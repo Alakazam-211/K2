@@ -19,7 +19,7 @@
 // With only the window's server it looks exactly as before.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Callout, Tag, Input, Textarea } from '@/components/ui'
+import { Button, Callout, Input, Surface, Textarea, cx } from '@/components/ui'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { SettingEntry } from '../searchManifest'
@@ -40,6 +40,10 @@ import {
   type AppRequest,
 } from './app-approvals-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
+import { useSettingsStore } from '@/stores/settings'
+import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SETTING_SERVER_REASON, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { AccessSheet, DIALOG_FIELD, Field } from './AccessDialogs'
+import { AppMonogram, StatusDot, type DotTone } from './apps-ui'
 
 export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
   {
@@ -53,17 +57,39 @@ export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
 
 const DENY_MAX = 500
 const NO_CONFIRM_HINT =
-  'No vault password and no Owner Connect login on this box: App approvals stay held until one is set (k2 vault password set).'
-const muted = 'text-[var(--color-text-muted)]'
-const secondary = 'text-[var(--color-text-secondary)]'
+  'You can’t approve yet: this server has no way to confirm it’s you. Set a vault password on the Vault page, then come back.'
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000)
 }
 
+/** What a kind of request asks for, in plain words. */
+const KIND_WORDS: Record<string, string> = {
+  config: 'Change its settings',
+  publish_run: 'Run a published service',
+  app_key: 'Use an App key',
+  clean_mode: 'Change how it cleans up',
+  egress: 'Reach an outside site',
+  egress_mode: 'Change its outside access',
+  deploy: 'Deploy a new version',
+  install: 'Install',
+  db_raw: 'Use its database directly',
+  overcommit: 'Use more memory than the server has free',
+  manage: 'Manage it end to end',
+  quota: 'Raise its limits',
+}
+function kindWords(kind: string): string {
+  return KIND_WORDS[kind] ?? kindLabel(kind)
+}
+
+function daysLeft(expiresAt: number, now: number): string {
+  return expiryText(expiresAt, now).replace(/(\d+)d$/, (_m, n: string) => `${n}d`)
+}
+
 export function AppApprovalsSection(): React.JSX.Element {
   const [groups, setGroups] = useState<ServerApprovals[] | null>(null)
-  const [showHistory, setShowHistory] = useState(false)
+  const [tab, setTab] = useState<'waiting' | 'history'>('waiting')
+  const showHistory = tab === 'history'
   const [notice, setNotice] = useState<Notice | null>(null)
 
   const load = useCallback(async () => {
@@ -94,52 +120,90 @@ export function AppApprovalsSection(): React.JSX.Element {
   const multi = (groups?.length ?? 0) > 1
   const pendingOf = (g: ServerApprovals): AppRequest[] => (g.list?.requests ?? []).filter((r) => r.status === 'pending')
   const total = (groups ?? []).reduce((n, g) => n + pendingOf(g).length, 0)
-  const anyRead = (groups ?? []).some((g) => g.list)
+
+  const tabs: { id: 'waiting' | 'history'; label: string; testId?: string }[] = [
+    { id: 'waiting', label: total > 0 ? `Waiting (${total})` : 'Waiting' },
+    { id: 'history', label: 'History', testId: 'app-approvals-history-toggle' },
+  ]
 
   return (
-    <div className="max-w-3xl space-y-4" data-testid="app-approvals" data-settings-id="app-approvals.list">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)]">
-          App Approvals{total > 0 ? ` (${total})` : ''}
-        </h2>
-        <p className={`type-hint ${muted} mt-1 leading-relaxed`}>
-          Changes to an App that only the server&apos;s owner may allow wait here: new caps on a deploy or install, outside
-          hosts, raised quotas, keys and more. Agents can only ask. You approve each one in person, with{' '}
-          {touchIdOrPassword()}. Requests expire after 7 days.
-          {multi ? ' Every server you own is listed; each one is approved on its own server.' : ''}
-        </p>
-      </div>
+    <div className="max-w-[52rem] space-y-6 pb-6" data-testid="app-approvals" data-settings-id="app-approvals.list">
+      <header className="space-y-3">
+        <div>
+          <h2 className="type-title text-[var(--color-text-primary)]">
+            App Approvals{total > 0 ? ` (${total})` : ''}
+          </h2>
+          <p className={SETTING_ROW_HINT}>
+            Changes to an App that only the server&rsquo;s owner may allow wait here: new permissions, outside sites, higher
+            limits and more. Agents can only ask. You approve each one in person, with {touchIdOrPassword()}. Requests
+            expire after 7 days.
+            {multi ? ' Every server you own is listed; each one is approved on its own server.' : ''}
+          </p>
+        </div>
+        <div role="tablist" aria-label="App Approvals" className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
+          {tabs.map((t) => {
+            const active = tab === t.id
+            return (
+              <button
+                key={t.id}
+                role="tab"
+                type="button"
+                aria-selected={active}
+                data-testid={t.testId}
+                onClick={() => {
+                  setNotice(null)
+                  setTab(t.id)
+                }}
+                data-k2-focus=""
+                className={cx(
+                  'relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none',
+                  active
+                    ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                    : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
+                )}
+              >
+                {t.label}
+              </button>
+            )
+          })}
+        </div>
+      </header>
       {notice ? (
-        <Callout tone={notice.tone} data-testid="app-approvals-notice">
+        <Callout tone={notice.tone} className="type-hint" role={notice.tone === 'error' ? 'alert' : 'status'} data-testid="app-approvals-notice">
           {notice.text}
         </Callout>
       ) : null}
-      {groups && anyRead && total === 0 && !multi ? <p className={`type-hint ${muted}`}>Nothing is waiting.</p> : null}
-      {(groups ?? []).map((g) => (
-        <ServerBlock
-          key={g.server.hostKey}
-          group={g}
-          multi={multi}
-          onDone={async (note) => {
-            setNotice(note)
-            await load()
-          }}
-        />
-      ))}
-      <div className="pt-2 border-t border-[var(--color-border)] space-y-2">
-        <button
-          type="button"
-          className={`type-hint ${secondary} underline no-drag cursor-pointer`}
-          onClick={() => setShowHistory((v) => !v)}
-          data-testid="app-approvals-history-toggle"
-        >
-          {showHistory ? 'Hide history' : 'Show history'}
-        </button>
-        {showHistory && groups
-          ? groups.map((g) => <HistoryBlock key={g.server.hostKey} group={g} multi={multi} />)
-          : null}
-      </div>
+      {groups === null ? (
+        <SettingsLoadState kind="loading" title={showHistory ? 'Loading history…' : 'Loading requests…'} testId="app-approvals-loading" />
+      ) : null}
+      {(groups ?? []).map((g) =>
+        showHistory ? (
+          <HistoryBlock key={g.server.hostKey} group={g} multi={multi} onRetry={() => void load()} />
+        ) : (
+          <ServerBlock
+            key={g.server.hostKey}
+            group={g}
+            multi={multi}
+            onRetry={() => void load()}
+            onDone={async (note) => {
+              setNotice(note)
+              await load()
+            }}
+          />
+        ),
+      )}
     </div>
+  )
+}
+
+function ServerHeading({ g, multi, waiting }: { g: ServerApprovals; multi: boolean; waiting: number | null }): React.JSX.Element | null {
+  if (!multi) return null
+  return (
+    <h3 className="type-heading text-[var(--color-text-primary)] flex items-baseline gap-2">
+      {g.server.label}
+      {g.server.isWindow ? <span className={SETTING_ROW_HINT}>this window&apos;s server</span> : null}
+      {waiting === 0 ? <span className={SETTING_ROW_HINT}>nothing waiting</span> : null}
+    </h3>
   )
 }
 
@@ -148,74 +212,83 @@ function ServerBlock({
   group: g,
   multi,
   onDone,
+  onRetry,
 }: {
   group: ServerApprovals
   multi: boolean
   onDone: (notice: Notice) => Promise<void>
+  onRetry: () => void
 }): React.JSX.Element {
   const ownerConfirm = g.list?.ownerConfirm ?? null
   const canConfirm = ownerConfirm?.available === true
   const pending = (g.list?.requests ?? []).filter((r) => r.status === 'pending')
-  // Multi-server: a server with nothing waiting and nothing wrong stays a
-  // one-line heading, so the page is about what waits.
   return (
-    <div className="space-y-2" data-testid={`app-approvals-server-${g.server.hostKey}`}>
-      {multi ? (
-        <h3 className="type-heading text-[var(--color-text-primary)]">
-          {g.server.label}
-          {g.server.isWindow ? <span className={`ml-2 type-hint ${muted}`}>this window&apos;s server</span> : null}
-          {g.list && pending.length === 0 ? <span className={`ml-2 type-hint ${muted}`}>nothing waiting</span> : null}
-        </h3>
-      ) : null}
+    <section className="space-y-3" data-testid={`app-approvals-server-${g.server.hostKey}`}>
+      <ServerHeading g={g} multi={multi} waiting={g.list ? pending.length : null} />
       {ownerConfirm && !canConfirm && (pending.length > 0 || !multi) ? (
-        <Callout tone="warn" data-testid="app-approvals-no-confirm">
-          {ownerConfirm.hint || NO_CONFIRM_HINT}
+        <Callout tone="warn" className="type-hint flex items-center justify-between gap-4">
+          <span data-testid="app-approvals-no-confirm">{NO_CONFIRM_HINT}</span>
+          <Button onClick={() => useSettingsStore.getState().openSettings('vault')} data-testid="app-approvals-open-vault">
+            Open Vault
+          </Button>
         </Callout>
       ) : null}
       {g.error ? (
-        <Callout tone="error" data-testid={`app-approvals-error-${g.server.hostKey}`}>
-          {multi ? `${g.server.label}: ` : ''}
-          {g.error}
-        </Callout>
+        <SettingsLoadState
+          kind="error"
+          title={multi ? `K2 couldn’t read the requests on ${g.server.label}` : 'K2 couldn’t read the waiting requests'}
+          detail={g.error}
+          testId={`app-approvals-error-${g.server.hostKey}`}
+          action={<Button onClick={onRetry}>Try again</Button>}
+        >
+          Nothing was approved or denied. Try again in a moment.
+        </SettingsLoadState>
+      ) : g.list && pending.length === 0 && !multi ? (
+        <SettingsLoadState kind="empty" title="Nothing is waiting" testId="app-approvals-empty">
+          When an agent asks for a change only you can allow, it shows up here.
+        </SettingsLoadState>
       ) : null}
       {pending.map((r) => (
         <RequestCard key={r.id} request={r} scope={g.server.scope} canConfirm={canConfirm} onDone={onDone} />
       ))}
-    </div>
+    </section>
   )
 }
 
 /** One server's decided requests. */
-function HistoryBlock({ group: g, multi }: { group: ServerApprovals; multi: boolean }): React.JSX.Element | null {
+function HistoryBlock({ group: g, multi, onRetry }: { group: ServerApprovals; multi: boolean; onRetry: () => void }): React.JSX.Element | null {
+  if (g.error) {
+    return (
+      <SettingsLoadState
+        kind="error"
+        title={multi ? `K2 couldn’t read the history on ${g.server.label}` : 'K2 couldn’t read the history'}
+        detail={g.error}
+        action={<Button onClick={onRetry}>Try again</Button>}
+      >
+        Try again in a moment.
+      </SettingsLoadState>
+    )
+  }
   if (!g.list) return null
   const history = g.list.requests.filter((r) => r.status !== 'pending')
   return (
-    <div className="space-y-2" data-testid={multi ? `app-approvals-history-${g.server.hostKey}` : 'app-approvals-history'}>
-      {multi ? <h3 className={`type-heading ${secondary}`}>{g.server.label}</h3> : null}
-      {history.length === 0 ? (
-        <p className={`type-hint ${muted}`}>No decided requests yet.</p>
-      ) : (
-        history.map((r) => <HistoryRow key={r.id} request={r} />)
-      )}
-    </div>
-  )
-}
-
-function KindBadge({ kind }: { kind: string }): React.JSX.Element {
-  return (
-    <Tag tone="accent">
-      {kindLabel(kind)}
-    </Tag>
-  )
-}
-
-function AppLine({ r }: { r: AppRequest }): React.JSX.Element {
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <KindBadge kind={r.kind} />
-      <span className="type-row font-mono text-[var(--color-text-primary)]">{r.appLabel}</span>
-      {r.workspaceHandle ? <span className={`type-hint ${muted}`}>{r.workspaceHandle}</span> : null}
-    </div>
+    <SettingsGroup
+      card
+      title={multi ? g.server.label : 'Decided requests'}
+      hint="The last requests approved, denied or left to expire."
+      testId={multi ? `app-approvals-history-${g.server.hostKey}` : 'app-approvals-history'}
+      state={
+        history.length === 0 ? (
+          <SettingsLoadState kind="empty" title="No decided requests yet">
+            What you approve or deny shows up here.
+          </SettingsLoadState>
+        ) : undefined
+      }
+    >
+      {history.map((r) => (
+        <HistoryRow key={r.id} request={r} />
+      ))}
+    </SettingsGroup>
   )
 }
 
@@ -223,7 +296,30 @@ function AppLine({ r }: { r: AppRequest }): React.JSX.Element {
  *  pending list (it is decided), so its error shows here and in History. */
 type Notice = { tone: 'ok' | 'error'; text: string }
 
-type ConfirmStep = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
+type ConfirmStep = { step: 'review' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
+
+/** The change itself: what it adds, one line each, in a quiet box. */
+function ChangeLines({ r }: { r: AppRequest }): React.JSX.Element | null {
+  const lines = diffLines(r)
+  const after = capsAfter(r)
+  if (lines.length === 0 && after.length === 0) return null
+  return (
+    <div className="space-y-1">
+      {lines.length > 0 ? (
+        <ul
+          data-k2-chamfer="surface"
+          className="type-hint font-mono list-none space-y-0.5 border border-[var(--color-border)] bg-[var(--color-bg)] rounded-[var(--radius-field)] px-3 py-2 text-[var(--color-text-primary)]"
+          data-testid="app-request-diff"
+        >
+          {lines.map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+        </ul>
+      ) : null}
+      {after.length > 0 ? <p className={SETTING_ROW_HINT}>After approval it holds: {after.join(', ')}</p> : null}
+    </div>
+  )
+}
 
 function RequestCard({
   request: r,
@@ -238,16 +334,22 @@ function RequestCard({
   canConfirm: boolean
   onDone: (notice: Notice) => Promise<void>
 }): React.JSX.Element {
-  const [confirm, setConfirm] = useState<ConfirmStep>({ step: 'idle' })
+  const [dialog, setDialog] = useState<'approve' | 'deny' | null>(null)
+  const [confirm, setConfirm] = useState<ConfirmStep>({ step: 'review' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [denying, setDenying] = useState(false)
   const [note, setNote] = useState('')
   const pwRef = useRef<HTMLInputElement>(null)
   const [hasPw, setHasPw] = useState(false)
-  const lines = diffLines(r)
-  const after = capsAfter(r)
   const now = nowSec()
+
+  const close = (): void => {
+    setDialog(null)
+    setConfirm({ step: 'review' })
+    setError(null)
+    setNote('')
+    setHasPw(false)
+  }
 
   const finish = async (method: string, password?: string): Promise<void> => {
     const { token } = await vaultConfirmOn(scope).finish({
@@ -258,7 +360,7 @@ function RequestCard({
       ...(password !== undefined ? { password } : {}),
     })
     const out = await approveAppRequest(r.id, token, scope)
-    setConfirm({ step: 'idle' })
+    close()
     if (out.error) {
       // Recorded as approved, but applying it failed: the daemon says why.
       await onDone({
@@ -267,7 +369,7 @@ function RequestCard({
       })
       return
     }
-    await onDone({ tone: 'ok', text: `Approved ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}: ${out.note ?? 'it applies now'}` })
+    await onDone({ tone: 'ok', text: `Approved ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}: ${out.note ?? 'it applies now'}.` })
   }
 
   const approve = async (): Promise<void> => {
@@ -285,10 +387,10 @@ function RequestCard({
         setConfirm({ step: 'password', method: pw })
         return
       }
-      setConfirm({ step: 'idle' })
+      setConfirm({ step: 'review' })
       setError(NO_CONFIRM_HINT)
     } catch (e) {
-      setConfirm({ step: 'idle' })
+      setConfirm({ step: 'review' })
       setError(daemonErrorText(e))
     }
   }
@@ -303,7 +405,6 @@ function RequestCard({
     try {
       await finish(method, pw)
     } catch (e) {
-      setConfirm({ step: 'idle' })
       setError(daemonErrorText(e))
     }
   }
@@ -313,8 +414,8 @@ function RequestCard({
     setError(null)
     try {
       await denyAppRequest(r.id, note.trim() || undefined, scope)
-      setDenying(false)
-      await onDone({ tone: 'ok', text: `Denied ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}.` })
+      close()
+      await onDone({ tone: 'ok', text: `Denied ${kindLabel(r.kind).toLowerCase()} for ${r.appLabel}. ${r.requestedBy} can see why.` })
     } catch (e) {
       setError(daemonErrorText(e))
     } finally {
@@ -322,114 +423,170 @@ function RequestCard({
     }
   }
 
+  const working = confirm.step === 'starting' || confirm.step === 'mac'
   return (
-    <div className="border border-[var(--color-border)] p-3 space-y-2" data-testid={`app-request-${r.id}`}>
-      <AppLine r={r} />
-      <div className="type-row text-[var(--color-text-primary)]">{r.summary}</div>
-      {lines.length > 0 ? (
-        <ul
-          className="type-hint font-mono list-none space-y-0.5 border border-[var(--color-border)] p-2 text-[var(--color-text-primary)]"
-          data-testid="app-request-diff"
-        >
-          {lines.map((l, i) => (
-            <li key={i}>{l}</li>
-          ))}
-        </ul>
-      ) : null}
-      {after.length > 0 ? (
-        <div className={`type-hint ${muted}`}>After approval it holds: {after.join(', ')}</div>
-      ) : null}
-      <div className={`type-hint ${secondary} flex flex-wrap gap-x-3`}>
-        <span>asked by {r.requestedBy}</span>
-        <span>{formatRelativeTime(r.requestedAt, now)}</span>
-        <span className={muted}>{expiryText(r.expiresAt, now)}</span>
-      </div>
-      {r.reason ? <div className={`type-hint ${secondary}`}>Why: {r.reason}</div> : null}
-      {r.reasons.length > 0 ? (
-        <div className={`type-hint ${muted}`} data-testid="app-request-reasons">
-          Held because: {r.reasons.join('; ')}
-        </div>
-      ) : null}
-
-      {confirm.step === 'starting' ? <p className={`type-hint ${muted}`}>Asking for your confirm…</p> : null}
-      {confirm.step === 'mac' ? <p className={`type-hint ${muted}`}>Confirm on your Mac.</p> : null}
-      {confirm.step === 'password' ? (
-        <form
-          className="flex flex-col gap-1.5 max-w-sm"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submitPassword(confirm.method)
-          }}
-        >
-          <label className={`type-hint ${muted}`}>
-            {confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <Input
-              ref={pwRef}
-              type="password"
-              autoComplete="current-password"
-              data-testid="app-approve-password"
-              onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className="mt-1 w-full type-control"
-            />
-          </label>
-          <div className="flex gap-1.5">
-            <Button type="submit" variant="accent" disabled={!hasPw}>
-              Approve
-            </Button>
-            <Button type="button" variant="ghost" onClick={() => setConfirm({ step: 'idle' })}>
-              Cancel
-            </Button>
+    <Surface chamfer material="tile" className="px-4 py-3 space-y-2" data-testid={`app-request-${r.id}`}>
+      <div className="flex items-start gap-3">
+        <AppMonogram name={r.appLabel} />
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="flex items-baseline gap-x-2 flex-wrap">
+            <span className="type-name text-[var(--color-text-primary)]">{r.appLabel}</span>
+            <span className={SETTING_ROW_HINT} data-kind={r.kind}>
+              {kindWords(r.kind)}
+              <span className="sr-only"> ({kindLabel(r.kind)})</span>
+            </span>
           </div>
-        </form>
-      ) : null}
+          <div className="type-row text-[var(--color-text-primary)]">{r.summary}</div>
+          <ChangeLines r={r} />
+          {r.reason ? <p className={SETTING_ROW_HINT}>Why: {r.reason}</p> : null}
+          <p className={SETTING_ROW_HINT}>
+            asked by {r.requestedBy}
+            {r.workspaceHandle ? ` for ${r.workspaceHandle}` : ''} · {formatRelativeTime(r.requestedAt, now)} · {daysLeft(r.expiresAt, now)}
+          </p>
+          {r.reasons.length > 0 ? (
+            <p className={SETTING_SERVER_REASON} data-testid="app-request-reasons">
+              Held because: {r.reasons.join('; ')}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button
+            variant="danger-quiet"
+            onClick={() => {
+              setError(null)
+              setDialog('deny')
+            }}
+            data-testid={`app-deny-${r.id}`}
+          >
+            Deny…
+          </Button>
+          <Button
+            variant="accent"
+            disabled={!canConfirm}
+            title={canConfirm ? undefined : 'No way to confirm on this server yet'}
+            onClick={() => {
+              setError(null)
+              setConfirm({ step: 'review' })
+              setDialog('approve')
+            }}
+            data-testid={`app-approve-${r.id}`}
+          >
+            Approve…
+          </Button>
+        </div>
+      </div>
 
-      {confirm.step === 'idle' ? (
-        denying ? (
-          <div className="flex flex-col gap-1.5 max-w-md">
-            <Textarea
-              value={note}
-              maxLength={DENY_MAX}
-              rows={2}
-              onChange={(e) => setNote(e.target.value.slice(0, DENY_MAX))}
-              placeholder="Why (optional; the requester reads this)"
-              aria-label="Why deny"
-              data-testid={`app-deny-note-${r.id}`}
-            />
-            <div className="flex items-center gap-2">
-              <Button disabled={busy} onClick={() => void deny()} data-testid={`app-deny-send-${r.id}`}>
-                Deny
-              </Button>
-              <Button variant="ghost" onClick={() => setDenying(false)}>
+      {dialog === 'approve' ? (
+        <AccessSheet
+          title={`Approve this request from ${r.requestedBy}?`}
+          intro={`${r.appLabel}: ${r.summary}. It applies as soon as you confirm it’s you.`}
+          onClose={close}
+          busy={working}
+          testId={`app-approve-dialog-${r.id}`}
+          footer={
+            <>
+              <Button variant="ghost" size="md" onClick={close} disabled={working}>
                 Cancel
               </Button>
-              <span className={`type-hint ${muted}`}>
-                {note.length}/{DENY_MAX}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="accent"
-              disabled={busy || !canConfirm}
-              title={canConfirm ? undefined : 'No way to confirm on this box yet'}
-              onClick={() => void approve()}
-              data-testid={`app-approve-${r.id}`}
+              {confirm.step === 'password' ? (
+                <Button type="submit" form={`approve-pw-${r.id}`} variant="accent" size="md" disabled={!hasPw}>
+                  Confirm and approve
+                </Button>
+              ) : (
+                <Button
+                  variant="accent"
+                  size="md"
+                  autoFocus
+                  disabled={working}
+                  onClick={() => void approve()}
+                  data-testid={`app-approve-confirm-${r.id}`}
+                >
+                  {confirm.step === 'mac' ? 'Confirm on your Mac…' : confirm.step === 'starting' ? 'Asking…' : 'Approve'}
+                </Button>
+              )}
+            </>
+          }
+        >
+          <ChangeLines r={r} />
+          {r.reason ? <p className={SETTING_ROW_HINT}>Why: {r.reason}</p> : null}
+          {confirm.step === 'review' ? (
+            <p className={SETTING_ROW_HINT}>You confirm it&rsquo;s you with {touchIdOrPassword()} next.</p>
+          ) : null}
+          {confirm.step === 'mac' ? <p className={SETTING_ROW_LABEL}>Confirm on your Mac to approve.</p> : null}
+          {confirm.step === 'password' ? (
+            <form
+              id={`approve-pw-${r.id}`}
+              onSubmit={(e) => {
+                e.preventDefault()
+                void submitPassword(confirm.method)
+              }}
             >
-              Approve
-            </Button>
-            <Button disabled={busy} onClick={() => setDenying(true)} data-testid={`app-deny-${r.id}`}>
-              Deny
-            </Button>
-          </div>
-        )
+              <Field
+                label={confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
+                htmlFor={`approve-pw-input-${r.id}`}
+                hint="K2 uses it once, to confirm it’s you."
+              >
+                <Input
+                  id={`approve-pw-input-${r.id}`}
+                  ref={pwRef}
+                  type="password"
+                  autoFocus
+                  autoComplete="current-password"
+                  data-testid="app-approve-password"
+                  onChange={(e) => setHasPw(e.currentTarget.value !== '')}
+                  className={DIALOG_FIELD}
+                />
+              </Field>
+            </form>
+          ) : null}
+          {error ? (
+            <Callout tone="error" role="alert" className="type-hint space-y-0.5">
+              <p className="font-medium">Couldn&rsquo;t approve it. Nothing changed.</p>
+              <p data-testid={`app-request-error-${r.id}`}>{error}</p>
+            </Callout>
+          ) : null}
+        </AccessSheet>
       ) : null}
-      {error ? (
-        <Callout tone="error" data-testid={`app-request-error-${r.id}`}>
-          {error}
-        </Callout>
+
+      {dialog === 'deny' ? (
+        <AccessSheet
+          title={`Deny this request from ${r.requestedBy}?`}
+          intro={`${r.appLabel}: ${r.summary}. Nothing changes on the App; ${r.requestedBy} can ask again later.`}
+          onClose={close}
+          busy={busy}
+          testId={`app-deny-dialog-${r.id}`}
+          footer={
+            <>
+              <Button variant="ghost" size="md" onClick={close} disabled={busy} autoFocus>
+                Cancel
+              </Button>
+              <Button variant="danger-muted" size="md" disabled={busy} onClick={() => void deny()} data-testid={`app-deny-send-${r.id}`}>
+                {busy ? 'Denying…' : 'Deny'}
+              </Button>
+            </>
+          }
+        >
+          <Field label="Why (optional)" htmlFor={`deny-note-${r.id}`} hint={`${r.requestedBy} reads this. ${note.length}/${DENY_MAX}`}>
+            <Textarea
+              id={`deny-note-${r.id}`}
+              value={note}
+              maxLength={DENY_MAX}
+              rows={3}
+              onChange={(e) => setNote(e.target.value.slice(0, DENY_MAX))}
+              aria-label="Why deny"
+              className={DIALOG_FIELD}
+              data-testid={`app-deny-note-${r.id}`}
+            />
+          </Field>
+          {error ? (
+            <Callout tone="error" role="alert" className="type-hint space-y-0.5">
+              <p className="font-medium">Couldn&rsquo;t deny it. It&rsquo;s still waiting.</p>
+              <p data-testid={`app-request-error-${r.id}`}>{error}</p>
+            </Callout>
+          ) : null}
+        </AccessSheet>
       ) : null}
-    </div>
+    </Surface>
   )
 }
 
@@ -440,25 +597,32 @@ const STATUS_WORDS: Record<string, string> = {
   expired: 'Expired',
   failed: 'Approved, failed to apply',
 }
+const STATUS_DOT: Record<string, DotTone> = { approved: 'ok', denied: 'idle', withdrawn: 'idle', expired: 'idle', failed: 'error' }
 
 function HistoryRow({ request: r }: { request: AppRequest }): React.JSX.Element {
   const failed = r.status === 'failed' ? resultError(r) : null
   const now = nowSec()
   return (
-    <div className="border border-[var(--color-border)] p-2 space-y-1" data-testid={`app-history-${r.id}`}>
-      <AppLine r={r} />
-      <div className={`type-hint ${secondary}`}>{r.summary}</div>
-      <div className={`type-hint ${muted} flex flex-wrap gap-x-3`}>
-        <span className={r.status === 'approved' ? 'text-[var(--color-status-ok-soft)]' : undefined}>
-          {STATUS_WORDS[r.status] ?? r.status}
-        </span>
-        {r.decidedBy ? <span>by {r.decidedBy}</span> : null}
-        {r.confirmVia ? <span>via {r.confirmVia}</span> : null}
-        {r.decidedAt ? <span>{formatRelativeTime(r.decidedAt, now)}</span> : null}
-        <span>asked by {r.requestedBy}</span>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`app-history-${r.id}`}>
+      <div className="flex items-start gap-3">
+        <AppMonogram name={r.appLabel} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-x-2 flex-wrap">
+            <span className="type-name text-[var(--color-text-primary)]">{r.appLabel}</span>
+            <span className="type-row text-[var(--color-text-primary)]">{r.summary}</span>
+          </div>
+          <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`}>
+            <StatusDot tone={STATUS_DOT[r.status] ?? 'idle'} />
+            <span className="text-[var(--color-text-primary)]">{STATUS_WORDS[r.status] ?? r.status}</span>
+            {r.decidedBy ? <span>by {r.decidedBy}</span> : null}
+            {r.confirmVia ? <span>via {r.confirmVia}</span> : null}
+            {r.decidedAt ? <span>· {formatRelativeTime(r.decidedAt, now)}</span> : null}
+            <span>· asked by {r.requestedBy}</span>
+          </p>
+          {r.decisionReason ? <p className={SETTING_ROW_HINT}>Note: {r.decisionReason}</p> : null}
+          {failed ? <p className="type-hint text-[var(--color-status-error-soft)] mt-0.5">{failed}</p> : null}
+        </div>
       </div>
-      {r.decisionReason ? <div className={`type-hint ${secondary}`}>Note: {r.decisionReason}</div> : null}
-      {failed ? <div className="type-hint text-[var(--color-status-error-soft)]">{failed}</div> : null}
     </div>
   )
 }

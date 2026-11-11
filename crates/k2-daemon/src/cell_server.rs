@@ -753,6 +753,23 @@ mod unix_impl {
                 &crate::people_picture_routes::Caller::Agent,
                 params,
             )),
+            // K5 at first run: `k2 setup chief-of-staff` from this cell. The
+            // caller is the bound session (the handler admits only K5's own
+            // pinned chat: the seat's workspace and the canonical map key).
+            crate::first_run_routes::COS_PATH => {
+                if !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::first_run_routes::MAX_BODY {
+                    return (
+                        "413 Payload Too Large".to_string(),
+                        "application/json",
+                        r#"{"ok":false,"error":{"code":"body_too_large","hint":"send {name, about, tool} only"}}"#.to_string(),
+                    );
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::first_run_routes::handle_chief_of_staff(body, &caller))
+            }
             crate::agent_identity_routes::IDENTITY_PATH => {
                 if body.len() > crate::agent_identity_routes::MAX_BODY {
                     return (

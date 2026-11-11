@@ -3,15 +3,13 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.12
+## 0.46.11
 
 ### Apps in containers can use the box's Postgres
 - **A container App reaches its databases at `127.0.0.1:5432`, inside its wall.** That covers guarded Apps (the default) and open ones. Each App has its own database door: K2 checks every connection's role and database before it reaches Postgres. An App opens only its workspace's databases and the ones granted to that workspace, as one of K2's roles for that database. It never logs in as the superuser, never opens a replication connection, and never opens another workspace's database. Anything else gets a Postgres error that says why, in the App's own driver. The password check stays in Postgres, so K2 never sees the App's password.
 - **Your `DATABASE_URL` keeps working.** When a container App starts, a box database URL in its secrets is pointed at the door (`127.0.0.1:5432`, `sslmode=disable`) on whichever Postgres version the database runs. TLS isn't used inside the wall: a client that asks for it is told no and goes on in plain text, and `sslmode=require` fails with a clear error.
 - **Grants count at once, and so do revokes.** A `k2 db grant` works at the App's next connection, with no re-host. A revoke or a dropped database refuses new connections and cuts the App's open ones straight away, and `k2 db revoke` says how many it cut. Each connection is written to `~/.k2/apps/<id>/logs/db.log`: role, database, bytes and time, never SQL or passwords.
 - **Needs the matching App engine.** K2 updates the engine with the app. On a box whose engine is older, K2 says so (`k2 app engine install`, then `k2 app rehost <app>`). `k2 app doctor <app>` shows the door, its open sessions and the databases the App may open. `--db-raw on` is still refused for container Apps, because it is for a private App database K2 doesn't make yet. The refusal now points at the door.
-
-## 0.46.11
 
 ### Permission cards are on by default
 - **Choose an agent in its own settings; no switch to find first.** Settings → Workspaces → <agent> → Permissions now starts with "Let this agent ask for permission": turn it on and that agent can ask you, on a card in its Thread, for a setting it can't change itself. Each agent's switch stays off until you turn it on, and nothing changes until you or an admin allow a card. A card from an agent that serves an App goes to the server's owner and admins only; the App's users never see it.

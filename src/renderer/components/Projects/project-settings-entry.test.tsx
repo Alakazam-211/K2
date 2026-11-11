@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 //
-// The way into project settings from the Projects page (0.46.1 dead
-// ends): right-clicking a project — in the expanded nav or the collapsed
-// rail — offers the SAME menu, and its "Project Settings" opens
-// Settings → Projects with that project selected.
+// The way into project settings from the Projects page: right-clicking a
+// project — in the expanded nav or the collapsed rail — offers the SAME
+// menu, and its "Project settings" opens that project's settings in a
+// sheet over the page (projects reorg §3.6), not Settings.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -41,6 +41,8 @@ vi.mock('./projects-api', async () => {
   return {
     ...actual,
     fetchProjectGroupShow: vi.fn(async () => SHOW),
+    fetchProjectGroupResources: vi.fn(async () => []),
+    fetchProjectGroupIcon: vi.fn(async () => ({ found: false, dataUrl: null })),
     fetchProjectGroupMessages: vi.fn(async () => ({ messages: [], truncated: false })),
   }
 })
@@ -92,10 +94,11 @@ beforeEach(() => {
     selectedGroupId: 'g1',
     chatCollapsed: true,
     navCollapsed: false,
+    settingsSheet: null,
     fetchGroups: vi.fn(async () => {}),
   })
   useUnreadStore.setState({ byKey: {}, total: 0, waitingTotal: 0, loaded: true })
-  useSettingsStore.setState({ openSettings })
+  useSettingsStore.setState({ openSettings, settingsOpen: false })
 })
 
 afterEach(() => {
@@ -107,15 +110,21 @@ function menuLabels(): string[] {
   return items.map((i) => i.label)
 }
 
-describe('Project Settings from the Projects page', () => {
-  it('right-click on a nav row → Project Settings opens Settings → Projects on that project', async () => {
+describe('Project settings from the Projects page', () => {
+  it('right-click on a nav row → Project settings opens the sheet over the page on that project', async () => {
     render(<ProjectsPage />)
     await waitFor(() => expect(screen.getByTestId('dashboard-stub')).toBeTruthy())
     const row = document.querySelector('[data-group-id="g1"] button') as HTMLElement
     expect(row).toBeTruthy()
     fireEvent.contextMenu(row)
-    await waitFor(() => expect(openSettings).toHaveBeenCalledWith('project-groups', 'g1'))
-    expect(menuLabels()[0]).toBe('Project Settings')
+    await waitFor(() => expect(useProjectGroupsStore.getState().settingsSheet?.groupId).toBe('g1'))
+    expect(useProjectGroupsStore.getState().settingsSheet?.opener).toBe(row)
+    expect(menuLabels()[0]).toBe('Project settings')
+    const sheet = await screen.findByTestId('project-settings-sheet')
+    await waitFor(() => expect(sheet.querySelector('[data-testid="project-settings-detail"]')).toBeTruthy())
+    // The page is still there behind it, and Settings never opened.
+    expect(screen.getByTestId('dashboard-stub')).toBeTruthy()
+    expect(openSettings).not.toHaveBeenCalled()
   })
 
   it('the collapsed rail offers the same menu, and it works the same way', async () => {
@@ -124,10 +133,11 @@ describe('Project Settings from the Projects page', () => {
     await waitFor(() => expect(screen.getByTestId('dashboard-stub')).toBeTruthy())
     const icon = screen.getByTitle('Launch • 0 members')
     fireEvent.contextMenu(icon)
-    await waitFor(() => expect(openSettings).toHaveBeenCalledWith('project-groups', 'g1'))
+    await waitFor(() => expect(useProjectGroupsStore.getState().settingsSheet?.groupId).toBe('g1'))
+    expect(openSettings).not.toHaveBeenCalled()
     const railLabels = menuLabels()
     vi.mocked(showContextMenu).mockClear()
-    useProjectGroupsStore.setState({ navCollapsed: false })
+    useProjectGroupsStore.setState({ navCollapsed: false, settingsSheet: null })
     cleanup()
     render(<ProjectsPage />)
     await waitFor(() => expect(screen.getByTestId('dashboard-stub')).toBeTruthy())

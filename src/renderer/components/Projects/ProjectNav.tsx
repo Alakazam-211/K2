@@ -13,7 +13,6 @@
 import React, { useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import { showContextMenu } from '@/lib/context-menu'
@@ -24,6 +23,7 @@ import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
 import { Button, Input } from '@/components/ui'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
+import { openProjectSettings } from './ProjectSettingsSheet'
 import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
   createProjectGroup,
@@ -83,16 +83,18 @@ function groupMuteItem(groupId: string): { label: string; next: boolean } | null
 }
 
 /** The one right-click menu for a project, in the nav row and the
- *  collapsed rail alike: Project Settings (opens Settings → Projects
- *  with this project selected), Pin/Unpin, and Mute when the server
- *  has it. `togglePin` is the caller's pin action. */
+ *  collapsed rail alike: Project settings (a sheet over this page with
+ *  this project's settings; `openProjectSettings`), Pin/Unpin, and Mute
+ *  when the server has it. `togglePin` is the caller's pin action;
+ *  `opener` (the row) gets the focus back when the sheet closes. */
 export async function openProjectGroupContextMenu(
   group: ProjectGroup,
   togglePin: () => Promise<void>,
+  opener?: HTMLElement | null,
 ): Promise<void> {
   const mute = groupMuteItem(group.id)
   const clickedId = await showContextMenu([
-    { id: 'group-settings', label: 'Project Settings' },
+    { id: 'group-settings', label: 'Project settings' },
     { id: 'separator-pin', label: '', type: 'separator' },
     { id: 'toggle-pin', label: group.pinned ? 'Unpin' : 'Pin to Top' },
     ...(mute ? [{ id: 'toggle-mute', label: mute.label }] : []),
@@ -100,7 +102,7 @@ export async function openProjectGroupContextMenu(
   if (clickedId === 'toggle-mute' && mute) {
     await toggleMute('project', group.id, mute.next, 'project chat')
   } else if (clickedId === 'group-settings') {
-    useSettingsStore.getState().openSettings('project-groups', group.id)
+    openProjectSettings(group.id, opener)
   } else if (clickedId === 'toggle-pin') {
     await togglePin()
   }
@@ -145,7 +147,7 @@ function GroupRow({
   // hover pin button (which stays).
   const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
-    await openProjectGroupContextMenu(group, () => togglePin())
+    await openProjectGroupContextMenu(group, () => togglePin(), e.currentTarget as HTMLElement)
   }
 
   return (
@@ -815,6 +817,7 @@ function RailIcon({
   const handleContextMenu = async (e: React.MouseEvent): Promise<void> => {
     e.preventDefault()
     e.stopPropagation()
+    const opener = e.currentTarget as HTMLElement
     await openProjectGroupContextMenu(group, async () => {
       try {
         await pinProjectGroup(primaryScope(), group.id, !group.pinned)
@@ -827,7 +830,7 @@ function RailIcon({
             'error',
           )
       }
-    })
+    }, opener)
   }
 
   return (

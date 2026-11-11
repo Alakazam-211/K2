@@ -1167,7 +1167,7 @@ function Swatch({
   )
 }
 
-function ProjectSettingsDetail({
+export function ProjectSettingsDetail({
   detail,
   role,
   onDeleted,
@@ -1176,6 +1176,9 @@ function ProjectSettingsDetail({
   docsError,
   onReloadDocs,
   notice,
+  variant = 'page',
+  closeButton,
+  titleId,
 }: {
   detail: ProjectGroupShow
   role: ProjectRole | null
@@ -1188,7 +1191,16 @@ function ProjectSettingsDetail({
   onReloadDocs: () => void
   /** What the page just did (a project created or deleted), once. */
   notice: string | null
+  /** `sheet`: shown over the Projects page (ProjectSettingsSheet). Its
+   *  title row says "Project settings" and ends in the sheet's close ×
+   *  instead of "Open project" (the project is already open behind it). */
+  variant?: 'page' | 'sheet'
+  /** The sheet's close × (with `variant="sheet"`). */
+  closeButton?: React.ReactNode
+  /** The sheet labels itself with the title row's heading. */
+  titleId?: string
 }): React.JSX.Element {
+  const inSheet = variant === 'sheet'
   const caps = projectSettingsCaps(role)
   const banner = readOnlyBannerText(role)
 
@@ -1519,7 +1531,13 @@ function ProjectSettingsDetail({
       )}
       <div className="flex flex-col h-full min-h-0" data-testid="project-settings-detail">
         {/* ── Header (fixed; never scrolls away) ── */}
-        <div className="flex-shrink-0 px-6 pt-6 pb-4 space-y-4 border-b border-[var(--color-border)]">
+        <div
+          className={cx(
+            'flex-shrink-0 px-6 space-y-4 border-b border-[var(--color-border)]',
+            inSheet ? 'pt-4 pb-4 pr-4' : 'pt-6 pb-4',
+          )}
+          data-testid="project-settings-head"
+        >
           <div className="flex items-center gap-3 min-w-0">
             <span className={AVATAR_ROUND}>
               <ProjectGroupAvatar
@@ -1531,17 +1549,24 @@ function ProjectSettingsDetail({
               />
             </span>
             <div className="flex-1 min-w-0">
-              <h2 className="type-title text-[var(--color-text-primary)] truncate">{detail.name}</h2>
+              <h2 id={titleId} className="type-title text-[var(--color-text-primary)] truncate">
+                {detail.name}
+              </h2>
               <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
+                {inSheet && 'Project settings · '}
                 {detail.memberCount} {detail.memberCount === 1 ? 'agent' : 'agents'}
                 {detail.pocWorkspaceId
                   ? ` · Point of contact: ${memberLabel(detail.pocWorkspaceId)}`
                   : ' · No point of contact yet'}
               </p>
             </div>
-            <Button variant="quiet" onClick={openProject}>
-              Open project
-            </Button>
+            {inSheet ? (
+              closeButton
+            ) : (
+              <Button variant="quiet" onClick={openProject}>
+                Open project
+              </Button>
+            )}
           </div>
           {notice && (
             <Callout tone="ok" role="status" className="type-hint" data-testid="project-settings-notice">
@@ -1562,6 +1587,9 @@ function ProjectSettingsDetail({
           data-layout={stacked ? 'stacked' : 'split'}
           className={cx(
             'flex-1 min-h-0',
+            // In the sheet the body is the page's own ground, as in Settings,
+            // so its cards and the sticky dashboard bar read the same.
+            inSheet && 'bg-[var(--color-bg)]',
             stacked ? 'overflow-y-auto' : 'grid grid-cols-2 divide-x divide-[var(--color-border)]',
           )}
         >
@@ -1691,12 +1719,23 @@ function ListHeading({ children }: { children: React.ReactNode }): React.JSX.Ele
   return <div className="flex items-center h-7 mb-1 type-heading text-[var(--color-text-primary)]">{children}</div>
 }
 
-export default function ProjectSettings(): React.JSX.Element {
-  // The page's width in CSS px (any app zoom): narrow, the list goes on top.
-  const [pageRef, pageWidth] = useElementWidth(PROJECTS_SPLIT_MIN_PX)
-  const groups = useProjectGroupsStore((s) => s.groups)
-  const groupsError = useProjectGroupsStore((s) => s.groupsError)
-
+/** One project's settings data, for the Settings page and the Projects
+ *  page's sheet alike: the viewer's role, its show view (painted from the
+ *  cache at once, revalidated on every structural change to it), its
+ *  Workspace Resources, and the optimistic `edit`. `shown` is the selected
+ *  project's view, else (while an unseen one loads) the previous one, with
+ *  `switching` true. */
+export function useProjectSettingsData(selectedId: string | null): {
+  role: ProjectRole | null
+  shown: ProjectGroupShow | null
+  switching: boolean
+  detailError: { id: string; message: string } | null
+  docs: ProjectGroupHtmlDoc[] | null
+  docsError: string | null
+  edit: (groupId: string, patch: Partial<ProjectGroup>, run: () => Promise<ProjectGroup | void>) => Promise<void>
+  reload: () => void
+  reloadDocs: () => void
+} {
   // The signed-in person's role on this server (owner token → owner).
   const [role, setRole] = useState<ProjectRole | null>(null)
   useEffect(() => {
@@ -1709,14 +1748,6 @@ export default function ProjectSettings(): React.JSX.Element {
     }
   }, [])
 
-  // The section's OWN selection — seeded from the deep-link preselect
-  // (initialProjectGroupId — the gear / right-click), else the Projects
-  // page's nav selection, else the first group. Switching here never
-  // moves the page's nav selection.
-  const initialGroupId = useSettingsStore((s) => s.initialProjectGroupId)
-  const [selectedId, setSelectedId] = useState<string | null>(
-    () => initialGroupId ?? useProjectGroupsStore.getState().selectedGroupId,
-  )
   // This project's structural revision: a chat line or another
   // project's change never refetches the panel.
   const revision = useProjectGroupsStore(selectGroupRevision(selectedId))
@@ -1734,31 +1765,6 @@ export default function ProjectSettings(): React.JSX.Element {
   } | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
   const [docsNonce, setDocsNonce] = useState(0)
-  const [creating, setCreating] = useState(false)
-  /** What the page just did, shown once above the next project. */
-  const [notice, setNotice] = useState<{ forId: string | null; text: string } | null>(null)
-
-  // A new deep-link while Settings is already open (right-click another
-  // project) re-targets the selection (the ProjectsSection
-  // initialProjectId idiom).
-  useEffect(() => {
-    if (initialGroupId) setSelectedId(initialGroupId)
-  }, [initialGroupId])
-
-  // The group list may be stale/unfetched when Settings opens before the
-  // Projects page ever did — fetch on mount (events keep it live after).
-  useEffect(() => {
-    void useProjectGroupsStore.getState().fetchGroups()
-  }, [])
-
-  // No selection yet, or the selected group vanished (deleted on another
-  // client) → fall back to the first group (null when none exist).
-  useEffect(() => {
-    if (groups === null) return
-    if (selectedId === null || !groups.some((g) => g.id === selectedId)) {
-      setSelectedId(groups[0]?.id ?? null)
-    }
-  }, [groups, selectedId])
 
   // Fetch the selected project's show view on selection change + every
   // structural change to THIS project (selectGroupRevision). The picture
@@ -1894,6 +1900,64 @@ export default function ProjectSettings(): React.JSX.Element {
     },
     [],
   )
+
+  const reload = useCallback(() => setReloadNonce((n) => n + 1), [])
+  const reloadDocs = useCallback(() => setDocsNonce((n) => n + 1), [])
+  return {
+    role,
+    shown,
+    switching,
+    detailError,
+    docs: shownDocs,
+    docsError: shownDocsError,
+    edit,
+    reload,
+    reloadDocs,
+  }
+}
+
+export default function ProjectSettings(): React.JSX.Element {
+  // The page's width in CSS px (any app zoom): narrow, the list goes on top.
+  const [pageRef, pageWidth] = useElementWidth(PROJECTS_SPLIT_MIN_PX)
+  const groups = useProjectGroupsStore((s) => s.groups)
+  const groupsError = useProjectGroupsStore((s) => s.groupsError)
+
+  // The section's OWN selection — seeded from the deep-link preselect
+  // (initialProjectGroupId — the gear / right-click), else the Projects
+  // page's nav selection, else the first group. Switching here never
+  // moves the page's nav selection.
+  const initialGroupId = useSettingsStore((s) => s.initialProjectGroupId)
+  const [selectedId, setSelectedId] = useState<string | null>(
+    () => initialGroupId ?? useProjectGroupsStore.getState().selectedGroupId,
+  )
+  const [creating, setCreating] = useState(false)
+  /** What the page just did, shown once above the next project. */
+  const [notice, setNotice] = useState<{ forId: string | null; text: string } | null>(null)
+
+  // A new deep-link while Settings is already open (right-click another
+  // project) re-targets the selection (the ProjectsSection
+  // initialProjectId idiom).
+  useEffect(() => {
+    if (initialGroupId) setSelectedId(initialGroupId)
+  }, [initialGroupId])
+
+  // The group list may be stale/unfetched when Settings opens before the
+  // Projects page ever did — fetch on mount (events keep it live after).
+  useEffect(() => {
+    void useProjectGroupsStore.getState().fetchGroups()
+  }, [])
+
+  // No selection yet, or the selected group vanished (deleted on another
+  // client) → fall back to the first group (null when none exist).
+  useEffect(() => {
+    if (groups === null) return
+    if (selectedId === null || !groups.some((g) => g.id === selectedId)) {
+      setSelectedId(groups[0]?.id ?? null)
+    }
+  }, [groups, selectedId])
+
+  const { role, shown, switching, detailError, docs: shownDocs, docsError: shownDocsError, edit, reload, reloadDocs } =
+    useProjectSettingsData(selectedId)
 
   // ── Left master list: search + keyboard selection, Pinned first ─────
   const [searchQuery, setSearchQuery] = useState('')
@@ -2174,7 +2238,7 @@ export default function ProjectSettings(): React.JSX.Element {
               title="Couldn’t load this project"
               detail={detailError.message}
               testId="project-settings-detail-error"
-              action={<Button variant="quiet" onClick={() => setReloadNonce((n) => n + 1)}>Try again</Button>}
+              action={<Button variant="quiet" onClick={reload}>Try again</Button>}
             >
               Its settings can’t be shown right now. The project itself is fine.
             </SettingsLoadState>
@@ -2200,7 +2264,7 @@ export default function ProjectSettings(): React.JSX.Element {
               edit={(patch, run) => edit(shown.id, patch, run)}
               docs={shownDocs}
               docsError={shownDocsError}
-              onReloadDocs={() => setDocsNonce((n) => n + 1)}
+              onReloadDocs={reloadDocs}
               notice={shownNotice}
               onDeleted={(name) => {
                 // Select the first surviving sibling (null when none —

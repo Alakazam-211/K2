@@ -201,6 +201,16 @@ interface ProjectGroupsState {
   /** Open or focus a resource file pane on the mounted project dashboard. */
   requestFileDocPane: (workspaceId: string, filePath: string) => void
   clearPaneRequest: () => void
+  /** The project whose settings show in a sheet over the Projects page
+   *  (ProjectSettingsSheet), and the control that opened it (focus goes
+   *  back there on close). null = no sheet. Session-only. */
+  settingsSheet: { groupId: string; opener: HTMLElement | null } | null
+  /** Show a project's settings in a sheet over the Projects page (the
+   *  nav's right-click, the project bar's ⚙). `opener` defaults to the
+   *  focused element; pass the clicked control where a click doesn't
+   *  focus it (WebKit buttons). */
+  openProjectSettingsSheet: (groupId: string, opener?: HTMLElement | null) => void
+  closeProjectSettingsSheet: () => void
 }
 
 export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
@@ -219,6 +229,15 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
   lastFocusedPaneByDashboard: {},
   dashPaneNumbers: {},
   tileViews: {},
+  settingsSheet: null,
+  openProjectSettingsSheet: (groupId, opener) => {
+    const focused = typeof document !== 'undefined' ? document.activeElement : null
+    const fallback = focused instanceof HTMLElement && focused !== document.body ? focused : null
+    set({ settingsSheet: { groupId, opener: opener ?? fallback } })
+  },
+  closeProjectSettingsSheet: () => {
+    if (get().settingsSheet) set({ settingsSheet: null })
+  },
   setTileView: (key, view, projectDefault) => {
     set((s) => {
       const entry = pickTileView(view, projectDefault)
@@ -482,6 +501,8 @@ onActiveHostChange(() => {
     revision: s.revision + 1,
     unscopedRevision: s.unscopedRevision + 1,
     paneRequest: null,
+    // Another server's projects: the sheet's project isn't one of them.
+    settingsSheet: null,
     lastFocusedPaneByDashboard: {},
     dashPaneNumbers: {},
   }))

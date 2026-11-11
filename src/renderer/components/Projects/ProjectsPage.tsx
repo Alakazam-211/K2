@@ -45,6 +45,7 @@ import ProjectDashboard from './ProjectDashboard'
 import DashboardPresetsMenu from './DashboardPresetsMenu'
 import ProjectChatPanel from './ProjectChatPanel'
 import { NoDashboardState, ProjectListLoadState, ProjectLoadState, ProjectsEmptyState } from './ProjectStates'
+import ProjectSettingsSheet from './ProjectSettingsSheet'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
 import { fetchProjectGroupShow, partitionPinned, type ProjectGroupShow } from './projects-api'
 import {
@@ -415,6 +416,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
         className="pointer-events-none overflow-hidden"
         style={{ position: 'absolute', top: TOPBAR_HEIGHT, right: 0, bottom: 0, left: 0, zIndex: 40 }}
       />
+      {/* A project's settings over the page (right-click → Project settings). */}
+      <ProjectSettingsSheet />
     </div>
     </PageLiveContext.Provider>
   )

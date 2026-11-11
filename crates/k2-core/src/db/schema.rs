@@ -3723,7 +3723,7 @@ impl HeartbeatFire {
                     h.decision, h.reason, h.inbox_priority, h.inbox_count, h.duration_ms, \
                     p.name AS project_name, h.actor \
              FROM heartbeat_fires h JOIN projects p ON p.id = h.project_id \
-             ORDER BY h.fired_at DESC LIMIT ?1"
+             ORDER BY julianday(h.fired_at) DESC, h.id DESC LIMIT ?1"
         )?;
         let rows = stmt.query_map(params![limit], |row| {
             let fire = HeartbeatFire {
@@ -3747,6 +3747,11 @@ impl HeartbeatFire {
     }
 
     /// Return the most recent `limit` fire rows for a project.
+    ///
+    /// `fired_at` is local time with its offset, so the lists order by the
+    /// instant (`julianday`, which keeps fractions of a second), never by
+    /// the string: across a daylight-saving fall-back the string order puts
+    /// 01:30-06:00 after 01:10-07:00, which came later. `id` breaks ties.
     pub fn list_by_project(
         conn: &Connection,
         project_id: &str,
@@ -3756,7 +3761,7 @@ impl HeartbeatFire {
             "SELECT id, project_id, agent_name, schedule_name, fired_at, mode, decision, reason, \
                     inbox_priority, inbox_count, duration_ms, actor \
              FROM heartbeat_fires WHERE project_id = ?1 \
-             ORDER BY fired_at DESC LIMIT ?2"
+             ORDER BY julianday(fired_at) DESC, id DESC LIMIT ?2"
         )?;
         let rows = stmt.query_map(params![project_id, limit], |row| {
             Ok(HeartbeatFire {
@@ -3788,7 +3793,7 @@ impl HeartbeatFire {
             "SELECT id, project_id, agent_name, schedule_name, fired_at, mode, decision, reason, \
                     inbox_priority, inbox_count, duration_ms, actor \
              FROM heartbeat_fires WHERE project_id = ?1 AND schedule_name = ?2 \
-             ORDER BY fired_at DESC LIMIT ?3"
+             ORDER BY julianday(fired_at) DESC, id DESC LIMIT ?3"
         )?;
         let rows = stmt.query_map(params![project_id, schedule_name, limit], |row| {
             Ok(HeartbeatFire {
@@ -6089,6 +6094,42 @@ mod unit_tests {
         assert_eq!(removed, 1, "prune should remove 1 old row");
         let remaining = HeartbeatFire::list_by_project(&conn, &pid, 10).unwrap();
         assert_eq!(remaining.len(), 1, "fresh row remains");
+    }
+
+    /// Across a daylight-saving fall-back (America/Denver, 2026-11-01) the
+    /// local strings sort the wrong way: 01:10-07:00 (08:10 UTC) came after
+    /// 01:30-06:00 (07:30 UTC). Every list orders by the instant.
+    #[test]
+    fn heartbeat_fire_lists_order_by_instant_across_a_fall_back() {
+        let conn = fresh();
+        let pid = make_project_row(&conn, "/tmp/hf-fallback");
+        for (at, decision) in [
+            ("2026-11-01T01:30:00.000000000-06:00", "first"),
+            ("2026-11-01T01:10:00.000000000-07:00", "second"),
+        ] {
+            conn.execute(
+                "INSERT INTO heartbeat_fires (project_id, schedule_name, mode, decision, fired_at) VALUES (?1, 'nightly', 'agent', ?2, ?3)",
+                params![pid, decision, at],
+            )
+            .unwrap();
+        }
+        let newest_first = vec!["second".to_string(), "first".to_string()];
+        let by_project: Vec<String> =
+            HeartbeatFire::list_by_project(&conn, &pid, 10).unwrap().into_iter().map(|r| r.decision).collect();
+        assert_eq!(by_project, newest_first, "list_by_project");
+        let by_schedule: Vec<String> = HeartbeatFire::list_by_schedule_name(&conn, &pid, "nightly", 10)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.decision)
+            .collect();
+        assert_eq!(by_schedule, newest_first, "list_by_schedule_name");
+        let all: Vec<String> = HeartbeatFire::list_all_recent_with_project(&conn, 100)
+            .unwrap()
+            .into_iter()
+            .filter(|(r, _)| r.project_id == pid)
+            .map(|(r, _)| r.decision)
+            .collect();
+        assert_eq!(all, newest_first, "list_all_recent_with_project");
     }
 
     // ── WorkspaceRelation ─────────────────────────────────────────

@@ -718,7 +718,7 @@ mod tests {
         let mut stmt = conn
             .prepare(
                 "SELECT decision FROM heartbeat_fires WHERE project_id = ?1 AND schedule_name = ?2 \
-                 ORDER BY fired_at, id",
+                 ORDER BY julianday(fired_at), id",
             )
             .unwrap();
         let out = stmt

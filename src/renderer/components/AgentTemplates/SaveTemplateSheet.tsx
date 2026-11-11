@@ -304,9 +304,9 @@ export function SaveTemplateSheet({ project, onClose }: { project: { path: strin
             </label>
             <Textarea id={ids.summary} className={DIALOG_FIELD} rows={2} value={summary} onChange={(e) => setSummary(e.target.value)} data-testid="save-template-summary" />
           </div>
-          <fieldset className="m-0 p-0 border-0 min-w-0 space-y-2" aria-describedby={ids.wiki} data-testid="save-template-wiki">
+          <fieldset className="p-0 border-0 min-w-0 space-y-2" aria-describedby={ids.wiki} data-testid="save-template-wiki">
             <legend className={`${DIALOG_LABEL} p-0`}>{SAVE_TEMPLATE_COPY.wiki}</legend>
-            <p id={ids.wiki} className={`${DIALOG_MUTED} !mt-0`}>
+            <p id={ids.wiki} className={DIALOG_MUTED}>
               {SAVE_TEMPLATE_COPY.wikiHint}
             </p>
             {notes === null ? (

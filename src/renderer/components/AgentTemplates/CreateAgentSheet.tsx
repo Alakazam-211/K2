@@ -513,7 +513,8 @@ function CreateAgentBody(): React.JSX.Element {
       )
     }
     const group = (title: string, list: TemplateSummary[], testId: string): React.JSX.Element => (
-      <fieldset className="m-0 p-0 border-0 min-w-0" data-testid={testId}>
+      // No margin class here: the group's space-y sets the gap between headings.
+      <fieldset className="p-0 border-0 min-w-0" data-testid={testId}>
         <legend className="p-0 mb-2 type-hint font-medium text-[var(--color-text-secondary)]">{title}</legend>
         <div className="space-y-2">{list.map(card)}</div>
       </fieldset>

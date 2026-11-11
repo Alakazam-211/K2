@@ -206,7 +206,7 @@ export function ReviewRow({
 }): React.JSX.Element {
   return (
     <div className="flex items-start gap-3 px-4 py-2.5" data-testid={testId}>
-      <dt className="w-24 flex-shrink-0 pt-px type-hint text-[var(--color-text-secondary)]">{label}</dt>
+      <dt className="w-28 flex-shrink-0 pt-px type-hint text-[var(--color-text-secondary)]">{label}</dt>
       <dd className="m-0 min-w-0 flex-1 flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1 type-hint text-[var(--color-text-primary)] [overflow-wrap:anywhere]">{children}</div>
         {onEdit ? (

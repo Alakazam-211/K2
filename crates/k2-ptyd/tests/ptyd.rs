@@ -692,7 +692,8 @@ fn launch_env_is_exactly_the_allowlisted_subset() {
 /// ptyd itself over its control socket (`ping` → `env_keys`, `dumpable`):
 /// it works under systemd's `ProtectProc=invisible`, where another
 /// process's `/proc` is hidden. Plus, on macOS (debug builds have no
-/// PT_DENY_ATTACH), the values through `ps eww`.
+/// PT_DENY_ATTACH), the values read from outside ([`live_env`]).
+/// Failure messages name env entries, never their values.
 fn check_live_env(c: &mut Client, pid: i32, home: &Path) {
     let Reply::Pong { env_keys, dumpable, .. } = c.request(Request::Ping).unwrap() else { panic!("ping") };
     assert!(!env_keys.is_empty(), "ptyd reports its env names");
@@ -703,11 +704,56 @@ fn check_live_env(c: &mut Client, pid: i32, home: &Path) {
     if cfg!(target_os = "linux") {
         assert_eq!(dumpable, Some(false), "ptyd must be non-dumpable");
     } else {
-        let out = Command::new("ps").args(["eww", "-o", "command=", "-p", &pid.to_string()]).output().unwrap();
-        let env = String::from_utf8_lossy(&out.stdout).into_owned();
-        assert!(env.contains(&format!("K2_HOME={}", home.display())), "sanity: env readable: {env}");
-        assert!(!env.contains("leak-me-not") && !env.contains("NOTIFY_SOCKET"), "{env}");
+        let entries = live_env(pid);
+        let names: Vec<&str> = entries.iter().map(|e| e.split_once('=').map_or(e.as_str(), |(k, _)| k)).collect();
+        let want = format!("K2_HOME={}", home.display());
+        assert!(entries.iter().any(|e| e.contains(&want)), "sanity: env readable: {names:?}");
+        assert!(!entries.iter().any(|e| e.contains("leak-me-not") || e.contains("NOTIFY_SOCKET")), "{names:?}");
     }
+}
+
+/// macOS: another process's argv and env strings from
+/// `sysctl(KERN_PROCARGS2)`, for a process of our own uid only. Not
+/// `ps eww`: `ps` is setuid, so it can't run under a sandbox (the macOS
+/// compute node). A small copy of k2-core's `mac_proc`, since k2-ptyd
+/// doesn't depend on k2-core.
+#[cfg(target_os = "macos")]
+fn live_env(pid: i32) -> Vec<String> {
+    // SAFETY: proc_bsdinfo is plain old data; all zeroes is a valid value.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is a proc_bsdinfo of exactly `size` bytes.
+    let n = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    assert_eq!(n, size, "proc_pidinfo({pid}): {}", std::io::Error::last_os_error());
+    // SAFETY: getuid has no failure mode.
+    assert_eq!(info.pbi_uid, unsafe { libc::getuid() }, "ptyd runs as this test's uid");
+    let mut argmax: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>();
+    let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    // SAFETY: `argmax` is a c_int and `len` holds its size.
+    let rc = unsafe { libc::sysctl(mib.as_mut_ptr(), 2, (&mut argmax as *mut libc::c_int).cast(), &mut len, std::ptr::null_mut(), 0) };
+    assert_eq!(rc, 0, "KERN_ARGMAX: {}", std::io::Error::last_os_error());
+    let mut buf = vec![0u8; usize::try_from(argmax).expect("argmax")];
+    let mut len = buf.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    // SAFETY: `buf` is `len` writable bytes; the kernel sets `len` to what it wrote.
+    let rc = unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0) };
+    assert_eq!(rc, 0, "KERN_PROCARGS2({pid}): {}", std::io::Error::last_os_error());
+    buf.truncate(len);
+    // A native-endian i32 argc, the exec path, NUL padding, then the argv
+    // and env strings, each NUL-terminated.
+    let rest = &buf[4..];
+    let rest = &rest[rest.iter().position(|b| *b == 0).expect("exec path")..];
+    let rest = &rest[rest.iter().position(|b| *b != 0).expect("argv")..];
+    rest.split(|b| *b == 0).filter(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect()
+}
+
+/// Other Unix: `ps eww` (command line then env, one string). Built on
+/// Linux too, where the check reads `dumpable` instead.
+#[cfg(not(target_os = "macos"))]
+fn live_env(pid: i32) -> Vec<String> {
+    let out = Command::new("ps").args(["eww", "-o", "command=", "-p", &pid.to_string()]).output().unwrap();
+    vec![String::from_utf8_lossy(&out.stdout).into_owned()]
 }
 
 // ------------------------------------------------------------------ 6 (self-upgrade)

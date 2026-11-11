@@ -4238,7 +4238,13 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    #[cfg(unix)]
+    /// macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
+    #[cfg(target_os = "macos")]
+    fn parent_pid(pid: i32) -> i32 {
+        crate::mac_proc::bsd_info(pid).expect("bsd info").ppid
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
     fn parent_pid(pid: i32) -> i32 {
         let out = std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().unwrap();
         String::from_utf8_lossy(&out.stdout).trim().parse().expect("ppid")

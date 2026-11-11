@@ -84,6 +84,13 @@ fn wait_file(p: &PathBuf, within: Duration) -> String {
     }
 }
 
+/// macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
+#[cfg(target_os = "macos")]
+fn parent_pid(pid: i32) -> i32 {
+    k2_core::mac_proc::bsd_info(pid).expect("bsd info").ppid
+}
+
+#[cfg(not(target_os = "macos"))]
 fn parent_pid(pid: i32) -> i32 {
     let out = std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().unwrap();
     String::from_utf8_lossy(&out.stdout).trim().parse().expect("ppid")

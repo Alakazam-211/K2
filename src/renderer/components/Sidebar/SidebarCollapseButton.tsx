@@ -8,8 +8,9 @@ import { Button } from '@/components/ui'
  *  done; a nav already collapsed stays so, and the rail still opens it.
  *
  *  `reserveSlot` (the nav footer): the shared quiet Button, one system with
- *  Add Workspace / Add Agent and Get started (the control edge and cut
- *  corners in Terminal, the Frost round in Glass). While the checklist hides
+ *  Add Workspace / Add Agent and Get started (the control edge, 3:1, with
+ *  cut corners in Terminal and round in Glass; not Frost, whose rim is
+ *  under 3:1 on the nav). While the checklist hides
  *  it, it keeps its slot invisible (out of the tab order and the
  *  accessibility tree), so the footer row keeps one shape. */
 export function SidebarCollapseButton({ reserveSlot = false }: { reserveSlot?: boolean } = {}): React.JSX.Element | null {
@@ -25,7 +26,6 @@ export function SidebarCollapseButton({ reserveSlot = false }: { reserveSlot?: b
       <Button
         variant="quiet"
         size="md"
-        data-material="frost"
         data-frost-shape="round"
         data-nav-control=""
         data-nav-collapse=""

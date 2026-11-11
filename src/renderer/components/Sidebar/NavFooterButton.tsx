@@ -1,9 +1,10 @@
 // The nav footer's main action (Add Workspace, Add Agent): the shared quiet
 // Button, so the footer is one button system with the Get started bubble and
-// the collapse button. In Terminal it carries the control edge (3:1 on every
-// ground) and the cut corners; in Glass it stays the nav's Frost pill
-// (`data-material="frost"` + `data-nav-control` win over the Button's own
-// fill, edge and radius).
+// the collapse button, and the same outlined control as Settings' quiet
+// buttons: the control edge (3:1 on every ground) in both Styles, with the
+// cut corners in Terminal and a pill in Glass (`data-frost-shape="pill"`).
+// Not Frost: the Frost rim is a material sheen, under 3:1 on the nav.
+// `data-nav-control` gives it the nav's control height and hover.
 //
 // `[--k2-ch-bw:1px]`: the nav sits in an unbordered Surface, whose
 // `--k2-ch-bw: 0px` is inherited and would leave the cut corners without
@@ -34,7 +35,6 @@ export const NavFooterButton = forwardRef<HTMLButtonElement, NavFooterButtonProp
       ref={ref}
       variant="quiet"
       size="md"
-      data-material="frost"
       data-frost-shape="pill"
       data-nav-control=""
       title={label}

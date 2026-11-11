@@ -196,6 +196,8 @@ describe('sidebar collapse button', () => {
     // The footer's button: the shared quiet Button (cut corners in Terminal).
     expect(slot().getAttribute('data-k2-chamfer')).toBe('control')
     expect(slot().className).toContain('border-[var(--color-control-edge)]')
+    // Not Frost: its rim is under 3:1 on the nav, the control edge isn't.
+    expect(slot().hasAttribute('data-material')).toBe(false)
     expect(collapse()).toBe(slot())
     showChecklist()
     // Still drawn (so Add Workspace keeps its width), but not there for anyone.
@@ -223,6 +225,8 @@ describe('nav footer action', () => {
     const btn = screen.getByRole('button', { name: 'Add Workspace' })
     expect(btn.getAttribute('data-k2-chamfer')).toBe('control')
     expect(btn.className).toContain('border-[var(--color-control-edge)]')
+    expect(btn.hasAttribute('data-material')).toBe(false)
+    expect(btn.getAttribute('data-frost-shape')).toBe('pill')
     expect(btn.className).toContain('whitespace-nowrap')
     expect(btn.getAttribute('title')).toBe('Add Workspace')
     expect(btn.parentElement!.className).toContain('@container')

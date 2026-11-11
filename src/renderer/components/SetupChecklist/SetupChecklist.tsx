@@ -364,8 +364,13 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
 
 /** The hidden list, as a small bubble where the list sits. Clicking it
  *  brings the list back (`POST first-run/show`); a failed show keeps the
- *  bubble and says so quietly. Minimal styling on the shared Button and
- *  theme tokens; K2 Design owns its look. */
+ *  bubble and says so quietly.
+ *
+ *  Look (K2 Design): it reads as the theme's colour. The shared accent
+ *  Button (the accent fill, the on-accent label and icon, the primary's
+ *  hover and focus ring), in the theme's control shape: cut in Terminal,
+ *  the field radius (a pill) in Glass. Compact, at the sidebar's content
+ *  edge in the list's slot, so it sits in the nav's flow, not over it. */
 function GetStartedBubble({ error, className }: { error: string | null; className?: string }): React.JSX.Element {
   return (
     <section
@@ -373,13 +378,13 @@ function GetStartedBubble({ error, className }: { error: string | null; classNam
       className={cx('flex flex-col gap-1 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0', className)}
     >
       <Button
-        variant="quiet"
+        variant="accent"
         data-testid="setup-get-started"
         aria-label={GET_STARTED_LABEL}
-        className="self-start flex-shrink-0 inline-flex items-center gap-1.5 rounded-[var(--radius-pill)]"
+        className="self-start flex-shrink-0 inline-flex items-center gap-1.5 font-medium"
         onClick={() => void useFirstRunStore.getState().show()}
       >
-        <span aria-hidden="true" className="flex text-[var(--color-accent)]">
+        <span aria-hidden="true" className="flex">
           <ChecklistIcon size={12} />
         </span>
         {GET_STARTED_TEXT}

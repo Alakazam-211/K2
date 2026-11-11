@@ -253,6 +253,29 @@ describe('SetupChecklist', () => {
     expect(isSetupChecklistShowing()).toBe(false)
   })
 
+  it('the bubble reads as the theme colour: the accent Button, its icon in the label colour, the control shape', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    const btn = await screen.findByTestId('setup-get-started')
+    // The accent fill with the on-accent label (and the accent Button's hover
+    // and focus ring, so it follows the shared primary).
+    expect(btn.className).toContain('bg-[var(--color-accent-fill)]')
+    expect(btn.className).toContain('text-[var(--color-on-accent)]')
+    expect(btn.className).toContain('k2-focus')
+    // The theme's control shape: cut in Terminal, the field radius (a pill)
+    // in Glass; no shape of its own.
+    expect(btn.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(btn.className).toContain('rounded-[var(--radius-field)]')
+    expect(btn.className).not.toContain('radius-pill')
+    // The icon takes the label's colour, not the accent (it would vanish on
+    // the accent fill).
+    const icon = btn.querySelector('[data-k2-icon="checklist"]')!.parentElement!
+    expect(icon.className).not.toContain('color-accent')
+    // It sits in the sidebar's flow at the list's spot, not floating.
+    const slot = btn.closest('[data-setup-checklist-collapsed]')!
+    expect(slot.className).not.toMatch(/\b(absolute|fixed)\b/)
+  })
+
   it('the bubble POSTs show and the full list comes back', async () => {
     h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
     h.daemonCliPost.mockResolvedValue(body())

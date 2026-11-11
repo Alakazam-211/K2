@@ -1838,6 +1838,21 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         })
 }
 
+/// The text K2 writes for a static built-in pack (the manager pack,
+/// Kessel's, wiki hygiene, subagents, browser); `None` for live, path and
+/// user packs. Agent templates keep these up to date through the lock's
+/// checksums (prd-agent-templates-v1 AT10).
+pub fn static_pack_body(source: &str) -> Option<&'static str> {
+    Some(match source {
+        "catalog:manager" => MANAGER_PACK_MD,
+        KESSEL_PACK_SOURCE => KESSEL_PACK_MD,
+        WIKI_HYGIENE_SOURCE => WIKI_HYGIENE_PACK_MD,
+        SUBAGENTS_PACK_SOURCE => SUBAGENTS_PACK_MD,
+        BROWSER_PACK_SOURCE => BROWSER_PACK_MD,
+        _ => return None,
+    })
+}
+
 fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
     if slug_from_user_source(&entry.source).is_some() {
         return true;

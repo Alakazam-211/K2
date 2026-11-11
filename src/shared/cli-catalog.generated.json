@@ -434,6 +434,16 @@
     "description": "Remove a saved template: every version, or one with --version. An agent removes only templates it saved (else exit 3). K2's built-ins and their old ids can't be removed."
    },
    {
+    "name": "agent template diff",
+    "usage": "k2 agent template diff <ws> | <id> <vA> <vB> [--json]",
+    "description": "With <ws>: what k2 agent template upgrade would do to that agent, file by file, with the lines that change; writes nothing. With <id> <vA> <vB>: two versions of a saved template, file by file. An agent diffs its own workspace only."
+   },
+   {
+    "name": "agent template upgrade",
+    "usage": "k2 agent template upgrade <ws> [--dry-run] [--json]",
+    "description": "Move an agent to its template's newest version. A file the agent never changed is replaced; one it changed is kept and the new text lands beside it as <file>.proposed; one it deleted stays deleted. In ROLE.md only the K2:MANAGED block is replaced. New notes, layers, skills and context are added; new heartbeats and suggested permissions are only listed. Never changes permissions, tool, model, name or connections. The agent gets one inbox note. K2's built-ins upgrade by themselves when K2 updates; a saved template only with this command. An agent upgrades its own workspace only. Exit 4 when the workspace wasn't made from a template."
+   },
+   {
     "name": "agent conf",
     "usage": "k2 agent conf [<name>] [--json]",
     "description": "Show all of an agent's settings: name, path, mode, enabled, persona, connections (always mutual), project memberships (PoC marked), live status. Default: the agent in the current directory (exit 4 if unregistered)."

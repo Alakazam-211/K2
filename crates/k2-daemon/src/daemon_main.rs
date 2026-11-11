@@ -3107,6 +3107,23 @@ fn run_workspace_legacy_migrations_sweep() {
         workspace::promote_legacy_heartbeat(&project.path);
         workspace::repair_mismigrated_heartbeats(&project.path);
         let _ = workspace::archive_orphan_top_tier_agents(&project.path);
+        // prd-agent-templates-v1 §4 (T5): a built-in template newer than the
+        // agent's lock upgrades with K2 (files the agent never touched are
+        // replaced; changed ones get `.proposed`); every template's stacked
+        // packs follow the same checksum rule (AT10). Library templates
+        // upgrade only on request.
+        match k2_core::hire::template::upgrade_at_start(&project.path) {
+            Ok(Some(r)) if r.changed || r.from != r.to => log_debug!(
+                "[daemon/migrations] agent template {} {}→{} on {} (changed={})",
+                r.id,
+                r.from,
+                r.to,
+                project.path,
+                r.changed
+            ),
+            Ok(_) => {}
+            Err(e) => log_debug!("[daemon/migrations] agent template upgrade on {}: {}", project.path, e),
+        }
         ensure_all_skills_up_to_date(&project.path);
         // GH #40: say so loudly when the regen above could not leave the
         // agent a readable charter (foreign dangling link, write failure).

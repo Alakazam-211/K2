@@ -348,7 +348,7 @@ pub fn charter(tpl: &Template, vars: &BTreeMap<String, String>, plan: &AnswerPla
 }
 
 /// The ROLE.md body under the generated frontmatter.
-fn role_body(display_name: &str, charter: &str) -> String {
+pub(crate) fn role_body(display_name: &str, charter: &str) -> String {
     format!(
         "# Persona — {display_name}\n\n{}\n{charter}{}\n\n## Your notes\n\n_Yours: K2 never changes anything below this line._\n",
         crate::skills::version::SKILL_BEGIN_MARKER,
@@ -475,6 +475,17 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         let added = steps::add_context(inp.path, std::slice::from_ref(id))?;
         rows.push(row("catalog", id.clone(), if added { "done" } else { "skip" }, (!added).then_some("stacked")));
     }
+    // AT10: a static pack the template stacked is K2's text while the agent
+    // leaves it alone, so the upgrade can refresh it by checksum.
+    if !dry {
+        for id in &t.meta.context.catalog {
+            let Ok(e) = crate::workspace::context_layers::resolve_catalog_entry(id) else { continue };
+            let Some(body) = crate::workspace::context_layers::static_pack_body(&e.source) else { continue };
+            if !files.contains_key(&e.path) && std::fs::read_to_string(Path::new(inp.path).join(&e.path)).is_ok_and(|t| t == body) {
+                files.insert(e.path.clone(), sha256_text(body));
+            }
+        }
+    }
 
     // The template's own layers: written only if missing (AT2).
     for (label, md) in t.layers() {
@@ -586,7 +597,11 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         suggested: permissions.suggested.clone(),
         granted: permissions.granted.clone(),
         carded: permissions.carded.clone(),
+        kept: prev.as_ref().map(|l| l.kept.clone()).unwrap_or_default(),
         files,
+        // What the text was rendered with: the first apply's, kept after.
+        vars: prev.as_ref().map(|l| l.vars.clone()).unwrap_or_else(|| vars.clone()),
+        answers: prev.as_ref().map(|l| l.answers.clone()).unwrap_or_else(|| inp.answers.clone()),
     };
     let lock_changed = prev.as_ref().is_none_or(|p| !p.same_content(&next));
     let wrote_something = rows.iter().any(|r| r.status == "done");
@@ -628,7 +643,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
 
 /// The hiring agent's handle (or name), when an agent hires (`None` when
 /// its workspace can't be found: the line then names no one).
-fn hirer_agent_name(caller: &HireCaller) -> Option<String> {
+pub(crate) fn hirer_agent_name(caller: &HireCaller) -> Option<String> {
     let HireCaller::Agent { workspace_id } = caller else { return None };
     let db = crate::db::shared();
     let conn = db.lock();

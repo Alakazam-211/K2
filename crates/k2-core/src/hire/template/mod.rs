@@ -23,6 +23,7 @@ pub mod lock;
 pub mod render;
 pub mod save;
 pub mod sets;
+pub mod upgrade;
 
 #[cfg(test)]
 mod tests;
@@ -35,6 +36,7 @@ pub use apply::{apply, apply_with, ApplyReport, ApplyRequest, PermissionPlan, Qu
 pub use format::{Fills, Kind, Origin, Question, Template, TemplateToml};
 pub use lock::{TemplateLock, LOCK_REL};
 pub use save::{SaveInput, SaveOutcome, TemplateError};
+pub use upgrade::{upgrade, upgrade_at_start, UpgradeReport};
 
 use super::{HireCaller, HireError};
 

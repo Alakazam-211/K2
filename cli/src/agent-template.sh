@@ -14,6 +14,8 @@ USAGE
   k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]
   k2 agent template add <dir> [--dry-run] [--json]
   k2 agent template remove <id> [--version N] [--json]
+  k2 agent template diff <ws> | <id> <vA> <vB> [--json]
+  k2 agent template upgrade <ws> [--dry-run] [--json]
 
 COMMANDS
   list            Every type you can hire: K2's ten built-ins (general, lead,
@@ -45,6 +47,22 @@ COMMANDS
   remove <id>     Remove a saved template (every version, or --version N).
                   An agent removes only templates it saved. K2's built-ins
                   can't be removed.
+  diff <ws>       What an upgrade would do to an agent made from a template,
+                  file by file, with the lines that change. Writes nothing.
+  diff <id> <vA> <vB>
+                  Two versions of a saved template, file by file.
+  upgrade <ws>    Move an agent to its template's newest version. A file the
+                  agent never changed is replaced; one it changed is kept,
+                  and the new text lands beside it as <file>.proposed to read
+                  and merge. A file it deleted stays deleted. In ROLE.md only
+                  the K2:MANAGED block is replaced; the agent's own part is
+                  never touched. New notes, layers, skills and context are
+                  added; new heartbeats and suggested permissions are only
+                  listed. Never changes permissions, tool, model, name or
+                  connections. The agent gets one inbox note saying what
+                  changed. K2's built-ins upgrade by themselves when K2
+                  updates; a saved template only with this command. An agent
+                  upgrades its own folder only.
 
 QUESTIONS
   Each built-in asks its person a few short questions on its first start,
@@ -66,7 +84,7 @@ FLAGS
   --summary <s>   save: one line on what it is for (default: none)
   --wiki <note>   save: take this wiki note too (repeatable; none by default)
   --version N     remove: only this version
-  --dry-run       save, add: show what would be written; write nothing
+  --dry-run       save, add, upgrade: show what would be written; write nothing
   --json          JSON output
 
 EXAMPLES
@@ -76,6 +94,9 @@ EXAMPLES
   k2 agent template save . --id my-writer --wiki "Voice and style"
   k2 agent hire --template my-writer --name "Ada"
   k2 agent template remove my-writer --version 1
+  k2 agent template diff .
+  k2 agent template diff my-writer 1 2
+  k2 agent template upgrade . --dry-run
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
   k2 agent hire --template writer --name "Max" --answer audience="Founders" --answer samples="https://example.k2.dev/blog"
 EOF
@@ -191,6 +212,40 @@ if v:
     b["version"] = int(v)
 print(json.dumps(b))')" \
                 remove "$as_json" ;;
+        upgrade|diff)
+            shift
+            local args=() dry=false as_json=false
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --dry-run) [ "$sub" = upgrade ] || { echo "diff writes nothing; --dry-run is for upgrade" >&2; exit 2; }; dry=true; shift ;;
+                    --json) as_json=true; shift ;;
+                    --help|-h) cmd_help_agent_template; exit 0 ;;
+                    -*) echo "Unknown flag: $1 (see: k2 agent template --help)" >&2; exit 2 ;;
+                    *) args+=("$1"); shift ;;
+                esac
+            done
+            local n=${#args[@]} body
+            if [ "$n" -eq 1 ]; then
+                local ws="${args[0]}"
+                if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+                body="$(WS="$ws" TDRY="$dry" python3 -c 'import json, os; print(json.dumps({"workspace": os.environ["WS"], "dryRun": os.environ["TDRY"] == "true"}))')"
+            elif [ "$n" -eq 3 ] && [ "$sub" = diff ]; then
+                body="$(TID="${args[0]}" A="${args[1]#v}" B="${args[2]#v}" python3 -c '
+import json, os, sys
+try:
+    a, b = int(os.environ["A"]), int(os.environ["B"])
+except ValueError:
+    print("versions are numbers: k2 agent template diff <id> 1 2", file=sys.stderr); sys.exit(2)
+print(json.dumps({"id": os.environ["TID"], "from": a, "to": b}))')" || exit 2
+            else
+                if [ "$sub" = diff ]; then
+                    echo "Usage: k2 agent template diff <ws> | <id> <vA> <vB>  (<ws>: a folder or handle; . for this one)" >&2
+                else
+                    echo "Usage: k2 agent template upgrade <ws> [--dry-run]  (<ws>: a folder or handle; . for this one)" >&2
+                fi
+                exit 2
+            fi
+            _agent_template_post "/cli/agent-templates/$sub" "$body" "$sub" "$as_json" ;;
         *)
             echo "Unknown: k2 agent template $sub (see: k2 agent template --help)" >&2; exit 2 ;;
     esac
@@ -257,6 +312,35 @@ if mode in ("save", "add"):
         print("Nothing written (dry run). Run it again without --dry-run to save.")
     else:
         print("Hire from it: k2 agent hire --template %s --name <name>" % d.get("id"))
+    sys.exit(0)
+if "rows" in d:
+    a, b = d.get("from"), d.get("to")
+    if a == b:
+        print("%s template: already on v%s (%s)" % (d.get("name"), a, d.get("id")))
+    else:
+        print("%s template: v%s -> v%s (%s)%s" % (d.get("name"), a, b, d.get("id"), "  [dry run]" if d.get("dryRun") else ""))
+    for r in d.get("rows") or []:
+        if r.get("status") == "unchanged":
+            continue
+        print("  %-9s %-10s %s%s" % (r.get("status"), r.get("step"), r.get("target"), ("  (" + r["reason"] + ")") if r.get("reason") else ""))
+        if r.get("proposed"):
+            print("            new text: %s" % r["proposed"])
+        if r.get("diff"):
+            for line in r["diff"].splitlines():
+                print("            " + line)
+    if d.get("dryRun"):
+        print("Nothing written.%s" % ("" if a == b else " Upgrade: k2 agent template upgrade <ws>"))
+    elif d.get("changed"):
+        print("Done. The agent has an inbox note saying what changed.")
+    else:
+        print("Nothing to change.")
+    sys.exit(0)
+if "files" in d and mode == "diff":
+    print("%s: v%s -> v%s" % (d.get("id"), d.get("from"), d.get("to")))
+    for f in d.get("files") or []:
+        print("  %-8s %s" % (f.get("status"), f.get("path")))
+        for line in (f.get("diff") or "").splitlines():
+            print("           " + line)
     sys.exit(0)
 print(json.dumps(d, indent=2))
 '

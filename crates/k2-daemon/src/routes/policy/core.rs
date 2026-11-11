@@ -27,9 +27,13 @@ pub(super) const ROWS: &[Route] = &[
     // T6 (Save as template): people at Admin; an agent passport its own
     // workspace only, and removes only what it saved (the handler checks).
     post("/cli/agent-templates/add", Admin),
+    // T5: what an upgrade would do (or two versions), and the upgrade. POST
+    // because the workspace is a path; an agent its own workspace only.
+    post("/cli/agent-templates/diff", Admin),
     post("/cli/agent-templates/remove", Admin),
     post("/cli/agent-templates/save", Admin),
     get("/cli/agent-templates/show", Member),
+    post("/cli/agent-templates/upgrade", Admin),
     post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),
     // 0.45.5 app identity surface: an App pass (agent:handle /

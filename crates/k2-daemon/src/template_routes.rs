@@ -5,6 +5,8 @@
 //! POST /cli/agent-templates/save    {workspace, id, name?, summary?, wiki?, dryRun?}
 //! POST /cli/agent-templates/add     {dir, dryRun?}
 //! POST /cli/agent-templates/remove  {id, version?}
+//! POST /cli/agent-templates/upgrade {workspace, dryRun?}          (T5)
+//! POST /cli/agent-templates/diff    {workspace} | {id, from, to}  (T5)
 //! ```
 //!
 //! **Who.** People at the Admin floor (the owner token, an Owner or Admin
@@ -29,9 +31,12 @@ use crate::compute_routes::Who;
 pub const CLI_SAVE: &str = "/cli/agent-templates/save";
 pub const CLI_ADD: &str = "/cli/agent-templates/add";
 pub const CLI_REMOVE: &str = "/cli/agent-templates/remove";
+/// T5: POST because the workspace is a path.
+pub const CLI_UPGRADE: &str = "/cli/agent-templates/upgrade";
+pub const CLI_DIFF: &str = "/cli/agent-templates/diff";
 
 /// Every route here (all POST-only).
-pub const PATHS: &[&str] = &[CLI_SAVE, CLI_ADD, CLI_REMOVE];
+pub const PATHS: &[&str] = &[CLI_SAVE, CLI_ADD, CLI_REMOVE, CLI_UPGRADE, CLI_DIFF];
 
 /// The standing V1 actions K2 can read on a workspace (each has its own
 /// switch): what Save as template turns into `suggest`.
@@ -163,6 +168,8 @@ pub(crate) fn handle(path: &str, who: &Who, is_post: bool, body: &[u8]) -> CliRe
         CLI_SAVE => save_route(&c, &v),
         CLI_ADD => add_route(&c, &v),
         CLI_REMOVE => remove_route(&c, &v),
+        CLI_UPGRADE => upgrade_route(&c, &v),
+        CLI_DIFF => diff_route(&c, &v),
         _ => CliResponse::not_found(),
     }
 }
@@ -287,6 +294,50 @@ fn remove_route(c: &Caller, v: &serde_json::Value) -> CliResponse {
             audit("agent-template-remove", c, &format!("ok {id} {:?}", out["removed"]));
             CliResponse::ok_json(out.to_string())
         }
+        Err(e) => respond(&e),
+    }
+}
+
+/// `upgrade {workspace, dryRun?}`: the workspace's template to its newest
+/// version (a library template only here; built-ins also at start). An
+/// agent upgrades its own workspace only (AT14).
+fn upgrade_route(c: &Caller, v: &serde_json::Value) -> CliResponse {
+    let ws = match workspace_for(c, s(v, "workspace")) {
+        Ok(w) => w,
+        Err(r) => return r,
+    };
+    let dry = flag(v, "dryRun");
+    match k2_core::hire::template::upgrade(&ws.path, None, c.author(), dry, dry) {
+        Ok(r) => {
+            if !dry && (r.changed || r.from != r.to) {
+                audit("agent-template-upgrade", c, &format!("ok {} {} {}→{}", ws.handle, r.id, r.from, r.to));
+                crate::v1_hire::emit_hire_watches();
+            }
+            CliResponse::ok_json(serde_json::to_value(&r).unwrap_or_default().to_string())
+        }
+        Err(e) => respond(&e),
+    }
+}
+
+/// `diff {workspace}`: what `upgrade` would do, with line diffs (writes
+/// nothing). `diff {id, from, to}`: two versions of a template.
+fn diff_route(c: &Caller, v: &serde_json::Value) -> CliResponse {
+    if v.get("workspace").is_some() {
+        let ws = match workspace_for(c, s(v, "workspace")) {
+            Ok(w) => w,
+            Err(r) => return r,
+        };
+        return match k2_core::hire::template::upgrade(&ws.path, None, c.author(), true, true) {
+            Ok(r) => CliResponse::ok_json(serde_json::to_value(&r).unwrap_or_default().to_string()),
+            Err(e) => respond(&e),
+        };
+    }
+    let num = |k: &str| v.get(k).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|t| t.trim_start_matches('v').parse().ok()))).and_then(|n| u32::try_from(n).ok());
+    let (Some(id), Some(a), Some(b)) = (s(v, "id"), num("from"), num("to")) else {
+        return fail(400, "usage", "pass {workspace} (what an upgrade would do) or {id, from, to} (two versions)");
+    };
+    match k2_core::hire::template::upgrade::diff_versions(id, a, b) {
+        Ok(out) => CliResponse::ok_json(out.to_string()),
         Err(e) => respond(&e),
     }
 }

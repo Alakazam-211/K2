@@ -12,7 +12,7 @@ use crate::hire_routes::handle_cli;
 use crate::hire_routes::test_support::ensure_test_root;
 use k2_core::connect_users::Role;
 
-use super::{CLI_ADD, CLI_REMOVE, CLI_SAVE};
+use super::{CLI_ADD, CLI_DIFF, CLI_REMOVE, CLI_SAVE, CLI_UPGRADE};
 
 fn uniq(prefix: &str) -> String {
     format!("{prefix}-{}", &uuid::Uuid::new_v4().simple().to_string()[..10])
@@ -104,7 +104,7 @@ fn template_save_route_follows_the_contract() {
     let admin = Who::Login { username: "ada".into(), role: Role::Admin };
     let (st, out) = post(CLI_SAVE, admin, json!({ "workspace": path, "id": uniq("ada"), "dryRun": true }));
     assert_eq!((st, out["author"].as_str()), (200, Some("user:ada")), "{out}");
-    for p in [CLI_SAVE, CLI_ADD, CLI_REMOVE] {
+    for p in [CLI_SAVE, CLI_ADD, CLI_REMOVE, CLI_UPGRADE, CLI_DIFF] {
         let r = handle_cli(p, Who::Owner, false, b"", &HashMap::new(), None);
         assert_eq!(r.status, "405 Method Not Allowed", "{p}");
         assert!(crate::routes::route_policy::post_allowed(p), "{p} is in route_policy as POST");
@@ -152,4 +152,42 @@ fn template_add_route_holds_an_agent_to_its_workspace() {
     let (st, e) = post(CLI_ADD, Who::Owner, json!({ "dir": "relative/dir" }));
     assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
     let _ = std::fs::remove_dir_all(&outside);
+}
+
+/// T5 through the doors: upgrade and diff, an agent on its own workspace
+/// only, a workspace with no template, two library versions diffed.
+#[test]
+fn template_upgrade_and_diff_routes() {
+    let _home = k2_core::test_env::TempHome::new();
+    let (ws, path, _) = hire();
+    // A current built-in: nothing to do.
+    let (st, r) = post(CLI_UPGRADE, Who::Owner, json!({ "workspace": path, "dryRun": true }));
+    assert_eq!(st, 200, "{r}");
+    assert_eq!((r["dryRun"].as_bool(), r["changed"].as_bool(), r["from"].clone()), (Some(true), Some(false), r["to"].clone()), "{r}");
+    let (st, r) = post(CLI_UPGRADE, agent(&ws), json!({ "workspace": path }));
+    assert_eq!(st, 200, "an agent upgrades its own workspace: {r}");
+    let (st, d) = post(CLI_DIFF, agent(&ws), json!({ "workspace": path }));
+    assert_eq!((st, d["id"].as_str()), (200, Some("writer")), "{d}");
+    let (other, _, _) = hire();
+    for p in [CLI_UPGRADE, CLI_DIFF] {
+        let (st, e) = post(p, agent(&other), json!({ "workspace": path }));
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("own_workspace_only")), "{p}: {e}");
+    }
+    // A workspace no template made.
+    let plain = ensure_test_root().join(uniq("plain"));
+    let (st, out) = post(crate::hire_routes::CLI_HIRE, Who::Owner, json!({ "path": plain }));
+    assert_eq!(st, 200, "{out}");
+    let (st, e) = post(CLI_UPGRADE, Who::Owner, json!({ "workspace": plain }));
+    assert_eq!((st, e["error"]["code"].as_str()), (404, Some("no_template")), "{e}");
+    // Two library versions.
+    let id = uniq("two");
+    for _ in 0..2 {
+        let (st, out) = post(CLI_SAVE, Who::Owner, json!({ "workspace": path, "id": id }));
+        assert_eq!(st, 200, "{out}");
+    }
+    let (st, d) = post(CLI_DIFF, Who::Owner, json!({ "id": id, "from": 1, "to": "v2" }));
+    assert_eq!(st, 200, "{d}");
+    assert!(d["files"].as_array().unwrap().iter().any(|f| f["path"] == "template.toml" && f["status"] == "changed"), "{d}");
+    let (st, e) = post(CLI_DIFF, Who::Owner, json!({ "id": id }));
+    assert_eq!((st, e["error"]["code"].as_str()), (400, Some("usage")), "{e}");
 }

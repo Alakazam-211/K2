@@ -32,11 +32,25 @@ pub struct TemplateLock {
     /// Suggestions filed as cards for a person (T3).
     #[serde(default)]
     pub carded: Vec<String>,
+    /// Files the agent had changed when an upgrade came: kept, with the new
+    /// text beside each as `<file>.proposed` (T5).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kept: Vec<String>,
     /// Workspace-relative path → sha256 of the text as written. For
-    /// `.k2/agent/ROLE.md` it is the K2:MANAGED block's body. The upgrade
+    /// `.k2/agent/ROLE.md` it is the K2:MANAGED block's body; a static
+    /// catalog pack the template stacked is here too (AT10). The upgrade
     /// (T5) replaces a file only while its sha still matches.
     #[serde(default)]
     pub files: BTreeMap<String, String>,
+    /// The values the template's text was rendered with (`name`, `person`,
+    /// the params, `open_questions`), so an upgrade renders the next
+    /// version the same way. Empty in a lock written before upgrades.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vars: BTreeMap<String, String>,
+    /// The hire's answers to the template's questions (they are in ROLE.md
+    /// or a starter note already).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub answers: BTreeMap<String, String>,
 }
 
 pub fn lock_path(workspace: &str) -> PathBuf {

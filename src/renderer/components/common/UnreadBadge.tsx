@@ -24,7 +24,9 @@ import type { ServerScope } from '@/kessel/server-scope'
 const PILL =
   'min-w-[14px] h-[14px] inline-flex items-center justify-center text-[8px] font-bold text-[var(--color-on-accent)] rounded-[var(--radius-badge)] px-0.5'
 const DOT = 'inline-block w-1.5 h-1.5 rounded-[var(--radius-badge)]'
-const UNREAD_BG = 'bg-[var(--color-accent)]'
+// The accent Button's fill, so the white count reads at 4.5:1 in every look
+// (the bright accent is 3.7:1 in Charcoal and Glass); a dot holds 3:1 on it.
+const UNREAD_BG = 'bg-[var(--color-accent-fill)]'
 const MUTED_BG = 'bg-[var(--color-text-muted)]'
 const WAITING_BG = 'bg-[var(--color-status-needs-you)]'
 const TICKET_PILL =

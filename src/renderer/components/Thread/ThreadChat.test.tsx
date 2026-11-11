@@ -227,6 +227,29 @@ describe('every K2 Style paints the chat as it paints the Thread', () => {
     expect(scope.style.getPropertyValue('--zen-bubble-me')).toBe('')
     expect(scope.querySelector('[data-zen-bubble]')).not.toBeNull()
   })
+
+  it('your bubble takes the accent Button fill on the desktop; a Garden keeps its own', () => {
+    expect((THREAD_ZEN_DESKTOP_TOKENS as Record<string, string>)['--zen-bubble-me']).toBe('var(--color-accent-fill)')
+    expect((THREAD_ZEN_DESKTOP_TOKENS as Record<string, string>)['--zen-bubble-me-text']).toBe('var(--color-on-accent)')
+    // A Garden root sets --zen-bubble-me itself; the shared bubble inside it
+    // reads that value, and nothing on the way down replaces it.
+    const { container } = render(
+      <div data-zen-root="" style={{ '--zen-bubble-me': '#2563eb' } as React.CSSProperties}>
+        <ThreadChatZenContext.Provider value={true}>
+          <ThreadChatScope testId="scope">
+            <ThreadChatBubble id="b" author="owner" body="yo" createdAt={1} mine timeLabel="now" />
+          </ThreadChatScope>
+        </ThreadChatZenContext.Provider>
+      </div>,
+    )
+    const root = must(container.querySelector('[data-zen-root]') as HTMLElement | null, 'garden')
+    expect(root.style.getPropertyValue('--zen-bubble-me')).toBe('#2563eb')
+    const mine = must(container.querySelector('[data-zen-bubble="me"]') as HTMLElement | null, 'bubble')
+    expect(mine.style.background).toBe('var(--zen-bubble-me)')
+    for (let el: HTMLElement | null = mine; el && el !== root; el = el.parentElement) {
+      expect(el.style.getPropertyValue('--zen-bubble-me')).toBe('')
+    }
+  })
 })
 
 describe('the message box', () => {

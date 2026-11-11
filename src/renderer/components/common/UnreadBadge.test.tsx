@@ -120,7 +120,7 @@ describe('UnreadBadge', () => {
     const { container, rerender } = render(<UnreadBadge unread={7} />)
     const count = container.querySelector('[data-unread-count]')
     expect(count?.textContent).toBe('7')
-    expect(count?.className).toContain('bg-[var(--color-accent)]')
+    expect(count?.className).toContain('bg-[var(--color-accent-fill)]')
     expect(count?.getAttribute('data-muted')).toBe('false')
     rerender(<UnreadBadge unread={100} />)
     expect(container.querySelector('[data-unread-count]')?.textContent).toBe('99+')
@@ -134,6 +134,7 @@ describe('UnreadBadge', () => {
     expect(count?.textContent).toBe('3')
     expect(count?.getAttribute('data-muted')).toBe('true')
     expect(count?.className).toContain('bg-[var(--color-text-muted)]')
+    expect(count?.className).not.toContain('bg-[var(--color-accent-fill)]')
     expect(count?.className).not.toContain('bg-[var(--color-accent)]')
   })
 

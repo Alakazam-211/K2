@@ -94,7 +94,10 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-control-edge': 'var(--color-control-edge, var(--color-border))',
   '--zen-focus-ring': 'var(--color-accent-text, var(--color-accent))',
   '--zen-type-sm': 'var(--type-sm, 0.8em)',
-  '--zen-bubble-me': 'var(--color-accent)',
+  // Your bubble takes the accent Button's fill, deep enough for its white
+  // words to read at 4.5:1 (the bright accent is 3.7:1 in Charcoal and
+  // Glass). The tail and the selection read this too. A Garden sets its own.
+  '--zen-bubble-me': 'var(--color-accent-fill)',
   '--zen-bubble-me-text': 'var(--color-on-accent)',
   '--zen-bubble-agent': 'var(--color-bubble-agent, var(--color-bg-elevated))',
   '--zen-bubble-agent-text': 'var(--color-text-primary)',

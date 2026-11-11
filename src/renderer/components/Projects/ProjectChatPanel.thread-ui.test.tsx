@@ -168,7 +168,7 @@ describe('project chat in the Thread look', () => {
       const root = await mount()
       const scope = screen.getByTestId('project-chat-thread')
       expect(scope.hasAttribute('data-k2-thread-zen')).toBe(true)
-      expect(scope.style.getPropertyValue('--zen-bubble-me')).toBe('var(--color-accent)')
+      expect(scope.style.getPropertyValue('--zen-bubble-me')).toBe('var(--color-accent-fill)')
       const [agent, mine] = Array.from(root.querySelectorAll('[data-zen-message]')) as HTMLElement[]
       expect(agent.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe('agent')
       expect(agent.querySelector('[data-thread-author]')?.textContent).toBe('Ada')

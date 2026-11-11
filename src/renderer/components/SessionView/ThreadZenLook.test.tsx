@@ -478,7 +478,7 @@ describe('the activity drawer on the Thread\'s message box', () => {
       // The whole column is one Zen Thread box with the app's colours.
       const column = screen.getByTestId('agent-session-thread')
       expect(column.hasAttribute('data-k2-thread-zen')).toBe(true)
-      expect(column.style.getPropertyValue('--zen-bubble-me')).toBe('var(--color-accent)')
+      expect(column.style.getPropertyValue('--zen-bubble-me')).toBe('var(--color-accent-fill)')
     } finally {
       Element.prototype.getBoundingClientRect = orig
     }

@@ -32,6 +32,8 @@ function stubWidths(widths: { bar: number; title: number; picker?: number; hint?
     if (el.hasAttribute('data-tile-lead')) return 16
     if (el.hasAttribute('data-tile-shortcut')) return 20
     if (el.hasAttribute('data-tile-close')) return 24
+    if (el.getAttribute('data-tile-tool') === 'bell') return 24
+    if (el.hasAttribute('data-tile-button')) return 24
     return 0
   }
   for (const key of ['clientWidth', 'offsetWidth', 'scrollWidth'] as const) {
@@ -190,5 +192,74 @@ describe('PaneChrome', () => {
     expect(CSS).toContain('[data-tile-bar]:hover [data-tile-shortcut],')
     expect(CSS).toContain('[data-tile]:has(:focus-visible:not(textarea, input, [contenteditable])) [data-tile-shortcut] { opacity: 1; }')
     expect(document.querySelector('[data-tile]')).not.toBeNull()
+  })
+
+  describe('an agent tile’s bell and search (TileBarTools)', () => {
+    const tools = (
+      <>
+        <span className="flex" data-tile-tool="bell"><button type="button" data-tile-button="">bell</button></span>
+        <span className="flex" data-tile-tool="search"><button type="button" data-tile-button="">search</button></span>
+      </>
+    )
+    const tile = (): React.JSX.Element => (
+      <PaneChrome
+        title="Design System"
+        shortcutNum={2}
+        readOnly={false}
+        focused={false}
+        onClose={() => {}}
+        onHeaderMouseDown={() => { pressed++ }}
+        lead={<span />}
+        picker={<div />}
+        tools={tools}
+        tileView="thread"
+      >
+        <div />
+      </PaneChrome>
+    )
+    let pressed = 0
+
+    it('sit at the bar’s right end, before ⌘N and the ×, and make the tile the search’s host', () => {
+      render(tile())
+      const end = bar().querySelector('[data-tile-end]') as HTMLElement
+      const order = Array.from(end.children).map((c) => (c.hasAttribute('data-tile-shortcut') ? 'keys' : c.hasAttribute('data-tile-tools') ? 'tools' : c.querySelector('[data-tile-close]') ? 'close' : '?'))
+      expect(order).toEqual(['tools', 'keys', 'close'])
+      expect(document.querySelector('[data-tile]')!.hasAttribute('data-thread-floats-host')).toBe(true)
+      expect(bar().getAttribute('data-tile-bell')).toBe('on')
+    })
+
+    it('never start a drag', () => {
+      pressed = 0
+      render(tile())
+      screen.getByText('search').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      expect(pressed).toBe(0)
+      bar().dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      expect(pressed).toBe(1)
+    })
+
+    it('a pane without them is no search host and has no bell state', () => {
+      render(agentTile())
+      expect(document.querySelector('[data-tile]')!.hasAttribute('data-thread-floats-host')).toBe(false)
+      expect(bar().hasAttribute('data-tile-bell')).toBe(false)
+    })
+
+    it('fold the bell after ⌘N, before the name truncates', () => {
+      // No CSS in jsdom: name 16 + 90, picker 96, ⌘N 20, tools 24 + 24, × 24.
+      // Following needs 106 + 96 + 20 + 48 + 24 + 1 = 295; without ⌘N 275.
+      let restore = stubWidths({ bar: 295, title: 90, picker: 96 })
+      render(tile())
+      expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['on', 'on'])
+      cleanup(); restore()
+      restore = stubWidths({ bar: 275, title: 90, picker: 96 })
+      render(tile())
+      expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['off', 'on'])
+      cleanup(); restore()
+      restore = stubWidths({ bar: 274, title: 90, picker: 96 })
+      render(tile())
+      expect([bar().getAttribute('data-tile-keys'), bar().getAttribute('data-tile-bell')]).toEqual(['off', 'off'])
+      restore()
+      // A folded bell collapses like ⌘N (globals.css).
+      expect(CSS).toContain('[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"] { max-width: 0;')
+    })
   })
 })

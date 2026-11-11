@@ -180,6 +180,68 @@ describe('Thread view’s search object', () => {
   })
 })
 
+/** An agent tile (Projects): the tile is the host, the search sits in its bar. */
+function BarPane({ children }: { children?: ReactNode }): React.JSX.Element {
+  return (
+    <div data-testid="host" data-thread-floats-host="">
+      <div data-tile-bar="">
+        <ThreadFloatSearch bar={{ className: 'bar-button', 'data-tile-button': '' }} />
+      </div>
+      <div data-testid="thread-list" tabIndex={-1} />
+      {children}
+    </div>
+  )
+}
+
+describe('the search in a bar (an agent tile’s)', () => {
+  it('is the bar’s own button, not a floating object, with the label and the shortcut', () => {
+    render(<BarPane />)
+    const b = screen.getByTestId('thread-search-button')
+    expect(b.className).toBe('bar-button')
+    expect(b.hasAttribute('data-tile-button')).toBe(true)
+    expect(b.hasAttribute('data-k2-float')).toBe(false)
+    expect(b.hasAttribute('data-material')).toBe(false)
+    expect(b.getAttribute('aria-label')).toBe('Search this Thread')
+    expect(b.getAttribute('title')).toBe('Search (⌘F)')
+    expect(b.getAttribute('aria-keyshortcuts')).toBe('Meta+F')
+    expect(b.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('opens the field under the bar; the button stays, pressed; the Thread pads by the field', () => {
+    render(<BarPane />)
+    fireEvent.click(screen.getByTestId('thread-search-button'))
+    const b = screen.getByTestId('thread-search-button')
+    expect(b.getAttribute('aria-expanded')).toBe('true')
+    const field = screen.getByRole('search')
+    expect(field.parentElement?.hasAttribute('data-bar-search-drop')).toBe(true)
+    expect(field.getAttribute('data-k2-float')).toBe('pill')
+    expect(document.activeElement).toBe(screen.getByLabelText('Search messages in this Thread'))
+    // jsdom has no layout: the field is 0px tall, so the pad is its two gaps.
+    expect(host().style.getPropertyValue('--thread-float-inset')).toBe('12px')
+    fireEvent.click(b)
+    expect(screen.queryByRole('search')).toBeNull()
+    expect(host().style.getPropertyValue('--thread-float-inset')).toBe('')
+    expect(document.activeElement).toBe(b)
+  })
+
+  it('Esc closes it and gives focus back to the button', () => {
+    render(<BarPane />)
+    fireEvent.click(screen.getByTestId('thread-search-button'))
+    fireEvent.keyDown(screen.getByLabelText('Search messages in this Thread'), { key: 'Escape' })
+    expect(screen.queryByRole('search')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByTestId('thread-search-button'))
+    expect(host().style.getPropertyValue('--thread-float-inset')).toBe('')
+  })
+
+  it('⌘F anywhere in the host opens it, and the Thread shares its state', () => {
+    render(<BarPane />)
+    fireEvent.keyDown(screen.getByTestId('thread-list'), { key: 'f', metaKey: true })
+    expect(screen.getByRole('search')).not.toBeNull()
+    fireEvent.change(screen.getByLabelText('Search messages in this Thread'), { target: { value: 'pricing' } })
+    expect(threadSearchState(host()).query).toBe('pricing')
+  })
+})
+
 describe('with the Thread', () => {
   const g = globalThis as unknown as { CSS?: unknown; Highlight?: unknown }
   let reg: Map<string, { ranges: Range[] }>

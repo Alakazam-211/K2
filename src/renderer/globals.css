@@ -2416,12 +2416,14 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
    While the name fits beside it, the picker is centred (equal side
    columns); when it doesn't, the picker follows the name and the controls
    keep the right end. PaneChrome measures and sets `data-tile-fit`, and
-   hides the hint, then the ⌘N slot, before the name truncates. A hidden
-   part collapses to no width (so it can still be measured). */
+   hides the hint, then the ⌘N slot, then the bell, before the name
+   truncates. A hidden part collapses to no width (so it can still be
+   measured). */
 [data-tile-bar][data-tile-fit="centred"] { grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-fit="follow"] { grid-template-columns: minmax(0, max-content) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-hint="off"] [data-tile-hint],
-[data-tile-bar][data-tile-keys="off"] [data-tile-shortcut] { max-width: 0; margin: 0; overflow: hidden; visibility: hidden; }
+[data-tile-bar][data-tile-keys="off"] [data-tile-shortcut],
+[data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"] { max-width: 0; margin: 0; overflow: hidden; visibility: hidden; }
 /* ⌘N is a shortcut hint, not content: it shows while the pointer is on the
    bar and while keyboard focus is on a control in the tile (not while
    typing in its message box or terminal). It keeps its slot, so nothing
@@ -2429,6 +2431,25 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
 [data-tile-shortcut] { opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-ease-standard); }
 [data-tile-bar]:hover [data-tile-shortcut],
 [data-tile]:has(:focus-visible:not(textarea, input, [contenteditable])) [data-tile-shortcut] { opacity: 1; }
+/* An agent tile's search (TileBarTools, ThreadFloatSearch `bar`): the button
+   stays in the bar, and the field opens just under it, over the top of the
+   tile's Thread, at the right, as wide as reads well. The Thread pads by it
+   meanwhile (--thread-float-inset on the tile), and the bar lifts over the
+   body so the field paints above the Thread. The field is Thread view's own
+   pill (Frost in Glass, cut in Terminal). */
+[data-tile-bar]:has([data-bar-search-drop]) { z-index: 30; }
+[data-bar-search-drop] {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 8px;
+  width: min(280px, calc(100% - 16px));
+  display: flex;
+  cursor: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+[data-bar-search-drop] > [data-thread-search] { flex: 1 1 auto; min-width: 0; }
+[data-bar-search-drop] .thread-search-input { flex: 1 1 auto; width: auto; min-width: 3ch; }
 
 /* A narrow agent tile (Projects): the picker takes its own row, centred and
    tighter, so all four views stay reachable; the name and the close button

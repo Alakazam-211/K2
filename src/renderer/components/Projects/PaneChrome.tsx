@@ -1,9 +1,11 @@
 // A dashboard pane's chrome (ProjectDashboard): the 32px bar (title, close,
-// drag to move) over the pane's body.
+// drag to move) over the pane's body. An agent tile's bar also holds its view
+// picker and its Thread's bell and search (TileBarTools).
 
 import type React from 'react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { DialogCloseButton, Surface } from '@/components/ui'
+import { THREAD_FLOATS_HOST_ATTR } from '@/components/SessionView/threadFloats'
 import type { TileView } from './tile-view'
 import { fitTileBar, measureTileBar, sameTileBarFit, TILE_BAR_FIT_DEFAULT, type TileBarFit } from './tile-bar-fit'
 
@@ -30,6 +32,9 @@ function useTileBarFit(deps: unknown[]): [React.RefObject<HTMLDivElement | null>
     ro?.observe(bar)
     const picker = bar.querySelector('[data-tile-picker]')
     if (picker) ro?.observe(picker)
+    // The bell and search (the bell arrives after its project is found).
+    const tools = bar.querySelector('[data-tile-tools]')
+    if (tools) ro?.observe(tools)
     void document.fonts?.ready.then(run)
     return () => {
       live = false
@@ -50,17 +55,22 @@ export function PaneChrome({
   onHeaderMouseDown,
   lead,
   picker,
+  tools,
   tileView,
   children,
 }: {
   title: string
   hint?: string
-  /** Before the title: an agent tile's 16px picture. */
+  /** Before the title: an agent tile's 18px picture. */
   lead?: React.ReactNode
   /** An agent tile's view picker, in the bar's centre while the name fits
    *  beside it (prd-projects-threads-v1 §3.1). Its segments are buttons, so
    *  pressing one never starts a drag. */
   picker?: React.ReactNode
+  /** An agent tile's bell and search (TileBarTools), at the bar's right end
+   *  before ⌘N and the ×. Given, the tile is its Thread search's host
+   *  (`data-thread-floats-host`): ⌘F anywhere in the tile searches. */
+  tools?: React.ReactNode
   /** An agent tile's view: `data-tile-view` on the tile, read by focus
    *  (⌘1–9, Esc) and Ctrl+`. */
   tileView?: TileView
@@ -72,7 +82,7 @@ export function PaneChrome({
   onHeaderMouseDown?: (e: React.MouseEvent) => void
   children: React.ReactNode
 }): React.JSX.Element {
-  const [barRef, fit] = useTileBarFit([title, hint, shortcutNum, readOnly, !!picker, !!lead])
+  const [barRef, fit] = useTileBarFit([title, hint, shortcutNum, readOnly, !!picker, !!lead, !!tools, tileView])
   const name = (
     <>
       {lead && (
@@ -92,9 +102,18 @@ export function PaneChrome({
   )
   const controls = (
     <>
+      {tools ? (
+        // The bell and search, then a thin rule setting them off from the
+        // tile's own ⌘N and × (the owner's mockup, 2026-11-11). Buttons, so
+        // pressing one never starts a drag.
+        <span className="flex flex-none items-center" data-tile-tools="" onMouseDown={(e) => e.stopPropagation()}>
+          {tools}
+          <span aria-hidden="true" className="w-px h-3.5 mx-1 flex-none bg-[var(--color-border)]" data-tile-sep="" />
+        </span>
+      ) : null}
       {/* ⌘N pane-switch badge, left of the close button: a shortcut hint,
           so it shows on the bar's hover and on keyboard focus in the tile
-          (globals.css). */}
+          (globals.css). It keeps its slot, so nothing moves. */}
       {shortcutNum !== undefined && (
         <span
           className="flex-none whitespace-nowrap overflow-hidden mr-2 type-hint text-[var(--color-text-muted)] tabular-nums"
@@ -126,9 +145,11 @@ export function PaneChrome({
     'data-tile-bar': '',
     'data-tile-hint': hint ? (fit.hint ? 'on' : 'off') : undefined,
     'data-tile-keys': shortcutNum !== undefined ? (fit.keys ? 'on' : 'off') : undefined,
+    'data-tile-bell': tools ? (fit.bell ? 'on' : 'off') : undefined,
     onMouseDown: readOnly ? undefined : onHeaderMouseDown,
   }
-  const bar = `h-8 gap-2 pl-2 pr-1 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
+  // `relative`: an open search field hangs from the bar (globals.css).
+  const bar = `relative h-8 gap-2 pl-2 pr-1 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
     readOnly ? '' : 'cursor-grab'
   }`
   return (
@@ -137,6 +158,7 @@ export function PaneChrome({
       bordered={false}
       data-tile=""
       data-tile-view={tileView}
+      {...(tools ? { [THREAD_FLOATS_HOST_ATTR]: '' } : {})}
       className={`flex flex-col h-full min-w-0 min-h-0 border transition-colors ${
         focused ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
       }`}

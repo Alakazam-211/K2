@@ -35,15 +35,6 @@ import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { InputsList } from '@/components/SessionView/ThreadDrawerPanel'
 import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
-import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
-import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
-import {
-  THREAD_FLOATS_GRID,
-  ThreadFloatScrim,
-  threadFloatShown,
-  useThreadFloats,
-  type ThreadFloatsPlace,
-} from '@/components/SessionView/threadFloats'
 import { threadTextCapPx } from '@/components/SessionView/threadTextWidth'
 import { DEFAULT_SPLIT_LEFT, DEFAULT_SPLIT_RIGHT, type SessionViewTab } from '@/components/SessionView/sessionViewTab'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -145,7 +136,7 @@ export function TileViewPicker({ view, onView }: { view: TileView; onView: (next
 
 // ── The bar's picture ────────────────────────────────────────────────────
 
-/** The agent's picture for the tile's bar, 16px. */
+/** The agent's picture for the tile's bar, 18px (the owner's mockup). */
 export function TilePicture({ name, addr }: { name: string; addr: string }): JSX.Element {
   const room = useRoom()
   return (
@@ -153,38 +144,15 @@ export function TilePicture({ name, addr }: { name: string; addr: string }): JSX
       data-testid="tile-picture"
       data-k2-chamfer="control"
       aria-hidden="true"
-      className="flex-shrink-0 block w-4 h-4 overflow-hidden rounded-[var(--radius-pill)] bg-[var(--color-bg-elevated)]"
+      className="flex-shrink-0 block w-[18px] h-[18px] overflow-hidden rounded-[var(--radius-pill)] bg-[var(--color-bg-elevated)]"
     >
       {addr ? (
         <Suspense fallback={null}>
-          <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={16} />
+          <AgentAvatar addr={addr} label={name} host={room.scope.isPrimary ? null : room.scope.hostKey} size={18} />
         </Suspense>
       ) : null}
     </span>
   )
-}
-
-// ── Floats over a tile's Thread or Chatter ───────────────────────────────
-
-/** Only search and the bell float over a tile's Thread (search alone over
- *  its Chatter): the bar already names the agent and holds the picker. */
-function TileFloats({ place, workspaceId }: { place: ThreadFloatsPlace; workspaceId: string }): JSX.Element {
-  const ref = useThreadFloats(true)
-  return (
-    <div ref={ref} className={THREAD_FLOATS_GRID} data-thread-floats="" data-testid="tile-floats">
-      <ThreadFloatScrim />
-      <div className="relative z-[1] flex min-w-0 items-center gap-1.5 thread-float-group" data-compact="">
-        {threadFloatShown('bell', place) ? <ThreadFloatBell projectId={workspaceId} /> : null}
-        {threadFloatShown('search', place) ? <ThreadFloatSearch /> : null}
-      </div>
-    </div>
-  )
-}
-
-function floatsPlaceFor(view: TileView): ThreadFloatsPlace | null {
-  if (view === 'thread') return 'tile'
-  if (view === 'chatter') return 'tileChatter'
-  return null
 }
 
 // ── The tile body ────────────────────────────────────────────────────────
@@ -196,8 +164,11 @@ export function DashboardAgentTile({
   initialPhase,
   view,
   addr,
+  onAsleep,
 }: {
   workspaceId: string
+  /** The bar's "asleep" hint: told whenever the agent falls asleep or wakes. */
+  onAsleep?: (asleep: boolean) => void
   /** null when the workspace left the project or was unregistered: the tile
    *  degrades to a placeholder, never breaks. */
   member: ProjectGroupMemberInfo | null
@@ -232,6 +203,10 @@ export function DashboardAgentTile({
       return initialPhase
     })
   }, [initialPhase])
+
+  useEffect(() => {
+    onAsleep?.(phase.kind === 'dormant')
+  }, [phase.kind, onAsleep])
 
   // A live attach means the client is watching: Active.
   useEffect(() => {
@@ -271,15 +246,12 @@ export function DashboardAgentTile({
     )
   }
 
-  const place = floatsPlaceFor(view)
-  const floats = place ? <TileFloats place={place} workspaceId={workspaceId} /> : null
   const heartbeats = view === 'heartbeats' ? <InputsList cwd={projectPath} active={pageLive} /> : null
 
   if (phase.kind === 'live') {
     // One tree for every view, so TerminalPane never remounts on a switch.
     return (
       <TileHost view={view}>
-        {floats}
         {heartbeats}
         <div
           className="relative flex-1 min-h-0 min-w-0 flex flex-col"
@@ -347,7 +319,6 @@ export function DashboardAgentTile({
   if (view === 'chatter') {
     return (
       <TileHost view={view}>
-        {floats}
         <div className="flex-1 min-h-0 min-w-0" data-testid="agent-session-chatter">
           <ChatterOverlayPane addr={addr} conversationId={null} active={pageLive} textCapPx={textCap} />
         </div>
@@ -376,7 +347,6 @@ export function DashboardAgentTile({
     ) : null
   return (
     <TileHost view={view}>
-      {floats}
       <ThreadOverlayColumn
         addr={addr}
         conversationId={null}
@@ -391,7 +361,8 @@ export function DashboardAgentTile({
   )
 }
 
-/** The floats' host: the Thread under it pads by their height. */
+/** The tile's body for a view. Its bell and search are in the bar
+ *  (TileBarTools); the tile itself is their host. */
 function TileHost({ view, children }: { view: TileView; children: ReactNode }): JSX.Element {
   return (
     <div className="relative h-full min-h-0 min-w-0 flex flex-col overflow-hidden" data-testid="tile-body" data-tile-body={view}>

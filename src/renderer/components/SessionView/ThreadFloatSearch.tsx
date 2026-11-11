@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type JSX, type KeyboardEvent } from 'react'
 import { isMacPlatform } from '@/lib/desktop-chrome'
-import { floatProps } from './threadFloats'
+import { floatProps, THREAD_FLOAT_INSET_VAR, type FloatButtonLook } from './threadFloats'
 import {
   closeThreadSearch,
   currentMatchIndex,
@@ -20,6 +20,10 @@ const KEEPS_FIND_KEY = '[data-terminal-container], .cm-editor, .monaco-editor, [
 export const THREAD_SEARCHING_ATTR = 'data-thread-searching'
 /** At or under this header width the field has the row to itself. */
 export const THREAD_SEARCH_TIGHT_PX = 380
+
+/** In a bar (an agent tile's): the field opens this far under it, and the
+ *  Thread pads by the field and this gap above and below it. */
+export const BAR_SEARCH_GAP_PX = 6
 
 /** The find shortcut for this platform: ⌘F on a Mac, Ctrl+F elsewhere. */
 export function isThreadFindKey(e: Pick<globalThis.KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>, mac: boolean): boolean {
@@ -57,11 +61,20 @@ const INNER_BUTTON =
 
 /** Thread view's search object, right of the bell: a round button that
  *  opens a field in the same row. The Thread below finds and highlights
- *  (useThreadSearchPane); this owns the field, the count and the keys. */
-export function ThreadFloatSearch(): JSX.Element {
+ *  (useThreadSearchPane); this owns the field, the count and the keys.
+ *
+ *  `bar`: drawn in a bar instead (an agent tile's, Projects), as that bar's
+ *  button. The button stays put, pressed while the field is open, and the
+ *  field opens just under the bar, over the top of the Thread, which pads by
+ *  it meanwhile (`--thread-float-inset` on the host), so the first message
+ *  and a match scrolled to are never under it. The host is the bar's pane
+ *  (`data-thread-floats-host`), so ⌘F anywhere in it searches. */
+export function ThreadFloatSearch({ bar }: { bar?: FloatButtonLook } = {}): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
+  const dropRef = useRef<HTMLDivElement>(null)
+  const inBar = !!bar
   const resolveHost = useCallback(() => threadSearchHost(rootRef.current), [])
   const s = useThreadSearchState(resolveHost)
   const mac = isMacPlatform()
@@ -160,8 +173,34 @@ export function ThreadFloatSearch(): JSX.Element {
     }
   }, [s.open])
 
+  // In a bar, the open field sits over the top of the Thread: the Thread
+  // pads by it (and its gaps) while it's open.
+  useLayoutEffect(() => {
+    const drop = dropRef.current
+    const host = inBar && s.open ? resolveHost() : null
+    if (!drop || !host) return
+    const publish = (): void => {
+      const h = Math.ceil(drop.getBoundingClientRect().height)
+      host.style.setProperty(THREAD_FLOAT_INSET_VAR, `${h + 2 * BAR_SEARCH_GAP_PX}px`)
+    }
+    publish()
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(publish)
+    ro?.observe(drop)
+    return () => {
+      ro?.disconnect()
+      host.style.removeProperty(THREAD_FLOAT_INSET_VAR)
+    }
+  }, [inBar, s.open, resolveHost])
+
   // Closed elsewhere (the pane left Thread view): nothing stays painted.
   useEffect(() => () => closeThreadSearch(resolveHost()), [resolveHost])
+  // In a bar, the host is found while mounted (its ref is gone by the time
+  // an unmount's cleanup runs), so a view switch closes it for sure.
+  useEffect(() => {
+    if (!inBar) return
+    const host = resolveHost()
+    return () => closeThreadSearch(host)
+  }, [inBar, resolveHost])
 
   const onKeyDown = (e: KeyboardEvent<HTMLElement>): void => {
     if (e.key === 'Escape') {
@@ -177,54 +216,81 @@ export function ThreadFloatSearch(): JSX.Element {
   }
 
   const shortcut = mac ? '⌘F' : 'Ctrl+F'
+  const field = (
+    <div
+      role="search"
+      aria-label="Search this Thread"
+      data-thread-search=""
+      {...floatProps(true, 'pill')}
+      className="gap-1 pl-2 pr-1"
+      onKeyDown={onKeyDown}
+    >
+      <span className="text-[var(--color-text-muted)] inline-flex"><SearchGlyph size={12} /></span>
+      <input
+        ref={inputRef}
+        type="search"
+        data-testid="thread-search-input"
+        aria-label="Search messages in this Thread"
+        aria-keyshortcuts="Enter Shift+Enter Escape"
+        placeholder="Search"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        enterKeyHint="search"
+        value={s.query}
+        onChange={(e) => updateThreadSearch(resolveHost(), { query: e.target.value, current: null })}
+        className="thread-search-input min-w-0 bg-transparent border-0 p-0 outline-none text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]"
+      />
+      <span
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="thread-search-count"
+        data-empty={status.text === 'No matches' ? '' : undefined}
+        className="thread-search-count flex-shrink-0 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap"
+      >
+        <span aria-hidden="true">{status.text}</span>
+        <span className="sr-only">{status.spoken}</span>
+      </span>
+      <button type="button" className={INNER_BUTTON} aria-label="Older match" title="Older match (Enter)" disabled={total === 0} onClick={() => step(1)} data-testid="thread-search-older">
+        <Chevron up />
+      </button>
+      <button type="button" className={INNER_BUTTON} aria-label="Newer match" title="Newer match (Shift+Enter)" disabled={total === 0} onClick={() => step(-1)} data-testid="thread-search-newer">
+        <Chevron up={false} />
+      </button>
+      <button type="button" className={INNER_BUTTON} aria-label="Close search" title="Close search (Esc)" onClick={() => close(true)} data-testid="thread-search-close">
+        <CloseGlyph />
+      </button>
+    </div>
+  )
+  if (bar) {
+    return (
+      <div ref={rootRef} className="flex min-w-0 items-center" data-testid="thread-search">
+        <button
+          ref={buttonRef}
+          type="button"
+          {...bar}
+          onClick={() => (s.open ? close(true) : open())}
+          aria-label="Search this Thread"
+          aria-expanded={s.open}
+          aria-keyshortcuts={mac ? 'Meta+F' : 'Control+F'}
+          title={`Search (${shortcut})`}
+          data-testid="thread-search-button"
+        >
+          <SearchGlyph />
+        </button>
+        {s.open ? (
+          <div ref={dropRef} data-bar-search-drop="">
+            {field}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
   return (
     <div ref={rootRef} className="flex min-w-0 items-center" data-testid="thread-search">
       {s.open ? (
-        <div
-          role="search"
-          aria-label="Search this Thread"
-          data-thread-search=""
-          {...floatProps(true, 'pill')}
-          className="gap-1 pl-2 pr-1"
-          onKeyDown={onKeyDown}
-        >
-          <span className="text-[var(--color-text-muted)] inline-flex"><SearchGlyph size={12} /></span>
-          <input
-            ref={inputRef}
-            type="search"
-            data-testid="thread-search-input"
-            aria-label="Search messages in this Thread"
-            aria-keyshortcuts="Enter Shift+Enter Escape"
-            placeholder="Search"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            enterKeyHint="search"
-            value={s.query}
-            onChange={(e) => updateThreadSearch(resolveHost(), { query: e.target.value, current: null })}
-            className="thread-search-input min-w-0 bg-transparent border-0 p-0 outline-none text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]"
-          />
-          <span
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            data-testid="thread-search-count"
-            data-empty={status.text === 'No matches' ? '' : undefined}
-            className="thread-search-count flex-shrink-0 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap"
-          >
-            <span aria-hidden="true">{status.text}</span>
-            <span className="sr-only">{status.spoken}</span>
-          </span>
-          <button type="button" className={INNER_BUTTON} aria-label="Older match" title="Older match (Enter)" disabled={total === 0} onClick={() => step(1)} data-testid="thread-search-older">
-            <Chevron up />
-          </button>
-          <button type="button" className={INNER_BUTTON} aria-label="Newer match" title="Newer match (Shift+Enter)" disabled={total === 0} onClick={() => step(-1)} data-testid="thread-search-newer">
-            <Chevron up={false} />
-          </button>
-          <button type="button" className={INNER_BUTTON} aria-label="Close search" title="Close search (Esc)" onClick={() => close(true)} data-testid="thread-search-close">
-            <CloseGlyph />
-          </button>
-        </div>
+        field
       ) : (
         <button
           ref={buttonRef}

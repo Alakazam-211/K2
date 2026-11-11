@@ -32,8 +32,8 @@ export type ThreadFloatShape = 'round' | 'pill' | 'name' | 'note' | 'capsule'
 /** Where a pane's floating objects are drawn: over the Thread on its own
  *  (Thread view), over the Chatter on its own (Chatter view), over split
  *  view's Thread column (else its Chatter column), under the bar that holds
- *  the rest (splitChrome.tsx), or over an agent tile's Thread or Chatter on
- *  the Projects page (`tile`, `tileChatter`). */
+ *  the rest (splitChrome.tsx), or in an agent tile's bar on the Projects
+ *  page, for its Thread or Chatter (`tile`, `tileChatter`). */
 export type ThreadFloatsPlace = 'thread' | 'chatter' | 'split' | 'tile' | 'tileChatter'
 
 /** Each floating object, by name. */
@@ -74,13 +74,14 @@ export const CHATTER_VIEW_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFlo
 ])
 
 /** An agent tile on the Projects page, in Thread view (prd-projects-threads-v1
- *  §3.3): the tile's bar already holds the name, picture and view picker, so
- *  only search and the bell float over the Thread. Restart, Token and the
- *  session history stay on the Agents page. */
+ *  §3.3): search and the bell only. They sit in the tile's bar, beside its
+ *  name and view picker, not floating over the Thread (Rosson, 2026-11-11;
+ *  Projects/TileBarTools.tsx). Restart, Token and the session history stay
+ *  on the Agents page. */
 export const TILE_THREAD_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['bell', 'search'])
 
-/** An agent tile in Chatter view: search only (the bell rings for the
- *  agent's turns with you, not for chatter). */
+/** An agent tile in Chatter view: search only, in the tile's bar (the bell
+ *  rings for the agent's turns with you, not for chatter). */
 export const TILE_CHATTER_FLOATS: ReadonlySet<ThreadFloatId> = new Set<ThreadFloatId>(['search'])
 
 const PLACE_FLOATS: Record<Exclude<ThreadFloatsPlace, 'thread'>, ReadonlySet<ThreadFloatId>> = {
@@ -89,6 +90,10 @@ const PLACE_FLOATS: Record<Exclude<ThreadFloatsPlace, 'thread'>, ReadonlySet<Thr
   tile: TILE_THREAD_FLOATS,
   tileChatter: TILE_CHATTER_FLOATS,
 }
+
+/** A host's own button look for an object it draws outside the floats (an
+ *  agent tile's bar): the class and data attributes replace the float's. */
+export type FloatButtonLook = { className: string } & { [attr: `data-${string}`]: string }
 
 /** Whether `id` is drawn in `place`: Thread view shows them all. */
 export function threadFloatShown(id: ThreadFloatId, place: ThreadFloatsPlace): boolean {

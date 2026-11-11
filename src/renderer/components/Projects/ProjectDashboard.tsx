@@ -80,6 +80,7 @@ import {
 import { TileState, TryAgain } from './TileState'
 import { emptyDashboardHint } from './ProjectStates'
 import { PaneChrome } from './PaneChrome'
+import { TileBarTools, tileToolsPlace } from './TileBarTools'
 import {
   FileViewerPane,
   getFileCategory,
@@ -162,8 +163,9 @@ const lookupByAgentForDashboard: (
 
 // ── Agent tile (prd-projects-threads-v1 §3) ──────────────────────────────
 
-/** An agent tile: the bar with the agent's picture and the view picker,
- *  over the view it picks (DashboardAgentTile). Viewers can switch views
+/** An agent tile: the bar with the agent's picture, the view picker and
+ *  the view's bell and search (TileBarTools), over the view it picks
+ *  (DashboardAgentTile). Viewers can switch views
  *  too: it changes nothing on the server. */
 function AgentTileFrame({
   groupId,
@@ -194,9 +196,13 @@ function AgentTileFrame({
 }): React.JSX.Element {
   const [view, setView] = useTileView(groupId, workspaceId, defaultView)
   const addr = useAgentTileAddr(workspaceId, member)
+  // A quiet "asleep" after the name (the owner's mockup); the body reports
+  // it, a local wake included.
+  const [asleep, setAsleep] = useState(initialPhase.kind === 'dormant')
   return (
     <PaneChrome
       title={title}
+      hint={asleep ? 'asleep' : undefined}
       shortcutNum={shortcutNum}
       readOnly={readOnly}
       focused={focused}
@@ -204,6 +210,7 @@ function AgentTileFrame({
       onHeaderMouseDown={onHeaderMouseDown}
       lead={<TilePicture name={title} addr={addr} />}
       picker={<TileViewPicker view={view} onView={setView} />}
+      tools={member && tileToolsPlace(view) ? <TileBarTools view={view} workspaceId={workspaceId} name={title} /> : undefined}
       tileView={view}
     >
       <DashboardAgentTile
@@ -213,6 +220,7 @@ function AgentTileFrame({
         initialPhase={initialPhase}
         view={view}
         addr={addr}
+        onAsleep={setAsleep}
       />
     </PaneChrome>
   )

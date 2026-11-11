@@ -8,7 +8,7 @@ import { useRoom } from '@/components/Room/RoomContext'
 import { BellIcon, BellOffIcon } from '@/components/common/BellIcons'
 import { Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingSwitchRow } from '@/components/Settings/controls/SettingControls'
-import { floatProps } from '@/components/SessionView/threadFloats'
+import { floatProps, type FloatButtonLook } from '@/components/SessionView/threadFloats'
 
 type SoundProject = { id: string; path: string; completionSoundEnabled?: number }
 
@@ -84,13 +84,21 @@ export function WorkspaceCompletionSoundToggle({
 }
 
 /** Drawer header bell: accent = workspace on, muted grey + slash = off.
- *  Thread view shows the same bell as one of its floating objects. */
+ *  Thread view shows the same bell as one of its floating objects; an agent
+ *  tile's bar (Projects) draws it as the bar's own button (`bar`). */
 export function WorkspaceCompletionSoundBell({
   project,
   floating = false,
+  bar,
+  label,
 }: {
   project: SoundProject
   floating?: boolean
+  /** The host bar's button look, in place of the drawer's or the float's. */
+  bar?: FloatButtonLook
+  /** The switch's own name (an agent tile's "Ring when sales finishes"):
+   *  on or off is its state, and the tooltip says which. */
+  label?: string
 }): React.JSX.Element {
   // Home M4: the drawer's room's server; a view-only room writes nothing.
   const room = useRoom()
@@ -118,17 +126,20 @@ export function WorkspaceCompletionSoundBell({
       aria-checked={enabled}
       disabled={busy}
       data-testid="workspace-completion-bell"
-      {...floatProps(floating, 'round')}
-      className="flex-shrink-0 p-0.5 no-drag cursor-pointer disabled:opacity-50 text-[var(--color-text-primary)]"
+      {...(bar ?? {
+        ...floatProps(floating, 'round'),
+        className: 'flex-shrink-0 p-0.5 no-drag cursor-pointer disabled:opacity-50 text-[var(--color-text-primary)]',
+      })}
       title={
-        enabled
-          ? 'Completion sound on — click to mute this workspace'
-          : 'Completion sound muted for this workspace'
+        label
+          ? `${label}${enabled ? '' : ' (off)'}`
+          : enabled
+            ? 'Completion sound on — click to mute this workspace'
+            : 'Completion sound muted for this workspace'
       }
       aria-label={
-        enabled
-          ? 'Mute completion sound for this workspace'
-          : 'Unmute completion sound for this workspace'
+        label ??
+        (enabled ? 'Mute completion sound for this workspace' : 'Unmute completion sound for this workspace')
       }
     >
       {enabled ? <BellIcon /> : <BellOffIcon />}

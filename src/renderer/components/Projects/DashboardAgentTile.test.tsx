@@ -47,8 +47,6 @@ vi.mock('@/components/SessionView/ThreadDrawerPanel', () => ({
     <div data-testid="heartbeats-list" data-cwd={cwd} data-active={String(active)} />
   ),
 }))
-vi.mock('@/components/SessionView/ThreadFloatBell', () => ({ ThreadFloatBell: () => <button type="button" data-testid="float-bell" /> }))
-vi.mock('@/components/SessionView/ThreadFloatSearch', () => ({ ThreadFloatSearch: () => <button type="button" data-testid="float-search" /> }))
 vi.mock('@/components/Thread/ThreadSenderAvatars', () => ({ AgentAvatar: () => <span /> }))
 vi.mock('@/stores/projects', () => ({ activateProject: vi.fn() }))
 const wake = vi.hoisted(() => ({ calls: [] as string[] }))
@@ -168,15 +166,15 @@ describe('a live tile', () => {
     expect(tileSessionViewTab('heartbeats')).toBe('chatter')
   })
 
-  it('floats search and the bell over the Thread, search alone over Chatter, none in Terminal', () => {
+  it('floats nothing over the Thread or Chatter: the bell and search are in the bar (TileBarTools)', () => {
     renderInRoom(room, <Tile />)
-    expect(screen.getByTestId('float-search')).toBeTruthy()
-    expect(screen.getByTestId('float-bell')).toBeTruthy()
-    pick('chatter')
-    expect(screen.getByTestId('float-search')).toBeTruthy()
-    expect(screen.queryByTestId('float-bell')).toBeNull()
-    pick('terminal')
-    expect(screen.queryByTestId('tile-floats')).toBeNull()
+    for (const v of ['thread', 'chatter', 'terminal', 'heartbeats']) {
+      pick(v)
+      expect(document.querySelector('[data-thread-floats]')).toBeNull()
+      expect(document.querySelector('[data-thread-floats-host]')).toBeNull()
+      expect(screen.queryByTestId('thread-search-button')).toBeNull()
+      expect(screen.queryByTestId('workspace-completion-bell')).toBeNull()
+    }
   })
 
   it('Heartbeats shows the workspace fires full-tile and hides the session under it', () => {
@@ -186,10 +184,25 @@ describe('a live tile', () => {
     expect(list.getAttribute('data-cwd')).toBe('/w/sales')
     expect(list.getAttribute('data-active')).toBe('true')
     expect((screen.getByTestId('tile-session') as HTMLElement).style.display).toBe('none')
-    expect(screen.queryByTestId('tile-floats')).toBeNull()
     pick('thread')
     expect(screen.queryByTestId('heartbeats-list')).toBeNull()
     expect((screen.getByTestId('tile-session') as HTMLElement).style.display).toBe('')
+  })
+})
+
+describe("the bar's asleep hint", () => {
+  it('is told when the agent is asleep, and when it wakes', async () => {
+    const told: boolean[] = []
+    const onAsleep = (a: boolean): void => {
+      told.push(a)
+    }
+    const { rerender } = renderInRoom(
+      room,
+      <DashboardAgentTile workspaceId="ws-sales" member={member} dashboardId="d1" initialPhase={DORMANT} view="thread" addr="sales" onAsleep={onAsleep} />,
+    )
+    expect(told.at(-1)).toBe(true)
+    rerender(<DashboardAgentTile workspaceId="ws-sales" member={member} dashboardId="d1" initialPhase={LIVE} view="thread" addr="sales" onAsleep={onAsleep} />)
+    expect(told.at(-1)).toBe(false)
   })
 })
 

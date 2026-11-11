@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   gets: [] as string[],
   posts: [] as Array<{ route: string; body: unknown }>,
   postError: null as Error | null,
+  getError: null as Error | null,
 }))
 
 const events = vi.hoisted(() => ({ handlers: new Set<(e: unknown) => void>() }))
@@ -35,6 +36,7 @@ vi.mock('@/lib/daemon-cli', async (orig) => {
     daemonCliGet: primaryOnly(async (route: string) => {
       if (route !== 'docs/cores') throw new Error(`unexpected GET ${route}`)
       h.gets.push(route)
+      if (h.getError) throw h.getError
       return h.cores
     }),
     daemonCliPost: primaryOnly(async (route: string, body: unknown) => {
@@ -120,6 +122,7 @@ beforeEach(() => {
   h.gets = []
   h.posts = []
   h.postError = null
+  h.getError = null
   events.handlers.clear()
 })
 
@@ -138,7 +141,7 @@ describe('Settings → Cores → Multiplayer', () => {
     expect(screen.getByRole('heading', { name: 'Multiplayer' })).toBeTruthy()
     expect(screen.getByText(MULTIPLAYER_INTRO)).toBeTruthy()
     expect(MULTIPLAYER_INTRO).toBe(
-      "People and agents work in the same file at the same time, with presence, history and everyone's own undo. Each kind of file has a core. When a core is on, files of that kind open in the multiplayer view on this server, for everyone, with the workspace's agent beside them. When it's off, they open the usual way. The server's owner or an Admin changes these.",
+      "People and agents work in the same file at the same time, with presence, history and everyone's own undo. Choose which kinds of files open this way on this server. It applies to everyone here; the rest open the usual way.",
     )
     // The rows are the daemon's, not a hard-coded list.
     expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual([
@@ -173,6 +176,7 @@ describe('Settings → Cores → Multiplayer', () => {
     fireEvent.click(sw('Markdown core'))
     await waitFor(() => expect(sw('Markdown core').getAttribute('aria-checked')).toBe('true'))
     expect(screen.queryByText('Turn off the Markdown core?')).toBeNull()
+    expect(within(row('markdown')).getByRole('status').textContent).toBe('The Markdown core is on for everyone on this server.')
     expect(h.posts).toEqual([{ route: 'settings/update', body: { multiplayerCores: { markdown: true } } }])
     expect(JSON.stringify(h.posts[0].body)).toBe('{"multiplayerCores":{"markdown":true}}')
     expect(h.gets).toEqual(['docs/cores', 'docs/cores'])
@@ -216,12 +220,14 @@ describe('Settings → Cores → Multiplayer', () => {
     expect(h.posts).toEqual([{ route: 'settings/update', body: { multiplayerCores: { markdown: false } } }])
   })
 
-  it("shows the daemon's refusal as one line under the row (role=alert)", async () => {
+  it("says what failed under the row, with the daemon's refusal quietly under it (role=alert)", async () => {
     await mount()
     h.postError = new DaemonHttpError('updating "multiplayerCores" requires the Owner or Admin role', 403, null)
     fireEvent.click(sw('Markdown core'))
     const alert = await within(row('markdown')).findByRole('alert')
-    expect(alert.textContent).toBe('updating "multiplayerCores" requires the Owner or Admin role')
+    expect(alert.textContent).toBe(
+      'Couldn’t turn on the Markdown core. It’s still off.The server said: updating "multiplayerCores" requires the Owner or Admin role.',
+    )
     expect(within(row('text')).queryByRole('alert')).toBeNull()
     expect(sw('Markdown core').getAttribute('aria-checked')).toBe('false')
   })
@@ -284,15 +290,34 @@ describe('Settings → Cores → Multiplayer', () => {
     expect(screen.queryByTestId('multiplayer-failed-markdown')).toBeNull()
   })
 
-  it('a malformed answer is an error, never a guess', async () => {
-    expect(() => parseDocCores({ ok: true, canChange: true, cores: [{ id: 'markdown' }] })).toThrow(
-      'docs/cores: cores[0].name is not a string',
-    )
-    expect(() => parseDocCores({ ok: true, cores: [] })).toThrow('docs/cores: the answer.canChange is not true or false')
-    h.cores = { ok: true, canChange: 'yes', cores: [] }
+  it('a malformed answer is a plain error card with Try again, never a guess or a crash', async () => {
+    expect(() => parseDocCores({ ok: true, canChange: true, cores: [{ id: 'markdown' }] })).toThrow('cores[0].name is not text')
+    expect(() => parseDocCores({ ok: true, cores: [] })).toThrow("the reply's canChange is not true or false")
+    expect(() => parseDocCores({})).toThrow('the reply has no list of cores')
+    h.cores = {}
     render(<MultiplayerSection />)
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toBe('docs/cores: the answer.canChange is not true or false')
+    expect(alert.textContent).toContain('Couldn’t load the multiplayer settings')
+    expect(alert.textContent).toContain('Details: the reply has no list of cores.')
+    expect(alert.textContent).not.toContain('docs/cores')
+    h.cores = answer()
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(3))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a refused read says so in words, with the server’s reason quietly', async () => {
+    h.getError = new DaemonHttpError('docs runtime is starting', 503, null)
+    render(<MultiplayerSection />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Couldn’t load the multiplayer settings')
+    expect(alert.textContent).toContain('The server said: docs runtime is starting.')
+  })
+
+  it('a server with no cores says so instead of an empty card', async () => {
+    h.cores = answer({ cores: [] })
+    render(<MultiplayerSection />)
+    expect((await screen.findByTestId('multiplayer-empty')).textContent).toContain('No kinds of files to choose yet')
   })
 
   it('search finds "Multiplayer" by name and keywords', () => {

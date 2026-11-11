@@ -70,32 +70,39 @@ export function multiplayerCoresAvailable(scope: ServerScope = primaryScope()): 
 }
 
 // ── Parsing (loud: a shape we don't know is an error, never a guess) ──
+// The messages are the quiet second line of the page's error card, so they
+// say what was wrong with the reply in words, without the route's name.
+
+/** `the reply's canChange`, `cores[0].name`. */
+function field(what: string, key: string): string {
+  return what === 'the reply' ? `the reply's ${key}` : `${what}.${key}`
+}
 
 function obj(v: unknown, what: string): Record<string, unknown> {
-  if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`docs/cores: ${what} is not an object`)
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${what} is not an object`)
   return v as Record<string, unknown>
 }
 
 function str(o: Record<string, unknown>, key: string, what: string): string {
   const v = o[key]
-  if (typeof v !== 'string') throw new Error(`docs/cores: ${what}.${key} is not a string`)
+  if (typeof v !== 'string') throw new Error(`${field(what, key)} is not text`)
   return v
 }
 
 function num(o: Record<string, unknown>, key: string, what: string): number {
   const v = o[key]
-  if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`docs/cores: ${what}.${key} is not a number`)
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`${field(what, key)} is not a number`)
   return v
 }
 
 function bool(o: Record<string, unknown>, key: string, what: string): boolean {
   const v = o[key]
-  if (typeof v !== 'boolean') throw new Error(`docs/cores: ${what}.${key} is not true or false`)
+  if (typeof v !== 'boolean') throw new Error(`${field(what, key)} is not true or false`)
   return v
 }
 
 function strings(v: unknown, what: string): string[] {
-  if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new Error(`docs/cores: ${what} is not a list of strings`)
+  if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new Error(`${what} is not a list of words`)
   return v as string[]
 }
 
@@ -112,7 +119,7 @@ function parseLastChange(v: unknown, what: string): DocCoreLastChange | null {
   if (v === null || v === undefined) return null
   const o = obj(v, `${what}.lastChange`)
   const w = `${what}.lastChange`
-  if (!Array.isArray(o.failed)) throw new Error(`docs/cores: ${w}.failed is not a list`)
+  if (!Array.isArray(o.failed)) throw new Error(`${w}.failed is not a list`)
   return {
     on: bool(o, 'on', w),
     by: str(o, 'by', w),
@@ -128,12 +135,12 @@ function parseLastChange(v: unknown, what: string): DocCoreLastChange | null {
 
 /** `GET /cli/docs/cores`'s body. Throws on any field it can't read. */
 export function parseDocCores(body: unknown): DocCores {
-  const o = obj(body, 'the answer')
-  if (!Array.isArray(o.cores)) throw new Error('docs/cores: "cores" is not a list')
+  const o = obj(body, 'the reply')
+  if (!Array.isArray(o.cores)) throw new Error('the reply has no list of cores')
   return {
-    canChange: bool(o, 'canChange', 'the answer'),
-    boardFilePreview: o.boardFilePreview === undefined ? null : bool(o, 'boardFilePreview', 'the answer'),
-    later: o.later === undefined ? [] : strings(o.later, '"later"'),
+    canChange: bool(o, 'canChange', 'the reply'),
+    boardFilePreview: o.boardFilePreview === undefined || o.boardFilePreview === null ? null : bool(o, 'boardFilePreview', 'the reply'),
+    later: o.later === undefined || o.later === null ? [] : strings(o.later, "the reply's later"),
     cores: o.cores.map((c, i) => {
       const what = `cores[${i}]`
       const co = obj(c, what)

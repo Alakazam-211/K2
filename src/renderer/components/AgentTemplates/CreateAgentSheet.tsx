@@ -239,7 +239,8 @@ function CreateAgentBody(): React.JSX.Element {
   }, [scope, listNonce])
 
   const [step, setStep] = useState<Step>('pick')
-  const [picked, setPicked] = useState<string | null>(null)
+  /** The person's pick; null: the first card. */
+  const [pickedId, setPicked] = useState<string | null>(null)
   const details = useRef(new Map<string, TemplateDetail>())
   const [detail, setDetail] = useState<TemplateDetail | null>(null)
   const [detailBusy, setDetailBusy] = useState(false)
@@ -247,16 +248,15 @@ function CreateAgentBody(): React.JSX.Element {
 
   const [name, setName] = useState('')
   const [nameTouched, setNameTouched] = useState(false)
-  const [handle, setHandle] = useState('')
-  const [handleTouched, setHandleTouched] = useState(false)
-  const [folder, setFolder] = useState('')
-  const [folderTouched, setFolderTouched] = useState(false)
+  /** What the person typed; null: follow the name (handle) or the handle (folder). */
+  const [handleInput, setHandle] = useState<string | null>(null)
+  const [folderInput, setFolder] = useState<string | null>(null)
   const [params, setParams] = useState<Record<string, string>>({})
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const [showProblems, setShowProblems] = useState(false)
 
-  const [tool, setTool] = useState<string | null>(null)
-  const [toolTouched, setToolTouched] = useState(false)
+  /** The person's pick; null: the template's suggestion or the server default. */
+  const [toolPick, setTool] = useState<string | null>(null)
 
   const [plan, setPlan] = useState<Load<HireResult> | null>(null)
   const [busy, setBusy] = useState(false)
@@ -267,26 +267,20 @@ function CreateAgentBody(): React.JSX.Element {
   const serverDefaultPreset = useMemo(() => resolveAgentPreset(enabledPresets, serverDefault)?.id ?? null, [enabledPresets, serverDefault])
 
   // The first card is chosen until the person picks.
-  useEffect(() => {
-    if (picked) return
-    const first = groups.builtIn[0] ?? groups.yours[0]
-    if (first) setPicked(first.id)
-  }, [groups, picked])
+  const picked = pickedId ?? groups.builtIn[0]?.id ?? groups.yours[0]?.id ?? null
 
   // The handle follows the name, and the folder the handle, until changed.
-  useEffect(() => {
-    if (!handleTouched) setHandle(handleFromName(name))
-  }, [name, handleTouched])
+  const handle = handleInput ?? handleFromName(name)
   const defaultFolder = folderFor(root, slugifyAddressToken(handle) ?? '')
-  useEffect(() => {
-    if (!folderTouched) setFolder(defaultFolder ?? '')
-  }, [defaultFolder, folderTouched])
+  const folderTouched = folderInput !== null
+  const folder = folderInput ?? defaultFolder ?? ''
 
-  // The template's suggestion (else the server default), until the person picks.
-  useEffect(() => {
-    if (toolTouched && tool && enabledPresets.some((p) => p.id === tool)) return
-    setTool(defaultPresetFor(enabledPresets, detail?.agent.tool, serverDefault))
-  }, [enabledPresets, detail, serverDefault, toolTouched, tool])
+  // The template's suggestion (else the server default), until the person
+  // picks (a pick that's no longer enabled falls back the same way).
+  const tool =
+    toolPick && enabledPresets.some((p) => p.id === toolPick)
+      ? toolPick
+      : defaultPresetFor(enabledPresets, detail?.agent.tool, serverDefault)
 
   const pickedSummary = list.state === 'ok' ? list.value.find((t) => t.id === picked) ?? null : null
 
@@ -563,7 +557,6 @@ function CreateAgentBody(): React.JSX.Element {
             aria-invalid={shown(problems.handle) ? true : undefined}
             aria-describedby={ids.handleHint}
             onChange={(e) => {
-              setHandleTouched(true)
               setHandle(e.target.value)
             }}
             data-testid="create-agent-handle"
@@ -589,7 +582,6 @@ function CreateAgentBody(): React.JSX.Element {
             spellCheck={false}
             aria-invalid={shown(problems.folder) ? true : undefined}
             onChange={(e) => {
-              setFolderTouched(true)
               setFolder(e.target.value)
             }}
             data-testid="create-agent-folder"
@@ -686,7 +678,6 @@ function CreateAgentBody(): React.JSX.Element {
                     value={p.id}
                     checked={tool === p.id}
                     onChange={() => {
-                      setToolTouched(true)
                       setTool(p.id)
                     }}
                     data-testid={`create-agent-tool-${p.id}`}

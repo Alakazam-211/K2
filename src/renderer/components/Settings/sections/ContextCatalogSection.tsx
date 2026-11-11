@@ -128,7 +128,8 @@ export function ContextCatalogSection(): React.JSX.Element {
             Add a pack to a workspace in{' '}
             <button
               type="button"
-              className="k2-focus underline hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+              data-k2-focus=""
+              className="relative px-0.5 -mx-0.5 underline hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
               onClick={() => useSettingsStore.getState().setSection('projects')}
             >
               Workspaces / Agents

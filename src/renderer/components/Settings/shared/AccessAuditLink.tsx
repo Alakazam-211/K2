@@ -11,7 +11,8 @@ export function AccessAuditLink({ className = '' }: { className?: string }): Rea
       Who signed in, from where and when:{' '}
       <button
         type="button"
-        className="underline hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+        data-k2-focus=""
+        className="relative px-0.5 -mx-0.5 underline hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
         onClick={() => useSettingsStore.getState().setSection('access-audit')}
       >
         Logs → Access Audit

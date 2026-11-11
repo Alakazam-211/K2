@@ -23,4 +23,12 @@ describe('AccessAuditLink', () => {
     fireEvent.click(btn)
     expect(useSettingsStore.getState().activeSection).toBe('access-audit')
   })
+
+  it('takes the shared focus ring (cut in Terminal), not the browser outline', () => {
+    render(<AccessAuditLink />)
+    const btn = screen.getByRole('button', { name: 'Logs → Access Audit' })
+    expect(btn.hasAttribute('data-k2-focus')).toBe(true)
+    // The ring is drawn by ::after inside the element, so it needs a positioned box.
+    expect(btn.className).toContain('relative')
+  })
 })

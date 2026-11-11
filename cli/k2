@@ -51951,7 +51951,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization"
 
 _study_usage() {
     cat <<'EOF'
@@ -51974,7 +51974,7 @@ Topics:
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  ci  ci-release  vault
   notifications  data-sources  projects  hooks  agent-hire
-  garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs  heartbeats
+  garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
 EOF
 }
@@ -51993,6 +51993,7 @@ _study_title() {
         context) echo "Always-on context" ;;
         db) echo "Workspace database" ;;
         db-upgrade) echo "Moving a database to a newer Postgres" ;;
+        app-databases) echo "An App's database: what reaches what, and connecting one" ;;
         mail) echo "Agent email" ;;
         connect-boundary) echo "K2 vs Connect" ;;
         apps) echo "Apps" ;;
@@ -52123,6 +52124,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   context             AGENTS.md, skills, layers — keep always-on lean
   db                  Loopback Postgres; db_agent_access is create-only
   db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
+  app-databases       Connect an App to Postgres (k2 app db); which App kinds reach what
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid
@@ -52210,6 +52212,7 @@ _study_page() {
         context) _study_page_context ;;
         db) _study_page_db ;;
         db-upgrade) _study_page_db_upgrade ;;
+        app-databases) _study_page_app_databases ;;
         mail) _study_page_mail ;;
         connect-boundary) _study_page_connect_boundary ;;
         apps) _study_page_skins ;;
@@ -55388,6 +55391,90 @@ LIVE MOVES (0.46.4, the owner's for now)
 EXITS
   0 done · 3 refused (nothing changed) · 1 failed (the owner gets an inbox
   note; new moves wait for --acknowledge-failed).
+EOF
+}
+
+# 0.46.11 (prd-app-database-integrations-v1 S8): connecting an App to a
+# database, and which App kinds reach which databases.
+_study_page_app_databases() {
+    cat <<'EOF'
+k2 study app-databases — An App's database: what reaches what, and connecting one
+
+CONNECT ONE (Postgres on this box)
+  k2 app db connect <app> --new [--major 17]   a new database for this App
+  k2 app db connect <app> --db <name>          one its workspace owns or was
+                                               granted (k2 db list)
+  K2 makes the App its own login (never your agent's), grants the App
+  DATABASE_URL and, on its own workspace's database, DATABASE_MIGRATE_URL
+  (the migrator's), opens its database door, re-hosts it and checks it
+  from inside: PASS (exit 0) or FAIL (exit 1). In the App read
+  process.env.DATABASE_URL. No URL or password is ever printed.
+  --major: a major this box runs (k2 app db status <app> lists them).
+  Connect never installs Postgres: a major or a --cluster this box doesn't
+  run is refused (app_db_cluster_missing, exit 3) with the command that
+  makes it. Each env name holds one database: a second one goes under
+  --as REPORTS_URL (then REPORTS_URL and REPORTS_MIGRATE_URL).
+  Then: k2 app db status <app> · check <app> · disconnect <app>.
+
+WHO MAY
+  The owner and Admins connect at once. A Member never does.
+  An agent (in a K2 tab) connects at once only when every switch it needs
+  is on and the database is its own workspace's. The switches, by their
+  Settings names (Settings → Workspaces → <agent> → Agent):
+    "Build and run Apps"
+    "Database" (under Apps: what its Apps may use)
+    "Let this agent create databases" (for --new)
+    "Let this agent manage Postgres versions" (another major, or --cluster)
+  Otherwise connect files ONE card for the owner naming each switch that
+  is off, and exits 2 with nothing changed.
+  Run the "Ask with:" line it prints, then wait: k2 app db connect …
+  --wait, or k2 app db status <app>. Running connect again doesn't nudge
+  the owner: it is the same card.
+  A database another workspace owns always takes a card and never gets
+  DATABASE_MIGRATE_URL. Disconnect needs no card.
+
+WHAT REACHES WHAT
+  An App is a guarded container unless its owner chose otherwise (k2 app
+  db status <app> says which: container, process-exception or process).
+  guarded container (the default) and open containers:
+    box Postgres: yes, through its door (127.0.0.1:5432 in the wall,
+      sslmode=disable). The door admits its own login, and its
+      workspace's roles, on databases its workspace owns or was granted.
+    outside Postgres wire (5432/6543): not yet; drivers don't use the
+      HTTP proxy.
+    outside HTTPS data APIs: yes, after k2 app egress add <app> <host>
+      (the owner approves): supabase-js (REST, Auth, Storage), Neon's
+      HTTP driver, PlanetScale's serverless driver, Turso over HTTP,
+      Upstash REST. MongoDB Atlas: no.
+    SQLite in $K2_APP_DATA: yes.
+  process exception (k2app unit): box Postgres yes (its nft rule names
+    the cluster port); nothing outside (no route out); SQLite yes.
+  unwalled process engine (the owner's dev opt-in): everything the
+    daemon's network reaches; nothing is enforced.
+  any App on macOS: no Postgres here (Linux only); SQLite yes.
+
+THE CHECK
+  k2 app db check <app> logs in as the App, from inside a container App
+  (node is in every K2 App image), and runs select 1 and version(). FAIL
+  names the step and shows the App's last output lines:
+    no_url           the App doesn't have it yet: k2 app rehost <app>
+    no_door          nothing answered on 127.0.0.1:5432 (k2 app doctor)
+    door_refused     the door refused that login or database
+    auth_failed      Postgres refused the login: connect again
+    db_missing       the database is gone
+    app_not_running  start it; rehost_failed: re-host it; exec_failed:
+                     the check couldn't run inside the App
+
+MIGRATIONS
+  DATABASE_MIGRATE_URL is the database's migrator: migrate with it at the
+  App's start, serve with DATABASE_URL. Or from your workspace:
+  k2 db migrate --db <name> (numbered files, 0001_name.sql, in
+  .k2/db/migrations).
+
+YOUR OWN SCRIPTS
+  k2 db dsn prints no password. k2 db run [--db <name>] -- <command>
+  hands the command DATABASE_URL in its environment; k2 db dsn --reveal
+  prints it on purpose (then keep it out of chats, notes and git).
 EOF
 }
 

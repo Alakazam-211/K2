@@ -780,7 +780,7 @@ chat-voice, chat-voice-rooms, voice-rooms, tauri, tauri-voice, skins, feedback-l
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
 publish-visibility, publish-dev, compute, compute-shared, ci, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
-garden-access, garden-changes, changes, docs, sim, design, db-upgrade, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
+garden-access, garden-changes, changes, docs, sim, design, db-upgrade, app-databases, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
 email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and

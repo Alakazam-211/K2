@@ -965,6 +965,21 @@ for needle in '"name": "voice recordings"' '"name": "voice transcript"' '"name":
 done
 assert_absent "schema: K5 recording no longer waits" "$vt_schema" "client_consent_missing"
 
+echo "== k2 study app-databases (prd-app-database-integrations-v1 S8, 0.46.11) =="
+adb_out="$("$K2" study app-databases)"
+for needle in "k2 app db connect <app> --new" "k2 app db connect <app> --db <name>" "DATABASE_MIGRATE_URL" \
+    "ONE card" "WHAT REACHES WHAT" "guarded container" "process exception" "unwalled process engine" "macOS" \
+    "outside Postgres wire" "k2 app egress add" "supabase-js" "MongoDB Atlas: no" "k2 db run" "no_url" "door_refused" \
+    "Let this agent create databases" "Let this agent manage Postgres versions"; do
+    assert_contains "study app-databases names $needle" "$adb_out" "$needle"
+done
+assert_absent "study app-databases prints no URL" "$adb_out" "postgres://"
+adb_lines="$(printf '%s\n' "$adb_out" | wc -l | tr -d ' ')"
+if [ "$adb_lines" -le 100 ]; then echo "  PASS: app-databases is bounded ($adb_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-databases is $adb_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: app-databases row" "$("$K2" study)" "  app-databases       Connect an App to Postgres"
+assert_contains "usage lists app-databases" "$("$K2" study --help)" "db-upgrade  app-databases"
+assert_contains "catalog --json: app-databases" "$("$K2" study --json)" '"id":"app-databases"'
+
 echo "== --help exit 0; bad flag exit 2 =="
 set +e
 help_out="$("$K2" study --help 2>&1)"

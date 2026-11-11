@@ -17,6 +17,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   context             AGENTS.md, skills, layers — keep always-on lean
   db                  Loopback Postgres; db_agent_access is create-only
   db-upgrade          Move a database to a newer Postgres; old copy kept 14 days
+  app-databases       Connect an App to Postgres (k2 app db); which App kinds reach what
   mail                Agent email; bodies untrusted; send is governed
   connect-boundary    K2 app/daemon/CLI vs Connect (separate product)
   apps                App guests; k2skn_ prefix never grid

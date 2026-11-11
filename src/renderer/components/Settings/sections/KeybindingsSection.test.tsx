@@ -25,10 +25,18 @@ vi.mock('@/lib/desktop-chrome', async (orig) => ({
   isMacPlatform: () => h.mac,
 }))
 
-import { KeybindingsSection, KEYBINDINGS_MANIFEST } from './KeybindingsSection'
+import { KeybindingsSection, KEYBINDINGS_MANIFEST, KEYBINDING_NAMES } from './KeybindingsSection'
+import { HOTKEYS } from '@shared/hotkeys'
 import { useSettingsStore } from '@/stores/settings'
 
-const LABELS = ['Go to My Home', 'Go to Agents', 'Go to Projects', 'Go to Tickets', 'Go to Wiki', 'Go to Settings']
+const LABELS = [
+  'Go to My Home',
+  'Go to the Agents page',
+  'Go to the Projects page',
+  'Go to the Tickets page',
+  'Go to the Wiki page',
+  'Go to the Settings page',
+]
 const IDS = ['goToHome', 'goToAgents', 'goToProjects', 'goToTickets', 'goToWiki', 'goToSettings']
 
 function rowFor(label: string): HTMLElement {
@@ -74,9 +82,9 @@ describe('Key Bindings: page chords', () => {
     h.mac = true
     useSettingsStore.setState({ keybindings: { goToTickets: 'Ctrl+Meta+T' } })
     render(<KeybindingsSection />)
-    const row = rowFor('Go to Tickets')
+    const row = rowFor('Go to the Tickets page')
     expect(keyButton(row).textContent?.replace(/\s/g, '')).toBe('⌃⌘T')
-    expect(within(row).getByRole('button', { name: 'Reset Go to Tickets to default' }).getAttribute('title')).toBe('Reset to default')
+    expect(within(row).getByRole('button', { name: 'Reset Go to the Tickets page to default' }).getAttribute('title')).toBe('Reset to default')
     expect(row.textContent).toContain('Changed. The default is ⌃⌘4.')
   })
 
@@ -84,8 +92,8 @@ describe('Key Bindings: page chords', () => {
     h.mac = false
     useSettingsStore.setState({ keybindings: { goToWiki: 'Ctrl+Alt+W', goToSettings: 'Ctrl+Alt+S' } })
     render(<KeybindingsSection />)
-    expect(keyButton(rowFor('Go to Wiki')).textContent?.replace(/\s/g, '')).toBe('Ctrl+Alt+W')
-    expect(keyButton(rowFor('Go to Settings')).textContent?.replace(/\s/g, '')).toBe('Ctrl+Alt+S')
+    expect(keyButton(rowFor('Go to the Wiki page')).textContent?.replace(/\s/g, '')).toBe('Ctrl+Alt+W')
+    expect(keyButton(rowFor('Go to the Settings page')).textContent?.replace(/\s/g, '')).toBe('Ctrl+Alt+S')
   })
 
   it('the settings search finds them under Navigation', () => {
@@ -101,6 +109,57 @@ describe('Key Bindings: page chords', () => {
   })
 })
 
+describe('Key Bindings: names', () => {
+  beforeEach(() => {
+    h.mac = true
+  })
+
+  it('every shortcut has a Settings name: sentence case, no slashes, none twice', () => {
+    const names = HOTKEYS.map((k) => KEYBINDING_NAMES[k.id]?.name)
+    names.forEach((n, i) => expect(n, HOTKEYS[i].id).toBeTruthy())
+    for (const n of names as string[]) {
+      expect(n).not.toContain('/')
+      expect(n[0]).toBe(n[0].toUpperCase())
+      // Sentence case: after the first word, only names of K2's own pages and views are capitalised.
+      const proper = new Set(['My', 'Home', 'Agents', 'Projects', 'Tickets', 'Wiki', 'Settings', 'Org', 'Chart', 'Thread'])
+      for (const w of n.split(' ').slice(1)) if (/^[A-Z]/.test(w)) expect(proper.has(w), `${n}: ${w}`).toBe(true)
+    }
+    expect(new Set(names).size).toBe(names.length)
+    expect(Object.keys(KEYBINDING_NAMES).sort()).toEqual(HOTKEYS.map((k) => k.id).sort())
+  })
+
+  it('the split names say which way the pane splits (⌘D stacks, ⇧⌘D sits side by side)', () => {
+    render(<KeybindingsSection />)
+    expect(within(rowFor('Split the pane top and bottom')).getByRole('button').textContent?.replace(/\s/g, '')).toBe('⌘D')
+    expect(within(rowFor('Split the pane side by side')).getByRole('button').textContent?.replace(/\s/g, '')).toBe('⌘⇧D')
+  })
+
+  it('a name that needs it carries a one-line hint, and keeps it once changed', () => {
+    useSettingsStore.setState({ keybindings: { focusWindow: 'Meta+Shift+J' } })
+    render(<KeybindingsSection />)
+    expect(rowFor('Show or hide the left panel').textContent).toContain('The panel beside the sidebar')
+    const row = rowFor('Open this workspace in its own window')
+    expect(row.textContent).toContain('A focus window: just this workspace, nothing else.')
+    expect(row.textContent).toContain('Changed. The default is ⌘⇧F.')
+  })
+
+  it('off macOS a changed page chord names its Ctrl+Alt default', () => {
+    h.mac = false
+    useSettingsStore.setState({ keybindings: { goToTickets: 'Ctrl+Alt+T' } })
+    render(<KeybindingsSection />)
+    expect(rowFor('Go to the Tickets page').textContent).toContain('Changed. The default is Ctrl+Alt+4.')
+  })
+
+  it('search uses the same names, and still finds a row by its menu name', () => {
+    const entry = KEYBINDINGS_MANIFEST.find((e) => e.id === 'keybindings.toggleLeftPanel')
+    expect(entry?.label).toBe('Show or hide the left panel')
+    expect(entry?.keywords).toContain('toggle left panel')
+    for (const k of HOTKEYS) {
+      expect(KEYBINDINGS_MANIFEST.find((e) => e.id === `keybindings.${k.id}`)?.label).toBe(KEYBINDING_NAMES[k.id].name)
+    }
+  })
+})
+
 describe('Key Bindings: recording, clashes and reset', () => {
   beforeEach(() => {
     h.mac = true
@@ -108,37 +167,37 @@ describe('Key Bindings: recording, clashes and reset', () => {
 
   it('records new keys, saves, and says Saved', async () => {
     render(<KeybindingsSection />)
-    const row = rowFor('Go to Tickets')
+    const row = rowFor('Go to the Tickets page')
     fireEvent.click(keyButton(row))
-    expect(within(row).getByRole('button', { name: 'Recording a new shortcut for Go to Tickets' }).textContent).toBe('Press keys…')
+    expect(within(row).getByRole('button', { name: 'Recording a new shortcut for Go to the Tickets page' }).textContent).toBe('Press keys…')
     expect(row.textContent).toContain('Press the new keys. Escape cancels.')
     await act(async () => {
       fireEvent.keyDown(window, { key: 'y', code: 'KeyY', metaKey: true, ctrlKey: true })
     })
     expect(useSettingsStore.getState().keybindings.goToTickets).toBeTruthy()
-    expect(rowFor('Go to Tickets').querySelector('[data-save-note]')).toBeTruthy()
+    expect(rowFor('Go to the Tickets page').querySelector('[data-save-note]')).toBeTruthy()
   })
 
   it('a shortcut the server refuses keeps the old keys and never says Saved', async () => {
     const { settingsUpdate } = await import('@/lib/daemon-settings')
     vi.mocked(settingsUpdate).mockRejectedValueOnce(new Error('settings_update 403: forbidden'))
     render(<KeybindingsSection />)
-    fireEvent.click(keyButton(rowFor('Go to Tickets')))
+    fireEvent.click(keyButton(rowFor('Go to the Tickets page')))
     await act(async () => {
       fireEvent.keyDown(window, { key: 'y', code: 'KeyY', metaKey: true, ctrlKey: true })
     })
     expect(useSettingsStore.getState().keybindings.goToTickets).toBeUndefined()
-    expect(rowFor('Go to Tickets').querySelector('[data-save-error]')?.textContent).toContain('Couldn’t save')
-    expect(rowFor('Go to Tickets').querySelector('[data-save-note]')).toBeNull()
+    expect(rowFor('Go to the Tickets page').querySelector('[data-save-error]')?.textContent).toContain('Couldn’t save')
+    expect(rowFor('Go to the Tickets page').querySelector('[data-save-note]')).toBeNull()
   })
 
   it('a key the terminal needs is refused out loud, and recording goes on', async () => {
     render(<KeybindingsSection />)
-    fireEvent.click(keyButton(rowFor('Go to Tickets')))
+    fireEvent.click(keyButton(rowFor('Go to the Tickets page')))
     await act(async () => {
       fireEvent.keyDown(window, { key: 'c', code: 'KeyC', ctrlKey: true })
     })
-    const row = rowFor('Go to Tickets')
+    const row = rowFor('Go to the Tickets page')
     expect(within(row).getByRole('alert').textContent).toContain('can’t be a shortcut')
     expect(within(row).getByRole('button', { name: /Recording a new shortcut/ })).toBeTruthy()
     expect(useSettingsStore.getState().keybindings.goToTickets).toBeUndefined()
@@ -147,8 +206,8 @@ describe('Key Bindings: recording, clashes and reset', () => {
   it('two shortcuts on the same keys both say so', () => {
     useSettingsStore.setState({ keybindings: { goToWiki: 'Ctrl+Meta+4' } })
     render(<KeybindingsSection />)
-    expect(rowFor('Go to Wiki').textContent).toContain('Same keys as Go to Tickets. Change one of them.')
-    expect(rowFor('Go to Tickets').textContent).toContain('Same keys as Go to Wiki. Change one of them.')
+    expect(rowFor('Go to the Wiki page').textContent).toContain('Same keys as “Go to the Tickets page”. Change one of them.')
+    expect(rowFor('Go to the Tickets page').textContent).toContain('Same keys as “Go to the Wiki page”. Change one of them.')
   })
 
   it('Reset all asks first, then says it is done', async () => {

@@ -36,17 +36,66 @@ export function isZenChordCombo(combo: string): boolean {
 }
 
 /**
+ * How Settings names each shortcut: sentence case, plain words, one voice,
+ * and a one-line hint where the name alone isn't enough. Settings only: the
+ * menus keep HOTKEYS' own labels. Ids are the HOTKEYS ids; a hotkey missing
+ * here falls back to its HOTKEYS label (a test keeps the two in step).
+ */
+export const KEYBINDING_NAMES: Record<string, { name: string; hint?: string }> = {
+  // Terminal (⌘D splits 'column', top and bottom; ⇧⌘D 'row', side by side)
+  clearTerminal: { name: 'Clear the terminal' },
+  splitVertical: { name: 'Split the pane top and bottom' },
+  splitHorizontal: { name: 'Split the pane side by side' },
+  toggleThreadTerminal: { name: 'Show or hide the terminal in a Thread', hint: 'Works while an agent is open in Thread view.' },
+  // Tabs
+  newTab: { name: 'Open a new tab' },
+  closeTab: { name: 'Close the tab' },
+  prevTab: { name: 'Go to the previous tab' },
+  nextTab: { name: 'Go to the next tab' },
+  // Navigation
+  toggleSidebar: { name: 'Show or hide the sidebar', hint: 'The list of workspaces on the left.' },
+  toggleLeftPanel: { name: 'Show or hide the left panel', hint: 'The panel beside the sidebar, with Files in it to start with.' },
+  toggleRightPanel: { name: 'Show or hide the right panel', hint: 'The panel on the far right, with History in it to start with.' },
+  toggleHiddenFiles: { name: 'Show or hide hidden files', hint: 'In the Files panel.' },
+  goToHome: { name: 'Go to My Home' },
+  goToAgents: { name: 'Go to the Agents page' },
+  goToProjects: { name: 'Go to the Projects page' },
+  goToTickets: { name: 'Go to the Tickets page' },
+  goToWiki: { name: 'Go to the Wiki page' },
+  goToSettings: { name: 'Go to the Settings page' },
+  goToOrgChart: { name: 'Go to the Org Chart page', hint: 'Works while the Org Chart is turned on.' },
+  // App
+  launchDefaultAgent: { name: 'Start the default agent', hint: 'In a new tab, with this workspace’s default agent.' },
+  openSettings: { name: 'Open Settings' },
+  newWindow: { name: 'Open a new window' },
+  newDocument: { name: 'Start a new file', hint: 'An untitled file in a new tab.' },
+  openWorkspace: { name: 'Add a workspace from a folder', hint: 'Pick a folder on this computer.' },
+  focusWindow: { name: 'Open this workspace in its own window', hint: 'A focus window: just this workspace, nothing else.' },
+  toggleServerSwitcher: { name: 'Switch to another server', hint: 'In a browser tab, it goes to the address bar instead.' },
+  openProjects: { name: 'Open the Projects page', hint: 'A second shortcut for the Projects page.' },
+  openMobile: { name: 'Open the phone simulator', hint: 'This workspace’s Mobile tab, on servers that can run a phone.' },
+  toggleCallFullscreen: { name: 'Expand the call video', hint: 'During a video call, the video fills the window.' },
+}
+
+/** The Settings name for a hotkey id (its HOTKEYS label if it has none). */
+export function keybindingName(id: string): string {
+  return KEYBINDING_NAMES[id]?.name ?? HOTKEYS.find((h) => h.id === id)?.label ?? id
+}
+
+const LAYOUT_LABEL = 'Number keys switch to'
+
+/**
  * Keybindings manifest: one entry per hotkey definition (dynamically
- * derived from HOTKEYS) plus the workspace-number-shortcuts layout
- * toggle. HOTKEYS is imported above, so changing it here once keeps
- * the search index in sync.
+ * derived from HOTKEYS, named as the page names them) plus the
+ * workspace-number-shortcuts layout toggle. HOTKEYS is imported above, so
+ * changing it here once keeps the search index in sync.
  */
 export const KEYBINDINGS_MANIFEST: SettingEntry[] = [
   {
     id: 'keybindings.shortcut-layout',
     section: 'keybindings',
-    label: 'Number keys open',
-    description: 'Which workspaces ⌘ 1–9 and ⌥⌘ 1–9 switch to',
+    label: LAYOUT_LABEL,
+    description: 'Which workspaces ⌘ 1–9 and ⌥⌘ 1–9 open',
     keywords: ['workspace', 'shortcut', 'layout', 'number', 'cmd', 'pinned', 'active', 'swap'],
   },
   {
@@ -60,9 +109,10 @@ export const KEYBINDINGS_MANIFEST: SettingEntry[] = [
     id: `keybindings.${h.id}`,
     section: 'keybindings' as const,
     group: h.category,
-    label: h.label,
-    description: `Change the shortcut for ${h.label}`,
-    keywords: [h.id, h.category.toLowerCase(), 'hotkey', 'shortcut', 'keybinding', 'rebind'],
+    label: keybindingName(h.id),
+    description: KEYBINDING_NAMES[h.id]?.hint ?? 'Change its keyboard shortcut',
+    // The menus' name too, so a search for either finds the row.
+    keywords: [h.id, h.label.toLowerCase(), h.category.toLowerCase(), 'hotkey', 'shortcut', 'keybinding', 'rebind'],
   })),
 ]
 
@@ -95,7 +145,7 @@ export function KeybindingsSection(): React.JSX.Element {
   const clashesWith = (id: string): string[] => {
     const combo = getEffectiveKeybinding(keybindings, id)
     if (!combo) return []
-    return (comboToIds[combo] ?? []).filter((o) => o !== id).map((o) => HOTKEYS.find((h) => h.id === o)?.label ?? o)
+    return (comboToIds[combo] ?? []).filter((o) => o !== id).map(keybindingName)
   }
 
   const changed = HOTKEYS.filter((h) => !!keybindings[h.id]).length
@@ -115,10 +165,10 @@ export function KeybindingsSection(): React.JSX.Element {
       <SettingsGroup card title="Workspace numbers" testId="keys-layout">
         <SettingRow
           settingId="keybindings.shortcut-layout"
-          label="Number keys open"
+          label={LAYOUT_LABEL}
           hint={
             <>
-              Which workspaces {numberKey} and {altNumberKey} switch to, by their place in the sidebar.{' '}
+              Which workspaces {numberKey} and {altNumberKey} open, by their place in the sidebar.{' '}
               <SaveNote state={layoutSave.state} />
             </>
           }
@@ -126,7 +176,7 @@ export function KeybindingsSection(): React.JSX.Element {
         >
           <SettingDropdown
             fullWidth
-            ariaLabel="Number keys open"
+            ariaLabel={LAYOUT_LABEL}
             value={shortcutLayout}
             options={[
               { value: 'cmd-active-cmdshift-pinned', label: `${numberKey} Active, ${altNumberKey} Pinned` },
@@ -144,10 +194,10 @@ export function KeybindingsSection(): React.JSX.Element {
         <SettingsGroup key={category} card title={category} testId={`keys-${category.toLowerCase()}`}>
           {category === 'Navigation' && (
             <>
-              <SettingRow label="Active workspaces" hint="Set by Number keys open, above.">
+              <SettingRow label="Switch to an active workspace" hint="Pick the keys at the top of this page.">
                 <KeyChip combo={activeFirst ? numberKey : altNumberKey} />
               </SettingRow>
-              <SettingRow label="Pinned workspaces" hint="Set by Number keys open, above.">
+              <SettingRow label="Switch to a pinned workspace" hint="Pick the keys at the top of this page.">
                 <KeyChip combo={activeFirst ? altNumberKey : numberKey} />
               </SettingRow>
             </>
@@ -330,6 +380,10 @@ function KeybindingRow({
     }
   }, [capturing])
 
+  const name = keybindingName(hotkey.id)
+  const about = KEYBINDING_NAMES[hotkey.id]?.hint
+  // Off macOS a Control+Command chord's default is its Ctrl+Alt twin.
+  const defaultKey = (!isMacPlatform() && hotkey.defaultKeyOther) || hotkey.defaultKey
   const conflict = clashes.length > 0
   const hint = capturing ? (
     refused ? (
@@ -341,19 +395,22 @@ function KeybindingRow({
     )
   ) : conflict ? (
     <span className="text-[var(--color-status-error-soft)]" data-keybinding-conflict="">
-      Same keys as {clashes.join(' and ')}. Change one of them.
+      Same keys as {clashes.map((c) => `“${c}”`).join(' and ')}. Change one of them.
     </span>
   ) : isCustom ? (
     <>
-      {hotkey.defaultKey ? `Changed. The default is ${keysFor(hotkey.defaultKey)}.` : 'Changed. It has no shortcut by default.'}
+      {about ? `${about} ` : ''}
+      {defaultKey ? `Changed. The default is ${keysFor(defaultKey)}.` : 'Changed. It has no shortcut by default.'}
     </>
-  ) : undefined
+  ) : (
+    about
+  )
 
   return (
     <SettingRow
       settingId={`keybindings.${hotkey.id}`}
       testId={`keybinding-${hotkey.id}`}
-      label={hotkey.label}
+      label={name}
       hint={
         hint || save.state !== 'idle' ? (
           <>
@@ -367,7 +424,7 @@ function KeybindingRow({
         <Button
           variant="quiet"
           title="Reset to default"
-          aria-label={`Reset ${hotkey.label} to default`}
+          aria-label={`Reset ${name} to default`}
           onClick={() => {
             save.reset()
             void onReset().then((ok) => (ok ? save.saved() : save.failed('')))
@@ -381,7 +438,7 @@ function KeybindingRow({
           ref={captureRef}
           type="button"
           data-k2-chamfer="chip"
-          aria-label={`Recording a new shortcut for ${hotkey.label}`}
+          aria-label={`Recording a new shortcut for ${name}`}
           onClick={() => {
             setRefused(null)
             onCancelCapture()
@@ -394,7 +451,7 @@ function KeybindingRow({
         <button
           type="button"
           data-k2-chamfer="chip"
-          aria-label={`${hotkey.label}: ${combo ? formatKeyCombo(combo, isMacPlatform()) : 'no shortcut'}. Change`}
+          aria-label={`${name}: ${combo ? formatKeyCombo(combo, isMacPlatform()) : 'no shortcut'}. Change`}
           onClick={() => {
             setRefused(null)
             save.reset()

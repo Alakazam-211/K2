@@ -966,6 +966,8 @@ fn draft_values(
             Ok(None) => return Err(draft_not_found(&row.id)),
             Err(hint) => return Err(engine(hint)),
         }
+    } else {
+        None
     };
     let cur_list = |l: &[MailAddr]| l.iter().map(|a| a.email.clone()).collect::<Vec<_>>();
     let to = to.unwrap_or_else(|| current.as_ref().map(|f| cur_list(&f.summary.to)).unwrap_or_default());
@@ -1094,7 +1096,7 @@ fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
                 references: row.refs.clone(),
             };
             let resp = crate::mail::routes_send::handle_send_in_thread(send_body.to_string().as_bytes(), &thread);
-            let mut out: serde_json::Value = match serde_json::from_str(&resp.body) {
+            let mut out: serde_json::Value = match serde_json::from_str::<serde_json::Value>(&resp.body) {
                 Ok(j) if resp.status.starts_with('2') && j["ok"] == true => j,
                 // Refused or failed: the draft stays as it was.
                 _ => return resp,

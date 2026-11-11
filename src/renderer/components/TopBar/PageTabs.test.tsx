@@ -328,7 +328,7 @@ describe('PageTabs — Mail tab (OA5, prd-ocmail-admin-in-k2-v1)', () => {
     const { container } = render(<PageTabs />)
     const mail = screen.getByRole('button', { name: 'Mail' })
     const all = tabs(container)
-    const at = all.indexOf(mail)
+    const at = all.indexOf(mail as HTMLButtonElement)
     expect(all[at - 1]).toBe(screen.getByRole('button', { name: /^Tickets/ }))
     expect(all[at + 1]).toBe(screen.getByRole('button', { name: 'Wiki' }))
     expect(mail.querySelector('svg')?.getAttribute('data-k2-icon')).toBe('mail')

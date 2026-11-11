@@ -2595,4 +2595,244 @@ mod tests {
         assert_eq!(a["sessionsUntracked"], 1, "{a}");
         session_ended(&sid);
     }
+
+    /// Field report (0.46.10): a person saved a secret through a Thread
+    /// card as `--scope server --delivery env` ("<agent> will get this as an
+    /// environment variable it can read, for all your agents"), shared it
+    /// with that workspace later, and refreshed its pinned chat. The new
+    /// session had no env var, and `k2 vault env-file --scope server` said
+    /// "it is delivered to you as env only ... widen it: k2 vault delivery
+    /// NAME env". A server secret reaches no workspace until it is shared,
+    /// and the card's Save shared it with nobody. Now Save shares it with
+    /// the workspace that asked, at the card's delivery: its next session
+    /// (a refresh is one) gets the env var and env-file works; a share made
+    /// later changes nothing.
+    #[test]
+    fn a_server_env_card_reaches_the_asking_workspaces_next_session() {
+        use crate::vault::actor::{Channel, VaultCaller};
+        use crate::vault_use_routes::ENV_FILE;
+        use k2_vault::vault::{CardAnswer, SecretRequest};
+        use k2_vault::{Actor, AgentActor, Consumer, ConsumerKind, GrantRequest, Kind, ScopeKind, SecretBytes};
+        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-server-env", &[]);
+        // The test vault is shared by the process: a name of its own.
+        let name = format!("EXAMPLE_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_ascii_uppercase());
+        let value = "example-token-value-1";
+        // The session that asks with the card.
+        let old_sid = uuid::Uuid::new_v4().to_string();
+        materialize(&mut HashMap::new(), &ws, &old_sid, false, &SpawnRefs::default());
+        let card = format!("card-{}", uuid::Uuid::new_v4().simple());
+        v.request_create(SecretRequest {
+            card_id: card.clone(),
+            conversation: format!("conv-{ws}"),
+            session_id: Some(old_sid.clone()),
+            workspace_id: ws.clone(),
+            requested_by: format!("agent:{ws}/{old_sid}"),
+            name: name.clone(),
+            kind: Kind::Generic,
+            proposed_scope: "server".into(),
+            proposed_hosts: vec![],
+            proposed_delivery: Delivery::Env,
+            prompt: "Paste the example token".into(),
+            ttl_secs: None,
+            status: String::new(),
+            answered_by: None,
+            secret_id: None,
+            created_at: String::new(),
+            answered_at: None,
+            inject: None,
+            once: false,
+        })
+        .expect("card");
+        let ans = CardAnswer { scope: Some("server".into()), delivery: Some(Delivery::Env), readable_disclosed: true, ..Default::default() };
+        let saved = v.request_answer(&card, SecretBytes::from_slice(value.as_bytes()), &ans, &Actor::Owner).expect("the owner saves the card");
+        assert_eq!((saved.meta.scope.kind, saved.meta.default_delivery), (ScopeKind::Server, Delivery::Env));
+        let shares = || -> Vec<(ConsumerKind, String, Delivery)> {
+            v.grants(&k2_vault::Selector::Id(saved.meta.id.clone()), &Actor::Owner)
+                .expect("grants")
+                .into_iter()
+                .map(|g| (g.consumer.kind, g.consumer.id, g.delivery))
+                .collect()
+        };
+        assert_eq!(shares(), vec![(ConsumerKind::Workspace, ws.clone(), Delivery::Env)], "Save shares it with the workspace that asked, and no other");
+
+        let agent = |sid: &str, vault_manage: bool| VaultCaller {
+            actor: Actor::Agent(AgentActor { workspace_id: ws.clone(), session_id: Some(sid.to_string()), shell: false, vault_manage }),
+            channel: Channel::Plain,
+            session_id: Some(sid.to_string()),
+        };
+        let env_file = |c: &VaultCaller| {
+            let body = serde_json::json!({ "secrets": [name.clone()], "scope": "server" }).to_string();
+            let r = crate::vault_routes::handle_on(&v, ENV_FILE, Ok(c.clone()), body.as_bytes(), &HashMap::new(), "test", None);
+            assert!(r.status.starts_with("200"), "env-file in the asking workspace: {}", r.body);
+            let ok: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            let path = ok["path"].as_str().expect("path").to_string();
+            assert_eq!(std::fs::read_to_string(&path).expect("env file"), format!("{name}={value}\n"));
+            let _ = std::fs::remove_file(&path);
+        };
+        // At once, in the session that asked (env can't reach its process).
+        env_file(&agent(&old_sid, false));
+
+        // The refresh: the old pinned chat ends, a new session starts.
+        let refresh = |old: &str| -> String {
+            session_ended(old);
+            let sid = uuid::Uuid::new_v4().to_string();
+            let mut env = HashMap::new();
+            let out = materialize(&mut env, &ws, &sid, false, &SpawnRefs::default());
+            assert_eq!(env.get(&name).map(String::as_str), Some(value), "the next session gets the env var: {out:?}");
+            sid
+        };
+        let sid = refresh(&old_sid);
+        for vault_manage in [false, true] {
+            env_file(&agent(&sid, vault_manage));
+        }
+
+        // About 80 minutes later the owner shares it with the workspace too:
+        // the same one share, and the next session still gets it.
+        v.grant(
+            GrantRequest {
+                selector: k2_vault::Selector::Id(saved.meta.id.clone()),
+                consumer: Consumer::workspace(ws.clone()),
+                delivery: Delivery::Env,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: None,
+                version: None,
+            },
+            &Actor::Owner,
+        )
+        .expect("the owner shares it with the workspace");
+        assert_eq!(shares().len(), 1, "{:?}", shares());
+        let sid = refresh(&sid);
+        env_file(&agent(&sid, false));
+        session_ended(&sid);
+    }
+
+    /// The share alone (no card): a server env secret shared with a
+    /// workspace after it was saved reaches that workspace's next session
+    /// and env-file with `--scope server`, and never a running one's env.
+    #[test]
+    fn a_server_env_secret_shared_later_reaches_the_next_session() {
+        use crate::vault::actor::{Channel, VaultCaller};
+        use crate::vault_use_routes::ENV_FILE;
+        use k2_vault::{Actor, AgentActor, Consumer, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-server-later", &[]);
+        let name = format!("EXAMPLE_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_ascii_uppercase());
+        let mut r = PutRequest::new(Namespace::User, Scope::server(), &name, Kind::Generic);
+        r.default_delivery = Some(Delivery::Env);
+        r.delivery_ceiling = Some(Delivery::Env);
+        let id = v.put(r, SecretBytes::from_slice(b"example-token-value-3"), &Actor::Owner).expect("put").meta.id;
+        let running = uuid::Uuid::new_v4().to_string();
+        let mut running_env = HashMap::new();
+        materialize(&mut running_env, &ws, &running, false, &SpawnRefs::default());
+        assert!(!running_env.contains_key(&name), "not shared yet");
+        v.grant(
+            GrantRequest {
+                selector: k2_vault::Selector::Id(id),
+                consumer: Consumer::workspace(ws.clone()),
+                delivery: Delivery::Env,
+                env_name: None,
+                file_name: None,
+                hosts_narrowed: None,
+                expires_at: None,
+                version: None,
+            },
+            &Actor::Owner,
+        )
+        .expect("share");
+        session_ended(&running);
+        let sid = uuid::Uuid::new_v4().to_string();
+        let mut env = HashMap::new();
+        materialize(&mut env, &ws, &sid, false, &SpawnRefs::default());
+        assert_eq!(env.get(&name).map(String::as_str), Some("example-token-value-3"));
+        let me = VaultCaller {
+            actor: Actor::Agent(AgentActor { workspace_id: ws.clone(), session_id: Some(sid.clone()), shell: false, vault_manage: false }),
+            channel: Channel::Plain,
+            session_id: Some(sid.clone()),
+        };
+        let body = serde_json::json!({ "secrets": [name.clone()], "scope": "server" }).to_string();
+        let r = crate::vault_routes::handle_on(&v, ENV_FILE, Ok(me), body.as_bytes(), &HashMap::new(), "test", None);
+        assert!(r.status.starts_with("200"), "{}", r.body);
+        let ok: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        let _ = std::fs::remove_file(ok["path"].as_str().expect("path"));
+        session_ended(&sid);
+    }
+
+    /// The refusal for a server secret an agent can see (its workspace may
+    /// manage the vault) but that isn't shared with its workspace said "it
+    /// is delivered to you as env only ... its delivery must be widened by a
+    /// person: k2 vault delivery NAME env", naming the delivery it already
+    /// has. It says it isn't shared, and the one step: the share. `show`
+    /// says nothing reaches the agent instead of the secret's delivery.
+    #[test]
+    fn a_server_secret_not_shared_with_you_says_so_and_names_the_share() {
+        use crate::vault::actor::{Channel, VaultCaller};
+        use crate::vault_use_routes::ENV_FILE;
+        use k2_vault::{Actor, AgentActor, Consumer, GrantRequest, Kind, Namespace, PutRequest, Scope, SecretBytes};
+        let (_env, _t, _over, v, ws, _other) = late_grant_setup("spawn-server-unshared", &[]);
+        let name = format!("EXAMPLE_TOKEN_{}", uuid::Uuid::new_v4().simple().to_string()[..8].to_ascii_uppercase());
+        let mut r = PutRequest::new(Namespace::User, Scope::server(), &name, Kind::Generic);
+        r.default_delivery = Some(Delivery::Env);
+        r.delivery_ceiling = Some(Delivery::Env);
+        let id = v.put(r, SecretBytes::from_slice(b"example-token-value-2"), &Actor::Owner).expect("put").meta.id;
+        let sid = uuid::Uuid::new_v4().to_string();
+        let me = VaultCaller {
+            actor: Actor::Agent(AgentActor { workspace_id: ws.clone(), session_id: Some(sid.clone()), shell: false, vault_manage: true }),
+            channel: Channel::Plain,
+            session_id: Some(sid.clone()),
+        };
+        let env_file = || -> (u16, serde_json::Value) {
+            let body = serde_json::json!({ "secrets": [name.clone()], "scope": "server" }).to_string();
+            let r = crate::vault_routes::handle_on(&v, ENV_FILE, Ok(me.clone()), body.as_bytes(), &HashMap::new(), "test", None);
+            (r.status[..3].parse().expect("status"), serde_json::from_str(&r.body).unwrap_or_else(|_| panic!("json body: {}", r.body)))
+        };
+        let show = || -> serde_json::Value {
+            let q = HashMap::from([("name".to_string(), name.clone()), ("scope".to_string(), "server".to_string())]);
+            let r = crate::vault_routes::handle_on(&v, crate::vault_routes::SHOW, Ok(me.clone()), b"", &q, "test", None);
+            assert!(r.status.starts_with("200"), "{}", r.body);
+            serde_json::from_str(&r.body).expect("show json")
+        };
+
+        let (st, e) = env_file();
+        assert_eq!((st, e["error"]["code"].as_str()), (403, Some("delivery_not_granted")), "{e}");
+        let hint = e["error"]["hint"].as_str().expect("hint");
+        assert!(!hint.contains(&format!("k2 vault delivery {name}")), "never 'widen' to the delivery it has: {hint}");
+        assert!(!hint.contains("delivered to you as"), "nothing reaches this workspace: {hint}");
+        assert!(hint.contains("isn't shared with this workspace"), "{hint}");
+        assert!(hint.contains(&format!("k2 vault grant {name} --to ws:{ws} --as env --scope server")), "{hint}");
+        assert!(hint.contains(&format!("then k2 vault env-file --secret {name} --scope server works at once")), "{hint}");
+        let s = show();
+        assert_eq!(s["delivered"], "none", "{s}");
+        assert!(s["use"].as_str().expect("use").contains("isn't shared with this workspace"), "{s}");
+
+        // Shared as fetch only: says so, and the share that gives env.
+        let share = |d: Delivery| {
+            v.grant(
+                GrantRequest {
+                    selector: k2_vault::Selector::Id(id.clone()),
+                    consumer: Consumer::workspace(ws.clone()),
+                    delivery: d,
+                    env_name: None,
+                    file_name: None,
+                    hosts_narrowed: None,
+                    expires_at: None,
+                    version: None,
+                },
+                &Actor::Owner,
+            )
+            .expect("share");
+        };
+        share(Delivery::Fetch);
+        let (_, e) = env_file();
+        let hint = e["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("is shared with this workspace as fetch, not env"), "{hint}");
+        assert!(hint.contains(&format!("k2 vault grant {name} --to ws:{ws} --as env --scope server")), "{hint}");
+
+        // Shared as env: env-file works, show says env.
+        share(Delivery::Env);
+        let (st, ok) = env_file();
+        assert_eq!(st, 200, "{ok}");
+        let _ = std::fs::remove_file(ok["path"].as_str().expect("path"));
+        assert_eq!(show()["delivered"], "env");
+    }
 }

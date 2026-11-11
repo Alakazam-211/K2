@@ -87,7 +87,9 @@ describe('Agent tab: Phone notifications (you)', () => {
       await Promise.resolve()
     })
     expect(container.innerHTML).toBe('')
-    expect(cli.gets).toEqual([])
+    // Only this component's own routes count: other stores loaded by the
+    // imports (settings → custom themes) may fetch on their own timing.
+    expect(cli.gets.filter((r) => r.startsWith('notify/'))).toEqual([])
   })
 
   it('shows this workspace’s effective value and source (not another workspace’s)', async () => {

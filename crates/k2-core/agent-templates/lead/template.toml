@@ -1,6 +1,6 @@
 schema = 1
 id = "lead"
-version = 1
+version = 2
 name = "Lead"
 summary = "Leads a small team of agents: splits the work, hands it out, follows up."
 kind = "agent"
@@ -23,4 +23,19 @@ suggest = ["agents.manage", "connections.create", "projects.manage"]
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "goals"
+ask = "What should the team get done first?"
+fills = "role"
+
+[[questions]]
+id = "team"
+ask = "Which agents are on the team today, if any?"
+fills = "wiki:Team#Who is on the team"
+
+[[questions]]
+id = "reports"
+ask = "How often do you want a report, and in what form?"
+fills = "wiki:About my person#How they like updates"

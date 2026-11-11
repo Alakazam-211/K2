@@ -215,7 +215,7 @@ fn template_apply_writes_the_agent_and_a_second_run_changes_nothing() {
         assert!(layers.iter().any(|l| l.source == src), "{src} stacked: {layers:?}");
     }
     let l = lock::read(&path).expect("lock").expect("lock written");
-    assert_eq!((l.id.as_str(), l.version), ("developer", 1));
+    assert_eq!((l.id.as_str(), l.version), ("developer", 2));
     assert_eq!(l.hash, first.template.hash);
     assert_eq!(l.by, "owner-token");
     assert_eq!(l.suggested, vec!["compute.use".to_string()]);
@@ -372,6 +372,64 @@ fn every_builtin_template_applies_headless() {
         let again = apply(&req(&t.meta.id, &path), &HireCaller::Owner).expect("again");
         assert!(!again.changed, "{}: {:?}", t.meta.id, again.rows);
     }
+}
+
+// ── first-conversation questions: the pieces ─────────────────────────
+
+#[test]
+fn template_fill_note_puts_answers_under_their_headings() {
+    let note = "---\ntitle: N\n---\n\n# N\n\n## A\n\n## B\n";
+    let a = Some("A".to_string());
+    let b = Some("B".to_string());
+    assert_eq!(apply::fill_note(note, &[]), note);
+    assert_eq!(apply::fill_note(note, &[(a.clone(), "one")]), "---\ntitle: N\n---\n\n# N\n\n## A\n\none\n\n## B\n");
+    // Two under one heading keep their order; the last heading takes text too.
+    assert_eq!(
+        apply::fill_note(note, &[(a.clone(), "one"), (a, "two\nlines"), (b, "end")]),
+        "---\ntitle: N\n---\n\n# N\n\n## A\n\none\n\ntwo\nlines\n\n## B\n\nend\n"
+    );
+    // No heading (or one that isn't there): at the end.
+    assert_eq!(apply::fill_note(note, &[(None, "tail")]), format!("{note}\ntail\n"));
+    assert!(format::is_heading("## How they sound", "How they sound"));
+    assert!(!format::is_heading("##How", "How") && !format::is_heading("text How", "How"));
+    assert_eq!(format::Fills::parse("role").unwrap(), format::Fills::Role);
+    assert_eq!(
+        format::Fills::parse("wiki:About my person#What they do").unwrap(),
+        format::Fills::Wiki("About my person.md".into(), Some("What they do".into()))
+    );
+    assert!(format::Fills::parse("wiki:#x").is_err() && format::Fills::parse("wiki:N#").is_err());
+}
+
+#[test]
+fn template_answers_for_a_note_not_written_go_to_role() {
+    let home = setup();
+    // --no-wiki: the note isn't written, so its answer lands in ROLE.md.
+    let path = ws(&home, "nowiki");
+    let mut r = req("writer", &path);
+    r.no_wiki = true;
+    r.answers.insert("samples".into(), "example.k2.dev/blog".into());
+    let out = apply(&r, &HireCaller::Owner).expect("apply");
+    let role = read(&path, ".k2/agent/ROLE.md");
+    assert!(role.contains("- **Where can I see how you write: a few samples or links?** example.k2.dev/blog"), "{role}");
+    assert!(!role.contains("in your wiki:"), "{role}");
+    assert!(out.questions.iter().any(|q| q.id == "samples" && q.answered));
+    // A dry run previews the answers in the charter and writes nothing.
+    let dry = ws(&home, "dry-answers");
+    let mut r = req("support", &dry);
+    r.dry_run = true;
+    r.answers.insert("tone".into(), "Warm and short.".into());
+    let plan = apply(&r, &HireCaller::Owner).expect("dry run");
+    assert!(plan.charter.contains("- **How should I sound with customers?** Warm and short."), "{}", plan.charter);
+    assert!(!Path::new(&dry).exists());
+    // An unknown id through apply too, naming the valid ids.
+    let mut r = req("ops", &ws(&home, "ops"));
+    r.answers.insert("budget".into(), "x".into());
+    let e = apply(&r, &HireCaller::Owner).expect_err("unknown");
+    assert!(e.hint.contains("its question ids: systems, limits, alerts"), "{}", e.hint);
+    // Too long.
+    let mut r = req("ops", &ws(&home, "ops2"));
+    r.answers.insert("limits".into(), "x".repeat(format::MAX_ANSWER_CHARS + 1));
+    assert!(apply(&r, &HireCaller::Owner).expect_err("long").hint.contains("at most 1000"));
 }
 
 // ── first-conversation questions ─────────────────────────────────────

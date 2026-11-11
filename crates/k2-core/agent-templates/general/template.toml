@@ -1,6 +1,6 @@
 schema = 1
 id = "general"
-version = 1
+version = 2
 name = "General"
 summary = "Helps with whatever you bring it; you shape the job over time."
 kind = "agent"
@@ -23,4 +23,19 @@ suggest = []
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "work"
+ask = "What do you do, in a sentence or two?"
+fills = "wiki:About my person#What they do"
+
+[[questions]]
+id = "updates"
+ask = "How and when do you want updates from me?"
+fills = "wiki:About my person#How they like updates"
+
+[[questions]]
+id = "tools"
+ask = "Which folders, tools or accounts will I work with?"
+fills = "role"

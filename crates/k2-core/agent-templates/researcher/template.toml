@@ -1,6 +1,6 @@
 schema = 1
 id = "researcher"
-version = 1
+version = 2
 name = "Researcher"
 summary = "Finds things out from sources, documents or data, and says where each answer came from."
 kind = "agent"
@@ -23,4 +23,24 @@ suggest = []
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "topics"
+ask = "What do you want to find out, and what will it help you decide?"
+fills = "role"
+
+[[questions]]
+id = "sources"
+ask = "Which sources do you trust, and which should I avoid?"
+fills = "wiki:Sources#Sources I trust"
+
+[[questions]]
+id = "format"
+ask = "How do you want findings: a short answer, a report, a table?"
+fills = "wiki:About my person#Preferences"
+
+[[questions]]
+id = "depth"
+ask = "How far should I dig before I check in with you?"
+fills = "role"

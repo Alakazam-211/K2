@@ -1,6 +1,6 @@
 schema = 1
 id = "writer"
-version = 1
+version = 2
 name = "Writer"
 summary = "Writes drafts, edits, docs, posts and replies in your voice."
 kind = "agent"
@@ -23,4 +23,24 @@ suggest = []
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "audience"
+ask = "Who do you write for?"
+fills = "role"
+
+[[questions]]
+id = "samples"
+ask = "Where can I see how you write: a few samples or links?"
+fills = "wiki:Voice and style#Examples"
+
+[[questions]]
+id = "avoid"
+ask = "Any words, tone or topics to avoid?"
+fills = "wiki:Voice and style#Words they use and avoid"
+
+[[questions]]
+id = "drafts"
+ask = "Where should my drafts go when they're ready?"
+fills = "role"

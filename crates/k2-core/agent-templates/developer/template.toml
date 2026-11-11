@@ -1,6 +1,6 @@
 schema = 1
 id = "developer"
-version = 1
+version = 2
 name = "Developer"
 summary = "Builds and fixes software in its folder."
 kind = "agent"
@@ -23,4 +23,24 @@ suggest = ["compute.use"]
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "repo"
+ask = "Which repo or folder is the code in?"
+fills = "wiki:Codebase map#Layout"
+
+[[questions]]
+id = "tests"
+ask = "How do you build it and run the tests?"
+fills = "wiki:Codebase map#How to build and test"
+
+[[questions]]
+id = "done"
+ask = "What does done mean for a change: tests pass, a review, a PR, a deploy?"
+fills = "role"
+
+[[questions]]
+id = "landing"
+ask = "How do changes land: a branch and PR, straight to main, or something else?"
+fills = "role"

@@ -30,8 +30,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub use apply::{apply, apply_with, ApplyReport, ApplyRequest, PermissionPlan, Row, TemplateRef, WorkspaceOutcome};
-pub use format::{Kind, Origin, Template, TemplateToml};
+pub use apply::{apply, apply_with, ApplyReport, ApplyRequest, PermissionPlan, QuestionState, Row, TemplateRef, WorkspaceOutcome};
+pub use format::{Fills, Kind, Origin, Question, Template, TemplateToml};
 pub use lock::{TemplateLock, LOCK_REL};
 
 use super::{HireCaller, HireError};
@@ -338,5 +338,43 @@ pub fn bind_params(t: &Template, given: &BTreeMap<String, String>, caller: &Hire
         out.entry(k.clone()).or_default();
     }
     out.entry("person".to_string()).or_insert_with(|| person_for(caller));
+    Ok(out)
+}
+
+/// Check the hirer's answers against the template's `[[questions]]`: every
+/// id must be one of them (the refusal names the valid ids), every answer
+/// non-empty, at most [`format::MAX_ANSWER_CHARS`], with no control
+/// characters but newlines. Returns them trimmed.
+pub fn bind_answers(t: &Template, given: &BTreeMap<String, String>) -> Result<BTreeMap<String, String>, HireError> {
+    let ids: Vec<&str> = t.meta.questions.iter().map(|q| q.id.as_str()).collect();
+    let mut out = BTreeMap::new();
+    for (k, v) in given {
+        let k = k.trim();
+        if !ids.contains(&k) {
+            let valid = if ids.is_empty() {
+                "it asks no questions".to_string()
+            } else {
+                format!("its question ids: {}", ids.join(", "))
+            };
+            return Err(HireError::usage(format!(
+                "template '{}' has no question '{k}'; {valid} (see: k2 agent template show {})",
+                t.meta.id, t.meta.id
+            )));
+        }
+        let v = v.replace("\r\n", "\n");
+        let v = v.trim();
+        if v.is_empty() {
+            return Err(HireError::usage(format!(
+                "answer {k} is empty; leave out a question you can't answer (the agent asks its person)"
+            )));
+        }
+        if v.chars().count() > format::MAX_ANSWER_CHARS || v.chars().any(|c| c.is_control() && c != '\n') {
+            return Err(HireError::usage(format!(
+                "answer {k}: at most {} characters, no control characters",
+                format::MAX_ANSWER_CHARS
+            )));
+        }
+        out.insert(k.to_string(), v.to_string());
+    }
     Ok(out)
 }

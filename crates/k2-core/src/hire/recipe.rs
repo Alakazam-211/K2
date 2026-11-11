@@ -110,6 +110,9 @@ pub struct MemberRecipe {
     /// The template's `[params]` (`about`), and `person`.
     #[serde(default)]
     pub params: Option<std::collections::BTreeMap<String, String>>,
+    /// Answers to the template's `[[questions]]`, by question id.
+    #[serde(default)]
+    pub answers: Option<std::collections::BTreeMap<String, String>>,
     /// Harness preset id (`claude`, `codex`, …).
     #[serde(default)]
     pub preset: Option<String>,
@@ -282,11 +285,17 @@ pub fn validate_member(m: &MemberRecipe, idx: usize) -> Result<(), HireError> {
                 super::template::bind_params(&tpl, p, &super::HireCaller::Owner)
                     .map_err(|e| HireError::usage(format!("{}: {}", at("params"), e.hint)))?;
             }
+            if let Some(a) = m.answers.as_ref() {
+                super::template::bind_answers(&tpl, a).map_err(|e| HireError::usage(format!("{}: {}", at("answers"), e.hint)))?;
+            }
         }
         (None, Some(p)) if !p.is_empty() => {
             return Err(HireError::usage(format!("{}: params go with a template", at("params"))));
         }
         _ => {}
+    }
+    if m.template.is_none() && m.answers.as_ref().is_some_and(|a| !a.is_empty()) {
+        return Err(HireError::usage(format!("{}: answers go with a template", at("answers"))));
     }
     for (field, v) in [("preset", &m.preset), ("model", &m.model)] {
         if let Some(s) = v.as_deref() {

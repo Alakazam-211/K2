@@ -31,6 +31,11 @@ pub struct ConvergeRequest {
     /// The template's `[params]` (`about`), and `person`.
     #[serde(default)]
     pub params: Option<std::collections::BTreeMap<String, String>>,
+    /// Answers to the template's `[[questions]]`, by question id
+    /// (`k2 agent template show <id>` lists them). The agent asks its
+    /// person the rest on its first start.
+    #[serde(default)]
+    pub answers: Option<std::collections::BTreeMap<String, String>>,
     /// ROLE.md body.
     #[serde(default)]
     pub persona: Option<String>,
@@ -257,12 +262,16 @@ pub fn converge(
             let tpl = super::template::resolve(t)?;
             super::template::check_caller(&tpl, caller)?;
             let vars = super::template::bind_params(&tpl, &req.params.clone().unwrap_or_default(), caller)?;
+            let answers = super::template::bind_answers(&tpl, &req.answers.clone().unwrap_or_default())?;
             super::template::apply::check_lock(&path, &tpl)?;
-            Some((tpl, vars))
+            Some((tpl, vars, answers))
         }
         None => {
             if req.params.as_ref().is_some_and(|p| !p.is_empty()) {
                 return Err(HireError::usage("params go with a template (--template <id>)"));
+            }
+            if req.answers.as_ref().is_some_and(|a| !a.is_empty()) {
+                return Err(HireError::usage("answers go with a template (--template <id>)"));
             }
             None
         }
@@ -335,7 +344,7 @@ pub fn converge(
     }
 
     let mut template_out = None;
-    if let Some((tpl, vars)) = tpl.as_ref() {
+    if let Some((tpl, vars, answers)) = tpl.as_ref() {
         // The template writes the persona (and its starters, layers, lock)
         // before the name and preset steps below.
         let display = match req.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -352,6 +361,7 @@ pub fn converge(
         let out = super::template::apply::workspace_steps(&super::template::apply::StepInput {
             tpl,
             vars,
+            answers,
             path: &path,
             caller,
             display_name: display,

@@ -1,6 +1,6 @@
 schema = 1
 id = "support"
-version = 1
+version = 2
 name = "Support"
 summary = "Looks after conversations with customers and leads."
 kind = "agent"
@@ -23,4 +23,24 @@ suggest = []
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "product"
+ask = "What do you offer, in a few lines?"
+fills = "role"
+
+[[questions]]
+id = "tone"
+ask = "How should I sound with customers?"
+fills = "role"
+
+[[questions]]
+id = "faqs"
+ask = "Where are your answers to common questions: a page, a doc, a folder?"
+fills = "wiki:Customers and FAQs#Common questions"
+
+[[questions]]
+id = "handoff"
+ask = "When should I hand a conversation to you instead of answering?"
+fills = "role"

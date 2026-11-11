@@ -285,9 +285,11 @@ fn apply_plan(plan: &Plan, instance_id: &str, caller: &HireCaller, undo: &mut Ve
                 let tpl = super::template::resolve(t)?;
                 super::template::check_caller(&tpl, caller)?;
                 let vars = super::template::bind_params(&tpl, &r.params.clone().unwrap_or_default(), caller)?;
+                let answers = super::template::bind_answers(&tpl, &r.answers.clone().unwrap_or_default())?;
                 let out = super::template::apply::workspace_steps(&super::template::apply::StepInput {
                     tpl: &tpl,
                     vars: &vars,
+                    answers: &answers,
                     path: &path_s,
                     caller,
                     display_name: r.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| m.handle.clone()),

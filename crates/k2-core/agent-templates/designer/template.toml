@@ -1,6 +1,6 @@
 schema = 1
 id = "designer"
-version = 1
+version = 2
 name = "Designer"
 summary = "Designs how things look and work: screens, flows and details."
 kind = "agent"
@@ -23,4 +23,24 @@ suggest = []
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "product"
+ask = "What are we designing, and who is it for?"
+fills = "role"
+
+[[questions]]
+id = "taste"
+ask = "Which designs or sites do you like, and why?"
+fills = "wiki:Design notes#What they like"
+
+[[questions]]
+id = "system"
+ask = "Is there a brand, design system or set of files I should start from?"
+fills = "wiki:Design notes#Decisions"
+
+[[questions]]
+id = "show"
+ask = "How do you want to see my work: images, a live page, a file?"
+fills = "wiki:About my person#Preferences"

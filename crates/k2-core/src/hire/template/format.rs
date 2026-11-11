@@ -16,8 +16,15 @@ pub const SCHEMA: u32 = 1;
 pub const MAX_PARAMS: usize = 8;
 pub const MAX_PARAM_CHARS: usize = 4096;
 pub const DEFAULT_PARAM_MAX: usize = 500;
-/// Placeholders every template has.
-pub const BUILT_IN_VARS: &[&str] = &["name", "person"];
+/// Placeholders every template has. `open_questions` is filled at apply:
+/// the asks of the `[[questions]]` the hire left unanswered (empty when
+/// none are open, so its line drops).
+pub const BUILT_IN_VARS: &[&str] = &["name", "person", "open_questions"];
+/// First-conversation questions a template may ask (`[[questions]]`).
+pub const MAX_QUESTIONS: usize = 8;
+pub const MAX_ASK_CHARS: usize = 200;
+/// An answer given at hire (`--answer id=text`).
+pub const MAX_ANSWER_CHARS: usize = 1000;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -86,6 +93,58 @@ fn default_param_max() -> usize {
     DEFAULT_PARAM_MAX
 }
 
+/// One first-conversation question (`[[questions]]`). The hirer may answer
+/// it at hire (`--answer id=text`, `answers` in the body); the agent asks
+/// its person the rest on its first start.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Question {
+    /// `a-z`, `0-9`, `_`; unique in the template.
+    pub id: String,
+    /// The question, one line, as the agent would ask it.
+    pub ask: String,
+    /// Where an answer goes: `role` (the "What I know about my work"
+    /// section of ROLE.md) or `wiki:<Note>[#<Heading>]` (a starter note of
+    /// this template, under one of its headings).
+    pub fills: String,
+}
+
+/// A parsed `fills`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fills {
+    Role,
+    /// `(note file id "About my person.md", heading)`.
+    Wiki(String, Option<String>),
+}
+
+impl Fills {
+    pub fn parse(s: &str) -> Result<Fills, String> {
+        let s = s.trim();
+        if s == "role" {
+            return Ok(Fills::Role);
+        }
+        let Some(rest) = s.strip_prefix("wiki:") else {
+            return Err(format!("fills '{s}' must be role or wiki:<Note>[#<Heading>]"));
+        };
+        let (note, heading) = match rest.split_once('#') {
+            Some((n, h)) => (n.trim(), Some(h.trim().to_string())),
+            None => (rest.trim(), None),
+        };
+        if note.is_empty() || heading.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("fills '{s}' must be role or wiki:<Note>[#<Heading>]"));
+        }
+        let file = if note.ends_with(".md") { note.to_string() } else { format!("{note}.md") };
+        Ok(Fills::Wiki(file, heading))
+    }
+}
+
+/// A note line that is the heading `h` (any level).
+pub fn is_heading(line: &str, h: &str) -> bool {
+    let t = line.trim_end();
+    let hashes = t.chars().take_while(|c| *c == '#').count();
+    hashes > 0 && t[hashes..].starts_with(' ') && t[hashes..].trim() == h
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct HelloSection {
@@ -118,6 +177,9 @@ pub struct TemplateToml {
     pub params: BTreeMap<String, ParamSpec>,
     #[serde(default)]
     pub hello: Option<HelloSection>,
+    /// First-conversation questions, in the order the agent asks them.
+    #[serde(default)]
+    pub questions: Vec<Question>,
     /// Same fields as the recipe's heartbeats. No built-in uses one.
     #[serde(default)]
     pub heartbeats: Vec<HeartbeatIn>,
@@ -336,6 +398,12 @@ impl Template {
         v["skills"] = serde_json::json!(self.skills().into_iter().map(|(n, _)| n).collect::<Vec<_>>());
         v["heartbeats"] = serde_json::json!(self.meta.heartbeats.iter().map(|h| serde_json::json!({ "name": h.name, "frequency": h.frequency })).collect::<Vec<_>>());
         v["hello"] = serde_json::json!(self.meta.hello.as_ref().map(|h| h.brief.clone()));
+        v["questions"] = serde_json::json!(self
+            .meta
+            .questions
+            .iter()
+            .map(|q| serde_json::json!({ "id": q.id, "ask": q.ask, "fills": q.fills }))
+            .collect::<Vec<_>>());
         v["dir"] = serde_json::json!(self.dir);
         if with_files {
             v["files"] = serde_json::json!(self.files);
@@ -441,13 +509,14 @@ pub fn validate(files: BTreeMap<String, String>, dir: Option<std::path::PathBuf>
     }
     for (k, p) in &meta.params {
         if !ident_ok(k) || BUILT_IN_VARS.contains(&k.as_str()) {
-            return Err(err(format!("template.toml: param '{k}' must be a-z, 0-9, _ (not name or person)")));
+            return Err(err(format!("template.toml: param '{k}' must be a-z, 0-9, _ (not name, person or open_questions)")));
         }
         if !line_ok(&p.label, 80) || p.max == 0 || p.max > MAX_PARAM_CHARS {
             return Err(err(format!("template.toml: param '{k}': a 1–80 character label and max 1–{MAX_PARAM_CHARS}")));
         }
     }
     let role = files.get("ROLE.md").filter(|r| !r.trim().is_empty()).ok_or_else(|| err("ROLE.md is missing or empty".into()))?;
+    check_questions(&meta.questions, &files).map_err(|m| err(format!("template.toml: [[questions]] {m}")))?;
 
     // The recipe's caps and shape rules, through the recipe's own validator.
     let mut m = MemberRecipe { persona: Some(role.clone()), ..Default::default() };
@@ -494,6 +563,49 @@ pub fn validate(files: BTreeMap<String, String>, dir: Option<std::path::PathBuf>
     }
     let hash = hash_files(&files);
     Ok(Template { meta, origin: ex.origin, dir, files, hash })
+}
+
+/// `[[questions]]`: at most [`MAX_QUESTIONS`], unique ids, a one-line ask,
+/// and a `fills` naming `role` or a starter note (and heading) this
+/// template ships.
+fn check_questions(qs: &[Question], files: &BTreeMap<String, String>) -> Result<(), String> {
+    if qs.len() > MAX_QUESTIONS {
+        return Err(format!("at most {MAX_QUESTIONS} questions"));
+    }
+    let mut seen = BTreeSet::new();
+    for q in qs {
+        if !ident_ok(&q.id) {
+            return Err(format!("id '{}' must be a-z, 0-9, _ (starting with a letter, at most 32)", q.id));
+        }
+        if !seen.insert(q.id.as_str()) {
+            return Err(format!("id '{}' is used twice", q.id));
+        }
+        if !line_ok(&q.ask, MAX_ASK_CHARS) {
+            return Err(format!("'{}': ask is 1–{MAX_ASK_CHARS} characters, one line", q.id));
+        }
+        if q.ask.contains("{{") {
+            return Err(format!("'{}': ask is plain text (no placeholders)", q.id));
+        }
+        match Fills::parse(&q.fills).map_err(|m| format!("'{}': {m}", q.id))? {
+            Fills::Role => {}
+            Fills::Wiki(note, heading) => {
+                let Some(body) = files.get(&format!("wiki/{note}")) else {
+                    let notes: Vec<&str> = files.keys().filter_map(|p| p.strip_prefix("wiki/")).collect();
+                    return Err(format!(
+                        "'{}': fills names wiki note '{note}', which this template doesn't ship (its notes: {})",
+                        q.id,
+                        if notes.is_empty() { "none".to_string() } else { notes.join(", ") }
+                    ));
+                };
+                if let Some(h) = heading {
+                    if !body.lines().any(|l| is_heading(l, &h)) {
+                        return Err(format!("'{}': wiki note '{note}' has no heading '{h}'", q.id));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// AT6: plain ids must be standing V1 actions (when the daemon installed

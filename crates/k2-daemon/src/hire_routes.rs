@@ -894,7 +894,7 @@ fn templates_read(path: &str, params: &HashMap<String, String>) -> CliResponse {
     }
 }
 
-/// `POST /cli/agents/hire {template, params?, path?, …}` (T2). `path` is
+/// `POST /cli/agents/hire {template, params?, answers?, path?, …}` (T2). `path` is
 /// optional: `<hire root>/<handle>`. `dryRun` returns the review rows and
 /// writes nothing. The response carries `hello` on the first create; the
 /// caller launches the agent and delivers it.
@@ -911,6 +911,7 @@ fn cli_template_hire(
     let areq = k2_core::hire::template::ApplyRequest {
         template: req.template.clone().unwrap_or_default(),
         params: req.params.clone().unwrap_or_default(),
+        answers: req.answers.clone().unwrap_or_default(),
         path: opt(&Some(req.path.clone())),
         name: opt(&req.name),
         handle: extra.get("handle").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),

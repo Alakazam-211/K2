@@ -10,7 +10,7 @@
 //! permission the template suggests; the permissions step, T3, turns it
 //! into a grant or a card).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Serialize;
@@ -18,7 +18,7 @@ use serde::Serialize;
 use super::super::converge::{self, ConvergeAuthority, ConvergeRequest};
 use super::super::steps;
 use super::super::{HireCaller, HireError};
-use super::format::{sha256_text, Template};
+use super::format::{is_heading, sha256_text, Fills, Question, Template};
 use super::lock::{self, TemplateLock, LOCK_REL};
 use super::render::render;
 
@@ -29,6 +29,9 @@ pub struct ApplyRequest {
     pub template: String,
     /// Declared `[params]` (`about`); `person` overrides the hirer's name.
     pub params: BTreeMap<String, String>,
+    /// Answers to the template's `[[questions]]`, by question id. The
+    /// agent asks its person the ones left out on its first start.
+    pub answers: BTreeMap<String, String>,
     /// The folder. `None`: `<hire root>/<handle>`.
     pub path: Option<String>,
     /// Display name; the handle seed when `handle` is unset.
@@ -103,6 +106,15 @@ impl TemplateRef {
     }
 }
 
+/// One `[[questions]]` entry after apply: was it answered at hire?
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct QuestionState {
+    pub id: String,
+    pub ask: String,
+    pub fills: String,
+    pub answered: bool,
+}
+
 /// The template's own steps on one workspace.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -119,6 +131,8 @@ pub struct WorkspaceOutcome {
     /// The rendered `[hello] brief`, only on the first create (the door
     /// launches the agent and delivers it).
     pub hello: Option<String>,
+    /// The template's questions, each marked answered or still open.
+    pub questions: Vec<QuestionState>,
 }
 
 /// What [`apply`] returns.
@@ -143,6 +157,9 @@ pub struct ApplyReport {
     pub charter: String,
     pub permissions: PermissionPlan,
     pub hello: Option<String>,
+    /// The template's questions: answered at hire, or open (the agent
+    /// asks its person on its first start).
+    pub questions: Vec<QuestionState>,
 }
 
 impl ApplyReport {
@@ -158,6 +175,8 @@ pub struct StepInput<'a> {
     pub tpl: &'a Template,
     /// From [`super::bind_params`] (declared params + `person`).
     pub vars: &'a BTreeMap<String, String>,
+    /// From [`super::bind_answers`] (question id → answer).
+    pub answers: &'a BTreeMap<String, String>,
     pub path: &'a str,
     pub caller: &'a HireCaller,
     /// `{{name}}` and the ROLE.md heading.
@@ -196,10 +215,130 @@ fn agent_type_for(role: &str) -> &'static str {
     if role == "lead" || role == "manager" { "manager" } else { "agent-template" }
 }
 
-/// The K2:MANAGED block's body: the charter, then the shared block.
-pub fn charter(tpl: &Template, vars: &BTreeMap<String, String>) -> String {
+/// Where this apply puts each hire answer, and what stays open.
+#[derive(Debug, Default)]
+pub struct AnswerPlan<'a> {
+    /// `fills = "role"` (and wiki answers whose note this apply won't
+    /// write): the "What I know about my work" section.
+    pub role: Vec<(&'a Question, &'a str)>,
+    /// Note file id → `(heading, answer)` in question order.
+    pub wiki: BTreeMap<String, Vec<(Option<String>, &'a str)>>,
+    /// Unanswered questions, in order.
+    pub open: Vec<&'a Question>,
+    /// Who answered, for the ROLE.md line (`None`: whoever hired you).
+    pub by_agent: Option<String>,
+}
+
+impl<'a> AnswerPlan<'a> {
+    /// `notes_written`: the note file ids this apply writes. An answer for
+    /// a note it doesn't write (present already, or `--no-wiki`) goes into
+    /// ROLE.md instead, so no answer is lost.
+    pub fn new(tpl: &'a Template, answers: &'a BTreeMap<String, String>, notes_written: &BTreeSet<String>) -> Self {
+        let mut plan = AnswerPlan::default();
+        for q in &tpl.meta.questions {
+            let Some(a) = answers.get(&q.id).map(String::as_str) else {
+                plan.open.push(q);
+                continue;
+            };
+            match Fills::parse(&q.fills) {
+                Ok(Fills::Wiki(note, heading)) if notes_written.contains(&note) => {
+                    plan.wiki.entry(note).or_default().push((heading, a));
+                }
+                _ => plan.role.push((q, a)),
+            }
+        }
+        plan
+    }
+
+    /// `{{open_questions}}`: the open asks on one line (empty: none open).
+    pub fn open_line(&self) -> String {
+        self.open.iter().map(|q| format!("\"{}\"", q.ask.trim())).collect::<Vec<_>>().join("; ")
+    }
+
+    pub fn states(&self, tpl: &Template) -> Vec<QuestionState> {
+        tpl.meta
+            .questions
+            .iter()
+            .map(|q| QuestionState {
+                id: q.id.clone(),
+                ask: q.ask.clone(),
+                fills: q.fills.clone(),
+                answered: !self.open.iter().any(|o| o.id == q.id),
+            })
+            .collect()
+    }
+}
+
+/// An answer as a list item's body: later lines indented under it.
+fn list_body(a: &str) -> String {
+    a.lines().map(str::trim_end).collect::<Vec<_>>().join("\n  ")
+}
+
+/// Put each answer under its heading in a starter note (after any text
+/// already there), or at the end when the heading is missing or unnamed.
+pub fn fill_note(text: &str, entries: &[(Option<String>, &str)]) -> String {
+    if entries.is_empty() {
+        return text.to_string();
+    }
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    for (heading, answer) in entries {
+        let body: Vec<String> = answer.lines().map(|l| l.trim_end().to_string()).collect();
+        let at_heading = heading.as_deref().and_then(|h| lines.iter().position(|l| is_heading(l, h)));
+        let (start, end) = match at_heading {
+            Some(i) => (i + 1, lines[i + 1..].iter().position(|l| l.starts_with('#')).map_or(lines.len(), |k| i + 1 + k)),
+            None => (0, lines.len()),
+        };
+        let mut at = end;
+        while at > start && lines[at - 1].trim().is_empty() {
+            at -= 1;
+        }
+        let mut insert = vec![String::new()];
+        insert.extend(body);
+        if at < lines.len() && !lines[at].trim().is_empty() {
+            insert.push(String::new());
+        }
+        drop(lines.splice(at..at, insert));
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// The K2:MANAGED block's body: the charter, what the hire answered, the
+/// first-conversation block (templates with questions), then the shared
+/// block.
+pub fn charter(tpl: &Template, vars: &BTreeMap<String, String>, plan: &AnswerPlan<'_>) -> String {
     let mut out = render(tpl.role_md(), vars).trim_end().to_string();
     out.push('\n');
+    if !plan.role.is_empty() {
+        out.push_str("\n## What I know about my work\n\n");
+        match plan.by_agent.as_deref() {
+            Some(a) => out.push_str(&format!(
+                "Answered when you were hired, by {a} (the agent that hired you). Check anything that looks off with your person.\n\n"
+            )),
+            None => out.push_str("Answered when you were hired.\n\n"),
+        }
+        for (q, a) in &plan.role {
+            out.push_str(&format!("- **{}** {}\n", q.ask.trim(), list_body(a)));
+        }
+    }
+    if !tpl.meta.questions.is_empty() {
+        out.push('\n');
+        out.push_str(render(super::AGENT_TEMPLATE_FIRST_CONVERSATION, vars).trim_end());
+        out.push('\n');
+        if !plan.wiki.is_empty() {
+            let links: Vec<String> = plan.wiki.keys().map(|n| format!("[[{}]]", n.trim_end_matches(".md"))).collect();
+            out.push_str(&format!("\nAnswered at hire, in your wiki: {}.\n", links.join(", ")));
+        }
+        if plan.open.is_empty() {
+            out.push_str("\nStill open from your hire: nothing. Every question was answered.\n");
+        } else {
+            out.push_str("\nStill open from your hire:\n\n");
+            for q in &plan.open {
+                out.push_str(&format!("- {}\n", q.ask.trim()));
+            }
+        }
+    }
     if tpl.meta.shared_block {
         out.push('\n');
         out.push_str(render(super::AGENT_TEMPLATE_SHARED_BLOCK, vars).trim_end());
@@ -234,8 +373,21 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
     vars.insert("name".into(), inp.display_name.clone());
     vars.entry("person".into()).or_insert_with(|| super::person_for(inp.caller));
 
+    // Hire answers: into the starter notes this apply writes, the rest
+    // into ROLE.md; the open ones go to the first conversation.
+    let notes_written: BTreeSet<String> = if inp.no_wiki {
+        BTreeSet::new()
+    } else {
+        t.wiki_notes().into_iter().map(|(id, _)| id).filter(|id| !exists(inp.path, &format!(".k2/wiki/{id}"))).collect()
+    };
+    let mut plan = AnswerPlan::new(t, inp.answers, &notes_written);
+    if !plan.role.is_empty() {
+        plan.by_agent = hirer_agent_name(inp.caller);
+    }
+    vars.insert("open_questions".into(), plan.open_line());
+
     // ROLE.md: written only when the agent has none.
-    let charter = charter(t, &vars);
+    let charter = charter(t, &vars, &plan);
     let role_rel = ".k2/agent/ROLE.md";
     let agent_dir = crate::workspace::agent_identity::workspace_agent_path(inp.path);
     let mut wrote_role = false;
@@ -274,7 +426,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
             rows.push(row("wiki", rel, "skip", Some("present")));
             continue;
         }
-        let text = render(body, &vars);
+        let text = fill_note(&render(body, &vars), plan.wiki.get(&id).map(Vec::as_slice).unwrap_or_default());
         if !dry {
             crate::wiki::write_note(Path::new(inp.path), &id, &text).map_err(HireError::usage)?;
             files.insert(rel.clone(), sha256_text(&text));
@@ -461,6 +613,7 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
     };
 
     let changed = rows.iter().any(|r| r.status == "done");
+    let questions = plan.states(t);
     Ok(WorkspaceOutcome {
         template: TemplateRef::of(t),
         rows,
@@ -469,7 +622,24 @@ pub fn workspace_steps(inp: &StepInput<'_>) -> Result<WorkspaceOutcome, HireErro
         charter,
         permissions,
         hello: if dry { None } else { hello },
+        questions,
     })
+}
+
+/// The hiring agent's handle (or name), when an agent hires (`None` when
+/// its workspace can't be found: the line then names no one).
+fn hirer_agent_name(caller: &HireCaller) -> Option<String> {
+    let HireCaller::Agent { workspace_id } = caller else { return None };
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let handle: Option<String> = conn
+        .query_row(
+            "SELECT COALESCE(NULLIF(handle, ''), name) FROM projects WHERE id = ?1",
+            rusqlite::params![workspace_id],
+            |r| r.get(0),
+        )
+        .ok();
+    handle.filter(|h| !h.trim().is_empty())
 }
 
 fn folder_free(path: &str, tpl: &Template) -> Result<(), HireError> {
@@ -526,6 +696,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
     let tpl = super::resolve(&req.template)?;
     super::check_caller(&tpl, caller)?;
     let vars = super::bind_params(&tpl, &req.params, caller)?;
+    let answers = super::bind_answers(&tpl, &req.answers)?;
     let path = match req.path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(p) => converge::expand_hire_path(p)?,
         None => default_path(req, &tpl, auth)?,
@@ -558,6 +729,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         let out = workspace_steps(&StepInput {
             tpl: &tpl,
             vars: &vars,
+            answers: &answers,
             path: &path,
             caller,
             display_name: display.clone(),
@@ -587,6 +759,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
             charter: out.charter,
             permissions: out.permissions,
             hello: None,
+            questions: out.questions,
         });
     }
 
@@ -596,6 +769,7 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         preset: req.tool.clone(),
         template: Some(tpl.meta.id.clone()),
         params: Some(req.params.clone()),
+        answers: Some(req.answers.clone()),
         default_model: req.model.clone(),
         db_access: req.db_access.clone(),
         no_wiki: Some(req.no_wiki),
@@ -627,5 +801,6 @@ pub fn apply_with(req: &ApplyRequest, caller: &HireCaller, auth: &ConvergeAuthor
         charter: applied.charter,
         permissions: applied.permissions,
         hello: applied.hello,
+        questions: applied.questions,
     })
 }

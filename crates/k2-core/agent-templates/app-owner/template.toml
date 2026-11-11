@@ -1,6 +1,6 @@
 schema = 1
 id = "app-owner"
-version = 1
+version = 2
 name = "App owner"
 summary = "Builds, ships and looks after K2 Apps."
 kind = "agent"
@@ -23,4 +23,19 @@ suggest = ["apps.build", "compute.use"]
 about = { label = "What should it focus on?", max = 500, required = false }
 
 [hello]
-brief = "Say hello to {{person}} on the Thread: who you are, what you're for, and ask what they want first."
+brief = "Say hello to {{person}} on the Thread: who you are and what you're for. Then do what \"Your first conversation\" in your ROLE.md says: ask only the questions still open, one or two at a time; if none are, say what you understood and what you'll start on.\nStill open from your hire: {{open_questions}}"
+
+[[questions]]
+id = "apps"
+ask = "Which App or Apps will I own, or what should I build?"
+fills = "wiki:My Apps#Apps"
+
+[[questions]]
+id = "users"
+ask = "Who uses them?"
+fills = "wiki:My Apps#Users and support"
+
+[[questions]]
+id = "releases"
+ask = "Should I ship when it's ready, or check with you before each release?"
+fills = "role"

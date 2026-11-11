@@ -21,7 +21,7 @@
 // UNTRUSTED CONTENT (§8.1/§8.4): approval items surface from/to/subject
 // summaries only; the body is a bounded plain-text preview the daemon
 // prepared, rendered ONLY behind an explicit expand, always as plain text
-// (<pre>), never HTML, never auto-shown.
+// (a pre-wrapped text box), never HTML, never auto-shown.
 
 import React, { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
@@ -539,7 +539,7 @@ function ServerTab({
         ) : null}
         {status.hostname ? (
           <FactRow label="Mail server name" hint="Mail apps and other mail servers reach this server by this name.">
-            <span className="type-row font-mono text-[var(--color-text-secondary)] truncate max-w-[16rem]">{status.hostname}</span>
+            <span className="type-row text-[var(--color-text-secondary)] truncate max-w-[16rem]">{status.hostname}</span>
             <CopyButton text={status.hostname} label="mail server name" />
           </FactRow>
         ) : null}
@@ -549,7 +549,7 @@ function ServerTab({
             hint={
               <>
                 Chosen when the server installed.{' '}
-                <span className="font-mono text-[var(--color-text-muted)]">{status.portPlan}</span>
+                <span className="text-[var(--color-text-muted)]">{status.portPlan}</span>
               </>
             }
           >
@@ -600,7 +600,7 @@ function ServerTab({
             <Input
               id={hostId}
               aria-label="Mail server name"
-              className="w-full font-mono"
+              className="w-full"
               value={hostname}
               disabled={!canMutate || busy}
               onChange={(e) => {
@@ -808,7 +808,7 @@ function UninstallDialog({
       </label>
       {purge ? (
         <Field label={`Type ${needs || 'the mail server name'} to confirm`} htmlFor={typedId}>
-          <Input id={typedId} className={`${DIALOG_FIELD} font-mono`} value={typed} disabled={busy} onChange={(e) => setTyped(e.target.value)} placeholder={needs} />
+          <Input id={typedId} className={`${DIALOG_FIELD}`} value={typed} disabled={busy} onChange={(e) => setTyped(e.target.value)} placeholder={needs} />
         </Field>
       ) : null}
       {error ? <FailedNote what={plainFailure("The email server wasn’t uninstalled.", error)} detail={error} next="It’s still installed and nothing was deleted. Try again in a moment." /> : null}
@@ -948,7 +948,7 @@ function AddDomainDialog({ onClose, onAdded, onExists }: { onClose: () => void; 
           <Input
             id={id}
             autoFocus
-            className={`${DIALOG_FIELD} font-mono`}
+            className={`${DIALOG_FIELD}`}
             value={value}
             disabled={busy}
             aria-invalid={problem ? true : undefined}
@@ -977,16 +977,16 @@ function RecordRow({ r }: { r: DnsRecordRow }): React.JSX.Element {
           <span className="type-hint text-[var(--color-text-secondary)]">
             {' · '}
             {instruction ? 'at your hosting provider for ' : `${r.type} at `}
-            <span className="font-mono">{r.name}</span>
+            {r.name}
           </span>
         </p>
         <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
       </div>
       <div
         data-k2-chamfer="control"
-        className="mt-1.5 flex items-center gap-2 bg-[var(--color-bg)] border border-[var(--color-border)] pl-2 pr-1 py-1"
+        className="mt-1.5 flex items-center gap-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[var(--radius-field)] pl-2 pr-1 py-1"
       >
-        <code className="flex-1 min-w-0 type-hint font-mono text-[var(--color-text-secondary)] break-all">{r.expectedDisplay}</code>
+        <span className="flex-1 min-w-0 type-hint text-[var(--color-text-secondary)] break-all">{r.expectedDisplay}</span>
         {!instruction ? <CopyButton text={r.expected} label={`the ${r.purpose} value`} /> : null}
       </div>
       {r.status === 'wrong' || (r.status === 'missing' && live.length > 0) ? (
@@ -996,7 +996,7 @@ function RecordRow({ r }: { r: DnsRecordRow }): React.JSX.Element {
               ? 'Your DNS has a different value here. Replace it with the one above, exactly as shown.'
               : 'Your DNS has other records at this name, but not this one. Add the one above.'}
           </p>
-          <p className={`${SETTING_SERVER_REASON} font-mono`}>Now: {live.join(' · ')}</p>
+          <p className={`${SETTING_SERVER_REASON}`}>Now: {live.join(' · ')}</p>
         </div>
       ) : null}
     </div>
@@ -1278,7 +1278,7 @@ function SendingGroup({ detail, canMutate, onChanged }: { detail: DomainDetail; 
       <Input
         aria-label={label}
         type={type}
-        className="w-full font-mono"
+        className="w-full"
         value={value}
         disabled={!canMutate || busy}
         onChange={(e) => set(e.target.value)}
@@ -1657,9 +1657,9 @@ function PasswordShownOnce({ creds, onClose }: { creds: RotatedMailboxPassword; 
     >
       <p className={DIALOG_MUTED}>{creds.note ?? 'Use these in a mail app. Mail apps on the old password are signed out.'}</p>
       <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
-        <CopyLine label="Server" value={creds.imap?.host || creds.submission?.host || ''} />
-        <CopyLine label="Username" value={creds.username || creds.address} />
-        <CopyLine label="Password" value={creds.password} testId="hosting-once-password" />
+        <CopyLine mono={false} label="Server" value={creds.imap?.host || creds.submission?.host || ''} />
+        <CopyLine mono={false} label="Username" value={creds.username || creds.address} />
+        <CopyLine mono={false} label="Password" value={creds.password} testId="hosting-once-password" />
       </Surface>
       <p className={DIALOG_MUTED}>
         Incoming mail (IMAP) on port {creds.imap?.port ?? 443}, sending (SMTP) on port {creds.submission?.port ?? 465}. K2 won’t show this password again.
@@ -1722,8 +1722,8 @@ function ApprovalRow({ item, canMutate, onDecided }: { item: ApprovalItem; canMu
             {item.subject || 'No subject'}
           </p>
           <p className={`${SETTING_ROW_HINT} break-words`}>
-            From <span className="font-mono">{item.from}</span>
-            {item.fromName ? ` shown as “${item.fromName}”` : ''} to <span className="font-mono">{to}</span>
+            From {item.from}
+            {item.fromName ? ` shown as “${item.fromName}”` : ''} to {to}
           </p>
           <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
             {item.agentName ?? 'An agent'}
@@ -1743,13 +1743,13 @@ function ApprovalRow({ item, canMutate, onDecided }: { item: ApprovalItem; canMu
 
       {(item.bcc?.length ?? 0) > 0 || (item.policyBcc?.length ?? 0) > 0 ? (
         <p className="type-hint text-[var(--color-text-secondary)] break-words">
-          Hidden copies to <span className="font-mono">{[...(item.bcc ?? []), ...(item.policyBcc ?? [])].join(', ')}</span>
+          Hidden copies to {[...(item.bcc ?? []), ...(item.policyBcc ?? [])].join(', ')}
           {(item.policyBcc?.length ?? 0) > 0 ? ' (some from your always-copy setting)' : ''}.
         </p>
       ) : null}
       {(item.replyTo?.length ?? 0) > 0 ? (
         <p className="type-hint text-[var(--color-status-warn-text)] break-words">
-          Replies go to <span className="font-mono">{item.replyTo?.join(', ')}</span>, not to the sender.
+          Replies go to {item.replyTo?.join(', ')}, not to the sender.
         </p>
       ) : null}
       {item.sourceCheck ? <p className="type-hint text-[var(--color-status-warn-text)] break-words">The message it answers {item.sourceCheck}. Its sender may be forged.</p> : null}
@@ -1760,7 +1760,7 @@ function ApprovalRow({ item, canMutate, onDecided }: { item: ApprovalItem; canMu
       ) : null}
       {item.forwardOf ? (
         <p className="type-hint text-[var(--color-text-secondary)] break-words">
-          Forwards a message in <span className="font-mono">{item.forwardOf.mailbox}</span> from <span className="font-mono">{item.forwardOf.sender}</span> (not checked)
+          Forwards a message in {item.forwardOf.mailbox} from {item.forwardOf.sender} (not checked)
           {item.forwardOf.asEml ? ', attached whole' : ''}.
         </p>
       ) : null}
@@ -1771,7 +1771,7 @@ function ApprovalRow({ item, canMutate, onDecided }: { item: ApprovalItem; canMu
           {item.files?.map((f) => (
             <div key={f.n} className="flex items-center justify-between gap-4 min-w-0">
               <span className="type-hint min-w-0 truncate">
-                <span className="font-mono text-[var(--color-text-primary)]">{f.name}</span>
+                <span className="text-[var(--color-text-primary)]">{f.name}</span>
                 <span className="text-[var(--color-text-secondary)]">
                   {' '}
                   · {fmtFileSize(f.size)}
@@ -1795,12 +1795,12 @@ function ApprovalRow({ item, canMutate, onDecided }: { item: ApprovalItem; canMu
         {expanded ? (
           <div className="mt-2 space-y-1">
             <p className="type-hint text-[var(--color-text-secondary)]">Written by the agent. Shown as plain text.</p>
-            <pre
+            <div
               data-k2-chamfer="control"
-              className="type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 max-h-48 overflow-y-auto"
+              className="type-hint text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[var(--radius-field)] px-2 py-1.5 max-h-48 overflow-y-auto"
             >
               {fullText ?? item.bodyPreview ?? 'This message has no text preview.'}
-            </pre>
+            </div>
             {fullText === null && item.bodyPreview !== null && item.bodyPreview.length >= 280 ? (
               <Button variant="quiet" onClick={() => void loadFullText()}>
                 Show the whole message
@@ -2028,7 +2028,7 @@ function ApprovalsTab({
               <div className="min-w-0">
                 <p className="type-name text-[var(--color-text-primary)] truncate">{o.subject || 'No subject'}</p>
                 <p className={`${SETTING_ROW_HINT} break-words`}>
-                  From <span className="font-mono">{o.from}</span> to <span className="font-mono">{o.to.join(', ')}</span>
+                  From {o.from} to {o.to.join(', ')}
                 </p>
                 {o.note ? <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Your reason: {o.note}</p> : null}
               </div>

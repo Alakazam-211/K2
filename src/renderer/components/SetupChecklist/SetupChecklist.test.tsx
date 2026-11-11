@@ -124,6 +124,15 @@ describe('SetupChecklist', () => {
     expect(document.querySelector('[data-setup-row="phone"] [data-step-mark="todo"]')?.className).not.toContain('--color-accent')
   })
 
+  it('a skipped row reads through its mark and tag, not by fading', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ rows: [{ id: 'tunnel', state: 'skipped', opens: 'tunnel' }, { id: 'phone', state: 'todo', opens: 'tunnel' }] }))
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-tunnel')
+    expect(row.textContent).toContain('Skipped')
+    expect(screen.getByTestId('setup-skipped-tunnel').textContent).toBe('Skipped')
+    expect(document.querySelector('[data-setup-row="tunnel"]')!.innerHTML).not.toContain('opacity')
+  })
+
   it("a row's note is no louder than its line", async () => {
     render(<SetupChecklist />)
     const row = await screen.findByTestId('setup-row-phone')

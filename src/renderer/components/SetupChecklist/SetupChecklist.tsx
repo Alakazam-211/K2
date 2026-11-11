@@ -16,8 +16,11 @@
 // controls), the step, and a quiet Skip. The current step (the first row
 // still to do) leads: its title is set heavier and its mark is the accent;
 // the other rows to do stay quiet. A row's line and its note share one muted
-// voice. The text runs up to Skip; a title that must wrap wraps evenly
-// (never one word alone on its last line). Done rows drop their line and go muted; skipped rows are quieter
+// voice. Skip (or a Skipped tag) sits on the title's line only; the lines
+// under the title use the row's full width, and a title that must wrap wraps
+// evenly. A skipped row reads through its mark and its tag, never by fading.
+// Under the pointer the muted words step up to secondary, so they keep 4.5:1
+// on the hover wash. Focus is an inset ring: nothing moves. Done rows drop their line and go muted; skipped rows are quieter
 // still. Tokens only, so every Style and palette draws it.
 //
 // States: nothing until the first answer (the switch may be off, so there is
@@ -26,7 +29,7 @@
 // with the list open, "You're set up" shows for a moment, then nothing.
 
 import { useEffect, useRef, useState } from 'react'
-import { cx } from '@/components/ui'
+import { Tag, cx } from '@/components/ui'
 import { ChecklistIcon } from '@/components/icons/K2Icons'
 import { NavSectionLabel } from '@/components/Sidebar/NavSection'
 import { primaryScope } from '@/kessel/server-scope'
@@ -151,9 +154,13 @@ export function currentRowId(rows: readonly FirstRunRow[]): FirstRunRowId | null
 function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }): React.JSX.Element {
   const copy = SETUP_CHECKLIST_COPY[row.id]
   const todo = row.state === 'todo'
+  const opens = row.opens !== null
+  // Muted words step up to secondary under the pointer, so they keep 4.5:1
+  // on the hover wash.
+  const muted = cx('text-[var(--color-text-muted)]', opens && 'group-hover:text-[var(--color-text-secondary)]')
   return (
     <li
-      className={cx('flex items-start', row.opens !== null && 'hover:bg-[var(--color-wash-2)] transition-colors')}
+      className={cx('group relative', opens && 'hover:bg-[var(--color-wash-2)] transition-colors')}
       data-setup-row={row.id}
       data-state={row.state}
       data-current={current ? '' : undefined}
@@ -163,48 +170,49 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
         data-testid={`setup-row-${row.id}`}
         data-k2-focus=""
         aria-current={current ? 'step' : undefined}
-        className={cx(
-          'relative no-drag flex-1 min-w-0 flex items-start gap-2 pl-3 py-1.5 text-left cursor-pointer disabled:cursor-default',
-          todo ? 'pr-0' : 'pr-3',
-        )}
-        disabled={row.opens === null}
+        className="relative no-drag w-full min-w-0 flex items-start gap-1.5 pl-3 pr-2 py-1.5 text-left cursor-pointer disabled:cursor-default"
+        disabled={!opens}
         onClick={() => void openFirstRunTarget(row.opens)}
       >
         <StepMark state={row.state} current={current} />
         <span className="min-w-0 flex-1">
+          {/* The title keeps clear of Skip's word (or the Skipped tag); the
+              lines under it use the full width. */}
           <span
             className={cx(
               'block type-row leading-snug text-balance',
+              todo ? 'pr-10' : row.state === 'skipped' ? 'pr-16' : null,
               current
                 ? 'font-semibold text-[var(--color-text-primary)]'
                 : todo
                   ? 'text-[var(--color-text-secondary)]'
-                  : 'text-[var(--color-text-muted)]',
-              row.state === 'skipped' && 'opacity-70',
+                  : muted,
             )}
           >
             {copy.label}
           </span>
-          {todo && <span className="block type-hint text-[var(--color-text-muted)] leading-snug text-pretty">{copy.line}</span>}
+          {todo && <span className={cx('block type-hint leading-snug', muted)}>{copy.line}</span>}
           {row.note !== null && todo && (
-            <span className="block type-hint text-[var(--color-text-muted)] leading-snug text-pretty mt-0.5" data-setup-note={row.note}>
+            <span className={cx('block type-hint leading-snug mt-0.5', muted)} data-setup-note={row.note}>
               {SETUP_NOTE_COPY[row.note]}
             </span>
           )}
         </span>
-        {row.state === 'skipped' ? (
-          <span className="flex-shrink-0 type-hint leading-snug text-[var(--color-text-muted)] opacity-70">
-            {STATE_TEXT.skipped}
-          </span>
-        ) : (
-          <span className="sr-only">{STATE_TEXT[row.state]}</span>
-        )}
+        <span className="sr-only">{STATE_TEXT[row.state]}</span>
       </button>
+      {row.state === 'skipped' && (
+        <Tag tone="muted" aria-hidden="true" className="absolute right-2 top-1.5 pointer-events-none group-hover:[--k2-tag-ink:var(--color-text-secondary)]!" data-testid={`setup-skipped-${row.id}`}>
+          {STATE_TEXT.skipped}
+        </Tag>
+      )}
       {todo && (
         <button
           type="button"
           data-k2-focus=""
-          className={cx(QUIET_ACTION_CLASS, 'mt-1 mr-1')}
+          className={cx(
+            'absolute right-2 top-1 no-drag px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] transition-colors cursor-pointer',
+            'group-hover:text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]!',
+          )}
           aria-label={`Skip: ${copy.label}`}
           data-testid={`setup-skip-${row.id}`}
           onClick={() => void useFirstRunStore.getState().skip(row.id)}

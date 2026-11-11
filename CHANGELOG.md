@@ -1,10 +1,32 @@
 # Changelog
 
+## v0.1.2 (2026-11-11): pairs with kit v0.14.0
+
+**Requires `k2-mpc-base` v0.14.0**, checked out beside this repo. The crate version is `0.1.2`;
+`Cargo.lock` records k2-mpc-base 0.14.0 (only the kit's crate version moves). This pack's own
+code is unchanged from v0.1.1. As for v0.1.1, the tag is a cut commit that leaves out the test
+tooling (`fuzz/`, `scripts/oracle/`).
+
+- **The vendored reader, from upstream PhotoCraft commit `a7301f1d`:** a descriptor's
+  `UnitFloats` (`UnFl`) count reserves at most 4,096 entries up front (`vec_for_count`), as
+  the descriptor's other counts already do. Only that change of the commit is taken
+  (`vendor/photocraft-psd/VENDORED.md` has its row; `src/descriptor.rs` says so on its first
+  line). This copy already bounded that count by the bytes left in the record, so files read
+  as before.
+- Pairs with kit v0.14.0. Its additions are provided methods with defaults
+  (`Pack::check_merged`, `Host::conflict_copy_name`) and person-writer reuse, off by default;
+  this pack overrides none of them. The kit's tier-0 change (an app's save over an agent's
+  write keeps both, with a conflict copy) applies to PSD and PSB files with no change here.
+- `scripts/private-allow.txt`'s header says what `scripts/check-private.sh` skips (only the
+  allowlist itself). v0.1.1's pairing line names the kit tag alone.
+- `crates/psd/Cargo.toml`'s kit comment names v0.14.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.14.0 and the crate version 0.1.2.
+
 ## v0.1.1 (2026-11-10): pairs with kit v0.13.1
 
-**Requires `k2-mpc-base` v0.13.1** (the tag at its public cut 6ef688e4), checked out beside this
+**Requires `k2-mpc-base` v0.13.1**, checked out beside this
 repo. The crate version is `0.1.1`; `Cargo.lock` records k2-mpc-base 0.13.1 (only the kit's crate
-version moves; no `mpce` entry). No kit API change since v0.13.0, and this pack's code is
+version moves). No kit API change since v0.13.0, and this pack's code is
 unchanged from v0.1.0. As for v0.1.0, the tag is a cut commit that leaves out the fuzz crate.
 
 - `scripts/check-private.sh` reads its patterns from outside the tree (`MPC_PRIVATE_PATTERNS`,

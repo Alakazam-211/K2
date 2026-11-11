@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): the `UnFl` count reserves at most 4,096 entries up front, from upstream commit a7301f1d.
 //! Photoshop ActionDescriptor structures (OSType-tagged key/value trees).
 //!
 //! These appear inside many tagged blocks (`lfx2`, `SoCo`, `GdFl`, `TySh`,
@@ -422,7 +423,7 @@ fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Va
             let unit = r.array()?;
             let n = r.u32()?;
             r.check_count(u64::from(n), 8)?;
-            let mut values = Vec::with_capacity(n as usize);
+            let mut values = vec_for_count(n);
             for _ in 0..n {
                 values.push(r.f64()?);
             }

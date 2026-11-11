@@ -26,6 +26,7 @@ A copy of the `crates/psd` crate of PhotoCraft, version 0.9.0.
 | `src/atn.rs` | The module docs link to `write()` rather than `write`, so the link names the function (the plain link was ambiguous). |
 | `src/layer.rs` | `LayerRecord::read` is `pub(crate)`, for `records.rs`. |
 | `src/tagged.rs` | `is_sig` is `pub(crate)`, for `records.rs`. |
+| `src/descriptor.rs` | From upstream commit `a7301f1db89b2f24b0fb6d1334b424da898faf0b`, newer than the one above, only its `UnFl` change: a descriptor's `UnitFloats` count reserves at most 4,096 entries up front (`vec_for_count`), as the other counts already do, so a large declared count can't abort on allocation. The rest of that commit is not taken. |
 | `src/records.rs` | New file, ours: the records-only streaming walker. Its sink also receives every global tagged block other than the layers' (begin, bytes, end), for a reader that wants a few of them. |
 
 `records.rs` copies one rule rather than sharing it, to keep upstream's function untouched: the

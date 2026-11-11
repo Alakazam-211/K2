@@ -80,6 +80,9 @@ DEPLOY (validate, build, deploy, rollback)
       --tunnel. To uninstall anyway: k2 app uninstall <app-id> --drop-access
 
 RUNTIME (the App engine, the box, health)
+  app_db_door_missing (exit 3)
+      fix: The owner makes it a process App (k2 app exception <app-id> on),
+      or the App's agent moves its data to SQLite in $K2_APP_DATA.
   crashlooping (exit 1)
       fix: Read why: k2 app logs <app-id> and k2 app errors <app-id>. Fix
       it, then deploy again.

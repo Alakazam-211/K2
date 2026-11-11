@@ -52,6 +52,10 @@ pub(super) const ROWS: &[Refusal] = &[
     r("uninstall_drops_access", "deploy", 409, Who::Agent, "Uninstalling the App would drop who may use it (logins, roles, chat, shared secrets); a reinstall is a new App and gets none of it back. The refusal lists what.",
         "To add a public URL, don't reinstall: k2 app expose <app-id> --tunnel. To uninstall anyway: k2 app uninstall <app-id> --drop-access"),
     // ── runtime ──
+    // `k2 app config --db-raw on`, a database grant or a DATABASE_URL for a
+    // container App (apps::reach): no approval or re-host opens the door.
+    r("app_db_door_missing", "runtime", 409, Who::Owner, "A guarded container App can't reach this box's Postgres yet: its database door isn't built, so nothing answers on 127.0.0.1:5432 inside the container.",
+        "The owner makes it a process App (k2 app exception <app-id> on), or the App's agent moves its data to SQLite in $K2_APP_DATA."),
     // A crashloop is a deployment's result: `_app_rt_deployment_exit` in
     // cli/k2 exits 1 for any result that isn't live, pending or stalled.
     r("crashlooping", "runtime", 409, Who::Agent, "The App crashed 6 times in an hour, so K2 stopped restarting it.",

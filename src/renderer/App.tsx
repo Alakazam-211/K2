@@ -104,6 +104,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { SETTINGS_OVERLAY_Z } from '@/lib/overlay-layers'
 import { SendFeedbackHost } from './components/SendFeedback/SendFeedbackButton'
 import { openSendFeedback } from '@/stores/send-feedback'
+import { installBothShifts } from '@/lib/both-shifts'
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure
@@ -417,6 +418,9 @@ function AppRoot(): React.JSX.Element {
   useEffect(() => {
     prewarmDaemonWs()
   }, [])
+
+  // Both Shift keys together opens Send feedback (Rosson 2026-11-11).
+  useEffect(() => installBothShifts(() => openSendFeedback('Both Shift keys')), [])
 
   // Mission Control reads the native window title. Restamp it when this
   // window's server changes, including a nickname edit on the active host.

@@ -359,8 +359,8 @@ export function DashboardAgentTile({
         testId="tile-error"
         action={<TryAgain busy={retrying} onClick={() => void (failedWake ? wake() : retry())} />}
       >
-        If it keeps failing,{' '}
-        <TileStateLink onClick={() => openOnAgentsPage(workspaceId)}>open {name} on the Agents page</TileStateLink>.
+        Still failing?{' '}
+        <TileStateLink onClick={() => openOnAgentsPage(workspaceId)}>Open {name} on the Agents page</TileStateLink>
       </TileState>
     )
   }

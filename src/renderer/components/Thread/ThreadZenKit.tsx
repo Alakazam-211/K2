@@ -179,7 +179,8 @@ ${SCOPE} [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-sur
 ${SCOPE} [data-zen-soft-button]:disabled { opacity: 0.45; }
 ${SCOPE} [data-zen-compose-input]::placeholder { color: var(--zen-text-muted); opacity: 1; }
 ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
-[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose-input]::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; word-break: normal; }
+[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose-input]::placeholder { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
+[${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose-input][data-own-hint]::placeholder { color: transparent; }
 ${SCOPE} [data-zen-message-more] { opacity: 0; transition: opacity 120ms ease; }
 ${SCOPE} [data-zen-message]:hover [data-zen-message-more], ${SCOPE} [data-zen-message-more]:focus-visible { opacity: 1; }
 ${SCOPE} [data-thread-hover-status] { opacity: 0; pointer-events: none; transition: opacity 120ms ease; }

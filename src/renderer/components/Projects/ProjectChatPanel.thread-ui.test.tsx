@@ -375,6 +375,9 @@ describe('project chat states and header', () => {
   })
 
   it('while the chat loads: the loading card, and the message box is off', async () => {
+    // No draft left from the tests above (the hint shows on an empty box).
+    const { clearProjectChatDraft } = await import('@/lib/composer-drafts')
+    clearProjectChatDraft('g1')
     cli.get.mockImplementation(async (path: string) =>
       path === 'project-group/messages' ? new Promise(() => {}) : {},
     )
@@ -384,6 +387,11 @@ describe('project chat states and header', () => {
     const input = screen.getByTestId('project-chat-input') as HTMLTextAreaElement
     expect(input.disabled).toBe(true)
     expect(input.placeholder).toBe('Loading the chat…')
+    // The hint is drawn on one line (cut with an ellipsis), over the field.
+    const hint = screen.getByTestId('project-chat-compose').querySelector('[data-compose-hint]') as HTMLElement
+    expect(hint.textContent).toBe('Loading the chat…')
+    expect(hint.className).toContain('truncate')
+    expect(input.hasAttribute('data-own-hint')).toBe(true)
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(cli.post.mock.calls.filter(([p]) => p === 'project-group/msg')).toHaveLength(0)
   })

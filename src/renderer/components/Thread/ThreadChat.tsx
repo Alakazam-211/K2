@@ -309,6 +309,11 @@ export function ThreadChatComposer({
   stash,
 }: ThreadChatComposerProps): JSX.Element {
   const fontSize = useSettingsStore((s) => s.editor.fontSize) || 13
+  // Outside a Garden the hint is drawn over the empty field on one line,
+  // cut with an ellipsis (a textarea's own placeholder wraps, or clips
+  // mid-word, in a narrow box); the field keeps its placeholder for
+  // assistive tech, unpainted.
+  const ownHint = !useContext(ThreadChatZenContext)
   const ownRef = useRef<HTMLTextAreaElement | null>(null)
   const setRef = useCallback(
     (el: HTMLTextAreaElement | null) => {
@@ -384,6 +389,16 @@ export function ThreadChatComposer({
           <ThreadComposeBox stacked={stacked} drawer={drawer}>
             {tools}
             <div className="relative min-w-0 flex-1" style={{ alignSelf: 'center', ...threadComposeTextSlotStyle(stacked) }}>
+              {ownHint && value.length === 0 && placeholder ? (
+                <span
+                  aria-hidden="true"
+                  data-compose-hint=""
+                  className="pointer-events-none absolute inset-x-0 top-0 block truncate"
+                  style={{ padding: '4px 6px', fontSize, lineHeight: 1.4, color: 'var(--zen-text-muted)' }}
+                >
+                  {placeholder}
+                </span>
+              ) : null}
               <textarea
                 ref={setRef}
                 data-testid={inputTestId}
@@ -402,6 +417,7 @@ export function ThreadChatComposer({
                 rows={1}
                 disabled={disabled}
                 placeholder={placeholder}
+                data-own-hint={ownHint ? '' : undefined}
                 title="Enter to send, Shift+Enter for a new line"
                 className="block w-full resize-none overflow-x-hidden bg-transparent focus:outline-none selectable-copy"
                 style={{

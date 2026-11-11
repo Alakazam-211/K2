@@ -340,8 +340,8 @@ describe('tile states', () => {
   it('a failure names one more next step: open the agent on the Agents page', () => {
     renderInRoom(room, <Tile phase={{ kind: 'error', message: 'session registry is not answering' }} />)
     const state = screen.getByTestId('tile-error')
-    expect(state.textContent).toContain('If it keeps failing, open sales on the Agents page.')
-    const link = screen.getByRole('button', { name: 'open sales on the Agents page' })
+    expect(state.textContent).toContain('Still failing? Open sales on the Agents page')
+    const link = screen.getByRole('button', { name: 'Open sales on the Agents page' })
     expect(link.hasAttribute('data-k2-focus')).toBe(true)
     fireEvent.click(link)
     expect(nav.agents).toEqual(['ws-sales'])

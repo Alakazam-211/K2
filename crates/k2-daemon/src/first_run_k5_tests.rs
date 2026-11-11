@@ -383,7 +383,9 @@ fn k5s_pinned_chat_hires_the_chief_of_staff_with_only_what_k5_holds() {
 fn a_k5_folder_already_there_is_409_folder_exists_not_a_crash() {
     let _e = env(true, &["codex"]);
     let root = k2_core::hire::root::hire_root().expect("root");
+    // Someone's folder (an empty one that isn't a workspace is adopted).
     std::fs::create_dir_all(root.join("k5")).expect("someone's folder");
+    std::fs::write(root.join("k5").join("notes.txt"), "mine").expect("someone's file");
     let r = post(K5_PATH, json!({ "tool": "codex" }), &Actor::owner_token());
     assert_eq!((r.status, code(&r).as_str()), ("409 Conflict", "folder_exists"), "{}", r.body);
     assert!(json_of(&r)["error"]["hint"].as_str().expect("hint").contains("another handle"));
@@ -400,9 +402,9 @@ fn a_chief_of_staff_named_like_k5s_folder_is_refused() {
 }
 
 #[test]
-fn deleting_k5s_workspace_clears_the_seat_and_the_offer_comes_back() {
+fn deleting_k5s_workspace_clears_the_seat_and_the_offer_comes_back_and_k5_is_made_again_in_place() {
     let _e = env(true, &["codex"]);
-    let (k5, _, _) = make_k5();
+    let (k5, k5_path, _) = make_k5();
     let v = status_for(&Actor::owner_token());
     let row = v["rows"].as_array().expect("rows").iter().find(|r| r["id"] == json!("chief_of_staff")).cloned().expect("row");
     assert_eq!(row["opens"], json!("k5_thread_cos"));
@@ -419,4 +421,17 @@ fn deleting_k5s_workspace_clears_the_seat_and_the_offer_comes_back() {
     // K5's old session can't hire any more.
     let r = handle_chief_of_staff(&cos_body(), &k5_session(&k5));
     assert_eq!((r.status, code(&r).as_str()), ("403 Forbidden", "k5_session_only"));
+    // Meet K5 again: its old folder is the `k5` template's (its lock says
+    // so), so K5 is made again in place, with its hello.
+    TEST_LAUNCHES.lock().clear();
+    let r = post(K5_PATH, json!({ "tool": "codex" }), &Actor::owner_token());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let again = json_of(&r);
+    assert_eq!(again["path"], json!(k5_path), "the same folder");
+    let id = again["workspaceId"].as_str().expect("id").to_string();
+    assert_ne!(id, k5, "a new workspace");
+    assert_eq!(status_for(&Actor::owner_token())["k5"]["workspaceId"], json!(id), "the seat names it");
+    let launches = TEST_LAUNCHES.lock().clone();
+    assert!(launches.len() == 1 && launches[0].1.is_some(), "{launches:?}");
 }
+

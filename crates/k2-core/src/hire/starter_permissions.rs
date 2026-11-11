@@ -66,15 +66,6 @@ pub const EXTRA_STANDING_TOGGLES: &[(&str, &str)] = &[("chat.refresh", "chat_ref
 pub const CARD_ASKS: &[&str] =
     &["heartbeat.pause-other", "heartbeat.resume-other", "sidecar.retire", "connections.add", "chat.refresh"];
 
-/// A set by the name a template's `suggest = ["set:<name>"]` uses.
-pub fn named_set(name: &str) -> Option<&'static [&'static str]> {
-    match name {
-        "k5-starter" => Some(K5_STARTER_PERMISSIONS),
-        "chief-of-staff-starter" => Some(CHIEF_OF_STAFF_STARTER_PERMISSIONS),
-        _ => None,
-    }
-}
-
 /// The standing switch a starter id is granted as: the `/cli/agent-access/set`
 /// toggle, or `agents_can_create_connections` (the per-workspace column
 /// `POST /cli/agents-create-connections` writes) for `connections.create`.
@@ -116,6 +107,8 @@ mod tests {
             assert!(K5_STARTER_PERMISSIONS.contains(id), "{id}");
             assert!(!owner_floor(id), "{id}: an agent hirer never passes an Owner-floor switch");
         }
+        // The templates name them as `set:k5-starter` / `set:chief-of-staff-starter`.
+        use crate::hire::template::sets::named_set;
         assert_eq!(named_set("k5-starter"), Some(K5_STARTER_PERMISSIONS));
         assert_eq!(named_set("chief-of-staff-starter"), Some(CHIEF_OF_STAFF_STARTER_PERMISSIONS));
         assert_eq!(named_set("nope"), None);

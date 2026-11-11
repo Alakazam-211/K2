@@ -254,6 +254,20 @@ fn hire_error(e: &k2_core::hire::HireError) -> CliResponse {
     crate::hire_routes::hire_error_response(e)
 }
 
+/// `hire::template::apply`'s refusals, as this route's bodies: the folder
+/// is taken (`folder_exists`, with `taken` as the hint), or holds another
+/// template's agent (`template_conflict`), both 409; a system template an
+/// API key can't hire (`system_template`), 403. Anything else as the hire
+/// routes answer it.
+fn apply_error(e: &k2_core::hire::HireError, taken: String) -> CliResponse {
+    match e.code {
+        "folder_exists" => error("409 Conflict", "folder_exists", taken),
+        "template_conflict" => error("409 Conflict", "template_conflict", &e.hint),
+        "system_template" => error("403 Forbidden", "system_template", &e.hint),
+        _ => hire_error(e),
+    }
+}
+
 fn json_body(body: &[u8]) -> Result<Value, CliResponse> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(json!({}));
@@ -473,18 +487,15 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     req.name = Some(name.clone());
     req.handle = Some(handle);
     req.tool = Some(tool.clone());
+    // A folder the `k5` template made before (its lock names `k5`) is
+    // K5's again: a K5 whose workspace was deleted is made in place.
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
         // `<hire root>/<handle>` is already there and isn't a K5 the
         // template made: K5's folder is taken, so another handle.
-        Err(e) if e.code == "folder_exists" => {
-            return error(
-                "409 Conflict",
-                "folder_exists",
-                format!("{path} is already there and isn't K5's: pick another handle (k2 setup k5 --handle <h>)"),
-            )
+        Err(e) => {
+            return apply_error(&e, format!("{path} is already there and isn't K5's: pick another handle (k2 setup k5 --handle <h>)"))
         }
-        Err(e) => return hire_error(&e),
     };
     {
         let db = k2_core::db::shared();
@@ -625,10 +636,7 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     req.params.insert("person".into(), seat_person());
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
-        Err(e) if e.code == "folder_exists" => {
-            return error("409 Conflict", "folder_exists", format!("{path} is already there: ask your person for another name"))
-        }
-        Err(e) => return hire_error(&e),
+        Err(e) => return apply_error(&e, format!("{path} is already there: ask your person for another name")),
     };
     {
         let db = k2_core::db::shared();

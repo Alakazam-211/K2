@@ -49,7 +49,15 @@ vi.mock('@/lib/first-run-openers', () => ({ openFirstRunTarget: (o: string | nul
 
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { NEEDS_TUNNEL_NOTE, SETUP_CHECKLIST_COPY, SetupChecklist, SetupChecklistRailButton } from './SetupChecklist'
+import {
+  ALL_DONE_TEXT,
+  CHECKLIST_ERROR_TEXT,
+  NEEDS_TUNNEL_NOTE,
+  SETUP_CHECKLIST_COPY,
+  SET_UP_TEXT,
+  SetupChecklist,
+  SetupChecklistRailButton,
+} from './SetupChecklist'
 import { resetFirstRunForTests } from '@/stores/first-run'
 import { useSidebarStore } from '@/stores/sidebar'
 
@@ -233,6 +241,44 @@ describe('SetupChecklist', () => {
   })
 })
 
+describe('SetupChecklist states', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('a failed gesture keeps the list, says so quietly, and Try again re-reads', async () => {
+    h.daemonCliPost.mockRejectedValue(new Error('database is locked'))
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-skip-tunnel'))
+    const alert = await screen.findByTestId('setup-error')
+    expect(alert.textContent).toContain(CHECKLIST_ERROR_TEXT)
+    expect(screen.getByTestId('setup-row-tunnel')).toBeTruthy()
+    const reads = h.daemonCliGet.mock.calls.length
+    fireEvent.click(screen.getByTestId('setup-retry'))
+    await waitFor(() => expect(screen.queryByTestId('setup-error')).toBeNull())
+    expect(h.daemonCliGet.mock.calls.length).toBe(reads + 1)
+  })
+
+  it('says the person is set up when the last row resolves, then draws nothing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const oneLeft = body({ rows: body().rows.map((r) => ({ ...r, state: r.id === 'tunnel' ? 'todo' : 'done' })) })
+    h.daemonCliGet.mockResolvedValue(oneLeft)
+    h.daemonCliPost.mockResolvedValue({ ...oneLeft, finished: true })
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-skip-tunnel'))
+    await waitFor(() => expect(document.querySelector('[data-setup-finished]')?.textContent).toContain(SET_UP_TEXT))
+    act(() => {
+      vi.advanceTimersByTime(4100)
+    })
+    expect(checklist()).toBeNull()
+  })
+
+  it('says all done in the header when every drawn row is resolved', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ rows: body().rows.map((r) => ({ ...r, state: 'done' })) }))
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-row-tunnel')
+    expect(screen.getByTestId('setup-left').textContent).toBe(ALL_DONE_TEXT)
+  })
+})
+
 describe('SetupChecklistRailButton', () => {
   it('shows how many rows are left and opens the nav', async () => {
     const expand = vi.fn()
@@ -240,6 +286,8 @@ describe('SetupChecklistRailButton', () => {
     render(<SetupChecklistRailButton />)
     const btn = await screen.findByTestId('setup-rail')
     expect(btn.textContent).toBe('4')
+    expect(btn.querySelector('[data-k2-icon="checklist"]')).toBeTruthy()
+    expect(screen.getByTestId('setup-rail-count').textContent).toBe('4')
     expect(btn.getAttribute('aria-label')).toBe('Setup checklist: 4 left')
     fireEvent.click(btn)
     expect(expand).toHaveBeenCalledTimes(1)

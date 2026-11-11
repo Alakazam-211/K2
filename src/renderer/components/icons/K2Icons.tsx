@@ -9,7 +9,8 @@
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
-//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`, `mail`; SmartphoneOff is
+//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`, `mail`,
+//     `list-todo` (Checklist); SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
 //     circles and arcs, like the clock face, stay round).
@@ -319,6 +320,20 @@ export function FeedbackIcon(props: K2IconProps = {}): React.JSX.Element {
   return (
     <svg {...iconProps('feedback', props)}>
       <path d="M3 3h18v14H7l-4 4Z" />
+    </svg>
+  )
+}
+
+/** The setup checklist (its collapsed-rail button): Lucide `list-todo`,
+ *  squared (the to-do box loses its corner radius). */
+export function ChecklistIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('checklist', props)}>
+      <path d="M13 5h8" />
+      <path d="M13 12h8" />
+      <path d="M13 19h8" />
+      <path d="m3 17 2 2 4-4" />
+      <rect x="3" y="4" width="6" height="6" />
     </svg>
   )
 }

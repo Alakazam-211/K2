@@ -14,10 +14,11 @@
 //! with every K2_* variable cleared.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use k2_core::bg_proc::command;
 use k2_core::deploy::store;
 
 use super::test_seams::Seam;
@@ -61,7 +62,7 @@ fn py() -> String {
 }
 
 fn run(prog: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(prog).args(args).env("LC_ALL", "C").output().map_err(|e| format!("{prog}: {e}"))?;
+    let out = command(prog).args(args).env("LC_ALL", "C").output().map_err(|e| format!("{prog}: {e}"))?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
@@ -85,7 +86,7 @@ impl Server {
         self.root.join("client.py").to_string_lossy().into_owned()
     }
     fn spawn(&self, conninfo: &str, pass: &str) -> std::process::Child {
-        Command::new(py())
+        command(py())
             .args([&self.script(), conninfo])
             .env("PGPASSWORD", pass)
             .env("LC_ALL", "C")

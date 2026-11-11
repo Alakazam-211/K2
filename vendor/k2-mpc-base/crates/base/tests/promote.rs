@@ -864,3 +864,57 @@ fn a_promoted_deletion_without_roots_is_caught() {
     );
     assert!(r.is_err(), "the planted fault went unseen");
 }
+
+/// A promoted doc keeps its id, and with it the comment threads it had as a blob doc: the
+/// text doc's purge (by text, of the whole history) and its participant erasure reach them.
+#[test]
+fn a_promoted_docs_comments_are_reached_by_its_purges() {
+    use k2_mpc_base::annot::{NewAnchor, NewComment};
+    k2_mpc_base::differential::under_env_annot_mutant(|| {
+        let fx = fx("annot");
+        fs::write(fx.path("c.md"), b"hello\n").unwrap();
+        fx.grant("alice", Rights::full().with_owner(true));
+        fx.grant("carol", Rights::editor());
+        let b = fx.open_blob("c.md");
+        let a = b.join(alice(), Stay::Held).unwrap().conn;
+        let carol = Participant::new("carol", "Carol", "#111111", ParticipantKind::Person, "tab");
+        let cc = b.join(carol, Stay::Held).unwrap().conn;
+        b.comment(
+            a,
+            NewComment::new(NewAnchor::Doc, "alice: zq81TEXTSECRETk4"),
+        )
+        .unwrap();
+        b.comment(
+            cc,
+            NewComment::new(NewAnchor::Doc, "carol: zq81CAROLBODYw9"),
+        )
+        .unwrap();
+        drop(b);
+        let (t, _) = fx.promote("c.md").unwrap();
+        let c = t.join(alice(), Stay::Held).unwrap().conn;
+        assert!(fx.find(b"zq81TEXTSECRETk4") > 0, "stored before");
+        t.purge(
+            c,
+            PurgeRequest::new(PurgeScope::Text("zq81TEXTSECRETk4".into())),
+        )
+        .unwrap();
+        assert_eq!(
+            fx.find(b"zq81TEXTSECRETk4"),
+            0,
+            "a promoted doc's comments are reached by its purge"
+        );
+        t.purge(
+            c,
+            PurgeRequest::new(PurgeScope::Participant {
+                pid: "carol".into(),
+                pseudonym: "erased-7".into(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            fx.find(b"zq81CAROLBODYw9"),
+            0,
+            "a promoted doc's comments are reached by its erasure"
+        );
+    });
+}

@@ -1,0 +1,21 @@
+MPC-E715 agent_write_refused (tier 0 and blobs)
+exit:     2
+message:  an agent can't write this file type
+next:     Agents don't write this file type. Nothing was written. Make a new file with the change and comment on the doc instead (the file type's pack says so).
+rule:     structure index
+verbs:    write
+status:   live
+--- json
+{
+  "id": "MPC-E715",
+  "name": "agent_write_refused",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "an agent can't write this file type",
+  "next": "Agents don't write this file type. Nothing was written. Make a new file with the change and comment on the doc instead (the file type's pack says so).",
+  "rule": "structure index",
+  "verbs": ["write"],
+  "returned_by": ["write"],
+  "status": "live",
+  "since_or_until": null
+}

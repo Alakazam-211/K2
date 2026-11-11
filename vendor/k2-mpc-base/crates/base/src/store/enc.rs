@@ -89,6 +89,24 @@ impl<'a> R<'a> {
     pub fn str(&mut self) -> Result<String, StoreError> {
         String::from_utf8(self.bytes()?).map_err(|_| StoreError::Corrupt(self.what))
     }
+    /// A [`R::str`] of at most `max` bytes; a longer one is `Corrupt`, with nothing copied.
+    pub fn str_max(&mut self, max: usize) -> Result<String, StoreError> {
+        let b = self.bytes_ref()?;
+        if b.len() > max {
+            return Err(StoreError::Corrupt(self.what));
+        }
+        std::str::from_utf8(b)
+            .map(str::to_owned)
+            .map_err(|_| StoreError::Corrupt(self.what))
+    }
+    /// [`R::opt_str`], capped as [`R::str_max`].
+    pub fn opt_str_max(&mut self, max: usize) -> Result<Option<String>, StoreError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => Ok(Some(self.str_max(max)?)),
+            _ => Err(StoreError::Corrupt(self.what)),
+        }
+    }
     pub fn opt_bytes(&mut self) -> Result<Option<Vec<u8>>, StoreError> {
         match self.u8()? {
             0 => Ok(None),

@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 mod board_verbs;
 mod grid_pack;
+mod index_pack;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1379,7 +1380,156 @@ fn walk() -> Seen {
         b"z\n",
         &refuse,
     )); // E171
+
+    // ---- the structure index (711-717)
+    index_walk(&mut seen);
+    // ---- comment threads (116, 117, 320, 321, 906)
+    annot_walk(&mut seen);
     seen
+}
+
+/// The annotations' refusals, each through the public API.
+fn annot_walk(seen: &mut Seen) {
+    use k2_mpc_base::annot::{NewAnchor, NewComment, ThreadId};
+    let f = fx("annot", |c| c.annot_threads_max = 1);
+    let s = f
+        .mgr
+        .open_blob(Arc::new(AnyFile), &key("c.bin"), Some(&mut &b"c"[..]))
+        .unwrap();
+    f.grant("reader", Rights::read_only());
+    let r = s
+        .join(who("reader", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    seen.res(s.comment(r, NewComment::new(NewAnchor::Doc, "hi"))); // E116
+    f.grant("ed", Rights::editor());
+    let e = s
+        .join(who("ed", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    f.grant("other", Rights::editor());
+    let o = s
+        .join(who("other", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    seen.res(s.comment(e, NewComment::new(NewAnchor::Doc, " "))); // E321
+    let t = s
+        .comment(e, NewComment::new(NewAnchor::Doc, "one"))
+        .unwrap()
+        .id;
+    seen.res(s.comment(e, NewComment::new(NewAnchor::Doc, "two"))); // E907
+    seen.res(s.delete_comment(o, t, 0)); // E117
+    seen.res(s.resolve(e, ThreadId::parse("ann-9").unwrap())); // E320
+}
+
+/// The structure index's refusals (E711-E717), each through the public API; the job's are
+/// [`IndexJobError`]s, reported as the host would.
+fn index_walk(seen: &mut Seen) {
+    use index_pack::{file, IxPack};
+    use k2_mpc_base::index::{index_to_wire, IndexJobError};
+    let job_err = |seen: &mut Seen, e: IndexJobError| {
+        let r = k2_mpc_base::errors::Refusal::report(&e);
+        let exit = r.exit();
+        seen.report(r, exit);
+    };
+    let one = file(&["@n:1|kind|n|-|1|-|-"]);
+    let two = file(&["@n:1|kind|n|-|1|-|-", "@n:2|kind|m|-|1|-|-"]);
+    // a pack with no index
+    let f = fx("index", |c| c.blob_index_max_nodes = 1);
+    let plain = f
+        .mgr
+        .open_blob(Arc::new(AnyFile), &key("x.bin"), Some(&mut &b"x"[..]))
+        .unwrap();
+    seen.res(plain.index_view(None)); // E711
+    let s = f
+        .mgr
+        .open_blob(
+            Arc::new(IxPack::default()),
+            &key("x.idx"),
+            Some(&mut &two[..]),
+        )
+        .unwrap();
+    seen.res(s.index_view(None)); // E713
+    s.index_job(None).unwrap().unwrap().run().unwrap(); // one node over the cap
+    seen.res(s.index_view(None)); // E712
+                                  // a worker's result refused
+    let s = f
+        .mgr
+        .open_blob(
+            Arc::new(IxPack::default()),
+            &key("y.idx"),
+            Some(&mut &one[..]),
+        )
+        .unwrap();
+    let mut job = s.index_job(None).unwrap().unwrap();
+    let (input, _) = job.open().unwrap();
+    job_err(seen, job.commit_wire(input, b"garbage").unwrap_err()); // E714
+                                                                    // an agent's write on a type that refuses them
+    let refuse = IxPack {
+        refuse_agents: true,
+        ..IxPack::default()
+    };
+    let s = f
+        .mgr
+        .open_blob(Arc::new(refuse), &key("z.idx"), Some(&mut &one[..]))
+        .unwrap();
+    f.grant("bot", Rights::editor());
+    let agent = s
+        .join(who("bot", ParticipantKind::Agent), Stay::Held)
+        .unwrap()
+        .conn;
+    let v = s.status().unwrap().version;
+    seen.res(s.write_bytes(agent, b"agent", v)); // E715
+                                                 // a job whose version was purged under it
+    let s = f
+        .mgr
+        .open_blob(
+            Arc::new(IxPack::default()),
+            &key("w.idx"),
+            Some(&mut &one[..]),
+        )
+        .unwrap();
+    f.grant("owner", Rights::full().with_owner(true));
+    let c = s
+        .join(who("owner", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    let mut job = s.index_job(None).unwrap().unwrap();
+    let (mut input, limits) = job.open().unwrap();
+    let wire = index_to_wire(&IxPack::default(), &mut input, one.len() as u64, &limits).unwrap();
+    let v = s.status().unwrap().version;
+    let v2 = s.write_bytes(c, b"second", v).unwrap().version;
+    assert_ne!(v, v2);
+    s.purge(c, Some(v)).unwrap();
+    job_err(seen, job.commit_wire(input, &wire).unwrap_err()); // E717
+
+    // the read side (A2): a partial node read, cursors, the budget
+    let s = f
+        .mgr
+        .open_blob(
+            Arc::new(IxPack::default()),
+            &key("r.idx"),
+            Some(&mut &one[..]),
+        )
+        .unwrap();
+    s.index_job(None).unwrap().unwrap().run().unwrap();
+    f.grant("reader", Rights::read_only());
+    let c = s
+        .join(who("reader", ParticipantKind::Person), Stay::Held)
+        .unwrap()
+        .conn;
+    let opts = k2_mpc_base::tools::ToolOptions::default().read_budget(1024);
+    seen.tool(s.run_tool(c, &argv(&["part", "show", "@n:1", "name:none"]), &opts)); // E172
+    let other_version = format!("c1.{}", "0".repeat(56));
+    seen.tool(s.run_tool(
+        c,
+        &argv(&["part", "list", "--cursor", &other_version]),
+        &opts,
+    )); // E173
+    seen.tool(s.run_tool(c, &argv(&["part", "list", "--cursor", "c1.junk"]), &opts)); // E174
+    let mut show = argv(&["part", "show", "--no-truncate"]);
+    show.extend(std::iter::repeat("@n:1".to_owned()).take(80));
+    seen.tool(s.run_tool(c, &show, &opts)); // E175
 }
 
 /// "Every id is reachable or retired": every live id the registry marks `Reach::Verb` is

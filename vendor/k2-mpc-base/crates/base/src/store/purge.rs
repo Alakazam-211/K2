@@ -158,6 +158,11 @@ pub struct PurgeCounts {
     /// kept: they are metadata (agent, person, state, settler, time) and hold no content
     /// or blob id, like the version's entry that stays.
     pub approvals: u64,
+    /// Annotations: comment bodies cleared (an annotation purge, or an erased participant's).
+    pub comments: u64,
+    /// Annotations: anchors that lost their copy of a node's name or the pack's hint (a
+    /// version purge, an annotation purge).
+    pub anchors: u64,
 }
 
 /// Replace `pid` by the pseudonym in `s`; returns whether it did.
@@ -435,6 +440,14 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
     redact_authored(w, id, p)?;
     if er.is_some() {
         c.attributions += rename_rows(w, id, er)?;
+    }
+    // comment threads a promoted doc kept from tier 0 (v0.9.2 keeps the doc id): bodies and
+    // anchor copies the needles match, the erasure, and a whole-history purge's anchor copies
+    {
+        let a = super::annot::text_doc_purge(w, id, p.needles, er, p.versions == Pick::All)?;
+        c.comments += a.comments;
+        c.anchors += a.anchors;
+        c.attributions += a.attributions;
     }
     // the sync table
     {

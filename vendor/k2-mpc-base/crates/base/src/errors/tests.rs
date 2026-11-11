@@ -119,6 +119,26 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         },
         S::Forbidden { need: Need::Owner },
         S::Forbidden {
+            need: Need::Comment,
+        },
+        S::NotCommentAuthor {
+            thread: crate::annot::ThreadId(1),
+            comment: 0,
+        },
+        S::NoAnnotation {
+            thread: crate::annot::ThreadId(1),
+            comment: None,
+        },
+        S::NoAnnotation {
+            thread: crate::annot::ThreadId(1),
+            comment: Some(2),
+        },
+        S::BadAnnotation(x.into()),
+        S::AnnotationCap {
+            what: "threads",
+            limit: 3,
+        },
+        S::Forbidden {
             need: Need::AuthorOrOwner,
         },
         S::NotJoined {
@@ -209,6 +229,40 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::Blob(BlobError::Io(x.into())),
         S::Blob(BlobError::NoRandom(x.into())),
         S::NoBlobStore,
+        S::IndexUnsupported,
+        S::NotIndexed {
+            version: 1,
+            why: crate::index::NotIndexedWhy::Unsupported,
+        },
+        S::IndexPending {
+            version: 1,
+            retry_after_ms: 10,
+        },
+        S::AgentWriteRefused,
+        S::NodesClaimed(Box::new(crate::session::NodesClaim {
+            id: crate::session::ClaimId::new(3),
+            by: "p1".into(),
+            name: "Sam".into(),
+            keys: vec![crate::index::NodeKey::parse("@k:r1.1").expect("a key")],
+            remaining_ms: 900,
+            note: Some(x.into()),
+        })),
+        S::IndexRead(Box::new(
+            ErrorReport::new(&crate::errors::ids::ADDRESS_NOT_FOUND, "1 of the addresses")
+                .with("count", 1u64),
+        )),
+        S::IndexRead(Box::new(ErrorReport::new(
+            &crate::errors::ids::STALE_CURSOR,
+            "the cursor is for another version",
+        ))),
+        S::IndexRead(Box::new(ErrorReport::new(
+            &crate::errors::ids::BAD_CURSOR,
+            "not a cursor",
+        ))),
+        S::IndexRead(Box::new(ErrorReport::new(
+            &crate::errors::ids::OVER_BUDGET,
+            "the result is 9 bytes",
+        ))),
         S::Pack(PackError(x.into())),
         S::Unloaded,
         S::Released,
@@ -433,7 +487,7 @@ fn ids_names_and_areas_are_well_formed() {
 fn entries_name_real_verbs() {
     let kit = [
         Registry::for_tier(Tier::Text),
-        Registry::for_tier(Tier::Blob),
+        Registry::for_tier(Tier::Blob).with_annotations(),
         Registry::for_tier(Tier::Grid),
     ];
     // host verbs the kit serves through its API but doesn't register (purge: deferred, P28),
@@ -457,7 +511,13 @@ fn entries_name_real_verbs() {
         for v in e.verbs {
             let ok = matches!(
                 *v,
-                "*" | "@change" | "@history" | "@run_tool" | "@pack" | "(sync)" | "(host)"
+                "*" | "@change"
+                    | "@history"
+                    | "@run_tool"
+                    | "@pack"
+                    | "@index"
+                    | "(sync)"
+                    | "(host)"
             ) || kit.iter().any(|r| r.get(v).is_some())
                 || META_VERBS.iter().any(|(m, _)| m == v)
                 || other.contains(v);
@@ -521,6 +581,20 @@ fn every_live_id_has_a_path() {
     seen.extend(session_errors().iter().map(|e| e.report().id()));
     seen.extend(tool_errors().iter().map(|e| e.report().id()));
     seen.extend(export_errors().iter().map(|e| e.report().id()));
+    // the index job's refusals (produced for real in tests/blob_struct.rs and tests/error_ids.rs)
+    seen.insert(
+        crate::index::IndexJobError::BadResult("x".into())
+            .report()
+            .id(),
+    );
+    seen.insert(
+        crate::index::IndexJobError::Stale {
+            version: 1,
+            reason: "x",
+        }
+        .report()
+        .id(),
+    );
     seen.extend(outcomes().iter().map(ErrorReport::id));
     for code in ["too_large", "hard_linked", "x"] {
         seen.insert(
@@ -717,6 +791,9 @@ fn export_errors() -> Vec<ExportError> {
             message: "m".into(),
         },
         ExportError::Limit("output bytes"),
+        ExportError::NeedsRenderer {
+            kind: "text".into(),
+        },
         ExportError::Cancelled,
         ExportError::Decode("bad header".into()),
         ExportError::Io(std::io::Error::other("disk full")),
@@ -732,6 +809,7 @@ fn export_errors() -> Vec<ExportError> {
 fn kit_verb_names() -> BTreeSet<&'static str> {
     crate::parity::KIT_VERBS
         .iter()
+        .chain(crate::parity::ANNOTATION_VERBS)
         .map(|v| v.name)
         .chain(META_VERBS.iter().map(|(n, _)| *n))
         .chain(crate::table::verbs::VERBS.iter().map(|v| v.name()))

@@ -21,6 +21,324 @@ use std::collections::HashMap;
 use crate::doc::{ClientId, DocError, MAX_CLIENT_ID};
 use crate::engine::{EngineDoc, TextPlan, YrsDoc};
 
+/// A fault planted in the structure index ([`crate::index`], the store's `blob_struct`), so its
+/// invariant tests can show they catch each one. Installed per thread by
+/// [`with_index_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IndexMutant {
+    /// A draft over the node cap is kept (`blob_index_max_nodes`).
+    NoNodeCap,
+    /// A draft over the depth cap is kept.
+    NoDepthCap,
+    /// A row over `blob_index_max_stored_bytes` is kept.
+    NoStoredCap,
+    /// The raw digest is stored unkeyed.
+    UnkeyedHash,
+    /// A purged blob's index row stays.
+    PurgeKeepsRow,
+    /// A purge removes the index row of a blob that is still shared.
+    SharedLosesRow,
+    /// A job commits for a version that was purged or moved.
+    StaleCommitAccepted,
+    /// A job commits without having read the stream to its verified end.
+    NoDrain,
+    /// A rewrite copies an index row whose blob is gone.
+    OrphanSurvivesRewrite,
+    /// No barrier removes a row: not the blob's transaction, the rewrite's filter or the sweep.
+    NoRowRemoval,
+    /// A key overlay is used whatever pack and format it was minted for.
+    KeysIgnoreFormat,
+    /// The digest key is derived the way a blob id is (HMAC under the space key).
+    DigestKeyInFileDomain,
+    /// The orphan sweep scans with a write transaction held.
+    SweepHoldsWriter,
+    /// The orphan sweep deletes without re-checking that the blob is still gone.
+    SweepSkipsRecheck,
+    /// Storing a read's minted keys doesn't re-check the version.
+    PutKeysNoCheck,
+    /// A commit overwrites a row and overlay that are already there.
+    KeysOverwritten,
+    /// Deleting a blob version leaves its overlay.
+    DeleteKeepsKeys,
+    /// A stored row's parents aren't checked at decode.
+    RowParentsUnchecked,
+    /// A worker's result is decoded with no bound on what it can allocate.
+    NoDecodeBudget,
+    // the read side (A2) and claims by node (A5)
+    /// A structure read checks no rights: not read, not history for another version.
+    ReadSkipsRights,
+    /// A page holds everything, whatever the read budget.
+    NoBudget,
+    /// A name that names nothing resolves to the first node whose name contains it.
+    GuessesNearName,
+    /// A name or ID two nodes share resolves to the first of them.
+    AmbiguousPicksFirst,
+    /// `#N` past the last node names the last one.
+    NthClamps,
+    /// A cursor is taken without checking its version or tag.
+    CursorUnchecked,
+    /// `--no-truncate` returns a page instead of refusing.
+    NoTruncatePages,
+    /// A node read with a missing address exits 0.
+    PartialExitsZero,
+    /// Another participant's node claim refuses a write.
+    ClaimBlocksWrite,
+    /// A claim on a node another participant claims is taken.
+    ClaimOverlapAllowed,
+    /// A claim whose nodes are all gone from a newly read version doesn't end.
+    ClaimOutlivesNodes,
+    /// An item larger than a page goes out whole.
+    ItemsNotShortened,
+    /// `--no-truncate` refuses only when more pages follow (not a shortened item).
+    NoTruncateOnlyOnMore,
+    /// A missing or ambiguous address lists every candidate.
+    CandidatesUncapped,
+    /// A node read's misses go whole on every page.
+    MissingUncapped,
+    /// The claims' check against a new version's index decodes it under the session lock.
+    ClaimsLoadUnderLock,
+}
+
+impl IndexMutant {
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "no-node-cap" => Self::NoNodeCap,
+            "no-depth-cap" => Self::NoDepthCap,
+            "no-stored-cap" => Self::NoStoredCap,
+            "unkeyed-hash" => Self::UnkeyedHash,
+            "purge-keeps-row" => Self::PurgeKeepsRow,
+            "shared-loses-row" => Self::SharedLosesRow,
+            "stale-commit-accepted" => Self::StaleCommitAccepted,
+            "no-drain" => Self::NoDrain,
+            "orphan-survives-rewrite" => Self::OrphanSurvivesRewrite,
+            "no-row-removal" => Self::NoRowRemoval,
+            "keys-ignore-format" => Self::KeysIgnoreFormat,
+            "digest-key-in-file-domain" => Self::DigestKeyInFileDomain,
+            "sweep-holds-writer" => Self::SweepHoldsWriter,
+            "sweep-skips-recheck" => Self::SweepSkipsRecheck,
+            "put-keys-no-check" => Self::PutKeysNoCheck,
+            "keys-overwritten" => Self::KeysOverwritten,
+            "delete-keeps-keys" => Self::DeleteKeepsKeys,
+            "row-parents-unchecked" => Self::RowParentsUnchecked,
+            "no-decode-budget" => Self::NoDecodeBudget,
+            "read-skips-rights" => Self::ReadSkipsRights,
+            "no-budget" => Self::NoBudget,
+            "guesses-near-name" => Self::GuessesNearName,
+            "ambiguous-picks-first" => Self::AmbiguousPicksFirst,
+            "nth-clamps" => Self::NthClamps,
+            "cursor-unchecked" => Self::CursorUnchecked,
+            "no-truncate-pages" => Self::NoTruncatePages,
+            "partial-exits-zero" => Self::PartialExitsZero,
+            "claim-blocks-write" => Self::ClaimBlocksWrite,
+            "claim-overlap-allowed" => Self::ClaimOverlapAllowed,
+            "claim-outlives-nodes" => Self::ClaimOutlivesNodes,
+            "items-not-shortened" => Self::ItemsNotShortened,
+            "no-truncate-only-on-more" => Self::NoTruncateOnlyOnMore,
+            "candidates-uncapped" => Self::CandidatesUncapped,
+            "missing-uncapped" => Self::MissingUncapped,
+            "claims-load-under-lock" => Self::ClaimsLoadUnderLock,
+            _ => return None,
+        })
+    }
+}
+
+/// Run `f` under the mutant `MPC_INDEX_MUTANT` names (unset: as is; an unknown name stops the
+/// test, naming it).
+pub fn under_env_index_mutant<R>(f: impl FnOnce() -> R) -> R {
+    match std::env::var("MPC_INDEX_MUTANT") {
+        Ok(v) => with_index_mutant(
+            IndexMutant::named(&v)
+                .unwrap_or_else(|| panic!("MPC_INDEX_MUTANT={v}: not an index mutant")),
+            f,
+        ),
+        Err(_) => f(),
+    }
+}
+
+thread_local! {
+    static INDEX_MUTANT: std::cell::Cell<Option<IndexMutant>> = const { std::cell::Cell::new(None) };
+}
+
+thread_local! {
+    static INDEX_LOADS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Count one structure index decoded on this thread (`locked`: with its session's lock held).
+pub(crate) fn count_index_load(locked: bool) {
+    INDEX_LOADS.with(|c| {
+        let (n, l) = c.get();
+        c.set((n + 1, l + u64::from(locked)));
+    });
+}
+
+/// The structure indexes decoded on this thread so far, and how many of them with their
+/// session's lock held (a test reads the difference across a call).
+pub fn index_loads() -> (u64, u64) {
+    INDEX_LOADS.with(|c| c.get())
+}
+
+/// The structure-index mutant installed on this thread, if any.
+pub fn index_mutant() -> Option<IndexMutant> {
+    INDEX_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` installed on this thread.
+pub fn with_index_mutant<R>(mutant: IndexMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<IndexMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            let back = self.0;
+            INDEX_MUTANT.with(|m| m.set(back));
+        }
+    }
+    let _back = Back(INDEX_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault planted in anchors ([`crate::anchor`]) or the annotations ([`crate::annot`]), so
+/// their invariant tests can show they catch each one. Installed per thread by
+/// [`with_annot_mutant`]; a test reads `MPC_ANNOT_MUTANT` through [`under_env_annot_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AnnotMutant {
+    /// A key gone with a candidate reads orphaned (the draft's C9 hole).
+    CandidateReadsOrphaned,
+    /// A hidden node hides a kind change (precedence rows 4 and 5 swapped).
+    HiddenOverDoubt,
+    /// A key carried by position alone is trusted.
+    WeakKeyTrusted,
+    /// A duplicated key resolves to its first holder.
+    DuplicateFirstWins,
+    /// The default judge doubts every rename.
+    RenameIsDoubt,
+    /// Recording an index moves an anchor to its first candidate.
+    AutoReanchor,
+    /// An agent's re-anchor applies, as a person's does.
+    AgentReanchorApplies,
+    /// Deleting a comment keeps its body in the row (only hidden from reads).
+    DeleteKeepsBody,
+    /// An annotation purge leaves the bodies.
+    PurgeKeepsBodies,
+    /// Participant erasure leaves the erased person's comment bodies.
+    ErasureKeepsBodies,
+    /// A version purge leaves the anchors' copies of that version's names.
+    VersionPurgeKeepsHints,
+    /// Commenting needs only read.
+    CommentNeedsRead,
+    /// Edit doesn't imply comment.
+    EditWithoutComment,
+    /// Anyone with comment may delete anyone's comment.
+    AnyoneDeletes,
+    /// A node anchor is written from a version without re-checking it is live.
+    AnchorFromPurgedVersion,
+    /// A text doc's purge and erasure don't reach the threads it kept from tier 0.
+    TextPurgeSkipsAnnotations,
+    /// Blob erasure takes any pseudonym (a reserved one, a participant's own pid).
+    EraseSkipsChecks,
+    /// Erasure leaves the bodies an agent wrote on the erased person's behalf.
+    ErasureSkipsBehalf,
+    /// Kit-side changes (erasure, a version purge, an index record) don't mark a thread
+    /// changed.
+    SinceMissesKitChanges,
+    /// Attribution fields are written at any length.
+    AttrUnbounded,
+    /// An erasure doesn't wait for comment writes already admitted.
+    NoAnnotGate,
+    /// A reader without history sees an older version's node copies.
+    HistoryLeak,
+    /// An index record puts back a `last_seen` a purge cleared.
+    LastSeenReturns,
+}
+
+impl AnnotMutant {
+    fn named(name: &str) -> Option<Self> {
+        Some(match name {
+            "candidate-reads-orphaned" => Self::CandidateReadsOrphaned,
+            "hidden-over-doubt" => Self::HiddenOverDoubt,
+            "weak-key-trusted" => Self::WeakKeyTrusted,
+            "duplicate-first-wins" => Self::DuplicateFirstWins,
+            "rename-is-doubt" => Self::RenameIsDoubt,
+            "auto-reanchor" => Self::AutoReanchor,
+            "agent-reanchor-applies" => Self::AgentReanchorApplies,
+            "delete-keeps-body" => Self::DeleteKeepsBody,
+            "purge-keeps-bodies" => Self::PurgeKeepsBodies,
+            "erasure-keeps-bodies" => Self::ErasureKeepsBodies,
+            "version-purge-keeps-hints" => Self::VersionPurgeKeepsHints,
+            "comment-needs-read" => Self::CommentNeedsRead,
+            "edit-without-comment" => Self::EditWithoutComment,
+            "anyone-deletes" => Self::AnyoneDeletes,
+            "anchor-from-purged-version" => Self::AnchorFromPurgedVersion,
+            "text-purge-skips-annotations" => Self::TextPurgeSkipsAnnotations,
+            "erase-skips-checks" => Self::EraseSkipsChecks,
+            "erasure-skips-behalf" => Self::ErasureSkipsBehalf,
+            "since-misses-kit-changes" => Self::SinceMissesKitChanges,
+            "attr-unbounded" => Self::AttrUnbounded,
+            "no-annot-gate" => Self::NoAnnotGate,
+            "history-leak" => Self::HistoryLeak,
+            "last-seen-returns" => Self::LastSeenReturns,
+            _ => return None,
+        })
+    }
+}
+
+/// Run `f` under the mutant `MPC_ANNOT_MUTANT` names (unset: as is; an unknown name stops the
+/// test, naming it).
+pub fn under_env_annot_mutant<R>(f: impl FnOnce() -> R) -> R {
+    match std::env::var("MPC_ANNOT_MUTANT") {
+        Ok(v) => with_annot_mutant(
+            AnnotMutant::named(&v)
+                .unwrap_or_else(|| panic!("MPC_ANNOT_MUTANT={v}: not an annotation mutant")),
+            f,
+        ),
+        Err(_) => f(),
+    }
+}
+
+thread_local! {
+    static ANNOT_MUTANT: std::cell::Cell<Option<AnnotMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The anchor or annotation mutant installed on this thread, if any.
+pub fn annot_mutant() -> Option<AnnotMutant> {
+    ANNOT_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` installed on this thread.
+pub fn with_annot_mutant<R>(mutant: AnnotMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<AnnotMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            let back = self.0;
+            ANNOT_MUTANT.with(|m| m.set(back));
+        }
+    }
+    let _back = Back(ANNOT_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A one-shot pause for the next annotation write, after it is admitted and before it
+/// commits (a test drives a race through it): the write sends on `paused`, then waits on
+/// `resume`. Process-wide: one at a time.
+pub fn pause_next_annotation(
+    paused: std::sync::mpsc::Sender<()>,
+    resume: std::sync::mpsc::Receiver<()>,
+) {
+    *ANNOT_PAUSE.lock().unwrap_or_else(|p| p.into_inner()) = Some((paused, resume));
+}
+
+type Pause = (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>);
+static ANNOT_PAUSE: std::sync::Mutex<Option<Pause>> = std::sync::Mutex::new(None);
+
+/// The pause point ([`pause_next_annotation`]).
+pub(crate) fn annotation_pause_point() {
+    let armed = ANNOT_PAUSE.lock().unwrap_or_else(|p| p.into_inner()).take();
+    if let Some((paused, resume)) = armed {
+        let _ = paused.send(());
+        let _ = resume.recv();
+    }
+}
+
 /// A fault planted in person undo grouping (undo spec U3, K4, v0.9.7), so the grouping
 /// tests can show they catch each one. Installed per thread by [`with_group_mutant`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

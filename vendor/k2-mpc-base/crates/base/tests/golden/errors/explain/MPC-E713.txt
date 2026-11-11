@@ -1,0 +1,27 @@
+MPC-E713 index_pending (tier 0 and blobs)
+exit:     1
+message:  the index of version {version} isn't ready; retry in {retry_after_ms} ms
+next:     The version's structure hasn't been read yet (a job is queued or running). Nothing changed. Retry after details.retry_after_ms.
+step:     status; why: That version's index isn't ready yet; see the doc's state, then retry after a wait.
+rule:     structure index
+verbs:    a structure index's verbs (named by the file type's pack) and node claims; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E713",
+  "name": "index_pending",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "the index of version {version} isn't ready; retry in {retry_after_ms} ms",
+  "next": "The version's structure hasn't been read yet (a job is queued or running). Nothing changed. Retry after details.retry_after_ms.",
+  "next_step": {
+    "verb": "status",
+    "args": [],
+    "why": "That version's index isn't ready yet; see the doc's state, then retry after a wait."
+  },
+  "rule": "structure index",
+  "verbs": ["@index", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

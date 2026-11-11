@@ -279,6 +279,24 @@ pub struct Config {
     /// Tier 0.5: a pack's `merge3_bytes` is only tried when base, ours and theirs are each
     /// at most this big (they are read into memory). Default 32 MiB.
     pub blob_merge_max_bytes: u64,
+    /// The structure index: a version over this many bytes gets no job (`NotIndexed {
+    /// TooLarge }`; not stored, so raising the limit works at once). Default 2 GiB.
+    pub blob_index_max_bytes: u64,
+    /// The structure index: a file with more nodes is recorded as not indexed. Default 100,000.
+    pub blob_index_max_nodes: u32,
+    /// The structure index: a row over this many bytes is recorded as not indexed (the
+    /// index has its own bound, whatever the file's size). Default 64 MiB.
+    pub blob_index_max_stored_bytes: u64,
+    /// Annotations: the longest comment body, in bytes (`MPC-E907` past it). Default 16 KiB.
+    pub annot_body_max_bytes: u64,
+    /// Annotations: the most comment threads in one doc. Default 10,000.
+    pub annot_threads_max: u64,
+    /// Annotations: the most comments in one thread. Default 1,000.
+    pub annot_comments_max: u64,
+    /// Annotations: the most history rows one thread keeps. Past it, the ops that only
+    /// toggle or move a thread (resolve, reopen, re-anchor, a proposal) are refused
+    /// (`MPC-E907`); replies, deletes and purges always fit. Default 4,096.
+    pub annot_thread_log_max: u32,
     /// Conflict copies older than this are deleted on `tick` (K-A11Y-5), unless their
     /// version is named or a person edited the copy (its bytes no longer match the version
     /// it holds). Default 30 days.
@@ -378,6 +396,13 @@ impl Config {
             lease_auto_ms,
             save_ticket_ms,
             blob_merge_max_bytes,
+            blob_index_max_bytes,
+            blob_index_max_nodes,
+            blob_index_max_stored_bytes,
+            annot_body_max_bytes,
+            annot_threads_max,
+            annot_comments_max,
+            annot_thread_log_max,
             conflict_copy_keep_ms,
             grid_max_cells,
             grid_max_cols,
@@ -457,6 +482,13 @@ impl Config {
             ("lease_auto_ms", *lease_auto_ms),
             ("save_ticket_ms", *save_ticket_ms),
             ("blob_merge_max_bytes", *blob_merge_max_bytes),
+            ("blob_index_max_bytes", *blob_index_max_bytes),
+            ("blob_index_max_nodes", u64::from(*blob_index_max_nodes)),
+            ("blob_index_max_stored_bytes", *blob_index_max_stored_bytes),
+            ("annot_body_max_bytes", *annot_body_max_bytes),
+            ("annot_threads_max", *annot_threads_max),
+            ("annot_comments_max", *annot_comments_max),
+            ("annot_thread_log_max", u64::from(*annot_thread_log_max)),
             ("conflict_copy_keep_ms", *conflict_copy_keep_ms),
             ("grid_max_cells", *grid_max_cells as u64),
             ("grid_max_cols", *grid_max_cols as u64),
@@ -550,6 +582,13 @@ impl Default for Config {
             lease_auto_ms: 2 * 60_000,
             save_ticket_ms: 30_000,
             blob_merge_max_bytes: 32 << 20,
+            blob_index_max_bytes: 2 << 30,
+            blob_index_max_nodes: 100_000,
+            blob_index_max_stored_bytes: 64 << 20,
+            annot_body_max_bytes: 16 << 10,
+            annot_threads_max: 10_000,
+            annot_comments_max: 1_000,
+            annot_thread_log_max: 4_096,
             conflict_copy_keep_ms: 30 * DAY,
             grid_max_cells: 25_000,
             grid_max_cols: 1_024,

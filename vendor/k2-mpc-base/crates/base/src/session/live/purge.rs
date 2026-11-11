@@ -155,6 +155,9 @@ pub enum NotReached {
     HostRows,
     /// Disk blocks of the old store file, released to the file system, not overwritten.
     FreedDiskBlocks,
+    /// Annotations: the notifications the host sent about the comments (their copies are the
+    /// host's, K-ANN-5).
+    SentNotifications,
 }
 
 impl NotReached {
@@ -198,6 +201,7 @@ impl NotReached {
             NotReached::OtherApps => "other apps that read the file; sent notifications",
             NotReached::HostRows => "the host's own records",
             NotReached::FreedDiskBlocks => "freed disk blocks of the old store file",
+            NotReached::SentNotifications => "notifications already sent about the comments",
         }
     }
 }

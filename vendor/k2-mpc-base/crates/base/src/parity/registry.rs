@@ -3,8 +3,9 @@
 use std::fmt;
 
 use super::action::PersonAction;
+use super::positions::{PositionForm, Unit};
 use crate::session::{Need, Pack};
-use crate::tools::exit::{NO, OK, TOO_OLD};
+use crate::tools::exit::{NO, NOT_FOUND, OK, TOO_OLD};
 
 /// Which kind of doc a verb (or a person action) applies to. Hosts classify verbs from
 /// this data ([`VerbSpec::tiers`], [`PersonAction::tiers`]).
@@ -108,6 +109,32 @@ pub enum Api {
     FileNow,
     /// `Session::file_at` (tier 0: `BlobSession::file_at_to`), then the export registry.
     FileAt,
+    /// `BlobSession::comment` (annotations, [`ANNOTATION_VERBS`]).
+    Comment,
+    /// `BlobSession::reply`.
+    Reply,
+    /// `BlobSession::resolve`.
+    Resolve,
+    /// `BlobSession::reopen`.
+    Reopen,
+    /// `BlobSession::delete_comment`.
+    DeleteComment,
+    /// `BlobSession::comments`.
+    Comments,
+    /// `BlobSession::annotation_log`.
+    AnnotationLog,
+    /// `BlobSession::reanchor`.
+    Reanchor,
+    /// Tier 0, a structure index: `BlobSession::index_list` (`Registry::for_blob_pack`).
+    IndexList,
+    /// Tier 0, a structure index: `BlobSession::index_nodes`.
+    IndexNodes,
+    /// Tier 0, a structure index: `BlobSession::index_diff`.
+    IndexDiff,
+    /// Tier 0, a structure index: `BlobSession::index_blame`.
+    IndexBlame,
+    /// Tier 0, a structure index: `BlobSession::claim_nodes`.
+    ClaimNodes,
 }
 
 /// Where a verb comes from.
@@ -160,6 +187,9 @@ pub struct VerbSpec {
     /// The host's own parity rows a file verb serves, by the host's names ([`FileVerb::serves`]);
     /// empty for a kit or pack verb, whose rows are [`VerbSpec::serves`].
     pub serves_named: &'static [&'static str],
+    /// The verb this one is another name for, when that verb's name is a pack's
+    /// ([`Registry::for_blob_pack`]'s `outline` and `node`); [`ALIASES`] holds the kit's own.
+    alias: Option<&'static str>,
 }
 
 impl VerbSpec {
@@ -172,17 +202,46 @@ impl VerbSpec {
         VerbSpec { tiers, ..self }
     }
 
-    /// Whether it runs through [`crate::session::Session::run_tool`] on a text doc: the
-    /// kit's verbs in [`RUN_TOOL_VERBS`] and every pack verb. A host routes these to
-    /// `run_tool` (or `run_tool_with`) and the others to their own session calls
-    /// ([`VerbSpec::api`]). On a blob doc no verb runs through `run_tool` (`cat` there is
-    /// `BlobSession::read`).
+    /// Whether it runs through `run_tool`: on a text doc
+    /// [`crate::session::Session::run_tool`], the kit's verbs in [`RUN_TOOL_VERBS`] and every
+    /// pack verb; on a blob doc [`crate::session::BlobSession::run_tool`], the structure
+    /// index's verbs and node claims ([`Registry::for_blob_pack`]; `cat` there is
+    /// `BlobSession::read`). A host routes these to `run_tool` and the others to their own
+    /// session calls ([`VerbSpec::api`]).
     pub fn runs_through_run_tool(&self) -> bool {
         match self.source {
             Source::Pack => true,
-            Source::Kit => RUN_TOOL_VERBS.contains(&self.name),
+            Source::Kit => {
+                RUN_TOOL_VERBS.contains(&self.name)
+                    || ((self.is_index() || self.is_annotation())
+                        && self.api.contains(&Api::RunTool))
+            }
             Source::File => false,
         }
+    }
+
+    /// Whether it is one of the annotation verbs ([`ANNOTATION_VERBS`]).
+    pub fn is_annotation(&self) -> bool {
+        self.source == Source::Kit && ANNOTATION_VERBS.iter().any(|v| v.name == self.name)
+    }
+
+    /// Whether [`Registry::for_blob_pack`] added it for a structure index (its verbs, their
+    /// other names, node claims): the error registry's `@index` group.
+    pub fn is_index(&self) -> bool {
+        self.source == Source::Kit
+            && self.tiers == BLOB
+            && self.api.iter().any(|a| {
+                matches!(
+                    a,
+                    Api::IndexList
+                        | Api::IndexNodes
+                        | Api::IndexDiff
+                        | Api::IndexBlame
+                        | Api::ClaimNodes
+                        | Api::RenewClaim
+                        | Api::ReleaseClaim
+                )
+            })
     }
 
     /// The verb this one is another name for ([`ALIASES`]), if any: the same row, the same
@@ -191,10 +250,58 @@ impl VerbSpec {
         if self.source == Source::File {
             return None;
         }
+        if self.alias.is_some() {
+            return self.alias;
+        }
         ALIASES
             .iter()
             .find(|(a, _)| *a == self.name)
             .map(|(_, of)| *of)
+    }
+}
+
+/// The words [`Registry::for_blob_pack`] gives a structure index besides the pack's names.
+const INDEX_KIT_WORDS: &[&str] = &["outline", "node", "claim"];
+
+const LIST_USAGE: &str = "[--version V] [--depth N] [--kind K] [--tree] [--cursor C] \
+     [--no-truncate] [--json] (the outline, each node's #N; another version: +history)";
+const SHOW_USAGE: &str = "ADDR... [--version V] [--depth N] [--cursor C] [--no-truncate] \
+     [--json] | ADDR --text (ADDR: @k:KEY, a native ID, #N, name:NAME; any missing: exit 4, \
+     every address listed; --text with no text: 1)";
+const SHOW_EXITS: &[u8] = &[OK, NO, NOT_FOUND];
+const LIST_POSITIONS: &[PositionForm] = &[PositionForm::new("stdout", Unit::PackNth)];
+const SHOW_POSITIONS: &[PositionForm] = &[
+    PositionForm::new("ADDR", Unit::PackNth),
+    PositionForm::new("stdout", Unit::PackNth),
+];
+const EXPORT_POSITIONS: &[PositionForm] = &[PositionForm::new("ADDR", Unit::PackNth)];
+const CLAIM_POSITIONS: &[PositionForm] = &[PositionForm::new("--node", Unit::PackNth)];
+
+/// A structure index's verb ([`Registry::for_blob_pack`]).
+#[allow(clippy::too_many_arguments)]
+const fn index_verb(
+    name: &'static str,
+    kind: VerbKind,
+    needs: &'static [Need],
+    api: &'static [Api],
+    serves: &'static [PersonAction],
+    usage: &'static str,
+    exits: &'static [u8],
+    positions: Option<&'static [PositionForm]>,
+) -> VerbSpec {
+    VerbSpec {
+        name,
+        kind,
+        needs,
+        api,
+        serves,
+        usage,
+        exits,
+        source: Source::Kit,
+        tiers: BLOB,
+        positions,
+        serves_named: &[],
+        alias: None,
     }
 }
 
@@ -250,6 +357,7 @@ const fn kit(
         tiers: TEXT,
         positions: None,
         serves_named: &[],
+        alias: None,
     }
 }
 
@@ -811,7 +919,8 @@ pub const KIT_VERBS: &[VerbSpec] = &[
 /// The verb form an `argv` names: `argv[0]`, or `argv[0]` plus the flag that makes it a
 /// separate registry entry (`sed -i`, `undo --partial`, `undo --drop`, `log --pending`,
 /// `diff --version`, `show --version`, `version --name`, `tail -f`, `lease --renew`,
-/// `lease --release`, `lease --break`, `blame --cell`, `blame --structure`), or its two
+/// `lease --release`, `lease --break`, `blame --cell`, `blame --structure`, `comment --delete`,
+/// `resolve --reopen`, `comments --log`), or its two
 /// words (`rows drop-deleted`). A host names verbs the same way when it checks its command
 /// table against the registry; a pack's two-word structured verb (`row insert`) is named by
 /// [`Registry::form_of`].
@@ -853,10 +962,107 @@ pub fn verb_form(argv: &[String]) -> String {
         "blame" if has("--cell") => "blame --cell",
         "blame" if has("--structure") => "blame --structure",
         "rows" if args.first().is_some_and(|a| a == "drop-deleted") => "rows drop-deleted",
+        "comment" if has("--delete") => "comment --delete",
+        "resolve" if has("--reopen") => "resolve --reopen",
+        "comments" if has("--log") => "comments --log",
         v => v,
     };
     form.to_owned()
 }
+
+const NC: &[Need] = &[Need::Read, Need::Comment];
+
+/// An annotation verb: no tier of its own ([`Registry::with_annotations`] adds them).
+const fn annot(
+    name: &'static str,
+    kind: VerbKind,
+    needs: &'static [Need],
+    api: &'static [Api],
+    serves: &'static [PersonAction],
+    usage: &'static str,
+) -> VerbSpec {
+    VerbSpec {
+        tiers: &[],
+        ..kit(name, kind, needs, api, serves, usage, OK0)
+    }
+}
+
+/// **The annotation verbs** (`docs/SESSIONS.md`, "Annotations"): comment threads, run by
+/// [`crate::session::BlobSession::run_annotation`] over the typed calls (and by
+/// [`crate::session::BlobSession::run_tool`], which hands them there). They carry no tier, so
+/// [`Registry::for_tier`] doesn't list them and a host that hasn't adopted comments sees no new
+/// verb; [`Registry::for_blob_pack`] lists them, and [`Registry::with_annotations`] adds them
+/// to any other. Their parity is
+/// [`super::check_annotations`]'s (P23 `Annotate` is a text and grid row; on blob docs these
+/// are its verbs). The rights: read for the reads, history for the log, the comment right
+/// (implied by edit) for the rest, and `comment --delete` also its author, the person it was
+/// for, or an owner. An agent's `reanchor` is a proposal a person confirms (K-ANN-9).
+pub const ANNOTATION_VERBS: &[VerbSpec] = &[
+    annot(
+        "comment",
+        E,
+        NC,
+        &[A::RunTool, A::Comment],
+        &[P::Annotate, P::Mention],
+        "comment (--doc | --node KEY [--version V] [--hint H]) --body TEXT [--mention PID]... [--proposal PATH]...",
+    ),
+    annot(
+        "reply",
+        E,
+        NC,
+        &[A::RunTool, A::Reply],
+        &[P::Annotate, P::Mention],
+        "reply ann-N --body TEXT [--mention PID]... [--proposal PATH]...",
+    ),
+    annot(
+        "resolve",
+        E,
+        NC,
+        &[A::RunTool, A::Resolve],
+        &[P::Annotate],
+        "resolve ann-N",
+    ),
+    annot(
+        "resolve --reopen",
+        E,
+        NC,
+        &[A::RunTool, A::Reopen],
+        &[P::Annotate],
+        "resolve ann-N --reopen",
+    ),
+    annot(
+        "comment --delete",
+        E,
+        NC,
+        &[A::RunTool, A::DeleteComment],
+        &[P::Annotate],
+        "comment --delete ann-N [--n N] (its author, the person it was for, or an owner)",
+    ),
+    annot(
+        "comments",
+        R,
+        NR,
+        &[A::RunTool, A::Comments],
+        &[P::Annotate],
+        "comments [--open | --resolved] [--version V] [--on KEY] [--since SEQ] [--after ann-N] [--limit N]",
+    ),
+    annot(
+        "comments --log",
+        H,
+        NH,
+        &[A::RunTool, A::AnnotationLog],
+        &[P::Annotate],
+        "comments --log [ann-N] [--since SEQ] [--limit N]",
+    ),
+    annot(
+        "reanchor",
+        E,
+        NC,
+        &[A::RunTool, A::Reanchor],
+        &[P::Annotate],
+        "reanchor ann-N (--doc | --node KEY [--version V] [--hint H]) (an agent's is a proposal)",
+    ),
+];
 
 /// Why a registry can't be built.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1008,6 +1214,7 @@ impl Registry {
                 tiers: &[],
                 positions: None,
                 serves_named: v.serves,
+                alias: None,
             });
         }
         Ok(r)
@@ -1101,6 +1308,7 @@ impl Registry {
                 tiers: if grid { GRID } else { TEXT },
                 positions: v.declared_positions(),
                 serves_named: &[],
+                alias: None,
             });
         }
         Ok(r)
@@ -1111,11 +1319,174 @@ impl Registry {
     pub fn form_of(&self, argv: &[String]) -> String {
         if let [a, b, ..] = argv {
             let two = format!("{a} {b}");
-            if self.get(&two).is_some_and(|v| v.source == Source::Pack) {
+            if self
+                .get(&two)
+                .is_some_and(|v| v.source == Source::Pack || v.is_index())
+            {
                 return two;
             }
         }
         verb_form(argv)
+    }
+
+    /// **The verbs of a blob doc of `pack`'s type**: [`Registry::for_tier`]`(Tier::Blob)`,
+    /// the annotation verbs ([`ANNOTATION_VERBS`], any pack: a comment on the whole doc needs
+    /// no index), plus, when the pack has a structure index ([`crate::session::BlobPack::index_spec`]),
+    /// its verbs under the names the pack gives ([`crate::index::IndexVerbs`]), `outline` and
+    /// `node` as other names for its list and show verbs (K-READ-1), and claims by node
+    /// (`claim --node`, `claim --renew`, `claim --release`). A pack with no index gets exactly
+    /// `for_tier(Tier::Blob).with_annotations()`, and `for_tier` never lists any of these: a
+    /// host that hasn't adopted them sees no change. The annotation verbs serve P23 and P27,
+    /// text and grid rows: a list checked against this registry lists them there.
+    ///
+    /// They are kit verbs ([`Source::Kit`], [`VerbSpec::is_index`]) of [`Tier::Blob`]: the
+    /// rights, calls, exits and parity rows are the kit's, only the names the pack's. All but
+    /// the export verb run through [`crate::session::BlobSession::run_tool`]; the export verb
+    /// is the host's export with the node option ([`crate::export::NODE_OPTION`]). The claim
+    /// verbs serve P8, a text and grid row: a pack that indexes lists it in its blob parity
+    /// list too.
+    ///
+    /// Refused: a verb name that isn't two lowercase words (letters, digits, `-`), one whose
+    /// first word is a kit verb's (any tier, `outline`, `node`, `claim` and the annotation
+    /// verbs' included), and two
+    /// verbs of one name.
+    pub fn for_blob_pack(pack: &dyn crate::session::BlobPack) -> Result<Self, RegistryError> {
+        let mut r = Self::for_tier(Tier::Blob).with_annotations();
+        let Some(spec) = pack.index_spec() else {
+            return Ok(r);
+        };
+        let v = spec.verbs;
+        let mut names = vec![v.list, v.show, v.diff, v.blame];
+        names.extend(v.export);
+        for (k, name) in names.iter().enumerate() {
+            let words: Vec<&str> = name.split(' ').collect();
+            let word_ok = |w: &str| {
+                !w.is_empty()
+                    && !w.starts_with('-')
+                    && w.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            };
+            if words.len() != 2 || !words.iter().all(|w| word_ok(w)) {
+                return Err(RegistryError(format!(
+                    "index verb {name:?}: two lowercase words (the noun, then the verb)"
+                )));
+            }
+            let taken = crate::tools::is_kit_verb(words[0])
+                || INDEX_KIT_WORDS.contains(&words[0])
+                || ANNOTATION_VERBS
+                    .iter()
+                    .any(|a| a.name.split(' ').next() == Some(words[0]))
+                || KIT_VERBS
+                    .iter()
+                    .any(|kv| kv.name.split(' ').next() == Some(words[0]));
+            if taken {
+                return Err(RegistryError(format!(
+                    "index verb {name:?}: {:?} is a kit verb's word (the kit's would win)",
+                    words[0]
+                )));
+            }
+            if names[..k].contains(name) {
+                return Err(RegistryError(format!("index verb {name:?} twice")));
+            }
+        }
+        let list = index_verb(
+            v.list,
+            R,
+            NR,
+            &[A::RunTool, A::IndexList],
+            &[P::ReadAll],
+            LIST_USAGE,
+            OK0,
+            Some(LIST_POSITIONS),
+        );
+        let show = index_verb(
+            v.show,
+            R,
+            NR,
+            &[A::RunTool, A::IndexNodes],
+            &[P::ReadAll],
+            SHOW_USAGE,
+            SHOW_EXITS,
+            Some(SHOW_POSITIONS),
+        );
+        r.verbs.push(list);
+        r.verbs.push(show);
+        r.verbs.push(index_verb(
+            v.diff,
+            H,
+            NH,
+            &[A::RunTool, A::IndexDiff],
+            &[P::History],
+            "V1 [V2] [--cursor C] [--no-truncate] [--json] (V2: the current version; node by node)",
+            OK0,
+            None,
+        ));
+        r.verbs.push(index_verb(
+            v.blame,
+            H,
+            NH,
+            &[A::RunTool, A::IndexBlame],
+            &[P::Blame],
+            "[--version V] [--cursor C] [--no-truncate] [--json] (per node: the version that \
+             made it as it is)",
+            OK0,
+            None,
+        ));
+        if let Some(e) = v.export {
+            r.verbs.push(index_verb(
+                e,
+                R,
+                NR,
+                &[A::IndexNodes, A::FileNow, A::FileAt],
+                &[P::Export],
+                "ADDR [--version V] --to TARGET [--option K=V]... (one node, through the export \
+                 registry with the node option; another version: +history)",
+                OK0,
+                Some(EXPORT_POSITIONS),
+            ));
+        }
+        r.verbs.push(VerbSpec {
+            name: "outline",
+            alias: Some(v.list),
+            ..list
+        });
+        r.verbs.push(VerbSpec {
+            name: "node",
+            alias: Some(v.show),
+            ..show
+        });
+        r.verbs.push(index_verb(
+            "claim",
+            E,
+            NE,
+            &[A::RunTool, A::ClaimNodes],
+            &[P::Caret],
+            "claim --node ADDR... [--version V] [--ttl MS] [--note TEXT] (advisory: never \
+             refuses a write; someone else's claim on a node: exit 5)",
+            OK0,
+            Some(CLAIM_POSITIONS),
+        ));
+        r.verbs.push(index_verb(
+            "claim --renew",
+            E,
+            NE,
+            &[A::RunTool, A::RenewClaim],
+            &[P::Caret],
+            "claim --renew [--id ID] [--ttl MS] (none: exit 4)",
+            OK0,
+            None,
+        ));
+        r.verbs.push(index_verb(
+            "claim --release",
+            E,
+            NR,
+            &[A::RunTool, A::ReleaseClaim],
+            &[P::Caret],
+            "claim --release [--id ID] (all of mine without an id; 1: none held)",
+            OK01,
+            None,
+        ));
+        Ok(r)
     }
 
     /// Every verb, kit verbs first.
@@ -1133,6 +1504,17 @@ impl Registry {
         self.verbs
             .iter()
             .filter(move |v| v.serves.contains(&action))
+    }
+
+    /// This registry plus the annotation verbs ([`ANNOTATION_VERBS`]), for a host that serves
+    /// comment threads on its docs. Adding them twice changes nothing.
+    pub fn with_annotations(mut self) -> Self {
+        for v in ANNOTATION_VERBS {
+            if self.get(v.name).is_none() {
+                self.verbs.push(*v);
+            }
+        }
+        self
     }
 
     /// This registry without `name`. For negative controls: a harness run on it must report

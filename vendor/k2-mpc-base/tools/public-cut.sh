@@ -4,13 +4,20 @@
 # public repo) carries no native-engine source. The cut commit is never merged into main:
 # main merges the pre-cut release commit.
 #
-#   tools/public-cut.sh [--no-commit] [--lock FILE] [--trailer TEXT]...
+#   tools/public-cut.sh [--no-commit] [--lock FILE] [--hold FILE] [--trailer TEXT]...
 #
 #   --no-commit   edit and stage the tree and run the checks, but commit nothing (a dry run;
 #                 the edits stay in the working tree). Allowed on a detached HEAD, and on a
 #                 tree with uncommitted changes (e.g. a merge --no-commit to try a branch).
 #   --lock FILE   take FILE as the pruned Cargo.lock instead of the script's own prune (see
 #                 "The lockfile"); refused unless it only removes lines from the current one.
+#   --hold FILE   an external hold list, kept outside the tree (or PUBLIC_CUT_HOLD=FILE in the
+#                 environment): paths named in it are taken from the given ref. Its lines, run
+#                 before the cut's own steps: `take PATH REF` puts PATH (a file or a directory)
+#                 as it is at commit REF in place of the tree's; a line `patch` ends them, and a
+#                 unified diff after it (git apply) is applied next, or skipped when it is
+#                 applied already. `#` lines and blank lines before it are comments. The script
+#                 prints counts only, never the list. Without a hold list none of this runs.
 #   --trailer T   a trailer for the commit message (git commit --trailer), repeatable.
 #
 # Run at the root of a clean checkout of the release branch (never main). Deterministic and
@@ -73,18 +80,23 @@
 set -eu
 export LC_ALL=C
 
-NOCOMMIT=0; LOCKFILE=; TRAILERS=
+NOCOMMIT=0; LOCKFILE=; TRAILERS=; HOLD=${PUBLIC_CUT_HOLD:-}
 while [ $# -gt 0 ]; do
   case $1 in
     --no-commit) NOCOMMIT=1 ;;
     --lock) LOCKFILE=${2:?--lock FILE}; shift ;;
+    --hold) HOLD=${2:?--hold FILE}; shift ;;
     --trailer) TRAILERS="$TRAILERS
 ${2:?--trailer TEXT}"; shift ;;
-    *) echo "usage: tools/public-cut.sh [--no-commit] [--lock FILE] [--trailer TEXT]..." >&2; exit 2 ;;
+    *) echo "usage: tools/public-cut.sh [--no-commit] [--lock FILE] [--hold FILE] [--trailer TEXT]..." >&2; exit 2 ;;
   esac
   shift
 done
 [ -z "$LOCKFILE" ] || LOCKFILE=$(cd "$(dirname "$LOCKFILE")" && pwd)/$(basename "$LOCKFILE")
+if [ -n "$HOLD" ]; then
+  [ -f "$HOLD" ] && [ -r "$HOLD" ] || { echo "public-cut: the hold list can't be read" >&2; exit 2; }
+  HOLD=$(cd "$(dirname "$HOLD")" && pwd)/$(basename "$HOLD")
+fi
 
 die() { echo "public-cut: $*" >&2; exit 1; }
 TOP=$(git rev-parse --show-toplevel 2>/dev/null) || die "not in a git checkout"
@@ -108,6 +120,40 @@ is_public() { case " $PUBLIC_ENGINE_CRATES " in *" $1 "*) return 0 ;; esac; retu
 replace() { if ! cmp -s "$1" "$2"; then cat "$2" > "$1"; echo "  edited $1"; fi; }
 
 echo "public-cut: at $(git rev-parse --short HEAD) (${BRANCH:-detached})"
+
+# ---- 0. an external hold list (--hold; nothing runs without one) ----------------------------
+if [ -n "$HOLD" ]; then
+  awk -v t="$WORK/hold-take" -v p="$WORK/hold-patch" '
+    BEGIN { printf "" > t; printf "" > p }
+    inpatch { print > p; next }
+    /^patch[ \t]*$/ { inpatch = 1; next }
+    { print > t }' "$HOLD"
+  HTAKEN=0
+  while IFS= read -r hl; do
+    case $hl in ''|'#'*) continue ;; esac
+    set -f; set -- $hl; set +f
+    { [ $# -eq 3 ] && [ "$1" = take ]; } || die "the hold list: a line that is not 'take PATH REF'"
+    hp=$2; hr=$3
+    case $hp in /*|..|../*|*/..|*/../*) die "the hold list: a path outside the root" ;; esac
+    git cat-file -e "$hr^{commit}" 2>/dev/null || die "the hold list: a ref that is not a commit here"
+    git cat-file -e "$hr:$hp" 2>/dev/null || die "the hold list: a path its ref doesn't have"
+    if [ -n "$(git ls-files -- "$hp")" ]; then git rm -r -q -f -- "$hp"; fi
+    rm -rf -- "$hp"
+    git checkout -q "$hr" -- "$hp"
+    HTAKEN=$((HTAKEN + 1))
+  done < "$WORK/hold-take"
+  HPATCH=none
+  if [ -s "$WORK/hold-patch" ]; then
+    if git apply --index --check "$WORK/hold-patch" 2>/dev/null; then
+      git apply --index "$WORK/hold-patch"; HPATCH=applied
+    elif git apply --index -R --check "$WORK/hold-patch" 2>/dev/null; then
+      HPATCH="applied already"
+    else
+      die "the hold list: its patch applies neither way"
+    fi
+  fi
+  echo "  hold list: $HTAKEN path(s) taken from their refs; patch: $HPATCH"
+fi
 
 # ---- 1. paths -------------------------------------------------------------------------------
 ENGINE=   # the engine package names removed (for the manifests and the lock)

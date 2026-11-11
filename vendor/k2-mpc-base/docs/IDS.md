@@ -37,6 +37,7 @@ Anchors bind to the most durable ID an object has; weaker ones are hints for re-
 | `change` | `revert 41` | durable | a doc's change log | `revert`, `approve`, `decline` | a change's log position, as `log` prints it (a blob doc: its version) |
 | `participant` | `--by p2` | durable | the host's participants | `follow`, `undo`, `undo --partial`, `log`, `log --pending`, `approvals` | host-given (the kit never mints or renames one): `follow <pid>`, `--for`, `--by`, `--on-behalf-of` |
 | `claim-id` | `claim-12` or `12` | session | the process | `claim --renew`, `claim --release` | printed by `claim`; unique within the process, so another doc's or an ended claim's id is simply not live |
+| `annotation` | `ann-12` or `12` | durable | a doc's comment threads | `reply`, `resolve`, `resolve --reopen`, `comment --delete`, `reanchor`, `comments --log` | printed by `comment` and `comments`; per doc, never reused (a purged thread keeps its id); a comment within it is `--n N`, 0 the first |
 
 ## Packs
 

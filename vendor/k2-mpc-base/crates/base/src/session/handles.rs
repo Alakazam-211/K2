@@ -38,6 +38,12 @@ impl Handles {
         }
     }
 
+    /// The pids `viewer` has seen, in handle order: a copy, to map handles back
+    /// ([`unpid_in`]) without holding the session.
+    pub fn seen_by(&self, viewer: &str) -> Vec<String> {
+        self.by_viewer.get(viewer).cloned().unwrap_or_default()
+    }
+
     /// Participant erasure: forget the pid everywhere (as a viewer and as seen).
     pub fn forget(&mut self, pid: &str) {
         self.by_viewer.remove(pid);
@@ -48,6 +54,18 @@ impl Handles {
             }
         }
     }
+}
+
+/// The pid behind handle `s` among `seen` (a viewer's, [`Handles::seen_by`]); anything else
+/// names nobody.
+pub(crate) fn unpid_in(seen: &[String], s: &str) -> String {
+    s.strip_prefix(PREFIX)
+        .and_then(|n| n.parse::<usize>().ok())
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|k| seen.get(k))
+        .filter(|p| !p.is_empty())
+        .cloned()
+        .unwrap_or_else(|| NOBODY.to_owned())
 }
 
 /// What one App viewer may see: pids become its handles.
@@ -82,13 +100,7 @@ impl Lens<'_> {
     /// The pid behind one of this viewer's handles (an App's `log --by p2`). Anything else
     /// (a raw pid, a handle it never saw) names nobody: an App can't probe for pids.
     pub fn unpid(&self, s: &str) -> String {
-        s.strip_prefix(PREFIX)
-            .and_then(|n| n.parse::<usize>().ok())
-            .and_then(|n| n.checked_sub(1))
-            .and_then(|k| self.seen.get(k))
-            .filter(|p| !p.is_empty())
-            .cloned()
-            .unwrap_or_else(|| NOBODY.to_owned())
+        unpid_in(&self.seen[..], s)
     }
 
     pub fn who(&mut self, w: Who) -> Who {
@@ -276,6 +288,10 @@ impl Lens<'_> {
             SessionError::ElemsClaimed(mut c) => {
                 c.by = self.pid(&c.by);
                 SessionError::ElemsClaimed(c)
+            }
+            SessionError::NodesClaimed(mut c) => {
+                c.by = self.pid(&c.by);
+                SessionError::NodesClaimed(c)
             }
             SessionError::Leased {
                 holder,

@@ -1333,6 +1333,14 @@ fn every_table_is_listed_once() {
         "overwrite_notes".to_owned(),
         "client_kinds".to_owned(),
         "doc_blob_refs".to_owned(),
+        "blob_struct".to_owned(),
+        "blob_struct_keys".to_owned(),
+        // the annotations' three, with a doc's first comment
+        "annot_threads".to_owned(),
+        "annot_comments".to_owned(),
+        "annot_log".to_owned(),
+        "annot_thread_log".to_owned(),
+        "annot_changed".to_owned(),
     ];
     let eager: Vec<String> = listed
         .iter()

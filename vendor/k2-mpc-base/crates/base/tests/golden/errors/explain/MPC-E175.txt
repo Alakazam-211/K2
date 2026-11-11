@@ -1,0 +1,21 @@
+MPC-E175 over_budget (sessions and edits)
+exit:     2
+message:  the result is {bytes} bytes, over the {budget}-byte read budget; --no-truncate refuses a page
+next:     With --no-truncate a read returns everything or nothing, and everything is more than one read may return. Nothing was read. Read without --no-truncate and page on with the cursor each page returns, or narrow the read (a depth, a kind, fewer addresses).
+rule:     K-READ-2
+verbs:    a pack's own verbs; a structure index's verbs (named by the file type's pack) and node claims
+status:   live
+--- json
+{
+  "id": "MPC-E175",
+  "name": "over_budget",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the result is {bytes} bytes, over the {budget}-byte read budget; --no-truncate refuses a page",
+  "next": "With --no-truncate a read returns everything or nothing, and everything is more than one read may return. Nothing was read. Read without --no-truncate and page on with the cursor each page returns, or narrow the read (a depth, a kind, fewer addresses).",
+  "rule": "K-READ-2",
+  "verbs": ["@pack", "@index"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

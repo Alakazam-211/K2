@@ -1,5 +1,207 @@
 # Changelog
 
+## v0.13.1 (2026-11-10)
+
+A host release on v0.13.0. The crate version is `0.13.1`; the client's stays `0.13.2` (no file
+under `client/` changed since v0.13.0). No API, wire frame or store format change since
+v0.13.0. Pairs with the markdown, text, board and csv pack tags of this release.
+
+- **`tools/check-private.sh` reads its patterns from outside the tree.** The first of
+  `MPC_PRIVATE_PATTERNS` (the patterns, one per line), the file `MPC_PRIVATE_PATTERNS_FILE`
+  names, or `~/.config/k2-mpc/private-patterns.txt`: one extended regex per line, matched
+  case-insensitively, `#` comments and blank lines ignored. With none it fails closed (exit 2)
+  and names the three places; it never prints a pattern. The allowlist,
+  `tools/private-allow.txt`, works as before. `tools/test-check-private.sh` (new) is its
+  self-test, in the evidence part and `scripts/check.sh`.
+- **`tools/public-cut.sh --hold FILE`** (or `PUBLIC_CUT_HOLD`): an optional hold list kept
+  outside the tree; paths named in it are taken from the given ref, and a patch after them is
+  applied, before the cut's own steps. Without one the script runs as before.
+- **Docs:** `Rights::comment`'s doc comment and `docs/SESSIONS.md` say comment is implied by
+  edit by a product ruling.
+
+## v0.13.0 (2026-11-10)
+
+A host release on v0.12.0. The crate version is `0.13.0`; the client's stays `0.13.2` (no file
+under `client/` changed since v0.12.0). Pairs with the markdown, text, board and csv pack tags
+of this release. No wire frame changes, and the store format is the same (`STORE_FORMAT` 6,
+`STORE_FORMAT_READ` 7, `STORE_FORMAT_BASE` 5): the structure index's and the comment threads'
+tables are additive and made by their first write, so a store needs no migration.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.12.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it). The cut leaves out what
+v0.12.0's did: the native-engine crates (`vendor/mpce-core`, `vendor/mpce-codec`,
+`vendor/mpce-sync`, `vendor/mpce-licences`; `vendor/mpce-model` stays), the kit's
+native-engine adapter (features `native`, `fuzzing`), the conformance crate, the fuzz trees and
+the evidence run records; and the engine-feature guard with its self-test
+(`tools/check-engine-features.sh`, `tools/test-engine-features.sh`).
+
+For a host, in short (details below):
+
+- **The structure index, opt-in per pack (A1 to A5):** a pack that indexes turns a blob
+  version into a tree of nodes the host indexes with its own worker (A1); `BlobSession` reads
+  it with rights and paged answers (`index_list`, `index_nodes`, `index_diff`, `index_blame`;
+  A2), anchors a comment on a node or the whole doc (`crate::anchor`; A3), keeps comment
+  threads when the host adopts them (`crate::annot`, `Registry::with_annotations`; A4), and
+  takes advisory claims by node (A5). `AnyFile` and a pack with no index are unchanged, as is
+  `Registry::for_tier`. The new enum variants and struct fields are on `#[non_exhaustive]`
+  types, so a host's code builds as is.
+- **What a host may want to adopt:** `Rights::comment` (implied by edit; a read-only share
+  comments only when granted), `Need::Comment`, `Action::Annotate`; `AuditEvent::IndexWanted`
+  (the host runs the index job), `AuditEvent::Annotation` and `AuditEvent::AnchorState`;
+  `PurgeReport::index_rows_removed` and `store_rewritten` (a `purge_space_key` that removed
+  index rows rewrites the store file; `false` with rows removed means the rewrite failed and
+  their old bytes stay in freed pages until a later rewrite).
+- **New `Config` fields, with defaults** (in `capabilities` with the other limits):
+  `blob_index_max_bytes`, `blob_index_max_nodes`, `blob_index_max_stored_bytes`,
+  `annot_body_max_bytes`, `annot_threads_max`, `annot_comments_max`, `annot_thread_log_max`.
+  New error ids `MPC-E116`, `E117`, `E174`, `E175`, `E320`, `E321`, `E711` to `E717` and
+  `E907`; `MPC-E172` and `E173` are live (reserved until now); a claim on a node another holds
+  is `MPC-E301` (exit 5), as for elements. The ID kind `annotation` (`ann-12`) is new.
+- **For packs, the parity harness:** `BlobCase` gains `next` (with `then(bytes)`; build a case
+  with `BlobCase::new`, as before), and `BlobPresenceObs` is `#[non_exhaustive]` and gains
+  `claims`.
+- **A test row for keys in `Debug`** (`key_debug_tests`): no kit type holding key material
+  prints it in `Debug`, in any spelling of known bytes.
+- **Client 0.13.2:** unchanged.
+- **Going back to v0.12.0:** no store format constant changes. A store with no index and no
+  comment is one v0.12.0 reads as before. One with the new tables follows the additive rules
+  (`docs/SESSIONS.md`): v0.12.0 opens it, reads and edits work, and its purge and rewrite
+  refuse.
+- **Main-only tooling** (not in this cut): the engine-feature guard also refuses the engine
+  crates' `test-support` and `verify-...` hooks; the fuzz night reads a forking target's
+  counters from its last progress line (`src=beat`), keeps libFuzzer's dictionary entry out of
+  its heartbeat lines, and lists the PSD pack's targets and the kit's `index_result` target in
+  the ledger.
+
+In detail:
+
+### Tooling: the fuzz night (main-only, not in this cut)
+
+- **A forking target's counters** (`-fork`, as `outside_edit` runs) come from its parent's last
+  progress line: the night's `FUZZ` line says `src=beat`; `src=final` for an in-process run's
+  final stats, and `src=-` when there is no line of either (every counter `?`, and the ledger's
+  "executed nothing" rule fires as before). Self-test: `tools/fuzz/test-ledger.py`.
+- **A heartbeat line leaves out libFuzzer's dictionary entry** (`DE: "..."`, a few bytes of a
+  mutation), so job logs carry no input bytes.
+- **The ledger's paths** list the PSD pack's targets, and the kit's `index_result` target (a
+  structure-index worker's result: a typed refusal or a checked draft).
+
+### Anchors and comment threads (A3, A4)
+
+- **Anchors (`crate::anchor`, pure):** an anchor on the whole doc or on a node by its key, and
+  its state in a version, exactly one of attached, hint-stale, suspect (duplicate key, weak key,
+  kind changed, identity doubt, candidate only, hints purged), hidden, orphaned, by a fixed
+  precedence; candidates are shown and never taken. `index::Fingerprint` gains `content` (the
+  node's keyed content hash), so the judge needs only the anchor and the later node. `BlobPack::judge_anchor` and
+  `anchor_candidate` (defaulted: no pack changes) are the file type's half.
+- **Comment threads (`crate::annot`), opt-in per host:** `BlobSession::comment`, `reply`,
+  `resolve`, `reopen`, `delete_comment`, `thread`, `comments`, `annotation_log`, `reanchor`,
+  `purge_annotations`, `erase_participant`, and `run_annotation` (the verbs over the same calls;
+  their rows are `parity::ANNOTATION_VERBS`, added by `Registry::with_annotations`, no tier, so
+  `Registry::for_tier` is unchanged). Three additive per-doc tables (`annot_threads`,
+  `annot_comments`, `annot_log`), created by a doc's first comment: a store with none is as
+  before. A comment makes no version and no undo step; an agent's comment on someone's behalf
+  starts no approval; an agent's re-anchor is a proposal a person confirms; deleting clears the
+  body at once (no undo). Purge and participant erasure clear bodies and rewrite the store; a
+  version purge takes the anchors' copies of that version's node names and hints.
+- **Rights:** `Rights::comment` (`with_comment`, `may_comment`): implied by edit; a read-only
+  share comments only when granted. `Need::Comment`, `Action::Annotate`.
+- **New:** `AuditEvent::Annotation` (with mentions, no body) and `AuditEvent::AnchorState`;
+  `PurgedScope::Annotations`, `AnnotationText`; `NotReached::SentNotifications` (on annotation
+  purges only); `PurgeCounts::comments`, `anchors`; `Config::annot_body_max_bytes`,
+  `annot_threads_max`, `annot_comments_max`; error ids `MPC-E116`, `E117`, `E320`, `E321`,
+  `E907` (`E906` is C3's); the ID kind `annotation` (`ann-12`). No store format bump.
+- **Review round:** five tables (a thread-history index and a per-thread change row, so
+  `comments --since` sees every change and reads one row a thread); `annot_thread_log_max`;
+  `Registry::for_blob_pack` lists the annotation verbs and `BlobSession::run_tool` runs them;
+  a promoted doc's text purges and erasure reach the threads it kept; attribution ids bounded at
+  the write, display fields cut; anchors written only from a live version; index records
+  resolved off the transaction and applied by compare-and-set; blob erasure refuses what
+  Session's does and waits for comment writes already admitted, and clears bodies written on
+  the erased person's behalf; readers without history see only the current version's node
+  copies; a purge's clear of an anchor sticks until a re-anchor.
+### The structure index: reading it (A2) and claims by node (A5)
+
+- **Typed reads with rights**, on `BlobSession`: `index_list` (the outline, depth-first, each
+  node's `#N`), `index_nodes` (several addresses, `None` per miss with candidates), `index_diff`
+  (node by node: added, removed, moved, renamed, props, content, text), `index_blame` (per node,
+  the version that made it as it is; only indexes that exist), `node_labels` (for a roster whose
+  regions are node keys). Read, plus history for another version, a diff and a blame, asked on
+  every call; App viewers see handles. `BlobStatus::index` says where the current version's
+  index stands.
+- **The verbs: `BlobSession::run_tool`** (new), a parser over those calls under the names the
+  pack gives (`IndexVerbs`), with `outline` and `node` as the kit's names (K-READ-1). A partial
+  `node` read exits 4 with `MPC-E172 address_not_found` and lists every address. Reads page under
+  `ToolOptions::read_budget` (default `READ_BUDGET`, 32,768 bytes of the page's compact JSON) with
+  opaque cursors bound to the doc, version, verb and arguments (K-READ-2): `MPC-E173
+  stale_cursor`, `MPC-E174 bad_cursor`, `MPC-E175 over_budget` (`--no-truncate`). A node larger
+  than a page comes alone without its text, which `--text` reads whole.
+- **`Registry::for_blob_pack`** (new): tier 0's verbs, plus a pack's index verbs and node claims
+  when it has an index. `for_tier(Tier::Blob)` is unchanged, as is a pack with no index.
+  `parity::kit_index_cases` checks the verbs against the typed calls on two versions of a file
+  the pack gives.
+- **Claims by node**: `BlobSession::claim_nodes`, `renew_claim`, `release_claim`, `claims`, and
+  `claim --node`, `claim --renew`, `claim --release`. Advisory: a claim never refuses a write,
+  a restore or a lease; another's claim on the same node refuses a new one
+  (`SessionError::NodesClaimed`, `MPC-E301`, exit 5). New `ClaimSpan::Nodes`; the roster lists
+  node claims; they end on release, expiry, leaving, and `Deleted` when an indexed version holds
+  none of their nodes.
+- **Export by node, contract only:** `export::NODE_OPTION` and `ExportError::NeedsRenderer`
+  (`MPC-E716 export_needs_renderer`, exit 4). The pack's exporter and the host's worker run it.
+- New: `SessionError::IndexRead` (an address or cursor refusal with its own id), the `@index`
+  group in the error registry; `MPC-E172` and `MPC-E173` are live; `MPC-E711`, `E712`, `E713`
+  name the index verbs. `ToolOptions` gains `read_budget` and `json`.
+- **Every page fits the budget, in text and JSON**, whatever one item holds: an item counts
+  as the larger of its two forms, and one that couldn't fit a page alone is shortened a step at
+  a time (its text, then its descendants to a `--under` continuation, then every field cut to
+  256 bytes and every list to 16 entries, then a stub), each step naming the read that returns
+  what it left out: `<show> ADDR --text`, `<show> ADDR --whole` (new: the node and its
+  ancestors in full), `<list> --under ADDR` (new; `ListQuery::under`). `READ_BUDGET_MIN` is
+  16,384, room for any frame and a stub. `--no-truncate` refuses whenever the whole answer is
+  over the budget, a shortened item included. Text pages print the same shortened items.
+- **Candidates capped (K-READ-3):** at most `CANDIDATES_MAX` (20) for a missing or an
+  ambiguous address, with `candidates_total` (`MissingAddress::candidates_total`, `MPC-E170`'s
+  `details.candidates_total`). A node read's misses are on its first page only, at most a
+  quarter of the budget, with `missing_total`; `MPC-E172` lists the first
+  `MISSING_LISTED_MAX` (20).
+- **Claims decode no index under the session lock:** a claim is checked against the current
+  version's index off the lock (then the lock is taken again and everything re-checked), and a
+  new version's index is decoded once for the claims, before the roster, `claims` or `tick`,
+  not on every call.
+- **Parity harness:** `BlobCase` gains `next` and `then(bytes)` (a second version for the
+  setup); `BlobStage` gains `index_verbs`, `index_all` and `write_next_as`; `BlobPresenceObs`
+  gains `claims` and is `#[non_exhaustive]` (the harness builds it). `BlobCase` stays open: its
+  callers vary a case with struct-update syntax (`BlobCase { person, ..case }`), which
+  `non_exhaustive` forbids outside the crate; add fields with a default in `BlobCase::new`.
+  `parity::kit_index_cases` (new).
+
+### The structure index (A1)
+
+- **New, opt-in per pack:** `BlobPack::index_spec`, `index`, `agent_writes` (all defaulted, so
+  `AnyFile` and every existing pack are unchanged). A pack that indexes turns a blob version into
+  a tree of generic nodes (`crate::index`), kept in the additive, lazily created tables
+  `blob_struct` (content-keyed) and `blob_struct_keys` (per doc, minted keys). A host runs the
+  work itself: `AuditEvent::IndexWanted`, then `BlobSession::index_job` and `IndexJob::run` or
+  (sandboxed worker) `open` / `index::index_to_wire` / `commit_wire`. Malformed worker results are
+  refused and record nothing; caps (nodes, depth, stored bytes, file size) are typed refusals
+  recorded as `NotIndexed`. Hashes stored are keyed per space; a purge removes the row in the
+  blob's own transaction, and the byte scan proves nothing is left. New `Config` fields
+  (`blob_index_max_bytes`, `blob_index_max_nodes`, `blob_index_max_stored_bytes`), events, and
+  error ids `MPC-E711`, `E712`, `E713`, `E714`, `E715`, `E717`. No store format bump. A
+  `purge_space_key` that removed index rows also rewrites the store file.
+- **Hardening of the same slice:** key overlays record their pack and format (an overlay of another format is absent, never laid over a new row); the digest key is derived with the space key as the message, so no blob id can equal it; the orphan sweep finds rows in a read transaction; minted keys are written once per format, and a late job changes nothing already shown; a deleted version loses its overlay; a stored row with a bad parent is `Corrupt` at decode; a worker's result is capped field by field and on total decoded size.
+
+### Guards: the engine's test hooks, and keys in `Debug`
+
+- `tools/check-engine-features.sh` also refuses `test-support` and `verify-...` on mpce-core,
+  mpce-codec and mpce-sync (a kit feature forwarding one, a dependency enabling one, one on the
+  shipped graph). The allowed `verify-shortcuts` dev-dependencies and the kit's own `test-support`
+  still pass. `tools/test-engine-features.sh` is its self-test (evidence part, `scripts/check.sh`).
+  Both scripts are main-only: the public cut leaves them out.
+- A new test row, `key_debug_tests`: no kit type holding key material prints it in `Debug`
+  (`SpaceKey`, and with `native` `NativeKeys`, `EngineChoice`, `StoreSecret`, the engine's
+  `DigestKey`), in any spelling of known bytes, and each `Debug` is held to its exact layout.
+
 ## v0.12.0 (2026-11-07)
 
 A host release on v0.11.1. The crate version is `0.12.0`; the client's is `0.13.2`. Pairs with

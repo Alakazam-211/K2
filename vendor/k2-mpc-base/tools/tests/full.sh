@@ -10,7 +10,7 @@
 #   base-a2      the kit: every other integration test but tier 0's, base-c's, base-d's and errors' (client_vectors among them)
 #   evidence     the evidence tools' self-test and check (tools/evidence/; Python, no cargo; the
 #                check not in a public cut, which has no run records),
-#                tools/check-private.sh, tools/check-windows-names.sh (with its self-test), the
+#                tools/check-private.sh (with its self-test), tools/check-windows-names.sh (with its self-test), the
 #                engine-features check (cargo tree, no build; not in a public cut) on what the
 #                part ships, and tools/oss-check.sh with its
 #                self-test (K-OSS-3: both licence files, "MIT OR Apache-2.0" on our crates and
@@ -46,6 +46,7 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           timed build cargo test -p k2-mpc-base $A2 --no-run
           timed base_a2 tests -p k2-mpc-base $A2 ;;
   evidence) timed evidence_selftest sh tools/evidence/test.sh
+          timed private_selftest sh tools/test-check-private.sh
           timed private sh tools/check-private.sh .
           timed windows_names_selftest sh tools/test-windows-names.sh
           timed windows_names sh tools/check-windows-names.sh .

@@ -330,6 +330,20 @@ impl Loss {
     }
 }
 
+/// The option a structure-index node export takes (the pack's export verb,
+/// [`crate::index::IndexVerbs::export`]): the node's key, as the index prints it (`@n:42`,
+/// `@k:r4.1`). The host resolves the caller's address to a key first
+/// ([`crate::session::BlobSession::index_nodes`], at the version it exports), so an exporter
+/// never sees a name or a position. An exporter that writes nodes lists it in its target's
+/// options, reads the node's bytes itself, and refuses a node it can't write with
+/// [`ExportError::NeedsRenderer`] (`MPC-E716`).
+pub const NODE_OPTION: OptionSpec = OptionSpec::new(
+    "node",
+    OptionKind::Text,
+    None,
+    "the node to export, by its key (@…) in the version exported",
+);
+
 /// What an export did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -357,6 +371,11 @@ pub enum ExportError {
     Limit(&'static str),
     #[error("export cancelled")]
     Cancelled,
+    /// A structure-index node export ([`NODE_OPTION`]) of a node whose look is drawn, not
+    /// stored (text, a placed or adjusted node): the exporter writes stored content only.
+    /// `MPC-E716`, exit 4.
+    #[error("a {kind} node has no stored content of its own to export")]
+    NeedsRenderer { kind: String },
     /// The source could not be read in its format.
     #[error("could not read the source: {0}")]
     Decode(String),
@@ -375,6 +394,7 @@ impl ExportError {
             ExportError::Unsupported { .. }
             | ExportError::Declined { .. }
             | ExportError::Limit(_) => 2,
+            ExportError::NeedsRenderer { .. } => 4,
             ExportError::Cancelled
             | ExportError::Decode(_)
             | ExportError::Io(_)
@@ -396,6 +416,9 @@ impl crate::errors::Refusal for ExportError {
                 R::new(&r::EXPORT_DECLINED, msg).with("code", *code)
             }
             ExportError::Limit(l) => R::new(&r::EXPORT_LIMIT, msg).with("limit", *l),
+            ExportError::NeedsRenderer { kind } => {
+                R::new(&r::EXPORT_NEEDS_RENDERER, msg).with("kind", kind.as_str())
+            }
             ExportError::Cancelled => R::new(&r::EXPORT_CANCELLED, msg),
             ExportError::Decode(_) => R::new(&r::EXPORT_DECODE, msg),
             ExportError::Io(_) => R::new(&r::EXPORT_IO, msg),

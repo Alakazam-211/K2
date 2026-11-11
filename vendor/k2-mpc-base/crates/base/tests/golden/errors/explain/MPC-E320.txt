@@ -1,0 +1,27 @@
+MPC-E320 no_annotation (presence and claims)
+exit:     4
+message:  no annotation {thread}
+next:     There is no comment thread by that id in this doc (or no comment by that number on it). Nothing changed. List the threads and use an id from there.
+step:     comments; why: That thread or comment isn't in this doc; list the threads and use an id from there.
+rule:     K-ANN-1
+verbs:    reply; resolve; resolve --reopen; comment --delete; reanchor; comments --log
+status:   live
+--- json
+{
+  "id": "MPC-E320",
+  "name": "no_annotation",
+  "area": "presence and claims",
+  "exit": 4,
+  "message": "no annotation {thread}",
+  "next": "There is no comment thread by that id in this doc (or no comment by that number on it). Nothing changed. List the threads and use an id from there.",
+  "next_step": {
+    "verb": "comments",
+    "args": [],
+    "why": "That thread or comment isn't in this doc; list the threads and use an id from there."
+  },
+  "rule": "K-ANN-1",
+  "verbs": ["reply", "resolve", "resolve --reopen", "comment --delete", "reanchor", "comments --log"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

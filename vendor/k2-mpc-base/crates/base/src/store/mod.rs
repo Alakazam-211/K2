@@ -20,10 +20,12 @@
 //! The host chooses the file path and calls [`DocStore::open_with_retry`] across its own
 //! process hand-offs (redb holds an exclusive lock while open).
 
+mod annot;
 mod blob;
 mod blob_refs;
+mod blob_struct;
 mod delete;
-mod enc;
+pub(crate) mod enc;
 mod history;
 mod promote;
 mod purge;
@@ -31,9 +33,11 @@ mod rewrite;
 mod scan;
 mod structured;
 
+pub(crate) use annot::{AnnotFail, Committed, Observed};
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
 pub(crate) use blob_refs::BlobRefScan;
+pub(crate) use blob_struct::{StructCommitted, StructPut};
 pub use history::Redaction;
 pub(crate) use history::{
     window_plan, Carry, ClockSpan, HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot,
@@ -218,6 +222,30 @@ pub(super) const ADDITIVE_TABLES: &[Additive] = &[
         rows: DocRows::Named(blob_refs::DOC_BLOB_REFS),
         on_orphan: Some(blob_refs::release_orphan),
     },
+    Additive {
+        rows: DocRows::Pair(blob_struct::BLOB_STRUCT_KEYS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(annot::ANNOT_THREADS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Clock(annot::ANNOT_COMMENTS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(annot::ANNOT_LOG),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Clock(annot::ANNOT_THREAD_LOG),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(annot::ANNOT_CHANGED),
+        on_orphan: None,
+    },
 ];
 
 /// Remove the rows of docs that have been deleted from each of `tables`. Run by **every** open,
@@ -345,12 +373,25 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Slot(blob::BLOB_SYNC), Erase::Blob),
     (DocRows::Pair(blob::BLOB_APPROVALS), Erase::Blob),
     (DocRows::Named(blob_refs::DOC_BLOB_REFS), Erase::Blob),
+    (DocRows::Pair(blob_struct::BLOB_STRUCT_KEYS), Erase::Range),
+    (DocRows::Pair(annot::ANNOT_THREADS), Erase::Range),
+    (DocRows::Clock(annot::ANNOT_COMMENTS), Erase::Range),
+    (DocRows::Pair(annot::ANNOT_LOG), Erase::Range),
+    (DocRows::Clock(annot::ANNOT_THREAD_LOG), Erase::Range),
+    (DocRows::Pair(annot::ANNOT_CHANGED), Erase::Range),
 ];
 
 /// The tables not keyed by doc id: `meta` (the store's own), `paths` (key → doc: a delete
 /// removes the doc's entry by its key), `host` (opaque to the kit), and the blob spaces and
 /// blobs (per space). A rewrite copies them; a doc delete leaves them (but `paths`) alone.
-pub(super) const SHARED_TABLES: &[&str] = &["meta", "paths", "host", "blob_spaces", "blobs"];
+pub(super) const SHARED_TABLES: &[&str] = &[
+    "meta",
+    "paths",
+    "host",
+    "blob_spaces",
+    "blobs",
+    "blob_struct",
+];
 
 impl DocRows {
     pub(super) fn name(&self) -> &str {

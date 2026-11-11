@@ -3,8 +3,5 @@
 # trimmed. A changed line, or another line in the same file, is not covered. Cleared whenever
 # tools/public-text-base moves: an entry matching no added line blocks the tag.
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
-tools/undo/expect.sh: walk) if [ "$_xm" = iv-redo-retries-skipped ]; then _xmr="$_xmr|panic"; fi; expect "enum@$_xm" VIOLATION "$_xmr" ;;
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
-tools/undo/oracle-panics.sh: expect enum@iv-redo-retries-skipped VIOLATION 'U17|panic'
 # names the spec-undo test that checks the enumerator ends a run at its own assertion-stop pseudo-rule; not an engine defect
-tools/tests/full.sh: an_oracle_panic_ends_every_enumerator_mode_as_a_violation d1_mutants_are_caught_by_the_traces"

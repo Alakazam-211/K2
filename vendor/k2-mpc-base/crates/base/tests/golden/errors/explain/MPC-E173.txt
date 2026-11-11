@@ -3,8 +3,8 @@ exit:     1
 message:  the cursor is for another version, doc or call; nothing was read
 next:     A cursor continues one read of one doc at one version with the same arguments. The doc changed since (or the cursor is from another doc, or the arguments differ), so nothing was read. Read again without --cursor and page on with the cursor that read returns.
 rule:     K-READ-2
-verbs:    a pack's own verbs
-status:   reserved for read budgets and cursors (K-READ-2); nothing returns it yet
+verbs:    a pack's own verbs; a structure index's verbs (named by the file type's pack) and node claims
+status:   live
 --- json
 {
   "id": "MPC-E173",
@@ -14,8 +14,8 @@ status:   reserved for read budgets and cursors (K-READ-2); nothing returns it y
   "message": "the cursor is for another version, doc or call; nothing was read",
   "next": "A cursor continues one read of one doc at one version with the same arguments. The doc changed since (or the cursor is from another doc, or the arguments differ), so nothing was read. Read again without --cursor and page on with the cursor that read returns.",
   "rule": "K-READ-2",
-  "verbs": ["@pack"],
+  "verbs": ["@pack", "@index"],
   "returned_by": [],
-  "status": "reserved",
-  "since_or_until": "read budgets and cursors (K-READ-2)"
+  "status": "live",
+  "since_or_until": null
 }

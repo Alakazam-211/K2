@@ -1,0 +1,27 @@
+MPC-E117 forbidden_comment_author (sessions and edits)
+exit:     3
+message:  refused: only its author, the person it was made for, or an owner can delete comment {comment} of {thread}
+next:     Only a comment's author, the person it was made for, or an owner can delete it. Don't retry: reply on the thread instead, or ask one of them. Nothing changed.
+step:     reply; args: {thread}; why: Only the comment's author, the person it was made for or an owner can delete it; reply on the thread instead, or ask one of them.
+rule:     K-ANN-6
+verbs:    comment --delete
+status:   live
+--- json
+{
+  "id": "MPC-E117",
+  "name": "forbidden_comment_author",
+  "area": "sessions and edits",
+  "exit": 3,
+  "message": "refused: only its author, the person it was made for, or an owner can delete comment {comment} of {thread}",
+  "next": "Only a comment's author, the person it was made for, or an owner can delete it. Don't retry: reply on the thread instead, or ask one of them. Nothing changed.",
+  "next_step": {
+    "verb": "reply",
+    "args": ["{thread}"],
+    "why": "Only the comment's author, the person it was made for or an owner can delete it; reply on the thread instead, or ask one of them."
+  },
+  "rule": "K-ANN-6",
+  "verbs": ["comment --delete"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

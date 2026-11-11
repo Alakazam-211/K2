@@ -136,6 +136,10 @@ pub enum ClaimSpan {
     /// Elements of a MovableList root by key, in key order, at most [`CLAIM_KEYS_MAX`]
     /// ([`super::Session::claim_elems`]).
     Elems { root: String, keys: Vec<Key> },
+    /// Tier 0: nodes of a blob doc's structure index by key, in key order, at most
+    /// [`CLAIM_KEYS_MAX`] ([`super::BlobSession::claim_nodes`]). Keys carry across versions;
+    /// the claim never grows.
+    Nodes { keys: Vec<crate::index::NodeKey> },
 }
 
 /// The most elements one claim names ([`ClaimSpan::Elems`]).
@@ -149,6 +153,18 @@ pub(crate) fn elems_text(root: &str, keys: &[Key]) -> String {
         format!("{root} {}", shown.join(", "))
     } else {
         format!("{root} {} (+{more})", shown.join(", "))
+    }
+}
+
+/// `node @n:1`, `nodes @n:1, @n:2`, `nodes @n:1, @n:2 (+3)`.
+pub(crate) fn nodes_text(keys: &[crate::index::NodeKey]) -> String {
+    let shown: Vec<&str> = keys.iter().take(2).map(|k| k.as_str()).collect();
+    let more = keys.len().saturating_sub(2);
+    let w = if keys.len() == 1 { "node" } else { "nodes" };
+    if more == 0 {
+        format!("{w} {}", shown.join(", "))
+    } else {
+        format!("{w} {} (+{more})", shown.join(", "))
     }
 }
 
@@ -184,6 +200,7 @@ impl fmt::Display for ClaimSpan {
                 }
             }
             ClaimSpan::Elems { root, keys } => f.write_str(&elems_text(root, keys)),
+            ClaimSpan::Nodes { keys } => f.write_str(&nodes_text(keys)),
         }
     }
 }
@@ -1143,7 +1160,7 @@ pub(crate) struct GridSpan {
 impl GridSpan {
     pub fn of(span: &ClaimSpan) -> Option<Self> {
         Some(match span {
-            ClaimSpan::Lines(_) | ClaimSpan::Elems { .. } => return None,
+            ClaimSpan::Lines(_) | ClaimSpan::Elems { .. } | ClaimSpan::Nodes { .. } => return None,
             ClaimSpan::Rows { first, last } => GridSpan {
                 rows: Some((first.clone(), last.clone())),
                 cols: None,

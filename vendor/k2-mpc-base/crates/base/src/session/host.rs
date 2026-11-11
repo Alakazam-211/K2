@@ -10,7 +10,7 @@ use crate::store::{DocKey, Seq};
 ///
 /// `#[non_exhaustive]`: build it with the constructors ([`Rights::none`],
 /// [`Rights::read_only`], [`Rights::editor`], [`Rights::full`]) and adjust with
-/// [`Rights::with_history`].
+/// [`Rights::with_history`], [`Rights::with_owner`] and [`Rights::with_comment`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct Rights {
@@ -26,6 +26,11 @@ pub struct Rights {
     /// breaking someone else's tier-0 lease, purge and participant erasure. **Never implied** by any other right, not even
     /// [`Rights::full`]: grant it with [`Rights::with_owner`]. Meaningless without `read`.
     pub owner: bool,
+    /// Comment on the doc: start, reply to, resolve and re-anchor comment threads
+    /// (`docs/SESSIONS.md`, "Annotations"). **Implied by edit** (a product ruling): with
+    /// `edit` it is never consulted. A read-only share comments only when the host grants it
+    /// ([`Rights::with_comment`]). Meaningless without `read`.
+    pub comment: bool,
 }
 
 impl Rights {
@@ -36,6 +41,7 @@ impl Rights {
             edit: false,
             history: false,
             owner: false,
+            comment: false,
         }
     }
 
@@ -63,6 +69,7 @@ impl Rights {
             edit: true,
             history: true,
             owner: false,
+            comment: false,
         }
     }
 
@@ -74,6 +81,16 @@ impl Rights {
     /// The same rights with `owner` set or cleared.
     pub const fn with_owner(self, owner: bool) -> Self {
         Self { owner, ..self }
+    }
+
+    /// The same rights with `comment` set or cleared (edit implies it either way).
+    pub const fn with_comment(self, comment: bool) -> Self {
+        Self { comment, ..self }
+    }
+
+    /// Whether these rights may comment: `comment`, or `edit`, which implies it.
+    pub const fn may_comment(&self) -> bool {
+        self.read && (self.comment || self.edit)
     }
 
     /// Same as [`Rights::none`] (kept from before amendment 1).
@@ -127,8 +144,11 @@ pub enum Need {
     /// `revert <change>`: only the change's author, the person it was made for
     /// ([`super::Participant::on_behalf_of`]), or an owner ([`Rights::owner`]) may revert it.
     /// The host can say so: "only the author, the person it was made for, or an owner can
-    /// revert this".
+    /// revert this". Also deleting a comment: its author, the person it was for, or an owner.
     AuthorOrOwner,
+    /// [`Rights::comment`] (implied by [`Rights::edit`]): starting, replying to, resolving or
+    /// re-anchoring a comment thread.
+    Comment,
 }
 
 /// The call that was refused.
@@ -175,6 +195,8 @@ pub enum Action {
     Blame,
     /// `rows drop-deleted` (owner only, K-CSV-7).
     DropDeleted,
+    /// Comment threads: start, reply, resolve, reopen, delete, re-anchor, list.
+    Annotate,
 }
 
 /// What a purge targeted, as [`AuditEvent::Purged`] records it: metadata only (never the
@@ -206,6 +228,14 @@ pub enum PurgedScope {
     BlobVersions {
         version: Option<crate::store::VersionId>,
     },
+    /// Annotations ([`crate::annot::AnnotPurge`]): one comment (`thread` and `comment`), one
+    /// thread (`thread`), or every thread (neither).
+    Annotations {
+        thread: Option<crate::annot::ThreadId>,
+        comment: Option<u32>,
+    },
+    /// Annotations holding a text the owner named, of `bytes` bytes.
+    AnnotationText { bytes: usize },
 }
 
 /// How a tier-0 lease ended ([`AuditEvent::LeaseEnded`]).
@@ -369,6 +399,50 @@ pub enum AuditEvent {
     BlobMerged {
         key: DocKey,
         version: crate::store::VersionId,
+    },
+    /// Tier 0: a version was recorded with a pack that indexes it and no row exists for its
+    /// bytes yet: queue a job ([`crate::session::BlobSession::index_job`]; quick, the session
+    /// is locked).
+    IndexWanted {
+        key: DocKey,
+        version: crate::store::VersionId,
+    },
+    /// Tier 0: an index job recorded version `version`'s structure, `nodes` nodes.
+    IndexReady {
+        key: DocKey,
+        version: crate::store::VersionId,
+        nodes: u32,
+    },
+    /// Tier 0: an index job recorded that version `version` has no index (a cap, unreadable);
+    /// [`crate::session::BlobSession::index_status`] says why.
+    IndexNotIndexed {
+        key: DocKey,
+        version: crate::store::VersionId,
+    },
+    /// A comment-thread op (`docs/SESSIONS.md`, "Annotations"): `pid` did `op` on `thread`
+    /// (comment `comment`), history row `seq`. `mentions` are the pids a new comment names:
+    /// the host notifies them, reading the body itself through
+    /// [`crate::session::BlobSession::thread`]. `anchor_key`: the node the thread is pinned to.
+    /// Never carries a body.
+    Annotation {
+        key: DocKey,
+        seq: u64,
+        thread: crate::annot::ThreadId,
+        comment: Option<u32>,
+        op: crate::annot::AnnotOp,
+        pid: String,
+        on_behalf_of: Option<String>,
+        mentions: Vec<String>,
+        anchor_key: Option<crate::index::NodeKey>,
+    },
+    /// Recording version `version`'s index changed a thread's anchor state (`was`: `None` the
+    /// first time one was recorded). The anchor still points where it did.
+    AnchorState {
+        key: DocKey,
+        thread: crate::annot::ThreadId,
+        version: crate::store::VersionId,
+        was: Option<crate::anchor::AnchorState>,
+        now: crate::anchor::AnchorState,
     },
     /// [`crate::session::SessionManager::recheck_rights`]: re-checking this loaded doc
     /// failed (it was skipped; the others were re-checked). `error` is the session error's

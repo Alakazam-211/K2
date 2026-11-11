@@ -138,7 +138,7 @@ pub fn assert_store_not_in_real_home(path: &Path) {
 /// a home that holds `TMPDIR` itself (a daemon harness points TMPDIR into
 /// its scratch HOME).
 pub fn home_is_isolated(home: &Path, real_home: Option<&Path>, temp_dirs: &[PathBuf]) -> bool {
-    let canon = |p: &Path| dunce::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let canon = canonical_even_if_missing;
     let home = canon(home);
     if real_home.is_some_and(|r| home == canon(r)) {
         return false;
@@ -147,6 +147,27 @@ pub fn home_is_isolated(home: &Path, real_home: Option<&Path>, temp_dirs: &[Path
         let t = canon(t);
         home.starts_with(&t) || t.starts_with(&home)
     }) || is_stub_home(&home)
+}
+
+/// `canonicalize`, but for a path that may not exist yet: the nearest
+/// existing ancestor is resolved and the rest is joined back on. A temp
+/// root on macOS is under `/var`, a link to `/private/var`, so a fresh
+/// `<temp>/k2-test-home` must resolve through the same link as `<temp>`.
+fn canonical_even_if_missing(p: &Path) -> PathBuf {
+    let mut base = p;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(c) = dunce::canonicalize(base) {
+            return rest.iter().rev().fold(c, |acc, name| acc.join(name));
+        }
+        match (base.parent(), base.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                base = parent;
+            }
+            _ => return p.to_path_buf(),
+        }
+    }
 }
 
 /// A test's stub home outside the temp roots ([`crate::test_env::StubHome`],
@@ -242,6 +263,27 @@ mod tests {
         assert!(home_is_isolated(&stub, Some(&real), &roots), "a test's stub home");
         assert!(!home_is_isolated(Path::new("/var/tmp/k2-v2spawn-home-oops"), Some(&real), &roots), "not a stub name");
         assert!(!home_is_isolated(Path::new("/home/k2-x-home-0123456789abcdef0123456789abcdef"), Some(Path::new("/home/k2-x-home-0123456789abcdef0123456789abcdef")), &roots), "the real home, whatever its name");
+    }
+
+    /// macOS's temp root is `/var/...`, a link to `/private/var/...`. A home
+    /// under the root that doesn't exist yet must resolve through the same
+    /// link. Built with a real link so Linux checks it too.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_home_under_a_linked_temp_root_is_isolated() {
+        let base = std::env::temp_dir().join(format!("k2-iso-link-{}-{}", std::process::id(), line!()));
+        let real_root = base.join("real");
+        let linked_root = base.join("linked");
+        std::fs::create_dir_all(&real_root).expect("real root");
+        std::os::unix::fs::symlink(&real_root, &linked_root).expect("link");
+        let real = PathBuf::from("/Users/someone");
+        let home = linked_root.join("k2-test-home").join("deeper");
+        assert!(!home.exists(), "the home must not exist yet");
+        let isolated = home_is_isolated(&home, Some(&real), &[linked_root.clone()]);
+        let isolated_by_real_path = home_is_isolated(&real_root.join("k2-test-home"), Some(&real), &[linked_root.clone()]);
+        std::fs::remove_dir_all(&base).expect("clean up");
+        assert!(isolated, "a missing home under a linked temp root");
+        assert!(isolated_by_real_path, "the same home named by its real path");
     }
 
     #[test]

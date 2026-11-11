@@ -161,6 +161,14 @@ export function visibleRows(doc: FirstRunDoc | null | undefined): FirstRunRow[] 
   return doc.rows
 }
 
+/** Whether the hidden list sits as its "Get started" bubble: the switch is
+ *  on, the person hid it, it isn't finished, and a row is left to show. The
+ *  bubble isn't the list, so `isSetupChecklistShowing` stays false for it
+ *  (the sidebar keeps its normal range). */
+export function showsCollapsed(doc: FirstRunDoc | null | undefined): boolean {
+  return !!doc && doc.enabled && doc.hidden && !doc.finished && doc.rows.length > 0
+}
+
 function checklistShowingIn(entries: Record<string, FirstRunEntry>): boolean {
   return visibleRows(entries[primaryScope().id]?.doc) !== null
 }

@@ -30,6 +30,7 @@ import {
   isSetupChecklistShowing,
   parseFirstRunDoc,
   resetFirstRunForTests,
+  showsCollapsed,
   useFirstRunStore,
   useSetupChecklistShowing,
 } from '@/stores/first-run'
@@ -81,6 +82,23 @@ describe('setup checklist showing', () => {
       expect(isSetupChecklistShowing()).toBe(false)
       expect(result.current).toBe(false)
     }
+  })
+})
+
+describe("the hidden list's Get started bubble", () => {
+  it('counts as dismissed: no floor, the collapse button is back and ⌘B collapses', () => {
+    useSidebarStore.setState({ width: 200 })
+    const { result } = renderHook(() => useSidebarDisplayWidth())
+    showChecklist()
+    expect(result.current).toBe(SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH)
+    hideChecklist()
+    expect(showsCollapsed(useFirstRunStore.getState().entries[primaryScope().id]?.doc)).toBe(true)
+    expect(isSetupChecklistShowing()).toBe(false)
+    expect(result.current).toBe(200)
+    render(<SidebarCollapseButton />)
+    expect(screen.queryByRole('button', { name: 'Collapse workspaces sidebar' })).not.toBeNull()
+    useSidebarStore.getState().toggle()
+    expect(useSidebarStore.getState().isCollapsed).toBe(true)
   })
 })
 

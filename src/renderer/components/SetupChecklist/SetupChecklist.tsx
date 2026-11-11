@@ -6,8 +6,11 @@
 //
 // Shown in the Agents sidebar and the Home sidebar; the collapsed rails get
 // `SetupChecklistRailButton`, a count of the rows left that opens the nav.
-// Nothing renders while the server's switch is off, or once the person hid
-// or finished it.
+// Nothing renders while the server's switch is off, or once it's finished.
+// Hidden, it sits as a small "Get started" bubble in the same place; the
+// bubble brings the list back (`POST first-run/show`, as `k2 setup show`).
+// The bubble isn't the list: the sidebar's floor, its collapse button and
+// the ⌘B guard (`isSetupChecklistShowing`) only hold for the full list.
 //
 // Look (K2 Design): the nav's own section language. The header is the
 // shared `NavSectionLabel` with the count left and a quiet Hide; a thin
@@ -37,7 +40,7 @@
 // with the list open, "You're set up" shows for a moment, then nothing.
 
 import { useEffect, useRef, useState } from 'react'
-import { Tag, cx } from '@/components/ui'
+import { Button, Tag, cx } from '@/components/ui'
 import { ChecklistIcon } from '@/components/icons/K2Icons'
 import { NavSectionLabel } from '@/components/Sidebar/NavSection'
 import { primaryScope } from '@/kessel/server-scope'
@@ -45,6 +48,7 @@ import { openFirstRunTarget } from '@/lib/first-run-openers'
 import { useSidebarStore } from '@/stores/sidebar'
 import {
   rowsLeft,
+  showsCollapsed,
   useFirstRunStore,
   visibleRows,
   watchFirstRun,
@@ -86,13 +90,23 @@ export const ALL_DONE_TEXT = 'All done'
 /** A read or a gesture failed; the last list stays. */
 export const CHECKLIST_ERROR_TEXT = 'Couldn’t update the checklist.'
 
+/** The hidden list's bubble: its label, and its accessible name. */
+export const GET_STARTED_TEXT = 'Get started'
+export const GET_STARTED_LABEL = 'Get started: show the setup list'
+
 /** How long "You're set up" stays before the list goes. */
 const SET_UP_MS = 4000
 
 /** The window's server's checklist rows, watched while mounted (null when
  *  nothing should show). `finished`: the daemon marked the list finished
- *  (with the switch on and the list not hidden). */
-export function useSetupChecklistRows(): { rows: FirstRunRow[] | null; error: string | null; finished: boolean } {
+ *  (with the switch on and the list not hidden). `collapsed`: the person
+ *  hid it with steps left, so it sits as the "Get started" bubble. */
+export function useSetupChecklistRows(): {
+  rows: FirstRunRow[] | null
+  error: string | null
+  finished: boolean
+  collapsed: boolean
+} {
   const scope = primaryScope()
   useEffect(() => watchFirstRun(scope), [scope])
   const entry = useFirstRunStore((s) => s.entries[scope.id])
@@ -101,6 +115,7 @@ export function useSetupChecklistRows(): { rows: FirstRunRow[] | null; error: st
     rows: visibleRows(doc),
     error: entry?.error ?? null,
     finished: !!doc && doc.enabled && !doc.hidden && doc.finished,
+    collapsed: showsCollapsed(doc),
   }
 }
 
@@ -269,7 +284,7 @@ function useSetUpMoment(rows: FirstRunRow[] | null, finished: boolean): boolean 
 
 /** The checklist, for a sidebar. Renders nothing when there's nothing to do. */
 export function SetupChecklist({ className }: { className?: string }): React.JSX.Element | null {
-  const { rows, error, finished } = useSetupChecklistRows()
+  const { rows, error, finished, collapsed } = useSetupChecklistRows()
   const setUpMoment = useSetUpMoment(rows, finished)
   if (setUpMoment) {
     return (
@@ -284,6 +299,7 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
       </section>
     )
   }
+  if (collapsed) return <GetStartedBubble error={error} className={className} />
   if (!rows) return null
   const left = rowsLeft(rows)
   const current = currentRowId(rows)
@@ -342,6 +358,37 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
           <ChecklistRow key={row.id} row={row} current={row.id === current} />
         ))}
       </ul>
+    </section>
+  )
+}
+
+/** The hidden list, as a small bubble where the list sits. Clicking it
+ *  brings the list back (`POST first-run/show`); a failed show keeps the
+ *  bubble and says so quietly. Minimal styling on the shared Button and
+ *  theme tokens; K2 Design owns its look. */
+function GetStartedBubble({ error, className }: { error: string | null; className?: string }): React.JSX.Element {
+  return (
+    <section
+      data-setup-checklist-collapsed=""
+      className={cx('flex flex-col gap-1 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0', className)}
+    >
+      <Button
+        variant="quiet"
+        data-testid="setup-get-started"
+        aria-label={GET_STARTED_LABEL}
+        className="self-start flex-shrink-0 inline-flex items-center gap-1.5 rounded-[var(--radius-pill)]"
+        onClick={() => void useFirstRunStore.getState().show()}
+      >
+        <span aria-hidden="true" className="flex text-[var(--color-accent)]">
+          <ChecklistIcon size={12} />
+        </span>
+        {GET_STARTED_TEXT}
+      </Button>
+      {error && (
+        <p role="alert" className="m-0 type-hint text-[var(--color-text-secondary)]" title={error} data-testid="setup-error">
+          {CHECKLIST_ERROR_TEXT}
+        </p>
+      )}
     </section>
   )
 }

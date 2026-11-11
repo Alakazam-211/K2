@@ -2,7 +2,8 @@
 //
 // Setup checklist component: draws the daemon's rows with the contract's
 // copy, opens each row's step, skips and hides through the daemon, and
-// draws nothing while the switch is off, or once hidden or finished.
+// draws nothing while the switch is off or once finished, and once hidden
+// sits as a "Get started" bubble that brings the list back.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -49,6 +50,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import {
   ALL_DONE_TEXT,
   CHECKLIST_ERROR_TEXT,
+  GET_STARTED_LABEL,
+  GET_STARTED_TEXT,
   NEEDS_K5_NOTE,
   NEEDS_TUNNEL_NOTE,
   SETUP_CHECKLIST_COPY,
@@ -56,7 +59,7 @@ import {
   SetupChecklist,
   SetupChecklistRailButton,
 } from './SetupChecklist'
-import { resetFirstRunForTests } from '@/stores/first-run'
+import { isSetupChecklistShowing, resetFirstRunForTests } from '@/stores/first-run'
 import { useSidebarStore } from '@/stores/sidebar'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -88,6 +91,10 @@ async function settled(): Promise<void> {
 
 function checklist(): HTMLElement | null {
   return document.querySelector('[data-setup-checklist]')
+}
+
+function bubble(): HTMLElement | null {
+  return screen.queryByTestId('setup-get-started')
 }
 
 beforeEach(() => {
@@ -202,8 +209,10 @@ describe('SetupChecklist', () => {
 
   it.each([
     ['off', { enabled: false }],
-    ['hidden', { hidden: true }],
+    ['off and hidden', { enabled: false, hidden: true }],
     ['finished', { finished: true }],
+    ['hidden and finished', { hidden: true, finished: true }],
+    ['hidden with no rows', { hidden: true, rows: [] }],
   ])('draws nothing when %s, in the sidebar or the rail', async (_name, over) => {
     h.daemonCliGet.mockResolvedValue(body(over))
     render(
@@ -215,7 +224,65 @@ describe('SetupChecklist', () => {
     await settled()
     expect(h.daemonCliGet).toHaveBeenCalledWith('first-run/status')
     expect(checklist()).toBeNull()
+    expect(bubble()).toBeNull()
     expect(screen.queryByTestId('setup-rail')).toBeNull()
+  })
+
+  it('draws the list, not the bubble, while it is on and not hidden or finished', async () => {
+    render(<SetupChecklist />)
+    expect(await screen.findByTestId('setup-row-tunnel')).toBeTruthy()
+    expect(bubble()).toBeNull()
+    expect(isSetupChecklistShowing()).toBe(true)
+  })
+
+  it('hidden with steps left: the Get started bubble, not the list, and the sidebar keeps its normal range', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    render(
+      <>
+        <SetupChecklist />
+        <SetupChecklistRailButton />
+      </>,
+    )
+    const btn = await screen.findByTestId('setup-get-started')
+    expect(btn.textContent).toBe(GET_STARTED_TEXT)
+    expect(screen.getByRole('button', { name: GET_STARTED_LABEL })).toBe(btn)
+    expect(btn.querySelector('[data-k2-icon="checklist"]')).toBeTruthy()
+    expect(checklist()).toBeNull()
+    expect(screen.queryByTestId('setup-rail')).toBeNull()
+    // The bubble isn't the list: no sidebar floor, collapse button or ⌘B guard.
+    expect(isSetupChecklistShowing()).toBe(false)
+  })
+
+  it('the bubble POSTs show and the full list comes back', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    h.daemonCliPost.mockResolvedValue(body())
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-get-started'))
+    expect(await screen.findByTestId('setup-row-tunnel')).toBeTruthy()
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/show', {})
+    expect(bubble()).toBeNull()
+    expect(isSetupChecklistShowing()).toBe(true)
+  })
+
+  it('a failed show keeps the bubble and says so quietly', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    h.daemonCliPost.mockRejectedValue(new Error('boom'))
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-get-started'))
+    expect((await screen.findByRole('alert')).textContent).toBe(CHECKLIST_ERROR_TEXT)
+    expect(bubble()).toBeTruthy()
+    expect(checklist()).toBeNull()
+  })
+
+  it('the bubble goes away once every step is done', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-get-started')
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true, finished: true }))
+    act(() => h.handlers.get('first_run_changed')?.forEach((fn) => fn()))
+    await waitFor(() => expect(bubble()).toBeNull())
+    expect(checklist()).toBeNull()
+    expect(document.querySelector('[data-setup-finished]')).toBeNull()
   })
 
   it('draws nothing when the server has no checklist route', async () => {
@@ -237,12 +304,14 @@ describe('SetupChecklist', () => {
     expect(screen.getByTestId('setup-left').textContent).toBe('3 left')
   })
 
-  it('Hide POSTs and the checklist goes away', async () => {
+  it('Hide POSTs and the checklist folds into the Get started bubble', async () => {
     h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
     render(<SetupChecklist />)
     fireEvent.click(await screen.findByTestId('setup-hide'))
     await waitFor(() => expect(checklist()).toBeNull())
     expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/hide', {})
+    expect(bubble()).toBeTruthy()
+    expect(isSetupChecklistShowing()).toBe(false)
   })
 
   it('shows again when first_run_changed says so', async () => {
@@ -253,6 +322,7 @@ describe('SetupChecklist', () => {
     h.daemonCliGet.mockResolvedValue(body())
     act(() => h.handlers.get('first_run_changed')?.forEach((fn) => fn()))
     expect(await screen.findByTestId('setup-row-tunnel')).toBeTruthy()
+    expect(bubble()).toBeNull()
   })
 
   it('the K5 switch: chief_of_staff in first_agent\'s place, with its copy and the needs_k5 note', async () => {

@@ -128,6 +128,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/wall",
     "/cli/compute/prewarm",
     "/cli/compute/queue",
+    // prd-compute-blacksmith-class-v1 R1: `k2 compute rightsize` (a reader).
+    crate::compute_rightsize::PATH,
     "/cli/compute/run",
     "/cli/compute/usage",
 ];
@@ -695,6 +697,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         crate::compute_git::REVOKE => crate::compute_git::revoke(&who, body),
         crate::compute_git::SETUP => crate::compute_git::setup(&who, body),
         "/cli/compute/run" => run(&who, body),
+        // R1 (prd-compute-blacksmith-class-v1 §4.4.2): what a command used.
+        crate::compute_rightsize::PATH => crate::compute_rightsize::handle(&who, params),
         // `k2 compute prewarm` (CE-18): tools onto matching granted nodes.
         "/cli/compute/prewarm" => prewarm(&who, body),
         "/cli/compute/jobs" => views::jobs_list(&who, params),
@@ -1765,6 +1769,18 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Toolchains / system packages the job needs (compute polish v1).
     let needs = needs_from(&v)?;
     let (cpu_millis, mem_bytes) = job_resources(&v)?;
+    // `--mem auto[:G]` (prd-compute-blacksmith-class-v1 R1, §4.4.3): the
+    // number comes from this command's (or CI check's) finished runs, at
+    // least 1.5 × the peak of its last `mem_cap` end; the fallback when it
+    // has none. Resolved here, so the plan carries a plain number.
+    let mem_auto = match crate::compute_rightsize::mem_auto_from(v)? {
+        Some(fallback) => {
+            let key = crate::compute_rightsize::auto_key(v, &argv);
+            Some(crate::compute_rightsize::resolve_auto(&ws.id, &key, fallback)?)
+        }
+        None => None,
+    };
+    let mem_bytes = mem_bytes.or(mem_auto.as_ref().map(|(b, _)| *b));
     // `--mem` is required (Rosson 10-28): without it the job reserves the
     // default (clamped to a smaller node below) and a notice says to set
     // it. The node stops a job that goes over (`failed/mem_cap`), and only
@@ -1873,7 +1889,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         distro: distro_from(v)?,
         only,
     };
-    let want = crate::compute_place::Want {
+    let mut want = crate::compute_place::Want {
         ws_id: ws.id.clone(),
         admin: who.is_admin(),
         auto: any,
@@ -1895,6 +1911,21 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         gpu,
         gpu_mem,
     };
+    // `--mem auto` never asks more than the largest node this job could
+    // run on allows per job (R1: capped at the node's cap; the job still
+    // never runs over its number).
+    let mem_auto = match mem_auto {
+        Some((b, from)) => match crate::compute_place::largest_job_mem(&want, compute::now()).filter(|cap| *cap < b) {
+            Some(cap) => {
+                want.mem_bytes = Some(cap);
+                Some((cap, format!("{from}; capped at the largest node's {} per job", crate::compute_place::mem_words(cap))))
+            }
+            None => Some((b, from)),
+        },
+        None => None,
+    };
+    let mem_bytes = mem_auto.as_ref().map(|(b, _)| *b).or(mem_bytes);
+    let want = want;
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = avoid_notes;
     let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
@@ -1904,6 +1935,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // What `.k2/compute.toml` and `--preset` set, and from where (CE-3;
     // `run` always writes it).
     let mut effective: Option<serde_json::Value> = v.get("effective").filter(|e| e.is_object()).cloned();
+    // R1: `effective.mem` says what `--mem auto` resolved to and why
+    // (`{value: "19G", from: "auto (p95 15.2G of 20 runs)"}`).
+    if let Some((b, from)) = mem_auto.as_ref() {
+        let e = effective.get_or_insert_with(|| serde_json::json!({}));
+        let asked = e.get("mem").and_then(|m| m.get("from")).and_then(|f| f.as_str()).unwrap_or("flag").to_string();
+        e["mem"] = serde_json::json!({"value": crate::compute_place::mem_words(*b), "bytes": b, "from": from, "asked": asked});
+    }
     // The default `--mem` never asks more than a small node has, nor more
     // than this server's share on a shared node allows per job.
     let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
@@ -2205,6 +2243,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 "no --mem: this job reserves {gb:.0} GB and is stopped if it uses more. Set --mem to what it needs (e.g. --mem 24G for a cargo build of K2, --mem 2G for a small script)"
             ),
         ));
+    }
+    // R1: what `--mem auto` became, as a warning line (not a coded notice).
+    if let Some((b, from)) = mem_auto.as_ref() {
+        warnings.push(format!("--mem auto: {} — {from}", crate::compute_place::mem_words(*b)));
     }
     // 0.46.8 (advisory): no --cpus reserves the node's CPUs ÷ its slots,
     // used or not; the next job waits for unreserved CPUs even while they

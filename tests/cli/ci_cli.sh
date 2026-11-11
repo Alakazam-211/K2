@@ -127,6 +127,14 @@ class H(BaseHTTPRequestHandler):
                         {"name": "sync::fresh", "classname": "k2-core", "kind": "failure", "message": "bang", "mark": "new"}]},
                     "testHistory": {"state": "done", "flaky": 1, "quarantined": 0, "new": 1, "retried": 0, "note": None}}})
             return self.reply({"id": q.get("job"), "result": {}})
+        if path == "/cli/compute/rightsize":
+            g = 1 << 30
+            return self.reply({"workspace": "proj", "key": {"kind": "check", "value": q.get("check"), "tag": "ci:" + str(q.get("check"))} if q.get("check") else {"kind": "argv", "value": json.loads(q.get("argv") or "[]")},
+                               "days": int(q.get("days") or 14), "runs": 6, "finished": 5, "confidence": "medium",
+                               "mem": {"samples": 5, "p50Bytes": 9 * g, "p95Bytes": 10 * g, "maxBytes": 10 * g, "memCapEnds": 1, "lastMemCapPeakBytes": 16 * g,
+                                       "floorBytes": 24 * g, "askedBytes": 16 * g, "suggestBytes": 24 * g, "suggest": "--mem 24G",
+                                       "auto": {"bytes": 24 * g, "value": "24G", "from": "auto (p95 10G of 5 runs; at least 1.5 × the 16G peak of a mem_cap end)"}},
+                               "cpus": {"samples": 5, "avgUsed": 3.9, "p95Used": 4.0, "asked": 4.0, "pinnedRuns": 5, "suggest": 8.0, "why": "speed: it was held at its --cpus 4 in 5 of 5 runs; a bigger --cpus may finish sooner"}})
         if path == "/cli/compute/jobs/logs":
             if q.get("cursor") == "0":
                 return self.reply({"cursor": 1, "chunks": [{"data": base64.b64encode(b"hello from unit\n").decode()}]})
@@ -150,6 +158,12 @@ class H(BaseHTTPRequestHandler):
                                "tips": [{"branch": "main", "sha": SHA}], "skippedCurrent": bool(v.get("skipCurrent"))})
         if path == "/cli/ci/init":
             return self.reply({"workspace": "proj", "path": work + "/proj/.k2/ci.toml", "config": "version = 1\n", "placeholder": "argv" not in v, "ignored": False})
+        if path == "/cli/compute/run":
+            if v.get("memAuto") and not v.get("memAutoFallbackBytes"):
+                return self.reply({"error": {"code": "mem_auto_no_history", "hint": "--mem auto: no finished run yet; --mem auto:8G"}}, 400)
+            return self.reply({"plan": True, "node": "k2n7", "online": True, "startsNow": True,
+                               "warnings": ["--mem auto: 8G — auto (no history yet: the fallback 8G)"],
+                               "effective": {"source": None, "mem": {"value": "8G", "bytes": 8 << 30, "from": "auto (no history yet: the fallback 8G)", "asked": "flag"}}})
         if path == "/cli/ci/freeze":
             if v.get("off"):
                 return self.reply({"workspace": "proj", "freeze": None})
@@ -334,6 +348,42 @@ out="$(cat "$WORK/out")"
 has "failures: the flaky mark" "$out" "[flaky] k2-core sync::reconnect — boom"
 has "failures: the new mark" "$out" "[new] k2-core sync::fresh — bang"
 has "failures: the history line" "$out" "history: 1 flaky, 0 quarantined, 1 new (k2 ci tests)"
+
+echo "== rightsize and --mem auto (compute Blacksmith class R1) =="
+chelp="$("$K2" compute --help)"
+has "help: rightsize" "$chelp" "k2 compute rightsize [--check C | --tag T | -- <command…>] [--days 14] [--json]"
+has "help: --mem auto" "$chelp" "--mem auto[:8G]  K2 sizes it from this command's last 20"
+has "study compute: RIGHTSIZE" "$("$K2" study compute)" "RIGHTSIZE (what a command really needs; preview: ciPreview)"
+before="$(wc -l <"$REQ_LOG")"
+rc "rightsize with no key" 2 compute rightsize
+rc "rightsize with two keys" 2 compute rightsize --check unit --tag x
+rc "rightsize --days not a number" 2 compute rightsize --check unit --days soon
+rc "--mem auto: a bad fallback" 2 compute run --plan --mem auto:lots -- true
+eq "usage errors sent nothing" "$(wc -l <"$REQ_LOG")" "$before"
+rc "rightsize --check" 0 compute rightsize --check unit --days 30d
+q="$(last /cli/compute/rightsize)"
+has "rightsize: check" "$q" "check=unit"
+has "rightsize: days" "$q" "days=30"
+out="$(cat "$WORK/out")"
+has "rightsize: header" "$out" "rightsize · proj · CI check unit · last 30 days · 6 runs (5 finished) · confidence medium"
+has "rightsize: memory" "$out" "memory: peak p50 9G · p95 10G · max 10G · asked 16G · 1 stopped at their limit (mem_cap; last peak 16G)"
+has "rightsize: mem suggestion" "$out" "suggest: --mem 24G   (p95 × 1.25, rounded up; never below 1.5 × the last mem_cap peak)"
+has "rightsize: auto" "$out" "or: --mem auto   (it would ask 24G now"
+has "rightsize: cpus" "$out" "cpus: used 3.9 on average (p95 4.0) of --cpus 4 · held at its limit in 5 of 5 runs"
+has "rightsize: cpus suggestion" "$out" "suggest: --cpus 8   (speed:"
+rc "rightsize -- argv" 0 compute rightsize -- cargo nextest run -p k2-core
+eq "rightsize: argv as JSON" "$(python3 -c 'import sys, urllib.parse; print(dict(urllib.parse.parse_qsl(sys.argv[1]))["argv"])' "$(last /cli/compute/rightsize)")" '["cargo", "nextest", "run", "-p", "k2-core"]'
+rc "rightsize --json" 0 compute rightsize --check unit --json
+has "rightsize --json is the daemon's" "$(cat "$WORK/out")" "\"suggest\": \"--mem 24G\""
+rc "--mem auto:8G" 0 compute run --plan --mem auto:8G -- cargo test
+b="$(last /cli/compute/run)"
+eq "auto: memAuto" "$(field "$b" memAuto)" "true"
+eq "auto: the fallback" "$(field "$b" memAutoFallbackBytes)" "8589934592"
+eq "auto: no size" "$(field "$b" memBytes)" "null"
+has "auto: the note" "$(cat "$WORK/err")" "[k2 compute] note: --mem auto: 8G — auto (no history yet: the fallback 8G)"
+rc "--mem auto, no history" 2 compute run --plan --mem auto -- cargo test
+has "auto: the refusal" "$(cat "$WORK/err")" "mem_auto_no_history"
+eq "bare auto sends no fallback" "$(field "$(last /cli/compute/run)" memAutoFallbackBytes)" "null"
 
 echo
 echo "ci_cli: $pass passed, $fail failed"

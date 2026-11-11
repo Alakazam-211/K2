@@ -119,6 +119,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/prewarm", Member),
     // A node's queue, redacted per §7 (an agent verb: its own workspace).
     get("/cli/compute/queue", Member),
+    // prd-compute-blacksmith-class-v1 R1: a reader of the caller's own runs.
+    get("/cli/compute/rightsize", Member),
     get("/cli/compute/roster", Admin),
     post("/cli/compute/roster/key", Admin),
     post("/cli/compute/roster/propose", Admin),

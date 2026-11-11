@@ -30,6 +30,7 @@ mod compute_manage_integration;
 mod compute_pkg_node_e2e;
 mod compute_place_integration;
 mod compute_receipt_v2_integration;
+mod compute_rightsize_integration;
 #[cfg(unix)]
 mod compute_results_integration;
 mod compute_secret_integration;

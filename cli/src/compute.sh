@@ -90,7 +90,8 @@ Agents:
                                 replaces the file's entry for the same tool or name
                                 (--needs rust@stable over rust@1.99.1) and the
                                 file's others stay. Keys: os arch distro mem
-                                cpus needs env timeout stall_timeout tier cache.
+                                cpus needs env timeout stall_timeout tier cache
+                                (mem = "auto" or "auto:8G" too: --mem auto).
                                 --plan shows what came from where
                  [--now]        start at once or fail (exit 3 not_now, naming the
                                 shortest wait); nothing is queued
@@ -144,6 +145,14 @@ Agents:
                                 (failed/mem_cap). It starts only when its --mem
                                 fits beside what runs (k2 compute nodes shows
                                 each node's free memory and cap)
+                 --mem auto[:8G]  K2 sizes it from this command's last 20
+                                finished runs (p95 peak × 1.25, rounded up; at
+                                least 1.5 × the peak of its last mem_cap kill;
+                                at most the largest node's cap). :8G is the size
+                                for its first runs; with no history and no :8G
+                                it is refused (mem_auto_no_history, exit 2). The
+                                run's note says what it picked; k2 compute
+                                rightsize shows the numbers (preview: ciPreview)
                  [--env K=V]... [--cpus N]
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
                                 node at spawn; names only in the plan (k2 study compute)
@@ -289,6 +298,16 @@ Agents:
   k2 compute attach <job> [--since SEQ] [--raw]
   k2 compute logs <job> [--tail N] [--failures] [--raw]
                                              --failures: failing tests first, then log lines
+  k2 compute rightsize [--check C | --tag T | -- <command…>] [--days 14] [--json]
+                 what one command really used and what to ask for, from this
+                 workspace's finished runs of it (the exact command, a --tag,
+                 or a .k2/ci.toml check): memory peak p50/p95/max, mem_cap
+                 kills, a --mem suggestion (p95 × 1.25, rounded up; never below
+                 1.5 × the last mem_cap peak), cores used vs --cpus, and how
+                 sure (low < 5 runs, medium, high 20+). e.g.
+                   k2 compute rightsize -- cargo nextest run -p k2-core
+                 Or let K2 pick each time: --mem auto (below)
+                 (preview: k2 settings set ciPreview true)
   k2 compute cancel <job> [--force]
                  a queued job is cancelled at once; one that already started
                  (or was just assigned) needs --force (else job_started, exit 3).
@@ -1414,7 +1433,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem=""
+    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -1502,7 +1521,15 @@ sys.exit(0 if ok else 1)'; then
             --env) envs+=("${2:-}"); shift 2 ;;
             --needs|--need) needs+=("${2:-}"); shift 2 ;;
             --cpus) cpus="${2:-}"; shift 2 ;;
-            --mem) mem="$(_compute_bytes "${2:-}")"; shift 2 ;;
+            # --mem auto[:8G] (Blacksmith class R1): sized from this
+            # command's finished runs; the size after : is the fallback.
+            --mem)
+                case "${2:-}" in
+                    auto) mem_auto=1; mem=""; mem_auto_fb="" ;;
+                    auto:*) mem_auto=1; mem=""; mem_auto_fb="$(_compute_bytes "${2#auto:}")" || exit 2 ;;
+                    *) mem="$(_compute_bytes "${2:-}")" || exit 2; mem_auto=""; mem_auto_fb="" ;;
+                esac
+                shift 2 ;;
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
             --exclusive) exclusive=1; shift ;;
             # --gpu [any|amd|intel] (0.46.11): one GPU of the node, to this
@@ -1687,7 +1714,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
         K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
-        K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_timeoutSecs_n="$timeout" \
+        K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
@@ -1778,6 +1805,9 @@ parts = []
 for k in ("os", "arch", "mem", "cpus", "needs", "env", "timeout", "stall", "tier", "cache"):
     e = eff.get(k)
     if not isinstance(e, dict) or e.get("from") in (None, "flag"):
+        continue
+    # --mem auto (Blacksmith class R1): its own note line says what and why.
+    if k == "mem" and str(e.get("from")).startswith("auto"):
         continue
     val = e.get("value")
     if isinstance(val, list): val = ", ".join(str(x) for x in val)
@@ -2285,6 +2315,80 @@ fs = json.load(sys.stdin)
 if not fs: print("(no artifacts kept for this job)")
 for f in fs: print("%s  %d bytes  sha256 %s…" % (f["path"], f["bytes"], f["sha256"][:12]))'
     fi
+}
+
+# k2 compute rightsize [--check C | --tag T | -- <command…>] [--days 14] [--json]
+# (prd-compute-blacksmith-class-v1 R1): what one command really used and
+# what --mem / --cpus to ask for, from this workspace's finished runs.
+cmd_compute_rightsize() {
+    local check="" tag="" days="" ws="" as_json=0 have_cmd=0
+    local usage="usage: k2 compute rightsize [--check NAME | --tag NAME | -- <command…>] [--days 14] [--json]  (one of the three)"
+    local -a argv=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --) shift; have_cmd=1; argv=("$@"); break ;;
+            --check) check="${2:-}"; shift 2 ;;
+            --tag) tag="${2:-}"; shift 2 ;;
+            --days) days="${2:-}"; days="${days%d}"; shift 2
+                case "$days" in ''|*[!0-9]*) echo "usage: --days is a number of days (1-90)" >&2; exit 2 ;; esac ;;
+            --workspace) ws="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            *) echo "$usage" >&2; exit 2 ;;
+        esac
+    done
+    local n=0
+    [ -n "$check" ] && n=$((n + 1))
+    [ -n "$tag" ] && n=$((n + 1))
+    [ "$have_cmd" = 1 ] && [ "${#argv[@]}" -gt 0 ] && n=$((n + 1))
+    [ "$n" = 1 ] || { echo "$usage" >&2; exit 2; }
+    local argv_json=""
+    [ "${#argv[@]}" -gt 0 ] && argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${argv[@]}")"
+    local q
+    q="$(python3 -c '
+import sys, urllib.parse
+ws, check, tag, argv, days = sys.argv[1:6]
+o = {k: v for k, v in (("workspace", ws), ("check", check), ("tag", tag), ("argv", argv), ("days", days)) if v}
+print(urllib.parse.urlencode(o))' "$(_compute_ws "$ws")" "$check" "$tag" "$argv_json" "$days")"
+    _compute_call GET /cli/compute/rightsize "$q"
+    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+k = v["key"]
+def g(b):
+    if b is None: return "?"
+    x = b / float(1 << 30)
+    return ("%dG" % round(x)) if abs(x - round(x)) < 0.05 else ("%.1fG" % x)
+what = {"argv": "command: " + " ".join(k["value"]) if isinstance(k["value"], list) else "", "check": "CI check " + str(k["value"]), "tag": "tag " + str(k["value"])}[k["kind"]]
+print("rightsize · %s · %s · last %d days · %d runs (%d finished) · confidence %s" % (v["workspace"], what[:160], v["days"], v["runs"], v["finished"], v["confidence"]))
+m, c = v["mem"], v["cpus"]
+if not v["runs"]:
+    print("  no finished runs of it in that window: run it once with a generous --mem, then ask again;")
+    print("  or submit with --mem auto:<size> (that size until it has history)")
+    sys.exit(0)
+if m["samples"]:
+    line = "memory: peak p50 %s · p95 %s · max %s" % (g(m["p50Bytes"]), g(m["p95Bytes"]), g(m["maxBytes"]))
+else:
+    line = "memory: no peak reported (an older k2-node, or no finished run)"
+if m.get("askedBytes"): line += " · asked %s" % g(m["askedBytes"])
+if m["memCapEnds"]: line += " · %d stopped at their limit (mem_cap; last peak %s)" % (m["memCapEnds"], g(m["lastMemCapPeakBytes"]))
+print(line)
+if m.get("suggest"):
+    why = "p95 × 1.25, rounded up" + ("; never below 1.5 × the last mem_cap peak" if m.get("floorBytes") else "")
+    print("  suggest: %s   (%s)" % (m["suggest"], why))
+    a = m.get("auto")
+    if a: print("  or: --mem auto   (it would ask %s now: %s)" % (a["value"], a["from"]))
+if c.get("samples"):
+    line = "cpus: used %.1f on average (p95 %.1f)" % (c["avgUsed"], c["p95Used"] or c["avgUsed"])
+    line += (" of --cpus %g" % c["asked"]) if c.get("asked") else " (no --cpus asked)"
+    if c.get("pinnedRuns"): line += " · held at its limit in %d of %d runs" % (c["pinnedRuns"], c["samples"])
+    print(line)
+    if c.get("suggest") is not None:
+        print("  suggest: --cpus %g   (%s)" % (c["suggest"], c.get("why") or ""))
+else:
+    print("cpus: no CPU time reported")
+if v["confidence"] == "low":
+    print("  (fewer than 5 finished runs: a first guess; it firms up as runs finish)")'
 }
 
 cmd_compute_logs() {
@@ -4740,6 +4844,8 @@ cmd_compute() {
             _compute_follow "$job" "$raw" "seq:${since:-0}"
             ;;
         logs) cmd_compute_logs "$@" ;;
+        # prd-compute-blacksmith-class-v1 R1: --mem / --cpus from history.
+        rightsize) cmd_compute_rightsize "$@" ;;
         wait) cmd_compute_wait "$@" ;;
         cancel)
             # 0.46.1: a job that already left the queue is stopped only with

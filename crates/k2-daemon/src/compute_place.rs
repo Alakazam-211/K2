@@ -1034,6 +1034,26 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
     out
 }
 
+/// prd-compute-blacksmith-class-v1 R1 (`--mem auto`): the most memory one
+/// job may ask on any node this job could otherwise run on (its caps, and a
+/// shared node's per-job limit for this server). `None`: no such node
+/// reports a cap (placement then says why it can't run).
+pub fn largest_job_mem(w: &Want, now: i64) -> Option<u64> {
+    let probe = Want { mem_bytes: None, mem_defaulted: true, ..w.clone() };
+    candidates_report_raw(&probe, &[], now)
+        .cands
+        .iter()
+        .filter_map(|c| {
+            let node = (c.offer.caps.mem_bytes > 0).then_some(c.offer.caps.mem_bytes);
+            let share = c.offer.share.as_ref().filter(|v| v.shared && v.limits.max_mem_gb > 0).map(|v| u64::from(v.limits.max_mem_gb) << 30);
+            match (node, share) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
+        })
+        .max()
+}
+
 /// [`candidates_report`] without the package step (prewarm reports every
 /// node's package states itself and files one batched request).
 pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandReport {

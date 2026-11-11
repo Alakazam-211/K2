@@ -911,6 +911,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/compute/local/status",
         // Node sharing (0.46.3): a node's queue, redacted per §7.
         "/cli/compute/queue",
+        // prd-compute-blacksmith-class-v1 R1: its own workspace's run sizes.
+        "/cli/compute/rightsize",
         // Node admin (prd-k2-node-admin-v1 §13.1): propose / list own /
         // withdraw own, policy show/set (widening becomes a held request),
         // health, update/rollback. The handler needs the Agent switch

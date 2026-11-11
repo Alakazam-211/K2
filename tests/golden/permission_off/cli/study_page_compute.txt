@@ -402,6 +402,25 @@ MEMORY (--mem, required; 0.46.6)
   node's cap is refused at submit (exceeds_node_caps, exit 2).
   k2 compute nodes shows each node's free memory and cap.
 
+RIGHTSIZE (what a command really needs; preview: ciPreview)
+  Don't guess --mem twice. After a run or two, ask:
+    k2 compute rightsize -- cargo nextest run -p k2-core   (the exact command)
+    k2 compute rightsize --check unit                       (a .k2/ci.toml check)
+    k2 compute rightsize --tag fuzz:p3 --days 30
+  It reads this workspace's finished runs of it: memory peak p50/p95/max,
+  runs killed at their limit (mem_cap), a --mem to ask (p95 × 1.25,
+  rounded up; never below 1.5 × the last mem_cap peak), and cores used vs
+  --cpus (under half: a smaller --cpus frees the node for others; held at
+  the limit: a bigger one may finish sooner). Confidence: low under 5
+  finished runs, medium 5–19, high 20+.
+  Or let K2 size it at each submit: --mem auto:8G (8G until it has
+  history; then the same rule over the last 20 runs, capped at the
+  largest node's limit). The run's note says what it picked and why;
+  get --json shows it as effective.mem. Bare --mem auto with no history
+  is refused (mem_auto_no_history, exit 2): add :<size>. Presets take
+  mem = "auto:8G"; a .k2/ci.toml check takes mem_auto = true with mem_gb
+  as the fallback (needs version = 2 in that file).
+
 SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2 compute run --secret GMAIL_CLIENT_SECRET -- make release
   k2 compute run --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test

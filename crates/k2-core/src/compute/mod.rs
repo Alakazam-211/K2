@@ -28,6 +28,8 @@ pub mod message;
 pub mod pkgreq;
 pub mod result;
 pub mod retry;
+/// prd-compute-blacksmith-class-v1 R1: `k2 compute rightsize`, `--mem auto`.
+pub mod rightsize;
 pub mod rollout;
 pub mod scheduler;
 pub mod shards;

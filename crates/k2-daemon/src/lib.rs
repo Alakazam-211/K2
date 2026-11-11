@@ -361,6 +361,8 @@ pub mod compute_move;
 // Package requests through nodes (0.46.9, self-serve environments).
 pub mod compute_pkg;
 pub mod compute_place;
+// `k2 compute rightsize` and `--mem auto` (prd-compute-blacksmith-class-v1 R1).
+pub mod compute_rightsize;
 // `.k2/compute.toml` defaults and presets (prd-compute-easy-mode-0467 CE-3).
 pub mod compute_preset;
 pub mod compute_secrets;

@@ -626,7 +626,20 @@ pub fn job_body(run_id: &str, index: usize, name: &str, c: &CheckJob, sha: &str,
     if let Some(cpus) = c.cpus {
         v["cpus"] = serde_json::json!(cpus);
     }
-    if let Some(gb) = c.mem_gb {
+    if c.mem_auto == Some(true) {
+        // Version 2 (prd-compute-blacksmith-class-v1 R1, §4.4.3): sized from
+        // this check's history at submit (its `ci:<name>` jobs); `mem_gb`
+        // is the fallback for its first runs.
+        v["memAuto"] = serde_json::json!(true);
+        if let Some(gb) = c.mem_gb {
+            v["memAutoFallbackBytes"] = serde_json::json!(u64::from(gb) << 30);
+        }
+        let asked = match c.mem_gb {
+            Some(gb) => format!("auto:{gb}G"),
+            None => "auto".to_string(),
+        };
+        v["effective"] = serde_json::json!({"mem": {"value": asked, "from": "ci.toml"}});
+    } else if let Some(gb) = c.mem_gb {
         v["memBytes"] = serde_json::json!(u64::from(gb) << 30);
     }
     let tag = format!("ci:{name}");
@@ -867,6 +880,13 @@ mod tests {
         let manual = job_body("r1", 1, "unit", &c, &sha, None, "normal");
         assert!(manual.get("supersede").is_none(), "a run on no branch replaces nothing");
         assert_eq!(manual["tier"], "normal");
+        assert!(v.get("memAuto").is_none() && v.get("effective").is_none());
+        // Version 2 `mem_auto` (Blacksmith class R1): auto, mem_gb the fallback.
+        let auto = job_body("r1", 0, "unit", &CheckJob { mem_auto: Some(true), ..c.clone() }, &sha, Some("main"), "ci");
+        assert_eq!((auto["memAuto"].as_bool(), auto["memAutoFallbackBytes"].as_u64(), auto.get("memBytes")), (Some(true), Some(8 << 30), None));
+        assert_eq!(auto["effective"], serde_json::json!({"mem": {"value": "auto:8G", "from": "ci.toml"}}));
+        let bare = job_body("r1", 0, "unit", &CheckJob { mem_auto: Some(true), mem_gb: None, ..c.clone() }, &sha, None, "ci");
+        assert_eq!((bare["memAuto"].as_bool(), bare.get("memAutoFallbackBytes")), (Some(true), None));
         // A client job id compute accepts: 16-64 of A-Z a-z 0-9 - _.
         let id = client_job_id(&uuid::Uuid::new_v4().simple().to_string(), 31);
         assert!((16..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'), "{id}");

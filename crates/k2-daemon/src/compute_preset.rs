@@ -16,7 +16,9 @@
 //! Keys: `os`, `arch`, `mem`, `cpus`, `needs`, `env`, `timeout`,
 //! `stall_timeout`, `tier`, `cache`. A top-level `needs = [...]` (the
 //! format the node already reads from a bundle) counts as
-//! `[defaults].needs`.
+//! `[defaults].needs`. `mem` is a size or, since the Blacksmith-class R1,
+//! `"auto"` / `"auto:8G"` (sized from the command's history at submit; the
+//! size after `:` is the fallback for its first runs).
 //!
 //! **Where:** `.k2` is gitignored, so the file never reaches a node in a
 //! bundle; only the caller's machine has it. The daemon runs there and
@@ -62,7 +64,11 @@ pub struct Settings {
     /// `ubuntu@24.04` (protocol 7, `--distro`).
     pub distro: Option<String>,
     pub arch: Option<String>,
+    /// With `mem_auto`, the fallback (`mem = "auto:8G"`), else the size.
     pub mem_bytes: Option<u64>,
+    /// `mem = "auto"` / `"auto:8G"` (prd-compute-blacksmith-class-v1 R1):
+    /// sized from the command's history at submit.
+    pub mem_auto: bool,
     pub cpus: Option<f64>,
     pub needs: Vec<String>,
     pub env: BTreeMap<String, String>,
@@ -193,7 +199,19 @@ fn section(text: &str, name: Option<&str>, t: &toml::Table) -> Result<Settings, 
                     }
                 }
             }
-            "mem" => out.mem_bytes = Some(parse_bytes(v).ok_or_else(|| bad("a size like \"8G\" or \"512M\""))?),
+            "mem" => match v.as_str().map(str::trim) {
+                // R1: "auto" or "auto:8G" (the fallback for the first runs).
+                Some(a) if a == "auto" || a.starts_with("auto:") => {
+                    out.mem_auto = true;
+                    out.mem_bytes = match a.strip_prefix("auto:") {
+                        None => None,
+                        Some(fb) => Some(
+                            parse_bytes(&toml::Value::String(fb.to_string())).ok_or_else(|| bad("\"auto\", \"auto:8G\" (the fallback when it has no history), or a size like \"8G\""))?,
+                        ),
+                    };
+                }
+                _ => out.mem_bytes = Some(parse_bytes(v).ok_or_else(|| bad("a size like \"8G\" or \"512M\", or \"auto\" / \"auto:8G\""))?),
+            },
             "cpus" => {
                 let c = match v {
                     toml::Value::Integer(n) => *n as f64,
@@ -435,13 +453,37 @@ pub fn apply(v: &mut Value, loaded: Option<&Loaded>, preset: Option<&str>) -> Re
         };
     }
     // mem.
-    eff["mem"] = match pick(has(v, "memBytes"), p.and_then(|s| s.mem_bytes).as_ref(), defaults.mem_bytes.as_ref()) {
+    // A section's mem: a size, or `auto` with its fallback (R1). The submit
+    // resolves `auto` and rewrites `effective.mem` with the number.
+    let mem_of = |s: &Settings| -> Option<(Option<u64>, bool)> {
+        if s.mem_auto {
+            Some((s.mem_bytes, true))
+        } else {
+            s.mem_bytes.map(|b| (Some(b), false))
+        }
+    };
+    let auto_words = |fb: Option<u64>| match fb {
+        Some(b) => format!("auto:{}", crate::compute_place::mem_words(b)),
+        None => "auto".to_string(),
+    };
+    let mem_flag = has(v, "memBytes") || v.get("memAuto").and_then(Value::as_bool) == Some(true);
+    eff["mem"] = match pick(mem_flag, p.and_then(mem_of).as_ref(), mem_of(defaults).as_ref()) {
+        Some((None, f)) if v.get("memAuto").and_then(Value::as_bool) == Some(true) => {
+            json!({"value": auto_words(v["memAutoFallbackBytes"].as_u64()), "from": f})
+        }
         Some((None, f)) => json!({"value": v["memBytes"].as_u64().map(crate::compute_place::mem_words), "bytes": v["memBytes"].clone(), "from": f}),
-        Some((Some(b), f)) => {
+        Some((Some((fb, true)), f)) => {
+            v["memAuto"] = json!(true);
+            if let Some(b) = fb {
+                v["memAutoFallbackBytes"] = json!(b);
+            }
+            json!({"value": auto_words(fb), "from": f})
+        }
+        Some((Some((Some(b), false)), f)) => {
             v["memBytes"] = json!(b);
             json!({"value": crate::compute_place::mem_words(b), "bytes": b, "from": f})
         }
-        None => Value::Null,
+        Some((Some((None, false)), _)) | None => Value::Null,
     };
     eff["cpus"] = match pick(has(v, "cpus"), p.and_then(|s| s.cpus).as_ref(), defaults.cpus.as_ref()) {
         Some((None, f)) => json!({"value": v["cpus"].clone(), "from": f}),
@@ -656,6 +698,32 @@ needs = ["rust@1.99.1", "cmake@3", "bun@1"]
         assert_eq!(parse_bytes(&toml::Value::String("8GiB".into())), Some(8 << 30));
         assert_eq!(parse_secs(&toml::Value::String("90m".into())), Some(5400));
         assert_eq!(parse_secs(&toml::Value::String("soon".into())), None);
+    }
+
+    /// prd-compute-blacksmith-class-v1 R1: `mem = "auto"` / `"auto:8G"` in a
+    /// preset puts `memAuto` (and the fallback) in the body; a flag still
+    /// wins; `effective.mem` says `auto:8G` until the submit resolves it.
+    #[test]
+    fn a_preset_mem_may_be_auto_with_a_fallback() {
+        let l = loaded("[defaults]\nmem = \"8G\"\n[presets.daemon]\nmem = \"auto:16G\"\n[presets.bare]\nmem = \"auto\"\n");
+        let mut v = json!({"argv": ["true"]});
+        let e = apply(&mut v, Some(&l), Some("daemon")).unwrap();
+        assert_eq!((v["memAuto"].as_bool(), v["memAutoFallbackBytes"].as_u64(), v.get("memBytes")), (Some(true), Some(16 << 30), None));
+        assert_eq!(e["mem"], json!({"value": "auto:16G", "from": "preset"}));
+        let mut v = json!({});
+        let e = apply(&mut v, Some(&l), Some("bare")).unwrap();
+        assert_eq!((v["memAuto"].as_bool(), v.get("memAutoFallbackBytes")), (Some(true), None));
+        assert_eq!(e["mem"]["value"], "auto");
+        // --mem 24G beats the preset's auto.
+        let mut v = json!({"memBytes": 24u64 << 30});
+        let e = apply(&mut v, Some(&l), Some("daemon")).unwrap();
+        assert_eq!((e["mem"]["from"].as_str(), v.get("memAuto")), (Some("flag"), None));
+        // --mem auto beats the defaults' size.
+        let mut v = json!({"memAuto": true, "memAutoFallbackBytes": 4u64 << 30});
+        let e = apply(&mut v, Some(&l), None).unwrap();
+        assert_eq!((e["mem"]["value"].as_str(), e["mem"]["from"].as_str(), v.get("memBytes")), (Some("auto:4G"), Some("flag"), None));
+        let err = parse("[defaults]\nmem = \"auto:lots\"\n").unwrap_err();
+        assert!(err.contains("\"auto:8G\""), "{err}");
     }
 
     /// An unknown preset lists the ones there are; a preset without a file

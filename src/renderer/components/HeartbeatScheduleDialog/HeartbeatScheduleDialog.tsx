@@ -211,7 +211,7 @@ export default function HeartbeatScheduleDialog(): React.JSX.Element | null {
         {/* Header */}
         <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">Heartbeat Schedule</h2>
-          <DialogCloseButton className="-mr-1" onClick={close} />
+          <DialogCloseButton className="-mr-2" onClick={close} />
         </div>
 
         {/* Tab bar */}

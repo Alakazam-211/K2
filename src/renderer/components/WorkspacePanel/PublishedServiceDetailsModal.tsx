@@ -92,7 +92,7 @@ export function PublishedServiceDetailsModal({
           <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
             {service.name}
           </div>
-          <DialogCloseButton onClick={onClose} />
+          <DialogCloseButton className="-mr-2" onClick={onClose} />
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
@@ -182,7 +182,7 @@ export function PublishedByoDetailsModal({
           <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
             {leftover.label}
           </div>
-          <DialogCloseButton onClick={onClose} />
+          <DialogCloseButton className="-mr-2" onClick={onClose} />
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
           <Field label="Kind">Nested URL</Field>

@@ -634,6 +634,7 @@ function ServerFormDialog({
       <DialogFrame
         onCancel={onClose}
         cancelHeld={busy || rotation !== null}
+        cancelHeldReason={rotation !== null ? 'Finish or cancel the new password first' : 'Can’t close while the server is saved'}
         role="dialog"
         aria-modal="true"
         aria-label={draft.id ? 'Edit server' : 'Add server'}

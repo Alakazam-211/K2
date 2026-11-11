@@ -81,9 +81,7 @@ export function ZenOverlay({
                 position: 'relative',
                 width: `min(${width}px, calc(100vw - 32px))`,
                 maxHeight: 'calc(100vh - 48px)',
-                overflowY: 'auto',
-                gap: 14,
-                padding: 20,
+                overflow: 'hidden',
                 color: 'var(--zen-text)',
                 background: 'var(--zen-surface-raised)',
                 border: '1px solid var(--zen-border)',
@@ -92,8 +90,11 @@ export function ZenOverlay({
                 outline: 'none',
               }}
             >
-              {closeButton && <DialogCloseButton tone="zen" className="absolute" style={{ top: 8, right: 8 }} onClick={onClose} />}
-              {children}
+              {/* Pinned: the × sits on the box, outside the part that scrolls. */}
+              {closeButton && <DialogCloseButton tone="zen" placement="corner" onClick={onClose} />}
+              <div data-zen-overlay-body="" className="flex flex-col" style={{ minHeight: 0, overflowY: 'auto', gap: 14, padding: 20 }}>
+                {children}
+              </div>
             </div>
           </div>,
           layer,

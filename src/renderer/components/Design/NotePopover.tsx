@@ -149,7 +149,7 @@ export function NotePopover({
           <span className="min-w-0 flex-1 truncate text-right font-mono text-[10px] text-[var(--color-text-muted)]" data-testid="design-element-chip">
             {elementChipLabel(element)}
           </span>
-          <DialogCloseButton className="-mr-2" onClick={onCancel} />
+          <DialogCloseButton className="-mr-1" onClick={onCancel} />
         </div>
         <div role="tablist" aria-label="Kind of note" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)]">
           {KINDS.map((k, i) => (

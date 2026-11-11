@@ -203,228 +203,232 @@ export function LlmLoginSheet({
       aria-label={title}
       data-testid="llm-login-sheet"
     >
-      <div {...dialogCancel} className="relative w-full max-w-lg max-h-full overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] p-5 space-y-4">
-        <DialogCloseButton className="absolute top-2 right-2" onClick={dismiss} disabled={busy} />
-        <div className="type-heading pr-6 text-[var(--color-text-primary)]">{title}</div>
+      <div {...dialogCancel} className="relative w-full max-w-lg max-h-full flex flex-col bg-[var(--color-bg)] border border-[var(--color-border)]">
+        <div className="flex flex-shrink-0 items-start gap-2 px-5 pt-5 pb-4">
+          <div className="min-w-0 flex-1 type-heading text-[var(--color-text-primary)]">{title}</div>
+          <DialogCloseButton className="-mt-3 -mr-3" onClick={dismiss} disabled={busy} heldReason="Can’t close while sign-in starts" />
+        </div>
+        <div className="min-h-0 overflow-y-auto px-5 pb-5 space-y-4">
 
-        {!login && (
-          <div className="space-y-3">
-            {start.kind === 'add' && (
-              <label className="block">
-                <span className="type-hint text-[var(--color-text-muted)]">Label</span>
-                <input
-                  autoFocus
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  placeholder="work, personal, team…"
-                  data-testid="llm-login-label"
-                  className="mt-1 w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 type-control text-[var(--color-text-primary)] outline-none"
-                />
-              </label>
-            )}
-            <div>
-              <div className="type-hint text-[var(--color-text-muted)] mb-1">Sign in from</div>
-              <div className="flex gap-1">
-                {(
-                  [
-                    ['this_computer', 'This computer'],
-                    ['other_device', 'Another device'],
-                  ] as const
-                ).map(([value, text]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setMode(value)}
-                    aria-pressed={mode === value}
-                    className={`px-2 py-1 type-control border ${
-                      mode === value
-                        ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                        : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    {text}
-                  </button>
-                ))}
+          {!login && (
+            <div className="space-y-3">
+              {start.kind === 'add' && (
+                <label className="block">
+                  <span className="type-hint text-[var(--color-text-muted)]">Label</span>
+                  <input
+                    autoFocus
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    placeholder="work, personal, team…"
+                    data-testid="llm-login-label"
+                    className="mt-1 w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 type-control text-[var(--color-text-primary)] outline-none"
+                  />
+                </label>
+              )}
+              <div>
+                <div className="type-hint text-[var(--color-text-muted)] mb-1">Sign in from</div>
+                <div className="flex gap-1">
+                  {(
+                    [
+                      ['this_computer', 'This computer'],
+                      ['other_device', 'Another device'],
+                    ] as const
+                  ).map(([value, text]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setMode(value)}
+                      aria-pressed={mode === value}
+                      className={`px-2 py-1 type-control border ${
+                        mode === value
+                          ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                          : 'border-[var(--color-border)] text-[var(--color-text-muted)]'
+                      }`}
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </div>
+                <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
+                  {mode === 'this_computer'
+                    ? 'The browser opens on the computer that runs this K2 server.'
+                    : 'Open the sign-in page here (phone or laptop), then paste the code back or enter the device code.'}
+                </p>
               </div>
-              <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-                {mode === 'this_computer'
-                  ? 'The browser opens on the computer that runs this K2 server.'
-                  : 'Open the sign-in page here (phone or laptop), then paste the code back or enter the device code.'}
+              <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
+                The tool runs its own sign-in on the server. K2 never sees your password; the subscription
+                is kept on this server and isn’t the server default until you choose Use this token.
               </p>
-            </div>
-            <p className="type-hint text-[var(--color-text-muted)] leading-relaxed">
-              The tool runs its own sign-in on the server. K2 never sees your password; the subscription
-              is kept on this server and isn’t the server default until you choose Use this token.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button type="button" onClick={onClose} className="px-3 py-1 type-control text-[var(--color-text-muted)]">
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={busy || (start.kind === 'add' && !label.trim())}
-                onClick={() => void begin()}
-                data-testid="llm-login-start"
-                className="px-3 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
-              >
-                {busy ? 'Starting…' : 'Start sign-in'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {login && (
-          <div className="space-y-3">
-            {login.banner && (
-              <div
-                className="type-hint px-2 py-1.5 border border-yellow-500/60 text-yellow-300"
-                data-testid="llm-login-banner"
-              >
-                {login.banner}
-              </div>
-            )}
-            <div className="type-row text-[var(--color-text-secondary)]" data-testid="llm-login-state">
-              {LOGIN_STATE_LABELS[login.state] ?? login.state}
-            </div>
-
-            {!done && (
-              <div className="space-y-3">
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={onClose} className="px-3 py-1 type-control text-[var(--color-text-muted)]">
+                  Cancel
+                </button>
                 <button
                   type="button"
-                  disabled={!login.url}
-                  onClick={openSignIn}
-                  className="w-full py-2.5 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
+                  disabled={busy || (start.kind === 'add' && !label.trim())}
+                  onClick={() => void begin()}
+                  data-testid="llm-login-start"
+                  className="px-3 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
                 >
-                  {login.url ? 'Open sign-in page' : 'Waiting for the sign-in page…'}
+                  {busy ? 'Starting…' : 'Start sign-in'}
                 </button>
-                {login.url && (
-                  <div className="space-y-1" data-testid="llm-login-link">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="type-hint text-[var(--color-text-secondary)] min-w-0">
-                        Sign in at{' '}
-                        <span className="font-mono text-[var(--color-text-primary)]" data-testid="llm-login-host">
-                          {signInHost(login) ?? 'the sign-in page'}
+              </div>
+            </div>
+          )}
+
+          {login && (
+            <div className="space-y-3">
+              {login.banner && (
+                <div
+                  className="type-hint px-2 py-1.5 border border-yellow-500/60 text-yellow-300"
+                  data-testid="llm-login-banner"
+                >
+                  {login.banner}
+                </div>
+              )}
+              <div className="type-row text-[var(--color-text-secondary)]" data-testid="llm-login-state">
+                {LOGIN_STATE_LABELS[login.state] ?? login.state}
+              </div>
+
+              {!done && (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    disabled={!login.url}
+                    onClick={openSignIn}
+                    className="w-full py-2.5 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)] disabled:opacity-40"
+                  >
+                    {login.url ? 'Open sign-in page' : 'Waiting for the sign-in page…'}
+                  </button>
+                  {login.url && (
+                    <div className="space-y-1" data-testid="llm-login-link">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="type-hint text-[var(--color-text-secondary)] min-w-0">
+                          Sign in at{' '}
+                          <span className="font-mono text-[var(--color-text-primary)]" data-testid="llm-login-host">
+                            {signInHost(login) ?? 'the sign-in page'}
+                          </span>
                         </span>
-                      </span>
-                      <span className="flex shrink-0 gap-3">
-                        <button
-                          type="button"
-                          onClick={() => setShowLink((v) => !v)}
-                          aria-expanded={showLink}
-                          className="type-hint text-[var(--color-text-muted)]"
-                        >
-                          {showLink ? 'Hide full link' : 'Show full link'}
-                        </button>
-                        <button type="button" onClick={copyLink} className="type-hint text-[var(--color-accent)]">
-                          {linkCopied ? 'Link copied' : 'Copy link'}
-                        </button>
-                      </span>
-                    </div>
-                    {showLink && (
-                      <div
-                        className="font-mono type-hint leading-snug text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 select-all"
-                        style={{ overflowWrap: 'anywhere', wordBreak: 'break-all', userSelect: 'all', whiteSpace: 'normal' }}
-                        data-testid="llm-login-url"
-                      >
-                        {login.url}
+                        <span className="flex shrink-0 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setShowLink((v) => !v)}
+                            aria-expanded={showLink}
+                            className="type-hint text-[var(--color-text-muted)]"
+                          >
+                            {showLink ? 'Hide full link' : 'Show full link'}
+                          </button>
+                          <button type="button" onClick={copyLink} className="type-hint text-[var(--color-accent)]">
+                            {linkCopied ? 'Link copied' : 'Copy link'}
+                          </button>
+                        </span>
                       </div>
-                    )}
+                      {showLink && (
+                        <div
+                          className="font-mono type-hint leading-snug text-[var(--color-text-secondary)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 select-all"
+                          style={{ overflowWrap: 'anywhere', wordBreak: 'break-all', userSelect: 'all', whiteSpace: 'normal' }}
+                          data-testid="llm-login-url"
+                        >
+                          {login.url}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {login.code && (
+                    <div className="flex items-center justify-between gap-3 border border-[var(--color-border)] px-3 py-2">
+                      <span className="font-mono text-[length:var(--type-xl)] tracking-widest text-[var(--color-text-primary)]" data-testid="llm-login-code">
+                        {login.code}
+                      </span>
+                      <button type="button" onClick={copyCode} className="type-hint text-[var(--color-accent)]">
+                        {copied ? 'Copied' : 'Copy code'}
+                      </button>
+                    </div>
+                  )}
+                  {(login.state === 'waiting_for_code' || showTerminal) && (
+                    <div className="flex gap-2">
+                      <input
+                        value={paste}
+                        onChange={(e) => setPaste(e.target.value)}
+                        placeholder="Paste code"
+                        aria-label="Paste code"
+                        autoComplete="off"
+                        spellCheck={false}
+                        className="flex-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 type-control font-mono text-[var(--color-text-primary)] outline-none"
+                      />
+                      <button
+                        type="button"
+                        disabled={!paste.trim()}
+                        onClick={() => void sendPaste()}
+                        className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {login.state === 'signed_in' && login.offerMakeActive && madeActive === null && canChangeDefault && (
+                <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
+                  <div className="type-row text-[var(--color-text-secondary)]">Make the new subscription the server default?</div>
+                  <div className="type-hint text-[var(--color-text-muted)]">
+                    Changing it affects every chat that uses Server default on this server.
                   </div>
-                )}
-                {login.code && (
-                  <div className="flex items-center justify-between gap-3 border border-[var(--color-border)] px-3 py-2">
-                    <span className="font-mono text-[length:var(--type-xl)] tracking-widest text-[var(--color-text-primary)]" data-testid="llm-login-code">
-                      {login.code}
-                    </span>
-                    <button type="button" onClick={copyCode} className="type-hint text-[var(--color-accent)]">
-                      {copied ? 'Copied' : 'Copy code'}
-                    </button>
-                  </div>
-                )}
-                {(login.state === 'waiting_for_code' || showTerminal) && (
                   <div className="flex gap-2">
-                    <input
-                      value={paste}
-                      onChange={(e) => setPaste(e.target.value)}
-                      placeholder="Paste code"
-                      aria-label="Paste code"
-                      autoComplete="off"
-                      spellCheck={false}
-                      className="flex-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] px-2 py-1.5 type-control font-mono text-[var(--color-text-primary)] outline-none"
-                    />
                     <button
                       type="button"
-                      disabled={!paste.trim()}
-                      onClick={() => void sendPaste()}
-                      className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-primary)] disabled:opacity-40"
+                      onClick={() => void makeActive()}
+                      className="px-3 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)]"
                     >
-                      Send
+                      Use this token
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMadeActive('kept')}
+                      className="px-3 py-1 type-control text-[var(--color-text-muted)]"
+                    >
+                      Keep current
                     </button>
                   </div>
+                </div>
+              )}
+              {madeActive === 'active' && (
+                <div className="type-hint text-[var(--color-text-secondary)]">The new subscription is now the server default.</div>
+              )}
+              {login.error && <div className="type-hint text-red-400">{login.error}</div>}
+
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowTerminal((v) => !v)}
+                  className="type-hint text-[var(--color-text-muted)]"
+                >
+                  {showTerminal ? 'Hide terminal' : 'Show terminal'}
+                </button>
+                {showTerminal && (
+                  <pre
+                    className="mt-1 max-h-48 overflow-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-2 type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
+                    data-testid="llm-login-terminal"
+                  >
+                    {login.screen.join('\n')}
+                  </pre>
                 )}
               </div>
-            )}
 
-            {login.state === 'signed_in' && login.offerMakeActive && madeActive === null && canChangeDefault && (
-              <div className="border border-[var(--color-border)] px-3 py-2 space-y-2">
-                <div className="type-row text-[var(--color-text-secondary)]">Make the new subscription the server default?</div>
-                <div className="type-hint text-[var(--color-text-muted)]">
-                  Changing it affects every chat that uses Server default on this server.
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void makeActive()}
-                    className="px-3 py-1 type-control border border-[var(--color-accent)] text-[var(--color-text-primary)]"
-                  >
-                    Use this token
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMadeActive('kept')}
-                    className="px-3 py-1 type-control text-[var(--color-text-muted)]"
-                  >
-                    Keep current
-                  </button>
-                </div>
-              </div>
-            )}
-            {madeActive === 'active' && (
-              <div className="type-hint text-[var(--color-text-secondary)]">The new subscription is now the server default.</div>
-            )}
-            {login.error && <div className="type-hint text-red-400">{login.error}</div>}
-
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowTerminal((v) => !v)}
-                className="type-hint text-[var(--color-text-muted)]"
-              >
-                {showTerminal ? 'Hide terminal' : 'Show terminal'}
-              </button>
-              {showTerminal && (
-                <pre
-                  className="mt-1 max-h-48 overflow-auto bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-2 type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-all"
-                  data-testid="llm-login-terminal"
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => (done ? onClose() : void cancel())}
+                  className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-muted)]"
                 >
-                  {login.screen.join('\n')}
-                </pre>
-              )}
+                  {done ? 'Close' : 'Cancel'}
+                </button>
+              </div>
             </div>
+          )}
 
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => (done ? onClose() : void cancel())}
-                className="px-3 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-muted)]"
-              >
-                {done ? 'Close' : 'Cancel'}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {error && <div className="type-hint text-red-400" data-testid="llm-login-error">{error}</div>}
+          {error && <div className="type-hint text-red-400" data-testid="llm-login-error">{error}</div>}
+        </div>
       </div>
     </div>
   )

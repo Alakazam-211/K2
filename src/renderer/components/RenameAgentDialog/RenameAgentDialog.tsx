@@ -92,7 +92,7 @@ export default function RenameAgentDialog(): React.JSX.Element | null {
         <div className="px-5 pt-5 pb-3">
           <div className="flex items-start justify-between gap-2">
             <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Rename agent</h2>
-            <DialogCloseButton className="-mt-2 -mr-2" onClick={cancel} disabled={busy} />
+            <DialogCloseButton className="-mt-3 -mr-3" onClick={cancel} disabled={busy} heldReason="Can’t close while the new name is saved" />
           </div>
           <label
             htmlFor="rename-agent-name"

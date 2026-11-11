@@ -42,7 +42,7 @@ export default function AgentCloseDialog({
           <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
             {title}
           </h3>
-          <DialogCloseButton className="-mt-2 -mr-2" onClick={onCancel} />
+          <DialogCloseButton className="-mt-3 -mr-3" onClick={onCancel} />
         </div>
 
         {/* Body */}

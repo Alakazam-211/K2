@@ -797,7 +797,7 @@ function BrowseDefaultsModal({
                 for a nice K2 experience.
               </p>
             </div>
-            <DialogCloseButton className="-mt-1 -mr-2" onClick={onClose} />
+            <DialogCloseButton className="-mt-2 -mr-3" onClick={onClose} />
           </div>
 
           <div className="relative">

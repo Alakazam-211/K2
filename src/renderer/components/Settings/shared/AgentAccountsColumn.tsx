@@ -494,7 +494,7 @@ function ApiKeyDialog({
       data-testid="llm-apikey-dialog"
     >
       <div {...cancel} className="relative w-[min(420px,92vw)] bg-[var(--color-bg-elevated)] border border-[var(--color-border)] p-4 space-y-3">
-        <DialogCloseButton className="absolute top-2 right-2" onClick={onClose} disabled={busy} />
+        <DialogCloseButton placement="corner" onClick={onClose} disabled={busy} heldReason="Can’t close while the token is saved" />
         <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">Add {toolLabel} API token</h3>
         <label className="block type-hint text-[var(--color-text-muted)]">
           Label

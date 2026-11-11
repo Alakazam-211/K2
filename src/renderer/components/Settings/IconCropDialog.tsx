@@ -151,7 +151,7 @@ export default function IconCropDialog({
           border: '1px solid var(--color-border)',
         }}
       >
-        <DialogCloseButton className="absolute top-2 right-2" onClick={onCancel} />
+        <DialogCloseButton placement="corner" onClick={onCancel} />
         <span className="type-section text-[var(--color-text-muted)] font-mono tracking-wide uppercase">
           Drag to position, scroll to zoom
         </span>

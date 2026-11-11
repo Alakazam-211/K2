@@ -45,7 +45,7 @@ function UnsavedChangesModal({ onChoose }: UnsavedChangesModalProps): React.JSX.
             <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
               Unsaved changes
             </h2>
-            <DialogCloseButton className="-mt-2 -mr-2" onClick={() => onChoose('cancel')} />
+            <DialogCloseButton className="-mt-3 -mr-3" onClick={() => onChoose('cancel')} />
           </div>
           <p className="text-xs text-[var(--color-text-muted)] mt-2 leading-relaxed">
             You have unsaved edits in this workspace. Save them before leaving?

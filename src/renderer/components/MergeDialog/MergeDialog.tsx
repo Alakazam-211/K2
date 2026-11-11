@@ -175,7 +175,7 @@ export default function MergeDialog(): React.JSX.Element | null {
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
             Merge &ldquo;{branch}&rdquo; into current branch
           </h2>
-          {!cancelHeld && <DialogCloseButton className="-mr-1" onClick={step === 'success' ? handleDone : close} />}
+          <DialogCloseButton className="-mr-2" onClick={step === 'success' ? handleDone : close} disabled={cancelHeld} heldReason={step === 'conflicts' ? 'Choose Abort Merge or Resolve Later first' : 'Can’t close while the merge runs'} />
         </div>
 
         {/* Body */}

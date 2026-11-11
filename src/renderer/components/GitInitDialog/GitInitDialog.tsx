@@ -93,7 +93,7 @@ export default function GitInitDialog(): React.JSX.Element | null {
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
             New Workspace
           </h2>
-          <DialogCloseButton className="-mt-2 -mr-2" onClick={close} disabled={isPending} />
+          <DialogCloseButton className="-mt-3 -mr-3" onClick={close} disabled={isPending} heldReason="Can’t close while the workspace is being set up" />
         </div>
 
         {/* Body */}

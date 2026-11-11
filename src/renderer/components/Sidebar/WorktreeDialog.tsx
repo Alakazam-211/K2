@@ -161,7 +161,7 @@ export default function WorktreeDialog({
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
             New Worktree
           </h2>
-          <DialogCloseButton className="-mr-1" onClick={onClose} />
+          <DialogCloseButton className="-mr-2" onClick={onClose} />
         </div>
 
         {/* Mode toggle */}

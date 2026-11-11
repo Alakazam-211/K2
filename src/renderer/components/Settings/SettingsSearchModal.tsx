@@ -93,7 +93,7 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
             placeholder="Search settings… (try: font, theme, hidden files, clear terminal)"
             className="flex-1 bg-transparent type-control text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
           />
-          <kbd className="type-hint font-mono text-[var(--color-text-muted)] border border-[var(--color-border)] px-1.5 py-0.5">
+          <kbd className="type-hint font-mono text-[var(--color-text-muted)] border border-[var(--color-border)] rounded-[var(--radius-selector)] px-1.5 py-0.5">
             esc
           </kbd>
           <DialogCloseButton className="-mr-1" onClick={onClose} />

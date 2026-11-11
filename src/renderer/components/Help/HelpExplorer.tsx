@@ -605,7 +605,7 @@ export default function HelpExplorer({
               </Surface>
             ) : null}
           </div>
-          <DialogCloseButton className="justify-self-end" onClick={onClose} />
+          <DialogCloseButton className="justify-self-end -mr-1.5" onClick={onClose} />
         </div>
         <div className="flex flex-1 min-h-0">
           <nav

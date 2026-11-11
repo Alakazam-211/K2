@@ -99,7 +99,7 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
         {...floatMaterial('dialog')} className="relative w-[360px] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         {...cancel}
       >
-        <DialogCloseButton className="absolute top-2 right-2" onClick={close} />
+        <DialogCloseButton placement="corner" onClick={close} />
         <div className="px-5 pt-5 pb-3">
           <h2 className="text-sm font-medium text-[var(--color-text-primary)]">Add {workspace.name} to Home</h2>
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1">

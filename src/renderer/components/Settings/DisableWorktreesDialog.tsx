@@ -165,7 +165,7 @@ export default function DisableWorktreesDialog({
           <h2 className="type-title text-[var(--color-text-primary)]">
             Disable Worktrees
           </h2>
-          <DialogCloseButton className="-mt-2 -mr-2" onClick={onClose} disabled={isPending} />
+          <DialogCloseButton className="-mt-3 -mr-3" onClick={onClose} disabled={isPending} heldReason="Can’t close while worktrees are being turned off" />
         </div>
 
         {/* Body */}

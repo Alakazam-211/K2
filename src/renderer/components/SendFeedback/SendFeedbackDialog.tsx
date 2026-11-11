@@ -273,7 +273,7 @@ export default function SendFeedbackDialog(): React.JSX.Element {
               { value: 'sent', label: 'Sent' },
             ]}
           />
-          <DialogCloseButton className="ml-auto" onClick={dismiss} />
+          <DialogCloseButton className="ml-auto -mr-2" onClick={dismiss} />
         </div>
 
         {tab === 'send' ? (

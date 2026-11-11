@@ -305,7 +305,7 @@ function BriefOverlay({
         >
           {title}
         </span>
-        <DialogCloseButton data-testid="brief-overlay-close" className="ml-auto" onClick={onClose} />
+        <DialogCloseButton data-testid="brief-overlay-close" className="ml-auto -mr-1" onClick={onClose} />
       </div>
       <div className="flex-1 min-h-0">
         <HtmlFrame

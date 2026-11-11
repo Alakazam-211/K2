@@ -25,7 +25,8 @@ export interface ZenSheetProps {
   /** The sheet's no-op answer; `undefined` holds it open (no ×). */
   onCancel: (() => void) | undefined
   maxWidth: number
-  /** Long content scrolls inside the sheet. */
+  /** Long content scrolls inside the sheet. Every sheet now scrolls when
+   *  it doesn't fit its card; kept so callers can still say so. */
   scroll?: boolean
   /** Extra style on the sheet itself (Thread card tokens). */
   panelStyle?: React.CSSProperties
@@ -39,7 +40,6 @@ export function ZenSheet({
   testId,
   onCancel,
   maxWidth,
-  scroll = false,
   panelStyle,
   dialogAttrs,
   children,
@@ -68,21 +68,34 @@ export function ZenSheet({
         style={{
           position: 'relative',
           maxWidth,
-          ...(scroll ? { maxHeight: '100%', overflow: 'auto' } : {}),
-          padding: 12,
+          // Never taller than the card: in a narrow or short widget the body
+          // scrolls (the × stays pinned), it is never cut off.
+          maxHeight: '100%',
+          display: 'flex',
+          flexDirection: 'column',
           fontSize: 12,
           color: 'var(--zen-text)',
           background: 'var(--zen-surface-raised)',
           border: '1px solid var(--zen-border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
           outline: 'none',
           ...panelStyle,
         }}
       >
-        {onCancel && <DialogCloseButton tone="zen" className="absolute" style={{ top: 4, right: 4 }} onClick={onCancel} />}
-        {children}
+        {/* Pinned: the × sits on the sheet, outside the part that scrolls. */}
+        {onCancel && <DialogCloseButton tone="zen" placement="corner" onClick={onCancel} />}
+        <div
+          data-zen-sheet-body=""
+          style={{
+            minHeight: 0,
+            overflow: 'auto',
+            padding: 12,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   )

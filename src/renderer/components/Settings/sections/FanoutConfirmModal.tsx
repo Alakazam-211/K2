@@ -109,84 +109,86 @@ export function FanoutConfirmModal({
         role="dialog"
         aria-modal="true"
         aria-label="Set up canonical harness fan-out"
-        {...floatMaterial('dialog')} className="w-[820px] max-w-[92vw] max-h-[90vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[820px] max-w-[92vw] max-h-[90vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         {...cancel}
       >
-        {/* Header */}
-        <div className="px-5 pt-5 pb-2">
-          <div className="flex items-start justify-between gap-2">
-            <h2 className="type-title text-[var(--color-text-primary)]">
-              Set up canonical harness fan-out
-            </h2>
-            <DialogCloseButton className="-mt-2 -mr-2" onClick={onCancel} disabled={busy !== null} />
-          </div>
-          <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Canonical fan-out makes K2&rsquo;s generated{' '}
-            <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> the
-            single source of truth, and points each AI tool&rsquo;s file
-            (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">AGENTS.md</span>, &hellip;)
-            back at it. Here&rsquo;s what that sets up:
-          </p>
+        {/* Header: the title and × stay put while the rest scrolls. */}
+        <div className="flex flex-shrink-0 items-start justify-between gap-2 px-5 pt-5">
+          <h2 className="type-title text-[var(--color-text-primary)]">
+            Set up canonical harness fan-out
+          </h2>
+          <DialogCloseButton className="-mt-3 -mr-3" onClick={onCancel} disabled={busy !== null} heldReason="Can’t close while fan-out is set up" />
         </div>
-
-        {/* The diagram — shows AGENT.md → generated canon → harness mirrors. */}
-        <div className="px-5 pb-1">
-          <AgentContextDiagram />
-        </div>
-
-        {/* Safety note — displaced files are moved into .k2/migration/. */}
-        <div className="px-5 pb-3">
-          <div className="border-l-2 border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5 pl-3 pr-2 py-2 type-hint leading-snug text-[var(--color-text-muted)]">
-            <span className="font-medium text-[var(--color-text-secondary)]">Safe by default: </span>
-            {FANOUT_ENABLE_WARNING}
-          </div>
-        </div>
-
-        {error && (
+        <div className="min-h-0 overflow-y-auto">
           <div className="px-5 pb-2">
-            <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
-          </div>
-        )}
-
-        {/* Two clear choices side by side; Cancel below. */}
-        <div className="px-5 pb-5">
-          <div className="grid grid-cols-2 gap-3">
-            {/* Recommended — the merge (skill) route. */}
-            <button
-              onClick={handleAgentic}
-              disabled={busy !== null}
-              className="px-4 py-3 text-left border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 transition-colors disabled:opacity-40 no-drag cursor-pointer"
-            >
-              <div className="type-name text-[var(--color-accent)]">
-                {busy === 'skill' ? 'Setting up…' : 'Set it up agentically'}
-              </div>
-              <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
-                Recommended. The K2 Canonical Agent merges your files into the canon — nothing changes without you.
-              </div>
-            </button>
-
-            {/* Direct — programmatic symlinks (originals moved into .k2/migration/). */}
-            <button
-              onClick={handleProgrammatic}
-              disabled={busy !== null}
-              className="px-4 py-3 text-left border border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
-            >
-              <div className="type-name text-[var(--color-text-primary)]">
-                {busy === 'programmatic' ? 'Enabling…' : 'Symlink it now'}
-              </div>
-              <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
-                K2 links your files to the canon automatically. Your originals are moved into .k2/migration/ first.
-              </div>
-            </button>
+            <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">
+              Canonical fan-out makes K2&rsquo;s generated{' '}
+              <span className="font-mono text-[var(--color-text-secondary)]">.k2/AGENTS.md</span> the
+              single source of truth, and points each AI tool&rsquo;s file
+              (<span className="font-mono">CLAUDE.md</span>, <span className="font-mono">AGENTS.md</span>, &hellip;)
+              back at it. Here&rsquo;s what that sets up:
+            </p>
           </div>
 
-          <button
-            onClick={onCancel}
-            disabled={busy !== null}
-            className="mt-3 w-full px-3 py-1.5 type-control text-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
-          >
-            Cancel
-          </button>
+          {/* The diagram — shows AGENT.md → generated canon → harness mirrors. */}
+          <div className="px-5 pb-1">
+            <AgentContextDiagram />
+          </div>
+
+          {/* Safety note — displaced files are moved into .k2/migration/. */}
+          <div className="px-5 pb-3">
+            <div className="border-l-2 border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5 pl-3 pr-2 py-2 type-hint leading-snug text-[var(--color-text-muted)]">
+              <span className="font-medium text-[var(--color-text-secondary)]">Safe by default: </span>
+              {FANOUT_ENABLE_WARNING}
+            </div>
+          </div>
+
+          {error && (
+            <div className="px-5 pb-2">
+              <p className="type-hint text-[var(--color-status-error-soft)]">{error}</p>
+            </div>
+          )}
+
+          {/* Two clear choices side by side; Cancel below. */}
+          <div className="px-5 pb-5">
+            <div className="grid grid-cols-2 gap-3">
+              {/* Recommended — the merge (skill) route. */}
+              <button
+                onClick={handleAgentic}
+                disabled={busy !== null}
+                className="px-4 py-3 text-left border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              >
+                <div className="type-name text-[var(--color-accent)]">
+                  {busy === 'skill' ? 'Setting up…' : 'Set it up agentically'}
+                </div>
+                <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
+                  Recommended. The K2 Canonical Agent merges your files into the canon — nothing changes without you.
+                </div>
+              </button>
+
+              {/* Direct — programmatic symlinks (originals moved into .k2/migration/). */}
+              <button
+                onClick={handleProgrammatic}
+                disabled={busy !== null}
+                className="px-4 py-3 text-left border border-[var(--color-border)] bg-[var(--color-bg-elevated)] hover:bg-[var(--color-bg-surface)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+              >
+                <div className="type-name text-[var(--color-text-primary)]">
+                  {busy === 'programmatic' ? 'Enabling…' : 'Symlink it now'}
+                </div>
+                <div className="mt-1 type-hint leading-snug text-[var(--color-text-muted)]">
+                  K2 links your files to the canon automatically. Your originals are moved into .k2/migration/ first.
+                </div>
+              </button>
+            </div>
+
+            <button
+              onClick={onCancel}
+              disabled={busy !== null}
+              className="mt-3 w-full px-3 py-1.5 type-control text-center text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-40 no-drag cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     </div>

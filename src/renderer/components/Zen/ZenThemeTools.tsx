@@ -252,8 +252,9 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
         style={{
           width: 'min(560px, calc(100% - 48px))',
           maxHeight: 'calc(100% - 64px)',
-          overflowY: 'auto',
-          padding: 20,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
           background: 'var(--zen-surface-raised)',
           color: 'var(--zen-text)',
           border: '1px solid var(--zen-border)',
@@ -261,48 +262,51 @@ export function ZenShortcutSheet({ os }: { os: DesktopOs }): React.JSX.Element |
           boxShadow: '0 16px 48px rgba(0, 0, 0, 0.24)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12 }}>
+        {/* The title and × stay put; the list scrolls under them. */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0, padding: '16px 20px 8px' }}>
           <h2 style={{ margin: 0, fontSize: '1.15em', fontWeight: 600 }}>Zen shortcuts</h2>
-          <DialogCloseButton tone="zen" className="-mr-2" onClick={closeZenOverlays} />
+          <DialogCloseButton tone="zen" className="-mr-3" onClick={closeZenOverlays} />
         </div>
-        {groups.map((g) => (
-          <section key={g.title} style={{ marginTop: 12 }}>
-            <h3
-              style={{
-                margin: '0 0 6px',
-                fontSize: '0.78em',
-                fontWeight: 600,
-                letterSpacing: '0.06em',
-                textTransform: 'uppercase',
-                color: 'var(--zen-text-muted)',
-              }}
-            >
-              {g.title}
-            </h3>
-            {g.rows.map((r) => (
-              <div
-                key={`${g.title}:${r.keys}`}
-                data-zen-shortcut={r.keys}
-                style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '4px 0' }}
+        <div style={{ minHeight: 0, overflowY: 'auto', padding: '0 20px 20px' }}>
+          {groups.map((g) => (
+            <section key={g.title} style={{ marginTop: 12 }}>
+              <h3
+                style={{
+                  margin: '0 0 6px',
+                  fontSize: '0.78em',
+                  fontWeight: 600,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--zen-text-muted)',
+                }}
               >
-                <span>{r.what}</span>
-                <kbd
-                  style={{
-                    fontFamily: 'var(--zen-terminal-font-family)',
-                    fontSize: '0.9em',
-                    padding: '1px 6px',
-                    borderRadius: 6,
-                    border: '1px solid var(--zen-border)',
-                    background: 'var(--zen-surface)',
-                    whiteSpace: 'nowrap',
-                  }}
+                {g.title}
+              </h3>
+              {g.rows.map((r) => (
+                <div
+                  key={`${g.title}:${r.keys}`}
+                  data-zen-shortcut={r.keys}
+                  style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '4px 0' }}
                 >
-                  {r.keys}
-                </kbd>
-              </div>
-            ))}
-          </section>
-        ))}
+                  <span>{r.what}</span>
+                  <kbd
+                    style={{
+                      fontFamily: 'var(--zen-terminal-font-family)',
+                      fontSize: '0.9em',
+                      padding: '1px 6px',
+                      borderRadius: 6,
+                      border: '1px solid var(--zen-border)',
+                      background: 'var(--zen-surface)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {r.keys}
+                  </kbd>
+                </div>
+              ))}
+            </section>
+          ))}
+        </div>
       </div>
     </div>
   )

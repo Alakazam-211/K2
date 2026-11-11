@@ -636,7 +636,7 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
     return () => window.removeEventListener('keydown', onKey, true)
   }, [onClose])
 
-  const closeButton = <DialogCloseButton ref={closeRef} onClick={onClose} data-testid="admin-profile-close" />
+  const closeButton = <DialogCloseButton ref={closeRef} className="-mr-2.5" onClick={onClose} data-testid="admin-profile-close" />
 
   // A modal covers the window, so it renders at the top of <body>: inside
   // the top bar's frosted capsule (Glass), whose backdrop-filter makes it a

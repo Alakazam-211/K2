@@ -702,181 +702,185 @@ function CreateKeyModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Create API key">
-      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl">
-        <DialogCloseButton className="absolute top-2 right-2" onClick={onClose} disabled={submitting} />
-        <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">Create API key</h3>
-        <label className="block type-hint text-[var(--color-text-muted)]">
-          Label
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            className="mt-1 w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-            placeholder="e.g. scout-sales"
-          />
-        </label>
-        <div className="space-y-1">
-          <p className="type-hint text-[var(--color-text-muted)]">Workspace grant</p>
-          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-            <Checkbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
-            All workspaces (*)
-          </label>
-          {!allWs && (
-            <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
-              {slugs.length === 0 ? (
-                <p className="type-hint text-[var(--color-text-muted)]">No workspaces registered.</p>
-              ) : (
-                slugs.map(({ slug, label: lab }) => (
-                  <label
-                    key={slug}
-                    className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
-                  >
-                    <Checkbox
-                      checked={selected.has(slug)}
-                      onChange={(e) => {
-                        setSelected((prev) => {
-                          const next = new Set(prev)
-                          if (e.target.checked) next.add(slug)
-                          else next.delete(slug)
-                          return next
-                        })
-                      }}
-                    />
-                    <span className="truncate">{lab}</span>
-                    <span className="type-hint text-[var(--color-text-muted)] font-mono">{slug}</span>
-                  </label>
-                ))
-              )}
-            </div>
-          )}
-          {!allWs && selected.size === 0 && (
-            <p className="type-hint text-[var(--color-status-warn-text)]">
-              No workspaces selected — key will authorize zero /v1 workspaces (fail-closed).
-            </p>
-          )}
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full flex flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl">
+        <div className="flex flex-shrink-0 items-start gap-2 px-4 pt-4 pb-3">
+          <h3 className="min-w-0 flex-1 type-heading text-[var(--color-text-primary)]">Create API key</h3>
+          <DialogCloseButton className="-mt-2 -mr-2" onClick={onClose} disabled={submitting} heldReason="Can’t close while the key is created" />
         </div>
-        <div className="space-y-1">
-          <p className="type-hint text-[var(--color-text-muted)]">Capabilities</p>
-          {(
-            [
-              ['hostSessions', hostSessions, setHostSessions, 'host-sessions'],
-              ['canonicalMessage', canonicalMessage, setCanonicalMessage, 'canonical-message'],
-              ['sandboxes', sandboxes, setSandboxes, 'sandboxes'],
-              ['db', db, setDb, 'db (create, migrate and dump workspace databases)'],
-            ] as const
-          ).map(([key, val, set, lab]) => (
-            <label
-              key={key}
-              className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
-            >
-              <Checkbox checked={val} onChange={(e) => set(e.target.checked)} />
-              {lab}
+        <div className="min-h-0 overflow-y-auto px-4 pb-4 space-y-3">
+          <label className="block type-hint text-[var(--color-text-muted)]">
+            Label
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              className="mt-1 w-full px-2 py-1.5 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+              placeholder="e.g. scout-sales"
+            />
+          </label>
+          <div className="space-y-1">
+            <p className="type-hint text-[var(--color-text-muted)]">Workspace grant</p>
+            <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
+              <Checkbox checked={allWs} onChange={(e) => setAllWs(e.target.checked)} />
+              All workspaces (*)
             </label>
-          ))}
-        </div>
-        <div className="space-y-1" data-testid="hire-scope">
-          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-            <Checkbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
-            Allow hiring agents (POST /v1/agents/hire)
-          </label>
-          {hire && (
-            <div className="border border-[var(--color-border)] p-2 space-y-1.5">
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Agents this key hires never get more than the key allows. Only the App access limit can be
-                changed later; for the rest, mint a new key and revoke this one. {hireConfirmCopy()}
+            {!allWs && (
+              <div className="max-h-32 overflow-y-auto border border-[var(--color-border)] p-2 space-y-1">
+                {slugs.length === 0 ? (
+                  <p className="type-hint text-[var(--color-text-muted)]">No workspaces registered.</p>
+                ) : (
+                  slugs.map(({ slug, label: lab }) => (
+                    <label
+                      key={slug}
+                      className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={selected.has(slug)}
+                        onChange={(e) => {
+                          setSelected((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(slug)
+                            else next.delete(slug)
+                            return next
+                          })
+                        }}
+                      />
+                      <span className="truncate">{lab}</span>
+                      <span className="type-hint text-[var(--color-text-muted)] font-mono">{slug}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+            )}
+            {!allWs && selected.size === 0 && (
+              <p className="type-hint text-[var(--color-status-warn-text)]">
+                No workspaces selected — key will authorize zero /v1 workspaces (fail-closed).
               </p>
-              {(
-                [
-                  ['maxMembersPerDay', 'Agents per day'],
-                  ['maxLiveMembers', 'Live agents'],
-                  ['maxMembersPerTeam', 'Agents per team'],
-                ] as const
-              ).map(([k, lab]) => (
-                <label key={k} className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                  {lab}
+            )}
+          </div>
+          <div className="space-y-1">
+            <p className="type-hint text-[var(--color-text-muted)]">Capabilities</p>
+            {(
+              [
+                ['hostSessions', hostSessions, setHostSessions, 'host-sessions'],
+                ['canonicalMessage', canonicalMessage, setCanonicalMessage, 'canonical-message'],
+                ['sandboxes', sandboxes, setSandboxes, 'sandboxes'],
+                ['db', db, setDb, 'db (create, migrate and dump workspace databases)'],
+              ] as const
+            ).map(([key, val, set, lab]) => (
+              <label
+                key={key}
+                className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer"
+              >
+                <Checkbox checked={val} onChange={(e) => set(e.target.checked)} />
+                {lab}
+              </label>
+            ))}
+          </div>
+          <div className="space-y-1" data-testid="hire-scope">
+            <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
+              <Checkbox checked={hire} onChange={(e) => setHire(e.target.checked)} aria-label="Allow hiring agents" />
+              Allow hiring agents (POST /v1/agents/hire)
+            </label>
+            {hire && (
+              <div className="border border-[var(--color-border)] p-2 space-y-1.5">
+                <p className="type-hint text-[var(--color-text-muted)]">
+                  Agents this key hires never get more than the key allows. Only the App access limit can be
+                  changed later; for the rest, mint a new key and revoke this one. {hireConfirmCopy()}
+                </p>
+                {(
+                  [
+                    ['maxMembersPerDay', 'Agents per day'],
+                    ['maxLiveMembers', 'Live agents'],
+                    ['maxMembersPerTeam', 'Agents per team'],
+                  ] as const
+                ).map(([k, lab]) => (
+                  <label key={k} className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
+                    {lab}
+                    <input
+                      aria-label={lab}
+                      value={hireForm[k]}
+                      onChange={(e) => setHireField(k, e.target.value)}
+                      inputMode="numeric"
+                      className="w-20 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                    />
+                  </label>
+                ))}
+                <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
+                  Database access for hired agents
+                  <SettingDropdown
+                    compact
+                    className="min-w-0"
+                    ariaLabel="Database access for hired agents"
+                    value={hireForm.db}
+                    options={[
+                      { value: 'off', label: 'off' },
+                      { value: 'read', label: 'read', disabled: !db },
+                      { value: 'write', label: 'write', disabled: !db },
+                    ]}
+                    onChange={(v) => setHireField('db', v as HireForm['db'])}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
+                  Messages and sessions to its agents
+                  <SettingDropdown
+                    compact
+                    className="min-w-0"
+                    ariaLabel="Reach"
+                    value={hireForm.reach}
+                    options={[
+                      { value: 'none', label: 'none (hire, link, retire only)' },
+                      { value: 'message', label: 'message' },
+                      { value: 'host-sessions', label: 'message + host sessions' },
+                    ]}
+                    onChange={(v) => setHireField('reach', v as HireForm['reach'])}
+                  />
+                </div>
+                <label className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
+                  Folder under the hire root
                   <input
-                    aria-label={lab}
-                    value={hireForm[k]}
-                    onChange={(e) => setHireField(k, e.target.value)}
-                    inputMode="numeric"
-                    className="w-20 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
+                    aria-label="Folder under the hire root"
+                    value={hireForm.folder}
+                    onChange={(e) => setHireField('folder', e.target.value)}
+                    placeholder="(the root)"
+                    className="w-32 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
                   />
                 </label>
-              ))}
-              <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                Database access for hired agents
-                <SettingDropdown
-                  compact
-                  className="min-w-0"
-                  ariaLabel="Database access for hired agents"
-                  value={hireForm.db}
-                  options={[
-                    { value: 'off', label: 'off' },
-                    { value: 'read', label: 'read', disabled: !db },
-                    { value: 'write', label: 'write', disabled: !db },
-                  ]}
-                  onChange={(v) => setHireField('db', v as HireForm['db'])}
-                />
+                <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
+                  <Checkbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
+                  May link teams (only to agents this key hired)
+                </label>
+                <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
+                  <Checkbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
+                  May retire the agents it hired
+                </label>
+                <AppAccessLimit form={ceiling} onChange={setCeiling} opts={ceilingOpts} optsError={ceilingOptsError} />
               </div>
-              <div className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                Messages and sessions to its agents
-                <SettingDropdown
-                  compact
-                  className="min-w-0"
-                  ariaLabel="Reach"
-                  value={hireForm.reach}
-                  options={[
-                    { value: 'none', label: 'none (hire, link, retire only)' },
-                    { value: 'message', label: 'message' },
-                    { value: 'host-sessions', label: 'message + host sessions' },
-                  ]}
-                  onChange={(v) => setHireField('reach', v as HireForm['reach'])}
-                />
-              </div>
-              <label className="flex items-center justify-between gap-2 type-hint text-[var(--color-text-secondary)]">
-                Folder under the hire root
-                <input
-                  aria-label="Folder under the hire root"
-                  value={hireForm.folder}
-                  onChange={(e) => setHireField('folder', e.target.value)}
-                  placeholder="(the root)"
-                  className="w-32 px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]"
-                />
-              </label>
-              <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-                <Checkbox checked={hireForm.link} onChange={(e) => setHireField('link', e.target.checked)} aria-label="May link teams" />
-                May link teams (only to agents this key hired)
-              </label>
-              <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-                <Checkbox checked={hireForm.retire} onChange={(e) => setHireField('retire', e.target.checked)} aria-label="May retire" />
-                May retire the agents it hired
-              </label>
-              <AppAccessLimit form={ceiling} onChange={setCeiling} opts={ceilingOpts} optsError={ceilingOptsError} />
-            </div>
-          )}
-        </div>
-        <ConfirmPrompt
-          confirm={confirm}
-          submitting={submitting}
-          onSubmit={() => void submitPassword()}
-          buttonLabel="Confirm and create"
-        />
-        {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
-        <div className="flex justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => void submit()}
-            className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
-          >
-            {submitting ? 'Creating…' : 'Create'}
-          </button>
+            )}
+          </div>
+          <ConfirmPrompt
+            confirm={confirm}
+            submitting={submitting}
+            onSubmit={() => void submitPassword()}
+            buttonLabel="Confirm and create"
+          />
+          {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => void submit()}
+              className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+            >
+              {submitting ? 'Creating…' : 'Create'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -948,47 +952,51 @@ function EditCeilingModal({
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="App access">
-      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-4 space-y-3 shadow-xl" data-testid="edit-app-access">
-        <DialogCloseButton className="absolute top-2 right-2" onClick={onClose} disabled={submitting} />
-        <h3 className="type-heading pr-6 text-[var(--color-text-primary)]">
-          App access for {keyRow.label || keyRow.id}
-        </h3>
-        <p className="type-hint text-[var(--color-text-secondary)]">
-          Now: {ceilingSummary(stored, ceilingOpts)}
-        </p>
-        <p className="type-hint text-[var(--color-text-muted)]">
-          Lowering it saves right away. Widening it (another App, a new room or a higher role) asks you to
-          confirm, like creating the key. Logins already made keep what they have.
-        </p>
-        {stored.length > 1 && (
-          <p className="type-hint text-[var(--color-status-warn-text)]">
-            This key names {stored.length} Apps (set from a terminal). Saving here keeps only the one shown.
+      <div {...floatMaterial('dialog')} {...cancel} className="relative w-full max-w-md max-h-full flex flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-xl" data-testid="edit-app-access">
+        <div className="flex flex-shrink-0 items-start gap-2 px-4 pt-4 pb-3">
+          <h3 className="min-w-0 flex-1 type-heading text-[var(--color-text-primary)]">
+            App access for {keyRow.label || keyRow.id}
+          </h3>
+          <DialogCloseButton className="-mt-2 -mr-2" onClick={onClose} disabled={submitting} heldReason="Can’t close while your changes save" />
+        </div>
+        <div className="min-h-0 overflow-y-auto px-4 pb-4 space-y-3">
+          <p className="type-hint text-[var(--color-text-secondary)]">
+            Now: {ceilingSummary(stored, ceilingOpts)}
           </p>
-        )}
-        <AppAccessLimit form={form} onChange={setForm} opts={ceilingOpts} optsError={ceilingOptsError} />
-        <ConfirmPrompt
-          confirm={confirm}
-          submitting={submitting}
-          onSubmit={() => void submitPassword()}
-          buttonLabel="Confirm and save"
-        />
-        {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
-        <div className="flex justify-end gap-2 pt-1">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => void save()}
-            className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
-          >
-            {submitting ? 'Saving…' : 'Save'}
-          </button>
+          <p className="type-hint text-[var(--color-text-muted)]">
+            Lowering it saves right away. Widening it (another App, a new room or a higher role) asks you to
+            confirm, like creating the key. Logins already made keep what they have.
+          </p>
+          {stored.length > 1 && (
+            <p className="type-hint text-[var(--color-status-warn-text)]">
+              This key names {stored.length} Apps (set from a terminal). Saving here keeps only the one shown.
+            </p>
+          )}
+          <AppAccessLimit form={form} onChange={setForm} opts={ceilingOpts} optsError={ceilingOptsError} />
+          <ConfirmPrompt
+            confirm={confirm}
+            submitting={submitting}
+            onSubmit={() => void submitPassword()}
+            buttonLabel="Confirm and save"
+          />
+          {err && <p className="type-hint text-[var(--color-status-error-soft)]">{err}</p>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3 py-1.5 type-control text-[var(--color-text-muted)] cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => void save()}
+              className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+            >
+              {submitting ? 'Saving…' : 'Save'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

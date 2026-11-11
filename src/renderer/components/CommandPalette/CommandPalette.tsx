@@ -303,7 +303,7 @@ export default function CommandPalette(): React.JSX.Element | null {
             style={{ fontFamily: 'inherit' }}
           />
           <kbd
-            className="ml-2 text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] text-[var(--color-text-muted)]"
+            className="ml-2 text-[10px] px-1.5 py-0.5 border border-[var(--color-border)] rounded-[var(--radius-selector)] text-[var(--color-text-muted)]"
             style={{ background: 'var(--color-bg)' }}
           >
             ESC

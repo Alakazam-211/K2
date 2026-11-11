@@ -200,7 +200,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
             <h2 className="text-sm font-medium text-[var(--color-text-primary)]">
               {titleOverride ?? (mode === 'file' ? 'Choose File on Host' : 'Open Folder on Host')}
             </h2>
-            <DialogCloseButton className="-mt-2 -mr-2" onClick={cancel} />
+            <DialogCloseButton className="-mt-3 -mr-3" onClick={cancel} />
           </div>
           <div className="flex items-center gap-2 mt-2">
             <button

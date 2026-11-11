@@ -50,7 +50,9 @@ export function AccessSheet({
     <>
       <DialogScrim />
       <DialogFrame
-        onCancel={busy ? undefined : onClose}
+        onCancel={onClose}
+        cancelHeld={busy}
+        cancelHeldReason="Can’t close while this change saves"
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -58,15 +60,14 @@ export function AccessSheet({
         placement="top"
         className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
       >
-        <div className="min-h-0 overflow-y-auto p-5 space-y-4">
-          <div>
-            <h3 id={titleId} className="type-heading text-[var(--color-text-primary)]">
-              {title}
-            </h3>
-            {intro ? <p className={`${DIALOG_MUTED} mt-1`}>{intro}</p> : null}
-          </div>
-          {children}
+        {/* The title stays put beside the frame's ×; the rest scrolls. */}
+        <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
+          <h3 id={titleId} className="type-heading text-[var(--color-text-primary)]">
+            {title}
+          </h3>
+          {intro ? <p className={`${DIALOG_MUTED} mt-1`}>{intro}</p> : null}
         </div>
+        <div className="min-h-0 overflow-y-auto px-5 pb-5 space-y-4">{children}</div>
       </DialogFrame>
     </>,
     document.body,

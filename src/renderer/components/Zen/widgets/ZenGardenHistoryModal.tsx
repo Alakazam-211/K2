@@ -39,7 +39,6 @@ import {
   type GardenUnsigned,
 } from '@/lib/zen/garden-access-api'
 import { ZenOverlay, zenButtonStyle } from './ZenOverlay'
-import { DialogCloseButton } from '@/components/ui/dialog-cancel'
 
 export type GardenHistoryTarget =
   | { kind: 'garden'; garden: string; name: string; readOnly?: boolean }
@@ -340,12 +339,12 @@ export function ZenGardenHistoryModal({
   // Sign signs for the Garden the modal belongs to (`'*'` has no widgets).
   const signFor = target.garden === '*' ? null : target.garden
   return (
-    <ZenOverlay label={title(target)} onClose={onClose} testId="zen-garden-history-modal" vars={vars} width={620} closeButton={false}>
-      <div className="flex items-center" style={{ gap: 8 }}>
+    <ZenOverlay label={title(target)} onClose={onClose} testId="zen-garden-history-modal" vars={vars} width={620}>
+      {/* The overlay's pinned × sits beside the title (room on the right). */}
+      <div className="flex items-center" style={{ gap: 8, paddingRight: 16 }}>
         <strong style={{ fontSize: '1.1em' }} className="flex-1 truncate" data-garden-history-title="">
           {title(target)}
         </strong>
-        <DialogCloseButton tone="zen" className="-mr-2" onClick={onClose} />
       </div>
       {unsigned.map((u) => (
         <UnsignedLine

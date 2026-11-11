@@ -78,7 +78,7 @@ export default function PresenceModal({ onClose, roster: otherRoster, serverLabe
               {roster.length}
             </span>
           </div>
-          <DialogCloseButton onClick={onClose} />
+          <DialogCloseButton className="-mr-2" onClick={onClose} />
         </div>
 
         {/* Rows */}

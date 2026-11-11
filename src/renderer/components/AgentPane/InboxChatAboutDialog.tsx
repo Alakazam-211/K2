@@ -179,6 +179,7 @@ export function InboxChatAboutDialog({
         aria-label="Chat about this"
         onCancel={onClose}
         cancelHeld={sending}
+        cancelHeldReason="Can’t close while your message sends"
         closeButton="inline"
         style={{
           width: 420,
@@ -192,7 +193,7 @@ export function InboxChatAboutDialog({
           <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate pr-2">
             Chat about this
           </div>
-          <DialogCloseButton onClick={dismiss} disabled={sending} />
+          <DialogCloseButton className="-mr-2" onClick={dismiss} disabled={sending} heldReason="Can’t close while your message sends" />
         </div>
 
         <div className="px-4 py-3 flex flex-col gap-2 min-h-0">

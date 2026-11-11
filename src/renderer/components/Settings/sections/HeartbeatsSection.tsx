@@ -266,7 +266,7 @@ function ScheduleEditor({ initial, onCancel, onSave, isEdit }: ScheduleEditorPro
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 no-drag" role="dialog" aria-modal="true" aria-label={isEdit ? 'Edit schedule' : 'Add heartbeat'}>
       <div {...floatMaterial('dialog')} {...cancel} className="relative w-[520px] bg-[var(--color-bg-surface)] border border-[var(--color-border)] p-5 shadow-2xl">
-        <DialogCloseButton className="absolute top-2 right-2" onClick={onCancel} disabled={busy} />
+        <DialogCloseButton placement="corner" onClick={onCancel} disabled={busy} heldReason="Can’t close while the schedule saves" />
         <div className="type-heading pr-6 text-[var(--color-text-primary)] mb-4">
           {isEdit ? `Edit schedule: ${initial?.name}` : 'Add heartbeat'}
         </div>

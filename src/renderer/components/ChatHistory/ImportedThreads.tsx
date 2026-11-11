@@ -186,7 +186,7 @@ export function ImportedThreadViewer({
               Imported with a clone{row.sourceHost ? ` from ${row.sourceHost}` : ''}. Imported messages are read-only.
             </div>
           </div>
-          <DialogCloseButton onClick={onClose} />
+          <DialogCloseButton className="-mr-2" onClick={onClose} />
         </div>
         <div className="relative flex-1 min-h-0 flex">
           <ThreadOverlayColumn addr={addr} conversationId={row.localConversationId} active composeBar={null} />

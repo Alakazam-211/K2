@@ -197,23 +197,26 @@ export function DataSourcesBatchDialog({
   const cancel = useDialogCancel(onClose)
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40" data-testid="sources-batch" role="dialog" aria-modal="true" aria-label="Review pending">
-      <div {...cancel} className="bg-[var(--color-bg)] border border-[var(--color-border)] p-3 w-[560px] max-w-[95vw] max-h-[85vh] overflow-auto space-y-2">
-        <div className="flex items-start justify-between gap-2">
+      <div {...cancel} className="bg-[var(--color-bg)] border border-[var(--color-border)] w-[560px] max-w-[95vw] max-h-[85vh] flex flex-col">
+        {/* The title and × stay put while the list scrolls. */}
+        <div className="flex flex-shrink-0 items-start justify-between gap-2 px-3 pt-3 pb-2">
           <p className="type-name text-[var(--color-text-primary)]">
             {args.gardenName ? `Review pending for Garden “${args.gardenName}”` : 'Review pending'}
           </p>
           <DialogCloseButton className="-mt-1 -mr-1" onClick={onClose} />
         </div>
-        <p className={`type-hint ${muted}`}>
-          Each check runs on its own server. Items that use a secret on one server need one confirm.
-        </p>
-        {servers.map(([hostKey, names]) => (
-          <ServerBlock key={hostKey} hostKey={hostKey} names={names} scopeOf={scopeOf} />
-        ))}
-        <div className="flex justify-end">
-          <button type="button" className={btn} onClick={onClose} data-testid="sources-batch-close">
-            Close
-          </button>
+        <div className="min-h-0 overflow-auto px-3 pb-3 space-y-2">
+          <p className={`type-hint ${muted}`}>
+            Each check runs on its own server. Items that use a secret on one server need one confirm.
+          </p>
+          {servers.map(([hostKey, names]) => (
+            <ServerBlock key={hostKey} hostKey={hostKey} names={names} scopeOf={scopeOf} />
+          ))}
+          <div className="flex justify-end">
+            <button type="button" className={btn} onClick={onClose} data-testid="sources-batch-close">
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>

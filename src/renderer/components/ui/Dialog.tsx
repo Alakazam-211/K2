@@ -36,13 +36,17 @@ export interface DialogFrameProps extends React.HTMLAttributes<HTMLDivElement> {
    *  heights all open in the same place and a growing one grows downward. */
   placement?: 'center' | 'top'
   /** The dialog's no-op answer (Cancel, Not now): given, the frame shows a ×
-   *  ("Close (Esc)") in its top-right corner, and Esc or a press outside it
+   *  ("Close (Esc)") 8px in from its top-right corner (outside the surface,
+   *  so it stays put when the surface's content scrolls; give the title
+   *  `pr-6` so it never runs under it), and Esc or a press outside it
    *  (its scrim, or anywhere else) calls this once, for the top dialog only.
    *  Cancel must change nothing. See `dialog-cancel.tsx`. */
   onCancel?: () => void
   /** A change in flight: Esc, presses outside and the × do nothing (the ×
    *  shows disabled) until it is released. */
   cancelHeld?: boolean
+  /** Why closing is held: the held ×'s tooltip (a generic line without it). */
+  cancelHeldReason?: string
   /** `inline`: the caller puts `<DialogCloseButton>` in its own header, so
    *  the frame draws no corner ×. Esc and a press outside still cancel. */
   closeButton?: 'corner' | 'inline'
@@ -63,6 +67,7 @@ export function DialogFrame({
   style,
   onCancel,
   cancelHeld = false,
+  cancelHeldReason,
   closeButton = 'corner',
   ...rest
 }: DialogFrameProps): React.JSX.Element {
@@ -84,7 +89,13 @@ export function DialogFrame({
     >
       <Surface elevation={5} chamfer className={className} style={style} {...floatMaterial('dialog')} {...rest} />
       {onCancel && closeButton === 'corner' && (
-        <DialogCloseButton className="absolute top-2 right-2" onClick={onCancel} disabled={cancelHeld} data-testid="dialog-close" />
+        <DialogCloseButton
+          placement="corner"
+          onClick={onCancel}
+          disabled={cancelHeld}
+          heldReason={cancelHeldReason}
+          data-testid="dialog-close"
+        />
       )}
     </div>
   )

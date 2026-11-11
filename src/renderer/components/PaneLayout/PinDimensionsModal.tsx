@@ -112,7 +112,7 @@ export default function PinDimensionsModal({
           <div className="text-sm font-semibold text-[var(--color-text-primary)]">
             Pin Dimensions
           </div>
-          <DialogCloseButton onClick={onClose} />
+          <DialogCloseButton className="-mr-2" onClick={onClose} />
         </div>
 
         {/* Body: preset list (left) + fields (right) */}

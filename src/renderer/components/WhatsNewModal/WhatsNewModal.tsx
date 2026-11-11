@@ -410,7 +410,7 @@ export default function WhatsNewModal({
                 {pageIdx + 1} / {totalPages}
               </span>
             )}
-            <DialogCloseButton className="-mr-3" onClick={dismissDialog} />
+            <DialogCloseButton className="-mr-3.5" onClick={dismissDialog} />
           </div>
         </div>
 

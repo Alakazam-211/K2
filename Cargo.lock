@@ -4618,6 +4618,7 @@ name = "k2-deskd"
 version = "0.1.0"
 dependencies = [
  "k2-deskd-proto",
+ "kessel-video",
  "libc",
  "objc2",
  "objc2-app-kit",
@@ -4632,6 +4633,7 @@ dependencies = [
 name = "k2-deskd-proto"
 version = "0.1.0"
 dependencies = [
+ "k2-simvideo",
  "libc",
  "serde",
  "serde_json",

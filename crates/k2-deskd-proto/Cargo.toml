@@ -6,13 +6,17 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
-description = "The wire between k2-daemon and k2-deskd (K2 Screen): framing, hello, requests, events, the frame header, fd passing and the key map. No platform code, so the daemon links it without AppKit or X11."
+description = "The wire between k2-daemon and k2-deskd (K2 Screen): protocol 4's framing and units (k2-simvideo's link), plus deskd's hello, requests, events, fd passing and the key map. No platform code, so the daemon links it without AppKit or X11."
 
 # Deliberately tiny: the daemon links this. Platform code (AppKit,
 # CoreGraphics, x11rb, zbus) lives in k2-deskd, which the daemon never
 # links (one cargo call builds both: a shared package would unify features
 # and pull AppKit into the daemon).
 [dependencies]
+# The helper link, protocol 4 (K2 Render's fix 1): framing, the unit
+# header, the layer / keyframe / rate requests and the hello fields. Its
+# only dependencies are serde and serde_json, so this crate stays tiny.
+k2-simvideo = { path = "../k2-simvideo" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

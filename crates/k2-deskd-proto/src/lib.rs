@@ -1,15 +1,16 @@
 //! The wire between `k2-daemon` and `k2-deskd` ("K2 Screen", the remote
 //! desktop helper; `prd-remote-desktop-tab-v1` §3.2–§3.3).
 //!
-//! **This is a local stand-in for K2 Render's protocol-4 module** (fix 1),
-//! which hasn't landed. It keeps to the parts deskd shares with
-//! k2-simhelper (the framing, the version gate) plus what deskd adds (the
-//! hello's role and TCC state, the desktop requests and events). When the
-//! engine's module lands, [`wire`] and the frame header move to it and this
-//! crate keeps only the desktop messages (vs-live R28: about 1 h).
+//! **The framing and the units are K2 Render's helper link, protocol 4**
+//! ([`link`], `k2_simvideo::link`, re-exported by [`wire`]); this crate adds
+//! what is deskd's own: the hello's role and TCC state, the desktop
+//! requests and events, fd passing and the key map.
 //!
-//! - [`wire`]: `[u32 BE len][u8 kind][payload]`, `J` = JSON, `F` = frame.
-//! - [`msg`]: hello, requests (`op`), replies (`id`), events (`event`).
+//! - [`wire`]: `[u32 BE len][u8 kind][payload]`, `J` = JSON, `F` = one
+//!   encoded unit (protocol 4's header: codec, flags, layer, display).
+//! - [`msg`]: hello (with protocol 4's fields), requests (`op`: deskd's own
+//!   plus protocol 4's `layers`, `keyframe` and `rate`), replies (`id`),
+//!   events (`event`).
 //! - [`keymap`]: `KeyboardEvent.code` → macOS virtual key and evdev
 //!   (X11 keycode = evdev + 8).
 //! - [`fdpass`]: the frames pipe's read end over `SCM_RIGHTS` (macOS).
@@ -32,10 +33,14 @@ pub mod wire;
 #[cfg(unix)]
 pub mod fdpass;
 
-/// The helper protocol deskd speaks. 4 = K2 Render's fix 1 numbering
-/// (k2-simhelper is on 3). The daemon refuses any other number with
-/// `needs_update` after one restart.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// The engine's helper link (protocol 4), for the unit header, the layer
+/// list and the hello fields.
+pub use k2_simvideo::link;
+
+/// The helper protocol deskd speaks: protocol 4, the engine's. deskd
+/// speaks only this one (`hello.accepts = [4]`); the daemon refuses any
+/// other number with `needs_update` after one restart.
+pub const PROTOCOL_VERSION: u32 = link::PROTOCOL_VERSION;
 /// deskd's own build line (this crate's version; k2-deskd reports it).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `hello.role` for a desktop helper (k2-simhelper has none).

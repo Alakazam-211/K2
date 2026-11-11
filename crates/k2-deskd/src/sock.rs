@@ -126,7 +126,7 @@ mod tests {
     use crate::inject::Injector;
     use k2_deskd_proto::fdpass::recv_fd;
     use k2_deskd_proto::msg::{Display, FramesVia, Tcc};
-    use k2_deskd_proto::wire::{Codec, FrameHeader, Message};
+    use k2_deskd_proto::wire::{Codec, Message, UnitHeader};
     use std::io::Read;
     use std::time::Duration;
 
@@ -213,17 +213,17 @@ mod tests {
                 assert_eq!(v["version"], k2_deskd_proto::PROTOCOL_VERSION);
                 assert_eq!(v["frames"], "fd");
             }
-            Message::Frame(_) => panic!("frame first"),
+            Message::Unit(_) => panic!("a unit first"),
         }
         let (marker, fd) = recv_fd(&s).unwrap();
         assert_eq!(marker, FRAMES_FD_MARKER);
-        // A frame deskd writes arrives on the passed pipe.
-        let h = FrameHeader { codec: Codec::H264, key: true, display: 1, width: 2, height: 2, seq: 1, captured_ns: 5, emitted_ns: 6 };
+        // A unit deskd writes arrives on the passed pipe.
+        let h = UnitHeader { codec: Codec::H264, key: true, source_start: true, discardable: false, layer: 0, source: 1, width: 2, height: 2, seq: 1, captured_ns: 5, emitted_ns: 6 };
         let mut frames = std::fs::File::from(fd);
         let d2 = Arc::clone(&d);
-        std::thread::spawn(move || d2.send_frame(&h, b"au"));
+        std::thread::spawn(move || d2.send_unit(&h, b"au"));
         match wire::read_message(&mut frames).unwrap().unwrap() {
-            Message::Frame(f) => {
+            Message::Unit(f) => {
                 assert_eq!(f.header, h);
                 assert_eq!(f.data, b"au");
             }
@@ -232,7 +232,7 @@ mod tests {
         wire::write_json(&mut s, &serde_json::json!({"id": 7, "op": "ping"})).unwrap();
         match wire::read_message(&mut s).unwrap().unwrap() {
             Message::Json(v) => assert_eq!(v, serde_json::json!({"id": 7, "ok": true})),
-            Message::Frame(_) => panic!(),
+            Message::Unit(_) => panic!(),
         }
         // One at a time: a second client is closed with no reply.
         let mut s2 = UnixStream::connect(&path).unwrap();

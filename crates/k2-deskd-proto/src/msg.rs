@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::link::{Codec, Encoder, HelloFields, LayerSpec};
+
 /// TCC state as deskd sees it. `required` is false where the OS has no
 /// such grant (Linux), and then both flags read true.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -54,6 +56,35 @@ pub struct Hello {
     pub tcc: Tcc,
     pub pid: u32,
     pub frames: FramesVia,
+    /// Protocol 4's fields (`link::HelloFields`, so the daemon reads them
+    /// from this hello as it does from a sim helper's `ready`): every
+    /// protocol deskd speaks (`[4]`).
+    #[serde(default)]
+    pub accepts: Vec<u32>,
+    /// The codecs deskd can encode here, in its order of preference
+    /// (macOS: H.264; empty where capture isn't built yet).
+    #[serde(default)]
+    pub codecs: Vec<Codec>,
+    /// Its H.264 encoder, from a probe session at start (`unknown` with no
+    /// H.264, or when the probe couldn't open one).
+    #[serde(default = "unknown_encoder")]
+    pub encoder: Encoder,
+    /// deskd's clock now (ns), the clock of every unit's capture and emit
+    /// times.
+    #[serde(default)]
+    pub clock_ns: u64,
+}
+
+fn unknown_encoder() -> Encoder {
+    Encoder::Unknown
+}
+
+impl Hello {
+    /// The protocol-4 fields, for the daemon's `LinkClock` and codec
+    /// negotiation.
+    pub fn link_fields(&self) -> HelloFields {
+        HelloFields { version: self.version, accepts: self.accepts.clone(), codecs: self.codecs.clone(), encoder: self.encoder, clock_ns: self.clock_ns }
+    }
 }
 
 /// Mouse buttons (`button` in §6).
@@ -177,6 +208,26 @@ pub enum Op {
     Displays,
     /// Reply: `{}`.
     Ping,
+    /// Protocol 4: the whole layer list (`link::Request::Layers`), usually
+    /// `nr`. A layer missing or `on: false` is paused; no layer on = no
+    /// capture at all. Reply: `{}`.
+    Layers { layers: Vec<LayerSpec> },
+    /// Protocol 4: a keyframe on `layer`, on the first frame captured at or
+    /// after `since_ns` (deskd's clock; absent = the next frame). On a still
+    /// screen deskd encodes the last frame again. Reply: `{}`.
+    Keyframe {
+        layer: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since_ns: Option<u64>,
+    },
+    /// Protocol 4: a layer's new rate targets, without a keyframe.
+    /// Reply: `{}`.
+    Rate { layer: u8, fps: u32, bitrate: u32 },
+    /// Capture this display instead (v1 rule: one capture per desktop, so
+    /// every layer moves). Each layer's next unit is a key with `source
+    /// start` from it. Reply: `{display}`; `no_such_display` otherwise.
+    /// (The field is `display`, not `id`: `id` is the request's.)
+    Display { display: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -221,9 +272,17 @@ pub enum Event {
     BannerDisconnect,
     /// deskd can't go on (no display, …); it exits after sending this.
     Fatal { code: String, error: String },
+    /// A layer can't run: a codec deskd doesn't make here, or its encoder
+    /// failed to open (or failed twice in a row). It sends nothing until
+    /// the next `layers` list changes it. Codes in [`codes`].
+    LayerFailed { layer: u8, code: String, error: String },
+    /// The capture stopped or couldn't start (the display went away,
+    /// Screen Recording was revoked, …). deskd tries again every few
+    /// seconds while a layer is on.
+    CaptureError { display: u32, code: String, error: String },
 }
 
-/// `input_error` codes.
+/// `input_error`, `layer_failed` and `capture_error` codes.
 pub mod codes {
     pub const LOCAL_HOLD: &str = "local_hold";
     pub const NO_ACCESSIBILITY: &str = "no_accessibility";
@@ -233,6 +292,10 @@ pub mod codes {
     pub const POST_FAILED: &str = "post_failed";
     pub const UNSUPPORTED: &str = "unsupported";
     pub const BAD_REQUEST: &str = "bad_request";
+    pub const NO_SUCH_DISPLAY: &str = "no_such_display";
+    pub const ENCODER_FAILED: &str = "encoder_failed";
+    pub const CAPTURE_FAILED: &str = "capture_failed";
+    pub const NO_SCREEN_PERMISSION: &str = "no_screen_permission";
 }
 
 #[cfg(test)]
@@ -274,6 +337,10 @@ mod tests {
             tcc: Tcc { required: true, screen: false, accessibility: true },
             pid: 12,
             frames: FramesVia::Fd,
+            accepts: vec![4],
+            codecs: vec![Codec::H264],
+            encoder: Encoder::Hardware,
+            clock_ns: 77,
         });
         let v = serde_json::to_value(&h).unwrap();
         assert_eq!(v["event"], "hello");
@@ -281,6 +348,51 @@ mod tests {
         assert_eq!(serde_json::from_value::<Event>(v).unwrap(), h);
         let v = serde_json::to_value(Event::BannerDisconnect).unwrap();
         assert_eq!(v, json!({"event": "banner_disconnect"}));
+        let v = serde_json::to_value(Event::LayerFailed { layer: 2, code: codes::UNSUPPORTED.into(), error: "no JPEG".into() }).unwrap();
+        assert_eq!(v, json!({"event": "layer_failed", "layer": 2, "code": "unsupported", "error": "no JPEG"}));
+    }
+
+    /// The daemon reads the engine's hello fields out of deskd's hello
+    /// (`LinkClock::from_hello`, codec negotiation), and a D3-era hello
+    /// without them still parses (as no codecs, unknown encoder).
+    #[test]
+    fn hello_carries_protocol_4s_fields() {
+        let v = json!({"event": "hello", "version": 4, "build": "0.1.0", "role": "desktop", "os": "macos", "backend": "macos",
+            "tcc": {"required": true, "screen": true, "accessibility": true}, "pid": 9, "frames": "fd",
+            "accepts": [4], "codecs": ["h264"], "encoder": "software", "clock_ns": 123});
+        let f: HelloFields = serde_json::from_value(v.clone()).expect("the engine's fields");
+        assert_eq!(f, HelloFields { version: 4, accepts: vec![4], codecs: vec![Codec::H264], encoder: Encoder::Software, clock_ns: 123 });
+        let Event::Hello(h) = serde_json::from_value::<Event>(v).unwrap() else { panic!("a hello") };
+        assert_eq!(h.link_fields(), f);
+        let old = json!({"event": "hello", "version": 4, "build": "0.1.0", "role": "desktop", "os": "linux", "backend": "x11",
+            "tcc": {"required": false, "screen": true, "accessibility": true}, "pid": 9, "frames": "fd3"});
+        let Event::Hello(h) = serde_json::from_value::<Event>(old).unwrap() else { panic!("a hello") };
+        assert_eq!((h.codecs.len(), h.encoder, h.clock_ns), (0, Encoder::Unknown, 0));
+    }
+
+    /// What the engine's `LinkSource` writes (`link::Request` plus `nr`)
+    /// parses as deskd's own request, unchanged.
+    #[test]
+    fn the_engines_requests_parse_as_ops() {
+        use crate::link::Request as LinkRequest;
+        let layer = LayerSpec { id: 1, codec: Codec::H264, max_width: 1920, fps: 30, bitrate: 4_000_000, quality: None, on: true };
+        for (r, op) in [
+            (LinkRequest::Layers { layers: vec![layer] }, Op::Layers { layers: vec![layer] }),
+            (LinkRequest::Layers { layers: vec![] }, Op::Layers { layers: vec![] }),
+            (LinkRequest::Keyframe { layer: 1, since_ns: Some(55) }, Op::Keyframe { layer: 1, since_ns: Some(55) }),
+            (LinkRequest::Keyframe { layer: 0, since_ns: None }, Op::Keyframe { layer: 0, since_ns: None }),
+            (LinkRequest::Rate { layer: 1, fps: 30, bitrate: 2_000_000 }, Op::Rate { layer: 1, fps: 30, bitrate: 2_000_000 }),
+        ] {
+            let mut v = serde_json::to_value(&r).unwrap();
+            v["nr"] = json!(true);
+            let parsed: Request = serde_json::from_value(v.clone()).unwrap_or_else(|e| panic!("{v}: {e}"));
+            assert_eq!(parsed, Request { id: None, nr: true, op });
+            // And back: the same JSON the engine wrote.
+            assert_eq!(serde_json::to_value(&parsed).unwrap(), v);
+        }
+        // `display` names the display; `id` stays the request's.
+        let d: Request = serde_json::from_value(json!({"id": 4, "op": "display", "display": 2})).unwrap();
+        assert_eq!(d, Request { id: Some(4), nr: false, op: Op::Display { display: 2 } });
     }
 
     #[test]

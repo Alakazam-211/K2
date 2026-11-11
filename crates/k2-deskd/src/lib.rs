@@ -13,8 +13,10 @@
 //! It takes no arguments that change what it does (`--version` and
 //! `--tcc-probe` only print), and never writes frames to disk.
 //!
-//! Capture and encode (D5, D8b) plug into [`server::Deskd::send_frame`].
+//! Capture and encode: [`capture`] (D5 on macOS; D8b adds X11), driven by
+//! protocol 4's `layers`, `keyframe` and `rate` through [`server::Deskd`].
 
+pub mod capture;
 pub mod hold;
 pub mod inject;
 pub mod server;

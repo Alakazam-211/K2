@@ -1,8 +1,10 @@
 //! macOS: deskd as a LaunchAgent in `K2 Screen.app`.
 //!
 //! `run()` wires it: the CGEvent poster, the event tap, the TCC re-check,
-//! the socket thread, SIGTERM, and AppKit's main loop for the banner.
+//! capture and encode (ScreenCaptureKit → VideoToolbox, [`capture`]), the
+//! socket thread, SIGTERM, and AppKit's main loop for the banner.
 
+pub mod capture;
 pub mod ffi;
 pub mod inject;
 pub mod peer;
@@ -111,6 +113,19 @@ pub fn run() -> ! {
     let host = Arc::new(MacHost { banner: Arc::clone(&banner) });
     let deskd = Arc::new(Deskd::new(host, injector, Arc::clone(&hold)));
     let _ = cell.set(Arc::clone(&deskd));
+
+    // D5: ScreenCaptureKit → VideoToolbox. The probe session tells hello
+    // what the encoder runs on (R9). Without kessel-video's backend deskd
+    // still serves input; every layer then fails as unsupported.
+    match kessel_video::system(kessel_video::SystemConfig::default()) {
+        Ok(backend) => {
+            let encoder = crate::capture::probe_encoder(&*backend);
+            if let Err(e) = deskd.start_capture(capture::MacOpener::new(Arc::clone(&backend)), backend, encoder) {
+                eprintln!("k2-deskd: capture: {e}");
+            }
+        }
+        Err(e) => eprintln!("k2-deskd: no video backend: {e}"),
+    }
 
     tap::spawn(hold);
     deskd.spawn_watchers();

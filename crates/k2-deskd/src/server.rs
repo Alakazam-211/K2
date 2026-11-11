@@ -1,21 +1,26 @@
 //! deskd's side of the link, platform-neutral: answers requests, sends
 //! events, and runs the 5 s TCC re-check and the local-hold watcher. The
 //! OS end is a [`Host`] (TCC, displays, idle, banner) plus the
-//! [`Injector`]'s [`crate::inject::Poster`].
+//! [`Injector`]'s [`crate::inject::Poster`], and, where capture is built
+//! (macOS, D5), a [`Capture`] that answers protocol 4's `layers`,
+//! `keyframe` and `rate` and writes units to the frames pipe.
 //!
 //! One link at a time. When it closes (the daemon quit, restarted or
-//! crashed) deskd releases everything held and hides the banner.
+//! crashed) deskd releases everything held, hides the banner and stops
+//! capturing.
 
 use std::io::{self, Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as J};
 
+use k2_deskd_proto::link::{Encoder as LinkEncoder, UnitHeader};
 use k2_deskd_proto::msg::{codes, Display, Event, FramesVia, Hello, Op, ReleaseReason, Request, Tcc};
 use k2_deskd_proto::wire::{self, Message};
 use k2_deskd_proto::{PROTOCOL_VERSION, ROLE, VERSION};
 
+use crate::capture::{self, Capture, Opener};
 use crate::hold::{Edge, HoldEdges, LocalHold};
 use crate::inject::{Injector, Outcome};
 
@@ -77,14 +82,59 @@ impl Outbox {
     }
 }
 
+/// The frames pipe's write end for the current link: the capture writes
+/// encoded units here.
+#[derive(Default)]
+pub struct FramesPipe {
+    w: Mutex<Option<Box<dyn Write + Send>>>,
+}
+
+impl FramesPipe {
+    pub fn attach(&self, w: Box<dyn Write + Send>) {
+        *self.w.lock().unwrap() = Some(w);
+    }
+
+    pub fn detach(&self) {
+        *self.w.lock().unwrap() = None;
+    }
+
+    /// Writes one unit; `false` with no link or when the daemon stopped
+    /// reading (then the pipe is dropped).
+    pub fn send(&self, h: &UnitHeader, data: &[u8]) -> bool {
+        let mut g = self.w.lock().unwrap();
+        let Some(w) = g.as_mut() else { return false };
+        if wire::write_unit(w, h, data).is_err() {
+            *g = None;
+            return false;
+        }
+        true
+    }
+}
+
+/// The capture's view of the link: units to the frames pipe, events to
+/// the control link.
+struct LinkOut {
+    out: Arc<Outbox>,
+    frames: Arc<FramesPipe>,
+}
+
+impl capture::Out for LinkOut {
+    fn unit(&self, h: &UnitHeader, data: &[u8]) -> bool {
+        self.frames.send(h, data)
+    }
+    fn event(&self, e: &Event) {
+        self.out.event(e);
+    }
+}
+
 pub struct Deskd<H: Host> {
     pub host: Arc<H>,
     pub injector: Mutex<Injector>,
     pub hold: Arc<LocalHold>,
-    pub out: Outbox,
-    /// The frames pipe's write end for the current link (D5/D8b write
-    /// encoded units here; D3 only plumbs it).
-    frames: Mutex<Option<Box<dyn Write + Send>>>,
+    pub out: Arc<Outbox>,
+    frames: Arc<FramesPipe>,
+    /// Capture and encode, where built ([`Deskd::start_capture`]).
+    capture: OnceLock<Capture>,
 }
 
 fn reply_ok(id: u64, mut extra: J) -> J {
@@ -102,10 +152,23 @@ fn reply_err(id: u64, code: &str, error: &str) -> J {
 
 impl<H: Host> Deskd<H> {
     pub fn new(host: Arc<H>, injector: Injector, hold: Arc<LocalHold>) -> Self {
-        Deskd { host, injector: Mutex::new(injector), hold, out: Outbox::default(), frames: Mutex::new(None) }
+        Deskd { host, injector: Mutex::new(injector), hold, out: Arc::default(), frames: Arc::default(), capture: OnceLock::new() }
+    }
+
+    /// Starts capture and encode on `opener` with `backend`'s encoders.
+    /// `encoder` is what [`capture::probe_encoder`] found (`hello.encoder`).
+    pub fn start_capture<O: Opener>(&self, opener: O, backend: Arc<dyn kessel_video::VideoBackend>, encoder: LinkEncoder) -> io::Result<()> {
+        let out = Arc::new(LinkOut { out: Arc::clone(&self.out), frames: Arc::clone(&self.frames) });
+        let c = Capture::spawn(opener, backend, out, encoder)?;
+        self.capture.set(c).map_err(|_| io::Error::other("capture already started"))
+    }
+
+    pub fn capture(&self) -> Option<&Capture> {
+        self.capture.get()
     }
 
     pub fn hello(&self) -> Event {
+        let cap = self.capture.get();
         Event::Hello(Hello {
             version: PROTOCOL_VERSION,
             build: VERSION.to_string(),
@@ -115,7 +178,20 @@ impl<H: Host> Deskd<H> {
             tcc: self.host.tcc(),
             pid: std::process::id(),
             frames: self.host.frames_via(),
+            accepts: vec![PROTOCOL_VERSION],
+            codecs: cap.map(Capture::codecs).unwrap_or_default(),
+            encoder: cap.map_or(LinkEncoder::Unknown, Capture::encoder),
+            clock_ns: capture::clock_ns(),
         })
+    }
+
+    /// Protocol 4's `layers` where nothing captures (Linux until D8b):
+    /// every layer that's on fails at once, so the daemon's hub moves its
+    /// viewers instead of waiting.
+    fn no_capture(&self, layers: &[k2_deskd_proto::link::LayerSpec]) {
+        for l in layers.iter().filter(|l| l.on) {
+            self.out.event(&Event::LayerFailed { layer: l.id, code: codes::UNSUPPORTED.into(), error: "K2 Screen doesn't capture on this computer yet".into() });
+        }
     }
 
     /// Answers one request. `None` for a fire-and-forget (`nr`) request,
@@ -145,6 +221,29 @@ impl<H: Host> Deskd<H> {
                 Ok(Outcome::Posted) | Ok(Outcome::Ignored) => Ok(json!({})),
                 Ok(Outcome::DroppedForHold) => Ok(json!({"dropped": codes::LOCAL_HOLD})),
                 Err(e) => Err((e.code, e.message)),
+            },
+            Op::Layers { layers } => {
+                match self.capture.get() {
+                    Some(c) => c.layers(layers),
+                    None => self.no_capture(&layers),
+                }
+                Ok(json!({}))
+            }
+            Op::Keyframe { layer, since_ns } => {
+                if let Some(c) = self.capture.get() {
+                    c.keyframe(layer, since_ns);
+                }
+                Ok(json!({}))
+            }
+            Op::Rate { layer, fps, bitrate } => {
+                if let Some(c) = self.capture.get() {
+                    c.rate(layer, fps, bitrate);
+                }
+                Ok(json!({}))
+            }
+            Op::Display { display } => match self.capture.get() {
+                Some(c) => c.display(display).map(|d| json!({"display": d})),
+                None => Err((codes::UNSUPPORTED, "K2 Screen doesn't capture on this computer yet".into())),
             },
         };
         match (id, req.nr, result) {
@@ -183,7 +282,7 @@ impl<H: Host> Deskd<H> {
                         },
                     }
                 }
-                Ok(Some(Message::Frame(_))) => break Err(io::Error::new(io::ErrorKind::InvalidData, "the daemon sent a frame")),
+                Ok(Some(Message::Unit(_))) => break Err(io::Error::new(io::ErrorKind::InvalidData, "the daemon sent a unit")),
                 Err(e) => break Err(e),
             }
         };
@@ -192,29 +291,27 @@ impl<H: Host> Deskd<H> {
     }
 
     pub fn attach_frames(&self, w: Box<dyn Write + Send>) {
-        *self.frames.lock().unwrap() = Some(w);
+        self.frames.attach(w);
     }
 
     /// Closes the frames pipe (the daemon's reader sees end of stream).
     pub fn detach_frames(&self) {
-        *self.frames.lock().unwrap() = None;
+        self.frames.detach();
     }
 
     /// Writes one encoded unit to the frames pipe; `false` with no link or
     /// when the daemon stopped reading (then the pipe is dropped).
-    pub fn send_frame(&self, h: &wire::FrameHeader, data: &[u8]) -> bool {
-        let mut g = self.frames.lock().unwrap();
-        let Some(w) = g.as_mut() else { return false };
-        if wire::write_frame(w, h, data).is_err() {
-            *g = None;
-            return false;
-        }
-        true
+    pub fn send_unit(&self, h: &UnitHeader, data: &[u8]) -> bool {
+        self.frames.send(h, data)
     }
 
-    /// The daemon went away: let go of everything and hide the banner.
+    /// The daemon went away: let go of everything, hide the banner and stop
+    /// capturing (the next daemon sends its own layer list).
     pub fn link_closed(&self) {
         self.out.detach();
+        if let Some(c) = self.capture.get() {
+            c.reset();
+        }
         self.injector.lock().unwrap().release_all();
         self.host.banner(None);
     }
@@ -291,6 +388,10 @@ fn op_name(op: &Op) -> &'static str {
         Op::Idle => "idle",
         Op::Displays => "displays",
         Op::Ping => "ping",
+        Op::Layers { .. } => "layers",
+        Op::Keyframe { .. } => "keyframe",
+        Op::Rate { .. } => "rate",
+        Op::Display { .. } => "display",
     }
 }
 
@@ -359,7 +460,7 @@ mod tests {
             match wire::read_message(s).unwrap().expect("a reply") {
                 Message::Json(r) if r.get("id").is_some() => return r,
                 Message::Json(_) => continue, // an event
-                Message::Frame(_) => panic!("frame on the control link"),
+                Message::Unit(_) => panic!("frame on the control link"),
             }
         }
     }
@@ -409,7 +510,7 @@ mod tests {
                 assert_eq!(v["op"], "inject");
                 assert_eq!(v["code"], "unknown_key");
             }
-            Message::Frame(_) => panic!("frame"),
+            Message::Unit(_) => panic!("frame"),
         }
     }
 
@@ -449,7 +550,7 @@ mod tests {
         assert_eq!(rec.take(), vec!["key ControlLeft up mods=[]"]);
         match wire::read_message(&mut s).unwrap().unwrap() {
             Message::Json(v) => assert_eq!(v, json!({"event": "local_input", "hold": true})),
-            Message::Frame(_) => panic!(),
+            Message::Unit(_) => panic!(),
         }
         let r = call(&mut s, json!({"id": 2, "op": "inject", "ev": {"t": "text", "text": "hello"}}));
         assert_eq!(r["dropped"], "local_hold");
@@ -458,7 +559,7 @@ mod tests {
         d.tick_hold(&mut edges, Instant::now() + Duration::from_secs(4));
         match wire::read_message(&mut s).unwrap().unwrap() {
             Message::Json(v) => assert_eq!(v, json!({"event": "local_input", "hold": false})),
-            Message::Frame(_) => panic!(),
+            Message::Unit(_) => panic!(),
         }
     }
 
@@ -478,7 +579,7 @@ mod tests {
                 assert_eq!(v["event"], "tcc_changed");
                 assert_eq!(v["tcc"]["accessibility"], true);
             }
-            Message::Frame(_) => panic!(),
+            Message::Unit(_) => panic!(),
         }
         // Exactly one: the next message is the ping's reply.
         assert_eq!(call(&mut s, json!({"id": 9, "op": "ping"}))["id"], 9);
@@ -494,16 +595,94 @@ mod tests {
         assert_eq!(rec.take(), vec!["button Right up"]);
         match wire::read_message(&mut s).unwrap().unwrap() {
             Message::Json(v) => assert_eq!(v, json!({"event": "banner_disconnect"})),
-            Message::Frame(_) => panic!(),
+            Message::Unit(_) => panic!(),
         }
     }
 
     #[test]
-    fn a_frame_from_the_daemon_closes_the_link() {
+    fn a_unit_from_the_daemon_closes_the_link() {
         let (d, _) = deskd();
         let (mut s, h) = link(&d);
-        let hdr = wire::FrameHeader { codec: wire::Codec::H264, key: true, display: 1, width: 1, height: 1, seq: 0, captured_ns: 0, emitted_ns: 0 };
-        wire::write_frame(&mut s, &hdr, b"x").unwrap();
+        let hdr = UnitHeader { codec: wire::Codec::H264, key: true, source_start: true, discardable: false, layer: 0, source: 1, width: 16, height: 16, seq: 0, captured_ns: 0, emitted_ns: 0 };
+        wire::write_unit(&mut s, &hdr, b"x").unwrap();
         assert!(h.join().unwrap().is_err());
+    }
+
+    fn next_event(s: &mut UnixStream) -> J {
+        match wire::read_message(s).unwrap().expect("an event") {
+            Message::Json(v) => v,
+            Message::Unit(_) => panic!("a unit on the control link"),
+        }
+    }
+
+    #[test]
+    fn hello_carries_protocol_4s_fields() {
+        let (d, _) = deskd();
+        let Event::Hello(h) = d.hello() else { panic!("a hello") };
+        assert_eq!(h.accepts, vec![PROTOCOL_VERSION]);
+        assert!(h.codecs.is_empty(), "no capture started: nothing to encode");
+        assert_eq!(h.encoder, LinkEncoder::Unknown);
+        let before = capture::clock_ns();
+        let Event::Hello(h2) = d.hello() else { panic!("a hello") };
+        assert!(h2.clock_ns >= before && h2.clock_ns >= h.clock_ns, "the clock of every unit's times, read now");
+    }
+
+    /// Where nothing captures (Linux until D8b), each layer that's on fails
+    /// at once instead of leaving the hub's viewers waiting.
+    #[test]
+    fn layers_without_capture_fail_each_layer_thats_on() {
+        let (d, _) = deskd();
+        let (mut s, _h) = link(&d);
+        let on = k2_deskd_proto::link::LayerSpec { id: 3, codec: wire::Codec::H264, max_width: 1920, fps: 60, bitrate: 12_000_000, quality: None, on: true };
+        let off = k2_deskd_proto::link::LayerSpec { id: 4, on: false, ..on };
+        let req = k2_deskd_proto::link::Request::Layers { layers: vec![on, off] };
+        let mut v = serde_json::to_value(&req).unwrap();
+        v["nr"] = json!(true);
+        wire::write_json(&mut s, &v).unwrap();
+        let e = next_event(&mut s);
+        assert_eq!((e["event"].as_str(), e["layer"].as_u64(), e["code"].as_str()), (Some("layer_failed"), Some(3), Some("unsupported")));
+        // Exactly one: the next message is the ping's reply.
+        assert_eq!(call(&mut s, json!({"id": 1, "op": "ping"})), json!({"id": 1, "ok": true}));
+        let r = call(&mut s, json!({"id": 2, "op": "display", "display": 1}));
+        assert_eq!((r["ok"].as_bool(), r["code"].as_str()), (Some(false), Some("unsupported")));
+    }
+
+    /// The whole path on one machine: the engine's `layers` request on the
+    /// control link, a frame from the (fake) capture, a protocol-4 unit on
+    /// the frames pipe; the link closing stops the capture.
+    #[test]
+    fn layers_reach_the_capture_and_units_come_out_on_the_frames_pipe() {
+        use crate::capture::tests::{fake_opener, push_frame};
+        let (d, _) = deskd();
+        let (opener, script) = fake_opener(1280, 720);
+        let backend: Arc<dyn kessel_video::VideoBackend> = kessel_video::fake::FakeBackend::new(kessel_video::fake::FakeConfig::default());
+        d.start_capture(opener, backend, LinkEncoder::Hardware).unwrap();
+        let Event::Hello(h) = d.hello() else { panic!("a hello") };
+        assert_eq!((h.codecs.as_slice(), h.encoder), (&[wire::Codec::H264][..], LinkEncoder::Hardware));
+        let (mut frames_rx, frames_tx) = std::io::pipe().unwrap();
+        d.attach_frames(Box::new(frames_tx));
+        let (mut s, h) = link(&d);
+        let layer = k2_deskd_proto::link::LayerSpec { id: 2, codec: wire::Codec::H264, max_width: 640, fps: 30, bitrate: 1_000_000, quality: None, on: true };
+        let mut v = serde_json::to_value(k2_deskd_proto::link::Request::Layers { layers: vec![layer] }).unwrap();
+        v["nr"] = json!(true);
+        wire::write_json(&mut s, &v).unwrap();
+        push_frame(&script, 1280, 720);
+        match wire::read_message(&mut frames_rx).unwrap().expect("a unit") {
+            Message::Unit(u) => {
+                let uh = u.header;
+                assert!(uh.key && uh.source_start, "{uh:?}");
+                assert_eq!((uh.layer, uh.source, uh.width, uh.height, uh.seq), (2, 1, 640, 360, 0));
+                assert!(u.data.starts_with(&[0, 0, 0, 1]), "Annex B");
+            }
+            Message::Json(_) => panic!("JSON on the frames pipe"),
+        }
+        drop(s);
+        h.join().unwrap().unwrap();
+        // The link closed: the capture stops (the fake counts the close).
+        let t0 = Instant::now();
+        while *script.lock().unwrap().closed.lock().unwrap() == 0 {
+            assert!(t0.elapsed() < Duration::from_secs(5), "the capture didn't stop with the link");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 }

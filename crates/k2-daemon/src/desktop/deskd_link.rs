@@ -32,8 +32,10 @@
 //! banner, so a dead daemon never leaves input stuck.
 //!
 //! Std threads, no tokio: the stream (D6) reads frames on its own thread.
-//! Uses a local protocol module (`k2-deskd-proto`) until K2 Render's
-//! protocol 4 lands.
+//! The wire is K2 Render's protocol 4 (`k2-deskd-proto` re-exports
+//! `k2_simvideo::link`): the frames pipe carries protocol-4 units for the
+//! engine's `LinkSource`, which sends its `layers` / `keyframe` / `rate`
+//! through [`DeskdManager::send_link`].
 
 #![cfg_attr(not(unix), allow(unused_imports, dead_code))]
 
@@ -141,6 +143,13 @@ pub enum DeskdEvent {
     /// Disconnect on the banner: close every viewer.
     BannerDisconnect,
     InputError { op: String, code: String, error: String },
+    /// A stream layer can't run (a codec deskd doesn't make here, or its
+    /// encoder failed): the stream's hub should move that layer's viewers
+    /// (`SourceError::LayerFailed`).
+    LayerFailed { layer: u8, code: String, error: String },
+    /// deskd's capture stopped or couldn't start (`no_screen_permission`,
+    /// `no_such_display`, `capture_failed`); it retries on its own.
+    CaptureError { display: u32, code: String, error: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -472,7 +481,7 @@ impl DeskdManager {
                     }
                     match wire::read_message(&mut reader) {
                         Ok(Some(Message::Json(v))) => me.on_message(&l2, v),
-                        Ok(Some(Message::Frame(_))) | Ok(None) | Err(_) => break,
+                        Ok(Some(Message::Unit(_))) | Ok(None) | Err(_) => break,
                     }
                 }
                 me.link_ended(&l2);
@@ -502,6 +511,8 @@ impl DeskdManager {
             Event::BannerDisconnect => self.broadcast(DeskdEvent::BannerDisconnect),
             Event::InputError { op, code, error } => self.broadcast(DeskdEvent::InputError { op, code, error }),
             Event::Fatal { code, error } => self.set_state(DeskdState::Failed { error: format!("{code}: {error}") }),
+            Event::LayerFailed { layer, code, error } => self.broadcast(DeskdEvent::LayerFailed { layer, code, error }),
+            Event::CaptureError { display, code, error } => self.broadcast(DeskdEvent::CaptureError { display, code, error }),
             Event::Hello(_) => {}
         }
     }
@@ -596,6 +607,28 @@ impl DeskdManager {
             }
             v
         })
+    }
+
+    /// Protocol 4's requests on the control link, fire-and-forget: what
+    /// the stream engine's `LinkSource` sends through its `SendRequest`
+    /// (`layers`, `keyframe`, `rate`). A failure deskd sees comes back as
+    /// [`DeskdEvent::LayerFailed`] / [`DeskdEvent::InputError`].
+    pub fn send_link(&self, r: &k2_deskd_proto::link::Request) -> io::Result<()> {
+        use k2_deskd_proto::link::Request as L;
+        let op = match r.clone() {
+            L::Layers { layers } => Op::Layers { layers },
+            L::Keyframe { layer, since_ns } => Op::Keyframe { layer, since_ns },
+            L::Rate { layer, fps, bitrate } => Op::Rate { layer, fps, bitrate },
+        };
+        self.send_nr(op).map_err(|e| io::Error::other(e.to_string()))
+    }
+
+    /// Moves deskd's one capture to `display` (v1 rule: every viewer of
+    /// the desktop follows). Each layer's next unit is a key with `source
+    /// start` from the new display. Waits for the capture to reopen.
+    pub fn select_display(&self, display: u32) -> Result<u32, DeskdError> {
+        let v = self.call(Op::Display { display }, Duration::from_secs(12))?;
+        v.get("display").and_then(J::as_u64).map(|d| d as u32).ok_or_else(|| DeskdError::new("deskd_bad_reply", "no display in the reply"))
     }
 
     /// The frames pipe of the current link (once per link). End of stream
@@ -1053,7 +1086,7 @@ impl Transport for ChildTransport {
 mod tests {
     use super::*;
     use k2_deskd_proto::msg::{Button, FramesVia};
-    use k2_deskd_proto::wire::{Codec, FrameHeader};
+    use k2_deskd_proto::wire::{Codec, UnitHeader};
     use std::collections::VecDeque;
     use std::os::unix::net::UnixStream;
     use std::sync::atomic::AtomicU32;
@@ -1070,6 +1103,10 @@ mod tests {
             tcc,
             pid: 4242,
             frames: FramesVia::Fd,
+            accepts: vec![version],
+            codecs: vec![Codec::H264],
+            encoder: k2_deskd_proto::link::Encoder::Hardware,
+            clock_ns: 1_000,
         }))
         .unwrap()
     }
@@ -1300,6 +1337,36 @@ mod tests {
         assert_eq!(got[0], DeskdEvent::LocalInput { hold: true });
         assert_eq!(got[1], DeskdEvent::BannerDisconnect);
         assert_eq!(got[2], DeskdEvent::InputError { op: "inject".into(), code: "no_accessibility".into(), error: "x".into() });
+        fake.push_event(json!({"event": "layer_failed", "layer": 2, "code": "unsupported", "error": "no JPEG"}));
+        fake.push_event(json!({"event": "capture_error", "display": 1, "code": "no_screen_permission", "error": "no"}));
+        assert_eq!(rx.recv_timeout(SETTLE).unwrap(), DeskdEvent::LayerFailed { layer: 2, code: "unsupported".into(), error: "no JPEG".into() });
+        assert_eq!(rx.recv_timeout(SETTLE).unwrap(), DeskdEvent::CaptureError { display: 1, code: "no_screen_permission".into(), error: "no".into() });
+        m.disable().unwrap();
+    }
+
+    /// What `LinkSource` sends through `send_link` reaches deskd as the
+    /// engine wrote it, plus `nr` (no reply on success).
+    #[test]
+    fn send_link_writes_protocol_4s_requests_fire_and_forget() {
+        use k2_deskd_proto::link::{LayerSpec, Request as L};
+        let fake = Fake::with(vec![]);
+        let m = DeskdManager::new(fake.clone());
+        m.enable(SETTLE);
+        let layer = LayerSpec { id: 1, codec: Codec::H264, max_width: 1920, fps: 30, bitrate: 4_000_000, quality: None, on: true };
+        m.send_link(&L::Layers { layers: vec![layer] }).unwrap();
+        m.send_link(&L::Keyframe { layer: 1, since_ns: Some(9) }).unwrap();
+        m.send_link(&L::Rate { layer: 1, fps: 30, bitrate: 2_000_000 }).unwrap();
+        assert_eq!(m.select_display(1), Err(DeskdError::new("deskd_bad_reply", "no display in the reply")), "the fake answers {{}}");
+        let seen = fake.seen.lock().unwrap().clone();
+        for (i, r) in [L::Layers { layers: vec![layer] }, L::Keyframe { layer: 1, since_ns: Some(9) }, L::Rate { layer: 1, fps: 30, bitrate: 2_000_000 }].iter().enumerate() {
+            let mut want = serde_json::to_value(r).unwrap();
+            want["nr"] = json!(true);
+            assert_eq!(seen[i], want);
+        }
+        assert_eq!((seen[3]["op"].as_str(), seen[3]["display"].as_u64()), (Some("display"), Some(1)));
+        // The hello's protocol-4 fields, for LinkClock and negotiation.
+        let f = m.hello().unwrap().link_fields();
+        assert_eq!((f.version, f.accepts, f.codecs, f.clock_ns), (PROTOCOL_VERSION, vec![PROTOCOL_VERSION], vec![Codec::H264], 1_000));
         m.disable().unwrap();
     }
 
@@ -1324,10 +1391,10 @@ mod tests {
         m.enable(SETTLE);
         let mut f = m.take_frames().expect("frames pipe");
         assert!(m.take_frames().is_none());
-        let h = FrameHeader { codec: Codec::H264, key: true, display: 1, width: 4, height: 4, seq: 1, captured_ns: 1, emitted_ns: 2 };
-        wire::write_frame(&mut fake.frame_tx.lock().unwrap()[0], &h, b"au").unwrap();
+        let h = UnitHeader { codec: Codec::H264, key: true, source_start: true, discardable: false, layer: 0, source: 1, width: 4, height: 4, seq: 1, captured_ns: 1, emitted_ns: 2 };
+        wire::write_unit(&mut fake.frame_tx.lock().unwrap()[0], &h, b"au").unwrap();
         match wire::read_message(&mut f).unwrap().unwrap() {
-            Message::Frame(fr) => assert_eq!(fr.header, h),
+            Message::Unit(fr) => assert_eq!(fr.header, h),
             Message::Json(_) => panic!("json on the frames pipe"),
         }
         m.disable().unwrap();
@@ -1378,8 +1445,8 @@ mod tests {
             let (rx, mut tx) = std::io::pipe().unwrap();
             k2_deskd_proto::fdpass::send_fd(&s, rx.as_raw_fd(), k2_deskd_proto::fdpass::FRAMES_FD_MARKER).unwrap();
             drop(rx);
-            let h = FrameHeader { codec: Codec::Vp8, key: true, display: 0, width: 2, height: 2, seq: 9, captured_ns: 0, emitted_ns: 0 };
-            wire::write_frame(&mut tx, &h, b"vp8").unwrap();
+            let h = UnitHeader { codec: Codec::Vp8, key: true, source_start: true, discardable: false, layer: 0, source: 0, width: 2, height: 2, seq: 9, captured_ns: 0, emitted_ns: 0 };
+            wire::write_unit(&mut tx, &h, b"vp8").unwrap();
             if let Ok(Some(Message::Json(v))) = wire::read_message(&mut s) {
                 wire::write_json(&mut s, &json!({"id": v["id"], "ok": true})).unwrap();
             }
@@ -1388,13 +1455,13 @@ mod tests {
         assert_eq!(o.hello["event"], "hello");
         let mut f = o.frames.take().unwrap();
         match wire::read_message(&mut f).unwrap().unwrap() {
-            Message::Frame(fr) => assert_eq!((fr.header.seq, fr.data.as_slice()), (9, &b"vp8"[..])),
+            Message::Unit(fr) => assert_eq!((fr.header.seq, fr.data.as_slice()), (9, &b"vp8"[..])),
             Message::Json(_) => panic!("json on the frames pipe"),
         }
         wire::write_json(&mut o.writer, &json!({"id": 1, "op": "ping"})).unwrap();
         match wire::read_message(&mut o.reader).unwrap().unwrap() {
             Message::Json(v) => assert_eq!(v, json!({"id": 1, "ok": true})),
-            Message::Frame(_) => panic!("frame on the control link"),
+            Message::Unit(_) => panic!("frame on the control link"),
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -1446,8 +1513,8 @@ mod tests {
         std::fs::write(&hello_file, &hb).unwrap();
         let frame_file = dir.join("frame.bin");
         let mut fb = Vec::new();
-        let fh = FrameHeader { codec: Codec::Vp8, key: true, display: 0, width: 8, height: 8, seq: 3, captured_ns: 0, emitted_ns: 0 };
-        wire::write_frame(&mut fb, &fh, b"key").unwrap();
+        let fh = UnitHeader { codec: Codec::Vp8, key: true, source_start: true, discardable: false, layer: 0, source: 0, width: 8, height: 8, seq: 3, captured_ns: 0, emitted_ns: 0 };
+        wire::write_unit(&mut fb, &fh, b"key").unwrap();
         std::fs::write(&frame_file, &fb).unwrap();
         let env_file = dir.join("env.txt");
         let script = dir.join("k2-deskd");
@@ -1462,7 +1529,7 @@ mod tests {
         let mut o = t.open().unwrap();
         assert_eq!(o.hello["frames"], "fd3");
         match wire::read_message(o.frames.as_mut().unwrap()).unwrap().unwrap() {
-            Message::Frame(f) => assert_eq!(f.header, fh),
+            Message::Unit(f) => assert_eq!(f.header, fh),
             Message::Json(_) => panic!("json on fd 3"),
         }
         let envs = std::fs::read_to_string(&env_file).unwrap();

@@ -1,6 +1,6 @@
 schema = 1
 id = "reviewer"
-version = 2
+version = 3
 name = "Reviewer"
 summary = "Checks work (code, documents, Apps or plans) and reports what it finds."
 kind = "agent"

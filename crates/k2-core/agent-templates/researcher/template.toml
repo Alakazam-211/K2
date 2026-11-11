@@ -1,6 +1,6 @@
 schema = 1
 id = "researcher"
-version = 2
+version = 3
 name = "Researcher"
 summary = "Finds things out from sources, documents or data, and says where each answer came from."
 kind = "agent"

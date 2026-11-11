@@ -1,6 +1,6 @@
 schema = 1
 id = "designer"
-version = 2
+version = 3
 name = "Designer"
 summary = "Designs how things look and work: screens, flows and details."
 kind = "agent"

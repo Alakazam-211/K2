@@ -1,6 +1,6 @@
 schema = 1
 id = "kessel"
-version = 1
+version = 2
 name = "Kessel"
 summary = "K2's own agent: setup, settings and agent management."
 kind = "system"

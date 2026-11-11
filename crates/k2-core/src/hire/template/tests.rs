@@ -299,6 +299,26 @@ fn template_dry_run_writes_nothing_and_matches_the_apply() {
     assert_eq!(want, got);
 }
 
+/// Every built-in hired with no `about`: the "focus on" line is dropped
+/// whole, no placeholder is left, and the shared block's rules are there.
+#[test]
+fn template_builtins_with_no_about_drop_the_focus_line() {
+    let home = setup();
+    for id in ["general", "lead", "developer", "app-owner", "designer", "researcher", "reviewer", "writer", "support", "ops"] {
+        let path = ws(&home, &format!("blank-{id}"));
+        let mut r = req(id, &path);
+        r.name = Some("Max".into());
+        apply(&r, &HireCaller::Owner).unwrap_or_else(|e| panic!("{id}: {e:?}"));
+        let role = read(&path, ".k2/agent/ROLE.md");
+        assert!(!role.contains("focus on"), "{id}: a blank about leaves no line: {role}");
+        assert!(!role.contains("{{"), "{id}: no placeholder left: {role}");
+        assert!(!role.contains("\n\n\n"), "{id}: no gap where the line was: {role}");
+        assert!(role.contains("Never answer a permission prompt in another agent's session"), "{id}: {role}");
+        assert!(role.contains("k2 thread secret <your address> --name <NAME>"), "{id}: {role}");
+        assert!(role.contains("If no questions are left"), "{id}: {role}");
+    }
+}
+
 #[test]
 fn template_params_are_checked() {
     let _home = setup();

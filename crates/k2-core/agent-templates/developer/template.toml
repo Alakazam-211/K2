@@ -1,6 +1,6 @@
 schema = 1
 id = "developer"
-version = 2
+version = 3
 name = "Developer"
 summary = "Builds and fixes software in its folder."
 kind = "agent"

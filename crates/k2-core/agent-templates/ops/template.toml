@@ -1,6 +1,6 @@
 schema = 1
 id = "ops"
-version = 2
+version = 3
 name = "Ops"
 summary = "Keeps machines, services and scheduled jobs running."
 kind = "agent"

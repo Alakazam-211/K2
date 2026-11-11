@@ -1,6 +1,6 @@
 schema = 1
 id = "chief-of-staff"
-version = 1
+version = 2
 name = "Chief of Staff"
 summary = "The person's lead agent: hires and runs their other agents."
 kind = "system"

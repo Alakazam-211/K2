@@ -1,6 +1,6 @@
 schema = 1
 id = "lead"
-version = 2
+version = 3
 name = "Lead"
 summary = "Leads a small team of agents: splits the work, hands it out, follows up."
 kind = "agent"

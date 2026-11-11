@@ -1,6 +1,6 @@
 schema = 1
 id = "support"
-version = 2
+version = 3
 name = "Support"
 summary = "Looks after conversations with customers and leads."
 kind = "agent"

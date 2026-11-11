@@ -1,6 +1,6 @@
 schema = 1
 id = "general"
-version = 2
+version = 3
 name = "General"
 summary = "Helps with whatever you bring it; you shape the job over time."
 kind = "agent"

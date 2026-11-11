@@ -747,6 +747,8 @@ mod tests {
     fn the_owner_token_and_a_member_get_their_own_lists() {
         let _home = crate::test_support::TempHome::new();
         let _db = k2_core::db::scoped_for_test();
+        // Git runs (whatever this machine has): no dev_tools row.
+        let _git = first_run::dev_tools_for_test(first_run::DevTools::NoRow);
         let mut rx = crate::session_events::sender().subscribe();
         let r = handle(false, STATUS_PATH, b"", &Actor::owner_token());
         assert_eq!(r.status, "200 OK", "{}", r.body);
@@ -794,6 +796,84 @@ mod tests {
         let r = handle(false, STATUS_PATH, b"", &Actor::owner_token());
         let v: Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["hidden"], json!(false), "anna's hide is anna's");
+    }
+
+    fn rows_of(r: &CliResponse) -> Vec<Value> {
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: Value = serde_json::from_str(&r.body).expect("json");
+        v["rows"].as_array().expect("rows").clone()
+    }
+
+    fn dev_row(rows: &[Value]) -> Option<Value> {
+        rows.iter().find(|r| r["id"] == json!("dev_tools")).cloned()
+    }
+
+    /// The developer-tools step through the route, with git's state
+    /// injected (never this machine's): absent while git runs; on a Mac
+    /// first, to do, the owner token's only, with `installing` while Apple's
+    /// installer is open, then done; on Linux the command, no opener, for
+    /// the owner token, Owner and Admin.
+    #[test]
+    fn the_dev_tools_row_through_the_route() {
+        use first_run::DevTools;
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        k2_core::connect_users::add_user("olga", "password123").expect("add");
+        k2_core::connect_users::set_role("olga", k2_core::connect_users::Role::Owner).expect("role");
+        k2_core::connect_users::add_user("adam", "password123").expect("add");
+        k2_core::connect_users::set_role("adam", k2_core::connect_users::Role::Admin).expect("role");
+        k2_core::connect_users::add_user("mia", "password123").expect("add");
+        let status = |actor: &Actor| rows_of(&handle(false, STATUS_PATH, b"", actor));
+
+        {
+            let _git = first_run::dev_tools_for_test(DevTools::NoRow);
+            assert_eq!(dev_row(&status(&Actor::owner_token())), None, "git runs: no row");
+        }
+        {
+            let _git = first_run::dev_tools_for_test(DevTools::AppleMissing { installing: false });
+            let rows = status(&Actor::owner_token());
+            assert_eq!(rows[0], json!({ "id": "dev_tools", "state": "todo", "opens": "dev_tools" }), "first, before llm_sign_in");
+            assert_eq!(rows[1]["id"], json!("llm_sign_in"));
+            for who in ["olga", "adam", "mia"] {
+                assert_eq!(dev_row(&status(&Actor::login(who))), None, "{who}: Apple's installer opens on the server's screen");
+            }
+            let r = handle(true, SKIP_PATH, br#"{"row":"dev_tools"}"#, &Actor::login("adam"));
+            assert_eq!(r.status, "400 Bad Request", "a login can't skip a row it doesn't see");
+        }
+        {
+            let _git = first_run::dev_tools_for_test(DevTools::AppleMissing { installing: true });
+            let row = dev_row(&status(&Actor::owner_token())).expect("row");
+            assert_eq!(row, json!({ "id": "dev_tools", "state": "todo", "opens": "dev_tools", "note": "installing" }));
+        }
+        {
+            let _git = first_run::dev_tools_for_test(DevTools::AppleDone);
+            let row = dev_row(&status(&Actor::owner_token())).expect("row");
+            assert_eq!(row, json!({ "id": "dev_tools", "state": "done", "opens": "dev_tools" }));
+        }
+        {
+            let _git = first_run::dev_tools_for_test(DevTools::LinuxMissing { command: "sudo apt install git" });
+            let want = json!({ "id": "dev_tools", "state": "todo", "opens": null, "note": "sudo apt install git" });
+            assert_eq!(status(&Actor::owner_token())[0], want);
+            assert_eq!(dev_row(&status(&Actor::login("olga"))), Some(want.clone()), "an Owner login");
+            assert_eq!(dev_row(&status(&Actor::login("adam"))), Some(want), "an Admin login");
+            assert_eq!(dev_row(&status(&Actor::login("mia"))), None, "a Member");
+            // Skippable like the others.
+            let r = handle(true, SKIP_PATH, br#"{"row":"dev_tools"}"#, &Actor::owner_token());
+            assert_eq!(dev_row(&rows_of(&r)).expect("row")["state"], json!("skipped"));
+        }
+    }
+
+    /// An install starting and git starting to run tell every client to
+    /// re-read the list (the row turns done without a reload).
+    #[test]
+    fn git_changes_send_first_run_changed_to_everyone() {
+        let mut rx = crate::session_events::sender().subscribe();
+        crate::git_tools_routes::setup_list_changed();
+        let mut saw = false;
+        while let Ok(ev) = rx.try_recv() {
+            saw |= matches!(ev, SessionEvent::FirstRunChanged { person: None });
+        }
+        assert!(saw, "first_run_changed to every socket");
     }
 }
 

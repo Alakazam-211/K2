@@ -16,6 +16,9 @@
 //!   waiting steps run as soon as the install finishes with no client
 //!   attached; after an hour of no git (and no install started) it looks
 //!   only every 10 minutes.
+//! - The setup list's `dev_tools` row (`k2_core::first_run`) reads git and
+//!   the install from here, so `first_run_changed` goes to every socket
+//!   when an install starts and when git starts to run ([`setup_list_changed`]).
 
 use std::time::{Duration, Instant};
 
@@ -46,6 +49,12 @@ fn run_waiting(force: bool) -> Vec<String> {
 fn tell_clients() {
     let _ = crate::session_events::emit(crate::session_events::SessionEvent::ProjectsChanged {});
     crate::fs_live::resync_watches();
+}
+
+/// The setup list's `dev_tools` row changed (an install started, git runs
+/// now): every client re-reads `GET /cli/first-run/status`.
+pub fn setup_list_changed() {
+    crate::first_run_routes::emit_changed(None);
 }
 
 fn spawn_finished_git_steps(_folder: &std::path::Path) {
@@ -125,6 +134,7 @@ pub fn handle_install(is_post: bool, as_text: bool) -> CliResponse {
             if started == InstallStart::AlreadyReady {
                 run_waiting(true);
             }
+            setup_list_changed();
             respond(as_text, Some(started), None)
         }
         Err(e) => refused(as_text, "install_refused", e, Vec::new()),
@@ -138,6 +148,9 @@ pub fn handle_recheck(is_post: bool, as_text: bool) -> CliResponse {
     }
     let ready = k2_core::git_safe::refresh().is_ready();
     let done = if ready { run_waiting(true) } else { Vec::new() };
+    if ready {
+        setup_list_changed();
+    }
     respond(as_text, None, Some(done))
 }
 
@@ -158,17 +171,23 @@ pub fn loop_should_probe(missing_for: Duration, since_last_probe: Duration, inst
 
 /// The headless watch: while git doesn't run, probe again every few
 /// seconds (every 10 minutes after an hour, unless an install was
-/// started); once it does, do every workspace's waiting git steps.
+/// started); once it does, do every workspace's waiting git steps and tell
+/// clients the setup list changed (its `dev_tools` row reads done).
 pub fn spawn_loop() {
     install_listener();
     let _ = std::thread::Builder::new().name("git-tools".into()).spawn(|| {
-        let mut missing_since: Option<Instant> = None;
+        // Missing at start counts: a client may read the setup list before
+        // the first tick, and must hear when git starts to run.
+        let mut missing_since: Option<Instant> = (!k2_core::git_safe::availability().is_ready()).then(Instant::now);
         let mut last_probe = Instant::now();
         loop {
             std::thread::sleep(EVERY);
             let ready_now = k2_core::git_safe::cached().is_some_and(|p| p.is_ready());
             if ready_now {
-                missing_since = None;
+                if missing_since.take().is_some() {
+                    // Another caller's probe found it first.
+                    setup_list_changed();
+                }
                 run_waiting(false);
                 continue;
             }
@@ -182,6 +201,7 @@ pub fn spawn_loop() {
             last_probe = Instant::now();
             if k2_core::git_safe::refresh().is_ready() {
                 missing_since = None;
+                setup_list_changed();
                 run_waiting(false);
             }
         }

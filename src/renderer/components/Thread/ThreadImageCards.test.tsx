@@ -7,8 +7,8 @@
 //   2. `hidden` and `gone` stay chips and never fetch.
 //   3. 415 (no thumbnail) falls back to today's chip.
 //   4. Only <img src> with a blob URL: no inline SVG, no innerHTML.
-//   5. A click opens through the file actions provider; without one, the
-//      full-size viewer (`mode=preview`), Esc closes it.
+//   5. A click opens the image viewer (`mode=preview`; ThreadImageViewer.test
+//      covers it), Option/Alt-click the tab in the background; Esc closes it.
 //   6. Without the feature, or without a source: chips only, no fetch.
 //   7. Cached: a remount doesn't fetch again; `n` is the index on the message.
 import { readFileSync } from 'node:fs'
@@ -259,39 +259,42 @@ describe('S3: image attachments draw as pictures', () => {
 })
 
 describe('S3: opening a picture', () => {
-  it('with the file actions provider: opens the file tab (the provider), no viewer', async () => {
+  it('a click opens the viewer, even where file tabs open (0.46.11); Option/Alt-click still opens the tab in the background', async () => {
     h.daemonCliGet.mockResolvedValue(thumbAnswer())
     const open = vi.fn()
     const file = image('hero.png', 'image/png')
     const { container } = renderFiles([file], { actions: { open } })
     await waitFor(() => expect(container.querySelector('[data-thread-image] img')).not.toBeNull())
-    fireEvent.click(container.querySelector('[data-thread-image-open]') as HTMLElement)
+    const card = container.querySelector('[data-thread-image-open]') as HTMLElement
+    fireEvent.click(card, { altKey: true })
+    expect(open).toHaveBeenCalledWith(file, { background: true })
+    expect(document.querySelector('[data-thread-image-viewer]')).toBeNull()
+    fireEvent.click(card)
     expect(open).toHaveBeenCalledTimes(1)
-    expect(open.mock.calls[0][0]).toEqual(file)
-    expect(document.querySelector('[data-thread-image-lightbox]')).toBeNull()
+    expect(document.querySelector('[data-thread-image-viewer]')).not.toBeNull()
   })
 
-  it('without one (Zen, Home): the full-size viewer loads mode=preview; Esc closes it', async () => {
+  it('the viewer loads mode=preview over the thumbnail; Esc closes it and lets the preview go', async () => {
     h.daemonCliGet.mockImplementation(async (_s: unknown, _r: string, p: { mode: string }) =>
       p.mode === 'preview' ? thumbAnswer('image/png') : thumbAnswer(),
     )
     const { container } = renderFiles([image('hero.png', 'image/png')])
     await waitFor(() => expect(container.querySelector('[data-thread-image] img')).not.toBeNull())
     fireEvent.click(container.querySelector('[data-thread-image-open]') as HTMLElement)
-    const box = document.querySelector('[data-thread-image-lightbox]') as HTMLElement
+    const box = document.querySelector('[data-thread-image-viewer]') as HTMLElement
     expect(box).not.toBeNull()
     // The thumbnail at once, then the whole image.
-    await waitFor(() => expect(box.hasAttribute('data-full')).toBe(true))
-    expect(box.querySelector('img')?.getAttribute('src')).toBe('blob:thumb-2')
+    await waitFor(() => expect(box.querySelector('[data-thread-image-viewer-picture]')?.hasAttribute('data-full')).toBe(true))
+    expect(box.querySelector('[data-thread-image-viewer-picture]')?.getAttribute('src')).toBe('blob:thumb-2')
     const preview = h.daemonCliGet.mock.calls.find((c) => (c[2] as { mode: string }).mode === 'preview')
     expect(preview?.[2]).toEqual({ addr: 'sales', id: 'doc-1', n: 0, mode: 'preview' })
     fireEvent.keyDown(window, { key: 'Escape' })
-    expect(document.querySelector('[data-thread-image-lightbox]')).toBeNull()
+    expect(document.querySelector('[data-thread-image-viewer]')).toBeNull()
     // The whole image's URL is let go; the cached thumbnail is kept.
     expect(revoked).toEqual(['blob:thumb-2'])
   })
 
-  it('a click on the viewer closes it; a failed preview keeps the thumbnail up', async () => {
+  it('a press outside closes it; a failed preview keeps the thumbnail up', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     h.daemonCliGet.mockImplementation(async (_s: unknown, _r: string, p: { mode: string }) => {
       if (p.mode === 'preview') throw new DaemonHttpError('too large', 413, 'preview_too_large')
@@ -300,12 +303,13 @@ describe('S3: opening a picture', () => {
     const { container } = renderFiles([image('hero.png', 'image/png')])
     await waitFor(() => expect(container.querySelector('[data-thread-image] img')).not.toBeNull())
     fireEvent.click(container.querySelector('[data-thread-image-open]') as HTMLElement)
-    const box = document.querySelector('[data-thread-image-lightbox]') as HTMLElement
+    const box = document.querySelector('[data-thread-image-viewer]') as HTMLElement
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledTimes(2))
-    expect(box.querySelector('img')?.getAttribute('src')).toBe('blob:thumb-1')
-    expect(box.hasAttribute('data-full')).toBe(false)
-    fireEvent.pointerDown(box)
-    expect(document.querySelector('[data-thread-image-lightbox]')).toBeNull()
+    const pic = box.querySelector('[data-thread-image-viewer-picture]') as HTMLElement
+    expect(pic.getAttribute('src')).toBe('blob:thumb-1')
+    expect(pic.hasAttribute('data-full')).toBe(false)
+    fireEvent.pointerDown(document.querySelector('[data-scrim]') as HTMLElement)
+    expect(document.querySelector('[data-thread-image-viewer]')).toBeNull()
   })
 })
 

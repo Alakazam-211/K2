@@ -19,6 +19,8 @@
 //     `phone-off`, unedited (round: the handset is curves).
 //   Bookmark
 //     Lucide 1.58 `bookmark`, squared.
+//   ChevronLeft, ChevronRight (the Thread image viewer's previous / next)
+//     Lucide 1.58 `chevron-left`, `chevron-right`, squared.
 //   Settings, Link, Globe
 //     Lucide 1.58 `settings`, `link`, `globe`, unedited (round caps and
 //     joins: they are curves).
@@ -662,6 +664,24 @@ export function ChevronDownIcon(props: K2IconProps = {}): React.JSX.Element {
   return (
     <svg {...iconProps('chevron-down', props)}>
       <path d="M6 9l6 6 6-6" />
+    </svg>
+  )
+}
+
+/** The previous picture (Thread image viewer): Lucide `chevron-left`, squared. */
+export function ChevronLeftIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('chevron-left', props)}>
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  )
+}
+
+/** The next picture (Thread image viewer): Lucide `chevron-right`, squared. */
+export function ChevronRightIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('chevron-right', props)}>
+      <path d="M9 18l6-6-6-6" />
     </svg>
   )
 }

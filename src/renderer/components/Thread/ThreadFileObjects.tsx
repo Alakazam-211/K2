@@ -28,10 +28,15 @@
 // server, cached), fetched when the card nears the viewport, and drawn
 // only through `<img src>`. While it loads: a skeleton with the name. No
 // thumbnail (415, any error): today's chip. `hidden` and `gone` stay chips
-// and never fetch. A click opens the file tab where the provider exists,
-// else the full-size viewer (`ThreadImageLightbox`). Without the feature
-// or without a `ThreadAttachmentSourceProvider` (a ticket, the project
-// chat): chips only.
+// and never fetch. Without the feature or without a
+// `ThreadAttachmentSourceProvider` (a ticket, the project chat): chips only.
+//
+// Viewer (0.46.11, Rosson): a click on a picture opens the image viewer
+// (`ThreadImageViewer`) over the window, at that picture, with the
+// message's other pictures a step away ("2 of 5"). Its "Open in tab" is the
+// provider's open (a file tab, focused; the one already open is focused),
+// shown only where the provider exists. Option/Alt-click still opens the
+// tab in the background, without the viewer.
 //
 // Download (0.46.3, Rosson 2026-10-22): every file tile (chip, list row,
 // image card) gets a Download button on its right when the daemon said
@@ -62,6 +67,7 @@ import {
 import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import {
+  backgroundClickLabel,
   fileOpenAriaHint,
   fileOpenOptionsFor,
   fileOpenTooltip,
@@ -82,11 +88,12 @@ import { downloadThreadAttachment, threadFileDownloadable } from '@/lib/thread-a
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from './chamfer'
 import { useThreadColumnNarrow } from './ThreadColumn'
 import {
-  ThreadImageLightbox,
+  ThreadImageViewer,
   attachmentImageRef,
   useNearViewport,
   useThreadAttachmentSource,
   type ThreadAttachmentSource,
+  type ThreadViewerImage,
 } from './ThreadImageObjects'
 
 /** Three or more files draw as a list card. */
@@ -503,6 +510,7 @@ export function ThreadImageCard({
   n,
   width,
   onDownload,
+  onView,
 }: {
   file: ThreadFileObject
   source: ThreadAttachmentSource
@@ -512,6 +520,9 @@ export function ThreadImageCard({
   width: number
   /** Save it (a Download button in the caption's right). */
   onDownload?: () => void
+  /** Open the image viewer at this picture; `from` is the card's button,
+   *  where focus goes back when the viewer closes. */
+  onView?: (from: HTMLElement) => void
 }): JSX.Element {
   const actions = useContext(ThreadFileActionsContext)
   const imageRef = useMemo<ThreadImageRef>(
@@ -520,7 +531,6 @@ export function ThreadImageCard({
   )
   const [img, setImg] = useState<ThreadImage | null>(() => peekThreadThumb(imageRef))
   const [failed, setFailed] = useState(false)
-  const [viewing, setViewing] = useState(false)
   const boxRef = useRef<HTMLDivElement>(null)
   const near = useNearViewport(boxRef)
   useEffect(() => {
@@ -551,9 +561,21 @@ export function ThreadImageCard({
   const canOpenTab = !!actions
   const isMac = isMacPlatform()
   const where = `${file.path}${fileLineLabel(file)}`
-  const open = canOpenTab
-    ? openHandlers((opts) => actions!.open(file, opts))
-    : { onClick: () => setViewing(true) }
+  // A click views it; Option/Alt-click (where tabs open) opens its tab in
+  // the background, as on every other file.
+  const open = {
+    onMouseDown: (e: MouseEvent) => {
+      if (canOpenTab && e.button === 0 && isBackgroundOpenEvent(e)) e.preventDefault()
+    },
+    onClick: (e: MouseEvent<HTMLButtonElement>) => {
+      if (canOpenTab && isBackgroundOpenEvent(e)) {
+        e.preventDefault()
+        actions!.open(file, { background: true })
+      } else if (onView) onView(e.currentTarget)
+      else if (canOpenTab) actions!.open(file, fileOpenOptionsFor(e))
+    },
+  }
+  const hint = canOpenTab ? `Click to view · ${backgroundClickLabel(isMac)} to open in background` : ''
   return (
     <div
       ref={boxRef}
@@ -577,8 +599,8 @@ export function ThreadImageCard({
       <button
         type="button"
         data-thread-image-open=""
-        title={canOpenTab ? fileOpenTooltip(where, isMac) : name}
-        aria-label={`${canOpenTab ? 'Open' : 'View'} ${name}${changed ? ' (changed since sent)' : ''}${canOpenTab ? `. ${fileOpenAriaHint(isMac)}` : ''}`}
+        title={hint ? `${where}\n${hint}` : name}
+        aria-label={`View ${name}${changed ? ' (changed since sent)' : ''}${canOpenTab ? `. ${fileOpenAriaHint(isMac)}` : ''}`}
         {...open}
         style={{
           display: 'block',
@@ -586,7 +608,7 @@ export function ThreadImageCard({
           padding: 0,
           border: 'none',
           background: 'transparent',
-          cursor: canOpenTab ? 'pointer' : 'zoom-in',
+          cursor: 'zoom-in',
           font: 'inherit',
           color: 'inherit',
         }}
@@ -641,9 +663,6 @@ export function ThreadImageCard({
         )}
         {onDownload && threadFileDownloadable(file) && <ThreadFileDownloadButton file={file} onDownload={onDownload} />}
       </span>
-      {viewing && (
-        <ThreadImageLightbox imageRef={imageRef} name={name} thumbUrl={img?.url ?? null} onClose={() => setViewing(false)} />
-      )}
     </div>
   )
 }
@@ -660,6 +679,10 @@ export function ThreadFileObjects({
   docId?: string
 }): JSX.Element | null {
   const source = useThreadAttachmentSource()
+  const actions = useContext(ThreadFileActionsContext)
+  // The image viewer: which picture it shows, and the card to focus again.
+  const [viewing, setViewing] = useState<number | null>(null)
+  const viewedFrom = useRef<HTMLElement | null>(null)
   // The index is the attachment's place on the message (the daemon's `n`).
   const all = (files ?? []).map((f, n) => ({ f, n })).filter(({ f }) => f && typeof f === 'object')
   if (all.length === 0) return null
@@ -679,6 +702,27 @@ export function ThreadFileObjects({
       : null
   const side = mine ? 'flex-end' : 'flex-start'
   const width = images.length > 1 ? THREAD_IMAGE_GRID_PX : THREAD_IMAGE_CARD_PX
+  const viewerImages: ThreadViewerImage[] =
+    source && docId && viewing !== null
+      ? images.map(({ f, n }) => ({
+          file: f,
+          imageRef: attachmentImageRef(source, docId, n, f.modifiedAt),
+          ...(download && threadFileDownloadable(f) ? { onDownload: () => download(f, n) } : {}),
+        }))
+      : []
+  const closeViewer = (why: 'cancel' | 'tab'): void => {
+    setViewing(null)
+    const from = viewedFrom.current
+    viewedFrom.current = null
+    // Back to the card it opened from, after the press that closed it (a
+    // press outside would otherwise leave focus on the page). "Open in
+    // tab" leaves focus to the tab.
+    if (why === 'cancel' && from) {
+      setTimeout(() => {
+        if (from.isConnected) from.focus()
+      }, 0)
+    }
+  }
   return (
     <div
       data-thread-files=""
@@ -687,7 +731,7 @@ export function ThreadFileObjects({
     >
       {source && docId && images.length > 0 && (
         <div data-thread-images="" className="flex flex-wrap" style={{ gap: 6, flexBasis: '100%', maxWidth: '100%', justifyContent: side }}>
-          {images.map(({ f, n }) => (
+          {images.map(({ f, n }, i) => (
             <ThreadImageCard
               key={threadThumbKey(attachmentImageRef(source, docId, n, f.modifiedAt))}
               file={f}
@@ -696,9 +740,21 @@ export function ThreadFileObjects({
               n={n}
               width={width}
               onDownload={download ? () => download(f, n) : undefined}
+              onView={(from) => {
+                viewedFrom.current = from
+                setViewing(i)
+              }}
             />
           ))}
         </div>
+      )}
+      {viewing !== null && viewerImages.length > 0 && (
+        <ThreadImageViewer
+          images={viewerImages}
+          start={viewing}
+          onClose={closeViewer}
+          onOpenInTab={actions ? (f) => actions.open(f) : undefined}
+        />
       )}
       {rest.length >= FILE_LIST_CARD_AT ? (
         <ThreadFileListCard

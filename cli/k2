@@ -1528,8 +1528,13 @@ cli_send() {
         return
     fi
     if [ -n "$sock" ] && [ -S "$sock" ] && _uds_eligible "$endpoint"; then
-        local out rc
-        out="$("${fn}_uds" "$endpoint" "$@")"; rc=$?
+        # `|| rc=$?`, never `; rc=$?`: under `set -e` a cell socket that
+        # refused or timed out ended the command right here, before the TCP
+        # fallback, and the caller printed an empty answer (0.46.12:
+        # `k2 inbox read` → "no usable answer: ''" from a session whose
+        # socket nobody served).
+        local out rc=0
+        out="$("${fn}_uds" "$endpoint" "$@")" || rc=$?
         if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]]; then
             printf '%s' "$out"
             return 0
@@ -61038,6 +61043,9 @@ cmd_inbox_read() {
     cli_send cli_request "/cli/inbox/read" "id=$(urlencode "$id")" | python3 -c "
 import json, sys
 raw = sys.stdin.read()
+if not raw.strip():
+    sys.stderr.write('Error: no answer from the K2 daemon (neither this session\'s cell socket nor the loopback port answered). Is K2 running? Try again: k2 inbox read <id>\n')
+    sys.exit(1)
 try:
     d = json.loads(raw)
 except Exception:

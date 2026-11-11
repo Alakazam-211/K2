@@ -659,14 +659,14 @@ impl Server {
     fn conn_writable(&mut self, id: u64) {
         let Some(c) = self.conns.get_mut(&id) else { return };
         while !c.wbuf.is_empty() {
+            // An fd whose frame already went out without it can never be
+            // sent: drop it rather than let it block every fd behind it.
+            // (`send_span` keeps this from happening; this is the backstop.)
+            while c.wfds.front().is_some_and(|(at, _)| *at < c.written) {
+                c.wfds.pop_front();
+            }
             let (a, _) = c.wbuf.as_slices();
-            let fd_here = c.wfds.front().map(|(at, _)| *at == c.written).unwrap_or(false);
-            // An fd rides on the first byte of its frame; send only up to the
-            // next fd boundary otherwise.
-            let limit = match c.wfds.front() {
-                Some((at, _)) if !fd_here => ((*at - c.written) as usize).min(a.len()),
-                _ => a.len(),
-            };
+            let (limit, fd_here) = send_span(c.written, a.len(), c.wfds.iter().map(|(at, _)| *at));
             let pass = if fd_here { c.wfds.front().map(|(_, f)| f.as_raw_fd()) } else { None };
             match sys::send_with_fd(c.sock.as_raw_fd(), &a[..limit], pass) {
                 Ok(n) => {
@@ -1519,6 +1519,30 @@ fn meta_too_big(meta: &serde_json::Value) -> bool {
     serde_json::to_vec(meta).map(|v| v.len() > MAX_META).unwrap_or(true)
 }
 
+/// One control-connection write: how many bytes of the next contiguous
+/// slice (`avail` long, starting at stream position `written`) a single
+/// `sendmsg` may carry, and whether the fd queued first rides on it.
+/// `fd_at` lists the stream positions of the queued fds, in order.
+///
+/// An fd rides on the FIRST byte of its frame, so a send always stops
+/// before the next fd's first byte, including a send that carries an fd
+/// itself. Before 0.46.12 that send ran to the end of the slice: with two
+/// fd replies queued at once (two `hold_unix_listener` from concurrent
+/// spawns read in one batch), the second frame went out inside the
+/// first's `sendmsg`, its fd never left, and every later fd on that
+/// connection queued behind it. Each spawn from then on got "no fd in
+/// the reply" and its cell socket was held by ptyd but served by nobody.
+fn send_span(written: u64, avail: usize, mut fd_at: impl Iterator<Item = u64>) -> (usize, bool) {
+    let first = fd_at.next();
+    let fd_here = first == Some(written);
+    let next = if fd_here { fd_at.next() } else { first };
+    let limit = match next {
+        Some(at) => (at.saturating_sub(written) as usize).min(avail),
+        None => avail,
+    };
+    (limit, fd_here)
+}
+
 fn dup_fd(fd: RawFd) -> io::Result<OwnedFd> {
     // SAFETY: F_DUPFD_CLOEXEC on a valid fd.
     let n = cvt(unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) })?;
@@ -1570,6 +1594,21 @@ fn signal_session(s: &Session, sig: Sig, target: SigTarget) -> Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_send_never_runs_into_the_next_fds_frame() {
+        // No fd queued: the whole slice.
+        assert_eq!(send_span(0, 100, std::iter::empty()), (100, false));
+        // Before an fd: stop at its first byte.
+        assert_eq!(send_span(10, 100, [40].into_iter()), (30, false));
+        // At an fd with no other queued: the whole slice rides with it.
+        assert_eq!(send_span(40, 100, [40].into_iter()), (100, true));
+        // At an fd with another queued at 70: this send carries the first fd
+        // and stops before the second frame (the 0.46.12 wedge).
+        assert_eq!(send_span(40, 100, [40, 70].into_iter()), (30, true));
+        // A slice shorter than the distance to the next fd.
+        assert_eq!(send_span(40, 10, [40, 70].into_iter()), (10, true));
+    }
 
     /// Invariant: any peer can make ptyd log a line per bad frame, so
     /// the log rotates at its cap and never grows past cap + one line,

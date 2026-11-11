@@ -110,14 +110,49 @@ mod unix_impl {
                 std::fs::create_dir_all(&dir)?;
                 std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
                 let sid = session.session_id.to_string();
-                return owner.hold_unix_listener(
-                    &k2_core::terminal::ptyd::cell_listener_name(&sid),
-                    &cell_socket_path(&session.session_id),
-                    0o600,
-                );
+                let name = k2_core::terminal::ptyd::cell_listener_name(&sid);
+                let held = owner.hold_unix_listener(&name, &cell_socket_path(&session.session_id), 0o600);
+                return match held {
+                    Ok(listener) => Ok(listener),
+                    Err(e) => bind_after_failed_hold(&session.session_id, &e, || {
+                        owner.request(k2_ptyd::proto::Request::ReleaseFd { name: name.clone() })
+                    }),
+                };
             }
         }
         bind_cell_socket(&session.session_id)
+    }
+
+    /// ptyd refused or botched `hold_unix_listener` (0.46.12: a reply with
+    /// no fd). ptyd may still hold a listener at the cell's path, and the
+    /// session's `K2_HOOK_SOCK` already names that path: left alone, every
+    /// `k2` call from the session connects to a socket nobody accepts on
+    /// (it waits out its timeout, or is refused once the backlog fills).
+    /// So ask ptyd to let it go (a release unlinks the path), and only
+    /// once it has answered bind the socket here, like a non-ptyd session.
+    /// Such a cell is served but won't outlive a daemon restart: at
+    /// adoption ptyd holds nothing for it and the daemon rebinds.
+    ///
+    /// The release must be answered BEFORE the bind (`release` unlinks the
+    /// path; a release still in flight would unlink our new socket). When
+    /// ptyd doesn't answer `ok`, the hold's error stands (today's TCP
+    /// fallback).
+    pub(crate) fn bind_after_failed_hold(
+        session_id: &SessionId,
+        hold_err: &std::io::Error,
+        release: impl FnOnce() -> std::io::Result<k2_ptyd::proto::Reply>,
+    ) -> std::io::Result<std::os::unix::net::UnixListener> {
+        match release() {
+            Ok(k2_ptyd::proto::Reply::Ok) => {
+                k2_core::log_debug!(
+                    "[hook-scoped] ptyd could not hold the cell listener for session={session_id} ({hold_err}); released it, binding it in the daemon"
+                );
+                bind_cell_socket(session_id)
+            }
+            other => Err(std::io::Error::other(format!(
+                "{hold_err}; releasing ptyd's listener didn't answer ok: {other:?}"
+            ))),
+        }
     }
 
     /// Adoption (P44): the cell listener ptyd held across the restart, if
@@ -272,6 +307,61 @@ mod unix_impl {
 
             drop(listener);
             // `_home` restores HOME + cleans up on drop.
+        }
+
+        /// 0.46.12: ptyd answered `hold_unix_listener` without the fd and
+        /// kept a listener at the cell's path that nobody accepted on, so
+        /// the session's `k2` calls (e.g. `k2 inbox read`) hit a dead
+        /// socket. Once ptyd confirms the release, the daemon binds and
+        /// SERVES the path itself: a client connects and is accepted.
+        #[test]
+        fn a_failed_hold_is_released_then_bound_and_served_here() {
+            let _home = k2_core::test_env::TempHome::short();
+            let sid = SessionId::new();
+            let path = cell_socket_path(&sid);
+            // ptyd's leftover: bound, never listening (connect is refused).
+            std::fs::create_dir_all(cells_dir()).expect("cells dir");
+            let leftover = std::os::unix::net::UnixDatagram::bind(&path).expect("leftover socket file");
+            let hold_err = std::io::Error::other("hold_unix_listener: no fd in the reply");
+            let mut released = false;
+            let listener = bind_after_failed_hold(&sid, &hold_err, || {
+                released = true;
+                Ok(k2_ptyd::proto::Reply::Ok)
+            })
+            .expect("bound in the daemon after the release");
+            assert!(released, "ptyd was asked to release its listener first");
+            let mut client = std::os::unix::net::UnixStream::connect(&path).expect("the cell socket accepts connections");
+            let (mut served, _) = listener.accept().expect("the daemon's listener accepts it");
+            use std::io::{Read, Write};
+            client.write_all(b"ping").expect("write");
+            let mut got = [0u8; 4];
+            served.read_exact(&mut got).expect("read");
+            assert_eq!(&got, b"ping");
+            drop(leftover);
+        }
+
+        /// When ptyd doesn't confirm the release, nothing is bound (a
+        /// release still in flight would unlink the new socket): the hold's
+        /// error stands and the session keeps the TCP fallback.
+        #[test]
+        fn a_failed_hold_whose_release_is_not_confirmed_binds_nothing() {
+            let _home = k2_core::test_env::TempHome::short();
+            let sid = SessionId::new();
+            let hold_err = std::io::Error::other("hold_unix_listener: no fd in the reply");
+            let err = bind_after_failed_hold(&sid, &hold_err, || {
+                Ok(k2_ptyd::proto::Reply::Error { code: "busy".into(), detail: String::new() })
+            })
+            .expect_err("no bind without a confirmed release");
+            let msg = err.to_string();
+            assert!(msg.contains("no fd in the reply"), "keeps the hold's error: {msg}");
+            assert!(msg.contains("didn't answer ok"), "says the release failed: {msg}");
+            assert!(!cell_socket_path(&sid).exists(), "no socket was bound");
+            let err = bind_after_failed_hold(&sid, &hold_err, || {
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "ptyd did not answer"))
+            })
+            .expect_err("no bind when ptyd doesn't answer");
+            assert!(err.to_string().contains("ptyd did not answer"), "{err}");
+            assert!(!cell_socket_path(&sid).exists(), "no socket was bound");
         }
 
         #[test]

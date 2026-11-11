@@ -597,6 +597,45 @@ fn held_listeners_queue_connections_and_fds_round_trip() {
     assert!(back.as_raw_fd() > 2);
 }
 
+/// Several `hold_unix_listener` requests read in one batch (the daemon
+/// spawning sessions at once) each get their own listener fd, and the
+/// connection still passes fds afterwards. Before 0.46.12 the second reply
+/// went out inside the first one's `sendmsg` without its fd; every fd
+/// queued after it was stuck for good, so every later cell socket was held
+/// by ptyd and served by nobody ("hold_unix_listener: no fd in the reply").
+#[test]
+fn pipelined_listener_holds_each_get_their_fd_and_later_holds_still_do() {
+    let home = Home::new(false);
+    let _p = Ptyd::start(&home, &[]);
+    let mut c = owner(&home);
+    let n = 6;
+    let paths: Vec<PathBuf> = (0..n).map(|i| home.root.join(format!("c{i}.sock"))).collect();
+    // One write: ptyd reads all six frames in one batch and queues all six
+    // replies (and fds) before it writes any.
+    let mut batch = Vec::new();
+    for (i, p) in paths.iter().enumerate() {
+        let req = Request::HoldUnixListener { name: format!("cell:p{i}"), path: p.to_string_lossy().into(), mode: 0o600, owner_uid: None };
+        batch.extend(k2_ptyd::proto::encode(&Frame::new(Some(1000 + i as u64), req)).unwrap());
+    }
+    c.conn.stream.write_all(&batch).unwrap();
+    for (i, p) in paths.iter().enumerate() {
+        let f = c.conn.recv().unwrap();
+        assert_eq!(f.id, Some(1000 + i as u64), "replies come back in order");
+        assert_eq!(f.body, Reply::Ok, "hold {i}");
+        let fd = c.take_fd().unwrap_or_else(|| panic!("hold {i}: no fd rode on its reply"));
+        let l = std::os::unix::net::UnixListener::from(fd);
+        let addr = l.local_addr().unwrap();
+        assert_eq!(addr.as_pathname(), Some(p.as_path()), "hold {i} got its own listener, not another's");
+    }
+    assert!(c.take_fd().is_none(), "no stray fds left over");
+    // The connection is not wedged: a later hold still gets its fd.
+    let later = home.root.join("later.sock");
+    let r = c.request(Request::HoldUnixListener { name: "cell:later".into(), path: later.to_string_lossy().into(), mode: 0o600, owner_uid: None }).unwrap();
+    assert_eq!(r, Reply::Ok);
+    let l = std::os::unix::net::UnixListener::from(c.take_fd().expect("a later hold still gets its fd"));
+    assert_eq!(l.local_addr().unwrap().as_pathname(), Some(later.as_path()));
+}
+
 // ------------------------------------------------------------------ 7
 
 #[test]

@@ -21,7 +21,6 @@ import { openFirstRunTarget } from './first-run-openers'
 import { useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
 import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-reopen'
-import { useCliCommandFocusStore } from '@/stores/cli-command-focus'
 
 beforeEach(() => {
   h.openSettings.mockReset()
@@ -30,7 +29,6 @@ beforeEach(() => {
   useLlmSignInRequestStore.setState({ pending: null })
   usePhonePairingFocusStore.setState({ requestSeq: 0, handledSeq: 0 })
   useOwnerAccountPromptReopenStore.setState({ forced: false })
-  useCliCommandFocusStore.setState({ requestSeq: 0, handledSeq: 0 })
 })
 
 describe('openFirstRunTarget', () => {
@@ -73,16 +71,7 @@ describe('openFirstRunTarget', () => {
     expect(h.openSettings).toHaveBeenCalledWith('general')
   })
 
-  it('cli_settings opens General and asks for the k2 command row, once per click', () => {
-    expect(openFirstRunTarget('cli_settings')).toBe(true)
-    expect(h.openSettings).toHaveBeenCalledWith('general')
-    expect(useCliCommandFocusStore.getState().takeRequest()).toBe(true)
-    expect(useCliCommandFocusStore.getState().takeRequest()).toBe(false)
-    openFirstRunTarget('cli_settings')
-    expect(useCliCommandFocusStore.getState().takeRequest()).toBe(true)
-  })
-
-  it.each(['k5_chat', '', 'constructor', '__proto__', null, undefined])('ignores %s', (v) => {
+  it.each(['k5_chat', 'cli_settings', '', 'constructor', '__proto__', null, undefined])('ignores %s', (v) => {
     expect(openFirstRunTarget(v as string | null | undefined)).toBe(false)
     expect(h.openSettings).not.toHaveBeenCalled()
     expect(h.startAddWorkspace).not.toHaveBeenCalled()

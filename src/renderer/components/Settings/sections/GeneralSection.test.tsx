@@ -4,7 +4,7 @@
 // server card for a server too old to restart or update from here.
 
 import React from 'react'
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 const tauri = vi.hoisted(() => ({
@@ -55,7 +55,6 @@ import { useUpdateStore } from '@/stores/update'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
-import { useCliCommandFocusStore } from '@/stores/cli-command-focus'
 
 const confirm = vi.fn(async () => true)
 const reset = vi.fn(async () => {})
@@ -286,30 +285,6 @@ describe('Settings → General', () => {
     expect(within(row('general.reset-all')).getByRole('alert').textContent).toBe(
       "Only this server's owner can reset its settings. Nothing was changed.",
     )
-  })
-
-  it('the setup checklist\'s k2 command row opens on the General tab with the k2 command row pulsed, once per ask', async () => {
-    useCliCommandFocusStore.setState({ requestSeq: 0, handledSeq: 0 })
-    const scroll = vi.fn()
-    const before = Element.prototype.scrollIntoView
-    Element.prototype.scrollIntoView = scroll // jsdom has none
-    onTestFinished(() => {
-      Element.prototype.scrollIntoView = before
-    })
-    render(<GeneralSection />)
-    act(() => void fireEvent.click(screen.getByRole('tab', { name: 'Server' })))
-    expect(document.querySelector('[data-settings-id="general.cli-version"]')).toBeNull()
-    act(() => useCliCommandFocusStore.getState().requestCliCommandFocus())
-    expect(screen.getByRole('tab', { name: 'General' }).getAttribute('aria-selected')).toBe('true')
-    await waitFor(() => expect(row('general.cli-version').classList.contains('settings-search-pulse')).toBe(true))
-    expect(scroll).toHaveBeenCalled()
-    expect(useCliCommandFocusStore.getState().takeRequest()).toBe(false)
-  })
-
-  it('a later visit to General does not jump to the k2 command row by itself', () => {
-    useCliCommandFocusStore.setState({ requestSeq: 3, handledSeq: 3 })
-    render(<GeneralSection />)
-    expect(row('general.cli-version').classList.contains('settings-search-pulse')).toBe(false)
   })
 
   it('Server tab: the server row shows its state and Restart asks first', async () => {

@@ -26,7 +26,6 @@ import { cx } from '@/components/ui'
 import { ChecklistIcon } from '@/components/icons/K2Icons'
 import { NavSectionLabel } from '@/components/Sidebar/NavSection'
 import { primaryScope } from '@/kessel/server-scope'
-import { isWebClient } from '@/lib/is-web'
 import { openFirstRunTarget } from '@/lib/first-run-openers'
 import { useSidebarStore } from '@/stores/sidebar'
 import {
@@ -46,7 +45,6 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
   tunnel: { label: 'Turn on the tunnel', line: 'Reach this server from anywhere.' },
   phone: { label: 'Connect your phone', line: 'Talk to your agents from your phone.' },
   own_sign_in: { label: 'Make your own sign-in', line: 'Sign in from your phone and your other devices.' },
-  k2_cli: { label: 'Try the k2 command', line: 'Open a new Terminal window and type k2.' },
 }
 
 export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs the tunnel first.'
@@ -74,12 +72,9 @@ export function useSetupChecklistRows(): { rows: FirstRunRow[] | null; error: st
   const scope = primaryScope()
   useEffect(() => watchFirstRun(scope), [scope])
   const entry = useFirstRunStore((s) => s.entries[scope.id])
-  // The k2 command row is about the server's own machine: only its desktop
-  // app draws it.
-  const thisComputer = !scope.isRemote && !isWebClient()
   const doc = entry?.doc
   return {
-    rows: visibleRows(doc, { thisComputer }),
+    rows: visibleRows(doc),
     error: entry?.error ?? null,
     finished: !!doc && doc.enabled && !doc.hidden && doc.finished,
   }

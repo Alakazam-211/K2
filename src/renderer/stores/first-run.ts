@@ -31,19 +31,12 @@ export const FIRST_RUN_SKIP_PATH = 'first-run/skip'
 
 /** Row ids this client knows, in the contract's order. The daemon may send
  *  more (`meet_k5` later); unknown ids are dropped. */
-export const FIRST_RUN_ROW_IDS = ['llm_sign_in', 'first_agent', 'tunnel', 'phone', 'own_sign_in', 'k2_cli'] as const
+export const FIRST_RUN_ROW_IDS = ['llm_sign_in', 'first_agent', 'tunnel', 'phone', 'own_sign_in'] as const
 export type FirstRunRowId = (typeof FIRST_RUN_ROW_IDS)[number]
 
 /** What a row's button opens. Unknown values are dropped (the row stays,
  *  without an opener). */
-export const FIRST_RUN_OPENS = [
-  'llm_sign_in',
-  'add_workspace',
-  'tunnel',
-  'phone',
-  'owner_account_prompt',
-  'cli_settings',
-] as const
+export const FIRST_RUN_OPENS = ['llm_sign_in', 'add_workspace', 'tunnel', 'phone', 'owner_account_prompt'] as const
 export type FirstRunOpens = (typeof FIRST_RUN_OPENS)[number]
 
 export type FirstRunRowState = 'done' | 'todo' | 'skipped'
@@ -100,23 +93,11 @@ export function parseFirstRunDoc(raw: unknown): FirstRunDoc {
   }
 }
 
-/** Rows about the machine the daemon runs on (`k2_cli`: a new Terminal
- *  window there finds `k2`). The daemon sends them to the owner token only;
- *  this client draws them only when it is that machine's desktop app, since
- *  their opener shows this computer's own Settings. */
-export const THIS_COMPUTER_ROWS: readonly FirstRunRowId[] = ['k2_cli']
-
 /** The rows to draw, or null when the checklist shows nothing: the switch
- *  is off, the person hid it, it's finished, or no row is left to show.
- *  `thisComputer`: the window is the desktop app on the server's own
- *  machine (false drops `THIS_COMPUTER_ROWS`). */
-export function visibleRows(
-  doc: FirstRunDoc | null | undefined,
-  { thisComputer = true }: { thisComputer?: boolean } = {},
-): FirstRunRow[] | null {
-  if (!doc || !doc.enabled || doc.hidden || doc.finished) return null
-  const rows = thisComputer ? doc.rows : doc.rows.filter((r) => !THIS_COMPUTER_ROWS.includes(r.id))
-  return rows.length === 0 ? null : rows
+ *  is off, the person hid it, it's finished, or no row is left to show. */
+export function visibleRows(doc: FirstRunDoc | null | undefined): FirstRunRow[] | null {
+  if (!doc || !doc.enabled || doc.hidden || doc.finished || doc.rows.length === 0) return null
+  return doc.rows
 }
 
 /** Rows still to do (not done, not skipped). */

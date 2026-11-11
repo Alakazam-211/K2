@@ -807,8 +807,8 @@ async function ensurePinnedChat(
  */
 function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSessionId, onDaemonSessionRemoved }: AgentChatTerminalProps): React.JSX.Element {
   const room = useRoom()
-  // The eye/pencil in any bar of this session reads who else is on it.
-  const modeSession = useMemo<ModeToggleSession>(() => ({ path: projectPath, room }), [projectPath, room])
+  // The eye/pencil in any bar of this session reads its room.
+  const modeSession = useMemo<ModeToggleSession>(() => ({ room }), [room])
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
   const displayName = useDisplayName(projectPath, agentName)
@@ -1669,8 +1669,8 @@ function RetryButton({ onClick, refreshing }: { onClick: () => void; refreshing:
  */
 function AgentChatTerminalLegacy({ agentName, projectId, projectPath, restoredSessionId }: AgentChatTerminalProps): React.JSX.Element {
   const room = useRoom()
-  // The eye/pencil in any bar of this session reads who else is on it.
-  const modeSession = useMemo<ModeToggleSession>(() => ({ path: projectPath, room }), [projectPath, room])
+  // The eye/pencil in any bar of this session reads its room.
+  const modeSession = useMemo<ModeToggleSession>(() => ({ room }), [room])
   const containerRef = useRef<HTMLDivElement>(null)
   const terminalIdRef = useRef(agentChatId(projectId, agentName))
 

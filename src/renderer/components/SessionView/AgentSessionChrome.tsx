@@ -105,8 +105,8 @@ export function AgentSessionChrome({
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
-  // The eye/pencil in any bar of this session reads who else is on it.
-  const modeSession = useMemo<ModeToggleSession>(() => ({ path: cwd ?? null, room }), [cwd, room])
+  // The eye/pencil in any bar of this session reads its room.
+  const modeSession = useMemo<ModeToggleSession>(() => ({ room }), [room])
   // The workspace's bell: Thread and Chatter views' floats, and split view's
   // Thread column (with the picture and name and search).
   const bell = useMemo(() => (cwd ? <ThreadFloatBell cwd={cwd} /> : null), [cwd])

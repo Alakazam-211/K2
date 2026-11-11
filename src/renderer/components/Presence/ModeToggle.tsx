@@ -3,70 +3,33 @@
 // the selected one is filled. Eye = viewer, pencil = claimer.
 //
 // 0.46.11 (Rosson, thread-first): it lives in the terminal's own bar
-// (Terminal view's session header), not the app's top bar, and shows only
-// when it matters: someone else is on this session, or this window is on
-// the eye (so nobody is stranded in view mode after the others leave).
-// Alone on the pencil, there is no switch at all. Drop `<ModeToggle />`
-// into any session bar: it reads the session from
-// `ModeToggleSessionContext`, which the session chrome provides, and
-// applies the rule itself.
+// (Terminal view's session header), not the app's top bar, and shows at
+// all times, alone or not, once the window's mode has resolved. A pinned
+// remote room shows its fixed mode, disabled. Drop `<ModeToggle />` into
+// any session bar: it reads its room from `ModeToggleSessionContext`,
+// which the session chrome provides.
 
 import { createContext, useContext, useEffect } from 'react'
-import { useStore } from 'zustand'
 import {
   useWindowModeStore,
   initWindowModeDefault,
   type WindowMode,
 } from '@/stores/window-mode'
-import { usersForWorkspace } from '@/lib/presence-workspace'
-import type { PresenceRosterUser as RosterUser } from '@/stores/session-events'
 // Type-only: the room's rule is restated below (`roomModeOf`), so this
 // control never loads the tabs store.
 import type { Room } from '@/stores/room'
-import { createStore } from 'zustand/vanilla'
-import type { PresenceView, PresenceViewStore } from '@/stores/server-view'
-import { useSelfPresenceUser } from './self-presence'
 
 const noDrag = {
   WebkitAppRegion: 'no-drag',
 } as React.CSSProperties
 
-/** The session a bar's toggle belongs to: its workspace path (the roster's
- *  join key) and its room (whose server's roster, and a pinned room's own
- *  mode). Provided by the session chrome around its header. */
+/** The session a bar's toggle belongs to: its room (a pinned room has its
+ *  own fixed mode). Provided by the session chrome around its header. */
 export interface ModeToggleSession {
-  path: string | null
-  room: Pick<Room, 'isPrimary' | 'readOnly' | 'presence' | 'scope'> | null
+  room: Pick<Room, 'isPrimary' | 'readOnly' | 'scope'> | null
 }
 
 export const ModeToggleSessionContext = createContext<ModeToggleSession | null>(null)
-
-/** The visibility rule (pure, unit-tested): show the eye/pencil when
- *  someone else is on this session, or when this window is on the eye.
- *  Alone on the pencil (or not resolved yet), hide it. */
-export function shouldShowModeToggle({
-  othersOnSession,
-  mode,
-}: {
-  othersOnSession: boolean
-  /** The mode in force; null while the window's default is unresolved. */
-  mode: WindowMode | null
-}): boolean {
-  return othersOnSession || mode === 'viewer'
-}
-
-/** Is anyone but `self` on the workspace at `path`? The roster's
- *  per-workspace subscriptions, joined by the daemon's prefix rule (the
- *  same join the nav rows' avatars use). No path or no presence: no. */
-export function othersOnSessionPath(
-  roster: RosterUser[],
-  path: string | null,
-  self: string,
-  supported: boolean,
-): boolean {
-  if (!supported || !path) return false
-  return usersForWorkspace(roster, path).some((u) => u.user !== self)
-}
 
 function EyeIcon(): React.JSX.Element {
   return (
@@ -202,36 +165,20 @@ export function ModeToggleControl({
   )
 }
 
-const NO_SESSION_PRESENCE: PresenceViewStore = createStore<PresenceView>(() => ({ roster: [], supported: false }))
-
-/** The eye/pencil for a session's bar, under the visibility rule. Reads
- *  its session from `ModeToggleSessionContext`; with none, it shows only
- *  while the window is on the eye. */
+/** The eye/pencil for a session's bar, shown at all times. Reads its room
+ *  from `ModeToggleSessionContext` (none: the window's own mode). Hidden
+ *  only while the window's mode is unresolved, so it doesn't flash. */
 export default function ModeToggle(): React.JSX.Element | null {
   const session = useContext(ModeToggleSessionContext)
   const room = session?.room ?? null
-  const windowMode = useWindowModeStore((s) => (s.resolved ? s.mode : null))
-  const self = useSelfPresenceUser()
-  // The session's server's roster: a pinned room reads its own server's.
-  // No session: nobody to count.
-  const presence = room?.presence ?? NO_SESSION_PRESENCE
-  const roster = useStore(presence, (s) => s.roster)
-  const supported = useStore(presence, (s) => s.supported)
+  const resolved = useWindowModeStore((s) => s.resolved)
 
   useEffect(() => {
     initWindowModeDefault()
   }, [])
 
-  const roomMode = roomModeOf(room)
-  // A remote room's mode is fixed by that room: it shows only when it is
-  // the eye, to say why typing does nothing.
-  const shown =
-    roomMode !== null
-      ? roomMode === 'viewer'
-      : shouldShowModeToggle({
-          othersOnSession: othersOnSessionPath(roster, session?.path ?? null, self, supported),
-          mode: windowMode,
-        })
-  if (!shown) return null
+  // A pinned remote room's mode is fixed by that room: always shown,
+  // disabled, eye or pencil, to say why typing does or doesn't work.
+  if (roomModeOf(room) === null && !resolved) return null
   return <ModeToggleControl room={room} />
 }

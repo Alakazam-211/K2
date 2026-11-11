@@ -781,11 +781,13 @@ describe('eye/pencil in the terminal bar (0.46.11)', () => {
     expect(header.querySelector('[data-mode-toggle]')?.getAttribute('data-mode-toggle')).toBe('viewer')
   })
 
-  it('alone on the pencil: not there', async () => {
+  it('alone on the pencil: still there, at all times', async () => {
     roomPresence.setState({ roster: [person('owner')] })
     renderView('terminal')
-    await screen.findByTestId('sidecar-session-header')
-    expect(document.querySelector('[data-mode-toggle]')).toBeNull()
+    const header = await screen.findByTestId('sidecar-session-header')
+    expect(header.querySelector('[data-mode-toggle]')?.getAttribute('data-mode-toggle')).toBe('claimer')
+    fireEvent.click(header.querySelector('button[title^="View only"]') as HTMLElement)
+    expect(useWindowModeStore.getState().mode).toBe('viewer')
   })
 
   it('not in Thread view (its slide-out terminal has no bar) and not in Chatter', async () => {

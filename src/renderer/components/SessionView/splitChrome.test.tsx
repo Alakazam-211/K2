@@ -66,8 +66,7 @@ import type { RosterUser } from '@/stores/presence'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { ModeToggleSessionContext } from '@/components/Presence/ModeToggle'
 
-// Someone else is on the workspace, so the eye/pencil (which applies its
-// own rule: others here, or this window on the eye) shows where it may.
+// Someone else is on the workspace (the eye/pencil shows either way).
 const person = (user: string): RosterUser => ({ user, role: user === 'owner' ? 'owner' : 'member', windowCount: 1, workspaces: ['/ws/one'], connectedAt: 1 })
 const roomPresence = createStore<PresenceView>(() => ({ roster: [person('owner'), person('alice')], supported: true }))
 
@@ -154,7 +153,7 @@ describe('what each header draws', () => {
 
 function header(viewTab: SessionViewTab, left: SplitPaneView = 'terminal', right: SplitPaneView = 'thread') {
   return (
-    <ModeToggleSessionContext.Provider value={{ path: '/ws/one', room }}>
+    <ModeToggleSessionContext.Provider value={{ room }}>
     <div data-testid="pane">
       <SidecarSessionHeader
         title="sales/reviewer"
@@ -224,13 +223,12 @@ describe("the session header as split view's bar", () => {
     expect(document.querySelector('[data-mode-toggle]')).toBeNull()
   })
 
-  it('the eye/pencil keeps its own rule on the bar: alone on the pencil, not there', () => {
+  it('the eye/pencil shows on the bar at all times: alone, on the pencil or the eye', () => {
     roomPresence.setState({ roster: [person('owner')] })
     try {
       renderInRoom(room, header('split', 'thread', 'terminal'))
-      expect(document.querySelector('[data-mode-toggle]')).toBeNull()
+      expect(document.querySelector('[data-mode-toggle]')?.getAttribute('data-mode-toggle')).toBe('claimer')
       cleanup()
-      // On the eye, it stays, so nobody is stranded in view mode.
       useWindowModeStore.setState({ mode: 'viewer', resolved: true, capable: true })
       renderInRoom(room, header('split', 'thread', 'terminal'))
       expect(document.querySelector('[data-mode-toggle]')?.getAttribute('data-mode-toggle')).toBe('viewer')

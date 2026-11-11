@@ -13,7 +13,7 @@ import {
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useSettingsStore } from '@/stores/settings'
 import { keyEventToSequence, naturalTextEditingSequence } from '@/lib/key-mapping'
-import { isFileDragActive, markDropConsumed, isImagePath, quotePathForImageDrop, bracketPaste } from '@/lib/file-drag'
+import { isFileDragActive, markDropConsumed } from '@/lib/file-drag'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
 import { TerminalComposeBar } from './TerminalComposeBar'
 import { useRoom } from '@/components/Room/RoomContext'
@@ -24,7 +24,10 @@ import {
   executeBrowserFileDrop,
   executeRemoteDrop,
 } from '@/lib/handle-remote-drop'
-import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import {
+  buildTerminalDropPayload,
+  filesFromDataTransfer,
+} from '@/lib/external-drop-router'
 
 // ── Types matching Rust GridUpdate / CompactLine / StyleSpan ──────────
 
@@ -82,30 +85,6 @@ interface AlacrittyTerminalViewProps {
    *  end-to-end spawn→visible latency for parity comparison with
    *  Kessel. See tabs.ts TerminalItemData.spawnedAt. */
   spawnedAt?: number
-}
-
-function shellEscape(path: string): string {
-  // Escape special shell characters with backslashes (like iTerm2/Terminal.app)
-  return path.replace(/[ '"\\()&|;<>$`!#*?[\]{}~]/g, '\\$&')
-}
-
-// Image/PDF paths skip backslash-escape so Claude Code's `[Image #N]`
-// detection (which fs.exists()s the literal string) can resolve them.
-function formatPathForTerminal(path: string): string {
-  return isImagePath(path) ? quotePathForImageDrop(path) : shellEscape(path)
-}
-
-/**
- * Build the terminal payload for a dropped/pasted set of paths. If any
- * path is an image, the full payload is wrapped in bracketed paste so
- * Claude Code's paste-event image detector fires and renders `[Image #N]`.
- * Plain terminals with bracketed paste enabled (zsh, bash, vim) see a
- * normal paste and insert the text as-is.
- */
-function buildDropPayload(paths: string[]): string {
-  const formatted = paths.map(formatPathForTerminal).join(' ')
-  const trailing = formatted + ' '
-  return paths.some(isImagePath) ? bracketPaste(trailing) : trailing
 }
 
 function colorToCSS(c: number): string {
@@ -626,7 +605,7 @@ export function AlacrittyTerminalView({
       .then((paths) => {
         if (!ptyIdRef.current) return
         if (paths && paths.length > 0) {
-          terminalWrite(room.scope, ptyIdRef.current, buildDropPayload(paths))
+          terminalWrite(room.scope, ptyIdRef.current, buildTerminalDropPayload(paths))
           return
         }
         writeText(text)
@@ -717,12 +696,12 @@ export function AlacrittyTerminalView({
             paths,
             { kind: 'terminal' },
             { workspacePath: cwd },
-            buildDropPayload,
+            buildTerminalDropPayload,
           ).then((payload) => {
             if (payload && pty) terminalWrite(room.scope, pty, payload)
           })
         } else {
-          terminalWrite(room.scope, ptyIdRef.current, buildDropPayload(paths))
+          terminalWrite(room.scope, ptyIdRef.current, buildTerminalDropPayload(paths))
         }
         return
       }
@@ -735,7 +714,7 @@ export function AlacrittyTerminalView({
           browserFiles,
           { kind: 'terminal' },
           { workspacePath: cwd || undefined },
-          buildDropPayload,
+          buildTerminalDropPayload,
         ).then((payload) => {
           if (payload && pty) terminalWrite(room.scope, pty, payload)
         })

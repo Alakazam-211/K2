@@ -298,9 +298,9 @@ export function hitTestExternalDrop(
   return classifyExternalDrop({ compose: null, terminal: null, fileTreeFolder })
 }
 
-// ── Terminal payload builder (matches TerminalPane / Alacritty) ───────
+// ── Terminal payload builder (shared by TerminalPane / Alacritty) ─────
 
-/** Backslash-escape specials the same way v1/v2 terminal drop did. */
+/** Backslash-escape shell specials, like iTerm2 and Terminal.app do. */
 function shellEscape(path: string): string {
   return path.replace(/[ '"\\()&|;<>$`!#*?[\]{}~]/g, '\\$&')
 }

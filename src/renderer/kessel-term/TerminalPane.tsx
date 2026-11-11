@@ -109,11 +109,6 @@ import {
   overlayViewer,
   type SplitPaneView,
 } from '@/components/SessionView/sessionViewTab'
-import {
-  bracketPaste,
-  isImagePath,
-  quotePathForImageDrop,
-} from '@/lib/file-drag'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { isSoleWorkspaceViewer } from '@/stores/presence'
 import { useStore } from 'zustand'
@@ -127,7 +122,10 @@ import {
   executeBrowserFileDrop,
   executeRemoteDrop,
 } from '@/lib/handle-remote-drop'
-import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import {
+  buildTerminalDropPayload,
+  filesFromDataTransfer,
+} from '@/lib/external-drop-router'
 import {
   anchorScrollPx,
   clampScrollPx,
@@ -366,29 +364,6 @@ function colWithin(rowDiv: Element, node: Node, offset: number): number {
     return 0
   }
   return r.toString().length
-}
-
-/** Shell-escape a path for safe paste into a terminal input line.
- *  Mirrors the helper in AlacrittyTerminalView.tsx — duplicated
- *  rather than imported to keep v2 decoupled from v1. */
-function shellEscape(path: string): string {
-  return path.replace(/[ '"\\()&|;<>$`!#*?[\]{}~]/g, '\\$&')
-}
-
-/** Images/PDFs skip backslash-escape so Claude Code's
- *  `[Image #N]` detection (which fs.exists()s the literal string)
- *  can resolve them. */
-function formatPathForTerminal(path: string): string {
-  return isImagePath(path) ? quotePathForImageDrop(path) : shellEscape(path)
-}
-
-/** Build terminal payload for a dropped/pasted set of paths.
- *  Wraps in bracketed paste if any path is an image, so Claude's
- *  paste-event handler fires. */
-function buildDropPayload(paths: string[]): string {
-  const formatted = paths.map(formatPathForTerminal).join(' ')
-  const trailing = formatted + ' '
-  return paths.some(isImagePath) ? bracketPaste(trailing) : trailing
 }
 
 /** Whether a snapshot's visible grid contains any non-blank cell.
@@ -3749,7 +3724,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         daemonCliGet<string[]>(room.scope, 'fs/clipboard-paths')
           .then((paths) => {
             if (paths && paths.length > 0) {
-              sendInput(buildDropPayload(paths))
+              sendInput(buildTerminalDropPayload(paths))
               return
             }
             if (text) sendInput(text)
@@ -4767,12 +4742,12 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               paths,
               { kind: 'terminal' },
               { workspacePath: cwd },
-              buildDropPayload,
+              buildTerminalDropPayload,
             ).then((payload) => {
               if (payload) sendInput(payload)
             })
           } else {
-            sendInput(buildDropPayload(paths))
+            sendInput(buildTerminalDropPayload(paths))
           }
           return
         }
@@ -4787,7 +4762,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             browserFiles,
             { kind: 'terminal' },
             { workspacePath: cwd || undefined },
-            buildDropPayload,
+            buildTerminalDropPayload,
           ).then((payload) => {
             if (payload) sendInput(payload)
           })

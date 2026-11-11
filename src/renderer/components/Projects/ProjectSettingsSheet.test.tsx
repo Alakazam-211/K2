@@ -137,7 +137,8 @@ describe('opening', () => {
     expect(sheet.getAttribute('aria-modal')).toBe('true')
     const title = within(sheet).getByRole('heading', { name: 'Docs refresh' })
     expect(sheet.getAttribute('aria-labelledby')).toBe(title.id)
-    expect(within(sheet).getByText(/^Project settings · /)).toBeTruthy()
+    expect(within(sheet).getByText(/^0 agents · No point of contact yet$/)).toBeTruthy()
+    expect(within(sheet).getByRole('button', { name: 'Open in Settings' })).toBeTruthy()
     expect(within(sheet).queryByRole('button', { name: 'Open project' })).toBeNull()
     expect(within(sheet).queryByLabelText('Search projects')).toBeNull()
     expect(within(sheet).getByRole('region', { name: 'General' })).toBeTruthy()
@@ -192,6 +193,14 @@ describe('closing and focus', () => {
     await waitFor(() => expect(document.activeElement).toBe(opener))
   })
 
+  it('"Open in Settings" closes the sheet and opens Settings → Projects on this project', async () => {
+    renderWithOpener()
+    const sheet = await openSheet('g2')
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Open in Settings' }))
+    expect(openSettings).toHaveBeenCalledWith('project-groups', 'g2')
+    await waitFor(() => expect(screen.queryByTestId('project-settings-sheet')).toBeNull())
+  })
+
   it('a press on the scrim closes it', async () => {
     renderWithOpener()
     await openSheet('g1')
@@ -208,13 +217,16 @@ describe('closing and focus', () => {
         'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       ),
     ).filter((el) => !el.closest('[aria-hidden="true"], [inert]'))
-    expect(all[0]).toBe(close)
+    // The title row comes first: Open in Settings, then the ×.
+    expect(all[0]).toBe(within(sheet).getByRole('button', { name: 'Open in Settings' }))
+    expect(all[1]).toBe(close)
+    const first = all[0]
     const last = all[all.length - 1]
-    close.focus()
-    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true })
+    first.focus()
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true })
     expect(document.activeElement).toBe(last)
     fireEvent.keyDown(last, { key: 'Tab' })
-    expect(document.activeElement).toBe(close)
+    expect(document.activeElement).toBe(first)
   })
 
   it('focus that lands behind the sheet comes back into it', async () => {

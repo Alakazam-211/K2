@@ -767,6 +767,14 @@ function AgentsSection({
     [registered, memberIds, query],
   )
   useEffect(() => setHighlight(query.trim() ? 0 : -1), [query])
+  const addSearchRef = useRef<HTMLInputElement>(null)
+  /** The Agents heading's "Add an agent": to the picker below, ready to type. */
+  const goToPicker = (): void => {
+    const field = addSearchRef.current
+    if (!field) return
+    field.scrollIntoView?.({ block: 'center', behavior: 'smooth' })
+    field.focus({ preventScroll: true })
+  }
 
   const addMember = useCallback(
     async (workspaceId: string, displayName: string): Promise<void> => {
@@ -841,7 +849,15 @@ function AgentsSection({
       <SettingsGroup
         card
         title="Agents"
-        hint="The point of contact gets every message posted in the project’s chat."
+        hint="The Point of contact gets every message posted in the project’s chat."
+        action={
+          readOnly ? undefined : (
+            <Button variant="quiet" onClick={goToPicker} className="inline-flex items-center gap-1.5">
+              {PLUS}
+              Add an agent
+            </Button>
+          )
+        }
         state={
           detail.members.length === 0 ? (
             <SettingsLoadState kind="empty" title="No agents yet">
@@ -867,6 +883,17 @@ function AgentsSection({
                 below={failure?.id === m.workspaceId ? <ActionError what={failure.what} reason={failure.reason} /> : undefined}
               >
                 {memberBusy === m.workspaceId ? <SavingNote on /> : null}
+                {!readOnly && !isPoc && (
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    disabled={memberBusy === m.workspaceId}
+                    title="It gets every message in the project’s chat."
+                    onClick={() => void setPoc(m.workspaceId, display)}
+                  >
+                    Make Point of contact
+                  </Button>
+                )}
                 {!readOnly && (
                   <OverflowMenu
                     label={`More actions for ${display}`}
@@ -909,6 +936,7 @@ function AgentsSection({
         >
           <div className="px-4 py-3">
             <SearchField
+              ref={addSearchRef}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onClear={() => setQuery('')}
@@ -1177,7 +1205,7 @@ export function ProjectSettingsDetail({
   onReloadDocs,
   notice,
   variant = 'page',
-  closeButton,
+  sheetActions,
   titleId,
 }: {
   detail: ProjectGroupShow
@@ -1192,11 +1220,11 @@ export function ProjectSettingsDetail({
   /** What the page just did (a project created or deleted), once. */
   notice: string | null
   /** `sheet`: shown over the Projects page (ProjectSettingsSheet). Its
-   *  title row says "Project settings" and ends in the sheet's close ×
-   *  instead of "Open project" (the project is already open behind it). */
+   *  title row ends in the sheet's own actions ("Open in Settings", the
+   *  close ×) instead of "Open project" (the project is open behind it). */
   variant?: 'page' | 'sheet'
-  /** The sheet's close × (with `variant="sheet"`). */
-  closeButton?: React.ReactNode
+  /** The sheet's title-row actions (with `variant="sheet"`). */
+  sheetActions?: React.ReactNode
   /** The sheet labels itself with the title row's heading. */
   titleId?: string
 }): React.JSX.Element {
@@ -1325,7 +1353,7 @@ export function ProjectSettingsDetail({
 
   const general = (
     <section aria-label="General">
-      <SettingsGroup card title="General">
+      <SettingsGroup card title="General" hint="Rename, picture, how agents open, and pinning.">
         <NameField
           label="Project"
           hint="In the sidebar."
@@ -1543,7 +1571,7 @@ export function ProjectSettingsDetail({
               <ProjectGroupAvatar
                 name={detail.name}
                 groupId={detail.id}
-                size={36}
+                size={inSheet ? 40 : 36}
                 color={detail.color}
                 iconUrl={icon?.dataUrl ?? null}
               />
@@ -1553,7 +1581,6 @@ export function ProjectSettingsDetail({
                 {detail.name}
               </h2>
               <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
-                {inSheet && 'Project settings · '}
                 {detail.memberCount} {detail.memberCount === 1 ? 'agent' : 'agents'}
                 {detail.pocWorkspaceId
                   ? ` · Point of contact: ${memberLabel(detail.pocWorkspaceId)}`
@@ -1561,7 +1588,7 @@ export function ProjectSettingsDetail({
               </p>
             </div>
             {inSheet ? (
-              closeButton
+              sheetActions
             ) : (
               <Button variant="quiet" onClick={openProject}>
                 Open project

@@ -45,6 +45,7 @@ vi.mock('./projects-api', async () => {
     fetchProjectGroupResources: vi.fn(async () => DOCS),
     fetchProjectGroupIcon: vi.fn(async () => ({ found: false, dataUrl: null })),
     addDashboardPane: vi.fn(async () => ({ ...DASH, revision: 2, changed: true })),
+    setProjectGroupPoc: vi.fn(async () => ({ ...GROUP, pocWorkspaceId: 'w2' })),
     removeDashboardPane: vi.fn(async () => ({ ...DASH, revision: 2, changed: true })),
     saveDashboardLayout: vi.fn(async () => {
       throw new Error('the settings page must not save whole layouts')
@@ -373,6 +374,24 @@ describe('quiet destructive actions, steady paths, search follows', () => {
     expect(remove.getAttribute('aria-disabled')).toBe('true')
     expect(remove.textContent).toContain('Make another agent the point of contact first.')
     expect(screen.queryByRole('menuitem', { name: /Make point of contact/ })).toBeNull()
+  })
+
+  it('each agent but the point of contact has a quiet "Make Point of contact" beside its … menu', async () => {
+    await renderReady()
+    const rows = screen.getAllByTestId('project-agent-row')
+    const [poc, ada] = rows
+    expect(within(poc).queryByRole('button', { name: 'Make Point of contact' })).toBeNull()
+    const make = within(ada).getByRole('button', { name: 'Make Point of contact' })
+    expect(make.className).not.toMatch(/status-error|danger|accent/)
+    fireEvent.click(make)
+    await waitFor(() => expect(projectsApi.setProjectGroupPoc).toHaveBeenCalledWith(expect.anything(), 'g1', 'w2'))
+  })
+
+  it('"Add an agent" by the Agents heading takes you to the picker, ready to type', async () => {
+    await renderReady()
+    const agents = screen.getByRole('region', { name: 'Agents' })
+    fireEvent.click(within(agents).getByRole('button', { name: 'Add an agent' }))
+    expect(document.activeElement).toBe(screen.getByLabelText('Search agents to add'))
   })
 
   it('folders show from the home folder, the full path as the title', () => {

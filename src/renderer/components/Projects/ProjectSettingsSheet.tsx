@@ -218,6 +218,24 @@ function SheetFrame({ groupId, opener }: { groupId: string; opener: HTMLElement 
   }
 
   const closeButton = <DialogCloseButton onClick={close} data-testid="project-settings-sheet-close" />
+  // Settings → Projects on this project (its list, the rest of Settings).
+  const openInSettings = (): void => {
+    close()
+    useSettingsStore.getState().openSettings('project-groups', groupId)
+  }
+  const sheetActions = (
+    <span className="flex flex-shrink-0 items-center gap-3">
+      <button
+        type="button"
+        data-k2-focus=""
+        onClick={openInSettings}
+        className="relative px-0.5 -mx-0.5 type-control text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:underline no-drag cursor-pointer"
+      >
+        Open in Settings
+      </button>
+      {closeButton}
+    </span>
+  )
 
   /** The title row while the project loads or fails: its name, the × */
   const plainHead = (
@@ -228,7 +246,7 @@ function SheetFrame({ groupId, opener }: { groupId: string; opener: HTMLElement 
         </h2>
         {groupName && <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Project settings</p>}
       </div>
-      {closeButton}
+      {sheetActions}
     </div>
   )
 
@@ -285,7 +303,7 @@ function SheetFrame({ groupId, opener }: { groupId: string; opener: HTMLElement 
               notice={null}
               onDeleted={onDeleted}
               variant="sheet"
-              closeButton={closeButton}
+              sheetActions={sheetActions}
               titleId={titleId}
             />
           )}

@@ -219,7 +219,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                             // inbound, all sub-second) lets `--wake`
                             // race ahead and spawn a session that the
                             // sidebar's window pane never sees. Filed by
-                            // acme-checkin Scout deployment as the
+                            // an automation deployment as the
                             // "canonical PTY initialization" issue.
                             // Best-effort — not having an agent yet
                             // (operator is between `mode` and AGENT.md

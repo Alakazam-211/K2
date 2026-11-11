@@ -2,7 +2,7 @@
 //! registration when a workspace transitions to a bot mode.
 //!
 //! Pins the contract that solves the SMS-bridge race documented in
-//! the acme-checkin issue: a fresh workspace with mode set + AGENT.md
+//! an automation deployment: a fresh workspace with mode set + AGENT.md
 //! written must have a `workspace_sessions` row + a v2_session_map
 //! entry under the canonical key BEFORE any consumer (webhook
 //! `k2so msg --wake`, renderer pinned-tab attach, etc.) can race.
@@ -591,7 +591,7 @@ async fn boot_sweep_does_not_resurrect_enabled_or_disabled_agents() {
 // Race contract: SMS bridge's specific scenario
 // ─────────────────────────────────────────────────────────────────────
 
-/// The exact race described in the acme-checkin issue:
+/// The exact race described in an automation deployment:
 ///
 /// 1. Fresh workspace registered
 /// 2. mode=custom set + AGENT.md written

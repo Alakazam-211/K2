@@ -517,6 +517,34 @@ pub mod tests {
         assert!(!wt.exists());
     }
 
+    /// 0.46.12: a bundle's tags land in the mirror (a job's checkout sees
+    /// them), and never count as the mirror's tips (`have` names commits
+    /// the node has; a tag object is none, and many tags would crowd out
+    /// the 50).
+    #[tokio::test]
+    async fn a_bundles_tags_land_in_the_mirror_but_are_not_tips() {
+        let (repo, first, second) = repo_with_commits("sync-tags");
+        let home = crate::util::temp_dir("sync-tags-home");
+        let g = git(&home);
+        let mirror = home.join("m.git");
+        g.ensure_mirror(&mirror).await.unwrap();
+        sh_git(&repo, &["tag", "-a", "v0.9.2", "-m", "release", &first]);
+        sh_git(&repo, &["tag", "v1.0.0", &second]);
+        sh_git(&repo, &["update-ref", "refs/k2-compute/job1", &second]);
+        let bundle = home.join("b.bundle");
+        sh_git(&repo, &["bundle", "create", bundle.to_str().unwrap(), "refs/k2-compute/job1", "refs/tags/v0.9.2", "refs/tags/v1.0.0"]);
+        g.fetch_bundle(&mirror, &bundle).await.unwrap();
+        let m = mirror.to_str().unwrap();
+        assert_eq!(sh_git(&mirror, &["--git-dir", m, "rev-parse", "v0.9.2^{commit}"]), first);
+        assert_eq!(sh_git(&mirror, &["--git-dir", m, "rev-parse", "v1.0.0"]), second);
+        assert_eq!(g.tips(&mirror).await.unwrap(), vec![second.clone()], "tags are not tips");
+        let wt = home.join("jobs/j/src");
+        g.worktree_add(&mirror, &wt, &second).await.unwrap();
+        assert_eq!(sh_git(&wt, &["describe", "--tags"]), "v1.0.0");
+        assert_eq!(sh_git(&wt, &["describe"]), format!("v0.9.2-1-g{}", sh_git(&wt, &["rev-parse", "--short", "HEAD"])));
+        g.worktree_remove(&mirror, &wt).await;
+    }
+
     /// Every bundle adds a pack (`gc.auto 0`). Past the limit the mirror folds
     /// them into one and keeps everything: every commit, an unreachable one, a
     /// live worktree. At or under the limit nothing runs.

@@ -540,6 +540,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// 0.46.12: the bundle carries the repo's tags that point into the
+    /// job's history (an unpushed local one too, annotated or not), never a
+    /// tag on a branch the job doesn't contain, and still writes nothing
+    /// into the workspace repo. `git describe --tags` works in a checkout.
+    #[test]
+    fn bundle_carries_the_tags_that_point_into_its_history() {
+        let d = temp("bundle-tags");
+        let r = repo(&d);
+        let base = g(&r, &["rev-parse", "HEAD"]);
+        g(&r, &["tag", "-a", "v0.9.2", "-m", "release 0.9.2"]);
+        // A side branch with its own tag: not in the job's history.
+        g(&r, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(r.join("side.txt"), "side\n").unwrap();
+        g(&r, &["add", "."]);
+        g(&r, &["commit", "-q", "-m", "side"]);
+        g(&r, &["tag", "v9-side"]);
+        g(&r, &["checkout", "-q", "-"]);
+        std::fs::write(r.join("a.txt"), "two\n").unwrap();
+        g(&r, &["commit", "-q", "-am", "two"]);
+        let tip = g(&r, &["rev-parse", "HEAD"]);
+        g(&r, &["tag", "v1.0.0-local"]);
+        let refs_before = g(&r, &["for-each-ref"]);
+
+        let out = d.join("job.bundle");
+        create_bundle(&r, &tip, &[], "job-1", &out).unwrap();
+        assert_eq!(g(&r, &["for-each-ref"]), refs_before, "no ref written into the workspace repo");
+        let heads = g(&r, &["bundle", "list-heads", out.to_str().unwrap()]);
+        let mut names: Vec<&str> = heads.lines().filter_map(|l| l.split_whitespace().nth(1)).collect();
+        names.sort();
+        assert_eq!(names, vec!["refs/k2-compute/job-1", "refs/tags/v0.9.2", "refs/tags/v1.0.0-local"], "{heads}");
+        assert!(heads.contains(&g(&r, &["rev-parse", "refs/tags/v0.9.2"])), "the annotated tag object itself: {heads}");
+
+        // What the node does: the job's ref and the tags, then a checkout.
+        let mirror = d.join("mirror.git");
+        g(&d, &["init", "-q", "--bare", mirror.to_str().unwrap()]);
+        g(&mirror, &["fetch", "-q", "--no-tags", out.to_str().unwrap(), "+refs/k2-compute/*:refs/k2-compute/*", "+refs/tags/*:refs/tags/*"]);
+        let wt = d.join("job-src");
+        g(&mirror, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap(), &tip]);
+        assert_eq!(g(&wt, &["describe", "--tags"]), "v1.0.0-local");
+        assert_eq!(g(&wt, &["describe", "--tags", "--exclude", "v1*"]), format!("v0.9.2-1-g{}", &g(&r, &["rev-parse", "--short", &tip])));
+        assert_eq!(g(&wt, &["rev-parse", "v0.9.2^{commit}"]), base);
+
+        // With the base as a have (a thin bundle), the tag on the new
+        // commit still comes; the side tag never does.
+        let thin = d.join("thin.bundle");
+        create_bundle(&r, &tip, &[base.clone()], "job-2", &thin).unwrap();
+        let heads = g(&r, &["bundle", "list-heads", thin.to_str().unwrap()]);
+        assert!(heads.contains("refs/tags/v1.0.0-local") && !heads.contains("v9-side"), "{heads}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn caller_checkout_picks_a_worktree_inside_the_workspace_only() {
         let d = temp("wt");

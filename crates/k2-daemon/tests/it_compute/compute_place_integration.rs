@@ -1625,3 +1625,74 @@ async fn avoid_keeps_jobs_off_a_node_at_submit_on_moves_and_on_release() {
     assert_eq!((s.node_id.as_str(), s.ctl.any.is_none()), ("q2n12-vin", true), "{s:?}");
     compute_ws::test_detach("q2n12-vin");
 }
+
+/// `--avoid` with a node the caller can't use (0.46.12): an ungranted node
+/// is never picked anyway, so the ask is accepted with one note, and a
+/// name that matches no node at all gets the very same note: neither says
+/// whether an ungranted node exists. Same on `--plan` and `move --auto`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn avoid_with_a_node_not_yours_is_a_note_not_an_error() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "avn");
+    for n in ["q4na-vin", "q4nb-vin", "q4nc-vin"] {
+        active_node(n);
+    }
+    // q4na (free) and q4nb (one slot, held) are this workspace's; q4nc
+    // exists and is free, but isn't granted to it.
+    grant("q4na-vin", &me, None, 2);
+    grant("q4nb-vin", &me, None, 2);
+    let _a = compute_ws::test_attach("q4na-vin", offer(1, 30, 32, 0));
+    let _b = compute_ws::test_attach("q4nb-vin", one_slot_full(1));
+    let _c = compute_ws::test_attach("q4nc-vin", offer(1, 30, 32, 0));
+    hold_one_slot(d.port, "q4nb-vin", &me, 2).await;
+    let agent = passport(&me);
+    let note = |t: &str| format!("--avoid {t}: not one of your nodes; nothing to avoid");
+    let warns = |r: &Resp| -> Vec<String> {
+        j(r)["warnings"].as_array().unwrap_or_else(|| panic!("no warnings: {}", r.body)).iter().map(|w| w.as_str().unwrap().to_string()).collect()
+    };
+    let avoid_notes = |r: &Resp| -> Vec<String> { warns(r).into_iter().filter(|w| w.starts_with("--avoid ")).collect() };
+
+    // --plan: the ungranted node (full name or a start of it) and a name
+    // that is no node are each one note, worded alike; no error.
+    for t in ["q4nc-vin", "q4nc", "nosuchnode"] {
+        let r = run(d.port, &agent, &me, json!({"plan": true, "avoid": [t]})).await;
+        assert_eq!(r.status, 200, "--avoid {t}: {}", r.body);
+        assert_eq!(avoid_notes(&r), vec![note(t)], "--avoid {t}: {}", r.body);
+    }
+    // The no-node case never hints at a node this workspace can't use.
+    let r = run(d.port, &agent, &me, json!({"plan": true, "avoid": ["nosuchnode"]})).await;
+    assert!(!r.body.contains("q4nc"), "never names an ungranted node: {}", r.body);
+
+    // A real run: the avoid of a node of yours is kept, the others dropped.
+    let r = run(d.port, &agent, &me, json!({"avoid": ["q4na-vin", "q4nc-vin", "nosuchnode"], "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(avoid_notes(&r), vec![note("q4nc-vin"), note("nosuchnode")], "{}", r.body);
+    let job = id_of(&r);
+    assert_eq!(node_of(&r), "q4nb-vin", "never the avoided q4na, never the ungranted q4nc");
+    assert_eq!(row(&job).ctl.any.as_ref().map(|f| f.avoid.clone()), Some(vec!["q4na-vin".to_string()]), "only a node of yours is stored");
+
+    // Only notes: as if no --avoid was passed (auto-placed, nothing stored).
+    let r = run(d.port, &agent, &me, json!({"avoid": ["q4nc-vin", "nosuchnode"], "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "q4na-vin", "{}", r.body);
+    assert_eq!(row(&id_of(&r)).ctl.any.as_ref().map(|f| f.avoid.clone()), Some(vec![]), "{}", r.body);
+
+    // move --auto: the same notes, and the release goes ahead.
+    let r = run(d.port, &agent, &me, json!({"node": "q4nb-vin", "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pinned = id_of(&r);
+    assert_eq!(row(&pinned).state, "queued");
+    let r = post(d.port, MOVE, &agent, json!({"job": pinned, "auto": true, "avoid": ["q4nc-vin", "nosuchnode"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(warns(&r), vec![note("q4nc-vin"), note("nosuchnode")], "{}", r.body);
+    assert!(row(&pinned).ctl.any.is_some(), "released to auto");
+
+    // The owner sees every node: a name that is none is the same note.
+    let r = run(d.port, OWNER, &me, json!({"plan": true, "avoid": ["nosuchnode"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(avoid_notes(&r), vec![note("nosuchnode")], "{}", r.body);
+    for n in ["q4na-vin", "q4nb-vin", "q4nc-vin"] {
+        compute_ws::test_detach(n);
+    }
+}

@@ -848,3 +848,78 @@ async fn git_works_in_the_jobs_own_checkout_it_does_not_own() {
     let (state, exit, _) = job_done_exit(&fr, "g1");
     assert_eq!((state, exit), (JobState::Done, Some(0)));
 }
+
+/// [`bundle_for`] as the controller builds it since 0.46.12: the job's ref
+/// plus the repo's tags that point into its history.
+fn bundle_with_tags(repo: &std::path::Path, job: &str, sha: &str, out: &std::path::Path) -> Vec<u8> {
+    let r = format!("refs/k2-compute/{job}");
+    git_out(repo, &["update-ref", &r, sha]);
+    let tags = git_out(repo, &["for-each-ref", "--merged", sha, "--format=%(refname)", "refs/tags"]);
+    let mut args = vec!["bundle", "create", out.to_str().unwrap(), r.as_str()];
+    args.extend(tags.lines());
+    git_out(repo, &args);
+    git_out(repo, &["update-ref", "-d", &r]);
+    std::fs::read(out).unwrap()
+}
+
+/// Tags in a job's checkout (0.46.12): `git describe --tags` works there.
+/// From the remote, the tags that point into the history fetched come
+/// along (a tag the node has keeps its place, never fails the fetch); from the
+/// controller's bundle, the tags it carries (an unpushed local one too).
+#[tokio::test(flavor = "multi_thread")]
+async fn git_describe_tags_works_in_a_job_checkout() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-tags", "", |_| {}).await;
+    let (repo, first, second) = temp_repo();
+    git_out(&repo, &["tag", "-a", "v0.9.2", "-m", "release 0.9.2", &first]);
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let script = "export GIT_TEST_ASSUME_DIFFERENT_OWNER=1; git describe --tags; git rev-parse 'v0.9.2^{commit}'";
+
+    // From the remote: no Need, the annotated tag came with the history.
+    let mut p = plan("t1", &["/bin/sh", "-c", script]);
+    p.src = Some(Src { project_key: "pk-tags".into(), remote_url: Some(repo.display().to_string()), commit: second.clone(), dirty: None, slots: 1 });
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "t1").await;
+    assert!(!fr.iter().any(|f| matches!(f, Frame::Need(_))), "history and tags came from the remote");
+    let out = text(&logs_of(&fr, "t1"), LogStream::Out);
+    let short = git_out(&repo, &["rev-parse", "--short", &second]);
+    assert_eq!(out.lines().collect::<Vec<_>>(), vec![format!("v0.9.2-1-g{short}").as_str(), first.as_str()], "{out}\n{}", text(&logs_of(&fr, "t1"), LogStream::Sys));
+    let (state, exit, _) = job_done_exit(&fr, "t1");
+    assert_eq!((state, exit), (JobState::Done, Some(0)));
+
+    // The remote gains a commit with a new tag, and moves v0.9.2: the next
+    // fetch brings the new tag, and keeps v0.9.2 where the node had it (as
+    // any clone does) instead of failing ("would clobber existing tag").
+    std::fs::write(repo.join("a.txt"), "three\n").unwrap();
+    git_out(&repo, &["commit", "-q", "-am", "three"]);
+    let third = git_out(&repo, &["rev-parse", "HEAD"]);
+    git_out(&repo, &["tag", "v0.9.3", &third]);
+    git_out(&repo, &["tag", "-f", "-a", "v0.9.2", "-m", "release 0.9.2, again", &second]);
+    let mut p = plan("t2", &["/bin/sh", "-c", script]);
+    p.src = Some(Src { project_key: "pk-tags".into(), remote_url: Some(repo.display().to_string()), commit: third.clone(), dirty: None, slots: 1 });
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "t2").await;
+    assert!(!fr.iter().any(|f| matches!(f, Frame::Need(_))), "the fetch didn't fail over a moved tag: {}", text(&logs_of(&fr, "t2"), LogStream::Sys));
+    let out = text(&logs_of(&fr, "t2"), LogStream::Out);
+    assert_eq!(out.lines().collect::<Vec<_>>(), vec!["v0.9.3", first.as_str()], "{out}");
+
+    // An unpushed local tag rides in the controller's bundle (no remote).
+    std::fs::write(repo.join("a.txt"), "four\n").unwrap();
+    git_out(&repo, &["commit", "-q", "-am", "four"]);
+    let fourth = git_out(&repo, &["rev-parse", "HEAD"]);
+    git_out(&repo, &["tag", "v1.0.0-local", &fourth]);
+    let mut p = plan("t3", &["/bin/sh", "-c", "export GIT_TEST_ASSUME_DIFFERENT_OWNER=1; git describe --tags; git tag --list | sort"]);
+    p.src = Some(Src { project_key: "pk-tags-b".into(), remote_url: None, commit: fourth.clone(), dirty: None, slots: 1 });
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = c.until(|f| matches!(f, Frame::Need(_))).await;
+    let Frame::Need(need) = fr.last().unwrap() else { unreachable!() };
+    assert_eq!(need.kind, TransferKind::Bundle);
+    let bundle = bundle_with_tags(&repo, "t3", &fourth, &n.dir.join("t3.bundle"));
+    send_blob(&c, "t3", TransferKind::Bundle, &bundle, 1000);
+    let fr = run_to_receipt(&mut c, "t3").await;
+    let out = text(&logs_of(&fr, "t3"), LogStream::Out);
+    assert_eq!(out.lines().collect::<Vec<_>>(), vec!["v1.0.0-local", "v0.9.2", "v0.9.3", "v1.0.0-local"], "{out}\n{}", text(&logs_of(&fr, "t3"), LogStream::Sys));
+    let (state, exit, _) = job_done_exit(&fr, "t3");
+    assert_eq!((state, exit), (JobState::Done, Some(0)));
+}

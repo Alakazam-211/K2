@@ -197,6 +197,17 @@ html[data-os]:not([data-os="mac"])[data-scheme="dark"] select {
 html[data-os]:not([data-os="mac"])[data-scheme="light"] select {
   color-scheme: light;
 }
+/* Date and time fields draw their own picker button (a clock or calendar
+   glyph) wherever the engine shows one (Chromium, WebView2). Under a dark K2
+   scheme that glyph stayed dark on our dark field (about 1.06:1). Give these
+   fields the app's scheme on every OS so the glyph follows it. Gardens keep
+   their own styling. */
+html[data-scheme="dark"] input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]):not([data-zen-root] *) {
+  color-scheme: dark;
+}
+html[data-scheme="light"] input:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]):not([data-zen-root] *) {
+  color-scheme: light;
+}
 html[data-os]:not([data-os="mac"]) select option,
 html[data-os]:not([data-os="mac"]) select optgroup {
   background-color: var(--color-bg-elevated);

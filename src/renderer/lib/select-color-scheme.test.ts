@@ -48,6 +48,22 @@ describe('native select theming off macOS', () => {
     expect(matches(light.selector, 'mac', 'light', 'select')).toBe(false)
   })
 
+  it('date and time fields follow the app scheme on every OS, outside Gardens', () => {
+    const dark = ruleFor('[data-scheme="dark"] input:is(')
+    expect(dark.body).toContain('color-scheme: dark')
+    const light = ruleFor('[data-scheme="light"] input:is(')
+    expect(light.body).toContain('color-scheme: light')
+    for (const os of ['mac', 'linux', 'windows']) {
+      document.documentElement.setAttribute('data-os', os)
+      document.documentElement.setAttribute('data-scheme', 'dark')
+      document.body.innerHTML = '<input type="time"><div data-zen-root><input type="date"></div><input type="text">'
+      const [time, garden, text] = Array.from(document.querySelectorAll('input'))
+      expect(time.matches(dark.selector)).toBe(true)
+      expect(garden.matches(dark.selector)).toBe(false)
+      expect(text.matches(dark.selector)).toBe(false)
+    }
+  })
+
   it('options take theme tokens off macOS only', () => {
     const opt = ruleFor('select option')
     expect(opt.body).toContain('background-color: var(--color-bg-elevated)')

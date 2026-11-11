@@ -504,6 +504,8 @@ fn the_owner_drives_and_a_granted_member_only_watches() {
         say(&mut o, json!({"t": "clipboard-get"})).await;
         let c = t_is(&mut o, "clipboard").await;
         assert_eq!(c["text"], "from the mac");
+        // Reads and writes share one clipboard use a second (input.rs).
+        tokio::time::sleep(Duration::from_millis(1100)).await;
         say(&mut o, json!({"t": "clipboard-set", "text": "s3cret paste"})).await;
         wait_for("the clipboard lines", || {
             let ev = audit_events();

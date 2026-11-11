@@ -236,6 +236,25 @@ describe('Keyboard focus', () => {
     }
   })
 
+  it('quiet text inside a tinted Callout reads at 4.5:1 on every tone in every look', () => {
+    const src = readFileSync(join(__dirname, 'Callout.tsx'), 'utf8')
+    expect(src).toContain("CALLOUT_QUIET_TEXT = '[--color-text-muted:var(--color-text-secondary)]'")
+    expect(src).toMatch(/cx\('border [^']*', CALLOUT_QUIET_TEXT, TONES\[tone\]/)
+    // Each tone's fill: its colour at 10% (warn 5%) over the ground.
+    const tones: Array<[string, number]> = [['status-error', 0.1], ['status-warn', 0.05], ['status-ok', 0.1], ['accent', 0.1]]
+    for (const [style, id] of LOOKS) {
+      const c = palette(style, id)
+      for (const [key, t] of tones) {
+        const tint = hex(c[key].startsWith('#') ? c[key] : '#0a84ff')
+        for (const ground of ['bg', 'bg-surface']) {
+          const g = hex(c[ground])
+          const fill = g.map((v, i) => Math.round(tint[i] * t + v * (1 - t))) as Rgb
+          expect(contrast(hex(c['text-secondary']), fill), `${style}/${id} ${key} callout on ${ground}`).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+    }
+  })
+
   it('switch, segment, slider thumb, menu items and dropdown options ring in the readable accent', () => {
     expect(rule(globals, '.k2-switch:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')
     expect(rule(globals, '.k2-segment:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')

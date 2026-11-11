@@ -18,11 +18,16 @@ export interface CalloutProps extends React.HTMLAttributes<HTMLDivElement> {
   tone?: keyof typeof TONES
 }
 
+/** Quiet text inside the tint (a server's reason under the banner's line)
+ *  steps up from muted to secondary: muted drops under 4.5:1 on the tinted
+ *  fill in the light palettes, secondary clears it on every tone. */
+export const CALLOUT_QUIET_TEXT = '[--color-text-muted:var(--color-text-secondary)]'
+
 export function Callout({ tone = 'error', className, ...rest }: CalloutProps): React.JSX.Element {
   return (
     <div
       data-k2-chamfer="surface"
-      className={cx('border rounded-[var(--radius-box)] px-3 py-2 text-[11px]', TONES[tone], className)}
+      className={cx('border rounded-[var(--radius-box)] px-3 py-2 text-[11px]', CALLOUT_QUIET_TEXT, TONES[tone], className)}
       {...rest}
     />
   )

@@ -10,6 +10,7 @@
 //!
 //! | id | done when | shown to |
 //! |---|---|---|
+//! | `dev_tools` | git runs (macOS: only while Apple's Command Line Tools are missing, or once an install started here finished; Linux: only while git is missing) | macOS: the owner token; Linux: owner token, Owner, Admin |
 //! | `llm_sign_in` | a claude, codex or grok login is `signed_in`, or is an API key | owner token, Owner, Admin |
 //! | `first_agent` | a workspace exists besides the audit sentinels (and K5's) | everyone |
 //! | `chief_of_staff` | the seat names a live Chief of Staff | owner token, Owner, Admin; **in place of `first_agent` while `k5FirstRun` is on** |
@@ -42,10 +43,21 @@
 //! `k5_thread_cos` once K5 exists, else `k5_sheet` with `note: needs_k5`.
 //! The seat is `crate::orchestrator`. Off, none of it is sent.
 //!
-//! The evaluators are pure ([`rows`], [`status_on`]); [`load_facts`] reads
-//! the existing readers (`llm_accounts::list`, `projects_list_on`,
-//! `tunnel::config`, `connect_users::device_sessions`,
-//! `owner_account_prompt::view`).
+//! **Developer tools** (`dev_tools`, K2 0.46.12). Workspaces need git. On a
+//! Mac without Apple's Command Line Tools the row is first, so Apple's
+//! long download can run while the person signs in; it opens `dev_tools`
+//! (the app POSTs `/cli/git-tools/install`, `xcode-select --install`, which
+//! opens Apple's installer on the daemon's own screen, so only the owner
+//! token sees it) and carries `note: "installing"` while that installer is
+//! up. Once git runs the row reads done, then goes at the next daemon start.
+//! On Linux without git it shows the distro's install line as its note and
+//! opens nothing (`opens: null`); a person with a shell runs it. Otherwise
+//! (git runs, a git that is there but fails, Windows) there is no row.
+//!
+//! The evaluators are pure ([`rows`], [`status_on`], [`dev_tools_from`]);
+//! [`load_facts`] reads the existing readers (`llm_accounts::list`,
+//! `projects_list_on`, `tunnel::config`, `connect_users::device_sessions`,
+//! `owner_account_prompt::view`, `git_safe::availability`).
 
 use std::collections::BTreeSet;
 
@@ -60,12 +72,14 @@ use crate::notify_prefs::{People, OWNER};
 /// before then changes nothing.
 /// `meet_k5` became the offer (`offer: "meet_k5"`), never a row.
 pub const ROW_IDS: &[&str] =
-    &["llm_sign_in", "meet_k5", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
+    &["dev_tools", "llm_sign_in", "meet_k5", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
 
-/// The rows this version computes with `k5FirstRun` off.
+/// The rows this version computes with `k5FirstRun` off, when git runs.
+/// While it doesn't, `dev_tools` comes before them ([`DevTools`]).
 pub const V1_ROWS: &[&str] = &["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"];
 
-/// The rows with `k5FirstRun` on: `chief_of_staff` in `first_agent`'s place.
+/// The rows with `k5FirstRun` on: `chief_of_staff` in `first_agent`'s place
+/// (and `dev_tools` first while git doesn't run).
 pub const K5_ROWS: &[&str] = &["llm_sign_in", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
 
 /// `phone.note` when the tunnel isn't on yet.
@@ -73,6 +87,9 @@ pub const NOTE_NEEDS_TUNNEL: &str = "needs_tunnel";
 
 /// `chief_of_staff.note` while there is no K5 to hire it with.
 pub const NOTE_NEEDS_K5: &str = "needs_k5";
+
+/// `dev_tools.note` while Apple's installer is open.
+pub const NOTE_INSTALLING: &str = "installing";
 
 /// The offer the LLM sign-in sheet leads to.
 pub const OFFER_MEET_K5: &str = "meet_k5";
@@ -97,9 +114,11 @@ impl State {
 pub struct Row {
     pub id: &'static str,
     pub state: State,
-    /// What the row opens: `llm_sign_in` | `add_workspace` | `tunnel` |
-    /// `phone` | `owner_account_prompt` | `k5_sheet` | `k5_thread_cos`.
-    pub opens: &'static str,
+    /// What the row opens: `dev_tools` | `llm_sign_in` | `add_workspace` |
+    /// `tunnel` | `phone` | `owner_account_prompt` | `k5_sheet` |
+    /// `k5_thread_cos`. Null for a row with nothing to open (Linux's
+    /// `dev_tools`, whose note is the command to run).
+    pub opens: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<&'static str>,
 }
@@ -190,6 +209,99 @@ pub struct Facts {
     pub chief_of_staff: bool,
     /// Where a new K5 goes by default (`<hire root>/k5`).
     pub k5_default_path: String,
+    /// Git and Apple's installer ([`dev_tools_from`]).
+    pub dev_tools: DevTools,
+}
+
+/// What the `dev_tools` row knows: git, and Apple's installer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DevTools {
+    /// No row: git runs (and no install started here), a git that is there
+    /// fails (installing won't fix it; `k2 git-tools` says how), or an OS
+    /// with no step (Windows).
+    #[default]
+    NoRow,
+    /// macOS without Apple's Command Line Tools. `installing`: Apple's
+    /// installer is open (`git_tools::install_state` says `installing`).
+    AppleMissing { installing: bool },
+    /// macOS: an install started here (this daemon run) and git runs now.
+    AppleDone,
+    /// Linux without git: the distro's install line.
+    LinuxMissing { command: &'static str },
+}
+
+/// Pure: the `dev_tools` fact from git's probe and what the daemon knows.
+/// `os` is `std::env::consts::OS`; `started` is
+/// `git_tools::install_started_at`; `installer_running`, Apple's installer
+/// window is up; `os_release`, `/etc/os-release` (Linux).
+pub fn dev_tools_from(
+    probe: &crate::git_safe::GitProbe,
+    os: &str,
+    started: Option<std::time::SystemTime>,
+    now: std::time::SystemTime,
+    installer_running: bool,
+    os_release: &str,
+) -> DevTools {
+    use crate::git_safe::GitProbe;
+    match (os, probe) {
+        ("macos", GitProbe::Ready { .. }) if started.is_some() => DevTools::AppleDone,
+        ("macos", GitProbe::NeedsAppleClt) => DevTools::AppleMissing {
+            installing: crate::git_tools::install_state(probe, true, started, now, installer_running)
+                == crate::git_tools::InstallState::Installing,
+        },
+        ("linux", GitProbe::Missing) => {
+            DevTools::LinuxMissing { command: crate::git_tools::linux_install_command(os_release) }
+        }
+        _ => DevTools::NoRow,
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+thread_local! {
+    static DEV_TOOLS_FOR_TEST: std::cell::Cell<Option<DevTools>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test-only: [`load_facts`] on this thread reports `d` instead of probing
+/// this machine's git, until the guard drops.
+#[cfg(any(test, feature = "test-util"))]
+pub fn dev_tools_for_test(d: DevTools) -> DevToolsTestGuard {
+    let prev = DEV_TOOLS_FOR_TEST.with(|c| c.replace(Some(d)));
+    DevToolsTestGuard { prev }
+}
+
+/// Restores what [`load_facts`] reports for `dev_tools` on drop.
+#[cfg(any(test, feature = "test-util"))]
+pub struct DevToolsTestGuard {
+    prev: Option<DevTools>,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl Drop for DevToolsTestGuard {
+    fn drop(&mut self) {
+        DEV_TOOLS_FOR_TEST.with(|c| c.set(self.prev));
+    }
+}
+
+/// The `dev_tools` fact on this machine now. Apple's installer is looked
+/// for (`pgrep`) only while an install started here and git doesn't run.
+pub fn dev_tools_now() -> DevTools {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(d) = DEV_TOOLS_FOR_TEST.with(|c| c.get()) {
+        return d;
+    }
+    let os = std::env::consts::OS;
+    let probe = crate::git_safe::availability();
+    let started = crate::git_tools::install_started_at();
+    let installer_running = os == "macos"
+        && started.is_some()
+        && matches!(probe, crate::git_safe::GitProbe::NeedsAppleClt)
+        && crate::git_tools::apple_installer_running();
+    let os_release = if os == "linux" && matches!(probe, crate::git_safe::GitProbe::Missing) {
+        std::fs::read_to_string("/etc/os-release").unwrap_or_default()
+    } else {
+        String::new()
+    };
+    dev_tools_from(&probe, os, started, std::time::SystemTime::now(), installer_running, &os_release)
 }
 
 /// A person's stored record.
@@ -272,23 +384,46 @@ pub fn rows(viewer: Viewer, facts: &Facts, skipped: &BTreeSet<String>) -> Vec<Ro
         }
     };
     let mut out = Vec::new();
+    // Developer tools first: Apple's download runs while the person signs
+    // in. Its installer opens on the daemon's own screen, so on a Mac only
+    // the owner token can use it; Linux's line is for anyone with a shell.
+    match facts.dev_tools {
+        DevTools::NoRow => {}
+        DevTools::AppleMissing { installing } => {
+            if viewer == Viewer::OwnerToken {
+                let note = installing.then_some(NOTE_INSTALLING);
+                out.push(Row { id: "dev_tools", state: state("dev_tools", false), opens: Some("dev_tools"), note });
+            }
+        }
+        DevTools::AppleDone => {
+            if viewer == Viewer::OwnerToken {
+                out.push(Row { id: "dev_tools", state: State::Done, opens: Some("dev_tools"), note: None });
+            }
+        }
+        DevTools::LinuxMissing { command } => {
+            if viewer.at_least(Role::Admin) {
+                out.push(Row { id: "dev_tools", state: state("dev_tools", false), opens: None, note: Some(command) });
+            }
+        }
+    }
     if viewer.at_least(Role::Admin) {
-        out.push(Row { id: "llm_sign_in", state: state("llm_sign_in", facts.llm_signed_in), opens: "llm_sign_in", note: None });
+        out.push(Row { id: "llm_sign_in", state: state("llm_sign_in", facts.llm_signed_in), opens: Some("llm_sign_in"), note: None });
     }
     if facts.k5_first_run {
         // K5 at first run: the Chief of Staff in `first_agent`'s place, for
         // the people who can make K5.
         if viewer.at_least(Role::Admin) {
-            let (opens, note) = if facts.k5.is_some() { ("k5_thread_cos", None) } else { ("k5_sheet", Some(NOTE_NEEDS_K5)) };
+            let (opens, note) =
+                if facts.k5.is_some() { (Some("k5_thread_cos"), None) } else { (Some("k5_sheet"), Some(NOTE_NEEDS_K5)) };
             out.push(Row { id: "chief_of_staff", state: state("chief_of_staff", facts.chief_of_staff), opens, note });
         }
     } else {
-        out.push(Row { id: "first_agent", state: state("first_agent", facts.has_agent), opens: "add_workspace", note: None });
+        out.push(Row { id: "first_agent", state: state("first_agent", facts.has_agent), opens: Some("add_workspace"), note: None });
     }
     let tunnel_visible = viewer.at_least(Role::Owner) && !facts.airgap;
     let tunnel_state = state("tunnel", facts.tunnel_done);
     if tunnel_visible {
-        out.push(Row { id: "tunnel", state: tunnel_state, opens: "tunnel", note: None });
+        out.push(Row { id: "tunnel", state: tunnel_state, opens: Some("tunnel"), note: None });
     }
     let phone_state = state("phone", facts.phones > 0);
     // Q-C: the phone row stays open before the tunnel is on, with a note,
@@ -301,9 +436,9 @@ pub fn rows(viewer: Viewer, facts: &Facts, skipped: &BTreeSet<String>) -> Vec<Ro
     } else {
         ("phone", Some(NOTE_NEEDS_TUNNEL))
     };
-    out.push(Row { id: "phone", state: phone_state, opens, note });
+    out.push(Row { id: "phone", state: phone_state, opens: Some(opens), note });
     if viewer == Viewer::OwnerToken && !facts.owner_linked {
-        out.push(Row { id: "own_sign_in", state: state("own_sign_in", false), opens: "owner_account_prompt", note: None });
+        out.push(Row { id: "own_sign_in", state: state("own_sign_in", false), opens: Some("owner_account_prompt"), note: None });
     }
     out
 }
@@ -498,6 +633,7 @@ pub fn load_facts(conn: &Connection, people: &People, settings: &crate::app_sett
         k5,
         chief_of_staff,
         k5_default_path,
+        dev_tools: dev_tools_now(),
     })
 }
 

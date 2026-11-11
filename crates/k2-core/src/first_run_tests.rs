@@ -100,7 +100,7 @@ fn each_row_is_todo_until_its_state_is_there_then_done() {
 #[test]
 fn opens_targets_are_the_contracts() {
     let rs = rows(Viewer::OwnerToken, &Facts { tunnel_done: true, ..Facts::default() }, &none());
-    let opens: Vec<(&str, &str)> = rs.iter().map(|r| (r.id, r.opens)).collect();
+    let opens: Vec<(&str, &str)> = rs.iter().map(|r| (r.id, r.opens.expect("opens"))).collect();
     assert_eq!(
         opens,
         vec![
@@ -126,20 +126,20 @@ fn skipped_shows_as_skipped_and_done_wins_over_skipped() {
 fn the_phone_row_points_at_the_tunnel_first_when_the_caller_can_turn_it_on() {
     // Owner token, tunnel todo: opens the tunnel, with the note.
     let rs = rows(Viewer::OwnerToken, &Facts::default(), &none());
-    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("tunnel", Some(NOTE_NEEDS_TUNNEL)));
+    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("tunnel"), Some(NOTE_NEEDS_TUNNEL)));
     // A Member can't see the tunnel row: the phone page, with the note.
     let rs = rows(Viewer::Login(Role::Member), &Facts::default(), &none());
-    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("phone", Some(NOTE_NEEDS_TUNNEL)));
+    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("phone"), Some(NOTE_NEEDS_TUNNEL)));
     // The owner skipped the tunnel: not todo any more, so the phone page.
     let skipped: BTreeSet<String> = ["tunnel".to_string()].into();
     let rs = rows(Viewer::OwnerToken, &Facts::default(), &skipped);
-    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("phone", Some(NOTE_NEEDS_TUNNEL)));
+    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("phone"), Some(NOTE_NEEDS_TUNNEL)));
     // Tunnel on: the phone page, no note.
     let rs = rows(Viewer::Login(Role::Member), &Facts { tunnel_done: true, ..Facts::default() }, &none());
-    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("phone", None));
+    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("phone"), None));
     // A paired phone needs no note.
     let rs = rows(Viewer::OwnerToken, &Facts { phones: 1, ..Facts::default() }, &none());
-    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("phone", None));
+    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("phone"), None));
 }
 
 // ── role visibility ──────────────────────────────────────────────────
@@ -166,7 +166,7 @@ fn air_gap_hides_the_tunnel_row_and_its_note() {
     let f = Facts { airgap: true, ..Facts::default() };
     let rs = rows(Viewer::OwnerToken, &f, &none());
     assert_eq!(ids(&rs), vec!["llm_sign_in", "first_agent", "phone", "own_sign_in"]);
-    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("phone", None));
+    assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), (Some("phone"), None));
 }
 
 #[test]
@@ -531,10 +531,10 @@ fn the_chief_of_staff_row_replaces_first_agent_only_with_the_flag_on() {
     let on = rows(Viewer::OwnerToken, &f, &none());
     assert_eq!(ids(&on), K5_ROWS.to_vec(), "same position");
     let cos = row(&on, "chief_of_staff");
-    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, "k5_sheet", Some(NOTE_NEEDS_K5)), "no K5 yet");
+    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, Some("k5_sheet"), Some(NOTE_NEEDS_K5)), "no K5 yet");
     let with_k5 = Facts { k5: Some(k5_live()), ..f.clone() };
     let cos = row(&rows(Viewer::Login(Role::Admin), &with_k5, &none()), "chief_of_staff").clone();
-    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, "k5_thread_cos", None));
+    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, Some("k5_thread_cos"), None));
     let hired = Facts { chief_of_staff: true, ..with_k5 };
     assert_eq!(row(&rows(Viewer::OwnerToken, &hired, &none()), "chief_of_staff").state, State::Done);
     // A Member sees neither row.
@@ -602,7 +602,7 @@ fn load_facts_reads_the_seat_and_a_deleted_k5_clears_it() {
     assert_eq!(f.k5, None, "a deleted K5 workspace clears the seat");
     let s = k5_status(Viewer::OwnerToken, &Facts { llm_signed_in: true, ..f.clone() }, false).expect("on");
     assert_eq!(s.offer, Some(OFFER_MEET_K5), "the offer comes back");
-    assert_eq!(row(&rows(Viewer::OwnerToken, &f, &none()), "chief_of_staff").opens, "k5_sheet");
+    assert_eq!(row(&rows(Viewer::OwnerToken, &f, &none()), "chief_of_staff").opens, Some("k5_sheet"));
 }
 
 #[test]
@@ -615,4 +615,121 @@ fn signed_in_tools_are_each_tools_own() {
         entry("gemini", kind::SUBSCRIPTION, state::SIGNED_IN),
     ];
     assert_eq!(signed_in_tools(&es), vec!["codex", "grok"]);
+}
+
+// ── developer tools (dev_tools, 0.46.12) ─────────────────────────────
+
+fn ready() -> crate::git_safe::GitProbe {
+    crate::git_safe::GitProbe::Ready { program: "/usr/bin/git".into(), version: "git version 2.50.1".into() }
+}
+
+#[test]
+fn the_dev_tools_fact_comes_from_the_probe_the_os_and_the_install() {
+    use crate::git_safe::GitProbe;
+    use std::time::{Duration as D, SystemTime};
+    let now = SystemTime::now();
+    let just = Some(now - D::from_secs(5));
+    let long_ago = Some(now - D::from_secs(2 * 60 * 60));
+    let clt = GitProbe::NeedsAppleClt;
+    let f = |p: &GitProbe, os: &str, started, running| dev_tools_from(p, os, started, now, running, "ID=ubuntu\n");
+    assert_eq!(f(&ready(), "macos", None, false), DevTools::NoRow, "git runs: no row");
+    assert_eq!(f(&clt, "macos", None, false), DevTools::AppleMissing { installing: false });
+    assert_eq!(f(&clt, "macos", just, false), DevTools::AppleMissing { installing: true }, "just clicked");
+    assert_eq!(f(&clt, "macos", long_ago, true), DevTools::AppleMissing { installing: true }, "the installer is up");
+    assert_eq!(f(&clt, "macos", long_ago, false), DevTools::AppleMissing { installing: false }, "closed: install again");
+    assert_eq!(f(&ready(), "macos", long_ago, false), DevTools::AppleDone, "installed here: the row reads done");
+    let broken = GitProbe::Broken { program: "/usr/bin/git".into(), error: "xcodebuild -license".into() };
+    assert_eq!(f(&broken, "macos", None, false), DevTools::NoRow, "installing won't fix a broken git");
+    assert_eq!(f(&GitProbe::Missing, "linux", None, false), DevTools::LinuxMissing { command: "sudo apt install git" });
+    assert_eq!(
+        dev_tools_from(&GitProbe::Missing, "linux", None, now, false, ""),
+        DevTools::LinuxMissing { command: "install git with your package manager (apt, dnf or pacman)" }
+    );
+    assert_eq!(f(&ready(), "linux", None, false), DevTools::NoRow);
+    assert_eq!(f(&GitProbe::Missing, "windows", None, false), DevTools::NoRow, "no step on Windows");
+}
+
+#[test]
+fn the_dev_tools_row_is_absent_while_git_runs() {
+    let rs = rows(Viewer::OwnerToken, &Facts { dev_tools: DevTools::NoRow, ..Facts::default() }, &none());
+    assert!(!ids(&rs).contains(&"dev_tools"), "{rs:?}");
+}
+
+#[test]
+fn on_a_mac_the_dev_tools_row_is_first_todo_and_the_owner_tokens_only() {
+    let f = Facts { dev_tools: DevTools::AppleMissing { installing: false }, ..Facts::default() };
+    let rs = rows(Viewer::OwnerToken, &f, &none());
+    assert_eq!(ids(&rs), vec!["dev_tools", "llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"]);
+    assert_eq!(rs[0], Row { id: "dev_tools", state: State::Todo, opens: Some("dev_tools"), note: None });
+    // Apple's installer opens on the daemon's own screen: no login gets it.
+    for role in [Role::Owner, Role::Admin, Role::Member] {
+        assert!(!ids(&rows(Viewer::Login(role), &f, &none())).contains(&"dev_tools"), "{role:?}");
+    }
+    // In contract order with the K5 rows too.
+    let on = rows(Viewer::OwnerToken, &Facts { k5_first_run: true, ..f.clone() }, &none());
+    assert_eq!(ids(&on)[..2].to_vec(), vec!["dev_tools", "llm_sign_in"]);
+    let order: Vec<usize> = on.iter().map(|r| ROW_IDS.iter().position(|id| *id == r.id).expect("known id")).collect();
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted);
+}
+
+#[test]
+fn the_dev_tools_row_says_installing_then_reads_done() {
+    let f = Facts { dev_tools: DevTools::AppleMissing { installing: true }, ..Facts::default() };
+    let r = row(&rows(Viewer::OwnerToken, &f, &none()), "dev_tools").clone();
+    assert_eq!((r.state, r.opens, r.note), (State::Todo, Some("dev_tools"), Some(NOTE_INSTALLING)));
+    let f = Facts { dev_tools: DevTools::AppleDone, ..Facts::default() };
+    let r = row(&rows(Viewer::OwnerToken, &f, &none()), "dev_tools").clone();
+    assert_eq!((r.state, r.opens, r.note), (State::Done, Some("dev_tools"), None));
+    assert!(!ids(&rows(Viewer::Login(Role::Owner), &f, &none())).contains(&"dev_tools"));
+}
+
+#[test]
+fn on_linux_the_dev_tools_row_carries_the_command_and_opens_nothing() {
+    let f = Facts { dev_tools: DevTools::LinuxMissing { command: "sudo apt install git" }, ..Facts::default() };
+    for v in [Viewer::OwnerToken, Viewer::Login(Role::Owner), Viewer::Login(Role::Admin)] {
+        let rs = rows(v, &f, &none());
+        assert_eq!(rs[0], Row { id: "dev_tools", state: State::Todo, opens: None, note: Some("sudo apt install git") }, "{v:?}");
+    }
+    assert!(!ids(&rows(Viewer::Login(Role::Member), &f, &none())).contains(&"dev_tools"));
+    let json = serde_json::to_value(&rows(Viewer::OwnerToken, &f, &none())[0]).expect("json");
+    assert_eq!(json, serde_json::json!({ "id": "dev_tools", "state": "todo", "opens": null, "note": "sudo apt install git" }));
+}
+
+#[test]
+fn the_dev_tools_row_counts_toward_finished_and_can_be_skipped() {
+    let conn = db();
+    let p = people();
+    let missing = Facts { dev_tools: DevTools::AppleMissing { installing: false }, ..all_done() };
+    let s = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &missing, true, 10).expect("status");
+    assert!(!s.finished, "every other row done, dev_tools to do: {s:?}");
+    let s = apply_on(&conn, &p, OWNER, Viewer::OwnerToken, &missing, true, &Action::Skip("dev_tools".into()), 11)
+        .expect("skip");
+    assert_eq!(row(&s.rows, "dev_tools").state, State::Skipped);
+    assert!(s.finished && s.newly_finished, "skipped counts: {s:?}");
+
+    let conn = db();
+    let done = Facts { dev_tools: DevTools::AppleDone, ..all_done() };
+    let s = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &done, true, 12).expect("status");
+    assert!(s.finished, "done counts: {s:?}");
+
+    // A login can't skip a row it doesn't see.
+    let conn = db();
+    let e = apply_on(&conn, &p, "julie", Viewer::Login(Role::Admin), &missing, true, &Action::Skip("dev_tools".into()), 13);
+    assert_eq!(e, Err(Error::UnknownRow("dev_tools".into())));
+}
+
+#[test]
+fn load_facts_takes_an_injected_dev_tools_fact() {
+    let d = DevTools::LinuxMissing { command: "sudo dnf install git" };
+    {
+        let _g = dev_tools_for_test(d);
+        assert_eq!(dev_tools_now(), d);
+        {
+            let _inner = dev_tools_for_test(DevTools::AppleDone);
+            assert_eq!(dev_tools_now(), DevTools::AppleDone);
+        }
+        assert_eq!(dev_tools_now(), d, "the inner guard restores the outer one");
+    }
 }

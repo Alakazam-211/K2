@@ -605,8 +605,8 @@ pub fn apple_headless_steps() -> Vec<String> {
 }
 
 /// The install line for this Linux distro, from `/etc/os-release` text.
-/// Pure.
-pub fn linux_install_command(os_release: &str) -> String {
+/// Pure. One of a few fixed lines (the setup list's `dev_tools` note).
+pub fn linux_install_command(os_release: &str) -> &'static str {
     let mut ids = String::new();
     for line in os_release.lines() {
         if let Some(v) = line.strip_prefix("ID=").or_else(|| line.strip_prefix("ID_LIKE=")) {
@@ -616,17 +616,17 @@ pub fn linux_install_command(os_release: &str) -> String {
     }
     let has = |names: &[&str]| ids.split_whitespace().any(|w| names.contains(&w));
     if has(&["debian", "ubuntu"]) {
-        "sudo apt install git".to_string()
+        "sudo apt install git"
     } else if has(&["fedora", "rhel", "centos", "rocky", "almalinux"]) {
-        "sudo dnf install git".to_string()
+        "sudo dnf install git"
     } else if has(&["arch", "manjaro", "endeavouros"]) {
-        "sudo pacman -S git".to_string()
+        "sudo pacman -S git"
     } else if has(&["opensuse", "suse", "opensuse-leap", "opensuse-tumbleweed", "sles"]) {
-        "sudo zypper install git".to_string()
+        "sudo zypper install git"
     } else if has(&["alpine"]) {
-        "sudo apk add git".to_string()
+        "sudo apk add git"
     } else {
-        "install git with your package manager (apt, dnf or pacman)".to_string()
+        "install git with your package manager (apt, dnf or pacman)"
     }
 }
 
@@ -687,7 +687,7 @@ pub fn status_from(
         GitProbe::Broken { program, error } => vec![broken_git_fix(program, error, mac, os_release)],
         _ if mac => apple_headless_steps(),
         _ if cfg!(windows) => vec!["Install Git for Windows from git-scm.com".to_string()],
-        _ => vec![linux_install_command(os_release)],
+        _ => vec![linux_install_command(os_release).to_string()],
     };
     GitToolsStatus {
         os: std::env::consts::OS,

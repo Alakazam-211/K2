@@ -133,6 +133,17 @@ describe('SetupChecklist', () => {
     expect(document.querySelector('[data-setup-row="tunnel"]')!.innerHTML).not.toContain('opacity')
   })
 
+  it('Skip is always shown, after its row in keyboard order, and its room on the last line adds no words', async () => {
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-phone')
+    const skip = screen.getByTestId('setup-skip-phone')
+    expect(row.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(skip.className).not.toMatch(/hidden|opacity-0|invisible/)
+    // The title holds only its words; the held room is drawn, not written.
+    expect(row.querySelector('span.type-row')?.textContent).toBe(SETUP_CHECKLIST_COPY.phone.label)
+    expect(row.querySelector('[data-setup-note]')?.textContent).toBe(NEEDS_TUNNEL_NOTE)
+  })
+
   it("a row's note is no louder than its line", async () => {
     render(<SetupChecklist />)
     const row = await screen.findByTestId('setup-row-phone')
@@ -148,12 +159,12 @@ describe('SetupChecklist', () => {
     const ids = [...document.querySelectorAll('[data-setup-row]')].map((el) => el.getAttribute('data-setup-row'))
     expect(ids).toEqual(['llm_sign_in', 'first_agent', 'tunnel', 'phone', 'own_sign_in'])
     expect(SETUP_CHECKLIST_COPY.llm_sign_in).toEqual({
-      label: 'Sign in to Claude, Codex or Grok',
-      line: 'Your agents think with this account.',
+      label: 'Sign in to an AI tool',
+      line: 'Claude, Codex or Grok. Your agents think with it.',
     })
     const first = screen.getByTestId('setup-row-llm_sign_in')
-    expect(first.textContent).toContain('Sign in to Claude, Codex or Grok')
-    expect(first.textContent).toContain('Your agents think with this account.')
+    expect(first.textContent).toContain('Sign in to an AI tool')
+    expect(first.textContent).toContain('Claude, Codex or Grok. Your agents think with it.')
     expect(first.textContent).toContain('To do')
     expect(screen.getByTestId('setup-row-first_agent').textContent).toContain('Done')
     expect(screen.getByTestId('setup-row-phone').textContent).toContain(NEEDS_TUNNEL_NOTE)

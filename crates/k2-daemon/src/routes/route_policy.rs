@@ -1354,6 +1354,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/domain/remove", Admin),
     get("/cli/mail/domain/show", Admin),
     post("/cli/mail/draft", Member),
+    // `k2 mail drafts`: the workspace agent's own drafted replies and what
+    // became of them (records only, no mail).
+    get("/cli/mail/drafts", Member),
     post("/cli/mail/external/add", Admin),
     post("/cli/mail/external/remove", Admin),
     post("/cli/mail/flag", Member),
@@ -1413,6 +1416,13 @@ pub const ROUTES: &[Route] = &[
     get("/cli/mail/reader/attachment", Member),
     post("/cli/mail/reader/delete", Member),
     post("/cli/mail/reader/draft", Member),
+    // Drafted replies: open (a peek, logged), list an inbox's, and save,
+    // send (the workspace's own send gate) or discard one.
+    post("/cli/mail/reader/draft-discard", Member),
+    get("/cli/mail/reader/draft-open", Member),
+    post("/cli/mail/reader/draft-save", Member),
+    post("/cli/mail/reader/draft-send", Member),
+    get("/cli/mail/reader/drafts", Member),
     post("/cli/mail/reader/flag", Member),
     get("/cli/mail/reader/folders", Member),
     get("/cli/mail/reader/inboxes", Member),
@@ -2874,6 +2884,11 @@ pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
     ("/cli/mail/approvals/show", "auto-denies sends pending longer than 7 days"),
     ("/cli/mail/outbox", "auto-denies sends pending longer than 7 days"),
     ("/cli/mail/read", "reading a message marks it \\Seen (IMAP semantics)"),
+    // Drafted replies: a tracked draft its mailbox no longer has (sent or
+    // deleted in the person's own mail app) is recorded as ended. Never
+    // touches the mailbox; never marks anything read.
+    ("/cli/mail/reader/draft-open", "records a tracked draft its mailbox no longer has as ended"),
+    ("/cli/mail/reader/thread", "records a tracked draft its mailbox no longer has as ended"),
     ("/cli/mail/status", "health=1 refreshes the stored health snapshot"),
     ("/cli/mail/wait", "a matched message is marked \\Seen"),
     ("/cli/power/status", "re-applies the saved keep-awake setting"),

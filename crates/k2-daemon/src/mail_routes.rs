@@ -215,6 +215,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/watch/inbox" => crate::mail::watch::routes::handle_inbox(params),
         "/cli/mail/watch/log" => crate::mail::watch::routes::handle_log(params),
         "/cli/mail/outbox" => routes_send::handle_outbox(params),
+        "/cli/mail/drafts" => crate::mail::drafts::handle_agent_drafts(params),
         "/cli/mail/approvals/list" => routes_send::handle_approvals_list(params),
         "/cli/mail/approvals/show" => routes_send::handle_approvals_show(params),
         // S11/E1: unified inbox catalog (agent view via proven principal

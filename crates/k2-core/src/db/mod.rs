@@ -1934,6 +1934,12 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // migration-order tests).
         // The store is `crate::first_run`.
         ("0290_first_run", include_str!("../../drizzle_sql/0290_first_run.sql")),
+        // 0292 — drafted replies K2 tracks (0.46.11, the mail reader shows an
+        // agent's draft at the top of its thread): `mail_drafts`, metadata
+        // only (the draft lives in the mailbox). 0289/0290 are reserved for
+        // other lanes, 0291 maybe the App database door's. Renumber freely
+        // on a slip (and edit the migration-order tests).
+        ("0292_mail_drafts", include_str!("../../drizzle_sql/0292_mail_drafts.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2619,7 +2625,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0290_first_run",
+            last_name, "0292_mail_drafts",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2864,6 +2870,8 @@ mod tests {
                 "0289_product_feedback_screenshot",
                 // The setup checklist.
                 "0290_first_run",
+                // 0.46.11: drafted replies (the mail reader's drafts).
+                "0292_mail_drafts",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -3044,6 +3052,8 @@ mod tests {
                 "0289_product_feedback_screenshot",
                 // The setup checklist.
                 "0290_first_run",
+                // 0.46.11: drafted replies (the mail reader's drafts).
+                "0292_mail_drafts",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3316,7 +3326,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0290_first_run", "0290 (the setup checklist) runs last");
+        assert_eq!(top, "0292_mail_drafts", "0292 (0.46.11) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3391,9 +3401,10 @@ mod tests {
                 "0287_ci_release",
                 "0288_mail_linked_by",
                 "0289_product_feedback_screenshot",
-                "0290_first_run"
+                "0290_first_run",
+                "0292_mail_drafts"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4235,7 +4246,10 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
-            // 0290 (the setup checklist) is the newest: its record goes (its
+            // 0292 (drafted replies, 0.46.11) is the newest: its record goes
+            // (its table and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0292_mail_drafts'", []).unwrap();
+            // 0290 (the setup checklist) came before it: its record goes (its
             // tables are IF NOT EXISTS and its insert OR IGNORE).
             conn.execute("DELETE FROM _migrations WHERE name = '0290_first_run'", []).unwrap();
             // 0289 (a feedback screenshot, 0.46.11) came before it: its record

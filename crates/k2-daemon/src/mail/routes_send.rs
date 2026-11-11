@@ -808,6 +808,26 @@ pub(crate) fn read_workspace_attachments(
 /// notification (`--wait` blocks until decided); on → audit row +
 /// submit ("accepted-for-delivery").
 pub fn handle_send(body: &[u8]) -> CliResponse {
+    handle_send_with(body, None)
+}
+
+/// The thread a send answers: the reply headers it carries.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ReplyThread {
+    pub in_reply_to: Option<String>,
+    pub references: Option<String>,
+}
+
+/// [`handle_send`] for a drafted reply a person sends from the mail reader
+/// with the recipients they chose: the same gate, outbox and approvals,
+/// plus the reply's thread headers. Only the reader calls this (a request
+/// body can't ask for it), so an agent's replies still meet `k2 mail
+/// reply`'s locked recipient and loop caps.
+pub(crate) fn handle_send_in_thread(body: &[u8], thread: &ReplyThread) -> CliResponse {
+    handle_send_with(body, Some(thread))
+}
+
+fn handle_send_with(body: &[u8], thread: Option<&ReplyThread>) -> CliResponse {
     let v: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -930,8 +950,8 @@ pub fn handle_send(body: &[u8]) -> CliResponse {
         reply_to,
         subject: subject.to_string(),
         text_body: body_text.to_string(),
-        in_reply_to: None,
-        references: None,
+        in_reply_to: thread.and_then(|t| t.in_reply_to.clone()),
+        references: thread.and_then(|t| t.references.clone()),
         reply_source: None,
         attachments: Vec::new(),
         ephemeral: false,

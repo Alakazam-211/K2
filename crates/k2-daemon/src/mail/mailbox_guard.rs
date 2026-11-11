@@ -138,6 +138,8 @@ fn is_list_action(action: &str) -> bool {
             | "reader/inboxes"
             | "reader/folders"
             | "reader/messages"
+            | "reader/drafts"
+            | "drafts"
     )
 }
 

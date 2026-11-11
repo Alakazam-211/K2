@@ -36,6 +36,16 @@
 //! send gate (on / approval / off) and the outbox all apply unchanged. The
 //! reader adds no send path of its own; it decides who may ask (the reader
 //! rule above) and logs the ask like a read.
+//!
+//! **Drafted replies** (Rosson, 2026-11-10). A thread answers its unsent
+//! drafts first (`draft: true`, who drafted it, when it was last edited), the
+//! drafts K2 tracks in `mail::drafts` (an agent's `k2 mail draft <id>`, or a
+//! person's reply draft saved here). `draft` opens one (logged), `drafts`
+//! lists an inbox's, and `draft-save`, `draft-send` and `draft-discard` act
+//! on one under the same reader rule and log: Save replaces the draft in the
+//! mailbox, Send runs the workspace's own `k2 mail send` (gate, outbox,
+//! approvals) with the reply's thread headers, then takes the draft out of
+//! Drafts; Discard takes it out. The drafting agent is told.
 
 use std::collections::HashMap;
 
@@ -44,6 +54,7 @@ use base64::Engine as _;
 
 use crate::cli_response::CliResponse;
 use crate::mail::access::Source;
+use crate::mail::drafts;
 use crate::mail::jmap::{EmailFull, EmailSummary, MailAddr};
 use crate::mail::mailbox_guard::{self, Rule};
 use crate::mail::messages::{self, MailBackend, MailFolder};
@@ -51,6 +62,8 @@ use crate::mail::messages::{self, MailBackend, MailFolder};
 /// Read routes (GET).
 pub const READ_ROUTES: &[&str] = &[
     "/cli/mail/reader/attachment",
+    "/cli/mail/reader/draft-open",
+    "/cli/mail/reader/drafts",
     "/cli/mail/reader/folders",
     "/cli/mail/reader/inboxes",
     "/cli/mail/reader/log",
@@ -66,6 +79,9 @@ pub const WRITE_ROUTES: &[&str] = &[
     "/cli/mail/reader/archive",
     "/cli/mail/reader/delete",
     "/cli/mail/reader/draft",
+    "/cli/mail/reader/draft-discard",
+    "/cli/mail/reader/draft-save",
+    "/cli/mail/reader/draft-send",
     "/cli/mail/reader/flag",
     "/cli/mail/reader/move",
     "/cli/mail/reader/reply",
@@ -160,6 +176,8 @@ pub fn dispatch(
             "/cli/mail/reader/message" => handle_message(params),
             "/cli/mail/reader/thread" => handle_thread(params),
             "/cli/mail/reader/attachment" => handle_attachment(params),
+            "/cli/mail/reader/draft-open" => handle_draft_open(params),
+            "/cli/mail/reader/drafts" => handle_drafts(params),
             "/cli/mail/reader/log" => handle_log(params),
             crate::mail::reader_presence::ROUTE => crate::mail::reader_presence::handle(),
             _ => CliResponse::not_found(),
@@ -172,6 +190,9 @@ pub fn dispatch(
             return method_not_allowed();
         }
         let verb = path.trim_start_matches("/cli/mail/reader/");
+        if matches!(verb, "draft-save" | "draft-send" | "draft-discard") {
+            return handle_draft_action(verb, body);
+        }
         return handle_write(verb, body);
     }
     CliResponse::not_found()
@@ -698,40 +719,404 @@ fn handle_thread(params: &HashMap<String, String>) -> CliResponse {
         Ok(None) => return message_not_found(token),
         Err(hint) => return engine(hint),
     };
-    let Some(thread_id) = first.summary.thread_id.clone().filter(|t| !t.is_empty()) else {
-        return ok_json(serde_json::json!({
-            "ok": true,
-            "messages": [message_json(&inbox.address, &first, &authority)],
-        }));
-    };
-    let filter = messages::ListFilter {
-        folder: folder_param(params.get("folder").map(String::as_str)),
-        ..Default::default()
-    };
-    let summaries = match backend.list_inbox(&account, &filter, THREAD_SCAN) {
-        Ok(s) => s,
-        Err(e) => return crate::mail::routes_messages::list_error_response(e),
-    };
-    let mut ids: Vec<(i64, String)> = summaries
-        .iter()
-        .filter(|s| s.thread_id.as_deref() == Some(thread_id.as_str()) && s.id != first.summary.id)
-        .map(|s| (messages::iso_to_unix(&s.received_at), s.id.clone()))
+    // The open drafts K2 tracks in this inbox: their copies in Drafts are
+    // answered as drafts, never as messages.
+    let draft_refs: std::collections::HashSet<String> = drafts::list_for_address(&inbox.address, 200)
+        .into_iter()
+        .filter(|d| d.state == drafts::STATE_OPEN)
+        .filter_map(|d| d.backend_ref)
         .collect();
-    ids.sort();
-    // The newest of the thread, keeping room for the message asked for.
-    let keep_from = ids.len().saturating_sub(THREAD_MAX - 1);
+    let thread_id = first.summary.thread_id.clone().filter(|t| !t.is_empty());
     let mut fulls: Vec<EmailFull> = vec![first];
-    for (_, id) in &ids[keep_from..] {
-        match backend.fetch_full(&account, id) {
-            Ok(Some(f)) => fulls.push(f),
-            Ok(None) => {}
-            Err(hint) => return engine(hint),
+    if let Some(thread_id) = thread_id.as_deref() {
+        let asked = folder_param(params.get("folder").map(String::as_str));
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        seen.insert(fulls[0].summary.id.clone());
+        let mut ids: Vec<(i64, String)> = Vec::new();
+        let mut take = |summaries: Vec<EmailSummary>, ids: &mut Vec<(i64, String)>| {
+            for s in summaries {
+                if s.thread_id.as_deref() == Some(thread_id) && !draft_refs.contains(&s.id) && seen.insert(s.id.clone()) {
+                    ids.push((messages::iso_to_unix(&s.received_at), s.id));
+                }
+            }
+        };
+        let filter = messages::ListFilter { folder: asked.clone(), ..Default::default() };
+        match backend.list_inbox(&account, &filter, THREAD_SCAN) {
+            Ok(s) => take(s, &mut ids),
+            Err(e) => return crate::mail::routes_messages::list_error_response(e),
+        }
+        // A reply sent from this inbox sits in Sent (or, for K2's own
+        // hosted sends, the Drafts mailbox without `$draft`): it belongs in
+        // the conversation. A folder this backend doesn't have is skipped.
+        for role in ["sent", "drafts"] {
+            if matches!(&asked, MailFolder::Named(n) if n.eq_ignore_ascii_case(role)) {
+                continue;
+            }
+            let filter = messages::ListFilter { folder: MailFolder::Named(role.to_string()), ..Default::default() };
+            if let Ok(s) = backend.list_inbox(&account, &filter, THREAD_SCAN) {
+                take(s, &mut ids);
+            }
+        }
+        ids.sort();
+        // The newest of the thread, keeping room for the message asked for.
+        let keep_from = ids.len().saturating_sub(THREAD_MAX - 1);
+        for (_, id) in &ids[keep_from..] {
+            match backend.fetch_full(&account, id) {
+                Ok(Some(f)) => fulls.push(f),
+                Ok(None) => {}
+                Err(hint) => return engine(hint),
+            }
         }
     }
+    fulls.retain(|f| !draft_refs.contains(&f.summary.id));
     fulls.sort_by_key(|f| messages::iso_to_unix(&f.summary.received_at));
-    let list: Vec<serde_json::Value> =
-        fulls.iter().map(|f| message_json(&inbox.address, f, &authority)).collect();
+    // Drafts first (newest edit first), then the conversation, oldest first.
+    let tokens: Vec<String> = std::iter::once(token.to_string())
+        .chain(fulls.iter().map(|f| messages::encode_message_id(&inbox.address, &f.summary.id)))
+        .collect();
+    let mut list: Vec<serde_json::Value> = Vec::new();
+    for row in drafts::open_in_thread(&inbox.address, &tokens, thread_id.as_deref()) {
+        if let Some(d) = draft_json_fetched(&row, &account, backend.as_ref()) {
+            list.push(d);
+        }
+    }
+    list.extend(fulls.iter().map(|f| {
+        let mut m = message_json(&inbox.address, f, &authority);
+        m["draft"] = serde_json::json!(false);
+        m
+    }));
     ok_json(serde_json::json!({ "ok": true, "messages": list }))
+}
+
+// ── Drafted replies ─────────────────────────────────────────────────────
+
+/// One tracked draft in the message shape the thread answers, marked
+/// `draft: true`. `full` is its copy in the mailbox (`None` = K2 can't
+/// read it: shown without content, not editable).
+fn draft_json(row: &drafts::DraftRow, full: Option<&EmailFull>, hint: Option<&str>) -> serde_json::Value {
+    let iso = |t: i64| {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(t, 0)
+            .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+            .unwrap_or_default()
+    };
+    let editable = full.is_some() && row.backend_ref.is_some();
+    let mut v = serde_json::json!({
+        "id": row.id,
+        "draft": true,
+        "draftId": row.id,
+        "inbox": row.address,
+        "replyOf": row.reply_of,
+        "status": drafts::status_wire(row),
+        "author": { "kind": row.author_kind, "name": row.author_label },
+        "createdAt": row.created_at,
+        "editedAt": row.edited_at,
+        "editedBy": row.edited_by,
+        "editable": editable,
+        "date": iso(row.edited_at),
+        "unread": false,
+        "hasAttachment": false,
+        "attachments": [],
+        "threadId": row.thread_ref,
+        "from": null,
+        "to": [],
+        "cc": [],
+        "subject": null,
+        "text": null,
+        "html": null,
+    });
+    if let Some(f) = full {
+        v["from"] = f.summary.from.first().map(addr_json).unwrap_or(serde_json::Value::Null);
+        v["to"] = serde_json::json!(f.summary.to.iter().map(addr_json).collect::<Vec<_>>());
+        v["cc"] = serde_json::json!(f.cc.iter().map(addr_json).collect::<Vec<_>>());
+        v["subject"] = serde_json::json!(f.summary.subject);
+        v["text"] = serde_json::json!(match (&f.text, &f.html) {
+            (Some(t), _) => t.clone(),
+            (None, Some(h)) => messages::html_to_text(h),
+            (None, None) => String::new(),
+        });
+    }
+    let hint = hint.map(str::to_string).or_else(|| {
+        (!editable).then(|| {
+            "K2 can show this draft but not change it; edit or send it from the inbox's own mail app".to_string()
+        })
+    });
+    if let Some(h) = hint {
+        v["hint"] = serde_json::json!(h);
+    }
+    v
+}
+
+/// [`draft_json`] after reading the draft's copy. A copy the mailbox no
+/// longer has (sent or deleted in the person's own mail app) ends the
+/// draft: `None`, and the record says so.
+fn draft_json_fetched(row: &drafts::DraftRow, account: &str, backend: &dyn messages::ReadBackend) -> Option<serde_json::Value> {
+    let Some(r) = row.backend_ref.as_deref() else {
+        return Some(draft_json(row, None, None));
+    };
+    match backend.fetch_full(account, r) {
+        Ok(Some(f)) => Some(draft_json(row, Some(&f), None)),
+        Ok(None) => {
+            if let Err(e) = drafts::set_state(&row.id, drafts::STATE_DISCARDED, Some("its mailbox"), None, drafts::now_secs()) {
+                k2_core::log_debug!("[mail/reader] draft {} left its mailbox; record: {e}", row.id);
+            }
+            None
+        }
+        Err(hint) => Some(draft_json(row, None, Some(&format!("K2 couldn't read this draft just now: {hint}")))),
+    }
+}
+
+/// The masked answer for a draft id: the same bytes whether it doesn't
+/// exist, is no longer a draft, or isn't the viewer's to open.
+fn draft_not_found(token: &str) -> CliResponse {
+    error_response(
+        "404 Not Found",
+        "not_found",
+        &format!("no draft '{token}' you can open — drafts show at the top of their thread, or in 'k2 mail reader drafts <inbox>'"),
+    )
+}
+
+/// The open draft `token` names, with its inbox opened under the reader
+/// rule (logged). Every refusal is [`draft_not_found`].
+fn open_draft(token: &str) -> Result<(drafts::DraftRow, ReaderInbox), CliResponse> {
+    let Some(row) = drafts::load(token).filter(|r| r.state == drafts::STATE_OPEN) else {
+        return Err(draft_not_found(token));
+    };
+    let inbox = open(find_inbox(&row.address), draft_not_found(token))?;
+    if inbox.source != row.source || inbox.inbox_id != row.inbox_id {
+        return Err(draft_not_found(token));
+    }
+    Ok((row, inbox))
+}
+
+fn handle_draft_open(params: &HashMap<String, String>) -> CliResponse {
+    let token = match required(params, "id", "missing 'id' — a draft id (d_…) from a thread or 'k2 mail reader drafts'") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let (row, inbox) = match open_draft(token) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let account = match account_of(&inbox) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let backend = match crate::mail::routes_messages::backend_for(&inbox.address) {
+        Ok(b) => b,
+        Err(r) => return r,
+    };
+    match draft_json_fetched(&row, &account, backend.as_ref()) {
+        Some(d) => ok_json(serde_json::json!({ "ok": true, "markedRead": false, "draft": d })),
+        None => draft_not_found(token),
+    }
+}
+
+fn handle_drafts(params: &HashMap<String, String>) -> CliResponse {
+    let raw = match required(params, "inbox", "missing 'inbox' — an address from 'k2 mail reader inboxes'") {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let inbox = match open_address(raw) {
+        Ok(i) => i,
+        Err(r) => return r,
+    };
+    let rows: Vec<serde_json::Value> = drafts::list_for_address(&inbox.address, 50)
+        .iter()
+        .filter(|d| d.source == inbox.source && d.inbox_id == inbox.inbox_id)
+        .map(drafts::meta_json)
+        .collect();
+    ok_json(serde_json::json!({ "ok": true, "inbox": inbox.address, "count": rows.len(), "drafts": rows }))
+}
+
+fn str_list(v: &serde_json::Value, key: &str) -> Result<Option<Vec<String>>, CliResponse> {
+    match &v[key] {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::String(s) => {
+            Ok(Some(s.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect()))
+        }
+        serde_json::Value::Array(a) => a
+            .iter()
+            .map(|x| x.as_str().map(|s| s.trim().to_string()).ok_or(()))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|l| Some(l.into_iter().filter(|s| !s.is_empty()).collect()))
+            .map_err(|_| usage(&format!("'{key}' must be a list of addresses"))),
+        _ => Err(usage(&format!("'{key}' must be a list of addresses"))),
+    }
+}
+
+/// The draft as the person wants it: what the body names, the draft's
+/// current copy for anything it leaves out. Checked like a send.
+fn draft_values(
+    v: &serde_json::Value,
+    row: &drafts::DraftRow,
+    account: &str,
+    address: &str,
+) -> Result<drafts::DraftValues, CliResponse> {
+    let to = str_list(v, "to")?;
+    let cc = str_list(v, "cc")?;
+    let subject = v["subject"].as_str().map(|s| s.trim().to_string());
+    let body = v["body"].as_str().map(str::to_string);
+    let current = if to.is_none() || cc.is_none() || subject.is_none() || body.is_none() {
+        let Some(r) = row.backend_ref.as_deref() else {
+            return Err(drafts::not_editable(row));
+        };
+        let backend = crate::mail::routes_messages::backend_for(address)?;
+        match backend.fetch_full(account, r) {
+            Ok(Some(f)) => Some(f),
+            Ok(None) => return Err(draft_not_found(&row.id)),
+            Err(hint) => return Err(engine(hint)),
+        }
+    };
+    let cur_list = |l: &[MailAddr]| l.iter().map(|a| a.email.clone()).collect::<Vec<_>>();
+    let to = to.unwrap_or_else(|| current.as_ref().map(|f| cur_list(&f.summary.to)).unwrap_or_default());
+    let cc = cc.unwrap_or_else(|| current.as_ref().map(|f| cur_list(&f.cc)).unwrap_or_default());
+    let subject = subject.unwrap_or_else(|| current.as_ref().map(|f| f.summary.subject.clone()).unwrap_or_default());
+    let body = body.unwrap_or_else(|| current.as_ref().and_then(|f| f.text.clone()).unwrap_or_default());
+    if to.is_empty() {
+        return Err(usage("a draft needs at least one 'to' recipient"));
+    }
+    if subject.is_empty() {
+        return Err(usage("a draft needs a 'subject'"));
+    }
+    if subject.contains('\r') || subject.contains('\n') {
+        return Err(usage("the subject can't hold a line break"));
+    }
+    if body.trim().is_empty() {
+        return Err(usage("a draft needs a 'body' — the text"));
+    }
+    if subject.len() + body.len() > crate::mail::send::MAX_MESSAGE_BYTES {
+        return Err(usage(&format!("draft too large — max {} bytes of text", crate::mail::send::MAX_MESSAGE_BYTES)));
+    }
+    if to.len() + cc.len() > crate::mail::send::MAX_RECIPIENTS {
+        return Err(usage(&format!(
+            "too many recipients ({}) — max {} per message, counting to + cc",
+            to.len() + cc.len(),
+            crate::mail::send::MAX_RECIPIENTS
+        )));
+    }
+    let norm = |l: &[String]| {
+        crate::mail::send::normalize_recipients(l).map_err(|e| match e {
+            crate::mail::send::SendError::Usage(h) | crate::mail::send::SendError::NotFound(h) => usage(&h),
+            other => usage(&format!("invalid recipient: {other:?}")),
+        })
+    };
+    Ok(drafts::DraftValues { to: norm(&to)?, cc: norm(&cc)?, subject, body })
+}
+
+/// POST draft-save | draft-send | draft-discard `{id, to?, cc?, subject?,
+/// body?, reason?}`.
+fn handle_draft_action(verb: &str, body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v @ serde_json::Value::Object(_)) => v,
+        Ok(_) => return usage("the body must be a JSON object"),
+        Err(e) => return usage(&format!("invalid JSON body: {e}")),
+    };
+    mailbox_guard::set_reason(v.get("reason").and_then(|r| r.as_str()));
+    let Some(token) = v.get("id").and_then(|i| i.as_str()).map(str::trim).filter(|s| !s.is_empty()) else {
+        return usage("missing 'id' — a draft id (d_…) from a thread or 'k2 mail reader drafts'");
+    };
+    let (row, inbox) = match open_draft(token) {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
+    if let Some(r) = level_refusal(if verb == "draft-send" { "send" } else { "draft" }, &inbox) {
+        return r;
+    }
+    let account = match account_of(&inbox) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
+    let by = drafts::viewer_label().unwrap_or_else(|| "a person".to_string());
+    let now = drafts::now_secs();
+    match verb {
+        "draft-discard" => {
+            if let Err(r) = drafts::remove_from_mailbox(&row, &account) {
+                return r;
+            }
+            if let Err(e) = drafts::set_state(&row.id, drafts::STATE_DISCARDED, Some(&by), None, now) {
+                return error_response("503 Service Unavailable", "not_ready", &format!("the draft left Drafts, but K2 couldn't record that ({e})"));
+            }
+            drafts::tell_agent(&row, "discarded", &by);
+            ok_json(serde_json::json!({
+                "ok": true,
+                "draftId": row.id,
+                "draftStatus": "discarded",
+                "hint": format!("draft {} discarded from {}", row.id, row.address),
+            }))
+        }
+        "draft-save" => {
+            let values = match draft_values(&v, &row, &account, &inbox.address) {
+                Ok(x) => x,
+                Err(r) => return r,
+            };
+            let from_name = k2_core::workspace::display::agent_display_name(
+                inbox.workspace_path.as_deref().unwrap_or(&inbox.owner_project_id),
+            );
+            let new_ref = match drafts::replace_in_mailbox(&row, &account, &from_name, &values) {
+                Ok(r) => r,
+                Err(resp) => return resp,
+            };
+            if let Err(e) = drafts::set_edited(&row.id, new_ref.as_deref(), Some(&by), now) {
+                return error_response("503 Service Unavailable", "not_ready", &format!("the draft was saved, but K2 couldn't record it ({e})"));
+            }
+            if row.edited_by.is_none() {
+                drafts::tell_agent(&row, "edited", &by);
+            }
+            let Some(saved) = drafts::load(&row.id) else {
+                return draft_not_found(token);
+            };
+            let backend = match crate::mail::routes_messages::backend_for(&inbox.address) {
+                Ok(b) => b,
+                Err(r) => return r,
+            };
+            let mut out = serde_json::json!({ "ok": true, "draftId": saved.id, "draftStatus": drafts::status_wire(&saved) });
+            if let Some(d) = draft_json_fetched(&saved, &account, backend.as_ref()) {
+                out["draft"] = d;
+            }
+            ok_json(out)
+        }
+        "draft-send" => {
+            let values = match draft_values(&v, &row, &account, &inbox.address) {
+                Ok(x) => x,
+                Err(r) => return r,
+            };
+            let project = inbox.workspace_path.clone().unwrap_or_else(|| inbox.owner_project_id.clone());
+            let send_body = serde_json::json!({
+                "project": project,
+                "from": inbox.address,
+                "to": values.to,
+                "cc": values.cc,
+                "subject": values.subject,
+                "body": values.body,
+            });
+            let thread = crate::mail::routes_send::ReplyThread {
+                in_reply_to: row.in_reply_to.clone(),
+                references: row.refs.clone(),
+            };
+            let resp = crate::mail::routes_send::handle_send_in_thread(send_body.to_string().as_bytes(), &thread);
+            let mut out: serde_json::Value = match serde_json::from_str(&resp.body) {
+                Ok(j) if resp.status.starts_with('2') && j["ok"] == true => j,
+                // Refused or failed: the draft stays as it was.
+                _ => return resp,
+            };
+            let state = match out["status"].as_str() {
+                Some("pending_approval") => drafts::STATE_HELD,
+                _ => drafts::STATE_SENT,
+            };
+            if let Err(r) = drafts::remove_from_mailbox(&row, &account) {
+                k2_core::log_debug!("[mail/reader] draft {} was sent; its copy stayed in Drafts: {}", row.id, r.body);
+            }
+            let outbound = out["id"].as_str().map(str::to_string);
+            if let Err(e) = drafts::set_state(&row.id, state, Some(&by), outbound.as_deref(), now) {
+                k2_core::log_debug!("[mail/reader] draft {} was sent; record: {e}", row.id);
+            }
+            drafts::tell_agent(&row, state, &by);
+            out["draftId"] = serde_json::json!(row.id);
+            out["draftStatus"] = serde_json::json!(if state == drafts::STATE_HELD { "held" } else { "sent" });
+            ok_json(out)
+        }
+        _ => CliResponse::not_found(),
+    }
 }
 
 // ── GET attachment ──────────────────────────────────────────────────────

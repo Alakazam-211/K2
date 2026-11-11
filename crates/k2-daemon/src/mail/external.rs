@@ -497,6 +497,18 @@ pub trait ImapOps: Send + Sync {
         folder: &str,
         rfc822: &[u8],
     ) -> Result<(), String>;
+    /// [`Self::append_draft`], answering where the draft landed as a
+    /// `uid:<validity>:<uid>` token when the server says (RFC 4315
+    /// APPENDUID). `Ok(None)` = saved, but the server didn't say where.
+    fn append_draft_uid(
+        &self,
+        inbox: &MailExternalInbox,
+        password: &str,
+        folder: &str,
+        rfc822: &[u8],
+    ) -> Result<Option<String>, String> {
+        self.append_draft(inbox, password, folder, rfc822).map(|()| None)
+    }
     /// S11 management/delete op (move/flag/archive/delete/folders). The
     /// destination folder is resolved server-side (Move: the named/junk
     /// folder; Archive/Trash: the SPECIAL-USE pick). DELETE routes here
@@ -1870,6 +1882,31 @@ pub fn save_reply_draft(
     body: &str,
     attachments: &[Rfc822Attachment],
 ) -> Result<String, ExtError> {
+    save_reply_draft_located(ops, inbox, password, source_uid_token, body, attachments).map(|d| d.folder)
+}
+
+/// Where a reply draft landed, and the thread it answers.
+#[derive(Debug, Clone)]
+pub struct SavedReplyDraft {
+    pub folder: String,
+    /// `uid:<validity>:<uid>` when the server said (APPENDUID).
+    pub uid_token: Option<String>,
+    /// The source's Message-ID (angle-bracketed), for In-Reply-To.
+    pub in_reply_to: Option<String>,
+    /// The References chain the draft carries.
+    pub references: Option<String>,
+}
+
+/// [`save_reply_draft`], answering where the draft landed and the thread
+/// headers it carries (so K2 can show, edit and send it later).
+pub fn save_reply_draft_located(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    source_uid_token: &str,
+    body: &str,
+    attachments: &[Rfc822Attachment],
+) -> Result<SavedReplyDraft, ExtError> {
     let src_raw = ops
         .fetch_raw(inbox, password, source_uid_token)
         .map_err(|e| {
@@ -1888,7 +1925,114 @@ pub fn save_reply_draft(
     let boundary = format!("=_k2_draft_{}", uuid::Uuid::new_v4().simple());
     let rfc822 = compose_draft_rfc822(inbox, &src, body, &date, attachments, &boundary)
         .map_err(ExtError::Engine)?;
-    append_draft_bytes(ops, inbox, password, &folder, &rfc822)
+    let (folder, uid_token) = append_draft_located(ops, inbox, password, &folder, &rfc822)?;
+    Ok(SavedReplyDraft {
+        folder,
+        uid_token,
+        references: crate::mail::send::build_out_references(src.references.as_deref(), src.message_id.as_deref()),
+        in_reply_to: src.message_id,
+    })
+}
+
+/// [`append_draft_bytes`] that also answers the new draft's uid token.
+fn append_draft_located(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    folder: &str,
+    rfc822: &[u8],
+) -> Result<(String, Option<String>), ExtError> {
+    match ops.append_draft_uid(inbox, password, folder, rfc822) {
+        Ok(uid) => {
+            record_check(&inbox.id, Ok(()));
+            Ok((folder.to_string(), uid))
+        }
+        Err(e) => {
+            record_check(&inbox.id, Err(&e));
+            Err(ExtError::Engine(format!("draft APPEND failed: {e}")))
+        }
+    }
+}
+
+/// A person's edit of a tracked reply draft: the new copy, with the same
+/// thread headers, APPENDed to the Drafts folder. Answers its uid token
+/// (`None` when the server doesn't say). The caller moves the old copy to
+/// Trash.
+#[allow(clippy::too_many_arguments)]
+pub fn save_edited_draft(
+    ops: &dyn ImapOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    to: &[String],
+    cc: &[String],
+    subject: &str,
+    body: &str,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+) -> Result<Option<String>, String> {
+    let as_addrs = |l: &[String]| l.iter().map(|e| MailAddr { name: None, email: e.clone() }).collect::<Vec<_>>();
+    let words = |e: ExtError| match e {
+        ExtError::Usage(h) | ExtError::NotFound(h) | ExtError::Exists(h) | ExtError::Engine(h) => h,
+    };
+    let folder = resolved_drafts_folder(ops, inbox, password).map_err(words)?;
+    let date = chrono::Utc::now().to_rfc2822();
+    let boundary = format!("=_k2_draft_{}", uuid::Uuid::new_v4().simple());
+    let rfc822 = compose_threaded_draft_rfc822(
+        inbox,
+        &as_addrs(to),
+        &as_addrs(cc),
+        subject,
+        body,
+        in_reply_to,
+        references,
+        &date,
+        &boundary,
+    )?;
+    append_draft_located(ops, inbox, password, &folder, &rfc822).map(|(_, uid)| uid).map_err(words)
+}
+
+/// Pure: an edited reply draft. Like [`compose_new_draft_rfc822`] (From =
+/// the linked account, the given To/Cc/Subject, no Message-ID) plus the
+/// reply's In-Reply-To/References, so the edit stays in its thread.
+#[allow(clippy::too_many_arguments)]
+pub fn compose_threaded_draft_rfc822(
+    inbox: &MailExternalInbox,
+    to: &[MailAddr],
+    cc: &[MailAddr],
+    subject: &str,
+    body: &str,
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+    date_rfc2822: &str,
+    boundary: &str,
+) -> Result<Vec<u8>, String> {
+    if to.is_empty() {
+        return Err("a draft needs at least one To recipient".to_string());
+    }
+    let mut h = String::new();
+    h.push_str(&format!("Date: {date_rfc2822}\r\n"));
+    h.push_str(&format!(
+        "From: {}\r\n",
+        format_mailbox(inbox.display_name.as_deref(), &inbox.email_address)
+    ));
+    h.push_str(&format!("To: {}\r\n", format_addr_list(to)));
+    if !cc.is_empty() {
+        h.push_str(&format!("Cc: {}\r\n", format_addr_list(cc)));
+    }
+    h.push_str(&format!("Subject: {}\r\n", encode_header_text(subject)));
+    for v in [in_reply_to, references].into_iter().flatten() {
+        if v.contains('\r') || v.contains('\n') {
+            return Err("a thread header can't hold a line break".to_string());
+        }
+    }
+    if let Some(irt) = in_reply_to.filter(|s| !s.trim().is_empty()) {
+        h.push_str(&format!("In-Reply-To: {}\r\n", bracketed(irt)));
+    }
+    if let Some(refs) = references.filter(|s| !s.trim().is_empty()) {
+        h.push_str(&format!("References: {refs}\r\n"));
+    }
+    emit_draft_payload(&mut h, body, &[], boundary);
+    Ok(h.into_bytes())
 }
 
 /// Brand-new compose draft: From = the linked account, To/Subject/Cc

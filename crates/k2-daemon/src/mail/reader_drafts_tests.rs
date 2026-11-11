@@ -145,10 +145,10 @@ async fn d2_the_thread_lists_the_draft_first_marked_unsent() {
             assert_eq!(msgs[1]["subject"], "agent mail");
         }
         // Opening the draft is logged like any other reader open, and names it.
-        let open = rget(&fx, &fx.admin, "draft", &[("id", &id)]);
+        let open = rget(&fx, &fx.admin, "draft-open", &[("id", &id)]);
         assert_eq!(open.status, 200, "{}", open.body);
         assert_eq!(json(&open)["draft"]["text"], "Draft body for the thread");
-        let rows = fx.rows_for("user:oa0admin", &fx.agent_addr, "reader/draft");
+        let rows = fx.rows_for("user:oa0admin", &fx.agent_addr, "reader/draft-open");
         assert_eq!(rows.len(), 1, "{:?}", fx.audit());
         assert_eq!(rows[0]["messageRef"], serde_json::json!(id));
         let text = serde_json::to_string(&fx.audit()).unwrap();
@@ -187,7 +187,7 @@ async fn d3_editing_a_draft_saves_it() {
         assert_eq!(e["cc"], serde_json::json!([{ "email": "bo@example.com" }]), "{e}");
         assert_eq!(destroyed(&fx.fake).len(), 1, "the old copy is gone: {:?}", destroyed(&fx.fake));
 
-        let open = rget(&fx, OWNER, "draft", &[("id", &id)]);
+        let open = rget(&fx, OWNER, "draft-open", &[("id", &id)]);
         assert_eq!(open.status, 200, "{}", open.body);
         let d = &json(&open)["draft"];
         assert_eq!(d["text"], "better words", "{d}");
@@ -260,7 +260,7 @@ async fn d4_send_goes_through_governance_and_becomes_a_sent_message() {
             msgs.iter().any(|m| m["draft"] == false && m["subject"] == "Re: agent mail" && m["text"] == "Rosson's final words"),
             "the sent reply shows in the thread: {msgs:?}"
         );
-        let gone = rget(&fx, OWNER, "draft", &[("id", &id)]);
+        let gone = rget(&fx, OWNER, "draft-open", &[("id", &id)]);
         assert_eq!(gone.status, 404, "a sent draft is no longer a draft: {}", gone.body);
         assert_eq!(fx.rows_for("owner-token", &fx.agent_addr, "reader/draft-send").len(), 2, "{:?}", fx.audit());
         let mine = agent_view(&fx, &id);
@@ -280,7 +280,7 @@ async fn d5_discard_removes_the_draft() {
         assert_eq!(json(&r)["draftStatus"], "discarded", "{}", r.body);
         assert_eq!(destroyed(&fx.fake).len(), 1, "{:?}", destroyed(&fx.fake));
         assert!(drafts_in(&thread(&fx, OWNER)).is_empty(), "gone from the thread");
-        assert_eq!(rget(&fx, OWNER, "draft", &[("id", &id)]).status, 404);
+        assert_eq!(rget(&fx, OWNER, "draft-open", &[("id", &id)]).status, 404);
         let again = rpost(&fx, &fx.admin, "draft-discard", serde_json::json!({ "id": id }));
         assert_eq!(again.status, 404, "discarding twice: {}", again.body);
         assert!(fx.fake.state.lock().unwrap().envelopes.is_empty(), "nothing was sent");
@@ -311,7 +311,7 @@ async fn d6_a_member_cant_see_another_persons_drafts() {
         let fold = |s: &str| s.replace(&id, "<D>").replace(ghost, "<D>");
         let mut failures = Vec::new();
         let pairs = vec![
-            (rget(&fx, &fx.member, "draft", &[("id", &id)]), rget(&fx, &fx.member, "draft", &[("id", ghost)])),
+            (rget(&fx, &fx.member, "draft-open", &[("id", &id)]), rget(&fx, &fx.member, "draft-open", &[("id", ghost)])),
             (
                 rpost(&fx, &fx.member, "draft-save", serde_json::json!({ "id": id, "body": "x" })),
                 rpost(&fx, &fx.member, "draft-save", serde_json::json!({ "id": ghost, "body": "x" })),
@@ -338,7 +338,7 @@ async fn d6_a_member_cant_see_another_persons_drafts() {
         assert!(failures.is_empty(), "a Member reached pat's draft:\n{}", failures.join("\n"));
         assert!(fx.fake.state.lock().unwrap().envelopes.is_empty(), "nothing was sent");
         assert!(destroyed(&fx.fake).is_empty(), "nothing was removed");
-        let still = rget(&fx, &fx.pat, "draft", &[("id", &id)]);
+        let still = rget(&fx, &fx.pat, "draft-open", &[("id", &id)]);
         assert_eq!(still.status, 200, "pat's draft is untouched: {}", still.body);
         assert_eq!(json(&still)["draft"]["text"], "pat's own reply");
         let mine = rget(&fx, &fx.pat, "drafts", &[("inbox", &fx.person_addr)]);
@@ -357,7 +357,7 @@ async fn d7_agents_cant_use_the_reader_draft_routes() {
         let pp = passport(&fx);
         let rows_before = fx.audit().len();
         let made_before = created(&fx.fake).len();
-        for (route, q) in [("draft", vec![("id", id.as_str())]), ("drafts", vec![("inbox", fx.agent_addr.as_str())])] {
+        for (route, q) in [("draft-open", vec![("id", id.as_str())]), ("drafts", vec![("inbox", fx.agent_addr.as_str())])] {
             let r = rget(&fx, &pp, route, &q);
             assert_eq!(r.status, 403, "{route}: {}", r.body);
             assert_eq!(json(&r)["error"]["code"], "owner_only", "{route}: {}", r.body);

@@ -959,6 +959,19 @@ impl ImapOps for RealImapOps {
         rfc822: &[u8],
     ) -> Result<(), String> {
         let mut session = login(inbox, password)?;
+        let result = append_draft_to(&mut session, folder, rfc822).map(|_| ());
+        let _ = session.logout();
+        result
+    }
+
+    fn append_draft_uid(
+        &self,
+        inbox: &MailExternalInbox,
+        password: &str,
+        folder: &str,
+        rfc822: &[u8],
+    ) -> Result<Option<String>, String> {
+        let mut session = login(inbox, password)?;
         let result = append_draft_to(&mut session, folder, rfc822);
         let _ = session.logout();
         result
@@ -1459,13 +1472,22 @@ fn manage_on_session(session: &mut ImapSession, op: &ManageOp) -> Result<ManageO
 
 /// APPEND with `\Draft` (session-level so the loopback mock exercises
 /// the exact production conversation).
-fn append_draft_to(session: &mut ImapSession, folder: &str, rfc822: &[u8]) -> Result<(), String> {
-    session
+/// APPEND with `\Draft`; the `uid:<validity>:<uid>` token of the new draft
+/// when the server answers APPENDUID (RFC 4315 UIDPLUS), else `None`.
+fn append_draft_to(session: &mut ImapSession, folder: &str, rfc822: &[u8]) -> Result<Option<String>, String> {
+    let appended = session
         .append(folder, rfc822)
         .flag(Flag::Draft)
         .finish()
-        .map(|_| ())
-        .map_err(|e| imap_err("APPEND", e))
+        .map_err(|e| imap_err("APPEND", e))?;
+    let uid = appended.uids.as_ref().and_then(|u| u.first()).and_then(|m| match m {
+        imap_proto::UidSetMember::Uid(u) => Some(*u),
+        imap_proto::UidSetMember::UidRange(r) => Some(*r.start()),
+    });
+    Ok(match (appended.uid_validity, uid) {
+        (Some(v), Some(u)) => Some(external::encode_uid_token(v, u)),
+        _ => None,
+    })
 }
 
 // ──────────────────────────────────────────────────────────────────────

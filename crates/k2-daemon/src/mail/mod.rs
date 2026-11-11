@@ -197,6 +197,8 @@ pub mod schedule;
 pub mod watch;
 pub mod secrets;
 pub mod fwd_message;
+// Drafted replies K2 tracks (the reader shows them on their thread; 0292).
+pub mod drafts;
 #[cfg(test)]
 mod fake_jmap;
 // OA0 (0.46.11): people's mailboxes through a named workspace, end to end.

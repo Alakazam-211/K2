@@ -5979,6 +5979,26 @@ impl StalwartClient {
         let args = self.mail_call(account_id, "Email/set", serde_json::json!({ "destroy": ids }))?;
         Ok(args.get("destroyed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0))
     }
+
+    /// Save `email` (an RFC 8621 Email create object, see
+    /// [`crate::mail::drafts::draft_email_json`]) as a draft in the account's
+    /// Drafts mailbox (the inbox when it has none), with `$draft` and
+    /// `$seen` set. Returns the new Email id. Never submits anything.
+    pub fn email_create_draft(&self, account_id: &str, email: serde_json::Value) -> Result<String, String> {
+        let mailbox_id = match self.mailbox_role_id(account_id, "drafts")? {
+            Some(id) => id,
+            None => self.mailbox_inbox_id(account_id)?,
+        };
+        let mut email = email;
+        email["mailboxIds"] = serde_json::json!({ mailbox_id: true });
+        email["keywords"] = serde_json::json!({ "$draft": true, "$seen": true });
+        let args = self.mail_call(account_id, "Email/set", serde_json::json!({ "create": { "k2draft": email } }))?;
+        if let Some(id) = args["created"]["k2draft"]["id"].as_str() {
+            return Ok(id.to_string());
+        }
+        let why = args["notCreated"]["k2draft"]["type"].as_str().unwrap_or("no created id in the reply");
+        Err(format!("Email/set (draft): the mail server didn't save the draft ({why})"))
+    }
 }
 
 /// The report part types N6 reads.

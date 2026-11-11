@@ -178,7 +178,9 @@ impl MailSubmit for SmtpSubmit {
         msg: &OutboundMessage,
         attachments: &[OutAttachment],
     ) -> Result<Receipt, SubmitError> {
-        let r = external_smtp::send_linked_message(
+        // A drafted reply sent from the mail reader carries its thread
+        // headers on the message (every other linked send has none).
+        let r = external_smtp::send_linked_message_threaded(
             &RealSmtpOps,
             &self.inbox,
             &self.password,
@@ -188,6 +190,8 @@ impl MailSubmit for SmtpSubmit {
             &msg.subject,
             &msg.text_body,
             attachments,
+            msg.in_reply_to.as_deref(),
+            msg.references.as_deref(),
         )?;
         Ok(Receipt {
             to: r.to,

@@ -432,6 +432,24 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
         }
     };
 
+    // A reply on a HOSTED message: a real draft in the account's Drafts
+    // mailbox (JMAP), tracked so the mail reader shows it on its thread.
+    if let DraftKind::Reply { address, email_id, source_id } = &kind {
+        if let Ok(ai) = access::can_draft(&project_id, address) {
+            if ai.source == Source::Hosted {
+                if !attach_specs.is_empty() {
+                    return error_response(
+                        "400 Bad Request",
+                        "usage",
+                        "a draft on a K2-hosted inbox takes no attachments yet — draft the text, or send \
+                         with 'k2 mail reply <id> --attach'",
+                    );
+                }
+                return crate::mail::drafts::save_hosted_reply(&project_id, &path, &ai, email_id, source_id, &b.body);
+            }
+        }
+    }
+
     let (inbox, source_id) = match &kind {
         DraftKind::Reply { address, source_id, .. } => {
             match resolve_reply_inbox(&project_id, address, source_id) {
@@ -499,6 +517,30 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 ),
             };
             match saved {
+                // A Microsoft 365 reply draft is tracked, but Graph doesn't
+                // say where it went: the reader shows it, read only.
+                Ok(folder) if source_id.is_some() => {
+                    match crate::mail::drafts::record_new(
+                        Source::Linked,
+                        &inbox.id,
+                        &inbox.email_address,
+                        &project_id,
+                        &path,
+                        source_id.as_deref().unwrap_or_default(),
+                        None,
+                        None,
+                        None,
+                        None,
+                    ) {
+                        Ok(d) => ok_json(crate::mail::drafts::saved_answer(
+                            &inbox.email_address,
+                            &folder,
+                            source_id.as_deref().unwrap_or_default(),
+                            Some(&d),
+                        )),
+                        Err(resp) => resp,
+                    }
+                }
                 Ok(folder) => ok_draft(folder),
                 Err(graph::GraphSendError::TooLarge(h)) => {
                     error_response("400 Bad Request", "attachment_too_large", &h)
@@ -519,11 +561,30 @@ fn handle_draft_with(body: &[u8], ops: &dyn ImapOps) -> CliResponse {
                 Err(resp) => return resp,
             };
             match &kind {
-                DraftKind::Reply { email_id, .. } => {
-                    match external::save_reply_draft(
+                DraftKind::Reply { email_id, source_id: token, .. } => {
+                    match external::save_reply_draft_located(
                         ops, &inbox, &password, email_id, &b.body, &parts,
                     ) {
-                        Ok(folder) => ok_draft(folder),
+                        Ok(saved) => match crate::mail::drafts::record_new(
+                            Source::Linked,
+                            &inbox.id,
+                            &inbox.email_address,
+                            &project_id,
+                            &path,
+                            token,
+                            None,
+                            saved.in_reply_to,
+                            saved.references,
+                            saved.uid_token,
+                        ) {
+                            Ok(d) => ok_json(crate::mail::drafts::saved_answer(
+                                &inbox.email_address,
+                                &saved.folder,
+                                token,
+                                Some(&d),
+                            )),
+                            Err(resp) => resp,
+                        },
                         Err(e) => ext_error_response(e),
                     }
                 }

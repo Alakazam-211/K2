@@ -491,6 +491,26 @@ pub fn send_linked_message(
     body: &str,
     attachments: &[OutAttachment],
 ) -> Result<LinkedReceipt, ExtError> {
+    send_linked_message_threaded(smtp, inbox, password, to, cc, bcc, subject, body, attachments, None, None)
+}
+
+/// [`send_linked_message`] carrying a reply's In-Reply-To/References (a
+/// person sending a drafted reply from the mail reader, with the recipients
+/// they chose), so it lands in its thread.
+#[allow(clippy::too_many_arguments)]
+pub fn send_linked_message_threaded(
+    smtp: &dyn SmtpOps,
+    inbox: &MailExternalInbox,
+    password: &str,
+    to: &[String],
+    cc: &[String],
+    bcc: &[String],
+    subject: &str,
+    body: &str,
+    attachments: &[OutAttachment],
+    in_reply_to: Option<&str>,
+    references: Option<&str>,
+) -> Result<LinkedReceipt, ExtError> {
     let route = derive_smtp_route(inbox).map_err(ExtError::Engine)?;
     // Password vs OAuth-XOAUTH2 (issue #31.1) — a stale/rejected token is
     // inbox-health news, so a failed mint stamps the row like a bad dial.
@@ -516,8 +536,8 @@ pub fn send_linked_message(
             body,
             &now.to_rfc2822(),
             &mid,
-            None,
-            None,
+            in_reply_to,
+            references,
         )
         .map_err(ExtError::Engine)?
     } else {
@@ -529,8 +549,8 @@ pub fn send_linked_message(
             body,
             now.into(),
             &mid,
-            None,
-            None,
+            in_reply_to,
+            references,
             attachments,
         )
         .map_err(ExtError::Engine)?

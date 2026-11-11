@@ -53721,6 +53721,16 @@ ACTING ON MAIL
   workspace may not do it you get exit 3 (not_allowed) and the fix. Reader
   sends can't attach files yet.
 
+DRAFTED REPLIES
+  When an agent drafts a reply (k2 mail draft <id>), the draft is a real
+  draft in the inbox's Drafts folder, and thread shows it first, marked
+  "DRAFT, NOT SENT" with who drafted it and when it was last edited. Its id
+  is d_…; drafts <inbox> lists them. draft-save <d_id> changes To, Cc,
+  Subject or the text; draft-send <d_id> sends it by the workspace's send
+  rule (as send does), then it leaves Drafts and shows in the thread as
+  sent; draft-discard <d_id> removes it. Each is logged like any other
+  access. The agent that drafted it is told, and sees it in k2 mail drafts.
+
 WHAT YOU SEE
   Plain text by default; --html prints the HTML as K2 cleaned it: no script,
   no remote pictures, links shown as data, not clickable. Attachments save
@@ -55129,7 +55139,8 @@ AGENT SURFACE
   k2 mail watch    hear that mail arrived without blocking: VIPs at once,
                    the rest in a digest (k2 study mail-watch)
   k2 mail send / reply / outbox
-  k2 mail draft    linked Gmail Drafts (always on for draft)
+  k2 mail draft    reply drafts in Drafts (hosted or linked; a person edits
+                   and sends them from the thread); k2 mail drafts = their state
   k2 calendar      calendars of a HOSTED inbox or a LINKED Microsoft 365
                    or Google account (alias k2 cal; other linked inboxes exit 3
                    capability_missing with the fix). Existing
@@ -69974,6 +69985,29 @@ elif verb == "outbox":
             for r in rows:
                 print_outbound_row(r)
 
+elif verb == "drafts":
+    # Your drafted replies and what a person did with each (records only).
+    params = {"project": ws_path}
+    if env("M_LIMIT"):
+        params["limit"] = env("M_LIMIT")
+    d = call("GET", "/cli/mail/drafts", params=params)
+    if as_json:
+        print(dumps(d))
+    else:
+        rows = d.get("drafts") or []
+        if not rows:
+            print("No drafted replies yet — 'k2 mail draft <message-id> --body <text>' makes one.")
+        for r in rows:
+            st = r.get("status") or "?"
+            line = "%s  %-9s %-34s answers %s" % (r.get("id"), st, r.get("inbox"), r.get("replyOf"))
+            if r.get("editedBy"):
+                line += "  · edited by %s" % r["editedBy"]
+            if st in ("sent", "held", "discarded") and r.get("stateBy"):
+                line += "  · %s by %s" % (st, r["stateBy"])
+            if r.get("outboundId"):
+                line += "  · outbox %s" % r["outboundId"]
+            print(line)
+
 elif verb == "address_delete":
     # Retire a HOSTED address (k2 hostmail delete, and k2 mail delete when
     # the argument is an address). Distinct verb from the message-Trash
@@ -73248,6 +73282,52 @@ cmd_mail_reply() {
     _mail_py
 }
 
+cmd_help_mail_drafts() {
+    cat <<'EOF'
+k2 mail drafts — your drafted replies, and what a person did with each
+
+A reply draft ('k2 mail draft <message-id> --body <text>') sits at the top of
+its thread in K2's Mail page, marked "Draft, not sent". A person there can edit
+it, send it (by your workspace's send rule) or discard it. This lists your
+drafts newest first with where each stands. No mail text is shown here.
+
+USAGE
+  k2 mail drafts [--limit <n>] [--json]
+
+STATUS
+  waiting     nobody has touched it yet
+  edited      a person changed it (the "edited by" name); still a draft
+  sent        a person sent it ("outbox <id>": see it with 'k2 mail outbox <id>')
+  held        a person sent it and it waits for approval in the outbox
+  discarded   a person removed it, or it left the mailbox's Drafts folder
+
+FLAGS
+  --limit <n>   how many (default 50, up to 200)
+  --json        the daemon's JSON ({ok, count, drafts:[{id, inbox, replyOf,
+                status, author, createdAt, editedAt, editedBy, stateAt,
+                stateBy, outboundId, editable}]})
+
+When a person sends, edits or discards your draft you also get one line in
+your session while it is open (it doesn't wake you).
+EOF
+}
+
+cmd_mail_drafts() {
+    if _wants_help "$@"; then cmd_help_mail_drafts; exit 0; fi
+    local as_json=false limit=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --limit)
+                [ $# -ge 2 ] || { _mail_err "usage" "--limit needs a number"; exit 2; }
+                limit="$2"; shift 2 ;;
+            *) _mail_err "usage" "unexpected '$1' — usage: k2 mail drafts [--limit <n>] [--json]"; exit 2 ;;
+        esac
+    done
+    local M_VERB="drafts" M_JSON="$as_json" M_LIMIT="$limit"
+    _mail_py
+}
+
 cmd_mail_outbox() {
     if _wants_help "$@"; then cmd_help_mail_outbox; exit 0; fi
     if [ "${1:-}" = "cancel" ]; then
@@ -73682,6 +73762,13 @@ cmd_mail_draft() {
     local to="" subject="" cc="" bcc="" from="" attach=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --reply-to)
+                [ $# -ge 2 ] || { _mail_err "usage" "--reply-to requires a message id (from 'k2 mail messages')"; exit 2; }
+                if [ -n "$id" ] && [ "$id" != "$2" ]; then
+                    _mail_err "usage" "one message to reply to — pass it once (as <message-id> or --reply-to)"
+                    exit 2
+                fi
+                id="$2"; shift 2 ;;
             --body)
                 [ $# -ge 2 ] || { _mail_err "usage" "--body requires the draft text"; exit 2; }
                 body="$2"; shift 2 ;;
@@ -73711,7 +73798,7 @@ cmd_mail_draft() {
                 _mail_err "usage" "unknown flag '$1' — usage: k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>]  OR  k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>]"
                 exit 2 ;;
             *)
-                if [ -z "$id" ]; then id="$1"; else
+                if [ -z "$id" ]; then id="$1"; elif [ "$id" != "$1" ]; then
                     _mail_err "usage" "unexpected extra argument '$1' — one <message-id> only"
                     exit 2
                 fi
@@ -80363,6 +80450,19 @@ ACT (as the inbox's own workspace: its level and send rules apply)
                                   (exit 3), approval queues it for the owner (prints
                                   "send pending", exit 0), on sends. No attachments yet
 
+DRAFTED REPLIES (an agent's 'k2 mail draft <id>', or yours; 'thread' shows them first)
+  drafts <inbox>                  The drafts K2 tracks in an inbox (d_… ids) and
+                                  what became of each: waiting, edited, sent, held
+                                  (waiting for approval), discarded
+  draft-show <draft-id>           One draft: who drafted it, To, Cc, Subject, text
+  draft-save <draft-id> [--to <a>] [--cc <a>] [--subject <s>] [--body <text>]
+                                  Change it; what you leave out stays as it is
+  draft-send <draft-id> [same flags as draft-save]
+                                  Send it, by the same send rule as 'send'; it
+                                  leaves Drafts and joins the thread as sent
+  draft-discard <draft-id>        Remove it from Drafts (hosted: deleted; linked: Trash)
+                                  The agent that drafted it is told what you did
+
 FLAGS (every command)
   --reason <text>   Why you're looking; kept in the log row
   --json            The daemon's JSON answer
@@ -80387,6 +80487,7 @@ cmd_mail_reader() {
     shift
     case "$sub" in
         inboxes|folders|messages|show|thread|attachment|log|flag|move|archive|delete|reply|draft|send) ;;
+        drafts|draft-show|draft-save|draft-send|draft-discard) ;;
         *) _mail_err "usage" "unknown command '$sub' — see k2 mail reader --help"; exit 2 ;;
     esac
     local MR_JSON=false MR_REASON="" MR_FOLDER="" MR_UNREAD=false MR_QUERY="" MR_FROM=""
@@ -80436,6 +80537,7 @@ cmd_mail_reader() {
     local need=0
     case "$sub" in
         folders|messages|show|thread|flag|archive|delete|reply) need=1 ;;
+        drafts|draft-show|draft-save|draft-send|draft-discard) need=1 ;;
         move|attachment) need=2 ;;
         draft) [ -z "$MR_INBOX" ] && need=1 ;;
     esac
@@ -80463,7 +80565,7 @@ cmd_mail_reader() {
         _mail_err "usage" "missing --inbox <address> — the inbox to send from"
         exit 2
     fi
-    MR_SUB="$sub" MR_A1="${pos[0]:-}" MR_A2="${pos[1]:-}" \
+    MR_BODY_SET="$MR_BODY_SET" MR_SUB="$sub" MR_A1="${pos[0]:-}" MR_A2="${pos[1]:-}" \
     MR_JSON="$MR_JSON" MR_REASON="$MR_REASON" MR_FOLDER="$MR_FOLDER" MR_UNREAD="$MR_UNREAD" \
     MR_QUERY="$MR_QUERY" MR_FROM="$MR_FROM" MR_SINCE="$MR_SINCE" MR_BEFORE="$MR_BEFORE" \
     MR_LIMIT="$MR_LIMIT" MR_OFFSET="$MR_OFFSET" MR_HTML="$MR_HTML" MR_OUT="$MR_OUT" \
@@ -80533,15 +80635,31 @@ def who(a):
 def lst(k):
     return [x.strip() for x in (E(k) or "").replace(",", "\n").split("\n") if x.strip()]
 
+def print_draft_head(m):
+    a = m.get("author") or {}
+    by = a.get("name") or "?"
+    kind = "agent" if a.get("kind") == "agent" else "person"
+    edited = time.strftime("%Y-%m-%d %H:%M", time.localtime(m.get("editedAt") or 0))
+    line = "DRAFT, NOT SENT — drafted by %s (%s), last edited %s" % (by, kind, edited)
+    if m.get("editedBy"):
+        line += " by %s" % m["editedBy"]
+    print(line)
+    print("Draft:   %s" % (m.get("draftId") or m.get("id")))
+    if m.get("hint"):
+        print("Note:    %s" % m["hint"])
+
 def print_message(m):
+    if m.get("draft"):
+        print_draft_head(m)
     print("From:    %s" % who(m.get("from")))
     if m.get("to"):
         print("To:      %s" % ", ".join(who(x) for x in m["to"]))
     if m.get("cc"):
         print("Cc:      %s" % ", ".join(who(x) for x in m["cc"]))
     print("Date:    %s" % m.get("date", ""))
-    print("Subject: %s" % m.get("subject", ""))
-    print("Id:      %s" % m.get("id", ""))
+    print("Subject: %s" % (m.get("subject") or ""))
+    if not m.get("draft"):
+        print("Id:      %s" % m.get("id", ""))
     ar = m.get("authResults") or {}
     if any(ar.get(k) for k in ("spf", "dkim", "dmarc")):
         print("Checks:  SPF %s · DKIM %s · DMARC %s" % (ar.get("spf") or "-", ar.get("dkim") or "-", ar.get("dmarc") or "-"))
@@ -80630,6 +80748,50 @@ elif sub == "log":
         if r.get("reason"):
             line += "  reason: %s" % r["reason"]
         print(line)
+elif sub == "drafts":
+    d = call("GET", R + "drafts", {"inbox": a1, "reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    rows = d.get("drafts") or []
+    if not rows:
+        print("No drafts K2 tracks in %s." % a1)
+    for r in rows:
+        a = r.get("author") or {}
+        edited = time.strftime("%Y-%m-%d %H:%M", time.localtime(r.get("editedAt") or 0))
+        line = "%s  %-9s by %-20s edited %s" % (r.get("id"), r.get("status"), "%s (%s)" % (a.get("name"), a.get("kind")), edited)
+        if r.get("editedBy"):
+            line += " by %s" % r["editedBy"]
+        if r.get("stateBy") and r.get("status") in ("sent", "held", "discarded"):
+            line += "  · %s by %s" % (r["status"], r["stateBy"])
+        print(line)
+elif sub == "draft-show":
+    d = call("GET", R + "draft-open", {"id": a1, "reason": reason})
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    print_message(d["draft"])
+elif sub in ("draft-save", "draft-send", "draft-discard"):
+    body = {"id": a1}
+    if reason:
+        body["reason"] = reason
+    if sub != "draft-discard":
+        if lst("MR_TO"):
+            body["to"] = lst("MR_TO")
+        if lst("MR_CC"):
+            body["cc"] = lst("MR_CC")
+        if E("MR_SUBJECT"):
+            body["subject"] = E("MR_SUBJECT")
+        if E("MR_BODY_SET") == "true":
+            body["body"] = E("MR_BODY")
+    d = call("POST", R + sub, None, body)
+    if as_json:
+        print(dumps(d)); sys.exit(0)
+    if sub == "draft-send":
+        st = d.get("status")
+        print("send %s%s — draft %s %s" % (st, (" — " + d["id"]) if d.get("id") else "", a1, d.get("draftStatus")))
+    elif sub == "draft-save":
+        print("saved draft %s" % a1)
+    else:
+        print("discarded draft %s" % a1)
 else:
     body = {"reason": reason} if reason else {}
     if sub in ("flag", "move", "archive", "delete", "reply") or (sub == "draft" and a1):
@@ -80657,6 +80819,8 @@ else:
         print("send %s%s" % (status, (" — " + d["id"]) if d.get("id") else ""))
     elif sub == "move":
         print("moved to %s" % (d.get("folder") or a2))
+    elif sub == "draft" and d.get("draftId"):
+        print("draft %s saved to %s" % (d["draftId"], d.get("folder") or "Drafts"))
     else:
         print("ok")
 PYEOF
@@ -80687,8 +80851,10 @@ DISCOVER & READ
   wait                        Block until a matching message arrives (verification codes)
 
 WRITE
-  draft <message-id>          LINKED: reply DRAFT into your human's Gmail Drafts
+  draft <message-id>          Reply DRAFT in the inbox's Drafts (hosted or linked);
+                              a person edits/sends it from the top of its thread
   draft --to --subject        LINKED: compose a brand-new draft (no message-id)
+  drafts                      Your reply drafts and what a person did with each
   send <to>                   Send from an inbox you have 'send' on — hosted OR a linked
                               inbox over SMTP — gated off | approval | on (human's choice)
   reply <message-id>          Guardrailed reply (needs 'send' on the receiving inbox)
@@ -80722,7 +80888,8 @@ CONNECT & SHARE
 
 FOR PEOPLE → k2 mail reader
   inboxes · folders · messages · show · thread · attachment · log (and flag,
-  move, archive, delete, reply, draft, send). The Owner and Admins open every
+  move, archive, delete, reply, draft, send; drafts and draft-show/save/send/
+  discard for drafted replies). The Owner and Admins open every
   inbox; others their own mailbox. Opening never marks mail read; every access
   is logged. Agents are refused (exit 3). k2 mail reader --help
 
@@ -81479,19 +81646,24 @@ EOF
 
 cmd_help_mail_draft() {
     cat <<'EOF'
-Save a DRAFT into your human's linked Gmail/IMAP Drafts folder (APPEND
-\Draft). Two forms: reply onto a listed message, or compose a brand-new
-To/Subject. Your human sees it in their own mail client, reviews, edits,
-and sends it themselves.
+Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
 
-`draft` only DRAFTS — it never sends. Sending FROM a linked account needs
-level `send` AND workspace Sending=`on` (`k2 mail send`/`reply`;
-app-password and Gmail-OAuth; Microsoft-OAuth stays draft-only until
-Graph send). Using `draft` on a K2-hosted message id errors with a
-pointer to `k2 mail reply`. Graph compose-draft is out of v1.
+  Reply draft (any inbox you have 'draft' on: K2-hosted, or a linked
+  Gmail/IMAP/Microsoft 365 account): threaded onto the message (In-Reply-To,
+  References, "Re:" subject, addressed to its sender). It shows at the top
+  of its thread in K2's Mail page, marked "Draft, not sent", where a person
+  can edit it, send it (by your workspace's send rule) or discard it.
+  'k2 mail drafts' shows what became of it.
+
+  Compose draft (linked inboxes only): a brand-new To/Subject in your
+  human's own Gmail/IMAP Drafts, for them to finish in their mail client.
+
+Sending yourself is 'k2 mail reply' / 'k2 mail send' (level 'send' and the
+workspace's Sending rule). A hosted reply draft takes no --attach yet.
 
 USAGE
   k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]
+  k2 mail draft --reply-to <message-id> (--body <text> | --body-file <f>) [--json]
   k2 mail draft --to <addr> --subject <s> (--body <text> | --body-file <f>) [--cc <addr>] [--bcc <addr>] [--attach <path>] [--from <linked>] [--json]
 
 ARGUMENTS
@@ -81499,6 +81671,7 @@ ARGUMENTS
                          (mutually exclusive with --to/--subject)
 
 FLAGS
+  --reply-to <id>        Reply form, spelled as a flag (same as <message-id>)
   --to <addr>            Compose form: recipient (repeatable)
   --subject <s>          Compose form: subject (required with --to)
   --cc <addr>            Compose only: Cc (repeatable)
@@ -81508,8 +81681,10 @@ FLAGS
   --from <linked-addr>   Compose: which linked inbox (required when several)
   --body <text>          The draft text
   --body-file <f>        Read the draft text from a file
-  --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB)
-  --json                 JSON output ({ok,id?,address,folder,hint})
+  --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB;
+                         linked inboxes only)
+  --json                 JSON output ({ok,id?,draftId?,address,folder,hint};
+                         draftId is the reply draft's d_… id for 'k2 mail drafts')
 EOF
 }
 
@@ -98717,6 +98892,7 @@ case "${1:-help}" in
             # folder (reply onto <id>, or compose --to/--subject). Agent
             # verb; sending is a separate 'send'-level verb.
             draft)       shift 2; cmd_mail_draft "$@" ;;
+            drafts)      shift 2; cmd_mail_drafts "$@" ;;
             outbox)      shift 2; cmd_mail_outbox "$@" ;;
             # S11: the user's OWN external accounts (link add|list|remove)
             # and the unified per-workspace access surface.

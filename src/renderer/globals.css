@@ -2386,7 +2386,7 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
    hairline so the four read as one control. Glass draws the page tabs'
    capsule (styles/glass/overrides.css). */
 [data-page-tabs][data-tab-mode="switch"] > [data-page-tab] { width: 24px; padding: 0; }
-[data-page-tabs][data-tab-mode="switch"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+[data-page-tabs][data-tab-mode="switch"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: -2px; }
 html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] { gap: 0; border: 1px solid var(--color-border); }
 html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] > [data-page-tab] + [data-page-tab] { border-left: 1px solid var(--color-border); }
 /* An agent tile's picker is a size smaller (ThreadDrawerSelector size="sm",
@@ -2412,6 +2412,24 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
   padding: calc(3px * var(--k2-tab-scale));
   gap: calc(var(--k2-capsule-gap) * var(--k2-tab-scale));
 }
+/* A dashboard tile's bar (Projects, PaneChrome): the name keeps its room.
+   While the name fits beside it, the picker is centred (equal side
+   columns); when it doesn't, the picker follows the name and the controls
+   keep the right end. PaneChrome measures and sets `data-tile-fit`, and
+   hides the hint, then the ⌘N slot, before the name truncates. A hidden
+   part collapses to no width (so it can still be measured). */
+[data-tile-bar][data-tile-fit="centred"] { grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
+[data-tile-bar][data-tile-fit="follow"] { grid-template-columns: minmax(0, max-content) auto minmax(max-content, 1fr); }
+[data-tile-bar][data-tile-hint="off"] [data-tile-hint],
+[data-tile-bar][data-tile-keys="off"] [data-tile-shortcut] { max-width: 0; margin: 0; overflow: hidden; visibility: hidden; }
+/* ⌘N is a shortcut hint, not content: it shows while the pointer is on the
+   bar and while keyboard focus is on a control in the tile (not while
+   typing in its message box or terminal). It keeps its slot, so nothing
+   moves when it shows. */
+[data-tile-shortcut] { opacity: 0; transition: opacity var(--motion-duration-fast) var(--motion-ease-standard); }
+[data-tile-bar]:hover [data-tile-shortcut],
+[data-tile]:has(:focus-visible:not(textarea, input, [contenteditable])) [data-tile-shortcut] { opacity: 1; }
+
 /* A narrow agent tile (Projects): the picker takes its own row, centred and
    tighter, so all four views stay reachable; the name and the close button
    share the first row and the ⌘N badge steps aside. 240px is where the
@@ -2419,7 +2437,7 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
    its line. */
 [data-tile-view] { container: agent-tile / inline-size; }
 @container agent-tile (max-width: 240px) {
-  [data-tile-bar][data-tile-centred] { grid-template-columns: minmax(0, 1fr) max-content; height: auto; row-gap: 4px; padding-block: 4px; }
+  [data-tile-bar][data-tile-fit] { grid-template-columns: minmax(0, 1fr) max-content; height: auto; row-gap: 4px; padding-block: 4px; }
   [data-tile-bar] > [data-tile-start] { grid-column: 1; grid-row: 1; }
   [data-tile-bar] > [data-tile-end] { grid-column: 2; grid-row: 1; }
   [data-tile-bar] > [data-tile-picker] { grid-column: 1 / -1; grid-row: 2; }

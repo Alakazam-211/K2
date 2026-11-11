@@ -2,8 +2,43 @@
 // drag to move) over the pane's body.
 
 import type React from 'react'
-import { Surface } from '@/components/ui'
+import { useLayoutEffect, useRef, useState } from 'react'
+import { DialogCloseButton, Surface } from '@/components/ui'
 import type { TileView } from './tile-view'
+import { fitTileBar, measureTileBar, sameTileBarFit, TILE_BAR_FIT_DEFAULT, type TileBarFit } from './tile-bar-fit'
+
+/** The bar keeps its name: it gives way in the order `fitTileBar` sets, as
+ *  the tile's width, the name or the Style's fonts change. */
+function useTileBarFit(deps: unknown[]): [React.RefObject<HTMLDivElement | null>, TileBarFit] {
+  const ref = useRef<HTMLDivElement>(null)
+  const [fit, setFit] = useState<TileBarFit>(TILE_BAR_FIT_DEFAULT)
+  useLayoutEffect(() => {
+    const bar = ref.current
+    if (!bar) return
+    let live = true
+    const run = (): void => {
+      if (!live) return
+      const sizes = measureTileBar(bar)
+      if (!sizes) return
+      const next = fitTileBar(sizes)
+      setFit((prev) => (sameTileBarFit(prev, next) ? prev : next))
+    }
+    run()
+    // The bar's width (the tile), and the picker's (a Style switch changes
+    // its cells and the fonts together).
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => run())
+    ro?.observe(bar)
+    const picker = bar.querySelector('[data-tile-picker]')
+    if (picker) ro?.observe(picker)
+    void document.fonts?.ready.then(run)
+    return () => {
+      live = false
+      ro?.disconnect()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  return [ref, fit]
+}
 
 export function PaneChrome({
   title,
@@ -22,8 +57,9 @@ export function PaneChrome({
   hint?: string
   /** Before the title: an agent tile's 16px picture. */
   lead?: React.ReactNode
-  /** An agent tile's view picker, in the bar's centre (prd-projects-threads-v1
-   *  §3.1). Its segments are buttons, so pressing one never starts a drag. */
+  /** An agent tile's view picker, in the bar's centre while the name fits
+   *  beside it (prd-projects-threads-v1 §3.1). Its segments are buttons, so
+   *  pressing one never starts a drag. */
   picker?: React.ReactNode
   /** An agent tile's view: `data-tile-view` on the tile, read by focus
    *  (⌘1–9, Esc) and Ctrl+`. */
@@ -36,22 +72,32 @@ export function PaneChrome({
   onHeaderMouseDown?: (e: React.MouseEvent) => void
   children: React.ReactNode
 }): React.JSX.Element {
+  const [barRef, fit] = useTileBarFit([title, hint, shortcutNum, readOnly, !!picker, !!lead])
   const name = (
     <>
-      {lead}
-      <span className="min-w-0 text-[11px] font-semibold text-[var(--color-text-secondary)] truncate" data-tile-title="">
+      {lead && (
+        <span className="flex flex-none mr-2" data-tile-lead="">
+          {lead}
+        </span>
+      )}
+      <span className="min-w-0 type-name text-[var(--color-text-primary)] truncate" data-tile-title="">
         {title}
       </span>
-      {hint && <span className="text-[9px] text-[var(--color-text-muted)] truncate opacity-70">{hint}</span>}
+      {hint && (
+        <span className="min-w-0 ml-2 type-hint text-[var(--color-text-muted)] truncate" data-tile-hint="">
+          {hint}
+        </span>
+      )}
     </>
   )
   const controls = (
     <>
-      {/* ⌘N pane-switch badge (the ActiveBar shortcutNum look),
-          immediately left of the close button. */}
+      {/* ⌘N pane-switch badge, left of the close button: a shortcut hint,
+          so it shows on the bar's hover and on keyboard focus in the tile
+          (globals.css). */}
       {shortcutNum !== undefined && (
         <span
-          className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0"
+          className="flex-none whitespace-nowrap overflow-hidden mr-2 type-hint text-[var(--color-text-muted)] tabular-nums"
           data-tile-shortcut=""
           title={`⌘${shortcutNum} focuses this pane`}
         >
@@ -60,29 +106,36 @@ export function PaneChrome({
         </span>
       )}
       {!readOnly && (
-        <button
-          type="button"
+        // The shared quiet ×: closing a tile only takes it off the
+        // dashboard; an agent keeps running.
+        <DialogCloseButton
+          size={12}
           onClick={onClose}
           onMouseDown={(e) => e.stopPropagation()}
-          className="flex items-center justify-center w-4 h-4 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors cursor-pointer"
-          title="Close pane"
+          title={picker ? 'Close pane. The agent keeps running.' : 'Close pane'}
           aria-label="Close pane"
-        >
-          <svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <line x1="2" y1="2" x2="10" y2="10" />
-            <line x1="10" y1="2" x2="2" y2="10" />
-          </svg>
-        </button>
+          data-tile-close=""
+        />
       )}
     </>
   )
-  const bar = `h-8 gap-2 pl-2 pr-1.5 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
+  // No tooltip on the bar: it is the drag handle (the grab pointer says so),
+  // and a tooltip over the name only got in the way.
+  const barProps = {
+    ref: barRef,
+    'data-tile-bar': '',
+    'data-tile-hint': hint ? (fit.hint ? 'on' : 'off') : undefined,
+    'data-tile-keys': shortcutNum !== undefined ? (fit.keys ? 'on' : 'off') : undefined,
+    onMouseDown: readOnly ? undefined : onHeaderMouseDown,
+  }
+  const bar = `h-8 gap-2 pl-2 pr-1 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
     readOnly ? '' : 'cursor-grab'
   }`
   return (
     <Surface
       role2="surface" material="tile"
       bordered={false}
+      data-tile=""
       data-tile-view={tileView}
       className={`flex flex-col h-full min-w-0 min-h-0 border transition-colors ${
         focused ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
@@ -90,39 +143,31 @@ export function PaneChrome({
     >
       {/* The tile's bar, 32px: it holds the picker's cells. */}
       {picker ? (
-        // Three columns, the picker truly centred (Rosson, 2026-11-11). The
-        // name's column gives way first (it truncates, then clips); the
-        // controls' column never shrinks below its content, so the picker
-        // may shift left but never covers the name or the buttons. A narrow
-        // tile puts the picker on its own row (globals.css, agent-tile).
-        <div
-          data-tile-bar=""
-          data-tile-centred=""
-          className={`grid grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)] items-center ${bar}`}
-          onMouseDown={readOnly ? undefined : onHeaderMouseDown}
-          title={readOnly ? undefined : 'Drag to move'}
-        >
-          <div className="flex min-w-0 items-center gap-2 overflow-hidden" data-tile-start="">
+        // Three columns: name | picker | controls. While the name fits
+        // beside it, the picker is truly centred (Rosson, 2026-11-11: equal
+        // side columns); when it doesn't, the picker follows the name and
+        // the controls keep the right end (`data-tile-fit`, globals.css). A
+        // narrow tile puts the picker on its own row (agent-tile).
+        <div {...barProps} data-tile-fit={fit.centred ? 'centred' : 'follow'} className={`grid items-center ${bar}`}>
+          <div className="flex min-w-0 items-center overflow-hidden" data-tile-start="">
             {name}
           </div>
           {/* The capsule's own padding is not a button: keep it off the drag. */}
           <span className="flex cursor-default justify-self-center" data-tile-picker="" onMouseDown={(e) => e.stopPropagation()}>
             {picker}
           </span>
-          <div className="flex items-center justify-end gap-2" data-tile-end="">
+          <div className="flex items-center justify-end" data-tile-end="">
             {controls}
           </div>
         </div>
       ) : (
-        <div
-          data-tile-bar=""
-          className={`flex items-center ${bar}`}
-          onMouseDown={readOnly ? undefined : onHeaderMouseDown}
-          title={readOnly ? undefined : 'Drag to move'}
-        >
-          {name}
-          <span className="flex-1" data-tile-spacer="" />
-          {controls}
+        <div {...barProps} className={`flex items-center ${bar}`}>
+          <div className="flex min-w-0 flex-1 items-center overflow-hidden" data-tile-start="">
+            {name}
+          </div>
+          <div className="flex flex-none items-center justify-end" data-tile-end="">
+            {controls}
+          </div>
         </div>
       )}
       <div className="flex-1 min-h-0 min-w-0">{children}</div>

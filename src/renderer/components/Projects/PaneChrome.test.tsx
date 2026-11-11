@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
-// The tile bar's layout: an agent tile's view picker sits in the centre
-// column of three (name | picker | controls); a pane without one keeps the
-// plain row.
+// The tile bar's layout: an agent tile's view picker sits in the middle
+// column of three (name | picker | controls), centred while the name fits
+// beside it and right after the name when it doesn't; a pane without one
+// keeps the plain row. ⌘N is a shortcut hint shown on hover and keyboard
+// focus (globals.css); the × is the shared quiet close button.
+import type React from 'react'
+import * as fs from 'fs'
+import * as path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { PaneChrome } from './PaneChrome'
@@ -9,32 +14,61 @@ import { PaneChrome } from './PaneChrome'
 afterEach(() => cleanup())
 
 const bar = (): HTMLElement => document.querySelector('[data-tile-bar]') as HTMLElement
+const CSS = fs.readFileSync(path.resolve(__dirname, '../../globals.css'), 'utf8')
+
+/** Give the jsdom layout the widths a real bar would have. */
+function stubWidths(widths: { bar: number; title: number; picker?: number; hint?: number }): () => void {
+  const proto = HTMLElement.prototype
+  const saved = {
+    client: Object.getOwnPropertyDescriptor(proto, 'clientWidth'),
+    offset: Object.getOwnPropertyDescriptor(proto, 'offsetWidth'),
+    scroll: Object.getOwnPropertyDescriptor(proto, 'scrollWidth'),
+  }
+  const pick = (el: HTMLElement): number => {
+    if (el.hasAttribute('data-tile-bar')) return widths.bar
+    if (el.hasAttribute('data-tile-title')) return widths.title
+    if (el.hasAttribute('data-tile-picker')) return widths.picker ?? 0
+    if (el.hasAttribute('data-tile-hint')) return widths.hint ?? 0
+    if (el.hasAttribute('data-tile-lead')) return 16
+    if (el.hasAttribute('data-tile-shortcut')) return 20
+    if (el.hasAttribute('data-tile-close')) return 24
+    return 0
+  }
+  for (const key of ['clientWidth', 'offsetWidth', 'scrollWidth'] as const) {
+    Object.defineProperty(proto, key, { configurable: true, get(this: HTMLElement) { return pick(this) } })
+  }
+  return () => {
+    if (saved.client) Object.defineProperty(proto, 'clientWidth', saved.client)
+    if (saved.offset) Object.defineProperty(proto, 'offsetWidth', saved.offset)
+    if (saved.scroll) Object.defineProperty(proto, 'scrollWidth', saved.scroll)
+  }
+}
+
+const agentTile = (): React.JSX.Element => (
+  <PaneChrome
+    title="Design System"
+    shortcutNum={2}
+    readOnly={false}
+    focused={false}
+    onClose={() => {}}
+    lead={<span data-testid="lead" />}
+    picker={<div data-testid="picker" />}
+    tileView="thread"
+  >
+    <div />
+  </PaneChrome>
+)
 
 describe('PaneChrome', () => {
-  it('centres an agent tile’s picker: three columns, name | picker | controls', () => {
-    render(
-      <PaneChrome
-        title="sales"
-        shortcutNum={2}
-        readOnly={false}
-        focused={false}
-        onClose={() => {}}
-        lead={<span data-testid="lead" />}
-        picker={<div data-testid="picker" />}
-        tileView="thread"
-      >
-        <div />
-      </PaneChrome>,
-    )
+  it('puts an agent tile’s parts in three cells, name | picker | controls', () => {
+    render(agentTile())
     const b = bar()
-    expect(b.hasAttribute('data-tile-centred')).toBe(true)
-    // Equal side columns round an auto centre; the controls' column never
-    // shrinks below its content, the name's gives way first.
-    expect(b.className).toContain('grid-cols-[minmax(0,1fr)_auto_minmax(max-content,1fr)]')
+    // Unmeasured (a test DOM): the picker starts centred.
+    expect(b.getAttribute('data-tile-fit')).toBe('centred')
     const cells = Array.from(b.children) as HTMLElement[]
     expect(cells.map((c) => Object.keys(c.dataset)[0])).toEqual(['tileStart', 'tilePicker', 'tileEnd'])
     expect(cells[0].contains(screen.getByTestId('lead'))).toBe(true)
-    expect(cells[0].textContent).toContain('sales')
+    expect(cells[0].textContent).toContain('Design System')
     expect(cells[0].className).toContain('min-w-0')
     expect(cells[1].contains(screen.getByTestId('picker'))).toBe(true)
     expect(cells[1].className).toContain('justify-self-center')
@@ -42,16 +76,119 @@ describe('PaneChrome', () => {
     expect(cells[2].querySelector('[data-tile-shortcut]')).not.toBeNull()
   })
 
-  it('keeps the plain row for a pane with no picker', () => {
+  it('centres the picker while the name fits beside it, and lets it follow the name when not', () => {
+    // jsdom has no CSS, so no gaps or padding: the name is 16 + 90 = 106, the
+    // controls 20 + 24 = 44. A side column of (400 - 96) / 2 = 152 holds it.
+    let restore = stubWidths({ bar: 400, title: 90, picker: 96 })
+    render(agentTile())
+    expect(bar().getAttribute('data-tile-fit')).toBe('centred')
+    expect(bar().getAttribute('data-tile-keys')).toBe('on')
+    cleanup(); restore()
+    // A side column of (300 - 96) / 2 = 102 < 107: the picker follows the name, nothing truncates.
+    restore = stubWidths({ bar: 300, title: 90, picker: 96 })
+    render(agentTile())
+    expect(bar().getAttribute('data-tile-fit')).toBe('follow')
+    expect(bar().getAttribute('data-tile-keys')).toBe('on')
+    cleanup(); restore()
+    // 106 + 96 + 44 + 1 > 240: the ⌘N slot goes before the name truncates.
+    restore = stubWidths({ bar: 240, title: 90, picker: 96 })
+    render(agentTile())
+    expect(bar().getAttribute('data-tile-fit')).toBe('follow')
+    expect(bar().getAttribute('data-tile-keys')).toBe('off')
+    restore()
+  })
+
+  it('keeps the plain row for a pane with no picker, and hides its hint first', () => {
+    const doc = (): React.JSX.Element => (
+      <PaneChrome title="notes.md" hint="atlas" shortcutNum={5} readOnly={false} focused={false} onClose={() => {}}>
+        <div />
+      </PaneChrome>
+    )
+    // name 70, hint 30, controls 44 (no CSS gaps in jsdom): all fit in 150.
+    let restore = stubWidths({ bar: 150, title: 70, hint: 30 })
+    render(doc())
+    const b = bar()
+    expect(b.hasAttribute('data-tile-fit')).toBe(false)
+    expect(b.className).toContain('flex')
+    expect(b.querySelector('[data-tile-picker]')).toBeNull()
+    expect([b.getAttribute('data-tile-hint'), b.getAttribute('data-tile-keys')]).toEqual(['on', 'on'])
+    cleanup(); restore()
+    // 145 > 120: the hint goes first.
+    restore = stubWidths({ bar: 120, title: 70, hint: 30 })
+    render(doc())
+    expect([bar().getAttribute('data-tile-hint'), bar().getAttribute('data-tile-keys')]).toEqual(['off', 'on'])
+    cleanup(); restore()
+    // 115 > 100: then ⌘N.
+    restore = stubWidths({ bar: 100, title: 70, hint: 30 })
+    render(doc())
+    expect([bar().getAttribute('data-tile-hint'), bar().getAttribute('data-tile-keys')]).toEqual(['off', 'off'])
+    restore()
+  })
+
+  it('has no blanket tooltip on the bar (it is still the drag handle)', () => {
+    let pressed = 0
     render(
-      <PaneChrome title="notes.md" readOnly={false} focused={false} onClose={() => {}}>
+      <PaneChrome title="sales" readOnly={false} focused={false} onClose={() => {}} onHeaderMouseDown={() => { pressed++ }}>
+        <div />
+      </PaneChrome>,
+    )
+    expect(bar().hasAttribute('title')).toBe(false)
+    bar().dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    expect(pressed).toBe(1)
+    // The × never starts a drag.
+    screen.getByRole('button', { name: 'Close pane' }).dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    expect(pressed).toBe(1)
+  })
+
+  it('uses the shared quiet × (24px, focus ring, no red) and says the agent keeps running', () => {
+    let closed = 0
+    render(
+      <PaneChrome title="sales" readOnly={false} focused={false} onClose={() => { closed++ }} picker={<div />}>
+        <div />
+      </PaneChrome>,
+    )
+    const x = screen.getByRole('button', { name: 'Close pane' })
+    expect(x.hasAttribute('data-k2-dialog-close')).toBe(true)
+    expect(x.className).toContain('k2-focus')
+    expect(x.className).toContain('h-6 w-6')
+    expect(x.className).not.toMatch(/error|danger/)
+    expect(x.getAttribute('title')).toBe('Close pane. The agent keeps running.')
+    x.click()
+    expect(closed).toBe(1)
+  })
+
+  it('keeps no close button for a read-only viewer', () => {
+    render(
+      <PaneChrome title="sales" shortcutNum={1} readOnly focused={false} onClose={() => {}}>
+        <div />
+      </PaneChrome>,
+    )
+    expect(screen.queryByRole('button', { name: 'Close pane' })).toBeNull()
+    expect(bar().className).not.toContain('cursor-grab')
+  })
+
+  it('reads its type from the type roles, no raw sizes', () => {
+    render(
+      <PaneChrome title="notes.md" hint="atlas" shortcutNum={3} readOnly={false} focused={false} onClose={() => {}}>
         <div />
       </PaneChrome>,
     )
     const b = bar()
-    expect(b.hasAttribute('data-tile-centred')).toBe(false)
-    expect(b.className).toContain('flex')
-    expect(b.querySelector('[data-tile-spacer]')).not.toBeNull()
-    expect(b.querySelector('[data-tile-picker]')).toBeNull()
+    expect(b.querySelector('[data-tile-title]')!.className).toContain('type-name')
+    expect(b.querySelector('[data-tile-hint]')!.className).toContain('type-hint')
+    expect(b.querySelector('[data-tile-shortcut]')!.className).toContain('type-hint')
+    expect(b.innerHTML).not.toMatch(/text-\[\d+px\]|font-mono/)
+  })
+
+  it('⌘N keeps its name and tooltip, and shows only on the bar’s hover and keyboard focus in the tile', () => {
+    render(agentTile())
+    const keys = bar().querySelector('[data-tile-shortcut]') as HTMLElement
+    expect(keys.getAttribute('title')).toBe('⌘2 focuses this pane')
+    expect(keys.textContent).toBe('⌘2')
+    // globals.css: hidden at rest, keeps its slot; shown on hover and on keyboard focus (not while typing).
+    expect(CSS).toMatch(/\[data-tile-shortcut\] \{ opacity: 0;/)
+    expect(CSS).toContain('[data-tile-bar]:hover [data-tile-shortcut],')
+    expect(CSS).toContain('[data-tile]:has(:focus-visible:not(textarea, input, [contenteditable])) [data-tile-shortcut] { opacity: 1; }')
+    expect(document.querySelector('[data-tile]')).not.toBeNull()
   })
 })

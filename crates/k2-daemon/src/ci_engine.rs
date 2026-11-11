@@ -1012,6 +1012,7 @@ mod tests {
         *f.tips.lock().unwrap() = format!("{a}\trefs/heads/main\n");
         f.configs.lock().unwrap().insert(a.clone(), CFG.into());
         f.configs.lock().unwrap().insert(b.clone(), CFG.into());
+        *f.slug.lock().unwrap() = Some("acme/app".into());
         tick(&f, 100);
         let unit_a = job_of(&f, &a, "unit");
         let xml_fail = r#"<testsuites><testsuite name="k2-core"><testcase name="sync::reconnect @user](http://x)" classname="k2-core" time="0.5"><failure message="boom"/></testcase><testcase name="ok" classname="k2-core" time="0.1"/></testsuite></testsuites>"#;

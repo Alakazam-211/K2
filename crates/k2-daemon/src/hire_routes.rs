@@ -1002,11 +1002,12 @@ fn cli_template_hire(
             }
             let mut v = out.to_json();
             v["id"] = serde_json::json!(out.workspace_id);
-            // Daemon-first hello (PRD §3, the Hello row): on the first create
-            // the daemon starts the agent and delivers its hello, then the
-            // hirer's `onboard` message after it. `launch: false` opts out
-            // (the hello is still returned for the caller to send).
-            let launch = extra.get("launch").and_then(|v| v.as_bool()) != Some(false);
+            // Daemon-first hello (PRD §3, the Hello row): with `launch: true`,
+            // on the first create the daemon starts the agent and delivers its
+            // hello, then the hirer's `onboard` message after it. Absent or
+            // false: nothing starts (agents hire from scripts; a surprise
+            // launch spends someone's tokens) and the hello is only returned.
+            let launch = extra.get("launch").and_then(|v| v.as_bool()) == Some(true);
             let onboard = extra.get("onboard").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
             let mut delivered = false;
             if let (false, true, true, Some(hello)) = (out.dry_run, out.created, launch, out.hello.clone()) {

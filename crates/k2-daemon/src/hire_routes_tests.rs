@@ -774,9 +774,10 @@ fn template_recipe_member_takes_a_template() {
     assert_eq!(st, 400, "{v}");
 }
 
-/// Daemon-first hello (PRD §3 Hello row): a first template hire starts the
-/// agent and delivers its hello once (then the `onboard` message after it);
-/// a re-apply and a dry run send nothing; `launch: false` opts out.
+/// Daemon-first hello (PRD §3 Hello row): with `launch: true` a first
+/// template hire starts the agent and delivers its hello once (then the
+/// `onboard` message after it). `launch` absent (an older CLI) or false
+/// starts nothing; a re-apply and a dry run send nothing.
 #[test]
 fn template_hire_delivers_the_hello_from_the_daemon_once() {
     let _home = k2_core::test_env::TempHome::new();
@@ -790,14 +791,31 @@ fn template_hire_delivers_the_hello_from_the_daemon_once() {
             .map(|(_, hello, onboard)| (hello.clone(), onboard.clone()))
             .collect()
     };
+    // `launch` absent: the old rule, nothing starts; the hello is returned.
+    let (st, quiet) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Quiet") }), &[]);
+    assert_eq!(st, 200, "{quiet}");
+    assert_eq!(quiet["helloDelivered"], false, "{quiet}");
+    assert!(quiet["hello"].is_string(), "{quiet}");
+    assert!(sent(quiet["handle"].as_str().unwrap()).is_empty());
+    // `launch: false`: the same.
+    let (_, off) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Off"), "launch": false }), &[]);
+    assert_eq!(off["helloDelivered"], false, "{off}");
+    assert!(sent(off["handle"].as_str().unwrap()).is_empty());
+
     let name = uniq("Hal");
-    // A dry run sends nothing.
-    let (st, plan) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "dryRun": true }), &[]);
+    // A dry run sends nothing, even with launch.
+    let (st, plan) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "launch": true, "dryRun": true }), &[]);
     assert_eq!(st, 200, "{plan}");
     assert_ne!(plan["helloDelivered"], true, "{plan}");
     assert!(sent(plan["handle"].as_str().unwrap()).is_empty());
-    // The first create: delivered once, the onboard message after it.
-    let (st, out) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "onboard": "Start with the blog." }), &[]);
+    // `launch: true`, first create: delivered once, the onboard message after it.
+    let (st, out) = cli(
+        CLI_HIRE,
+        Who::Owner,
+        true,
+        json!({ "template": "writer", "name": name, "launch": true, "onboard": "Start with the blog." }),
+        &[],
+    );
     assert_eq!(st, 200, "{out}");
     assert_eq!((out["helloDelivered"].as_bool(), out["onboardQueued"].as_bool()), (Some(true), Some(true)), "{out}");
     let handle = out["handle"].as_str().unwrap().to_string();
@@ -805,14 +823,9 @@ fn template_hire_delivers_the_hello_from_the_daemon_once() {
     assert_eq!(got.len(), 1, "{got:?}");
     assert!(got[0].0.contains("Say hello") && Some(got[0].0.as_str()) == out["hello"].as_str(), "{got:?}");
     assert_eq!(got[0].1.as_deref(), Some("Start with the blog."));
-    // A re-apply sends nothing.
-    let (st, again) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name }), &[]);
+    // A re-apply sends nothing, even with launch.
+    let (st, again) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": name, "launch": true }), &[]);
     assert_eq!(st, 200, "{again}");
     assert_eq!(again["helloDelivered"], false, "{again}");
     assert_eq!(sent(&handle).len(), 1, "the hello goes out once");
-    // `launch: false`: returned for the caller, not sent.
-    let (_, quiet) = cli(CLI_HIRE, Who::Owner, true, json!({ "template": "writer", "name": uniq("Quiet"), "launch": false }), &[]);
-    assert_eq!(quiet["helloDelivered"], false, "{quiet}");
-    assert!(quiet["hello"].is_string(), "{quiet}");
-    assert!(sent(quiet["handle"].as_str().unwrap()).is_empty());
 }

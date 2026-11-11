@@ -47,8 +47,16 @@ async function freshStore() {
   return (await import('./style')).useStyleStore
 }
 
+/** A client that already saved Terminal / Charcoal / Dark. */
+function seedTerminal(): void {
+  mem.set('k2.style', 'terminal')
+  mem.set('k2.palette', 'charcoal')
+  mem.set('k2.scheme', 'dark')
+}
+
 beforeEach(() => {
   mem.clear()
+  seedTerminal()
   clearHtml()
   osLight = false
 })
@@ -250,6 +258,145 @@ describe('Auto picks at boot', () => {
     runBootstrap()
     expect(accentVar()).toBe('#ff00aa')
     expect(html.getAttribute('data-palette')).toBe('paper')
+  })
+})
+
+describe('the default look on a client with nothing saved', () => {
+  const YELLOW_ON_OBSIDIAN = '#ffc700'
+  const YELLOW_ON_VEIL = '#e6b400'
+
+  beforeEach(() => {
+    mem.clear()
+  })
+
+  it('boots to Glass under Auto, Obsidian and Veil, with the Yellow accent saved once', async () => {
+    const store = await freshStore()
+    const s = store.getState()
+    expect([s.styleId, s.paletteId, s.schemeMode, s.autoPalettes]).toEqual([
+      'glass',
+      'obsidian',
+      'auto',
+      { dark: 'obsidian', light: 'veil' },
+    ])
+    expect(s.accent).toBe('yellow')
+    expect(mem.get('k2.accent.glass')).toBe('yellow')
+    expect([html.getAttribute('data-style'), html.getAttribute('data-palette')]).toEqual(['glass', 'obsidian'])
+    expect(accentVar()).toBe(YELLOW_ON_OBSIDIAN)
+    expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.light')]).toEqual(['glass', 'auto', 'veil'])
+  })
+
+  it('on a light system it is Veil with Yellow', async () => {
+    osLight = true
+    const store = await freshStore()
+    expect(store.getState().resolvedPaletteId).toBe('veil')
+    expect(accentVar()).toBe(YELLOW_ON_VEIL)
+  })
+
+  it('the first paint is already the default, with no flash of Terminal or blue', () => {
+    runBootstrap()
+    expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual([
+      'glass',
+      'obsidian',
+      'dark',
+    ])
+    expect(accentVar()).toBe(YELLOW_ON_OBSIDIAN)
+    clearHtml()
+    osLight = true
+    runBootstrap()
+    expect([html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual(['veil', 'light'])
+    expect(accentVar()).toBe(YELLOW_ON_VEIL)
+  })
+
+  it('the bootstrap’s Yellow is exactly what the store derives, on both palettes', async () => {
+    const { accentVarsFor } = await import('@/lib/style-accent')
+    const { getStyle } = await import('@/styles.generated')
+    const glass = getStyle('glass')!
+    for (const [palette, light] of [['obsidian', false], ['veil', true]] as const) {
+      clearHtml()
+      osLight = light
+      runBootstrap()
+      const want = accentVarsFor('yellow', glass.palettes.find((p) => p.id === palette)!, light ? 'light' : 'dark')
+      const got = Object.fromEntries(Object.keys(want).map((k) => [k, html.style.getPropertyValue(k)]))
+      expect([palette, got]).toEqual([palette, want])
+    }
+  })
+
+  it('the bootstrap and the store agree after the first launch', async () => {
+    await freshStore()
+    clearHtml()
+    runBootstrap()
+    expect(accentVar()).toBe(YELLOW_ON_OBSIDIAN)
+    expect(html.getAttribute('data-style')).toBe('glass')
+  })
+
+  it('an existing Terminal client keeps it, and no accent is written', async () => {
+    seedTerminal()
+    const store = await freshStore()
+    expect([store.getState().styleId, store.getState().resolvedPaletteId, store.getState().schemeMode]).toEqual([
+      'terminal',
+      'charcoal',
+      'dark',
+    ])
+    expect(store.getState().accent).toBeNull()
+    expect([...mem.keys()].filter((k) => k.startsWith('k2.accent.') && !k.startsWith('k2.accent.stamp.'))).toEqual([])
+    expect(accentVar()).toBe('')
+    clearHtml()
+    runBootstrap()
+    expect([html.getAttribute('data-style'), accentVar()]).toEqual(['terminal', ''])
+  })
+
+  it('an existing Glass client with no accent saved stays on the palette’s accent', async () => {
+    mem.set('k2.style', 'glass')
+    mem.set('k2.palette', 'obsidian')
+    mem.set('k2.scheme', 'dark')
+    const store = await freshStore()
+    expect(store.getState().accent).toBeNull()
+    expect(mem.has('k2.accent.glass')).toBe(false)
+    expect(accentVar()).toBe('')
+    clearHtml()
+    runBootstrap()
+    expect(accentVar()).toBe('')
+  })
+
+  it('never replaces an accent already saved for Glass', async () => {
+    mem.set('k2.accent.glass', '#00ff88')
+    const store = await freshStore()
+    expect(store.getState().accent).toBe('#00ff88')
+    expect(mem.get('k2.accent.glass')).toBe('#00ff88')
+  })
+
+  it('a person who resets to the palette’s accent keeps that', async () => {
+    const store = await freshStore()
+    store.getState().resetAccent()
+    expect(mem.has('k2.accent.glass')).toBe(false)
+    const again = await freshStore()
+    expect(again.getState().accent).toBeNull()
+    expect(accentVar()).toBe('')
+  })
+})
+
+describe('the daemon’s style echo on a new client', () => {
+  beforeEach(() => {
+    mem.clear()
+  })
+
+  it('the daemon’s never-set default (square / charcoal / dark) does not replace the default look', async () => {
+    const store = await freshStore()
+    const { migrateStyleFromDaemon, __setPreBootMirrorCompleteForTests } = await import('./style')
+    __setPreBootMirrorCompleteForTests(false)
+    migrateStyleFromDaemon({ id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' })
+    expect([store.getState().styleId, store.getState().accent]).toEqual(['glass', 'yellow'])
+    expect(mem.get('k2.style.migrated')).toBe('1')
+  })
+
+  it('a style someone chose on the daemon still seeds a new client, with its own accent', async () => {
+    const store = await freshStore()
+    const { migrateStyleFromDaemon, __setPreBootMirrorCompleteForTests } = await import('./style')
+    __setPreBootMirrorCompleteForTests(false)
+    migrateStyleFromDaemon({ id: 'glass', palette: 'veil', scheme: 'light', gaps: '' })
+    expect([store.getState().styleId, store.getState().resolvedPaletteId]).toEqual(['glass', 'veil'])
+    expect(store.getState().accent).toBeNull()
+    expect(mem.has('k2.accent.glass')).toBe(false)
   })
 })
 

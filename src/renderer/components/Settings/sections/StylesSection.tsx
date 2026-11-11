@@ -20,7 +20,7 @@ import React, { useCallback, useEffect, useReducer, useRef, useState } from 'rea
 import { useSettingsStore } from '@/stores/settings'
 import { LS_PALETTE, LS_SCHEME, LS_STYLE, osPrefersLight, stampStyleAttributes, useStyleStore } from '@/stores/style'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
-import type { StyleSelection } from '@/lib/style-resolve'
+import { DEFAULT_SELECTION, type StyleSelection } from '@/lib/style-resolve'
 import { dialDefault, dialStorageKey, formatDialValue, resolveDialValue } from '@/lib/style-dials'
 import { accentFillHex, accentStorageKey } from '@/lib/style-accent'
 import { readStoredTextGamma, TEXT_GAMMA_MAX, TEXT_GAMMA_MIN, textGammaStorageKey } from '@/lib/text-gamma'
@@ -50,8 +50,10 @@ export const STYLES_MANIFEST: SettingEntry[] = [
 ]
 
 /** Retired looks stay compiled but never reach the picker. */
-// Terminal first, then Glass (Rosson, 2026-11-09).
-const PICKER_STYLES = STYLES.filter((s) => !s.hidden).sort((a, b) => Number(b.id === 'terminal') - Number(a.id === 'terminal'))
+// The default look first: Glass, then Terminal (Rosson, 2026-11-11).
+const PICKER_STYLES = STYLES.filter((s) => !s.hidden).sort(
+  (a, b) => Number(b.id === DEFAULT_SELECTION.styleId) - Number(a.id === DEFAULT_SELECTION.styleId),
+)
 
 const AUTO_SIDES: { side: StyleScheme; label: string }[] = [
   { side: 'light', label: 'When my system is light' },

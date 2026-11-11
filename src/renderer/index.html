@@ -28,20 +28,24 @@
     <script>
       // Stamp Style attributes before first paint so styles.generated.css
       // resolves without a flash. localStorage is this client's own record
-      // of the choice (never the daemon's); defaults = the Terminal style.
-      // Runs before any module, so retired ids are mapped here too: keep
-      // this in step with STYLE_ID_ALIASES (lib/style-resolve.ts).
+      // of the choice (never the daemon's). Runs before any module, so retired
+      // ids are mapped here too: keep this in step with STYLE_ID_ALIASES and
+      // DEFAULT_SELECTION (lib/style-resolve.ts).
       (function () {
         var html = document.documentElement;
         function read(key, fallback) {
           try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
         }
-        var savedStyle = read('k2.style', 'terminal');
+        // No saved style: the default look, Glass under Auto (Obsidian for a
+        // dark system, Veil for a light one) with the Yellow accent. The store
+        // saves that accent on this first launch (stores/style.ts).
+        var fresh = !read('k2.style', '');
+        var savedStyle = read('k2.style', 'glass');
         var style = savedStyle === 'square' ? 'terminal'
           : savedStyle === 'bezel' || savedStyle === 'glass-next' || savedStyle === 'glass-classic' ? 'glass'
           : savedStyle;
         html.setAttribute('data-style', style);
-        var mode = read('k2.scheme', 'dark');
+        var mode = fresh ? 'auto' : read('k2.scheme', 'dark');
         // The side of the mode: under Auto, the OS appearance.
         var side = mode;
         if (mode === 'auto') {
@@ -51,7 +55,8 @@
         // appearance, right even after an OS flip while the app was closed.
         // Under a fixed mode k2.palette is the choice, and the other key may
         // hold an Auto pick. stores/style.ts keeps them all in sync.
-        var palette = mode === 'auto'
+        var palette = fresh ? (side === 'light' ? 'veil' : 'obsidian')
+          : mode === 'auto'
           ? read('k2.palette.' + side, '') || read('k2.palette', '')
           : read('k2.palette', '') || read('k2.palette.' + side, '');
         // Bezel's palettes moved: Graphite to Yellow, Porcelain to Veil.
@@ -71,8 +76,21 @@
         // The accent: ready-made values the style store saves per appearance.
         // Used only if they are for this style and palette, and only as
         // plain colours; anything else leaves the palette's own accent.
+        // The default look's Yellow, as lib/style-accent derives it for
+        // Obsidian (dark) and Veil (light); style-accent.test.ts pins these.
+        var defaultAccent = {
+          dark: { style: 'glass', palette: 'obsidian', vars: {
+            '--color-accent': '#ffc700', '--color-accent-hover': '#ffd54d', '--color-accent-active': '#d6a700',
+            '--color-accent-soft': '#ffe38a', '--color-accent-text': '#ffc700', '--color-accent-fill': '#ffc700',
+            '--color-on-accent': '#1a1400', '--glass-accent': '#ffc700' } },
+          light: { style: 'glass', palette: 'veil', vars: {
+            '--color-accent': '#e6b400', '--color-accent-hover': '#c79c00', '--color-accent-active': '#a68200',
+            '--color-accent-soft': '#8a6d00', '--color-accent-text': '#8a6c00', '--color-accent-fill': '#e6b400',
+            '--color-on-accent': '#1a1400', '--glass-accent': '#e6b400' } }
+        };
         try {
           var accent = JSON.parse(read('k2.accent.stamp.' + side, '') || 'null');
+          if (fresh && !(accent && accent.style === style && accent.palette === palette)) accent = defaultAccent[side];
           if (accent && accent.style === style && accent.palette === palette && accent.vars) {
             Object.keys(accent.vars).forEach(function (name) {
               if (/^--[a-z-]+$/.test(name) && /^#[0-9a-f]{6}$/i.test(accent.vars[name])) {
@@ -82,7 +100,7 @@
           }
         } catch (e) { /* a damaged stamp only costs the pre-paint */ }
         // Bezel had no density control, so its saved gaps never carry over.
-        var gaps = savedStyle === 'bezel' ? '' : read('k2.gaps', '');
+        var gaps = savedStyle === 'bezel' || fresh ? '' : read('k2.gaps', '');
         if (gaps) html.setAttribute('data-gaps', gaps);
         if (scheme === 'light') {
           // Override the dark anti-flash <style> above before first paint.

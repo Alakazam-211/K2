@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { STYLES, getStyle, type StyleMeta } from '@/styles.generated'
 import {
+  DEFAULT_ACCENT,
   DEFAULT_SELECTION,
   STYLE_ID_ALIASES,
   canonicalStyleSelection,
@@ -12,6 +13,9 @@ import {
   toKesselColors,
   type StyleSelection,
 } from './style-resolve'
+
+/** A plain Terminal selection, for the tests that need a known starting point. */
+const TERMINAL: StyleSelection = { styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'dark', gapsPreset: '' }
 
 // A synthetic style exercising every fallback edge independently of
 // whatever first-party styles happen to ship in the registry. Only the
@@ -104,8 +108,8 @@ describe('resolvePalette fallback matrix', () => {
 })
 
 describe('resolveStyleSelection', () => {
-  it('resolves the registry default selection to itself (dark)', () => {
-    const r = resolveStyleSelection(DEFAULT_SELECTION, false)
+  it('resolves a Terminal selection to itself (dark)', () => {
+    const r = resolveStyleSelection(TERMINAL, false)
     expect(r.style.id).toBe('terminal')
     expect(r.resolvedScheme).toBe('dark')
     expect(r.resolvedPalette.id).toBe('charcoal')
@@ -113,21 +117,48 @@ describe('resolveStyleSelection', () => {
   })
 
   it('auto + OS-light flips terminal to its light default palette', () => {
-    const r = resolveStyleSelection({ ...DEFAULT_SELECTION, schemeMode: 'auto' }, true)
+    const r = resolveStyleSelection({ ...TERMINAL, schemeMode: 'auto' }, true)
     expect(r.resolvedScheme).toBe('light')
     expect(r.resolvedPalette.id).toBe('paper')
   })
 
   it('unknown style ids fall back to the default style', () => {
-    const r = resolveStyleSelection({ ...DEFAULT_SELECTION, styleId: 'ghost' }, false)
+    const r = resolveStyleSelection({ ...TERMINAL, styleId: 'ghost' }, false)
     expect(r.style.id).toBe('terminal')
   })
 
   it('validates gap presets against the style and drops unknown ones', () => {
-    const ok = resolveStyleSelection({ ...DEFAULT_SELECTION, gapsPreset: 'regular' }, false)
+    const ok = resolveStyleSelection({ ...TERMINAL, gapsPreset: 'regular' }, false)
     expect(ok.gapsPreset).toBe('regular')
-    const bad = resolveStyleSelection({ ...DEFAULT_SELECTION, gapsPreset: 'gigantic' }, false)
+    const bad = resolveStyleSelection({ ...TERMINAL, gapsPreset: 'gigantic' }, false)
     expect(bad.gapsPreset).toBe('')
+  })
+})
+
+describe('the default look (a client with nothing saved)', () => {
+  it('is Glass under Auto: Obsidian on a dark system, Veil on a light one', () => {
+    expect(DEFAULT_SELECTION).toEqual({
+      styleId: 'glass',
+      paletteId: 'obsidian',
+      schemeMode: 'auto',
+      gapsPreset: '',
+      autoPalettes: { dark: 'obsidian', light: 'veil' },
+    })
+    const dark = resolveStyleSelection(DEFAULT_SELECTION, false)
+    expect([dark.style.id, dark.resolvedPalette.id, dark.resolvedScheme]).toEqual(['glass', 'obsidian', 'dark'])
+    const light = resolveStyleSelection(DEFAULT_SELECTION, true)
+    expect([light.style.id, light.resolvedPalette.id, light.resolvedScheme]).toEqual(['glass', 'veil', 'light'])
+  })
+
+  it('uses palettes Glass ships, and the Yellow accent', () => {
+    const glass = getStyle('glass')!
+    for (const id of ['obsidian', 'veil']) expect(glass.palettes.some((p) => p.id === id), id).toBe(true)
+    expect(DEFAULT_ACCENT).toBe('yellow')
+  })
+
+  it('cannot be changed by a caller', () => {
+    expect(Object.isFrozen(DEFAULT_SELECTION)).toBe(true)
+    expect(Object.isFrozen(DEFAULT_SELECTION.autoPalettes)).toBe(true)
   })
 })
 
@@ -151,7 +182,7 @@ describe('toKesselColors', () => {
 })
 
 describe('retired style ids (the alias table)', () => {
-  const sel = (over: Partial<StyleSelection>): StyleSelection => ({ ...DEFAULT_SELECTION, ...over })
+  const sel = (over: Partial<StyleSelection>): StyleSelection => ({ ...TERMINAL, ...over })
 
   it('every alias points at a style that ships and is not hidden', () => {
     expect(STYLE_ID_ALIASES.size).toBeGreaterThan(0)
@@ -219,7 +250,7 @@ describe('retired style ids (the alias table)', () => {
 })
 
 describe('Auto picks (any two of a style\'s palettes)', () => {
-  const sel = (o: Partial<StyleSelection>): StyleSelection => ({ ...DEFAULT_SELECTION, ...o })
+  const sel = (o: Partial<StyleSelection>): StyleSelection => ({ ...TERMINAL, ...o })
   const auto = (dark: string, light: string): StyleSelection =>
     sel({ styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'auto', autoPalettes: { dark, light } })
 

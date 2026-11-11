@@ -20,6 +20,8 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { STYLES, type StyleMeta, type StylePaletteMeta, type StyleScheme } from '@/styles.generated'
 import {
+  DAEMON_STYLE_DEFAULT,
+  DEFAULT_ACCENT,
   DEFAULT_SELECTION,
   canonicalStyleSelection,
   paletteSlots,
@@ -414,10 +416,28 @@ function writeMirror(sel: StyleSelection): void {
   writeAccentStamps(sel)
 }
 
-/** Best-effort boot selection from the localStorage mirror. */
-export function readMirror(): StyleSelection {
-  if (typeof localStorage === 'undefined') return { ...DEFAULT_SELECTION }
+/** A fresh copy of the default look (its Auto picks are shared otherwise). */
+function defaultSelection(): StyleSelection {
+  return { ...DEFAULT_SELECTION, autoPalettes: { ...DEFAULT_SELECTION.autoPalettes } }
+}
+
+/** True when this client has no saved style at all: it gets the default
+ *  look. index.html's bootstrap makes the same test (`k2.style` empty). */
+export function hasNoSavedStyle(): boolean {
+  if (typeof localStorage === 'undefined') return false
   try {
+    return !localStorage.getItem(LS_STYLE)
+  } catch {
+    return false
+  }
+}
+
+/** Best-effort boot selection from the localStorage mirror. With no saved
+ *  style, the default look whatever else is there. */
+export function readMirror(): StyleSelection {
+  if (typeof localStorage === 'undefined') return defaultSelection()
+  try {
+    if (!localStorage.getItem(LS_STYLE)) return defaultSelection()
     const dark = localStorage.getItem(lsPaletteFor('dark'))
     const light = localStorage.getItem(lsPaletteFor('light'))
     return canonicalStyleSelection({
@@ -430,7 +450,7 @@ export function readMirror(): StyleSelection {
         : {}),
     })
   } catch {
-    return { ...DEFAULT_SELECTION }
+    return defaultSelection()
   }
 }
 
@@ -497,13 +517,37 @@ export interface DaemonStyleSeed {
 }
 
 /**
+ * Seed the default look's accent on a client with no saved style, before the
+ * first read of the mirror. Only when the default style has no accent saved:
+ * an empty key keeps meaning the palette's own accent for everyone else.
+ * Returns whether it wrote one. Never throws.
+ */
+function seedDefaultAccent(): boolean {
+  if (!hasNoSavedStyle()) return false
+  try {
+    const key = accentStorageKey(DEFAULT_SELECTION.styleId)
+    if (localStorage.getItem(key) !== null) return false
+    localStorage.setItem(key, DEFAULT_ACCENT)
+    return localStorage.getItem(key) === DEFAULT_ACCENT
+  } catch {
+    return false
+  }
+}
+
+/** Whether this boot gave the default style the default accent. */
+let _seededDefaultAccent = false
+
+/**
  * One-shot upgrade migration: seed localStorage from a daemon style
  * echo only when this install has no prior local selection.
  *
  * Rules (in order):
  *  1. Already migrated → no-op forever
  *  2. Pre-boot mirror was complete → mark migrated, keep local
- *  3. Daemon returned a style → apply once to local, mark migrated
+ *  3. Daemon returned a style someone chose → apply once to local, mark
+ *     migrated. The daemon's own default (square / charcoal / dark, what
+ *     every daemon echoes until set) is not a choice: it never replaces the
+ *     default look on a new client.
  *  4. Else → mark migrated (defaults already live from boot)
  */
 export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined | null): void {
@@ -514,13 +558,24 @@ export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined 
     return
   }
 
-  if (daemonStyle && hasDaemonStylePayload(daemonStyle)) {
+  if (daemonStyle && hasDaemonStylePayload(daemonStyle) && !isDaemonDefaultStyle(daemonStyle)) {
+    // The default accent came with the default look this boot; the
+    // person's own look comes with the palette's accent, as it did.
+    if (_seededDefaultAccent) {
+      try {
+        const key = accentStorageKey(DEFAULT_SELECTION.styleId)
+        if (localStorage.getItem(key) === DEFAULT_ACCENT) localStorage.removeItem(key)
+      } catch {
+        // They keep the default accent on that style.
+      }
+      _seededDefaultAccent = false
+    }
     if (daemonStyle.id) seedRetiredStyleAccent(daemonStyle.id, parseSchemeMode(daemonStyle.scheme))
     const sel = canonicalStyleSelection({
-      styleId: daemonStyle.id ?? DEFAULT_SELECTION.styleId,
-      paletteId: daemonStyle.palette ?? DEFAULT_SELECTION.paletteId,
+      styleId: daemonStyle.id ?? DAEMON_STYLE_DEFAULT.id,
+      paletteId: daemonStyle.palette ?? DAEMON_STYLE_DEFAULT.palette,
       schemeMode: parseSchemeMode(daemonStyle.scheme),
-      gapsPreset: daemonStyle.gaps ?? DEFAULT_SELECTION.gapsPreset,
+      gapsPreset: daemonStyle.gaps ?? DAEMON_STYLE_DEFAULT.gaps,
     })
     useStyleStore.getState().applyStyle(sel)
     markStyleMigrated()
@@ -528,6 +583,16 @@ export function migrateStyleFromDaemon(daemonStyle: DaemonStyleSeed | undefined 
   }
 
   markStyleMigrated()
+}
+
+/** The daemon's never-set default, under its old or new id. */
+function isDaemonDefaultStyle(s: DaemonStyleSeed): boolean {
+  return (
+    (s.id == null || s.id === DAEMON_STYLE_DEFAULT.id || s.id === 'terminal') &&
+    (s.palette == null || s.palette === DAEMON_STYLE_DEFAULT.palette) &&
+    (s.scheme == null || s.scheme === DAEMON_STYLE_DEFAULT.scheme) &&
+    (s.gaps == null || s.gaps === DAEMON_STYLE_DEFAULT.gaps)
+  )
 }
 
 function hasDaemonStylePayload(s: DaemonStyleSeed): boolean {
@@ -552,6 +617,7 @@ export function styleSelectionToBackend(sel: {
 // Before the first read of the mirror, so the store and every per-style
 // key lookup after it only ever see current ids.
 migrateRetiredStyleKeys()
+_seededDefaultAccent = seedDefaultAccent()
 
 const bootSelection = readMirror()
 const bootResolved = resolveStyleSelection(bootSelection, osPrefersLight())

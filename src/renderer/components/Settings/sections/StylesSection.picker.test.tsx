@@ -29,6 +29,7 @@ afterEach(() => {
 const rows = (): HTMLElement[] =>
   Array.from(document.querySelectorAll('[data-settings-id="styles.style-picker"] [data-style-row]')) as HTMLElement[]
 const rowName = (row: HTMLElement): string | null => row.querySelector('[data-style-name]')?.textContent ?? null
+const rowNamed = (name: string): HTMLElement => rows().find((r) => rowName(r) === name)!
 
 const paletteCards = (): string[] =>
   Array.from(document.querySelectorAll('[data-settings-id="styles.palette"] [data-palette-id]')).map(
@@ -41,9 +42,9 @@ const useTerminalCharcoal = (): void => {
 }
 
 describe('the Styles list', () => {
-  it('lists Terminal then Glass, and not Bezel, though Bezel still compiles', () => {
+  it('lists Glass (the default look) then Terminal, and not Bezel, though Bezel still compiles', () => {
     render(<StylesSection />)
-    expect(rows().map(rowName)).toEqual(['Terminal', 'Glass'])
+    expect(rows().map(rowName)).toEqual(['Glass', 'Terminal'])
     expect(getStyle('bezel')).toBeDefined()
   })
 
@@ -59,7 +60,7 @@ describe('the Styles list', () => {
   it('clicking a style uses it and moves the In use tag', () => {
     useTerminalCharcoal()
     render(<StylesSection />)
-    fireEvent.click(rows()[1])
+    fireEvent.click(rowNamed('Glass'))
     expect(useStyleStore.getState().styleId).toBe('glass')
     expect(rows().filter((r) => within(r).queryByText('In use')).map(rowName)).toEqual(['Glass'])
     expect(screen.getByRole('heading', { level: 2, name: 'Glass' })).toBeTruthy()
@@ -69,7 +70,7 @@ describe('the Styles list', () => {
     useTerminalCharcoal()
     render(<StylesSection />)
     expect(screen.getAllByText('In use')).toHaveLength(1)
-    expect(within(rows()[0]).getByText('In use').getAttribute('data-tone')).toBe('neutral')
+    expect(within(rowNamed('Terminal')).getByText('In use').getAttribute('data-tone')).toBe('neutral')
   })
 
   it('list rows show keyboard focus in the theme\'s shape', () => {
@@ -107,8 +108,8 @@ describe('Colours', () => {
     render(<StylesSection />)
     const group = screen.getByRole('radiogroup', { name: 'Light or dark' })
     expect(within(group).getAllByRole('radio').filter((r) => r.getAttribute('aria-checked') === 'true')).toHaveLength(0)
-    // …and offers the way back to a listed style.
-    expect(screen.getByRole('button', { name: 'Use Terminal' })).toBeTruthy()
+    // …and offers the way back to a listed style: the first, the default look.
+    expect(screen.getByRole('button', { name: 'Use Glass' })).toBeTruthy()
   })
 
   it('arrow keys on Light or dark move focus without committing a change', () => {

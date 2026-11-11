@@ -42,12 +42,28 @@ export interface ResolvedStyle {
   gapsPreset: string
 }
 
-export const DEFAULT_SELECTION: StyleSelection = {
-  styleId: 'terminal',
-  paletteId: 'charcoal',
-  schemeMode: 'dark',
+/**
+ * The look for a client that has never picked one (Rosson, 2026-11-11):
+ * Glass under Auto, Obsidian when the system is dark and Veil when it is
+ * light, with DEFAULT_ACCENT. A saved choice is never replaced by it. Keep
+ * index.html's pre-paint bootstrap in step.
+ */
+export const DEFAULT_SELECTION: Readonly<StyleSelection> = Object.freeze({
+  styleId: 'glass',
+  paletteId: 'obsidian',
+  schemeMode: 'auto',
   gapsPreset: '',
-}
+  autoPalettes: Object.freeze({ dark: 'obsidian', light: 'veil' }),
+})
+
+/** The default look's accent (lib/style-accent's `yellow`), saved once as the
+ *  default style's accent on a client with no saved style. A missing accent
+ *  key still means the palette's own accent. */
+export const DEFAULT_ACCENT = 'yellow'
+
+/** What the daemon's StyleSettings holds when nobody ever set it
+ *  (app_settings.rs). Its echo is not a choice. */
+export const DAEMON_STYLE_DEFAULT = { id: 'square', palette: 'charcoal', scheme: 'dark', gaps: '' } as const
 
 /**
  * Retired style ids and where they went. The ONE alias table: every

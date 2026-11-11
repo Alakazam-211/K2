@@ -62,7 +62,7 @@ const SEND_LABEL = 'Let people message them'
 
 const PAGE = 'w-full max-w-[52rem] space-y-6 pb-6'
 
-/** "Scout", "Scout and Ledger", "Scout, Ledger and Atlas". */
+/** "Nova", "Nova and Ledger", "Nova, Ledger and Atlas". */
 function andList(names: string[]): string {
   if (names.length <= 1) return names.join('')
   return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`

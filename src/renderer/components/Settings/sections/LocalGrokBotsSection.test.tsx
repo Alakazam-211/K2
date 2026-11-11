@@ -9,7 +9,7 @@ vi.mock('@tauri-apps/api/event', () => ({ emit: vi.fn(async () => undefined), li
 vi.mock('@/lib/daemon-reconnect', () => ({ onDaemonConnected: vi.fn() }))
 const cli = vi.hoisted(() => ({
   settings: { show: false, send: false, canEdit: true } as Record<string, unknown>,
-  detect: { installed: true, dataPath: '/Users/alex/sand-data', agents: [{ id: 'scout', name: 'Scout' }, { id: 'ledger', name: 'Ledger' }] } as unknown,
+  detect: { installed: true, dataPath: '/Users/alex/sand-data', agents: [{ id: 'nova', name: 'Nova' }, { id: 'ledger', name: 'Ledger' }] } as unknown,
   getFail: null as Error | null,
   detectFail: null as Error | null,
   postFail: null as Error | null,
@@ -52,7 +52,7 @@ import { DaemonHttpError } from '@/lib/daemon-http-error'
 afterEach(() => {
   cleanup()
   cli.settings = { show: false, send: false, canEdit: true }
-  cli.detect = { installed: true, dataPath: '/Users/alex/sand-data', agents: [{ id: 'scout', name: 'Scout' }, { id: 'ledger', name: 'Ledger' }] }
+  cli.detect = { installed: true, dataPath: '/Users/alex/sand-data', agents: [{ id: 'nova', name: 'Nova' }, { id: 'ledger', name: 'Ledger' }] }
   cli.getFail = null
   cli.detectFail = null
   cli.postFail = null
@@ -66,7 +66,7 @@ describe('Settings → Grok Bot', () => {
   it('shows what K2 found as a status row, with the agents by name and the folder', async () => {
     render(<LocalGrokBotsSection />)
     const row = await screen.findByTestId('grokbots-found')
-    expect(row.textContent).toBe('Grok Bot is on this computer2 agents: Scout and Ledger.Its data is in /Users/alex/sand-data.')
+    expect(row.textContent).toBe('Grok Bot is on this computer2 agents: Nova and Ledger.Its data is in /Users/alex/sand-data.')
     expect((screen.getByRole('switch', { name: 'Let people message them' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByTestId('grokbots-send-needs-show').textContent).toBe('Turn on Show Grok Bot agents first.')
   })

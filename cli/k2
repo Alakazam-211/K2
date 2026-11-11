@@ -47546,14 +47546,83 @@ cmd_schema() {
     },
     {
       "name": "db dsn",
-      "usage": "k2 db dsn [--db <name|id>] [--ref] [--json] [--workspace <ws>]",
-      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
+      "usage": "k2 db dsn [--db <name|id>] [--reveal | --ref [--as NAME]] [--test [--actor migrator]] [--json] [--workspace <ws>]",
+      "description": "The DSN of this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). Since 0.46.11 it prints NO password (dsnHasPassword: false and a dsnHint): --reveal prints the full DSN on purpose, k2 db run -- <cmd> hands it to a command without printing it, --ref keeps it in the vault. A script that did psql \"$(k2 db dsn)\" now fails auth: use k2 db run. --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
       "args": [],
       "flags": [
-        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test, --actor or --ref."},
-        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test or --actor."},
+        {"name": "--reveal", "arg": null, "description": "Print the full DSN, password included (keep it out of chats, logs, notes and git)."},
+        {"name": "--ref", "arg": null, "description": "Keep it in the vault and print its k2v:// reference: DATABASE_URL (the default database), DATABASE_URL_<NAME> with --db, or --as NAME."},
+        {"name": "--as", "arg": "NAME", "description": "With --ref: the reference's name."},
+        {"name": "--test", "arg": null, "description": "The test database's agent DSN (--actor migrator: its migrator's)."},
+        {"name": "--json", "arg": null, "description": "JSON output ({name, dsn (no password), dsnHasPassword, dsnHint}, or {ref, name})."},
         {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
         {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },
+    {
+      "name": "db run",
+      "usage": "k2 db run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>",
+      "description": "Run one command with the database's DSN in its environment as DATABASE_URL (or --as NAME), the way k2 vault run hands a secret: never on argv, never printed. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
+      "args": [{"name": "command", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (default: the workspace's default)."},
+        {"name": "--test", "arg": null, "description": "The test database (--actor migrator: as its migrator)."},
+        {"name": "--as", "arg": "NAME", "description": "The env name (default DATABASE_URL)."}
+      ]
+    },
+    {
+      "name": "db list",
+      "usage": "k2 db list [--json] [--workspace <ws>]",
+      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."}
+      ]
+    },
+    {
+      "name": "db migrate",
+      "usage": "k2 db migrate [--dir .k2/db/migrations] [--db <name|id>] [--json]",
+      "description": "Apply SQL migrations as the database's migrator ({db}_migrator), in order. Files are numbered: NNNN_name.sql (0001_users.sql, 0002_orders.sql); anything else (init.sql, an empty file) is a loud usage error. An unchanged file already applied is skipped; a rewritten applied file is refused (checksum_mismatch). After each file K2 grants USAGE, table DML and sequences on every migrator-owned schema to the agent (and so to every App connected with k2 app db connect). Never CREATE ROLE or FORCE ROW LEVEL SECURITY in a migration (usage).",
+      "args": [],
+      "flags": [
+        {"name": "--dir", "arg": "path", "description": "Workspace-relative folder of NNNN_name.sql files (default .k2/db/migrations)."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{applied: [...], discovered, noop}."}
+      ]
+    },
+    {
+      "name": "db dump",
+      "usage": "k2 db dump [--out .k2/db/dumps/<ts>.dump] [--db <name|id>] [--json]",
+      "description": "pg_dump (custom format) of a database this workspace owns into a workspace-relative file, plus a grants sidecar (who was granted what; never a secret). Default: .k2/db/dumps/<timestamp>.dump.",
+      "args": [],
+      "flags": [
+        {"name": "--out", "arg": "path", "description": "Workspace-relative output file (no .., no absolute path)."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{path}."}
+      ]
+    },
+    {
+      "name": "db restore",
+      "usage": "k2 db restore <file> [--db <name|id>] [--json]",
+      "description": "pg_restore a workspace-relative dump into a database this workspace owns, with the pg_restore of that database's major, then replays the grants sidecar. Refusals (--json prints {error: {code, hint}} on stderr): usage (a path outside the workspace, with .., or absolute; exit 2), not_found (no such file or database; exit 1), not_ready (Postgres not running, or the database is moving to another major; exit 1), engine (pg_restore failed: the hint has its error; exit 1).",
+      "args": [{"name": "file", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{restored}."}
+      ]
+    },
+    {
+      "name": "db drop",
+      "usage": "k2 db drop --yes [--db <name|id>] [--test] [--json]",
+      "description": "Drop a live database this workspace owns (default: its default database) and its own roles; --test drops only the test database (404 if none). Frees one slot of the cap. Apps connected to it are told; their door refuses it from then.",
+      "args": [],
+      "flags": [
+        {"name": "--yes", "arg": null, "description": "Required: there is no undo."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns."},
+        {"name": "--test", "arg": null, "description": "The test database only."},
+        {"name": "--json", "arg": null, "description": "{dropped}."}
       ]
     },
     {
@@ -54956,8 +55025,8 @@ HOW MANY (the cap)
 
 --test (disposable scratch; not cap)
   `k2 db create --test` next to the live databases (not counted).
-  Its answer shows no passwords: `k2 db dsn --test` is the agent DSN,
-  `k2 db dsn --test --actor migrator` the migrator's. Owner or
+  Its answer shows no passwords: `k2 db run --test -- <cmd>` runs as the
+  agent, `k2 db run --test --actor migrator -- <cmd>` as the migrator. Owner or
   owning-workspace cell only.
   Guest GET dsn is 403; guests never hold a DSN. Grant-path 403.
   `k2 db drop --test --yes` loads status=test only (404 if missing,
@@ -54975,6 +55044,7 @@ AGENT VERBS (workspace identity from the token)
   k2 db create [--id <key>] [--db-access write] [--json]
   k2 db create --test
   k2 db list | cap | dsn [--db <name>] | dsn --test | dsn --test --actor migrator
+  k2 db run [--db <name>] [--test [--actor migrator]] -- <cmd>
   k2 db migrate [--dir .k2/db/migrations] [--db <name>]
   k2 db dump / restore <workspace-relative-file> [--db <name>]
   k2 db drop --yes [--db <name>] | drop --test --yes
@@ -54986,9 +55056,11 @@ OWNER VERBS (agents exit 3)
   Ask your human. Do not retry-loop.
 
 DSN
-  Re-fetch with `k2 db dsn` when you need it. Never log it, never
-  paste it into study notes, never commit it. Unflagged dsn is the
-  live agent. Dump-table HTTP is the guest path that never holds a DSN.
+  `k2 db dsn` prints it without its password (0.46.11). A command that
+  needs it: k2 db run [--db <name>] -- <cmd> (DATABASE_URL in its env,
+  never printed). `k2 db dsn --reveal` prints it on purpose: never log
+  it, paste it into notes or commit it. Unflagged dsn is the live agent.
+  Dump-table HTTP is the guest path that never holds a DSN.
 
 MIGRATIONS
   Numbered `0001_name.sql` files. Empty or `init.sql` is a loud error.
@@ -85942,6 +86014,7 @@ _db_py() {
     D_GRANTEE="${D_GRANTEE:-}" D_DB="${D_DB:-}" D_LEVEL="${D_LEVEL:-}" \
     D_MANAGE="${D_MANAGE:-false}" D_ROLE="${D_ROLE:-}" D_ACCESS="${D_ACCESS:-}" \
     D_RELATIONS="${D_RELATIONS:-[]}" D_MAJOR="${D_MAJOR:-}" \
+    D_REVEAL="${D_REVEAL:-false}" D_AS="${D_AS:-}" D_PERM_NOTE="${_K2_PERMISSION_NOTE:-}" \
     python3 - <<'PYEOF'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 
@@ -86059,6 +86132,10 @@ elif verb == "dsn":
         params["ref"] = "1"
     if os.environ.get("D_DB"):
         params["db"] = os.environ["D_DB"]
+    if os.environ.get("D_REVEAL") == "true":
+        params["reveal"] = "1"
+    if os.environ.get("D_AS"):
+        params["as"] = os.environ["D_AS"]
     status, raw = request("GET", "/cli/db/dsn", params)
     d = load(raw)
 elif verb == "migrate":
@@ -86154,9 +86231,36 @@ elif verb == "store_drop":
 else:
     die({"code": "usage", "hint": "unknown db/store verb"})
 
+# 0.46.11 (field report F4): a refusal's `permission` object (the daemon
+# adds it while permission cards are on for this agent) becomes the one
+# closing line every other family prints: "Ask with: k2 permission request
+# …" or "It can't be requested." The CLI's exit trap prints it after the
+# error line (the note file is _permission_note's).
+def note_permission(v):
+    p = v.get("permission") if isinstance(v, dict) else None
+    path = os.environ.get("D_PERM_NOTE") or ""
+    if not isinstance(p, dict) or not path:
+        return
+    lines = []
+    cmd = p.get("command")
+    if isinstance(cmd, str) and cmd:
+        lines.append("Ask with: " + cmd)
+    elif p.get("requestable") is False:
+        if isinstance(p.get("hint"), str) and p["hint"]:
+            lines.append(p["hint"])
+        lines.append("It can't be requested.")
+    if lines:
+        try:
+            with open(path, "w") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception:
+            sys.stderr.write("\n".join(lines) + "\n")
+
 if isinstance(d, dict) and d.get("ok") is False and isinstance(d.get("error"), dict):
+    note_permission(d)
     die(d["error"])
 if status and int(status) >= 400:
+    note_permission(d)
     if isinstance(d, dict) and isinstance(d.get("error"), dict):
         die(d["error"])
     die({"code": "error", "hint": raw[:400] or ("HTTP %s" % status)})
@@ -86238,13 +86342,29 @@ elif verb == "create":
         print("migratorDsn: %s" % d.get("migratorDsn"))
     if d.get("dsnHint"):
         print("no password shown; %s" % d["dsnHint"])
+    kept = d.get("kept") or {}
+    if kept.get("ref"):
+        print("kept:     %s as %s (this workspace's default database)" % (kept.get("ref"), kept.get("name")))
+    elif kept.get("error"):
+        print("kept:     no DATABASE_URL reference (%s)" % kept["error"])
     cap = d.get("cap") or {}
     if cap:
         print("cap %s/%s used" % (cap.get("used"), cap.get("cap") if cap.get("cap") else "unlimited"))
     for a in d.get("apps") or []:
         print("app:      %s" % a.get("note"))
+    if d.get("next"):
+        print("next:     %s (an App's own login and DATABASE_URL, checked live)" % d["next"])
 elif verb == "dsn":
-    print(d.get("ref") or d.get("dsn") or "")
+    if d.get("ref"):
+        print(d["ref"])
+        if d.get("name") and d.get("name") != "DATABASE_URL":
+            print("kept as %s" % d["name"], file=sys.stderr)
+    else:
+        print(d.get("dsn") or "")
+        if d.get("dsnHasPassword") is False and d.get("dsnHint"):
+            print(d["dsnHint"], file=sys.stderr)
+        elif d.get("dsnHasPassword") is True:
+            print("this printed a password: keep it out of chats, logs, notes and git (k2 db run -- <cmd> needs no copy)", file=sys.stderr)
 elif verb == "list":
     dbs = d.get("databases") or []
     print("%s database(s)" % len(dbs))
@@ -86362,8 +86482,9 @@ AGENT (workspace — identity from token, never body project=)
                                  Up to the cap (default 25) per workspace: a new --id
                                  makes another database (ws_<id>_<client-id>); the same
                                  --id answers the one it made. No --id, no --name: the
-                                 workspace's default database. Shows no password: get the
-                                 DSN with k2 db dsn [--db <name>]
+                                 workspace's default database, kept in the vault as
+                                 DATABASE_URL (as k2 app install --pg-major does). Shows
+                                 no password. For an App: k2 app db connect <app> --db <name>
   create --test                  disposable scratch DB (not cap; owner/cell only)
   create --cluster <name> [--name <db>] [--id <id>]
                                  a database in this workspace's named cluster (k2 db
@@ -86375,12 +86496,22 @@ AGENT (workspace — identity from token, never body project=)
                                  manage Postgres versions". --test follows the live DB
   list [--json]                  active + test (no dropped tombstones)
   dsn | creds [--json] [--workspace <ws>]
-                                 owned or granted; always re-fetchable; never logged
+                                 owned or granted; never logged. Prints NO password
+                                 (0.46.11): --reveal prints the full DSN, on purpose
   dsn --db <name|id>             one database by name, id or create --id (owned or
                                  granted). Without --db, dsn/migrate/dump/restore/drop
                                  use the workspace's default database (the oldest one)
+  dsn --ref [--db <name|id>] [--as NAME]
+                                 keep it in the vault and print its k2v:// reference:
+                                 DATABASE_URL (the default DB), DATABASE_URL_<NAME>
+                                 with --db, or NAME
   dsn --test                     agent DSN on the test DB
   dsn --test --actor migrator    migrator DSN on the test DB (two-role tests)
+  run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>
+                                 run a command with the DSN in $DATABASE_URL (or
+                                 NAME), never on argv or stdout:
+                                 k2 db run -- node migrate.js (it reads
+                                 process.env.DATABASE_URL)
   migrate [--dir .k2/db/migrations] [--db <name|id>]
   dump  [--out .k2/db/dumps/<ts>.dump] [--db <name|id>]
   restore <file> [--db <name|id>]
@@ -86425,6 +86556,9 @@ Skin helpers (ensured on create and migrate; POLICY is still copy-in):
   set_principal lane. `k2 study db` ACTOR has example policies.
   crates/k2-daemon/src/sql/skin_rls_template.sql — GUC POLICY example;
   no CREATE ROLE skin_*; no FORCE RLS; not auto-applied; no SET ROLE.
+
+A refusal ends with the line to ask for it ("Ask with: k2 permission
+request …") or "It can't be requested." while permission cards are on.
 
 Exit: 0 ok · 1 error · 2 usage · 3 owner-only / gated / refused major
 EOF
@@ -86974,12 +87108,16 @@ else:
             while [ $# -gt 0 ]; do case "$1" in --json) as_json=true; shift ;; *) _db_err "usage" "unexpected '$1'"; exit 2 ;; esac; done
             D_VERB="list" D_JSON="$as_json" _db_py ;;
         dsn|creds)
-            local test=false actor="" vref=false db_sel=""
+            # 0.46.11 (field report F1): no password unless --reveal.
+            local test=false actor="" vref=false db_sel="" reveal=false ref_as=""
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --json) as_json=true; shift ;;
                     --test) test=true; shift ;;
                     --ref) vref=true; shift ;;
+                    --reveal) reveal=true; shift ;;
+                    --as) ref_as="${2:-}"; shift 2 || { _db_err "usage" "--as needs a name"; exit 2; } ;;
+                    --as=*) ref_as="${1#*=}"; shift ;;
                     --actor) actor="${2:-}"; shift 2 ;;
                     --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
                     --db=*) db_sel="${1#*=}"; shift ;;
@@ -86990,7 +87128,37 @@ else:
                 _db_err "usage" "--actor must be migrator"
                 exit 2
             fi
-            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" D_REF="$vref" D_DB="$db_sel" _db_py ;;
+            if $reveal && $vref; then
+                _db_err "usage" "--ref keeps the DSN in the vault and prints its reference; --reveal prints the DSN. Pick one"
+                exit 2
+            fi
+            D_VERB="dsn" D_JSON="$as_json" D_TEST="$test" D_ACTOR="$actor" D_REF="$vref" D_DB="$db_sel" D_REVEAL="$reveal" D_AS="$ref_as" _db_py ;;
+        run)
+            # 0.46.11 (F1): `k2 db run [--db X] [--test [--actor migrator]]
+            # [--as NAME] -- <cmd…>`: the command gets the DSN as $NAME
+            # (DATABASE_URL), never on argv or stdout (as k2 vault run).
+            local test=false actor="" db_sel="" env_as="DATABASE_URL"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --) shift; break ;;
+                    --test) test=true; shift ;;
+                    --actor) actor="${2:-}"; shift 2 ;;
+                    --db) _db_need_db_value "$@"; db_sel="$2"; shift 2 ;;
+                    --db=*) db_sel="${1#*=}"; shift ;;
+                    --as) env_as="${2:-}"; shift 2 ;;
+                    *) _db_err "usage" "k2 db run [--db <name>] [--test [--actor migrator]] [--as NAME] -- <command…> (unexpected '$1')"; exit 2 ;;
+                esac
+            done
+            [ $# -gt 0 ] || { _db_err "usage" "k2 db run … -- <command…>: name the command after --"; exit 2; }
+            if [[ ! "$env_as" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then _db_err "usage" "--as takes an env name like DATABASE_URL"; exit 2; fi
+            if [ -n "$actor" ] && [ "$actor" != "migrator" ]; then _db_err "usage" "--actor must be migrator"; exit 2; fi
+            local _run_out _run_url
+            _run_out="$(D_VERB="dsn" D_JSON=true D_TEST="$test" D_ACTOR="$actor" D_DB="$db_sel" D_REVEAL=true _db_py)" || exit $?
+            _run_url="$(printf '%s' "$_run_out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("dsn") or "")')"
+            [ -n "$_run_url" ] || { _db_err "engine" "the daemon answered no DSN"; exit 1; }
+            export "${env_as}=${_run_url}"
+            unset _run_out _run_url
+            exec "$@" ;;
         migrate)
             local db_sel=""
             while [ $# -gt 0 ]; do

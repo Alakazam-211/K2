@@ -179,8 +179,13 @@ fn show(who: &Who, params: &HashMap<String, String>) -> R<J> {
         "app": app.app_id,
         "mode": mode,
         "enforced": enf,
+        // 0.46.11 (field report F6): the process exception has no route
+        // out at all (`IPAddressDeny=any`, no proxy); only the unwalled
+        // engine has the daemon's network.
         "note": if enf {
             "Guarded: the App reaches only the allowed hosts, through its own proxy (DNS in the proxy). Private, local and metadata addresses and this box's own names are always refused."
+        } else if app.is_process_exception() {
+            "This App is the process exception: it has no route out at all (no proxy; its unit allows loopback only: its gateway and the box Postgres it was granted). This list doesn't apply to it. To reach the internet through the proxy, run it guarded (k2 app exception <app> off)."
         } else {
             "This App runs on the unwalled process engine (the owner's dev opt-in): it has the daemon's network and the list is not enforced. Deploy with --engine guarded to enforce it."
         },

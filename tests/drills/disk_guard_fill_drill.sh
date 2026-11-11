@@ -16,7 +16,7 @@
 #   - Two walled Apps are installed and live: $APP_A and $APP_B, with a
 #     URL each ($APP_A_URL, $APP_B_URL) that answers HTTP 200.
 #   - One --cmd service is running ($SERVICE), one database exists ($DB)
-#     and $PG_DSN connects to it (k2 db dsn; psql on PATH).
+#     and $PG_DSN connects to it (k2 db dsn --db $DB --reveal; psql on PATH).
 #   - An agent passport for the workspace that owns $APP_A is in
 #     $AGENT_TOKEN (from a K2 agent tab: its passport), and that workspace
 #     has "Build and run Apps" on.
@@ -30,7 +30,7 @@
 #
 # Usage:
 #   APP_A=jobs APP_B=notes APP_A_URL=https://… APP_B_URL=https://… \
-#   SERVICE=helper DB=jobs_db PG_DSN="$(k2 db dsn jobs_db)" AGENT_TOKEN=k2s_… \
+#   SERVICE=helper DB=jobs_db PG_DSN="$(k2 db dsn --db jobs_db --reveal)" AGENT_TOKEN=k2s_… \
 #   APP_A_FOLDER=/home/k2/ws-a/jobs \
 #   tests/drills/disk_guard_fill_drill.sh
 #
@@ -53,7 +53,7 @@ APP_B_URL="${APP_B_URL:?set APP_B_URL}"
 APP_A_FOLDER="${APP_A_FOLDER:?set APP_A_FOLDER (the folder APP_A deploys from)}"
 SERVICE="${SERVICE:?set SERVICE (a running --cmd service)}"
 DB="${DB:?set DB (a Postgres database)}"
-PG_DSN="${PG_DSN:?set PG_DSN (k2 db dsn for DB, owner credentials)}"
+PG_DSN="${PG_DSN:?set PG_DSN (k2 db dsn --db DB --reveal, owner credentials)}"
 AGENT_TOKEN="${AGENT_TOKEN:?set AGENT_TOKEN (a passport of the workspace of APP_A)}"
 
 [ "$(uname -s)" = Linux ] || { echo "the drill runs on Linux only" >&2; exit 1; }

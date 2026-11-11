@@ -403,7 +403,32 @@ pub fn handle_create(body: &[u8]) -> CliResponse {
                     "refusing to return a superuser DSN",
                 );
             }
-            ok_json(with_app_reach(without_passwords(v, b.test)))
+            // 0.46.11 (field report F3): the workspace's default database
+            // keeps its DATABASE_URL reference, as `k2 app install
+            // --pg-major` does, so both leave the same state.
+            let mut kept = serde_json::Value::Null;
+            if !b.test {
+                let name = v["name"].as_str().unwrap_or_default().to_string();
+                let default = {
+                    let db = k2_core::db::shared();
+                    let conn = db.lock();
+                    ops::active_default_name_in(&conn, &project_id)
+                };
+                if default.as_deref() == Some(name.as_str()) {
+                    let r = dsn_ref(&project_id, &v, false);
+                    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap_or_default();
+                    kept = if r.status.starts_with("200") {
+                        serde_json::json!({ "ref": body["ref"], "name": body["name"] })
+                    } else {
+                        serde_json::json!({ "error": body["error"]["hint"] })
+                    };
+                }
+            }
+            let mut out = with_app_reach(without_passwords(v, b.test));
+            if !kept.is_null() {
+                out["kept"] = kept;
+            }
+            ok_json(out)
         }
         Err(e) => ops_err(e),
     }
@@ -436,10 +461,14 @@ fn without_passwords(mut v: serde_json::Value, test: bool) -> serde_json::Value 
     }
     v["dsnHasPassword"] = serde_json::json!(false);
     v["dsnHint"] = serde_json::json!(if test {
-        "full DSNs: k2 db dsn --test (agent) and k2 db dsn --test --actor migrator".to_string()
+        "full DSNs: k2 db dsn --test --reveal (agent) and k2 db dsn --test --actor migrator --reveal; or k2 db run --test -- <cmd>".to_string()
     } else {
-        format!("full DSN: k2 db dsn --db {name} (or k2 db dsn --ref to keep it in the vault)")
+        format!("run a command with it: k2 db run --db {name} -- <cmd> (or k2 db dsn --db {name} --reveal to print it)")
     });
+    if !test {
+        // 0.46.11 (F3): what an App needs next.
+        v["next"] = serde_json::json!(format!("k2 app db connect <app> --db {name}"));
+    }
     v
 }
 
@@ -535,20 +564,35 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
         return resp;
     }
     let secrets = FileSecretStore::default();
+    let reveal = truthy_param(params, "reveal");
+    let as_name = params.get("as").map(|s| s.trim()).filter(|s| !s.is_empty());
+    if as_name.is_some() && !truthy_param(params, "ref") {
+        return err_json("400 Bad Request", "usage", "--as names the reference --ref keeps: k2 db dsn --ref --db <name> --as NAME");
+    }
     if let Some(spec) = params.get("db").map(|s| s.trim()).filter(|s| !s.is_empty()) {
         if test || migrator {
             return err_json("400 Bad Request", "usage", "--db does not go with --test or --actor (one test database per workspace)");
         }
-        if truthy_param(params, "ref") {
-            return err_json(
-                "400 Bad Request",
-                "usage",
-                "--ref keeps DATABASE_URL for the workspace's default database only; it does not take --db yet",
-            );
-        }
         // Owned or granted is checked in ops (else 404, as unscoped).
         return match ops::dsn_for_db(ops(), &secrets, &project_id, cap_for(&path), spec) {
-            Ok(v) => ok_json(v),
+            // 0.46.11 (field report F3): K2's own hint said to run this, and
+            // it was refused. The reference is `DATABASE_URL_<NAME>` (or
+            // `--as`), never the workspace's DATABASE_URL (its default DB).
+            Ok(v) if truthy_param(params, "ref") => {
+                let name = match as_name {
+                    Some(n) => n.to_string(),
+                    None => ref_name_for_db(v["name"].as_str().unwrap_or(spec)),
+                };
+                if k2_vault::model::validate_name(&name, true).is_err() || k2_vault::delivery::validate_env_name(&name).is_err() {
+                    return err_json(
+                        "400 Bad Request",
+                        "usage",
+                        format!("{name} can't be a reference name (letters, digits and _, at most 64): pass --as NAME"),
+                    );
+                }
+                dsn_ref_named(&project_id, &v, &name)
+            }
+            Ok(v) => ok_json(dsn_answer(v, reveal)),
             Err(e) => ops_err(e),
         };
     }
@@ -565,12 +609,43 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
                 }
             }
             if truthy_param(params, "ref") && !migrator {
+                if let Some(n) = as_name {
+                    return dsn_ref_named(&project_id, &v, n);
+                }
                 return dsn_ref(&project_id, &v, test);
             }
-            ok_json(v)
+            ok_json(dsn_answer(v, reveal))
         }
         Err(e) => ops_err(e),
     }
+}
+
+/// `k2 db dsn` answers (0.46.11, field report F1; Rosson's Q2 answered by
+/// the PRD's default): no password unless `reveal` (`--reveal`). `dsnHint`
+/// says how to get the full DSN, or how not to need it (`k2 db run`).
+pub(crate) fn dsn_answer(mut v: serde_json::Value, reveal: bool) -> serde_json::Value {
+    if reveal {
+        v["dsnHasPassword"] = serde_json::json!(true);
+        return v;
+    }
+    for key in ["dsn", "migratorDsn"] {
+        if let Some(r) = v.get(key).and_then(|d| d.as_str()).map(redact_dsn_password) {
+            v[key] = serde_json::json!(r);
+        }
+    }
+    v["dsnHasPassword"] = serde_json::json!(false);
+    v["dsnHint"] = serde_json::json!(
+        "no password shown: run a command with it (k2 db run [--db <name>] -- <cmd> gives it DATABASE_URL), keep it in the vault \
+         (k2 db dsn --ref [--db <name>]), give it to an App (k2 app db connect <app> --db <name>), or print it on purpose \
+         (k2 db dsn --reveal)"
+    );
+    v
+}
+
+/// `DATABASE_URL_<NAME>`: the reference `k2 db dsn --ref --db <name>` keeps.
+pub(crate) fn ref_name_for_db(db: &str) -> String {
+    let up: String = db.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { '_' }).collect();
+    format!("DATABASE_URL_{up}")
 }
 
 /// `k2 db dsn --ref` (K2 vault Q12): keep the DSN as a `user` secret
@@ -578,6 +653,11 @@ pub fn handle_dsn(params: &HashMap<String, String>) -> CliResponse {
 /// reference (for `.env.k2`, publish bindings). The plain `k2 db dsn`
 /// keeps returning the agent's own DSN.
 fn dsn_ref(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
+    dsn_ref_named(project_id, v, if test { "DATABASE_URL_TEST" } else { "DATABASE_URL" })
+}
+
+/// [`dsn_ref`] under `name` (`--ref --db`: `DATABASE_URL_<NAME>`, or `--as`).
+fn dsn_ref_named(project_id: &str, v: &serde_json::Value, name: &str) -> CliResponse {
     use k2_vault::SecretStore as _;
     let Some(dsn) = v.get("dsn").and_then(|d| d.as_str()).filter(|d| !d.is_empty()) else {
         return err_json("500 Internal Server Error", "engine", "no DSN to keep");
@@ -586,7 +666,6 @@ fn dsn_ref(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
         Ok(x) => x,
         Err(e) => return err_json("503 Service Unavailable", "vault_not_open", e.hint),
     };
-    let name = if test { "DATABASE_URL_TEST" } else { "DATABASE_URL" };
     let mut r = k2_vault::PutRequest::new(k2_vault::Namespace::User, k2_vault::Scope::workspace(project_id), name, k2_vault::Kind::Dsn);
     r.default_delivery = Some(k2_vault::Delivery::Env);
     r.delivery_ceiling = Some(k2_vault::Delivery::Env);
@@ -600,6 +679,7 @@ fn dsn_ref(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {
             "ok": true,
             "ref": crate::vault::display_ref(&out.meta),
             "name": name,
+            "db": v.get("name"),
         })),
         Err(e) => err_json("500 Internal Server Error", "vault", e.hint),
     }

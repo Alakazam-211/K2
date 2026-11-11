@@ -11,6 +11,13 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Grants count at once, and so do revokes.** A `k2 db grant` works at the App's next connection, with no re-host. A revoke or a dropped database refuses new connections and cuts the App's open ones straight away, and `k2 db revoke` says how many it cut. Each connection is written to `~/.k2/apps/<id>/logs/db.log`: role, database, bytes and time, never SQL or passwords.
 - **Needs the matching App engine.** K2 updates the engine with the app. On a box whose engine is older, K2 says so (`k2 app engine install`, then `k2 app rehost <app>`). `k2 app doctor <app>` shows the door, its open sessions and the databases the App may open. `--db-raw on` is still refused for container Apps, because it is for a private App database K2 doesn't make yet. The refusal now points at the door.
 
+### `k2 db` prints no passwords
+- **`k2 db dsn` no longer prints the password** (plain or `--json`; `dsnHasPassword` says so). `--reveal` prints the full DSN on purpose. **A script that runs `psql "$(k2 db dsn)"` now fails to log in:** use `k2 db run [--db <name>] -- <command>`, which hands the command `DATABASE_URL` without printing it.
+- **`k2 db dsn --ref --db <name>` works** (K2's own hint suggested it, and it was refused). It keeps `DATABASE_URL_<NAME>` in the vault, or the name you give with `--as`.
+- **`k2 db create` leaves the same state as `k2 app install --pg-major`:** the workspace's default database is kept in the vault as `DATABASE_URL`, and the answer ends with the command that connects an App to it.
+- **Every `k2 db` refusal ends with its "Ask with: k2 permission request …" line** (or "It can't be requested."), like the rest of `k2`.
+- `k2 app egress` no longer says a process-exception App "has the daemon's network": it has no route out.
+
 ### Permission cards are on by default
 - **Choose an agent in its own settings; no switch to find first.** Settings → Workspaces → <agent> → Permissions now starts with "Let this agent ask for permission": turn it on and that agent can ask you, on a card in its Thread, for a setting it can't change itself. Each agent's switch stays off until you turn it on, and nothing changes until you or an admin allow a card. A card from an agent that serves an App goes to the server's owner and admins only; the App's users never see it.
 - **On updating:** the server switch turns on once, unless you had turned it off yourself, and the owner gets one notice saying so. Turn it off for the whole server in Settings → Access → Permission Cards (or `k2 permission beta off`); it stays off.

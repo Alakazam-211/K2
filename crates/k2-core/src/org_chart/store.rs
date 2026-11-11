@@ -784,8 +784,118 @@ pub fn add_ask(conn: &Connection, group: &str, org_id: &str, from: &str, to: &st
 }
 
 pub fn set_ask_woke(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("UPDATE org_chart_asks SET woke = 1 WHERE id = ?1", params![id])?;
+    set_ask_state(conn, id, ASK_DELIVERED)
+}
+
+/// `org_chart_asks.woke`: an ask's copy waits its turn (the fan-out goes
+/// one member at a time through the wake governor), went out, or never
+/// will (the wake budget was spent, delivery failed, or it waited too long).
+pub const ASK_QUEUED: i64 = 0;
+pub const ASK_DELIVERED: i64 = 1;
+pub const ASK_NOT_DELIVERED: i64 = -1;
+
+pub fn set_ask_state(conn: &Connection, id: &str, state: i64) -> Result<()> {
+    conn.execute("UPDATE org_chart_asks SET woke = ?2 WHERE id = ?1", params![id, state])?;
     Ok(())
+}
+
+/// One member's copy of an ask, as the fan-out sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskCopy {
+    pub id: String,
+    pub group: String,
+    pub org_id: String,
+    pub from: String,
+    pub to: String,
+    pub body: String,
+    pub state: i64,
+    pub created_at: i64,
+    /// Its place in its group (0 = the first member asked), by id.
+    pub pos: usize,
+}
+
+/// Every copy of every ask that still has a queued copy made at or after
+/// `since`, oldest ask first, each group's copies in order.
+pub fn asks_with_queued(conn: &Connection, since: i64) -> Result<Vec<AskCopy>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, org_id, from_project_id, to_project_id, body, woke, created_at FROM org_chart_asks \
+         WHERE substr(id, 1, instr(id, ':') - 1) IN \
+               (SELECT substr(id, 1, instr(id, ':') - 1) FROM org_chart_asks WHERE woke = 0 AND created_at >= ?1) \
+         ORDER BY created_at, id",
+    )?;
+    let rows = stmt
+        .query_map(params![since], |r| {
+            let id: String = r.get(0)?;
+            Ok(AskCopy {
+                group: id.split(':').next().unwrap_or_default().to_string(),
+                id,
+                org_id: r.get(1)?,
+                from: r.get(2)?,
+                to: r.get(3)?,
+                body: r.get(4)?,
+                state: r.get(5)?,
+                created_at: r.get(6)?,
+                pos: 0,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out: Vec<AskCopy> = Vec::with_capacity(rows.len());
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for mut a in rows {
+        let n = seen.entry(a.group.clone()).or_insert(0);
+        a.pos = *n;
+        *n += 1;
+        out.push(a);
+    }
+    Ok(out)
+}
+
+/// Queued copies made before `before` will never go out (an ask isn't news
+/// hours later): marked not delivered. Returns how many.
+pub fn expire_queued_asks(conn: &Connection, before: i64) -> Result<usize> {
+    Ok(conn.execute("UPDATE org_chart_asks SET woke = -1 WHERE woke = 0 AND created_at < ?1", params![before])?)
+}
+
+/// Has `from` sent its org an update at or after `since`? (A member who
+/// answered an ask is done with it.)
+pub fn sent_update_since(conn: &Connection, from: &str, since: i64) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM org_chart_updates WHERE from_project_id = ?1 AND created_at >= ?2",
+        params![from, since],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Did any org `project_id` heads get a bulletin written at or after
+/// `since`? (A head that wrote is done with its night run.)
+pub fn head_wrote_since(conn: &Connection, project_id: &str, since: i64) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM org_chart_bulletins b JOIN org_chart_orgs o ON o.id = b.org_id \
+         WHERE o.head_project_id = ?1 AND o.deleted_at IS NULL AND b.updated_at >= ?2",
+        params![project_id, since],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// The latest org wake of `kind` to `project_id` at or after `since`.
+pub fn last_wake_at(conn: &Connection, project_id: &str, kind: &str, since: i64) -> Result<Option<i64>> {
+    Ok(conn.query_row(
+        "SELECT MAX(at) FROM org_chart_wakes WHERE project_id = ?1 AND kind = ?2 AND at >= ?3",
+        params![project_id, kind, since],
+        |r| r.get::<_, Option<i64>>(0),
+    )?)
+}
+
+/// Org wakes of the given kinds at or after `since`, latest per agent and
+/// kind: `(project_id, kind, at)` (the governor's restart pickup).
+pub fn recent_wakes(conn: &Connection, kinds: &[&str], since: i64) -> Result<Vec<(String, String, i64)>> {
+    let mut stmt = conn.prepare("SELECT project_id, kind, MAX(at) FROM org_chart_wakes WHERE at >= ?1 GROUP BY project_id, kind ORDER BY 3, 1")?;
+    let rows = stmt
+        .query_map(params![since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().filter(|(_, k, _)| kinds.contains(&k.as_str())).collect())
 }
 
 // ── the night ledger and wakes ──────────────────────────────────────

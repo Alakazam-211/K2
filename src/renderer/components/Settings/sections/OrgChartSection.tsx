@@ -73,6 +73,23 @@ function parseNight(v: unknown): OrgChartNight {
   return { runAt: pick('runAt'), lastCallAt: pick('lastCallAt'), dayStartsAt }
 }
 
+/** The daemon's `organization/night` answer, the parts this page reads. */
+interface NightSpread {
+  runAt?: unknown
+  spreadEndsAt?: unknown
+  spreadMinutes?: unknown
+  governor?: { slots?: unknown } | null
+}
+
+/** "Night run spreads over 180 min (01:00–04:00), 2 at a time on this
+ *  server." from the daemon (which owns the rule), or null. Read only. */
+export function spreadLine(v: NightSpread | null | undefined): string | null {
+  if (!v || typeof v.spreadMinutes !== 'number' || typeof v.runAt !== 'string' || typeof v.spreadEndsAt !== 'string') return null
+  const slots = typeof v.governor?.slots === 'number' ? v.governor.slots : null
+  const pace = slots === null ? '' : `, ${slots} at a time on this server`
+  return `Night run spreads over ${v.spreadMinutes} min (${v.runAt}–${v.spreadEndsAt})${pace}.`
+}
+
 const muted = 'text-[var(--color-text-muted)]'
 
 export function OrgChartSection(): React.JSX.Element {
@@ -106,6 +123,28 @@ export function OrgChartSection(): React.JSX.Element {
       live = false
     }
   }, [])
+
+  // How the night run is paced (read only; the daemon answers only while
+  // the Org Chart is on).
+  const [spread, setSpread] = useState<string | null>(null)
+  useEffect(() => {
+    if (!on) {
+      setSpread(null)
+      return
+    }
+    let live = true
+    void daemonCliGet<NightSpread>(primaryScope(), 'organization/night').then(
+      (v) => {
+        if (live) setSpread(spreadLine(v))
+      },
+      () => {
+        if (live) setSpread(null)
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [on, savedNight])
 
   const flip = async (): Promise<void> => {
     if (busy || canChange === false) return
@@ -193,8 +232,13 @@ export function OrgChartSection(): React.JSX.Element {
             <span className={`type-hint ${muted}`}>{r.hint}</span>
           </label>
         ))}
+        {spread ? (
+          <div className={`type-hint ${muted}`} data-testid="org-chart-spread">
+            {spread}
+          </div>
+        ) : null}
         <div className="flex items-center gap-2">
-          {problem ? <span className="type-hint text-[var(--color-status-error-text)]">{problem}</span> : null}
+          {problem ?<span className="type-hint text-[var(--color-status-error-text)]">{problem}</span> : null}
           <Button size="sm" className="ml-auto" disabled={locked || busy || !!problem || !nightDirty} onClick={() => void saveNight()}>
             Save times
           </Button>

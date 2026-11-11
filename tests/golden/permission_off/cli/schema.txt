@@ -931,8 +931,8 @@ exit: 0
     },
     {
       "name": "organization list",
-      "usage": "k2 organization list|show <org>|mine|status|updates|ask \"<question>\" [--member <agent>]|update \"<text>\" [--json]",
-      "description": "Read the Org Chart (list, show, mine: your org, head and whether you're connected; status: is today's bulletin unread). Heads: updates (what members sent), ask (their own members only; 3 a night, 10 a day). Members: update (news to their own head; stored by day, delivered at night).",
+      "usage": "k2 organization list|show <org>|mine|status|night|updates|ask \"<question>\" [--member <agent>]|update \"<text>\" [--json]",
+      "description": "Read the Org Chart (list, show, mine: your org, head and whether you're connected; status: is today's bulletin unread; night: tonight's night run, each org's time and queued/running/done/skipped). Heads: updates (what members sent), ask (their own members only, one member at a time about 2 minutes apart; 3 a night, 10 a day). Members: update (news to their own head; stored by day, delivered at night).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },

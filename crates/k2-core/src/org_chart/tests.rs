@@ -440,3 +440,45 @@ fn the_role_comes_from_agents_md() {
     assert_eq!(super::wire::role_line(&dir.to_string_lossy()), "Handles invoices, refunds and Stripe questions.");
     assert_eq!(super::wire::role_line("/nonexistent/org-chart"), "");
 }
+
+// Night stagger (Rosson 2026-11-10): every org's head has its own stable
+// start between runAt and lastCallAt less the margin.
+#[test]
+fn the_night_run_spreads_over_the_whole_window_in_a_stable_order() {
+    let t = NightTimes::default();
+    assert_eq!(t.spread_minutes(), 180, "01:00 to 04:30 less 30 minutes");
+    let night = NaiveDate::from_ymd_opt(2026, 11, 10).unwrap();
+    let run = day::on_night(night, t.run_at);
+    let end = t.spread_end(night);
+    assert_eq!(end, run + chrono::Duration::minutes(180));
+    assert!(end < day::on_night(night, t.last_call_at), "ends well before last call");
+    let ids: Vec<String> = (0..200).map(|i| store::new_id(&format!("org{i}"))).collect();
+    let dues: Vec<_> = ids.iter().map(|id| t.run_due(night, id)).collect();
+    for d in &dues {
+        assert!(*d >= run && *d < end, "{d} outside {run}..{end}");
+    }
+    // Not one instant: 200 orgs land in many different minutes, across
+    // all three hours of the window.
+    let minutes: std::collections::BTreeSet<_> = dues.iter().map(|d| (*d - run).num_minutes()).collect();
+    assert!(minutes.len() > 100, "spread over {} distinct minutes", minutes.len());
+    assert!(minutes.iter().any(|m| *m < 30) && minutes.iter().any(|m| *m >= 150), "{minutes:?}");
+    // Stable: the same org has the same offset every night and in a fresh
+    // computation (a restart).
+    let next = night + chrono::Duration::days(1);
+    for id in &ids {
+        assert_eq!(t.run_offset_secs(id), NightTimes::default().run_offset_secs(id));
+        assert_eq!(t.run_due(next, id) - day::on_night(next, t.run_at), t.run_due(night, id) - run);
+    }
+    // The hash is fixed (FNV-1a), not std's per-build hasher.
+    assert_eq!(day::stable_hash(""), 0xcbf2_9ce4_8422_2325);
+    assert_eq!(day::stable_hash("a"), 0xaf63_dc4c_8601_ec8c);
+    // Close night times: the margin never eats more than half the gap.
+    let tight = NightTimes::parse("01:00", "01:20", "06:00").unwrap();
+    assert_eq!(tight.spread_minutes(), 10);
+    let tiny = NightTimes::parse("01:00", "01:01", "06:00").unwrap();
+    assert_eq!(tiny.spread_minutes(), 1);
+    // During the day, the latest night is the one that just ended.
+    let noon = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap().and_hms_opt(12, 0, 0).unwrap();
+    assert_eq!(day::latest_night_at(&t, noon), night);
+    assert_eq!(day::latest_night_at(&t, run), night);
+}

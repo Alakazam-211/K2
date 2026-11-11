@@ -194,3 +194,90 @@ pub fn zone_name(zone: Zone) -> String {
         Zone::Box => "this server's clock".to_string(),
     }
 }
+
+// ── the night run's spread (Rosson 2026-11-10: "stagger it so we don't
+// hit the computer with a ton of work all at the same time") ──────────
+//
+// Every org's head gets its own start time between `runAt` and
+// `lastCallAt` less a margin (01:00–04:00 by default). The time is a
+// stable hash of the org's id, so it is the same every night and after a
+// restart, and never before `runAt`. The daemon's wake governor then
+// starts only as many at once as the computer can take; a head still
+// waiting when the spread ends is skipped for the night (its bulletin
+// stays, marked "not updated since …"), never run late.
+
+/// The spread ends this long before last call (less when the night times
+/// are close together: never more than half the gap).
+pub const SPREAD_MARGIN_MINUTES: i64 = 30;
+
+// The other pacing defaults, all here. A wake's time cap is when its
+// governor slot ends even if the agent is still working.
+
+/// A head's night run holds its slot until it writes its bulletin, goes
+/// idle, or this long.
+pub const RUN_CAP_SECS: i64 = 20 * 60;
+/// A last call's cap.
+pub const LAST_CALL_CAP_SECS: i64 = 10 * 60;
+/// A member's ask holds its slot until it answers, goes idle, or this long.
+pub const ASK_CAP_SECS: i64 = 10 * 60;
+/// `ask` goes to one member at a time, about this far apart…
+pub const ASK_GAP_SECS: i64 = 120;
+/// …plus a stable jitter of up to this much.
+pub const ASK_JITTER_SECS: i64 = 30;
+/// A copy still queued this long after the ask is dropped (not news by
+/// then); the head sees it under "not delivered".
+pub const ASK_QUEUE_TTL_SECS: i64 = 3 * 3600;
+
+/// When the copy at `pos` in its ask may go out: the first at once, then
+/// one about every [`ASK_GAP_SECS`] (jittered by its id), and never sooner
+/// than that after the copy before it went out (`prev_sent_at`).
+pub fn ask_due(created_at: i64, pos: usize, copy_id: &str, prev_sent_at: Option<i64>) -> i64 {
+    if pos == 0 {
+        return created_at;
+    }
+    let gap = ASK_GAP_SECS + (stable_hash(copy_id) % ASK_JITTER_SECS as u64) as i64;
+    let planned = created_at + pos as i64 * ASK_GAP_SECS + (gap - ASK_GAP_SECS);
+    prev_sent_at.map_or(planned, |p| planned.max(p + gap))
+}
+
+/// FNV-1a (64-bit): stable across builds and platforms, unlike std's
+/// hasher. Spreads work; never used for security.
+pub fn stable_hash(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+impl NightTimes {
+    /// Minutes from `runAt` to the end of the spread (at least 1).
+    pub fn spread_minutes(&self) -> i64 {
+        let gap = offset_minutes(self.last_call_at) - offset_minutes(self.run_at);
+        let margin = SPREAD_MARGIN_MINUTES.min(gap / 2);
+        (gap - margin).max(1)
+    }
+
+    /// When night N's spread ends: no night run starts at or after it.
+    pub fn spread_end(&self, night: NaiveDate) -> NaiveDateTime {
+        on_night(night, self.run_at) + Duration::minutes(self.spread_minutes())
+    }
+
+    /// The org's stable start, in seconds after `runAt` (0 ≤ x < spread).
+    pub fn run_offset_secs(&self, org_id: &str) -> i64 {
+        let span = (self.spread_minutes() * 60).max(1) as u64;
+        (stable_hash(org_id) % span) as i64
+    }
+
+    /// When the org's head is due on night N (never before `runAt`).
+    pub fn run_due(&self, night: NaiveDate, org_id: &str) -> NaiveDateTime {
+        on_night(night, self.run_at) + Duration::seconds(self.run_offset_secs(org_id))
+    }
+}
+
+/// The current night, or during the day the night that just ended (for
+/// "how did tonight go").
+pub fn latest_night_at(times: &NightTimes, local_now: NaiveDateTime) -> NaiveDate {
+    current_night_at(times, local_now).unwrap_or_else(|| read_day_at(times, local_now) - Duration::days(1))
+}

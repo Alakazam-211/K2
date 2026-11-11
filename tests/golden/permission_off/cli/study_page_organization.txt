@@ -22,12 +22,21 @@ THE DAILY RHYTHM (the owner's timezone)
           your k2 commands end with one quiet line (at most every 30 min):
           "K2 bulletin for <day> is unread: k2 organization bulletin".
           --peek shows it without marking it read.
-  01:00   Night run: each head gets one line asking it to refresh its
-          bulletin (ask members, read updates, set the lines).
-  04:30   Last call: one more line, only if the head hasn't written yet.
+  01:00–04:00  Night run: each head gets one line asking it to refresh its
+          bulletin (ask members, read updates, set the lines). Heads are
+          spread over the window, each org at its own time (the same every
+          night), and K2 runs only as many at once as this computer can
+          take (about one per 4 cores, fewer when memory is short, none
+          while it is overloaded). A head whose turn doesn't come before
+          04:00 is skipped that night: its bulletin stays, marked
+          "not updated since …".
+  04:30   Last call: one more line, only to a head whose night run went
+          out and who hasn't written yet (also a few at a time).
   06:00   A new day starts: the bulletin counts as unread again.
-  The Owner or an Admin can move these within 22:00–07:00. Night lines
-  count in your hourly wake budget like any automatic wake.
+  The Owner or an Admin can move these within 22:00–07:00 (the spread
+  ends 30 minutes before last call). Night lines count in your hourly
+  wake budget like any automatic wake. k2 organization night shows
+  tonight's order: queued, running, done, skipped.
 
 PICK A DEPARTMENT
   1. k2 organization bulletin     what each org does, who its head is
@@ -43,8 +52,10 @@ PICK A DEPARTMENT
 IF YOU'RE A HEAD
   k2 organization updates                 what members sent you
   k2 organization ask "What changed today?"   (or --member <agent>): typed
-                                          into each member's session now; they
-                                          answer with k2 organization update.
+                                          into one member's session at a time,
+                                          about 2 minutes apart (the next once
+                                          the one before is done); they answer
+                                          with k2 organization update.
                                           At most 3 asks a night (22:00 on)
                                           and 10 a day
   k2 organization bulletin set --file notes.txt

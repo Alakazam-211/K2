@@ -14,6 +14,10 @@ const cli = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async (_s: unknown, route: string) => {
+    if (route === 'organization/night') {
+      if (!cli.settings.orgChart) throw new Error('The Org Chart is off on this server')
+      return { runAt: '01:00', spreadEndsAt: '04:00', spreadMinutes: 180, governor: { slots: 2 } }
+    }
     if (route !== 'settings/get') throw new Error(`unexpected GET ${route}`)
     return cli.settings
   }),
@@ -29,7 +33,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
-import { DEFAULT_NIGHT, nightProblem, OrgChartSection } from './OrgChartSection'
+import { DEFAULT_NIGHT, nightProblem, OrgChartSection, spreadLine } from './OrgChartSection'
 import { useSettingsStore } from '@/stores/settings'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -109,6 +113,21 @@ describe('Settings → Org Chart', () => {
     expect(nightProblem(DEFAULT_NIGHT)).toBeNull()
     expect(nightProblem({ runAt: '22:00', lastCallAt: '02:00', dayStartsAt: '07:00' })).toBeNull()
     expect(nightProblem({ ...DEFAULT_NIGHT, dayStartsAt: '08:00' })).toBe('New day must fall between 22:00 and 07:00.')
+  })
+
+  it("shows how the night run is paced, read only, from the daemon's numbers", async () => {
+    cli.settings = { orgChart: true }
+    render(<OrgChartSection />)
+    expect((await screen.findByTestId('org-chart-spread')).textContent).toBe(
+      'Night run spreads over 180 min (01:00–04:00), 2 at a time on this server.',
+    )
+    cleanup()
+    cli.settings = { orgChart: false }
+    render(<OrgChartSection />)
+    await waitFor(() => expect((screen.getByRole('switch', { name: 'Org Chart' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(screen.queryByTestId('org-chart-spread')).toBeNull()
+    expect(spreadLine({ runAt: '01:00', spreadEndsAt: '04:00', spreadMinutes: 180 })).toBe('Night run spreads over 180 min (01:00–04:00).')
+    expect(spreadLine(null)).toBeNull()
   })
 
   it('a Member sees it read-only', async () => {

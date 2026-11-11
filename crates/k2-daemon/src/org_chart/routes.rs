@@ -5,6 +5,7 @@
 //! |---|---|---|
 //! | `list`, `show`, `chart`, `bulletin` (`peek=1` doesn't mark), `bulletin/status` | GET | anyone on the server |
 //! | `mine` | GET | the calling agent |
+//! | `night` | GET | anyone on the server: tonight's queue (queued, running, done, skipped) and the wake governor |
 //! | `updates` | GET | that org's head; Owner/Admin people |
 //! | `bulletin/read` | POST | the calling agent (its own marker, from its passport) |
 //! | `bulletin/set` | POST | that org's head (no switch); Owner/Admin people (audited) |
@@ -38,6 +39,7 @@ pub const GET_ROUTES: &[&str] = &[
     "/cli/organization/bulletin",
     "/cli/organization/bulletin/status",
     "/cli/organization/updates",
+    "/cli/organization/night",
 ];
 
 pub const POST_ROUTES: &[&str] = &[
@@ -320,6 +322,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         "/cli/organization/bulletin/read" => bulletin_read(caller, now),
         "/cli/organization/bulletin/set" => bulletin_set(caller, &m, now.timestamp()),
         "/cli/organization/updates" => updates(caller, &m, now),
+        "/cli/organization/night" => Ok(ok(super::night::status(now))),
         "/cli/organization/ask" => ask(caller, &m, now),
         "/cli/organization/update" => update(caller, &m, now),
         "/cli/organization/reach" => match caller {
@@ -589,25 +592,38 @@ fn ask(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chrono:
             &format!("A head sends at most {} asks a night and {} a day; you've sent yours. Read the answers with k2 organization updates.", oc::ASKS_PER_NIGHT, oc::ASKS_PER_DAY),
         ));
     }
-    let me = super::caller_handle(project_id);
-    let line = format!("{}'s head ({me}) asks: {q} Answer with: k2 organization update \"<your news>\"", org.name);
-    let from = format!("org:{}", org.name);
-    let w = super::waker();
+    // The fan-out goes one member at a time through the server's wake
+    // governor (Rosson 2026-11-10): the first now when there's a slot, the
+    // rest about every two minutes from the night pass, each after the one
+    // before is done.
+    let mut targets = targets;
+    targets.sort();
     let group = store::new_id("ask");
+    for t in &targets {
+        or_fail(db!(conn, store::add_ask(&conn, &group, &org.id, project_id, t, &q, ts)))?;
+    }
+    let copies = |conn: &Connection| store::asks_with_queued(conn, ts).map(|v| v.into_iter().filter(|c| c.group == group).collect::<Vec<_>>());
     let mut asked = Vec::new();
     let mut held = Vec::new();
-    for t in &targets {
-        let id = or_fail(db!(conn, store::add_ask(&conn, &group, &org.id, project_id, t, &q, ts)))?;
-        match super::wake(w.as_ref(), t, store::WAKE_ASK, &from, &line, ts) {
-            super::WakeOutcome::Delivered => {
-                let _ = db!(conn, store::set_ask_woke(&conn, &id));
-                asked.push(super::caller_handle(t));
-            }
-            other => held.push(json!({ "member": super::caller_handle(t), "why": other.word() })),
+    if let Some(c) = or_fail(db!(conn, copies(&conn)))?.into_iter().find(|c| c.pos == 0) {
+        let w = super::waker();
+        match super::night::send_ask(w.as_ref(), &crate::wake_governor::current(), &c, ts) {
+            super::night::AskTry::Sent => asked.push(super::caller_handle(&c.to)),
+            super::night::AskTry::Held(_) => {}
+            super::night::AskTry::NotDelivered(why) => held.push(json!({ "member": super::caller_handle(&c.to), "why": why })),
         }
     }
+    let waiting: Vec<String> = or_fail(db!(conn, copies(&conn)))?.into_iter().filter(|c| c.state == store::ASK_QUEUED).map(|c| c.to).collect();
+    let queued: Vec<String> = waiting.iter().map(|t| super::caller_handle(t)).collect();
     audit(caller, "ask", format!("{} to {} member(s)", org.name, targets.len()));
-    Ok(ok(json!({ "ok": true, "org": { "id": org.id, "name": org.name }, "asked": asked, "notDelivered": held })))
+    Ok(ok(json!({
+        "ok": true,
+        "org": { "id": org.id, "name": org.name },
+        "asked": asked,
+        "queued": queued,
+        "spacing": format!("one member at a time, about {} minutes apart", day::ASK_GAP_SECS / 60),
+        "notDelivered": held,
+    })))
 }
 
 fn update(caller: &OrgCaller, m: &Map<String, Value>, now: chrono::DateTime<chrono::Utc>) -> R {

@@ -1583,6 +1583,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/organization/member/move", Admin),
     post("/cli/organization/member/remove", Admin),
     get("/cli/organization/mine", NoLogin),
+    // Tonight's night-run queue and the wake governor (0.46.11): anyone
+    // on the server, like list.
+    get("/cli/organization/night", Member),
     post("/cli/organization/purpose", Admin),
     post("/cli/organization/reach", NoLogin),
     post("/cli/organization/rename", Admin),

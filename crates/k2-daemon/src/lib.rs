@@ -122,6 +122,9 @@ pub mod heartbeat_monitor;
 // The Org Chart (prd-org-chart-v1, 0.46.11): `/cli/organization/*`, the
 // night pass, the feed field and reach. Store + rules: k2_core::org_chart.
 pub mod org_chart;
+// 0.46.11: one server-wide queue for scheduled LLM wakes, sized from the
+// machine (the Org Chart's night run and ask fan-out first).
+pub mod wake_governor;
 // 0.46.6: pause / resume another workspace's heartbeat (people; agents ask).
 pub mod heartbeat_other;
 pub mod heartbeat_routes;

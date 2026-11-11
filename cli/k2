@@ -11536,12 +11536,21 @@ THE DAILY RHYTHM (the owner's timezone)
           your k2 commands end with one quiet line (at most every 30 min):
           "K2 bulletin for <day> is unread: k2 organization bulletin".
           --peek shows it without marking it read.
-  01:00   Night run: each head gets one line asking it to refresh its
-          bulletin (ask members, read updates, set the lines).
-  04:30   Last call: one more line, only if the head hasn't written yet.
+  01:00–04:00  Night run: each head gets one line asking it to refresh its
+          bulletin (ask members, read updates, set the lines). Heads are
+          spread over the window, each org at its own time (the same every
+          night), and K2 runs only as many at once as this computer can
+          take (about one per 4 cores, fewer when memory is short, none
+          while it is overloaded). A head whose turn doesn't come before
+          04:00 is skipped that night: its bulletin stays, marked
+          "not updated since …".
+  04:30   Last call: one more line, only to a head whose night run went
+          out and who hasn't written yet (also a few at a time).
   06:00   A new day starts: the bulletin counts as unread again.
-  The Owner or an Admin can move these within 22:00–07:00. Night lines
-  count in your hourly wake budget like any automatic wake.
+  The Owner or an Admin can move these within 22:00–07:00 (the spread
+  ends 30 minutes before last call). Night lines count in your hourly
+  wake budget like any automatic wake. k2 organization night shows
+  tonight's order: queued, running, done, skipped.
 
 PICK A DEPARTMENT
   1. k2 organization bulletin     what each org does, who its head is
@@ -11557,8 +11566,10 @@ PICK A DEPARTMENT
 IF YOU'RE A HEAD
   k2 organization updates                 what members sent you
   k2 organization ask "What changed today?"   (or --member <agent>): typed
-                                          into each member's session now; they
-                                          answer with k2 organization update.
+                                          into one member's session at a time,
+                                          about 2 minutes apart (the next once
+                                          the one before is done); they answer
+                                          with k2 organization update.
                                           At most 3 asks a night (22:00 on)
                                           and 10 a day
   k2 organization bulletin set --file notes.txt
@@ -47354,8 +47365,8 @@ cmd_schema() {
     },
     {
       "name": "organization list",
-      "usage": "k2 organization list|show <org>|mine|status|updates|ask \"<question>\" [--member <agent>]|update \"<text>\" [--json]",
-      "description": "Read the Org Chart (list, show, mine: your org, head and whether you're connected; status: is today's bulletin unread). Heads: updates (what members sent), ask (their own members only; 3 a night, 10 a day). Members: update (news to their own head; stored by day, delivered at night).",
+      "usage": "k2 organization list|show <org>|mine|status|night|updates|ask \"<question>\" [--member <agent>]|update \"<text>\" [--json]",
+      "description": "Read the Org Chart (list, show, mine: your org, head and whether you're connected; status: is today's bulletin unread; night: tonight's night run, each org's time and queued/running/done/skipped). Heads: updates (what members sent), ask (their own members only, one member at a time about 2 minutes apart; 3 a night, 10 a day). Members: update (news to their own head; stored by day, delivered at night).",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -98437,6 +98448,8 @@ READ (any agent; any person on the server)
   k2 organization show <org>              one org: head, members, lines, its bulletin
   k2 organization mine                    your org, your head, and whether you're connected to it
                                           (in no org: says so)
+  k2 organization night                   tonight's night run (by day, last night's): each org's
+                                          time, and queued / running / done / skipped
 
 REACH A DEPARTMENT
   k2 organization reach <org|head> --why "<one line>"     (an org's name, or its head's)
@@ -98451,8 +98464,10 @@ HEADS
                                                            at most 5 lines, 160 characters each
   k2 organization bulletin set --file notes.txt           one bulletin line per line of the file
       An Owner or Admin writes any org's: add --org <org>.
-  k2 organization ask "<question>" [--member <agent>]      ask your members (or one) for news, now;
-                                                           they answer with k2 organization update
+  k2 organization ask "<question>" [--member <agent>]      ask your members (or one) for news; K2
+                                                           types it to one member at a time, about
+                                                           2 minutes apart; they answer with
+                                                           k2 organization update
   k2 organization updates                                  what your members sent you (since last night)
 
 MEMBERS
@@ -98587,6 +98602,31 @@ elif verb == "mine":
         org_lines(o)
 elif verb == "reach":
     w((v.get("text") or "") + "\n")
+elif verb == "night":
+    g = v.get("governor") or {}
+    mc = g.get("machine") or {}
+    c = v.get("counts") or {}
+    w("%s (night of %s, %s): runs spread %s-%s, last call %s, new day %s.\n" % (
+        "Tonight" if v.get("tonight") else "Last night", v.get("night"), v.get("zone"),
+        v.get("runAt"), v.get("spreadEndsAt"), v.get("lastCallAt"), v.get("dayStartsAt")))
+    free = mc.get("availableBytes")
+    load = mc.get("load1")
+    w("This computer: %s at a time (%s cores%s%s).\n" % (
+        g.get("slots"), mc.get("cores"),
+        ", %.1f GiB free" % (free / 1073741824.0) if isinstance(free, (int, float)) else "",
+        ", load %.1f" % load if isinstance(load, (int, float)) else ""))
+    if g.get("holding"):
+        w("Holding new starts: %s.\n" % g["holding"])
+    w("Queued %s · running %s · done %s · skipped %s%s\n" % (
+        c.get("queued", 0), c.get("running", 0), c.get("done", 0), c.get("skipped", 0),
+        (" · failed %s" % c["failed"]) if c.get("failed") else ""))
+    for o in v.get("orgs") or []:
+        state = o.get("state")
+        if state == "done" and o.get("wrote"):
+            state = "done (wrote its bulletin)"
+        elif state == "skipped":
+            state = "skipped (the bulletin stays as it was)"
+        w("  %s  %s · head: %s · %s\n" % (o.get("due"), o["org"]["name"], o["head"]["handle"], state))
 elif verb == "updates":
     us = v.get("updates") or []
     if not us:
@@ -98594,7 +98634,11 @@ elif verb == "updates":
     for u in us:
         w("%s: %s\n" % (u["from"]["handle"], u["body"]))
 elif verb == "ask":
-    w("Asked %s. Their answers: k2 organization updates\n" % (", ".join(v.get("asked") or []) or "nobody"))
+    q = v.get("queued") or []
+    w("Asked %s now.\n" % (", ".join(v.get("asked") or []) or "nobody"))
+    if q:
+        w("Queued: %s (K2 asks %s).\n" % (", ".join(q), v.get("spacing") or "one at a time"))
+    w("Their answers: k2 organization updates\n")
     for n in v.get("notDelivered") or []:
         w("Not delivered to %s (%s); the ask is stored.\n" % (n.get("member"), n.get("why")))
 elif verb == "update":
@@ -98735,6 +98779,7 @@ cmd_organization() {
             _org_call show GET "$P/show" "org=$(urlencode "${args[0]}")"
             ;;
         mine) _org_call mine GET "$P/mine" "" ;;
+        night) _org_call night GET "$P/night" "" ;;
         chart) _ORG_JSON=1; _org_call chart GET "$P/chart" "" ;;
         reach)
             [ "$n" -ge 1 ] || _org_usage_err "name the org (or its head): k2 organization reach <org> --why \"<one line>\""

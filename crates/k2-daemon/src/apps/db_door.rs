@@ -856,9 +856,12 @@ pub(crate) mod test_seams {
         pub upstream: HashMap<u16, u16>,
     }
 
-    /// App → (its seam, the test thread that set it).
-    static SEAMS: Mutex<Option<HashMap<String, (Seam, std::thread::ThreadId)>>> = Mutex::new(None);
+    /// App → (its seam, the token of the test thread that set it).
+    static SEAMS: Mutex<Option<HashMap<String, (Seam, u64)>>> = Mutex::new(None);
+    static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     thread_local! {
+        /// This test thread's token: unique in the process, never reused.
+        static TOKEN: u64 = NEXT_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         /// Does "this box's engine" serve the door (per test thread)?
         static ENGINE_READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
@@ -868,7 +871,7 @@ pub(crate) mod test_seams {
         let m = g.get_or_insert_with(HashMap::new);
         match s {
             Some(s) => {
-                m.insert(app.to_string(), (s, std::thread::current().id()));
+                m.insert(app.to_string(), (s, TOKEN.with(|t| *t)));
             }
             None => {
                 m.remove(app);
@@ -880,7 +883,7 @@ pub(crate) mod test_seams {
     }
     /// Did this test thread set `app`'s seam?
     pub(super) fn mine(app: &str) -> bool {
-        let me = std::thread::current().id();
+        let me = TOKEN.with(|t| *t);
         SEAMS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|m| m.get(app).is_some_and(|(_, t)| *t == me))
     }
     pub(super) fn admit(app: &str) -> Option<Vec<Admit>> {

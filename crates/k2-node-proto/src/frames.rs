@@ -2552,7 +2552,8 @@ mod tests {
         // v3 fields on a v1 or v2 receipt: refused by name.
         assert!(Receipt { kind: Some(ReceiptKind::Job), ..v2.clone() }.check_version().unwrap_err().contains("v3 fields"));
         assert!(Receipt { cache: Some(None), ..v2.clone() }.check_version().unwrap_err().contains("v3 fields"));
-        assert!(Receipt { v: 4, ..cold.clone() }.check_version().unwrap_err().contains("not 1, 2 or 3"));
+        assert!(Receipt { v: 4, ..cold.clone() }.check_version().unwrap_err().contains("receipt v4 carries v3 fields"));
+        assert!(Receipt { v: 4, kind: None, cache: None, ..cold.clone() }.check_version().unwrap_err().contains("not 1, 2 or 3"));
 
         // v3 forked: warmth gen and a well-formed cache; they must agree.
         let producer_rc = format!("sha256:{}", "e".repeat(64));

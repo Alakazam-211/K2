@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 
 import type { ServerScope } from '@/kessel/server-scope'
 import { Button, Callout, Input, OverflowMenu, SearchField, Tag } from '@/components/ui'
 import { useProjectsStore } from '@/stores/projects'
+import { useSettingsStore } from '@/stores/settings'
 import type { SettingEntry } from '../searchManifest'
 import {
   SETTING_LIST_ROW_HOVER,
@@ -26,14 +27,16 @@ import {
   SettingsGroup,
   SettingsLoadState,
 } from '../controls/SettingControls'
-import { AccessSheet, DIALOG_MUTED, FailedNote, Field } from './AccessDialogs'
+import { AccessSheet, DIALOG_MUTED, Field } from './AccessDialogs'
 import { localWhen } from '../shared/local-time'
 import {
   emailNotifyApiOn,
   logErrorText,
   logStatusText,
   logWhatText,
+  notifyErrorCode,
   notifyErrorMessage,
+  notifyFailure,
   notifyLoadProblem,
   offReasonText,
   ownerText,
@@ -42,7 +45,9 @@ import {
   senderStateText,
   suppressionReasonText,
   suppressionScopeText,
+  type NotifyAction,
   type NotifyAgent,
+  type NotifyFailure,
   type NotifyLoadProblem,
   type NotifyLogItem,
   type NotifySender,
@@ -121,9 +126,22 @@ function DoneNote({ text }: { text: string }): React.JSX.Element {
   )
 }
 
+/** A failed action: what failed, the next step that fits the server's
+ *  reason, and the server's own words quietly when they add something. */
+function FailureNote({ what, failure }: { what: string; failure: NotifyFailure }): React.JSX.Element {
+  return (
+    <Callout tone="error" role="alert" className="type-hint space-y-0.5" data-testid="dialog-error">
+      <p className="font-medium">{what}</p>
+      <p>{failure.next}</p>
+      {failure.detail && <p>The server said: {failure.detail.trim().replace(/[.\s]+$/, '')}.</p>}
+    </Callout>
+  )
+}
+
 /** A confirm-first action in the shared dialog frame: Cancel has the focus;
- *  while the write runs the dialog holds; a refusal shows what failed, that
- *  nothing changed, and the server's reason. */
+ *  while the write runs the dialog holds and the button says so; a refusal
+ *  says what failed and the next step that fits it (Try again only where
+ *  trying again can help, or the fix itself, e.g. turning notices off). */
 function ConfirmAction({
   title,
   children,
@@ -131,9 +149,13 @@ function ConfirmAction({
   busyLabel,
   destructive = false,
   failed,
+  action,
   run,
   onDone,
   onClose,
+  fixLabel,
+  onFix,
+  workspace,
   testId,
 }: {
   title: string
@@ -143,23 +165,31 @@ function ConfirmAction({
   destructive?: boolean
   /** "Couldn't …" for the failure note. */
   failed: string
+  action: NotifyAction
   run: () => Promise<string>
   onDone: (note: string) => void
   onClose: () => void
+  /** The fix a failure offers, named for the page (a workspace's name). */
+  fixLabel?: (fix: NonNullable<NotifyFailure['fix']>) => string
+  onFix?: (fix: NonNullable<NotifyFailure['fix']>) => void
+  /** A workspace's name for an id in the server's words. */
+  workspace?: (id: string) => string
   testId: string
 }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [failure, setFailure] = useState<NotifyFailure | null>(null)
   const go = async (): Promise<void> => {
     setBusy(true)
-    setError(null)
+    setFailure(null)
     try {
       onDone(await run())
     } catch (e) {
-      setError(notifyErrorMessage(e))
+      setFailure(notifyFailure(e, action, workspace))
       setBusy(false)
     }
   }
+  const fix = failure?.fix && onFix && fixLabel ? failure.fix : null
+  const primary = !failure ? confirmLabel : failure.retry
   return (
     <AccessSheet
       title={title}
@@ -169,16 +199,23 @@ function ConfirmAction({
       footer={
         <>
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
-            Cancel
+            {failure && !primary ? 'Close' : 'Cancel'}
           </Button>
-          <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" disabled={busy} onClick={() => void go()} data-testid={`${testId}-confirm`}>
-            {busy ? busyLabel : error ? 'Try again' : confirmLabel}
-          </Button>
+          {fix && (
+            <Button variant="accent" size="md" onClick={() => onFix?.(fix)} data-testid={`${testId}-fix`}>
+              {fixLabel?.(fix)}
+            </Button>
+          )}
+          {(busy || primary) && (
+            <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" disabled={busy} onClick={() => void go()} data-testid={`${testId}-confirm`}>
+              {busy ? busyLabel : primary}
+            </Button>
+          )}
         </>
       }
     >
       <div className={`${DIALOG_MUTED} space-y-2`}>{children}</div>
-      {error && <FailedNote what={failed} next="Nothing changed. Try again, or close this and check back later." detail={error} />}
+      {failure && <FailureNote what={failed} failure={failure} />}
     </AccessSheet>
   )
 }
@@ -200,26 +237,26 @@ function ResumeDialog({
   const [askPassword, setAskPassword] = useState(false)
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [failure, setFailure] = useState<NotifyFailure | null>(null)
   const formId = useId()
   const fieldId = useId()
   const resume = async (): Promise<void> => {
     setBusy(true)
-    setError(null)
+    setFailure(null)
     try {
       await api.resume(sender, askPassword ? password : undefined)
       onDone(`${sender.address} is sending again. K2 counts its bounces from zero from now on.`)
     } catch (e) {
-      const msg = notifyErrorMessage(e)
       setBusy(false)
       // No Touch ID on that server: ask for the vault password, quietly.
-      if (!askPassword && /password/i.test(msg)) {
+      if (!askPassword && notifyErrorCode(e) === 'password_needed') {
         setAskPassword(true)
         return
       }
-      setError(msg)
+      setFailure(notifyFailure(e, 'resume'))
     }
   }
+  const primary = !failure ? 'Resume sending' : failure.retry
   return (
     <AccessSheet
       title={`Resume ${sender.address}?`}
@@ -229,18 +266,20 @@ function ResumeDialog({
       footer={
         <>
           <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus={!askPassword}>
-            Cancel
+            {failure && !primary ? 'Close' : 'Cancel'}
           </Button>
-          <Button
-            type="submit"
-            form={formId}
-            variant="accent"
-            size="md"
-            disabled={busy || (askPassword && !password)}
-            data-testid="notify-resume-confirm"
-          >
-            {busy ? 'Resuming…' : 'Resume sending'}
-          </Button>
+          {(busy || primary) && (
+            <Button
+              type="submit"
+              form={formId}
+              variant="accent"
+              size="md"
+              disabled={busy || (askPassword && !password)}
+              data-testid="notify-resume-confirm"
+            >
+              {busy ? 'Resuming…' : primary}
+            </Button>
+          )}
         </>
       }
     >
@@ -249,7 +288,7 @@ function ResumeDialog({
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
-          void resume()
+          if (primary) void resume()
         }}
       >
         <div className={`${DIALOG_MUTED} space-y-2`}>
@@ -272,9 +311,7 @@ function ResumeDialog({
             />
           </Field>
         )}
-        {error && (
-          <FailedNote what={`Couldn’t resume ${sender.address}`} next="It’s still paused. Check the password and try again." detail={error} />
-        )}
+        {failure && <FailureNote what={`Couldn’t resume ${sender.address}`} failure={failure} />}
       </form>
     </AccessSheet>
   )
@@ -322,6 +359,20 @@ function SenderRow({
         s.paused ? (
           <p className="type-hint text-[var(--color-status-warn-amber-soft)] leading-relaxed" data-testid={`notify-paused-${s.id}`}>
             Paused {when(s.paused.pausedAt)}: {pauseText(s.paused)}. Nothing it sends goes out until you resume it.
+          </p>
+        ) : s.state === 'needs_dmarc' ? (
+          <div className="flex items-start justify-between gap-6" data-testid={`notify-needs-dns-${s.id}`}>
+            <p className={`${SETTING_ROW_HINT} mt-0`}>
+              Its domain needs a DMARC record: a DNS text record named _dmarc.{s.domain} that tells inboxes its mail is real. Add it
+              where {s.domain}’s DNS is managed. For a domain this server hosts, Email Hosting shows the exact record.
+            </p>
+            <Button className="flex-shrink-0" onClick={() => useSettingsStore.getState().openSettings('email-hosting')}>
+              Open Email Hosting
+            </Button>
+          </div>
+        ) : s.state === 'needs_test' ? (
+          <p className={`${SETTING_ROW_HINT} mt-0`} data-testid={`notify-needs-test-${s.id}`}>
+            It sends once a test email to the owner goes through. The owner sends one from a terminal on the server.
           </p>
         ) : undefined
       }
@@ -477,7 +528,10 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
         >
           <Tag data-case="as-written" tone={status.boxSwitch === 'on' ? 'ok' : 'muted'}>{status.boxSwitch === 'on' ? 'On' : 'Off'}</Tag>
         </SettingRow>
-        <SettingRow label="Mail goes out through" hint="A sender uses this server’s own mail where it can, or a mail relay set up for its domain.">
+        <SettingRow
+          label="Mail goes out through"
+          hint="This server’s own mail, or a mail relay: another mail service, such as your email provider, that sends for a domain this server doesn’t host."
+        >
           <span className="type-row text-[var(--color-text-secondary)] text-right">
             {[status.hostedMail ? 'This server’s own mail' : '', status.relays.length ? plural(status.relays.length, 'mail relay', 'mail relays') : '']
               .filter(Boolean)
@@ -710,6 +764,19 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
           busyLabel="Removing…"
           destructive
           failed={`Couldn’t remove ${ask.sender.address}`}
+          action="remove"
+          workspace={workspaceName}
+          fixLabel={(f) => `Turn off ${workspaceName(f.workspace)}’s notices…`}
+          onFix={(f) => {
+            const agent = agentList.find((a) => a.workspace === f.workspace || workspaceName(a.workspace) === f.workspace) ?? {
+              workspace: f.workspace,
+              sender: ask.sender.address,
+              on: true,
+              offReason: null,
+              grantedAt: 0,
+            }
+            setAsk({ kind: 'agent-off', agent, name: workspaceName(agent.workspace) })
+          }}
           run={async () => {
             const r = await api.removeSender(ask.sender)
             const days = typeof r?.reservedDays === 'number' ? r.reservedDays : null
@@ -723,6 +790,15 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
             {ask.sender.app ? ` ${ownerText(ask.sender)} can’t send email until it gets a new sender.` : ''} Adding it back is done from
             a terminal on the server.
           </p>
+          {(() => {
+            const users = agentList.filter((a) => a.on && a.sender === ask.sender.address).map((a) => workspaceName(a.workspace))
+            return users.length > 0 ? (
+              <p data-testid="notify-remove-users">
+                {users.length === 1 ? `Workspace ${users[0]} sends` : `Workspaces ${users.join(', ')} send`} its email notices from it; they
+                stop until the owner gives {users.length === 1 ? 'it' : 'them'} another sender.
+              </p>
+            ) : null
+          })()}
         </ConfirmAction>
       )}
       {ask?.kind === 'agent-off' && (
@@ -733,6 +809,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
           busyLabel="Turning off…"
           destructive
           failed={`Couldn’t turn off notices for ${ask.name}`}
+          action="agent-off"
           run={async () => {
             await api.agentOff(ask.agent.workspace)
             return `Email notices for ${ask.name} are off. Its agents can’t email people now.`
@@ -751,6 +828,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
           busyLabel="Removing…"
           destructive
           failed={`Couldn’t take ${ask.address} off the list`}
+          action="unsuppress"
           run={async () => {
             const r = await api.removeSuppression(ask.address)
             setSearch('')

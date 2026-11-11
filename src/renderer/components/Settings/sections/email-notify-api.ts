@@ -208,7 +208,7 @@ export function senderStateText(state: string): { text: string; tone: 'ok' | 'wa
 
 /** How a sender's mail leaves the server. */
 export function pathText(path: string): string {
-  return path === 'relay' ? 'through a mail relay' : 'from this server’s own mail'
+  return path === 'relay' ? 'through a mail relay (another mail service)' : 'from this server’s own mail'
 }
 
 /** Why an address is on the list. */
@@ -299,6 +299,73 @@ export function offReasonText(reason: string | null): string {
   if (!m) return reason
   const by = m[1] === 'its agent' ? 'its agent' : m[1].replace(/^user:/, '').replace(/^connect:/, '')
   return `Turned off by ${by === 'owner' ? 'the owner' : by}`
+}
+
+/** The daemon's error code: a DaemonHttpError's, or the `{error:{code}}`
+ *  JSON a local step throws (password_needed). */
+export function notifyErrorCode(e: unknown): string | null {
+  const c = (e as { code?: unknown } | null)?.code
+  if (typeof c === 'string' && c) return c
+  try {
+    const v = JSON.parse(e instanceof Error ? e.message : String(e))
+    const code = v?.error?.code ?? v?.code
+    return typeof code === 'string' && code ? code : null
+  } catch {
+    return null
+  }
+}
+
+export type NotifyAction = 'resume' | 'remove' | 'agent-off' | 'unsuppress'
+
+/** A failed action, in words: the next step that fits the server's reason,
+ *  the retry button's label (null: retrying won't help), the server's own
+ *  words when they add something, and a fix the page can offer. */
+export interface NotifyFailure {
+  next: string
+  retry: string | null
+  detail: string | null
+  fix?: { kind: 'agent-off'; workspace: string }
+}
+
+/** `workspace` names a workspace id the server's words carry. */
+export function notifyFailure(e: unknown, action: NotifyAction, workspace: (id: string) => string = (id) => id): NotifyFailure {
+  const code = notifyErrorCode(e)
+  const detail = notifyErrorMessage(e)
+  switch (code) {
+    case 'vault_confirm_required':
+      return { next: 'That confirmation expired. Confirm again.', retry: 'Confirm again', detail: null }
+    case 'confirm_failed':
+      return { next: 'That isn’t the vault password. Check it and try again.', retry: 'Try again', detail: null }
+    case 'confirm_locked':
+      return { next: 'Too many wrong tries, so confirming is locked for a while. Try again later.', retry: null, detail: null }
+    case 'vault_closed':
+      return { next: 'The vault on this server isn’t open yet. Open it, then try again.', retry: 'Try again', detail: null }
+    case 'owner_only':
+    case 'forbidden':
+      return { next: 'Only the server’s owner can do this. Ask them to.', retry: null, detail: null }
+    case 'not_paused':
+      return { next: 'It isn’t paused any more, so there’s nothing to resume.', retry: null, detail: null }
+    case 'not_found':
+      return {
+        next:
+          action === 'unsuppress'
+            ? 'That address isn’t on the stop list any more.'
+            : action === 'agent-off'
+              ? 'That workspace has no email notices any more.'
+              : 'That sender is already gone.',
+        retry: null,
+        detail: null,
+      }
+    case 'sender_in_use': {
+      const ws = /workspace (\S+?)['’]s notice sender/.exec(detail)?.[1]
+      if (ws) return { next: `It sends the email notices for workspace ${workspace(ws)}. Turn those off first, then remove it.`, retry: null, detail: null, fix: { kind: 'agent-off', workspace: ws } }
+      return { next: 'An App sends from it. Give the App another sender first, then remove it.', retry: null, detail }
+    }
+    case 'failed':
+      return { next: 'The mail server didn’t answer. Nothing changed; try again in a moment.', retry: 'Try again', detail }
+    default:
+      return { next: 'Nothing changed. Try again in a moment.', retry: 'Try again', detail }
+  }
 }
 
 /** `{"error":{"code","hint"}}` → a line for the page. */

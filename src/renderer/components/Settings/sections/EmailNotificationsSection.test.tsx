@@ -158,15 +158,50 @@ describe('EmailNotificationsSection', () => {
     expect(finish?.body).toMatchObject({ method: 'vault-password', password: 'hunter2' })
   })
 
-  it('a refused resume keeps the dialog open with what failed and the server’s reason', async () => {
-    h.postFail = { route: 'notifications/email/sender/resume', err: new Error('confirm again: a confirm works once') }
+  it('an expired confirm says so and offers Confirm again, not the server’s words', async () => {
+    h.postFail = {
+      route: 'notifications/email/sender/resume',
+      err: Object.assign(new Error('confirm again: a confirm works once, for this step, within 60 seconds'), { status: 403, code: 'vault_confirm_required' }),
+    }
     await page()
     fireEvent.click(screen.getByTestId('notify-resume-ens_shop'))
     fireEvent.click(await screen.findByTestId('notify-resume-confirm'))
     const err = await screen.findByTestId('dialog-error')
     expect(err.textContent).toContain('Couldn’t resume noreply@notify.brand.test')
-    expect(err.textContent).toContain('The server said: confirm again: a confirm works once.')
-    expect(screen.getByTestId('notify-resume-dialog')).toBeTruthy()
+    expect(err.textContent).toContain('That confirmation expired. Confirm again.')
+    expect(err.textContent).not.toContain('The server said')
+    expect(screen.getByTestId('notify-resume-confirm').textContent).toBe('Confirm again')
+    h.postFail = null
+    fireEvent.click(screen.getByTestId('notify-resume-confirm'))
+    expect((await screen.findByTestId('notify-done')).textContent).toContain('is sending again')
+  })
+
+  it('a sender in use by a workspace offers to turn those notices off instead of Try again', async () => {
+    h.postFail = {
+      route: 'notifications/email/sender/rm',
+      err: Object.assign(new Error('noreply@notify.brand.test is workspace p_sales’s notice sender'), { status: 409, code: 'sender_in_use' }),
+    }
+    await page()
+    fireEvent.click(screen.getByTestId('notify-more-ens_shop'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Remove sender/ }))
+    fireEvent.click(await screen.findByTestId('notify-remove-dialog-confirm'))
+    const err = await screen.findByTestId('dialog-error')
+    expect(err.textContent).toContain('It sends the email notices for workspace sales. Turn those off first, then remove it.')
+    expect(screen.queryByTestId('notify-remove-dialog-confirm')).toBeNull()
+    fireEvent.click(screen.getByTestId('notify-remove-dialog-fix'))
+    expect((await screen.findByTestId('notify-agent-off-dialog')).textContent).toContain('Turn off email notices for sales?')
+  })
+
+  it('an owner-only refusal says so plainly and offers Close, not Try again', async () => {
+    h.postFail = { route: 'notifications/email/agent/off', err: Object.assign(new Error('this step is the owner’s'), { status: 403, code: 'owner_only' }) }
+    await page()
+    fireEvent.click(screen.getByTestId('notify-agent-off-p_sales'))
+    fireEvent.click(await screen.findByTestId('notify-agent-off-dialog-confirm'))
+    const err = await screen.findByTestId('dialog-error')
+    expect(err.textContent).toContain('Only the server’s owner can do this.')
+    expect(err.textContent).not.toContain('this step is the owner’s')
+    expect(screen.queryByTestId('notify-agent-off-dialog-confirm')).toBeNull()
+    expect(screen.getByText('Close')).toBeTruthy()
   })
 
   it('turns a workspace off only after its confirm', async () => {

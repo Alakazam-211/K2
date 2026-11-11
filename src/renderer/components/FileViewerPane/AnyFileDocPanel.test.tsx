@@ -138,7 +138,7 @@ describe('what it shows', () => {
   it('renders who’s here, the holder, versions newest first, copies and approvals', async () => {
     d.roster = [
       { pid: 'person:owner', name: 'Rosson', colour: '#88aaff', kind: 'person', region: null, away: false },
-      { pid: 'agent:w1', name: 'Scout', colour: '', kind: 'agent', region: 'layer 3', away: true },
+      { pid: 'agent:w1', name: 'Ledger', colour: '', kind: 'agent', region: 'layer 3', away: true },
     ]
     d.lease = otherLease()
     d.conflictCopies = [{ path: '.k2/conflicts/poster.psd', version: 5, kept: 4, atMs: Date.now() - 1000 }]
@@ -147,7 +147,7 @@ describe('what it shows', () => {
     await loaded()
     const who = screen.getByTestId('any-file-who').textContent ?? ''
     expect(who).toContain('Rosson')
-    expect(who).toContain('Scout')
+    expect(who).toContain('Ledger')
     expect(who).toContain('agent')
     expect(who).toContain('layer 3')
     expect(who).toContain('away')
@@ -477,8 +477,8 @@ describe('helpers', () => {
   })
 
   it('pidName prefers the roster', () => {
-    const people = [{ pid: 'agent:w1', name: 'Scout', colour: '', kind: 'agent', region: null, away: false }]
-    expect(pidName('agent:w1', people)).toBe('Scout')
+    const people = [{ pid: 'agent:w1', name: 'Ledger', colour: '', kind: 'agent', region: null, away: false }]
+    expect(pidName('agent:w1', people)).toBe('Ledger')
     expect(pidName('person:ada', people)).toBe('ada')
   })
 })

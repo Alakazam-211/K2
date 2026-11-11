@@ -301,7 +301,7 @@ describe('A6 close contract — view-lifecycle paths never close sessions', () =
     useTabsStore.setState({
       tabs: [
         terminalTab('tab-api', 'pg-api', {
-          attachAgentName: 'api-scout-aaaa',
+          attachAgentName: 'api-ledger-aaaa',
           fromApi: true,
           sessionId: 'sess-api-1',
         }),
@@ -322,7 +322,7 @@ describe('A6 close contract — view-lifecycle paths never close sessions', () =
       tabs: [
         terminalTab('tab-sys', 'pg-sys', { sessionId: 'sess-sys' }),
         terminalTab('tab-api', 'pg-api', {
-          attachAgentName: 'api-scout-bbbb',
+          attachAgentName: 'api-ledger-bbbb',
           fromApi: true,
           sessionId: 'sess-api-2',
         }),
@@ -341,7 +341,7 @@ describe('A6 close contract — view-lifecycle paths never close sessions', () =
     expect(left).toHaveLength(1)
     expect(left[0].isSystemAgent).toBe(true)
     expect(v2Closes()).toEqual([
-      { agent_name: 'api-scout-bbbb', force: true, clear_index: true, reason: 'tab_close' },
+      { agent_name: 'api-ledger-bbbb', force: true, clear_index: true, reason: 'tab_close' },
     ])
   })
 })

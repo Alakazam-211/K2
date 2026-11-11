@@ -49,7 +49,7 @@ const ITEM: FeedbackShow = {
   projectId: 'p1',
   sessionId: null,
   sessionKind: null,
-  agentName: 'scout',
+  agentName: 'ada',
   kind: 'question',
   title: 'Which DB?',
   body: 'Pick one.',
@@ -66,7 +66,7 @@ const ITEM: FeedbackShow = {
   projectPath: '/ws',
   canonicalSessionId: null,
   comments: [
-    { author: 'scout', body: 'Which DB? **SQLite** or `postgres`?\n\n- fast\n- simple', at: NOW - 120 },
+    { author: 'ada', body: 'Which DB? **SQLite** or `postgres`?\n\n- fast\n- simple', at: NOW - 120 },
     { author: 'owner', body: 'thinking', at: NOW - 60 },
   ],
 }
@@ -159,7 +159,7 @@ describe('a ticket’s discussion in the Thread look', () => {
       expect(thread.style.getPropertyValue('--zen-bubble-agent')).toBe('var(--color-bubble-agent, var(--color-bg-elevated))')
       const [agent, mine] = Array.from(root.querySelectorAll('[data-zen-message]')) as HTMLElement[]
       expect(agent.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe('agent')
-      expect(agent.querySelector('[data-thread-author]')?.textContent).toBe('scout')
+      expect(agent.querySelector('[data-thread-author]')?.textContent).toBe('ada')
       expect(mine.querySelector('[data-zen-bubble]')?.getAttribute('data-zen-bubble')).toBe('me')
       // As the Thread: the name over another's run; yours has none, and its
       // status line under it.
@@ -197,7 +197,7 @@ describe('a ticket’s discussion in the Thread look', () => {
     })
     const withPath: FeedbackShow = {
       ...ITEM,
-      comments: [{ author: 'scout', body: 'The schema lives in src/db.rs today.', at: NOW - 30 }],
+      comments: [{ author: 'ada', body: 'The schema lives in src/db.rs today.', at: NOW - 30 }],
     }
     const { container } = render(
       <TicketAgentRail
@@ -227,7 +227,7 @@ describe('a ticket’s discussion in the Thread look', () => {
   it('Enter sends a free-text comment; Shift+Enter does not; a pill sends the answer', async () => {
     rail()
     const input = screen.getByTestId('ticket-compose-input') as HTMLTextAreaElement
-    expect(input.placeholder).toBe('Pick an option above, or message scout')
+    expect(input.placeholder).toBe('Pick an option above, or message ada')
     fireEvent.change(input, { target: { value: 'what about **both**?' } })
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
     // 0.46.3: the ticket's file links ask `fs/resolve-links`; only the

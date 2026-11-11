@@ -585,7 +585,7 @@ export async function probeCliReady(timeoutMs = 2000): Promise<boolean> {
 // pool, so recovery.kind sat on 'reconnecting' forever. Only a full app
 // restart cleared it.
 //
-// THE 0.40.68 INCIDENT (GH#57 / scout.k2.dev): tunnel + external boot-status
+// THE 0.40.68 INCIDENT (GH#57 / box.example.k2.dev): tunnel + external boot-status
 // STABLE, but the desktop client flapped "Reconnecting…" after a blip.
 // Daemon logs showed ~10s cadence of
 //   `[daemon/e2e] connection ended: TLS handshake failed: tls handshake eof`

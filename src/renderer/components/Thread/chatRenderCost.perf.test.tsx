@@ -362,7 +362,7 @@ function ticket(n: number): FeedbackShow {
     projectId: 'p1',
     sessionId: null,
     sessionKind: null,
-    agentName: 'scout',
+    agentName: 'ada',
     kind: 'question',
     title: 'Which DB?',
     body: 'Pick one.',
@@ -379,7 +379,7 @@ function ticket(n: number): FeedbackShow {
     projectPath: '/ws',
     canonicalSessionId: null,
     comments: Array.from({ length: n }, (_, i) => ({
-      author: i % 2 === 0 ? 'scout' : 'owner',
+      author: i % 2 === 0 ? 'ada' : 'owner',
       body: bodyFor(i),
       at: NOW - (n - i) * 60,
     })),

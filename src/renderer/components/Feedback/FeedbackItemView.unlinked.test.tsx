@@ -45,7 +45,7 @@ const base: FeedbackListRow = {
   projectId: 'gone-project-id',
   sessionId: 'sess-1',
   sessionKind: 'canonical',
-  agentName: 'scout',
+  agentName: 'ada',
   kind: 'question',
   title: 'Approve the vendor contract',
   body: 'Net-30, $12k.',
@@ -69,7 +69,7 @@ function show(row: FeedbackListRow): FeedbackShow {
     workspace: row.projectName,
     projectPath: row.projectPath,
     canonicalSessionId: null,
-    comments: [{ author: 'scout', body: 'Approve the vendor contract', at: row.createdAt }],
+    comments: [{ author: 'ada', body: 'Approve the vendor contract', at: row.createdAt }],
   }
 }
 

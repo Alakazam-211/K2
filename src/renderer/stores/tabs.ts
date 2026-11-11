@@ -94,7 +94,7 @@ import {
 import { assertScopeMayPost, primaryScope, type ServerScope } from '@/kessel/server-scope'
 
 /** Project path → id (+ primary workspace) for host-session tab routing.
- *  Scout sales pilot: api- SessionAdded must park under the event's
+ *  Ledger sales pilot: api- SessionAdded must park under the event's
  *  workspace, not the focused strip. Lazy ref avoids projects↔tabs cycle. */
 export type ProjectPathEntry = {
   id: string
@@ -225,7 +225,7 @@ export function registerActiveProjectIdGetter(getter: () => string | null): void
   primaryDeps.activeProjectId = getter
 }
 
-/** Host-session tab routing (Scout sales pilot): projects.ts registers the
+/** Host-session tab routing (Ledger sales pilot): projects.ts registers the
  *  window server's project list so api- SessionAdded parks under the
  *  event's workspace, not the focused strip. */
 export function registerProjectsPathIndex(getter: () => ProjectPathEntry[]): void {
@@ -7358,7 +7358,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
    * - Active project (path match) → append to in-view `tabs` (no active-tab steal).
    * - Background snapshot for that layout key → append there.
    * - Else merge into `workspaceLayouts` + persist so next open of that
-   *   workspace restores the audit tab (Scout sales pilot: never Julie strip).
+   *   workspace restores the audit tab (Ledger sales pilot: never Julie strip).
    */
   function placeApiAdoptedTab(tab: Tab, eventPath: string): void {
     const project = findProjectForPathIn(deps.projectsPathIndex(), eventPath)
@@ -7580,7 +7580,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     console.warn(
       `[tabs] api-session adoption — agent=${agentName} backend=${backend} path=${event.workspace_path || ''}`,
     )
-    // Scout sales pilot: park under the project for event.workspace_path —
+    // Ledger sales pilot: park under the project for event.workspace_path —
     // never append into an unrelated focused workspace (e.g. Julie while
     // sales host-session spawns).
     placeApiAdoptedTab(tab, event.workspace_path || '')

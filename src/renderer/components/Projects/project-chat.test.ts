@@ -124,12 +124,12 @@ describe('mergeMessages (authoritative-tail merge)', () => {
 
 describe('pocLabel', () => {
   const members: ProjectGroupMemberInfo[] = [
-    { workspaceId: 'w1', name: 'k2', path: '/k2', agentName: 'Scout', createdAt: 1 },
+    { workspaceId: 'w1', name: 'k2', path: '/k2', agentName: 'Ada', createdAt: 1 },
     { workspaceId: 'w2', name: 'relay', path: '/relay', agentName: null, createdAt: 2 },
   ]
 
   it('prefers the agent display name, falls back to the workspace name', () => {
-    expect(pocLabel(members, 'w1')).toBe('Scout')
+    expect(pocLabel(members, 'w1')).toBe('Ada')
     expect(pocLabel(members, 'w2')).toBe('relay')
   })
 
@@ -190,7 +190,7 @@ describe('clampChatPanelWidth (§6.7.3 resizable panel clamps)', () => {
 
 describe('deliveredLine (§6.4 indicator mapping)', () => {
   it('delivered → subtle "delivered to <PoC>"', () => {
-    expect(deliveredLine(true, null, 'Scout')).toBe('delivered to Scout')
+    expect(deliveredLine(true, null, 'Ada')).toBe('delivered to Ada')
   })
 
   it('delivered with no resolvable PoC label still reads sanely', () => {
@@ -198,7 +198,7 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
   })
 
   it('author-is-poc renders nothing (should not occur for owner posts — handled gracefully)', () => {
-    expect(deliveredLine(false, 'author-is-poc', 'Scout')).toBeNull()
+    expect(deliveredLine(false, 'author-is-poc', 'Ada')).toBeNull()
   })
 
   it('no_poc is a normal stored-only outcome, not an unreachable session', () => {
@@ -208,15 +208,15 @@ describe('deliveredLine (§6.4 indicator mapping)', () => {
   })
 
   it('queued (the daemon answers before the inject) is on its way, not a failure', () => {
-    expect(deliveredLine(false, 'queued', 'Scout')).toBe('sending to Scout')
+    expect(deliveredLine(false, 'queued', 'Ada')).toBe('sending to Ada')
     expect(deliveredLine(false, 'queued', null)).toBe('sending to the PoC')
   })
 
   it('every other failure reason → "PoC session unreachable"', () => {
-    expect(deliveredLine(false, 'wake_timeout', 'Scout')).toBe('PoC session unreachable')
-    expect(deliveredLine(false, 'no_agent_mode', 'Scout')).toBe('PoC session unreachable')
-    expect(deliveredLine(false, 'workspace_not_found', 'Scout')).toBe('PoC session unreachable')
-    expect(deliveredLine(false, null, 'Scout')).toBe('PoC session unreachable')
+    expect(deliveredLine(false, 'wake_timeout', 'Ada')).toBe('PoC session unreachable')
+    expect(deliveredLine(false, 'no_agent_mode', 'Ada')).toBe('PoC session unreachable')
+    expect(deliveredLine(false, 'workspace_not_found', 'Ada')).toBe('PoC session unreachable')
+    expect(deliveredLine(false, null, 'Ada')).toBe('PoC session unreachable')
   })
 })
 

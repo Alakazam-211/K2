@@ -154,7 +154,7 @@ function item(over: Partial<FeedbackShow> = {}): FeedbackShow {
     projectId: 'p1',
     sessionId: null,
     sessionKind: null,
-    agentName: 'scout',
+    agentName: 'ada',
     kind: 'question',
     title: 'Which logo?',
     body: null,
@@ -171,7 +171,7 @@ function item(over: Partial<FeedbackShow> = {}): FeedbackShow {
     projectPath: '/ws',
     canonicalSessionId: null,
     comments: [
-      { id: SEED, author: 'scout', body: 'Which logo?', at: NOW - 120, attachments: [png('a.png'), pdf] },
+      { id: SEED, author: 'ada', body: 'Which logo?', at: NOW - 120, attachments: [png('a.png'), pdf] },
       { id: REPLY, author: 'owner', body: 'thinking', at: NOW - 60 },
     ],
     ...over,
@@ -263,7 +263,7 @@ describe('files under each message', () => {
     const spy = vi.spyOn(mod, 'daemonCliGet').mockResolvedValueOnce({
       ...item(),
       comments: [
-        { id: SEED, author: 'scout', body: 'x', at: 1, attachments: [{ kind: 'file', state: 'ok', path: 'a', name: 'a', bogus: 1 }, 'junk'] },
+        { id: SEED, author: 'ada', body: 'x', at: 1, attachments: [{ kind: 'file', state: 'ok', path: 'a', name: 'a', bogus: 1 }, 'junk'] },
         { id: REPLY, author: 'owner', body: 'y', at: 2, attachments: 'nope' },
       ],
     } as never)

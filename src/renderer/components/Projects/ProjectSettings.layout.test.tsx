@@ -107,13 +107,13 @@ const SHOW: ProjectGroupShow = {
   ...GROUP,
   members: [
     { workspaceId: 'w1', name: 'cortana', path: '/w/cortana', agentName: 'Cortana', createdAt: 1 },
-    { workspaceId: 'w2', name: 'scout', path: '/w/scout', agentName: 'Scout', createdAt: 2 },
+    { workspaceId: 'w2', name: 'ada', path: '/w/ada', agentName: 'Ada', createdAt: 2 },
   ],
   dashboards: [DASH, { ...DASH, id: 'd2', name: 'Ops', position: 1 }],
 }
 const DOCS: ProjectGroupHtmlDoc[] = [
-  { workspaceId: 'w2', workspaceName: 'scout', agentName: 'Scout', filePath: '/w/scout/status.html', fileName: 'status.html' },
-  { workspaceId: 'w2', workspaceName: 'scout', agentName: 'Scout', filePath: '/w/scout/notes.md', fileName: 'notes.md' },
+  { workspaceId: 'w2', workspaceName: 'ada', agentName: 'Ada', filePath: '/w/ada/status.html', fileName: 'status.html' },
+  { workspaceId: 'w2', workspaceName: 'ada', agentName: 'Ada', filePath: '/w/ada/notes.md', fileName: 'notes.md' },
 ]
 
 const fetchGroups = vi.fn(async () => {})
@@ -266,7 +266,7 @@ describe('the dashboard selector', () => {
     expect(vi.mocked(projectsApi.addDashboardPane).mock.calls[0].slice(1)).toEqual([
       'g1',
       'd1',
-      { kind: 'htmlDoc', workspaceId: 'w2', filePath: '/w/scout/status.html' },
+      { kind: 'htmlDoc', workspaceId: 'w2', filePath: '/w/ada/status.html' },
     ])
     expect(projectsApi.saveDashboardLayout).not.toHaveBeenCalled()
     // A non-HTML file says why it can't be added, in plain words.

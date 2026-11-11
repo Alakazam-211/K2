@@ -193,7 +193,7 @@ function resetStore(): void {
 
 beforeEach(resetStore)
 
-describe('adoptApiSandboxSession — workspace routing (Scout sales pilot)', () => {
+describe('adoptApiSandboxSession — workspace routing (Ledger sales pilot)', () => {
   it('does NOT append a sales host-session into the Julie-focused strip', () => {
     registerProjectsPathIndex(() => [
       {

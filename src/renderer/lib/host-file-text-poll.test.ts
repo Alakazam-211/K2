@@ -15,9 +15,9 @@ import { HostSwitchedError } from './daemon-cli'
 
 function makeRemoteHost(): ConnectHost {
   return {
-    id: 'scout-1',
-    label: 'Scout',
-    hostname: 'scout.k2.dev',
+    id: 'ledger-1',
+    label: 'Ledger',
+    hostname: 'box.example.k2.dev',
     username: 'rosson',
     port: 443,
     secure: true,
@@ -120,7 +120,7 @@ describe('host-file-text-poll', () => {
 
   it('host-switch error drops the result and stops polling', async () => {
     const read = vi.fn(async () => {
-      throw new HostSwitchedError('local', 'r1:scout.k2.dev:443')
+      throw new HostSwitchedError('local', 'r1:box.example.k2.dev:443')
     })
     const apply = vi.fn()
     const onError = vi.fn()

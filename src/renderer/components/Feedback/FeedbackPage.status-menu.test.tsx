@@ -58,7 +58,7 @@ const unlinkedRow: FeedbackListRow = {
   ...row,
   id: '3f2a9c1e-7b4d-4e0a-9d6f-0123456789ab',
   projectId: 'gone-project-id',
-  agentName: 'scout',
+  agentName: 'ada',
   title: 'Approve the vendor contract',
   createdAt: 1_759_241_100, // 2025-09-30 14:05 UTC
   projectPath: null,
@@ -238,7 +238,7 @@ describe('unlinked ticket card (prd-tickets-badge-orphans TB18 + Appa A1)', () =
     // under the "Unlinked workspace" section).
     expect(screen.getByText('Approve the vendor contract')).toBeTruthy()
     const details = screen.getByTestId('unlinked-details')
-    expect(details.textContent).toBe('Filed by scout·2025-09-30 14:05 UTC·3f2a9c1e')
+    expect(details.textContent).toBe('Filed by ada·2025-09-30 14:05 UTC·3f2a9c1e')
 
     fireEvent.click(screen.getByTitle('Change status'))
     const menu = screen.getByTestId('ticket-status-menu')

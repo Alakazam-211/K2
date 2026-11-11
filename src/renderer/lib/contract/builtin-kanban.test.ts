@@ -903,7 +903,7 @@ const PAGE_COLUMNS = (): LayoutColumn[] => [
 /** agents.subscribe rows from the board's view (the Garden's reach), the
  *  one K2's Conversation shows marked `selected`. */
 const reachRows = (selected: string | null): Array<Record<string, unknown>> =>
-  ['cortana::local', 'scout::local', 'ops::box.k2.dev'].map((address) => ({
+  ['cortana::local', 'ada::local', 'ops::box.k2.dev'].map((address) => ({
     address,
     label: address.split('::')[0],
     state: 'ok',
@@ -1001,7 +1001,7 @@ describe('k2:kanban@5: the Thread is K2’s own Conversation in its column', () 
     const bad = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), postError: 'sending_off' })
     const b = await started(bad)
     await until('agents read', () => bad.agentSubs.length === 1)
-    bad.agentSubs[0](reachRows('scout::local'))
+    bad.agentSubs[0](reachRows('ada::local'))
     b.$('#btnSend').click()
     await until('refused', () => (b.$('#toast').textContent ?? '').startsWith('Send failed: posting is paused'))
 
@@ -1009,27 +1009,27 @@ describe('k2:kanban@5: the Thread is K2’s own Conversation in its column', () 
     const ro = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), caps: ALL_CAPS.filter((c) => c !== 'thread.post') })
     const r = await started(ro)
     await until('agents read', () => ro.agentSubs.length === 1)
-    ro.agentSubs[0](reachRows('scout::local'))
+    ro.agentSubs[0](reachRows('ada::local'))
     expect(r.$('#btnSend').hidden).toBe(true)
   })
 
   it('carries @4’s picked agent over once, only while the Thread shows no one', async () => {
-    const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: 'scout::local' }]])
+    const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: 'ada::local' }]])
     const f = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), saves })
     await started(f)
     await until('agents read', () => f.agentSubs.length === 1)
     f.agentSubs[0](reachRows(null))
     await until('removed', () => f.saveRemoves.length === 1)
-    expect(f.convOpens).toEqual(['scout::local'])
+    expect(f.convOpens).toEqual(['ada::local'])
     expect(f.saveRemoves).toEqual(['dock/g-test0001'])
     // Never again, even if the Thread shows no one later.
     f.agentSubs[0](reachRows(null))
     await tick()
-    expect(f.convOpens).toEqual(['scout::local'])
+    expect(f.convOpens).toEqual(['ada::local'])
 
     // The Thread already shows someone (the header's own pick): nothing
     // moves, and the old save waits.
-    const kept = new Map<string, Json>([['dock/g-test0001', { open: false, agent: 'scout::local' }]])
+    const kept = new Map<string, Json>([['dock/g-test0001', { open: false, agent: 'ada::local' }]])
     const g = fakeK2({ data: THREE(), columns: PAGE_COLUMNS(), saves: kept })
     await started(g)
     await until('agents read', () => g.agentSubs.length === 1)
@@ -1042,7 +1042,7 @@ describe('k2:kanban@5: the Thread is K2’s own Conversation in its column', () 
 
 // ── k2:kanban@2: the Thread panel's message flow and look ───────────────
 
-const SCOUT = 'scout::local'
+const ADA = 'ada::local'
 const nowSec = (): number => Math.floor(Date.now() / 1000)
 // One clock per test: every message a test builds is stamped from the same
 // second. The panel keys a message on its whole doc, so pushing the same
@@ -1067,7 +1067,7 @@ function textItem(seq: number, body: string, o: { mine?: boolean; from?: string;
     doc: {
       id: `m${seq}`,
       kind: 'text',
-      from: o.from ?? (o.mine ? 'Rosson' : SCOUT),
+      from: o.from ?? (o.mine ? 'Rosson' : ADA),
       to: null,
       created_at: testNow - (o.ago ?? 0),
       body,
@@ -1078,20 +1078,20 @@ function textItem(seq: number, body: string, o: { mine?: boolean; from?: string;
 }
 
 function view(items: ViewItem[], turn: { state: string; since: number } | null = null) {
-  return { address: SCOUT, phase: 'live', note: null, items, hasMore: false, turn }
+  return { address: ADA, phase: 'live', note: null, items, hasMore: false, turn }
 }
 
-/** A board with the Thread panel open on scout (saved per Garden). */
-async function openOnScout(
+/** A board with the Thread panel open on ada (saved per Garden). */
+async function openOnAda(
   o: { row?: Record<string, unknown>; postError?: string; config?: Record<string, unknown>; k2?: Parameters<typeof fakeK2>[0] } = {},
 ) {
-  const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: SCOUT }]])
+  const saves = new Map<string, Json>([['dock/g-test0001', { open: true, agent: ADA }]])
   const f = fakeK2({ data: THREE(), saves, postError: o.postError, config: o.config, ...o.k2 })
   const m = await started(f)
   await until('agents read', () => f.agentSubs.length === 1)
-  f.agentSubs[0]([{ address: SCOUT, label: 'scout', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null, ...o.row }])
+  f.agentSubs[0]([{ address: ADA, label: 'ada', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null, ...o.row }])
   await until('Thread open', () => f.threadSubs.length === 1)
-  expect(f.threadSubs[0].address).toBe(SCOUT)
+  expect(f.threadSubs[0].address).toBe(ADA)
   return { f, m }
 }
 
@@ -1099,7 +1099,7 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
   beforeAll(() => useVersion(dir))
 
   it('draws bubbles: yours right and the agent’s left, "author · time" under each, markdown inside, safely', async () => {
-    const { f, m } = await openOnScout()
+    const { f, m } = await openOnAda()
     f.threadSubs[0].cb(
       view([
         textItem(1, 'Which database should the **ledger** use?\n\n- `SQLite`: one file\n- `Postgres`: a server', { ago: 7200 }),
@@ -1114,7 +1114,7 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     for (const n of msgs) expect([...n.children].map((c) => c.className.split(' ')[0])).toEqual(['bubble', 'meta'])
     expect(msgs[0].querySelector('.bubble')!.className).toBe('bubble bubble-agent')
     expect(msgs[1].querySelector('.bubble')!.className).toBe('bubble bubble-me')
-    expect(msgs.map((n) => n.querySelector('.meta')!.textContent)).toEqual(['scout · 2h ago', 'You · 15m ago', 'scout · 10m ago'])
+    expect(msgs.map((n) => n.querySelector('.meta')!.textContent)).toEqual(['ada · 2h ago', 'You · 15m ago', 'ada · 10m ago'])
     // Markdown, built as nodes: bold, a list, inline code.
     const first = msgs[0].querySelector('.body')!
     expect(first.classList.contains('md')).toBe(true)
@@ -1127,15 +1127,15 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     expect(third.querySelector('.md-url')!.textContent).toBe('https://example.com/x')
     // The empty Thread says what K2's does.
     f.threadSubs[0].cb(view([]))
-    expect(m.$('#dockBody').textContent).toBe('Message scout. It reads this like a text.')
+    expect(m.$('#dockBody').textContent).toBe('Message ada. It reads this like a text.')
   })
 
   it('Enter sends and Shift+Enter is a new line; the round Send lights up; the post reaches the agent and its reply renders', async () => {
-    const { f, m } = await openOnScout()
+    const { f, m } = await openOnAda()
     f.threadSubs[0].cb(view([textItem(1, 'Ready when you are.', { ago: 60 })]))
     const text = m.$<HTMLTextAreaElement>('#dockText')
     const send = m.$<HTMLButtonElement>('#dockSendBtn')
-    expect(text.placeholder).toBe('Message scout')
+    expect(text.placeholder).toBe('Message ada')
     expect(send.getAttribute('aria-label')).toBe('Send')
     expect(send.title).toBe('Send (Enter)')
     expect(send.disabled).toBe(true)
@@ -1156,7 +1156,7 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     text.dispatchEvent(enter)
     expect(enter.defaultPrevented).toBe(true)
     await until('posted', () => f.posts.length === 1)
-    expect(f.posts[0]).toEqual([SCOUT, 'Take the Doing column'])
+    expect(f.posts[0]).toEqual([ADA, 'Take the Doing column'])
     await until('cleared', () => text.value === '')
     expect(send.disabled).toBe(true)
     // Until the agent answers, the ear says it was sent.
@@ -1169,7 +1169,7 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     m.type(text, 'And the Done one')
     send.click()
     await until('posted twice', () => f.posts.length === 2)
-    expect(f.posts[1]).toEqual([SCOUT, 'And the Done one'])
+    expect(f.posts[1]).toEqual([ADA, 'And the Done one'])
 
     // Your post comes back, then the agent's reply: both render, the reply
     // on the left, and the ear goes.
@@ -1192,12 +1192,12 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     const last = [...m.doc.querySelectorAll<HTMLElement>('#dockBody .msg')].at(-1)!
     expect(last.className).toBe('msg theirs')
     expect(last.querySelector('.bubble strong')!.textContent).toBe('Doing')
-    expect(last.querySelector('.meta')!.textContent).toBe('scout · just now')
+    expect(last.querySelector('.meta')!.textContent).toBe('ada · just now')
     expect(ear.hidden).toBe(true)
   })
 
   it('a refused post keeps your text and says why', async () => {
-    const { f, m } = await openOnScout({ postError: 'sending_off' })
+    const { f, m } = await openOnAda({ postError: 'sending_off' })
     f.threadSubs[0].cb(view([]))
     const text = m.$<HTMLTextAreaElement>('#dockText')
     m.type(text, 'Hello?')
@@ -1211,7 +1211,7 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
 
   it('the working ear: a dot, the state, the counters and the turn’s clock', async () => {
     const counts = { subagents: 1, tools: 4, commands: 3 }
-    const { f, m } = await openOnScout({ row: { working: true, activity: 'working', counts } })
+    const { f, m } = await openOnAda({ row: { working: true, activity: 'working', counts } })
     f.threadSubs[0].cb(view([textItem(1, 'Hi', { mine: true, ago: 80 })], { state: 'working', since: Date.now() - 74_000 }))
     const ear = m.$('#dockTurn')
     expect(ear.hidden).toBe(false)
@@ -1233,13 +1233,13 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     expect(ear.querySelector('.ear-label')!.textContent).toBe('Needs you')
     expect(ear.querySelector('.ear-clock')!.textContent).toMatch(/^0:0[56]$/)
     // Idle: no ear.
-    f.agentSubs[0]([{ address: SCOUT, label: 'scout', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null }])
+    f.agentSubs[0]([{ address: ADA, label: 'ada', state: 'ok', working: false, needsYou: false, activity: 'idle', counts: null }])
     f.threadSubs[0].cb(view([], null))
     expect(ear.hidden).toBe(true)
   })
 
   it('a choice card answers inside the agent’s bubble; a secret card points to K2’s own Thread', async () => {
-    const { f, m } = await openOnScout()
+    const { f, m } = await openOnAda()
     f.threadSubs[0].cb(
       view([
         {
@@ -1248,7 +1248,7 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
           doc: {
             id: 'c1',
             kind: 'choice',
-            from: SCOUT,
+            from: ADA,
             created_at: nowSec() - 120,
             body: null,
             via: null,
@@ -1265,19 +1265,19 @@ describe.each(['kanban-2', 'kanban-3', 'kanban-4'] as const)('k2:kanban Thread p
     expect(chips.map((c) => c.textContent)).toEqual(['SQLite', 'Postgres'])
     chips[1].click()
     await until('answered', () => f.answers.length === 1)
-    expect(f.answers[0]).toEqual([SCOUT, 'c1', 'Postgres'])
+    expect(f.answers[0]).toEqual([ADA, 'c1', 'Postgres'])
     expect(m.$('.msg[data-msg-id="s1"] .bubble .status').textContent).toContain('K2’s own Thread')
   })
 
   it('wears K2 Companion’s look by default; look = "garden" follows the Garden theme instead', async () => {
-    const a = await openOnScout()
+    const a = await openOnAda()
     expect(a.m.win.KanbanDock.look()).toBe('companion')
     expect(a.m.doc.documentElement.classList.contains('look-garden')).toBe(false)
-    const b = await openOnScout({ config: { look: 'garden' } })
+    const b = await openOnAda({ config: { look: 'garden' } })
     await until('garden look', () => b.m.doc.documentElement.classList.contains('look-garden'))
     expect(b.m.win.KanbanDock.look()).toBe('garden')
-    // The look never changes what it does: still talks to scout.
-    expect(b.m.win.KanbanDock.address()).toBe(SCOUT)
+    // The look never changes what it does: still talks to ada.
+    expect(b.m.win.KanbanDock.address()).toBe(ADA)
   })
 })
 
@@ -1353,7 +1353,7 @@ describe.each(['kanban-3', 'kanban-4'] as const)('k2:kanban Thread panel scrolli
   beforeAll(() => useVersion(dir))
 
   it('a reader at the bottom stays there; one who scrolled up never moves, and a pill counts what came in', async () => {
-    const { f, m } = await openOnScout()
+    const { f, m } = await openOnAda()
     const d = layoutDock(m)
     const push = (items: ViewItem[], turn: { state: string; since: number } | null = null): void => f.threadSubs[0].cb(view(items, turn))
     const pill = m.$<HTMLButtonElement>('.dock-newer')
@@ -1401,7 +1401,7 @@ describe.each(['kanban-3', 'kanban-4'] as const)('k2:kanban Thread panel scrolli
   })
 
   it('the pill goes to the newest and clears; your own message always goes to the bottom', async () => {
-    const { f, m } = await openOnScout()
+    const { f, m } = await openOnAda()
     const d = layoutDock(m)
     const push = (items: ViewItem[]): void => f.threadSubs[0].cb(view(items))
     const pill = m.$<HTMLButtonElement>('.dock-newer')
@@ -1449,7 +1449,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
   beforeAll(() => useVersion('kanban-4'))
 
   it('draws a message’s files: chips with their state, a hidden one without a name, pictures through <img> data: URLs only', async () => {
-    const { f, m } = await openOnScout({
+    const { f, m } = await openOnAda({
       k2: { thumbs: { 'm1/0': { mime: 'image/png', base64: PNG_B64 }, 'm1/4': { mime: 'text/html', base64: 'PHNjcmlwdD4=' } } },
     })
     f.threadSubs[0].cb(
@@ -1477,9 +1477,9 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     // Every image asks K2 for its 512 px thumbnail.
     await until('thumbs asked', () => f.attachmentCalls.length === 3)
     expect(f.attachmentCalls).toEqual([
-      [SCOUT, 'm1', 0, { mode: 'thumb', px: 512 }],
-      [SCOUT, 'm1', 4, { mode: 'thumb', px: 512 }],
-      [SCOUT, 'm1', 5, { mode: 'thumb', px: 512 }],
+      [ADA, 'm1', 0, { mode: 'thumb', px: 512 }],
+      [ADA, 'm1', 4, { mode: 'thumb', px: 512 }],
+      [ADA, 'm1', 5, { mode: 'thumb', px: 512 }],
     ])
     await until('picture drawn', () => msg.querySelector('.file-thumb img') !== null)
     const img = msg.querySelector<HTMLImageElement>('.file-thumb img')!
@@ -1503,8 +1503,8 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     files[2].click()
     await until('opened twice', () => f.opens.length === 2)
     expect(f.opens).toEqual([
-      [SCOUT, { docId: 'm1', n: 0 }],
-      [SCOUT, { docId: 'm1', n: 1 }],
+      [ADA, { docId: 'm1', n: 0 }],
+      [ADA, { docId: 'm1', n: 1 }],
     ])
 
     // Files alone are a message: no empty bubble.
@@ -1513,7 +1513,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
   })
 
   it('links printed paths K2 says lead into the workspace; a click opens the file at its line', async () => {
-    const { f, m } = await openOnScout({ k2: { linkable: { 'src/app.ts:12': 'src/app.ts', 'Cargo.toml': 'Cargo.toml' } } })
+    const { f, m } = await openOnAda({ k2: { linkable: { 'src/app.ts:12': 'src/app.ts', 'Cargo.toml': 'Cargo.toml' } } })
     f.threadSubs[0].cb(
       view([
         textItem(
@@ -1525,7 +1525,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     )
     await until('links asked', () => f.linkCalls.length === 1)
     // Path-shaped text only: never a URL, a fenced block or prose like and/or.
-    expect(f.linkCalls[0]).toEqual([SCOUT, ['src/app.ts:12', 'Cargo.toml', 'lib/gone.rs']])
+    expect(f.linkCalls[0]).toEqual([ADA, ['src/app.ts:12', 'Cargo.toml', 'lib/gone.rs']])
     await until('links drawn', () => m.doc.querySelectorAll('.file-link').length === 2)
     const links = [...m.doc.querySelectorAll<HTMLElement>('.file-link')]
     expect(links.map((l) => [l.textContent, l.getAttribute('role'), l.getAttribute('data-rel')])).toEqual([
@@ -1538,8 +1538,8 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     links[1].dispatchEvent(new m.win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     await until('opened', () => f.opens.length === 2)
     expect(f.opens).toEqual([
-      [SCOUT, { rel: 'src/app.ts', line: 12 }],
-      [SCOUT, { rel: 'Cargo.toml' }],
+      [ADA, { rel: 'src/app.ts', line: 12 }],
+      [ADA, { rel: 'Cargo.toml' }],
     ])
     // The same text again is answered from what K2 said: no second ask.
     f.threadSubs[0].cb(view([textItem(1, 'Changed src/app.ts:12', { ago: 60 }), textItem(2, 'Also src/app.ts:12', { ago: 30 })]))
@@ -1549,7 +1549,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
   })
 
   it('the message box takes files: + opens K2’s picker, chips wait (removable), and files alone send', async () => {
-    const { f, m } = await openOnScout({
+    const { f, m } = await openOnAda({
       k2: {
         picks: [
           { files: [{ relPath: 'shots/a.png', name: 'a.png' }, { relPath: '.k2/downloads/b.pdf', name: 'b.pdf' }] },
@@ -1565,7 +1565,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     expect(send.disabled).toBe(true)
     plus.click()
     await until('picked', () => m.doc.querySelectorAll('.compose-file').length === 2)
-    expect(f.pickCalls).toEqual([SCOUT])
+    expect(f.pickCalls).toEqual([ADA])
     expect([...m.doc.querySelectorAll('.compose-file .file-name')].map((n) => n.textContent)).toEqual(['a.png', 'b.pdf'])
     expect(send.disabled).toBe(false)
     // Remove one; a cancelled pick adds nothing.
@@ -1578,20 +1578,20 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     // Files alone are a message.
     send.click()
     await until('posted', () => f.posts.length === 1)
-    expect(f.posts[0]).toEqual([SCOUT, '', { attachments: [{ relPath: 'shots/a.png' }] }])
+    expect(f.posts[0]).toEqual([ADA, '', { attachments: [{ relPath: 'shots/a.png' }] }])
     await until('chips cleared', () => m.doc.querySelectorAll('.compose-file').length === 0)
     // Text with no files is posted as before (two arguments).
     m.type(m.$<HTMLTextAreaElement>('#dockText'), 'Thanks')
     send.click()
     await until('posted twice', () => f.posts.length === 2)
-    expect(f.posts[1]).toEqual([SCOUT, 'Thanks'])
+    expect(f.posts[1]).toEqual([ADA, 'Thanks'])
   })
 
   it('marks the Thread read at the newest message while it is shown, once per newer message', async () => {
-    const { f, m } = await openOnScout()
+    const { f, m } = await openOnAda()
     f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two')]))
     await until('read', () => f.markReads.length === 1)
-    expect(f.markReads[0]).toEqual([SCOUT, { seq: 2 }])
+    expect(f.markReads[0]).toEqual([ADA, { seq: 2 }])
     f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two')], { state: 'working', since: Date.now() }))
     await tick()
     expect(f.markReads).toHaveLength(1)
@@ -1604,11 +1604,11 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     state = 'visible'
     m.doc.dispatchEvent(new m.win.Event('visibilitychange'))
     await until('read again', () => f.markReads.length === 2)
-    expect(f.markReads[1]).toEqual([SCOUT, { seq: 3 }])
+    expect(f.markReads[1]).toEqual([ADA, { seq: 3 }])
   })
 
   it('catches up with a delta when the window shows again: new items join, changed ones update, removed ones go', async () => {
-    const { f, m } = await openOnScout({
+    const { f, m } = await openOnAda({
       k2: {
         reads: (o) =>
           o.afterSeq === 3
@@ -1624,7 +1624,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     f.threadSubs[0].cb(view([textItem(1, 'one'), textItem(2, 'two'), textItem(3, 'three')]))
     m.doc.dispatchEvent(new m.win.Event('visibilitychange'))
     await until('caught up', () => m.doc.querySelectorAll('#dockBody .msg').length === 3)
-    expect(f.reads[0]).toEqual([SCOUT, { afterSeq: 3 }])
+    expect(f.reads[0]).toEqual([ADA, { afterSeq: 3 }])
     expect([...m.doc.querySelectorAll('#dockBody .msg')].map((n) => n.querySelector('.body')!.textContent!.trim())).toEqual([
       'two, edited',
       'three',
@@ -1633,7 +1633,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
   })
 
   it('scrolled to the top with earlier messages left, it loads them above without moving you or counting them as new', async () => {
-    const { f, m } = await openOnScout({
+    const { f, m } = await openOnAda({
       k2: { reads: (o) => (o.beforeSeq === 11 ? { items: lines(10), hasMore: false } : { items: [], hasMore: false }) },
     })
     const d = layoutDock(m)
@@ -1642,7 +1642,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
     const pill = m.$<HTMLButtonElement>('.dock-newer')
     d.scrollTo(0)
     await until('earlier read', () => f.reads.length === 1)
-    expect(f.reads[0]).toEqual([SCOUT, { beforeSeq: 11 }])
+    expect(f.reads[0]).toEqual([ADA, { beforeSeq: 11 }])
     await until('earlier drawn', () => d.msgs().length === 20)
     expect(d.msgs()[0].getAttribute('data-seq')).toBe('1')
     // What you were reading (line 11) is still at the top of the view.
@@ -1651,7 +1651,7 @@ describe('k2:kanban@4 Thread panel: files, links, the message box’s picks, rea
   })
 
   it('on an older K2 it is @3’s panel: no picker, no links, no pictures, no reads', async () => {
-    const { f, m } = await openOnScout({ k2: { caps: PRE_PARITY_CAPS, linkable: { 'src/app.ts': 'src/app.ts' } } })
+    const { f, m } = await openOnAda({ k2: { caps: PRE_PARITY_CAPS, linkable: { 'src/app.ts': 'src/app.ts' } } })
     f.threadSubs[0].cb(
       view([fileItem(1, 'See src/app.ts', [{ kind: 'file', state: 'ok', name: 'shot.png', mime: 'image/png' }])]),
     )

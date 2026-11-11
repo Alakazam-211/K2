@@ -47,7 +47,7 @@ const row: FeedbackListRow = {
   projectId: 'p1',
   sessionId: null,
   sessionKind: null,
-  agentName: 'scout',
+  agentName: 'ada',
   kind: 'approval',
   title: 'Deploy blocked: DNS?',
   body: 'Short summary.',
@@ -80,7 +80,7 @@ function show(r: FeedbackListRow): FeedbackShow {
     workspace: r.projectName,
     projectPath: r.projectPath,
     canonicalSessionId: null,
-    comments: [{ author: 'scout', body: `${r.title}\n${r.body}`, at: r.createdAt }],
+    comments: [{ author: 'ada', body: `${r.title}\n${r.body}`, at: r.createdAt }],
   }
 }
 
@@ -153,7 +153,7 @@ describe('FeedbackCard — assignee on the bottom row', () => {
     expect(bottom.contains(screen.getByTestId('html-badge'))).toBe(true)
     expect(screen.getByTestId('card-age').textContent).toBe('2m ago')
     const card0 = screen.getByTestId('ticket-card')
-    expect(card0.textContent).not.toContain('scout')
+    expect(card0.textContent).not.toContain('ada')
     expect(card0.textContent).not.toContain('Alpha')
     // Title, then the one-line summary (the --body).
     expect(screen.getByTestId('card-title').textContent).toBe('Deploy blocked: DNS?')

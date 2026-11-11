@@ -1,6 +1,6 @@
 // 0.46.3 Thread parity in Gardens (Rosson 2026-10-20): K2's own impls of
 // the catalog v16 widget Thread rows, against a faked daemon. Fixtures are
-// made up (example.test, /w/scout).
+// made up (example.test, /w/ada).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -87,17 +87,17 @@ function scope(features: string[] = ALL, over: Partial<ServerScope> = {}): Serve
 }
 
 function target(s: ServerScope = scope()): ZenThreadTarget {
-  return { address: 'scout::box.example.test', scope: s, threadAddr: 'scout/chat', workspacePath: '/w/scout' }
+  return { address: 'ada::box.example.test', scope: s, threadAddr: 'ada/chat', workspacePath: '/w/ada' }
 }
 
-/** The daemon's resolve-links: a path under /w/scout/ is a file there. */
+/** The daemon's resolve-links: a path under /w/ada/ is a file there. */
 function resolveLinks(): void {
   h.post.set('fs/resolve-links', (b) => ({
-    root: '/w/scout',
-    prefixes: ['/w/scout'],
+    root: '/w/ada',
+    prefixes: ['/w/ada'],
     links: (b.paths as string[]).map((p) => {
-      const rel = p.startsWith('/w/scout/') ? p.slice('/w/scout/'.length) : p.startsWith('/') ? null : p
-      return rel && !rel.includes('missing') ? { input: p, linkable: true, kind: 'file', rel, path: `/w/scout/${rel}` } : { input: p, linkable: false }
+      const rel = p.startsWith('/w/ada/') ? p.slice('/w/ada/'.length) : p.startsWith('/') ? null : p
+      return rel && !rel.includes('missing') ? { input: p, linkable: true, kind: 'file', rel, path: `/w/ada/${rel}` } : { input: p, linkable: false }
     }),
   }))
 }
@@ -116,7 +116,7 @@ const item = (seq: number, extra: Record<string, unknown> = {}) => ({
   collection: 'thread',
   seq,
   id: `m${seq}`,
-  doc: { id: `m${seq}`, kind: 'text', from: 'scout', body: `line ${seq}`, via: 'agent', ...extra },
+  doc: { id: `m${seq}`, kind: 'text', from: 'ada', body: `line ${seq}`, via: 'agent', ...extra },
 })
 
 beforeEach(() => {
@@ -143,7 +143,7 @@ describe('thread.read afterSeq (thread-delta-v1)', () => {
       removed: [{ id: 'm1', seq: 1 }, { id: 7 }],
     }))
     const d = await zenThreadDelta(target(), 4, 50)
-    expect(h.calls).toEqual([{ method: 'GET', route: 'thread', data: { addr: 'scout/chat', after_seq: 4, limit: 50 } }])
+    expect(h.calls).toEqual([{ method: 'GET', route: 'thread', data: { addr: 'ada/chat', after_seq: 4, limit: 50 } }])
     expect(d.items.map((i) => i.seq)).toEqual([5, 6])
     expect(d.hasMore).toBe(true)
     expect(d.changed.map((i) => i.id)).toContain('m3')
@@ -165,7 +165,7 @@ describe('thread.markRead (thread-read-v1)', () => {
     h.post.set('thread/read', () => ({ ok: true, kind: 'thread', id: 'c-1', changed: true, lastReadSeq: 9, lastSeq: 12, unread: 3, waiting: 1, total: 4 }))
     expect(await zenThreadMarkRead(target(), 9)).toEqual({ changed: true, lastReadSeq: 9, lastSeq: 12, unread: 3 })
     await zenThreadMarkRead(target())
-    expect(h.calls.map((c) => c.data)).toEqual([{ addr: 'scout/chat', seq: 9 }, { addr: 'scout/chat' }])
+    expect(h.calls.map((c) => c.data)).toEqual([{ addr: 'ada/chat', seq: 9 }, { addr: 'ada/chat' }])
   })
 
   it('refuses without the feature, on a view-only room, and a bad seq', async () => {
@@ -194,7 +194,7 @@ describe('thread.attachment (thread-images-v1)', () => {
     const t = await zenThreadAttachment(target(), 'm4', 0, { mode: 'thumb', px: 400 })
     expect(t).toEqual({ kind: 'image', mime: 'image/jpeg', width: 512, height: 384, base64: 'AAAA', name: 'a.heic', state: 'ok' })
     // px rounds to the two sizes the daemon keeps.
-    expect(h.calls[0].data).toEqual({ addr: 'scout/chat', id: 'm4', n: 0, mode: 'thumb', px: 512 })
+    expect(h.calls[0].data).toEqual({ addr: 'ada/chat', id: 'm4', n: 0, mode: 'thumb', px: 512 })
     expect(projectZenThreadFileData({ kind: 'file', state: 'hidden', name: 'secret.txt', size: 9, path: 'x' })).toEqual({ kind: 'file', state: 'hidden' })
   })
 
@@ -220,11 +220,11 @@ describe('thread.attachment (thread-images-v1)', () => {
 describe('thread.links', () => {
   it('answers {input, linkable, kind, rel}: the host path and root never cross; :line stays in input', async () => {
     resolveLinks()
-    const r = await zenThreadLinks(target(), ['src/app.ts:12', '/w/scout/README.md', '/etc/hosts', 'not a path at all', 'src/missing.ts'])
+    const r = await zenThreadLinks(target(), ['src/app.ts:12', '/w/ada/README.md', '/etc/hosts', 'not a path at all', 'src/missing.ts'])
     expect(r).toEqual({
       links: [
         { input: 'src/app.ts:12', linkable: true, kind: 'file', rel: 'src/app.ts' },
-        { input: '/w/scout/README.md', linkable: true, kind: 'file', rel: 'README.md' },
+        { input: '/w/ada/README.md', linkable: true, kind: 'file', rel: 'README.md' },
         { input: '/etc/hosts', linkable: false },
         { input: 'not a path at all', linkable: false },
         { input: 'src/missing.ts', linkable: false },
@@ -235,8 +235,8 @@ describe('thread.links', () => {
     // never asked about.
     expect(h.calls).toHaveLength(1)
     expect(h.calls[0].data).toEqual({
-      workspace: 'scout/chat',
-      paths: ['src/app.ts', '/w/scout/README.md', '/etc/hosts', 'src/missing.ts'],
+      workspace: 'ada/chat',
+      paths: ['src/app.ts', '/w/ada/README.md', '/etc/hosts', 'src/missing.ts'],
     })
   })
 
@@ -275,24 +275,24 @@ describe('thread.pickFiles and posts with attachments', () => {
   it('this computer: a file in the workspace stays put; others are copied into .k2/downloads; all workspace-relative', async () => {
     resolveLinks()
     const local = target(scope(ALL, { isRemote: false, hostKey: 'local' }))
-    const r = await zenThreadPickFiles(local, pickers(['/w/scout/notes/plan.md', '/Users/me/shot.png']))
+    const r = await zenThreadPickFiles(local, pickers(['/w/ada/notes/plan.md', '/Users/me/shot.png']))
     expect(r).toEqual({
       files: [
         { relPath: 'notes/plan.md', name: 'plan.md' },
         { relPath: '.k2/downloads/shot.png', name: 'shot.png' },
       ],
     })
-    expect(h.drops).toEqual([{ paths: ['/Users/me/shot.png'], workspacePath: '/w/scout' }])
+    expect(h.drops).toEqual([{ paths: ['/Users/me/shot.png'], workspacePath: '/w/ada' }])
   })
 
   it('another server or the browser: everything is uploaded first', async () => {
     resolveLinks()
-    const r = await zenThreadPickFiles(target(), pickers(['/w/scout/in.txt']))
+    const r = await zenThreadPickFiles(target(), pickers(['/w/ada/in.txt']))
     expect(r.files).toEqual([{ relPath: '.k2/downloads/in.txt', name: 'in.txt' }])
     const file = new File(['hi'], 'hello.txt', { type: 'text/plain' })
     const b = await zenThreadPickFiles(target(), pickers(null, [file], true))
     expect(b.files).toEqual([{ relPath: '.k2/downloads/hello.txt', name: 'hello.txt', size: 2, mime: 'text/plain' }])
-    expect(h.browserDrops).toEqual([{ names: ['hello.txt'], workspacePath: '/w/scout' }])
+    expect(h.browserDrops).toEqual([{ names: ['hello.txt'], workspacePath: '/w/ada' }])
   })
 
   it('needs thread-attachments-v1', async () => {
@@ -306,7 +306,7 @@ describe('thread.pickFiles and posts with attachments', () => {
     expect(h.calls.at(-1)).toEqual({
       method: 'POST',
       route: 'thread/post',
-      data: { addr: 'scout/chat', text: '', via: 'compose', attachments: [{ path: 'a.png' }, { path: 'src/x.ts', line: 3, lineEnd: 9 }] },
+      data: { addr: 'ada/chat', text: '', via: 'compose', attachments: [{ path: 'a.png' }, { path: 'src/x.ts', line: 3, lineEnd: 9 }] },
     })
     for (const bad of [
       'a.png',
@@ -336,8 +336,8 @@ describe('thread.download (catalog v50): K2 saves the original, quarantined', ()
     expect(seen).toEqual([{ name: 'take 3.m4a', size: 120 * 1024 * 1024, mime: 'audio/mp4' }])
     // The probe, then the save's own reads: every one is mode=download on the Thread door.
     expect(h.calls.map((c) => [c.route, c.data.mode, c.data.addr, c.data.id, c.data.n])).toEqual([
-      ['thread/attachment', 'download', 'scout/chat', 'm4', 2],
-      ['thread/attachment', 'download', 'scout/chat', 'm4', 2],
+      ['thread/attachment', 'download', 'ada/chat', 'm4', 2],
+      ['thread/attachment', 'download', 'ada/chat', 'm4', 2],
     ])
     expect(h.saves).toHaveLength(1)
     expect(h.saves[0].label).toBe('take 3.m4a')

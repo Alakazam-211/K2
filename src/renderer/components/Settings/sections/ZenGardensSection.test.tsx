@@ -1309,7 +1309,7 @@ describe('Settings → Gardens: the Garden catalog, and no widget permissions (p
           name: 'Work',
           rows: [
             { address: 'alice::local', workspaceId: 'w1', label: 'Alice' },
-            { address: 'julie::scout.k2.dev', workspaceId: 'w2', label: 'Julie' },
+            { address: 'julie::box.example.k2.dev', workspaceId: 'w2', label: 'Julie' },
           ],
         },
       ],

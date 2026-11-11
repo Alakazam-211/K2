@@ -18,7 +18,7 @@ describe('terminal-id builders', () => {
     // to the pre-0.37.5 prefix shape MUST flip this assertion to
     // "FAIL".
     expect(agentChatId('p_abc', 'manager')).toBe('agent-chat:p_abc')
-    expect(agentChatId('p_abc', 'scout')).toBe('agent-chat:p_abc')
+    expect(agentChatId('p_abc', 'ada')).toBe('agent-chat:p_abc')
   })
 
   it('builds worktree id', () => {

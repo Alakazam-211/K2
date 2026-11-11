@@ -47,7 +47,7 @@ const ITEM: FeedbackShow = {
   projectId: 'p1',
   sessionId: null,
   sessionKind: null,
-  agentName: 'scout',
+  agentName: 'ada',
   kind: 'question',
   title: 'Which DB?',
   body: 'Pick one.',
@@ -64,7 +64,7 @@ const ITEM: FeedbackShow = {
   projectPath: '/ws',
   canonicalSessionId: null,
   comments: [
-    { author: 'scout', body: 'Which DB?', at: NOW - 120 },
+    { author: 'ada', body: 'Which DB?', at: NOW - 120 },
     { author: 'owner', body: 'A long answer that wraps over many lines.', at: NOW - 60 },
   ],
 }
@@ -274,7 +274,7 @@ describe('a ticket’s discussion on new messages', () => {
     scrollTo(scroller, box, 200)
     box.writes = []
     box.content = 1100
-    rerender(withComment(ITEM, 'scout', 'Noted.'))
+    rerender(withComment(ITEM, 'ada', 'Noted.'))
     await frames()
     expect(box.writes).toEqual([])
     expect(box.top).toBe(200)
@@ -283,7 +283,7 @@ describe('a ticket’s discussion on new messages', () => {
   it('an arrival while at the bottom follows it', async () => {
     const { box, rerender } = await openTicket()
     box.content = 1100
-    rerender(withComment(ITEM, 'scout', 'Noted.'))
+    rerender(withComment(ITEM, 'ada', 'Noted.'))
     await frames()
     expect(box.top).toBe(800)
   })

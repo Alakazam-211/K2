@@ -444,7 +444,7 @@ async function pickAttach(plus: Element | null): Promise<void> {
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const B = 'akzm.k2.dev'
-const C = 'scout.k2.dev'
+const C = 'box.example.k2.dev'
 const D = 'old.k2.dev'
 /** The window server's rollup for cortana's workspace (S5). */
 function windowWorkspace(display: ActivityDisplay): void {
@@ -598,7 +598,7 @@ beforeEach(() => {
   useRemoteRoomsPreviewStore.getState().setEnabled(false)
   useConnectHostStore.setState({
     activeHost: 'local',
-    hosts: [host('b', 'akzm', B), host('c', 'scout', C), host('d', 'old box', D)],
+    hosts: [host('b', 'akzm', B), host('c', 'ledger', C), host('d', 'old box', D)],
     connectionStatus: 'connected',
   })
   useProjectsStore.setState({
@@ -2142,7 +2142,7 @@ describe('Conversation widget', () => {
     await mountZen()
     await select(ROWS.julie.address)
     const note = document.querySelector('[data-zen-conversation-note]')
-    expect(note?.textContent).toContain('Your login on scout can’t message agents.')
+    expect(note?.textContent).toContain('Your login on ledger can’t message agents.')
     expect(composeInput().disabled).toBe(true)
     expect(h.calls.some((c) => c.hostKey === C)).toBe(false)
   })

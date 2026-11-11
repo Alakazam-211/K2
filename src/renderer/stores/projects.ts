@@ -59,7 +59,7 @@ registerProjectDefaultAgentGetter(
     useProjectsStore.getState().projects.find((p) => p.id === projectId)?.defaultAgent ?? undefined,
 )
 
-// Host-session tab routing (Scout sales pilot): adoptApiSandboxSession parks
+// Host-session tab routing (Ledger sales pilot): adoptApiSandboxSession parks
 // api- cells under the project matching SessionAdded.workspace_path, not the
 // focused strip. Same cycle-avoidance pattern as activeProjectId.
 registerProjectsPathIndex(() =>

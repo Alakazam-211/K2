@@ -86,7 +86,7 @@ function makeRow(over: Partial<FeedbackListRow>): FeedbackListRow {
     projectId: 'p1',
     sessionId: null,
     sessionKind: null,
-    agentName: 'scout',
+    agentName: 'ada',
     kind: 'question',
     title: 'Which DB?',
     body: 'Pick one.',
@@ -112,7 +112,7 @@ function show(r: FeedbackListRow): FeedbackShow {
     workspace: r.projectName,
     projectPath: r.projectPath,
     canonicalSessionId: null,
-    comments: [{ author: 'scout', body: r.title, at: r.createdAt }],
+    comments: [{ author: 'ada', body: r.title, at: r.createdAt }],
   }
 }
 
@@ -355,7 +355,7 @@ describe('ticket detail', () => {
     await screen.findByTestId('brief-frame')
     const header = screen.getByTestId('ticket-detail-header')
     expect(screen.getByTestId('ticket-detail-title').textContent).toBe('Which DB?')
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from scout → assigned to Owner/)
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from ada → assigned to Owner/)
     for (const t of ['ticket-expand', 'ticket-open-window', 'ticket-chat-toggle', 'ticket-status', 'ticket-reassign']) {
       expect(header.contains(screen.getByTestId(t)), t).toBe(true)
     }
@@ -370,17 +370,17 @@ describe('ticket detail', () => {
   })
 
   it('byline names the agent once: an Unassigned ticket from a workspace named like its agent shows no second name', async () => {
-    detail(makeRow({ agentName: 'scout', projectName: 'Scout', assignees: [] }))
+    detail(makeRow({ agentName: 'ada', projectName: 'Ada', assignees: [] }))
     await screen.findByTestId('ticket-rail-thread')
     const byline = screen.getByTestId('ticket-detail-byline')
-    expect(byline.textContent).toMatch(/^from scout → unassigned · asked /)
-    expect(byline.textContent!.match(/scout/gi)).toHaveLength(1)
+    expect(byline.textContent).toMatch(/^from ada → unassigned · asked /)
+    expect(byline.textContent!.match(/ada/gi)).toHaveLength(1)
   })
 
   it('byline keeps the workspace only when it differs from the agent name', async () => {
-    detail(makeRow({ agentName: 'scout', projectName: 'Alpha', assignees: [] }))
+    detail(makeRow({ agentName: 'ada', projectName: 'Alpha', assignees: [] }))
     await screen.findByTestId('ticket-rail-thread')
-    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from scout → unassigned · Alpha · asked /)
+    expect(screen.getByTestId('ticket-detail-byline').textContent).toMatch(/^from ada → unassigned · Alpha · asked /)
   })
 
   it('a ticket with no brief has no comments/history section either; its comments are only in the rail Thread', async () => {

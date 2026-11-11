@@ -877,7 +877,7 @@ describe('roster slug matcher (D9 / D20)', () => {
   it('hits handle via alias/slug (sales team → sales-team)', async () => {
     const { matchRosterAgents, rosterAgentMatches, slugifyAddressToken } = await import('./federation')
     expect(slugifyAddressToken('Sales Team')).toBe('sales-team')
-    expect(slugifyAddressToken('scout_v3')).toBe('scout-v3')
+    expect(slugifyAddressToken('ada_v3')).toBe('ada-v3')
     expect(slugifyAddressToken('sales/1')).toBeNull()
 
     const sales = {

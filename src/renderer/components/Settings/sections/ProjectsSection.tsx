@@ -1989,7 +1989,7 @@ function ProjectDetail({
 
 // ── Host-session concurrent cap (workspace API tab) ─────────────────
 //
-// Per-workspace ceiling for concurrent live /v1 host-sessions (Scout etc.).
+// Per-workspace ceiling for concurrent live /v1 host-sessions (Ledger etc.).
 // Default 15 (daemon env K2_SANDBOX_WORKSPACE_CELL_CAP); max 512.
 // CLI: `k2 workspace api-host-session-cap get|set <ws>`.
 

@@ -209,8 +209,8 @@ describe('connection-gate-probe registration', () => {
 describe('R1 remote events drop debounce', () => {
   const remoteHost = {
     id: 'h1',
-    label: 'scout',
-    hostname: 'scout.example',
+    label: 'ledger',
+    hostname: 'box.example.k2.dev',
     port: 443,
     secure: true,
     username: 'u',

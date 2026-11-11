@@ -88,13 +88,13 @@ describe('unlinked helpers (TB18 + Appa A1)', () => {
       unlinkedDetails({
         id: '3f2a9c1e-7b4d-4e0a-9d6f-0123456789ab',
         title: 'Approve the vendor contract',
-        agentName: 'scout',
+        agentName: 'ada',
         createdAt: 1_759_241_100,
       }),
     ).toEqual({
       title: 'Approve the vendor contract',
       filed: '2025-09-30 14:05 UTC',
-      agent: 'scout',
+      agent: 'ada',
       shortId: '3f2a9c1e',
     })
     expect(formatFiledDate(0)).toBe('1970-01-01 00:00 UTC')
@@ -102,9 +102,9 @@ describe('unlinked helpers (TB18 + Appa A1)', () => {
 
   it('search tolerates a null workspace name', () => {
     const rows: Pick<FeedbackListRow, 'id' | 'title' | 'agentName' | 'projectName' | 'kind' | 'status'>[] = [
-      { id: 'fb-1', title: 'Approve PR', agentName: 'scout', projectName: null, kind: 'approval', status: 'waiting' },
+      { id: 'fb-1', title: 'Approve PR', agentName: 'ada', projectName: null, kind: 'approval', status: 'waiting' },
     ]
-    expect(filterBySearch(rows, 'scout approve').map((r) => r.id)).toEqual(['fb-1'])
+    expect(filterBySearch(rows, 'ada approve').map((r) => r.id)).toEqual(['fb-1'])
     expect(filterBySearch(rows, 'null')).toEqual([])
   })
 })

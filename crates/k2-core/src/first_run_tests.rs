@@ -58,15 +58,7 @@ fn row<'a>(rows: &'a [Row], id: &str) -> &'a Row {
 }
 
 fn all_done() -> Facts {
-    Facts {
-        llm_signed_in: true,
-        has_agent: true,
-        tunnel_done: true,
-        airgap: false,
-        owner_linked: true,
-        phones: 1,
-        k2_cli: Some(true),
-    }
+    Facts { llm_signed_in: true, has_agent: true, tunnel_done: true, airgap: false, owner_linked: true, phones: 1 }
 }
 
 // ── rows: done and todo ──────────────────────────────────────────────
@@ -99,7 +91,7 @@ fn each_row_is_todo_until_its_state_is_there_then_done() {
 
 #[test]
 fn opens_targets_are_the_contracts() {
-    let rs = rows(Viewer::OwnerToken, &Facts { tunnel_done: true, k2_cli: Some(false), ..Facts::default() }, &none());
+    let rs = rows(Viewer::OwnerToken, &Facts { tunnel_done: true, ..Facts::default() }, &none());
     let opens: Vec<(&str, &str)> = rs.iter().map(|r| (r.id, r.opens)).collect();
     assert_eq!(
         opens,
@@ -109,7 +101,6 @@ fn opens_targets_are_the_contracts() {
             ("tunnel", "tunnel"),
             ("phone", "phone"),
             ("own_sign_in", "owner_account_prompt"),
-            ("k2_cli", "cli_settings"),
         ]
     );
     assert!(rs.iter().all(|r| r.note.is_none()), "tunnel on: no notes {rs:?}");
@@ -143,74 +134,6 @@ fn the_phone_row_points_at_the_tunnel_first_when_the_caller_can_turn_it_on() {
     assert_eq!((row(&rs, "phone").opens, row(&rs, "phone").note), ("phone", None));
 }
 
-// ── the k2 command (k2_cli) ──────────────────────────────────────────
-
-#[test]
-fn the_k2_cli_row_is_done_when_a_new_terminal_finds_k2_and_todo_when_not() {
-    let rs = rows(Viewer::OwnerToken, &Facts { k2_cli: Some(true), ..Facts::default() }, &none());
-    assert_eq!(rs.last(), Some(&Row { id: "k2_cli", state: State::Done, opens: "cli_settings", note: None }), "last: {rs:?}");
-    let rs = rows(Viewer::OwnerToken, &Facts { k2_cli: Some(false), ..Facts::default() }, &none());
-    assert_eq!(rs.last(), Some(&Row { id: "k2_cli", state: State::Todo, opens: "cli_settings", note: None }), "last: {rs:?}");
-    let skipped: BTreeSet<String> = ["k2_cli".to_string()].into();
-    let rs = rows(Viewer::OwnerToken, &Facts { k2_cli: Some(false), ..Facts::default() }, &skipped);
-    assert_eq!(row(&rs, "k2_cli").state, State::Skipped);
-    // The owner linked a login: own_sign_in goes, k2_cli is still last.
-    let rs = rows(Viewer::OwnerToken, &Facts { owner_linked: true, k2_cli: Some(false), ..Facts::default() }, &none());
-    assert_eq!(ids(&rs), vec!["llm_sign_in", "first_agent", "tunnel", "phone", "k2_cli"]);
-}
-
-#[test]
-fn the_k2_cli_row_is_hidden_until_the_daemon_has_checked() {
-    let rs = rows(Viewer::OwnerToken, &Facts { k2_cli: None, ..Facts::default() }, &none());
-    assert!(!ids(&rs).contains(&"k2_cli"), "{rs:?}");
-}
-
-#[test]
-fn the_k2_cli_row_is_hidden_from_every_login() {
-    // A login is a person on another machine (or a phone): this machine's
-    // terminal is not their business, whatever the role or the answer.
-    for role in [Role::VoiceChat, Role::Member, Role::Admin, Role::Owner] {
-        for found in [Some(true), Some(false)] {
-            let rs = rows(Viewer::Login(role), &Facts { k2_cli: found, ..Facts::default() }, &none());
-            assert!(!ids(&rs).contains(&"k2_cli"), "{role:?} {found:?}: {rs:?}");
-        }
-    }
-    let conn = db();
-    let p = people();
-    let f = Facts { k2_cli: Some(false), ..Facts::default() };
-    let e = apply_on(&conn, &p, "z3thon", Viewer::Login(Role::Admin), &f, true, &Action::Skip("k2_cli".into()), 1)
-        .expect_err("a login can't skip it");
-    assert_eq!(e, Error::UnknownRow("k2_cli".to_string()));
-}
-
-#[test]
-fn an_owner_token_with_everything_but_the_k2_command_is_not_finished() {
-    let conn = db();
-    let p = people();
-    let f = Facts { k2_cli: Some(false), ..all_done() };
-    let s = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 1).expect("status");
-    assert!(!s.finished, "{s:?}");
-    // A linked login of the same person doesn't see the row: done for them.
-    let s = status_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, 2).expect("status");
-    assert!(s.finished && s.newly_finished, "{s:?}");
-}
-
-#[test]
-fn the_k2_cli_cache_claims_one_check_at_a_time_and_reports_changes() {
-    use std::time::Duration as D;
-    // The only test that touches the process-wide cache.
-    assert!(claim_k2_cli_check(D::from_secs(3600)), "nothing checked yet: due");
-    assert!(!claim_k2_cli_check(D::ZERO), "one check runs at a time");
-    assert!(set_k2_cli_found(Some(false)), "None → Some(false) is a change");
-    assert_eq!(k2_cli_found(), Some(false));
-    assert!(!claim_k2_cli_check(D::from_secs(3600)), "fresh: not due");
-    assert!(claim_k2_cli_check(D::ZERO), "stale: due");
-    assert!(!set_k2_cli_found(Some(false)), "the same answer is no change");
-    assert!(claim_k2_cli_check(D::ZERO));
-    assert!(set_k2_cli_found(Some(true)));
-    assert_eq!(k2_cli_found(), Some(true));
-}
-
 // ── role visibility ──────────────────────────────────────────────────
 
 #[test]
@@ -240,7 +163,7 @@ fn air_gap_hides_the_tunnel_row_and_its_note() {
 
 #[test]
 fn v1_rows_are_in_contract_order() {
-    let all = rows(Viewer::OwnerToken, &Facts { k2_cli: Some(false), ..Facts::default() }, &none());
+    let all = rows(Viewer::OwnerToken, &Facts::default(), &none());
     let order: Vec<usize> = all.iter().map(|r| ROW_IDS.iter().position(|id| *id == r.id).expect("known id")).collect();
     let mut sorted = order.clone();
     sorted.sort();
@@ -340,6 +263,15 @@ fn two_logins_hide_and_skip_apart_while_the_owner_token_and_a_linked_login_share
     let s = apply_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, &Action::Show, 107).expect("show");
     assert!(!s.hidden);
     assert!(!status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 108).expect("owner").hidden);
+}
+
+#[test]
+fn the_dropped_k2_command_row_is_never_emitted_even_with_an_old_skip() {
+    // k2_cli was dropped 11-10. A skip stored before then is harmless.
+    let skipped: BTreeSet<String> = ["k2_cli".to_string()].into();
+    let rs = rows(Viewer::OwnerToken, &Facts::default(), &skipped);
+    assert_eq!(ids(&rs), V1_ROWS.to_vec());
+    assert!(!ROW_IDS.contains(&"k2_cli"));
 }
 
 #[test]

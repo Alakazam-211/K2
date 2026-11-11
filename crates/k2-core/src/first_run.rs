@@ -15,7 +15,6 @@
 //! | `tunnel` | subdomain set, token held (file or vault), enabled ("running" is not asked) | owner token, Owner login; never in air-gap mode |
 //! | `phone` | this person's login has a live paired phone (as `/cli/auth/devices` counts) | everyone |
 //! | `own_sign_in` | never (the row goes once the owner links a login) | the owner token, while no login is linked |
-//! | `k2_cli` | a new terminal on the daemon's machine finds a K2 `k2` (`cli_install::path_status_at`) | the owner token only; not while the daemon hasn't checked |
 //!
 //! **Person.** `People::person_key`: the owner token and the logins the
 //! owner linked are one person, `owner`, so they share hiding, skips and
@@ -36,16 +35,7 @@
 //! The evaluators are pure ([`rows`], [`status_on`]); [`load_facts`] reads
 //! the existing readers (`llm_accounts::list`, `projects_list_on`,
 //! `tunnel::config`, `connect_users::device_sessions`,
-//! `owner_account_prompt::view`, and the `k2` command check cached below).
-//!
-//! **The `k2` command (`k2_cli`).** Whether a new terminal finds `k2` is
-//! about the daemon's own machine, so only the owner token (the person at
-//! that machine) sees the row; a remote login's machine isn't this
-//! server's business. The check probes the login shell (a second or two),
-//! so it is never run on a read: the daemon keeps the last answer here
-//! ([`k2_cli_found`]), checks at boot after its heal, and re-checks in the
-//! background when the owner token reads a stale answer
-//! ([`claim_k2_cli_check`]), so a fix made in the app's Settings shows up.
+//! `owner_account_prompt::view`).
 
 use std::collections::BTreeSet;
 
@@ -55,11 +45,13 @@ use serde::Serialize;
 use crate::connect_users::Role;
 use crate::notify_prefs::{People, OWNER};
 
-/// Every row id, in the order shown. Only [`V1_ROWS`] are emitted.
-pub const ROW_IDS: &[&str] = &["llm_sign_in", "meet_k5", "first_agent", "tunnel", "phone", "own_sign_in", "k2_cli"];
+/// Every row id, in the order shown. v1 emits only [`V1_ROWS`].
+/// `k2_cli` ("Try the k2 command") was dropped 11-10; a skip of it stored
+/// before then changes nothing.
+pub const ROW_IDS: &[&str] = &["llm_sign_in", "meet_k5", "first_agent", "tunnel", "phone", "own_sign_in"];
 
 /// The rows this version computes.
-pub const V1_ROWS: &[&str] = &["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in", "k2_cli"];
+pub const V1_ROWS: &[&str] = &["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"];
 
 /// `phone.note` when the tunnel isn't on yet.
 pub const NOTE_NEEDS_TUNNEL: &str = "needs_tunnel";
@@ -85,7 +77,7 @@ pub struct Row {
     pub id: &'static str,
     pub state: State,
     /// What the row opens: `llm_sign_in` | `add_workspace` | `tunnel` |
-    /// `phone` | `owner_account_prompt` | `cli_settings`.
+    /// `phone` | `owner_account_prompt`.
     pub opens: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<&'static str>,
@@ -138,9 +130,6 @@ pub struct Facts {
     pub owner_linked: bool,
     /// Live paired phones for this person.
     pub phones: usize,
-    /// A new terminal on the daemon's machine finds a K2 `k2`; `None`
-    /// while the daemon hasn't checked (or can't, off unix): no row then.
-    pub k2_cli: Option<bool>,
 }
 
 /// A person's stored record.
@@ -242,12 +231,6 @@ pub fn rows(viewer: Viewer, facts: &Facts, skipped: &BTreeSet<String>) -> Vec<Ro
     out.push(Row { id: "phone", state: phone_state, opens, note });
     if viewer == Viewer::OwnerToken && !facts.owner_linked {
         out.push(Row { id: "own_sign_in", state: state("own_sign_in", false), opens: "owner_account_prompt", note: None });
-    }
-    // The daemon's own machine: the owner token is the person at it.
-    if viewer == Viewer::OwnerToken {
-        if let Some(found) = facts.k2_cli {
-            out.push(Row { id: "k2_cli", state: state("k2_cli", found), opens: "cli_settings", note: None });
-        }
     }
     out
 }
@@ -400,75 +383,7 @@ pub fn load_facts(conn: &Connection, people: &People, settings: &crate::app_sett
         airgap: crate::airgap::enabled(),
         owner_linked: prompt.reason == crate::owner_account_prompt::Reason::Linked,
         phones: phones_for(people, person)?,
-        k2_cli: k2_cli_found(),
     })
-}
-
-// ── The k2 command on the daemon's machine (`k2_cli`) ──────────────────
-
-/// How old the cached answer may be before the owner token's read asks
-/// for a background re-check.
-pub const K2_CLI_RECHECK_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
-
-struct K2CliCheck {
-    found: Option<bool>,
-    checked_at: Option<std::time::Instant>,
-    running: bool,
-}
-
-static K2_CLI: std::sync::Mutex<K2CliCheck> =
-    std::sync::Mutex::new(K2CliCheck { found: None, checked_at: None, running: false });
-
-fn k2_cli_check() -> std::sync::MutexGuard<'static, K2CliCheck> {
-    K2_CLI.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// The last answer: a new terminal finds `k2` (`None`: not checked yet).
-pub fn k2_cli_found() -> Option<bool> {
-    k2_cli_check().found
-}
-
-/// Store an answer and release the check. True when it changed (the
-/// caller sends `first_run_changed`).
-pub fn set_k2_cli_found(found: Option<bool>) -> bool {
-    let mut c = k2_cli_check();
-    c.running = false;
-    c.checked_at = Some(std::time::Instant::now());
-    let changed = c.found != found;
-    c.found = found;
-    changed
-}
-
-/// Claim the one background re-check when the answer is missing or older
-/// than `after` and no check is running. True: the caller runs
-/// [`check_k2_cli`] (off the request path) and hands it to
-/// [`set_k2_cli_found`].
-pub fn claim_k2_cli_check(after: std::time::Duration) -> bool {
-    let mut c = k2_cli_check();
-    if c.running || c.checked_at.is_some_and(|t| t.elapsed() < after) {
-        return false;
-    }
-    c.running = true;
-    true
-}
-
-/// Ask the system now, the way Settings → General → k2 command does
-/// (`cli_install::path_status_at` with the login shell's PATH). Probes the
-/// login shell: never call it on a request thread. `None` without a home.
-#[cfg(unix)]
-pub fn check_k2_cli() -> Option<bool> {
-    use crate::cli_install as ci;
-    let home = crate::paths::home_dir()?;
-    let shell = ci::user_shell();
-    let login = crate::login_shell_path(&shell);
-    let zdot = ci::zdotdir();
-    Some(ci::path_status_at(&home, &shell, zdot.as_deref(), login.as_deref()).new_terminals_find_it)
-}
-
-/// Off unix the daemon has no check: the row stays hidden.
-#[cfg(not(unix))]
-pub fn check_k2_cli() -> Option<bool> {
-    None
 }
 
 #[cfg(test)]

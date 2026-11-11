@@ -50,7 +50,7 @@ import {
   type NativeVoiceEngine,
 } from '@/lib/voice/native-voice-engine'
 import type { VoiceDevices } from '@/lib/voice/voice-engine'
-import type { RecordingPerms } from '@/lib/voice/recording-controls'
+import type { RecordingButtons, RecordingPerms } from '@/lib/voice/recording-controls'
 
 /** §4.3: a 30 s check while the popover is open or a call runs. */
 export const VOICE_ROOMS_POLL_MS = 30_000
@@ -111,6 +111,9 @@ export interface VoiceCall {
   recordingNotice: RecordingNotice | null
   /** The person's own Sew permissions in the room (Record and Stop), once read. */
   recordingPerms: RecordingPerms | null
+  /** Plugin 0.6.1's `recording_controls` (Sew 0.9.2): it decides Record and
+   *  Stop. Null with plugin 0.6.0 (the derived rule stands in). */
+  recordingControls: RecordingButtons | null
 }
 
 /** A notice on screen: the recording it is for, its slots, and where it was
@@ -541,7 +544,11 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     if (!room || !c || c.roomId === room) return
     const known = roomOnList(c.hostKey, room)
     if (known) {
-      if (known.id !== c.roomId) store.setState({ call: { ...c, roomId: known.id, roomName: known.name } })
+      if (known.id !== c.roomId) {
+        // A moderator's move: the plugin forgot the old room's rights.
+        store.setState({ call: { ...c, roomId: known.id, roomName: known.name, recordingPerms: null, recordingControls: null } })
+        void readRecordingPerms()
+      }
       return
     }
     // Not on the list we hold: the next read names it.
@@ -604,6 +611,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         recording: null,
         recordingNotice: null,
         recordingPerms: null,
+        recordingControls: null,
       },
     })
     drawNativeParticipants()
@@ -790,6 +798,10 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   const nativeEvents: NativeEvents = {
     onState: onNativeState,
     onRecording: onNativeRecording,
+    onRecordingControls: (controls) => {
+      const c = store.getState().call
+      if (c) store.setState({ call: { ...c, recordingControls: controls } })
+    },
     onParticipants: onNativeParticipants,
     onSpeaking: onNativeSpeaking,
     onDevices: (d: NativeDevices) => {
@@ -914,6 +926,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         recording: null,
         recordingNotice: null,
         recordingPerms: null,
+        recordingControls: null,
       },
     })
     const target = deps.targetFor?.(hostKey) ?? null
@@ -1003,6 +1016,7 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
         recording: null,
         recordingNotice: null,
         recordingPerms: null,
+        recordingControls: null,
       },
     })
     const scope = deps.scopeFor(hostKey)

@@ -32,6 +32,7 @@ const call = (over: Partial<VoiceCall> = {}): VoiceCall => ({
     prompt: { noticeVersion: 3141, startedByName: 'Alice', audioKeepDays: 30, required: false, appReaders: [], agentReaders: false, declineMode: 'not_join' },
   },
   recordingPerms: null,
+  recordingControls: null,
   ...over,
 })
 

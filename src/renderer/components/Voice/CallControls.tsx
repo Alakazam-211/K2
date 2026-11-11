@@ -266,7 +266,13 @@ export default function CallControls({ variant, call, actions, video }: CallCont
   const locked = call.speakDenied ? micBlockedText('speak_denied', call.roomName) : call.serverMuted ? micBlockedText('server_muted', call.roomName) : null
   const micOff = call.muted || call.micDenied || call.deafened || locked !== null
   const size = variant !== 'topbar' ? 15 : undefined
-  const rec = recordingButtons({ perms: call.recordingPerms, recording: call.recording, people: peopleOf(call) })
+  const rec = recordingButtons({
+    perms: call.recordingPerms,
+    recording: call.recording,
+    people: peopleOf(call),
+    inCall: call.phase === 'connected' || call.phase === 'reconnecting',
+    controls: call.recordingControls,
+  })
   return (
     <div
       data-testid={`call-${variant}-controls`}

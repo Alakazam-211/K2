@@ -186,7 +186,8 @@ describe('events', () => {
     const e = new NativeVoiceEngine(f.bridge)
     const ev = events()
     await e.start(ev)
-    expect([...f.listeners.keys()].sort()).toEqual(contract.events.map((n: string) => `${contract.eventPrefix}${n}`).sort())
+    // Plus plugin 0.6.1's recording_controls (0.6.0 never sends it).
+    expect([...f.listeners.keys()].sort()).toEqual([...contract.events, 'recording_controls'].map((n: string) => `${contract.eventPrefix}${n}`).sort())
     f.fire('sew-voice://state', contract.states.connected)
     f.fire('sew-voice://participants', contract.participants)
     f.fire('sew-voice://speaking', contract.speaking)

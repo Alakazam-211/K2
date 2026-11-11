@@ -33,29 +33,41 @@ describe('Record and Stop, derived until Sew 0.9.2 sends can_record / can_stop',
     expect(recordingButtons({ perms: null, recording: null, people: [me] })).toEqual({ canRecord: false, canStop: false })
   })
 
-  it('Stop: the starter, a DM, or MANAGE_CHANNELS', () => {
-    const p = { recordCalls: true, manageChannels: false }
+  it('Stop: the starter, a DM, RECORD_CALLS or MANAGE_CHANNELS', () => {
+    const p = { recordCalls: false, manageChannels: false }
     expect(recordingButtons({ perms: p, recording: rec({ startedBy: '1' }), people: [me, other] }).canStop).toBe(true)
     expect(recordingButtons({ perms: p, recording: rec(), people: [me, other] }).canStop).toBe(false)
     expect(recordingButtons({ perms: p, recording: rec(), people: [me, other], isDm: true }).canStop).toBe(true)
+    expect(recordingButtons({ perms: { ...p, recordCalls: true }, recording: rec(), people: [me, other] }).canStop).toBe(true)
     expect(recordingButtons({ perms: { ...p, manageChannels: true }, recording: rec(), people: [me, other] }).canStop).toBe(true)
   })
 
-  it('Stop is hidden while a required room has two or more people', () => {
+  it('Stop is hidden while a trigger:required recording has two or more people', () => {
     const p = { recordCalls: true, manageChannels: true }
-    expect(recordingButtons({ perms: p, recording: rec({ required: true }), people: [me, other] }).canStop).toBe(false)
-    expect(recordingButtons({ perms: p, recording: rec({ required: true }), people: [me] }).canStop).toBe(true)
+    expect(recordingButtons({ perms: p, recording: rec({ trigger: 'required', required: true }), people: [me, other] }).canStop).toBe(false)
+    expect(recordingButtons({ perms: p, recording: rec({ trigger: 'required', required: true }), people: [me] }).canStop).toBe(true)
   })
 
-  it("Sew 0.9.2's can_record / can_stop decide when the event has them; the derived rule is the fallback", () => {
+  it('Record: in the call, recording.enabled, not an agent, not capped', () => {
+    const rights = { room: 'room-1', my_perms: '8388608', dm: false, record_capped: false, agent: false }
+    const p = { recordCalls: true, manageChannels: false, rights }
+    expect(recordingButtons({ perms: p, recording: null, people: [me], inCall: true }).canRecord).toBe(true)
+    expect(recordingButtons({ perms: p, recording: null, people: [me], inCall: false }).canRecord).toBe(false)
+    expect(recordingButtons({ perms: { ...p, rights: { ...rights, recording_enabled: false } }, recording: null, people: [me] }).canRecord).toBe(false)
+    expect(recordingButtons({ perms: { ...p, rights: { ...rights, record_capped: true } }, recording: null, people: [me] }).canRecord).toBe(false)
+    expect(recordingButtons({ perms: { ...p, rights: { ...rights, agent: true } }, recording: null, people: [me] }).canRecord).toBe(false)
+    expect(recordingButtons({ perms: { ...p, rights: { ...rights, dm: true, recording_dm_enabled: false } }, recording: null, people: [me] }).canRecord).toBe(false)
+  })
+
+  it("the plugin's recording_controls (Sew 0.9.2, plugin 0.6.1) decide when K2 has them; the derived rule is 0.6.0's fallback", () => {
     const p = { recordCalls: false, manageChannels: false }
-    expect(recordingButtons({ perms: p, recording: rec({ canRecord: true, canStop: true }), people: [me, other] })).toEqual({ canRecord: true, canStop: true })
-    expect(recordingButtons({ perms: { recordCalls: true, manageChannels: true }, recording: rec({ startedBy: '1', canRecord: false, canStop: false }), people: [me] })).toEqual({
+    expect(recordingButtons({ perms: p, recording: null, people: [me, other], controls: { canRecord: true, canStop: false } })).toEqual({ canRecord: true, canStop: false })
+    expect(recordingButtons({ perms: { recordCalls: true, manageChannels: true }, recording: rec({ startedBy: '1' }), people: [me], controls: { canRecord: false, canStop: false } })).toEqual({
       canRecord: false,
       canStop: false,
     })
-    // Absent: derived from the perms (here: not the starter, no MANAGE_CHANNELS).
-    expect(recordingButtons({ perms: p, recording: rec(), people: [me, other] })).toEqual({ canRecord: false, canStop: false })
+    // None from the plugin: derived (here: not the starter, no RECORD_CALLS or MANAGE_CHANNELS).
+    expect(recordingButtons({ perms: p, recording: rec(), people: [me, other], controls: null })).toEqual({ canRecord: false, canStop: false })
   })
 
   it('a Voice & Chat only login never records or stops', () => {

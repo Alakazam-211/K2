@@ -131,6 +131,18 @@ export interface NativeEvents {
   onDevices(devices: NativeDevices): void
   onError(code: string, detail: unknown): void
   onRecording(recording: NativeRecording | null): void
+  /** Plugin 0.6.1 (Sew 0.9.2): may this person press Record / Stop now.
+   *  Never sent by 0.6.0. */
+  onRecordingControls?(controls: { canRecord: boolean; canStop: boolean }): void
+}
+
+/** Plugin 0.6.1's event (not in 0.6.0's list, so not in the contract file yet). */
+export const RECORDING_CONTROLS_EVENT = 'recording_controls'
+
+export function parseRecordingControls(v: unknown): { canRecord: boolean; canStop: boolean } {
+  const r = record(v)
+  if (!r || typeof r.can_record !== 'boolean' || typeof r.can_stop !== 'boolean') throw badShape('recording_controls', v)
+  return { canRecord: r.can_record, canStop: r.can_stop }
 }
 
 /** A command's rejection: the plugin's `{code, detail}`. */
@@ -304,6 +316,7 @@ export class NativeVoiceEngine {
         events.onError(e.code, e.detail)
       }),
       on('recording', (p) => events.onRecording(parseRecording(p))),
+      on(RECORDING_CONTROLS_EVENT, (p) => events.onRecordingControls?.(parseRecordingControls(p))),
     ])
   }
 

@@ -13,7 +13,7 @@
 //!   ─────────────────────────────────────
 //!   Server Status: Running  (up 2h 14m)
 //!   ─────────────────────────────────────
-//!   Quit K2                            (honors keep-daemon-on-quit)
+//!   Quit K2                    (quits the app; the server keeps running)
 //! ```
 //!
 //! Updates every 10s via `set_text` on the status row — replacing the
@@ -229,9 +229,10 @@ fn build_menu(app: &AppHandle<Wry>) -> Result<Menu<Wry>, String> {
     .map_err(|e| format!("status: {e}"))?;
     menu.append(&status).map_err(|e| format!("status: {e}"))?;
 
-    // 2. Separator + Quit. Quit honors the keep-daemon-on-quit
-    // setting via the normal ExitRequested handler in lib.rs — no
-    // tray-local override.
+    // 2. Separator + Quit. Quit goes through the normal ExitRequested
+    // handler in lib.rs, which quits the app and never stops the server
+    // (only the close button with keep-daemon-on-quit off does, on macOS:
+    // see close_button.rs). No tray-local override.
     let sep1 = PredefinedMenuItem::separator(app).map_err(|e| format!("sep1: {e}"))?;
     menu.append(&sep1).map_err(|e| format!("sep1: {e}"))?;
 
@@ -286,9 +287,10 @@ fn handle_menu_event(app: &AppHandle<Wry>, id: &str) {
     match id {
         ids::SHOW => show_main_window(app),
         ids::QUIT => {
-            // Honors the "keep daemon running when K2SO quits" setting
-            // via the RunEvent::ExitRequested handler in lib.rs. No
-            // tray-local override — one quit path, one policy.
+            // Same path as Cmd+Q: RunEvent::ExitRequested in lib.rs quits
+            // the app and leaves the server running, whatever the
+            // keep-daemon-on-quit setting says (that setting is the close
+            // button's; see close_button.rs). One quit path, one policy.
             // A board file's unsaved edit asks first, in the page (never set while the feature is dark).
             if crate::commands::settings::BOARD_FILE_UNSAVED.load(std::sync::atomic::Ordering::Relaxed) {
                 let _ = app.emit("board-file:quit-requested", ());

@@ -17,7 +17,7 @@
 // `k5_sheet`), mounted once in App. The window's server only.
 //
 // Look: the Settings dialogs' frame (Admin Access, the LLM sign-in sheet):
-// one width, its top edge in one place, the title and × pinned while the
+// one width, centred in the window, the title and × pinned while the
 // body scrolls, labelled fields with a hint or problem under them, the
 // footer's quiet answer before its main one. Each step is a form, so Enter
 // moves on (Next, then Create K5) and Esc, the × or a press outside cancel;
@@ -226,8 +226,7 @@ function K5Frame({
         aria-describedby={intro ? introId : undefined}
         aria-busy={busy || undefined}
         data-testid="k5-sheet"
-        placement="top"
-        className="w-[min(36rem,calc(100vw-2.5rem))] min-h-[min(22.25rem,calc(100vh-var(--dialog-top)-1rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
+        className="w-[min(36rem,calc(100vw-2.5rem))] min-h-[min(22.25rem,calc(100vh-2.5rem))] max-h-[calc(100vh-2.5rem)] flex flex-col"
       >
         <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
           {step ? (

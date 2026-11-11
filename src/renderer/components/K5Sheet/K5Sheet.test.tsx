@@ -246,6 +246,12 @@ describe('K5Sheet', () => {
     expect(screen.getByTestId('k5-intro').textContent).toBe(K5_MADE_ELSEWHERE.intro)
   })
 
+  it('opens centred in the window, as the Settings dialogs do', async () => {
+    await openSheet()
+    const frame = screen.getByTestId('k5-sheet').closest('[data-dialog-placement]')
+    expect(frame?.getAttribute('data-dialog-placement')).toBe('center')
+  })
+
   it('each step says which it is and what it is for, and names the dialog', async () => {
     await openSheet()
     expect(screen.getByTestId('k5-step').textContent).toBe('Step 1 of 2')

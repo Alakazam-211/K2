@@ -188,8 +188,28 @@ describe('parseFirstRunDoc', () => {
     })
     expect(doc.rows).toEqual([
       { id: 'llm_sign_in', state: 'todo', opens: null, note: null },
+      { id: 'k2_cli', state: 'todo', opens: null, note: null },
       { id: 'tunnel', state: 'todo', opens: 'tunnel', note: null },
     ])
+  })
+
+  it('knows the k2 command row and its cli_settings opener', () => {
+    const doc = parseFirstRunDoc({ enabled: true, rows: [{ id: 'k2_cli', state: 'done', opens: 'cli_settings' }] })
+    expect(doc.rows).toEqual([{ id: 'k2_cli', state: 'done', opens: 'cli_settings', note: null }])
+  })
+
+  it('draws the k2 command row only on the server\'s own machine', () => {
+    const doc = parseFirstRunDoc({
+      enabled: true,
+      rows: [
+        { id: 'phone', state: 'todo', opens: 'phone' },
+        { id: 'k2_cli', state: 'todo', opens: 'cli_settings' },
+      ],
+    })
+    expect(visibleRows(doc)?.map((r) => r.id)).toEqual(['phone', 'k2_cli'])
+    expect(visibleRows(doc, { thisComputer: false })?.map((r) => r.id)).toEqual(['phone'])
+    const only = { ...doc, rows: doc.rows.filter((r) => r.id === 'k2_cli') }
+    expect(visibleRows(only, { thisComputer: false })).toBeNull()
   })
 
   it('a malformed body is a switched-off checklist', () => {

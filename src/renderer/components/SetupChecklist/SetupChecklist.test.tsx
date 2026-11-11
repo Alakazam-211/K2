@@ -11,7 +11,10 @@ const h = vi.hoisted(() => ({
   daemonCliPost: vi.fn(),
   open: vi.fn((_opens: string | null) => true),
   handlers: new Map<string, Array<() => void>>(),
+  web: false,
 }))
+
+vi.mock('@/lib/is-web', () => ({ isWebClient: () => h.web }))
 
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
@@ -87,6 +90,7 @@ beforeEach(() => {
   h.daemonCliPost.mockReset()
   h.open.mockClear()
   h.handlers.clear()
+  h.web = false
   h.daemonCliGet.mockImplementation(async (route: string) => {
     if (route === 'first-run/status') return body()
     throw new Error(`unexpected GET ${route}`)
@@ -95,7 +99,32 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
+const K2_CLI_ROW = { id: 'k2_cli', state: 'todo', opens: 'cli_settings' }
+
 describe('SetupChecklist', () => {
+  it('the k2 command row says what to try, last, on this computer', async () => {
+    expect(SETUP_CHECKLIST_COPY.k2_cli).toEqual({
+      label: 'Try the k2 command',
+      line: 'Open a new Terminal window and type k2.',
+    })
+    h.daemonCliGet.mockResolvedValue(body({ rows: [...body().rows, K2_CLI_ROW] }))
+    render(<SetupChecklist />)
+    const el = await screen.findByTestId('setup-row-k2_cli')
+    expect(el.textContent).toContain('Try the k2 command')
+    expect(el.textContent).toContain('Open a new Terminal window and type k2.')
+    const ids = [...document.querySelectorAll('[data-setup-row]')].map((n) => n.getAttribute('data-setup-row'))
+    expect(ids.at(-1)).toBe('k2_cli')
+  })
+
+  it('the web client never draws the k2 command row', async () => {
+    h.web = true
+    h.daemonCliGet.mockResolvedValue(body({ rows: [...body().rows, K2_CLI_ROW] }))
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-row-llm_sign_in')
+    expect(screen.queryByTestId('setup-row-k2_cli')).toBeNull()
+    expect(screen.getByTestId('setup-left').textContent).toBe('4 left')
+  })
+
   it('draws each row with the contract copy and its state, in the daemon order', async () => {
     render(<SetupChecklist />)
     await screen.findByTestId('setup-row-llm_sign_in')
@@ -122,7 +151,9 @@ describe('SetupChecklist', () => {
     ['tunnel', 'tunnel'],
     ['phone', 'tunnel'],
     ['own_sign_in', 'owner_account_prompt'],
+    ['k2_cli', 'cli_settings'],
   ])('the %s row runs its opener (%s)', async (id, opens) => {
+    h.daemonCliGet.mockResolvedValue(body({ rows: [...body().rows, K2_CLI_ROW] }))
     render(<SetupChecklist />)
     fireEvent.click(await screen.findByTestId(`setup-row-${id}`))
     expect(h.open).toHaveBeenCalledWith(opens)
@@ -189,7 +220,7 @@ describe('SetupChecklist', () => {
         rows: [
           { id: 'meet_k5', state: 'todo', opens: 'k5_chat' },
           { id: 'tunnel', state: 'todo', opens: 'something_new' },
-          { id: 'k2_cli', state: 'todo', opens: 'general' },
+          { id: 'future_row', state: 'todo', opens: 'cli_settings' },
         ],
       }),
     )

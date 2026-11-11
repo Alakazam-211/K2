@@ -110,7 +110,7 @@ describe('Connected Servers layout', () => {
     // Each heading stays with its own column, and so do search and anchors.
     expect(column('servers').textContent).toContain('Servers')
     expect(column('servers').querySelector('[data-server-row="z3"]')).not.toBeNull()
-    expect(column('servers').querySelector('[data-settings-id="connections.search"]')).not.toBeNull()
+    expect(column('servers').querySelector('[data-settings-id="connections.add"]')).not.toBeNull()
     expect(column('servers').querySelector('[data-settings-id="connections.list"]')).not.toBeNull()
     expect(column('agents').textContent).toContain('Agents on other servers')
     expect(column('agents').querySelector('[data-settings-id="connections.federation-overview"]')).not.toBeNull()

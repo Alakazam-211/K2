@@ -5,10 +5,12 @@
 //
 // Two columns on a wide pane (Servers left, Agents on other servers right,
 // each scrolling on its own); one column on a narrow one, Servers first.
-// Each saved ConnectHost is a row: name, then health (from its public
-// /boot-status), address and trust; at most one button for what it needs next, and everything else in
-// the row's menu. Add and Edit open a dialog with a "Remember password"
-// checkbox. Non-secret fields persist to ~/.k2so/connect-hosts.json (via the
+// Each saved ConnectHost is a row: a status dot, its name and address, then
+// its state in words (health from its public /boot-status, password,
+// pairing); at most one button for what it needs next, and everything else
+// in the row's menu. Add a server is one dialog in steps: the address
+// (checked against its /boot-status), then sign in, then a done step. Edit
+// is the same dialog with every field. Non-secret fields persist to ~/.k2so/connect-hosts.json (via the
 // store's connect_hosts_write); the token goes to the OS keychain ONLY when
 // "Remember password" is on, else it's kept in memory for the session.
 //
@@ -29,7 +31,7 @@
 // (`pickHost`) so a host without a remembered token drops into the same
 // full-screen sign-in.
 
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import {
   useConnectHostStore,
   saveRememberedPassword,
@@ -43,11 +45,10 @@ import {
 import { VOICE_CHAT_LINE, hostIsVoiceChatOnly, isVoiceChatOnly, voiceChatAddedText } from '@/lib/voice-chat-only'
 import { VoiceChatOnlyChip } from '@/components/Voice/VoiceChatOnlyChip'
 import { homeHostKey } from '@/lib/host-key'
-import { abandonRotation, fetchWhoamiRole, verifyHostCredentials } from '@/lib/add-server-login'
+import { abandonRotation, fetchWhoamiRole, verifyHostCredentials, type LoginFailureKind } from '@/lib/add-server-login'
 import { PasswordRotationStep } from '@/components/PasswordRotationStep'
 import { parseServerUrl, isValidUsername } from '@/lib/connect-validate'
 import { IconLock } from '@/components/icons/IconLock'
-import { BookmarkIcon, GlobeIcon, LinkIcon } from '@/components/icons/K2Icons'
 import { FederationOverview } from './FederationOverview'
 import { useAddServerFocus } from '@/stores/add-server-focus'
 import { useElementWidth } from '@/hooks/useElementWidth'
@@ -58,7 +59,6 @@ import {
   hostOpGet,
   hostBootStatus,
   summarizeCheck,
-  federationBadgeText,
   type CheckSummary,
   type FederationState,
 } from '@/lib/host-ops'
@@ -100,24 +100,21 @@ import {
   Button,
   Callout,
   Checkbox,
-  DialogFrame,
-  DialogScrim,
   Input,
   OverflowMenu,
   SearchField,
-  Surface,
   type OverflowMenuItem,
 } from '@/components/ui'
+import { SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { AccessSheet, DIALOG_FIELD, DIALOG_MUTED, Field } from './AccessDialogs'
 import {
   ConnectionRow,
-  HEALTH_TAG_TONE,
-  HealthWord,
-  MetaDot,
-  SectionHeader,
+  Facts,
+  ProblemNote,
   ServerAddress,
   StateNote,
-  StatusChip,
   StatusDot,
+  StatusFact,
   type HealthTone,
 } from './ConnectionsParts'
 
@@ -154,19 +151,37 @@ function connectionHealth(status: ConnectionStatus): { tone: HealthTone; word: s
   }
 }
 
+/** Where the Add a server dialog is: the address, then signing in, then
+ *  the confirmation. Edit is one step with every field. */
+type DraftStep = 'address' | 'sign-in' | 'done' | 'edit'
+
 type DraftHost = {
   id: string | null // null = creating a new host
+  step: DraftStep
   label: string
-  /** Raw "K2 Server URL" field (e.g. https://rosson.k2.dev); parsed on
-   *  save via parseServerUrl into hostname/secure/port. */
+  /** Raw address field (e.g. https://studio.k2.dev); parsed on save via
+   *  parseServerUrl into hostname/secure/port. */
   url: string
   username: string
   password: string
   remember: boolean
+  /** Done step: the server was saved with Voice & Chat only. */
+  voiceOnly?: boolean
+}
+
+/** What went wrong in the dialog: a field's own problem shows under it;
+ *  anything else is a note above the buttons with the next step. */
+type FormProblem = {
+  what: string
+  next?: string
+  detail?: string | null
+  field?: 'address' | 'name' | 'username' | 'password'
+  /** The address didn't answer: offer to go on anyway. */
+  anyway?: boolean
 }
 
 function emptyDraft(): DraftHost {
-  return { id: null, label: '', url: '', username: '', password: '', remember: false }
+  return { id: null, step: 'address', label: '', url: '', username: '', password: '', remember: false }
 }
 
 /** Reconstruct the URL field from a saved host for the edit form. */
@@ -175,6 +190,42 @@ function hostToUrl(h: ConnectHost): string {
   const authority = h.secure && h.port === 443 ? h.hostname : `${h.hostname}:${h.port}`
   return `${scheme}://${authority}`
 }
+
+/** A server's address as people read it: no https://, no :443. */
+function shownAddress(h: { hostname: string; port: number; secure: boolean }): string {
+  return h.secure && h.port === 443 ? h.hostname : `${h.hostname}:${h.port}`
+}
+
+/** The address parser's reason, in plain words with an example. */
+function addressProblem(reason: string): string {
+  if (/^Enter /.test(reason)) return 'Enter the server’s address.'
+  if (/explicit port/i.test(reason)) return 'Add the server’s port, like http://192.168.1.50:60710.'
+  if (/not HTTPS/i.test(reason)) return 'Servers on your network use http://, not https://, like http://192.168.1.50:60710.'
+  if (/^Port /.test(reason)) return 'The port must be a number from 1 to 65535.'
+  return 'That doesn’t look like a server address. Try one like studio.k2.dev.'
+}
+
+/** Why a sign-in failed, in plain words, with what to do next. */
+function signInProblem(kind: LoginFailureKind | undefined, reason: string, server: string): FormProblem {
+  switch (kind) {
+    case 'auth':
+      return { what: 'That username or password isn’t right.', next: 'Check both and try again. Usernames are lowercase.', field: 'password' }
+    case 'unreachable':
+      return { what: `Couldn’t reach ${server} to sign in.`, next: 'Check that the server is running and this computer is online, then try again.' }
+    case 'throttled':
+      return { what: 'Too many sign-in tries.', next: reason }
+    case 'not-found':
+    case 'server':
+      return { what: `${server} didn’t accept the sign-in.`, next: 'Make sure this is a K2 server, and that it and K2 are up to date.', detail: reason }
+    default:
+      return { what: `Couldn’t sign in to ${server}.`, detail: reason }
+  }
+}
+
+const USERNAME_RULE = 'Usernames are at least 2 characters: lowercase letters, numbers, _ or -.'
+
+/** A note under a list card: what just happened, with a way to clear it. */
+type PageNotice = { tone: 'ok' | 'info'; text: string }
 
 export function ConnectionsSection(): React.JSX.Element {
   // Measure the full-width root (never the capped stacked column), so the
@@ -194,10 +245,11 @@ export function ConnectionsSection(): React.JSX.Element {
   const activeHostLabel = isLocalActive ? 'This computer' : activeHost.label || activeHost.hostname
 
   const [draft, setDraft] = useState<DraftHost | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  /** §8.4: "Added <server>. It gives you Voice & Chat only…" after a save. */
-  const [notice, setNotice] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<FormProblem | null>(null)
+  /** What the last add, edit or remove did, under the list. */
+  const [notice, setNotice] = useState<PageNotice | null>(null)
+  /** What the dialog is waiting on, in its button's words. */
+  const [busy, setBusy] = useState<string | null>(null)
   // W4: the add/edit form's credentials were accepted but the daemon
   // requires a new password first. The shared PasswordRotationStep replaces
   // the form fields until it completes (then the save finishes) or is
@@ -218,7 +270,8 @@ export function ConnectionsSection(): React.JSX.Element {
   const labelRef = useRef<HTMLInputElement | null>(null)
 
   const beginAdd = (): void => {
-    setError(null)
+    setProblem(null)
+    setNotice(null)
     setDraft(emptyDraft())
   }
 
@@ -227,7 +280,7 @@ export function ConnectionsSection(): React.JSX.Element {
   // to every bump of the monotonic request counter.
   useEffect(() => {
     if (addServerFocusSeq === 0) return
-    setError(null)
+    setProblem(null)
     setDraft((d) => d ?? emptyDraft())
     // Defer to the next frame so the dialog (and its inputs) are mounted.
     const raf = requestAnimationFrame(() => {
@@ -239,9 +292,11 @@ export function ConnectionsSection(): React.JSX.Element {
   }, [addServerFocusSeq])
 
   const beginEdit = (h: ConnectHost): void => {
-    setError(null)
+    setProblem(null)
+    setNotice(null)
     setDraft({
       id: h.id,
+      step: 'edit',
       label: h.label,
       url: hostToUrl(h),
       username: h.username ?? '',
@@ -253,20 +308,66 @@ export function ConnectionsSection(): React.JSX.Element {
     })
   }
 
-  const save = async (): Promise<void> => {
-    if (!draft) return
-    if (!draft.label.trim()) {
-      setError('Enter a name for this server.')
-      return
-    }
-    const parsed = parseServerUrl(draft.url)
+  /** Remove a saved server (its row already asked) and say so. */
+  const forgetHost = (h: ConnectHost): void => {
+    removeHost(h.id)
+    setNotice({ tone: 'ok', text: `Removed ${h.label || h.hostname} from this computer. You can add it again at any time.` })
+  }
+
+  /** The address check shared by Continue and Save: parsed, and not
+   *  already saved under another entry (MS61). */
+  const checkAddress = (d: DraftHost): { hostname: string; secure: boolean; port: number } | null => {
+    const parsed = parseServerUrl(d.url)
     if (!parsed.ok) {
-      setError(parsed.reason)
-      return
+      setProblem({ what: addressProblem(parsed.reason), field: 'address' })
+      return null
     }
+    const dup = duplicateSavedHost(hosts, parsed, d.id ?? null)
+    const editKeepsKey =
+      d.id !== null && hosts.some((h) => h.id === d.id && homeHostKey(h) === homeHostKey(parsed))
+    if (dup && !editKeepsKey) {
+      setProblem({
+        what: `You’ve already saved this server as ${dup.label || dup.hostname}.`,
+        next: 'Use that one, or edit it from its row’s menu.',
+        field: 'address',
+      })
+      return null
+    }
+    return parsed
+  }
+
+  /** Add, step 1 → 2: the address is well formed, new, and answers (its
+   *  public /boot-status). `anyway` skips the answer check. */
+  const continueToSignIn = async (anyway = false): Promise<void> => {
+    if (!draft || busy) return
+    setProblem(null)
+    const parsed = checkAddress(draft)
+    if (!parsed) return
+    if (!anyway) {
+      setBusy('Checking…')
+      const status = await hostBootStatus(remoteCreds({ ...parsed, token: '' }))
+      setBusy(null)
+      if (status === null) {
+        setProblem({
+          what: `Couldn’t reach ${shownAddress(parsed)}.`,
+          next: 'Check the address, and that the server is running and reachable from this computer.',
+          field: 'address',
+          anyway: true,
+        })
+        return
+      }
+    }
+    setDraft((d) => (d ? { ...d, step: 'sign-in' } : d))
+  }
+
+  const save = async (): Promise<void> => {
+    if (!draft || busy) return
+    setProblem(null)
+    const parsed = checkAddress(draft)
+    if (!parsed) return
     const username = draft.username.trim()
     if (!isValidUsername(username)) {
-      setError('Username must be at least 2 characters: lowercase letters, numbers, _ or -.')
+      setProblem({ what: username ? USERNAME_RULE : 'Enter your username on this server.', field: 'username' })
       return
     }
     const passwordEntered = draft.password // do NOT trim — passwords may have edge whitespace
@@ -276,31 +377,18 @@ export function ConnectionsSection(): React.JSX.Element {
     // otherwise a wrong password still creates a tile, and a second "add"
     // attempt leaves two lookalike servers.
     if (isNew && !passwordEntered) {
-      setError('Password is required when adding a server.')
+      setProblem({ what: 'Enter your password on this server.', field: 'password' })
       return
-    }
-
-    // MS61: one saved entry per server (host key), for an add AND for an
-    // edit that would move an entry onto another entry's address.
-    {
-      const dup = duplicateSavedHost(hosts, parsed, draft.id ?? null)
-      const editKeepsKey =
-        draft.id !== null &&
-        hosts.some((h) => h.id === draft.id && homeHostKey(h) === homeHostKey(parsed))
-      if (dup && !editKeepsKey) {
-        setError(
-          `${duplicateSavedHostMessage(dup)} Edit or remove that server instead.`,
-        )
-        return
-      }
     }
 
     const id = draft.id ?? `host-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     const existing = draft.id ? hosts.find((h) => h.id === draft.id) : undefined
+    // No name: the address stands in for it, as it does everywhere.
+    const label = draft.label.trim() || parsed.hostname
 
     const host: ConnectHost = {
       id,
-      label: draft.label.trim(),
+      label,
       hostname: parsed.hostname,
       port: parsed.port,
       username,
@@ -320,21 +408,23 @@ export function ConnectionsSection(): React.JSX.Element {
     // addHost is required before loginToHost (it keys the host by id). On a
     // FAILED login for a NEW host we remove the provisional tile so a wrong
     // password never sticks in the list.
+    let voiceOnly = false
     if (passwordEntered) {
-      setBusy(true)
-      setError(null)
+      setBusy('Signing in…')
       // Same loginToHost (same edge login URL rule) as the switcher and
       // RemoteSignIn; adds the host first, removes a NEW host on failure.
       const outcome = await verifyHostCredentials(host, passwordEntered, isNew)
-      setBusy(false)
+      setBusy(null)
       if (outcome.kind === 'error') {
-        setError(outcome.reason)
+        setProblem(
+          outcome.loginKind
+            ? signInProblem(outcome.loginKind, outcome.reason, label)
+            : { what: outcome.reason, field: 'address' },
+        )
         return
       }
-      if (outcome.kind === 'voice-chat-only') {
-        // §8.4: saved, never switched to; say where its rooms are.
-        setNotice(voiceChatAddedText(host.label || host.hostname))
-      }
+      // §8.4: saved, never switched to; the done step says where its rooms are.
+      if (outcome.kind === 'voice-chat-only') voiceOnly = true
       if (outcome.kind === 'rotate') {
         // Not signed in yet: hand over to the rotation step (inline). The
         // save completes from its onDone with the NEW password.
@@ -351,7 +441,11 @@ export function ConnectionsSection(): React.JSX.Element {
       if (draft.remember) {
         const failure = await saveRememberedPassword(id, passwordEntered)
         if (failure) {
-          setError(failure)
+          setProblem({
+            what: 'You’re signed in, but K2 couldn’t save the password in the keychain.',
+            next: 'Turn off Remember password to finish without saving it, or try again.',
+            detail: failure,
+          })
           return
         }
       } else {
@@ -366,9 +460,18 @@ export function ConnectionsSection(): React.JSX.Element {
         await forgetToken(id)
       }
     }
+    finishSave(label, isNew, voiceOnly)
+  }
 
+  /** The add lands on its done step; an edit closes and says it saved. */
+  const finishSave = (label: string, isNew: boolean, voiceOnly: boolean): void => {
+    setProblem(null)
+    if (isNew) {
+      setDraft((d) => (d ? { ...d, label, step: 'done', voiceOnly } : d))
+      return
+    }
     setDraft(null)
-    setError(null)
+    setNotice(voiceOnly ? { tone: 'info', text: voiceChatAddedText(label) } : { tone: 'ok', text: `Saved your changes to ${label}.` })
   }
 
   // Rotation step completed: the fresh (unrestricted) session is already
@@ -377,26 +480,32 @@ export function ConnectionsSection(): React.JSX.Element {
   const finishRotation = async (newPassword: string): Promise<void> => {
     if (!rotation) return
     // §8.4: the role decides whether the new server is Voice & Chat only.
+    let voiceOnly = false
     const fresh = useConnectHostStore.getState().hosts.find((h) => h.id === rotation.host.id)
     if (fresh && fresh.token.length > 0) {
       const role = await fetchWhoamiRole(fresh, fresh.token)
       useConnectHostStore.getState().setHostAccess(fresh.id, role)
-      if (isVoiceChatOnly(role)) setNotice(voiceChatAddedText(fresh.label || fresh.hostname))
+      voiceOnly = isVoiceChatOnly(role)
     }
     if (rotation.remember) {
       const failure = await saveRememberedPassword(rotation.host.id, newPassword)
       if (failure) {
         setRotation(null)
-        setError(failure)
+        setProblem({
+          what: 'You’re signed in, but K2 couldn’t save the new password in the keychain.',
+          next: 'Turn off Remember password to finish without saving it, or try again.',
+          detail: failure,
+        })
         return
       }
     } else {
       await forgetPassword(rotation.host.id)
       await forgetToken(rotation.host.id)
     }
+    const label = rotation.host.label || rotation.host.hostname
+    const isNew = rotation.isNew
     setRotation(null)
-    setDraft(null)
-    setError(null)
+    finishSave(label, isNew, voiceOnly)
   }
 
   const cancelRotation = (): void => {
@@ -422,131 +531,114 @@ export function ConnectionsSection(): React.JSX.Element {
   const localHealth = connectionHealth(connectionStatus)
   const closeForm = (): void => {
     setDraft(null)
-    setError(null)
+    setProblem(null)
   }
 
-  const serversColumn = (
-    <section>
-      <SectionHeader
+  const noticeNote = notice && (
+    <Callout
+      tone={notice.tone}
+      role="status"
+      data-testid="connections-notice"
+      className="mt-3 type-hint flex items-center justify-between gap-3"
+    >
+      <span>{notice.text}</span>
+      <Button variant="quiet" onClick={() => setNotice(null)}>
+        OK
+      </Button>
+    </Callout>
+  )
+
+  const serversColumn = isLocalActive ? (
+    <div>
+      <SettingsGroup
+        card
         title="Servers"
-        hint={
-          isLocalActive
-            ? 'Servers this computer can connect to. A password is saved only if you choose Remember password, and only in this computer’s keychain.'
-            : (
-              <>
-                Servers paired with <span className="text-[var(--color-text-primary)]">{activeHostLabel}</span>. Your
-                saved servers are in the server menu in the top bar.
-              </>
-            )
-        }
+        hint="Other K2 servers you use from this computer. Switch between them from the server menu in the top bar."
         action={
-          isLocalActive ? (
-            <Button variant="accent" onClick={beginAdd} data-settings-id="connections.add">
-              + Add a server
-            </Button>
-          ) : undefined
-        }
-      />
-
-      {notice && (
-        <Callout
-          tone="info"
-          data-testid="connections-voice-chat-notice"
-          className="mb-3 type-hint flex items-center justify-between gap-3"
-        >
-          <span>{notice}</span>
-          <Button variant="quiet" onClick={() => setNotice(null)}>
-            OK
+          <Button variant="accent" onClick={beginAdd} data-settings-id="connections.add">
+            Add a server
           </Button>
-        </Callout>
-      )}
-
-      {isLocalActive ? (
-        <>
-          {hosts.length > 0 && (
+        }
+      >
+        {hosts.length >= SERVER_SEARCH_FROM && (
+          <div className="px-4 py-3">
             <SearchField
               value={serverQuery}
               onChange={(e) => setServerQuery(e.target.value)}
               placeholder="Search servers"
               aria-label="Search servers"
-              className="w-full mb-3"
+              className="w-full"
               data-settings-id="connections.search"
             />
-          )}
-
-          <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
-            {/* Local — always present, never editable. */}
-            <ConnectionRow
-              mark={<StatusDot tone={localHealth.tone} />}
-              title={
-                <>
-                  <span className="truncate flex-shrink-0">This computer</span>
-                  <span className="type-hint text-[var(--color-text-secondary)] truncate ml-1">
-                    K2 server built into this app
-                  </span>
-                </>
-              }
-              meta={
-                <>
-                  <StatusChip kind="health" tone={HEALTH_TAG_TONE[localHealth.tone]}>
-                    {localHealth.word}
-                  </StatusChip>
-                  <StatusChip kind="active" tone="accent">
-                    Active
-                  </StatusChip>
-                </>
-              }
-            />
-            <div className="divide-y divide-[var(--color-border)]" data-settings-id="connections.list">
-              {rows.length === 0 ? (
-                hosts.length === 0 ? (
-                  <StateNote
-                    data-testid="connections-empty"
-                    title="No saved servers yet."
-                    hint="Add a K2 server to reach its workspaces and agents from this computer."
-                    action={
-                      <Button variant="quiet" onClick={beginAdd}>
-                        + Add a server
-                      </Button>
-                    }
-                  />
-                ) : (
-                  <StateNote
-                    title="No matching servers."
-                    action={
-                      <Button variant="quiet" onClick={() => setServerQuery('')}>
-                        Clear search
-                      </Button>
-                    }
-                  />
-                )
-              ) : (
-                rows.map((h) => (
-                  <HostTile
-                    key={h.id}
-                    host={h}
-                    isActive={false}
-                    connectionStatus={connectionStatus}
-                    activePeerSideLabel={activeHostLabel}
-                    onEdit={() => beginEdit(h)}
-                    onRemove={() => removeHost(h.id)}
-                    onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
-                  />
-                ))
-              )}
-            </div>
-          </Surface>
-        </>
-      ) : (
-        <ActiveHostPeersPanel
-          hostLabel={activeHostLabel}
-          refreshKey={fedRefreshKey}
-          localHosts={Array.isArray(hosts) ? hosts : []}
-          onPeersChanged={() => setFedRefreshKey((n) => n + 1)}
-          onConnectLocal={() => pickHost('local')}
+          </div>
+        )}
+        {/* Local — always present, never editable. */}
+        <ConnectionRow
+          data-server-row="This computer"
+          mark={<StatusDot tone={localHealth.tone} />}
+          title={
+            <>
+              <span className="truncate flex-shrink-0">This computer</span>
+              <span className="type-hint text-[var(--color-text-secondary)] truncate ml-1">
+                The K2 server built into this app
+              </span>
+            </>
+          }
+          meta={
+            <Facts>
+              <StatusFact kind="health" tone={localHealth.tone}>
+                {localHealth.word}
+              </StatusFact>
+              <StatusFact kind="active" tone="quiet">
+                In use
+              </StatusFact>
+            </Facts>
+          }
         />
-      )}
-    </section>
+        <div className="divide-y divide-[var(--color-border)]" data-settings-id="connections.list">
+          {rows.length === 0 ? (
+            hosts.length === 0 ? (
+              <StateNote
+                data-testid="connections-empty"
+                title="No other servers yet"
+                hint="Add one to use its workspaces and agents from this computer."
+              />
+            ) : (
+              <StateNote
+                title={`No servers match “${serverQuery.trim()}”`}
+                action={
+                  <Button variant="quiet" onClick={() => setServerQuery('')}>
+                    Clear search
+                  </Button>
+                }
+              />
+            )
+          ) : (
+            rows.map((h) => (
+              <HostTile
+                key={h.id}
+                host={h}
+                isActive={false}
+                connectionStatus={connectionStatus}
+                activePeerSideLabel={activeHostLabel}
+                onEdit={() => beginEdit(h)}
+                onRemove={() => forgetHost(h)}
+                onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
+              />
+            ))
+          )}
+        </div>
+      </SettingsGroup>
+      {noticeNote}
+    </div>
+  ) : (
+    <ActiveHostPeersPanel
+      hostLabel={activeHostLabel}
+      refreshKey={fedRefreshKey}
+      localHosts={Array.isArray(hosts) ? hosts : []}
+      onPeersChanged={() => setFedRefreshKey((n) => n + 1)}
+      onConnectLocal={() => pickHost('local')}
+    />
   )
   const agentsColumn = <FederationOverview refreshKey={fedRefreshKey} />
 
@@ -564,7 +656,7 @@ export function ConnectionsSection(): React.JSX.Element {
         data-servers-column="servers"
         className={
           twoColumn
-            ? 'flex-[3] min-w-0 overflow-y-auto pr-3 pb-6 [scrollbar-gutter:stable]'
+            ? 'flex-[3] min-w-0 overflow-y-auto pr-6 pb-6 [scrollbar-gutter:stable]'
             : 'max-w-[52rem] pb-8'
         }
       >
@@ -584,11 +676,20 @@ export function ConnectionsSection(): React.JSX.Element {
       {draft && isLocalActive && (
         <ServerFormDialog
           draft={draft}
-          setDraft={setDraft}
+          setDraft={(d) => {
+            setDraft(d)
+            // Typing in the field that had a problem clears it.
+            if (problem?.field) setProblem(null)
+          }}
           rotation={rotation}
-          error={error}
+          problem={problem}
           busy={busy}
           labelRef={labelRef}
+          onContinue={(anyway) => void continueToSignIn(anyway)}
+          onBack={() => {
+            setProblem(null)
+            setDraft({ ...draft, step: 'address', password: '' })
+          }}
           onSave={() => void save()}
           onClose={closeForm}
           onRotationDone={(newPassword) => finishRotation(newPassword)}
@@ -599,15 +700,21 @@ export function ConnectionsSection(): React.JSX.Element {
   )
 }
 
-/** Add a server / Edit server. A modal, so an edit opened from far down the
- *  list stays with the row you picked instead of pushing it off screen. */
+/** From this many saved servers the list gets a search field. */
+const SERVER_SEARCH_FROM = 6
+
+/** Add a server (address, then sign in, then done) and Edit server. The
+ *  shared Settings dialog: centred, labelled fields, buttons pinned at the
+ *  foot. */
 function ServerFormDialog({
   draft,
   setDraft,
   rotation,
-  error,
+  problem,
   busy,
   labelRef,
+  onContinue,
+  onBack,
   onSave,
   onClose,
   onRotationDone,
@@ -616,112 +723,266 @@ function ServerFormDialog({
   draft: DraftHost
   setDraft: (d: DraftHost) => void
   rotation: { host: ConnectHost; tempPassword: string } | null
-  error: string | null
-  busy: boolean
+  problem: FormProblem | null
+  busy: string | null
   labelRef: React.RefObject<HTMLInputElement | null>
+  onContinue: (anyway: boolean) => void
+  onBack: () => void
   onSave: () => void
   onClose: () => void
   onRotationDone: (newPassword: string) => void | Promise<void>
   onRotationCancel: () => void
 }): React.JSX.Element {
-  // Esc, the × and a press outside close it unsaved. Held mid-save, and
-  // mid-rotation (the server is saved with a temporary password): the
-  // buttons there decide.
-  const field = 'w-full type-control'
+  const id = useId()
+  const formId = `${id}-form`
+  const step = draft.step
+  const parsed = parseServerUrl(draft.url)
+  const address = parsed.ok ? shownAddress(parsed) : draft.url.trim()
+  const name = draft.label.trim() || (parsed.ok ? parsed.hostname : draft.url.trim())
+  // A field's own problem (no next step to offer) shows under the field;
+  // anything else is a note above the buttons.
+  const inline = problem !== null && problem.field !== undefined && !problem.next && !problem.anyway
+  const fieldProblem = (f: FormProblem['field']): string | null => (inline && problem?.field === f ? problem.what : null)
+  const note =
+    problem && !inline ? (
+      <ProblemNote
+        what={problem.what}
+        next={problem.next}
+        detail={problem.detail}
+        testId="connections-form-problem"
+        action={
+          problem.anyway ? (
+            <Button disabled={busy !== null} onClick={() => onContinue(true)}>
+              Continue anyway
+            </Button>
+          ) : undefined
+        }
+      />
+    ) : null
+
+  const title = step === 'edit' ? 'Edit server' : step === 'done' ? 'Server added' : 'Add a server'
+  const intro =
+    rotation !== null
+      ? undefined
+      : step === 'address'
+        ? 'Step 1 of 2. Where the server is. You’ll sign in to it next.'
+        : step === 'sign-in'
+          ? `Step 2 of 2. Sign in with your account on ${name}.`
+          : step === 'edit'
+            ? 'Change how K2 finds and signs in to this server.'
+            : undefined
+
+  const rememberRow = (
+    <label className="flex items-start gap-2 cursor-pointer select-none" data-settings-id="connections.remember-password">
+      <Checkbox
+        className="mt-0.5"
+        checked={draft.remember}
+        onChange={(e) => setDraft({ ...draft, remember: e.target.checked })}
+      />
+      <span>
+        <span className={SETTING_ROW_LABEL}>Remember password</span>
+        <span className={`block ${DIALOG_MUTED}`}>
+          Saves it in this computer’s keychain, its built-in password store, so K2 signs in by itself next time.
+        </span>
+      </span>
+    </label>
+  )
+
+  const addressField = (
+    <Field
+      label="Address"
+      htmlFor={`${id}-url`}
+      problem={fieldProblem('address')}
+      hint="Its web address, like studio.k2.dev, or http://192.168.1.50:60710 on your network."
+    >
+      <Input
+        id={`${id}-url`}
+        ref={step === 'address' ? labelRef : undefined}
+        autoFocus={step === 'address'}
+        className={DIALOG_FIELD}
+        aria-invalid={fieldProblem('address') ? true : undefined}
+        value={draft.url}
+        onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+      />
+    </Field>
+  )
+  const nameField = (
+    <Field
+      label={step === 'edit' ? 'Name' : 'Name (optional)'}
+      htmlFor={`${id}-name`}
+      problem={fieldProblem('name')}
+      hint="How it shows in K2. Leave it blank to use the address."
+    >
+      <Input
+        id={`${id}-name`}
+        ref={step === 'edit' ? labelRef : undefined}
+        autoFocus={step === 'edit'}
+        className={DIALOG_FIELD}
+        value={draft.label}
+        onChange={(e) => setDraft({ ...draft, label: e.target.value })}
+      />
+    </Field>
+  )
+  const usernameField = (
+    <Field label="Username" htmlFor={`${id}-user`} problem={fieldProblem('username')}>
+      <Input
+        id={`${id}-user`}
+        autoFocus={step === 'sign-in'}
+        autoComplete="username"
+        className={DIALOG_FIELD}
+        aria-invalid={fieldProblem('username') ? true : undefined}
+        value={draft.username}
+        onChange={(e) => setDraft({ ...draft, username: e.target.value })}
+      />
+    </Field>
+  )
+  const passwordField = (
+    <Field
+      label="Password"
+      htmlFor={`${id}-pass`}
+      problem={fieldProblem('password')}
+      hint={step === 'edit' ? 'Leave it blank to keep the saved password.' : undefined}
+    >
+      <Input
+        id={`${id}-pass`}
+        type="password"
+        autoComplete="off"
+        className={DIALOG_FIELD}
+        aria-invalid={problem?.field === 'password' ? true : undefined}
+        value={draft.password}
+        onChange={(e) => setDraft({ ...draft, password: e.target.value })}
+      />
+    </Field>
+  )
+
+  const footer =
+    rotation !== null ? undefined : step === 'done' ? (
+      <Button variant="accent" autoFocus onClick={onClose}>
+        Done
+      </Button>
+    ) : step === 'address' ? (
+      <>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" form={formId} variant="accent" disabled={busy !== null}>
+          {busy ?? 'Continue'}
+        </Button>
+      </>
+    ) : step === 'sign-in' ? (
+      <>
+        <Button variant="ghost" disabled={busy !== null} onClick={onBack}>
+          Back
+        </Button>
+        <Button type="submit" form={formId} variant="accent" disabled={busy !== null}>
+          {busy ?? 'Sign in'}
+        </Button>
+      </>
+    ) : (
+      <>
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" form={formId} variant="accent" disabled={busy !== null}>
+          {busy ?? 'Save'}
+        </Button>
+      </>
+    )
+
   return (
-    <>
-      <DialogScrim />
-      <DialogFrame
-        onCancel={onClose}
-        cancelHeld={busy || rotation !== null}
-        cancelHeldReason={rotation !== null ? 'Finish or cancel the new password first' : 'Can’t close while the server is saved'}
-        role="dialog"
-        aria-modal="true"
-        aria-label={draft.id ? 'Edit server' : 'Add server'}
-        className="w-[26rem] max-w-[calc(var(--k2-vw)*0.9)] p-5"
-      >
-        <h3 className="type-heading pr-6 text-[var(--color-text-primary)] mb-3">{draft.id ? 'Edit server' : 'Add server'}</h3>
-        {rotation ? (
-          <>
-            <div className="type-hint text-[var(--color-text-secondary)] mb-2">
-              {rotation.host.username}@{hostToUrl(rotation.host).replace(/^https?:\/\//, '')}
-            </div>
-            <PasswordRotationStep
-              host={rotation.host}
-              initialCurrentPassword={rotation.tempPassword}
-              variant="inline"
-              onDone={({ newPassword }) => onRotationDone(newPassword)}
-              onCancel={onRotationCancel}
-            />
-          </>
-        ) : (
-          <form
-            className="space-y-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              if (!busy) onSave()
-            }}
-          >
-            <Input
-              ref={labelRef}
-              autoFocus
-              className={field}
-              placeholder="Name (e.g. Mac mini)"
-              aria-label="Name"
-              value={draft.label}
-              onChange={(e) => setDraft({ ...draft, label: e.target.value })}
-            />
-            <Input
-              className={field}
-              placeholder="Server URL (e.g. http://192.168.1.50:60710)"
-              aria-label="Server URL"
-              value={draft.url}
-              onChange={(e) => setDraft({ ...draft, url: e.target.value })}
-            />
-            <Input
-              className={field}
-              placeholder="Username"
-              aria-label="Username"
-              autoComplete="username"
-              value={draft.username}
-              onChange={(e) => setDraft({ ...draft, username: e.target.value })}
-            />
-            <Input
-              className={field}
-              type="password"
-              autoComplete="off"
-              aria-label="Password"
-              placeholder={draft.id ? 'Password (leave blank to keep saved)' : 'Password'}
-              value={draft.password}
-              onChange={(e) => setDraft({ ...draft, password: e.target.value })}
-            />
-            <label
-              className="flex items-center gap-2 pt-1 type-hint text-[var(--color-text-secondary)] cursor-pointer select-none"
-              data-settings-id="connections.remember-password"
-            >
-              <Checkbox
-                checked={draft.remember}
-                onChange={(e) => setDraft({ ...draft, remember: e.target.checked })}
-              />
-              Remember password on this computer
-            </label>
-            {error && (
-              <Callout tone="error" role="alert" className="type-hint">
-                {error}
-              </Callout>
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" variant="accent" disabled={busy}>
-                {busy ? 'Verifying…' : 'Save'}
-              </Button>
-            </div>
-          </form>
-        )}
-      </DialogFrame>
-    </>
+    <AccessSheet
+      title={title}
+      intro={intro}
+      onClose={onClose}
+      // Held mid-check or mid-sign-in, and mid-rotation (the server is
+      // saved with a temporary password): the buttons there decide.
+      busy={busy !== null || rotation !== null}
+      testId="connections-server-dialog"
+      footer={footer}
+    >
+      {rotation ? (
+        <>
+          <p className={DIALOG_MUTED}>
+            {rotation.host.username} on {name}
+          </p>
+          <PasswordRotationStep
+            host={rotation.host}
+            initialCurrentPassword={rotation.tempPassword}
+            variant="inline"
+            onDone={({ newPassword }) => onRotationDone(newPassword)}
+            onCancel={onRotationCancel}
+          />
+        </>
+      ) : step === 'done' ? (
+        <div className="flex items-start gap-3 pt-2" role="status" data-testid="connections-added">
+          <span className="flex pt-1.5">
+            <StatusDot tone="ok" />
+          </span>
+          <div className="min-w-0">
+            <p className={SETTING_ROW_LABEL}>
+              {draft.voiceOnly ? `Added ${name}` : `Connected to ${name}`}
+            </p>
+            <p className={`${DIALOG_MUTED} font-mono truncate`}>{address}</p>
+            <p className={`${DIALOG_MUTED} mt-1`}>
+              {draft.voiceOnly
+                ? voiceChatAddedText(name)
+                : 'It’s in your server list now. Open it from the server menu in the top bar. To let its agents work with your workspaces, pair it from its row.'}
+            </p>
+          </div>
+        </div>
+      ) : (
+        <form
+          id={formId}
+          className="space-y-4"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (busy !== null) return
+            if (step === 'address') onContinue(false)
+            else onSave()
+          }}
+        >
+          {step === 'address' && (
+            <>
+              {addressField}
+              {nameField}
+            </>
+          )}
+          {step === 'sign-in' && (
+            <>
+              <div className="flex items-center justify-between gap-4 min-w-0" data-testid="connections-form-server">
+                <div className="min-w-0">
+                  <p className={`${SETTING_ROW_LABEL} truncate`}>{name}</p>
+                  <p className={`${DIALOG_MUTED} font-mono truncate`}>{address}</p>
+                </div>
+                <button
+                  type="button"
+                  data-k2-focus=""
+                  disabled={busy !== null}
+                  onClick={onBack}
+                  className="type-hint text-[var(--color-accent-hover)] hover:underline cursor-pointer flex-shrink-0 disabled:opacity-60"
+                >
+                  Change
+                </button>
+              </div>
+              {usernameField}
+              {passwordField}
+              {rememberRow}
+            </>
+          )}
+          {step === 'edit' && (
+            <>
+              {nameField}
+              {addressField}
+              {usernameField}
+              {passwordField}
+              {rememberRow}
+            </>
+          )}
+          {note}
+        </form>
+      )}
+    </AccessSheet>
   )
 }
 
@@ -810,146 +1071,176 @@ function ActiveHostPeersPanel({
     }
   }
 
+  const peerTrustWord = (t: FederationPeer['trust']): string =>
+    t === 'trusted' ? 'Paired' : t === 'pending' ? 'Waiting for the other server' : 'Blocked'
+
   return (
-    <div className="space-y-8" data-settings-id="connections.active-host-peers">
-      <Surface chamfer material="tile">
+    <div className="space-y-6" data-settings-id="connections.active-host-peers">
+      <SettingsGroup
+        card
+        title="Servers"
+        hint={
+          <>
+            You’re using {hostLabel}. Your saved servers are in the server menu in the top bar, and on this page when
+            you switch back to this computer.
+          </>
+        }
+      >
         <ConnectionRow
           mark={<StatusDot tone={activeHealth.tone} />}
           title={<span className="truncate">{hostLabel}</span>}
           meta={
-            <>
-              <HealthWord tone={activeHealth.tone}>{activeHealth.word}</HealthWord>
-              <MetaDot />
-              <span>Active</span>
-            </>
+            <Facts>
+              <StatusFact kind="health" tone={activeHealth.tone}>
+                {activeHealth.word}
+              </StatusFact>
+              <StatusFact kind="active" tone="quiet">
+                In use
+              </StatusFact>
+            </Facts>
           }
-          actions={
-            <Button variant="quiet" onClick={onConnectLocal}>
-              Switch to this computer
-            </Button>
-          }
+          actions={<Button onClick={onConnectLocal}>Switch to this computer</Button>}
         />
-      </Surface>
+      </SettingsGroup>
 
-      <section>
-        <SectionHeader title={<>Peers of {hostLabel}</>} />
-        <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
-          {loading ? (
-            <StateNote title="Loading peers…" />
+      <SettingsGroup
+        card
+        title={`Paired with ${hostLabel}`}
+        hint="Servers whose agents can work with agents on this one."
+        state={
+          loading ? (
+            <SettingsLoadState kind="loading" title="Loading paired servers…" />
           ) : !available ? (
-            <StateNote
-              data-testid="connections-peers-error"
-              title="Can’t list this server’s paired servers."
-              hint={
-                <>
-                  Federation may be off, you may not be an owner or admin, or the server may be unreachable. To turn
-                  federation on, open {isAirgap() ? 'Servers → Policies' : 'Tunnel → Policies'} while signed in to this
-                  server.
-                </>
-              }
+            <SettingsLoadState
+              kind="error"
+              testId="connections-peers-error"
+              title="Couldn’t list the servers paired with this one"
               action={
-                <Button variant="quiet" onClick={() => void reload()}>
+                <Button onClick={() => void reload()}>
                   Try again
                 </Button>
               }
-            />
+            >
+              Connect agents across servers may be off there, or you may not be its owner or an admin. To turn it on,
+              open {isAirgap() ? 'Servers' : 'Tunnel'} while you’re using this server.
+            </SettingsLoadState>
           ) : peers.length === 0 ? (
-            <StateNote title="No paired servers yet." hint="Pair one below." />
-          ) : (
-            peers.map((p) => {
-              // Trust, not reachability: this list can't say whether a peer is up.
-              const trustTone: HealthTone = p.trust === 'pending' ? 'warn' : 'neutral'
-              return (
-                <ConnectionRow
-                  key={p.fingerprint}
-                  mark={<StatusDot tone={p.repair_recommended ? 'warn' : trustTone} />}
-                  title={<span className="truncate">{p.label || p.subdomain || p.fingerprint.slice(0, 12)}</span>}
-                  meta={
-                    <>
-                      <HealthWord tone={trustTone}>{p.trust}</HealthWord>
-                      <MetaDot />
-                      <span className="truncate">
-                        {p.base_url || p.baseUrl
-                          ? p.base_url || p.baseUrl
-                          : federatedPeerHost(p) || p.fingerprint.slice(0, 24) + '…'}
-                      </span>
-                      {p.repair_recommended && (
-                        <>
-                          <MetaDot />
-                          <HealthWord tone="warn">
-                            <span title={REPAIR_RECOMMENDED_HINT}>Re-pair recommended</span>
-                          </HealthWord>
-                        </>
-                      )}
-                    </>
-                  }
-                >
+            <SettingsLoadState kind="empty" title="No paired servers yet">
+              Pair one from the list below.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        {peers.map((p) => {
+          // Trust, not reachability: this list can't say whether a peer is up.
+          const trustTone: HealthTone = p.trust === 'pending' ? 'warn' : p.trust === 'trusted' ? 'ok' : 'error'
+          return (
+            <ConnectionRow
+              key={p.fingerprint}
+              mark={<StatusDot tone={p.repair_recommended ? 'warn' : trustTone} />}
+              title={
+                <>
+                  <span className="truncate flex-shrink-0 max-w-[60%]">{p.label || p.subdomain || p.fingerprint.slice(0, 12)}</span>
+                  <ServerAddress>
+                    {p.base_url || p.baseUrl ? p.base_url || p.baseUrl : federatedPeerHost(p) || p.fingerprint.slice(0, 24) + '…'}
+                  </ServerAddress>
+                </>
+              }
+              meta={
+                <Facts>
+                  <StatusFact kind="paired" tone={trustTone}>
+                    {peerTrustWord(p.trust)}
+                  </StatusFact>
                   {p.repair_recommended && (
-                    <div className="type-hint text-[var(--color-text-secondary)] leading-relaxed space-y-2">
-                      <div>{REPAIR_RECOMMENDED_HINT}</div>
-                      <Button
-                        variant="quiet"
-                        data-testid="connections-peer-repair"
-                        disabled={pairBusyHost !== null}
-                        onClick={() => void handleRepairPeer(p)}
-                      >
-                        Re-pair
-                      </Button>
-                      {repairSteps?.fingerprint === p.fingerprint && (
-                        <ol className="list-decimal pl-5 space-y-1" data-testid="connections-peer-repair-steps">
-                          {repairSteps.steps.map((step) => (
-                            <li key={step} className="select-text">
-                              {step}
-                            </li>
-                          ))}
-                        </ol>
-                      )}
-                    </div>
+                    <StatusFact kind="paired" tone="warn" title={REPAIR_RECOMMENDED_HINT}>
+                      Pair again recommended
+                    </StatusFact>
                   )}
-                </ConnectionRow>
-              )
-            })
-          )}
-        </Surface>
-      </section>
-
-      <section>
-        <SectionHeader
-          title="Pair from this computer"
-          hint={
-            <>
-              Lets {hostLabel} and a server you&apos;re signed in to on this computer trust each other, so their agents
-              can be connected.
-            </>
-          }
-        />
-        <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
-          {pairableLocal.length === 0 ? (
-            <StateNote title="No servers signed in on this computer. Switch to This computer, sign in to a server, then come back here to pair." />
-          ) : (
-            pairableLocal.map((h) => (
-              <ConnectionRow
-                key={h.id}
-                title={<span className="truncate">{h.label || h.hostname}</span>}
-                meta={<span className="truncate">{h.secure ? h.hostname : savedHostBaseUrl(h)}</span>}
-                actions={
-                  <Button disabled={pairBusyHost === h.id} onClick={() => void handlePair(h)}>
-                    {pairBusyHost === h.id ? 'Pairing…' : 'Pair'}
+                </Facts>
+              }
+              actions={
+                p.repair_recommended ? (
+                  <Button
+                    data-testid="connections-peer-repair"
+                    disabled={pairBusyHost !== null}
+                    onClick={() => void handleRepairPeer(p)}
+                  >
+                    Pair again
                   </Button>
-                }
-              />
-            ))
-          )}
-        </Surface>
+                ) : undefined
+              }
+            >
+              {p.repair_recommended && (
+                <div className="type-hint text-[var(--color-text-secondary)] leading-relaxed space-y-2">
+                  <p>{REPAIR_RECOMMENDED_HINT}</p>
+                  {repairSteps?.fingerprint === p.fingerprint && (
+                    <ol className="list-decimal pl-5 space-y-1" data-testid="connections-peer-repair-steps">
+                      {repairSteps.steps.map((step) => (
+                        <li key={step} className="select-text">
+                          {step}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              )}
+            </ConnectionRow>
+          )
+        })}
+      </SettingsGroup>
+
+      <div>
+        <SettingsGroup
+          card
+          title="Pair from this computer"
+          hint={`Lets ${hostLabel} and a server you’re signed in to on this computer trust each other, so their agents can work together.`}
+          state={
+            pairableLocal.length === 0 ? (
+              <SettingsLoadState kind="empty" title="No servers signed in on this computer">
+                Switch to this computer, sign in to a server there, then come back to pair it.
+              </SettingsLoadState>
+            ) : undefined
+          }
+        >
+          {pairableLocal.map((h) => (
+            <ConnectionRow
+              key={h.id}
+              title={
+                <>
+                  <span className="truncate flex-shrink-0 max-w-[60%]">{h.label || h.hostname}</span>
+                  <ServerAddress>{h.secure ? h.hostname : savedHostBaseUrl(h)}</ServerAddress>
+                </>
+              }
+              actions={
+                <Button disabled={pairBusyHost !== null} onClick={() => void handlePair(h)}>
+                  {pairBusyHost === h.id ? 'Pairing…' : 'Pair'}
+                </Button>
+              }
+            />
+          ))}
+        </SettingsGroup>
         {pairMsg && (
-          <Callout tone={pairMsg.ok ? 'ok' : 'error'} className="mt-3 type-hint">
-            {pairMsg.text}
-          </Callout>
+          <div className="mt-3">
+            {pairMsg.ok ? (
+              <Callout tone="ok" role="status" className="type-hint">
+                {pairMsg.text}
+              </Callout>
+            ) : (
+              <ProblemNote
+                what="Couldn’t pair the two servers."
+                next="Both need Connect agents across servers turned on. Try again once it is."
+                detail={pairMsg.text}
+              />
+            )}
+          </div>
         )}
-      </section>
+      </div>
     </div>
   )
 }
+
+/** A row action that failed: what, in plain words, and the server's reason. */
+type RowProblem = { what: string; next?: string; detail?: string }
 
 /** One saved-server tile. Owns its own per-host operation state (restart /
  *  update-check / update / federation badge / pair-as-peer) and drives THAT
@@ -994,9 +1285,9 @@ function HostTile({
 
   const [federation, setFederation] = useState<FederationState>('loading')
   const [restartBusy, setRestartBusy] = useState(false)
-  const [restartMsg, setRestartMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [restartMsg, setRestartMsg] = useState<{ ok: boolean; text: string; detail?: string } | null>(null)
   const [checkBusy, setCheckBusy] = useState(false)
-  const [checkError, setCheckError] = useState<string | null>(null)
+  const [checkError, setCheckError] = useState<RowProblem | null>(null)
   const [summary, setSummary] = useState<CheckSummary | null>(null)
   const [hostCurrent, setHostCurrent] = useState<string | undefined>(undefined)
   // From the last successful check — drives Shape A vs B (auto-apply) and the
@@ -1005,7 +1296,7 @@ function HostTile({
     undefined,
   )
   const [updateBusy, setUpdateBusy] = useState(false)
-  const [updateError, setUpdateError] = useState<string | null>(null)
+  const [updateError, setUpdateError] = useState<RowProblem | null>(null)
   const [phaseText, setPhaseText] = useState<string | null>(null)
   // True while polling /boot-status back to 'ready' after a restart/update we
   // triggered — drives the "reconnecting…" UX and disables re-triggering.
@@ -1211,10 +1502,10 @@ function HostTile({
             setPhaseText(null)
             const observed = status?.version
             setHostCurrent(observed)
-            setUpdateError(
-              `The update didn’t finish: ${label} is on v${observed ?? 'an unexpected version'}, expected v${expected}.` +
-                ` Try again, or run install-daemon.sh --version ${expected} on the server.`,
-            )
+            setUpdateError({
+              what: `The update didn’t finish: ${label} is on v${observed ?? 'an unexpected version'}, not v${expected}.`,
+              next: 'Check for updates again from the row’s menu.',
+            })
             void reviveRemoteSession(host.id, { force: true })
             void refreshFederation()
             return
@@ -1257,8 +1548,8 @@ function HostTile({
       setPhaseText(null)
       setUpdateError(
         expected
-          ? `${label} hasn’t come back on v${expected}. Try Check for updates, or run install-daemon.sh on the server.`
-          : `${label} still isn’t responding. Try Check for updates, or relaunch K2.`,
+          ? { what: `${label} hasn’t come back on v${expected}.`, next: 'Check for updates again from the row’s menu.' }
+          : { what: `${label} still isn’t responding.`, next: 'Check that it’s running, then use Try again. If it stays down, quit and reopen K2.' },
       )
     } finally {
       if (aliveRef.current) setReconnecting(false)
@@ -1279,9 +1570,8 @@ function HostTile({
       clearIfAuthError(m)
       setRestartMsg({
         ok: false,
-        text: isForbiddenError(m)
-          ? `Only ${label}’s owner or an admin can restart it.`
-          : `Couldn't restart ${label}: ${m}`,
+        text: isForbiddenError(m) ? `Only ${label}’s owner or an admin can restart it.` : `Couldn’t restart ${label}.`,
+        detail: isForbiddenError(m) ? undefined : m,
       })
     } finally {
       setRestartBusy(false)
@@ -1305,11 +1595,11 @@ function HostTile({
     } catch (e) {
       const m = errMsg(e)
       if (e instanceof UpdateReplyError) {
-        setCheckError(`Update check failed: ${m}`)
+        setCheckError({ what: `Couldn’t check ${label} for updates.`, detail: m })
         return
       }
       clearIfAuthError(m)
-      setCheckError(isForbiddenError(m) ? updateForbiddenCopy(label) : `Update check failed: ${m}`)
+      setCheckError(isForbiddenError(m) ? { what: updateForbiddenCopy(label) } : { what: `Couldn’t check ${label} for updates.`, detail: m })
     } finally {
       setCheckBusy(false)
     }
@@ -1331,12 +1621,12 @@ function HostTile({
     jobId: string,
     kind: UpdateCheckResult['installKind'] | undefined,
   ): Promise<'applied' | 'failed' | 'unreachable'> => {
-    const fail = (text: string): 'failed' => {
+    const fail = (what: string, detail?: string): 'failed' => {
       if (aliveRef.current) {
         setPhaseText(null)
-        setUpdateError(text)
+        setUpdateError({ what, detail })
       } else {
-        useToastStore.getState().addToast(text, 'error', 10000)
+        useToastStore.getState().addToast(detail ? `${what} ${detail}` : what, 'error', 10000)
       }
       return 'failed'
     }
@@ -1344,11 +1634,9 @@ function HostTile({
       const m = errMsg(err)
       // An unreadable reply quotes the body, which may say "Forbidden":
       // it is never a permission refusal.
-      if (err instanceof UpdateReplyError) return fail(`Couldn't install the update on ${label}: ${m}`)
+      if (err instanceof UpdateReplyError) return fail(`Couldn’t install the update on ${label}.`, m)
       clearIfAuthError(m)
-      return fail(
-        isForbiddenError(m) ? updateForbiddenCopy(label) : `Couldn't install the update on ${label}: ${m}`,
-      )
+      return isForbiddenError(m) ? fail(updateForbiddenCopy(label)) : fail(`Couldn’t install the update on ${label}.`, m)
     }
     const outcome = await driveUpdateJob({
       hostLabel: label,
@@ -1370,16 +1658,14 @@ function HostTile({
       case 'unreachable':
         return outcome.kind
       case 'job-failed':
-        return fail(
-          outcome.status.error
-            ? `Update error on ${label}: ${outcome.status.error}`
-            : updatePhaseCopy(outcome.status.phase, label, { current: hostCurrent }),
-        )
+        return outcome.status.error
+          ? fail(`The update on ${label} failed.`, outcome.status.error)
+          : fail(updatePhaseCopy(outcome.status.phase, label, { current: hostCurrent }))
       case 'poll-failed':
       case 'apply-failed':
         return refused(outcome.err)
       case 'timed-out':
-        return fail(`Timed out waiting for the update on ${label}. Use Check for updates to see whether it finished.`)
+        return fail(`The update on ${label} is taking too long. Check for updates from the row’s menu to see whether it finished.`)
     }
   }
 
@@ -1422,9 +1708,7 @@ function HostTile({
       // pre-apply blips as "update restarting". Auth/403 still surface as-is.
       setPhaseText(null)
       setUpdateError(
-        isForbiddenError(m)
-          ? updateForbiddenCopy(label)
-          : `Couldn't start the update on ${label}: ${m}`,
+        isForbiddenError(m) ? { what: updateForbiddenCopy(label) } : { what: `Couldn’t start the update on ${label}.`, detail: m },
       )
     } finally {
       if (aliveRef.current) setUpdateBusy(false)
@@ -1464,18 +1748,18 @@ function HostTile({
             id: 'pair',
             label: pairBusy ? 'Pairing…' : 'Check pairing',
             disabled: pairBusy || reconnecting,
-            title: `${activePeerSideLabel} is already paired with this server. Check the pairing and repair it if needed.`,
+            title: `${activePeerSideLabel} is already paired with this server. Check the pairing and fix it if needed.`,
             onSelect: () => void doPairPeer(),
           }
         : {
             id: 'pair',
             label: pairBusy ? 'Pairing…' : peerPaired === 'checking' ? 'Checking…' : 'Pair',
             disabled: pairBusy || reconnecting || federation === 'off',
-            hint: federation === 'off' ? `Turn on federation on this server and on ${peerSide} first` : undefined,
+            hint: federation === 'off' ? `First turn on Connect agents across servers (in Tunnel) on ${peerSide} and on this server` : undefined,
             title:
               federation === 'off'
-                ? `Turn on federation on this server and on ${peerSide} first`
-                : `Let ${peerSide} and this server trust each other, so their agents can be connected`,
+                ? `First turn on Connect agents across servers (in Tunnel) on ${peerSide} and on this server`
+                : `Let ${peerSide} and this server trust each other, so their agents can work together`,
             onSelect: () => void doPairPeer(),
           }
       : null
@@ -1532,15 +1816,16 @@ function HostTile({
     },
   })
 
-  // One button at most, the thing this server needs next. Whatever isn't
-  // promoted here stays in the menu. Only a server that can't be reached
+  // One button at most, the thing this server needs next (none while its
+  // health is still being checked). Whatever isn't promoted here stays in
+  // the menu. Only a server that can't be reached
   // gets a new action: asking again.
   const primaryId: string | null =
     reach === 'offline' && !reconnecting && !isActive
       ? 'try-again'
       : signedOut
         ? 'sign-in'
-        : !signedIn
+        : !signedIn || (reach === 'checking' && !hasFailure)
           ? null
           : hasFailure
             ? 'sign-in-again'
@@ -1562,9 +1847,9 @@ function HostTile({
     <ConnectionRow
       data-server-row={label}
       mark={<StatusDot tone={health.tone} />}
-      // Line 1: the name and its address. Line 2: the status chips, always in
-      // the same order (health, Saved, Paired, Federation, Active), so every
-      // row lines up the same way whatever its address.
+      // Line 1: the name and its address. Line 2: its state in words, always
+      // in the same order (health, password, pairing, agents across servers,
+      // in use), so every row reads the same way whatever its address.
       title={
         <>
           <span className="truncate flex-shrink-0 max-w-[60%]">{label}</span>
@@ -1575,53 +1860,46 @@ function HostTile({
         </>
       }
       meta={
-        <>
-          <StatusChip kind="health" tone={HEALTH_TAG_TONE[health.tone]}>
+        <Facts>
+          <StatusFact kind="health" tone={health.tone}>
             {health.word}
-          </StatusChip>
+          </StatusFact>
           {host.remember && (
-            <StatusChip
-              kind="saved"
-              tone="neutral"
-              icon={<BookmarkIcon size={12} className="flex-shrink-0" />}
-              title="Its password is saved in this computer’s keychain"
-            >
-              Saved
-            </StatusChip>
+            <StatusFact kind="saved" tone="quiet" title="Its password is saved in this computer’s keychain">
+              Password saved
+            </StatusFact>
           )}
           {!isActive && ((peerPaired === 'yes' && !signedOut) || (peerPaired === 'no' && signedIn)) && (
-            <StatusChip
+            <StatusFact
               kind="paired"
-              tone={peerPaired === 'yes' ? 'ok' : 'muted'}
-              icon={<LinkIcon size={12} className="flex-shrink-0" />}
+              tone="quiet"
               title={
                 peerPaired === 'yes'
-                  ? `${activePeerSideLabel} trusts this server`
+                  ? `${activePeerSideLabel} trusts this server, so their agents can work together`
                   : `${activePeerSideLabel} and this server don’t trust each other yet`
               }
             >
               {peerPaired === 'yes' ? 'Paired' : 'Not paired'}
-            </StatusChip>
+            </StatusFact>
           )}
-          {(federation === 'on' || federation === 'off') && (
-            <StatusChip
-              kind="federation"
-              tone={federation === 'on' ? 'ok' : 'muted'}
-              icon={<GlobeIcon size={12} className="flex-shrink-0" />}
-              title="Whether this server can connect to agents on other servers"
-            >
-              {federationBadgeText(federation)}
-            </StatusChip>
+          {federation === 'off' && (
+            <StatusFact kind="federation" tone="quiet" title="Connect agents across servers is off on this server">
+              Agents across servers off
+            </StatusFact>
           )}
-          {/* "Active" only — switching to a host happens from the server
+          {/* "In use" only — switching to a host happens from the server
               switcher, not here. The row is for managing the host in place. */}
           {isActive && (
-            <StatusChip kind="active" tone="accent">
-              Active
-            </StatusChip>
+            <StatusFact kind="active" tone="quiet">
+              In use
+            </StatusFact>
           )}
-          {signedOut && reach !== 'offline' && <span className="ml-0.5">Sign in to manage this server</span>}
-        </>
+          {signedOut && reach !== 'offline' && (
+            <StatusFact kind="saved" tone="quiet">
+              Sign in to manage it
+            </StatusFact>
+          )}
+        </Facts>
       }
       actions={
         <>
@@ -1647,9 +1925,9 @@ function HostTile({
       {/* What's happening on this row, or what just went wrong. Fail loud,
           never silent. */}
       {reach === 'offline' && !isActive && !reconnecting && (
-        <div className="type-hint text-[var(--color-text-secondary)]">
-          Can’t reach this server. Check that it’s running and on your network, then try again.
-        </div>
+        <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
+          K2 can’t reach this server. Check that it’s running and on your network, then try again.
+        </p>
       )}
       {!signedOut && voiceOnly && (
         // prd-voice-chat-only-members-v1 §8.2: the server never opens, and
@@ -1678,10 +1956,16 @@ function HostTile({
       {summary && !checkError && <div className="type-hint text-[var(--color-text-secondary)]">{summary.text}</div>}
       {restartMsg?.ok && <div className="type-hint text-[var(--color-text-secondary)]">{restartMsg.text}</div>}
       {pairMsg?.ok && <div className="type-hint text-[var(--color-text-secondary)]">{pairMsg.text}</div>}
-      {restartMsg && !restartMsg.ok && <Callout role="alert" className="type-hint">{restartMsg.text}</Callout>}
-      {pairMsg && !pairMsg.ok && <Callout role="alert" className="type-hint">{pairMsg.text}</Callout>}
-      {checkError && <Callout role="alert" className="type-hint">{checkError}</Callout>}
-      {updateError && <Callout role="alert" className="type-hint">{updateError}</Callout>}
+      {restartMsg && !restartMsg.ok && <ProblemNote what={restartMsg.text} detail={restartMsg.detail} />}
+      {pairMsg && !pairMsg.ok && (
+        <ProblemNote
+          what={`Couldn’t pair with ${label}.`}
+          next="Both servers need Connect agents across servers turned on (in Tunnel). Try again once they do."
+          detail={pairMsg.text}
+        />
+      )}
+      {checkError && <ProblemNote what={checkError.what} next={checkError.next} detail={checkError.detail} />}
+      {updateError && <ProblemNote what={updateError.what} next={updateError.next} detail={updateError.detail} />}
     </ConnectionRow>
   )
 }

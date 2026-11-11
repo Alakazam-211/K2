@@ -68,7 +68,7 @@ describe('verifyHostCredentials (add-server path)', () => {
   it('failed login on a NEW host removes the provisional tile and surfaces the reason', async () => {
     const d = deps({ ok: false, kind: 'auth', reason: 'Invalid username or password.' })
     const out = await verifyHostCredentials(HOST, 'bad', true, d)
-    expect(out).toEqual({ kind: 'error', reason: 'Invalid username or password.' })
+    expect(out).toEqual({ kind: 'error', reason: 'Invalid username or password.', loginKind: 'auth' })
     expect(d.removeHost).toHaveBeenCalledWith('new-1')
   })
 

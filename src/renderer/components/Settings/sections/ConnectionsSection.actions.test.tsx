@@ -89,12 +89,12 @@ describe('Connected Servers row actions', () => {
   it('federation off: Pair stays in the menu, disabled, and says why', async () => {
     net.federation = false
     show(base)
-    await waitFor(() => within(row()).getByText('Federation off'))
+    await waitFor(() => within(row()).getByText('Agents across servers off'))
     await waitFor(() => expect(within(row()).queryByText('Checking…')).toBeNull())
     await menuLabels()
     const pair = screen.getAllByRole('menuitem')[0]
     expect(pair.getAttribute('aria-disabled')).toBe('true')
-    expect(pair.textContent).toContain('Turn on federation on this server and on this computer first')
+    expect(pair.textContent).toContain('First turn on Connect agents across servers (in Tunnel) on this computer and on this server')
   })
 
   it('signed out: Sign in is the button; only Edit and Remove are in the menu', async () => {
@@ -112,32 +112,33 @@ describe('Connected Servers row actions', () => {
     expect(await menuLabels()).toEqual(['Pair', 'Restart', 'Check for updates', 'Sign out', 'Edit', 'Remove'])
   })
 
-  it('puts the address on the name line and the status chips below, always in one order', async () => {
+  it('puts the address on the name line and its state in words below, always in one order', async () => {
     net.paired = true
     show(base)
-    await waitFor(() => within(row()).getByText('Federation on'))
     await waitFor(() => within(row()).getByText('Paired'))
-    const chips = Array.from(row().querySelectorAll<HTMLElement>('[data-server-status]'))
-    expect(chips.map((c) => c.dataset.serverStatus)).toEqual(['health', 'saved', 'paired', 'federation'])
-    expect(chips.map((c) => c.textContent)).toEqual(['Online', 'Saved', 'Paired', 'Federation on'])
-    expect(chips.map((c) => c.dataset.tone)).toEqual(['ok', 'neutral', 'ok', 'ok'])
-    // Every chip but health carries its icon.
-    expect(chips.slice(1).every((c) => c.querySelector('svg[data-k2-icon]'))).toBe(true)
-    // The address sits on the first line with the name, not among the chips.
+    const facts = Array.from(row().querySelectorAll<HTMLElement>('[data-server-status]'))
+    expect(facts.map((c) => c.dataset.serverStatus)).toEqual(['health', 'saved', 'paired'])
+    expect(facts.map((c) => c.textContent)).toEqual(['Online', 'Password saved', 'Paired'])
+    expect(facts.map((c) => c.dataset.tone)).toEqual(['ok', 'quiet', 'quiet'])
+    // Words, not badges: no chip shapes, and agents across servers only
+    // shows when it is off.
+    expect(row().querySelector('.k2-tag')).toBeNull()
+    expect(within(row()).queryByText(/across servers/)).toBeNull()
+    // The address sits on the first line with the name, not among the facts.
     const address = within(row()).getByText('z3.k2.dev')
-    expect(chips.some((c) => c.contains(address))).toBe(false)
+    expect(facts.some((c) => c.contains(address))).toBe(false)
   })
 
-  it('says Not paired and Federation off in quiet chips', async () => {
+  it('says Not paired and Agents across servers off, quietly', async () => {
     net.federation = false
     show({ ...base, remember: false })
-    await waitFor(() => within(row()).getByText('Federation off'))
+    await waitFor(() => within(row()).getByText('Agents across servers off'))
     await waitFor(() => within(row()).getByText('Not paired'))
-    const chips = Array.from(row().querySelectorAll<HTMLElement>('[data-server-status]'))
-    expect(chips.map((c) => [c.dataset.serverStatus, c.dataset.tone])).toEqual([
+    const facts = Array.from(row().querySelectorAll<HTMLElement>('[data-server-status]'))
+    expect(facts.map((c) => [c.dataset.serverStatus, c.dataset.tone])).toEqual([
       ['health', 'ok'],
-      ['paired', 'muted'],
-      ['federation', 'muted'],
+      ['paired', 'quiet'],
+      ['federation', 'quiet'],
     ])
   })
 
@@ -161,18 +162,22 @@ describe('Connected Servers row actions', () => {
     expect(useConnectHostStore.getState().hosts).toHaveLength(1)
   })
 
-  it('confirming Remove removes the server', async () => {
+  it('confirming Remove removes the server and says so', async () => {
     show(base)
     await pickRemove()
     act(() => useConfirmDialogStore.getState().onResolve?.(true))
     await waitFor(() => expect(useConnectHostStore.getState().hosts).toEqual([]))
+    expect(screen.getByTestId('connections-notice').textContent).toContain('Removed z3 from this computer.')
   })
 
-  it('no servers: says so and offers Add a server', () => {
+  it('no servers: says so, and the one Add a server opens the dialog', () => {
     useConnectHostStore.setState({ activeHost: 'local', hosts: [], connectionStatus: 'connected' })
     render(<ConnectionsSection />)
-    expect(screen.getByText('No saved servers yet.')).toBeTruthy()
-    fireEvent.click(within(screen.getByTestId('connections-empty')).getByRole('button', { name: '+ Add a server' }))
-    expect(screen.getByRole('dialog', { name: 'Add server' })).toBeTruthy()
+    expect(within(screen.getByTestId('connections-empty')).getByText('No other servers yet')).toBeTruthy()
+    expect(within(screen.getByTestId('connections-empty')).queryByRole('button')).toBeNull()
+    const adds = screen.getAllByRole('button', { name: 'Add a server' })
+    expect(adds).toHaveLength(1)
+    fireEvent.click(adds[0])
+    expect(screen.getByRole('dialog', { name: 'Add a server' })).toBeTruthy()
   })
 })

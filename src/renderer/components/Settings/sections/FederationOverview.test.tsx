@@ -34,7 +34,7 @@ const CONN = {
 async function clickRemove(): Promise<void> {
   list.mockResolvedValue([CONN])
   render(<FederationOverview />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Remove ai from Cortana' }))
   await waitFor(() => expect(useConfirmDialogStore.getState().isOpen).toBe(true))
 }
 
@@ -50,11 +50,11 @@ describe('FederationOverview', () => {
     list.mockRejectedValueOnce(new Error('internal error'))
     list.mockResolvedValueOnce([])
     render(<FederationOverview />)
-    await waitFor(() => screen.getByText('Couldn’t load agents on other servers.'))
-    expect(screen.getByText('internal error')).toBeTruthy()
-    expect(screen.queryByText('No agents connected yet.')).toBeNull()
+    await waitFor(() => screen.getByText('Couldn’t load agents on other servers'))
+    expect(screen.getByText('The server said: internal error.')).toBeTruthy()
+    expect(screen.queryByText('No agents connected yet')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await waitFor(() => screen.getByText('No agents connected yet.'))
+    await waitFor(() => screen.getByText('No agents connected yet'))
   })
 
   it('Remove asks first, names the agent and says what happens', async () => {
@@ -62,8 +62,8 @@ describe('FederationOverview', () => {
     const dialog = useConfirmDialogStore.getState()
     expect(dialog.confirmDestructive).toBe(true)
     expect(dialog.confirmLabel).toBe('Remove')
-    expect(dialog.title).toBe('Remove ai on rpm.k2.dev?')
-    expect(dialog.message).toContain('Cortana will no longer be connected to ai')
+    expect(dialog.title).toBe('Remove ai from Cortana?')
+    expect(dialog.message).toContain('Cortana stops being able to message ai on rpm.k2.dev')
     expect(dialog.message).toContain('The server stays paired')
     expect(remove).not.toHaveBeenCalled()
   })
@@ -75,9 +75,21 @@ describe('FederationOverview', () => {
     expect(remove).not.toHaveBeenCalled()
   })
 
-  it('confirming removes the connection', async () => {
+  it('confirming removes the connection and says so', async () => {
     await clickRemove()
+    list.mockResolvedValue([])
     act(() => useConfirmDialogStore.getState().onResolve?.(true))
     await waitFor(() => expect(remove).toHaveBeenCalledWith('/srv/cortana', 'ai::rpm.k2.dev'))
+    await waitFor(() => screen.getByText('Removed ai from Cortana.'))
+  })
+
+  it('a Remove that fails says so on the row and keeps it', async () => {
+    remove.mockRejectedValueOnce(new Error('database is locked'))
+    await clickRemove()
+    act(() => useConfirmDialogStore.getState().onResolve?.(true))
+    const problem = await screen.findByTestId('connections-agent-remove-error')
+    expect(problem.textContent).toContain('Couldn’t remove ai.')
+    expect(problem.textContent).toContain('The server said: database is locked.')
+    expect(document.querySelector('[data-agent-row="ai::rpm.k2.dev"]')).not.toBeNull()
   })
 })

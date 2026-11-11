@@ -32,8 +32,14 @@ export type AddServerLoginOutcome =
    *  NEW host's provisional tile is left in the address book so the step can
    *  address it; the caller removes it if the user cancels. */
   | { kind: 'rotate'; host: ConnectHost }
-  /** Login failed. A NEW host's provisional tile has been removed. */
-  | { kind: 'error'; reason: string }
+  /** Login failed. A NEW host's provisional tile has been removed.
+   *  `loginKind` says why (wrong password, can't reach, not a K2 server…)
+   *  so the dialog can say what failed in plain words; absent when the
+   *  host was never tried (already saved). */
+  | { kind: 'error'; reason: string; loginKind?: LoginFailureKind }
+
+/** Why a sign-in failed, as `loginToHost` classifies it. */
+export type LoginFailureKind = Extract<LoginResult, { ok: false }>['kind']
 
 export interface AddServerLoginDeps {
   /** False when another saved entry already uses this host key (MS61). */
@@ -83,7 +89,7 @@ export async function verifyHostCredentials(
   const result = await deps.loginToHost(host, password)
   if (!result.ok) {
     if (isNew) deps.removeHost(host.id)
-    return { kind: 'error', reason: result.reason }
+    return { kind: 'error', reason: result.reason, loginKind: result.kind }
   }
   if (result.mustChangePassword) {
     return { kind: 'rotate', host: { ...host, token: result.token } }

@@ -949,7 +949,7 @@ assert_contains "catalog --json: app-recording" "$("$K2" study --json)" '"id":"a
 assert_absent "app-recording: K5 recording no longer waits" "$rec_out" "client_consent_missing"
 echo "== k2 study voice-rooms: Record, Stop and call transcripts (0.46.11) =="
 vr_out="$("$K2" study voice-rooms)"
-for needle in "people are told, not asked" "POST /cli/voice/recording/start" "voice_chat_not_allowed" "Read call transcripts" \
+for needle in "people are told, not asked" "POST /cli/voice/recording/start" "voice_chat_not_allowed" "(card id voice.transcripts-read)" \
     "k2 voice recordings [--room <room>]" "k2 voice transcript <id>" "k2 voice transcripts subscribe <room> <workspace>" \
     "Every read is logged" "Agents on this server may read the transcript." "transcripts_read_off" \
     "k2 permission request voice.transcripts-read" "owner_token_cannot_read"; do

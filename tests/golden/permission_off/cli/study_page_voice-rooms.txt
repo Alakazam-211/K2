@@ -109,12 +109,16 @@ Record and Stop: POST /cli/voice/recording/start {"room": "room-1"} and
 POST /cli/voice/recording/stop {"recordingId": "77"}, a person's own login
 (a Voice & Chat only login: voice_chat_not_allowed); Sew decides who may.
 
-CALL TRANSCRIPTS (after a call; agents need "Read call transcripts", the
-owner's switch, off by default). Only this server's own rooms: an App's
-Spaces keep their own rule (k2 study app-recording).
-  k2 voice recordings [--room <room>]     ids, room, when, transcript ready
+CALL TRANSCRIPTS (after a call). Agents need the switch "Read call
+transcripts" (card id voice.transcripts-read): off by default, only the
+owner turns it on. Only this server's own rooms: an App's Spaces keep
+their own rule (k2 study app-recording). <room> is 1, room-1 or its name.
+  k2 voice recordings [--room <room>]     oldest first: id, room, start
+                                          time, transcript ready or not
   k2 voice transcript <id> [--after <line-id>]
-                                          the text, a page at a time
+                                          the text, 200 lines a page; the
+                                          output ends with the next page's
+                                          command
   k2 voice transcripts [--room <room>]    who may read, who each room tells
   k2 voice transcripts subscribe <room> <workspace>
                                           a note in that agent's inbox when a
@@ -127,7 +131,9 @@ agent holds the switch, each person's recording notice says:
 Without the switch you get transcripts_read_off; ask once and wait:
   k2 permission request voice.transcripts-read --why "review our calls"
 The bare owner token lists but never reads a transcript
-(owner_token_cannot_read): read it from an owner or Admin login.
+(owner_token_cannot_read): an agent seeing it has lost its passport (K2_*
+unset in that shell); run from its own session. People read from their
+own owner or Admin login.
 
 REFUSALS. room_full · room_closing · room_not_found · host_not_pro ·
 voice_unavailable (details.engine media_path_down = the voice lane is

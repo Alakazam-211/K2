@@ -51,6 +51,8 @@
       "$type": "color"
     },
     "control-edge": { "$value": "#7d776c", "$type": "color" },
+    "control-hover": { "$value": "var(--color-border)", "$type": "color", "$description": "Hover fill of the default Button (an elevated chip at rest). Glass keeps the border step; its tile buttons hover by the Glass rules in globals." },
+    "control-hover-quiet": { "$value": "var(--color-bg-elevated)", "$type": "color", "$description": "Hover fill of the quiet Button (clear at rest, so the card or page shows). Glass hovers its tile buttons by the Glass rules in globals; this is the fallback." },
     "divider": { "$value": "#4f4b44", "$type": "color", "$description": "Short dividers between items in a row: tab-strip tabs, top-bar groups. Between border and control-edge, about 2:1 on the tab strip and the top bar capsule." },
     "text-muted": {
       "$value": "#a09a8e",

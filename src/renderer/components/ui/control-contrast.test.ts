@@ -131,6 +131,55 @@ describe('Filled accent controls', () => {
   })
 })
 
+describe('White on the accent fill (your Thread bubble, the unread count)', () => {
+  it.each(LOOKS)('white reads at 4.5:1 on the accent fill, and a dot on it holds 3:1 on the page (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    const fill = resolve(style, id, 'var(--color-accent-fill)')
+    expect(contrast(hex(p['on-accent']), fill), `${id} label on fill`).toBeGreaterThanOrEqual(4.5)
+    for (const ground of ['bg', 'bg-surface']) {
+      expect(contrast(fill, hex(p[ground])), `${id} dot on ${ground}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+
+  it('the bubble and the badge paint the fill, not the bright accent', () => {
+    const kit = readFileSync(join(__dirname, '..', 'Thread', 'ThreadZenKit.tsx'), 'utf8')
+    expect(kit).toContain("'--zen-bubble-me': 'var(--color-accent-fill)'")
+    const badge = readFileSync(join(__dirname, '..', 'common', 'UnreadBadge.tsx'), 'utf8')
+    expect(badge).toContain("const UNREAD_BG = 'bg-[var(--color-accent-fill)]'")
+  })
+})
+
+describe('Default and quiet Button hover', () => {
+  const TERMINAL = LOOKS.filter(([style]) => style === 'terminal')
+  const GLASS = LOOKS.filter(([style]) => style === 'glass')
+  const cls = (variant: string): string =>
+    new RegExp(`\\n  ${variant}:\\s*'([^']+)'`).exec(readFileSync(join(__dirname, 'Button.tsx'), 'utf8'))![1]
+
+  it('the variants hover on their own slots', () => {
+    expect(cls('default')).toContain('hover:bg-[var(--color-control-hover)]')
+    expect(cls('quiet')).toContain('hover:bg-[var(--color-control-hover-quiet)]')
+  })
+
+  it.each(TERMINAL)('in Terminal the hover fill moves 1.25:1 or more from every resting ground, under a readable label (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    const dflt = resolve(style, id, p['control-hover'])
+    const quiet = resolve(style, id, p['control-hover-quiet'])
+    expect(contrast(hex(p['bg-elevated']), dflt), `${id} default rest against hover`).toBeGreaterThanOrEqual(1.25)
+    for (const ground of ['bg', 'bg-surface', 'bg-elevated']) {
+      expect(contrast(hex(p[ground]), quiet), `${id} quiet on ${ground} against hover`).toBeGreaterThanOrEqual(1.25)
+    }
+    for (const fill of [dflt, quiet]) {
+      expect(contrast(hex(p['text-primary']), fill), `${id} label on hover`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it.each(GLASS)('Glass keeps the hover it had: the border step and the elevated fill (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    expect(p['control-hover']).toBe('var(--color-border)')
+    expect(p['control-hover-quiet']).toBe('var(--color-bg-elevated)')
+  })
+})
+
 describe('Segmented in Glass', () => {
   it('is one design in both palettes: edged track, secondary labels, the accent fill under a white label', () => {
     const track = rule(generated, '[data-style="glass"] .k2-segmented[data-material="frost"]:not([data-zen-root] *)')

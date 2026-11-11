@@ -124,6 +124,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
+  --color-control-hover: #333333;
+  --color-control-hover-quiet: #333333;
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
   --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #3987e5;
@@ -276,6 +278,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
   --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge: rgba(255, 255, 255, 0.06);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
   --color-ring-hairline: rgba(255, 255, 255, 0.08);
@@ -363,6 +367,8 @@
   --color-scrollbar-thumb-hover: rgba(30, 26, 16, 0.28);
   --color-scrollbar-thumb-strong: rgba(30, 26, 16, 0.30);
   --color-scrollbar-thumb-strong-hover: rgba(30, 26, 16, 0.45);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge: rgba(255, 255, 255, 0);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.65);
   --color-ring-hairline: rgba(17, 17, 17, 0.06);
@@ -517,6 +523,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
   --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #3987e5;
@@ -613,6 +621,8 @@
   --color-scrollbar-thumb-hover: rgba(60, 60, 67, 0.32);
   --color-scrollbar-thumb-strong: rgba(60, 60, 67, 0.34);
   --color-scrollbar-thumb-strong-hover: rgba(60, 60, 67, 0.5);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 78%, black);
   --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #2a78d6;
@@ -709,6 +719,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
   --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-chart-1: #3987e5;
   --color-chart-2: #d95926;
   --color-chart-3: #199e70;
@@ -1722,6 +1734,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.22);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.28);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.42);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
   --color-ring-edge: rgba(255, 255, 255, 0.07);
   --color-ring-hairline: rgba(255, 255, 255, 0.06);
@@ -1805,6 +1819,8 @@
   --color-scrollbar-thumb-hover: rgba(20, 30, 60, 0.26);
   --color-scrollbar-thumb-strong: rgba(20, 30, 60, 0.30);
   --color-scrollbar-thumb-strong-hover: rgba(20, 30, 60, 0.44);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.9);
   --color-ring-edge: rgba(255, 255, 255, 0.85);
   --color-ring-hairline: rgba(20, 30, 60, 0.08);
@@ -1888,6 +1904,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
   --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-control-hover: var(--color-border);
+  --color-control-hover-quiet: var(--color-bg-elevated);
   --color-ring-edge-strong: rgba(255, 255, 255, 0.10);
   --color-ring-edge: rgba(255, 255, 255, 0.07);
   --color-ring-hairline: rgba(255, 255, 255, 0.06);
@@ -2108,6 +2126,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
   --color-scrollbar-thumb-strong: rgba(255, 255, 255, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 255, 255, 0.4);
+  --color-control-hover: #333333;
+  --color-control-hover-quiet: #333333;
   --color-accent-fill: color-mix(in srgb, var(--color-accent) 82%, black);
   --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #3987e5;
@@ -2193,6 +2213,8 @@
   --color-scrollbar-thumb-hover: rgba(40, 32, 16, 0.28);
   --color-scrollbar-thumb-strong: rgba(40, 32, 16, 0.30);
   --color-scrollbar-thumb-strong-hover: rgba(40, 32, 16, 0.45);
+  --color-control-hover: #cfc7b6;
+  --color-control-hover-quiet: #cfc7b6;
   --color-accent-fill: var(--color-accent);
   --color-accent-fill-hover: color-mix(in srgb, var(--color-accent-fill) 78%, black);
   --color-chart-1: #2a78d6;
@@ -2278,6 +2300,8 @@
   --color-scrollbar-thumb-hover: rgba(255, 250, 235, 0.20);
   --color-scrollbar-thumb-strong: rgba(255, 250, 235, 0.25);
   --color-scrollbar-thumb-strong-hover: rgba(255, 250, 235, 0.40);
+  --color-control-hover: #3a3732;
+  --color-control-hover-quiet: #3a3732;
   --color-chart-1: #3987e5;
   --color-chart-2: #d95926;
   --color-chart-3: #199e70;

@@ -45,6 +45,10 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-border': zen('border'),
   '--color-border-strong': mix('text', 25),
   '--color-control-edge': zen('border'),
+  // A Button's hover in a Garden stays what it was: the default Button's
+  // border step, the quiet Button's raised fill.
+  '--color-control-hover': zen('border'),
+  '--color-control-hover-quiet': zen('surface-raised'),
   '--color-divider': zen('border'),
   // Text
   '--color-text': zen('text'),

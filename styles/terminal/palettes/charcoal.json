@@ -53,6 +53,8 @@
       "$type": "color",
       "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, the hovered list row (row-hover over a card, #2c2c2c: 3.28) being the worst case. Hairline dividers stay on border."
     },
+    "control-hover": { "$value": "#333333", "$type": "color", "$description": "Hover fill of the default Button (an elevated chip at rest). At least 1.25:1 from bg-elevated, its resting fill, so the change shows." },
+    "control-hover-quiet": { "$value": "#333333", "$type": "color", "$description": "Hover fill of the quiet Button (clear at rest, so the card or page shows). At least 1.25:1 from bg-elevated, bg-surface and bg." },
     "divider": {
       "$value": "#48484b",
       "$type": "color",

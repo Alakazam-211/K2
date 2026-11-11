@@ -5,15 +5,20 @@ import { usePressSpring } from './usePressSpring'
 /** Variants bound to Terminal's dominant button idioms — converting a call
  *  site to a variant must be rendering-identical under Charcoal. */
 const VARIANTS: Record<string, string> = {
-  /** Settings-style default: elevated chip, brightens on hover. */
+  /** Settings-style default: elevated chip, brightens on hover. The hover
+   *  fill is its own slot (--color-control-hover): in Terminal a clear step
+   *  (1.25:1 or more from the chip), in Glass the border step it always had. */
   default:
-    'bg-[var(--color-bg-elevated)] border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-border)] hover:text-[var(--color-text-primary)]',
+    'bg-[var(--color-bg-elevated)] border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-control-hover)] hover:text-[var(--color-text-primary)]',
   /** Bordered but transparent (dialog Cancel). */
   ghost:
     'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
-  /** Transparent base that fills on hover (the Settings/Connections idiom). */
+  /** Transparent base that fills on hover (the Settings/Connections idiom).
+   *  The fill (--color-control-hover-quiet) shows on the page, a card or an
+   *  elevated chip alike in Terminal; Glass fills its tile buttons by the
+   *  Glass rules in globals and keeps bg-elevated as the fallback. */
   quiet:
-    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
+    'bg-transparent border border-[var(--color-control-edge)] text-[var(--color-text-secondary)] hover:bg-[var(--color-control-hover-quiet)] hover:text-[var(--color-text-primary)]',
   /** Primary action. The fill is the accent deep enough for its label to
    *  read (--color-accent-fill). Hover is a visible step away from it
    *  (--color-accent-fill-hover, 1.3:1 or more, away from the label so it

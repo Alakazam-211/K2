@@ -46,6 +46,8 @@
       "$value": "#828287",
       "$type": "color"
     },
+    "control-hover": { "$value": "var(--color-border)", "$type": "color", "$description": "Hover fill of the default Button (an elevated chip at rest). Glass keeps the border step; its tile buttons hover by the Glass rules in globals." },
+    "control-hover-quiet": { "$value": "var(--color-bg-elevated)", "$type": "color", "$description": "Hover fill of the quiet Button (clear at rest, so the card or page shows). Glass hovers its tile buttons by the Glass rules in globals; this is the fallback." },
     "divider": {
       "$value": "#ababae",
       "$type": "color",

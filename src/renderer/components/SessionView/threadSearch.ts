@@ -8,7 +8,7 @@
 // 12" is the newest match, and the next one (Enter, the up button) is older.
 //
 // Highlights never touch the message's DOM: they are CSS Custom Highlights
-// (`::highlight(k2-thread-search)` in globals.css) over ranges of the drawn
+// (`::highlight(k2-thread-search)`, a style added at run time; the colours are in globals.css) over ranges of the drawn
 // text, so Markdown, links, code and React's own nodes are left exactly as
 // they are. Where the API is missing nothing is painted; the count and the
 // scroll still work.
@@ -371,10 +371,27 @@ interface HighlightRegistryLike {
   delete(name: string): unknown
 }
 
+// The ::highlight() rules live here, not in globals.css: the release build's
+// CSS minifier (lightningcss) refuses that pseudo-element and fails the build.
+const HIGHLIGHT_STYLE_ID = 'k2-thread-search-highlight-style'
+const HIGHLIGHT_CSS =
+  `::highlight(${THREAD_SEARCH_HIGHLIGHT}) { background-color: var(--thread-search-hit); color: var(--thread-search-hit-text); }\n` +
+  `::highlight(${THREAD_SEARCH_HIGHLIGHT_CURRENT}) { background-color: var(--thread-search-hit-current); color: var(--thread-search-hit-text); }\n`
+
+function ensureHighlightStyle(): void {
+  const doc = (globalThis as { document?: Document }).document
+  if (!doc?.head || doc.getElementById(HIGHLIGHT_STYLE_ID)) return
+  const el = doc.createElement('style')
+  el.id = HIGHLIGHT_STYLE_ID
+  el.textContent = HIGHLIGHT_CSS
+  doc.head.appendChild(el)
+}
+
 function registry(): { reg: HighlightRegistryLike; make: (ranges: Range[]) => unknown } | null {
   const css = (globalThis as { CSS?: { highlights?: HighlightRegistryLike } }).CSS
   const H = (globalThis as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
   if (!css?.highlights || typeof H !== 'function') return null
+  ensureHighlightStyle()
   return { reg: css.highlights, make: (ranges) => new H(...ranges) }
 }
 

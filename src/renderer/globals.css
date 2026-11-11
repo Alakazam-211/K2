@@ -2498,14 +2498,9 @@ html[data-style="glass"] [data-split-bar] [data-mode-toggle] > button:not([data-
   --thread-search-hit-current: #ff9f43;
   --thread-search-hit-text: #1a1400;
 }
-::highlight(k2-thread-search) {
-  background-color: var(--thread-search-hit);
-  color: var(--thread-search-hit-text);
-}
-::highlight(k2-thread-search-current) {
-  background-color: var(--thread-search-hit-current);
-  color: var(--thread-search-hit-text);
-}
+/* The ::highlight(k2-thread-search…) rules themselves are added at run time
+   by threadSearch.ts: the release build's CSS minifier (lightningcss) refuses
+   the ::highlight() pseudo-element. */
 
 /* A banner at the top of the Thread stays below the objects. */
 [data-thread-floats-host] [data-testid="clone-proposals-banner"] { margin-top: var(--thread-float-inset, 0px); }

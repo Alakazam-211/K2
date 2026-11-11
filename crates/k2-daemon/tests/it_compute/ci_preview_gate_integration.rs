@@ -164,6 +164,10 @@ const CI_TABLES: &[&str] = &[
     // 0287 (k2 ci release): an App update's evidence summary. Release runs
     // themselves are ci_runs / ci_checks rows, listed above.
     "app_update_evidence",
+    // 0295 (compute Blacksmith class T1): the test history.
+    "ci_test_jobs",
+    "ci_test_failures",
+    "ci_test_stats",
 ];
 
 fn ci_rows() -> Vec<(String, i64)> {
@@ -183,7 +187,7 @@ fn ci_routes() -> Vec<(&'static str, &'static str)> {
         assert!(k2_daemon::compute_routes::is_ci_route(p), "{p} is a CI route");
         out.push((*p, if k2_daemon::compute_routes::is_post_route(p) { "POST" } else { "GET" }));
     }
-    assert_eq!(out.len(), 30, "7 `k2 ci` routes (release and evidence since 0.46.11) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
+    assert_eq!(out.len(), 31, "8 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
     out
 }
 
@@ -260,7 +264,7 @@ async fn every_ci_route_is_dark_until_the_owner_turns_the_ci_preview_on() {
 
     for (p, m) in &routes {
         let (query, body) = match (*p, *m) {
-            ("/cli/ci/status", _) => ("workspace=gate", None),
+            ("/cli/ci/status", _) | ("/cli/ci/tests", _) => ("workspace=gate", None),
             (_, "POST") => ("", Some(json!({}))),
             _ => ("", None),
         };

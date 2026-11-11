@@ -175,6 +175,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/ci/signer/reveal", Admin),
     get("/cli/ci/signers", Admin),
     get("/cli/ci/status", Member),
+    // prd-compute-blacksmith-class-v1 T1: test history, a reader like status.
+    get("/cli/ci/tests", Member),
     post("/cli/ci/watch", Member),
     post("/cli/claude-auth/install-scheduler", Member),
     post("/cli/claude-auth/refresh-now", Member),

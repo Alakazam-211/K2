@@ -1955,6 +1955,13 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // edit the migration-order tests). The writer is k2-daemon's
         // `apps::db_connect`.
         ("0294_app_db_connections", include_str!("../../drizzle_sql/0294_app_db_connections.sql")),
+        // 0295 — CI test history and flaky detection
+        // (prd-compute-blacksmith-class-v1 T1): non-passing cases per check
+        // job, a rolling row per test per check, and what was recorded per
+        // job. 0296–0298 are reserved for the same PRD's other slices.
+        // Renumber freely on a slip (and edit the migration-order tests).
+        // The writer is k2-daemon's `ci_engine` (`crate::ci_tests`).
+        ("0295_ci_test_history", include_str!("../../drizzle_sql/0295_ci_test_history.sql")),
         // 0301 — "Allow a virtual desktop" (0.46.12,
         // prd-linux-virtual-desktop-v1 LD-38): `projects.agents_can_use_desktop`,
         // beside 0233's "Allow mobile devices". 0295–0300 are other arcs'
@@ -2899,6 +2906,8 @@ mod tests {
                 "0293_orchestrator",
                 // 0.46.11: an App's database connections (k2 app db connect).
                 "0294_app_db_connections",
+                // CI test history (compute Blacksmith class T1).
+                "0295_ci_test_history",
                 // 0.46.12: "Allow a virtual desktop".
                 "0301_desktop_agents",
             ],
@@ -3087,6 +3096,8 @@ mod tests {
                 "0293_orchestrator",
                 // 0.46.11: an App's database connections (k2 app db connect).
                 "0294_app_db_connections",
+                // CI test history (compute Blacksmith class T1).
+                "0295_ci_test_history",
                 // 0.46.12: "Allow a virtual desktop".
                 "0301_desktop_agents",
             ],
@@ -3440,6 +3451,7 @@ mod tests {
                 "0292_mail_drafts",
                 "0293_orchestrator",
                 "0294_app_db_connections",
+                "0295_ci_test_history",
                 "0301_desktop_agents"
             ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0.46.12's 0301)"
@@ -4287,6 +4299,9 @@ mod tests {
             // 0301 ("Allow a virtual desktop", 0.46.12) is the newest: its
             // record goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0301_desktop_agents'", []).unwrap();
+            // 0295 (CI test history) is the newest: its record goes (its
+            // tables and indexes are IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0295_ci_test_history'", []).unwrap();
             // 0294 (an App's database connections, 0.46.11) came before it:
             // its record goes (its table and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0294_app_db_connections'", []).unwrap();

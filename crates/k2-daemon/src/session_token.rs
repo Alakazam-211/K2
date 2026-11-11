@@ -866,6 +866,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/ci/release",
         "/cli/ci/run",
         "/cli/ci/status",
+        // prd-compute-blacksmith-class-v1 T1: its own workspace's test history.
+        "/cli/ci/tests",
         "/cli/ci/watch",
         // K2 compute nodes (CN18): the agent verbs. The handler checks the
         // workspace switch (`compute_off`) and the node grant

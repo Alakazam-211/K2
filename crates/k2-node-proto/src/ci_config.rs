@@ -240,6 +240,28 @@ pub fn civil_days(s: &str) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
+/// `YYYY-MM-DD` (UTC) of a unix time: the `today` [`Quarantine::state`]
+/// takes. The inverse of [`civil_days`].
+pub fn civil_date(unix_secs: i64) -> String {
+    // Howard Hinnant's civil_from_days.
+    let z = unix_secs.div_euclid(86_400) + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The `[[quarantine]]` entries for `check` that are active on `today`
+/// (expired and too-far entries are left out; the verdict notes them).
+pub fn active_quarantine<'a>(cfg: &'a CiConfig, check: &str, today: &str) -> Vec<&'a Quarantine> {
+    cfg.quarantine.iter().filter(|q| q.check == check && q.state(today) == Ok(QuarantineState::Active)).collect()
+}
+
 /// `k2 ci release`: the builds of one release set, placed together on the
 /// seat (C5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -724,5 +746,13 @@ warm = true
         assert_eq!(civil_days("2023-02-29"), None);
         assert_eq!(civil_days("2026-13-01"), None);
         assert_eq!(civil_days("2026-1-01"), None);
+        for d in ["1970-01-01", "2000-02-29", "2026-11-11", "2026-12-31", "2100-03-01"] {
+            assert_eq!(civil_date(civil_days(d).unwrap() * 86_400 + 3600), d);
+        }
+        assert_eq!(civil_date(1_794_441_600), "2026-11-12");
+        let c = CiConfig::parse(V2).unwrap();
+        assert_eq!(active_quarantine(&c, "test", "2026-11-11").len(), 1);
+        assert!(active_quarantine(&c, "test", "2026-12-02").is_empty(), "expired");
+        assert!(active_quarantine(&c, "vitest", "2026-11-11").is_empty(), "another check");
     }
 }

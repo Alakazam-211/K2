@@ -80,6 +80,99 @@ pub trait Ops: Send + Sync {
     fn job(&self, job_id: &str) -> Option<JobFacts>;
     /// One commit status. `Err` is one line for the check's row.
     fn post_status(&self, ws_id: &str, target: &StatusTarget, sha: &str, context: &str, state: &str, description: &str) -> Result<(), String>;
+    /// prd-compute-blacksmith-class-v1 T1 (BK-8): the JUnit files a check
+    /// job kept, fetched to this server and read. The default (a fake
+    /// without it) is "no JUnit".
+    fn junit(&self, _job_id: &str) -> JunitFetch {
+        JunitFetch { note: Some("no JUnit fetch here".into()), ..Default::default() }
+    }
+}
+
+/// What [`Ops::junit`] found for one check job.
+#[derive(Debug, Clone, Default)]
+pub struct JunitFetch {
+    /// `(artifact name, text)` of every JUnit file the job kept. Empty with
+    /// a `note` when there is none, it is over the history cap
+    /// (`results::MAX_HISTORY_JUNIT_BYTES`), or a fetch failed.
+    pub files: Vec<(String, String)>,
+    /// The node's own counts (kept as `counts_only` when there are no files).
+    pub summary: Option<k2_core::compute::proto::results::TestSummary>,
+    pub note: Option<String>,
+    /// `BUILD_TREE`, the node and the attempt (flaky rule 1's key; the row).
+    pub tree: Option<String>,
+    pub node_id: Option<String>,
+    pub attempt: i64,
+}
+
+/// How long one JUnit pull may sit with no bytes (T1). Small: JUnit is a
+/// few MB at most, and the reap holds the run lock.
+const JUNIT_IDLE: Duration = Duration::from_secs(20);
+
+/// T1: record one finished check job's tests (§4.3.2): fetch its JUnit,
+/// parse every case, apply the flaky rules, mark quarantined tests from
+/// the commit's `.k2/ci.toml`. Once per job (`ci_test_jobs`). Returns the
+/// counts phrase for the check's description, when there are tests.
+fn record_tests(o: &dyn Ops, run: &RunRow, check: &str, job_id: &str, now: i64) -> Option<String> {
+    use k2_core::ci_tests::{self, JobCtx};
+    use k2_core::compute::proto::ci_config;
+    use k2_core::compute::proto::results::parse_junit_cases;
+    {
+        let db = db();
+        let conn = db.lock();
+        if let Some(r) = ci_tests::recorded(&conn, job_id) {
+            return (r.total > 0).then(|| r.counts_phrase());
+        }
+    }
+    let f = o.junit(job_id);
+    let ctx = JobCtx {
+        workspace_id: run.workspace_id.clone(),
+        check: check.to_string(),
+        job_id: job_id.to_string(),
+        run_id: Some(run.id.clone()),
+        sha: Some(run.sha.clone()),
+        tree: f.tree.clone(),
+        node_id: f.node_id.clone(),
+        attempt: f.attempt.max(1),
+        at: now,
+    };
+    let mut cases = Vec::new();
+    let mut note = f.note.clone();
+    for (name, text) in &f.files {
+        match parse_junit_cases(text, name) {
+            Ok(mut c) => cases.append(&mut c),
+            Err(e) => {
+                note = Some(format!("JUnit: {e}"));
+                cases.clear();
+                break;
+            }
+        }
+    }
+    // Quarantine marks: the commit's own `.k2/ci.toml` (version 2), the
+    // entries for this check that are active today.
+    let today = ci_config::civil_date(now);
+    let quarantined: Vec<String> = Some(())
+        .filter(|_| !cases.is_empty())
+        .and_then(|_| crate::compute_routes::ws_by_id(&run.workspace_id))
+        .and_then(|ws| o.repo_root(Path::new(&ws.path)).ok())
+        .and_then(|root| o.read_config(&root, &run.sha).ok().flatten())
+        .and_then(|t| CiConfig::parse(&t).ok())
+        .map(|c| ci_config::active_quarantine(&c, check, &today).into_iter().map(|q| q.test.clone()).collect())
+        .unwrap_or_default();
+    let is_q = |id: &str| quarantined.iter().any(|q| q == id);
+    let db = db();
+    let conn = db.lock();
+    let r = if f.files.is_empty() || (cases.is_empty() && note.is_some()) {
+        ci_tests::record_counts_only(&conn, &ctx, f.summary.as_ref(), note.as_deref().unwrap_or("no JUnit"))
+    } else {
+        ci_tests::record_cases(&conn, &ctx, &cases, &is_q)
+    };
+    match r {
+        Ok(r) => (r.total > 0).then(|| r.counts_phrase()),
+        Err(e) => {
+            log_debug!("[ci] test history for {}: {e}", &job_id[..job_id.len().min(8)]);
+            None
+        }
+    }
 }
 
 static OPS: Mutex<Option<Arc<dyn Ops>>> = Mutex::new(None);
@@ -470,6 +563,8 @@ pub fn reap(o: &dyn Ops, run_id: &str, now: i64) {
         return;
     }
     let late = now >= run.created_at + ci::RUN_DEADLINE_SECS;
+    // T1: checks whose job ended now, for their test history.
+    let mut ended: Vec<(String, String, String, String)> = Vec::new();
     for c in checks.iter().filter(|c| !c.is_final()) {
         let (state, desc) = match c.job_id.as_deref() {
             None => (check_state::ERROR, "never submitted".to_string()),
@@ -488,6 +583,19 @@ pub fn reap(o: &dyn Ops, run_id: &str, now: i64) {
         if ci::is_final_check(state) {
             // The final state gets its own tries at posting.
             ci::set_check_posted(&conn, run_id, &c.name, None, 0, c.post_error.as_deref());
+            if let Some(job) = c.job_id.as_deref().filter(|_| state == check_state::SUCCESS || state == check_state::FAILURE) {
+                ended.push((c.name.clone(), job.to_string(), state.to_string(), desc.clone()));
+            }
+        }
+    }
+    // T1 (prd-compute-blacksmith-class-v1 §4.3): each ended check's tests
+    // go into the history, and their counts (never names) into the check's
+    // description, before the final status posts.
+    for (name, job, state, desc) in &ended {
+        if let Some(phrase) = record_tests(o, &run, name, job, now) {
+            let db = db();
+            let conn = db.lock();
+            ci::set_check(&conn, run_id, name, None, state, &format!("{desc}; {phrase}"));
         }
     }
     let checks = {
@@ -736,6 +844,50 @@ impl Ops for Real {
         let gh = k2_core::compute::git::Github::new(&base)?;
         gh.create_status(token, owner, repo, sha, state, context, description).map_err(|(_, m)| m)
     }
+
+    fn junit(&self, job_id: &str) -> JunitFetch {
+        use k2_core::compute::proto::results::MAX_HISTORY_JUNIT_BYTES;
+        let job = {
+            let db = db();
+            let conn = db.lock();
+            k2_core::compute::store::job_by_id(&conn, job_id)
+        };
+        let Some(job) = job else {
+            return JunitFetch { note: Some("the job has no record here".into()), ..Default::default() };
+        };
+        let o = k2_core::compute::result::outputs(&job);
+        let summary = o.as_ref().and_then(|o| o.tests.clone());
+        let mut f = JunitFetch { summary: summary.clone(), tree: job.src_tree.clone(), node_id: Some(job.node_id.clone()), attempt: job.attempt, ..Default::default() };
+        let Some(t) = summary else {
+            f.note = Some("the job kept no JUnit report (name one in the check's artifacts)".into());
+            return f;
+        };
+        // The JUnit files are the artifacts the node parsed (`sources`).
+        let arts: Vec<_> = o.map(|o| o.artifacts).unwrap_or_default().into_iter().filter(|a| t.sources.contains(&a.name)).collect();
+        let bytes: u64 = arts.iter().map(|a| a.bytes).sum();
+        if arts.is_empty() {
+            f.note = Some("the job's JUnit files are not among its artifacts".into());
+            return f;
+        }
+        if bytes > MAX_HISTORY_JUNIT_BYTES {
+            f.note = Some(format!("JUnit is {} MB, over the {} MB history cap: counts only", bytes >> 20, MAX_HISTORY_JUNIT_BYTES >> 20));
+            return f;
+        }
+        for a in &arts {
+            let read = crate::compute_ws::fetch_artifact(&job, a, false, JUNIT_IDLE)
+                .map_err(|(code, hint)| format!("{}: {code}: {hint}", a.name))
+                .and_then(|p| std::fs::read(&p).map_err(|e| format!("{}: {e}", a.name)));
+            match read {
+                Ok(bytes) => f.files.push((a.name.clone(), String::from_utf8_lossy(&bytes).into_owned())),
+                Err(e) => {
+                    f.files.clear();
+                    f.note = Some(format!("couldn't fetch the JUnit ({e}): counts only"));
+                    return f;
+                }
+            }
+        }
+        f
+    }
 }
 
 #[cfg(test)]
@@ -758,6 +910,9 @@ mod tests {
         posts: Mutex<Vec<(String, String, String, String)>>,
         post_fails: Mutex<u32>,
         ls_fails: Mutex<Option<String>>,
+        /// T1: each job's JUnit, as `Ops::junit` answers it.
+        junit: Mutex<HashMap<String, JunitFetch>>,
+        junit_asked: Mutex<Vec<String>>,
     }
 
     impl Fake {
@@ -830,6 +985,88 @@ mod tests {
             self.posts.lock().unwrap().push((format!("{}@{}", t.slug, &sha[..7]), context.to_string(), state.to_string(), desc.to_string()));
             Ok(())
         }
+        fn junit(&self, job_id: &str) -> JunitFetch {
+            self.junit_asked.lock().unwrap().push(job_id.to_string());
+            self.junit.lock().unwrap().get(job_id).cloned().unwrap_or_default()
+        }
+    }
+
+    /// The job id of `check` in the run of `sha`.
+    fn job_of(f: &Fake, sha: &str, check: &str) -> String {
+        let bodies = f.bodies.lock().unwrap();
+        let b = bodies.iter().find(|b| b["sha"] == sha && b["tag"] == format!("ci:{check}")).expect("a job for that check");
+        b["clientJobId"].as_str().unwrap().to_string()
+    }
+
+    /// prd-compute-blacksmith-class-v1 T1 (§4.3, §10): when a check's job
+    /// ends, the engine fetches its JUnit, records every case once, and the
+    /// check's description gains counts only (never a name). A test that
+    /// failed on a tree and passed on the same tree in a later run is flaky.
+    #[test]
+    fn ended_checks_record_test_history_and_counts_only() {
+        let _db = k2_core::db::scoped_for_test();
+        let f = Fake::default();
+        let ws = seed_ws();
+        watch(&ws, 4);
+        let (a, b) = (sha('a'), sha('b'));
+        *f.tips.lock().unwrap() = format!("{a}\trefs/heads/main\n");
+        f.configs.lock().unwrap().insert(a.clone(), CFG.into());
+        f.configs.lock().unwrap().insert(b.clone(), CFG.into());
+        tick(&f, 100);
+        let unit_a = job_of(&f, &a, "unit");
+        let xml_fail = r#"<testsuites><testsuite name="k2-core"><testcase name="sync::reconnect @user](http://x)" classname="k2-core" time="0.5"><failure message="boom"/></testcase><testcase name="ok" classname="k2-core" time="0.1"/></testsuite></testsuites>"#;
+        f.junit.lock().unwrap().insert(
+            unit_a.clone(),
+            JunitFetch { files: vec![("target/nextest/ci/junit.xml".into(), xml_fail.into())], tree: Some("t".repeat(40)), node_id: Some("n7".into()), attempt: 1, ..Default::default() },
+        );
+        f.finish("unit", 100);
+        f.finish("lint", 0);
+        tick(&f, 200);
+        let r = runs(&ws).into_iter().find(|r| r.sha == a).unwrap();
+        assert_eq!(r.state, run_state::FAILED);
+        let unit = checks(&r.id).into_iter().find(|c| c.name == "unit").unwrap();
+        assert!(unit.description.ends_with("; tests 1 passed, 1 failed (1 new)"), "{}", unit.description);
+        assert!(!unit.description.contains("reconnect") && !unit.description.contains("@user"), "no names: {}", unit.description);
+        assert!(f.posts().iter().any(|p| p.1 == "k2-ci/unit" && p.2 == "failure" && !p.3.contains("@user")), "{:?}", f.posts());
+        {
+            let db = db();
+            let conn = db.lock();
+            let rec = k2_core::ci_tests::recorded(&conn, &unit_a).expect("recorded");
+            assert_eq!((rec.state.as_str(), rec.total, rec.failed, rec.new_failures), ("done", 2, 1, 1));
+            let marks = k2_core::ci_tests::marks_of_job(&conn, &unit_a);
+            assert_eq!(marks.get("k2-core::sync::reconnect @user](http://x)").map(String::as_str), Some("new"));
+            // lint kept no JUnit: recorded once as `none`.
+            let lint_a = job_of(&f, &a, "lint");
+            assert_eq!(k2_core::ci_tests::recorded(&conn, &lint_a).unwrap().state, "none");
+        }
+        // Another tick asks nothing again (recorded once).
+        let asked = f.junit_asked.lock().unwrap().len();
+        tick(&f, 250);
+        assert_eq!(f.junit_asked.lock().unwrap().len(), asked);
+
+        // The next tip builds the same tree (a rebuild, say): the test
+        // passes there, so it is flaky (rule 1).
+        *f.tips.lock().unwrap() = format!("{b}\trefs/heads/main\n");
+        tick(&f, 300);
+        let unit_b = job_of(&f, &b, "unit");
+        let lint_b = job_of(&f, &b, "lint");
+        let xml_pass = r#"<testsuites><testsuite name="k2-core"><testcase name="sync::reconnect @user](http://x)" classname="k2-core" time="0.5"/><testcase name="ok" classname="k2-core"/></testsuite></testsuites>"#;
+        f.junit.lock().unwrap().insert(unit_b.clone(), JunitFetch { files: vec![("j.xml".into(), xml_pass.into())], tree: Some("t".repeat(40)), attempt: 1, ..Default::default() });
+        {
+            let mut jobs = f.jobs.lock().unwrap();
+            for (id, j) in jobs.iter_mut() {
+                if *id == unit_b || *id == lint_b {
+                    j.state = "done".into();
+                    j.exit = Some(0);
+                }
+            }
+        }
+        tick(&f, 400);
+        let db = db();
+        let conn = db.lock();
+        let flaky = k2_core::ci_tests::list(&conn, &ws.id, Some("unit"), k2_core::ci_tests::Filter::Flaky, 0, 50).unwrap();
+        assert_eq!(flaky.len(), 1, "{flaky:?}");
+        assert_eq!(flaky[0].test, "k2-core::sync::reconnect @user](http://x)");
     }
 
     const CFG: &str = "version = 1\n[watch]\nremote = \"origin\"\nbranches = [\"main\", \"integ/*\"]\n[statuses]\ntoken_secret = \"K2_CI_STATUSES_TOKEN\"\n[checks.unit]\nargv = [\"cargo\", \"test\"]\nmem_gb = 8\n[checks.lint]\nargv = [\"cargo\", \"clippy\"]\n";

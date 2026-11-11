@@ -2311,11 +2311,15 @@ t = r.get("tests")
 if not t:
     sys.exit(0)
 print("FAILING TESTS: %d failed, %d errors, %d passed, %d skipped (of %d)" % (t["failed"], t["errors"], t["passed"], t["skipped"], t["total"]))
+h = r.get("testHistory")
+if h and (h.get("flaky") or h.get("quarantined") or h.get("new")):
+    print("  history: %d flaky, %d quarantined, %d new (k2 ci tests)" % (h.get("flaky") or 0, h.get("quarantined") or 0, h.get("new") or 0))
 for f in t.get("failing") or []:
     where = ("[shard %d] " % f["shard"]) if f.get("shard") else ""
+    mark = ("[%s] " % f["mark"]) if f.get("mark") in ("new", "flaky", "quarantined", "known") else ""
     cls = (f.get("classname") + " ") if f.get("classname") else ""
     msg = (f.get("message") or "").splitlines()
-    print("  %s%s%s%s" % (where, cls, f["name"], (" — " + msg[0][:160]) if msg else ""))
+    print("  %s%s%s%s%s" % (where, mark, cls, f["name"], (" — " + msg[0][:160]) if msg else ""))
 if t.get("truncated"):
     print("  … more failures than listed (k2 compute fetch the JUnit file)")
 print("LOG LINES:")'

@@ -114,7 +114,18 @@ class H(BaseHTTPRequestHandler):
                 return self.reply({"workspace": "proj", "run": run("failed")})
             return self.reply({"workspace": "proj", "watch": {"on": True, "remote": "origin", "branches": ["main", "integ/*"], "pollSecs": 60, "tier": "ci", "maxInflight": 2, "by": "owner", "at": 1, "lastPollAt": int(time.time()) - 20, "lastError": None},
                                "freeze": None, "inflight": 0, "runs": [run("failed")]})
+        if path == "/cli/ci/tests":
+            return self.reply({"workspace": "proj", "check": q.get("check"), "filter": q.get("filter") or "all", "days": int(q.get("days") or 30),
+                               "tests": [{"check": "test", "test": "k2-core::sync::reconnect", "why": "flaky", "runs": 40, "fails": 3, "flakes": 3,
+                                          "windowJobs": 40, "windowCount": 3, "rose": False, "lastFlakeAt": int(time.time()) - 7200,
+                                          "lastFlakeTree": "c0ffee" * 6 + "abcd", "lastSeen": int(time.time())}]})
         if path == "/cli/compute/jobs/get":
+            if q.get("job") == "jobaaaaa1111":
+                return self.reply({"id": q.get("job"), "result": {
+                    "tests": {"total": 3, "passed": 1, "failed": 2, "errors": 0, "skipped": 0, "failing": [
+                        {"name": "sync::reconnect", "classname": "k2-core", "kind": "failure", "message": "boom", "mark": "flaky"},
+                        {"name": "sync::fresh", "classname": "k2-core", "kind": "failure", "message": "bang", "mark": "new"}]},
+                    "testHistory": {"state": "done", "flaky": 1, "quarantined": 0, "new": 1, "retried": 0, "note": None}}})
             return self.reply({"id": q.get("job"), "result": {}})
         if path == "/cli/compute/jobs/logs":
             if q.get("cursor") == "0":
@@ -298,6 +309,31 @@ has "logs fetched the job" "$(last /cli/compute/jobs/logs)" "job=jobaaaaa1111"
 rc "logs --check lint only" 0 ci logs ab12cd34 --check lint
 if grep -Fq "hello from unit" "$WORK/out"; then bad "--check lint printed unit's log"; else ok "--check picks one check"; fi
 rc "logs --check nope" 4 ci logs ab12cd34 --check nope
+
+echo "== tests and failure marks (compute Blacksmith class T1) =="
+has "help: ci tests" "$("$K2" ci --help)" "k2 ci tests [--check NAME] [--flaky | --slow | --failing | --quarantined]"
+has "study: tests pointer" "$("$K2" study ci)" "TESTS AND FLAKY: k2 ci tests"
+before="$(wc -l <"$REQ_LOG")"
+rc "two lists" 2 ci tests --flaky --slow
+rc "--days not a number" 2 ci tests --days soon
+rc "--flaky outside tests" 2 ci status --flaky
+rc "--days outside tests" 2 ci status --days 3
+eq "usage errors sent nothing" "$(wc -l <"$REQ_LOG")" "$before"
+rc "tests --flaky" 0 ci tests --flaky --check test --days 7d
+q="$(last /cli/ci/tests)"
+has "tests: filter" "$q" "filter=flaky"
+has "tests: check" "$q" "check=test"
+has "tests: days" "$q" "days=7"
+out="$(cat "$WORK/out")"
+has "tests: data framing" "$out" "names are program output"
+has "tests: the flaky line" "$out" "test k2-core::sync::reconnect  flaky (3 of the last 40 runs), last flipped 2h ago on tree c0ffeec0ffee"
+rc "tests --json" 0 ci tests --json
+has "tests --json is the daemon's" "$(cat "$WORK/out")" "\"windowJobs\": 40"
+rc "logs --failures" 0 ci logs ab12cd34 --check unit --failures
+out="$(cat "$WORK/out")"
+has "failures: the flaky mark" "$out" "[flaky] k2-core sync::reconnect — boom"
+has "failures: the new mark" "$out" "[new] k2-core sync::fresh — bang"
+has "failures: the history line" "$out" "history: 1 flaky, 0 quarantined, 1 new (k2 ci tests)"
 
 echo
 echo "ci_cli: $pass passed, $fail failed"

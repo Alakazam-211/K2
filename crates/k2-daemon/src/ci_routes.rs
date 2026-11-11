@@ -37,9 +37,11 @@ pub const INIT: &str = "/cli/ci/init";
 pub const RELEASE: &str = "/cli/ci/release";
 pub const RUN: &str = "/cli/ci/run";
 pub const STATUS: &str = "/cli/ci/status";
+/// prd-compute-blacksmith-class-v1 T1: `k2 ci tests` (test history).
+pub const TESTS: &str = "/cli/ci/tests";
 pub const WATCH: &str = "/cli/ci/watch";
 
-pub const ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, STATUS, WATCH];
+pub const ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, STATUS, TESTS, WATCH];
 pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, WATCH];
 
 /// Longest freeze (`k2 ci freeze --until`).
@@ -52,6 +54,7 @@ pub fn is_route(p: &str) -> bool {
 pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     match p {
         STATUS => status(who, params),
+        TESTS => tests(who, params),
         RUN => run(who, body),
         // 0.46.11 (C5/C6b, `ci_release`): a release set and its evidence.
         RELEASE => crate::ci_release::release(who, body),
@@ -215,6 +218,48 @@ fn status(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
         "freeze": freeze_view(row.as_ref(), now()),
         "inflight": ci::inflight_count(&conn, &ws.id),
         "runs": runs,
+    }))
+}
+
+// ── GET /cli/ci/tests ────────────────────────────────────────────────
+
+/// `k2 ci tests [--check C] [--flaky|--slow|--failing|--quarantined]
+/// [--days 30] [--limit N]` (prd-compute-blacksmith-class-v1 §4.3.5): the
+/// workspace's test history. A reader verb, like status. Test names are
+/// program output: the CLI shows them as data.
+fn tests(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    let ws = reader(who, params.get("workspace").map(String::as_str))?;
+    let check = params.get("check").map(|c| c.trim()).filter(|c| !c.is_empty());
+    if let Some(c) = check {
+        if !k2_core::compute::proto::ci::is_name(c) {
+            return Err(no("bad_request", 400, format!("--check {c:?}: a check name ([a-z0-9._-])")));
+        }
+    }
+    let filter_text = params.get("filter").map(String::as_str).unwrap_or("");
+    let filter = k2_core::ci_tests::Filter::parse(filter_text)
+        .ok_or_else(|| no("bad_request", 400, "filter: flaky, slow, failing or quarantined (or none for all three lists)"))?;
+    let days = match params.get("days") {
+        None => 30,
+        Some(d) => d.parse::<i64>().ok().filter(|d| (1..=365).contains(d)).ok_or_else(|| no("bad_request", 400, "--days: 1-365"))?,
+    };
+    let limit = match params.get("limit") {
+        None => 50,
+        Some(l) => l
+            .parse::<usize>()
+            .ok()
+            .filter(|l| (1..=k2_core::ci_tests::MAX_LIST).contains(l))
+            .ok_or_else(|| no("bad_request", 400, "--limit: 1-500"))?,
+    };
+    let since = now() - days * 86_400;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let rows = k2_core::ci_tests::list(&conn, &ws.id, check, filter, since, limit).map_err(|e| no("internal", 500, e))?;
+    Ok(serde_json::json!({
+        "workspace": ws.handle,
+        "check": check,
+        "filter": if filter_text.is_empty() { "all" } else { filter_text },
+        "days": days,
+        "tests": rows,
     }))
 }
 

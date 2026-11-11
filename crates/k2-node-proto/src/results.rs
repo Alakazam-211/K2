@@ -485,10 +485,116 @@ pub fn looks_like_junit(head: &[u8]) -> bool {
 /// suite attributes. A case that passed after a retry (`flakyFailure`,
 /// `rerunFailure` only) counts as passed.
 pub fn parse_junit(xml: &str, source: &str) -> Result<TestSummary, String> {
+    Ok(run_junit(xml, source, false)?.out)
+}
+
+/// Most cases [`parse_junit_cases`] returns from one report.
+pub const MAX_CASES: usize = 200_000;
+/// JUnit the controller parses into test history per job
+/// (prd-compute-blacksmith-class-v1 §4.3.2): past it, history records
+/// counts only and says so.
+pub const MAX_HISTORY_JUNIT_BYTES: u64 = 20 << 20;
+
+/// One test case's outcome (§4.3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaseResult {
+    Passed,
+    Failed,
+    Error,
+    Skipped,
+    /// Passed after a retry inside the run (nextest's `flakyFailure` /
+    /// `flakyError`): flaky by the runner's own report.
+    Flaky,
+}
+
+impl CaseResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaseResult::Passed => "passed",
+            CaseResult::Failed => "failed",
+            CaseResult::Error => "error",
+            CaseResult::Skipped => "skipped",
+            CaseResult::Flaky => "flaky",
+        }
+    }
+
+    /// Failed or errored (what turns a check red).
+    pub fn is_failure(self) -> bool {
+        matches!(self, CaseResult::Failed | CaseResult::Error)
+    }
+}
+
+/// One `<testcase>`: what [`parse_junit`] counts, kept whole. Names and
+/// messages are program output (untrusted text).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestCase {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub classname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    pub result: CaseResult,
+    /// The `time` attribute in milliseconds (absent: none or unreadable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_ms: Option<u64>,
+    /// Retries inside the run: nextest's `flakyFailure`/`flakyError` on a
+    /// pass, `rerunFailure`/`rerunError` on a failure.
+    #[serde(default)]
+    pub retries: u32,
+    /// The first lines of the failure text (failed, error and flaky only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl TestCase {
+    /// The id `k2 ci tests` shows: `classname::name`, or the name alone.
+    pub fn test_id(&self) -> String {
+        match &self.classname {
+            Some(c) => format!("{c}::{}", self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
+/// Every case of one JUnit report (§4.3.2, BK-8): name, classname, result,
+/// time, and nextest's retry elements, which [`parse_junit`] counts as a
+/// pass and drops. Same reader as [`parse_junit`], so the counts agree:
+/// a [`CaseResult::Flaky`] case is one of its `passed`. At most
+/// [`MAX_CASES`].
+pub fn parse_junit_cases(xml: &str, source: &str) -> Result<Vec<TestCase>, String> {
+    let st = run_junit(xml, source, true)?;
+    Ok(st.cases.unwrap_or_default())
+}
+
+/// `time="1.5"` (seconds) → 1500 ms. No floats: whole and fraction parts
+/// are read as digits; anything else is `None`.
+pub fn junit_time_ms(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (whole, frac) = s.split_once('.').unwrap_or((s, ""));
+    if whole.is_empty() && frac.is_empty() {
+        return None;
+    }
+    if !whole.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) || whole.len() > 12 {
+        return None;
+    }
+    let w: u64 = if whole.is_empty() { 0 } else { whole.parse().ok()? };
+    let mut ms = 0u64;
+    for (i, b) in frac.bytes().take(3).enumerate() {
+        ms += u64::from(b - b'0') * [100, 10, 1][i];
+    }
+    w.checked_mul(1000)?.checked_add(ms)
+}
+
+fn run_junit(xml: &str, source: &str, keep_cases: bool) -> Result<JunitState, String> {
     use quick_xml::events::Event;
     let mut r = quick_xml::Reader::from_str(xml);
     r.config_mut().trim_text(false);
-    let mut st = JunitState { out: TestSummary { sources: vec![source.to_string()], ..Default::default() }, ..Default::default() };
+    let mut st = JunitState {
+        out: TestSummary { sources: vec![source.to_string()], ..Default::default() },
+        cases: keep_cases.then(Vec::new),
+        ..Default::default()
+    };
     loop {
         let ev = r.read_event().map_err(|e| format!("{source}: XML error at byte {}: {e}", r.buffer_position()))?;
         match ev {
@@ -524,7 +630,7 @@ pub fn parse_junit(xml: &str, source: &str) -> Result<TestSummary, String> {
     if !st.saw_root {
         return Err(format!("{source}: no <testsuite> or <testsuites> element"));
     }
-    Ok(st.out)
+    Ok(st)
 }
 
 /// The open test case while parsing.
@@ -538,6 +644,15 @@ struct Case {
     skipped: bool,
     text: String,
     in_verdict: bool,
+    time_ms: Option<u64>,
+    /// `flakyFailure` / `flakyError` elements (retried, then passed).
+    flaky: u32,
+    /// `rerunFailure` / `rerunError` elements (retried, still failed).
+    reruns: u32,
+    /// The first flaky element's message, and its text.
+    flaky_msg: Option<String>,
+    flaky_text: String,
+    in_flaky: bool,
 }
 
 #[derive(Default)]
@@ -546,6 +661,8 @@ struct JunitState {
     case: Option<Case>,
     suite_file: Vec<Option<String>>,
     saw_root: bool,
+    /// [`parse_junit_cases`] only.
+    cases: Option<Vec<TestCase>>,
 }
 
 fn attr(e: &quick_xml::events::BytesStart<'_>, k: &[u8]) -> Option<String> {
@@ -574,6 +691,7 @@ impl JunitState {
                     name: attr(e, b"name").unwrap_or_default(),
                     classname: attr(e, b"classname").filter(|s| !s.is_empty()),
                     file: attr(e, b"file").or_else(|| self.suite_file.last().cloned().flatten()),
+                    time_ms: attr(e, b"time").as_deref().and_then(junit_time_ms),
                     ..Default::default()
                 });
                 if empty {
@@ -596,6 +714,22 @@ impl JunitState {
                     c.skipped = true;
                 }
             }
+            // nextest (and surefire) retries: counted by `parse_junit` as
+            // the case's final result, kept by `parse_junit_cases`.
+            b"flakyFailure" | b"flakyError" => {
+                if let Some(c) = self.case.as_mut() {
+                    c.flaky += 1;
+                    if c.flaky_msg.is_none() {
+                        c.flaky_msg = Some(attr(e, b"message").unwrap_or_default());
+                        c.in_flaky = !empty;
+                    }
+                }
+            }
+            b"rerunFailure" | b"rerunError" => {
+                if let Some(c) = self.case.as_mut() {
+                    c.reruns += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -615,17 +749,52 @@ impl JunitState {
                     c.in_verdict = false;
                 }
             }
+            b"flakyFailure" | b"flakyError" => {
+                if let Some(c) = self.case.as_mut() {
+                    c.in_flaky = false;
+                }
+            }
             _ => {}
         }
     }
 
     fn text(&mut self, s: &str) {
-        if let Some(c) = self.case.as_mut().filter(|c| c.in_verdict && c.text.len() < 8192) {
-            c.text.push_str(s);
+        if let Some(c) = self.case.as_mut() {
+            if c.in_verdict && c.text.len() < 8192 {
+                c.text.push_str(s);
+            } else if c.in_flaky && c.flaky_text.len() < 8192 {
+                c.flaky_text.push_str(s);
+            }
         }
     }
 
     fn finish(&mut self, c: Case) {
+        if let Some(cases) = self.cases.as_mut() {
+            if cases.len() < MAX_CASES {
+                let result = match &c.verdict {
+                    Some((kind, _)) if kind == "error" => CaseResult::Error,
+                    Some(_) => CaseResult::Failed,
+                    None if c.skipped => CaseResult::Skipped,
+                    None if c.flaky > 0 => CaseResult::Flaky,
+                    None => CaseResult::Passed,
+                };
+                let message = match (&c.verdict, &c.flaky_msg) {
+                    (Some((_, msg)), _) => Some(first_lines(if msg.trim().is_empty() { &c.text } else { msg })),
+                    (None, Some(msg)) if result == CaseResult::Flaky => Some(first_lines(if msg.trim().is_empty() { &c.flaky_text } else { msg })),
+                    _ => None,
+                };
+                let retries = if c.verdict.is_some() { c.reruns } else { c.flaky };
+                cases.push(TestCase {
+                    name: c.name.clone(),
+                    classname: c.classname.clone(),
+                    file: c.file.clone(),
+                    result,
+                    time_ms: c.time_ms,
+                    retries,
+                    message,
+                });
+            }
+        }
         let out = &mut self.out;
         out.total += 1;
         match c.verdict {
@@ -715,6 +884,54 @@ more2</failure>
         assert_eq!(t.failing[1].kind, "error");
         assert_eq!(t.failing[1].message, "setup & teardown <bad>");
         assert_eq!(t.sources, vec!["target/nextest/ci/junit.xml".to_string()]);
+    }
+
+    /// prd-compute-blacksmith-class-v1 §4.3.2 (BK-8), §10 T1: every case,
+    /// its time, and nextest's flaky element kept (a red test against
+    /// today's parser, which counts it passed and drops it).
+    #[test]
+    fn junit_cases_keep_every_case_and_the_flaky_retry() {
+        let cases = parse_junit_cases(NEXTEST, "target/nextest/ci/junit.xml").unwrap();
+        let t = parse_junit(NEXTEST, "target/nextest/ci/junit.xml").unwrap();
+        assert_eq!(cases.len() as u64, t.total, "the same cases parse_junit counts");
+        let by = |n: &str| cases.iter().find(|c| c.name == n).unwrap();
+        assert_eq!(by("compute::a::passes").result, CaseResult::Passed);
+        assert_eq!(by("compute::a::passes").time_ms, Some(10));
+        assert_eq!(by("compute::a::passes").message, None);
+        let f = by("compute::a::fails");
+        assert_eq!((f.result, f.time_ms), (CaseResult::Failed, Some(20)));
+        assert!(f.message.as_deref().unwrap().starts_with("thread 'compute::a::fails' panicked"));
+        let fl = by("compute::a::flaky");
+        assert_eq!((fl.result, fl.retries), (CaseResult::Flaky, 1));
+        assert_eq!(fl.message.as_deref(), Some("first try"));
+        assert_eq!(fl.test_id(), "k2-core::compute::a::flaky");
+        assert_eq!(by("compute::a::errs").result, CaseResult::Error);
+        assert_eq!(by("compute::a::ignored").result, CaseResult::Skipped);
+        // Flaky counts as one of parse_junit's passes, so the two agree.
+        let passed = cases.iter().filter(|c| matches!(c.result, CaseResult::Passed | CaseResult::Flaky)).count() as u64;
+        assert_eq!(passed, t.passed);
+        // A failing case nextest retried keeps its reruns.
+        let rerun = r#"<testsuite name="s"><testcase name="r" time="2.5"><failure message="third"/><rerunFailure message="first"/><rerunFailure message="second"/></testcase></testsuite>"#;
+        let c = &parse_junit_cases(rerun, "j.xml").unwrap()[0];
+        assert_eq!((c.result, c.retries, c.time_ms), (CaseResult::Failed, 2, Some(2500)));
+        assert_eq!(c.message.as_deref(), Some("third"));
+        assert_eq!(c.test_id(), "r");
+        // The parse_junit counts and messages are unchanged by the new path.
+        let t2 = parse_junit(rerun, "j.xml").unwrap();
+        assert_eq!((t2.failed, t2.failing[0].message.as_str()), (1, "third"));
+    }
+
+    #[test]
+    fn junit_time_is_read_without_floats() {
+        assert_eq!(junit_time_ms("0.01"), Some(10));
+        assert_eq!(junit_time_ms("1.5"), Some(1500));
+        assert_eq!(junit_time_ms("12"), Some(12_000));
+        assert_eq!(junit_time_ms("0.0004"), Some(0));
+        assert_eq!(junit_time_ms(".25"), Some(250));
+        assert_eq!(junit_time_ms(" 3.141 "), Some(3141));
+        for bad in ["", ".", "-1", "1e3", "abc", "1.2.3", "NaN"] {
+            assert_eq!(junit_time_ms(bad), None, "{bad:?}");
+        }
     }
 
     #[test]

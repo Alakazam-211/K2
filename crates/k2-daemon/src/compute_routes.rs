@@ -50,6 +50,8 @@ pub const ROUTES: &[&str] = &[
     crate::ci_routes::RELEASE,
     crate::ci_routes::RUN,
     crate::ci_routes::STATUS,
+    // prd-compute-blacksmith-class-v1 T1: test history (a reader verb).
+    crate::ci_routes::TESTS,
     crate::ci_routes::WATCH,
     "/cli/compute/admin/approval-key",
     "/cli/compute/admin/approve",

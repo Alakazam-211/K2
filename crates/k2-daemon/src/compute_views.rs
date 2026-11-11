@@ -1261,6 +1261,37 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     if let Some(s) = v.get("secrets").cloned() {
         v["result"]["secrets"] = s;
     }
+    // prd-compute-blacksmith-class-v1 T1: a CI check job's failing tests
+    // carry their history mark (`new`, `flaky`, `quarantined`, `known`) for
+    // `--failures`, and the record's counts. Only once the CI engine
+    // recorded the job (CI on compute on); nothing changes otherwise.
+    if compute::ci_enabled() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Some(rec) = k2_core::ci_tests::recorded(&conn, &j.id) {
+            let marks = k2_core::ci_tests::marks_of_job(&conn, &j.id);
+            if let Some(failing) = v["result"]["tests"]["failing"].as_array_mut() {
+                for f in failing.iter_mut() {
+                    let name = f["name"].as_str().unwrap_or_default().to_string();
+                    let id = match f["classname"].as_str() {
+                        Some(c) => format!("{c}::{name}"),
+                        None => name,
+                    };
+                    if let Some(m) = marks.get(&id) {
+                        f["mark"] = m.clone().into();
+                    }
+                }
+            }
+            v["result"]["testHistory"] = serde_json::json!({
+                "state": rec.state,
+                "flaky": rec.flaky,
+                "quarantined": rec.quarantined,
+                "new": rec.new_failures,
+                "retried": rec.retried,
+                "note": rec.note,
+            });
+        }
+    }
     // CE-7: `get --json` prints the result object: the wait rides there too
     // (null once the job ended), and a running job's stall watch.
     v["result"]["wait"] = v.get("wait").cloned().unwrap_or_default();

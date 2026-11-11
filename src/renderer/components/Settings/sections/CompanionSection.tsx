@@ -227,7 +227,8 @@ export function CompanionSection(): React.JSX.Element {
                   href={publicUrl as string}
                   target="_blank"
                   rel="noreferrer"
-                  className="k2-focus font-mono text-[var(--color-accent-text)] hover:underline no-drag"
+                  data-k2-focus=""
+                  className="relative px-0.5 -mx-0.5 font-mono text-[var(--color-accent-text)] hover:underline no-drag"
                 >
                   {publicUrl}
                 </a>

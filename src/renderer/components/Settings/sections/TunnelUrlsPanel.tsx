@@ -34,7 +34,7 @@ import { SettingRow } from '../controls/SettingControls'
 // (local host + whoami role); the panel re-checks the window's host so a
 // remote server never shows them.
 
-const LINK = 'k2-focus font-mono text-[var(--color-accent-text)] hover:underline truncate no-drag cursor-pointer'
+const LINK = 'relative px-0.5 -mx-0.5 font-mono text-[var(--color-accent-text)] hover:underline truncate no-drag cursor-pointer'
 
 /** Rows for the Addresses card (Settings → Tunnel). Render inside a
  *  `SettingsGroup card`: each child is one row of the card.
@@ -88,7 +88,7 @@ export function TunnelUrlsPanel({
           ) : (
             <>
               {publicUrl ? (
-                <a href={publicUrl} target="_blank" rel="noreferrer" className={LINK}>
+                <a href={publicUrl} target="_blank" rel="noreferrer" data-k2-focus="" className={LINK}>
                   {publicUrl}
                 </a>
               ) : (
@@ -131,7 +131,7 @@ export function TunnelUrlsPanel({
               testId="tunnel-address-site"
               label={
                 url ? (
-                  <a href={url} target="_blank" rel="noreferrer" className={LINK}>
+                  <a href={url} target="_blank" rel="noreferrer" data-k2-focus="" className={LINK}>
                     {url}
                   </a>
                 ) : (

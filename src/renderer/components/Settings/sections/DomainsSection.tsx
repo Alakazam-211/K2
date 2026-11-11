@@ -890,7 +890,7 @@ function AppRecords({ host, app: a, busy, onCheckNow }: { host: string; app: App
           {a.pathB.upgrade && (
             <>
               {' '}
-              <a href={a.pathB.upgrade} target="_blank" rel="noreferrer" data-testid={`app-path-b-upgrade-${host}`} className="k2-focus text-[var(--color-accent)] underline">
+              <a href={a.pathB.upgrade} target="_blank" rel="noreferrer" data-testid={`app-path-b-upgrade-${host}`} data-k2-focus="" className="relative px-0.5 -mx-0.5 text-[var(--color-accent)] underline">
                 Upgrade
               </a>
             </>

@@ -1266,7 +1266,7 @@ export function K2ConnectSection({
                     href={publicUrl as string}
                     target="_blank"
                     rel="noreferrer"
-                    className="k2-focus font-mono text-[var(--color-accent-text)] hover:underline no-drag"
+                    data-k2-focus="" className="relative px-0.5 -mx-0.5 font-mono text-[var(--color-accent-text)] hover:underline no-drag"
                   >
                     {publicUrl}
                   </a>
@@ -1286,7 +1286,7 @@ export function K2ConnectSection({
                     href="https://github.com/fatedier/frp/releases"
                     target="_blank"
                     rel="noreferrer"
-                    className="k2-focus block text-[var(--color-accent-text)] hover:underline no-drag"
+                    data-k2-focus="" className="relative block px-0.5 -mx-0.5 text-[var(--color-accent-text)] hover:underline no-drag"
                   >
                     Open the frp releases page
                   </a>
@@ -1395,7 +1395,7 @@ export function K2ConnectSection({
                 hint={
                   <>
                     No account yet? Create one at{' '}
-                    <a href="https://k2.dev" target="_blank" rel="noreferrer" className="k2-focus text-[var(--color-accent-text)] hover:underline no-drag">
+                    <a href="https://k2.dev" target="_blank" rel="noreferrer" data-k2-focus="" className="relative px-0.5 -mx-0.5 text-[var(--color-accent-text)] hover:underline no-drag">
                       k2.dev
                     </a>
                     .
@@ -1441,7 +1441,7 @@ export function K2ConnectSection({
                   subdomains.length === 0 ? (
                     <>
                       Your account has no addresses yet. Buy one at{' '}
-                      <a href="https://k2.dev" target="_blank" rel="noreferrer" className="k2-focus text-[var(--color-accent-text)] hover:underline no-drag">
+                      <a href="https://k2.dev" target="_blank" rel="noreferrer" data-k2-focus="" className="relative px-0.5 -mx-0.5 text-[var(--color-accent-text)] hover:underline no-drag">
                         k2.dev
                       </a>
                       , then come back.

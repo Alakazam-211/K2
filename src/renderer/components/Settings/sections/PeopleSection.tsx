@@ -1142,7 +1142,7 @@ function SignInCard({
               apps.status === 'error' ? (
                 <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
                   Couldn’t list the Apps: {(apps.error ?? '').replace(/[.\s]+$/, '')}.{' '}
-                  <button type="button" className="k2-focus underline cursor-pointer" onClick={() => void reload('apps')}>
+                  <button type="button" data-k2-focus="" className="relative px-0.5 -mx-0.5 underline cursor-pointer" onClick={() => void reload('apps')}>
                     Try again
                   </button>
                 </p>

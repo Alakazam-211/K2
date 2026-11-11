@@ -50,7 +50,7 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
 }
 
 export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs the tunnel first.'
-export const NEEDS_K5_NOTE = "K5 helps you hire it, so you'll meet K5 first."
+export const NEEDS_K5_NOTE = "You'll meet K5 first."
 
 /** Each note's copy (a note this client doesn't know never reaches here). */
 export const SETUP_NOTE_COPY: Record<FirstRunNote, string> = {

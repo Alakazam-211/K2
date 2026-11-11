@@ -210,7 +210,7 @@ describe('SetupChecklist', () => {
       label: 'Hire your Chief of Staff',
       line: 'Your lead agent. K5 hires it with you.',
     })
-    expect(NEEDS_K5_NOTE).toBe("K5 helps you hire it, so you'll meet K5 first.")
+    expect(NEEDS_K5_NOTE).toBe("You'll meet K5 first.")
     expect(row.textContent).toContain('Hire your Chief of Staff')
     expect(row.textContent).toContain('Your lead agent. K5 hires it with you.')
     expect(row.querySelector('[data-setup-note="needs_k5"]')?.textContent).toBe(NEEDS_K5_NOTE)

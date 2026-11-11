@@ -454,7 +454,10 @@ pub fn validate(files: BTreeMap<String, String>, dir: Option<std::path::PathBuf>
     if !line_ok(&meta.name, 60) {
         return Err(err("template.toml: name is 1–60 characters, one line".into()));
     }
-    if !line_ok(&meta.summary, 200) {
+    // A saved template may leave its summary empty (Save as template's
+    // default); a built-in always has one.
+    let blank_ok = ex.origin == Origin::Library && meta.summary.is_empty();
+    if !blank_ok && !line_ok(&meta.summary, 200) {
         return Err(err("template.toml: summary is 1–200 characters, one line".into()));
     }
     // AT18: only built-ins may say K2.

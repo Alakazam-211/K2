@@ -82,16 +82,16 @@ const CLI_PATHS: &[&str] = &[
 const CLI_POST_ONLY: &[&str] = &[CLI_HIRE, CLI_INSTANCES_HIRE, CLI_INSTANCES_RETIRE, CLI_LINK, CLI_UNLINK];
 
 pub fn is_route(p: &str) -> bool {
-    CLI_PATHS.contains(&p)
+    CLI_PATHS.contains(&p) || crate::template_routes::PATHS.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    CLI_POST_ONLY.contains(&p)
+    CLI_POST_ONLY.contains(&p) || crate::template_routes::PATHS.contains(&p)
 }
 
 // ── responses ────────────────────────────────────────────────────────
 
-fn status_line(code: u16) -> &'static str {
+pub(crate) fn status_line(code: u16) -> &'static str {
     match code {
         200 => "200 OK",
         400 => "400 Bad Request",
@@ -100,6 +100,7 @@ fn status_line(code: u16) -> &'static str {
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
         413 => "413 Payload Too Large",
+        422 => "422 Unprocessable Entity",
         429 => "429 Too Many Requests",
         503 => "503 Service Unavailable",
         _ => "500 Internal Server Error",
@@ -760,6 +761,8 @@ pub fn handle_cli(
         CLI_HIRE => cli_converge(&who, body),
         CLI_HIRE_ROOT => hire_root(&who, is_post, body),
         CLI_MSG_WHO => msg_who(&who, params),
+        // prd-agent-templates-v1 T6/T5: save, add, remove, upgrade, diff.
+        p if crate::template_routes::PATHS.contains(&p) => crate::template_routes::handle(p, &who, is_post, body),
         CLI_TEMPLATES | CLI_TEMPLATES_SHOW => {
             if is_post {
                 return CliResponse::method_not_allowed();

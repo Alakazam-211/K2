@@ -21,6 +21,7 @@ pub mod apply;
 pub mod format;
 pub mod lock;
 pub mod render;
+pub mod save;
 pub mod sets;
 
 #[cfg(test)]
@@ -33,6 +34,7 @@ use std::sync::OnceLock;
 pub use apply::{apply, apply_with, ApplyReport, ApplyRequest, PermissionPlan, QuestionState, Row, TemplateRef, WorkspaceOutcome};
 pub use format::{Fills, Kind, Origin, Question, Template, TemplateToml};
 pub use lock::{TemplateLock, LOCK_REL};
+pub use save::{SaveInput, SaveOutcome, TemplateError};
 
 use super::{HireCaller, HireError};
 

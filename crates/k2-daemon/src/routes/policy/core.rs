@@ -22,6 +22,11 @@ pub(super) const ROWS: &[Route] = &[
     // Agent templates (prd-agent-templates-v1 T1): list + one card. Member
     // (anyone who may hire); agent passports read them too.
     get("/cli/agent-templates", Member),
+    // T6 (Save as template): people at Admin; an agent passport its own
+    // workspace only, and removes only what it saved (the handler checks).
+    post("/cli/agent-templates/add", Admin),
+    post("/cli/agent-templates/remove", Admin),
+    post("/cli/agent-templates/save", Admin),
     get("/cli/agent-templates/show", Member),
     post("/cli/agent/complete", Member),
     get("/cli/agent/conf", Member),

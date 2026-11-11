@@ -537,6 +537,40 @@ exit: 0
       ]
     },
     {
+      "name": "agent template save",
+      "usage": "k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]",
+      "description": "Save an agent's setup as a new template to hire from: its charter (ROLE.md), context layers, the skills it made (not K2's), heartbeats, tool, and the permission switches now on (as suggestions). Wiki notes only with --wiki. Never Threads, transcripts, vault secrets, mail, sign-ins, .env files or connections. A secret-shaped string (token, API key, private key) is refused naming the file and line. The same --id again writes its next version; another author's id or a K2 id is refused. An agent saves its own workspace only. Exit codes: 0 ok, 1 refused (id_taken, id_reserved, secret_found, too_large), 2 bad usage, 3 not allowed, 4 not found.",
+      "args": [{"name": "ws", "required": true}],
+      "flags": [
+        {"name": "--id", "arg": "id", "description": "The new template id (a-z, 0-9, -; at most 40)."},
+        {"name": "--name", "arg": "name", "description": "Its name in the list (default: the agent's name)."},
+        {"name": "--summary", "arg": "text", "description": "One line on what it is for (default: none)."},
+        {"name": "--wiki", "arg": "note", "description": "Take this wiki note too (repeatable; none by default)."},
+        {"name": "--dry-run", "arg": null, "description": "List every file it would write; write nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, dryRun, id, version, author, path, hash, files: [{path, bytes}], catalog, suggest, tool, heartbeats, skipped: [{what, name, why}]}."}
+      ]
+    },
+    {
+      "name": "agent template add",
+      "usage": "k2 agent template add <dir> [--dry-run] [--json]",
+      "description": "Install a template folder (template.toml, ROLE.md, wiki/, context/, skills/) into this server's library as its id's next version, with you as its author. Same checks as save (paths, no symlinks, sizes, secrets, ids). An agent adds only from a folder inside its own workspace.",
+      "args": [{"name": "dir", "required": true}],
+      "flags": [
+        {"name": "--dry-run", "arg": null, "description": "Check it and show what would be installed; write nothing."},
+        {"name": "--json", "arg": null, "description": "JSON output (the same shape as save)."}
+      ]
+    },
+    {
+      "name": "agent template remove",
+      "usage": "k2 agent template remove <id> [--version N] [--json]",
+      "description": "Remove a saved template: every version, or one with --version. An agent removes only templates it saved (else exit 3). K2's built-ins and their old ids can't be removed.",
+      "args": [{"name": "id", "required": true}],
+      "flags": [
+        {"name": "--version", "arg": "N", "description": "Remove only this version."},
+        {"name": "--json", "arg": null, "description": "JSON output: {ok, id, removed, remaining}."}
+      ]
+    },
+    {
       "name": "agent conf",
       "usage": "k2 agent conf [<name>] [--json]",
       "description": "Show all of an agent's settings: name, path, mode, enabled, persona, connections (always mutual), project memberships (PoC marked), live status. Default: the agent in the current directory (exit 4 if unregistered).",

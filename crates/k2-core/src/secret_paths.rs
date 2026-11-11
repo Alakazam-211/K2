@@ -516,9 +516,102 @@ fn is_b64url(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
 
+/// A secret-shaped string on one line of a text (agent templates: Save as
+/// template and `add`, prd-agent-templates-v1 §7). Only token shapes, so a
+/// charter that talks about secrets ("never put a private key in chat") is
+/// never refused:
+/// - K2's own tokens: `k2skn_` / `k2rs_` (43 base62), `k2sk_` / `k2pp_`;
+/// - `sk-` (incl. `sk-ant-`, `sk-proj-`), `ghp_` and the other `gh?_`,
+///   `github_pat_`, `xoxb-` / `xoxp-`: at least 16 token characters with a
+///   digit among them (a placeholder like `sk-your-key-here` has none);
+/// - `AKIA` / `ASIA` + 16 (not the documentation's `…EXAMPLE` key);
+/// - a `-----BEGIN … PRIVATE KEY-----` header.
+///
+/// Returns the 1-based line and what it looks like. The secret itself is
+/// never returned, so a refusal can't echo it.
+pub fn secret_line(text: &str) -> Option<(usize, &'static str)> {
+    text.lines().enumerate().find_map(|(i, line)| secret_kind(line).map(|k| (i + 1, k)))
+}
+
+fn secret_kind(line: &str) -> Option<&'static str> {
+    if let Some(b) = line.find("-----BEGIN") {
+        if line[b..].contains("PRIVATE KEY-----") {
+            return Some("a private key");
+        }
+    }
+    if ["k2skn_", "k2rs_"].iter().any(|p| k2_token_present(line, p)) {
+        return Some("a K2 token");
+    }
+    if ["k2sk_", "k2pp_"].iter().any(|p| bounded_token_present(line, p)) {
+        return Some("a K2 key");
+    }
+    if bounded_token_present(line, "sk-ant-") {
+        return Some("an Anthropic API key");
+    }
+    if bounded_token_present(line, "sk-") {
+        return Some("an API key (sk-…)");
+    }
+    if gh_token_present(line) || bounded_token_present(line, "github_pat_") {
+        return Some("a GitHub token");
+    }
+    if ["xoxb-", "xoxp-"].iter().any(|p| bounded_token_present(line, p)) {
+        return Some("a Slack token");
+    }
+    if aws_key_present(line) {
+        return Some("an AWS access key");
+    }
+    None
+}
+
+/// [`prefixed_token_present`] where `prefix` starts a token: the character
+/// before it is not a token character (`task-1234…` holds no `sk-` key).
+fn bounded_token_present(text: &str, prefix: &str) -> bool {
+    text.match_indices(prefix).any(|(i, _)| {
+        let starts = i == 0 || !is_b64url(text.as_bytes()[i - 1]);
+        starts && prefixed_token_present(&text[i..], prefix)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fake, secret-shaped strings only (never a real key).
+    #[test]
+    fn secret_line_finds_token_shapes_and_names_the_line() {
+        let k2 = format!("k2skn_{}", "a1B2c3D4e5".repeat(4) + "xyz");
+        assert_eq!(k2.len(), 6 + 43);
+        let cases: Vec<(String, &str)> = vec![
+            (format!("intro\nmy pass is {k2}\n"), "a K2 token"),
+            (format!("x\n\nk2rs_{}", "Z9y8X7w6V5".repeat(4) + "abc"), "a K2 token"),
+            ("use k2sk_ab12cd34ef56gh78ij90 here".into(), "a K2 key"),
+            ("key: sk-ant-api03-FAKEfake1234567890abcdEF".into(), "an Anthropic API key"),
+            ("OPENAI=sk-proj-FAKE1234567890abcdefgh".into(), "an API key (sk-…)"),
+            ("token ghp_FAKEfake1234567890abcdefGHIJ".into(), "a GitHub token"),
+            ("github_pat_11FAKE0000000000000000_fake".into(), "a GitHub token"),
+            ("slack xoxb-1234567890-FAKEfakeFAKE".into(), "a Slack token"),
+            ("aws AKIAFAKE1234567890AB".into(), "an AWS access key"),
+            ("-----BEGIN OPENSSH PRIVATE KEY-----".into(), "a private key"),
+        ];
+        for (text, want) in &cases {
+            let (line, kind) = secret_line(text).unwrap_or_else(|| panic!("missed: {text}"));
+            assert_eq!(kind, *want, "{text}");
+            assert_eq!(line, text.lines().position(|l| secret_kind(l).is_some()).unwrap() + 1);
+        }
+        assert_eq!(secret_line(&format!("a\nb\n{k2}")).map(|h| h.0), Some(3));
+        // Charters talk about secrets; that is never a hit.
+        for clean in [
+            "Never put secrets in chat or the wiki.",
+            "Never share a PRIVATE KEY or an API key.",
+            "Keep the task-1234567890abcdefgh list short; risk-free.",
+            "sk-your-key-here goes in the vault, not here.",
+            "AKIAIOSFODNN7EXAMPLE is the documentation's key.",
+            "k2skn_ passes look like this, but this isn't one.",
+            "xoxb-your-bot-token-goes-here",
+        ] {
+            assert_eq!(secret_line(clean), None, "{clean}");
+        }
+    }
 
     #[test]
     fn path_patterns_from_both_old_lists_and_the_new_ones() {

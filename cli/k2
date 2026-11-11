@@ -916,6 +916,16 @@ if [ "${1:-}" = "organization" ]; then
     case "${2:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
     for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
+# `k2 agent hire --help`, `k2 agent template` and any `k2 agent template
+# … --help` only print help (agent templates T9): no daemon.
+if [ "${1:-}" = "agent" ]; then
+    case "${2:-}" in
+        hire) for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        template|templates)
+            case "${3:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
+            for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
 # `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
 # `k2 zen ... --help` only print help (prd-zen-freeform-chrome FC55):
 # none of them talks to the daemon. Neither do `k2 zen widget grant` and
@@ -11624,6 +11634,131 @@ if v.get("warning"):
     print(v["warning"])
 if v.get("next"):
     print(v["next"])'
+}
+
+_study_page_agent_templates() {
+    cat <<'EOF'
+k2 study agent-templates — Agent templates: hire a type of agent, save your own
+
+WHAT A TEMPLATE IS
+  A folder of plain files: template.toml (id, version, what the agent
+  gets), ROLE.md (the charter), and optional wiki/, context/ and skills/.
+  K2 has ten built-in types: general, lead, developer, app-owner, designer,
+  researcher, reviewer, writer, support, ops. Templates saved on this server
+  (the library, ~/.k2/agent-templates/<id>/v<N>/) list under "Yours".
+  Two system templates, kessel and chief-of-staff, are hidden from list
+  (--all shows them) and are hired by id only. Old ids still work:
+  worker = general, manager = lead, qa = reviewer.
+  A template carries no authority: it only suggests permissions.
+
+1. LOOK
+  k2 agent template list                  the types (--json also has canSave)
+  k2 agent template show writer           its charter, params, questions,
+                                          starter notes, layers, suggestions
+                                          and the hello it sends
+  k2 agent template show writer --files   every file in full
+
+2. REVIEW, THEN HIRE
+  k2 agent hire --template writer --name "Max" --agent codex --dry-run
+    Writes nothing. Prints the folder it would use (<hire root>/max; see
+    k2 agent hire-root) and every row: would write, skip, yours (kept),
+    suggested. Read it before you hire.
+  k2 agent hire --template writer --name "Max" --agent codex
+    Writes the folder, ROLE.md, starter notes, context layers and
+    .k2/agent/template.lock. Nothing starts: the agent waits until someone
+    opens it.
+  k2 agent hire --template writer --name "Max" --agent codex --launch
+    The same, then K2 starts it, and on its first create it says hello to
+    its person on the Thread (once; never on a re-run).
+  --agent <preset>   the tool it runs: an id, label or command word from
+                     k2 preset list (codex, claude, ...). Left out: the
+                     template's suggestion, else the server default.
+  --param key=value  a value the template asks for; every built-in takes
+                     about="what to focus on" (show lists them).
+  --answer id=text   answer a first-conversation question (show lists the
+                     ids). Answer only what you know; the agent asks its
+                     person the rest on its first start.
+  <dir>              optional: a folder instead of <hire root>/<name>.
+  Re-running the same hire is safe: it writes only what is missing and
+  never replaces a file the agent changed. One template per agent.
+  The hire prints the folder; tell your person who you hired and why.
+
+3. PERMISSIONS: SUGGESTED, NOT GRANTED
+  A hire never gets more than the hirer may give. Today a hire turns no
+  switch on: each suggestion prints as "suggested", for a person to turn
+  on (Settings → Workspaces → the agent → Agent). When K2 refuses the new
+  agent, it asks on the permission card the refusal prints. Granting what
+  the hirer itself holds, and filing cards for the rest, comes later.
+
+4. SAVE YOUR OWN SETUP AS A TEMPLATE
+  k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
+  k2 agent template save . --id my-writer --wiki "Voice and style"
+  <ws> is a folder or handle ("." = the one you are in). An agent saves
+  its own workspace only; an Owner or Admin person, any agent's.
+  Taken: the ROLE.md charter and your notes (no frontmatter), stacked
+  catalog ids, your own context layers, skills you made (not K2's),
+  heartbeats (name, schedule, WAKEUP text), the tool, and the permission
+  switches now on, as suggestions. Wiki notes only with --wiki.
+  Never taken: Threads, transcripts, vault secrets, mail accounts,
+  sign-ins, .env files, App logins, connections, or any other file.
+  Secrets: a token, API key or private key in a taken file stops the save
+  with secret_found, naming the file and line; the secret is never
+  printed. Remove it (keep it in the vault: k2 study vault), save again.
+  Versions: the first save of an id is v1; you saving it again writes v2,
+  v3, ... and keeps the older ones. A hire uses the newest.
+
+5. ADD AND REMOVE
+  k2 agent template add ./my-template --dry-run    check a folder only
+  k2 agent template add ./my-template              install it
+    The folder needs template.toml and ROLE.md. Same checks as save; it
+    lands as its id's next version, with you as the author.
+  k2 agent template remove my-writer --version 1   one version
+  k2 agent template remove my-writer               every version
+    Agents already hired from it keep their files. K2's built-ins can't
+    be removed; an agent removes only templates it saved.
+
+6. UPGRADE AND DIFF
+  k2 agent template diff .                what an upgrade would change
+  k2 agent template upgrade . --dry-run   the same report; writes nothing
+  k2 agent template upgrade .
+  k2 agent template diff my-writer 1 2    two saved versions, file by file
+  Per file, by the checksum in .k2/agent/template.lock:
+    unchanged since the hire → replaced;
+    changed by the agent → kept, and the new text lands beside it as
+      <file>.proposed: read it and merge what you want;
+    deleted by the agent → stays deleted.
+  In ROLE.md only the K2:MANAGED block is replaced, never "Your notes".
+  New notes, layers, skills and catalog items are added; new heartbeats
+  and suggestions are only listed. Never changed: permissions, tool,
+  model, name, connections. The agent gets one inbox note.
+  K2's built-ins upgrade by themselves when K2 updates; a saved template
+  only when someone runs upgrade.
+
+ERRORS (code (exit): what to do)
+  unknown_template (4)    no such id: k2 agent template list --all
+  usage (2)               a param or answer the template doesn't take; the
+                          message lists the valid ones
+  template_conflict (3)   that folder was made from another template; one
+                          per agent: pick another folder or --name
+  folder_exists (3)       <hire root>/<name> is taken: another --name, or
+                          pass that folder as <dir>
+  system_template (3)     an API key can't hire kessel or chief-of-staff
+  bad_id (2)              ids are a-z, 0-9 and -, at most 40 characters
+  id_reserved (1)         a K2 id or old id: pick another id
+  id_taken (1)            another author saved that id: pick another id
+  secret_found (1)        remove the secret from the file and line named
+  too_large (1)           a file over 64 KiB, or over 40 notes, 20 skills,
+                          20 layers or 12 heartbeats: cut it down
+  no_charter (2)          the agent's ROLE.md is missing or empty
+  no_note (4)             no such wiki note for --wiki: k2 wiki list
+  bad_template (2)        add: the folder fails a check (paths, fields,
+                          placeholders); the message says which
+  own_workspace_only (3)  an agent works on its own workspace; ask a person
+  not_author (3)          an agent removes only what it saved; ask a person
+  role_required (3)       saving and managing templates needs an Owner or Admin
+  no_workspace (4)        no such folder or handle registered on this server
+  no_template (4)         upgrade/diff: that agent wasn't made from one
+EOF
 }
 
 _study_page_organization() {
@@ -48176,8 +48311,8 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). An agent hires only from its main session, with \"Let this agent hire agents\" on (hire_off / main_only, exit 3). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--take-app <app> [--brief <file>]] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>); --dry-run is the review, and only --launch starts it (it then says hello). Re-running converges (changed:false). An agent hires only from its main session, with \"Let this agent hire agents\" on (hire_off / main_only, exit 3). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found. Templates step by step: k2 study agent-templates.",
       "args": [{"name": "dir", "required": false}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -48194,6 +48329,8 @@ cmd_schema() {
         {"name": "--color", "arg": "hex|rgb", "description": "Workspace color as #rrggbb, #rgb, rgb(r,g,b), or r,g,b. Not limited to the GUI swatches."},
         {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, browser:pack, manager:pack, kessel:pack, connections|heartbeats|skills|users:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Create-only passport for k2 db create (default off). List/dsn/store work when this workspace owns a DB or has a grant. Does not mint a database — hire calls k2 db create separately."},
+        {"name": "--take-app", "arg": "app", "description": "After the hire, offer this App to the new agent and accept it for it (k2 study app-handover). Reported as its own step."},
+        {"name": "--brief", "arg": "file", "description": "With --take-app: your notes for the new agent about the App (markdown, at most 64 KiB)."},
         {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
         {"name": "--no-agents-md", "arg": null, "description": "Skip planting cwd AGENTS.md on first register (generated by default for new agents). Compose still writes .k2/AGENTS.md."},
         {"name": "--fanout", "arg": null, "description": "Opt in to leftover harness fan-out (CLAUDE.md, GEMINI.md, AGENT.md, …). Off by default."},
@@ -53113,7 +53250,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates"
 
 _study_usage() {
     cat <<'EOF'
@@ -53138,6 +53275,7 @@ Topics:
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
+  agent-templates
 EOF
 }
 
@@ -53213,6 +53351,7 @@ _study_title() {
         desktop) echo "Remote desktop: this computer's screen in a Desktop tab (people only)" ;;
         send-feedback) echo "Telling K2's makers about K2: k2 send-feedback, what is sent, agents' limits" ;;
         organization) echo "The Org Chart: orgs, heads and the daily bulletin" ;;
+        agent-templates) echo "Agent templates: hire a type, save your own, upgrade" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -53357,6 +53496,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   desktop             Remote desktop: this computer's screen in a Desktop tab, people only
   send-feedback       Tell Alakazam Labs about K2 itself: what is sent, never sent, agents' limits
   organization        The Org Chart: read the bulletin daily, reach a head, heads and members
+  agent-templates     Hire a type of agent, review first, save your own setup, upgrade safely
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -53455,6 +53595,7 @@ _study_page() {
         desktop) _study_page_desktop ;;
         send-feedback) _study_page_send_feedback ;;
         organization) _study_page_organization ;;
+        agent-templates) _study_page_agent_templates ;;
         *) return 1 ;;
     esac
 }
@@ -63200,7 +63341,18 @@ missing and reports changed:false when there is nothing to do.
 
 USAGE
   k2 agent hire <dir> [flags]
-  k2 agent hire --template <id> --name <name> [flags]    (folder: <hire root>/<handle>)
+  k2 agent hire [<dir>] --template <id> --name <name> [--agent <preset>]
+                [--param <key>=<value>]... [--answer <id>=<text>]...
+                [--dry-run | --launch] [flags]   (no <dir>: <hire root>/<handle>)
+
+FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
+  1. Look:    k2 agent template list, then k2 agent template show <id>
+  2. Review:  the same hire with --dry-run: the folder, and every file, layer
+              and suggested permission, marked would write / skip / yours.
+              Nothing is written.
+  3. Hire:    the same line without --dry-run. Nothing starts unless you add
+              --launch; with it, K2 starts the agent and it says hello on
+              its Thread. Tell your person what you hired.
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).
@@ -63224,7 +63376,9 @@ FLAGS
                           agent made from one template with another is
                           refused (exit 3); re-running with the same one is safe.
                           A template only SUGGESTS permissions; nothing is
-                          turned on for the agent by the hire.
+                          turned on for the agent by the hire. The output
+                          lists each one as "suggested", for a person to turn
+                          on, and the agent asks on a card when K2 refuses it.
   --param <key>=<value>   A value the template asks for (repeatable). Quote a
                           value with spaces: --param about="the billing service".
                           Every built-in takes `about` (optional: what to focus
@@ -63298,6 +63452,11 @@ FLAGS
                           Create-only DB passport (default off). Gates k2 db
                           create, not list/dsn/store. Does not mint a
                           database — call k2 db create after hire.
+  --take-app <app>        After the hire, offer this App to the new agent and
+                          accept it for it (k2 study app-handover). Owner:
+                          one card to approve. Reported as its own step.
+  --brief <file>          With --take-app: your notes for the new agent about
+                          the App (markdown, at most 64 KiB).
   --dry-run               Show the full plan; change nothing (steps that would
                           fail are FAILED, and it exits non-zero). With
                           --template it names the folder it would use, every
@@ -63309,6 +63468,12 @@ FLAGS
   every step's result is printed, then the exit is non-zero (the first
   failure's: 4 not_found, 2 usage, 3 refused, 1 other). Only a failure to
   make the workspace itself stops the rest (reported "not run").
+
+  Template refusals: unknown_template (4: k2 agent template list --all),
+  usage (2: a param or answer it doesn't take; the valid ones are named),
+  template_conflict (3: the folder has another template), folder_exists
+  (3: <hire root>/<handle> is taken; another --name, or pass it as <dir>).
+  Every code and its fix: k2 study agent-templates.
 
 WHO MAY
   A person: the owner, or a login in Settings or a terminal. An agent: only
@@ -96966,11 +97131,14 @@ cmd_help_agent_template() {
 Agent templates: the types of agent you can hire. A template is a charter
 (the agent's ROLE.md), starter wiki notes and context layers. It gives the
 agent no permissions: it only suggests some, for a person to turn on.
+Step by step, with every error code: k2 study agent-templates.
 
 USAGE
   k2 agent template list [--all] [--json]
   k2 agent template show <id> [--files] [--json]
-  k2 agent hire --template <id> --name <name> [--dry-run]   (make an agent from one)
+  k2 agent hire [<dir>] --template <id> --name <name> [--agent <preset>]
+      [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run | --launch]
+                                     (make an agent from one: k2 agent hire --help)
   k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]
   k2 agent template add <dir> [--dry-run] [--json]
   k2 agent template remove <id> [--version N] [--json]
@@ -96981,7 +97149,9 @@ COMMANDS
   list            Every type you can hire: K2's ten built-ins (general, lead,
                   developer, app-owner, designer, researcher, reviewer, writer,
                   support, ops), then any saved on this server, under "Yours".
-                  --all also shows K2's system templates (hired by id only).
+                  --all also shows K2's system templates, kessel and
+                  chief-of-staff (hired by id only). --json also carries
+                  canSave: this server can save templates.
   show <id>       What one gives: its charter, params (--param on hire; marked
                   when required), its first-conversation questions, starter
                   notes, context layers, suggested permissions and the hello
@@ -96989,8 +97159,9 @@ COMMANDS
                   An old id works too: worker = general, manager = lead,
                   qa = reviewer. An unknown id exits 4.
   save <ws>       Save an agent's setup as a new template you can hire from.
-                  <ws> is the agent's folder or handle (an agent: its own
-                  only; "." works). It takes the charter (ROLE.md), its
+                  <ws> is the agent's folder or handle ("." works). An
+                  agent saves its own only; an Owner or Admin person, any
+                  agent's. It takes the charter (ROLE.md), its
                   context layers, the skills it made, its heartbeats, its
                   tool, and the permission switches now on (as suggestions).
                   Wiki notes only with --wiki. Never Threads, transcripts,
@@ -97046,6 +97217,15 @@ FLAGS
   --version N     remove: only this version
   --dry-run       save, add, upgrade: show what would be written; write nothing
   --json          JSON output
+  Hiring flags (--name, --agent, --param, --answer, --dry-run, --launch):
+  k2 agent hire --help.
+
+EXIT CODES
+  0 ok · 1 refused (id_reserved, id_taken, secret_found, too_large) ·
+  2 bad usage (bad_id, bad_template, no_charter) · 3 not allowed
+  (own_workspace_only, not_author, role_required) · 4 not found
+  (unknown_template, no_template, no_workspace, no_note, no_folder).
+  Each code and its fix: k2 study agent-templates.
 
 EXAMPLES
   k2 agent template list
@@ -97241,6 +97421,10 @@ if err:
     print("Error: %s%s" % ((code + ": ") if code else "", hint), file=sys.stderr)
     if code in ("usage", "bad_id", "bad_template", "no_charter"):
         sys.exit(2)
+    # Refusals of the template itself: exit 1, even when the hint names a
+    # token (secret_found says "a GitHub token", not a sign-in problem).
+    if code in ("id_reserved", "id_taken", "secret_found", "too_large", "template_conflict"):
+        sys.exit(1)
     if code in ("forbidden", "role_required", "own_workspace_only", "not_author", "owner_only") or "token" in hint.lower():
         sys.exit(3)
     if code in ("not_found", "unknown_template", "no_workspace", "no_folder", "no_note", "no_template"):

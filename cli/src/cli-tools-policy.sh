@@ -550,6 +550,16 @@ if [ "${1:-}" = "organization" ]; then
     case "${2:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
     for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
+# `k2 agent hire --help`, `k2 agent template` and any `k2 agent template
+# … --help` only print help (agent templates T9): no daemon.
+if [ "${1:-}" = "agent" ]; then
+    case "${2:-}" in
+        hire) for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+        template|templates)
+            case "${3:-}" in ""|help|--help|-h) _skip_conn_gate=1 ;; esac
+            for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
 # `k2 zen guide` is static pages, and `k2 zen` / `k2 zen help` / any
 # `k2 zen ... --help` only print help (prd-zen-freeform-chrome FC55):
 # none of them talks to the daemon. Neither do `k2 zen widget grant` and

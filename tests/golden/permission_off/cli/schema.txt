@@ -50,26 +50,17 @@ exit: 0
     },
     {
       "name": "ci",
-      "usage": "k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB] [--cpus N] [--timeout 1h] [--branches a,b/*] [--remote R] [--statuses-token NAME] [--force] [-- <cmd…>] | k2 ci run [<rev>] [--check a,b] [--ref B] [--tier ci|standard] [--wait] [--json] | k2 ci status [<run|commit|branch>] [--json] | k2 ci logs <run|commit|branch> [--check NAME] [--failures] | k2 ci tests [--check NAME] [--flaky|--slow|--failing|--quarantined] [--days 30] [--limit N] [--json] | k2 ci stats [--check NAME] [--branch B] [--days 14] [--json] | k2 ci monitors [--json] | k2 ci monitor add <name> --kind fail-streak|slow|queue-wait|new-flaky [--branch B] [--check C] [--count N] [--over 1.5x|10m] [--cooldown 6h] [--to <workspace>|thread[:<addr>]] | k2 ci monitor mute <name> --for 1d|off | k2 ci monitor rm <name> | k2 ci watch [on|off] [--remote R] [--branches a,b/*] [--poll S] [--tier ci|standard] [--max-inflight N] [--skip-current] | k2 ci freeze --until <3d|time> [--why text] | k2 ci freeze off | k2 ci release <version> [<rev>|--sha C] [--build a,b] [--plan] [--wait] [--json] | k2 ci evidence <run> --out <dir> [--no-files] [--json]",
-      "description": "CI on K2 Compute, run by the daemon: .k2/ci.toml (committed; read at each commit) lists [checks.<name>]; each is one compute job on the commit (--tier ci, --supersede ci/<branch>/<check>) carrying the workspace's own grants. watch on: the daemon polls the remote and checks every new tip; run: one commit now (--wait: exit 0 passed, 1 failed). GitHub commit statuses <context>/<check> with the [statuses] token from the workspace vault. release: [release] builds on the workspace's seat as one set (a dual build's L1 and V1 on nodes that differ per the owner's node roster; seat_degraded / no_independent_nodes, exit 3); evidence: once it passed, the evidence bundle v2 and every job's files for the signer (signing is a person's, at the signer). tests: the history of the checks' JUnit (flaky, failing, slowest, quarantined; names are data). stats: per check, run time and queue wait p50/p95, failure and flaky rates, CPU-hours, cache hit rate. monitor: a message (facts only) when a branch fails N runs in a row, a check gets slow, a check job waits too long, or a test turns flaky; each ended run also sends one [ci] message (check jobs send no [compute] note). Agents: their own workspace, with Allow compute nodes on. See k2 study ci.",
-      "args": [{"name": "verb", "required": true, "description": "init | run | status | logs | tests | stats | monitors | monitor | watch | freeze | release | evidence"}],
+      "usage": "k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB] [--cpus N] [--timeout 1h] [--branches a,b/*] [--remote R] [--statuses-token NAME] [--force] [-- <cmd…>] | k2 ci run [<rev>] [--check a,b] [--ref B] [--tier ci|standard] [--wait] [--json] | k2 ci status [<run|commit|branch>] [--json] | k2 ci logs <run|commit|branch> [--check NAME] [--failures] | k2 ci watch [on|off] [--remote R] [--branches a,b/*] [--poll S] [--tier ci|standard] [--max-inflight N] [--skip-current] | k2 ci freeze --until <3d|time> [--why text] | k2 ci freeze off | k2 ci release <version> [<rev>|--sha C] [--build a,b] [--plan] [--wait] [--json] | k2 ci evidence <run> --out <dir> [--no-files] [--json]",
+      "description": "CI on K2 Compute, run by the daemon: .k2/ci.toml (committed; read at each commit) lists [checks.<name>]; each is one compute job on the commit (--tier ci, --supersede ci/<branch>/<check>) carrying the workspace's own grants. watch on: the daemon polls the remote and checks every new tip; run: one commit now (--wait: exit 0 passed, 1 failed). GitHub commit statuses <context>/<check> with the [statuses] token from the workspace vault. release: [release] builds on the workspace's seat as one set (a dual build's L1 and V1 on nodes that differ per the owner's node roster; seat_degraded / no_independent_nodes, exit 3); evidence: once it passed, the evidence bundle v2 and every job's files for the signer (signing is a person's, at the signer). Agents: their own workspace, with Allow compute nodes on. See k2 study ci.",
+      "args": [{"name": "verb", "required": true, "description": "init | run | status | logs | watch | freeze | release | evidence"}],
       "flags": [
-        {"name": "--check", "arg": "NAME|a,b", "description": "init: the check's name (default test); run: only these checks; logs, tests, stats: one check; monitor add: the check it watches."},
+        {"name": "--check", "arg": "NAME|a,b", "description": "init: the check's name (default test); run: only these checks; logs: one check."},
         {"name": "--tier", "arg": "ci|standard", "description": "CI tier (default; the grant needs --ci) or Standard."},
         {"name": "--wait", "arg": null, "description": "run, release: wait for the verdict (exit 0 passed, 1 failed or error)."},
         {"name": "--plan", "arg": null, "description": "release: where each job would go; nothing submitted."},
         {"name": "--out", "arg": "dir", "description": "evidence: write the bundle and fetch each job's files into <dir>/<label>/."},
         {"name": "--branches", "arg": "a,b/*", "description": "watch on / init: branch names or prefix/*."},
         {"name": "--skip-current", "arg": null, "description": "watch on: start at the next push."},
-        {"name": "--flaky|--slow|--failing|--quarantined", "arg": null, "description": "tests: one list (default: flaky, failing and slowest together)."},
-        {"name": "--days", "arg": "N", "description": "tests: the window (default 30, 1-365); stats: (default 14, 1-90)."},
-        {"name": "--branch", "arg": "B", "description": "stats: one branch; monitor add --kind fail-streak: the branch it watches."},
-        {"name": "--kind", "arg": "fail-streak|slow|queue-wait|new-flaky", "description": "monitor add: what to watch."},
-        {"name": "--count", "arg": "N", "description": "monitor add --kind fail-streak: runs in a row (default 3, 1-20)."},
-        {"name": "--over", "arg": "1.5x|10m", "description": "monitor add: slow's ratio to the 14-day p50 (default 1.5x); queue-wait's wait (default 10m)."},
-        {"name": "--cooldown", "arg": "6h", "description": "monitor add: at most one message per this (default 6h, 5m-7d)."},
-        {"name": "--to", "arg": "<workspace>|thread[:<addr>]", "description": "monitor add: where the message goes (default this workspace; agents: their own workspace or Thread only)."},
-        {"name": "--for", "arg": "1d|off", "description": "monitor mute: how long (at most 30d); off unmutes."},
         {"name": "--force", "arg": null, "description": "init: replace an existing .k2/ci.toml."},
         {"name": "--workspace", "arg": "ws", "description": "People: the workspace (default: this folder's). Agents: their own only."},
         {"name": "--json", "arg": null, "description": "The daemon's JSON."}
@@ -201,7 +192,7 @@ exit: 0
     {
       "name": "sessions open",
       "usage": "k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text \"...\"] [--force] [--json]",
-      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Let this agent manage its sidecars.",
+      "description": "Reopen a past conversation as a sidecar with the same history; prints its address. Already running: prints that address, never a second copy. Main session only, with Allow hiring and managing agents.",
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Its address name (else a number, <ws>/<n>)."},
@@ -275,7 +266,7 @@ exit: 0
     {
       "name": "sidecar archive",
       "usage": "k2 sidecar archive <name>|--all-stopped [--workspace <ws>] [--json]",
-      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Let this agent manage its sidecars on.",
+      "description": "Take a stopped sidecar, or every stopped one, off k2 sidecar list. Its conversation stays: k2 sidecar new with that name and the same harness resumes it, and k2 sessions --past finds it. Refuses a running sidecar (stop it first) and a worktree sidecar (retire it). --all-stopped skips running sidecars, worktree sidecars and any you may not archive, and says which. Agents: the main session, for sidecars an agent of this workspace opened, with Allow hiring and managing agents on.",
       "args": [{"name": "name", "required": false, "description": "The sidecar's name or <workspace>/<name> address."}],
       "flags": [
         {"name": "--all-stopped", "arg": null, "description": "Every stopped sidecar in this workspace."},
@@ -286,7 +277,7 @@ exit: 0
     {
       "name": "sidecar access",
       "usage": "k2 sidecar access on|off|status [--workspace <ws>]",
-      "description": "Owner/Admin: the 'Let this agent manage its sidecars' switch for a workspace (hiring is its own switch: k2 agent access set <ws> agents_hire on|off).",
+      "description": "Owner/Admin: the 'Allow hiring and managing agents' switch for a workspace.",
       "args": [{"name": "on|off|status", "required": true}],
       "flags": [{"name": "--workspace", "arg": "ws", "description": "Target workspace (default: this one)."}]
     },
@@ -496,8 +487,8 @@ exit: 0
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
-      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). An agent hires only from its main session, with \"Let this agent hire agents\" on (hire_off / main_only, exit 3). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--take-app <app> [--brief <file>]] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>); --dry-run is the review, and only --launch starts it (it then says hello). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found. Templates step by step: k2 study agent-templates.",
       "args": [{"name": "dir", "required": false}],
       "flags": [
         {"name": "--name", "arg": "name", "description": "Display name (default: the folder's basename, as-is)."},
@@ -514,6 +505,8 @@ exit: 0
         {"name": "--color", "arg": "hex|rgb", "description": "Workspace color as #rrggbb, #rgb, rgb(r,g,b), or r,g,b. Not limited to the GUI swatches."},
         {"name": "--context", "arg": "path|catalog-id", "description": "Seed an always-on context layer after open (repeatable). Path must exist; catalog ids from `k2 agent context catalog` (wiki:index|home|hygiene, subagents:pack, browser:pack, manager:pack, kessel:pack, connections|heartbeats|skills|users:roster, …) warn if the file is missing and still stack. Re-hire with the same layer is a no-op."},
         {"name": "--db-access", "arg": "off|read|write", "description": "Create-only passport for k2 db create (default off). List/dsn/store work when this workspace owns a DB or has a grant. Does not mint a database — hire calls k2 db create separately."},
+        {"name": "--take-app", "arg": "app", "description": "After the hire, offer this App to the new agent and accept it for it (k2 study app-handover). Reported as its own step."},
+        {"name": "--brief", "arg": "file", "description": "With --take-app: your notes for the new agent about the App (markdown, at most 64 KiB)."},
         {"name": "--no-wiki", "arg": null, "description": "Skip seeding .k2/wiki/Home.md + _Index.md on first register (wiki is seeded by default)."},
         {"name": "--no-agents-md", "arg": null, "description": "Skip planting cwd AGENTS.md on first register (generated by default for new agents). Compose still writes .k2/AGENTS.md."},
         {"name": "--fanout", "arg": null, "description": "Opt in to leftover harness fan-out (CLAUDE.md, GEMINI.md, AGENT.md, …). Off by default."},
@@ -612,8 +605,8 @@ exit: 0
     },
     {
       "name": "agent access",
-      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh|agents_hire|agents_manage on|off [--json]",
-      "description": "One switch for one workspace's agent. chat_manage: \"Manage Chat / Voice Hosting\" (it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps; on also makes its own chat account, as a coworker, if it has none; off keeps it). chat_refresh: \"Let this agent refresh its pinned chat\". agents_hire: \"Let this agent hire agents\" (its main session may run k2 agent hire). agents_manage: \"Let this agent manage its sidecars\" (its main session may open and stop its sidecars). The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "usage": "k2 agent access set <workspace> chat_manage|chat_refresh on|off [--json]",
+      "description": "\"Manage Chat / Voice Hosting\" for one workspace's agent: it may run Chat / Voice Hosting on this server, create Spaces and bind them to its Apps. On also makes its own chat account, as a coworker, if it has none; off keeps it. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
       "args": [{"name": "workspace", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
     },

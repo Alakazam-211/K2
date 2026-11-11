@@ -2150,6 +2150,131 @@ if v.get("next"):
     print(v["next"])'
 }
 
+_study_page_agent_templates() {
+    cat <<'EOF'
+k2 study agent-templates — Agent templates: hire a type of agent, save your own
+
+WHAT A TEMPLATE IS
+  A folder of plain files: template.toml (id, version, what the agent
+  gets), ROLE.md (the charter), and optional wiki/, context/ and skills/.
+  K2 has ten built-in types: general, lead, developer, app-owner, designer,
+  researcher, reviewer, writer, support, ops. Templates saved on this server
+  (the library, ~/.k2/agent-templates/<id>/v<N>/) list under "Yours".
+  Two system templates, kessel and chief-of-staff, are hidden from list
+  (--all shows them) and are hired by id only. Old ids still work:
+  worker = general, manager = lead, qa = reviewer.
+  A template carries no authority: it only suggests permissions.
+
+1. LOOK
+  k2 agent template list                  the types (--json also has canSave)
+  k2 agent template show writer           its charter, params, questions,
+                                          starter notes, layers, suggestions
+                                          and the hello it sends
+  k2 agent template show writer --files   every file in full
+
+2. REVIEW, THEN HIRE
+  k2 agent hire --template writer --name "Max" --agent codex --dry-run
+    Writes nothing. Prints the folder it would use (<hire root>/max; see
+    k2 agent hire-root) and every row: would write, skip, yours (kept),
+    suggested. Read it before you hire.
+  k2 agent hire --template writer --name "Max" --agent codex
+    Writes the folder, ROLE.md, starter notes, context layers and
+    .k2/agent/template.lock. Nothing starts: the agent waits until someone
+    opens it.
+  k2 agent hire --template writer --name "Max" --agent codex --launch
+    The same, then K2 starts it, and on its first create it says hello to
+    its person on the Thread (once; never on a re-run).
+  --agent <preset>   the tool it runs: an id, label or command word from
+                     k2 preset list (codex, claude, ...). Left out: the
+                     template's suggestion, else the server default.
+  --param key=value  a value the template asks for; every built-in takes
+                     about="what to focus on" (show lists them).
+  --answer id=text   answer a first-conversation question (show lists the
+                     ids). Answer only what you know; the agent asks its
+                     person the rest on its first start.
+  <dir>              optional: a folder instead of <hire root>/<name>.
+  Re-running the same hire is safe: it writes only what is missing and
+  never replaces a file the agent changed. One template per agent.
+  The hire prints the folder; tell your person who you hired and why.
+
+3. PERMISSIONS: SUGGESTED, NOT GRANTED
+  A hire never gets more than the hirer may give. Today a hire turns no
+  switch on: each suggestion prints as "suggested", for a person to turn
+  on (Settings → Workspaces → the agent → Agent). When K2 refuses the new
+  agent, it asks on the permission card the refusal prints. Granting what
+  the hirer itself holds, and filing cards for the rest, comes later.
+
+4. SAVE YOUR OWN SETUP AS A TEMPLATE
+  k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
+  k2 agent template save . --id my-writer --wiki "Voice and style"
+  <ws> is a folder or handle ("." = the one you are in). An agent saves
+  its own workspace only; an Owner or Admin person, any agent's.
+  Taken: the ROLE.md charter and your notes (no frontmatter), stacked
+  catalog ids, your own context layers, skills you made (not K2's),
+  heartbeats (name, schedule, WAKEUP text), the tool, and the permission
+  switches now on, as suggestions. Wiki notes only with --wiki.
+  Never taken: Threads, transcripts, vault secrets, mail accounts,
+  sign-ins, .env files, App logins, connections, or any other file.
+  Secrets: a token, API key or private key in a taken file stops the save
+  with secret_found, naming the file and line; the secret is never
+  printed. Remove it (keep it in the vault: k2 study vault), save again.
+  Versions: the first save of an id is v1; you saving it again writes v2,
+  v3, ... and keeps the older ones. A hire uses the newest.
+
+5. ADD AND REMOVE
+  k2 agent template add ./my-template --dry-run    check a folder only
+  k2 agent template add ./my-template              install it
+    The folder needs template.toml and ROLE.md. Same checks as save; it
+    lands as its id's next version, with you as the author.
+  k2 agent template remove my-writer --version 1   one version
+  k2 agent template remove my-writer               every version
+    Agents already hired from it keep their files. K2's built-ins can't
+    be removed; an agent removes only templates it saved.
+
+6. UPGRADE AND DIFF
+  k2 agent template diff .                what an upgrade would change
+  k2 agent template upgrade . --dry-run   the same report; writes nothing
+  k2 agent template upgrade .
+  k2 agent template diff my-writer 1 2    two saved versions, file by file
+  Per file, by the checksum in .k2/agent/template.lock:
+    unchanged since the hire → replaced;
+    changed by the agent → kept, and the new text lands beside it as
+      <file>.proposed: read it and merge what you want;
+    deleted by the agent → stays deleted.
+  In ROLE.md only the K2:MANAGED block is replaced, never "Your notes".
+  New notes, layers, skills and catalog items are added; new heartbeats
+  and suggestions are only listed. Never changed: permissions, tool,
+  model, name, connections. The agent gets one inbox note.
+  K2's built-ins upgrade by themselves when K2 updates; a saved template
+  only when someone runs upgrade.
+
+ERRORS (code (exit): what to do)
+  unknown_template (4)    no such id: k2 agent template list --all
+  usage (2)               a param or answer the template doesn't take; the
+                          message lists the valid ones
+  template_conflict (3)   that folder was made from another template; one
+                          per agent: pick another folder or --name
+  folder_exists (3)       <hire root>/<name> is taken: another --name, or
+                          pass that folder as <dir>
+  system_template (3)     an API key can't hire kessel or chief-of-staff
+  bad_id (2)              ids are a-z, 0-9 and -, at most 40 characters
+  id_reserved (1)         a K2 id or old id: pick another id
+  id_taken (1)            another author saved that id: pick another id
+  secret_found (1)        remove the secret from the file and line named
+  too_large (1)           a file over 64 KiB, or over 40 notes, 20 skills,
+                          20 layers or 12 heartbeats: cut it down
+  no_charter (2)          the agent's ROLE.md is missing or empty
+  no_note (4)             no such wiki note for --wiki: k2 wiki list
+  bad_template (2)        add: the folder fails a check (paths, fields,
+                          placeholders); the message says which
+  own_workspace_only (3)  an agent works on its own workspace; ask a person
+  not_author (3)          an agent removes only what it saved; ask a person
+  role_required (3)       saving and managing templates needs an Owner or Admin
+  no_workspace (4)        no such folder or handle registered on this server
+  no_template (4)         upgrade/diff: that agent wasn't made from one
+EOF
+}
+
 _study_page_organization() {
     cat <<'EOF'
 k2 study organization — The Org Chart: orgs, heads and the daily bulletin

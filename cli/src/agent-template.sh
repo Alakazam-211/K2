@@ -6,11 +6,14 @@ cmd_help_agent_template() {
 Agent templates: the types of agent you can hire. A template is a charter
 (the agent's ROLE.md), starter wiki notes and context layers. It gives the
 agent no permissions: it only suggests some, for a person to turn on.
+Step by step, with every error code: k2 study agent-templates.
 
 USAGE
   k2 agent template list [--all] [--json]
   k2 agent template show <id> [--files] [--json]
-  k2 agent hire --template <id> --name <name> [--dry-run]   (make an agent from one)
+  k2 agent hire [<dir>] --template <id> --name <name> [--agent <preset>]
+      [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run | --launch]
+                                     (make an agent from one: k2 agent hire --help)
   k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]
   k2 agent template add <dir> [--dry-run] [--json]
   k2 agent template remove <id> [--version N] [--json]
@@ -21,7 +24,9 @@ COMMANDS
   list            Every type you can hire: K2's ten built-ins (general, lead,
                   developer, app-owner, designer, researcher, reviewer, writer,
                   support, ops), then any saved on this server, under "Yours".
-                  --all also shows K2's system templates (hired by id only).
+                  --all also shows K2's system templates, kessel and
+                  chief-of-staff (hired by id only). --json also carries
+                  canSave: this server can save templates.
   show <id>       What one gives: its charter, params (--param on hire; marked
                   when required), its first-conversation questions, starter
                   notes, context layers, suggested permissions and the hello
@@ -29,8 +34,9 @@ COMMANDS
                   An old id works too: worker = general, manager = lead,
                   qa = reviewer. An unknown id exits 4.
   save <ws>       Save an agent's setup as a new template you can hire from.
-                  <ws> is the agent's folder or handle (an agent: its own
-                  only; "." works). It takes the charter (ROLE.md), its
+                  <ws> is the agent's folder or handle ("." works). An
+                  agent saves its own only; an Owner or Admin person, any
+                  agent's. It takes the charter (ROLE.md), its
                   context layers, the skills it made, its heartbeats, its
                   tool, and the permission switches now on (as suggestions).
                   Wiki notes only with --wiki. Never Threads, transcripts,
@@ -86,6 +92,15 @@ FLAGS
   --version N     remove: only this version
   --dry-run       save, add, upgrade: show what would be written; write nothing
   --json          JSON output
+  Hiring flags (--name, --agent, --param, --answer, --dry-run, --launch):
+  k2 agent hire --help.
+
+EXIT CODES
+  0 ok · 1 refused (id_reserved, id_taken, secret_found, too_large) ·
+  2 bad usage (bad_id, bad_template, no_charter) · 3 not allowed
+  (own_workspace_only, not_author, role_required) · 4 not found
+  (unknown_template, no_template, no_workspace, no_note, no_folder).
+  Each code and its fix: k2 study agent-templates.
 
 EXAMPLES
   k2 agent template list
@@ -281,6 +296,10 @@ if err:
     print("Error: %s%s" % ((code + ": ") if code else "", hint), file=sys.stderr)
     if code in ("usage", "bad_id", "bad_template", "no_charter"):
         sys.exit(2)
+    # Refusals of the template itself: exit 1, even when the hint names a
+    # token (secret_found says "a GitHub token", not a sign-in problem).
+    if code in ("id_reserved", "id_taken", "secret_found", "too_large", "template_conflict"):
+        sys.exit(1)
     if code in ("forbidden", "role_required", "own_workspace_only", "not_author", "owner_only") or "token" in hint.lower():
         sys.exit(3)
     if code in ("not_found", "unknown_template", "no_workspace", "no_folder", "no_note", "no_template"):

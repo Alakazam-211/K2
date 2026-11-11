@@ -797,7 +797,18 @@ missing and reports changed:false when there is nothing to do.
 
 USAGE
   k2 agent hire <dir> [flags]
-  k2 agent hire --template <id> --name <name> [flags]    (folder: <hire root>/<handle>)
+  k2 agent hire [<dir>] --template <id> --name <name> [--agent <preset>]
+                [--param <key>=<value>]... [--answer <id>=<text>]...
+                [--dry-run | --launch] [flags]   (no <dir>: <hire root>/<handle>)
+
+FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
+  1. Look:    k2 agent template list, then k2 agent template show <id>
+  2. Review:  the same hire with --dry-run: the folder, and every file, layer
+              and suggested permission, marked would write / skip / yours.
+              Nothing is written.
+  3. Hire:    the same line without --dry-run. Nothing starts unless you add
+              --launch; with it, K2 starts the agent and it says hello on
+              its Thread. Tell your person what you hired.
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).
@@ -821,7 +832,9 @@ FLAGS
                           agent made from one template with another is
                           refused (exit 3); re-running with the same one is safe.
                           A template only SUGGESTS permissions; nothing is
-                          turned on for the agent by the hire.
+                          turned on for the agent by the hire. The output
+                          lists each one as "suggested", for a person to turn
+                          on, and the agent asks on a card when K2 refuses it.
   --param <key>=<value>   A value the template asks for (repeatable). Quote a
                           value with spaces: --param about="the billing service".
                           Every built-in takes `about` (optional: what to focus
@@ -895,6 +908,11 @@ FLAGS
                           Create-only DB passport (default off). Gates k2 db
                           create, not list/dsn/store. Does not mint a
                           database — call k2 db create after hire.
+  --take-app <app>        After the hire, offer this App to the new agent and
+                          accept it for it (k2 study app-handover). Owner:
+                          one card to approve. Reported as its own step.
+  --brief <file>          With --take-app: your notes for the new agent about
+                          the App (markdown, at most 64 KiB).
   --dry-run               Show the full plan; change nothing (steps that would
                           fail are FAILED, and it exits non-zero). With
                           --template it names the folder it would use, every
@@ -906,6 +924,12 @@ FLAGS
   every step's result is printed, then the exit is non-zero (the first
   failure's: 4 not_found, 2 usage, 3 refused, 1 other). Only a failure to
   make the workspace itself stops the rest (reported "not run").
+
+  Template refusals: unknown_template (4: k2 agent template list --all),
+  usage (2: a param or answer it doesn't take; the valid ones are named),
+  template_conflict (3: the folder has another template), folder_exists
+  (3: <hire root>/<handle> is taken; another --name, or pass it as <dir>).
+  Every code and its fix: k2 study agent-templates.
 
 WHO MAY
   A person: the owner, or a login in Settings or a terminal. An agent: only

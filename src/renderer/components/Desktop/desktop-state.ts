@@ -181,6 +181,77 @@ export function desktopStateLabel(state: string): string {
   }
 }
 
+function text(v: unknown): string {
+  return typeof v === 'string' ? v : ''
+}
+
+function grantOf(v: unknown): DesktopGrant | null {
+  if (!isObj(v) || typeof v.user !== 'string' || !v.user) return null
+  return {
+    user: v.user,
+    userId: text(v.userId) || v.user,
+    mode: v.mode === 'control' ? 'control' : 'view',
+    grantedBy: text(v.grantedBy),
+    grantedAt: typeof v.grantedAt === 'number' && Number.isFinite(v.grantedAt) ? v.grantedAt : 0,
+  }
+}
+
+function viewerOf(v: unknown): DesktopViewer | null {
+  if (!isObj(v) || typeof v.id !== 'string' || !v.id) return null
+  return {
+    id: v.id,
+    user: text(v.user) || 'Someone',
+    role: text(v.role),
+    mode: v.mode === 'control' ? 'control' : 'view',
+    ingress: text(v.ingress),
+    ip: text(v.ip),
+    device: text(v.device),
+    display: text(v.display),
+    since: typeof v.since === 'number' && Number.isFinite(v.since) ? v.since : 0,
+  }
+}
+
+/** `GET /cli/desktop/status`, read so an odd reply is a plain error, never a
+ *  crash: the switch (`enabled`) and who you are (`you`) must be there; a
+ *  list entry K2 can't read is dropped. The daemon always sends both
+ *  (desktop/routes.rs `status`), so this only guards against a proxy or a
+ *  half-written answer. */
+export function readDesktopStatus(body: unknown): DesktopStatus {
+  if (!isObj(body)) throw new Error('the reply was empty')
+  if (typeof body.enabled !== 'boolean') throw new Error('the reply didn’t say whether Remote Desktop is on')
+  if (!isObj(body.you)) throw new Error('the reply didn’t say what you may do here')
+  const you = body.you
+  const out: DesktopStatus = {
+    desktop: text(body.desktop) || 'console',
+    machine: text(body.machine),
+    enabled: body.enabled,
+    backend: text(body.backend),
+    state: text(body.state) || 'unavailable',
+    message: text(body.message),
+    lane: (text(body.lane) || 'main') as DesktopStatus['lane'],
+    you: {
+      role: text(you.role),
+      mayView: you.mayView === true,
+      mayControl: you.mayControl === true,
+      mayManage: you.mayManage === true,
+      sameMachine: you.sameMachine === true,
+      // A virtual desktop's start right (read by mayStartOf).
+      ...(typeof you.mayStart === 'boolean' ? { mayStart: you.mayStart } : {}),
+    },
+  }
+  if (Array.isArray(body.hideApps)) out.hideApps = body.hideApps.filter((a): a is string => typeof a === 'string')
+  if (Array.isArray(body.grants)) out.grants = body.grants.map(grantOf).filter((g): g is DesktopGrant => g !== null)
+  if (Array.isArray(body.viewers)) out.viewers = body.viewers.map(viewerOf).filter((v): v is DesktopViewer => v !== null)
+  // A virtual desktop's fields (contract-virtual-desktop-wire-v1), kept as sent.
+  if (typeof body.kind === 'string') out.kind = body.kind
+  if (typeof body.name === 'string') out.name = body.name
+  if (typeof body.workspaceId === 'string') out.workspaceId = body.workspaceId
+  if (typeof body.agentsAllowed === 'boolean') out.agentsAllowed = body.agentsAllowed
+  if (body.reason === null) out.reason = null
+  else if (isObj(body.reason)) out.reason = body.reason as unknown as DesktopCloseReason
+  if (isObj(body.virtual)) out.virtual = body.virtual as VirtualDesktopInfo
+  return out
+}
 
 /** Every card the tab can show. `running` is the picture (no card). */
 export type TabState =

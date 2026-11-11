@@ -263,6 +263,8 @@ pub mod federation;
 pub mod feedback;
 // The setup checklist (prd-setup-checklist-v1): rows, hide/skip/finish.
 pub mod first_run;
+// What `k2 setup` prints (`?format=text`), so the CLI needs no python3.
+pub mod first_run_text;
 // K5 at first run (prd-setup-checklist-v1 §10): the one-row seat naming
 // K2's own agent and the person's Chief of Staff (0293).
 pub mod orchestrator;

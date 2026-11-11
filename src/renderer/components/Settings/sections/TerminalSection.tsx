@@ -153,7 +153,7 @@ export function TerminalSection(): React.JSX.Element {
     <div className="w-full max-w-[52rem] space-y-6 pb-6" data-testid="terminal-page">
       <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Terminal</h2>
-        <p className={SETTING_ROW_HINT}>How text looks and behaves in terminal tabs on this computer.</p>
+        <p className={SETTING_ROW_HINT}>How text looks and behaves in terminal tabs.</p>
       </header>
 
       <SettingsGroup

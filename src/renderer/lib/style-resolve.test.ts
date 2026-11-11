@@ -136,23 +136,28 @@ describe('resolveStyleSelection', () => {
 })
 
 describe('the default look (a client with nothing saved)', () => {
-  it('is Glass under Auto: Obsidian on a dark system, Veil on a light one', () => {
+  it('is Glass under Auto: Obsidian on a light system, Yellow on a dark one', () => {
     expect(DEFAULT_SELECTION).toEqual({
       styleId: 'glass',
-      paletteId: 'obsidian',
+      paletteId: 'yellow',
       schemeMode: 'auto',
       gapsPreset: '',
-      autoPalettes: { dark: 'obsidian', light: 'veil' },
+      autoPalettes: { light: 'obsidian', dark: 'yellow' },
     })
     const dark = resolveStyleSelection(DEFAULT_SELECTION, false)
-    expect([dark.style.id, dark.resolvedPalette.id, dark.resolvedScheme]).toEqual(['glass', 'obsidian', 'dark'])
+    expect([dark.style.id, dark.resolvedPalette.id, dark.resolvedScheme]).toEqual(['glass', 'yellow', 'dark'])
+    // Obsidian is a dark palette: on a light system it decides the scheme.
     const light = resolveStyleSelection(DEFAULT_SELECTION, true)
-    expect([light.style.id, light.resolvedPalette.id, light.resolvedScheme]).toEqual(['glass', 'veil', 'light'])
+    expect([light.style.id, light.resolvedPalette.id, light.resolvedScheme]).toEqual(['glass', 'obsidian', 'dark'])
+  })
+
+  it('keeps both picks through paletteSlots: Obsidian on the light side is not rewritten', () => {
+    expect(paletteSlots(getStyle('glass')!, DEFAULT_SELECTION)).toEqual({ light: 'obsidian', dark: 'yellow' })
   })
 
   it('uses palettes Glass ships, and names default accents only for them', () => {
     const glass = getStyle('glass')!
-    for (const id of ['obsidian', 'veil']) expect(glass.palettes.some((p) => p.id === id), id).toBe(true)
+    for (const id of ['obsidian', 'yellow']) expect(glass.palettes.some((p) => p.id === id), id).toBe(true)
     for (const id of Object.keys(DEFAULT_PALETTE_ACCENTS)) {
       expect(glass.palettes.some((p) => p.id === id), id).toBe(true)
     }

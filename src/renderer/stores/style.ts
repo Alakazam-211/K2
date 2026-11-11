@@ -560,8 +560,8 @@ let _seededDefaultAccents: [string, AccentChoice][] = []
 
 /**
  * The one-time switch to the default look (Rosson, 2026-11-11): every client,
- * new or existing, starts 0.46.11 on Glass under Auto (Obsidian dark, Veil
- * light), once. It writes only the accents DEFAULT_PALETTE_ACCENTS names, each
+ * new or existing, starts 0.46.11 on Glass under Auto (Obsidian light, Yellow
+ * dark), once. It writes only the accents DEFAULT_PALETTE_ACCENTS names, each
  * on its own palette; every other palette keeps its accent. Runs before the first read of the
  * mirror; index.html's bootstrap paints the same look while the flag is
  * missing, so the first frame is already Glass.

@@ -60,9 +60,9 @@ describe('pre-paint bootstrap (index.html)', () => {
   if (!script) throw new Error('the Style bootstrap is not in index.html')
   const runBootstrap = new Function(script[1])
 
-  it('a first boot with nothing saved is the default look, Glass on Obsidian (dark system)', () => {
+  it('a first boot with nothing saved is the default look, Glass on Yellow (dark system)', () => {
     runBootstrap()
-    expect(stamped()).toEqual({ style: 'glass', palette: 'obsidian', scheme: 'dark', gaps: null })
+    expect(stamped()).toEqual({ style: 'glass', palette: 'yellow', scheme: 'dark', gaps: null })
   })
 
   it('maps a saved square, keeping palette, scheme and gaps', () => {

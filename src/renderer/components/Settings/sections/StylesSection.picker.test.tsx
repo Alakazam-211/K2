@@ -353,7 +353,7 @@ describe('Reset to defaults', () => {
     expect([s.styleId, s.schemeMode, s.autoPalettes, s.gapsPreset, s.accent]).toEqual([
       'glass',
       'auto',
-      { dark: 'obsidian', light: 'veil' },
+      { dark: 'yellow', light: 'obsidian' },
       '',
       null,
     ])

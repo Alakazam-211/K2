@@ -503,11 +503,11 @@ function mergeEditorDefaults(result: Partial<EditorSettingsBackend> | undefined)
   return { ...DEFAULT_EDITOR, ...result }
 }
 
-/** Defaults matching Glass / obsidian / auto / base density (same as
+/** Defaults matching Glass / yellow / auto / base density (same as
  *  style-resolve DEFAULT_SELECTION). Used only as the settings-store
  *  initial value before the style store is consulted. */
 const DEFAULT_STYLE: StyleSettingsBackend = {
-  id: 'glass', palette: 'obsidian', scheme: 'auto', gaps: '',
+  id: 'glass', palette: 'yellow', scheme: 'auto', gaps: '',
 }
 
 /** Snapshot the live per-client style selection into the settings-store

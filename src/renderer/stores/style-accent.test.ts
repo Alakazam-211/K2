@@ -370,26 +370,31 @@ describe('the default look on a client with nothing saved', () => {
   const accentChoiceKeys = (): string[] =>
     [...mem.keys()].filter((k) => k.startsWith('k2.accent.') && !k.startsWith('k2.accent.stamp.'))
 
-  it('boots to Glass under Auto, Obsidian and Veil, with no accent written', async () => {
+  it('boots to Glass under Auto, Yellow and Obsidian, with no accent written', async () => {
     const store = await freshStore()
     const s = store.getState()
     expect([s.styleId, s.paletteId, s.schemeMode, s.autoPalettes]).toEqual([
       'glass',
-      'obsidian',
+      'yellow',
       'auto',
-      { dark: 'obsidian', light: 'veil' },
+      { dark: 'yellow', light: 'obsidian' },
     ])
     expect(s.accent).toBeNull()
     expect(accentChoiceKeys()).toEqual([])
-    expect([html.getAttribute('data-style'), html.getAttribute('data-palette')]).toEqual(['glass', 'obsidian'])
+    expect([html.getAttribute('data-style'), html.getAttribute('data-palette')]).toEqual(['glass', 'yellow'])
     expect(accentVar()).toBe('')
-    expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.light')]).toEqual(['glass', 'auto', 'veil'])
+    expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.dark'), mem.get('k2.palette.light')]).toEqual([
+      'glass',
+      'auto',
+      'yellow',
+      'obsidian',
+    ])
   })
 
-  it('on a light system it is Veil with its own accent', async () => {
+  it('on a light system it is Obsidian (a dark palette) with its own accent', async () => {
     osLight = true
     const store = await freshStore()
-    expect(store.getState().resolvedPaletteId).toBe('veil')
+    expect([store.getState().resolvedPaletteId, store.getState().resolvedScheme]).toEqual(['obsidian', 'dark'])
     expect(accentVar()).toBe('')
   })
 
@@ -397,28 +402,32 @@ describe('the default look on a client with nothing saved', () => {
     runBootstrap()
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual([
       'glass',
-      'obsidian',
+      'yellow',
       'dark',
     ])
     expect(accentVar()).toBe('')
     clearHtml()
     osLight = true
     runBootstrap()
-    expect([html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual(['veil', 'light'])
+    expect([html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual(['obsidian', 'dark'])
     expect(accentVar()).toBe('')
   })
 
   it('the bootstrap’s default accents are exactly what DEFAULT_PALETTE_ACCENTS derives, on both sides', async () => {
     const { accentVarsFor } = await import('@/lib/style-accent')
-    const { DEFAULT_PALETTE_ACCENTS } = await import('@/lib/style-resolve')
+    const { DEFAULT_PALETTE_ACCENTS, DEFAULT_SELECTION } = await import('@/lib/style-resolve')
     const { getStyle } = await import('@/styles.generated')
     const glass = getStyle('glass')!
-    for (const [palette, light] of [['obsidian', false], ['veil', true]] as const) {
+    for (const light of [false, true]) {
+      const palette = DEFAULT_SELECTION.autoPalettes![light ? 'light' : 'dark']!
       clearHtml()
       osLight = light
       runBootstrap()
+      expect(html.getAttribute('data-palette')).toBe(palette)
+      const meta = glass.palettes.find((p) => p.id === palette)!
       const choice = DEFAULT_PALETTE_ACCENTS[palette] ?? null
-      const want = accentVarsFor(choice, glass.palettes.find((p) => p.id === palette)!, light ? 'light' : 'dark')
+      // Auto lets the palette decide: Obsidian on a light system is still dark.
+      const want = accentVarsFor(choice, meta, meta.schemes.includes(light ? 'light' : 'dark') ? (light ? 'light' : 'dark') : meta.schemes[0])
       const names = ['--color-accent', ...Object.keys(want)]
       const got = Object.fromEntries(names.map((k) => [k, html.style.getPropertyValue(k)]).filter(([, v]) => v !== ''))
       expect([palette, got]).toEqual([palette, want])
@@ -512,23 +521,23 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     mem.set('k2.style.migrated', '1')
   }
 
-  it('moves an existing Terminal client to Glass / Auto / Obsidian + Veil, writes no Glass accent, and sets the flag', async () => {
+  it('moves an existing Terminal client to Glass / Auto / Yellow + Obsidian, writes no Glass accent, and sets the flag', async () => {
     seedOldTerminal()
     const store = await freshStore()
     const s = store.getState()
     expect([s.styleId, s.schemeMode, s.autoPalettes, s.resolvedPaletteId, s.accent]).toEqual([
       'glass',
       'auto',
-      { dark: 'obsidian', light: 'veil' },
-      'obsidian',
+      { dark: 'yellow', light: 'obsidian' },
+      'yellow',
       null,
     ])
     expect(mem.get(SWITCHED)).toBe('1')
     expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.dark'), mem.get('k2.palette.light')]).toEqual([
       'glass',
       'auto',
+      'yellow',
       'obsidian',
-      'veil',
     ])
     expect([...mem.keys()].filter((k) => k.startsWith('k2.accent.glass'))).toEqual([])
     expect(html.getAttribute('data-style')).toBe('glass')
@@ -558,7 +567,7 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     runBootstrap()
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual([
       'glass',
-      'obsidian',
+      'yellow',
       'dark',
     ])
     expect(accentVar()).toBe('')
@@ -567,7 +576,7 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     runBootstrap()
     expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), accentVar()]).toEqual([
       'glass',
-      'veil',
+      'obsidian',
       '',
     ])
   })
@@ -635,7 +644,7 @@ describe('the one-time switch to the default look (first launch of 0.46.11)', ()
     const store = await freshStore()
     const { migrateStyleFromDaemon } = await import('./style')
     migrateStyleFromDaemon({ id: 'terminal', palette: 'paper', scheme: 'light', gaps: '' })
-    expect([store.getState().styleId, store.getState().resolvedPaletteId]).toEqual(['glass', 'obsidian'])
+    expect([store.getState().styleId, store.getState().resolvedPaletteId]).toEqual(['glass', 'yellow'])
     expect(mem.get('k2.style.migrated')).toBe('1')
   })
 

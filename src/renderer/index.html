@@ -38,7 +38,7 @@
         }
         // No saved style, or the first launch of 0.46.11 (its one-time switch
         // flag is missing): the default look, Glass under Auto (Obsidian for a
-        // dark system, Veil for a light one), each palette with its own accent
+        // light system, Yellow for a dark one), each palette with its own accent
         // unless DEFAULT_PALETTE_ACCENTS names one. The store saves it on this
         // launch (stores/style.ts migrateToDefaultLook).
         var switching = read('k2.style.migrated-0-46-11-glass', '') !== '1';
@@ -58,7 +58,7 @@
         // appearance, right even after an OS flip while the app was closed.
         // Under a fixed mode k2.palette is the choice, and the other key may
         // hold an Auto pick. stores/style.ts keeps them all in sync.
-        var palette = fresh ? (side === 'light' ? 'veil' : 'obsidian')
+        var palette = fresh ? (side === 'light' ? 'obsidian' : 'yellow')
           : mode === 'auto'
           ? read('k2.palette.' + side, '') || read('k2.palette', '')
           : read('k2.palette', '') || read('k2.palette.' + side, '');
@@ -82,8 +82,8 @@
         // and palette, and only as plain colours; anything else leaves the
         // palette's own accent.
         // The default look's accents, as lib/style-accent derives them from
-        // DEFAULT_PALETTE_ACCENTS (lib/style-resolve) for Obsidian (dark) and
-        // Veil (light); null is the palette's own. style-accent.test.ts
+        // DEFAULT_PALETTE_ACCENTS (lib/style-resolve) for Yellow (dark) and
+        // Obsidian (light); null is the palette's own. style-accent.test.ts
         // derives these from that constant and fails until they agree.
         var defaultAccent = { dark: null, light: null };
         try {

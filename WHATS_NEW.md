@@ -3,12 +3,6 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.12
-
-### Compute
-- **`--avoid` takes a node that isn't yours.** `k2 compute run --avoid k2n9` (and `--plan`, `test`, `move --auto`) no longer fails with `node_not_found` when that node isn't granted to your workspace, or doesn't exist: it could never be picked, so the job runs and one note says `--avoid k2n9: not one of your nodes; nothing to avoid`. A standing "never those nodes" list now works as flags. The note is the same whether such a node exists or not.
-- **Tags in a job's checkout.** `git describe --tags`, or a semver check against a tag (`--baseline v0.9.2`), now works on a compute node with no archive to ship. The checkout has the repo's tags that point into its history: from the remote, the tags in the history the node fetched (as in a clone, a tag the node already has keeps its place); from your machine, for a commit the remote doesn't have yet, the tags that point into it, an unpushed local tag too. Nothing is fetched from any other remote. Needs this K2 and k2-node 0.46.12; an older node or server leaves tags out, as before.
-
 ## 0.46.11
 
 ### App SDK
@@ -87,6 +81,8 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **K2 reads PSD and PSB files into a layer index; comment on and claim individual layers.** Agents list and compare the layers with `k2 doc outline`, `k2 doc layer` and `k2 doc node`, comment with `k2 doc comment`, `reply` and `resolve`, and claim a layer with `k2 doc claim --node` (`k2 study docs`). Agents never write PSD or PSB files: they propose a new file and leave a comment.
 
 ### Fixes
+- **`--avoid` takes a node that isn't yours.** `k2 compute run --avoid k2n9` (and `--plan`, `test`, `move --auto`) no longer fails with `node_not_found` when that node isn't granted to your workspace, or doesn't exist: it could never be picked, so the job runs and one note says `--avoid k2n9: not one of your nodes; nothing to avoid`. A standing "never those nodes" list now works as flags. The note is the same whether such a node exists or not.
+- **Tags in a job's checkout.** `git describe --tags`, or a semver check against a tag (`--baseline v0.9.2`), now works on a compute node with no archive to ship. The checkout has the repo's tags that point into its history: from the remote, the tags in the history the node fetched (as in a clone, a tag the node already has keeps its place); from your machine, for a commit the remote doesn't have yet, the tags that point into it, an unpushed local tag too. Nothing is fetched from any other remote. Needs this K2 and k2-node 0.46.12; an older node or server leaves tags out, as before.
 - **A secret you save on a card "for the server" now reaches the agent that asked.** A server secret goes only to the workspaces it is shared with, and saving a card for the server shared it with nobody, while the card said the agent would get it, so its environment variable never arrived and `k2 vault env-file` refused it. Saving now shares it with the asking workspace at the card's delivery (its next session gets the variable; `k2 vault env-file NAME --scope server` works at once). Other workspaces still get it only when you share it, and the card and Settings → Vault now say so. Secrets saved this way before the update: share them once with `k2 vault grant NAME --to ws:<workspace> --as env --scope server` or Settings → Vault → Share.
 - **A secret that isn't shared with an agent's workspace says so.** `k2 vault env-file`, `file` and `run` told such an agent "it is delivered to you as env only … widen it: k2 vault delivery NAME env", naming the delivery the secret already had. They now say it isn't shared with this workspace (or is shared at a lower delivery, or the share ended) and give the one share that fixes it; `k2 vault show` says nothing reaches the agent instead of the secret's own delivery.
 - **Settings → User Access loads when one part fails.** The users list used to fail completely if any one of its reads failed. Now the rest still shows, and the list reads each App's details once instead of once per user.

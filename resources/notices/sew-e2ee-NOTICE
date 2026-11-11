@@ -4,6 +4,9 @@ Copyright (c) 2026 Alakazam Labs.
 Licensed under either of the Apache License, Version 2.0 (LICENSE-APACHE) or the MIT license
 (LICENSE-MIT), at your option.
 
-It depends on sew-mls-crypto (MIT OR Apache-2.0), which holds code derived from
-openmls_rust_crypto (part of OpenMLS, MIT) and carries OpenMLS's MIT licence text; a binary
-that includes sew-e2ee includes it and must carry its NOTICE file.
+sew-e2ee contains no code copied or derived from other projects. It uses openmls (MIT) and
+other crates as dependencies, under their own licences.
+
+Its dependency sew-mls-crypto (MIT OR Apache-2.0) holds code derived from openmls_rust_crypto
+and openmls_basic_credential (parts of OpenMLS, MIT) and carries OpenMLS's MIT licence text in
+its own NOTICE file, which a binary that includes sew-mls-crypto must carry.

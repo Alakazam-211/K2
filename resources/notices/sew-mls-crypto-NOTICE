@@ -8,6 +8,7 @@ src/crypto.rs is derived from openmls_rust_crypto 0.6.0 (src/provider.rs and src
 src/lib.rs (MlsProvider and its OpenMlsProvider impl) from openmls_rust_crypto 0.6.0's
 src/lib.rs, and src/credential.rs (SignatureKeyPair) from openmls_basic_credential 0.6.0's
 src/lib.rs, parts of OpenMLS (https://github.com/openmls/openmls), modified by Alakazam Labs.
+src/rng.rs (the RNG adapter) follows the shape of openmls_rust_crypto 0.6.0's rand_shim.
 openmls_rust_crypto and openmls_basic_credential are licensed under the MIT license. Their
 packages on crates.io carry no licence file; the text below is OpenMLS's LICENSE file at the
 commit both packages were built from (3a3e35de3feeca8f6605143c464d5452ae584d43), unchanged:

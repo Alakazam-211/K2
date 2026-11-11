@@ -608,7 +608,16 @@ mod tests {
             crate::test_env::write_executable(&frpc, "#!/bin/sh\nwhile :; do sleep 1; done\n");
             let cfg = dir.join("frpc.toml");
             std::fs::write(&cfg, Self::RENDERED).expect("write cfg");
-            let child = std::process::Command::new(&frpc).arg("-c").arg(&cfg).spawn().expect("spawn stand-in");
+            // No inherited stdio: the loop's last `sleep 1` outlives a killed
+            // shell and would hold the test's output open (a nextest leak).
+            let child = std::process::Command::new(&frpc)
+                .arg("-c")
+                .arg(&cfg)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn stand-in");
             // Wait for the shell to be exec'd (argv names the script).
             let pid = child.id() as i32;
             let t = Instant::now();

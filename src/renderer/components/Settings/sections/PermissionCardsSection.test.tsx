@@ -47,6 +47,8 @@ import { useProjectsStore } from '@/stores/projects'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { settingsNav } from '../Settings'
 
+const SWITCH = 'Let agents ask with permission cards'
+
 type Daemon = {
   permissionCards: boolean | undefined
   agents: Array<{ workspace: string; handle: string; name: string; on: boolean }>
@@ -123,6 +125,13 @@ beforeEach(() => {
       a.on = body.value as boolean
       return { ok: true, workspace: a.handle, toggle: 'permission_cards', agentsCanRequestPermissions: a.on }
     }
+    if (route === 'thread/answer') {
+      const p = daemon.pending.find((x) => (x as { cardId: string }).cardId === body.id) as typeof PENDING | undefined
+      if (!p) throw new DaemonHttpError('this card has no open request', 409, 'request_not_pending')
+      daemon.pending = daemon.pending.filter((x) => x !== p)
+      daemon.recent = [{ id: p.requestId, agent: p.agent, workspace: 'p-billing', action: p.action, setting: p.setting, state: body.answer === 'Allow' ? 'approved' : 'denied', askedAt: p.createdAt, answeredBy: 'owner', answeredAt: p.createdAt + 60, addr: p.addr, card: p.cardId }, ...daemon.recent]
+      return { ok: true }
+    }
     throw new Error(`unexpected POST ${route}`)
   })
 })
@@ -167,7 +176,7 @@ describe('Settings → Access → Permission Cards', () => {
 
   it('off (an owner turned it off): the owner sees the switch off and nothing from the permission family is called', async () => {
     render(<PermissionCardsSection />)
-    const sw = await screen.findByRole('switch', { name: 'Permission cards' })
+    const sw = await screen.findByRole('switch', { name: SWITCH })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     expect(sw.getAttribute('aria-checked')).toBe('false')
     expect(document.querySelectorAll('[data-beta-tag]').length).toBeGreaterThan(0)
@@ -179,7 +188,7 @@ describe('Settings → Access → Permission Cards', () => {
   it('the owner turns it on: one settings/update {permissionCards:true}, then the agents and Waiting on you load', async () => {
     daemon.pending = [PENDING]
     render(<PermissionCardsSection />)
-    const sw = await screen.findByRole('switch', { name: 'Permission cards' })
+    const sw = await screen.findByRole('switch', { name: SWITCH })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(sw)
     await waitFor(() => expect(h.post).toHaveBeenCalledWith(expect.anything(), 'settings/update', { permissionCards: true }))
@@ -187,18 +196,21 @@ describe('Settings → Access → Permission Cards', () => {
     await screen.findByTestId('permission-agent-billing')
     expect(screen.getByRole('switch', { name: 'Billing can ask for permission cards' }).getAttribute('aria-checked')).toBe('false')
     await screen.findByTestId('permission-pending-pr_7f3a2c')
-    expect(screen.getByText('billing asks: Allow compute nodes')).toBeTruthy()
+    expect(screen.getByTestId('permission-pending-pr_7f3a2c').textContent).toContain("Let billing run jobs on this server's compute nodes.")
+    expect(screen.getByTestId('permission-pending-pr_7f3a2c').textContent).toContain('Billing asked')
   })
 
   it('a refused global write rolls back and shows the daemon message', async () => {
     h.post.mockRejectedValueOnce(new DaemonHttpError('updating "permissionCards" requires the Owner role', 403, null))
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     render(<PermissionCardsSection />)
-    const sw = await screen.findByRole('switch', { name: 'Permission cards' })
+    const sw = await screen.findByRole('switch', { name: SWITCH })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(sw)
-    await screen.findByText('updating "permissionCards" requires the Owner role')
-    expect(screen.getByRole('switch', { name: 'Permission cards' }).getAttribute('aria-checked')).toBe('false')
+    await screen.findByTestId('permission-cards-switch-error')
+    expect(screen.getByTestId('permission-cards-switch-error').textContent).toContain('updating "permissionCards" requires the Owner role')
+    expect(screen.getByTestId('permission-cards-switch-error').textContent).toContain('Nothing changed')
+    expect(screen.getByRole('switch', { name: SWITCH }).getAttribute('aria-checked')).toBe('false')
     expect(familyCalls()).toEqual([])
     spy.mockRestore()
   })
@@ -208,7 +220,7 @@ describe('Settings → Access → Permission Cards', () => {
     daemon.permissionCards = true
     render(<PermissionCardsSection />)
     await screen.findByTestId('permission-cards-owner-only')
-    const sw = screen.getByRole('switch', { name: 'Permission cards' })
+    const sw = screen.getByRole('switch', { name: SWITCH })
     expect(sw.getAttribute('aria-checked')).toBe('true')
     expect((sw as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(sw)
@@ -226,16 +238,17 @@ describe('Settings → Access → Permission Cards', () => {
     daemon.permissionCards = true
     render(<PermissionCardsSection />)
     await screen.findByTestId('permission-cards-member')
-    expect((screen.getByRole('switch', { name: 'Permission cards' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('switch', { name: SWITCH }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.queryByText('Turn on for all agents')).toBeNull()
     expect(familyCalls()).toEqual([])
   })
 
-  it('a server without permission cards says to update it; the switch is disabled', async () => {
+  it('a server without permission cards says to update it, in place of the switch', async () => {
     daemon.permissionCards = undefined
     render(<PermissionCardsSection />)
     await screen.findByTestId('permission-cards-old-server')
-    expect((screen.getByRole('switch', { name: 'Permission cards' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('permission-cards-old-server').textContent).toContain('0.46.3')
+    expect(screen.queryByRole('switch', { name: SWITCH })).toBeNull()
     expect(familyCalls()).toEqual([])
   })
 
@@ -265,7 +278,9 @@ describe('Settings → Access → Permission Cards', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     render(<PermissionCardsSection />)
     fireEvent.click(await screen.findByRole('switch', { name: 'Billing can ask for permission cards' }))
-    await screen.findByText('only the owner or an admin login may change agent access (forbidden)')
+    const row = await screen.findByTestId('permission-agent-billing')
+    await waitFor(() => expect(row.querySelector('[data-save-error]')?.textContent).toContain('only the owner or an admin login may change agent access'))
+    expect(row.querySelector('[data-save-error]')?.textContent).toContain('Nothing changed')
     expect(screen.getByRole('switch', { name: 'Billing can ask for permission cards' }).getAttribute('aria-checked')).toBe('false')
     spy.mockRestore()
   })
@@ -284,7 +299,7 @@ describe('Settings → Access → Permission Cards', () => {
     spy.mockRestore()
   })
 
-  it('recent requests show their state; Open card on a waiting one opens the agent', async () => {
+  it('recent requests show their state; a waiting one links to its card', async () => {
     daemon.permissionCards = true
     daemon.recent = [
       { id: 'pr_1', agent: 'billing', workspace: 'p-billing', action: 'compute.use', setting: 'Allow compute nodes', state: 'approved', askedAt: 100, answeredBy: 'rosson', answeredAt: 150, addr: 'billing', card: 'tc_1' },
@@ -293,19 +308,94 @@ describe('Settings → Access → Permission Cards', () => {
     render(<PermissionCardsSection />)
     await screen.findByTestId('permission-recent-pr_1')
     expect(screen.getByTestId('permission-recent-pr_1').textContent).toContain('Allowed by rosson')
+    await screen.findByTestId('permission-pending-pr_7f3a2c')
+    fireEvent.click(screen.getByRole('button', { name: 'Read why on its card' }))
+    expect(h.openOnAgentsPage).toHaveBeenCalledWith('p-billing')
+  })
+
+  it('Allow… asks first, then sends the card\'s own answer and moves the request to Recent', async () => {
+    daemon.permissionCards = true
+    daemon.pending = [PENDING]
+    render(<PermissionCardsSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow Billing’s request…' }))
+    const dialog = await screen.findByTestId('permission-allow-dialog')
+    expect(dialog.textContent).toContain("Let billing run jobs on this server's compute nodes.")
+    expect(h.post).not.toHaveBeenCalledWith(expect.anything(), 'thread/answer', expect.anything())
+    fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith(expect.anything(), 'thread/answer', expect.objectContaining({ addr: 'billing', id: 'tc_7f3a2c90', answer: 'Allow', item: 'pr_7f3a2c' })),
+    )
+    await waitFor(() => expect(screen.queryByTestId('permission-allow-dialog')).toBeNull())
+    expect(screen.getByTestId('permission-cards-notice').textContent).toContain('Allowed Billing’s request: Allow compute nodes.')
+    expect(screen.queryByTestId('permission-pending-pr_7f3a2c')).toBeNull()
+    await screen.findByTestId('permission-recent-pr_7f3a2c')
+    expect(screen.getByTestId('permission-recent-pr_7f3a2c').textContent).toContain('Allowed by owner')
+  })
+
+  it('a refused Allow stays in the dialog, says what failed, and changes nothing', async () => {
+    daemon.permissionCards = true
+    daemon.pending = [PENDING]
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.post.mockImplementationOnce(async () => {
+      throw new DaemonHttpError('only an owner or admin can answer this', 403, 'action_card_person_only')
+    })
+    render(<PermissionCardsSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow Billing’s request…' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow' }))
+    const err = await screen.findByTestId('dialog-error')
+    expect(err.textContent).toContain('Couldn’t allow this request')
+    expect(err.textContent).toContain('only an owner or admin can answer this')
+    expect(screen.getByTestId('permission-allow-dialog')).toBeTruthy()
+    expect(screen.getByTestId('permission-pending-pr_7f3a2c')).toBeTruthy()
+    spy.mockRestore()
+  })
+
+  it('Deny answers at once, quietly, and says it can ask again', async () => {
+    daemon.permissionCards = true
+    daemon.pending = [PENDING]
+    render(<PermissionCardsSection />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Deny Billing’s request' }))
+    await waitFor(() =>
+      expect(h.post).toHaveBeenCalledWith(expect.anything(), 'thread/answer', expect.objectContaining({ id: 'tc_7f3a2c90', answer: 'Deny' })),
+    )
+    await screen.findByTestId('permission-cards-notice')
+    expect(screen.getByTestId('permission-cards-notice').textContent).toContain('It can ask again later.')
+  })
+
+  it('a card that needs a confirm step is opened, not allowed in place', async () => {
+    daemon.permissionCards = true
+    daemon.pending = [{ ...PENDING, proof: { kind: 'confirm' } }]
+    render(<PermissionCardsSection />)
+    await screen.findByTestId('permission-pending-pr_7f3a2c')
+    expect(screen.queryByRole('button', { name: 'Allow Billing’s request…' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Open card' }))
     expect(h.openOnAgentsPage).toHaveBeenCalledWith('p-billing')
   })
 
+  it('turning it off while cards wait asks first; Cancel keeps it on', async () => {
+    daemon.permissionCards = true
+    daemon.pending = [PENDING]
+    render(<PermissionCardsSection />)
+    await screen.findByTestId('permission-pending-pr_7f3a2c')
+    fireEvent.click(screen.getByRole('switch', { name: SWITCH }))
+    const sheet = await screen.findByTestId('permission-cards-off-confirm')
+    expect(sheet.textContent).toContain('The request waiting on you closes')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(h.post).not.toHaveBeenCalledWith(expect.anything(), 'settings/update', expect.anything())
+    fireEvent.click(screen.getByRole('switch', { name: SWITCH }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Turn off' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith(expect.anything(), 'settings/update', { permissionCards: false }))
+  })
+
   it('re-reads when the daemon says the switch moved (another window, a terminal)', async () => {
     render(<PermissionCardsSection />)
-    const sw = await screen.findByRole('switch', { name: 'Permission cards' })
+    const sw = await screen.findByRole('switch', { name: SWITCH })
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     expect(sw.getAttribute('aria-checked')).toBe('false')
     daemon.permissionCards = true
     await waitFor(() => expect(h.syncHandlers.length).toBeGreaterThan(0))
     emitSync({ permissionCards: true, feature: 'permission-cards-v1', rehandshake: true })
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Permission cards' }).getAttribute('aria-checked')).toBe('true'))
+    await waitFor(() => expect(screen.getByRole('switch', { name: SWITCH }).getAttribute('aria-checked')).toBe('true'))
     await screen.findByTestId('permission-agent-billing')
   })
 })
@@ -356,7 +446,8 @@ describe('Agent tab: Can ask for permission cards', () => {
     await waitFor(() => expect((sw as HTMLButtonElement).disabled).toBe(false))
     fireEvent.click(sw)
     await screen.findByTestId('agent-permission-cards-error')
-    expect(screen.getByTestId('agent-permission-cards-error').textContent).toBe('no workspace (workspace_not_found)')
+    expect(screen.getByTestId('agent-permission-cards-error').textContent).toContain('no workspace')
+    expect(screen.getByTestId('agent-permission-cards-error').textContent).toContain('Nothing changed')
     expect(screen.getByRole('switch', { name: NAME }).getAttribute('aria-checked')).toBe('false')
     spy.mockRestore()
   })

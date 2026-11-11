@@ -15,7 +15,8 @@
 //     publishes `sync:settings {permissionCards:"agent", workspace}`. The
 //     value is NOT on Project JSON (C8): it is read from
 //     `GET /cli/permission/agents` (d2-asks.md).
-//   - "Waiting on you": `GET /cli/permission/pending` (§17.8, lane A2).
+//   - "Waiting on you": `GET /cli/permission/pending` (§17.8, lane A2),
+//     answered in place through the card's own `POST /cli/thread/answer`.
 //
 // The `/cli/permission/` family exists only while the server switch is on
 // (§2.4), so nothing here calls it unless `permissionCards` reads true.
@@ -26,6 +27,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { openOnAgentsPage } from '@/lib/page-selection'
+import { permissionAnswerBody } from '@/components/SessionView/permissionCardView'
 
 // ── Shapes ──────────────────────────────────────────────────────────
 
@@ -217,6 +219,24 @@ export async function setAgentPermissionCards(workspace: string, value: boolean)
     throw new Error('agent-access/set: the daemon did not answer with "agentsCanRequestPermissions"')
   }
   return o.agentsCanRequestPermissions
+}
+
+/** Actions whose card shows the person who answers something only the card
+ *  can show (a password, a box login's access): answered on the card. */
+const CARD_ONLY_ACTIONS: ReadonlySet<string> = new Set(['apps.user-password-reset', 'apps.user-grant-box'])
+
+/** Can "Waiting on you" allow this request in place? Not when allowing
+ *  needs a confirm step (§17.5) or shows the answerer something once: those
+ *  open the card. Deny is always offered. */
+export function canAllowInPlace(p: PermissionPending): boolean {
+  return p.proofKind === 'click' && !CARD_ONLY_ACTIONS.has(p.action)
+}
+
+/** Answer one request from "Waiting on you": the same `POST thread/answer`
+ *  the card itself sends (its `addr` and card id; `item` names the request,
+ *  which a batch card needs and a single card ignores). */
+export async function answerPermissionRequest(p: PermissionPending, answer: 'Allow' | 'Deny'): Promise<void> {
+  await daemonCliPost<unknown>(primaryScope(), 'thread/answer', permissionAnswerBody(p.addr, p.cardId, { answer, item: p.requestId }))
 }
 
 /** "hint (code)" for a daemon refusal, else the plain message. */

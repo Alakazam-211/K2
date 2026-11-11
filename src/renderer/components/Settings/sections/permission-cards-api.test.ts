@@ -21,7 +21,9 @@ vi.mock('@/lib/page-selection', () => ({ openOnAgentsPage: h.openOnAgentsPage })
 
 import {
   PERMISSION_ACTION_ROWS,
+  answerPermissionRequest,
   asksForRow,
+  canAllowInPlace,
   fetchPermissionAgents,
   fetchPermissionCardsSetting,
   fetchPermissionPending,
@@ -180,6 +182,20 @@ describe('GET permission/pending (§17.8)', () => {
 
   it('a body without requests throws', () => {
     expect(() => parsePermissionPending({})).toThrow(/"requests"/)
+  })
+  it('answering from the page is the card\'s own thread/answer, naming the request', async () => {
+    h.post.mockResolvedValueOnce({ ok: true })
+    const [row] = parsePermissionPending({ requests: [PENDING_ROW] })
+    await answerPermissionRequest(row, 'Deny')
+    expect(h.post).toHaveBeenCalledWith('SCOPE', 'thread/answer', expect.objectContaining({ addr: 'billing', id: 'tc_7f3a2c90', answer: 'Deny', item: 'pr_7f3a2c' }))
+  })
+
+  it('only a click card that shows nothing once is allowed in place', () => {
+    const [row] = parsePermissionPending({ requests: [PENDING_ROW] })
+    expect(canAllowInPlace(row)).toBe(true)
+    expect(canAllowInPlace({ ...row, proofKind: 'confirm' })).toBe(false)
+    expect(canAllowInPlace({ ...row, action: 'apps.user-password-reset' })).toBe(false)
+    expect(canAllowInPlace({ ...row, action: 'apps.user-grant-box' })).toBe(false)
   })
 })
 

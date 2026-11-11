@@ -208,6 +208,11 @@
       "$value": "rgba(255, 255, 255, 0.2)",
       "$type": "color"
     },
+    "row-hover": {
+      "$value": "rgba(255, 255, 255, 0.10)",
+      "$type": "color",
+      "$description": "Hover band on a list row (Settings lists): about 1.3:1 against the resting row on dark palettes, 1.2:1 or more on light ones. On it the row's muted text steps up to text-secondary (SETTING_LIST_ROW_HOVER), which reads at 4.5:1."
+    },
     "status-warn-soft": {
       "$value": "#eab308",
       "$type": "color"

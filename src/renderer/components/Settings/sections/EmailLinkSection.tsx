@@ -49,6 +49,7 @@ import {
   SettingsGroup,
   SettingsLoadState,
   type SaveState,
+  SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
 import { InboxAccessPanel } from './InboxAccessPanel'
 import {
@@ -1566,7 +1567,7 @@ function AccountRow({ inbox, onOpen }: { inbox: Inbox; onOpen: () => void }): Re
           onOpen()
         }
       }}
-      className="relative flex items-center gap-4 px-4 py-3 no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-wash-1)]"
+      className={`relative flex items-center gap-4 px-4 py-3 no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
     >
       <div className="flex-1 min-w-0">
         <div className="type-name text-[var(--color-text-primary)] truncate">{inbox.address}</div>

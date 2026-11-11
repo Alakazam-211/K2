@@ -31,6 +31,7 @@ import {
   SettingsLoadState,
   useSaveStatus,
   type SaveState,
+  SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
@@ -467,7 +468,7 @@ function PersonList({
             onClick={() => onSelect(row.username)}
             className={cx(
               'relative w-full flex items-center gap-3 px-3 py-2 text-left no-drag cursor-pointer transition-colors outline-none',
-              selected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
+              selected ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER,
             )}
           >
             {selected && <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />}
@@ -662,7 +663,7 @@ function EveryoneRow({
   const canReset = canResetPassword(viewerRole, person)
   const why = !canReset && viewerRole === 'admin' ? BOX_LOGIN_REASON : undefined
   return (
-    <div className="relative flex items-center gap-2 pr-3 transition-colors hover:bg-[var(--color-wash-1)]" data-overview-item={person.username}>
+    <div className={`relative flex items-center gap-2 pr-3 ${SETTING_LIST_ROW_HOVER}`} data-overview-item={person.username}>
       <button
         type="button"
         aria-label={`See what ${person.username} can use`}
@@ -760,7 +761,7 @@ function ByApp({
                     aria-label={`See what ${who.username} can use`}
                     data-k2-focus=""
                     onClick={() => onOpen(who.username)}
-                    className="relative w-full flex items-center gap-4 px-4 py-3 text-left no-drag cursor-pointer transition-colors outline-none hover:bg-[var(--color-wash-1)]"
+                    className={`relative w-full flex items-center gap-4 px-4 py-3 text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block type-name text-[var(--color-text-primary)] truncate">{displayName(who)}</span>

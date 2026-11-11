@@ -24,6 +24,7 @@ import {
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
   useSaveStatus,
+  SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
 import { Button, Callout, Input, OverflowMenu, Surface, Tag, Toggle, type TagTone } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
@@ -610,7 +611,7 @@ function DomainItem({
   const pending = isPendingNs(d)
   const onK2 = d.zoneId !== null
   return (
-    <div className="px-4 py-3 hover:bg-[var(--color-wash-1)] transition-colors" data-testid={`domain-${d.apex}`}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`domain-${d.apex}`}>
       <div className="flex items-start justify-between gap-6">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -814,7 +815,7 @@ function NameItem({
   const waiting = a !== null && a.notServedYet && !a.external && a.error !== 'unknown_app'
   const hasCert = n.cert.state === 'issued' || n.cert.state === 'expired'
   return (
-    <div className="px-4 py-3 hover:bg-[var(--color-wash-1)] transition-colors" data-testid={`domain-name-${n.hostname}`}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`domain-name-${n.hostname}`}>
       <div className="flex items-start justify-between gap-6">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -1327,7 +1328,7 @@ export function FirewallPanel(): React.JSX.Element {
           return (
             <div
               key={`${r.port}/${r.proto}`}
-              className="px-4 py-3 flex items-center justify-between gap-6 hover:bg-[var(--color-wash-1)] transition-colors"
+              className={`px-4 py-3 flex items-center justify-between gap-6 ${SETTING_LIST_ROW_HOVER}`}
               data-testid={`fw-row-${r.port}-${r.proto}`}
             >
               <div className="flex-1 min-w-0">

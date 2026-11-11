@@ -25,6 +25,7 @@ import {
   SettingsLoadState,
   useSaveStatus,
   type SaveState,
+  SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
@@ -195,7 +196,7 @@ export function UserTemplatesSection(): React.JSX.Element {
                       onClick={() => setSelection(row.id)}
                       className={cx(
                         'relative w-full flex flex-col px-3 py-2 text-left no-drag cursor-pointer transition-colors outline-none',
-                        selected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
+                        selected ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER,
                       )}
                     >
                       {selected && <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />}

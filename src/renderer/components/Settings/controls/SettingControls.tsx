@@ -41,6 +41,19 @@ export const AVATAR_ROUND = 'inline-flex flex-shrink-0 overflow-hidden rounded-[
 export const SETTING_ROW_LABEL = 'type-row text-[var(--color-text-primary)]'
 export const SETTING_ROW_HINT = 'type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]'
 
+/** A list row that answers the pointer: the shared hover band
+ *  (--color-row-hover, about 1.3:1 against the resting row on dark palettes
+ *  and 1.2:1 on light ones), and on the same hover the row's muted text steps
+ *  up to secondary, because muted text drops under 4.5:1 on the band. The
+ *  trigger is the row's own :hover, which also holds while a control inside
+ *  the row (Remove, a menu button) is under the pointer, so band and text
+ *  always change together. Put it on the row, not on its children; a selected
+ *  row swaps it for its own fill. */
+export const SETTING_LIST_ROW_HOVER =
+  'transition-colors hover:bg-[var(--color-row-hover)] hover:[--color-text-muted:var(--color-text-secondary)]'
+/** The same band at rest, for a row the keyboard has highlighted. */
+export const SETTING_LIST_ROW_BAND = 'bg-[var(--color-row-hover)] [--color-text-muted:var(--color-text-secondary)]'
+
 export function SettingRow({
   label,
   hint,

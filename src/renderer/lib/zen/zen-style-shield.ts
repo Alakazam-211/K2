@@ -101,6 +101,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-wash-1': mix('text', 5),
   '--color-wash-2': mix('text', 10),
   '--color-wash-3': mix('text', 20),
+  '--color-row-hover': mix('text', 8),
   '--color-overlay-soft-bg': mix('text', 6),
   '--color-overlay-soft-border': mix('text', 8),
   '--color-scrim': 'rgba(0, 0, 0, 0.32)',

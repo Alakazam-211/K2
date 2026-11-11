@@ -27,7 +27,7 @@ import {
 } from '@/lib/ensure-cli'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { primaryScope } from '@/kessel/server-scope'
-import { SaveError, SaveNote, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL, useSaveStatus } from '../controls/SettingControls'
+import { SaveError, SaveNote, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL, useSaveStatus, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { Spinner } from '@/components/ui/Spinner'
 import type { SettingEntry } from '../searchManifest'
 import { metaChordLabel } from '@/lib/shortcut-label'
@@ -636,7 +636,7 @@ function PresetRow({
     <div
       data-preset-reorder-index={index}
       data-testid={`preset-row-${preset.id}`}
-      className={`relative flex items-center gap-3 px-4 py-2.5 hover:bg-[var(--color-wash-1)] transition-colors ${dragging ? 'opacity-40' : ''}`}
+      className={`relative flex items-center gap-3 px-4 py-2.5 ${SETTING_LIST_ROW_HOVER} ${dragging ? 'opacity-40' : ''}`}
     >
       {dropBefore && <div className="absolute left-0 right-0 top-0 h-0.5 bg-[var(--color-accent)] z-10" />}
       {dropAfter && <div className="absolute left-0 right-0 bottom-0 h-0.5 bg-[var(--color-accent)] z-10" />}
@@ -1073,7 +1073,7 @@ function AgentToolsGroup({ where }: { where: string }): React.JSX.Element {
             data-k2-focus=""
             aria-expanded={showMore}
             onClick={() => setShowMore((v) => !v)}
-            className="relative w-full flex items-center justify-between gap-4 px-4 py-3 text-left hover:bg-[var(--color-wash-1)] transition-colors no-drag cursor-pointer"
+            className={`relative w-full flex items-center justify-between gap-4 px-4 py-3 text-left no-drag cursor-pointer ${SETTING_LIST_ROW_HOVER}`}
           >
             <span className="min-w-0">
               <span className={`block ${SETTING_ROW_LABEL}`}>{moreLabel}</span>

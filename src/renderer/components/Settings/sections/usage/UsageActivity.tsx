@@ -14,7 +14,7 @@ import { workspaceUsageLabel, type UsageNameProject } from '../workspaceUsageLab
 import { freshTurns, parseUsageTurnsPage, turnCursor, type UsageTurn } from '../usageTurnsPage'
 import { COST_LABEL, costSourceText, fmtCompact, fmtUsd, harnessLabel, turnsParams, type UsageFilters, type UsageRange } from './usage-page'
 import { Button } from '@/components/ui'
-import { SettingsGroup, SettingsLoadState } from '../../controls/SettingControls'
+import { SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../../controls/SettingControls'
 import { RetryButton, SeriesKey } from './UsageChart'
 
 export const ACTIVITY_PAGE = 50
@@ -259,7 +259,7 @@ export function UsageActivity({
                         data-testid={`usage-activity-open-${row.rowid}`}
                         aria-label={`Open the chat in ${label.name} from ${when}`}
                         onClick={() => onOpenChat(row)}
-                        className={`group relative ${ROW_GRID} text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-bg-hover)]`}
+                        className={`group relative ${ROW_GRID} text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
                       >
                         {body}
                       </button>

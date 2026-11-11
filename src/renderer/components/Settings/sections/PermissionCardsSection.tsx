@@ -34,6 +34,7 @@ import {
   SettingsLoadState,
   useSaveStatus,
   type SaveState,
+  SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
 import { BetaTag, Button, Tag, Toggle, type TagTone } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
@@ -943,7 +944,7 @@ function PendingRow({
 }): React.JSX.Element {
   const inPlace = canAllowInPlace(p)
   return (
-    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid={`permission-pending-${p.requestId}`}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`permission-pending-${p.requestId}`}>
       <div className="flex items-start justify-between gap-6">
         <div className="flex-1 min-w-0">
           <div className={SETTING_ROW_LABEL}>{p.whatChanges || p.setting}</div>
@@ -981,7 +982,7 @@ function RecentRow({ request: r, name, now }: { request: PermissionRecent; name:
   const label = requestStateLabel(r.state)
   const answered = r.answeredBy ? `${label} by ${r.answeredBy}` : label
   return (
-    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid={`permission-recent-${r.id}`}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`permission-recent-${r.id}`}>
       <div className="flex items-start justify-between gap-6">
         <div className="flex-1 min-w-0">
           <div className={SETTING_ROW_LABEL}>{r.setting}</div>

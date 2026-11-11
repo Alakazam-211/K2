@@ -74,7 +74,7 @@ import {
 } from './usage/usage-page'
 import { Button, Segmented, Surface } from '@/components/ui'
 import { useElementWidth } from '@/hooks/useElementWidth'
-import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -343,7 +343,7 @@ function Breakdown({
   const exact = (row: BreakdownRow, c: ChartMeasure): string => (c === 'cost' ? COST_LABEL : fmtExact(measureValue(row.totals, c)))
   const columnLabel = (c: ChartMeasure): string => (c === 'cost' ? 'Est. cost' : MEASURE_LABEL[c])
   const sum = rows.reduce((n, r) => n + measureValue(r.totals, measure), 0)
-  const rowClass = 'relative w-full px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-bg-hover)]'
+  const rowClass = `relative w-full px-4 py-2.5 text-left no-drag cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`
   const name = (row: BreakdownRow, harness: string | null): React.JSX.Element => (
     <span className="min-w-0 flex items-center gap-2">
       {harness ? <SeriesKey harness={harness} /> : null}

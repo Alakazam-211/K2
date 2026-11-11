@@ -47,6 +47,7 @@
     "wash-1": { "$value": "rgba(30, 26, 16, 0.04)", "$type": "color" },
     "wash-2": { "$value": "rgba(30, 26, 16, 0.08)", "$type": "color" },
     "wash-3": { "$value": "rgba(30, 26, 16, 0.16)", "$type": "color" },
+    "row-hover": { "$value": "rgba(30, 26, 16, 0.11)", "$type": "color", "$description": "Hover band on a list row (Settings lists): about 1.3:1 against the resting row on dark palettes, 1.2:1 or more on light ones. On it the row's muted text steps up to text-secondary (SETTING_LIST_ROW_HOVER), which reads at 4.5:1." },
     "scrim": { "$value": "rgba(30, 25, 12, 0.40)", "$type": "color" },
     "media-label-bg": { "$value": "rgba(0, 0, 0, 0.62)", "$type": "color", "$description": "Behind a name or time drawn on video (any picture, either scheme)." },
     "media-label-text": { "$value": "#ffffff", "$type": "color" },

@@ -57,7 +57,7 @@ import {
 import { LlmLoginSheet, type LoginSheetResult, type LoginSheetStart } from './LlmLoginSheet'
 import { SIGN_IN_TOOLS, useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { Button, Callout, Input, OverflowMenu, Tag, type OverflowMenuItem } from '@/components/ui'
-import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SettingRow, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { AccessSheet, ConfirmSheet, DIALOG_FIELD, Field } from '../sections/AccessDialogs'
 import { StatusDot, type HealthTone } from '../sections/ConnectionsParts'
 
@@ -352,7 +352,7 @@ function AccountRow({
   if (account.inUse) facts.push('In use by a chat right now')
 
   return (
-    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-bg-hover)]" data-testid={`llm-account-${account.id}`}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`llm-account-${account.id}`}>
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
         <span title={STATE_LABELS[account.state] ?? account.state} className="flex">
           <StatusDot tone={STATE_TONE[account.state] ?? 'neutral'} />

@@ -17,7 +17,7 @@ import { Button, OverflowMenu, SearchField, Tag } from '@/components/ui'
 import { useSettingsStore } from '@/stores/settings'
 import type { SettingEntry } from '../searchManifest'
 import { ContextCatalogCreator } from '../ContextCatalogCreator'
-import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { DeletePackDialog, NewPackDialog } from './ContextCatalogDialogs'
 import { isLivePack, isUserPack, packMatches, packSummary } from './context-catalog-copy'
 import { useActiveHostRole } from './useActiveHostRole'
@@ -283,7 +283,7 @@ function PackRow({
   const lock = readOnly ? 'Only an Owner or Admin of this server can change packs.' : undefined
   return (
     <div
-      className={`px-4 py-3 ${mine ? 'transition-colors hover:bg-[var(--color-wash-1)]' : ''}`}
+      className={`px-4 py-3 ${mine ? SETTING_LIST_ROW_HOVER : ''}`}
       data-testid={`pack-row-${p.id}`}
     >
       <div className="flex items-start justify-between gap-6">

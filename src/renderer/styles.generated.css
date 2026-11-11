@@ -110,6 +110,7 @@
   --color-wash-3: rgba(255, 255, 255, 0.2);
   --color-scrim: rgba(0, 0, 0, 0.5);
   --color-danger-muted: #c53030;
+  --color-row-hover: rgba(255, 255, 255, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a3e635;
@@ -260,6 +261,7 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-row-hover: rgba(255, 250, 235, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
@@ -346,6 +348,7 @@
   --color-wash-3: rgba(30, 26, 16, 0.16);
   --color-scrim: rgba(30, 25, 12, 0.40);
   --color-danger-muted: #a03029;
+  --color-row-hover: rgba(30, 26, 16, 0.11);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #4a6b12;
@@ -499,6 +502,7 @@
   --color-wash-3: rgba(255, 255, 255, 0.20);
   --color-scrim: rgba(0, 0, 0, 0.6);
   --color-danger-muted: #b3382f;
+  --color-row-hover: rgba(255, 255, 255, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #7ee787;
@@ -593,6 +597,7 @@
   --color-wash-3: rgba(60, 60, 67, 0.16);
   --color-scrim: rgba(30, 30, 35, 0.32);
   --color-danger-muted: #c0392b;
+  --color-row-hover: rgba(60, 60, 67, 0.12);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #1a7f37;
@@ -687,6 +692,7 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-row-hover: rgba(255, 250, 235, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
@@ -1689,6 +1695,7 @@
   --color-wash-3: rgba(255, 255, 255, 0.20);
   --color-scrim: rgba(3, 5, 10, 0.40);
   --color-danger-muted: #b53a44;
+  --color-row-hover: rgba(255, 255, 255, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a5e075;
@@ -1771,6 +1778,7 @@
   --color-wash-3: rgba(20, 30, 60, 0.15);
   --color-scrim: rgba(18, 24, 40, 0.30);
   --color-danger-muted: #ab3535;
+  --color-row-hover: rgba(20, 30, 60, 0.11);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #47691a;
@@ -1853,6 +1861,7 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-row-hover: rgba(255, 250, 235, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;
@@ -2072,6 +2081,7 @@
   --color-wash-3: rgba(255, 255, 255, 0.2);
   --color-scrim: rgba(0, 0, 0, 0.5);
   --color-danger-muted: #c53030;
+  --color-row-hover: rgba(255, 255, 255, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a3e635;
@@ -2155,6 +2165,7 @@
   --color-wash-3: rgba(40, 32, 16, 0.16);
   --color-scrim: rgba(30, 24, 12, 0.42);
   --color-danger-muted: #a03029;
+  --color-row-hover: rgba(40, 32, 16, 0.11);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #4a6b12;
@@ -2238,6 +2249,7 @@
   --color-wash-3: rgba(255, 250, 235, 0.16);
   --color-scrim: rgba(8, 7, 5, 0.55);
   --color-danger-muted: #a83636;
+  --color-row-hover: rgba(255, 250, 235, 0.10);
   --color-media-label-bg: rgba(0, 0, 0, 0.62);
   --color-media-label-text: #ffffff;
   --color-diff-add-text: #a9d16f;

@@ -31,6 +31,7 @@ import {
   useSaveStatus,
   SETTING_FIELD_WIDTH,
   SETTING_ROW_HINT,
+  SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
 import { Button, Input, OverflowMenu, SearchField, Tag, Toggle, type OverflowMenuItem } from '@/components/ui'
 import { PresenceChip } from '@/components/Presence/PresenceChip'
@@ -808,7 +809,7 @@ function PersonRow({
   ]
 
   return (
-    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid={`person-row-${u.username}`}>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`person-row-${u.username}`}>
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
         {/* No role mark on the picture: the role field says it. */}
         <span data-testid={`user-chip-${u.username}`} className="flex flex-none">

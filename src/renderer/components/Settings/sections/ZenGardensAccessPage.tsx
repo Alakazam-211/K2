@@ -33,7 +33,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
-import { SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL } from '../controls/SettingControls'
+import { SettingRow, SettingsGroup, SettingsLoadState, SETTING_ROW_HINT, SETTING_ROW_LABEL, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { ZenGardenSyncControls, useZenSyncLive } from './ZenGardenSyncControls'
 import { InlineError, NewGarden, ZEN_TOKENS_IN_SETTINGS, attempt, revealLabel } from './zen-gardens-ui'
 import {
@@ -94,7 +94,7 @@ const LIST_ROW =
 const LIST_COL_ROW =
   'relative w-full flex flex-col items-start text-left px-3 py-2 no-drag cursor-pointer select-none outline-none transition-colors'
 const ROW_ON = 'bg-[var(--color-accent)]/15'
-const ROW_OFF = 'hover:bg-[var(--color-wash-1)]'
+const ROW_OFF = SETTING_LIST_ROW_HOVER
 
 /** Press-and-move distance before a Garden row starts dragging; less is a click. */
 export const DRAG_THRESHOLD_PX = 4
@@ -309,7 +309,7 @@ function Sidebar({
           aria-label="Styles"
           aria-current={stylesOn ? 'page' : undefined}
           className={`relative w-full flex flex-col items-start px-3 py-2 rounded-[var(--radius-selector)] text-left no-drag cursor-pointer outline-none transition-colors k2-focus ${
-            stylesOn ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]'
+            stylesOn ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER
           }`}
           onClick={() => onSelect({ kind: 'styles' })}
         >
@@ -577,7 +577,7 @@ function StylesPane({ onHistory }: { onHistory(t: GardenHistoryTarget): void }):
             {st.themes.map((t) => {
               const inUse = t.name === st.globalTheme
               return (
-                <li key={t.name} className="px-4 py-3 flex items-center justify-between gap-6 hover:bg-[var(--color-wash-1)] transition-colors">
+                <li key={t.name} className={`px-4 py-3 flex items-center justify-between gap-6 ${SETTING_LIST_ROW_HOVER}`}>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="type-name text-[var(--color-text-primary)]">{t.name}</span>
@@ -1032,7 +1032,7 @@ function GardenPane({
                   <li
                     key={e.agent}
                     data-garden-editor={e.agent}
-                    className="px-4 py-3 flex items-center gap-6 hover:bg-[var(--color-wash-1)] transition-colors"
+                    className={`px-4 py-3 flex items-center gap-6 ${SETTING_LIST_ROW_HOVER}`}
                   >
                     <div className="flex-1 min-w-0">
                       <p className="flex items-center gap-2 min-w-0 type-name text-[var(--color-text-primary)]">
@@ -1095,7 +1095,7 @@ function GardenPane({
                     <li
                       key={w.widget}
                       data-garden-widget={w.widget}
-                      className="px-4 py-3 flex items-center justify-between gap-6 hover:bg-[var(--color-wash-1)] transition-colors"
+                      className={`px-4 py-3 flex items-center justify-between gap-6 ${SETTING_LIST_ROW_HOVER}`}
                     >
                       <div className="flex-1 min-w-0">
                         <p className="type-name text-[var(--color-text-primary)] truncate">{w.title ?? w.widget}</p>

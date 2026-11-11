@@ -45,7 +45,7 @@ import remarkGfm from 'remark-gfm'
 import { CodeEditor } from '@/components/FileViewerPane/CodeEditor'
 import { CustomThemeCreator } from '../CustomThemeCreator'
 import { useToastStore } from '@/stores/toast'
-import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
+import { AVATAR_ROUND, SETTING_FIELD_WIDTH, SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingDropdown, SettingRow, SettingSwitchRow, SettingsGroup, useSaveStatus, SETTING_LIST_ROW_HOVER, SETTING_LIST_ROW_BAND } from '../controls/SettingControls'
 import { RemindersList } from '@/components/HeartbeatsPanel/RemindersList'
 import { MailWatchPanel } from './MailWatchPanel'
 import { showContextMenu } from '@/lib/context-menu'
@@ -713,7 +713,7 @@ export function ProjectsSection(): React.JSX.Element {
         className={`relative flex items-center gap-3 ${twoColumn ? 'px-3 py-2' : 'px-4 py-2.5'} transition-colors no-drag cursor-pointer group select-none outline-none active:cursor-grabbing ${
           isSelected
             ? 'bg-[var(--color-accent)]/15'
-            : isKeyboardHighlighted ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]'
+            : isKeyboardHighlighted ? SETTING_LIST_ROW_BAND : SETTING_LIST_ROW_HOVER
         } ${isDragged ? 'opacity-30' : ''}`}
       >
         {isSelected && (

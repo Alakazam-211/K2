@@ -41,7 +41,7 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
-import { SaveNote, SettingRow, SettingsGroup } from '../controls/SettingControls'
+import { SaveNote, SettingRow, SettingsGroup, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
@@ -469,7 +469,7 @@ export function StylesSection(): React.JSX.Element {
                 data-material="tile"
                 className={cx(
                   'relative -mx-4 w-[calc(100%+2rem)] flex flex-col gap-2 px-4 py-2.5 text-left no-drag cursor-pointer transition-colors outline-none',
-                  isSelected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
+                  isSelected ? 'bg-[var(--color-accent)]/15' : SETTING_LIST_ROW_HOVER,
                 )}
               >
                 {isSelected && (

@@ -18,18 +18,18 @@
 // the other rows to do stay quiet. A row's line and its note share one muted
 // voice, with one gap between title, line and note.
 //
-// Every title has the row's full width, so it fits one line. Skip (or a
-// skipped row's SKIPPED tag) sits at the row's bottom right, its word ending
-// on Hide's right edge: it shares the last line when there's room (an
-// invisible copy of the word holds that room at the end of the last line)
-// and gets a short line of its own when there isn't. Always shown; after the
-// row in keyboard order. A skipped row reads through its mark and its tag,
-// never by fading. Done rows drop their line and go muted. Under the pointer
-// the muted words (and the marks) step up to secondary, so they keep 4.5:1
-// on the hover wash: the wash is the row's own :hover and the step-up is
+// Skip (or a skipped row's SKIPPED tag) sits on the title's line, its right
+// edge on Hide's; the title keeps clear of it and the line and note under it
+// use the row's full width. While the checklist shows, the sidebar is never
+// narrower than SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH (260), where every title
+// fits one line in every Style. Skip is always shown and comes after its row
+// in keyboard order. A skipped row reads through its mark and its tag, never
+// by fading. Done rows drop their line and go muted. Under the pointer the
+// muted words (and the marks) step up to secondary, so they keep 4.5:1 on
+// the hover wash: the wash is the row's own :hover and the step-up is
 // `group-hover/row`, a named group on that same row (not any outer group),
-// so whenever the wash shows, so does the step-up. Focus is an inset ring: nothing moves. Tokens only, so every Style
-// and palette draws it.
+// so whenever the wash shows, so does the step-up. Focus is an inset ring:
+// nothing moves. Tokens only, so every Style and palette draws it.
 //
 // States: nothing until the first answer (the switch may be off, so there is
 // no placeholder to flash); a failed read or gesture after that keeps the
@@ -159,22 +159,6 @@ export function currentRowId(rows: readonly FirstRunRow[]): FirstRunRowId | null
   return rows.find((r) => r.state === 'todo')?.id ?? null
 }
 
-/** Holds Skip's (or the SKIPPED tag's) room at the end of a row's last
- *  line: the same word in the same type, invisible, so the real one (drawn
- *  at the row's bottom right) shares that line when it fits and gets a line
- *  of its own when it doesn't. */
-function EndRoom({ skipped }: { skipped: boolean }): React.JSX.Element {
-  // The word is drawn by ::after (from data-end), so it's in no text or
-  // accessible name.
-  return skipped ? (
-    <span aria-hidden="true" className="invisible inline-block pl-2 pr-1.5 align-middle">
-      <Tag tone="muted" data-end={STATE_TEXT.skipped} className="after:content-[attr(data-end)]" />
-    </span>
-  ) : (
-    <span aria-hidden="true" data-end="Skip" className="invisible inline-block pl-[1.125rem] pr-1.5 type-hint after:content-[attr(data-end)]" />
-  )
-}
-
 function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }): React.JSX.Element {
   const copy = SETUP_CHECKLIST_COPY[row.id]
   const todo = row.state === 'todo'
@@ -184,7 +168,6 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
   // Muted words step up to secondary under the pointer, so they keep 4.5:1
   // on the hover wash.
   const muted = cx('text-[var(--color-text-muted)]', opens && 'group-hover/row:text-[var(--color-text-secondary)]')
-  const end = todo || skipped ? <EndRoom skipped={skipped} /> : null
   return (
     <li
       // The wash is this row's own :hover; the step-up is `group-hover/row`,
@@ -205,50 +188,50 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
       >
         <StepMark state={row.state} current={current} lift={opens} />
         <span className="min-w-0 flex-1">
-          <span
-            className={cx(
-              'block type-row leading-snug',
-              current
-                ? 'font-semibold text-[var(--color-text-primary)]'
-                : todo
-                  ? 'text-[var(--color-text-secondary)]'
-                  : muted,
-            )}
-          >
-            {copy.label}
-            {skipped ? end : null}
-          </span>
-          {todo && (
-            <span className={cx('block type-hint leading-snug mt-0.5', muted)}>
-              {copy.line}
-              {note ? null : end}
+          {/* The title line: the title, then Skip (drawn over the row's
+              top right, so the title keeps clear of it) or the SKIPPED tag.
+              The line and note under it use the full width. */}
+          <span className="flex items-start gap-2">
+            <span
+              className={cx(
+                'min-w-0 flex-1 type-row leading-snug',
+                todo && 'pr-10',
+                current
+                  ? 'font-semibold text-[var(--color-text-primary)]'
+                  : todo
+                    ? 'text-[var(--color-text-secondary)]'
+                    : muted,
+              )}
+              data-setup-title=""
+            >
+              {copy.label}
             </span>
-          )}
+            {skipped ? (
+              <Tag
+                tone="muted"
+                aria-hidden="true"
+                className="mr-1.5 mt-px group-hover/row:[--k2-tag-ink:var(--color-text-secondary)]!"
+                data-testid={`setup-skipped-${row.id}`}
+              >
+                {STATE_TEXT.skipped}
+              </Tag>
+            ) : null}
+          </span>
+          {todo && <span className={cx('block type-hint leading-snug mt-0.5', muted)}>{copy.line}</span>}
           {note ? (
             <span className={cx('block type-hint leading-snug mt-0.5', muted)} data-setup-note={row.note}>
               {note}
-              {end}
             </span>
           ) : null}
         </span>
         <span className="sr-only">{STATE_TEXT[row.state]}</span>
       </button>
-      {skipped && (
-        <Tag
-          tone="muted"
-          aria-hidden="true"
-          className="absolute right-3.5 bottom-[calc(0.375rem+1px)] pointer-events-none group-hover/row:[--k2-tag-ink:var(--color-text-secondary)]!"
-          data-testid={`setup-skipped-${row.id}`}
-        >
-          {STATE_TEXT.skipped}
-        </Tag>
-      )}
       {todo && (
         <button
           type="button"
           data-k2-focus=""
           className={cx(
-            'absolute right-2 bottom-1 no-drag px-1.5 py-0.5 type-hint leading-snug text-[var(--color-text-muted)] transition-colors cursor-pointer',
+            'absolute right-2 top-1 no-drag px-1.5 py-0.5 type-hint leading-snug text-[var(--color-text-muted)] transition-colors cursor-pointer',
             'group-hover/row:text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]!',
           )}
           aria-label={`Skip: ${copy.label}`}

@@ -13,14 +13,12 @@ import type { SettingEntry } from '../searchManifest'
 import {
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
-  SaveError,
-  SaveNote,
   SettingRow,
   SettingSwitchRow,
   SettingsGroup,
   SettingsLoadState,
-  useSaveStatus,
 } from '../controls/SettingControls'
+import { DENIED_LINE, RowSaveError, RowSaveNote, useRowSave } from './row-save'
 import { BetaTag, Button, Input, Tag, Toggle } from '@/components/ui'
 import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
@@ -32,7 +30,7 @@ import { SettingsLink } from './ComputeBits'
 export const ORG_CHART_SWITCH_LABEL = 'Org Chart'
 export const ORG_CHART_SWITCH_LINE =
   'Adds an Org Chart tab, groups agents into orgs and gives every agent a daily bulletin. Off: no tab, no bulletin and no night runs.'
-export const ORG_CHART_MEMBER_LINE = 'Only the server’s owner or an admin can change these.'
+export const ORG_CHART_MEMBER_LINE = DENIED_LINE
 export const ORG_CHART_MANAGE_LINE =
   'An agent changes the chart only when its Manage the org chart switch is on, in Workspaces / Agents. Org heads write their own org’s bulletin without it.'
 
@@ -149,8 +147,8 @@ export function OrgChartSection(): React.JSX.Element {
   const [savedNight, setSavedNight] = useState<OrgChartNight>(DEFAULT_NIGHT)
   const [canChange, setCanChange] = useState<boolean | null>(null)
   const [busy, setBusy] = useState(false)
-  const switchSave = useSaveStatus()
-  const nightSave = useSaveStatus()
+  const switchSave = useRowSave()
+  const nightSave = useRowSave()
 
   const load = useCallback((): (() => void) => {
     let live = true
@@ -189,10 +187,10 @@ export function OrgChartSection(): React.JSX.Element {
   // the Org Chart is on).
   const [spread, setSpread] = useState<string | null>(null)
   useEffect(() => {
-    if (!on || !loaded) {
-      setSpread(null)
-      return
-    }
+    // Hidden while it is (re-)read, so a saved change never sits beside the
+    // old pacing.
+    setSpread(null)
+    if (!on || !loaded) return
     let live = true
     void daemonCliGet<NightSpread>(primaryScope(), 'organization/night').then(
       (v) => {
@@ -213,13 +211,14 @@ export function OrgChartSection(): React.JSX.Element {
     if (busy || locked) return
     const next = !on
     setBusy(true)
+    switchSave.saving()
     useSettingsStore.setState({ orgChart: next }) // optimistic: the tab shows at once
     try {
       await daemonCliPost(primaryScope(), 'settings/update', { orgChart: next })
       switchSave.saved()
     } catch (e) {
       useSettingsStore.setState({ orgChart: !next })
-      switchSave.failed(daemonErrorText(e))
+      switchSave.failed(e)
     } finally {
       setBusy(false)
     }
@@ -231,12 +230,13 @@ export function OrgChartSection(): React.JSX.Element {
   const saveNight = async (): Promise<void> => {
     if (problem || !nightDirty) return
     setBusy(true)
+    nightSave.saving()
     try {
       await daemonCliPost(primaryScope(), 'settings/update', { orgChartNight: night })
       setSavedNight(night)
       nightSave.saved()
     } catch (e) {
-      nightSave.failed(daemonErrorText(e))
+      nightSave.failed(e)
     } finally {
       setBusy(false)
     }
@@ -268,6 +268,8 @@ export function OrgChartSection(): React.JSX.Element {
     )
   }
 
+  const saving = nightSave.state === 'saving'
+  const denied = typeof nightSave.state === 'object' && nightSave.state.denied
   const timezone = loaded.timezone
   const nightHint = timezone ? (
     <span data-testid="org-chart-timezone">Times are in the owner’s timezone, {timezone}. All three fall between 22:00 and 07:00.</span>
@@ -286,7 +288,7 @@ export function OrgChartSection(): React.JSX.Element {
         <SettingSwitchRow
           control={
             <>
-              <SaveNote state={switchSave.state} />
+              <RowSaveNote state={switchSave.state} />
               <Toggle
                 checked={on}
                 onChange={() => void flip()}
@@ -299,7 +301,7 @@ export function OrgChartSection(): React.JSX.Element {
         >
           <div className={SETTING_ROW_LABEL}>{ORG_CHART_SWITCH_LABEL}</div>
           <div className={SETTING_ROW_HINT}>{ORG_CHART_SWITCH_LINE}</div>
-          <SaveError state={switchSave.state} />
+          <RowSaveError state={switchSave.state} testId="org-chart-switch-error" />
         </SettingSwitchRow>
       </SettingsGroup>
 
@@ -327,7 +329,9 @@ export function OrgChartSection(): React.JSX.Element {
           <div className="px-4 py-3" data-testid="org-chart-night-footer">
             <div className="flex items-center justify-between gap-6">
               <div className="min-w-0">
-                {problem ? (
+                {saving ? (
+                  <p className={SETTING_ROW_HINT}>Saving the new times…</p>
+                ) : problem ? (
                   <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed" data-testid="org-chart-night-problem">
                     {problem}
                   </p>
@@ -338,18 +342,20 @@ export function OrgChartSection(): React.JSX.Element {
                     {spread}
                   </p>
                 ) : null}
-                <SaveError state={nightSave.state} />
+                <RowSaveError state={nightSave.state} testId="org-chart-night-error" />
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
-                <SaveNote state={nightSave.state} />
+                {nightSave.state === 'saved' && <RowSaveNote state={nightSave.state} />}
                 {nightDirty && !locked && (
                   <>
                     <Button variant="quiet" disabled={busy} onClick={undoNight}>
                       Undo changes
                     </Button>
-                    <Button variant="accent" disabled={busy || !!problem} onClick={() => void saveNight()}>
-                      Save times
-                    </Button>
+                    {!denied && (
+                      <Button variant="accent" disabled={busy || !!problem} onClick={() => void saveNight()}>
+                        {saving ? 'Saving…' : 'Save times'}
+                      </Button>
+                    )}
                   </>
                 )}
               </div>

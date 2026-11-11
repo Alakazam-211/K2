@@ -2417,11 +2417,14 @@ html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size=
    columns); when it doesn't, the picker follows the name and the controls
    keep the right end. PaneChrome measures and sets `data-tile-fit`, and
    hides the hint, then the ⌘N slot, folds the picker to its menu button,
-   then hides the bell, before the name truncates. A hidden part collapses
-   to no width (so it can still be measured). */
+   then hides the bell, before the name truncates. An asleep agent's word
+   shrinks to its moon (never hidden). A hidden part collapses to no width
+   (so it can still be measured). */
 [data-tile-bar][data-tile-fit="centred"] { grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-fit="follow"] { grid-template-columns: minmax(0, max-content) auto minmax(max-content, 1fr); }
 [data-tile-bar][data-tile-hint="off"] [data-tile-hint],
+[data-tile-bar][data-tile-asleep="icon"] [data-tile-asleep-word],
+[data-tile-bar][data-tile-asleep="word"] [data-tile-asleep-icon],
 [data-tile-bar][data-tile-keys="off"] [data-tile-shortcut],
 [data-tile-bar][data-tile-bell="off"] [data-tile-tool="bell"],
 [data-tile-bar][data-tile-pick="compact"] [data-tile-picker-full],

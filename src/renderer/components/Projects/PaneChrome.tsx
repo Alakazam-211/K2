@@ -5,6 +5,7 @@
 import type React from 'react'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { DialogCloseButton, Surface } from '@/components/ui'
+import { MoonIcon } from '@/components/icons/K2Icons'
 import { THREAD_FLOATS_HOST_ATTR } from '@/components/SessionView/threadFloats'
 import type { TileView } from './tile-view'
 import { fitTileBar, measureTileBar, sameTileBarFit, TILE_BAR_FIT_DEFAULT, type TileBarFit } from './tile-bar-fit'
@@ -48,6 +49,7 @@ function useTileBarFit(deps: unknown[]): [React.RefObject<HTMLDivElement | null>
 export function PaneChrome({
   title,
   hint,
+  asleep = false,
   shortcutNum,
   readOnly,
   focused,
@@ -61,7 +63,11 @@ export function PaneChrome({
   children,
 }: {
   title: string
+  /** A quiet hint after the name (a doc tile's owner): it hides first. */
   hint?: string
+  /** The agent is asleep: "asleep" after the name, or a moon named
+   *  "Asleep" when the bar is tight. Never hidden (`fitTileBar`). */
+  asleep?: boolean
   /** Before the title: an agent tile's 18px picture. */
   lead?: React.ReactNode
   /** An agent tile's view picker, in the bar's centre while the name fits
@@ -86,7 +92,7 @@ export function PaneChrome({
   onHeaderMouseDown?: (e: React.MouseEvent) => void
   children: React.ReactNode
 }): React.JSX.Element {
-  const [barRef, fit] = useTileBarFit([title, hint, shortcutNum, readOnly, !!picker, !!pickerCompact, !!lead, !!tools, tileView])
+  const [barRef, fit] = useTileBarFit([title, hint, asleep, shortcutNum, readOnly, !!picker, !!pickerCompact, !!lead, !!tools, tileView])
   const name = (
     <>
       {lead && (
@@ -97,6 +103,23 @@ export function PaneChrome({
       <span className="min-w-0 type-name text-[var(--color-text-primary)] truncate" data-tile-title="">
         {title}
       </span>
+      {asleep && (
+        // Both forms stay in the row; the bar shows one (`data-tile-asleep`).
+        <>
+          <span className="flex-none ml-2 whitespace-nowrap type-hint text-[var(--color-text-muted)]" data-tile-asleep-word="">
+            asleep
+          </span>
+          <span
+            role="img"
+            aria-label="Asleep"
+            title="Asleep"
+            className="flex flex-none ml-2 text-[var(--color-text-muted)]"
+            data-tile-asleep-icon=""
+          >
+            <MoonIcon size={12} />
+          </span>
+        </>
+      )}
       {hint && (
         <span className="min-w-0 ml-2 type-hint text-[var(--color-text-muted)] truncate" data-tile-hint="">
           {hint}
@@ -148,6 +171,7 @@ export function PaneChrome({
     ref: barRef,
     'data-tile-bar': '',
     'data-tile-hint': hint ? (fit.hint ? 'on' : 'off') : undefined,
+    'data-tile-asleep': asleep ? (fit.asleepWord ? 'word' : 'icon') : undefined,
     'data-tile-keys': shortcutNum !== undefined ? (fit.keys ? 'on' : 'off') : undefined,
     'data-tile-bell': tools ? (fit.bell ? 'on' : 'off') : undefined,
     'data-tile-pick': picker && pickerCompact ? (fit.compact ? 'compact' : 'full') : undefined,

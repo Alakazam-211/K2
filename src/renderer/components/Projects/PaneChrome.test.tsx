@@ -17,7 +17,7 @@ const bar = (): HTMLElement => document.querySelector('[data-tile-bar]') as HTML
 const CSS = fs.readFileSync(path.resolve(__dirname, '../../globals.css'), 'utf8')
 
 /** Give the jsdom layout the widths a real bar would have. */
-function stubWidths(widths: { bar: number; title: number; picker?: number; hint?: number; compact?: number }): () => void {
+function stubWidths(widths: { bar: number; title: number; picker?: number; hint?: number; compact?: number; asleep?: number; moon?: number }): () => void {
   const proto = HTMLElement.prototype
   const saved = {
     client: Object.getOwnPropertyDescriptor(proto, 'clientWidth'),
@@ -30,6 +30,8 @@ function stubWidths(widths: { bar: number; title: number; picker?: number; hint?
     if (el.hasAttribute('data-tile-picker') || el.hasAttribute('data-tile-picker-full')) return widths.picker ?? 0
     if (el.hasAttribute('data-tile-picker-compact')) return widths.compact ?? 0
     if (el.hasAttribute('data-tile-hint')) return widths.hint ?? 0
+    if (el.hasAttribute('data-tile-asleep-word')) return widths.asleep ?? 0
+    if (el.hasAttribute('data-tile-asleep-icon')) return widths.moon ?? 0
     if (el.hasAttribute('data-tile-lead')) return 16
     if (el.hasAttribute('data-tile-shortcut')) return 20
     if (el.hasAttribute('data-tile-close')) return 24
@@ -99,6 +101,54 @@ describe('PaneChrome', () => {
     expect(bar().getAttribute('data-tile-fit')).toBe('follow')
     expect(bar().getAttribute('data-tile-keys')).toBe('off')
     restore()
+  })
+
+  it('never hides an asleep agent: the word, then the moon named Asleep, while the picker moves', () => {
+    const asleepTile = (): React.JSX.Element => (
+      <PaneChrome title="Design System" asleep shortcutNum={2} readOnly={false} focused={false} onClose={() => {}}
+        lead={<span />} picker={<div />} pickerCompact={<div />} tileView="thread">
+        <div />
+      </PaneChrome>
+    )
+    // Unmeasured: the word.
+    render(asleepTile())
+    expect(bar().getAttribute('data-tile-asleep')).toBe('word')
+    expect(bar().querySelector('[data-tile-asleep-word]')?.textContent).toBe('asleep')
+    const moon = screen.getByRole('img', { name: 'Asleep' })
+    expect(moon.getAttribute('title')).toBe('Asleep')
+    expect(moon.querySelector('svg')).not.toBeNull()
+    cleanup()
+    // jsdom has no gaps: name 16 + 90 + word 40 = 146, + 1 ≤ side (400 - 96) / 2 = 152: centred, with the word.
+    let restore = stubWidths({ bar: 400, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
+    render(asleepTile())
+    expect([bar().getAttribute('data-tile-fit'), bar().getAttribute('data-tile-asleep')]).toEqual(['centred', 'word'])
+    cleanup(); restore()
+    // Side 132 < 147: the picker moves off centre and the word stays.
+    restore = stubWidths({ bar: 360, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
+    render(asleepTile())
+    expect([bar().getAttribute('data-tile-fit'), bar().getAttribute('data-tile-asleep'), bar().getAttribute('data-tile-pick')]).toEqual(['follow', 'word', 'full'])
+    cleanup(); restore()
+    // 146 + 96 + 24 + 1 = 267 > 250, 106 + 12 + 96 + 24 + 1 = 239: the moon, the picker in full.
+    restore = stubWidths({ bar: 250, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
+    render(asleepTile())
+    expect([bar().getAttribute('data-tile-asleep'), bar().getAttribute('data-tile-pick'), bar().getAttribute('data-tile-keys')]).toEqual(['icon', 'full', 'off'])
+    cleanup(); restore()
+    // Tighter: the picker folds, the moon stays.
+    restore = stubWidths({ bar: 120, title: 90, picker: 96, compact: 30, asleep: 40, moon: 12 })
+    render(asleepTile())
+    expect([bar().getAttribute('data-tile-asleep'), bar().getAttribute('data-tile-pick')]).toEqual(['icon', 'compact'])
+    restore()
+  })
+
+  it('collapses the asleep form not in use, the same way as the other parts', () => {
+    expect(CSS).toContain('[data-tile-bar][data-tile-asleep="icon"] [data-tile-asleep-word],')
+    expect(CSS).toContain('[data-tile-bar][data-tile-asleep="word"] [data-tile-asleep-icon],')
+  })
+
+  it('an awake tile draws no asleep mark', () => {
+    render(agentTile())
+    expect(bar().hasAttribute('data-tile-asleep')).toBe(false)
+    expect(bar().querySelector('[data-tile-asleep-word], [data-tile-asleep-icon]')).toBeNull()
   })
 
   it('keeps the plain row for a pane with no picker, and hides its hint first', () => {

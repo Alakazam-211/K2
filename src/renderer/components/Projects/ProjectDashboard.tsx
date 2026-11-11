@@ -197,13 +197,13 @@ function AgentTileFrame({
 }): React.JSX.Element {
   const [view, setView] = useTileView(groupId, workspaceId, defaultView)
   const addr = useAgentTileAddr(workspaceId, member)
-  // A quiet "asleep" after the name (the owner's mockup); the body reports
-  // it, a local wake included.
+  // "asleep" after the name (the owner's mockup), a moon when the bar is
+  // tight; the body reports it, a local wake included.
   const [asleep, setAsleep] = useState(initialPhase.kind === 'dormant')
   return (
     <PaneChrome
       title={title}
-      hint={asleep ? 'asleep' : undefined}
+      asleep={asleep}
       shortcutNum={shortcutNum}
       readOnly={readOnly}
       focused={focused}

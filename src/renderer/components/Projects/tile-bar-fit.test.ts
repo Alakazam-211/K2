@@ -12,7 +12,7 @@ const agent = (width: number, o: Partial<TileBarSizes> = {}): TileBarSizes => ({
 // the picker folds to a 40px button.
 const thread = (width: number, o: Partial<TileBarSizes> = {}): TileBarSizes =>
   agent(width, { tools: 59, bell: 24, pickerCompact: 40, ...o })
-const F = (o: Partial<TileBarFit>): TileBarFit => ({ hint: false, centred: false, keys: false, bell: true, compact: false, ...o })
+const F = (o: Partial<TileBarFit>): TileBarFit => ({ hint: false, centred: false, keys: false, bell: true, compact: false, asleepWord: true, ...o })
 
 describe('fitTileBar', () => {
   it('centres the picker while the name fits in a side column', () => {
@@ -78,5 +78,53 @@ describe('fitTileBar', () => {
 
   it('a picker that cannot fold keeps its capsule, and the bell goes after ⌘N', () => {
     expect(fitTileBar(thread(309, { pickerCompact: 0 }))).toEqual(F({ bell: false }))
+  })
+
+  describe('an asleep agent (its state beats symmetry)', () => {
+    // "asleep" 38px, the moon 12px, each after an 8px gap.
+    const asleep = (width: number, o: Partial<TileBarSizes> = {}): TileBarSizes => thread(width, { asleep: 38, asleepIcon: 12, ...o })
+
+    it('shows the word, centred while it fits', () => {
+      // side ≥ 114 + 8 + 38 + 1 = 161: (width - 112) / 2 ≥ 161 → 434
+      expect(fitTileBar(asleep(434))).toEqual(F({ hint: true, centred: true, keys: true }))
+    })
+
+    it('moves the picker off centre and drops ⌘N before the word shrinks', () => {
+      expect(fitTileBar(asleep(433))).toEqual(F({ keys: true }))
+      // following with the word: 160 + 8 + 96 + 8 + 111 + 1 = 384
+      expect(fitTileBar(asleep(384))).toEqual(F({ keys: true }))
+      // without ⌘N: 356
+      expect(fitTileBar(asleep(356))).toEqual(F({}))
+    })
+
+    it('then the word becomes the moon, before the picker folds', () => {
+      // the moon: 356 - 38 + 12 = 330
+      expect(fitTileBar(asleep(355))).toEqual(F({ asleepWord: false }))
+      expect(fitTileBar(asleep(330))).toEqual(F({ asleepWord: false }))
+      // the picker folds: 330 - 96 + 40 = 274
+      expect(fitTileBar(asleep(329))).toEqual(F({ compact: true, asleepWord: false }))
+      expect(fitTileBar(asleep(274))).toEqual(F({ compact: true, asleepWord: false }))
+    })
+
+    it('never hides the moon: the bell folds and the name gives way instead', () => {
+      for (const width of [273, 200, 140, 60]) {
+        const f = fitTileBar(asleep(width))
+        expect(f).toEqual(F({ compact: true, bell: false, asleepWord: false }))
+      }
+    })
+
+    it('a plain row keeps the mark too: the word, then the moon', () => {
+      const row = (width: number): TileBarSizes => ({ width, gap: 8, name: 80, hint: 0, picker: 0, keys: 28, tools: 0, bell: 0, close: 24, asleep: 38, asleepIcon: 12 })
+      // 80 + 46 + 8 + 52 + 1 = 187
+      expect(fitTileBar(row(187))).toEqual(F({ hint: true, keys: true }))
+      // without ⌘N: 159; the moon: 133
+      expect(fitTileBar(row(159))).toEqual(F({}))
+      expect(fitTileBar(row(158))).toEqual(F({ asleepWord: false }))
+      expect(fitTileBar(row(100))).toEqual(F({ asleepWord: false }))
+    })
+
+    it('an awake agent always reports the word slot (nothing to shrink)', () => {
+      expect(fitTileBar(thread(140)).asleepWord).toBe(true)
+    })
   })
 })

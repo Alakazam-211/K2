@@ -378,11 +378,23 @@ impl Hub {
         }
     }
 
-    /// `layer`'s encoder failed: its viewers go to JPEG.
+    /// `layer`'s encoder failed: its viewers go to JPEG. A JPEG layer that
+    /// fails has nowhere to go (a Mac deskd sends no JPEG): its viewers end
+    /// with the reason, rather than join a new JPEG layer that fails again.
     fn layer_failed(&self, layer: u8, why: &str) {
         let mut st = lock(&self.state);
         let kind = self.key.kind();
         let movers: Vec<u64> = st.viewers.iter().filter(|(_, s)| s.layer == layer).map(|(id, _)| *id).collect();
+        if st.layers.iter().any(|l| l.id == layer && l.key.codec == Codec::Jpeg) {
+            for id in movers {
+                if let Some(s) = st.viewers.remove(&id) {
+                    let _ = s.events.send(HubEvent::Ended(format!("this source can't send JPEG: {why}")));
+                }
+            }
+            st.layers.retain(|l| l.id != layer);
+            st.dirty = true;
+            return;
+        }
         for id in movers {
             let Some(old) = st.viewers.get(&id).map(|s| s.want) else { continue };
             let want = Want { codec: Codec::Jpeg, fps: rates::clamp_fps(kind, Codec::Jpeg, old.path, Some(old.fps)), ..old };
@@ -587,6 +599,86 @@ impl Drop for Subscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A source that fails every layer of one codec as soon as the hub turns
+    /// it on, and records each layer list.
+    struct FailsCodec {
+        fail: Codec,
+        failed: Vec<u8>,
+        pending: Vec<u8>,
+        seen: Arc<Mutex<Vec<Vec<LayerSpec>>>>,
+    }
+
+    impl EncodedSource for FailsCodec {
+        fn next_unit(&mut self, wait: Duration) -> Result<Option<EncodedUnit>, SourceError> {
+            if let Some(layer) = self.pending.pop() {
+                return Err(SourceError::LayerFailed { layer, why: format!("no {:?} encoder", self.fail) });
+            }
+            std::thread::sleep(wait.min(Duration::from_millis(5)));
+            Ok(None)
+        }
+        fn set_layers(&mut self, layers: &[LayerSpec]) {
+            lock_seen(&self.seen).push(layers.to_vec());
+            for l in layers.iter().filter(|l| l.on && l.codec == self.fail) {
+                if !self.failed.contains(&l.id) {
+                    self.failed.push(l.id);
+                    self.pending.push(l.id);
+                }
+            }
+        }
+        fn request_keyframe(&mut self, _layer: u8, _since: Option<Instant>) {}
+        fn sizes(&self) -> Option<SourceSizes> {
+            Some(SourceSizes { points: 400, native_px: Some(1200) })
+        }
+    }
+
+    fn lock_seen(m: &Mutex<Vec<Vec<LayerSpec>>>) -> MutexGuard<'_, Vec<Vec<LayerSpec>>> {
+        m.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn event_within(sub: &mut Subscription, limit: Duration) -> Option<HubEvent> {
+        let t0 = Instant::now();
+        while t0.elapsed() < limit {
+            if let Ok(e) = sub.events.try_recv() {
+                return Some(e);
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        None
+    }
+
+    fn fails(key: i64, fail: Codec, codec: Codec) -> (Subscription, Arc<Mutex<Vec<Vec<LayerSpec>>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let src = FailsCodec { fail, failed: Vec::new(), pending: Vec::new(), seen: seen.clone() };
+        let want = Want { codec, fps: 15, path: ViewerPath::Local, pw: None, stats: false };
+        let sub = join(SourceKey::Sim(key), want, move || Ok::<_, String>(Box::new(src) as Box<dyn EncodedSource>)).expect("join");
+        (sub, seen)
+    }
+
+    /// A failed H.264 layer moves its viewers to JPEG (S2's rule).
+    #[test]
+    fn a_failed_video_layer_moves_its_viewers_to_jpeg() {
+        let (mut sub, _seen) = fails(-9_101, Codec::H264, Codec::H264);
+        match event_within(&mut sub, Duration::from_secs(5)) {
+            Some(HubEvent::Moved { codec: Codec::Jpeg, .. }) => {}
+            other => panic!("want Moved to JPEG, got {other:?}"),
+        }
+    }
+
+    /// A failed JPEG layer ends its viewers once, with the reason, instead
+    /// of opening a new JPEG layer that fails again (a Mac deskd, D6).
+    #[test]
+    fn a_failed_jpeg_layer_ends_its_viewers_without_a_retry_loop() {
+        let (mut sub, seen) = fails(-9_102, Codec::Jpeg, Codec::Jpeg);
+        match event_within(&mut sub, Duration::from_secs(5)) {
+            Some(HubEvent::Ended(why)) => assert!(why.contains("can't send JPEG") && why.contains("Jpeg"), "{why}"),
+            other => panic!("want Ended, got {other:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        let jpeg_layers: std::collections::HashSet<u8> = lock_seen(&seen).iter().flatten().filter(|l| l.on && l.codec == Codec::Jpeg).map(|l| l.id).collect();
+        assert_eq!(jpeg_layers.len(), 1, "one JPEG layer was tried, not a loop: {:?}", lock_seen(&seen));
+        assert!(event_within(&mut sub, Duration::from_millis(50)).is_none(), "one end, nothing after");
+    }
 
     #[test]
     fn fps_rounds_up_to_a_tier_never_past_the_cap() {

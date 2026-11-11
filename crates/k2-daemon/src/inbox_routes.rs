@@ -186,7 +186,12 @@ pub fn handle_list(params: &HashMap<String, String>) -> CliResponse {
         Err(r) => return r,
     };
     let items = match params.get("folder") {
-        Some(folder) => k2_core::inbox::list_folder(&workspace, folder),
+        Some(folder) => {
+            if let Err(e) = k2_core::inbox::check_folder(folder) {
+                return CliResponse::bad_request(e);
+            }
+            k2_core::inbox::list_folder(&workspace, folder)
+        }
         None => k2_core::inbox::list_all(&workspace),
     };
     CliResponse::ok_json(

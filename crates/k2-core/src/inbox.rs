@@ -57,6 +57,32 @@ pub fn inbox_root(workspace: &Path) -> PathBuf {
     crate::workspace_dot_dir(&workspace).join("inbox")
 }
 
+/// A name that stays inside one inbox directory: no separator, no `.` /
+/// `..`, no NUL. Item ids are file stems (from `list`) and folders are one
+/// level under the root, never paths. An item id or folder is one name
+/// inside this inbox; anything else is refused.
+fn is_plain_name(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
+}
+
+/// [`is_plain_name`] for an item id, with the error the routes return.
+pub fn check_item_id(id: &str) -> Result<(), String> {
+    if is_plain_name(id) {
+        Ok(())
+    } else {
+        Err(format!("not an inbox item id: {id:?} (an id is a name from `k2 inbox list`, not a path)"))
+    }
+}
+
+/// [`is_plain_name`] for a folder; `""` is the inbox root.
+pub fn check_folder(folder: &str) -> Result<(), String> {
+    if folder.is_empty() || is_plain_name(folder) {
+        Ok(())
+    } else {
+        Err(format!("not an inbox folder: {folder:?} (a folder is one name under the inbox, not a path)"))
+    }
+}
+
 /// Path to a folder under the inbox root (e.g. "active" → `.k2so/inbox/active/`).
 /// Empty string returns the inbox root itself.
 pub fn folder_path(workspace: &Path, folder: &str) -> PathBuf {
@@ -163,6 +189,9 @@ pub fn list_root(workspace: &Path) -> Vec<InboxItem> { list_folder(workspace, ""
 /// List items in a folder. Empty folder string returns top-level.
 /// Only direct children (non-recursive); ignores sub-directories.
 pub fn list_folder(workspace: &Path, folder: &str) -> Vec<InboxItem> {
+    if check_folder(folder).is_err() {
+        return Vec::new();
+    }
     let dir = folder_path(workspace, folder);
     if !dir.exists() {
         return Vec::new();
@@ -220,6 +249,7 @@ pub fn list_folders(workspace: &Path) -> Vec<String> {
 /// Read full text of one item by id (filename stem). Searches the
 /// root first, then every folder. Returns the file contents on hit.
 pub fn read_by_id(workspace: &Path, id: &str) -> Result<String, String> {
+    check_item_id(id)?;
     let target = format!("{}.md", id);
     let root = inbox_root(workspace);
     let root_path = root.join(&target);
@@ -238,6 +268,7 @@ pub fn read_by_id(workspace: &Path, id: &str) -> Result<String, String> {
 /// Locate the on-disk path of an item by id. Returns `(folder, path)`
 /// where folder is "" for root-level items.
 pub fn locate_item(workspace: &Path, id: &str) -> Result<(String, PathBuf), String> {
+    check_item_id(id)?;
     let target = format!("{}.md", id);
     let root = inbox_root(workspace);
     let root_path = root.join(&target);
@@ -979,6 +1010,7 @@ fn human_bytes(n: u64) -> String {
 /// Move an item by id into the target folder. Creates the folder if
 /// it doesn't exist. `to_folder` of "" moves back to the inbox root.
 pub fn move_item(workspace: &Path, id: &str, to_folder: &str) -> Result<PathBuf, String> {
+    check_folder(to_folder)?;
     let (current_folder, src) = locate_item(workspace, id)?;
     if current_folder == to_folder {
         return Ok(src);
@@ -1411,6 +1443,29 @@ mod tests {
         compose(ws.path(), "nope", "totally other", None, None, None).unwrap();
         let hits = search(ws.path(), "oauth");
         assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn ids_and_folders_that_are_paths_never_leave_the_inbox() {
+        let ws = make_ws();
+        let item = compose(ws.path(), "kept", "body", None, None, None).unwrap();
+        // A file beside the inbox, reachable by `../`.
+        let beside = inbox_root(ws.path()).join("..").join("beside.md");
+        std::fs::write(&beside, "---\ntitle: beside\n---\nBESIDE").unwrap();
+        for bad in ["../beside", "..", ".", "", "a/b", "a\\b", "x\0y"] {
+            let e = read_by_id(ws.path(), bad).expect_err(bad);
+            assert!(e.contains("not an inbox item id"), "{bad:?}: {e}");
+            assert!(locate_item(ws.path(), bad).is_err(), "{bad:?}");
+            assert!(respond(ws.path(), bad, "x").is_err(), "{bad:?}");
+            assert!(delete(ws.path(), bad).is_err(), "{bad:?}");
+        }
+        for bad in ["..", "../..", "a/b", "."] {
+            assert!(move_item(ws.path(), &item.id, bad).is_err(), "{bad:?}");
+            assert!(list_folder(ws.path(), bad).is_empty(), "{bad:?}");
+        }
+        assert_eq!(std::fs::read_to_string(&beside).unwrap(), "---\ntitle: beside\n---\nBESIDE");
+        assert!(read_by_id(ws.path(), &item.id).is_ok(), "a real id still reads");
+        assert!(move_item(ws.path(), &item.id, "active").is_ok(), "a plain folder still works");
     }
 
     #[test]

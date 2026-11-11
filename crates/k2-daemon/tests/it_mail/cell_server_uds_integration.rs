@@ -978,3 +978,93 @@ async fn project_chat_over_the_cell_socket_is_for_member_agents_only() {
     let stored = k2_core::project_groups::list_messages(&gid, None, Some(500)).expect("list").messages;
     assert_eq!(stored.iter().map(|m| m.body.as_str()).collect::<Vec<_>>(), vec!["cell-secret-1", "cell member line"]);
 }
+
+/// 0.46.12 field report: sidecars couldn't read inbox items. A sidecar's
+/// passport (its workspace's uuid, a `tab-…` agent) reads its workspace's
+/// inbox over its cell socket exactly as `k2 inbox read <id>` sends it (no
+/// `project=`): an item a sidecar sent (`from: W/scientist`) and one the
+/// primary sent. It can't reach another workspace's items: not by naming
+/// that workspace (403 `not_connected`) and not by an id that is a path
+/// (an item id is one name inside its inbox; anything else is refused).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_sidecar_reads_its_workspace_inbox_and_nothing_outside_it() {
+    let _g = lock();
+    let home = set_short_home();
+    let (w_uuid, w_path) = mk_workspace(&home, "W");
+    let (_other_uuid, other_path) = mk_workspace(&home, "OTHER");
+    let from_sidecar = k2_core::inbox::compose(&w_path, "Q1 answer r1", "the sidecar's answer body", None, Some("msg-inbox"), Some("W/scientist"))
+        .expect("an item from the sidecar");
+    let from_primary = k2_core::inbox::compose(&w_path, "Q1 question", "the primary's question body", None, Some("msg-inbox"), Some("W"))
+        .expect("an item from the primary");
+    let secret = k2_core::inbox::compose(&other_path, "Other's item", "OTHER-INBOX-SECRET", None, None, Some("OTHER"))
+        .expect("an item in OTHER");
+
+    let sid = SessionId::new();
+    let sidecar = HookPrincipal { workspace_uuid: w_uuid.clone(), agent_address: "tab-scientist".to_string() };
+    let token = session_token::mint_session_token(&sid, "pane-sc", sidecar, session_token::CredMode::ApiKey, session_token::Provider::Anthropic);
+    let listener = cell_uds::bind_cell_socket(&sid).expect("bind cell socket");
+    let sock = cell_uds::cell_socket_path(&sid);
+    cell_server::serve_cell(sid, listener, None);
+    settle().await;
+
+    for (item, body_text, from) in [
+        (&from_sidecar, "the sidecar's answer body", "from: W/scientist"),
+        (&from_primary, "the primary's question body", "from: W"),
+    ] {
+        let (status, body) = uds(&sock, &get(&format!("/cli/inbox/read?id={}", urlencode(&item.id)), Some(&token))).await;
+        assert_eq!(status, 200, "the sidecar reads {}: {body}", item.id);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON: {e}; {body}"));
+        let content = v["content"].as_str().unwrap_or_else(|| panic!("content string: {body}"));
+        assert!(content.contains(body_text), "{}: {content}", item.id);
+        assert!(content.contains(from), "{}: {content}", item.id);
+    }
+    // The listing it reads ids from is the same inbox.
+    let (status, body) = uds(&sock, &get("/cli/inbox/list", Some(&token))).await;
+    assert_eq!(status, 200, "list: {body}");
+    assert!(body.contains(&from_sidecar.id) && body.contains(&from_primary.id), "both items listed: {body}");
+    assert!(!body.contains(&secret.id), "never OTHER's: {body}");
+
+    // Naming the other workspace: refused by the connection gate.
+    let other_proj = urlencode(other_path.to_str().unwrap());
+    let (status, body) =
+        uds(&sock, &get(&format!("/cli/inbox/read?project={other_proj}&id={}", urlencode(&secret.id)), Some(&token))).await;
+    assert_eq!(status, 403, "OTHER's item by project=: {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON: {e}; {body}"));
+    assert_eq!(v["error"]["code"], "not_connected", "{body}");
+    assert!(!body.contains("OTHER-INBOX-SECRET"), "{body}");
+
+    // An id that is a path out of W's inbox into OTHER's: refused, never read.
+    let w_inbox = k2_core::inbox::inbox_root(&w_path);
+    let other_inbox = k2_core::inbox::inbox_root(&other_path);
+    let ups = "../".repeat(w_inbox.strip_prefix(&home).expect("W's inbox under home").components().count());
+    let rel = other_inbox.strip_prefix(&home).expect("OTHER's inbox under home");
+    let escape = format!("{ups}{}/{}", rel.display(), secret.id);
+    assert!(
+        w_inbox.join(format!("{escape}.md")).canonicalize().is_ok(),
+        "the escape id names OTHER's real file: {escape}"
+    );
+    for (route, id) in [("read", escape.as_str()), ("read", ".."), ("read", "a/b")] {
+        let (status, body) = uds(&sock, &get(&format!("/cli/inbox/{route}?id={}", urlencode(id)), Some(&token))).await;
+        assert_eq!(status, 400, "{route} id={id:?}: {body}");
+        assert!(body.contains("not an inbox item id"), "{route} id={id:?}: {body}");
+        assert!(!body.contains("OTHER-INBOX-SECRET"), "{route} id={id:?}: {body}");
+    }
+    let (status, body) = uds(&sock, &get("/cli/inbox/list?folder=..%2F..%2F..%2FOTHER", Some(&token))).await;
+    assert_eq!(status, 400, "a folder that is a path: {body}");
+    // Writes refuse the same ids: OTHER's item is untouched.
+    for (route, form) in [
+        ("/cli/inbox/respond", format!("id={}&text=overwritten", urlencode(&escape))),
+        ("/cli/inbox/move", format!("id={}&folder=stolen", urlencode(&escape))),
+        ("/cli/inbox/delete", format!("id={}", urlencode(&escape))),
+        ("/cli/inbox/move", format!("id={}&folder=..%2F..%2F..%2FOTHER", urlencode(&from_primary.id))),
+    ] {
+        let (status, body) = uds(&sock, &post_form(route, &token, &form)).await;
+        assert_ne!(status, 200, "{route} {form}: {body}");
+    }
+    let still = k2_core::inbox::read_by_id(&other_path, &secret.id).expect("OTHER's item is still there");
+    assert!(still.contains("OTHER-INBOX-SECRET") && !still.contains("overwritten"), "{still}");
+    assert!(
+        k2_core::inbox::read_by_id(&w_path, &from_primary.id).is_ok(),
+        "W's item did not move out of W's inbox"
+    );
+}

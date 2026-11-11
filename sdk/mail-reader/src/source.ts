@@ -7,6 +7,7 @@
 // marked read). Every write is an explicit user action in the views.
 
 import type {
+  DraftEditInput,
   DraftInput,
   FlagInput,
   ListPage,
@@ -43,7 +44,26 @@ export interface MailReaderSource {
   reply(input: ReplyInput): Promise<MailWriteResult>
   draft(input: DraftInput): Promise<MailWriteResult>
   send(input: SendInput): Promise<MailWriteResult>
+
+  // ── A drafted reply (a thread lists its drafts first, `draft: true`) ──
+  /** Replace the draft in its mailbox with these values. */
+  draftSave(draftId: string, values: DraftEditInput): Promise<MailWriteResult>
+  /** Send it by the inbox's send rule; it then leaves Drafts. */
+  draftSend(draftId: string, values: DraftEditInput): Promise<MailWriteResult>
+  /** Remove it from Drafts. */
+  draftDiscard(draftId: string): Promise<MailWriteResult>
 }
 
-/** The names of the write methods (the views call them only from buttons). */
-export const WRITE_METHODS = ['move', 'flag', 'archive', 'delete', 'reply', 'draft', 'send'] as const satisfies readonly (keyof MailReaderSource)[]
+/** The names of the write methods (the views call them only on a person's edit or button). */
+export const WRITE_METHODS = [
+  'move',
+  'flag',
+  'archive',
+  'delete',
+  'reply',
+  'draft',
+  'send',
+  'draftSave',
+  'draftSend',
+  'draftDiscard',
+] as const satisfies readonly (keyof MailReaderSource)[]

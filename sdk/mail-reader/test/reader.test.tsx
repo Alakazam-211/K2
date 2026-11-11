@@ -76,7 +76,7 @@ function fakeSource(opts: { viewer?: ReaderViewer; inboxes?: ReaderInbox[]; thre
       { name: 'Archive', role: 'archive' },
       { name: 'Receipts', role: null },
     ]),
-    list: rec('list', { items: thread.map(({ id, inbox, from, to, subject, date, unread, hasAttachment, threadId }) => ({ id, inbox, from, to, subject, date, unread, hasAttachment, threadId })), nextOffset: null }),
+    list: rec('list', { items: thread.filter((m) => !m.draft).map(({ id, inbox, from, to, subject, date, unread, hasAttachment, threadId }) => ({ id, inbox, from, to, subject, date, unread, hasAttachment, threadId })), nextOffset: null }),
     message: rec('message', thread[0]),
     thread: rec('thread', thread),
     attachment: rec('attachment', { filename: 'a.txt', mime: 'text/plain', size: 1, blob: new Blob(['a']) }),
@@ -87,6 +87,9 @@ function fakeSource(opts: { viewer?: ReaderViewer; inboxes?: ReaderInbox[]; thre
     reply: rec('reply', { ok: true, status: 'submitted' }),
     draft: rec('draft', { ok: true }),
     send: rec('send', { ok: true, status: 'pending_approval' }),
+    draftSave: rec('draftSave', { ok: true, draftId: 'd_1', draftStatus: 'edited' }),
+    draftSend: rec('draftSend', { ok: true, status: 'submitted', draftId: 'd_1', draftStatus: 'sent' }),
+    draftDiscard: rec('draftDiscard', { ok: true, draftId: 'd_1', draftStatus: 'discarded' }),
   } satisfies MailReaderSource
   return { source, calls, writes: () => calls.filter((c) => (WRITE_METHODS as readonly string[]).includes(c.method)) }
 }
@@ -245,6 +248,109 @@ describe('refresh', () => {
       window.dispatchEvent(new Event('focus'))
     })
     await waitFor(() => expect(f.calls.filter((c) => c.method === 'inboxes').length).toBe(before + 1))
+    expect(f.writes()).toEqual([])
+  })
+})
+
+/** An agent's unsent reply, as the daemon lists it first in a thread. */
+function draft(over: Partial<ReaderMessage> = {}): ReaderMessage {
+  return message({
+    id: 'd_1',
+    draft: true,
+    draftId: 'd_1',
+    from: { name: 'Sales Bot', address: 'bot@x.example' },
+    to: [{ name: '', address: 's@o.example' }],
+    cc: [{ name: '', address: 'bo@example.com' }],
+    subject: 'Re: Hello there',
+    text: 'agent words',
+    unread: false,
+    authResults: null,
+    author: { kind: 'agent', name: 'sales-bot' },
+    editedAt: 1_762_790_400,
+    editedBy: null,
+    editable: true,
+    ...over,
+  })
+}
+
+describe('drafted replies at the top of the thread', () => {
+  it('the thread’s draft is a DraftCard above the conversation, not a message; opening writes nothing', async () => {
+    const f = fakeSource({ thread: [draft(), message()] })
+    await openFirstThread(f)
+    const card = await screen.findByTestId('mr-draft-card')
+    expect(card.textContent).toContain('Draft by sales-bot')
+    expect(screen.getByTestId('mr-draft-unsent').textContent).toBe('not sent')
+    expect((screen.getByTestId('mr-draft-body') as HTMLTextAreaElement).value).toBe('agent words')
+    const viewer = screen.getByTestId('mr-viewer')
+    expect(card.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByTestId('mr-viewer')).toHaveLength(1)
+    expect(f.writes()).toEqual([])
+  })
+
+  it('an edit is saved once the person pauses, with the draft’s own To, Cc and Subject', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const f = fakeSource({ thread: [draft(), message()] })
+      await openFirstThread(f)
+      await screen.findByTestId('mr-draft-card')
+      fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'better' } })
+      fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'better words' } })
+      expect(f.writes()).toEqual([])
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+      })
+      await waitFor(() =>
+        expect(f.writes()).toEqual([
+          { method: 'draftSave', args: ['d_1', { to: ['s@o.example'], cc: ['bo@example.com'], subject: 'Re: Hello there', body: 'better words' }] },
+        ]),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Send asks first; a no sends nothing, a yes sends the edited text and reloads the conversation', async () => {
+    const f = fakeSource({ thread: [draft(), message()] })
+    const answers = [false, true]
+    const confirm = vi.fn(async () => answers.shift() ?? false)
+    await openFirstThread(f, vi.fn(() => null), confirm)
+    await screen.findByTestId('mr-draft-card')
+    fireEvent.click(screen.getByTestId('mr-draft-send'))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    expect(f.writes()).toEqual([])
+    fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'final words' } })
+    fireEvent.click(screen.getByTestId('mr-draft-send'))
+    await waitFor(() =>
+      expect(f.writes()).toEqual([
+        { method: 'draftSend', args: ['d_1', { to: ['s@o.example'], cc: ['bo@example.com'], subject: 'Re: Hello there', body: 'final words' }] },
+      ]),
+    )
+    await waitFor(() => expect(f.calls.filter((c) => c.method === 'thread').length).toBe(2))
+    expect((await screen.findByTestId('mr-notice')).textContent).toBe('Sent. The draft is now in the conversation.')
+  })
+
+  it('Discard asks first, then removes the card and leaves the conversation', async () => {
+    const f = fakeSource({ thread: [draft(), message()] })
+    const answers = [false, true]
+    const confirm = vi.fn(async () => answers.shift() ?? false)
+    await openFirstThread(f, vi.fn(() => null), confirm)
+    await screen.findByTestId('mr-draft-card')
+    fireEvent.click(screen.getByTestId('mr-draft-discard'))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    expect(f.writes()).toEqual([])
+    fireEvent.click(screen.getByTestId('mr-draft-discard'))
+    await waitFor(() => expect(f.writes()).toEqual([{ method: 'draftDiscard', args: ['d_1'] }]))
+    await waitFor(() => expect(screen.queryByTestId('mr-draft-card')).toBeNull())
+    expect(screen.getByTestId('mr-viewer')).toBeTruthy()
+  })
+
+  it('a draft K2 can only show saves nothing and sends nothing, and says why', async () => {
+    const f = fakeSource({ thread: [draft({ editable: false, hint: 'edit it in Outlook' }), message()] })
+    await openFirstThread(f)
+    await screen.findByTestId('mr-draft-card')
+    fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'changed' } })
+    fireEvent.click(screen.getByTestId('mr-draft-send'))
+    expect((await screen.findByTestId('mr-notice')).textContent).toBe('edit it in Outlook')
     expect(f.writes()).toEqual([])
   })
 })

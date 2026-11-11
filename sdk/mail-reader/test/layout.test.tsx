@@ -62,6 +62,9 @@ function source(thread: ReaderMessage[] = [msg()]) {
     reply,
     draft: async () => ({}),
     send: async () => ({}),
+    draftSave: async () => ({}),
+    draftSend: async () => ({}),
+    draftDiscard: async () => ({}),
   }
   return { s, reply }
 }

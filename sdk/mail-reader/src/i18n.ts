@@ -123,6 +123,10 @@ const EN = {
   draft_hint: 'An agent wrote this reply. Nothing has gone out; edit it here, then send or discard it.',
   confirm_discard_draft_title: 'Discard this draft?',
   confirm_discard_draft_message: '{agent}’s draft is removed and nothing is sent.',
+  confirm_send_draft_title: 'Send this draft?',
+  draft_saved_ok: 'Draft saved. It’s still not sent.',
+  draft_sent_ok: 'Sent. The draft is now in the conversation.',
+  draft_discarded: 'Draft discarded.',
 } as const
 
 export type MessageKey = keyof typeof EN

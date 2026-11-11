@@ -71,6 +71,12 @@ export interface ReaderAttachment {
   size: number
 }
 
+/** Who wrote a drafted reply: an agent (its workspace's name) or a person. */
+export interface DraftAuthor {
+  kind: 'agent' | 'person'
+  name: string
+}
+
 /** One full message (person shape: no agent markers). */
 export interface ReaderMessage extends ReaderEmail {
   cc?: ReaderAddress[]
@@ -80,6 +86,30 @@ export interface ReaderMessage extends ReaderEmail {
   remoteContentBlocked?: boolean
   attachments: ReaderAttachment[]
   authResults?: AuthenticationResults | null
+  /**
+   * An unsent drafted reply: the daemon lists a thread's drafts first, and
+   * the reader shows each as a DraftCard above the conversation. Its `id` is
+   * the draft id (`d_…`); the message actions don't apply, the draft ones do.
+   */
+  draft?: boolean
+  draftId?: string
+  author?: DraftAuthor
+  /** Unix seconds of the last save. */
+  editedAt?: number
+  /** Who last saved it, when a person did. */
+  editedBy?: string | null
+  /** False when K2 can show the draft but not change it (`hint` says why). */
+  editable?: boolean
+  hint?: string | null
+}
+
+/** A drafted reply as the person leaves it (Save or Send). */
+export interface DraftEditInput {
+  to: string[]
+  cc: string[]
+  subject: string
+  body: string
+  reason?: string
 }
 
 /** Thread grouping for the list (OCmail's ThreadGroup). */

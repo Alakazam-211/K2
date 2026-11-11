@@ -7,7 +7,10 @@
 // write methods are called from buttons only: Mark read/unread and Star
 // (`flag`), Move, Archive, Delete (asks first), Reply / New message → Send
 // (asks first) or Save draft. Refreshes on window focus and on the button;
-// nothing is pushed.
+// nothing is pushed. A thread's unsent drafted replies (an agent's `k2 mail
+// draft`) sit above it as DraftCards: an edit is saved when the person
+// pauses (`draftSave`), Send asks first (`draftSend`, the inbox's send rule),
+// Discard asks first (`draftDiscard`).
 //
 // Layout (./panes): three resizable columns from 840px of the reader's own
 // width; below that one column at a time (mailboxes → list → conversation)
@@ -18,6 +21,7 @@ import { folderLabel, folderOrder, folderParam } from '../format'
 import { t } from '../i18n'
 import type { MailReaderSource } from '../source'
 import type {
+  DraftEditInput,
   MailWriteResult,
   ReaderAttachment,
   ReaderAttachmentFile,
@@ -30,6 +34,7 @@ import type {
 } from '../types'
 import { IconButton, MailIcon, MailUiProvider, useMailUi, type MailReaderUi } from '../ui'
 import { Composer, type ComposeMode, type ComposeValues } from './Composer'
+import { DraftCard } from './DraftCard'
 import { EmailList } from './EmailList'
 import type { MessageActions, RenderHtml } from './EmailViewer'
 import { FolderList } from './FolderList'
@@ -64,6 +69,9 @@ export interface MailReaderProps {
 
 /** Which column a narrow reader shows. */
 export type NarrowView = 'folders' | 'list' | 'message'
+
+/** A drafted reply's edit is saved this long after the last keystroke. */
+const DRAFT_SAVE_PAUSE_MS = 1200
 
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -305,6 +313,10 @@ function Reader({
   )
 
   const currentInbox = inboxes.find((i) => i.address === inbox) ?? null
+  // The daemon lists a thread's unsent drafts first (`draft: true`): they
+  // sit above the conversation as DraftCards, never as messages.
+  const threadDrafts = (thread ?? []).filter((m) => m.draft)
+  const conversation = (thread ?? []).filter((m) => !m.draft)
 
   const actionsFor = (m: ReaderMessage): MessageActions => ({
     busy,
@@ -419,8 +431,112 @@ function Reader({
           : source.draft({ inbox: mode.inbox, to: v.to, cc: v.cc, subject: v.subject, body: v.body }),
       () => t('draft_saved'),
     )
-    if (saved) setCompose(null)
+    if (saved) {
+      setCompose(null)
+      // A reply draft now sits at the top of its thread.
+      if (mode.kind === 'reply') void reloadThread()
+    }
   }
+
+  // ── Drafted replies: the thread's drafts as DraftCards above it ──
+  // The open conversation again (after a draft is sent or saved from the
+  // composer): still a peek.
+  const reloadThread = async (): Promise<void> => {
+    if (!selectedId) return
+    const seq = ++threadSeq.current
+    try {
+      const messages = await source.thread(selectedId, folder)
+      if (seq !== threadSeq.current) return
+      setThread(messages.length > 0 ? messages : null)
+    } catch (e) {
+      if (seq === threadSeq.current) setThreadError(errText(e))
+    }
+  }
+
+  // An edit in the card is saved once the person pauses typing.
+  const draftTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  useEffect(() => {
+    const timers = draftTimers.current
+    return () => timers.forEach((h) => clearTimeout(h))
+  }, [])
+  const stopDraftSave = (draftId: string): void => {
+    const h = draftTimers.current.get(draftId)
+    if (h) clearTimeout(h)
+    draftTimers.current.delete(draftId)
+  }
+  const draftValues = (d: ReaderMessage, body: string): DraftEditInput => ({
+    to: (d.to ?? []).map((a) => a.address),
+    cc: (d.cc ?? []).map((a) => a.address),
+    subject: d.subject ?? '',
+    body,
+  })
+  const editThreadDraft = (d: ReaderMessage, body: string): void => {
+    const draftId = d.draftId ?? d.id
+    stopDraftSave(draftId)
+    draftTimers.current.set(
+      draftId,
+      setTimeout(() => {
+        draftTimers.current.delete(draftId)
+        if (body.trim().length === 0) return
+        source
+          .draftSave(draftId, draftValues(d, body))
+          .then(() => setNotice(t('draft_saved_ok')))
+          .catch((e: unknown) => setNotice(t('error_prefix', { message: errText(e) })))
+      }, DRAFT_SAVE_PAUSE_MS),
+    )
+  }
+  const dropDraft = (draftId: string): void => {
+    setThread((cur) => {
+      const left = cur ? cur.filter((m) => !(m.draft && (m.draftId ?? m.id) === draftId)) : cur
+      return left && left.length > 0 ? left : null
+    })
+  }
+  const sendThreadDraft = async (d: ReaderMessage, body: string): Promise<void> => {
+    const draftId = d.draftId ?? d.id
+    const v = draftValues(d, body)
+    const ok = await confirm({
+      title: t('confirm_send_draft_title'),
+      message: t('confirm_send_message', { inbox: d.inbox, to: v.to.join(', ') }),
+      confirmLabel: t('send'),
+    })
+    if (!ok) return
+    stopDraftSave(draftId)
+    const sent = await run(
+      () => source.draftSend(draftId, v),
+      (r) => describeWriteResult(r, t('draft_sent_ok')),
+    )
+    // Sent (or held for approval): it leaves the top; a sent reply joins
+    // the conversation.
+    if (sent) void reloadThread()
+  }
+  const discardThreadDraft = (d: ReaderMessage): void => {
+    const draftId = d.draftId ?? d.id
+    stopDraftSave(draftId)
+    void run(
+      () => source.draftDiscard(draftId),
+      () => {
+        dropDraft(draftId)
+        return t('draft_discarded')
+      },
+    )
+  }
+  const draftCards = (drafts: ReaderMessage[]): React.ReactNode =>
+    drafts.map((d) => {
+      const editable = d.editable !== false
+      return (
+        <DraftCard
+          key={d.draftId ?? d.id}
+          text={d.text ?? ''}
+          agent={d.author?.name || t('owner_unknown')}
+          updatedAt={d.editedAt ? new Date(d.editedAt * 1000).toISOString() : null}
+          onChange={editable ? (body) => editThreadDraft(d, body) : undefined}
+          onSend={(body) => (editable ? void sendThreadDraft(d, body) : setNotice(d.hint ?? null))}
+          onDiscard={() => (editable ? discardThreadDraft(d) : setNotice(d.hint ?? null))}
+          confirm={confirm}
+          busy={busy}
+        />
+      )
+    })
 
   const pickFolder = (f: string): void => {
     setFolder(f)
@@ -600,7 +716,19 @@ function Reader({
           </div>
         )}
         {!threadLoading && !threadError && thread && (
-          <ThreadConversationView messages={thread} renderHtml={renderHtml} actionsFor={actionsFor} top={threadTop?.(thread)} />
+          <ThreadConversationView
+            messages={conversation}
+            renderHtml={renderHtml}
+            actionsFor={actionsFor}
+            top={
+              threadDrafts.length > 0 || threadTop ? (
+                <>
+                  {draftCards(threadDrafts)}
+                  {threadTop?.(conversation)}
+                </>
+              ) : undefined
+            }
+          />
         )}
         {!threadLoading && !threadError && !thread && !compose && inbox && (
           <div data-mr="message-empty" className="h-full min-h-[240px] px-6 flex flex-col items-center justify-center text-center gap-1">

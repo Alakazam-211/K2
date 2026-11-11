@@ -5,6 +5,7 @@
 // the login and decides who may open what, logs it and refuses agents.
 
 import type {
+  DraftEditInput,
   DraftInput,
   FlagInput,
   ListPage,
@@ -126,5 +127,10 @@ export function daemonMailReaderSource(scope: ServerScope): MailReaderSource {
     reply: (input: ReplyInput) => post('reply', input),
     draft: (input: DraftInput) => post('draft', input),
     send: (input: SendInput) => post('send', input),
+    // A drafted reply: the daemon replaces it in its mailbox, sends it by the
+    // inbox's send rule, or removes it, and tells the agent that drafted it.
+    draftSave: (draftId: string, values: DraftEditInput) => post('draft-save', { id: draftId, ...values }),
+    draftSend: (draftId: string, values: DraftEditInput) => post('draft-send', { id: draftId, ...values }),
+    draftDiscard: (draftId: string) => post('draft-discard', { id: draftId }),
   }
 }

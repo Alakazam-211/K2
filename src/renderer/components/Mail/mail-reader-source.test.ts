@@ -84,6 +84,20 @@ describe('daemonMailReaderSource', () => {
     }
   })
 
+  it('a drafted reply is saved, sent and discarded through the reader draft routes, by its draft id', async () => {
+    const s = daemonMailReaderSource(scope)
+    const v = { to: ['ada@example.com'], cc: ['bo@example.com'], subject: 'Re: hi', body: 'final words' }
+    await s.draftSave('d_1', v)
+    await s.draftSend('d_1', v)
+    await s.draftDiscard('d_2')
+    expect(h.posts).toEqual([
+      { route: 'mail/reader/draft-save', body: { id: 'd_1', ...v } },
+      { route: 'mail/reader/draft-send', body: { id: 'd_1', ...v } },
+      { route: 'mail/reader/draft-discard', body: { id: 'd_2' } },
+    ])
+    expect(h.gets).toEqual([])
+  })
+
   it('an answer missing its field fails loudly, never an empty list', async () => {
     h.answers['mail/reader/inboxes'] = { ok: true }
     await expect(daemonMailReaderSource(scope).inboxes()).rejects.toThrow('without the viewer')

@@ -217,9 +217,10 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
               </Tag>
             ) : null}
           </span>
-          {todo && <span className={cx('block type-hint leading-snug mt-0.5', muted)}>{copy.line}</span>}
+          {/* Balanced, so a hint never leaves one word alone on its last line. */}
+          {todo && <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)}>{copy.line}</span>}
           {note ? (
-            <span className={cx('block type-hint leading-snug mt-0.5', muted)} data-setup-note={row.note}>
+            <span className={cx('block type-hint leading-snug text-balance mt-0.5', muted)} data-setup-note={row.note}>
               {note}
             </span>
           ) : null}

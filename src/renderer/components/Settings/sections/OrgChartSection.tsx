@@ -3,22 +3,38 @@
 // and where an agent's "Manage the org chart" switch lives. The daemon owns
 // both settings (`orgChart`, `orgChartNight`) at the Admin floor: an Owner
 // or Admin changes them, a Member sees them read-only.
+//
+// Card groups, top to bottom: the switch; The night (three times, each a
+// row with its hint under the label, then how the run is paced and Save);
+// Agents on the chart (a link to Workspaces / Agents).
 
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { Button, Input, Toggle } from '@/components/ui'
+import {
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SaveError,
+  SaveNote,
+  SettingRow,
+  SettingSwitchRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+} from '../controls/SettingControls'
+import { BetaTag, Button, Input, Tag, Toggle } from '@/components/ui'
 import { daemonCliGet, daemonCliPost, isHostSwitchedError } from '@/lib/daemon-cli'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { primaryScope } from '@/kessel/server-scope'
 import { useSettingsStore } from '@/stores/settings'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
+import { SettingsLink } from './ComputeBits'
 
 export const ORG_CHART_SWITCH_LABEL = 'Org Chart'
 export const ORG_CHART_SWITCH_LINE =
-  'Show an Org Chart tab, group agents into orgs, and give every agent a daily bulletin. Off: no tab, no bulletin, no night runs.'
-export const ORG_CHART_MEMBER_LINE = "Only the server's owner or an Admin can change these."
+  'Adds an Org Chart tab, groups agents into orgs and gives every agent a daily bulletin. Off: no tab, no bulletin and no night runs.'
+export const ORG_CHART_MEMBER_LINE = 'Only the server’s owner or an admin can change these.'
 export const ORG_CHART_MANAGE_LINE =
-  "Agents change the chart only when the Owner turns on Manage the org chart for that agent. Org heads write their own org's bulletin without it."
+  'An agent changes the chart only when its Manage the org chart switch is on, in Workspaces / Agents. Org heads write their own org’s bulletin without it.'
 
 export const ORG_CHART_MANIFEST: SettingEntry[] = [
   {
@@ -40,8 +56,8 @@ export const DEFAULT_NIGHT: OrgChartNight = { runAt: '01:00', lastCallAt: '04:30
 
 const NIGHT_ROWS: { key: keyof OrgChartNight; label: string; hint: string }[] = [
   { key: 'runAt', label: 'Night run', hint: 'Each org head is woken to update its bulletin.' },
-  { key: 'lastCallAt', label: 'Last call', hint: "One reminder to a head that hasn't written yet." },
-  { key: 'dayStartsAt', label: 'New day', hint: "From here, every agent's bulletin counts as unread for the new day." },
+  { key: 'lastCallAt', label: 'Last call', hint: 'One reminder to a head that hasn’t written yet.' },
+  { key: 'dayStartsAt', label: 'New day', hint: 'Every agent’s bulletin counts as unread from here.' },
 ]
 
 /** Minutes after 22:00 on the night's clock (22:00 → 0, 07:00 → 540), or
@@ -90,32 +106,77 @@ export function spreadLine(v: NightSpread | null | undefined): string | null {
   return `Night run spreads over ${v.spreadMinutes} min (${v.runAt}–${v.spreadEndsAt})${pace}.`
 }
 
-const muted = 'text-[var(--color-text-muted)]'
+const PAGE = 'w-full max-w-[52rem] space-y-6 pb-6'
+
+function Header({ readOnly }: { readOnly: boolean }): React.JSX.Element {
+  return (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
+        Org Chart <BetaTag />
+        {readOnly && <Tag tone="muted">View only</Tag>}
+      </h2>
+      <p className={`${SETTING_ROW_HINT} mt-1`}>
+        Your agents on one canvas, grouped into orgs. Each org has a head who keeps a short bulletin, and every agent reads
+        the server’s bulletin once a day.
+      </p>
+      {readOnly && (
+        <p className="type-hint text-[var(--color-text-primary)] mt-1" data-testid="org-chart-member-line">
+          {ORG_CHART_MEMBER_LINE}
+        </p>
+      )}
+    </header>
+  )
+}
+
+/** A time a Member can see but not change: plain text on the control's edge. */
+function ReadOnlyTime({ value, label }: { value: string; label: string }): React.JSX.Element {
+  return (
+    <span aria-label={label} data-readonly-value="" className="block text-right type-row text-[var(--color-text-primary)] tabular-nums">
+      {value}
+    </span>
+  )
+}
+
+interface Loaded {
+  timezone: string
+}
 
 export function OrgChartSection(): React.JSX.Element {
   const on = useSettingsStore((s) => s.orgChart)
+  const [loaded, setLoaded] = useState<Loaded | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [night, setNight] = useState<OrgChartNight>(DEFAULT_NIGHT)
   const [savedNight, setSavedNight] = useState<OrgChartNight>(DEFAULT_NIGHT)
-  const [timezone, setTimezone] = useState<string>('')
   const [canChange, setCanChange] = useState<boolean | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const switchSave = useSaveStatus()
+  const nightSave = useSaveStatus()
 
-  useEffect(() => {
+  const load = useCallback((): (() => void) => {
     let live = true
+    setLoadError(null)
     void daemonCliGet<{ orgChart?: boolean; orgChartNight?: unknown; ownerTimezone?: string | null }>(primaryScope(), 'settings/get').then(
       (s) => {
         if (!live) return
         const n = parseNight(s.orgChartNight)
         setNight(n)
         setSavedNight(n)
-        setTimezone(s.ownerTimezone ?? '')
+        setLoaded({ timezone: s.ownerTimezone ?? '' })
         useSettingsStore.setState({ orgChart: s.orgChart === true })
       },
       (e) => {
-        if (live && !isHostSwitchedError(e)) setError(daemonErrorText(e))
+        if (live && !isHostSwitchedError(e)) setLoadError(daemonErrorText(e))
       },
     )
+    return () => {
+      live = false
+    }
+  }, [])
+
+  useEffect(() => load(), [load])
+
+  useEffect(() => {
+    let live = true
     void fetchViewerRole().then((role) => {
       if (live) setCanChange(role === 'owner' || role === 'admin')
     })
@@ -128,7 +189,7 @@ export function OrgChartSection(): React.JSX.Element {
   // the Org Chart is on).
   const [spread, setSpread] = useState<string | null>(null)
   useEffect(() => {
-    if (!on) {
+    if (!on || !loaded) {
       setSpread(null)
       return
     }
@@ -144,19 +205,21 @@ export function OrgChartSection(): React.JSX.Element {
     return () => {
       live = false
     }
-  }, [on, savedNight])
+  }, [on, loaded, savedNight])
+
+  const locked = canChange === false
 
   const flip = async (): Promise<void> => {
-    if (busy || canChange === false) return
+    if (busy || locked) return
     const next = !on
     setBusy(true)
-    setError(null)
     useSettingsStore.setState({ orgChart: next }) // optimistic: the tab shows at once
     try {
       await daemonCliPost(primaryScope(), 'settings/update', { orgChart: next })
+      switchSave.saved()
     } catch (e) {
       useSettingsStore.setState({ orgChart: !next })
-      setError(daemonErrorText(e))
+      switchSave.failed(daemonErrorText(e))
     } finally {
       setBusy(false)
     }
@@ -168,96 +231,140 @@ export function OrgChartSection(): React.JSX.Element {
   const saveNight = async (): Promise<void> => {
     if (problem || !nightDirty) return
     setBusy(true)
-    setError(null)
     try {
       await daemonCliPost(primaryScope(), 'settings/update', { orgChartNight: night })
       setSavedNight(night)
+      nightSave.saved()
     } catch (e) {
-      setError(daemonErrorText(e))
+      nightSave.failed(daemonErrorText(e))
     } finally {
       setBusy(false)
     }
   }
 
-  const locked = canChange === false
+  const undoNight = (): void => {
+    setNight(savedNight)
+    nightSave.reset()
+  }
+
+  if (!loaded) {
+    return (
+      <div className={PAGE} data-settings-id="org-chart.switch" data-testid="org-chart-section">
+        <Header readOnly={false} />
+        {loadError ? (
+          <SettingsLoadState
+            kind="error"
+            title="Couldn’t load the Org Chart settings"
+            detail={loadError}
+            action={<Button onClick={() => load()}>Try again</Button>}
+            testId="org-chart-load-error"
+          >
+            Nothing changed on this server; this page just couldn’t read it.
+          </SettingsLoadState>
+        ) : (
+          <SettingsLoadState kind="loading" title="Loading the Org Chart settings…" testId="org-chart-loading" />
+        )}
+      </div>
+    )
+  }
+
+  const timezone = loaded.timezone
+  const nightHint = timezone ? (
+    <span data-testid="org-chart-timezone">Times are in the owner’s timezone, {timezone}. All three fall between 22:00 and 07:00.</span>
+  ) : (
+    <span data-testid="org-chart-timezone">
+      Times use this server’s own clock until you set your timezone.{' '}
+      {!locked && <SettingsLink to="general">Set your timezone</SettingsLink>}
+    </span>
+  )
 
   return (
-    <div className="max-w-2xl space-y-4" data-settings-id="org-chart.switch" data-testid="org-chart-section">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)]">Org Chart</h2>
-        <p className={`type-hint ${muted} mt-1 leading-relaxed`}>
-          Your agents on one canvas, grouped into orgs, each with a head who keeps a short bulletin. Every agent reads the server's bulletin once a day.
-        </p>
-        {locked ? (
-          <p className={`type-hint ${muted} mt-1`} data-testid="org-chart-member-line">
-            {ORG_CHART_MEMBER_LINE}
-          </p>
-        ) : null}
-      </div>
+    <div className={PAGE} data-settings-id="org-chart.switch" data-testid="org-chart-section">
+      <Header readOnly={locked} />
 
-      <div className="border border-[var(--color-border)] p-3">
-        <div className="flex items-start gap-3">
-          <Toggle
-            size="sm"
-            checked={on}
-            onChange={() => void flip()}
-            aria-label={ORG_CHART_SWITCH_LABEL}
-            data-testid="org-chart-switch"
-            disabled={busy || locked}
-            className="mt-0.5"
-          />
-          <div className="min-w-0 flex-1">
-            <div className="type-name text-[var(--color-text-primary)]">{ORG_CHART_SWITCH_LABEL}</div>
-            <div className={`type-hint ${muted} mt-0.5 leading-relaxed`}>{ORG_CHART_SWITCH_LINE}</div>
-          </div>
-        </div>
-      </div>
+      <SettingsGroup card testId="org-chart-switch-card">
+        <SettingSwitchRow
+          control={
+            <>
+              <SaveNote state={switchSave.state} />
+              <Toggle
+                checked={on}
+                onChange={() => void flip()}
+                aria-label={ORG_CHART_SWITCH_LABEL}
+                data-testid="org-chart-switch"
+                disabled={busy || locked}
+              />
+            </>
+          }
+        >
+          <div className={SETTING_ROW_LABEL}>{ORG_CHART_SWITCH_LABEL}</div>
+          <div className={SETTING_ROW_HINT}>{ORG_CHART_SWITCH_LINE}</div>
+          <SaveError state={switchSave.state} />
+        </SettingSwitchRow>
+      </SettingsGroup>
 
-      <div className="space-y-2 border border-[var(--color-border)] p-3" data-settings-id="org-chart.night">
-        <div className="type-name text-[var(--color-text-primary)]">The night</div>
-        <div className={`type-hint ${muted}`} data-testid="org-chart-timezone">
-          Times are in {timezone ? `the owner's timezone, ${timezone}` : "this server's own clock (no owner timezone is set: Settings → General)"}.
-        </div>
+      <SettingsGroup title="The night" hint={nightHint} card settingId="org-chart.night" testId="org-chart-night">
         {NIGHT_ROWS.map((r) => (
-          <label key={r.key} className="flex items-center gap-3">
-            <span className="w-24 flex-shrink-0 type-row text-[var(--color-text-secondary)]">{r.label}</span>
-            <Input
-              type="time"
-              value={night[r.key]}
-              disabled={locked || busy}
-              aria-label={r.label}
-              className="w-28"
-              onChange={(e) => setNight({ ...night, [r.key]: e.target.value })}
-            />
-            <span className={`type-hint ${muted}`}>{r.hint}</span>
-          </label>
+          <SettingRow key={r.key} label={r.label} hint={r.hint} field>
+            {locked ? (
+              <ReadOnlyTime value={night[r.key]} label={r.label} />
+            ) : (
+              <Input
+                type="time"
+                value={night[r.key]}
+                disabled={busy}
+                aria-label={r.label}
+                className="w-full"
+                onChange={(e) => {
+                  setNight({ ...night, [r.key]: e.target.value })
+                  nightSave.reset()
+                }}
+              />
+            )}
+          </SettingRow>
         ))}
-        {spread ? (
-          <div className={`type-hint ${muted}`} data-testid="org-chart-spread">
-            {spread}
+        {(spread || problem || nightDirty || nightSave.state !== 'idle') && (
+          <div className="px-4 py-3" data-testid="org-chart-night-footer">
+            <div className="flex items-center justify-between gap-6">
+              <div className="min-w-0">
+                {problem ? (
+                  <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed" data-testid="org-chart-night-problem">
+                    {problem}
+                  </p>
+                ) : nightDirty ? (
+                  <p className={SETTING_ROW_HINT}>Unsaved changes.</p>
+                ) : spread ? (
+                  <p className={SETTING_ROW_HINT} data-testid="org-chart-spread">
+                    {spread}
+                  </p>
+                ) : null}
+                <SaveError state={nightSave.state} />
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <SaveNote state={nightSave.state} />
+                {nightDirty && !locked && (
+                  <>
+                    <Button variant="quiet" disabled={busy} onClick={undoNight}>
+                      Undo changes
+                    </Button>
+                    <Button variant="accent" disabled={busy || !!problem} onClick={() => void saveNight()}>
+                      Save times
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
-        ) : null}
-        <div className="flex items-center gap-2">
-          {problem ?<span className="type-hint text-[var(--color-status-error-text)]">{problem}</span> : null}
-          <Button size="sm" className="ml-auto" disabled={locked || busy || !!problem || !nightDirty} onClick={() => void saveNight()}>
-            Save times
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup title="Agents on the chart" card testId="org-chart-agents">
+        <SettingRow label="Who can change the chart" hint={ORG_CHART_MANAGE_LINE}>
+          <Button variant="quiet" onClick={() => useSettingsStore.getState().setSection('projects')}>
+            Open Workspaces / Agents
           </Button>
-        </div>
-      </div>
-
-      <div className="space-y-1 border border-[var(--color-border)] p-3">
-        <div className="type-name text-[var(--color-text-primary)]">Agents on the chart</div>
-        <div className={`type-hint ${muted} leading-relaxed`}>{ORG_CHART_MANAGE_LINE}</div>
-        <Button size="sm" variant="quiet" onClick={() => useSettingsStore.getState().setSection('projects')}>
-          Open Workspaces / Agents
-        </Button>
-      </div>
-
-      {error ? (
-        <div role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-          {error}
-        </div>
-      ) : null}
+        </SettingRow>
+      </SettingsGroup>
     </div>
   )
 }

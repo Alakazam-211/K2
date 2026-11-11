@@ -3,7 +3,8 @@
 // Settings → Voice Rooms (prd-k2-voice-rooms-v1 §3.3, §3.4, §4.5): read-only
 // for Members (the daemon's `canManage`, never a guessed role); Owner/Admin
 // get the count stepper, "Close now" when lowering past occupied rooms, and
-// renames; the hosting line and the media mode show.
+// renames; the hosting line and the media mode show; an odd or refused read
+// is a plain error card with Try again, never a raw parser line.
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,6 +29,7 @@ vi.mock('@/stores/session-events', () => ({
   },
 }))
 vi.mock('@/stores/settings', () => ({ useSettingsStore: { getState: () => ({ setSection: () => {} }) } }))
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@/stores/voice', () => ({
   useVoice: (sel: (s: { prefs: { joinMuted: boolean } }) => unknown) => sel({ prefs: { joinMuted: false } }),
   voice: { refreshRooms: async () => {}, setPrefs: () => {} },
@@ -40,6 +42,8 @@ vi.mock('@/lib/voice/voice-api', () => ({
   setVoiceRecordingRequired: (...a: unknown[]) => h.setRequired(...a),
 }))
 
+import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { VoiceRoomsSection } from './VoiceRoomsSection'
 
 const occupant = { user: 'ada', name: null, role: null, color: null, muted: false, deafened: false, speaking: false }
@@ -76,13 +80,60 @@ describe('VoiceRoomsSection', () => {
   it('an Owner lowers the count past an occupied room with Close now', async () => {
     h.rooms.mockResolvedValue(rooms(true))
     h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: 'tunnel' })
-    render(<VoiceRoomsSection />)
+    render(
+      <>
+        <VoiceRoomsSection />
+        <ConfirmDialog />
+      </>,
+    )
     await waitFor(() => expect(screen.getByTestId('voice-rooms-count').textContent).toBe('2'))
-    expect(screen.getByTestId('voice-rooms-media').textContent).toContain("isn't published")
+    expect(screen.getByTestId('voice-rooms-media').textContent).toContain('isn’t published')
     fireEvent.click(screen.getByTestId('voice-rooms-minus'))
     fireEvent.click(screen.getByTestId('voice-rooms-close-now'))
     fireEvent.click(screen.getByTestId('voice-rooms-apply'))
+    // Cutting people off asks first.
+    await waitFor(() => expect(screen.getByText('Close the room now?')).toBeTruthy())
+    expect(h.setCount).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Close now' }))
     await waitFor(() => expect(h.setCount).toHaveBeenCalledWith({ hostKey: 'sewlab.k2.dev', id: 'p' }, 1, true))
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-count-note').textContent).toContain('Saved.'))
+  })
+
+  it('lowering without Close now asks nothing and lets rooms close once empty', async () => {
+    h.rooms.mockResolvedValue(rooms(true))
+    h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: 'tunnel' })
+    render(<VoiceRoomsSection />)
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-count').textContent).toBe('2'))
+    fireEvent.click(screen.getByTestId('voice-rooms-minus'))
+    fireEvent.click(screen.getByTestId('voice-rooms-apply'))
+    await waitFor(() => expect(h.setCount).toHaveBeenCalledWith({ hostKey: 'sewlab.k2.dev', id: 'p' }, 1, false))
+  })
+
+  it('a refused count change says what failed and the server’s reason', async () => {
+    h.rooms.mockResolvedValue(rooms(true))
+    h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: null })
+    h.setCount.mockRejectedValue(new DaemonHttpError('voice settings are the owner’s and Admins’', 403, 'owner_or_admin_only'))
+    render(<VoiceRoomsSection />)
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-count').textContent).toBe('2'))
+    fireEvent.click(screen.getByTestId('voice-rooms-plus'))
+    fireEvent.click(screen.getByTestId('voice-rooms-apply'))
+    const note = await screen.findByTestId('voice-rooms-count-note')
+    expect(note.getAttribute('role')).toBe('alert')
+    expect(note.textContent).toBe('Couldn’t change the number of rooms. Nothing changed; try again.The server said: voice settings are the owner’s and Admins’.')
+  })
+
+  it('an odd rooms reply is a plain error card with Try again, never a raw parser line', async () => {
+    h.rooms.mockRejectedValueOnce(new Error('the reply is not a rooms list'))
+    h.rooms.mockResolvedValue(rooms(false))
+    render(<VoiceRoomsSection />)
+    const card = await screen.findByTestId('voice-rooms-error')
+    expect(card.getAttribute('role')).toBe('alert')
+    expect(card.textContent).toContain('Couldn’t load the voice rooms')
+    expect(card.textContent).toContain('Details: the reply is not a rooms list.')
+    expect(card.textContent).not.toContain('voice/rooms')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.getAllByTestId('voice-rooms-row')).toHaveLength(2))
+    expect(screen.queryByTestId('voice-rooms-error')).toBeNull()
   })
 
   it('renames a room', async () => {
@@ -91,8 +142,9 @@ describe('VoiceRoomsSection', () => {
     render(<VoiceRoomsSection />)
     const input = await screen.findByLabelText('Name of Room 1')
     fireEvent.change(input, { target: { value: 'Standup' } })
-    fireEvent.click(screen.getByText('Rename'))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rename' })[0])
     await waitFor(() => expect(h.rename).toHaveBeenCalledWith({ hostKey: 'sewlab.k2.dev', id: 'p' }, 'room-1', 'Standup'))
+    await waitFor(() => expect(screen.getByTestId('voice-rooms-note').textContent).toBe('Renamed “Room 1” to “Standup”.'))
   })
 
   it('a Mac server with the preview on says why, and has no stepper or renames', async () => {
@@ -148,5 +200,16 @@ describe('VoiceRoomsSection', () => {
     h.status.mockResolvedValue({ hosting: { state: 'not_pro', line: 'Voice rooms need the Pro plan.', detail: null }, count: 1, mediaTier: null })
     render(<VoiceRoomsSection />)
     await waitFor(() => expect(screen.getByTestId('voice-rooms-hosting').textContent).toContain('Voice rooms need the Pro plan.'))
+    expect(screen.getByRole('button', { name: 'See plans' })).toBeTruthy()
+  })
+
+  it('says a hosting state in plain words, with the daemon’s detail quietly under it', async () => {
+    const hosting = { state: 'sew_off', line: 'Voice rooms are off on this server: Chat / Voice Hosting isn’t on (k2 hostchat status).', detail: 'identity: standalone' }
+    h.rooms.mockResolvedValue({ ...rooms(false), hosting, rooms: [] })
+    render(<VoiceRoomsSection />)
+    const box = await screen.findByTestId('voice-rooms-hosting')
+    expect(box.textContent).toContain('Voice rooms need Chat / Voice Hosting')
+    expect(box.textContent).not.toContain('k2 hostchat')
+    expect(screen.getByTestId('voice-rooms-hosting-detail').textContent).toBe('Details: identity: standalone.')
   })
 })

@@ -128,7 +128,7 @@ function parseRoom(raw: unknown): VoiceRoom | null {
 /** `GET /cli/voice/rooms`. Throws when the body is not a rooms list. */
 export function parseVoiceRooms(body: unknown): VoiceRoomsList {
   if (!body || typeof body !== 'object' || !Array.isArray((body as { rooms?: unknown }).rooms)) {
-    throw new Error('voice/rooms: not a rooms list')
+    throw new Error('the reply is not a rooms list')
   }
   const b = body as { rooms: unknown[]; hosting?: unknown; rev?: unknown; canManage?: unknown; feed?: unknown; agentReaders?: unknown }
   return {
@@ -185,7 +185,7 @@ function parseRecording(v: unknown): VoiceRecordingSettings | undefined {
 }
 
 export function parseVoiceStatus(body: unknown): VoiceStatus {
-  if (!body || typeof body !== 'object') throw new Error('voice/status: empty answer')
+  if (!body || typeof body !== 'object') throw new Error('the reply was empty')
   const b = body as Record<string, unknown>
   const count = b.count
   const media = b.media && typeof b.media === 'object' ? (b.media as Record<string, unknown>) : {}

@@ -6,6 +6,11 @@
 #   PATH IDENT   the word IDENT in the file PATH
 # A line's `#` starts a comment.
 
+# v0.13.0: no kit type holding key material prints it in Debug (crates/base/src/key_debug_tests.rs;
+# the rows a public cut keeps)
+the_key_byte_search_finds_every_spelling
+space_key_debug_prints_no_key_bytes
+
 # v0.12.0: a grid's paths are linear in its stored cells and rows, a blank row included
 # (crates/base/tests/grid_scaling.rs)
 grid_paths_are_linear_in_stored_size

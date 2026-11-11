@@ -222,6 +222,13 @@ pub struct PurgeReport {
     pub key_destroyed: bool,
     pub blobs_removed: usize,
     pub bytes_removed: u64,
+    /// Structure-index rows of the space's blobs removed with them. When there were any, the
+    /// store file is rewritten so their content leaves the file too (`store_rewritten`).
+    pub index_rows_removed: u64,
+    /// Whether the store file was rewritten after removing index rows (K-PURGE-2). `false`
+    /// when none were removed, or when the rewrite failed (the rows are gone from the store,
+    /// their old bytes stay in freed pages until a later rewrite).
+    pub store_rewritten: bool,
 }
 
 /// Returned by [`BlobStore::stats`].
@@ -481,12 +488,14 @@ impl BlobStore {
     }
 
     /// Remove blobs unreferenced for [`BlobConfig::gc_grace_ms`] (index row first, then the
-    /// file), files with no index row, and the folders of purged spaces.
+    /// file), files with no index row, the folders of purged spaces, and structure-index rows
+    /// whose blob is gone (left by a kit that didn't know the table).
     pub fn gc(&self) -> Result<GcReport, BlobError> {
         let _g = self.guard();
         let now = (self.clock)();
         let due = self.docs.blob_collectable(now, self.config.gc_grace_ms)?;
         let gone = self.docs.blob_remove_unreferenced(&due)?;
+        self.docs.blob_struct_sweep_orphans()?;
         let mut rep = GcReport::default();
         for (no, id, size) in &gone {
             match fs::remove_file(self.path_of(*no, id)) {
@@ -534,7 +543,7 @@ impl BlobStore {
     /// re-imports them. Audit it as metadata only.
     pub fn purge_space_key(&self, space: &str) -> Result<PurgeReport, BlobError> {
         let _g = self.guard();
-        let Some((no, rows)) = self.docs.blob_purge_space(space)? else {
+        let Some((no, rows, index_rows_removed)) = self.docs.blob_purge_space(space)? else {
             return Ok(PurgeReport::default());
         };
         let folder = self.dir.join(no.to_string());
@@ -543,10 +552,14 @@ impl BlobStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_err("removing the space's blobs", e)),
         }
+        // index rows hold names and text: their bytes must leave the file, as a purge's do
+        let store_rewritten = index_rows_removed > 0 && self.docs.rewrite_file().is_ok();
         Ok(PurgeReport {
             key_destroyed: true,
             blobs_removed: rows.len(),
             bytes_removed: rows.iter().map(|(_, s)| s).sum(),
+            index_rows_removed,
+            store_rewritten,
         })
     }
 

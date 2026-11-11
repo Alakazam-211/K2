@@ -108,9 +108,22 @@ pub(crate) fn refusal(rights: Rights, need: Need) -> Option<Need> {
         Some(Need::History)
     } else if need == Need::Owner && !rights.owner {
         Some(Need::Owner)
+    } else if need == Need::Comment && !comment_ok(rights) {
+        Some(Need::Comment)
     } else {
         None
     }
+}
+
+/// [`Rights::may_comment`], with its mutants planted.
+fn comment_ok(rights: Rights) -> bool {
+    if crate::anchor::planted!(CommentNeedsRead) {
+        return true;
+    }
+    if crate::anchor::planted!(EditWithoutComment) {
+        return rights.read && rights.comment;
+    }
+    rights.may_comment()
 }
 
 /// Distinct pids among the connections.

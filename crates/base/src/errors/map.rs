@@ -6,6 +6,7 @@ use super::ids as r;
 use super::{ErrorEntry, ErrorReport, Refusal, Value};
 use crate::blob::BlobError;
 use crate::doc::DocError;
+use crate::index::IndexJobError;
 use crate::session::{
     ConflictKind, ConflictRegion, Declined, Need, PackError, SessionError, UndoOutcome,
     WriteOutcome,
@@ -28,6 +29,7 @@ pub(crate) fn need_word(n: Need) -> &'static str {
         Need::Approver => "approver",
         Need::Owner => "owner",
         Need::AuthorOrOwner => "author_or_owner",
+        Need::Comment => "comment",
     }
 }
 
@@ -44,6 +46,7 @@ impl Refusal for SessionError {
                     Need::Approver => &r::FORBIDDEN_APPROVER,
                     Need::Owner => &r::FORBIDDEN_OWNER,
                     Need::AuthorOrOwner => &r::FORBIDDEN_AUTHOR_OR_OWNER,
+                    Need::Comment => &r::FORBIDDEN_COMMENT,
                 },
                 msg,
             )
@@ -113,6 +116,31 @@ impl Refusal for SessionError {
                 .with("name", name)
                 .with("expires_ms", *expires_ms),
             S::NoLease => rep(&r::NO_LEASE, msg),
+            S::IndexUnsupported => rep(&r::INDEX_UNSUPPORTED, msg),
+            S::NotIndexed { version, why } => rep(&r::NOT_INDEXED, msg)
+                .with("version", *version)
+                .with("why", why.to_string()),
+            S::IndexPending {
+                version,
+                retry_after_ms,
+            } => rep(&r::INDEX_PENDING, msg)
+                .with("version", *version)
+                .with("retry_after_ms", *retry_after_ms),
+            S::AgentWriteRefused => rep(&r::AGENT_WRITE_REFUSED, msg),
+            S::NoAnnotation { thread, comment } => {
+                let out = rep(&r::NO_ANNOTATION, msg).with("thread", thread.to_string());
+                match comment {
+                    Some(n) => out.with("comment", u64::from(*n)),
+                    None => out,
+                }
+            }
+            S::BadAnnotation(why) => rep(&r::BAD_ANNOTATION, msg).with("why", why),
+            S::AnnotationCap { what, limit } => rep(&r::ANNOTATION_CAP, msg)
+                .with("what", *what)
+                .with("limit", *limit),
+            S::NotCommentAuthor { thread, comment } => rep(&r::FORBIDDEN_COMMENT_AUTHOR, msg)
+                .with("thread", thread.to_string())
+                .with("comment", u64::from(*comment)),
             S::Claimed {
                 id,
                 by,
@@ -138,6 +166,17 @@ impl Refusal for SessionError {
                 )
                 .with("remaining_ms", c.remaining_ms)
                 .with("note", c.note.clone()),
+            S::NodesClaimed(c) => rep(&r::CLAIMED, msg)
+                .with("claim", c.id.to_string())
+                .with("by", &c.by)
+                .with("name", &c.name)
+                .with(
+                    "nodes",
+                    Value::List(c.keys.iter().map(|k| Value::from(k.as_str())).collect()),
+                )
+                .with("remaining_ms", c.remaining_ms)
+                .with("note", c.note.clone()),
+            S::IndexRead(r) => (**r).clone(),
             S::NoClaim(id) => rep(&r::NO_CLAIM, msg).with("claim", id.map(|i| i.to_string())),
             S::ClaimContended {
                 id,
@@ -403,6 +442,20 @@ impl Refusal for StoreError {
 impl Refusal for BlobError {
     fn report(&self) -> ErrorReport {
         blob(self, self.to_string())
+    }
+}
+
+impl Refusal for IndexJobError {
+    fn report(&self) -> ErrorReport {
+        let msg = self.to_string();
+        match self {
+            IndexJobError::Stale { version, reason } => rep(&r::INDEX_STALE, msg)
+                .with("version", *version)
+                .with("reason", *reason),
+            IndexJobError::BadResult(_) => rep(&r::INDEX_BAD_RESULT, msg),
+            IndexJobError::Blob(e) => blob(e, msg),
+            IndexJobError::Store(e) => store(e, msg),
+        }
     }
 }
 

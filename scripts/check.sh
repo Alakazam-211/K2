@@ -14,6 +14,7 @@ cargo clippy -p k2-mpc-base -p k2-mpc-spec-undo --all-targets -- -D warnings
 cargo clippy -p k2-mpc-spec-undo --all-targets --features mutants -- -D warnings
 ./scripts/check-licences.sh
 sh tools/evidence/test.sh
+sh tools/test-check-private.sh
 sh tools/check-private.sh
 sh tools/test-windows-names.sh
 sh tools/check-windows-names.sh

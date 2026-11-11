@@ -8,6 +8,19 @@ use crate::doc::DocError;
 use crate::elem::Key;
 use crate::store::{DocKey, Seq, StoreError};
 
+/// Who holds the index nodes a claim was refused on ([`SessionError::NodesClaimed`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NodesClaim {
+    pub id: ClaimId,
+    pub by: String,
+    pub name: String,
+    /// The nodes the two claims share, in key order.
+    pub keys: Vec<crate::index::NodeKey>,
+    pub remaining_ms: u64,
+    pub note: Option<String>,
+}
+
 /// Who holds the elements an edit or a claim was refused on ([`SessionError::ElemsClaimed`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -166,6 +179,16 @@ pub enum SessionError {
         .0.note.as_deref().map(|n| format!(" \"{}\"", crate::session::awareness::one_line(n))).unwrap_or_default(),
         .0.remaining_ms)]
     ElemsClaimed(Box<ElemsClaim>),
+    /// Tier 0: another participant's live claim names some of the same index nodes
+    /// ([`super::BlobSession::claim_nodes`]). The same id and exit as
+    /// [`SessionError::Claimed`]: exit 5. Claims never refuse a write.
+    #[error("{} claimed by {} ({}){}; {} ms left",
+        crate::session::awareness::nodes_text(&.0.keys),
+        .0.name,
+        .0.by,
+        .0.note.as_deref().map(|n| format!(" \"{}\"", crate::session::awareness::one_line(n))).unwrap_or_default(),
+        .0.remaining_ms)]
+    NodesClaimed(Box<NodesClaim>),
     /// No live claim by that id (it ended, or never existed here), or, with no id, the
     /// caller holds none. Exit 4.
     #[error("{}", match .0 { Some(id) => format!("no live claim {id}"), None => "you hold no claim here".to_owned() })]
@@ -191,6 +214,60 @@ pub enum SessionError {
     /// Tier 0: the manager has no blob store ([`super::SessionManager::with_blob_store`]).
     #[error("no blob store configured")]
     NoBlobStore,
+    /// The doc's type has no structure index. `MPC-E711`, exit 2.
+    #[error("this file type has no structure index")]
+    IndexUnsupported,
+    /// A version has no index, and won't get one without a change (past a cap, unreadable, or
+    /// purged). `MPC-E712`, exit 4.
+    #[error("version {version} has no index: {why}")]
+    NotIndexed {
+        version: crate::store::VersionId,
+        why: crate::index::NotIndexedWhy,
+    },
+    /// A version's index isn't ready yet (no job has run, or one is running). `MPC-E713`, exit
+    /// 1: retry after `retry_after_ms`.
+    #[error("the index of version {version} isn't ready; retry in {retry_after_ms} ms")]
+    IndexPending {
+        version: crate::store::VersionId,
+        retry_after_ms: u64,
+    },
+    /// A structure-index read refused for an address or a cursor, with its own id, exit and
+    /// details: `MPC-E170 ambiguous_address` (exit 2, `details.candidates`), `MPC-E173
+    /// stale_cursor` (exit 1), `MPC-E174 bad_cursor` (exit 2), `MPC-E175 over_budget` (exit 2).
+    /// Nothing was read. The message is the report's.
+    #[error("{}", .0.message())]
+    IndexRead(Box<crate::errors::ErrorReport>),
+    /// An agent's `write` on a type whose pack refuses them ([`super::BlobPack::agent_writes`]).
+    /// `MPC-E715`, exit 2.
+    #[error("an agent can't write this file type")]
+    AgentWriteRefused,
+    /// No annotation thread `thread` in this doc (or no comment `comment` on it). `MPC-E320`,
+    /// exit 4.
+    #[error("{}", no_annotation_text(*thread, *comment))]
+    NoAnnotation {
+        thread: crate::annot::ThreadId,
+        comment: Option<u32>,
+    },
+    /// A comment call the kit refuses: an empty body, a bad mention, attachment or hint, an
+    /// anchor naming no node (or a key several nodes hold). Nothing changed. `MPC-E321`,
+    /// exit 2.
+    #[error("bad annotation: {0}")]
+    BadAnnotation(String),
+    /// Past an annotation cap (`what`: `body bytes`, `threads`, `comments`;
+    /// [`super::Config::annot_body_max_bytes`] and the others). Nothing changed. `MPC-E907`,
+    /// exit 2.
+    #[error("annotation limit: at most {limit} {what}")]
+    AnnotationCap { what: &'static str, limit: u64 },
+    /// Deleting a comment that isn't the caller's: only its author, the person it was made
+    /// for, or an owner may. `MPC-E117`, exit 3.
+    #[error(
+        "refused: only its author, the person it was made for, or an owner can delete comment \
+         {comment} of {thread}"
+    )]
+    NotCommentAuthor {
+        thread: crate::annot::ThreadId,
+        comment: u32,
+    },
     #[error(transparent)]
     Doc(#[from] DocError),
     #[error(transparent)]
@@ -277,6 +354,14 @@ pub enum EditWithError<E> {
     Session(#[from] SessionError),
     #[error("{0}")]
     Compute(E),
+}
+
+/// [`SessionError::NoAnnotation`]'s message.
+fn no_annotation_text(thread: crate::annot::ThreadId, comment: Option<u32>) -> String {
+    match comment {
+        Some(n) => format!("no comment {n} on {thread}"),
+        None => format!("no annotation {thread}"),
+    }
 }
 
 /// [`SessionError::AtLimit`]'s message.

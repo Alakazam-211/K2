@@ -13,6 +13,13 @@
 //! - [`table`]: tables (the CSV grid) as plain data over the structured kinds: the six roots,
 //!   render rules, key minting, grid ops, the aligner (`reconcile`), the grid three-way merge,
 //!   and the hidden-cell-writes report. Engine-free and codec-free.
+//! - [`index`]: the file-structure index: nodes, keys and keyed hashes read from a blob
+//!   version by a pack (tier 0), generic over the file type.
+//! - [`anchor`]: where a comment is pinned (the whole doc, a node by its key) and its state in a
+//!   version (attached, hint-stale, suspect, hidden, orphaned), computed on read; an anchor
+//!   is never moved silently.
+//! - [`annot`]: comment threads pinned to anchors, per doc: create, reply, resolve, delete,
+//!   re-anchor, with attribution and history; purge and erasure reach every body.
 //! - [`mint`]: tagged-key minting (`<prefix><n>.<writer tag>`): list keys two writers never
 //!   mint alike, and the next number from the keys a writer can see.
 //! - [`refs`]: references to list elements and their state (attached, suspect, orphaned),
@@ -79,6 +86,8 @@ compile_error!(
 );
 
 pub mod addr;
+pub mod anchor;
+pub mod annot;
 pub mod blob;
 pub mod codec;
 pub mod conformance;
@@ -91,6 +100,7 @@ pub mod errors;
 pub mod export;
 mod hash;
 pub mod ids;
+pub mod index;
 pub mod mint;
 pub mod parity;
 pub mod refs;
@@ -101,6 +111,9 @@ pub mod table;
 pub mod text;
 pub mod timers;
 pub mod tools;
+
+#[cfg(test)]
+mod key_debug_tests;
 
 pub use doc::{ClientId, Doc, DocError, Edit, Neutral, UpdateInfo, MAX_CLIENT_ID};
 pub use elem::{Applied, Key, Value};

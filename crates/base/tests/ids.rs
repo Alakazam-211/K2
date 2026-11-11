@@ -20,7 +20,7 @@ use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::elem::{Anchor, Key};
 use k2_mpc_base::ids::churn::{judge, ChurnKind, ChurnReport, Saved, Unit};
 use k2_mpc_base::ids::{self, IdClass, IdKind, KIT};
-use k2_mpc_base::parity::{Registry, KIT_VERBS};
+use k2_mpc_base::parity::{Registry, ANNOTATION_VERBS, KIT_VERBS};
 use k2_mpc_base::schema::Schema;
 use k2_mpc_base::session::{
     default_reconcile, Declined, Pack, PackContent, PackError, Reconciled, TextFilePack, View,
@@ -54,9 +54,14 @@ fn golden(path: &Path, got: &str) {
     );
 }
 
-/// A verb the kit registers: its own ([`KIT_VERBS`]) or a grid verb ([`verbs::VERBS`]).
+/// A verb the kit registers: its own ([`KIT_VERBS`], [`ANNOTATION_VERBS`]) or a grid verb
+/// ([`verbs::VERBS`]).
 fn kit_verb(v: &str) -> bool {
-    KIT_VERBS.iter().any(|s| s.name == v) || verbs::VERBS.iter().any(|p| p.name() == v)
+    KIT_VERBS
+        .iter()
+        .chain(ANNOTATION_VERBS)
+        .any(|s| s.name == v)
+        || verbs::VERBS.iter().any(|p| p.name() == v)
 }
 
 // ------------------------------------------------------------- the table

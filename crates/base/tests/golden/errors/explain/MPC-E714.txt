@@ -1,0 +1,21 @@
+MPC-E714 index_bad_result (tier 0 and blobs)
+exit:     1
+message:  the indexer's result was refused: {reason}
+next:     The worker that read the file returned something the kit refuses: it was not trusted, and nothing was recorded. Report it to the host's operator. The host may run a new job, backing off between tries: the refusal isn't stored and the kit keeps no count of failures, so a worker that always fails would be run again on every try.
+rule:     structure index
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E714",
+  "name": "index_bad_result",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "the indexer's result was refused: {reason}",
+  "next": "The worker that read the file returned something the kit refuses: it was not trusted, and nothing was recorded. Report it to the host's operator. The host may run a new job, backing off between tries: the refusal isn't stored and the kit keeps no count of failures, so a worker that always fails would be run again on every try.",
+  "rule": "structure index",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

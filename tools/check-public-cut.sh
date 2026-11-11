@@ -65,7 +65,7 @@ DROPPED_CRATES="crates/conformance:k2-mpc-conformance"
 DROPPED_TREES="fuzz tools/fuzz docs/evidence/runs"
 DROPPED_REFS='(^|[^A-Za-z0-9_-])fuzz/|tools/fuzz([^A-Za-z0-9_-]|$)|(^[ \t]*|exclude.*)"fuzz"|cargo[- ]fuzz|k2[-_]mpc[-_]base[-_]fuzz|k2_mpc_base::fuzzing|(^|[^A-Z_])FUZZ_(CPUS|HOME|MAX_JOBS|MEM|NODES|SECS|SHIP|SUMMARY_DIR|TIMEOUT|TZ|USED|WINDOW|WITH|WS)'
 # Single files a public cut removes (a check of what the cut takes out), paths from the root.
-DROPPED_FILES="tools/check-engine-features.sh"
+DROPPED_FILES="tools/check-engine-features.sh tools/test-engine-features.sh"
 # Files a public cut must carry at its root.
 LICENCE_FILES="LICENSE-MIT LICENSE-APACHE"
 # The pinned regression tests every cut must still have (relative to the root).

@@ -178,6 +178,7 @@ impl Verbs {
             "@history" => !file_verb && v.kind == VerbKind::History,
             "@run_tool" => v.runs_through_run_tool(),
             "@pack" => v.source == Source::Pack,
+            "@index" => v.is_index(),
             name => name == v.name && file_row == file_verb,
         })
     }
@@ -214,6 +215,9 @@ fn verbs_text(e: &ErrorEntry) -> String {
                 crate::parity::RUN_TOOL_VERBS.join(", ")
             ),
             "@pack" => "a pack's own verbs".to_owned(),
+            "@index" => "a structure index's verbs (named by the file type's pack) and node \
+                         claims"
+                .to_owned(),
             "(sync)" => "an editor's sync connection (no verb)".to_owned(),
             "(host)" => "a host call (no verb)".to_owned(),
             v => v.to_owned(),

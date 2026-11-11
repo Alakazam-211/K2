@@ -1,0 +1,27 @@
+MPC-E711 index_unsupported (tier 0 and blobs)
+exit:     2
+message:  this file type has no structure index
+next:     This file type has no index of its structure, so there is nothing to list here. Read the file itself.
+step:     cat; why: This file type has no structure index; read the file itself.
+rule:     structure index
+verbs:    a structure index's verbs (named by the file type's pack) and node claims; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E711",
+  "name": "index_unsupported",
+  "area": "tier 0 and blobs",
+  "exit": 2,
+  "message": "this file type has no structure index",
+  "next": "This file type has no index of its structure, so there is nothing to list here. Read the file itself.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "This file type has no structure index; read the file itself."
+  },
+  "rule": "structure index",
+  "verbs": ["@index", "(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -16,7 +16,7 @@ use super::harness::{
     list_check, wrong_tier, Failure, Output, ParityHost, ParityRow, Report, RowStatus, Side, Step,
     TmpDir, VerbOut, VerbValue, ACTOR, AGENT_VIA, OBSERVER, PERSON_VIA,
 };
-use super::registry::{verb_form, Api, Registry, Tier};
+use super::registry::{Api, Registry, Tier};
 use crate::blob::{BlobConfig, BlobStore};
 use crate::session::{
     ApprovalState, BlobPack, BlobSession, Config, ConnId, DiskCheck, DiskState, LeaseInfo,
@@ -49,6 +49,9 @@ pub struct BlobCase {
     /// What this case shows, a few words.
     pub name: &'static str,
     pub initial: &'static [u8],
+    /// A second version's bytes for the setup to write ([`BlobStage::write_next_as`]);
+    /// empty for most cases.
+    pub next: &'static [u8],
     pub setup: BlobSetupFn,
     pub person: BlobPersonFn,
     pub agent: BlobAgentFn,
@@ -72,6 +75,7 @@ impl BlobCase {
             verb,
             name,
             initial: BLOB_DOC,
+            next: &[],
             setup: no_setup,
             person,
             agent,
@@ -82,6 +86,10 @@ impl BlobCase {
     }
     pub const fn setup(self, setup: BlobSetupFn) -> Self {
         BlobCase { setup, ..self }
+    }
+    /// The bytes [`BlobStage::write_next_as`] writes.
+    pub const fn then(self, next: &'static [u8]) -> Self {
+        BlobCase { next, ..self }
     }
 }
 
@@ -100,6 +108,8 @@ impl fmt::Debug for BlobCase {
 /// actions; the actor acts only through [`BlobPerson`] or [`BlobAgent`].
 pub struct BlobStage {
     host: Arc<ParityHost>,
+    pack: Arc<dyn BlobPack>,
+    next: &'static [u8],
     mgr: SessionManager,
     session: Arc<BlobSession>,
     key: DocKey,
@@ -142,10 +152,12 @@ impl BlobStage {
             path: BLOB_PATH.into(),
         };
         let session = mgr
-            .open_blob_file(pack, &key, &file, &root_dir)
+            .open_blob_file(pack.clone(), &key, &file, &root_dir)
             .map_err(|e| format!("open_blob_file: {e}"))?;
         let mut stage = BlobStage {
             host,
+            pack,
+            next: &[],
             mgr,
             session,
             key,
@@ -295,6 +307,39 @@ impl BlobStage {
     pub fn write_file(&self, bytes: &[u8]) -> Result<DiskCheck, String> {
         std::fs::write(&self.file, bytes).map_err(|e| format!("write file: {e}"))?;
         self.session.file_changed().map_err(|e| e.to_string())
+    }
+
+    /// The pack's structure-index verbs, if it has an index.
+    pub fn index_verbs(&self) -> Option<&'static crate::index::IndexVerbs> {
+        self.pack.index_spec().map(|s| s.verbs)
+    }
+
+    /// Run the index job of every version that has none yet (in-process: the host's worker).
+    pub fn index_all(&mut self) -> Result<(), String> {
+        let o = self.observer;
+        let versions = self
+            .session
+            .versions(o)
+            .map_err(|e| format!("versions: {e}"))?;
+        for (v, _) in versions {
+            if let Some(job) = self
+                .session
+                .index_job(Some(v))
+                .map_err(|e| format!("index job {v}: {e}"))?
+            {
+                job.run().map_err(|e| format!("index {v}: {e}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `pid` writes the case's second version ([`BlobCase::then`]). Returns it.
+    pub fn write_next_as(&mut self, pid: &str) -> Result<VersionId, String> {
+        if self.next.is_empty() {
+            return Err("the case has no second version (BlobCase::then)".into());
+        }
+        let next = self.next;
+        self.write_as(pid, next)
     }
 
     /// The current version.
@@ -464,7 +509,7 @@ impl BlobAgent<'_> {
     /// only make the declared calls, and the exit must be declared (or a session refusal).
     pub fn verb(&mut self, argv: &[&str], stdin: &[u8]) -> Result<VerbOut, String> {
         let argv: Vec<String> = argv.iter().map(|s| (*s).to_owned()).collect();
-        let form = verb_form(&argv);
+        let form = self.registry.form_of(&argv);
         let Some(spec) = self.registry.get(&form).copied() else {
             self.problems.push(Failure::MissingVerb {
                 action: self.action,
@@ -543,6 +588,23 @@ impl BlobAgent<'_> {
             Some(t) => Some(num(&t)?),
             None => None,
         };
+        // a structure index's verbs and node claims: what a host does, `run_tool`
+        if self
+            .registry
+            .get(form)
+            .is_some_and(|v| v.is_index() && v.runs_through_run_tool())
+        {
+            let c = self.join(Stay::UntilIdle, used)?;
+            used.push(Api::RunTool);
+            return match s.run_tool(c, argv, &tools::ToolOptions::default()) {
+                Ok(out) => {
+                    let exit = out.exit;
+                    Ok(Bound::Value(VerbValue::Tool(out), exit))
+                }
+                Err(tools::ToolRunError::Session(e)) => Err(BindError::Session(e)),
+                Err(tools::ToolRunError::Tool(e)) => Ok(Bound::Refused(e.to_string(), e.exit())),
+            };
+        }
         match form {
             "open" => {
                 self.join(Stay::Held, used)?;
@@ -761,8 +823,10 @@ pub struct BlobVersionObs {
     pub conflict_copy: bool,
 }
 
-/// The actor's presence on a blob doc, as others see it.
+/// The actor's presence on a blob doc, as others see it. `non_exhaustive`: the harness
+/// builds it; another crate reads and compares it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct BlobPresenceObs {
     pub name: String,
     pub colour: String,
@@ -771,6 +835,8 @@ pub struct BlobPresenceObs {
     pub holds_lease: bool,
     pub region: Option<String>,
     pub connections: usize,
+    /// Their claims on index nodes: what each covers, its note and time left.
+    pub claims: Vec<(String, Option<String>, u64)>,
 }
 
 /// Everything compared after a tier-0 path.
@@ -836,6 +902,11 @@ fn observe(stage: &BlobStage, step: Step, via: &str) -> Result<BlobObservation, 
             holds_lease: e.holds_lease,
             region: e.region,
             connections: e.connections,
+            claims: e
+                .claims
+                .iter()
+                .map(|c| (c.span.to_string(), c.note.clone(), c.remaining_ms))
+                .collect(),
         });
     let file = s
         .file_path()
@@ -901,6 +972,7 @@ pub fn run_blob_case(
     };
     let world = || -> Result<BlobStage, String> {
         let mut st = BlobStage::new(pack.clone(), case.initial)?;
+        st.next = case.next;
         (case.setup)(&mut st)?;
         Ok(st)
     };
@@ -958,8 +1030,16 @@ fn all_blob_cases(extra: &[BlobCase]) -> Vec<BlobCase> {
     cases
 }
 
-fn covered(cases: &[BlobCase]) -> Vec<(PersonAction, &'static str)> {
-    cases.iter().map(|c| (c.action, c.verb)).collect()
+/// The (action, verb) pairs the cases cover; a registry with the annotation verbs has them
+/// covered by the annotation harness ([`super::check_annotations_with`], which
+/// [`check_blob`] runs).
+fn covered(cases: &[BlobCase], registry: &Registry) -> Vec<(PersonAction, &'static str)> {
+    let mut v: Vec<(PersonAction, &'static str)> =
+        cases.iter().map(|c| (c.action, c.verb)).collect();
+    for spec in registry.verbs().iter().filter(|s| s.is_annotation()) {
+        v.extend(spec.serves.iter().map(|a| (*a, spec.name)));
+    }
+    v
 }
 
 /// The parity check for tier 0 (any file, or a tier-0.5 [`BlobPack`]), as [`super::check`]
@@ -978,9 +1058,16 @@ pub fn check_blob(
         return Err(vec![f]);
     }
     let all = all_blob_cases(extra);
-    let (mut report, mut failures) = list_check(rows, registry, &covered(&all), |a| {
+    let (mut report, mut failures) = list_check(rows, registry, &covered(&all, registry), |a| {
         !super::kit_blob_cases(a).is_empty()
     });
+    // the annotation verbs (`Registry::for_blob_pack`): their own harness, on the whole doc
+    // (a pack checks node anchors with `check_annotations` and a node of its own)
+    if registry.verbs().iter().any(|s| s.is_annotation()) {
+        if let Err(f) = super::check_annotations_with(pack.clone(), BLOB_DOC, None, registry) {
+            failures.extend(f);
+        }
+    }
     for c in all.iter().filter(|c| {
         !rows
             .iter()
@@ -1008,8 +1095,11 @@ pub fn check_blob_list(
     if let Some(f) = wrong_tier(registry, Tier::Blob) {
         return vec![f];
     }
-    list_check(rows, registry, &covered(&all_blob_cases(extra)), |a| {
-        !super::kit_blob_cases(a).is_empty()
-    })
+    list_check(
+        rows,
+        registry,
+        &covered(&all_blob_cases(extra), registry),
+        |a| !super::kit_blob_cases(a).is_empty(),
+    )
     .1
 }

@@ -352,6 +352,22 @@ pub const KIT: &[IdKind] = &[
         note: "printed by `claim`; unique within the process, so another doc's or an ended \
                claim's id is simply not live",
     },
+    IdKind {
+        kind: "annotation",
+        example: "ann-12 | 12",
+        class: IdClass::Durable,
+        scope: "a doc's comment threads",
+        accepted_by: &[
+            "reply",
+            "resolve",
+            "resolve --reopen",
+            "comment --delete",
+            "reanchor",
+            "comments --log",
+        ],
+        note: "printed by `comment` and `comments`; per doc, never reused (a purged thread keeps \
+               its id); a comment within it is `--n N`, 0 the first",
+    },
 ];
 
 // ---------- rendering and checks ----------

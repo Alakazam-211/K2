@@ -75,6 +75,8 @@ function resetStore(): void {
     showMemoDialog: false,
     stoppedElapsed: null,
     entries: [],
+    entriesStatus: 'loading',
+    entriesError: null,
   })
 }
 
@@ -112,6 +114,27 @@ describe('timer store — Plan B host-aware migration', () => {
       project_id: 'proj-1',
     })
     expect(useTimerStore.getState().entries).toEqual(rows)
+    expect(useTimerStore.getState().entriesStatus).toBe('ready')
+  })
+
+  it('a failed fetchEntries says so with the reason and keeps the last list', async () => {
+    const e: TimeEntry = { id: 'old', projectId: null, startTime: 1, endTime: 2, durationSeconds: 1, memo: null, createdAt: 1 }
+    useTimerStore.setState({ entries: [e] })
+    daemonCliGet.mockRejectedValueOnce(new Error('database is locked'))
+    await useTimerStore.getState().fetchEntries()
+    expect(useTimerStore.getState().entriesStatus).toBe('error')
+    expect(useTimerStore.getState().entriesError).toBe('database is locked')
+    expect(useTimerStore.getState().entries).toEqual([e])
+  })
+
+  it('updateTimerSetting resolves false and puts the value back when the save fails', async () => {
+    const settings = await import('@/lib/daemon-settings')
+    useTimerStore.setState({ skipMemo: false })
+    vi.mocked(settings.settingsUpdate).mockRejectedValueOnce(new Error('read-only'))
+    expect(await useTimerStore.getState().updateTimerSetting('skipMemo', true)).toBe(false)
+    expect(useTimerStore.getState().skipMemo).toBe(false)
+    expect(await useTimerStore.getState().updateTimerSetting('skipMemo', true)).toBe(true)
+    expect(useTimerStore.getState().skipMemo).toBe(true)
   })
 
   it('fetchEntries passes undefined params through unchanged', async () => {
@@ -206,7 +229,7 @@ describe('timer store — Plan B host-aware migration', () => {
     }
     useTimerStore.setState({ entries: [e] })
 
-    await useTimerStore.getState().deleteEntry('gone')
+    expect(await useTimerStore.getState().deleteEntry('gone')).toBe(true)
 
     expect(daemonCliPost).toHaveBeenCalledWith('timer/delete', { id: 'gone' })
     expect(useTimerStore.getState().entries).toEqual([])
@@ -226,7 +249,7 @@ describe('timer store — Plan B host-aware migration', () => {
     }
     useTimerStore.setState({ entries: [e] })
 
-    await useTimerStore.getState().deleteEntry('keep')
+    expect(await useTimerStore.getState().deleteEntry('keep')).toBe(false)
 
     expect(useTimerStore.getState().entries).toEqual([e])
     expect(emitMock).not.toHaveBeenCalledWith('sync:timer-entries')

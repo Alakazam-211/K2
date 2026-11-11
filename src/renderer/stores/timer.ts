@@ -62,6 +62,10 @@ interface TimerState {
 
   // History
   entries: TimeEntry[]
+  /** The last history read: loading (before the first answer), ready, or
+   *  failed with the server's reason in `entriesError`. */
+  entriesStatus: 'loading' | 'ready' | 'error'
+  entriesError: string | null
 
   // Actions
   initFromSettings: () => Promise<void>
@@ -75,11 +79,13 @@ interface TimerState {
 
   // History actions
   fetchEntries: (start?: number, end?: number, projectId?: string) => Promise<void>
-  deleteEntry: (id: string) => Promise<void>
+  /** Resolves true when the server deleted it, false when it didn't. */
+  deleteEntry: (id: string) => Promise<boolean>
   exportEntries: (format: 'csv' | 'json', start?: number, end?: number, projectId?: string) => Promise<string>
 
   // Settings actions
-  updateTimerSetting: (key: string, value: any) => Promise<void>
+  /** Resolves false when the server didn't save it (the value goes back). */
+  updateTimerSetting: (key: string, value: any) => Promise<boolean>
 
   // Cross-window sync
   syncFromEvent: (payload: TimerSyncPayload) => void
@@ -199,6 +205,8 @@ export const useTimerStore = create<TimerState>((set, get) => ({
 
   // History
   entries: [],
+  entriesStatus: 'loading',
+  entriesError: null,
 
   initFromSettings: async () => {
     try {
@@ -352,6 +360,8 @@ export const useTimerStore = create<TimerState>((set, get) => ({
   },
 
   fetchEntries: async (start?: number, end?: number, projectId?: string) => {
+    // The first read shows loading; later reads keep the list until they land.
+    if (get().entriesStatus !== 'ready') set({ entriesStatus: 'loading', entriesError: null })
     try {
       // GET query params are snake_case (the daemon reads `project_id`);
       // the camelCase TimeEntry response shape matches the Rust struct's
@@ -361,9 +371,11 @@ export const useTimerStore = create<TimerState>((set, get) => ({
         end,
         project_id: projectId,
       }))
-      set({ entries })
+      set({ entries, entriesStatus: 'ready', entriesError: null })
     } catch (err) {
       console.error('[timer] Failed to fetch entries:', err)
+      const reason = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+      set({ entriesStatus: 'error', entriesError: reason.trim() || null })
     }
   },
 
@@ -373,8 +385,10 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       // Remove locally
       set({ entries: get().entries.filter((e) => e.id !== id) })
       emitEntriesChanged()
+      return true
     } catch (err) {
       console.error('[timer] Failed to delete entry:', err)
+      return false
     }
   },
 
@@ -400,19 +414,24 @@ export const useTimerStore = create<TimerState>((set, get) => ({
   updateTimerSetting: async (key: string, value: any) => {
     // Optimistic update locally — happens even when persist is gated
     // off so the UI stays responsive in the pre-daemon-load window.
+    const previous = (get() as any)[key]
     set({ [key]: value } as any)
     if (!hasLoadedFromDaemon) {
       console.warn(
         '[timer] persist suppressed: settings not yet loaded from daemon'
       )
-      return
+      return true
     }
     try {
       const currentSettings = await settingsGet()
       const timer = { ...(currentSettings.timer ?? {}), [key]: value }
       await settingsUpdate({ timer })
+      return true
     } catch (err) {
       console.error('[timer] Failed to persist setting:', err)
+      // Put the value back so the switch shows what the server has.
+      set({ [key]: previous } as any)
+      return false
     }
   },
 

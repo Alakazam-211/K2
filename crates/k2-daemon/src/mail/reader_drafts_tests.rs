@@ -254,6 +254,18 @@ async fn d4_send_goes_through_governance_and_becomes_a_sent_message() {
         assert!(destroyed(&fx.fake).is_empty(), "{:?}", destroyed(&fx.fake));
 
         set_gate(&fx, "on");
+        // A hosted send also needs its domain hosted here, sending direct
+        // (the send path refuses fail-closed otherwise).
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT OR IGNORE INTO mail_domains (id, domain, send_mode, status, created_at) \
+                 VALUES (?1, ?2, 'direct', 'verified', 100)",
+                rusqlite::params![format!("dom-d4-{}", fx.ws_id), fx.domain],
+            )
+            .expect("seed the sending domain");
+        }
         let on = rpost(&fx, OWNER, "draft-send", values);
         assert_eq!(on.status, 200, "{}", on.body);
         let v = json(&on);
@@ -302,7 +314,9 @@ async fn d5_discard_removes_the_draft() {
         let again = rpost(&fx, &fx.admin, "draft-discard", serde_json::json!({ "id": id }));
         assert_eq!(again.status, 404, "discarding twice: {}", again.body);
         assert!(fx.fake.state.lock().unwrap().envelopes.is_empty(), "nothing was sent");
-        assert_eq!(fx.rows_for("user:oa0admin", &fx.agent_addr, "reader/draft-discard").len(), 2, "{:?}", fx.audit());
+        // One row: the second ask names a draft that no longer is one, so it
+        // reaches no inbox (like an unknown message id).
+        assert_eq!(fx.rows_for("user:oa0admin", &fx.agent_addr, "reader/draft-discard").len(), 1, "{:?}", fx.audit());
         let mine = agent_view(&fx, &id);
         assert_eq!(mine["status"], "discarded", "{mine}");
         assert_eq!(mine["stateBy"], "oa0admin", "{mine}");

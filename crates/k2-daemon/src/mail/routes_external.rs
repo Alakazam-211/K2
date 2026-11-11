@@ -939,8 +939,10 @@ mod tests {
         assert_eq!(resp.status, "400 Bad Request");
         assert_eq!(body_json(&resp)["error"]["code"], "usage");
 
-        // A message id naming a K2-HOSTED owned address → the teaching
-        // error pointing at `k2 mail reply` (drafts are external-only).
+        // A message id naming a K2-HOSTED owned address is a hosted reply
+        // draft now (mail::drafts, end to end in reader_drafts_tests D1).
+        // Before any engine dial it refuses attachments, pointing at
+        // `k2 mail reply --attach`.
         let local = format!("bot@{name}.example");
         {
             let db = k2_core::db::shared();
@@ -955,13 +957,13 @@ mod tests {
         }
         let token = messages::encode_message_id(&local, "M1");
         let resp = handle_draft(
-            serde_json::json!({ "project": path, "id": token, "body": "hi" })
+            serde_json::json!({ "project": path, "id": token, "body": "hi", "attachments": ["notes.txt"] })
                 .to_string()
                 .as_bytes(),
         );
         assert_eq!(resp.status, "400 Bad Request", "{}", resp.body);
         let hint = body_json(&resp)["error"]["hint"].as_str().unwrap().to_string();
-        assert!(hint.contains("k2 mail reply"), "{hint}");
+        assert!(hint.contains("takes no attachments") && hint.contains("k2 mail reply"), "{hint}");
 
         // A FOREIGN external inbox answers the masked not_found (never
         // reveals the inbox exists).

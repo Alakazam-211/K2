@@ -324,6 +324,29 @@ describe('DraftCard', () => {
     expect(screen.queryByTestId('mr-draft-headers-toggle')).toBeNull()
   })
 
+  it('the text box grows to fit the draft, then scrolls past its max height', () => {
+    let content = 260
+    const { rerender } = render(<DraftCard text="Hi" agent="bot" onSend={() => {}} onDiscard={() => {}} />)
+    const box = screen.getByTestId('mr-draft-body') as HTMLTextAreaElement
+    // jsdom lays nothing out: the text's height is whatever this says.
+    Object.defineProperty(box, 'scrollHeight', { configurable: true, get: () => content })
+    rerender(<DraftCard text="Hi there" agent="bot" onSend={() => {}} onDiscard={() => {}} />)
+    expect(box.style.height).toBe('260px')
+    expect(box.style.overflowY).toBe('hidden')
+    box.style.maxHeight = '400px'
+    content = 900
+    fireEvent.change(box, { target: { value: 'a much longer draft' } })
+    expect(box.style.height).toBe('400px')
+    expect(box.style.overflowY).toBe('auto')
+  })
+
+  it('the composer keeps its fixed height and resize grip', () => {
+    render(<Composer mode={{ kind: 'new', inbox: 'me@x.example' }} busy={false} onSend={() => {}} onSaveDraft={() => {}} onCancel={() => {}} />)
+    const box = screen.getByTestId('mr-compose-body') as HTMLTextAreaElement
+    expect(box.style.height).toBe('')
+    expect(box.className).toContain('resize-y')
+  })
+
   it('sits at the top of the open conversation through threadTop', async () => {
     const { s } = source()
     render(

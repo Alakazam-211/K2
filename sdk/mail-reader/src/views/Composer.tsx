@@ -9,7 +9,7 @@
 // has been written. `ComposerBody` is the body field on its own (DraftCard
 // edits in it, and its To / Cc / Subject in `FieldRow`s).
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { formatSize, splitAddresses } from '../format'
 import { t } from '../i18n'
 import { IconButton, MailIcon, useMailUi } from '../ui'
@@ -39,15 +39,50 @@ export function isSendChord(e: Pick<React.KeyboardEvent, 'key' | 'metaKey' | 'ct
   return e.key === 'Enter' && (e.metaKey || e.ctrlKey)
 }
 
-/** The body field: the multi-line radius, the field edge, accent on focus. */
+/** Grow a textarea to fit its text, up to its CSS max-height, then scroll.
+ *  (min-height still holds the floor.) */
+function fitToText(el: HTMLTextAreaElement | null): void {
+  if (!el || typeof window === 'undefined') return
+  el.style.height = 'auto'
+  const cs = window.getComputedStyle(el)
+  const edges = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+  const want = el.scrollHeight + edges
+  const max = parseFloat(cs.maxHeight)
+  const height = Number.isFinite(max) ? Math.min(want, max) : want
+  el.style.height = `${height}px`
+  el.style.overflowY = want > height ? 'auto' : 'hidden'
+}
+
+/** The body field: the multi-line radius, the field edge, accent on focus.
+ *  `autoGrow`: it grows with its text up to its max-height (give one in
+ *  `className`), then scrolls, instead of a fixed height and a resize grip. */
 export function ComposerBody({
   className = '',
+  autoGrow = false,
   ...rest
-}: React.TextareaHTMLAttributes<HTMLTextAreaElement>): React.JSX.Element {
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { autoGrow?: boolean }): React.JSX.Element {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    if (autoGrow) fitToText(ref.current)
+  }, [autoGrow, rest.value])
+  // A new width rewraps the text: fit again.
+  useEffect(() => {
+    const el = ref.current
+    if (!autoGrow || !el || typeof ResizeObserver === 'undefined') return
+    let width = el.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth === width) return
+      width = el.clientWidth
+      fitToText(el)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [autoGrow])
   return (
     <textarea
+      ref={ref}
       data-mr="compose-body"
-      className={`w-full min-h-[180px] resize-y px-3 py-2.5 type-row leading-relaxed rounded-[var(--radius-field-multiline)] border border-[var(--color-control-edge)] bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] ${className}`}
+      className={`w-full ${autoGrow ? 'resize-none' : 'min-h-[180px] resize-y'} px-3 py-2.5 type-row leading-relaxed rounded-[var(--radius-field-multiline)] border border-[var(--color-control-edge)] bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-accent)] ${className}`}
       {...rest}
     />
   )

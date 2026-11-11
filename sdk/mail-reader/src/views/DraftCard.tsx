@@ -2,7 +2,8 @@
 // (K2's own; not from OCmail). Unmistakably unsent in every look: a header
 // that says "Draft by <agent> · not sent", a dashed warn-tinted edge on a
 // faint warn wash, and Send / Discard of its own. It is edited in place in
-// the composer's body field.
+// the composer's body field, which grows to fit the draft (up to most of
+// the window, then scrolls).
 //
 // MailReader feeds it a thread's drafts (`draft: true`); a host can also show
 // one through the `threadTop` slot, e.g.
@@ -397,7 +398,9 @@ export function DraftCard({
           data-testid="mr-draft-body"
           aria-label={t('draft_by', { agent })}
           value={value}
-          className="min-h-[140px]"
+          autoGrow
+          // Fits the whole draft up to most of the window, then scrolls.
+          className="min-h-[140px] max-h-[min(60vh,36rem)]"
           onChange={(e) => {
             setValue(e.target.value)
             onChange?.(e.target.value)

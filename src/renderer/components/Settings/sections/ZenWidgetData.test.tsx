@@ -202,7 +202,15 @@ async function mount(): Promise<void> {
       <ConfirmDialog />
     </>,
   )
-  await waitFor(() => expect(document.querySelector('[data-garden-data]')?.textContent).not.toContain('Loading…'))
+  // Wait for the load to finish: the section is there and its loading
+  // state is gone. (This used to wait for the text 'Loading…', which the
+  // component stopped showing, so the wait passed at once and a slow run
+  // read a data line before it was drawn.)
+  await waitFor(() => {
+    const section = document.querySelector('[data-garden-data]')
+    expect(section).not.toBeNull()
+    expect(section!.querySelector('[data-load-state="loading"]')).toBeNull()
+  })
 }
 
 beforeEach(() => {

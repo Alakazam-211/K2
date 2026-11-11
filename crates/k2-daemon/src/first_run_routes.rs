@@ -9,9 +9,9 @@
 //! | POST | `/cli/first-run/show` | | the same body (hidden, finished and skips cleared) |
 //! | POST | `/cli/first-run/skip` | `{"row": "<id>"}` | the same body |
 //! | POST | `/cli/first-run/offer/dismiss` | | the same body ("Not now" on Meet K5, per person) |
-//! | POST | `/cli/first-run/k5` | `{tool?, name?, handle?}` | `{workspaceId, name, path, …}` |
+//! | POST | `/cli/first-run/k5` | `{tool?, name?, handle?, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
 //! | POST | `/cli/first-run/chief-of-staff/start` | | `{workspaceId}` |
-//! | POST | `/cli/first-run/chief-of-staff` | `{name, about, tool}` | `{workspaceId, name, path, …}` |
+//! | POST | `/cli/first-run/chief-of-staff` | `{name, about, tool, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
 //!
 //! **K5 at first run** (prd-setup-checklist-v1 §10, `k5-first-run-contract.md`):
 //! the last four answer 404 `k5_first_run_off` while the owner's
@@ -32,6 +32,12 @@
 //! (`session_token`, `/cli/first-run/`), app passes and API keys fail
 //! `validate_session`, and a Voice & Chat only login is refused by the
 //! Member floor. The GET chain (an agent's cell socket) refuses as a belt.
+//!
+//! **Focus groups.** `focusGroup` (a group's id, or its name) puts the new
+//! agent in that group, the way `k2 agent hire --focus-group` and Add
+//! Workspace do (`db_ops::focus_groups_assign_project`). It is checked
+//! before anything is made: no such group is 400 `unknown_focus_group` and
+//! nothing is made. The Chief of Staff joins K5's group when it's left out.
 //!
 //! **Frames.** `first_run_changed` to that person's sockets on hide, show,
 //! skip, dismiss and finish; to everyone when K5 or the Chief of Staff is
@@ -343,6 +349,47 @@ fn folder_free(path: &str) -> Result<(), CliResponse> {
     Ok(())
 }
 
+/// The focus group `asked` names (its id, or its name in any case), as an
+/// id; checked before anything is made. 400 `unknown_focus_group` when no
+/// group is that, `ambiguous_focus_group` when two share the name.
+fn focus_group_for(asked: Option<String>) -> Result<Option<String>, CliResponse> {
+    let Some(asked) = asked else { return Ok(None) };
+    let groups = k2_core::db_ops::focus_groups_list().map_err(|e| error("500 Internal Server Error", "store", e))?;
+    if let Some(g) = groups.iter().find(|g| g.id == asked) {
+        return Ok(Some(g.id.clone()));
+    }
+    let named: Vec<_> = groups.iter().filter(|g| g.name.eq_ignore_ascii_case(&asked)).collect();
+    match named.as_slice() {
+        [g] => Ok(Some(g.id.clone())),
+        [] => Err(error(
+            "400 Bad Request",
+            "unknown_focus_group",
+            format!("no focus group is {asked:?}: nothing was made (Settings → Workspaces lists them)"),
+        )),
+        _ => Err(error("400 Bad Request", "ambiguous_focus_group", format!("more than one focus group is named {asked:?}: send its id"))),
+    }
+}
+
+/// K5's focus group, if it's in one: where its Chief of Staff goes by default.
+fn focus_group_of(workspace_id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::Project::get(&conn, workspace_id).ok().and_then(|p| p.focus_group_id)
+}
+
+/// Put the new agent in `group`, as Add Workspace and `k2 agent hire
+/// --focus-group` do. The agent stands whether or not this works.
+fn join_focus_group(report: &k2_core::hire::template::ApplyReport, group: Option<&str>) -> Option<String> {
+    let group = group?;
+    match k2_core::db_ops::focus_groups_assign_project(&report.workspace_id, Some(group)) {
+        Ok(p) => p.focus_group_id,
+        Err(e) => {
+            k2_core::log_debug!("[first-run] focus group {group} for {}: {e}", report.handle);
+            None
+        }
+    }
+}
+
 fn seat_k5() -> Result<Option<k2_core::orchestrator::Live>, CliResponse> {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -432,13 +479,19 @@ fn audit(event: &str, actor: &str, outcome: String) {
 }
 
 /// The answer both making routes send.
-fn made(report: &k2_core::hire::template::ApplyReport, granted: &crate::first_run_grants::Granted, cards: &Result<(), String>) -> CliResponse {
+fn made(
+    report: &k2_core::hire::template::ApplyReport,
+    focus_group: Option<String>,
+    granted: &crate::first_run_grants::Granted,
+    cards: &Result<(), String>,
+) -> CliResponse {
     let body = json!({
         "ok": true,
         "workspaceId": report.workspace_id,
         "name": report.name,
         "path": report.path,
         "handle": report.handle,
+        "focusGroupId": focus_group,
         "permissions": {
             "granted": granted.granted,
             "left": granted.left,
@@ -448,9 +501,10 @@ fn made(report: &k2_core::hire::template::ApplyReport, granted: &crate::first_ru
     CliResponse::ok_json(body.to_string())
 }
 
-/// `POST /cli/first-run/k5 {tool?, name?, handle?}`: make K5 from the `k5`
-/// template, seat it, set the harness, pinned chat and cards switch, grant
-/// the starter set the creator can give, then launch it with its hello.
+/// `POST /cli/first-run/k5 {tool?, name?, handle?, focusGroup?}`: make K5
+/// from the `k5` template, seat it, put it in the focus group, set the
+/// harness, pinned chat and cards switch, grant the starter set the creator
+/// can give, then launch it with its hello.
 fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
@@ -459,6 +513,10 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     let (tool, name, handle) = match (str_field(&v, "tool", 32), str_field(&v, "name", MAX_NAME), str_field(&v, "handle", MAX_NAME)) {
         (Ok(t), Ok(n), Ok(h)) => (t, n, h),
         (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r,
+    };
+    let asked_group = match str_field(&v, "focusGroup", 128) {
+        Ok(g) => g,
+        Err(r) => return r,
     };
     let _made = MAKE_LOCK.lock();
     match seat_k5() {
@@ -486,6 +544,10 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     if let Err(r) = folder_free(&path) {
         return r;
     }
+    let group = match focus_group_for(asked_group) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
     let (caller, grantor, created_by, from) = if actor.owner_token {
         (
             k2_core::hire::HireCaller::Owner,
@@ -524,6 +586,7 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
         }
     }
     let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
+    let group = join_focus_group(&report, group.as_deref());
     after_make(&report);
     let cards = crate::first_run_grants::cards_on(&target, &grantor);
     let granted = crate::first_run_grants::grant_set(&crate::first_run_grants::with_extras(k2_core::hire::starter_permissions::K5_STARTER_PERMISSIONS), &target, &grantor);
@@ -531,7 +594,7 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
     launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
-    made(&report, &granted, &cards)
+    made(&report, group, &granted, &cards)
 }
 
 /// Pinned chat on, for any new agent the first-run routes make (the
@@ -571,13 +634,15 @@ fn handle_cos_start(actor: &Actor) -> CliResponse {
     CliResponse::ok_json(json!({ "ok": true, "workspaceId": k5.workspace_id }).to_string())
 }
 
-/// `POST /cli/first-run/chief-of-staff {name, about, tool}`: the one
+/// `POST /cli/first-run/chief-of-staff {name, about, tool, focusGroup?}`:
+/// the one
 /// agent-callable route here. **Only K5's own pinned chat** may call it:
 /// the passport's workspace is the seat's K5 and its map key is the
 /// canonical one (`map_key == project_id`, as `k2 agent refresh` checks;
 /// `K2_SESSION_ID` is never trusted). Then: the `chief-of-staff` template,
 /// the seat, pinned chat, cards, the starter set K5 holds, the connection
-/// to K5, the events and the launch with its hello.
+/// to K5, the events and the launch with its hello. It joins `focusGroup`,
+/// or K5's own focus group when that's left out.
 pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller) -> CliResponse {
     use crate::sidecar_routes::Caller;
     if !k2_core::app_settings::load().k5_first_run {
@@ -616,6 +681,10 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     let (Some(name), Some(about), Some(tool)) = (name, about, tool) else {
         return error("400 Bad Request", "usage", "send {\"name\", \"about\", \"tool\"}: ask your person all three first");
     };
+    let asked_group = match str_field(&v, "focusGroup", 128) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
     let _made = MAKE_LOCK.lock();
     let existing = {
         let db = k2_core::db::shared();
@@ -644,6 +713,13 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     if let Err(r) = folder_free(&path) {
         return r;
     }
+    let group = match asked_group {
+        Some(g) => match focus_group_for(Some(g)) {
+            Ok(g) => g,
+            Err(r) => return r,
+        },
+        None => focus_group_of(&k5.workspace_id),
+    };
     let k5_handle = handle_of(&k5.workspace_id);
     let caller = k2_core::hire::HireCaller::Agent { workspace_id: k5.workspace_id.clone() };
     let mut req = k2_core::hire::template::ApplyRequest::new("chief-of-staff");
@@ -664,6 +740,7 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
             return error("500 Internal Server Error", "store", e.to_string());
         }
     }
+    let group = join_focus_group(&report, group.as_deref());
     after_make(&report);
     let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
     let grantor = crate::first_run_grants::Grantor::Agent { workspace_id: k5.workspace_id.clone() };
@@ -687,7 +764,7 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
     launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), k5_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
-    made(&report, &granted, &cards)
+    made(&report, group, &granted, &cards)
 }
 
 #[cfg(test)]

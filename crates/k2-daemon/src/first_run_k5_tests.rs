@@ -500,3 +500,102 @@ async fn k5_made_with_claude_on_a_fresh_server_starts_its_chat_with_no_409_and_s
     stop_chat(&cos);
     stop_chat(&k5);
 }
+
+/// A focus group named `name`: its id.
+fn focus_group(name: &str) -> String {
+    k2_core::db_ops::focus_groups_create(name, None).expect("group").id
+}
+
+fn focus_group_id(id: &str) -> Option<String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT focus_group_id FROM projects WHERE id = ?1", [id], |r| r.get(0)).expect("project")
+}
+
+fn workspaces() -> i64 {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0)).expect("count")
+}
+
+/// The sheet's focus-group picker: K5 lands in the group it names, and a
+/// group that isn't there is refused before anything is made.
+#[test]
+fn k5_lands_in_the_chosen_focus_group_and_an_unknown_group_makes_nothing() {
+    let _e = env(true, &["codex"]);
+    let ops = focus_group("Ops");
+    let _home = focus_group("Home");
+    let before = workspaces();
+
+    let r = post(K5_PATH, json!({ "tool": "codex", "focusGroup": "no-such-group" }), &Actor::owner_token());
+    assert_eq!((r.status, code(&r).as_str()), ("400 Bad Request", "unknown_focus_group"), "{}", r.body);
+    assert!(matches!(seat_k5(), Ok(None)), "no K5 seated");
+    assert_eq!(workspaces(), before, "no workspace made");
+    assert!(TEST_LAUNCHES.lock().is_empty(), "nothing launched");
+    let r = post(K5_PATH, json!({ "tool": "codex", "focusGroup": 7 }), &Actor::owner_token());
+    assert_eq!((r.status, code(&r).as_str()), ("400 Bad Request", "usage"));
+
+    let r = post(K5_PATH, json!({ "tool": "codex", "focusGroup": &ops }), &Actor::owner_token());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let out = json_of(&r);
+    let k5 = out["workspaceId"].as_str().expect("id").to_string();
+    assert_eq!(out["focusGroupId"], json!(&ops), "{out}");
+    assert_eq!(focus_group_id(&k5).as_deref(), Some(ops.as_str()), "K5 is in Ops");
+}
+
+/// No `focusGroup`: K5 joins no group (focus groups off, or none picked).
+#[test]
+fn k5_without_a_focus_group_joins_none() {
+    let _e = env(true, &["codex"]);
+    let _ops = focus_group("Ops");
+    let (k5, _, _) = make_k5();
+    assert_eq!(focus_group_id(&k5), None);
+}
+
+/// K5 hires the Chief of Staff in chat, with no sheet: it joins K5's own
+/// focus group unless K5 names another.
+#[test]
+fn the_chief_of_staff_joins_k5s_focus_group_by_default() {
+    let _e = env(true, &["codex"]);
+    let ops = focus_group("Ops");
+    let r = post(K5_PATH, json!({ "tool": "codex", "focusGroup": &ops }), &Actor::owner_token());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let k5 = json_of(&r)["workspaceId"].as_str().expect("id").to_string();
+    let before = workspaces();
+
+    let mut body = json!({ "name": "Max", "about": "Runs a small bakery", "tool": "codex", "focusGroup": "nope" });
+    let r = handle_chief_of_staff(body.to_string().as_bytes(), &k5_session(&k5));
+    assert_eq!((r.status, code(&r).as_str()), ("400 Bad Request", "unknown_focus_group"), "{}", r.body);
+    assert_eq!(workspaces(), before, "no workspace made");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(k2_core::orchestrator::live_chief_of_staff(&conn).expect("seat"), None, "nothing seated");
+    }
+
+    body.as_object_mut().expect("object").remove("focusGroup");
+    let r = handle_chief_of_staff(body.to_string().as_bytes(), &k5_session(&k5));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let out = json_of(&r);
+    let cos = out["workspaceId"].as_str().expect("id").to_string();
+    assert_eq!(out["focusGroupId"], json!(&ops));
+    assert_eq!(focus_group_id(&cos).as_deref(), Some(ops.as_str()), "with K5, in Ops");
+}
+
+#[test]
+fn the_chief_of_staff_honours_a_focus_group_k5_names() {
+    let _e = env(true, &["codex"]);
+    let ops = focus_group("Ops");
+    let home = focus_group("Home");
+    let r = post(K5_PATH, json!({ "tool": "codex", "focusGroup": &ops }), &Actor::owner_token());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let k5 = json_of(&r)["workspaceId"].as_str().expect("id").to_string();
+
+    // By name, in any case (the CLI's --focus-group <id|name>).
+    let body = json!({ "name": "Max", "about": "Runs a small bakery", "tool": "codex", "focusGroup": "home" });
+    let r = handle_chief_of_staff(body.to_string().as_bytes(), &k5_session(&k5));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let cos = json_of(&r)["workspaceId"].as_str().expect("id").to_string();
+    assert_eq!(focus_group_id(&cos).as_deref(), Some(home.as_str()), "in Home, as K5 asked");
+    assert_eq!(focus_group_id(&k5).as_deref(), Some(ops.as_str()), "K5 stays in Ops");
+}

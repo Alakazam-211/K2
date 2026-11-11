@@ -181,7 +181,7 @@ describe('edit rights follow the role, not the window mode', () => {
     expect((screen.getByLabelText('Project name') as HTMLInputElement).readOnly).toBe(false)
     expect((screen.getByRole('switch', { name: 'Show in Pinned' }) as HTMLButtonElement).disabled).toBe(false)
     // Make point of contact is in the agent's … menu.
-    fireEvent.click(screen.getByRole('button', { name: 'More actions for Scout' }))
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Ada' }))
     expect(screen.getByRole('menuitem', { name: /Make point of contact/ })).toBeTruthy()
     expect(screen.getByLabelText('Search agents to add')).toBeTruthy()
   })

@@ -513,21 +513,30 @@ mod tests {
     fn unary_calls_share_a_warm_connection_and_redial_once_it_drops() {
         use std::sync::atomic::Ordering;
         let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("rt");
+        // Each call is bounded and named: one that never answers fails here
+        // and says which, instead of hanging the run (it hung on a busy
+        // macOS node; on loopback a call takes milliseconds).
+        async fn step<T>(name: &str, fut: impl std::future::Future<Output = T>) -> T {
+            match tokio::time::timeout(Duration::from_secs(10), fut).await {
+                Ok(v) => v,
+                Err(_) => panic!("stalled for 10 s at: {name}"),
+            }
+        }
         rt.block_on(async {
             let (port, conns) = tiny_server(false).await;
             let g = EmuGrpc::new(port, "t");
             let ev = TouchEvent::default();
-            g.send_touch(&ev).await.expect("first");
-            g.clone().send_touch(&ev).await.expect("second, through a clone");
-            g.send_touch(&ev).await.expect("third");
+            step("warm: first", g.send_touch(&ev)).await.expect("first");
+            step("warm: second, through a clone", g.clone().send_touch(&ev)).await.expect("second, through a clone");
+            step("warm: third", g.send_touch(&ev)).await.expect("third");
             assert_eq!(conns.load(Ordering::SeqCst), 1, "one TCP connection for every unary call");
 
             let (port, conns) = tiny_server(true).await;
             let g = EmuGrpc::new(port, "t");
-            g.send_touch(&ev).await.expect("first");
+            step("drop: first", g.send_touch(&ev)).await.expect("first");
             tokio::time::sleep(Duration::from_millis(150)).await; // the client sees the close
-            g.send_touch(&ev).await.expect("re-dialled");
-            g.send_touch(&ev).await.expect("on the new connection");
+            step("drop: re-dial", g.send_touch(&ev)).await.expect("re-dialled");
+            step("drop: on the new connection", g.send_touch(&ev)).await.expect("on the new connection");
             assert_eq!(conns.load(Ordering::SeqCst), 2, "dialled once more, not per call");
         });
     }

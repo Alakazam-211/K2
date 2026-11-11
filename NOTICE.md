@@ -91,7 +91,7 @@ The Board Garden's whiteboard widget is **Board by Baden Ballard (MIT)**.
 
 | | |
 |--|--|
-| **What** | `crates/k2-core/src/zen/builtin_widgets/board-1/` (the `k2:board@1` built-in widget), ported from Board's own widget |
+| **What** | `crates/k2-core/src/zen/builtin_widgets/board-1/` (the `k2:board@1` built-in widget) and `crates/k2-core/src/zen/builtin_widgets/board-file-1/` (the Board tab for `.k5board` files), ported from Board's own widget; and Board code used by the Org Chart in `src/renderer/components/OrgChart/`: `org-camera.ts` and `OrgMinimap.tsx` (adapted from Board's camera and minimap) and `board-geom.ts` (which loads Board's `board-file-1/geom.js`) |
 | **Author** | Baden Ballard |
 | **License** | **MIT** (granted to K2 in writing by the author, 2026-11-01) |
 
@@ -358,6 +358,39 @@ never writes a file. Vendored beside the kit from its public cut, which has no
 | **Dependencies** | flate2 (MIT OR Apache-2.0, with miniz_oxide: MIT OR Zlib OR Apache-2.0), thiserror (MIT OR Apache-2.0), and the kit (above) |
 
 Update these sections on every kit bump.
+
+## Third-party: jmap-webmail, in the mail reader (MIT)
+
+The Mail tab's reader views (`sdk/mail-reader`, bundled into the app) are adapted from **jmap-webmail** by root-fr, by way of Alakazam Labs' adaptation of it. Which files, and what changed: `sdk/mail-reader/UPSTREAM.md`.
+
+| | |
+|--|--|
+| **What** | `sdk/mail-reader/src/` (types, thread grouping, the sanitizer config, the folder list, email list, thread and message views) |
+| **Upstream** | [jmap-webmail](https://github.com/root-fr/jmap-webmail) v1.7.3 |
+| **License** | **MIT**, text below (also in `sdk/mail-reader/NOTICE`) |
+
+> MIT License
+>
+> Copyright (c) 2025 Matthieu MALVACHE
+> Copyright (c) 2026 Alakazam Labs
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
 
 ## Third-party: Stalwart mail server (AGPL-3.0-only)
 

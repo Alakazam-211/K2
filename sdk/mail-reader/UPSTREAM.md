@@ -1,18 +1,16 @@
 # Where this package comes from
 
-- **Source repo:** `a private fork` (OCmail, the Office Craft agent's product), a fork of
-  `root-fr/jmap-webmail` v1.7.3 (MIT).
-- **Branch:** `tauri`
-- **Commit:** `private-fork-commit` (the commit where Office Craft declared its
-  own changes MIT; LICENSE carries both copyright lines).
-- **Not used:** `ocmail` `main` (pure upstream), and no AGPL webmail (Bulwark or any other) was read.
-- **Licence:** MIT; both copyright lines and the permission text are in `NOTICE`.
-- **Updates:** pulled by hand, file by file, the way OCmail pulls jmap-webmail. Ask Office Craft before
-  splitting pieces out of OCmail itself.
+- **Upstream:** `root-fr/jmap-webmail` v1.7.3 (MIT), https://github.com/root-fr/jmap-webmail.
+- **Our side:** Alakazam Labs' adaptation of it (the `tauri` line, whose changes are MIT). The
+  files below were ported from that adaptation (OCmail).
+- **Not used:** no AGPL webmail (Bulwark or any other) was read.
+- **Licence:** MIT. Both copyright lines and the permission text are in `NOTICE` (this package has
+  no separate LICENSE file).
+- **Updates:** pulled by hand, file by file.
 
 ## Files adapted
 
-| OCmail file (at the private fork commit) | Here | What was kept |
+| OCmail file | Here | What was kept |
 |---|---|---|
 | `lib/jmap/types.ts` | `src/types.ts` | `Email`, `EmailAddress`, `Attachment`, `Mailbox`, `ThreadGroup`, `AuthenticationResults` shapes, trimmed to what K2's daemon serves (no JMAP account ids, blob ids, keywords maps, rights, quotas, contacts or calendars). |
 | `lib/thread-utils.ts` | `src/thread-utils.ts` | `groupEmailsByThread`, `sortThreadGroups`, `getThreadParticipants`, `mergeThreadEmails` (account scoping dropped: K2 message ids are already unique per inbox). |

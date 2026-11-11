@@ -1,9 +1,8 @@
 @k2/mail-reader
 
-Parts of this package are adapted from OCmail (a private fork, branch
-`tauri`, commit private-fork-commit), itself a fork of
-jmap-webmail by root-fr (https://github.com/root-fr/jmap-webmail), forked at
-v1.7.3. Which files, and what changed, is listed in UPSTREAM.md.
+Parts of this package are adapted from jmap-webmail by root-fr
+(https://github.com/root-fr/jmap-webmail), v1.7.3, by way of Alakazam Labs'
+adaptation of it. Which files, and what changed, is listed in UPSTREAM.md.
 
 The adapted code is used under the MIT License below, which covers both the
 jmap-webmail code and Alakazam Labs' changes to it.

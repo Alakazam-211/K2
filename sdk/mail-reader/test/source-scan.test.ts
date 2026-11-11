@@ -75,15 +75,17 @@ describe('@k2/mail-reader source scan', () => {
     expect(outside).toEqual([])
   })
 
-  it('NOTICE keeps both copyright lines and the MIT permission text; UPSTREAM pins the commit', () => {
+  it('NOTICE keeps both copyright lines and the MIT permission text; UPSTREAM names the upstream', () => {
     const notice = readFileSync(join(PKG, 'NOTICE'), 'utf8')
     expect(notice).toContain('Copyright (c) 2025 Matthieu MALVACHE')
     expect(notice).toContain('Copyright (c) 2026 Alakazam Labs')
     expect(notice).toContain('Permission is hereby granted, free of charge, to any person obtaining a copy')
     expect(notice).toContain('THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND')
     const upstream = readFileSync(join(PKG, 'UPSTREAM.md'), 'utf8')
-    expect(upstream).toContain('private-fork-commit')
+    expect(upstream).toContain('root-fr/jmap-webmail')
+    expect(upstream).toContain('v1.7.3')
     expect(upstream).toContain('`tauri`')
+    expect(upstream).not.toMatch(/Alakazam-211\//)
     const pkg = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8')) as { license: string; name: string }
     expect(pkg).toMatchObject({ name: '@k2/mail-reader', license: 'MIT' })
   })

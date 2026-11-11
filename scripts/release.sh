@@ -268,7 +268,7 @@ k2u_env_guard
 # checkout's public keys and takes the Linux release commit from THIS
 # checkout's tag; a leftover override (a test shell, .env) would move either
 # somewhere else without a word.
-for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD; do
+for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do
     if [ -n "${!_k2_seam:-}" ]; then
         echo "ERROR: $_k2_seam is set (${!_k2_seam}). It is a test seam: a release checks signatures and the release tag against this checkout only. Unset it and run again." >&2
         exit 1

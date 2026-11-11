@@ -14,9 +14,10 @@
 #   sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence <version>
 #   sudo /usr/local/libexec/k2sign/k2sign-admin unpin-compute-node <name>
 #   sudo /usr/local/libexec/k2sign/k2sign-admin cancel-session <version> [--restore-last-version <x.y.z>]
-#        (a release run that stopped before building or signing anything: the
-#        session is kept aside, last_version goes back; refused once anything
-#        was signed under the version)
+#        (break-glass: the normal path is a Touch ID replacement, `k2sign
+#        challenge --replace`, which release.sh asks for itself. The session is
+#        kept aside, last_version goes back; refused once anything was signed
+#        under the version)
 #
 # Same fixed environment as k2sign; k2sign.py refuses its test mode as root.
 set -u

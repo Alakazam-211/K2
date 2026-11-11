@@ -175,19 +175,30 @@ then proves Touch ID, the password, and (hands off) that an SSH-started request 
   `sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>…`
   (admin password; logged `APPROVED-BY-ADMIN`).
 - A run that stopped before building or signing anything, then a fix
-  commit (0.46.11): the re-run wants another base commit and Step 1.55
-  refuses it, printing
+  commit (0.46.11): no sudo. The re-run wants another base commit (or
+  asset list), and when `k2sign status` says the version is `unused`
+  (nothing signed under it: audit log, asset registry and session count;
+  no compute evidence), Step 1.55 asks for a **replacement**: one Touch ID
+  or password approval like any other, the sheet saying "RE-approve K2
+  <v> for new code <base7> (the earlier approval for <oldbase7> was never
+  used)". The signer checks again at approve time, keeps the old session
+  as `sessions/<version>.json.replaced-<UTC time>-<nonce8>`, carries
+  `prev_last_version` over, leaves `state/last_version`, and logs
+  `SESSION-REPLACED` with both bases. With no session file but
+  `last_version` already this version and nothing signed (a session moved
+  aside by hand), the same replacement works. Anything signed: refused, as
+  before. The approval app must list `replace-session` (`--capabilities`;
+  rebuild with `scripts/k2sign/approve/build.sh`, the key is kept).
+- Break-glass (admin password), only when the Touch ID path can't be used:
   `sudo /usr/local/libexec/k2sign/k2sign-admin cancel-session <version>`.
-  It needs the admin password (a person's call). The signer refuses if
-  anything was signed under the version (audit log, asset registry,
-  session count) or compute evidence is registered. Otherwise it keeps the
-  session file as `sessions/<version>.json.cancelled-<UTC time>` and puts
+  Same refusals. It keeps the session file as
+  `sessions/<version>.json.cancelled-<UTC time>` and puts
   `state/last_version` back to what it was before that version's first
   approval (logged `SESSION-CANCELLED-BY-ADMIN` and
-  `LAST-VERSION-RESTORED-BY-ADMIN`). Then re-run `release.sh`. A session
-  approved before the signer recorded that earlier version (or one moved
-  aside by hand) needs `--restore-last-version <x.y.z>`, the last version
-  released, named by the admin and lower than `<version>`.
+  `LAST-VERSION-RESTORED-BY-ADMIN`). A session approved before the signer
+  recorded that earlier version (or one moved aside by hand) needs
+  `--restore-last-version <x.y.z>`, the last version released, named by
+  the admin and lower than `<version>`.
 - Full: `K2_SIGNER=keychain` after the keys are exported back to
   `~/.k2-updater` (that export verb, `export-to-keychain`, is slice S4, not
   built yet; until then the keys can only be copied out by root by hand).

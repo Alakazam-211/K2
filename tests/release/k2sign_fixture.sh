@@ -7,7 +7,8 @@
 # fail the test; nothing is skipped.
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
-unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD K2_SIGN_APPROVE_CMD K2SIGN_TEST_NOW \
+unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD K2_SIGN_APPROVE_CMD K2_SIGN_APPROVE_APP \
+    K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SIGN_TEST_NOW \
     K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE K2SIGN_TEST_ROOT K2_SIGNER K2SIGN_TEST_GITHUB_API \
     K2SIGN_TEST_ANCHOR K2SIGN_TEST_NOTARIZED || true
 
@@ -16,6 +17,10 @@ npass=0 nfail=0
 pass() { echo "  ok: $1"; npass=$((npass + 1)); }
 fail() { echo "  FAIL: $1" >&2; [ -z "${2:-}" ] || echo "        $2" >&2; nfail=$((nfail + 1)); }
 finish() {
+    # The open stub must never have been reached (no test opens the app).
+    if [ -s "$tmp/open.calls" ]; then
+        fail "a test reached the approval app's open (stubbed): $(head -3 "$tmp/open.calls")"
+    fi
     echo
     echo "$(basename "$0"): $npass passed, $nfail failed"
     [ "$nfail" -eq 0 ]
@@ -109,6 +114,26 @@ set_gh_token() {
 install_signer || { cat "$tmp/install.out" >&2; echo "FAIL: test install" >&2; exit 1; }
 
 export K2SIGN_TEST_ROOT="$TROOT"
+# No test ever shows UI, a notification, or asks for Touch ID or a password:
+# no osascript, the approval helper is an openssl stand-in with the test
+# approver key (made in ready), and /usr/bin/open is a stub that records the
+# call and fails (finish() fails the test if it was reached).
+export K2SA_NOTIFY=0
+cat > "$tmp/approve-stub.sh" <<SH
+#!/bin/sh
+# K2 Release Approve stand-in (tests): signs the challenge with the test approver key.
+c=""; o=""
+while [ \$# -gt 0 ]; do case "\$1" in --challenge) c="\$2"; shift ;; --out) o="\$2"; shift ;; esac; shift; done
+exec /usr/bin/openssl dgst -sha256 -sign "$tmp/keys/approver.key" -out "\$o" "\$c"
+SH
+cat > "$tmp/open-stub.sh" <<SH
+#!/bin/sh
+echo "open \$*" >> "$tmp/open.calls"
+echo "open stub: a test tried to open the approval app" >&2
+exit 1
+SH
+chmod +x "$tmp/approve-stub.sh" "$tmp/open-stub.sh"
+export K2SA_HELPER="$tmp/approve-stub.sh" K2SA_OPEN="$tmp/open-stub.sh"
 K="$TROOT/usr/local/libexec/k2sign/k2sign"
 ADM="$TROOT/usr/local/libexec/k2sign/k2sign-admin"
 AUDIT="$TROOT/var/k2sign/audit"

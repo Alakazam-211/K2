@@ -57,6 +57,9 @@ say() { printf '[win-after-release] %s\n' "$*" >&2; }
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: $0 <version> [setup.exe]"
 [ "$(uname -s)" = Darwin ] || die "run this on z3mbpZ (macOS), where the signer lives"
 [ -z "${K2_SIGN_APPROVE_CMD:-}" ] || die "K2_SIGN_APPROVE_CMD is for tests only"
+for _v in K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do
+    [ -z "${!_v:-}" ] || die "$_v is for tests only"
+done
 [ -z "${K2SIGN_TEST_ROOT:-}" ] || die "K2SIGN_TEST_ROOT is for tests only"
 [ -z "${K2_SIGNER:-}" ] || [ "$K2_SIGNER" = k2sign ] || die "K2_SIGNER=$K2_SIGNER: this script signs through k2sign only"
 
@@ -120,7 +123,7 @@ else
     nonce="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["nonce"])' "$cf")"
     printf '\n\033[1;33m══ Approval needed (Touch ID or your login password): RE-approve K2 %s (base %s) for the Windows setup ONLY (no independent check) ══\033[0m\n' \
         "$VERSION" "${BASE:0:7}" >&2
-    /usr/bin/osascript -e "display notification \"Touch ID or password: approve the K2 $VERSION Windows setup\" with title \"K2 release\"" >/dev/null 2>&1 || true
+    k2sa_notify "Touch ID or password: approve the K2 $VERSION Windows setup"
     k2sa_run_helper "$cf" "$of" "$VERSION" || die "no approval; nothing was signed or uploaded"
     k2u_k2sign approve "$nonce" < "$of" >/dev/null || die "the signer did not accept the approval (above); nothing was signed"
     rm -rf "$work"; trap - EXIT

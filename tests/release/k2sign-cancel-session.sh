@@ -45,10 +45,9 @@ while [ \$# -gt 0 ]; do case "\$1" in --challenge) c="\$2"; shift ;; --out) o="\
 /usr/bin/openssl dgst -sha256 -sign "$tmp/keys/approver.key" -out "\$o" "\$c"
 SH
 chmod +x "$helper"
-export K2_SIGN_APPROVE_CMD="$helper"
-check "sign-approve: the mismatch error prints the cancel command" 1 "$CMD_LINE 0.46.11" sa k2sa_open_session 0.46.11 "$B2" "${ASSETS[@]}"
-grep -qF "./scripts/release.sh 0.46.11" "$tmp/out" && grep -qF "stopped before it built or signed anything" "$tmp/out" \
-    && pass "…with the re-run line and when to use it" || fail "mismatch text" "$(cat "$tmp/out")"
+export K2SA_HELPER="$helper"
+# (The normal path replaces it with one Touch ID: k2sign-replace-session.sh.
+# This file covers the break-glass admin verb.)
 
 echo "== cancel-session on the unused session =="
 check "cancel-session 0.46.11" 0 "approval session cancelled" "$ADM" cancel-session 0.46.11
@@ -83,8 +82,8 @@ cmp -s "$SESS/0.46.11.json" "$tmp/sess-before.json" && [ "$(last_v)" = 0.46.11 ]
     && [ "$(n_lines SESSION-CANCELLED "$AUDIT/0.46.11/signatures.tsv")" = "$n_cancel" ] \
     && pass "…and changed nothing (session, last_version, no audit line)" || fail "refusal changed state"
 check "…the explicit restore flag doesn't get past it" 3 "has signatures" "$ADM" cancel-session 0.46.11 --restore-last-version 0.46.10
-check "sign-approve: a signed session's mismatch says it can't be cancelled" 1 "so it can't be cancelled" sa k2sa_open_session 0.46.11 "$B1" "${ASSETS[@]}"
-grep -qF "$CMD_LINE" "$tmp/out" && fail "no cancel command for a signed session" "$(cat "$tmp/out")" || pass "…and prints no cancel command"
+check "sign-approve: a signed session's mismatch says it is never replaced" 1 "so it is never replaced" sa k2sa_open_session 0.46.11 "$B1" "${ASSETS[@]}"
+grep -qF "$CMD_LINE" "$tmp/out" && fail "no cancel command for a signed session" "$(cat "$tmp/out")" || pass "…and prints no break-glass command"
 # A re-approval starts the session's count at 0; the audit log still knows.
 K2SIGN_TEST_NOW=$((NOW + 13 * 3600)) expect 0 "RE-APPROVE" sa k2sa_open_session 0.46.11 "$B2" "${ASSETS[@]}" > "$tmp/r" \
     && pass "an expired session re-approved (count back to 0)" || fail "reapprove" "$(cat "$tmp/r")"

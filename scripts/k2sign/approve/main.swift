@@ -157,11 +157,26 @@ func challengeReason(_ data: Data) -> String? {
     }
     let windows = (obj["windows"] as? Bool) ?? false
     let re = (obj["reapproval"] as? Bool) ?? false
+    // A replacement (k2sign challenge --replace): this version's earlier
+    // approval signed nothing and new code takes its place.
+    var lead = re ? "RE-APPROVE: " : ""
+    if (obj["replacement"] as? Bool) ?? false {
+        guard kind == "k2-release-approval", !re else { return nil }
+        let new7 = String(base.prefix(7))
+        if let old = obj["replaces_base"] as? String {
+            guard old.count == 40, old.allSatisfy({ $0.isASCII && $0.isHexDigit && !$0.isUppercase }) else { return nil }
+            lead = "RE-approve K2 \(version) for new code \(new7) (the earlier approval for \(old.prefix(7)) was never used): "
+        } else if obj["replaces_base"] == nil || obj["replaces_base"] is NSNull {
+            lead = "RE-approve K2 \(version) for new code \(new7) (an earlier approval of \(version) was never used): "
+        } else {
+            return nil
+        }
+    }
     let until = expires.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "Z", with: " UTC")
     // The whole base commit and every file name (security review M2): a
     // 7-character prefix and a count are too little to check against.
     let names = assets.map { a in a.filter { $0.isASCII && !$0.isNewline && $0 != "\u{1b}" } }.joined(separator: ", ")
-    var reason = "\(re ? "RE-APPROVE: " : "")approve \(what) \(version) at base commit \(base): sign \(names) until \(until)"
+    var reason = "\(lead)approve \(what) \(version) at base commit \(base): sign \(names) until \(until)"
     if windows { reason += ", including the Windows setup (no independent check)" }
     return reason
 }
@@ -220,8 +235,9 @@ func softSelftest(dir: String) {
     }
 }
 
-// Bump when a release depends on a new behaviour (Step 0.46 checks "timeout").
-let capabilities = "k2-release-approve 2 timeout replace key-dir describe"
+// Bump when a release depends on a new behaviour (release.sh Step 1.55 checks
+// "timeout"; a replacement approval also needs "replace-session").
+let capabilities = "k2-release-approve 2 timeout replace key-dir describe replace-session"
 
 let args = CommandLine.arguments
 if args.contains("--capabilities") {

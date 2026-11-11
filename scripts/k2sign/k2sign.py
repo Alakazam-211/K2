@@ -15,7 +15,9 @@ root-owned binaries by absolute path: the pinned minisign next to it,
 
 Signer verbs (the whole surface; anything else exits 2):
   preflight <version>
-  challenge <version> <base-commit> <asset>... [--windows] [--reapprove]   -> challenge JSON
+  challenge <version> <base-commit> <asset>... [--windows] [--reapprove | --replace]   -> challenge JSON
+              (--replace: a new base or asset list for a version whose earlier approval
+               signed nothing; still one Touch ID, the old session is kept aside)
   approve <nonce>                       (DER approval signature on stdin)  -> session id
   sign <u1|u2> <asset> <version> raw|b64   (file bytes on stdin)           -> signature
   status <version>                                                         -> JSON
@@ -1799,19 +1801,21 @@ def verb_preflight(ctx, args):
 
 
 def parse_approval_args(args, what):
-    windows = reapprove = False
+    windows = reapprove = replace = False
     rest = []
     for a in args:
         if a == "--windows":
             windows = True
         elif a == "--reapprove":
             reapprove = True
+        elif a == "--replace":
+            replace = True
         elif a.startswith("--"):
             raise Usage("%s: unknown flag %s" % (what, a))
         else:
             rest.append(a)
     if len(rest) < 3:
-        raise Usage("%s <version> <base-commit> <asset>... [--windows] [--reapprove]" % what)
+        raise Usage("%s <version> <base-commit> <asset>... [--windows] [--reapprove | --replace]" % what)
     version = check_version(rest[0])
     base = rest[1]
     if not BASE_RE.match(base):
@@ -1822,11 +1826,17 @@ def parse_approval_args(args, what):
         if a in assets:
             raise Usage("asset %s listed twice" % a)
         assets.append(a)
-    return version, base, sorted(assets), windows, reapprove
+    if reapprove and replace:
+        raise Usage("%s: --reapprove and --replace don't go together" % what)
+    return version, base, sorted(assets), windows, reapprove, replace
 
 
-def check_new_session(ctx, pol, version, base, assets, windows, reapprove):
-    """The rules a new approval must pass (challenge, approve, admin approve)."""
+def check_new_session(ctx, pol, version, base, assets, windows, reapprove, replace=False):
+    """The rules a new approval must pass (challenge, approve, admin approve).
+    replace: a Touch ID approval that takes the place of this version's
+    earlier one, which signed nothing (a run that stopped at a gate, then a
+    fix commit). The earlier session may be gone (moved aside by hand) as
+    long as state/last_version is this version."""
     win = windows_assets(pol, version)
     signable = allowed_assets(pol, "u1", version) | allowed_assets(pol, "u2", version)
     for a in assets:
@@ -1839,9 +1849,24 @@ def check_new_session(ctx, pol, version, base, assets, windows, reapprove):
     if windows and not any(a in win for a in assets):
         raise Refused("--windows without a Windows setup in the asset list")
     existing = load_session(ctx, version)
+    if replace:
+        last = last_version(ctx)
+        if existing is None and last != version:
+            raise Refused("%s has no earlier approval to replace (last_version %s)" % (version, last))
+        if last is not None and vtuple(version) < vtuple(last):
+            raise Refused("%s is older than %s: its approval is never replaced" % (version, last))
+        if (existing is not None and existing["base_commit"] == base and sorted(existing["assets"]) == assets
+                and bool(existing["windows"]) == windows):
+            raise Refused("%s's session already has this base commit and asset list: nothing to replace" % version)
+        used = unused_problems(ctx, version, existing)
+        if used:
+            raise Refused("%s's earlier approval was used (%s): it is never replaced; investigate (the release "
+                          "may be out) and release a new version" % (version, "; ".join(used[:6])))
+        return
     if existing is not None:
         if not reapprove:
-            raise Refused("%s already has an approved session (approved %s, base %s); re-approving needs --reapprove"
+            raise Refused("%s already has an approved session (approved %s, base %s); re-approving needs --reapprove "
+                          "(or --replace for a new base when it signed nothing)"
                           % (version, hhmm(existing["approved"]), existing["base_commit"][:12]))
         if existing["base_commit"] != base:
             raise Refused("base commit differs from %s's approved session (%s, now %s)"
@@ -1854,7 +1879,7 @@ def check_new_session(ctx, pol, version, base, assets, windows, reapprove):
 
 
 def verb_challenge(ctx, args):
-    version, base, assets, windows, reapprove = parse_approval_args(args, "challenge")
+    version, base, assets, windows, reapprove, replace = parse_approval_args(args, "challenge")
     check_pins(ctx)
     pol = load_policy(ctx)
     if pol["approval"] != "on":
@@ -1863,7 +1888,7 @@ def verb_challenge(ctx, args):
         raise Refused("no approver key enrolled (k2sign-admin set-approver)")
     with Locked(ctx):
         state_dirs(ctx)
-        check_new_session(ctx, pol, version, base, assets, windows, reapprove)
+        check_new_session(ctx, pol, version, base, assets, windows, reapprove, replace)
         now = ctx.now()
         nonce = secrets.token_hex(16)
         challenge = {
@@ -1873,6 +1898,12 @@ def verb_challenge(ctx, args):
             "expires": iso(now + int(pol["session_hours"]) * 3600),
             "nonce": nonce, "issued": iso(now),
         }
+        if replace:
+            # Signed with the rest: the sheet shows it, and approve checks the
+            # session it replaces is still this one.
+            old = load_session(ctx, version)
+            challenge["replacement"] = True
+            challenge["replaces_base"] = old["base_commit"] if old is not None else None
         text = json.dumps(challenge, sort_keys=True, separators=(",", ":"))
         rec = {"challenge": text, "issued": now, "used": False}
         write_file(ctx, os.path.join(ctx.state, "challenges", nonce + ".json"), json.dumps(rec))
@@ -1891,6 +1922,7 @@ def write_session(ctx, pol, challenge, by):
     # "opened": this version's FIRST approval. A re-approval keeps it, so
     # compute receipts from the same release run stay inside the window.
     prev = load_session(ctx, version)
+    replacing = bool(challenge.get("replacement"))
     again = prev is not None and challenge["reapproval"]
     opened = int(prev.get("opened", prev["approved"])) if again else now
     last = last_version(ctx)
@@ -1905,11 +1937,37 @@ def write_session(ctx, pol, challenge, by):
     # approval (null: there was none), so cancel-session can put it back. A
     # re-approval carries it over; a session written before this field
     # existed has none, and cancel-session then needs the admin to name it.
-    if not again:
+    aside = None
+    if replacing:
+        # The replaced session (or none: moved aside by hand) keeps its
+        # record; last_version already is this version and stays.
+        if prev is not None and "prev_last_version" in prev:
+            sess["prev_last_version"] = prev["prev_last_version"]
+        if prev is not None:
+            # Kept, not overwritten: a second name for the old file, then the
+            # new one renamed over the first (at every moment the session is
+            # the old one or the new one).
+            # The old session's nonce keeps two replacements in one second apart.
+            aside = "%s.json.replaced-%s-%s" % (version, time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now)),
+                                                str(prev.get("nonce", ""))[:8])
+            link_var(ctx, session_path(ctx, version), aside)
+    elif not again:
         sess["prev_last_version"] = last
     elif "prev_last_version" in prev:
         sess["prev_last_version"] = prev["prev_last_version"]
-    write_file(ctx, session_path(ctx, version), json.dumps(sess, sort_keys=True))
+    try:
+        write_file(ctx, session_path(ctx, version), json.dumps(sess, sort_keys=True))
+    except BaseException:
+        if aside is not None:
+            unlink_var(ctx, os.path.join(ctx.state, "sessions", aside))  # the old session stays as it was
+        raise
+    if replacing:
+        audit(ctx, version, "SESSION-REPLACED", detail="old base %s; new base %s; %s" % (
+            prev["base_commit"] if prev is not None else "unknown",
+            challenge["base_commit"],
+            "old session (%s; approved %s; no signatures) kept as sessions/%s" % (
+                " ".join(prev["assets"]), iso(int(prev["approved"])), aside)
+            if prev is not None else "no session file (moved aside by hand); no signatures"))
     if last is None or vtuple(version) > vtuple(last):
         write_file(ctx, os.path.join(ctx.state, "last_version"), version + "\n")
     audit(ctx, version, "APPROVED-BY-ADMIN" if by == "admin" else "APPROVED", detail="base %s; %s; expires %s%s" % (
@@ -1949,8 +2007,14 @@ def verb_approve(ctx, args):
         rec["used"] = True
         write_file(ctx, cpath, json.dumps(rec))
         # The world may have moved since the challenge (another session).
+        replace = bool(challenge.get("replacement"))
         check_new_session(ctx, pol, challenge["version"], challenge["base_commit"], challenge["assets"],
-                          challenge["windows"], challenge["reapproval"])
+                          challenge["windows"], challenge["reapproval"], replace)
+        if replace:
+            cur = load_session(ctx, challenge["version"])
+            if (cur["base_commit"] if cur is not None else None) != challenge.get("replaces_base"):
+                raise Refused("%s's session changed since this replacement challenge was issued: run again"
+                              % challenge["version"])
         sess = write_session(ctx, pol, challenge, "touchid")
     print(sess["nonce"])
     say("signing session for %s approved until %s" % (sess["version"], hhmm(sess["expires"])))
@@ -1984,6 +2048,9 @@ def verb_status(ctx, args):
         }
     apath = os.path.join(ctx.state, "assets", version + ".tsv")
     out["signed"] = open(apath).read().split("\n")[:-1] if os.path.exists(apath) else []
+    # Nothing signed under this version and no compute evidence: a new base
+    # or asset list may replace its approval (challenge --replace).
+    out["unused"] = not unused_problems(ctx, version, sess)
     cpath = compute_state_path(ctx, version)
     out["compute"] = read_json(cpath)["summary"] if os.path.exists(cpath) else None
     print(json.dumps(out, sort_keys=True))
@@ -2092,7 +2159,10 @@ def admin_set_approver(ctx, args):
 
 
 def admin_approve(ctx, args):
-    version, base, assets, windows, reapprove = parse_approval_args(args, "approve")
+    version, base, assets, windows, reapprove, replace = parse_approval_args(args, "approve")
+    if replace:
+        raise Usage("approve: --replace is a Touch ID approval only (k2sign challenge); break-glass: "
+                    "cancel-session, then approve")
     check_pins(ctx)
     pol = load_policy(ctx)
     with Locked(ctx):
@@ -2413,6 +2483,36 @@ def rename_var(ctx, path, new_name):
         os.close(dfd)
 
 
+def link_var(ctx, path, new_name):
+    """A second name for a plain file under /var/k2sign, in its folder
+    (linkat, never following a symlink); never replaces anything."""
+    folder, name = var_split(ctx, path)
+    if "/" in new_name or new_name in (".", ".."):
+        raise Refused("internal: bad new name %r" % new_name)
+    if read_var(ctx, path) is None:
+        raise Refused("%s is missing" % path)
+    dfd = var_dirfd(ctx, folder, create=False)
+    try:
+        try:
+            os.link(name, new_name, src_dir_fd=dfd, dst_dir_fd=dfd, follow_symlinks=False)
+        except FileExistsError:
+            raise Refused("%s/%s already exists: refused" % (os.path.dirname(path), new_name))
+    finally:
+        os.close(dfd)
+
+
+def unused_problems(ctx, version, sess):
+    """Why <version>'s approval counts as used (never replaced): release
+    signatures (audit log, asset registry, the session's count) or
+    registered compute evidence. Empty: nothing."""
+    found = release_signatures(ctx, version)
+    if sess is not None and (int(sess.get("count", 0)) != 0 or sess.get("signed")):
+        found.append("session: %s signature(s)" % sess.get("count"))
+    if read_var(ctx, compute_state_path(ctx, version)) is not None:
+        found.append("K2 Compute evidence registered")
+    return found
+
+
 def release_signatures(ctx, version):
     """Every signature of a release file under <version>, from the audit log
     and the one-sha-per-asset registry. The preflight self-test is not one
@@ -2435,9 +2535,11 @@ def release_signatures(ctx, version):
 
 
 def admin_cancel_session(ctx, args):
-    """Cancel a version's approval session that signed NOTHING: a release run
-    that stopped before any build (a failed gate, 0.46.11) and must re-run
-    on another base commit. The session file is kept, moved aside to
+    """Break-glass (the normal path is a Touch ID replacement: challenge
+    --replace, which release.sh asks for itself). Cancel a version's approval
+    session that signed NOTHING: a release run that stopped before any build
+    (a failed gate, 0.46.11) and must re-run on another base commit, when
+    the Touch ID path can't be used. The session file is kept, moved aside to
     sessions/<version>.json.cancelled-<UTC time>, and state/last_version
     goes back to what it was before this version's first approval, so a
     fresh challenge for the same version works. Both are audited.

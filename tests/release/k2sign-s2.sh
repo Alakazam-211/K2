@@ -232,15 +232,19 @@ echo "\$c" >> "$tmp/helper.calls"
 /usr/bin/openssl dgst -sha256 -sign "$tmp/keys/approver.key" -out "\$o" "\$c"
 SH
 chmod +x "$helper"
-export K2_SIGN_APPROVE_CMD="$helper"
+export K2SA_HELPER="$helper"
 check "a new release: one approval" 0 "signing session" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}"
-grep -q 'open -W -n -a "$app" --args --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
-    && grep -q '"$K2_SIGN_APPROVE_CMD" --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
+grep -q '"$open_cmd" -W -n -a "$app" --args --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
+    && grep -q '"$helper" --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
     && pass "Step 1.55 gives the app the watchdog's limit as --timeout (the sheet closes when the watchdog fires)" || fail "helper --timeout wiring"
 [ "$(wc -l < "$tmp/helper.calls" | tr -d ' ')" = 1 ] && pass "the helper ran once" || fail "helper calls"
 check "a resumed run reuses the valid session (no prompt)" 0 "using 0.46.13's approved signing session" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}"
 [ "$(wc -l < "$tmp/helper.calls" | tr -d ' ')" = 1 ] && pass "no second prompt" || fail "helper called again"
-check "a session with other parameters: stop loudly" 1 "already has an approved session with different parameters" sa k2sa_open_session 0.46.13 "$B2" "${ASSETS[@]}"
+# A session that signed nothing is replaced instead (k2sign-replace-session.sh);
+# once it signed something, other parameters stop loudly.
+printf 'signed under 0.46.13\n' > "$tmp/s13"
+K2SIGN_TEST_EVIDENCE=accept "$K" sign u2 k2-daemon-linux-x86_64 0.46.13 raw < "$tmp/s13" > /dev/null 2>"$tmp/e" || fail "sign under 0.46.13" "$(cat "$tmp/e")"
+check "a session (that signed) with other parameters: stop loudly" 1 "already has an approved session with different parameters" sa k2sa_open_session 0.46.13 "$B2" "${ASSETS[@]}"
 check "…and with another asset list" 1 "Investigate before re-approving" sa k2sa_open_session 0.46.13 "$B1" K2.app.tar.gz
 K2SIGN_TEST_NOW=$((NOW + 13 * 3600)) expect 0 "RE-APPROVE" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}" > "$tmp/r" \
     && pass "an expired session asks to RE-APPROVE (same base)" || fail "reapprove" "$(cat "$tmp/r")"
@@ -251,7 +255,7 @@ o=""; while [ \$# -gt 0 ]; do [ "\$1" = --out ] && o="\$2"; shift; done
 echo "Authentication canceled." > "\$o.err"
 SH
 chmod +x "$tmp/cancel.sh"
-K2_SIGN_APPROVE_CMD="$tmp/cancel.sh" expect 1 "No signing approval (Authentication canceled.) — nothing was built. Re-run: ./scripts/release.sh 0.46.14" \
+K2SA_HELPER="$tmp/cancel.sh" expect 1 "No signing approval (Authentication canceled.) — nothing was built. Re-run: ./scripts/release.sh 0.46.14" \
     sa k2sa_open_session 0.46.14 "$B1" "${ASSETS[@]}" > "$tmp/r" && pass "a cancelled Touch ID: the reason and the re-run line" || fail "cancel" "$(cat "$tmp/r")"
 cat > "$tmp/wrongkey.sh" <<SH
 #!/bin/sh
@@ -260,13 +264,13 @@ while [ \$# -gt 0 ]; do case "\$1" in --challenge) c="\$2"; shift ;; --out) o="\
 /usr/bin/openssl dgst -sha256 -sign "$tmp/keys/other.key" -out "\$o" "\$c"
 SH
 chmod +x "$tmp/wrongkey.sh"
-K2_SIGN_APPROVE_CMD="$tmp/wrongkey.sh" expect 1 "the signer did not accept the approval" sa k2sa_open_session 0.46.15 "$B1" "${ASSETS[@]}" > "$tmp/r" \
+K2SA_HELPER="$tmp/wrongkey.sh" expect 1 "the signer did not accept the approval" sa k2sa_open_session 0.46.15 "$B1" "${ASSETS[@]}" > "$tmp/r" \
     && pass "a helper that signs with another key: refused by the signer" || fail "wrong key helper" "$(cat "$tmp/r")"
 
 echo "== S2-5: the watchdog (helper = sleep 99999, 1 minute) =="
 printf '#!/bin/sh\nexec sleep 99999\n' > "$tmp/sleep.sh"; chmod +x "$tmp/sleep.sh"
 t0="$(date +%s)"
-K2_SIGN_APPROVE_CMD="$tmp/sleep.sh" K2_SIGN_APPROVE_TIMEOUT_MIN=1 expect 1 \
+K2SA_HELPER="$tmp/sleep.sh" K2_SIGN_APPROVE_TIMEOUT_MIN=1 expect 1 \
     "No signing approval (timed out after 1 min) — nothing was built. Re-run: ./scripts/release.sh 0.46.16" \
     sa k2sa_open_session 0.46.16 "$B1" "${ASSETS[@]}" > "$tmp/r" && rc=0 || rc=1
 t1="$(date +%s)"
@@ -275,12 +279,12 @@ pgrep -f "$tmp/sleep.sh" >/dev/null && fail "the helper still runs after the wat
 # An approval app built before --timeout never reaches a release: Step 1.55 refuses it before opening it.
 old="$tmp/Old Approve.app/Contents/MacOS"; mkdir -p "$old"
 printf '#!/bin/sh\necho "K2 Release Approve: usage: --enrol | --challenge <file> --out <file>" >&2\nexit 1\n' > "$old/K2 Release Approve"; chmod +x "$old/K2 Release Approve"
-env -u K2_SIGN_APPROVE_CMD K2_SIGN_APPROVE_APP="$tmp/Old Approve.app" bash -c 'source "$1"; source "$2"; shift 2; "$@"' _ \
+env -u K2SA_HELPER -u K2_SIGN_APPROVE_CMD K2_SIGN_APPROVE_APP="$tmp/Old Approve.app" bash -c 'source "$1"; source "$2"; shift 2; "$@"' _ \
     "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" k2sa_open_session 0.46.17 "$B1" "${ASSETS[@]}" > "$tmp/r" 2>&1 && rc=0 || rc=$?
 [ "$rc" = 1 ] && grep -q "is too old (no --timeout)" "$tmp/r" && grep -q "bash scripts/k2sign/approve/build.sh" "$tmp/r" \
     && pass "Step 1.55 refuses an approval app without --timeout (and says how to rebuild)" || fail "old app" "rc=$rc $(cat "$tmp/r")"
 printf '#!/bin/sh\n[ "$1" = --capabilities ] && echo "k2-release-approve 2 timeout replace key-dir" && exit 0\nexit 7\n' > "$old/K2 Release Approve"
-env -u K2_SIGN_APPROVE_CMD bash -c 'source "$1"; source "$2"; shift 2; k2sa_app_current "$@"' _ \
+env -u K2SA_HELPER -u K2_SIGN_APPROVE_CMD bash -c 'source "$1"; source "$2"; shift 2; k2sa_app_current "$@"' _ \
     "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$tmp/Old Approve.app" \
     && pass "a build that lists timeout passes the check" || fail "current app check"
 # release.sh: the approval (Step 1.55) comes after every pre-flight gate and
@@ -324,7 +328,7 @@ closes = [m.start() for m in re.finditer(r'^fi # SKIP_BUILD\b', s, re.M)]
 assert len(opens) == len(closes) == 2, (opens, closes)
 depth_ok = all(not (o < approve < c) for o, c in zip(opens, closes))
 assert depth_ok and opens[0] < closes[0] < approve < opens[1] < closes[1], (opens, closes, approve)
-assert re.search(r'for _k2_seam in [^;]*K2SIGN_TEST_ROOT[^;]*K2_SIGN_APPROVE_CMD', s)
+assert re.search(r'for _k2_seam in [^;]*K2SIGN_TEST_ROOT[^;]*K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do', s)
 assert 'Step 0.46' not in s, "a stale Step 0.46 label"
 PY
 

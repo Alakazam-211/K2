@@ -136,7 +136,7 @@ function parseLastChange(v: unknown, what: string): DocCoreLastChange | null {
 /** `GET /cli/docs/cores`'s body. Throws on any field it can't read. */
 export function parseDocCores(body: unknown): DocCores {
   const o = obj(body, 'the reply')
-  if (!Array.isArray(o.cores)) throw new Error('the reply has no list of cores')
+  if (!Array.isArray(o.cores)) throw new Error("the server's answer was missing the list of file kinds")
   return {
     canChange: bool(o, 'canChange', 'the reply'),
     boardFilePreview: o.boardFilePreview === undefined || o.boardFilePreview === null ? null : bool(o, 'boardFilePreview', 'the reply'),
@@ -195,15 +195,49 @@ export function openNowLine(open: DocCoreOpen): string {
   )
 }
 
-/** A core in a sentence: "the Markdown core", or "the \"Any other file\" core"
- *  for a name that doesn't end in "core". */
-export function coreInSentence(core: Pick<DocCore, 'name'>): string {
-  return /\bcore$/i.test(core.name) ? `the ${core.name}` : `the "${core.name}" core`
+/** A core in plain words, renderer-side, for the cores this client knows:
+ *  the daemon's names ("Markdown core") and its Board text name internal
+ *  parts, so Settings says what kind of file it is. A core this client
+ *  doesn't know keeps the daemon's own words. `sentence` is the name inside
+ *  a sentence ("text and code files"). */
+export interface PlainCore {
+  name: string
+  description: string
+  sentence: string
 }
 
-/** The turn-off dialog's title: "Turn off the Markdown core?" */
-export function turnOffTitle(core: Pick<DocCore, 'name'>): string {
-  return `Turn off ${coreInSentence(core)}?`
+const PLAIN_CORES: Record<string, PlainCore> = {
+  markdown: {
+    name: 'Markdown files',
+    description: '.md and .markdown files open beside the workspace’s agent, with live editing, presence and history.',
+    sentence: 'Markdown files',
+  },
+  text: {
+    name: 'Text and code files',
+    description: 'Code, config, plain text, logs, HTML, XML, SVG and diagram sources, and CSV or TSV files shown as text.',
+    sentence: 'text and code files',
+  },
+  'any-file': {
+    name: 'Any other file',
+    description:
+      'PSD, CAD, 3D and .blend files, images, PDFs, office files and the rest. They open the usual way, with a panel beside them: who’s here, a lock, versions and restore, conflict copies and approvals.',
+    sentence: 'any other file',
+  },
+  board: {
+    name: 'Boards',
+    description:
+      'A whiteboard Garden for you and your agents, single-person for now. When this is off, boards are hidden and agents can’t open them. Your boards are kept.',
+    sentence: 'boards',
+  },
+}
+
+export function plainCore(core: Pick<DocCore, 'id' | 'name' | 'description'>): PlainCore {
+  return PLAIN_CORES[core.id] ?? { name: core.name, description: core.description, sentence: core.name }
+}
+
+/** The turn-off dialog's title: "Turn off multiplayer for Markdown files?" */
+export function turnOffTitle(core: Pick<DocCore, 'id' | 'name' | 'description'>): string {
+  return `Turn off multiplayer for ${plainCore(core).sentence}?`
 }
 
 /** The turn-off dialog's body. */
@@ -216,9 +250,10 @@ export function turnOffMessage(open: DocCoreOpen): string {
 }
 
 /** One line per path the last turn-off couldn't write back (§6.2). */
-export function failedWriteBackLine(core: Pick<DocCore, 'name'>, f: DocCoreFailedPath): string {
+export function failedWriteBackLine(core: Pick<DocCore, 'id' | 'name' | 'description'>, f: DocCoreFailedPath): string {
+  const kind = plainCore(core).sentence
   return (
-    `${f.path} couldn't be written when ${coreInSentence(core)} was turned off (${f.error}). ` +
-    `Its last changes are kept in K2's history; turning ${coreInSentence(core)} on again writes them.`
+    `${f.path} couldn't be written when multiplayer was turned off for ${kind} (${f.error}). ` +
+    `Its last changes are kept in K2's history, and turning multiplayer on again for ${kind} writes them.`
   )
 }

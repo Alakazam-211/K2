@@ -15,8 +15,8 @@ import { useSettingsStore } from '@/stores/settings'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { isHostSwitchedError } from '@/lib/daemon-cli'
 import {
-  coreInSentence,
   failedWriteBackLine,
+  plainCore,
   fetchDocCores,
   setBoardFilePreview,
   openNowLine,
@@ -26,7 +26,7 @@ import {
   type DocCore,
   type DocCores,
 } from './multiplayer-cores-api'
-import { BetaTag, Button, Callout, Toggle } from '@/components/ui'
+import { BetaTag, Button, Callout, Spinner, Toggle } from '@/components/ui'
 import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SettingSwitchRow } from '../controls/SettingControls'
 import { ActionNote, readFailure, useActionNote } from './ActionNote'
 
@@ -40,7 +40,7 @@ export const MULTIPLAYER_BETA_LINE = 'Keep your work in git while multiplayer is
 /** A core that opens as a Garden (the Board): its own Beta line. */
 export const MULTIPLAYER_GARDEN_BETA_LINE = "Now and then, export a board from its ⋯ menu to keep a copy while it's new."
 /** The board-file switch's words; it carries a Beta tag on screen. */
-export const BOARD_FILE_PREVIEW_NAME = 'Open .k5board files in a Board tab'
+export const BOARD_FILE_PREVIEW_NAME = 'Open board files in a Board tab'
 /** The switch's accessible name: the words plus "(Beta)", which the tag says on screen. */
 export const BOARD_FILE_PREVIEW_LABEL = `${BOARD_FILE_PREVIEW_NAME} (Beta)`
 export const BOARD_FILE_PREVIEW_LINE =
@@ -58,6 +58,13 @@ export const MULTIPLAYER_MANIFEST: SettingEntry[] = [
 ]
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
+
+/** What was wrong with an answer K2 couldn't read, in words: the known
+ *  case says so; a field-level one says only that a part was unreadable. */
+function shapeLine(shape: string): string {
+  if (/^the server's answer/.test(shape)) return `${shape.charAt(0).toUpperCase()}${shape.slice(1)}.`
+  return 'Part of the server’s answer wasn’t in a form K2 can read.'
+}
 
 /** A switch's flip: `done` (the write landed), `cancelled` (the person said
  *  no in the dialog), or the error the write threw. */
@@ -166,7 +173,7 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
       }
     >
       K2 couldn&apos;t read which kinds of files open in multiplayer on this server.
-      {fail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">Details: {fail.shape}.</span> : null}
+      {fail.shape ? <span className="block mt-1 text-[var(--color-text-muted)]">{shapeLine(fail.shape)}</span> : null}
     </SettingsLoadState>
   ) : (
     <SettingsLoadState kind="loading" title="Loading the multiplayer settings…" testId="multiplayer-loading" />
@@ -216,6 +223,16 @@ export function MultiplayerSection({ scope = primaryScope() }: { scope?: ServerS
   )
 }
 
+/** Beside a switch while its write is in flight. */
+function SavingNote(): React.JSX.Element {
+  return (
+    <span role="status" data-testid="multiplayer-saving" className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)] whitespace-nowrap">
+      <Spinner />
+      Saving…
+    </span>
+  )
+}
+
 /** Run a flip and say what it did under the row. */
 function useFlipNote(): { note: ReturnType<typeof useActionNote>['note']; run: (flip: () => Promise<FlipResult>, ok: string, fail: string) => Promise<void> } {
   const { note, clear, done, failed } = useActionNote()
@@ -247,6 +264,8 @@ function PreviewRow({
     <SettingSwitchRow
       settingId="multiplayer.board-file-preview"
       control={
+        <>
+        {busy ? <SavingNote /> : null}
         <Toggle
           checked={on}
           onChange={() =>
@@ -257,8 +276,10 @@ function PreviewRow({
             )
           }
           aria-label={BOARD_FILE_PREVIEW_LABEL}
+          aria-busy={busy || undefined}
           disabled={!canChange || busy}
         />
+        </>
       }
     >
       <div className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
@@ -288,31 +309,38 @@ function CoreRow({
 }): React.JSX.Element {
   const { note, run } = useFlipNote()
   const failed = !core.on && core.lastChange && !core.lastChange.on ? core.lastChange.failed : []
-  const name = coreInSentence(core)
-  const cap = name.charAt(0).toUpperCase() + name.slice(1)
+  const plain = plainCore(core)
+  const kind = plain.sentence
+  const garden = core.view === 'garden'
+  const okLine = garden
+    ? core.on
+      ? 'Boards are off. Your boards are kept.'
+      : 'Boards are on for everyone on this server.'
+    : core.on
+      ? `Multiplayer is off for ${kind}. They open the usual way.`
+      : `Multiplayer is on for ${kind}, for everyone on this server.`
+  const failLine = garden
+    ? core.on
+      ? 'Couldn’t turn off boards. They’re still on.'
+      : 'Couldn’t turn on boards. They’re still off.'
+    : core.on
+      ? `Couldn’t turn off multiplayer for ${kind}. It’s still on.`
+      : `Couldn’t turn on multiplayer for ${kind}. It’s still off.`
   return (
     <SettingSwitchRow
       settingId={`multiplayer.${core.id}`}
       control={
-        <Toggle
-          checked={core.on}
-          onChange={() =>
-            void run(
-              onFlip,
-              core.on ? `${cap} is off. Its files open the usual way.` : `${cap} is on for everyone on this server.`,
-              core.on ? `Couldn’t turn off ${name}. It’s still on.` : `Couldn’t turn on ${name}. It’s still off.`,
-            )
-          }
-          aria-label={core.name}
-          disabled={!canChange || busy}
-        />
+        <>
+          {busy ? <SavingNote /> : null}
+          <Toggle checked={core.on} onChange={() => void run(onFlip, okLine, failLine)} aria-label={plain.name} aria-busy={busy || undefined} disabled={!canChange || busy} />
+        </>
       }
     >
       <div className="type-row text-[var(--color-text-primary)] flex items-center gap-2">
-        <span>{core.name}</span>
+        <span>{plain.name}</span>
         {core.status === 'beta' ? <BetaTag /> : null}
       </div>
-      <div className={SETTING_ROW_HINT}>{core.description}</div>
+      <div className={SETTING_ROW_HINT}>{plain.description}</div>
       {core.on ? (
         <div className={SETTING_ROW_HINT}>{core.view === 'garden' ? MULTIPLAYER_GARDEN_BETA_LINE : MULTIPLAYER_BETA_LINE}</div>
       ) : null}

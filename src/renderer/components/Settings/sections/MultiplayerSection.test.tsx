@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   posts: [] as Array<{ route: string; body: unknown }>,
   postError: null as Error | null,
   getError: null as Error | null,
+  postGate: null as Promise<void> | null,
 }))
 
 const events = vi.hoisted(() => ({ handlers: new Set<(e: unknown) => void>() }))
@@ -41,6 +42,7 @@ vi.mock('@/lib/daemon-cli', async (orig) => {
     }),
     daemonCliPost: primaryOnly(async (route: string, body: unknown) => {
       h.posts.push({ route, body })
+      if (h.postGate) await h.postGate
       if (h.postError) throw h.postError
       if (route !== 'settings/update') throw new Error(`unexpected POST ${route}`)
       return { multiplayerCoresReport: { changed: [], closed: 0, written: 0, failed: [] } }
@@ -60,7 +62,7 @@ import ConfirmDialog from '@/components/ConfirmDialog/ConfirmDialog'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { BOARD_FILE_PREVIEW_LABEL, MultiplayerSection, MULTIPLAYER_INTRO, MULTIPLAYER_MANIFEST, MULTIPLAYER_MEMBER_LINE } from './MultiplayerSection'
 import { useSettingsStore } from '@/stores/settings'
-import { failedWriteBackLine, openNowLine, parseDocCores, turnOffMessage, turnOffTitle } from './multiplayer-cores-api'
+import { failedWriteBackLine, openNowLine, parseDocCores, plainCore, turnOffMessage, turnOffTitle } from './multiplayer-cores-api'
 import { searchManifest, SECTION_LABELS } from '../searchManifest'
 
 function core(id: string, name: string, over: Json = {}): Json {
@@ -123,6 +125,7 @@ beforeEach(() => {
   h.posts = []
   h.postError = null
   h.getError = null
+  h.postGate = null
   events.handlers.clear()
 })
 
@@ -144,15 +147,19 @@ describe('Settings → Cores → Multiplayer', () => {
       "People and agents work in the same file at the same time, with presence, history and everyone's own undo. Choose which kinds of files open this way on this server. It applies to everyone here; the rest open the usual way.",
     )
     // The rows are the daemon's, not a hard-coded list.
+    // Known cores read as plain kinds of file; one this client doesn't know
+    // keeps the daemon's name.
     expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual([
-      'Markdown core',
-      'Text and code core',
+      'Markdown files',
+      'Text and code files',
       'Extra core',
     ])
-    expect(sw('Markdown core').getAttribute('aria-checked')).toBe('false')
-    expect(sw('Markdown core').disabled).toBe(false)
+    expect(sw('Markdown files').getAttribute('aria-checked')).toBe('false')
+    expect(sw('Markdown files').disabled).toBe(false)
     expect(within(row('markdown')).getByText('Beta')).toBeTruthy()
-    expect(within(row('markdown')).getByText('Markdown core description.')).toBeTruthy()
+    expect(within(row('markdown')).getByText('.md and .markdown files open beside the workspace’s agent, with live editing, presence and history.')).toBeTruthy()
+    expect(within(row('extra')).getByText('Extra core description.')).toBeTruthy()
+    expect(row('markdown').textContent).not.toContain('core')
     expect(within(row('extra')).queryByText('Beta')).toBeNull()
     expect(screen.queryByText(MULTIPLAYER_MEMBER_LINE)).toBeNull()
     expect(screen.getByTestId('multiplayer-later').textContent).toBe('Coming later: CSV grid, Word, Slides.')
@@ -165,7 +172,7 @@ describe('Settings → Cores → Multiplayer', () => {
     await mount()
     for (const s of screen.getAllByRole('switch')) expect((s as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText("Only the server's owner or an Admin can change these.")).toBeTruthy()
-    fireEvent.click(sw('Markdown core'))
+    fireEvent.click(sw('Markdown files'))
     await settle()
     expect(h.posts).toEqual([])
   })
@@ -173,10 +180,10 @@ describe('Settings → Cores → Multiplayer', () => {
   it('turning on: no dialog, the write body is exact, then a refetch', async () => {
     await mount()
     h.cores = answer({}, { on: true })
-    fireEvent.click(sw('Markdown core'))
-    await waitFor(() => expect(sw('Markdown core').getAttribute('aria-checked')).toBe('true'))
-    expect(screen.queryByText('Turn off the Markdown core?')).toBeNull()
-    expect(within(row('markdown')).getByRole('status').textContent).toBe('The Markdown core is on for everyone on this server.')
+    fireEvent.click(sw('Markdown files'))
+    await waitFor(() => expect(sw('Markdown files').getAttribute('aria-checked')).toBe('true'))
+    expect(screen.queryByText('Turn off multiplayer for Markdown files?')).toBeNull()
+    expect(within(row('markdown')).getByRole('status').textContent).toBe('Multiplayer is on for Markdown files, for everyone on this server.')
     expect(h.posts).toEqual([{ route: 'settings/update', body: { multiplayerCores: { markdown: true } } }])
     expect(JSON.stringify(h.posts[0].body)).toBe('{"multiplayerCores":{"markdown":true}}')
     expect(h.gets).toEqual(['docs/cores', 'docs/cores'])
@@ -189,9 +196,9 @@ describe('Settings → Cores → Multiplayer', () => {
     h.cores = answer({}, { on: true })
     await mount()
     h.cores = answer()
-    fireEvent.click(sw('Markdown core'))
+    fireEvent.click(sw('Markdown files'))
     await waitFor(() => expect(h.posts).toHaveLength(1))
-    expect(screen.queryByText('Turn off the Markdown core?')).toBeNull()
+    expect(screen.queryByText('Turn off multiplayer for Markdown files?')).toBeNull()
     expect(h.posts[0]).toEqual({ route: 'settings/update', body: { multiplayerCores: { markdown: false } } })
   })
 
@@ -199,8 +206,8 @@ describe('Settings → Cores → Multiplayer', () => {
     const open = { files: 2, participants: 3, paths: ['notes.md', 'plan.md'] }
     h.cores = answer({}, { on: true, open })
     await mount()
-    fireEvent.click(sw('Markdown core'))
-    await waitFor(() => expect(screen.getByText('Turn off the Markdown core?')).toBeTruthy())
+    fireEvent.click(sw('Markdown files'))
+    await waitFor(() => expect(screen.getByText('Turn off multiplayer for Markdown files?')).toBeTruthy())
     expect(
       screen.getByText(
         '2 files are open live (notes.md, plan.md). K2 writes every change to disk, closes them, and they reopen the usual way. Their history stays.',
@@ -208,28 +215,28 @@ describe('Settings → Cores → Multiplayer', () => {
     ).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await settle()
-    expect(screen.queryByText('Turn off the Markdown core?')).toBeNull()
+    expect(screen.queryByText('Turn off multiplayer for Markdown files?')).toBeNull()
     expect(h.posts).toEqual([])
-    expect(sw('Markdown core').getAttribute('aria-checked')).toBe('true')
+    expect(sw('Markdown files').getAttribute('aria-checked')).toBe('true')
 
-    fireEvent.click(sw('Markdown core'))
-    await waitFor(() => expect(screen.getByText('Turn off the Markdown core?')).toBeTruthy())
+    fireEvent.click(sw('Markdown files'))
+    await waitFor(() => expect(screen.getByText('Turn off multiplayer for Markdown files?')).toBeTruthy())
     h.cores = answer()
     fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
-    await waitFor(() => expect(sw('Markdown core').getAttribute('aria-checked')).toBe('false'))
+    await waitFor(() => expect(sw('Markdown files').getAttribute('aria-checked')).toBe('false'))
     expect(h.posts).toEqual([{ route: 'settings/update', body: { multiplayerCores: { markdown: false } } }])
   })
 
   it("says what failed under the row, with the daemon's refusal quietly under it (role=alert)", async () => {
     await mount()
     h.postError = new DaemonHttpError('updating "multiplayerCores" requires the Owner or Admin role', 403, null)
-    fireEvent.click(sw('Markdown core'))
+    fireEvent.click(sw('Markdown files'))
     const alert = await within(row('markdown')).findByRole('alert')
     expect(alert.textContent).toBe(
-      'Couldn’t turn on the Markdown core. It’s still off.The server said: updating "multiplayerCores" requires the Owner or Admin role.',
+      'Couldn’t turn on multiplayer for Markdown files. It’s still off.The server said: updating "multiplayerCores" requires the Owner or Admin role.',
     )
     expect(within(row('text')).queryByRole('alert')).toBeNull()
-    expect(sw('Markdown core').getAttribute('aria-checked')).toBe('false')
+    expect(sw('Markdown files').getAttribute('aria-checked')).toBe('false')
   })
 
   it('a doc_cores_changed event refetches and repaints', async () => {
@@ -242,7 +249,7 @@ describe('Settings → Cores → Multiplayer', () => {
         fn({ kind: 'doc_cores_changed', cores: { markdown: true, text: false, 'any-file': false }, core: 'markdown', on: true, by: 'Anna' })
       }
     })
-    await waitFor(() => expect(sw('Markdown core').getAttribute('aria-checked')).toBe('true'))
+    await waitFor(() => expect(sw('Markdown files').getAttribute('aria-checked')).toBe('true'))
     expect(h.gets).toEqual(['docs/cores', 'docs/cores'])
   })
 
@@ -281,8 +288,8 @@ describe('Settings → Cores → Multiplayer', () => {
     h.cores = answer({}, { on: false, lastChange })
     await mount()
     expect(screen.getAllByTestId('multiplayer-failed-markdown').map((e) => e.textContent)).toEqual([
-      "notes.md couldn't be written when the Markdown core was turned off (no space left on the disk). Its last changes are kept in K2's history; turning the Markdown core on again writes them.",
-      "docs/plan.md couldn't be written when the Markdown core was turned off (permission denied). Its last changes are kept in K2's history; turning the Markdown core on again writes them.",
+      "notes.md couldn't be written when multiplayer was turned off for Markdown files (no space left on the disk). Its last changes are kept in K2's history, and turning multiplayer on again for Markdown files writes them.",
+      "docs/plan.md couldn't be written when multiplayer was turned off for Markdown files (permission denied). Its last changes are kept in K2's history, and turning multiplayer on again for Markdown files writes them.",
     ])
     cleanup()
     h.cores = answer({}, { on: true, lastChange: { ...lastChange, on: false } })
@@ -293,12 +300,12 @@ describe('Settings → Cores → Multiplayer', () => {
   it('a malformed answer is a plain error card with Try again, never a guess or a crash', async () => {
     expect(() => parseDocCores({ ok: true, canChange: true, cores: [{ id: 'markdown' }] })).toThrow('cores[0].name is not text')
     expect(() => parseDocCores({ ok: true, cores: [] })).toThrow("the reply's canChange is not true or false")
-    expect(() => parseDocCores({})).toThrow('the reply has no list of cores')
+    expect(() => parseDocCores({})).toThrow("the server's answer was missing the list of file kinds")
     h.cores = {}
     render(<MultiplayerSection />)
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('Couldn’t load the multiplayer settings')
-    expect(alert.textContent).toContain('Details: the reply has no list of cores.')
+    expect(alert.textContent).toContain("The server's answer was missing the list of file kinds.")
     expect(alert.textContent).not.toContain('docs/cores')
     h.cores = answer()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
@@ -337,13 +344,35 @@ describe('Settings → Cores → Multiplayer', () => {
 })
 
 describe('core names in a sentence', () => {
-  it('reads "the Markdown core", and quotes a name that is not a core', () => {
-    expect(turnOffTitle({ name: 'Markdown core' })).toBe('Turn off the Markdown core?')
-    expect(turnOffTitle({ name: 'Any other file' })).toBe('Turn off the "Any other file" core?')
-    expect(failedWriteBackLine({ name: 'Text and code core' }, { path: 'a.txt', error: 'no space left on the disk' })).toBe(
-      "a.txt couldn't be written when the Text and code core was turned off (no space left on the disk). " +
-        "Its last changes are kept in K2's history; turning the Text and code core on again writes them.",
+  it('names a known core as its kind of file, and an unknown one by the daemon’s name', () => {
+    expect(turnOffTitle({ id: 'markdown', name: 'Markdown core', description: '' })).toBe('Turn off multiplayer for Markdown files?')
+    expect(turnOffTitle({ id: 'any-file', name: 'Any other file', description: '' })).toBe('Turn off multiplayer for any other file?')
+    expect(turnOffTitle({ id: 'sheets', name: 'Sheets core', description: '' })).toBe('Turn off multiplayer for Sheets core?')
+    expect(failedWriteBackLine({ id: 'text', name: 'Text and code core', description: '' }, { path: 'a.txt', error: 'no space left on the disk' })).toBe(
+      "a.txt couldn't be written when multiplayer was turned off for text and code files (no space left on the disk). " +
+        "Its last changes are kept in K2's history, and turning multiplayer on again for text and code files writes them.",
     )
+    // The Board's daemon text names a CLI call; Settings says it plainly.
+    expect(plainCore({ id: 'board', name: 'Board', description: "Off: agents' k2 board calls are refused" })).toEqual({
+      name: 'Boards',
+      description: 'A whiteboard Garden for you and your agents, single-person for now. When this is off, boards are hidden and agents can’t open them. Your boards are kept.',
+      sentence: 'boards',
+    })
+  })
+})
+
+describe('Settings → Cores → Multiplayer: while a switch saves', () => {
+  it('shows Saving… beside the switch and holds it until the write lands', async () => {
+    await mount()
+    let release: () => void = () => {}
+    h.postGate = new Promise<void>((r) => (release = r))
+    fireEvent.click(sw('Markdown files'))
+    expect((await screen.findByTestId('multiplayer-saving')).textContent).toBe('Saving…')
+    expect(sw('Markdown files').disabled).toBe(true)
+    h.cores = answer({}, { on: true })
+    release()
+    await waitFor(() => expect(screen.queryByTestId('multiplayer-saving')).toBeNull())
+    expect(sw('Markdown files').getAttribute('aria-checked')).toBe('true')
   })
 })
 

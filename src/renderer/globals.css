@@ -1982,12 +1982,13 @@ html[data-style="glass"] .k2-header-blur:not([data-scrolled="1"]):not([data-zen-
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 12%, transparent 40%);
   mask-image: linear-gradient(to bottom, #000 0%, #000 12%, transparent 40%);
 }
-/* The tint's colour is --k2-header-tint (black, or the page in Veil), so a band
+/* The tint's colour is --k2-header-tint (the page's own colour by default), so a band
    can fade into the surface it sits on: under a workspace tab strip it is the
    pane's own colour (styles/glass/overrides.css). */
 .k2-header-tint {
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, #000) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, #000) 55%, transparent) 45%, transparent 100%);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 55%, transparent) 45%, transparent 100%);
 }
+/* Veil keeps the plain ramp on its early and heavy bands too (this rule outranks theirs). */
 html[data-style="glass"][data-palette="veil"] .k2-header-tint {
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 55%, transparent) 45%, transparent 100%);
 }
@@ -1998,7 +1999,7 @@ html[data-style="glass"][data-palette="veil"] .k2-header-tint {
 .k2-header-blur--early > .k2-header-blur-2 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.4), transparent calc((100% - var(--k2-blur-early)) * 0.8)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.4), transparent calc((100% - var(--k2-blur-early)) * 0.8)); }
 .k2-header-blur--early > .k2-header-blur-3 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.25), transparent calc((100% - var(--k2-blur-early)) * 0.6)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.25), transparent calc((100% - var(--k2-blur-early)) * 0.6)); }
 .k2-header-blur--early > .k2-header-blur-4 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.12), transparent calc((100% - var(--k2-blur-early)) * 0.4)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc((100% - var(--k2-blur-early)) * 0.12), transparent calc((100% - var(--k2-blur-early)) * 0.4)); }
-.k2-header-blur--early > .k2-header-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, #000) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, #000) 55%, transparent) calc((100% - var(--k2-blur-early)) * 0.45), color-mix(in srgb, var(--k2-header-tint, #000) 12%, transparent) calc(100% - var(--k2-blur-early) - 20px), transparent 100%); }
+.k2-header-blur--early > .k2-header-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 55%, transparent) calc((100% - var(--k2-blur-early)) * 0.45), color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 12%, transparent) calc(100% - var(--k2-blur-early) - 20px), transparent 100%); }
 /* Full strength through a tall header, then a strip below it once scrolled. */
 .k2-header-blur--heavy { --k2-blur-heavy: 0px; --k2-blur-h: calc(100% - var(--k2-blur-heavy)); height: calc(40px + var(--k2-blur-heavy)) !important; }
 .k2-header-blur--heavy[data-scrolled="1"] { --k2-blur-heavy: 18px; }
@@ -2006,7 +2007,7 @@ html[data-style="glass"][data-palette="veil"] .k2-header-tint {
 .k2-header-blur--heavy > .k2-header-blur-2 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.8), transparent calc(var(--k2-blur-h) + var(--k2-blur-heavy) * 0.5)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.8), transparent calc(var(--k2-blur-h) + var(--k2-blur-heavy) * 0.5)); }
 .k2-header-blur--heavy > .k2-header-blur-3 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.7), transparent var(--k2-blur-h)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.7), transparent var(--k2-blur-h)); }
 .k2-header-blur--heavy > .k2-header-blur-4 { -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.62), transparent calc(var(--k2-blur-h) * 0.95)); mask-image: linear-gradient(to bottom, #000 0%, #000 calc(var(--k2-blur-h) * 0.62), transparent calc(var(--k2-blur-h) * 0.95)); }
-.k2-header-blur--heavy > .k2-header-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, #000) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, #000) 85%, transparent) calc(var(--k2-blur-h) * 0.6), color-mix(in srgb, var(--k2-header-tint, #000) 40%, transparent) calc(var(--k2-blur-h) * 0.85), color-mix(in srgb, var(--k2-header-tint, #000) 10%, transparent) var(--k2-blur-h), transparent 100%); }
+.k2-header-blur--heavy > .k2-header-tint { background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 85%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 85%, transparent) calc(var(--k2-blur-h) * 0.6), color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 40%, transparent) calc(var(--k2-blur-h) * 0.85), color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 10%, transparent) var(--k2-blur-h), transparent 100%); }
 
 /* The bottom band: the same stack flipped, on the Thread's footer strip. The
    Thread kit draws the strip; Glass replaces its layers with the phone's. */
@@ -2025,9 +2026,6 @@ html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade:not([data-zen-
 html[data-style="glass"][data-frost="tile"] :is(.k2-header-blur-1, .k2-header-blur-2, .k2-header-blur-3, .k2-header-blur-4):not([data-zen-root] *),
 html[data-style="glass"][data-frost="tile"] [data-k2-thread-zen] .thread-footer-fade > [class^="thread-footer-blur-"]:not([data-zen-root] *) { display: none; }
 html[data-style="glass"][data-frost="tile"] .k2-header-tint:not([data-zen-root] *) {
-  background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, #000) 96%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, #000) 88%, transparent) 60%, transparent 100%);
-}
-html[data-style="glass"][data-frost="tile"][data-palette="veil"] .k2-header-tint:not([data-zen-root] *) {
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 96%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 88%, transparent) 60%, transparent 100%);
 }
 html[data-style="glass"][data-frost="tile"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) {

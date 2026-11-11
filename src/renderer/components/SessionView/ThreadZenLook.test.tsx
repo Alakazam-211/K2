@@ -908,6 +908,11 @@ describe('frosted glass behind the message box', () => {
       expect(body).toContain('color-mix(in srgb, var(--color-bg) ')
       expect(body).not.toMatch(/rgba\(0, 0, 0|#000\b/)
     }
+    // The top band's tint falls back to the page's colour too, never black.
+    expect(css).not.toContain('var(--k2-header-tint, #000)')
+    const top = css.split('\n').filter((l) => l.includes('var(--k2-header-tint,'))
+    expect(top.length).toBeGreaterThan(0)
+    for (const l of top) expect(l).not.toMatch(/var\(--k2-header-tint, (?!var\(--color-bg\)\))/)
   })
 
   it('the field on the bar is see-through (stronger in light), opaque with reduced transparency; the tab keeps its own fill', () => {

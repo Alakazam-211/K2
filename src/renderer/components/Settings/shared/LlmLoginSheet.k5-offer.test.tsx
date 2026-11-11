@@ -96,8 +96,8 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-async function signIn(state: string, scope: ServerScope = primaryScope()): Promise<void> {
-  const l = login(state)
+async function signIn(state: string, scope: ServerScope = primaryScope(), over: Record<string, unknown> = {}): Promise<void> {
+  const l = { ...login(state), ...over }
   h.addLogin.mockImplementation(async () => ({ account: { id: 'acc_new' }, login: l }))
   h.loginStatus.mockImplementation(async () => l)
   render(<LlmLoginSheet scope={scope} start={{ kind: 'add', tool: 'claude', toolLabel: 'Claude' }} onClose={onClose} />)
@@ -117,6 +117,17 @@ describe('the K5 offer after a sign-in', () => {
     expect(screen.getByText(K5_OFFER_COPY.line)).toBeTruthy()
     expect(screen.getByTestId('k5-offer-meet').textContent).toBe('Meet K5')
     expect(screen.getByTestId('k5-offer-dismiss').textContent).toBe('Not now')
+  })
+
+  it('sits under the success note, above the server-default question, with the only Not now', async () => {
+    await signIn('signed_in', primaryScope(), { offerMakeActive: true })
+    const offerBox = await screen.findByTestId('k5-offer')
+    const done = screen.getByTestId('llm-login-done')
+    const question = screen.getByTestId('llm-login-offer')
+    expect(done.compareDocumentPosition(offerBox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(offerBox.compareDocumentPosition(question) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Not now' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Keep the current default' })).toBeTruthy()
   })
 
   it('Meet K5 opens the K5 sheet and closes the sign-in sheet', async () => {

@@ -230,7 +230,7 @@ function openNew(onClose = vi.fn(), onDone = vi.fn()): { onClose: ReturnType<typ
 }
 
 describe('Add a token: choose, sign in or paste, then done or failed', () => {
-  it('lists only the providers K2 can save a token for; nothing can start until one is chosen and named', () => {
+  it('lists only the providers K2 can save a token for; starting with something missing says what, and sends nothing', () => {
     seedDoc()
     openNew()
     expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
@@ -240,15 +240,25 @@ describe('Add a token: choose, sign in or paste, then done or failed', () => {
       'Gemini: API tokens only.',
     ])
     expect(screen.queryByTestId('llm-login-label')).toBeNull()
-    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    // The button stays live (never dimmed): pressing it says what's missing.
     const start = screen.getByTestId('llm-login-start') as HTMLButtonElement
-    expect(start.disabled).toBe(true)
-    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
     expect(start.disabled).toBe(false)
+    fireEvent.click(start)
+    expect(screen.getByText('Choose a provider.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    expect(screen.getByText('Give it a name, like work or personal.')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByTestId('llm-login-label'))
+    expect(h.addLogin).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
+    expect(screen.queryByText('Give it a name, like work or personal.')).toBeNull()
     // Gemini has no sign-in: the key field, no "How" choice.
     fireEvent.click(screen.getByRole('radio', { name: /^Gemini/ }))
     expect(screen.queryByRole('radio', { name: 'Sign in with a subscription' })).toBeNull()
     expect((screen.getByLabelText('API token') as HTMLInputElement).type).toBe('password')
+    fireEvent.click(screen.getByRole('button', { name: 'Add API token' }))
+    expect(screen.getByText('Paste the API token from your Gemini account.')).toBeTruthy()
+    expect(h.addApiKey).not.toHaveBeenCalled()
   })
 
   it('sign-in success: says what is signed in and where, reports it once, Done closes', async () => {
@@ -272,6 +282,42 @@ describe('Add a token: choose, sign in or paste, then done or failed', () => {
     expect(onDone).toHaveBeenCalledWith({ tool: 'claude', label: 'work', method: 'signin' })
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('signed in: a caller’s follow-up sits under the success note, above the default question, with no second “Not now”', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    seedDoc()
+    h.addLogin.mockImplementation(async () => ({ account: { id: 'acc_new' }, login: login({ label: 'work', code: null }) }))
+    h.loginStatus.mockImplementation(async () => login({ label: 'work', state: 'signed_in', done: true, offerMakeActive: true }))
+    render(
+      <LlmLoginSheet
+        scope={primaryScope()}
+        start={{ kind: 'new' }}
+        onClose={() => {}}
+        signedInExtra={<p data-testid="extra-offer">Meet someone new</p>}
+      />,
+    )
+    // Not shown before the sign-in lands.
+    expect(screen.queryByTestId('extra-offer')).toBeNull()
+    fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
+    fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    await screen.findByRole('dialog', { name: 'Sign in to Claude' })
+    expect(screen.queryByTestId('extra-offer')).toBeNull()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    const done = screen.getByTestId('llm-login-done')
+    const extra = screen.getByTestId('extra-offer')
+    const offer = screen.getByTestId('llm-login-offer')
+    // Document order: success note → extra → default question.
+    expect(done.compareDocumentPosition(extra) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(extra.compareDocumentPosition(offer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Not now' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Keep the current default' }))
+    expect(screen.queryByTestId('llm-login-offer')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Done' })).toBeTruthy()
+    expect(screen.getByTestId('extra-offer')).toBeTruthy()
   })
 
   it('sign-in failed: what failed, the server’s reason, Try again starts it again, or paste a key instead', async () => {

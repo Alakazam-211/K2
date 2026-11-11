@@ -109,12 +109,17 @@ export function LlmLoginSheet({
   start,
   onClose,
   onDone,
+  signedInExtra,
 }: {
   scope: ServerScope
   start: LoginSheetStart
   onClose: () => void
   /** A token was added or signed in again (for the page's saved note). */
   onDone?: (r: LoginSheetResult) => void
+  /** Shown in the signed-in step, under the success note and above the
+   *  server-default question: a follow-up the caller offers (for example
+   *  the K5 offer). Brings its own buttons. */
+  signedInExtra?: React.ReactNode
 }): React.JSX.Element {
   const doc = useLlmAccountsStore((s) => s.entries[scope.id]?.doc ?? null)
   // Only Admin and above may make it the server default (the daemon says
@@ -163,6 +168,9 @@ export function LlmLoginSheet({
   const [linkCopied, setLinkCopied] = useState(false)
   const [madeActive, setMadeActive] = useState<null | 'active' | 'kept'>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  // The submit button stays live (a dimmed one reads as broken and its
+  // edge falls under 3:1); pressing it with something missing says what.
+  const [tried, setTried] = useState(false)
   const loginRef = useRef<LlmLogin | null>(null)
   loginRef.current = login
   const reported = useRef(false)
@@ -464,8 +472,14 @@ export function LlmLoginSheet({
               </p>
               <p>Workspaces and chats can pick it from their Token menu.</p>
             </Callout>
-            {/* K5 at first run: the daemon says when to offer it. */}
+            {/* Follow-up offers mount here, under the success note and above
+                the server-default question, each bringing its own buttons:
+                K2 Onboarding's K5 offer (Meet K5 / Not now; the daemon says
+                when to offer it), then `signedInExtra` from the caller.
+                Nothing below says "Not now", so the two never sit side by
+                side. */}
             <K5Offer scope={scope} onMeet={onClose} />
+            {signedInExtra ? <div data-testid="llm-login-signed-in-extra">{signedInExtra}</div> : null}
             {login.offerMakeActive && canChangeDefault && madeActive === null ? (
               <div data-testid="llm-login-offer">
                 <p className={SETTING_ROW_LABEL}>Make it the {display} server default?</p>
@@ -522,8 +536,8 @@ export function LlmLoginSheet({
           ) : signedIn ? (
             login.offerMakeActive && canChangeDefault && madeActive === null ? (
               <>
-                <Button variant="ghost" size="md" onClick={() => setMadeActive('kept')}>
-                  Not now
+                <Button size="md" onClick={() => setMadeActive('kept')}>
+                  Keep the current default
                 </Button>
                 <Button variant="accent" size="md" onClick={() => void makeActive()} autoFocus>
                   Make it the default
@@ -555,9 +569,18 @@ export function LlmLoginSheet({
   }
 
   // ── The form: provider, how, name, then the sign-in or the key ──────
-  const ready = !!provider && !busy && (relogin || !!label.trim()) && (how === 'signin' ? !(airgap && !relogin) : !!key.trim())
+  const providerProblem = !relogin && !provider ? 'Choose a provider.' : null
+  const nameProblem = provider && !relogin && !label.trim() ? 'Give it a name, like work or personal.' : null
+  const keyProblem = provider && how === 'key' && !key.trim() ? `Paste the API token from your ${provider.display} account.` : null
+  const airgapProblem = provider && how === 'signin' && airgap && !relogin ? 'Sign-in is off while air-gap mode is on. Paste an API token instead.' : null
   const submit = (): void => {
-    if (!ready) return
+    if (busy) return
+    if (providerProblem || nameProblem || keyProblem || airgapProblem) {
+      setTried(true)
+      const first = nameProblem ? ids.label : keyProblem ? ids.key : null
+      if (first) document.getElementById(first)?.focus()
+      return
+    }
     if (how === 'key') void addKey()
     else void begin()
   }
@@ -599,6 +622,11 @@ export function LlmLoginSheet({
                 </label>
               ))}
             </div>
+            {tried && providerProblem ? (
+              <p className="type-hint text-[var(--color-status-error-soft)]" data-field-problem="">
+                {providerProblem}
+              </p>
+            ) : null}
           </fieldset>
         ) : null}
         {!relogin && providers.length === 0 ? (
@@ -639,9 +667,10 @@ export function LlmLoginSheet({
         ) : null}
 
         {provider && !relogin ? (
-          <Field label="Name" htmlFor={ids.label} hint="So you can tell your tokens apart, like work or personal.">
+          <Field label="Name" htmlFor={ids.label} hint="So you can tell your tokens apart, like work or personal." problem={tried ? nameProblem : null}>
             <Input
               id={ids.label}
+              aria-invalid={tried && nameProblem ? true : undefined}
               autoFocus={start.kind !== 'new'}
               className={DIALOG_FIELD}
               value={label}
@@ -672,11 +701,21 @@ export function LlmLoginSheet({
             {!relogin ? (
               <p className={`${DIALOG_MUTED} mt-1`}>{provider.display} runs its own sign-in on the server. K2 never sees your password.</p>
             ) : null}
+            {tried && airgapProblem ? (
+              <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-field-problem="">
+                {airgapProblem}
+              </p>
+            ) : null}
           </div>
         ) : null}
 
         {provider && how === 'key' ? (
-          <Field label="API token" htmlFor={ids.key} hint={`From your ${provider.display} account. K2 keeps it on this server and never shows it again.`}>
+          <Field
+            label="API token"
+            htmlFor={ids.key}
+            hint={`From your ${provider.display} account. K2 keeps it on this server and never shows it again.`}
+            problem={tried ? keyProblem : null}
+          >
             <div className="flex items-center gap-2">
               <Input
                 id={ids.key}
@@ -686,7 +725,7 @@ export function LlmLoginSheet({
                 className={`${DIALOG_FIELD} font-mono`}
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
-                aria-invalid={error ? true : undefined}
+                aria-invalid={error || (tried && keyProblem) ? true : undefined}
                 data-testid="llm-key-input"
               />
               <Button variant="quiet" className="flex-shrink-0" onClick={() => setKeyShown((s) => !s)} aria-pressed={keyShown}>
@@ -709,11 +748,11 @@ export function LlmLoginSheet({
             Cancel
           </Button>
           {how === 'key' ? (
-            <Button type="submit" variant="accent" size="md" disabled={!ready} data-testid="llm-key-add">
+            <Button type="submit" variant="accent" size="md" disabled={busy} data-testid="llm-key-add">
               {busy ? 'Adding…' : 'Add API token'}
             </Button>
           ) : (
-            <Button type="submit" variant="accent" size="md" disabled={!ready} data-testid="llm-login-start">
+            <Button type="submit" variant="accent" size="md" disabled={busy} data-testid="llm-login-start">
               {busy ? 'Starting…' : 'Start sign-in'}
             </Button>
           )}

@@ -594,8 +594,10 @@ describe('Sign-in sheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add a token' }))
     const sheet = screen.getByTestId('llm-login-sheet')
     expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
-    // Nothing chosen yet: no way to start.
-    expect((screen.getByTestId('llm-login-start') as HTMLButtonElement).disabled).toBe(true)
+    // Nothing chosen yet: starting says so and sends nothing.
+    fireEvent.click(screen.getByTestId('llm-login-start'))
+    expect(within(sheet).getByText('Choose a provider.')).toBeTruthy()
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('llm/accounts/add', expect.anything())
     fireEvent.click(within(sheet).getByRole('radio', { name: /^Claude/ }))
     fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'team' } })
     fireEvent.click(screen.getByRole('radio', { name: 'Another device' }))

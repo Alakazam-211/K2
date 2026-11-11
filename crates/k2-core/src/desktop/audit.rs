@@ -49,6 +49,12 @@ pub enum Event {
     LocalHold,
     ModeChange,
     Refused,
+    /// The controller read the host's clipboard (Copy theirs). Only that
+    /// it happened, and its outcome (`ok` or why not); never the text.
+    ClipboardRead,
+    /// The controller put text on the host's clipboard (Send my
+    /// clipboard). Never the text.
+    ClipboardWrite,
 }
 
 impl Event {
@@ -70,6 +76,8 @@ impl Event {
             Event::LocalHold => "local_hold",
             Event::ModeChange => "mode_change",
             Event::Refused => "refused",
+            Event::ClipboardRead => "clipboard_read",
+            Event::ClipboardWrite => "clipboard_write",
         }
     }
 }

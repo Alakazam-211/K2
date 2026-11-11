@@ -21,6 +21,7 @@ use k2_deskd_proto::wire::{self, Message};
 use k2_deskd_proto::{PROTOCOL_VERSION, ROLE, VERSION};
 
 use crate::capture::{self, Capture, Opener};
+use crate::clipboard::{self, ClipRead};
 use crate::hold::{Edge, HoldEdges, LocalHold};
 use crate::inject::{Injector, Outcome};
 
@@ -44,6 +45,16 @@ pub trait Host: Send + Sync + 'static {
     fn hid_idle_ms(&self) -> Option<u64>;
     /// `None` hides it.
     fn banner(&self, text: Option<String>);
+    /// The clipboard's text (see [`crate::clipboard`]; never logged).
+    /// Default: none on this host yet.
+    fn clipboard_get(&self) -> ClipRead {
+        ClipRead::Unsupported
+    }
+    /// Puts text on the clipboard; the text is already checked
+    /// ([`crate::clipboard::check_set`]). Errors never carry the text.
+    fn clipboard_set(&self, _text: &str) -> Result<(), (&'static str, String)> {
+        Err((codes::UNSUPPORTED, "K2 Screen can't reach the clipboard on this computer yet".into()))
+    }
 }
 
 /// Where events and replies go: the current link, if any.
@@ -245,6 +256,8 @@ impl<H: Host> Deskd<H> {
                 Some(c) => c.display(display).map(|d| json!({"display": d})),
                 None => Err((codes::UNSUPPORTED, "K2 Screen doesn't capture on this computer yet".into())),
             },
+            Op::ClipboardGet => Ok(clipboard::get_reply(self.host.clipboard_get())),
+            Op::ClipboardSet { text } => clipboard::check_set(&text).and_then(|()| self.host.clipboard_set(&text)).map(|()| json!({})),
         };
         match (id, req.nr, result) {
             (Some(id), false, Ok(v)) => Some(reply_ok(id, v)),
@@ -392,6 +405,8 @@ fn op_name(op: &Op) -> &'static str {
         Op::Keyframe { .. } => "keyframe",
         Op::Rate { .. } => "rate",
         Op::Display { .. } => "display",
+        Op::ClipboardGet => "clipboard_get",
+        Op::ClipboardSet { .. } => "clipboard_set",
     }
 }
 
@@ -406,6 +421,9 @@ mod tests {
         tcc: Mutex<Tcc>,
         banner: Mutex<Vec<Option<String>>>,
         requested: Mutex<u32>,
+        /// `None` = the trait's default (no clipboard here).
+        clip: Mutex<Option<ClipRead>>,
+        clip_sets: Mutex<Vec<String>>,
     }
 
     impl Host for FakeHost {
@@ -434,6 +452,47 @@ mod tests {
         fn banner(&self, text: Option<String>) {
             self.banner.lock().unwrap().push(text);
         }
+        fn clipboard_get(&self) -> ClipRead {
+            self.clip.lock().unwrap().clone().unwrap_or(ClipRead::Unsupported)
+        }
+        fn clipboard_set(&self, text: &str) -> Result<(), (&'static str, String)> {
+            if self.clip.lock().unwrap().is_none() {
+                return Err((codes::UNSUPPORTED, "no clipboard".into()));
+            }
+            self.clip_sets.lock().unwrap().push(text.to_string());
+            *self.clip.lock().unwrap() = Some(ClipRead::Text(text.to_string()));
+            Ok(())
+        }
+    }
+
+    /// Text in and out through the link; refusals say why and never carry
+    /// the text; with no clipboard on the host, both say unsupported.
+    #[test]
+    fn the_clipboard_round_trips_text_and_refuses_with_a_reason() {
+        let (d, _) = deskd();
+        let (mut s, _h) = link(&d);
+        // No clipboard on this host (the trait's default).
+        assert_eq!(call(&mut s, json!({"id": 1, "op": "clipboard_get"})), json!({"id": 1, "ok": true, "text": null, "reason": "unsupported"}));
+        let r = call(&mut s, json!({"id": 2, "op": "clipboard_set", "text": "hi"}));
+        assert_eq!((r["ok"].as_bool(), r["code"].as_str()), (Some(false), Some("unsupported")));
+
+        *d.host.clip.lock().unwrap() = Some(ClipRead::Text("from the mac".into()));
+        assert_eq!(call(&mut s, json!({"id": 3, "op": "clipboard_get"})), json!({"id": 3, "ok": true, "text": "from the mac"}));
+        assert_eq!(call(&mut s, json!({"id": 4, "op": "clipboard_set", "text": "pässwörd\n"})), json!({"id": 4, "ok": true}));
+        assert_eq!(*d.host.clip_sets.lock().unwrap(), vec!["pässwörd\n".to_string()]);
+        assert_eq!(call(&mut s, json!({"id": 5, "op": "clipboard_get"}))["text"], "pässwörd\n");
+
+        // Over the cap: refused before the OS end, and the text isn't echoed.
+        let big = format!("hunter2{}", "x".repeat(k2_deskd_proto::msg::CLIPBOARD_MAX_BYTES));
+        let r = call(&mut s, json!({"id": 6, "op": "clipboard_set", "text": big}));
+        assert_eq!((r["ok"].as_bool(), r["code"].as_str()), (Some(false), Some("too_large")));
+        assert!(!r.to_string().contains("hunter2"), "{r}");
+        let r = call(&mut s, json!({"id": 7, "op": "clipboard_set", "text": ""}));
+        assert_eq!(r["code"], "empty");
+        assert_eq!(d.host.clip_sets.lock().unwrap().len(), 1, "refusals never reach the OS end");
+
+        *d.host.clip.lock().unwrap() = Some(ClipRead::Concealed);
+        assert_eq!(call(&mut s, json!({"id": 8, "op": "clipboard_get"})), json!({"id": 8, "ok": true, "text": null, "reason": "concealed"}));
     }
 
     fn deskd() -> (Arc<Deskd<FakeHost>>, Recorder) {

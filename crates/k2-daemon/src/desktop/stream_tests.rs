@@ -499,6 +499,23 @@ fn the_owner_drives_and_a_granted_member_only_watches() {
         let fake = e.fake.clone();
         wait_for("the pointer at deskd", || fake.injects.lock().unwrap().iter().any(|i| *i == InputEvent::Pointer { display: 1, x: 10.0, y: 20.0 })).await;
 
+        // The controller's clipboard: read and write reach deskd, and the
+        // access log says only that they happened, never the text.
+        say(&mut o, json!({"t": "clipboard-get"})).await;
+        let c = t_is(&mut o, "clipboard").await;
+        assert_eq!(c["text"], "from the mac");
+        say(&mut o, json!({"t": "clipboard-set", "text": "s3cret paste"})).await;
+        wait_for("the clipboard lines", || {
+            let ev = audit_events();
+            ev.iter().any(|(e, w)| e == "clipboard_read" && w == "login:olive") && ev.iter().any(|(e, w)| e == "clipboard_write" && w == "login:olive")
+        })
+        .await;
+        let raw = k2_core::desktop::audit::read(None, 1000).expect("audit");
+        let clip: Vec<_> = raw.iter().filter(|l| l["event"].as_str().is_some_and(|e| e.starts_with("clipboard_"))).collect();
+        assert!(clip.iter().all(|l| l["outcome"] == "ok"), "{clip:?}");
+        let all = serde_json::to_string(&raw).unwrap();
+        assert!(!all.contains("from the mac") && !all.contains("s3cret"), "no clipboard text in the access log");
+
         let mut m = viewer("mel", &mel, &[], fast()).await;
         let hello = t_is(&mut m, "hello").await;
         assert_eq!((hello["mode"].as_str(), hello["controller"].as_str()), (Some("view"), Some("olive")));

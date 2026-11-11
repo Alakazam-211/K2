@@ -5,6 +5,7 @@
 //! socket thread, SIGTERM, and AppKit's main loop for the banner.
 
 pub mod capture;
+pub mod clipboard;
 pub mod ffi;
 pub mod inject;
 pub mod peer;
@@ -47,6 +48,12 @@ impl Host for MacHost {
     }
     fn banner(&self, text: Option<String>) {
         self.banner.set(text);
+    }
+    fn clipboard_get(&self) -> crate::clipboard::ClipRead {
+        clipboard::read()
+    }
+    fn clipboard_set(&self, text: &str) -> Result<(), (&'static str, String)> {
+        clipboard::write(text)
     }
 }
 

@@ -734,6 +734,15 @@ struct DesktopSink {
     push: mpsc::UnboundedSender<Push>,
 }
 
+/// One access-log line for a clipboard read or write: who, which viewer,
+/// the outcome. The line has no field for the text, and none is passed.
+fn audit_clipboard(ctx: &Ctx, event: Event, outcome: &str) {
+    let line = AuditLine::new(event, &ctx.desktop, &format!("login:{}", ctx.username)).viewer(&ctx.viewer).outcome(outcome);
+    if let Err(e) = audit::write(&line) {
+        k2_core::log_debug!("[desktop] audit write failed ({}): {e}", event.as_str());
+    }
+}
+
 impl DesktopSink {
     fn deskd_err(e: String) -> Refusal {
         Refusal::new("desktop_input_failed", format!("K2 Screen couldn't do that: {e}"))
@@ -778,11 +787,22 @@ impl InputSink<ViewerMsg> for DesktopSink {
                 Ok(())
             }
             ViewerMsg::ClipboardGet => {
-                let (text_v, reason) = ctx.deskd.clipboard_get().map_err(Self::deskd_err)?;
+                let got = ctx.deskd.clipboard_get();
+                let outcome = match &got {
+                    Ok((_, Some(reason))) => reason.as_str(),
+                    Ok(_) => "ok",
+                    Err(_) => "failed",
+                };
+                audit_clipboard(ctx, Event::ClipboardRead, outcome);
+                let (text_v, reason) = got.map_err(Self::deskd_err)?;
                 let _ = self.push.send(Push::Text(text(&ServerMsg::Clipboard { text: text_v, reason })));
                 Ok(())
             }
-            ViewerMsg::ClipboardSet { text: t } => ctx.deskd.clipboard_set(&t).map_err(Self::deskd_err),
+            ViewerMsg::ClipboardSet { text: t } => {
+                let r = ctx.deskd.clipboard_set(&t);
+                audit_clipboard(ctx, Event::ClipboardWrite, if r.is_ok() { "ok" } else { "failed" });
+                r.map_err(Self::deskd_err)
+            }
             other => {
                 if held {
                     return Err(Refusal::new("desktop_local_hold", "Someone at this computer is using it; that input was dropped."));

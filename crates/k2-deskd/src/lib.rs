@@ -17,6 +17,7 @@
 //! protocol 4's `layers`, `keyframe` and `rate` through [`server::Deskd`].
 
 pub mod capture;
+pub mod clipboard;
 pub mod hold;
 pub mod inject;
 pub mod server;

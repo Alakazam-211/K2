@@ -228,6 +228,33 @@ pub enum Op {
     /// start` from it. Reply: `{display}`; `no_such_display` otherwise.
     /// (The field is `display`, not `id`: `id` is the request's.)
     Display { display: u32 },
+    /// The host's clipboard, text only (the controller's Copy theirs; the
+    /// daemon gates who). Reply: `{text}` or `{text: null, reason}` with a
+    /// [`clip`] reason. deskd never logs the text.
+    ClipboardGet,
+    /// Put text on the host's clipboard (the controller's Send my
+    /// clipboard). At most [`CLIPBOARD_MAX_BYTES`] of UTF-8. Reply: `{}`;
+    /// `empty` / `too_large` / `unsupported` otherwise. Never logged.
+    ClipboardSet { text: String },
+}
+
+/// The most clipboard text deskd reads or writes, in UTF-8 bytes (1 MiB).
+pub const CLIPBOARD_MAX_BYTES: usize = 1024 * 1024;
+
+/// Why `clipboard_get` gave no text (`reason`).
+pub mod clip {
+    /// Nothing on the clipboard.
+    pub const EMPTY: &str = "empty";
+    /// Something, but not text (an image, files).
+    pub const NOT_TEXT: &str = "not_text";
+    /// A password manager's copy (marked `org.nspasteboard.ConcealedType`).
+    pub const CONCEALED: &str = "concealed";
+    /// Over [`super::CLIPBOARD_MAX_BYTES`].
+    pub const TOO_LARGE: &str = "too_large";
+    /// The person at the Mac set K2 Screen's paste access to Deny.
+    pub const DENIED: &str = "denied";
+    /// No clipboard here yet (Linux until its slice).
+    pub const UNSUPPORTED: &str = "unsupported";
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -296,6 +323,10 @@ pub mod codes {
     pub const ENCODER_FAILED: &str = "encoder_failed";
     pub const CAPTURE_FAILED: &str = "capture_failed";
     pub const NO_SCREEN_PERMISSION: &str = "no_screen_permission";
+    /// `clipboard_set` refusals.
+    pub const EMPTY: &str = "empty";
+    pub const TOO_LARGE: &str = "too_large";
+    pub const CLIPBOARD_FAILED: &str = "clipboard_failed";
 }
 
 #[cfg(test)]
@@ -313,6 +344,16 @@ mod tests {
         assert_eq!(r, Request { id: Some(9), nr: false, op: Op::TccRequest });
         let r: Request = serde_json::from_value(json!({"id": 1, "op": "banner", "text": null})).unwrap();
         assert_eq!(r.op, Op::Banner { text: None });
+    }
+
+    /// What the daemon's stream sends (`managed.rs`) parses as is.
+    #[test]
+    fn the_daemons_clipboard_requests_parse() {
+        let r: Request = serde_json::from_value(json!({"id": 5, "op": "clipboard_get"})).unwrap();
+        assert_eq!(r, Request { id: Some(5), nr: false, op: Op::ClipboardGet });
+        let r: Request = serde_json::from_value(json!({"id": 6, "op": "clipboard_set", "text": "héllo\nthere"})).unwrap();
+        assert_eq!(r.op, Op::ClipboardSet { text: "héllo\nthere".into() });
+        assert!(serde_json::from_value::<Request>(json!({"id": 7, "op": "clipboard_set"})).is_err(), "text is required");
     }
 
     #[test]

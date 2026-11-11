@@ -80,8 +80,8 @@ export interface NativeRecording {
   startedBy: string | null
   /** The notice, while `myConsent` is `pending`. */
   prompt: NativeConsentPrompt | null
-  /** Sew 0.9.2's plugin: whether this person may press Record / Stop now.
-   *  Absent (null) from the 0.9.0 plugin: `recordingButtons` derives them. */
+  /** Plugin 0.6.1 (Sew 0.9.2): whether this person may press Record / Stop
+   *  now; the plugin writes each only when true. */
   canRecord?: boolean | null
   canStop?: boolean | null
 }
@@ -131,12 +131,11 @@ export interface NativeEvents {
   onDevices(devices: NativeDevices): void
   onError(code: string, detail: unknown): void
   onRecording(recording: NativeRecording | null): void
-  /** Plugin 0.6.1 (Sew 0.9.2): may this person press Record / Stop now.
-   *  Never sent by 0.6.0. */
+  /** Plugin 0.6.1 (Sew 0.9.2): may this person press Record / Stop now. */
   onRecordingControls?(controls: { canRecord: boolean; canStop: boolean }): void
 }
 
-/** Plugin 0.6.1's event (not in 0.6.0's list, so not in the contract file yet). */
+/** Plugin 0.6.1's event (Sew's contract: `recording.controls.rights`). */
 export const RECORDING_CONTROLS_EVENT = 'recording_controls'
 
 export function parseRecordingControls(v: unknown): { canRecord: boolean; canStop: boolean } {
@@ -368,21 +367,11 @@ export class NativeVoiceEngine {
     await this.command<null>('consent', { granted, notice_version: noticeVersion })
   }
 
-  /** Sew 0.9.2's plugin (0.6.1, gated on the command being there, not the version): hand it the raw facts it computes
-   *  `can_record` / `can_stop` from. `false`: this plugin has no such command
-   *  (0.6.0, Sew 0.9.0), so the caller derives the buttons itself
-   *  (`recording-controls.ts` `derivedButtons`). Delete the `false` path with
-   *  the 0.9.2 pin. */
-  async setRecordingRights(rights: RecordingRights): Promise<boolean> {
-    try {
-      await this.command<null>('set_recording_rights', { ...rights })
-      return true
-    } catch (err) {
-      // A plain string is Tauri's own: the command doesn't exist (or isn't
-      // granted) in this plugin. Anything else is the plugin's refusal.
-      if (err instanceof NativeVoiceError && err.code === 'failed' && typeof err.detail === 'string') return false
-      throw err
-    }
+  /** Plugin 0.6.1 (Sew 0.9.2, permission set `sew-voice:recording`): hand
+   *  it the raw facts it computes `can_record` / `can_stop` from; its answer
+   *  comes on the `recording_controls` event. A refusal throws. */
+  async setRecordingRights(rights: RecordingRights): Promise<void> {
+    await this.command<null>('set_recording_rights', { ...rights })
   }
 
   /** Record (Sew 0.9.0, permission set `sew-voice:recording`). */

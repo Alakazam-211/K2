@@ -23,7 +23,6 @@ import {
 import { micBlockedText, MIC_DENIED_LINE } from '@/lib/voice/voice-wire'
 import { policyBlockText } from '@/lib/voice/video-labels'
 import { recordingBadgeTitle, recordingButtons } from '@/lib/voice/recording-controls'
-import type { NativeParticipant } from '@/lib/voice/native-voice-engine'
 import type { VoiceCall } from '@/stores/voice-core'
 import type { VideoController } from '@/stores/video-core'
 
@@ -248,18 +247,6 @@ export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: Ca
   )
 }
 
-/** The engine's people as the derived rule reads them. */
-function peopleOf(call: VoiceCall): NativeParticipant[] {
-  return call.participants.map((p) => ({
-    memberId: p.memberId ?? '',
-    isSelf: p.isSelf === true,
-    muted: p.muted,
-    deafened: false,
-    serverMuted: false,
-    serverDeafened: false,
-    speakDenied: false,
-  }))
-}
 
 export default function CallControls({ variant, call, actions, video }: CallControlsProps): React.JSX.Element {
   const busy = call.phase === 'joining'
@@ -269,8 +256,6 @@ export default function CallControls({ variant, call, actions, video }: CallCont
   const rec = recordingButtons({
     perms: call.recordingPerms,
     recording: call.recording,
-    people: peopleOf(call),
-    inCall: call.phase === 'connected' || call.phase === 'reconnecting',
     controls: call.recordingControls,
   })
   return (

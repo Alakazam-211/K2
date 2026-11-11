@@ -112,7 +112,7 @@ export interface VoiceCall {
   /** The person's own Sew permissions in the room (Record and Stop), once read. */
   recordingPerms: RecordingPerms | null
   /** Plugin 0.6.1's `recording_controls` (Sew 0.9.2): it decides Record and
-   *  Stop. Null with plugin 0.6.0 (the derived rule stands in). */
+   *  Stop. Null until the plugin sends one. */
   recordingControls: RecordingButtons | null
 }
 
@@ -266,8 +266,6 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
   let nativeSpeaking = new Set<string>()
   /** The notice (recording and version) this window already put up. */
   let toldRecording: string | null = null
-  /** The plugin takes `set_recording_rights` (Sew 0.9.2): null until tried. */
-  let rightsCommand: boolean | null = null
   /** Bumped per join/leave so a stale async step never touches a newer call. */
   let callGen = 0
   /** Lists in a row that didn't show this login in its room. */
@@ -706,8 +704,8 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
     else console.warn(`[voice] engine says: ${code}`)
   }
 
-  /** The person's own Sew permissions in the call's room, for Record and
-   *  Stop (Sew 0.9.0's plugin has no `can_record` / `can_stop` until 0.9.2). */
+  /** The person's own Sew permissions in the call's room, handed to the
+   *  plugin, which decides Record and Stop (`recording_controls`). */
   const readRecordingPerms = async (): Promise<void> => {
     const c = store.getState().call
     const read = deps.api.recordingControls
@@ -717,12 +715,9 @@ export function createVoiceController(deps: VoiceDeps): VoiceController {
       const perms = await read(deps.scopeFor(c.hostKey), c.roomId)
       const now = store.getState().call
       if (gen === callGen && now) store.setState({ call: { ...now, recordingPerms: perms } })
-      // Sew 0.9.2's plugin decides Record and Stop from these facts (passed
-      // through as read); 0.6.0's has no such command, and the derived rule
-      // stands in (`recordingButtons`).
-      if (native && perms.rights && rightsCommand !== false) {
-        rightsCommand = await native.setRecordingRights(perms.rights)
-      }
+      // The plugin decides Record and Stop from these facts, passed through
+      // as read.
+      if (native && perms.rights) await native.setRecordingRights(perms.rights)
     } catch (err) {
       console.warn('[voice] reading the recording controls failed:', err)
     }

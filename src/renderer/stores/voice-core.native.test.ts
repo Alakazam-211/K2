@@ -664,7 +664,7 @@ describe("recording in K2's own rooms (Sew 0.9.0): told, not asked", () => {
     expect(sent).toContain(`${P}stop_recording`)
   })
 
-  it("hands the plugin the raw rights facts when it takes them (Sew 0.9.2), passed through unchanged", async () => {
+  it("hands the plugin the raw rights facts (plugin 0.6.1, Sew 0.9.2), passed through unchanged", async () => {
     const rights = { room: 'room-1', my_perms: '8388608', dm: false, recording_enabled: true, record_capped: false, agent: false }
     const s = setup()
     s.api.recordingControls.mockImplementation(async () => ({ recordCalls: true, manageChannels: false, rights }))

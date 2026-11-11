@@ -6,6 +6,7 @@ import {
   NativeVoiceEngine,
   NativeVoiceError,
   PLUGIN_COMMAND_PREFIX,
+  RECORDING_CONTROLS_EVENT,
   parseCallState,
   parseDevices,
   parseEngineError,
@@ -85,7 +86,7 @@ describe("Sew's contract (native-voice-contract.json, held to the plugin's types
       prompt: null,
     })
     expect(parseRecording(contract.recording.granted)).toMatchObject({ recordingId: '77', myConsent: 'granted', recorderPresent: true, startedBy: '7' })
-    // Sew 0.9.2's plugin adds can_record / can_stop; absent on 0.9.0's.
+    // Plugin 0.6.1 writes can_record / can_stop only when true.
     expect(parseRecording(contract.recording.granted)).not.toHaveProperty('canRecord')
     expect(parseRecording({ ...contract.recording.granted, can_record: false, can_stop: true })).toMatchObject({ canRecord: false, canStop: true })
     expect(parseRecording(contract.recording.stopped)).toBeNull()
@@ -186,7 +187,7 @@ describe('events', () => {
     const e = new NativeVoiceEngine(f.bridge)
     const ev = events()
     await e.start(ev)
-    // Plus plugin 0.6.1's recording_controls (0.6.0 never sends it).
+    // Plus plugin 0.6.1's recording_controls (Sew's contract: recording.controls.rights).
     expect([...f.listeners.keys()].sort()).toEqual([...contract.events, 'recording_controls'].map((n: string) => `${contract.eventPrefix}${n}`).sort())
     f.fire('sew-voice://state', contract.states.connected)
     f.fire('sew-voice://participants', contract.participants)
@@ -243,13 +244,16 @@ describe('rejections', () => {
     expect(contract.recordingCommands).toEqual(['start_recording', 'stop_recording'])
   })
 
-  it("set_recording_rights: true where the plugin has it (Sew 0.9.2), false on 0.6.0's Tauri refusal, a plugin refusal throws", async () => {
-    const rights = { room: 'room-1', my_perms: '8388608', dm: false, record_capped: false, agent: false }
+  it("set_recording_rights (plugin 0.6.1, Sew 0.9.2) sends Sew's contract args as given; any refusal throws", async () => {
+    const sew = JSON.parse(readFileSync(resolve(__dirname, 'sew-native-voice-contract.json'), 'utf8'))
+    const rights = sew.recording.controls.rights.args
+    expect(sew.recording.controls.rights.command).toBe('set_recording_rights')
+    expect(sew.recording.controls.rights.event).toBe(`${EVENT_PREFIX}${RECORDING_CONTROLS_EVENT}`)
     const ok = fakeBridge()
-    expect(await new NativeVoiceEngine(ok.bridge).setRecordingRights(rights)).toBe(true)
+    await new NativeVoiceEngine(ok.bridge).setRecordingRights(rights)
     expect(ok.calls).toEqual([{ command: `${PLUGIN_COMMAND_PREFIX}set_recording_rights`, args: rights }])
-    const old = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}set_recording_rights`]: 'Command set_recording_rights not found' })
-    expect(await new NativeVoiceEngine(old.bridge).setRecordingRights(rights)).toBe(false)
+    const missing = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}set_recording_rights`]: 'Command set_recording_rights not found' })
+    await expect(new NativeVoiceEngine(missing.bridge).setRecordingRights(rights)).rejects.toBeInstanceOf(NativeVoiceError)
     const refused = fakeBridge({}, { [`${PLUGIN_COMMAND_PREFIX}set_recording_rights`]: { code: 'not_in_call', detail: null } })
     await expect(new NativeVoiceEngine(refused.bridge).setRecordingRights(rights)).rejects.toMatchObject({ code: 'not_in_call' })
   })

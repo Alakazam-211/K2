@@ -9,13 +9,13 @@
 // answer within a minute. Apps' Spaces keep Sew's full per-person sheet; this
 // is only for K2's own rooms.
 
-import type { NativeConsentPrompt, NativeParticipant, NativeRecording } from './native-voice-engine'
+import type { NativeConsentPrompt, NativeRecording } from './native-voice-engine'
 
 /** The person's Sew permissions in the room (`POST /cli/voice/recording/controls`). */
 export interface RecordingPerms {
-  /** RECORD_CALLS in the channel's `my_perms`. */
+  /** RECORD_CALLS in the channel's `my_perms` (shown, never decided on: the plugin decides). */
   recordCalls: boolean
-  /** MANAGE_CHANNELS in the channel's `my_perms`. */
+  /** MANAGE_CHANNELS in the channel's `my_perms` (likewise). */
   manageChannels: boolean
   /** A Voice & Chat only login: it never records. */
   voiceChatOnly?: boolean
@@ -42,57 +42,21 @@ export interface RecordingButtons {
 
 /**
  * Which of Record and Stop to show. Sew 0.9.2's plugin (0.6.1) computes them
- * from the rights K2 hands it (`set_recording_rights`) and sends them on its
- * `recording_controls` event (`controls`): when K2 has that, it decides. A
- * Voice & Chat only login never records either way.
+ * from the rights K2 hands it (`set_recording_rights`) and says so on its
+ * `recording_controls` event (`controls`); until that event comes, the
+ * recording event's own `can_record` / `can_stop` (written only when true).
+ * K2 adds no rule of its own: no word from the plugin shows neither. A Voice
+ * & Chat only login never records either way.
  */
 export function recordingButtons(opts: {
   perms: RecordingPerms | null
   recording: NativeRecording | null
-  people: NativeParticipant[]
-  isDm?: boolean
-  /** In the call (connected), not held for a notice. */
-  inCall?: boolean
-  /** The plugin's `recording_controls` (0.6.1+); null from 0.6.0. */
+  /** The plugin's `recording_controls`: null until it sends one. */
   controls?: RecordingButtons | null
 }): RecordingButtons {
   if (opts.perms?.voiceChatOnly) return { canRecord: false, canStop: false }
   if (opts.controls) return opts.controls
-  return derivedButtons(opts)
-}
-
-/**
- * FALLBACK for plugin 0.6.0 (Sew 0.9.0), which has no `set_recording_rights`
- * and sends no `recording_controls`. Delete with the Sew 0.9.2 pin. Sew's own
- * rules, as the 0.6.1 plugin applies them:
- *   Record: in the call, nothing recording, `recording.enabled` (and
- *   `dm_enabled` in a DM), RECORD_CALLS, not an agent, and not capped
- *   (`voice:record` where the App requires it).
- *   Stop: a recording running and you in the call; in a DM anyone in it;
- *   elsewhere the starter, RECORD_CALLS or MANAGE_CHANNELS; never while a
- *   `trigger: "required"` recording has two or more people in the room.
- */
-export function derivedButtons(opts: {
-  perms: RecordingPerms | null
-  recording: NativeRecording | null
-  people: NativeParticipant[]
-  isDm?: boolean
-  inCall?: boolean
-}): RecordingButtons {
-  const { perms, recording, people } = opts
-  const none = { canRecord: false, canStop: false }
-  if (!perms || perms.voiceChatOnly || opts.inCall === false) return none
-  const r = perms.rights
-  const dm = opts.isDm === true || r?.dm === true
-  if (!recording) {
-    const enabled = r?.recording_enabled !== false && (!dm || r?.recording_dm_enabled !== false)
-    return { canRecord: enabled && perms.recordCalls && r?.agent !== true && r?.record_capped !== true, canStop: false }
-  }
-  const self = people.find((p) => p.isSelf)
-  const started = self !== undefined && recording.startedBy === self.memberId
-  const mayStop = dm || started || perms.recordCalls || perms.manageChannels
-  const heldOpen = recording.trigger === 'required' && people.length >= 2
-  return { canRecord: false, canStop: mayStop && !heldOpen }
+  return { canRecord: opts.recording?.canRecord === true, canStop: opts.recording?.canStop === true }
 }
 
 /** K2's own line when an agent on this server may read its rooms' transcripts. */

@@ -148,6 +148,21 @@ describe('the K5 offer after a sign-in', () => {
     expect(useK5SheetStore.getState().isOpen).toBe(false)
   })
 
+  it('the offer is a group named by its title, and waits while Not now is sent', async () => {
+    await signIn('signed_in')
+    const offerBox = await screen.findByTestId('k5-offer')
+    expect(screen.getByRole('group', { name: K5_OFFER_COPY.title })).toBe(offerBox)
+    let answer: (v: unknown) => void = () => {}
+    h.daemonCliPost.mockImplementation(() => new Promise((r) => (answer = r)))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('k5-offer-dismiss'))
+    })
+    expect((screen.getByTestId('k5-offer-dismiss') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('k5-offer-meet') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => answer(status(null)))
+    await waitFor(() => expect(screen.queryByTestId('k5-offer')).toBeNull())
+  })
+
   it('no offer without meet_k5', async () => {
     offer = null
     await signIn('signed_in')

@@ -8,9 +8,10 @@
 // role. Plus this computer's own call preference (join muted).
 //
 // Sew 0.9.0: "Require recording when two or more people are in a room"
-// shows only once the daemon says K2's desktop answers consent prompts
-// (`recording.consentSheet`; Rosson's answer 6). The daemon refuses the
-// switch until then anyway (`client_consent_missing`).
+// shows while the daemon says K2's desktop answers recording notices
+// (`recording.consentSheet`, on since 0.46.11; Rosson's answer 6). The line
+// "Agents on this server may read the transcript" shows while an agent holds
+// "Read call transcripts" (`recording.agentReaders`).
 //
 // Shown in the nav only with the window's server's `voice_rooms_preview` on.
 // A server that can't host (not Linux, not Pro…) shows the daemon's line. It
@@ -238,8 +239,14 @@ export function VoiceRoomsSection(): React.JSX.Element {
             onChange={(on) => void requireRecording(on)}
             size="sm"
           />
-          Require recording when two or more people are in a room. Each person still answers their own consent notice.
+          Require recording when two or more people are in a room. Everyone is told: the notice is OK or leave the call.
         </label>
+      ) : null}
+      {recording?.agentReaders ? (
+        <div className="type-hint text-[var(--color-text-secondary)]" data-testid="voice-rooms-agent-readers">
+          Agents on this server may read the transcript. Each person&apos;s recording notice says so (Settings → Workspaces → an
+          agent → Read call transcripts).
+        </div>
       ) : null}
 
       {rooms ? (

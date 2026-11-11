@@ -165,6 +165,8 @@ export interface VoiceRecordingSettings {
   /** K2's desktop answers consent prompts: until then "require recording"
    *  stays hidden (Rosson's answer 6). */
   consentSheet: boolean
+  /** 0.46.11: an agent holds "Read call transcripts" (the notice says so). */
+  agentReaders: boolean
 }
 
 function parseRecording(v: unknown): VoiceRecordingSettings | undefined {
@@ -178,6 +180,7 @@ function parseRecording(v: unknown): VoiceRecordingSettings | undefined {
     locked: r.locked === true,
     canRequire: flags.recordingRequired === true,
     consentSheet: r.consentSheet === true,
+    agentReaders: r.agentReaders === true,
   }
 }
 

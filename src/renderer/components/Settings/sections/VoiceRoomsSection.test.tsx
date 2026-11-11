@@ -131,6 +131,16 @@ describe('VoiceRoomsSection', () => {
     expect(screen.getByText(/Require recording when two or more people are in a room/)).toBeTruthy()
     fireEvent.click(sw)
     await waitFor(() => expect(h.setRequired).toHaveBeenCalledWith({ hostKey: 'sewlab.k2.dev', id: 'p' }, true))
+    expect(screen.queryByTestId('voice-rooms-agent-readers')).toBeNull()
+  })
+
+  it("the room's recording settings say when agents may read the transcript (0.46.11)", async () => {
+    const recording = { spaceId: '4001', startLevel: null, required: null, locked: false, canRequire: true, consentSheet: true, agentReaders: true }
+    h.rooms.mockResolvedValue(rooms(true))
+    h.status.mockResolvedValue({ hosting: { state: 'ok', line: null, detail: null }, count: 2, mediaTier: null, recording })
+    render(<VoiceRoomsSection />)
+    const line = await screen.findByTestId('voice-rooms-agent-readers')
+    expect(line.textContent).toContain('Agents on this server may read the transcript.')
   })
 
   it('shows why the server cannot host (§4.5)', async () => {

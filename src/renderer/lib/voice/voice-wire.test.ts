@@ -93,7 +93,9 @@ describe('parseVoiceStatus (voice/routes.rs status_view)', () => {
       locked: false,
       canRequire: true,
       consentSheet: false,
+      agentReaders: false,
     })
+    expect(parseVoiceStatus({ count: 1, recording: { flags, consentSheet: true, agentReaders: true } }).recording?.agentReaders).toBe(true)
   })
 })
 

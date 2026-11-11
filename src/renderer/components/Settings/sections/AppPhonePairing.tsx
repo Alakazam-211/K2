@@ -31,7 +31,7 @@ const secondary = 'type-hint text-[var(--color-text-secondary)]'
 const field = 'w-full type-control font-mono'
 
 const NO_CONFIRM_HINT =
-  'No vault password and no Owner Connect login on this box: setting the phone apps needs one (k2 vault password set).'
+  'This server has no way to confirm it’s you yet, so the phone apps can’t be set. Set a vault password on the Vault page, then try again.'
 
 type Confirm = { step: 'idle' } | { step: 'starting' } | { step: 'mac' } | { step: 'password'; method: string }
 

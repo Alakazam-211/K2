@@ -40,7 +40,7 @@ import {
 } from '../controls/SettingControls'
 import { AccessSheet } from './AccessDialogs'
 import { LinuxOnlyNote } from './LinuxOnlyNote'
-import { PaneHeader, StatusDot, type DotTone } from './apps-ui'
+import { PaneHeader, StatusDot, serverWords, type DotTone } from './apps-ui'
 import type { SettingEntry } from '../searchManifest'
 import {
   changeLines,
@@ -71,7 +71,7 @@ export const APPS_SERVER_MANIFEST: SettingEntry[] = [
     section: 'skin-access',
     label: 'Apps on this server',
     beta: true,
-    description: 'Turn Apps on or off, check the box, prepare it and install the App engine',
+    description: 'Turn Apps on or off, check and set up this server, and install the App runtime',
     keywords: ['apps', 'app', 'beta', 'this server', 'doctor', 'prepare', 'box', 'podman', 'engine', 'k2 app doctor', 'setup'],
     group: 'This server',
   },
@@ -108,7 +108,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       if (mounted.current) setBox({ kind: 'ready', doctor: d })
     } catch (e) {
       if (!mounted.current) return
-      setBox(isAppsOff(e) ? { kind: 'off' } : { kind: 'error', text: daemonErrorText(e) })
+      setBox(isAppsOff(e) ? { kind: 'off' } : { kind: 'error', text: serverWords(daemonErrorText(e)) })
     }
   }, [])
 
@@ -145,7 +145,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       setDry(null)
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t turn Apps ${next ? 'on' : 'off'}: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t turn Apps ${next ? 'on' : 'off'}: ${serverWords(daemonErrorText(e))}. Try again.` })
     } finally {
       setSwitchBusy(false)
     }
@@ -157,7 +157,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
     try {
       setDry(await prepareDryRun())
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t work out what Prepare would change: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t work out what Prepare would change: ${serverWords(daemonErrorText(e))}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -176,7 +176,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
     } catch (e) {
       setNotice({
         tone: 'error',
-        text: `Couldn’t prepare the server: ${daemonErrorText(e)}. The checks below show where it is now.`,
+        text: `Couldn’t prepare the server: ${serverWords(daemonErrorText(e))}. The checks below show where it is now.`,
       })
       await load()
     } finally {
@@ -191,7 +191,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       await setAutoPrepare(next)
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t change automatic setup: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t change automatic setup: ${serverWords(daemonErrorText(e))}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -205,7 +205,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       setNotice({ tone: 'info', text: 'Automatic setup will run again now.' })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t restart automatic setup: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t restart automatic setup: ${serverWords(daemonErrorText(e))}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -217,7 +217,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
     try {
       setUnprep(await unprepDryRun())
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t work out what Undo would remove: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t work out what Undo would remove: ${serverWords(daemonErrorText(e))}. Try again.` })
     } finally {
       setBusy(null)
     }
@@ -236,7 +236,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t prepare the server: ${daemonErrorText(e)}. The checks below show where it is now.` })
+      setNotice({ tone: 'error', text: `Couldn’t prepare the server: ${serverWords(daemonErrorText(e))}. The checks below show where it is now.` })
       await load()
     } finally {
       setBusy(null)
@@ -251,7 +251,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
       setNotice({ tone: 'ok', text: `The App runtime ${r.version ?? ''} is installed and answering.`.replace('  ', ' ') })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t install the App runtime: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t install the App runtime: ${serverWords(daemonErrorText(e))}. Try again.` })
       await load()
     } finally {
       setBusy(null)
@@ -314,7 +314,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
 
       <SettingsGroup
         card
-        title="Box checks"
+        title="Server checks"
         hint="What this server needs to run Apps safely."
         action={
           doctor ? (
@@ -354,7 +354,9 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
                   {!doctor.linux
                     ? 'Apps run walled on Linux servers. This machine can build and check Apps, not run them.'
                     : doctor.ready
-                      ? `${attention ? 'The checks below are worth a look. ' : ''}${doctor.runtime ? `Containers run on ${doctor.runtime}.` : ''}`
+                      ? attention
+                        ? 'Ready to run Apps. The check below is worth a look.'
+                        : 'Ready to run Apps.'
                       : 'The checks below need attention. Prepare this server, under Set up, fixes most of them.'}
                 </p>
               </div>
@@ -441,7 +443,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
                     <p className="type-hint text-[var(--color-status-warn-text)] leading-relaxed">
                       {doctor.autoPrepare.undoneAt !== null
                         ? 'Paused because you undid the setup.'
-                        : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this box can’t be prepared'}.`}{' '}
+                        : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this server can’t be set up'}.`}{' '}
                       K2 won&apos;t try again until you press Retry or K2 updates.
                     </p>
                     <Button
@@ -511,7 +513,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
                 disabled={!isOwner || busy !== null}
                 data-testid="apps-prepare-apply"
               >
-                {busy === 'apply' ? 'Preparing… (a few minutes)' : needsPodmanInstall(dry) ? 'Prepare (installs Podman)' : 'Prepare'}
+                {busy === 'apply' ? 'Preparing… (a few minutes)' : needsPodmanInstall(dry) ? 'Prepare (installs the container engine)' : 'Prepare'}
               </Button>
             </>
           }
@@ -525,7 +527,7 @@ export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {})
           </ol>
           {needsPodmanInstall(dry) && dry.podman.bundle ? (
             <p className={`${SETTING_SERVER_REASON} break-all`}>
-              K2&apos;s Podman {dry.podman.bundle.version}, sha256 {dry.podman.bundle.sha256}, from {dry.podman.bundle.url}
+              Container engine: Podman {dry.podman.bundle.version} from {dry.podman.bundle.url} (sha256 {dry.podman.bundle.sha256})
             </p>
           ) : null}
           {!isOwner ? <p className={SETTING_ROW_HINT}>Only the server&rsquo;s owner can prepare it.</p> : null}
@@ -586,6 +588,28 @@ const LAST_RUN_WORDS: Record<string, string> = {
   blocked: 'stopped',
 }
 
+/** A check's value in plain words: no K2-internal notes, just the number
+ *  a person reads ("Podman 5.2", "38 GB"); the kernel's own version is left
+ *  out. Unknown checks show the daemon's detail. */
+export function checkValue(c: Pick<BoxCheck, 'id' | 'detail'>): string {
+  const d = serverWords(c.detail.trim())
+  if (!d) return ''
+  switch (c.id) {
+    case 'kernel':
+      return ''
+    case 'podman': {
+      const v = d.replace(/\s*\(K2[’']s\)\s*$/i, '')
+      return /^\d/.test(v) ? `Podman ${v}` : v.replace(/^podman\b/i, 'Podman')
+    }
+    case 'disk': {
+      const m = /^([\d.,]+\s*[KMGT]?B)\b/i.exec(d)
+      return m ? m[1] : d
+    }
+    default:
+      return d
+  }
+}
+
 /** The one line that sums the checks up. */
 function checksSummary(d: BoxDoctor): string {
   const total = d.checks.length
@@ -612,7 +636,7 @@ function CheckRow({ check }: { check: BoxCheck }): React.JSX.Element {
       <div className="min-w-0 flex-1">
         <span className="type-row text-[var(--color-text-primary)]">
           {checkLabel(check.id)}
-          {check.detail ? `: ${check.id === 'podman' && /^\d/.test(check.detail) ? `Podman ${check.detail}` : check.detail}` : ''}
+          {checkValue(check) ? `: ${checkValue(check)}` : ''}
         </span>
         {check.fix && check.status !== 'ok' ? <p className={SETTING_SERVER_REASON}>{fixWords(check.fix)}</p> : null}
       </div>

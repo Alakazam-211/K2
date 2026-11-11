@@ -45,7 +45,7 @@ import {
   SettingsLoadState,
 } from '../controls/SettingControls'
 import { AccessSheet } from './AccessDialogs'
-import { AppMonogram, StatusDot, appStateWords } from './apps-ui'
+import { AppMonogram, StatusDot, appStateWords, serverWords } from './apps-ui'
 import {
   APP_CORES,
   dismissReview,
@@ -109,7 +109,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
       if (mounted.current) setLoad({ kind: 'ready', apps })
     } catch (e) {
       if (!mounted.current) return
-      setLoad(isAppsOff(e) ? { kind: 'off' } : { kind: 'error', text: daemonErrorText(e) })
+      setLoad(isAppsOff(e) ? { kind: 'off' } : { kind: 'error', text: serverWords(daemonErrorText(e)) })
       return
     }
     try {
@@ -154,7 +154,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
       await f()
       setNotice({ tone: 'ok', text: ok })
     } catch (e) {
-      setNotice({ tone: 'error', text: `${what}: ${daemonErrorText(e)}. Nothing changed; try again.` })
+      setNotice({ tone: 'error', text: `${what}: ${serverWords(daemonErrorText(e))}. Nothing changed; try again.` })
     } finally {
       setBusy(null)
       setConfirmUninstall(null)
@@ -175,7 +175,7 @@ export function AppsBoxSection(): React.JSX.Element | null {
       if (lost) setLoss(lost[0])
       else {
         setConfirmUninstall(null)
-        setNotice({ tone: 'error', text: `Couldn’t uninstall ${appId}: ${daemonErrorText(e)}. It’s still installed; try again.` })
+        setNotice({ tone: 'error', text: `Couldn’t uninstall ${appId}: ${serverWords(daemonErrorText(e))}. It’s still installed; try again.` })
       }
     } finally {
       setBusy(null)

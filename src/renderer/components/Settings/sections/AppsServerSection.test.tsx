@@ -36,8 +36,9 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 
 import * as presence from '@/components/Presence/PresenceKickButton'
 import { useSettingsStore, appsSwitchFrom } from '@/stores/settings'
-import { AppsServerSection, APPS_SERVER_MANIFEST } from './AppsServerSection'
+import { AppsServerSection, checkValue, APPS_SERVER_MANIFEST } from './AppsServerSection'
 import { appEngineLine, changeLines, needsPodmanInstall, parseAppEngine, parseAutoPrepare, parseDoctor, parseDryRun, parseUnprepResult, stepWords } from './apps-server-api'
+import { serverWords } from './apps-ui'
 
 const role = vi.mocked(presence.fetchViewerRole)
 
@@ -178,6 +179,7 @@ describe('the box doctor', () => {
     const podman = await screen.findByTestId('apps-check-podman')
     expect(podman.getAttribute('data-status')).toBe('fail')
     expect(podman.textContent).toMatch(/Container engine: Podman 4\.9\.3/)
+    expect(podman.textContent).not.toMatch(/K2['’]s/)
     expect(podman.textContent).toMatch(/Fix: Prepare this server, under Set up\./)
     expect(screen.getByTestId('apps-checks-summary').textContent).toMatch(/^Not ready yet: \d+ of \d+ checks need attention$/)
     // The passing ones fold into the summary until Show details.
@@ -215,7 +217,7 @@ describe('Prepare this box', () => {
     expect(list.textContent).not.toMatch(/apps ensure-user/)
     expect(list.textContent).toMatch(/abc123/)
     const apply = screen.getByTestId('apps-prepare-apply') as HTMLButtonElement
-    expect(apply.textContent).toMatch(/installs Podman/)
+    expect(apply.textContent).toMatch(/installs the container engine/)
     fireEvent.click(apply)
     await screen.findByText('The server is prepared.')
     expect(postsTo('app/box/prepare')).toEqual([{ dryRun: true }, { installPodman: true }])
@@ -481,6 +483,15 @@ describe('helpers', () => {
     expect(parseAutoPrepare({ enabled: false, undoneAt: 7 })?.undoneAt).toBe(7)
     const r = parseUnprepResult({ result: { steps: [{ step: 'nft remove', changed: true }], kept: ['x'] }, note: 'n' })
     expect(r).toEqual({ steps: [{ step: 'nft remove', changed: true }], kept: ['x'], note: 'n', box: null })
+  })
+
+  it('says each check’s value plainly, and the daemon’s names in the page’s words', () => {
+    expect(checkValue({ id: 'podman', detail: "5.2 (K2's)" })).toBe('Podman 5.2')
+    expect(checkValue({ id: 'disk', detail: '38 GB free on /' })).toBe('38 GB')
+    expect(checkValue({ id: 'kernel', detail: '6.8' })).toBe('')
+    expect(checkValue({ id: 'platform', detail: 'Ubuntu 24.04' })).toBe('Ubuntu 24.04')
+    expect(serverWords('the root helper did not answer')).toBe('the admin helper didn’t answer')
+    expect(serverWords('box prep stopped on this box')).toBe('server setup stopped on this server')
   })
 
   it('the manifest points at the Apps section', () => {

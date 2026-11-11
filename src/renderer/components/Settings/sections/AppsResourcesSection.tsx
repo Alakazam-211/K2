@@ -18,7 +18,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { AccessSheet } from './AccessDialogs'
-import { StatusDot, type DotTone } from './apps-ui'
+import { StatusDot, serverWords, type DotTone } from './apps-ui'
 import type { SettingEntry } from '../searchManifest'
 import { isAppsOff } from './apps-server-api'
 import type { ViewerRole } from './app-access-api'
@@ -43,7 +43,7 @@ export const APPS_RESOURCES_MANIFEST: SettingEntry[] = [
   {
     id: 'skin-access.box-usage',
     section: 'skin-access',
-    label: 'Box usage',
+    label: 'Disk and memory',
     description: 'Disk used and free against the disk guard, the biggest users, CPU and memory over a day, and what K2 can clean',
     keywords: ['disk', 'disk guard', 'box usage', 'resources', 'storage', 'free space', 'clean', 'cpu', 'memory', 'ram', 'k2 app resources'],
     group: 'This server',
@@ -149,7 +149,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
       if (mounted.current) setLoad({ kind: 'ready', usage })
     } catch (e) {
       if (!mounted.current) return
-      setLoad(isAppsOff(e) ? { kind: 'off' } : { kind: 'error', text: daemonErrorText(e) })
+      setLoad(isAppsOff(e) ? { kind: 'off' } : { kind: 'error', text: serverWords(daemonErrorText(e)) })
       return
     }
     try {
@@ -185,7 +185,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
       const ok = await f()
       if (ok) setNotice({ tone: 'ok', text: ok })
     } catch (e) {
-      setNotice({ tone: 'error', text: `${what}: ${daemonErrorText(e)}. Nothing changed; try again.` })
+      setNotice({ tone: 'error', text: `${what}: ${serverWords(daemonErrorText(e))}. Nothing changed; try again.` })
     } finally {
       setBusy(null)
       await refresh()

@@ -64,6 +64,18 @@ export function StatusDot({ tone, className = '' }: { tone: DotTone; className?:
   )
 }
 
+/** A daemon reason shown on the Apps pages, with its internal names in
+ *  the page's words (the root helper is the admin helper, the box is the
+ *  server). The reason is still the server's own; only the names change. */
+export function serverWords(text: string): string {
+  return text
+    .replace(/\broot helper\b/gi, 'admin helper')
+    .replace(/\bdid not\b/g, 'didn’t')
+    .replace(/\bbox prep\b/gi, 'server setup')
+    .replace(/\bthe box\b/gi, 'the server')
+    .replace(/\bthis box\b/gi, 'this server')
+}
+
 /** An App's running state in plain words, with its dot. */
 export function appStateWords(state: string): { tone: DotTone; words: string } {
   switch (state) {

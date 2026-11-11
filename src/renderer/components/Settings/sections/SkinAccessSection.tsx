@@ -65,8 +65,8 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
     id: 'skin-access.keys',
     section: 'skin-access',
-    label: 'Platform tokens',
-    description: 'Mint platform k2skn_ tokens (name, caps, rooms); secret shown once. Not for a user.',
+    label: 'Keys for other sites',
+    description: 'Keys that let another site or service read or post in an agent’s Thread; each is shown once. Not for people.',
     keywords: [
       'skin token',
       'k2skn',
@@ -82,15 +82,15 @@ export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
       'skin',
       'app',
     ],
-    group: 'Platform tokens',
+    group: 'Keys for other sites',
   },
   {
     id: 'skin-access.hydra',
     section: 'skin-access',
-    label: 'OIDC issuer (Hydra)',
-    description: 'Opt-in Hydra sidecar — Linux loopback 4444/4445; enabling apps does not start Hydra',
+    label: 'Sign-in for other sites',
+    description: 'Let other sites sign people in with this server (OpenID Connect). Linux servers only; off unless you turn it on.',
     keywords: ['oidc', 'hydra', 'issuer', 'openid', 'skin', 'app'],
-    group: 'OIDC issuer (Hydra)',
+    group: 'Sign-in for other sites',
   },
 ]
 
@@ -782,7 +782,7 @@ export function SkinAccessSection(): React.JSX.Element {
       const h = await daemonCliGet<unknown>(primaryScope(), 'skin/hydra')
       setHydra(parseHydra(h))
     } catch (e) {
-      failures.push(`hydra: ${errText(e)}`)
+      failures.push(`sign-in for other sites: ${errText(e)}`)
       setHydra(DEFAULT_HYDRA)
     }
     if (failures.length) {
@@ -820,7 +820,7 @@ export function SkinAccessSection(): React.JSX.Element {
     try {
       const res = await daemonCliPost<unknown>(primaryScope(), 'skin-tokens', { name, caps, rooms })
       const secret = mintSecretFrom(res)
-      if (!secret) throw new Error('mint returned no secret')
+      if (!secret) throw new Error('the server sent no key back')
       setMintedSecret(secret)
       await refresh()
     } catch (e) {
@@ -920,7 +920,7 @@ export function SkinAccessSection(): React.JSX.Element {
         setEditKeyId(null)
         await refresh()
       } catch (e) {
-        setError(failed('Couldn’t save the token’s agents', e))
+        setError(failed('Couldn’t save the key’s agents', e))
       } finally {
         setBusyId(null)
       }
@@ -1023,7 +1023,7 @@ export function SkinAccessSection(): React.JSX.Element {
         await daemonCliPost(primaryScope(), 'skin-tokens/revoke', { id })
         await refresh()
       } catch (e) {
-        setError(failed('Couldn’t revoke the token', e))
+        setError(failed('Couldn’t revoke the key', e))
       } finally {
         setBusyId(null)
       }
@@ -1445,17 +1445,21 @@ export function SkinAccessSection(): React.JSX.Element {
                           <div className="type-name text-[var(--color-text-primary)]">{who}</div>
                           {selectedApp === 'host' && grant.subjectKind === 'principal' && person ? (
                             person.roleId || person.roleName ? null : (
-                              <p className={SETTING_ROW_HINT}>default rooms: {rooms.length ? rooms.join(', ') : 'none'}</p>
+                              <p className={SETTING_ROW_HINT}>
+                                {rooms.length
+                                  ? `No role yet, so they reach only ${rooms.map(handleName).join(', ')}’s Thread.`
+                                  : 'No role yet, so they reach no agent’s Thread.'}
+                              </p>
                             )
                           ) : selectedApp !== 'host' && grantRole ? (
                             <p className={SETTING_ROW_HINT}>{grantRole.name}</p>
                           ) : selectedApp !== 'host' && grant.subjectKind === 'principal' ? (
                             <p className={SETTING_ROW_HINT}>
-                              rooms:{' '}
                               {(() => {
                                 const ids = grantScopeRooms(grant.scope)
-                                if (!ids.length) return 'none'
-                                return ids.map((id) => workspaces.find((w) => w.id === id)?.handle ?? id).join(', ')
+                                if (!ids.length) return 'No role yet, so they reach no agent’s Thread.'
+                                const names = ids.map((id) => workspaces.find((w) => w.id === id)?.name ?? id)
+                                return `No role yet, so they reach only ${names.join(', ')}’s Thread.`
                               })()}
                             </p>
                           ) : null}
@@ -1563,14 +1567,14 @@ export function SkinAccessSection(): React.JSX.Element {
                 <>
                   <SettingsGroup
                     card
-                    title="Platform tokens"
+                    title="Keys for other sites"
                     settingId="skin-access.keys"
-                    hint="Let another service, like your website, read or post in an agent’s Thread. Not for people: give a person a role instead. Each token is shown once, when you make it."
+                    hint="A key lets another site or service, like your website, read or post in an agent’s Thread. Not for people: give a person a role instead. Each key is shown once, when you create it."
                   >
                     {!bannerDismissed && darkKeys.length > 0 ? (
                       <div className="px-4 py-3">
                         <Callout tone="warn" role="status" className="type-hint flex items-center justify-between gap-4">
-                          <span>Assign agents or these platform tokens go dark: a token with no agents can&rsquo;t reach any Thread.</span>
+                          <span>Give these keys an agent: a key with no agents can&rsquo;t reach any Thread.</span>
                           <Button onClick={() => setBannerDismissed(true)}>Dismiss</Button>
                         </Callout>
                       </div>
@@ -1582,7 +1586,7 @@ export function SkinAccessSection(): React.JSX.Element {
                           <div className="flex items-start justify-between gap-6">
                             <div className="min-w-0 flex-1">
                               <div className="flex items-baseline gap-2 flex-wrap">
-                                <span className="type-name text-[var(--color-text-primary)]">{k.name || 'Unnamed token'}</span>
+                                <span className="type-name text-[var(--color-text-primary)]">{k.name || 'Unnamed key'}</span>
                                 <span className="type-hint text-[var(--color-text-secondary)]" title={prefixLabel(k.prefix)}>{keyEnding(k.prefix)}</span>
                               </div>
                               <p className={SETTING_ROW_HINT}>
@@ -1608,8 +1612,8 @@ export function SkinAccessSection(): React.JSX.Element {
                                   onClick={() =>
                                     setAsk({
                                       title: `Revoke ${k.name || keyEnding(k.prefix)}?`,
-                                      message: 'The service using it stops working at once. A revoked token can’t come back: make a new one instead.',
-                                      confirmLabel: 'Revoke token',
+                                      message: 'The site using it stops working at once. A revoked key can’t come back: create a new one instead.',
+                                      confirmLabel: 'Revoke key',
                                       run: () => revokeKey(k.id),
                                     })
                                   }
@@ -1659,18 +1663,18 @@ export function SkinAccessSection(): React.JSX.Element {
                     <div className="px-4 py-3 space-y-3">
                       <div className="flex items-start justify-between gap-6">
                         <div className="min-w-0 flex-1">
-                          <div className={SETTING_ROW_LABEL}>New token</div>
-                          <p className={SETTING_ROW_HINT}>Name it after the service that uses it, pick what it may do and which agents it reaches.</p>
+                          <div className={SETTING_ROW_LABEL}>New key</div>
+                          <p className={SETTING_ROW_HINT}>Name it after the site that uses it, pick what it may do and which agents it reaches.</p>
                         </div>
                         <Input
                           className={`${SETTING_FIELD_WIDTH} type-control flex-shrink-0`}
-                          placeholder="Service name, like website"
+                          placeholder="Site name, like website"
                           autoCapitalize="none"
                           autoCorrect="off"
                           spellCheck={false}
                           value={mintName}
                           onChange={(e) => setMintName(e.target.value)}
-                          aria-label="Platform token name"
+                          aria-label="Key name"
                         />
                       </div>
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
@@ -1722,23 +1726,23 @@ export function SkinAccessSection(): React.JSX.Element {
                           </div>
                         </div>
                       ) : (
-                        <p className={SETTING_ROW_HINT}>No agents on this server yet: add a workspace before making a token.</p>
+                        <p className={SETTING_ROW_HINT}>No agents on this server yet: add a workspace before creating a key.</p>
                       )}
                       {mintError ? (
                         <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
-                          Couldn&rsquo;t make the token. <span className="text-[var(--color-text-muted)]">{trimReason(mintError)}.</span>
+                          Couldn&rsquo;t create the key. <span className="text-[var(--color-text-muted)]">{trimReason(mintError)}.</span>
                         </p>
                       ) : null}
                       {mintedSecret ? (
                         <Callout tone="warn" className="type-hint space-y-2" data-testid="apps-token-secret">
-                          <p className="font-medium">Copy this token now. K2 can&rsquo;t show it again.</p>
+                          <p className="font-medium">Copy this key now. K2 can&rsquo;t show it again.</p>
                           <code className="block break-all select-all text-[var(--color-text-primary)]">{mintedSecret}</code>
                           <Button
                             onClick={() => {
                               void navigator.clipboard?.writeText(mintedSecret)
                             }}
                           >
-                            Copy token
+                            Copy key
                           </Button>
                         </Callout>
                       ) : null}

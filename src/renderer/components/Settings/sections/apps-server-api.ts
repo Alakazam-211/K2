@@ -367,7 +367,7 @@ const CHECK_LABELS: Record<string, string> = {
   ptraceScope: 'Process isolation',
   usernsRestricted: 'User namespaces',
   ownerConfirm: 'Owner confirm',
-  disk: 'Free disk',
+  disk: 'Free disk space',
 }
 
 export function checkLabel(id: string): string {

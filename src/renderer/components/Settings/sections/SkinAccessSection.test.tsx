@@ -352,7 +352,7 @@ describe('SkinAccessSection', () => {
     })
     render(<SkinAccessSection />)
     await openHost()
-    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
@@ -386,7 +386,7 @@ describe('SkinAccessSection', () => {
       'agent:handle',
       'files:download',
     ])
-    expect(screen.getByText('Copy this token now. K2 can’t show it again.')).not.toBeNull()
+    expect(screen.getByText('Copy this key now. K2 can’t show it again.')).not.toBeNull()
     expect(screen.getByText('Key ending in ab12')).not.toBeNull()
   })
 
@@ -420,7 +420,7 @@ describe('SkinAccessSection', () => {
     expect(read.checked).toBe(false)
     expect(write.checked).toBe(false)
     expect(read.closest('label')?.getAttribute('title')).toBe(SKIN_CAP_LABELS['heartbeats:read'])
-    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'kiosk' } })
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'kiosk' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(read)
     fireEvent.click(write)
@@ -445,7 +445,7 @@ describe('SkinAccessSection', () => {
     await openHost()
     expect(screen.getByLabelText('Mint cap files:read')).not.toBeNull()
     expect(screen.getByLabelText('Mint cap files:write')).not.toBeNull()
-    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByLabelText('Mint cap files:read'))
     fireEvent.click(screen.getByLabelText('Mint cap files:write'))
@@ -466,13 +466,13 @@ describe('SkinAccessSection', () => {
     h.daemonCliPost.mockResolvedValue({ id: 'tok-new', prefix: 'k2skn_ffff' })
     render(<SkinAccessSection />)
     await openHost()
-    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
-      expect(screen.getByRole('alert').textContent).toMatch(/mint returned no secret/)
+      expect(screen.getByRole('alert').textContent).toMatch(/the server sent no key back/)
     })
-    expect(screen.queryByText('Copy this token now. K2 can’t show it again.')).toBeNull()
+    expect(screen.queryByText('Copy this key now. K2 can’t show it again.')).toBeNull()
   })
 
   it('fails loud when GET routes reject', async () => {
@@ -496,7 +496,7 @@ describe('SkinAccessSection', () => {
     // Asks first in a dialog (never window.confirm); nothing is sent until it's confirmed.
     expect(confirm).not.toHaveBeenCalled()
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('skin-tokens/revoke', expect.anything())
-    fireEvent.click(within(screen.getByTestId('apps-confirm')).getByRole('button', { name: 'Revoke token' }))
+    fireEvent.click(within(screen.getByTestId('apps-confirm')).getByRole('button', { name: 'Revoke key' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin-tokens/revoke', { id: 'tok-1' })
     })
@@ -571,16 +571,16 @@ describe('SkinAccessSection', () => {
     })
     render(<SkinAccessSection />)
     await openHost()
-    expect(screen.getByText(/Assign agents or these platform tokens go dark/i)).not.toBeNull()
+    expect(screen.getByText(/Give these keys an agent/i)).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
-    expect(screen.queryByText(/Assign agents or these platform tokens go dark/i)).toBeNull()
+    expect(screen.queryByText(/Give these keys an agent/i)).toBeNull()
     expect(h.daemonCliPost.mock.calls.map((c) => String(c[0])).join(' ')).not.toMatch(/rooms/)
   })
 
   it('mints disabled until an agent is checked', async () => {
     render(<SkinAccessSection />)
     await openHost()
-    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'vercel' } })
     expect((screen.getByRole('button', { name: 'Create key' }) as HTMLButtonElement).disabled).toBe(
       true,
     )
@@ -644,7 +644,7 @@ describe('SkinAccessSection', () => {
     expect(view.container.querySelector('select')).toBeNull()
     expect(screen.queryByRole('combobox')).toBeNull()
     expect(screen.queryByText('role-other')).toBeNull()
-    expect(screen.getByText('default rooms: secret-room')).toBeTruthy()
+    expect(screen.getByText('No role yet, so they reach only secret-room’s Thread.')).toBeTruthy()
     expect(
       screen.getByText(/These aren’t the server’s Owner, Admin or Member roles/),
     ).not.toBeNull()
@@ -756,13 +756,13 @@ describe('SkinAccessSection', () => {
     await loaded()
     expect(screen.queryByRole('heading', { name: 'Guests' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Keys for other sites' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Sign-in for other sites' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Roles' })).toBeNull()
     expect(screen.queryByLabelText('New skin username')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Host' }))
     expect(screen.getByRole('heading', { name: 'Roles' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Platform tokens' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Keys for other sites' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Sign-in for other sites' })).toBeTruthy()
     expect(screen.getByLabelText('New skin role name')).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
@@ -904,9 +904,9 @@ describe('SkinAccessSection', () => {
     })
     render(<SkinAccessSection />)
     await loaded()
-    expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Keys for other sites' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
-    expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Keys for other sites' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Sign-in for other sites' })).toBeNull()
     fireEvent.click(screen.getByLabelText('App user'))
     fireEvent.click(screen.getByRole('button', { name: 'ada' }))
@@ -984,7 +984,7 @@ describe('SkinAccessSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
     expect(screen.getByText(/Only the people here can sign in to this App/)).toBeTruthy()
     expect(screen.getByText(/Waiting for a restart/).getAttribute('role')).toBe('status')
-    expect(screen.getByText('rooms: support')).toBeTruthy()
+    expect(screen.getByText('No role yet, so they reach only Support’s Thread.')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Add them all' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants/copy-host', { app: 'svc-wiki' })
@@ -1080,7 +1080,7 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
     expect(ident.checked).toBe(false)
     expect(handle.checked).toBe(false)
     expect(ident.closest('label')?.getAttribute('title')).toBe(SKIN_CAP_LABELS['agent:identity'])
-    fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'kiosk' } })
+    fireEvent.change(screen.getByLabelText('Key name'), { target: { value: 'kiosk' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(ident)
     fireEvent.click(screen.getByRole('button', { name: 'Create key' }))

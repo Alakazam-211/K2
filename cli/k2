@@ -11674,9 +11674,9 @@ WHAT A TEMPLATE IS
     to its person on the Thread (the Thread is the person's chat with
     the agent).
   Or, to make it without starting it, leave out --launch: nothing starts.
-  The hello goes once, the first time the agent starts: with --launch
-  here, a later re-run with --launch, or its person opening it in the
-  app. Later starts send nothing.
+  Start it later with k2 workspace launch <folder>, or open it in the app.
+  The hello goes once, the first time the agent starts (any of these
+  ways, or a re-run with --launch). Later starts send nothing.
   --name <name>      optional; the display name. Left out, it is the
                      folder's name: the template id with no <dir>
                      (<hire root>/writer), else the <dir> folder's name.
@@ -11693,7 +11693,8 @@ WHAT A TEMPLATE IS
   <dir>              optional: a folder instead of <hire root>/<handle>.
   Re-running the same hire is safe: the same --template and --name with
   no <dir> reuse <hire root>/<handle>; it writes only what is missing and
-  never replaces a file the agent changed. folder_exists means that
+  never replaces a file the agent changed. Without --agent it keeps the
+  tool set at create. folder_exists means that
   folder holds something else (another agent or other files). One
   template per agent. The hire prints the folder; tell your person who
   you hired and why.
@@ -11754,8 +11755,12 @@ WHAT A TEMPLATE IS
   New notes, layers, skills and catalog items are added; new heartbeats
   and suggestions are only listed. Never changed: permissions, tool,
   model, name, connections. The agent gets one inbox note.
-  K2's built-ins upgrade by themselves when K2 updates; a saved template
-  only when someone runs upgrade.
+  Answers given at hire (--answer, --param) are kept in the lock and
+  written into each new version.
+  K2's built-ins upgrade by themselves when K2 starts after an update,
+  with these same rules; on an agent made from a built-in, diff shows that
+  pending upgrade first. A saved template upgrades only when someone runs
+  upgrade.
 
 EXIT CODES (the same for k2 agent hire and k2 agent template)
   0  ok
@@ -63383,7 +63388,7 @@ USAGE
   k2 agent hire <dir> [flags]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
                 [--param <key>=<value>]... [--answer <id>=<text>]...
-                [--dry-run | --launch] [flags]
+                [--dry-run] [--launch] [flags]   (--dry-run wins: it only previews)
 
   The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
   With --template and no <dir>, the folder is <hire root>/<handle>
@@ -63398,12 +63403,13 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
               --launch; with it, K2 starts the agent and it says hello on
               its Thread. Tell your person what you hired.
   The hello goes once, the first time the agent starts: with --launch
-  here, a later re-run with --launch, or its person opening it in the
-  app. Later starts send nothing. --dry-run with --launch or --onboard
-  only previews: nothing is written or started.
+  here, a later re-run with --launch, k2 workspace launch <folder>, or
+  opening it in the app. Later starts send nothing. --dry-run with
+  --launch or --onboard only previews: nothing is written or started.
   Re-running the same --template and --name with no <dir> reuses
   <hire root>/<handle>; folder_exists means that folder holds something
-  else (another agent or other files).
+  else (another agent or other files). A re-run without --agent keeps
+  the tool set at create.
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).
@@ -97198,7 +97204,7 @@ USAGE
   k2 agent template list [--all] [--json]
   k2 agent template show <id> [--files] [--json]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
-      [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run | --launch]
+      [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run] [--launch]
                                      (make an agent from one: k2 agent hire --help)
   k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]
   k2 agent template add <dir> [--dry-run] [--json]
@@ -97250,6 +97256,8 @@ COMMANDS
                   can't be removed.
   diff <ws>       What an upgrade would do to an agent made from a template,
                   file by file, with the lines that change. Writes nothing.
+                  On an agent made from a built-in, it shows the upgrade
+                  K2 applies by itself at its next start (same rules).
   diff <id> <vA> <vB>
                   Two versions of a saved template, file by file.
   upgrade <ws>    Move an agent to its template's newest version. A file the
@@ -97260,8 +97268,9 @@ COMMANDS
                   never touched. New notes, layers, skills and context are
                   added; new heartbeats and suggested permissions are only
                   listed. Never changes permissions, tool, model, name or
-                  connections. The agent gets one inbox note saying what
-                  changed. K2's built-ins upgrade by themselves when K2
+                  connections. Answers given at hire are kept in the lock
+                  and written into each new version. The agent gets one
+                  inbox note saying what changed. K2's built-ins upgrade by themselves when K2
                   updates; a saved template only with this command. An agent
                   upgrades its own folder only.
 

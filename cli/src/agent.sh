@@ -799,7 +799,7 @@ USAGE
   k2 agent hire <dir> [flags]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
                 [--param <key>=<value>]... [--answer <id>=<text>]...
-                [--dry-run | --launch] [flags]
+                [--dry-run] [--launch] [flags]   (--dry-run wins: it only previews)
 
   The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
   With --template and no <dir>, the folder is <hire root>/<handle>
@@ -814,12 +814,13 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
               --launch; with it, K2 starts the agent and it says hello on
               its Thread. Tell your person what you hired.
   The hello goes once, the first time the agent starts: with --launch
-  here, a later re-run with --launch, or its person opening it in the
-  app. Later starts send nothing. --dry-run with --launch or --onboard
-  only previews: nothing is written or started.
+  here, a later re-run with --launch, k2 workspace launch <folder>, or
+  opening it in the app. Later starts send nothing. --dry-run with
+  --launch or --onboard only previews: nothing is written or started.
   Re-running the same --template and --name with no <dir> reuses
   <hire root>/<handle>; folder_exists means that folder holds something
-  else (another agent or other files).
+  else (another agent or other files). A re-run without --agent keeps
+  the tool set at create.
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).

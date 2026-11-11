@@ -2188,9 +2188,9 @@ WHAT A TEMPLATE IS
     to its person on the Thread (the Thread is the person's chat with
     the agent).
   Or, to make it without starting it, leave out --launch: nothing starts.
-  The hello goes once, the first time the agent starts: with --launch
-  here, a later re-run with --launch, or its person opening it in the
-  app. Later starts send nothing.
+  Start it later with k2 workspace launch <folder>, or open it in the app.
+  The hello goes once, the first time the agent starts (any of these
+  ways, or a re-run with --launch). Later starts send nothing.
   --name <name>      optional; the display name. Left out, it is the
                      folder's name: the template id with no <dir>
                      (<hire root>/writer), else the <dir> folder's name.
@@ -2207,7 +2207,8 @@ WHAT A TEMPLATE IS
   <dir>              optional: a folder instead of <hire root>/<handle>.
   Re-running the same hire is safe: the same --template and --name with
   no <dir> reuse <hire root>/<handle>; it writes only what is missing and
-  never replaces a file the agent changed. folder_exists means that
+  never replaces a file the agent changed. Without --agent it keeps the
+  tool set at create. folder_exists means that
   folder holds something else (another agent or other files). One
   template per agent. The hire prints the folder; tell your person who
   you hired and why.
@@ -2268,8 +2269,12 @@ WHAT A TEMPLATE IS
   New notes, layers, skills and catalog items are added; new heartbeats
   and suggestions are only listed. Never changed: permissions, tool,
   model, name, connections. The agent gets one inbox note.
-  K2's built-ins upgrade by themselves when K2 updates; a saved template
-  only when someone runs upgrade.
+  Answers given at hire (--answer, --param) are kept in the lock and
+  written into each new version.
+  K2's built-ins upgrade by themselves when K2 starts after an update,
+  with these same rules; on an agent made from a built-in, diff shows that
+  pending upgrade first. A saved template upgrades only when someone runs
+  upgrade.
 
 EXIT CODES (the same for k2 agent hire and k2 agent template)
   0  ok

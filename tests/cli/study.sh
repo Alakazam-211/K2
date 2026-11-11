@@ -1044,7 +1044,7 @@ for needle in "k2 agent template list" "k2 agent template show writer" "kessel a
     "<file>.proposed" "K2:MANAGED" "Never changed: permissions" ".k2/agent/template.lock" \
     "unknown_template (4)" "template_conflict (3)" "folder_exists (3)" "id_reserved (1)" "id_taken (1)" \
     "too_large (1)" "bad_id (2)" "own_workspace_only (3)" "not_author (3)" "no_template (4)" "role_required (3)" \
-    "The hello goes once, the first time the agent starts" "Later starts send nothing" "the Thread is the person's chat" "No override" "not a path" "\"Your notes\" part" "role_required" \
+    "The hello goes once, the first time the agent starts" "Later starts send nothing" "k2 workspace launch <folder>" "tool set at create" "kept in the lock" "the Thread is the person's chat" "No override" "not a path" "\"Your notes\" part" "role_required" \
     "would write · skip ·" "yours, kept" "(the same for k2 agent hire and k2 agent template)"; do
     assert_contains "agent-templates names $needle" "$at_out" "$needle"
 done

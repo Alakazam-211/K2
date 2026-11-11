@@ -12,7 +12,7 @@ USAGE
   k2 agent template list [--all] [--json]
   k2 agent template show <id> [--files] [--json]
   k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
-      [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run | --launch]
+      [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run] [--launch]
                                      (make an agent from one: k2 agent hire --help)
   k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]
   k2 agent template add <dir> [--dry-run] [--json]
@@ -64,6 +64,8 @@ COMMANDS
                   can't be removed.
   diff <ws>       What an upgrade would do to an agent made from a template,
                   file by file, with the lines that change. Writes nothing.
+                  On an agent made from a built-in, it shows the upgrade
+                  K2 applies by itself at its next start (same rules).
   diff <id> <vA> <vB>
                   Two versions of a saved template, file by file.
   upgrade <ws>    Move an agent to its template's newest version. A file the
@@ -74,8 +76,9 @@ COMMANDS
                   never touched. New notes, layers, skills and context are
                   added; new heartbeats and suggested permissions are only
                   listed. Never changes permissions, tool, model, name or
-                  connections. The agent gets one inbox note saying what
-                  changed. K2's built-ins upgrade by themselves when K2
+                  connections. Answers given at hire are kept in the lock
+                  and written into each new version. The agent gets one
+                  inbox note saying what changed. K2's built-ins upgrade by themselves when K2
                   updates; a saved template only with this command. An agent
                   upgrades its own folder only.
 

@@ -61201,9 +61201,11 @@ FLAGS
                           like --param: --answer audience="Local customers".
                           It goes into the agent's ROLE.md ("What I know about
                           my work") or the starter wiki note the question
-                          names. Answer only what you know; don't guess: on
-                          its first start the agent asks its person the rest
-                          on the Thread, and its hello names them. An unknown
+                          names. Answer only what you know; don't guess (if
+                          you know part, say which part is unsure, and the
+                          agent checks it with its person). On its first
+                          start the agent asks its person the questions left
+                          out, on the Thread, and its hello names them. An unknown
                           id is refused (exit 2) with the valid ids, in a
                           --dry-run too. Like --param, it is written once: a
                           re-run never changes what the agent has, so to
@@ -94766,7 +94768,7 @@ if qs:
     print("  Questions (answer at hire with --answer id=text; the agent asks its person the rest):")
     for q in qs:
         f = q.get("fills") or ""
-        where = "ROLE.md" if f == "role" else (f[len("wiki:"):].replace("#", " > ") if f.startswith("wiki:") else f)
+        where = "ROLE.md > What I know about my work" if f == "role" else (f[len("wiki:"):].replace("#", " > ") if f.startswith("wiki:") else f)
         print("    %s: %s  -> %s" % (q.get("id"), q.get("ask"), where))
 for label, key in (("Wiki notes", "wiki"), ("Context layers", "catalog"), ("Own layers", "layers"), ("Skills", "skills")):
     if t.get(key):

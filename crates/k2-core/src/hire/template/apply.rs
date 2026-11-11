@@ -316,7 +316,7 @@ pub fn charter(tpl: &Template, vars: &BTreeMap<String, String>, plan: &AnswerPla
             Some(a) => out.push_str(&format!(
                 "Answered when you were hired, by {a} (the agent that hired you). Check anything that looks off with your person.\n\n"
             )),
-            None => out.push_str("Answered when you were hired.\n\n"),
+            None => out.push_str("Answered when you were hired. If an answer says it's unsure, check it with your person.\n\n"),
         }
         for (q, a) in &plan.role {
             out.push_str(&format!("- **{}** {}\n", q.ask.trim(), list_body(a)));

@@ -43,6 +43,7 @@ export {
   type MailTagTone,
 } from './ui'
 export { NARROW_BELOW, SIDEBAR, LIST, MESSAGE_MIN, fitPanes, type PaneWidths } from './views/panes'
+export { DraftCard, type DraftCardProps } from './views/DraftCard'
 export { InboxList, groupInboxes, type InboxGroups, type InboxOwnerGroup } from './views/InboxList'
 export { FolderList, folderIcon } from './views/FolderList'
 export { EmailList } from './views/EmailList'

@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 // OA6: the reader's layout and controls. Narrow readers show one column at a
 // time with Back; the columns' widths fit the reader; the composer sends on
-// ⌘↩ and asks before Esc throws text away; auth badges say what they mean.
+// ⌘↩ and asks before Esc throws text away; auth badges say what they mean;
+// the DraftCard is unmistakably unsent and edits, sends and discards.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   Composer,
+  DraftCard,
   LIST,
   MESSAGE_MIN,
   MailReader,
@@ -191,5 +193,50 @@ describe('composer keys', () => {
     expect(attach.disabled).toBe(true)
     expect(attach.getAttribute('title')).toBe('Attaching files from the reader isn’t available yet.')
     expect(document.querySelector('[data-mr="compose-attachment"]')?.textContent).toContain('map.pdf')
+  })
+})
+
+describe('DraftCard', () => {
+  it('says Draft by <agent> · not sent, edits in place, sends the edited text', () => {
+    const onChange = vi.fn()
+    const onSend = vi.fn()
+    render(<DraftCard text="Hi Sam" agent="support-desk" updatedAt="2026-11-09T08:14:00Z" onChange={onChange} onSend={onSend} onDiscard={() => {}} />)
+    const card = screen.getByTestId('mr-draft-card')
+    expect(card.textContent).toContain('Draft by support-desk')
+    expect(screen.getByTestId('mr-draft-unsent').textContent).toBe('not sent')
+    expect(card.getAttribute('aria-label')).toBe('Draft by support-desk, not sent')
+    fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'Hi Sam, 23 of us.' } })
+    expect(onChange).toHaveBeenLastCalledWith('Hi Sam, 23 of us.')
+    fireEvent.click(screen.getByTestId('mr-draft-send'))
+    expect(onSend).toHaveBeenCalledWith('Hi Sam, 23 of us.')
+  })
+
+  it('Discard asks first; only a yes discards', async () => {
+    const onDiscard = vi.fn()
+    let answer = false
+    const confirm = vi.fn(async () => answer)
+    render(<DraftCard text="Hi" agent="bot" onSend={() => {}} onDiscard={onDiscard} confirm={confirm} />)
+    fireEvent.click(screen.getByTestId('mr-draft-discard'))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    expect(onDiscard).not.toHaveBeenCalled()
+    answer = true
+    fireEvent.click(screen.getByTestId('mr-draft-discard'))
+    await waitFor(() => expect(onDiscard).toHaveBeenCalledTimes(1))
+  })
+
+  it('sits at the top of the open conversation through threadTop', async () => {
+    const { s } = source()
+    render(
+      <MailReader
+        source={s}
+        renderHtml={() => null}
+        threadTop={() => <DraftCard text="draft" agent="bot" onSend={() => {}} onDiscard={() => {}} />}
+      />,
+    )
+    fireEvent.click(await screen.findByTestId('mr-thread-m_1'))
+    const view = await screen.findByTestId('mr-thread-view')
+    const card = screen.getByTestId('mr-draft-card')
+    expect(view.contains(card)).toBe(true)
+    expect(card.compareDocumentPosition(screen.getByTestId('mr-viewer')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

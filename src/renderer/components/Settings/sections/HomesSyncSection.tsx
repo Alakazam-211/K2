@@ -3,7 +3,7 @@
 // Rosson (ticket 4f537560): one home server per person, local-first. The
 // desktop syncs its Homes with its own daemon; a phone picks its server and
 // that server lists the devices syncing from it. Here: this computer's sync
-// state, "Stop syncing" / "Sync again", and the devices syncing their Homes
+// state, "Change Home Sync" / "Sync again", and the devices syncing their Homes
 // from this computer, each with Remove. No "personal device" labels.
 
 import React, { useCallback, useEffect, useState } from 'react'
@@ -91,6 +91,19 @@ export function HomesSyncSection(props: {
     return () => offs.forEach((off) => off())
   }, [refresh])
 
+  // Rosson 11-11: "Stop syncing" read as a scare word. The button says
+  // "Change Home Sync"; turning it off is a choice inside, with what it
+  // keeps spelled out.
+  const change = async (): Promise<void> => {
+    const ok = await useConfirmDialogStore.getState().confirm({
+      title: 'Change Home Sync',
+      message:
+        'This computer keeps its Homes in step with your phone through this computer’s K2 server. You can turn that off for this computer: its Homes stay here, nothing is deleted, and you can turn it back on at any time.',
+      confirmLabel: 'Turn off for this computer',
+    })
+    if (ok) await stop()
+  }
+
   const stop = async (): Promise<void> => {
     setBusy(true)
     try {
@@ -115,8 +128,8 @@ export function HomesSyncSection(props: {
     const ok = await useConfirmDialogStore.getState().confirm({
       title: 'Remove device',
       message: d.current
-        ? 'Stop syncing this computer’s Homes? Its Homes stay as they are here.'
-        : `Stop syncing Homes with “${d.name}”? Its Homes stay on that device. It can sync again later from its own settings.`,
+        ? 'Take this computer off Homes Sync? Its Homes stay as they are here.'
+        : `Take “${d.name}” off Homes Sync? Its Homes stay on that device, and it can sync again later from its own settings.`,
       confirmLabel: 'Remove',
       destructive: true,
     })
@@ -162,8 +175,8 @@ export function HomesSyncSection(props: {
               </div>
             </div>
             {enabled && status.phase !== 'removed' ? (
-              <Button variant="ghost" disabled={busy} onClick={() => void stop()}>
-                Stop syncing
+              <Button variant="ghost" disabled={busy} onClick={() => void change()}>
+                Change Home Sync
               </Button>
             ) : (
               <Button variant="accent" disabled={busy} onClick={start}>

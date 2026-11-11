@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // homes-sync-v1 — Settings → Network → Homes Sync: the devices syncing from
-// this computer, Remove, Stop syncing / Sync again.
+// this computer, Remove, Change Home Sync / Sync again.
 
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
@@ -59,12 +59,16 @@ describe('HomesSyncSection', () => {
     expect(server.devices.get('dev-laptop')?.removed).toBe(false)
   })
 
-  it('Stop syncing turns sync off and leaves the list; Start syncing bumps the control epoch', async () => {
+  it('Change Home Sync turns sync off after a confirm and leaves the list; Start syncing bumps the control epoch', async () => {
     const { server, kv } = setup()
+    const confirm = vi.spyOn(useConfirmDialogStore.getState(), 'confirm').mockResolvedValue(true)
     act(() => useHomesSyncStatus.setState({ ...INITIAL_STATUS, phase: 'synced' }))
     render(<HomesSyncSection transport={server.transport()} kv={kv} />)
     await waitFor(() => expect(screen.getAllByTestId('homes-sync-device')).toHaveLength(2))
-    fireEvent.click(screen.getByRole('button', { name: 'Stop syncing' }))
+    expect(screen.queryByRole('button', { name: 'Stop syncing' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Change Home Sync' }))
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
+    expect(confirm.mock.calls[0][0]).toMatchObject({ title: 'Change Home Sync', confirmLabel: 'Turn off for this computer' })
     await waitFor(() => expect(screen.getAllByTestId('homes-sync-device')).toHaveLength(1))
     expect(readControl(kv)).toEqual({ enabled: false, epoch: 0 })
     expect(server.devices.get('dev-laptop')?.removed).toBe(true)
@@ -82,5 +86,19 @@ describe('HomesSyncSection', () => {
     server.supported = false
     render(<HomesSyncSection transport={server.transport()} kv={kv} />)
     expect(screen.getByTestId('homes-sync-unsupported')).toBeTruthy()
+  })
+})
+
+describe('Change Home Sync, cancelled', () => {
+  it('keeps syncing when the person cancels', async () => {
+    const { server, kv } = setup()
+    vi.spyOn(useConfirmDialogStore.getState(), 'confirm').mockResolvedValue(false)
+    act(() => useHomesSyncStatus.setState({ ...INITIAL_STATUS, phase: 'synced' }))
+    render(<HomesSyncSection transport={server.transport()} kv={kv} />)
+    await waitFor(() => expect(screen.getAllByTestId('homes-sync-device')).toHaveLength(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Change Home Sync' }))
+    await waitFor(() => expect(useConfirmDialogStore.getState().confirm).toHaveBeenCalled())
+    expect(readControl(kv).enabled).toBe(true)
+    expect(screen.getAllByTestId('homes-sync-device')).toHaveLength(2)
   })
 })

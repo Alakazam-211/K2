@@ -105,6 +105,34 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('SetupChecklist', () => {
+  it('marks the current step: the first row still to do, and only that one', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({
+        rows: [
+          { id: 'llm_sign_in', state: 'done', opens: 'llm_sign_in' },
+          { id: 'first_agent', state: 'skipped', opens: 'add_workspace' },
+          { id: 'tunnel', state: 'todo', opens: 'tunnel' },
+          { id: 'phone', state: 'todo', opens: 'tunnel', note: 'needs_tunnel' },
+        ],
+      }),
+    )
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-row-tunnel')
+    const current = [...document.querySelectorAll('[aria-current="step"]')].map((el) => el.getAttribute('data-testid'))
+    expect(current).toEqual(['setup-row-tunnel'])
+    expect(document.querySelector('[data-setup-row="tunnel"] [data-step-mark="todo"]')?.className).toContain('--color-accent')
+    expect(document.querySelector('[data-setup-row="phone"] [data-step-mark="todo"]')?.className).not.toContain('--color-accent')
+  })
+
+  it("a row's note is no louder than its line", async () => {
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-phone')
+    const note = row.querySelector('[data-setup-note="needs_tunnel"]') as HTMLElement
+    const line = [...row.querySelectorAll('span.type-hint')].find((el) => !el.hasAttribute('data-setup-note')) as HTMLElement
+    const colour = (el: HTMLElement): string | undefined => el.className.match(/text-\[var\(--color-[a-z-]+\)\]/)?.[0]
+    expect(colour(note)).toBe(colour(line))
+  })
+
   it('draws each row with the contract copy and its state, in the daemon order', async () => {
     render(<SetupChecklist />)
     await screen.findByTestId('setup-row-llm_sign_in')
@@ -210,7 +238,7 @@ describe('SetupChecklist', () => {
       label: 'Hire your Chief of Staff',
       line: 'Your lead agent. K5 hires it with you.',
     })
-    expect(NEEDS_K5_NOTE).toBe("You'll meet K5 first.")
+    expect(NEEDS_K5_NOTE).toBe('You’ll meet K5 first.')
     expect(row.textContent).toContain('Hire your Chief of Staff')
     expect(row.textContent).toContain('Your lead agent. K5 hires it with you.')
     expect(row.querySelector('[data-setup-note="needs_k5"]')?.textContent).toBe(NEEDS_K5_NOTE)

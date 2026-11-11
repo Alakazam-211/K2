@@ -12,8 +12,12 @@
 // Look (K2 Design): the nav's own section language. The header is the
 // shared `NavSectionLabel` with the count left and a quiet Hide; a thin
 // accent bar shows how far along it is. Each row is a status mark (round in
-// Glass, square in Terminal, from `--radius-status`), the step, and a quiet
-// Skip. Done rows drop their line and go muted; skipped rows are quieter
+// Glass from `--radius-status`, cut in Terminal like the other small
+// controls), the step, and a quiet Skip. The current step (the first row
+// still to do) leads: its title is set heavier and its mark is the accent;
+// the other rows to do stay quiet. A row's line and its note share one muted
+// voice. The text runs up to Skip; a title that must wrap wraps evenly
+// (never one word alone on its last line). Done rows drop their line and go muted; skipped rows are quieter
 // still. Tokens only, so every Style and palette draws it.
 //
 // States: nothing until the first answer (the switch may be off, so there is
@@ -50,7 +54,7 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
 }
 
 export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs the tunnel first.'
-export const NEEDS_K5_NOTE = "You'll meet K5 first."
+export const NEEDS_K5_NOTE = 'You’ll meet K5 first.'
 
 /** Each note's copy (a note this client doesn't know never reaches here). */
 export const SETUP_NOTE_COPY: Record<FirstRunNote, string> = {
@@ -65,11 +69,11 @@ export const CHECKLIST_TITLE = 'Setup checklist'
 const STATE_TEXT: Record<FirstRunRowState, string> = { done: 'Done', todo: 'To do', skipped: 'Skipped' }
 
 /** Said once, when the person finishes with the list open. */
-export const SET_UP_TEXT = "You're set up"
+export const SET_UP_TEXT = 'You’re set up'
 /** The header's count once every drawn row is done or skipped. */
 export const ALL_DONE_TEXT = 'All done'
 /** A read or a gesture failed; the last list stays. */
-export const CHECKLIST_ERROR_TEXT = "Couldn't update the checklist."
+export const CHECKLIST_ERROR_TEXT = 'Couldn’t update the checklist.'
 
 /** How long "You're set up" stays before the list goes. */
 const SET_UP_MS = 4000
@@ -98,13 +102,20 @@ function leftText(n: number): string {
 const QUIET_ACTION_CLASS =
   'relative no-drag flex-shrink-0 px-1.5 py-0.5 type-hint text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer'
 
-/** A row's status mark: hollow to do, filled with a check when done, a dash
- *  when skipped. Round in Glass, square in Terminal (`--radius-status`). */
-function StepMark({ state }: { state: FirstRunRowState }): React.JSX.Element {
+/** A row's status mark: hollow to do (the accent for the current step),
+ *  filled with a check when done, a dash when skipped. Round in Glass
+ *  (`--radius-status`), cut in Terminal like the radios and checkboxes
+ *  (`data-k2-chamfer="chip"`, `--chamfer-chip`). */
+function StepMark({ state, current = false }: { state: FirstRunRowState; current?: boolean }): React.JSX.Element {
   const base = 'mt-[3px] w-3 h-3 flex-shrink-0 flex items-center justify-center rounded-[var(--radius-status)]'
   if (state === 'done') {
     return (
-      <span aria-hidden="true" data-step-mark="done" className={cx(base, 'bg-[var(--color-status-ok)] text-[var(--color-bg)]')}>
+      <span
+        aria-hidden="true"
+        data-step-mark="done"
+        data-k2-chamfer="chip"
+        className={cx(base, 'border border-[var(--color-status-ok)] bg-[var(--color-status-ok)] text-[var(--color-bg)]')}
+      >
         <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth={1.6}>
           <path d="M1.5 4.2 3.2 5.8 6.5 2.4" />
         </svg>
@@ -113,48 +124,70 @@ function StepMark({ state }: { state: FirstRunRowState }): React.JSX.Element {
   }
   if (state === 'skipped') {
     return (
-      <span aria-hidden="true" data-step-mark="skipped" className={cx(base, 'border border-[var(--color-border-strong)]')}>
+      <span aria-hidden="true" data-step-mark="skipped" data-k2-chamfer="chip" className={cx(base, 'border border-[var(--color-border-strong)]')}>
         <span className="w-1.5 h-px bg-[var(--color-text-muted)]" />
       </span>
     )
   }
-  return <span aria-hidden="true" data-step-mark="todo" className={cx(base, 'border-[1.5px] border-[var(--color-text-muted)]')} />
+  return (
+    <span
+      aria-hidden="true"
+      data-step-mark="todo"
+      data-k2-chamfer="chip"
+      className={cx(
+        base,
+        'border-[1.5px] [--k2-ch-bw:1.5px]',
+        current ? 'border-[var(--color-accent)]' : 'border-[var(--color-text-muted)]',
+      )}
+    />
+  )
 }
 
-function ChecklistRow({ row }: { row: FirstRunRow }): React.JSX.Element {
+/** The current step: the first row still to do (null when none is). */
+export function currentRowId(rows: readonly FirstRunRow[]): FirstRunRowId | null {
+  return rows.find((r) => r.state === 'todo')?.id ?? null
+}
+
+function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }): React.JSX.Element {
   const copy = SETUP_CHECKLIST_COPY[row.id]
   const todo = row.state === 'todo'
   return (
     <li
-      className={cx('flex items-start', row.opens !== null && 'hover:bg-[var(--color-bg-hover)] transition-colors')}
+      className={cx('flex items-start', row.opens !== null && 'hover:bg-[var(--color-wash-2)] transition-colors')}
       data-setup-row={row.id}
       data-state={row.state}
+      data-current={current ? '' : undefined}
     >
       <button
         type="button"
         data-testid={`setup-row-${row.id}`}
         data-k2-focus=""
+        aria-current={current ? 'step' : undefined}
         className={cx(
-          'relative no-drag flex-1 min-w-0 flex items-start gap-2.5 pl-3 py-1.5 text-left cursor-pointer disabled:cursor-default',
-          todo ? 'pr-1' : 'pr-3',
+          'relative no-drag flex-1 min-w-0 flex items-start gap-2 pl-3 py-1.5 text-left cursor-pointer disabled:cursor-default',
+          todo ? 'pr-0' : 'pr-3',
         )}
         disabled={row.opens === null}
         onClick={() => void openFirstRunTarget(row.opens)}
       >
-        <StepMark state={row.state} />
+        <StepMark state={row.state} current={current} />
         <span className="min-w-0 flex-1">
           <span
             className={cx(
-              'block type-row leading-snug',
-              todo ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-muted)]',
+              'block type-row leading-snug text-balance',
+              current
+                ? 'font-semibold text-[var(--color-text-primary)]'
+                : todo
+                  ? 'text-[var(--color-text-secondary)]'
+                  : 'text-[var(--color-text-muted)]',
               row.state === 'skipped' && 'opacity-70',
             )}
           >
             {copy.label}
           </span>
-          {todo && <span className="block type-hint text-[var(--color-text-muted)] leading-snug">{copy.line}</span>}
+          {todo && <span className="block type-hint text-[var(--color-text-muted)] leading-snug text-pretty">{copy.line}</span>}
           {row.note !== null && todo && (
-            <span className="block type-hint text-[var(--color-text-secondary)] leading-snug mt-0.5" data-setup-note={row.note}>
+            <span className="block type-hint text-[var(--color-text-muted)] leading-snug text-pretty mt-0.5" data-setup-note={row.note}>
               {SETUP_NOTE_COPY[row.note]}
             </span>
           )}
@@ -171,7 +204,7 @@ function ChecklistRow({ row }: { row: FirstRunRow }): React.JSX.Element {
         <button
           type="button"
           data-k2-focus=""
-          className={cx(QUIET_ACTION_CLASS, 'mt-1 mr-2')}
+          className={cx(QUIET_ACTION_CLASS, 'mt-1 mr-1')}
           aria-label={`Skip: ${copy.label}`}
           data-testid={`setup-skip-${row.id}`}
           onClick={() => void useFirstRunStore.getState().skip(row.id)}
@@ -223,6 +256,7 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
   }
   if (!rows) return null
   const left = rowsLeft(rows)
+  const current = currentRowId(rows)
   const progress = rows.length === 0 ? 0 : (rows.length - left) / rows.length
   return (
     <section
@@ -275,7 +309,7 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
       )}
       <ul className="m-0 p-0 pb-1 list-none min-h-0 overflow-y-auto">
         {rows.map((row) => (
-          <ChecklistRow key={row.id} row={row} />
+          <ChecklistRow key={row.id} row={row} current={row.id === current} />
         ))}
       </ul>
     </section>

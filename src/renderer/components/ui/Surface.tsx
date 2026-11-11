@@ -62,7 +62,11 @@ export const Surface = forwardRef<HTMLDivElement, SurfaceProps>(function Surface
         bordered && 'border border-[var(--color-border)]',
         'rounded-[var(--radius-box)]',
         ELEVATION_SHADOW[elevation],
-        !bordered && '[--k2-ch-bw:0px]',
+        // No edge on its own cut. Set as the band width itself (--k2-ch-w),
+        // not --k2-ch-bw: that one is inherited, and every cut control inside
+        // (buttons, inputs, tags) would lose its diagonal edges. Each cut
+        // control derives its own --k2-ch-w from --k2-ch-bw.
+        !bordered && '[--k2-ch-w:0px]',
         className
       )}
       {...rest}

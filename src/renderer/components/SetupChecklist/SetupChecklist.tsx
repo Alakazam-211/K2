@@ -673,7 +673,7 @@ const GetStartedBubble = forwardRef<
           size="md"
           data-testid="setup-get-started"
           aria-label={left > 0 ? `${GET_STARTED_LABEL}, ${leftText(left)}` : GET_STARTED_LABEL}
-          className="w-full h-[30px] flex-shrink-0 inline-flex items-center justify-center gap-2 text-[13px] font-medium [--k2-ch-bw:1px]"
+          className="w-full h-[30px] flex-shrink-0 inline-flex items-center justify-center gap-2 text-[13px] font-medium"
           onClick={onShow}
         >
           <span aria-hidden="true" className="flex flex-shrink-0">

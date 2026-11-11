@@ -6,10 +6,6 @@
 // Not Frost: the Frost rim is a material sheen, under 3:1 on the nav.
 // `data-nav-control` gives it the nav's control height and hover.
 //
-// `[--k2-ch-bw:1px]`: the nav sits in an unbordered Surface, whose
-// `--k2-ch-bw: 0px` is inherited and would leave the cut corners without
-// their diagonal edge.
-//
 // The label never wraps. The footer row is a container: below 12.5rem (a
 // sidebar narrower than about 225px) the label drops to the icon, kept as
 // the button's accessible name and its tooltip.
@@ -40,7 +36,7 @@ export const NavFooterButton = forwardRef<HTMLButtonElement, NavFooterButtonProp
       data-frost-shape="pill"
       data-nav-control=""
       title={label}
-      className={cx('flex-1 min-w-0 flex items-center justify-center gap-2 [--k2-ch-bw:1px]', className)}
+      className={cx('flex-1 min-w-0 flex items-center justify-center gap-2', className)}
       {...rest}
     >
       <span aria-hidden="true" className="flex flex-shrink-0">

@@ -108,7 +108,7 @@ function FooterCollapseSlot({
         data-frost-shape="round"
         data-nav-control=""
         data-nav-collapse=""
-        className="flex items-center justify-center w-8 h-8 p-0! flex-shrink-0 [--k2-ch-bw:1px]"
+        className="flex items-center justify-center w-8 h-8 p-0! flex-shrink-0"
         onClick={hidden ? undefined : () => onToggle()}
         title={hidden ? undefined : label}
         aria-label={label}

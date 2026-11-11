@@ -42,6 +42,23 @@ describe('chamfer opt-in', () => {
     expect(screen.getByTestId('pane').hasAttribute('data-k2-chamfer')).toBe(false)
   })
 
+  it("a borderless Surface drops its own cut's edge without taking it from the controls inside", () => {
+    render(
+      <Surface bordered={false} chamfer data-testid="card">
+        <Button>Save</Button>
+      </Surface>,
+    )
+    const card = screen.getByTestId('card')
+    // The band width itself, set on the Surface's own element.
+    expect(card.className).toContain('[--k2-ch-w:0px]')
+    // Never --k2-ch-bw: it is inherited, and each cut control inside derives
+    // its own --k2-ch-w from it, so the controls would lose their diagonals.
+    expect(card.className).not.toContain('--k2-ch-bw')
+    expect(globals).toContain('--k2-ch-w: var(--k2-ch-bw, 1px)')
+    // The shared Button needs no override of its own.
+    expect(screen.getByRole('button', { name: 'Save' }).className).not.toContain('--k2-ch-bw')
+  })
+
   it('DialogFrame is a chamfered card inside a shadow wrapper', () => {
     render(<DialogFrame data-testid="d" />)
     const frame = screen.getByTestId('d')

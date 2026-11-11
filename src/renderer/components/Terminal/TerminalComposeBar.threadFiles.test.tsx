@@ -181,7 +181,7 @@ describe('S4: Thread compose files become attachments', () => {
       fireEvent.keyDown(box, { key: 'Enter' })
     })
     expect(threadPosts()).toEqual([
-      { addr: 'sales', text: 'Have a look', via: 'compose', attachments: [{ path: `${WS}/docs/plan.md` }] },
+      { addr: 'sales', text: 'Have a look', via: 'compose', attachments: [{ path: `${WS}/docs/plan.md` }], clientMsgId: expect.stringMatching(/^[0-9a-f]{32}$/) },
     ])
   })
 

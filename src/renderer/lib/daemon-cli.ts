@@ -253,6 +253,37 @@ interface CliCallMeta {
   /** The part after `/cli/`, e.g. `thread`. */
   route: string
   method: string
+  /** Give up on one try after this long (`CliTimeoutError`). */
+  timeoutMs?: number
+}
+
+/**
+ * thread-send-resilience (2026-11-11): a Thread post that carries its own
+ * `clientMsgId` gives up after this long. After sleep a pooled socket can
+ * sit half-open and a fetch on it may hang for minutes; the outbox tries
+ * the SAME id again on reconnect, and the server answers a repeat with the
+ * stored post (`duplicate: true`), so giving up is safe. A post without an
+ * id (no outbox) never times out here: a retry of it could post twice.
+ */
+export const THREAD_POST_TIMEOUT_MS = 30_000
+let threadPostTimeoutMs = THREAD_POST_TIMEOUT_MS
+
+/** Tests: a short Thread post timeout (null: the default). */
+export function setThreadPostTimeoutForTests(ms: number | null): void {
+  threadPostTimeoutMs = ms ?? THREAD_POST_TIMEOUT_MS
+}
+
+/** A `/cli/*` try that got no answer in time (no status: the caller may try
+ *  again; nothing says whether the server acted on it). */
+export class CliTimeoutError extends Error {
+  constructor(route: string, ms: number) {
+    super(`no answer from the server in ${Math.round(ms / 1000)} s (${route})`)
+    this.name = 'CliTimeoutError'
+  }
+}
+
+function hasClientMsgId(body: unknown): boolean {
+  return !!body && typeof body === 'object' && typeof (body as { clientMsgId?: unknown }).clientMsgId === 'string'
 }
 
 async function cliFetch(
@@ -295,7 +326,22 @@ async function cliFetch(
         lastUrl = url
         // Hosted web: credentials:include (send/store k2_session) + X-K2-Client.
         // Desktop: withDaemonFetch is a no-op — init is unchanged.
-        const res = await fetch(url, withDaemonFetch(init ?? {}))
+        const timeoutMs = meta.timeoutMs
+        let res: Response
+        if (timeoutMs) {
+          const ac = new AbortController()
+          const t = setTimeout(() => ac.abort(), timeoutMs)
+          try {
+            res = await fetch(url, withDaemonFetch({ ...(init ?? {}), signal: ac.signal }))
+          } catch (err) {
+            if (ac.signal.aborted) throw new CliTimeoutError(meta.route, timeoutMs)
+            throw err
+          } finally {
+            clearTimeout(t)
+          }
+        } else {
+          res = await fetch(url, withDaemonFetch(init ?? {}))
+        }
         throwIfHostSwitched(scope, startedKey)
         return { res, text: await res.text() }
       }
@@ -479,7 +525,8 @@ export async function daemonCliPost<T = unknown>(
   assertServerScope(scope, 'daemonCliPost')
   // Home M4: a view-only room never writes to its server.
   assertScopeMayPost(scope, route)
-  const { res, text } = await cliFetch(scope, { route, method: 'POST' }, (creds) => ({
+  const timeoutMs = route === 'thread/post' && hasClientMsgId(body) ? threadPostTimeoutMs : undefined
+  const { res, text } = await cliFetch(scope, { route, method: 'POST', timeoutMs }, (creds) => ({
     url: getUrl(creds, route),
     init: {
       method: 'POST',

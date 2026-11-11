@@ -17,7 +17,15 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }))
 
 import { scopeForHost, __resetServerScopesForTests } from '@/kessel/server-scope'
 import { invalidateDaemonWs } from '@/kessel/daemon-ws'
-import { daemonCliGet, daemonCliPost, isPriorityCliRoute, remoteCliInflightForTests, withHostCliSlot } from '@/lib/daemon-cli'
+import {
+  CliTimeoutError,
+  daemonCliGet,
+  daemonCliPost,
+  isPriorityCliRoute,
+  remoteCliInflightForTests,
+  setThreadPostTimeoutForTests,
+  withHostCliSlot,
+} from '@/lib/daemon-cli'
 import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost } from '@/stores/connect-host'
 import { __resetRemoteSessionForTests } from '@/lib/remote-session'
 import {
@@ -212,5 +220,43 @@ describe('Fix 1: the Thread lane', () => {
     while (releases.length > 0) releases.shift()!()
     await Promise.all(checks)
     expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(0)
+  })
+})
+
+describe('thread-send-resilience: a keyed Thread post gives up when no answer comes', () => {
+  /** A fetch on a half-open socket after sleep: no answer until aborted. */
+  function hangUntilAborted(): void {
+    fetchMock.mockImplementation(
+      (_url: string, init?: RequestInit) =>
+        new Promise((_res, rej) => {
+          const signal = init?.signal
+          if (!signal) return // never answers, never gives up
+          signal.addEventListener('abort', () => rej(new DOMException('The operation was aborted.', 'AbortError')))
+        }),
+    )
+  }
+
+  it('a post carrying a clientMsgId rejects with CliTimeoutError (no status) and frees its slot', async () => {
+    setThreadPostTimeoutForTests(20)
+    try {
+      hangUntilAborted()
+      const err = await daemonCliPost(scopeForHost(A), 'thread/post', { addr: 'k2', text: 'hi', clientMsgId: 'a'.repeat(32) }).then(
+        () => null,
+        (e: unknown) => e,
+      )
+      expect(err).toBeInstanceOf(CliTimeoutError)
+      expect((err as { status?: unknown }).status).toBeUndefined()
+      expect(remoteCliInflightForTests('rosson.k2.dev')).toBe(0)
+    } finally {
+      setThreadPostTimeoutForTests(null)
+    }
+  })
+
+  it('a post without a clientMsgId (no outbox, a retry could post twice) gets no timeout', async () => {
+    await daemonCliPost(scopeForHost(A), 'thread/post', { addr: 'k2', text: 'hi' })
+    await daemonCliPost(scopeForHost(A), 'workspace-layouts/save', { projectId: 'p', clientMsgId: 'x' })
+    await daemonCliPost(scopeForHost(A), 'thread/post', { addr: 'k2', text: 'hi', clientMsgId: 'b'.repeat(32) })
+    const signals = fetchMock.mock.calls.map((c) => (c[1] as RequestInit | undefined)?.signal ?? null)
+    expect(signals.map((s) => s !== null)).toEqual([false, false, true])
   })
 })

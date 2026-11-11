@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => () => undefined),
 }))
 
-import { createElement, act } from 'react'
+import { createElement, act, useEffect } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { RoomFailureGate, RoomFailureView, roomFailureActions, type RoomFailureActions } from './RoomFailure'
 import { hostPool } from '@/lib/host-pool-instance'
@@ -260,6 +260,31 @@ describe('RoomFailureGate (the pool drives it)', () => {
     expect(wrap.className).toContain('pointer-events-none')
     act(() => setEntry(entry({})))
     expect(el.querySelector('[role="alert"]')).toBeNull()
+    act(() => root.unmount())
+  })
+
+  it('the room stays mounted while its server drops and comes back (a message box mid-send keeps its state)', () => {
+    setEntry(entry({}))
+    let mounts = 0
+    function Pane(): React.JSX.Element {
+      useEffect(() => {
+        mounts += 1
+      }, [])
+      return createElement('p', { id: 'pane' }, 'B pane')
+    }
+    const { el, root } = mount(createElement(RoomFailureGate, { hostKey: KEY, actions: spyActions() }, createElement(Pane)))
+    const first = el.querySelector('#pane')
+    expect(mounts).toBe(1)
+    act(() => setEntry(entry({ reach: 'offline', boot: null })))
+    expect(el.querySelector('[data-room-failure]')?.getAttribute('data-room-failure')).toBe('offline')
+    act(() => setEntry(entry({})))
+    expect(el.querySelector('[role="alert"]')).toBeNull()
+    expect(mounts).toBe(1)
+    expect(el.querySelector('#pane')).toBe(first)
+    // Without a failure the wrappers take no box.
+    const wrap = first?.parentElement as HTMLElement
+    expect(wrap.style.display).toBe('contents')
+    expect(wrap.hasAttribute('inert')).toBe(false)
     act(() => root.unmount())
   })
 

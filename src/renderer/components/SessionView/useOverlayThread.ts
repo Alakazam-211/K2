@@ -61,7 +61,11 @@
 //      as `outbox`: pending bubbles to draw after `items`. One goes as soon
 //      as the server's copy is in `items` (matched by `clientMsgId`, or by
 //      text and time on a server without post-idempotency-v1), whichever
-//      way it came; never both.
+//      way it came; never both. A snapshot or catch-up never drops one.
+//      thread-send-resilience (2026-11-11): the outbox is on disk; this
+//      view loads it, lends it its scope (an entry saved before a restart
+//      has none), and tries what waits when its socket (re)opens and on
+//      focus / visible / `online`.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
@@ -98,7 +102,16 @@ import { createViewingSender, windowIsLookedAt, type ViewingSender } from './thr
 import { useAutoMarkRead } from '@/stores/unread'
 import { peekThreadView, readThreadView, saveThreadView } from './threadViewCache'
 import { readThreadFirstPage } from './threadRead'
-import { outboxKey, outboxSettle, reconcileOutbox, useOutbox } from './threadOutbox'
+import {
+  kickOutbox,
+  loadOutbox,
+  noteThreadNewestSeq,
+  outboxBind,
+  outboxKey,
+  outboxSettle,
+  reconcileOutbox,
+  useOutbox,
+} from './threadOutbox'
 import {
   isThreadAddressMiss,
   publishThreadAddress,
@@ -466,6 +479,8 @@ export function useOverlayThread(opts: {
           void catchUp(sinceOnOpen())
           void catchUpTurn()
           viewingSender.socketOpened()
+          // The server is reachable again: unsent posts go now.
+          void kickOutbox({ hostKey: scope.hostKey, force: true })
         }
         if (sock.readyState === 1) opened()
         else sock.onopen = opened
@@ -482,7 +497,11 @@ export function useOverlayThread(opts: {
     /** Window focus / visible / online: reconnect now if the socket is
      *  gone, else re-sync (a socket can sit half-open after sleep). */
     function wake(): void {
-      if (cancelled || !conv) return
+      if (cancelled) return
+      // Unsent posts try again at once (they stop at the first that is
+      // still out of reach).
+      void kickOutbox({ hostKey: scope.hostKey, force: true })
+      if (!conv) return
       if (!ws || ws.readyState > 1) {
         if (connecting) return
         if (retryTimer !== null) {
@@ -821,8 +840,33 @@ export function useOverlayThread(opts: {
   )
 
   // §10: pending bubbles, minus the ones the server's copy already answers
-  // (those are settled out of the outbox right after).
-  const outboxEntries = useOutbox(outboxKey(scope, addr))
+  // (those are settled out of the outbox right after). Under this address
+  // and the chat's past ones (a rename keeps its unsent posts on screen).
+  const outboxAddrs = useMemo(() => {
+    const all = [addr, addressInfo.currentAddr ?? '', ...addressInfo.pastAddresses].map((a) => a.trim()).filter(Boolean)
+    return [...new Set(all)]
+  }, [addr, addressInfo.currentAddr, addressInfo.pastAddresses])
+  const outboxKeys = useMemo(() => outboxAddrs.map((a) => outboxKey(scope, a)), [outboxAddrs, scope])
+  // Saved unsent posts (a restart) load, and this view's scope carries them.
+  useEffect(() => {
+    if (!enabled || outboxAddrs.length === 0) return
+    let live = true
+    void loadOutbox().then(() => {
+      if (!live) return
+      outboxBind(scope, outboxAddrs)
+      void kickOutbox({ hostKey: scope.hostKey, force: true })
+    })
+    return () => {
+      live = false
+    }
+  }, [enabled, scope, outboxAddrs])
+  // What this view holds now: a send made next is newer than this (an older
+  // server's copy is matched only past it).
+  useEffect(() => {
+    if (fromCache || !serverReadRef.current) return
+    noteThreadNewestSeq(outboxKey(scope, addr), newestSeq(items))
+  }, [items, fromCache, scope, addr])
+  const outboxEntries = useOutbox(outboxKeys)
   const baselinesRef = useRef(new Map<string, Set<string>>())
   const reconciled = useMemo(() => {
     const baselines = baselinesRef.current

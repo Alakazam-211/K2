@@ -81,7 +81,7 @@ describe('thread view cache', () => {
     expect(peekThreadView('rosson.k2.dev', 'k2')?.items).toHaveLength(3)
     // A row of another version is ignored.
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const r = indexedDB.open('k2.thread-view-cache', 1)
+      const r = indexedDB.open('k2.thread-view-cache', 2)
       r.onsuccess = () => resolve(r.result)
       r.onerror = () => reject(r.error)
     })

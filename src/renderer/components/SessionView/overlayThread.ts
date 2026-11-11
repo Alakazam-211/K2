@@ -11,14 +11,21 @@ import { httpCodeOf, httpStatusOf } from '@/lib/daemon-http-error'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
 import { parseThreadAuthor, type ThreadAuthor } from '@/lib/thread-viewer'
 import {
+  kickOutbox,
   newClientMsgId,
   outboxAdd,
+  outboxAttempt,
   outboxDrop,
   outboxGet,
+  outboxHasEarlier,
   outboxKey,
   outboxMark,
-  outboxSettle,
+  outboxRetry,
   POST_IDEMPOTENCY_FEATURE,
+  scopeLogin,
+  threadNewestSeq,
+  type OutboxEntry,
+  type OutboxSendOutcome,
   type PendingMark,
 } from './threadOutbox'
 import { readPermissionCard, type PermissionCardData } from './permissionCardView'
@@ -741,6 +748,10 @@ export async function postThreadCompose(
     /** Fix 3: show the message in the Thread at once as a pending bubble
      *  until the server confirms it. Only for a post with words. */
     pending?: boolean
+    /** thread-send-resilience: called at once with the outbox save (true
+     *  once the send is on this computer's disk): the message box may let
+     *  its saved draft go then. Only with `pending`. */
+    onQueued?: (saved: Promise<boolean>) => void
   },
 ): Promise<ThreadComposeResult> {
   const body: {
@@ -774,59 +785,135 @@ export async function postThreadCompose(
     }))
   }
   // A send without a pending bubble has no Retry: it goes as before.
-  if (!extra?.pending || !text.trim()) return sendThreadPost(scope, addr, text, body, null)
-  // post-idempotency-v1: the post's own id (what Retry sends again), only
-  // to a server that takes it.
-  const keyed = scope.serverSupports(POST_IDEMPOTENCY_FEATURE)
+  if (!extra?.pending || !text.trim()) return sendThreadPost(scope, addr, text, body)
+  // thread-send-resilience: the send goes into this computer's outbox
+  // FIRST (saved on disk), keyed by its own id, and leaves it only when the
+  // server confirmed it. The post always carries the id: a server with
+  // post-idempotency-v1 never posts it twice; an older one ignores it.
+  const login = scopeLogin(scope)
   const clientMsgId = newClientMsgId()
-  if (keyed) body.clientMsgId = clientMsgId
-  outboxAdd({
+  body.clientMsgId = clientMsgId
+  const key = outboxKey(scope, addr)
+  const afterSeq = threadNewestSeq(key)
+  const entry: OutboxEntry = {
     clientMsgId,
-    key: outboxKey(scope, addr),
+    key,
+    hostKey: scope.hostKey,
     scope,
-    addr,
+    addr: addr.trim(),
     text,
     body,
-    keyed,
+    keyed: scope.serverSupports(POST_IDEMPOTENCY_FEATURE),
     createdAtSec: Math.floor(Date.now() / 1000),
-    state: 'sending',
-  })
-  return sendThreadPost(scope, addr, text, body, clientMsgId)
+    state: outboxHasEarlier(key, clientMsgId) ? 'waiting' : 'sending',
+    attempts: 0,
+    nextAttemptAtMs: 0,
+    login: login ?? '',
+    ...(afterSeq !== undefined ? { afterSeq } : {}),
+  }
+  const saved = outboxAdd(entry)
+  extra.onQueued?.(saved)
+  if (entry.state === 'waiting') {
+    // Older sends to this Thread still wait: this one goes after them.
+    void kickOutbox({ hostKey: entry.hostKey, force: true })
+    return { ok: false, error: 'Waiting to send after your earlier message.', kept: true }
+  }
+  const out = await outboxAttempt(clientMsgId, true)
+  if (!out) {
+    // Not tried now (its server is not saved here at the moment): it waits.
+    if (outboxGet(clientMsgId)) outboxMark(clientMsgId, 'waiting')
+    return { ok: false, error: 'Waiting to send.', kept: true }
+  }
+  return composeResult(out)
 }
 
-/** Send a failed bubble again: the same body, the SAME id. */
-export function retryThreadPost(clientMsgId: string): Promise<ThreadComposeResult> {
-  const e = outboxGet(clientMsgId)
-  if (!e) return Promise.resolve({ ok: false, error: 'This message is no longer waiting to be sent.' })
-  outboxMark(clientMsgId, 'sending')
-  return sendThreadPost(e.scope, e.addr, e.text, e.body, clientMsgId)
+/** What the message box hears about one try of an outbox send. */
+function composeResult(out: OutboxSendOutcome): ThreadComposeResult {
+  switch (out.kind) {
+    case 'sent': {
+      const refused = out.resp ? contextRefusedOf(out.resp) : null
+      return { ok: true, item: out.item, ...(refused ? { contextRefused: refused } : {}) }
+    }
+    case 'transient':
+    case 'final':
+      return { ok: false, error: out.error, ...(out.code ? { code: out.code } : {}), kept: true }
+    case 'refused':
+      return { ok: false, error: out.error, ...(out.code ? { code: out.code } : {}) }
+  }
 }
 
-/** Drop a failed bubble (the person's Discard). */
+/** Send a waiting or "Not sent" bubble again now: the same body, the SAME id. */
+export async function retryThreadPost(clientMsgId: string): Promise<ThreadComposeResult> {
+  if (!outboxGet(clientMsgId)) return { ok: false, error: 'This message is no longer waiting to be sent.' }
+  const out = await outboxRetry(clientMsgId)
+  if (!out) return { ok: false, error: 'The server is out of reach: it goes when the Thread reconnects.', kept: true }
+  return composeResult(out)
+}
+
+/** Delete an unsent bubble (the person's Delete). */
 export function discardThreadPost(clientMsgId: string): void {
   outboxDrop(clientMsgId)
 }
 
+function contextRefusedOf(resp: Record<string, unknown>): { code: string; message: string } | null {
+  const refused = resp?.contextRefused
+  if (!refused || typeof refused !== 'object' || Array.isArray(refused)) return null
+  const r = refused as Record<string, unknown>
+  return {
+    code: typeof r.code === 'string' ? r.code : 'failed',
+    message: typeof r.message === 'string' && r.message ? r.message : 'The server didn’t take the Board context.',
+  }
+}
+
+/** One try of an outbox entry, classified (the outbox keeps the state). */
+export async function sendOutboxEntry(e: OutboxEntry): Promise<OutboxSendOutcome> {
+  const scope = e.scope
+  if (!scope) return { kind: 'transient', error: 'The server is out of reach.' }
+  let resp: Record<string, unknown>
+  try {
+    resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', e.body)
+  } catch (err) {
+    // The server's copy already showed (a frame beat the failed answer).
+    if (!outboxGet(e.clientMsgId)) return { kind: 'sent', item: null }
+    // Thread survives a tab rename (S4): look the address up again.
+    if (isThreadAddressMiss(err)) {
+      requestThreadAddressRelookup(e.addr)
+      return { kind: 'refused', error: THREAD_ADDRESS_MOVED, addressMiss: true }
+    }
+    const errText = threadErrorText(err)
+    const code = httpCodeOf(err) ?? undefined
+    const error = threadAttachmentRefusalText(err, errText) ?? errText
+    if (code === 'client_msg_id_reused') return { kind: 'final', error, code }
+    if (isRetryableThreadSendError(err)) return { kind: 'transient', error, ...(code ? { code } : {}) }
+    return { kind: 'refused', error, ...(code ? { code } : {}) }
+  }
+  if (resp?.ok === false) {
+    return { kind: 'refused', error: typeof resp.error === 'string' ? resp.error : 'The server refused the message.' }
+  }
+  if (typeof resp?.movedFrom === 'string' && typeof resp.addr === 'string' && resp.addr !== e.addr) {
+    requestThreadAddressRelookup(e.addr, resp.addr)
+  }
+  // `duplicate: true` (a retry of a post the server already has) is sent.
+  const item = overlayItemFromThreadPost(resp, e.text)
+  if (item) ingestOverlayThreadItem(item)
+  return { kind: 'sent', item, resp }
+}
+
+/** A send without the outbox (Zen, a Garden widget): one try, no Retry. */
 async function sendThreadPost(
   scope: ServerScope,
   addr: string,
   text: string,
   body: Record<string, unknown>,
-  /** The pending bubble this send settles, or null. */
-  pendingId: string | null,
 ): Promise<ThreadComposeResult> {
   let resp: Record<string, unknown>
   try {
     resp = await daemonCliPost<Record<string, unknown>>(scope, 'thread/post', body)
   } catch (e) {
-    // The server's copy already showed (a frame beat the failed answer):
-    // it was sent.
-    if (pendingId && !outboxGet(pendingId)) return { ok: true, item: null }
     // Thread survives a tab rename (S4): a 404 on this address (an older
     // daemon after a rename) makes the sidecar view look it up again; the
     // person sees why the send did not post (Side finding C).
     if (isThreadAddressMiss(e)) {
-      if (pendingId) outboxDrop(pendingId)
       requestThreadAddressRelookup(addr)
       return { ok: false, error: THREAD_ADDRESS_MOVED }
     }
@@ -835,39 +922,18 @@ async function sendThreadPost(
     // S4: a refused file says which rule, in words (the daemon's hint).
     const refusal = threadAttachmentRefusalText(e, errText)
     const error = refusal ?? errText
-    if (pendingId) {
-      if (isRetryableThreadSendError(e)) {
-        outboxMark(pendingId, 'failed', error)
-        return { ok: false, error, ...(code ? { code } : {}), kept: true }
-      }
-      outboxDrop(pendingId)
-    }
     return { ok: false, error, ...(code ? { code } : {}) }
   }
   if (resp?.ok === false) {
-    if (pendingId) outboxDrop(pendingId)
     return { ok: false, error: typeof resp.error === 'string' ? resp.error : 'The server refused the message.' }
   }
   if (typeof resp?.movedFrom === 'string' && typeof resp.addr === 'string' && resp.addr !== addr) {
     requestThreadAddressRelookup(addr, resp.addr)
   }
-  // `duplicate: true` (a retry of a post the server already has) is sent.
   const item = overlayItemFromThreadPost(resp, text)
   if (item) ingestOverlayThreadItem(item)
-  if (pendingId) outboxSettle(pendingId, item?.id ?? null)
-  const refused = resp?.contextRefused
-  if (refused && typeof refused === 'object' && !Array.isArray(refused)) {
-    const r = refused as Record<string, unknown>
-    return {
-      ok: true,
-      item,
-      contextRefused: {
-        code: typeof r.code === 'string' ? r.code : 'failed',
-        message: typeof r.message === 'string' && r.message ? r.message : 'The server didn’t take the Board context.',
-      },
-    }
-  }
-  return { ok: true, item }
+  const refused = contextRefusedOf(resp)
+  return refused ? { ok: true, item, contextRefused: refused } : { ok: true, item }
 }
 
 /**

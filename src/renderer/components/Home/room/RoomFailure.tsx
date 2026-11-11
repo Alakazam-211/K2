@@ -171,13 +171,26 @@ export function RoomFailureGate({
   children?: React.ReactNode
 }): React.JSX.Element {
   const failure = useRoomFailure(hostKey)
-  if (!failure) return <>{children}</>
+  // One tree either way (thread-send-resilience 2026-11-11): the room stays
+  // MOUNTED when its server drops and comes back (a laptop waking from
+  // sleep). Swapping a fragment for wrappers remounted every pane, which
+  // threw away a message box mid-send, scroll and terminal state. Without
+  // a failure both wrappers are `display: contents` (no box, no layout).
   return (
     // --gap-pane: 0 in Terminal (the strip sits on the room), a tile gap in
     // Glass (the banner floats as its own tile above the room's tiles).
-    <div className="flex flex-col h-full min-h-0 gap-[var(--gap-pane)]" data-room-failing={failure.kind}>
-      <RoomFailureView failure={failure} actions={actions ?? roomFailureActions(hostKey)} />
-      <div className="flex-1 min-h-0 opacity-50 pointer-events-none" aria-disabled="true" inert>
+    <div
+      className={failure ? 'flex flex-col h-full min-h-0 gap-[var(--gap-pane)]' : undefined}
+      style={failure ? undefined : { display: 'contents' }}
+      data-room-failing={failure ? failure.kind : undefined}
+    >
+      {failure ? <RoomFailureView failure={failure} actions={actions ?? roomFailureActions(hostKey)} /> : null}
+      <div
+        className={failure ? 'flex-1 min-h-0 opacity-50 pointer-events-none' : undefined}
+        style={failure ? undefined : { display: 'contents' }}
+        aria-disabled={failure ? 'true' : undefined}
+        inert={failure ? true : undefined}
+      >
         {children}
       </div>
     </div>

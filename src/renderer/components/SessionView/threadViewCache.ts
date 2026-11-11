@@ -16,6 +16,13 @@
 //   - Versioned (`v`): a row of another version is ignored.
 //   - Forgotten for a server when it is removed from this computer or its
 //     login is signed out or replaced.
+//
+// The same database holds this computer's unsent Thread posts (the
+// `outbox` store, `threadOutbox.ts`; thread-send-resilience 2026-11-11):
+// a send written here first, shown as pending from here, and deleted only
+// when the server confirmed it. Its rows are NOT dropped with a server's
+// view rows (a token refresh after sleep "replaces" the login), and they
+// are rows of their own (the view rows are rewritten whole by every read).
 
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { homeHostKey } from '@/lib/host-key'
@@ -27,8 +34,10 @@ export const THREAD_VIEW_CACHE_ITEMS = 25
 /** Threads kept. */
 export const THREAD_VIEW_CACHE_THREADS = 50
 const DB_NAME = 'k2.thread-view-cache'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE = 'threads'
+/** Unsent Thread posts (`threadOutbox.ts`), keyed by `clientMsgId`. */
+const OUTBOX_STORE = 'outbox'
 /** Writes to IndexedDB are coalesced per Thread. */
 const WRITE_DELAY_MS = 750
 
@@ -107,6 +116,9 @@ function openDb(): Promise<IDBDatabase> | null {
         s.createIndex('savedAt', 'savedAt')
         s.createIndex('hostKey', 'hostKey')
       }
+      if (!db.objectStoreNames.contains(OUTBOX_STORE)) {
+        db.createObjectStore(OUTBOX_STORE, { keyPath: 'clientMsgId' })
+      }
     }
     r.onsuccess = () => {
       const db = r.result
@@ -183,6 +195,7 @@ async function idbDeleteWhere(match: (row: CacheRow) => boolean): Promise<void> 
     const store = tx.objectStore(STORE)
     const rows = (await req(store.getAll())) as CacheRow[]
     for (const row of rows) if (match(row)) store.delete(row.key)
+    // The outbox store is never touched here (see the header).
     await done
   } catch (e) {
     quiet('delete', e)
@@ -198,6 +211,76 @@ function coerceRow(raw: CacheRow | null, hostKey: string, addr: string): CachedT
     conversationId: typeof raw.conversationId === 'string' ? raw.conversationId : '',
     items: raw.items,
     savedAt: typeof raw.savedAt === 'number' ? raw.savedAt : 0,
+  }
+}
+
+// ── Unsent posts (the outbox store) ────────────────────────────────────────
+
+/** One unsent Thread post as saved on this computer (JSON only). */
+export interface PendingSendRow {
+  clientMsgId: string
+  hostKey: string
+  addr: string
+  text: string
+  body: Record<string, unknown>
+  keyed: boolean
+  createdAtSec: number
+  state: string
+  error?: string
+  attempts: number
+  /** The login it was written under (`''` for this computer). */
+  login: string
+  afterSeq?: number
+  v: number
+}
+
+async function outboxTx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => Promise<T> | T): Promise<T> {
+  const open = openDb()
+  if (!open) throw new Error('no IndexedDB')
+  const db = await open
+  const tx = db.transaction(OUTBOX_STORE, mode)
+  const done = new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('outbox write failed'))
+    tx.onabort = () => reject(tx.error ?? new Error('outbox write aborted'))
+  })
+  const out = await fn(tx.objectStore(OUTBOX_STORE))
+  await done
+  return out
+}
+
+/** Save (or replace) an unsent post. Resolves true once it is on disk,
+ *  false when this window has no working IndexedDB (never throws). */
+export async function savePendingSend(row: PendingSendRow): Promise<boolean> {
+  try {
+    await outboxTx('readwrite', (store) => {
+      store.put(row)
+    })
+    return true
+  } catch (e) {
+    quiet('outbox write', e)
+    return false
+  }
+}
+
+/** Delete an unsent post (the server confirmed it, or the person deleted it). */
+export async function deletePendingSend(clientMsgId: string): Promise<void> {
+  try {
+    await outboxTx('readwrite', (store) => {
+      store.delete(clientMsgId)
+    })
+  } catch (e) {
+    quiet('outbox delete', e)
+  }
+}
+
+/** Every unsent post saved on this computer. */
+export async function readPendingSends(): Promise<PendingSendRow[]> {
+  try {
+    return await outboxTx('readonly', async (store) => (await req(store.getAll())) as PendingSendRow[])
+  } catch (e) {
+    quiet('outbox read', e)
+    return []
   }
 }
 
@@ -332,5 +415,16 @@ export async function resetThreadViewCacheForTests(opts: { keepDisk?: boolean } 
     } catch {
       /* never opened */
     }
+  }
+}
+
+/** Tests: delete every saved unsent post. */
+export async function clearPendingSendsForTests(): Promise<void> {
+  try {
+    await outboxTx('readwrite', (store) => {
+      store.clear()
+    })
+  } catch (e) {
+    quiet('outbox clear', e)
   }
 }

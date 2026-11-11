@@ -174,6 +174,36 @@ export function insertIntoDraft(draft: string, chunk: string, caret: number | nu
   return before + mid + after
 }
 
+/** A send's words go back to the box saved under `detail.key`. */
+export const COMPOSE_DRAFT_RESTORE_EVENT = 'k2:compose-draft-restore'
+
+/** The send is safe (in the Thread outbox on disk, or delivered): the saved
+ *  draft may go, unless the person has typed something else since. Works
+ *  after the box that sent it is gone. */
+function releaseStoredDraft(key: string, raw: string): void {
+  if (!key) return
+  try {
+    if (localStorage.getItem(key) === raw) localStorage.removeItem(key)
+  } catch {
+    /* storage disabled */
+  }
+}
+
+/** The send was refused: its words go back to the box, saved first (the
+ *  box that sent it may have been remounted or closed meanwhile). Never
+ *  over words typed since. */
+function restoreStoredDraft(key: string, text: string): void {
+  if (!key || !text) return
+  try {
+    if (!localStorage.getItem(key)) localStorage.setItem(key, text)
+  } catch {
+    /* storage disabled */
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(COMPOSE_DRAFT_RESTORE_EVENT, { detail: { key, text } }))
+  }
+}
+
 export function TerminalComposeBar({
   sessionId,
   workspacePath = '',
@@ -376,12 +406,22 @@ export function TerminalComposeBar({
   }, [draftKey, legacyDraftKeysId, sendOnThread])
 
   // Persist on every change (localStorage writes are cheap + synchronous — this
-  // is the crash-durable store). An empty draft clears the key.
+  // is the crash-durable store). An empty draft clears the key — except the
+  // box a send just emptied: the saved words stay until the send is safe
+  // (in the Thread outbox on disk, or delivered), so a reload, a remount
+  // (a room's failure gate, a server switch) or a crash on the way never
+  // loses them (thread-send-resilience 2026-11-11).
+  const draftKeyRef = useRef(draftKey)
+  draftKeyRef.current = draftKey
+  const keepStoredDraftRef = useRef<{ key: string; raw: string } | null>(null)
   useEffect(() => {
     if (!draftKey) return
     try {
-      if (draft) localStorage.setItem(draftKey, draft)
-      else {
+      if (draft) {
+        // New words: they are what is saved now.
+        keepStoredDraftRef.current = null
+        localStorage.setItem(draftKey, draft)
+      } else if (keepStoredDraftRef.current?.key !== draftKey) {
         localStorage.removeItem(draftKey)
         clearComposeCaret(draftOwner)
       }
@@ -389,6 +429,18 @@ export function TerminalComposeBar({
       /* storage disabled/full — draft just won't persist */
     }
   }, [draft, draftKey, draftOwner])
+
+  // A send's words come back to this box (a refusal), even when the send
+  // was made by an earlier mount of it.
+  useEffect(() => {
+    const onRestore = (ev: Event): void => {
+      const detail = (ev as CustomEvent<{ key: string; text: string }>).detail
+      if (!detail || !detail.key || detail.key !== draftKeyRef.current) return
+      setDraft((cur) => (cur.length === 0 ? detail.text : cur))
+    }
+    window.addEventListener(COMPOSE_DRAFT_RESTORE_EVENT, onRestore)
+    return () => window.removeEventListener(COMPOSE_DRAFT_RESTORE_EVENT, onRestore)
+  }, [])
 
   // Auto-grow with real draft text only. Empty boxes stay one line —
   // the long placeholder used to wrap (especially before width settled
@@ -909,7 +961,27 @@ export function TerminalComposeBar({
 
     setQueued(false)
     setSending(true)
-    setDraft('') // optimistic clear (PRD 1b); restored below only on failure
+    // Optimistic clear of the BOX (PRD 1b). The saved draft stays until the
+    // send is safe: in the Thread outbox on disk, or delivered
+    // (thread-send-resilience). A refusal brings the words back, even to a
+    // remounted box.
+    const sentKey = draftKey
+    const rawDraft = draft
+    if (sentKey) keepStoredDraftRef.current = { key: sentKey, raw: rawDraft }
+    const release = (): void => {
+      if (keepStoredDraftRef.current?.key === sentKey && keepStoredDraftRef.current.raw === rawDraft) {
+        keepStoredDraftRef.current = null
+      }
+      releaseStoredDraft(sentKey, rawDraft)
+    }
+    const restore = (): void => {
+      if (keepStoredDraftRef.current?.key === sentKey && keepStoredDraftRef.current.raw === rawDraft) {
+        keepStoredDraftRef.current = null
+      }
+      setDraft((cur) => (cur.length === 0 ? text : cur))
+      restoreStoredDraft(sentKey, text)
+    }
+    setDraft('')
     setStashNotes([])
     setSlashMenuOpen(false)
     setSlashMenuFromTypeahead(false)
@@ -924,12 +996,23 @@ export function TerminalComposeBar({
           command,
           // Remote Thread load Fix 3: the words show in the Thread at once
           // as a pending bubble until the server confirms them.
-          files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })), pending: true } : { pending: true },
+          // thread-send-resilience: the post is in this computer's outbox
+          // (on disk) before it goes; the saved draft goes once it is.
+          {
+            ...(files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })) } : {}),
+            pending: true,
+            onQueued: (saved) => {
+              void saved.then((onDisk) => {
+                if (onDisk) release()
+              })
+            },
+          },
         )
         if (!result.ok && result.kept) {
-          // It failed on the way and waits in the Thread as "Not sent" with
-          // Retry (the same post): the draft does not come back, the reply
-          // chip and files went with it.
+          // It waits in the Thread ("Waiting to send…", then by itself, or
+          // "Not sent" with Retry: the same post): the draft does not come
+          // back, the reply chip and files went with it.
+          release()
           setThreadAddrError(null)
           if (replyTo) reply.clear()
           if (files.length > 0) {
@@ -943,10 +1026,11 @@ export function TerminalComposeBar({
         } else if (!result.ok) {
           // The draft and its file chips stay (a refused file: the whole
           // post was refused), with the daemon's reason.
-          setDraft((cur) => (cur.length === 0 ? text : cur))
+          restore()
           // Side finding C: say why, instead of a silent bounce.
           setThreadAddrError(result.error)
         } else {
+          release()
           setThreadAddrError(null)
           // The chip goes with the send (a refused send keeps it).
           if (replyTo) reply.clear()
@@ -970,8 +1054,9 @@ export function TerminalComposeBar({
         // IS the feedback) — but never clobber a fresh draft already started.
         // Keep the selected slash-command on failure so retry still sends it.
         if (mapMsgResponseToStatus(resp).kind !== 'delivered') {
-          setDraft((cur) => (cur.length === 0 ? text : cur))
+          restore()
         } else {
+          release()
           if (text) setHistory((prev) => [text, ...prev].slice(0, 50))
           setHistoryIndex(-1)
           historyDraftRef.current = ''
@@ -979,11 +1064,11 @@ export function TerminalComposeBar({
         }
       }
     } catch {
-      setDraft((cur) => (cur.length === 0 ? text : cur))
+      restore()
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, sessionChrome?.retryOverlayAddr, pendingFiles, scope, reply])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, sessionChrome?.retryOverlayAddr, pendingFiles, scope, reply, draftKey])
 
   // A waiting send goes once the Thread has its address (with the words in
   // the box then); emptying the box calls it off.

@@ -314,7 +314,7 @@ describe('the Thread\'s message box (Zen look)', () => {
     expect(inject).not.toHaveBeenCalled()
   })
 
-  it('Enter shows the message as a pending bubble; a send that fails on the way stays there as "Not sent" (no draft back, no error line)', async () => {
+  it('Enter shows the message as a pending bubble; a send that fails on the way waits there to go again (no draft back, no error line)', async () => {
     renderBar()
     let fail!: (e: unknown) => void
     h.daemonCliPost.mockImplementationOnce(() => new Promise((_res, rej) => (fail = rej)))
@@ -326,19 +326,19 @@ describe('the Thread\'s message box (Zen look)', () => {
     expect(pendingFor().map((e) => [e.clientMsgId, e.text, e.state])).toEqual([[cid, 'over a bad tunnel', 'sending']])
     expect(box().value).toBe('')
     await act(async () => fail(new TypeError('Load failed')))
-    await waitFor(() => expect(pendingFor()[0]?.state).toBe('failed'))
+    await waitFor(() => expect(pendingFor()[0]?.state).toBe('waiting'))
     expect(box().value).toBe('')
     expect(screen.queryByTestId('compose-thread-addr-error')).toBeNull()
     discardThreadPost(cid)
   })
 
-  it('a pending bubble is the person\'s own, a little faded, "You · Sending…"; failed reads "Not sent" with Retry · Discard', () => {
-    const item = (state: 'sending' | 'failed'): OverlayThreadItem => ({
+  it('a pending bubble is the person\'s own, a little faded, "You · Sending…"; waiting reads "Waiting to send…" with Retry now · Delete; failed reads "Not sent" with Retry · Delete', () => {
+    const item = (state: 'sending' | 'waiting' | 'failed'): OverlayThreadItem => ({
       collection: 'thread',
       seq: Number.MAX_SAFE_INTEGER,
       id: 'pending:abc',
       localTime: true,
-      pending: { clientMsgId: 'abc', state, ...(state === 'failed' ? { error: 'Load failed' } : {}) },
+      pending: { clientMsgId: 'abc', state, ...(state !== 'sending' ? { error: 'Load failed' } : {}) },
       doc: { id: 'pending:abc', kind: 'text', from: '', body: 'hello', via: 'compose', created_at: 1 },
     })
     const { rerender } = render(<ThreadItemRow item={item('sending')} />)
@@ -348,13 +348,19 @@ describe('the Thread\'s message box (Zen look)', () => {
     expect(row.style.opacity).toBe('0.6')
     expect(row.querySelector('[data-zen-message-meta]')?.textContent).toBe('You · Sending…')
     expect(row.querySelector('[data-thread-retry]')).toBeNull()
+    rerender(<ThreadItemRow item={item('waiting')} />)
+    const waiting = document.querySelector('[data-zen-message="pending:abc"]') as HTMLElement
+    expect(waiting.getAttribute('data-pending')).toBe('sending')
+    expect(waiting.style.opacity).toBe('0.6')
+    expect(waiting.querySelector('[data-zen-message-meta]')?.textContent).toBe('You · Waiting to send…')
+    expect((waiting.querySelector('[data-thread-pending-actions]') as HTMLElement).textContent).toBe('Retry now · Delete')
     rerender(<ThreadItemRow item={item('failed')} />)
     const failed = document.querySelector('[data-zen-message="pending:abc"]') as HTMLElement
     expect(failed.getAttribute('data-pending')).toBe('failed')
     expect(failed.style.opacity).toBe('')
     expect(failed.querySelector('[data-zen-message-meta]')?.textContent).toBe('You · Not sent')
     const actions = failed.querySelector('[data-thread-pending-actions]') as HTMLElement
-    expect(actions.textContent).toBe('Retry · Discard')
+    expect(actions.textContent).toBe('Retry · Delete')
     expect(actions.getAttribute('title')).toBe('Load failed')
   })
 

@@ -732,7 +732,7 @@ export function ThreadItemRow({
       // A pending bubble is always this window's own send.
       mine={pending ? true : mine}
       author={pending ? 'You' : author}
-      timeLabel={pending ? (pending.state === 'failed' ? 'Not sent' : 'Sending…') : formatRelativeTime(item.doc.created_at, now)}
+      timeLabel={pending ? pendingTimeLabel(pending.state) : formatRelativeTime(item.doc.created_at, now)}
       viewer={viewer}
       nowSec={now}
       onAnswer={onAnswer}
@@ -748,15 +748,23 @@ export function ThreadItemRow({
       tail={tail}
       runStart={runStart}
       receipt={receipt}
-      pending={pending?.state}
-      footer={pending?.state === 'failed' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} /> : undefined}
+      pending={pending ? (pending.state === 'failed' ? 'failed' : 'sending') : undefined}
+      footer={pending && pending.state !== 'sending' ? <PendingSendActions clientMsgId={pending.clientMsgId} error={pending.error} waiting={pending.state === 'waiting'} /> : undefined}
     />
   )
 }
 
-/** Under a "Not sent" bubble: Retry (the same post, the same id) and
- *  Discard. The reason is the hover text. */
-function PendingSendActions({ clientMsgId, error }: { clientMsgId: string; error?: string }): JSX.Element {
+/** A pending bubble's status line: on its way, waiting for the server (it
+ *  goes again by itself), or not sent. */
+export function pendingTimeLabel(state: 'sending' | 'waiting' | 'failed'): string {
+  if (state === 'failed') return 'Not sent'
+  if (state === 'waiting') return 'Waiting to send…'
+  return 'Sending…'
+}
+
+/** Under a waiting or "Not sent" bubble: Retry (now; the same post, the
+ *  same id) and Delete. The reason is the hover text. */
+function PendingSendActions({ clientMsgId, error, waiting }: { clientMsgId: string; error?: string; waiting?: boolean }): JSX.Element {
   const link: CSSProperties = {
     background: 'none',
     border: 'none',
@@ -776,11 +784,11 @@ function PendingSendActions({ clientMsgId, error }: { clientMsgId: string; error
           void retryThreadPost(clientMsgId)
         }}
       >
-        Retry
+        {waiting ? 'Retry now' : 'Retry'}
       </button>
       {' · '}
       <button type="button" style={link} data-thread-discard="" onClick={() => discardThreadPost(clientMsgId)}>
-        Discard
+        Delete
       </button>
     </span>
   )

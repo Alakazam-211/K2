@@ -50,6 +50,7 @@ features:
   email-notifications-v1
   app-chat-v1
   app-chat-space-v1
+  app-recordings-v1
   app-hosted-sign-in-v1
   live-access-v1
   activity-live-busy
@@ -89,4 +90,5 @@ features:
   product-feedback-screenshot-v1
   post-idempotency-v1
   remote-desktop-v1
+  app-voice-record-v1
   boot-status-views-v1

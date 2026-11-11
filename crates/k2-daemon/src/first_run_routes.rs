@@ -370,22 +370,41 @@ fn seat_person() -> String {
 #[cfg(test)]
 pub(crate) static TEST_LAUNCHES: parking_lot::Mutex<Vec<(String, Option<String>)>> = parking_lot::Mutex::new(Vec::new());
 
-/// Start the new agent's pinned chat and deliver its first-start `hello`,
-/// off the request thread (`hire_routes`' launch pattern). The agent stands
-/// whether or not this works.
-fn launch(path: String, handle: String, hello: Option<String>, from: String, sender: crate::hire_routes::Sender) {
+/// Start the new agent's pinned chat on `tool` the way the Chat tab's
+/// first-chat picker does: `ensure-pinned-chat` with `harness`. The pick is
+/// saved as its default agent and the chat starts on it, so a server that
+/// has never had a pinned chat doesn't answer `409 harness_choice_needed`
+/// (`pinned_chat_choice`) and the person isn't asked again.
+fn start_chat(path: &str, tool: &str) -> Result<(), String> {
+    let body = json!({ "project": path, "harness": tool }).to_string();
+    let r = crate::pinned_chat::handle_ensure_pinned_chat(body.as_bytes());
+    if r.status.starts_with('2') {
+        Ok(())
+    } else {
+        Err(format!("{}: {}", r.status, r.body))
+    }
+}
+
+/// Start the new agent's pinned chat on the chosen tool ([`start_chat`]),
+/// then deliver its first-start `hello` off the request thread
+/// (`hire_routes`' launch pattern). The agent stands whether or not this
+/// works.
+fn launch(path: String, handle: String, tool: &str, hello: Option<String>, from: String, sender: crate::hire_routes::Sender) {
+    let started = start_chat(&path, tool);
+    if let Err(e) = &started {
+        k2_core::log_debug!("[first-run] chat {handle} on {tool}: {e}");
+    }
     #[cfg(test)]
     {
-        let _ = (path, from, sender);
+        let _ = (path, from, sender, started);
         TEST_LAUNCHES.lock().push((handle, hello));
     }
     #[cfg(not(test))]
     {
+        if started.is_err() {
+            return;
+        }
         let spawned = crate::rt::spawn("first-run-launch", move || {
-            if let Err(e) = crate::canonical_session::ensure_canonical_session(&path) {
-                k2_core::log_debug!("[first-run] launch {handle}: {e}");
-                return;
-            }
             if let Some(brief) = hello {
                 let (r, _) = crate::hire_routes::deliver_recorded(
                     &handle,
@@ -511,7 +530,7 @@ fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
     audit("first-run-k5", &created_by, format!("ok {} {tool} granted={}", report.handle, granted.granted.join(",")));
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
-    launch(report.path.clone(), report.handle.clone(), report.hello.clone(), from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
+    launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
     made(&report, &granted, &cards)
 }
 
@@ -667,7 +686,7 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
     );
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
-    launch(report.path.clone(), report.handle.clone(), report.hello.clone(), k5_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
+    launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), k5_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
     made(&report, &granted, &cards)
 }
 

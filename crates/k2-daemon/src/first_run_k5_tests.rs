@@ -435,3 +435,68 @@ fn deleting_k5s_workspace_clears_the_seat_and_the_offer_comes_back_and_k5_is_mad
     assert!(launches.len() == 1 && launches[0].1.is_some(), "{launches:?}");
 }
 
+// ── The first chat (0.46.11's picker) ────────────────────────────────
+
+/// An `exec cat` shim for `bin` only: every other agent CLI is missing.
+fn installed(home: &crate::test_support::TempHome, bin: &str) -> k2_core::test_env::EnvVar {
+    let dir = home.path().join("agent-shims");
+    std::fs::create_dir_all(&dir).expect("shim dir");
+    k2_core::test_env::write_executable(&dir.join(bin), "#!/bin/sh\nexec cat\n");
+    k2_core::test_env::EnvVar::set(k2_core::terminal::agent_spawn_guard::SHIM_DIR_ENV, &dir)
+}
+
+/// What the Chat tab sends when it opens an agent's chat: no `harness`.
+fn chat_tab_ensure(path: &str) -> (String, Value) {
+    let r = crate::pinned_chat::handle_ensure_pinned_chat(json!({ "project": path }).to_string().as_bytes());
+    (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
+}
+
+fn chat_is_live(id: &str) -> bool {
+    crate::v2_session_map::lookup_by_agent_name(&crate::canonical_session::canonical_key_for(id)).is_some()
+}
+
+fn stop_chat(id: &str) {
+    crate::v2_session_map::unregister(&crate::canonical_session::canonical_key_for(id));
+}
+
+/// A server that has never had a pinned chat asks before a never-chatted
+/// agent's first chat starts on Claude (`409 harness_choice_needed`). K5
+/// and the Chief of Staff come with a tool already picked, so their routes
+/// start the chat on it the way the picker does, and the Chat tab finds it
+/// running: nobody is asked again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn k5_made_with_claude_on_a_fresh_server_starts_its_chat_with_no_409_and_so_does_the_chief_of_staff() {
+    let e = env(true, &["claude"]);
+    let _claude = installed(&e._home, "claude");
+    let ever: bool = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM workspace_sessions)", [], |r| r.get(0)).expect("sessions")
+    };
+    assert!(!ever, "a fresh server: no pinned chat ever");
+
+    let r = post(K5_PATH, json!({ "tool": "claude" }), &Actor::owner_token());
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let out = json_of(&r);
+    let (k5, k5_path) = (out["workspaceId"].as_str().expect("id").to_string(), out["path"].as_str().expect("path").to_string());
+    assert!(chat_is_live(&k5), "K5's chat started on the tool picked in the sheet");
+    assert_eq!(crate::pinned_chat_choice::needs_choice(&k5_path), None, "nothing left to ask");
+    let (status, v) = chat_tab_ensure(&k5_path);
+    assert_eq!(status, "200 OK", "the Chat tab finds K5's chat, no 409: {v}");
+    assert_eq!((v["provider"].as_str(), v["reused"].as_bool()), (Some("claude"), Some(true)), "{v}");
+
+    let r = handle_chief_of_staff(
+        &json!({ "name": "Max", "about": "Runs a small bakery", "tool": "claude" }).to_string().into_bytes(),
+        &k5_session(&k5),
+    );
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let out = json_of(&r);
+    let (cos, cos_path) = (out["workspaceId"].as_str().expect("id").to_string(), out["path"].as_str().expect("path").to_string());
+    assert!(chat_is_live(&cos), "the Chief of Staff's chat started on the tool K5 asked for");
+    let (status, v) = chat_tab_ensure(&cos_path);
+    assert_eq!(status, "200 OK", "no 409 for the Chief of Staff either: {v}");
+    assert_eq!((v["provider"].as_str(), v["reused"].as_bool()), (Some("claude"), Some(true)), "{v}");
+
+    stop_chat(&cos);
+    stop_chat(&k5);
+}

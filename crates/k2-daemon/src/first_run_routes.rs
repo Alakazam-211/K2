@@ -756,3 +756,7 @@ mod tests {
         assert_eq!(v["hidden"], json!(false), "anna's hide is anna's");
     }
 }
+
+#[cfg(test)]
+#[path = "first_run_k5_tests.rs"]
+mod k5_tests;

@@ -1,36 +1,30 @@
-// Settings → Email (K2 Mail S7, prd-email-server-v1 §13) — the owner
-// surface: server lifecycle, domains + DNS record tables, addresses,
-// and the outbound-approvals queue. Master-detail (the
-// Projects/ProjectSettings shell idiom): left column = server status
-// card + Approvals/Addresses nav + the domain list + [Add domain];
-// right panel = the selection's management surface.
+// Settings → Email Hosting (K2 Mail S7, prd-email-server-v1 §13) — the
+// owner surface: the mail server, domains and their DNS records, agent
+// addresses, and the outbound-approvals queue. The reference layout: a
+// page header, a tab strip (Server / Domains / Addresses / Approvals) and
+// card groups of rows; a domain opens its own detail inside Domains, with
+// a way back to the list.
 //
 // CAPABILITY GATING (pre-mortem #15 — BINDING): the whole page keys off
 // GET /cli/mail/status `supported` — the DAEMON's report, never
 // navigator.platform (a Mac app driving a remote Linux daemon must see
 // the real page). When unsupported the page renders fully from the
-// static SAMPLE fixture (email-api.ts) under the D3 banner, with every
-// mutating control disabled and NO further network calls.
+// static SAMPLE fixture (email-api.ts) under the shared Linux note, with
+// every mutating control disabled and NO further network calls.
 //
-// LIVE UPDATES: the daemon mirrors its mail:* hook events
-// (server-state-changed / domain-status-changed /
-// send-approval-requested / send-decided) onto the host-aware
-// /cli/sessions/events bus as `mail_changed` (the feedback_changed
-// pattern); we subscribe on the window's server's app bus
-// (`onMailChanged`) and bump a revision that refetches — local and
-// remote alike (Home 0.43.2). While an enable run is in flight we
-// additionally poll /cli/mail/status (the route's documented
-// enableProgress contract).
+// LIVE UPDATES: the daemon mirrors its mail:* hook events onto the
+// host-aware /cli/sessions/events bus as `mail_changed`; we subscribe on
+// the window's server's app bus (`onWindowServerMailChanged`) and bump a
+// revision that refetches. While an enable run is in flight we also poll
+// /cli/mail/status (the route's documented enableProgress contract).
 //
-// UNTRUSTED CONTENT (§8.1/§8.4): approval items surface from/to/
-// subject summaries only; the body is a bounded plain-text preview the
-// daemon prepared, rendered ONLY behind an explicit expand, always as
-// plain text (<pre>), never HTML, never auto-shown.
+// UNTRUSTED CONTENT (§8.1/§8.4): approval items surface from/to/subject
+// summaries only; the body is a bounded plain-text preview the daemon
+// prepared, rendered ONLY behind an explicit expand, always as plain text
+// (<pre>), never HTML, never auto-shown.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
-import { useToastStore } from '@/stores/toast'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useWindowModeStore } from '@/stores/window-mode'
 import type { SettingEntry } from '../searchManifest'
 import { InboxAccessPanel } from './InboxAccessPanel'
@@ -54,11 +48,9 @@ import {
   fetchApprovalFile,
   fetchApprovals,
   fetchApprovalText,
-  fetchDoctor,
   fetchDomainDetail,
   fetchDomains,
   fetchInboxes,
-  fetchMailConfig,
   fetchMailStatus,
   onWindowServerMailChanged,
   fetchOutbox,
@@ -82,219 +74,270 @@ import {
   type PreflightReport,
   type RotatedMailboxPassword,
 } from './email-api'
-import { SettingDropdown } from '../controls/SettingControls'
-import { Checkbox, Tag } from '@/components/ui'
+import {
+  SETTING_LIST_ROW_HOVER,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SETTING_SERVER_REASON,
+  SaveError,
+  SaveNote,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+} from '../controls/SettingControls'
+import { Button, Callout, Checkbox, Input, Surface, Tag } from '@/components/ui'
+import { AccessSheet, CopyLine, DIALOG_FIELD, DIALOG_MUTED, FailedNote, Field } from './AccessDialogs'
+import { HealthWord, StatusDot, type HealthTone } from './ConnectionsParts'
+import { LinuxOnlyNote } from './LinuxOnlyNote'
 
 export const EMAIL_HOSTING_MANIFEST: SettingEntry[] = [
-  { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Enable and supervise the mail server (Linux deployments)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting'] },
-  { id: 'email-hosting.domains', section: 'email-hosting', label: 'Email Domains', description: 'Add domains and verify MX / SPF / DKIM / DMARC records', keywords: ['domain', 'dns', 'mx', 'spf', 'dkim', 'dmarc', 'ptr', 'records', 'verify', 'zone'] },
-  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent mailboxes per domain — caps, holders, retirement, forwarding', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint', 'rotate', 'imap', 'smtp', 'password', 'forward', 'forwarding', 'gmail', 'redirect'] },
-  { id: 'email-hosting.approvals', section: 'email-hosting', label: 'Send Approvals', description: 'Approve or deny agent outbound email', keywords: ['approval', 'approvals', 'outbox', 'send', 'deny', 'approve', 'queue', 'outbound'] },
-  { id: 'email-hosting.send-mode', section: 'email-hosting', label: 'Send Mode & Relay', description: 'Direct send or smart-host relay, per domain', keywords: ['relay', 'smtp relay', 'direct', 'send mode', 'smart host', 'receive-only'] },
+  { id: 'email-hosting.server', section: 'email-hosting', label: 'Email Server', description: 'Install and run your own mail server (Linux servers)', keywords: ['mail', 'email', 'smtp', 'stalwart', 'server', 'enable', 'preflight', 'hosting', 'install', 'uninstall'] },
+  { id: 'email-hosting.domains', section: 'email-hosting', label: 'Email Domains', description: 'Add domains and check their DNS records', keywords: ['domain', 'dns', 'mx', 'spf', 'dkim', 'dmarc', 'ptr', 'records', 'verify', 'zone'] },
+  { id: 'email-hosting.addresses', section: 'email-hosting', label: 'Email Addresses', description: 'Agent addresses on your domains: forwarding, passwords, retiring', keywords: ['address', 'mailbox', 'agent', 'cap', 'retire', 'mint', 'rotate', 'imap', 'smtp', 'password', 'forward', 'forwarding', 'gmail', 'redirect'] },
+  { id: 'email-hosting.approvals', section: 'email-hosting', label: 'Send Approvals', description: 'Approve or deny mail your agents want to send', keywords: ['approval', 'approvals', 'outbox', 'send', 'deny', 'approve', 'queue', 'outbound'] },
+  { id: 'email-hosting.send-mode', section: 'email-hosting', label: 'Send Mode & Relay', description: 'How mail leaves each domain: from this server or through a relay', keywords: ['relay', 'smtp relay', 'direct', 'send mode', 'smart host', 'receive-only'] },
 ]
 
-// The D3 banner — exact copy is a locked product decision.
-const MAC_BANNER =
-  'THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS, THIS PAGE IS JUST HERE FOR EXAMPLE PURPOSES.'
+type Tab = 'server' | 'domains' | 'addresses' | 'approvals'
+const TABS: Tab[] = ['server', 'domains', 'addresses', 'approvals']
+const TAB_LABEL: Record<Tab, string> = { server: 'Server', domains: 'Domains', addresses: 'Addresses', approvals: 'Approvals' }
+const TAB_SETTINGS_ID: Record<Tab, string> = {
+  server: 'email-hosting.server',
+  domains: 'email-hosting.domains',
+  addresses: 'email-hosting.addresses',
+  approvals: 'email-hosting.approvals',
+}
 
-type Selection =
-  | { kind: 'server' }
-  | { kind: 'approvals' }
-  | { kind: 'addresses' }
-  | { kind: 'domain'; domain: string }
+/** A page-level result under the header: what just happened, or what
+ *  failed and why. Dismissable. */
+type Notice = { tone: 'ok' | 'error'; text: string; detail?: string }
 
 // ── Small shared bits ────────────────────────────────────────────────────
 
-function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
+function fmtFileSize(n: number): string {
+  if (n < 1024) return `${n} bytes`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function fmtDay(unixSecs: number | null | undefined): string {
+  if (typeof unixSecs !== 'number' || unixSecs <= 0) return ''
+  return new Date(unixSecs * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function fmtWhen(unixSecs: number | null | undefined): string {
+  if (typeof unixSecs !== 'number' || unixSecs <= 0) return ''
+  return new Date(unixSecs * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
+
+function reasonOf(e: unknown): string {
+  return mailErrorInfo(e).hint ?? mailErrorMessage(e)
+}
+
+/** The daemon always sends `supported` and `state`; anything else is a
+ *  reply this page can't read, said plainly instead of guessed at. */
+function isMailStatus(s: unknown): s is MailStatus {
+  const o = s as Partial<MailStatus> | null
+  return !!o && typeof o === 'object' && typeof o.supported === 'boolean' && typeof o.state === 'string'
+}
+
+const STATE_WORD: Record<string, { word: string; tone: HealthTone; hint: string }> = {
+  running: { word: 'Running', tone: 'ok', hint: 'Receiving and sending mail for your domains.' },
+  degraded: { word: 'Running with problems', tone: 'warn', hint: 'Mail still flows, but something needs a look.' },
+  installing: { word: 'Installing', tone: 'warn', hint: 'K2 is setting the server up. This page updates as each step finishes.' },
+  error: { word: 'Install stopped', tone: 'error', hint: 'The install stopped part-way. Resume it to carry on from the last step that finished.' },
+  stopped: { word: 'Stopped', tone: 'neutral', hint: 'The server isn’t running. Your mail is kept.' },
+  disabled: { word: 'Turned off', tone: 'neutral', hint: 'The server is off and your mail is kept. Incoming mail bounces until you turn it back on.' },
+  'not-installed': {
+    word: 'Not installed',
+    tone: 'neutral',
+    hint: 'That’s fine: agents can still read and draft in any account you connect in Email Link. Install the server to give them addresses on your own domains that can send.',
+  },
+}
+
+function stateInfo(state: string): { word: string; tone: HealthTone; hint: string } {
+  return STATE_WORD[state] ?? { word: state ? state[0].toUpperCase() + state.slice(1) : 'Unknown', tone: 'neutral', hint: '' }
+}
+
+/** A DNS record's (or a domain's) check result, in words. */
+function recordTag(status: string): { label: string; tone: HealthTone } {
+  switch (status) {
+    case 'valid':
+      return { label: 'Found', tone: 'ok' }
+    case 'verified':
+      return { label: 'Verified', tone: 'ok' }
+    case 'missing':
+      return { label: 'Missing', tone: 'error' }
+    case 'wrong':
+      return { label: 'Wrong value', tone: 'error' }
+    case 'unknown':
+      return { label: 'Couldn’t check', tone: 'warn' }
+    case 'unverifiable':
+      return { label: 'Check by hand', tone: 'neutral' }
+    case 'optional':
+      return { label: 'Optional', tone: 'neutral' }
+    case 'skip':
+      // 0.46.1: an external zone can't give these names a certificate yet.
+      return { label: 'Skip for now', tone: 'neutral' }
+    case 'pending':
+      return { label: 'Waiting for DNS', tone: 'warn' }
+    default:
+      return { label: 'Not checked yet', tone: 'neutral' }
+  }
+}
+
+function domainTag(status: string): { label: string; tone: HealthTone } {
+  if (status === 'verified') return { label: 'Verified', tone: 'ok' }
+  if (status === 'pending') return { label: 'Waiting for DNS', tone: 'warn' }
+  return recordTag(status)
+}
+
+const SEND_MODE_WORD: Record<string, string> = {
+  'receive-only': 'Receive only',
+  direct: 'Sends from this server',
+  relay: 'Sends through a relay',
+}
+
+/** A button that copies `text`, then says Copied (or that it couldn't). */
+function CopyButton({ text, label }: { text: string; label: string }): React.JSX.Element {
+  const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle')
+  useEffect(() => {
+    if (state === 'idle') return
+    const t = window.setTimeout(() => setState('idle'), 1600)
+    return () => window.clearTimeout(t)
+  }, [state])
   return (
-    <h3 className="type-section text-[var(--color-text-muted)] uppercase tracking-wider">
-      {children}
-    </h3>
+    <Button
+      aria-label={`Copy ${label}`}
+      onClick={() => {
+        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+        if (!clip) return setState('failed')
+        clip.writeText(text).then(
+          () => setState('done'),
+          () => setState('failed'),
+        )
+      }}
+    >
+      {state === 'done' ? 'Copied' : state === 'failed' ? 'Couldn’t copy' : 'Copy'}
+    </Button>
   )
 }
 
-function fmtFileSize(n: number): string {
-  if (n < 1024) return `${n} bytes`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`
-  return `${(n / (1024 * 1024)).toFixed(1)} MiB`
-}
-
-function fmtDate(unixSecs: number | null | undefined): string {
-  if (typeof unixSecs !== 'number' || unixSecs <= 0) return '—'
-  return new Date(unixSecs * 1000).toLocaleString()
-}
-
-/** Server-state → status-token color. */
-function stateColor(state: string): string {
-  switch (state) {
-    case 'running':
-      return 'var(--color-status-ok)'
-    case 'degraded':
-      return 'var(--color-status-warn)'
-    case 'installing':
-      return 'var(--color-status-working)'
-    case 'error':
-      return 'var(--color-status-error-soft)'
-    default:
-      // not-installed / stopped / disabled
-      return 'var(--color-text-muted)'
-  }
-}
-
-/** Per-record (and per-domain) verification chip. */
-function recordChip(status: string): { label: string; color: string } {
-  switch (status) {
-    case 'valid':
-    case 'verified':
-      return { label: status === 'verified' ? 'Verified' : 'Valid', color: 'var(--color-status-ok)' }
-    case 'missing':
-      return { label: 'Missing', color: 'var(--color-status-error-soft)' }
-    case 'wrong':
-      return { label: 'Wrong', color: 'var(--color-status-error-soft)' }
-    case 'unknown':
-      return { label: 'Unknown', color: 'var(--color-status-warn)' }
-    case 'unverifiable':
-      return { label: 'Manual', color: 'var(--color-status-warn)' }
-    case 'optional':
-      return { label: 'Optional', color: 'var(--color-text-muted)' }
-    case 'skip':
-      // 0.46.1: an external zone can't give these names a certificate yet.
-      return { label: 'Skip for now', color: 'var(--color-text-muted)' }
-    default:
-      return { label: 'Pending', color: 'var(--color-text-muted)' }
-  }
-}
-
-function StatusChip({ status }: { status: string }): React.JSX.Element {
-  const { label, color } = recordChip(status)
+/** A status as a dot and a word: the words carry it, colour only on a problem. */
+function StatusWord({ tone, children }: { tone: HealthTone; children: React.ReactNode }): React.JSX.Element {
   return (
-    <span
-      className="type-badge px-1.5 py-0.5 flex-shrink-0 uppercase tracking-wide"
-      style={{ color, backgroundColor: `color-mix(in srgb, ${color} 14%, transparent)` }}
-    >
-      {label}
+    <span className="inline-flex items-center gap-1.5 type-hint whitespace-nowrap" data-status-word={tone}>
+      <StatusDot tone={tone} />
+      <HealthWord tone={tone}>{children}</HealthWord>
     </span>
   )
 }
 
-/** Copy-to-clipboard with a transient "Copied" flash. */
-function CopyButton({ text, title }: { text: string; title?: string }): React.JSX.Element {
-  const [copied, setCopied] = useState(false)
+function NoticeBar({ notice, onDismiss }: { notice: Notice; onDismiss: () => void }): React.JSX.Element {
   return (
-    <button
-      type="button"
-      title={title ?? 'Copy value'}
-      onClick={() => {
-        void navigator.clipboard
-          .writeText(text)
-          .then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1200)
-          })
-          .catch(() => {
-            useToastStore.getState().addToast('Copy failed', 'error')
-          })
-      }}
-      className="px-1.5 py-0.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-accent)] border border-[var(--color-border)] transition-colors cursor-pointer flex-shrink-0"
+    <Callout
+      tone={notice.tone}
+      role={notice.tone === 'error' ? 'alert' : 'status'}
+      className="type-hint flex items-center justify-between gap-4"
+      data-testid="hosting-notice"
     >
-      {copied ? 'Copied' : 'Copy'}
-    </button>
+      <div className="min-w-0">
+        <p className="font-medium">{notice.text}</p>
+        {notice.detail ? <p className="mt-0.5">The server said: {notice.detail.trim().replace(/[.\s]+$/, '')}.</p> : null}
+      </div>
+      <Button variant="quiet" className="flex-shrink-0" onClick={onDismiss}>
+        Dismiss
+      </Button>
+    </Callout>
   )
 }
 
-// ── Server panel ─────────────────────────────────────────────────────────
-
-function PreflightChecklist({ report }: { report: PreflightReport }): React.JSX.Element {
-  const mark = (status: string): { glyph: string; color: string } => {
-    switch (status) {
-      case 'pass':
-        return { glyph: '✓', color: 'var(--color-status-ok)' }
-      case 'fail':
-        return { glyph: '✖', color: 'var(--color-status-error-soft)' }
-      case 'warn':
-        return { glyph: '!', color: 'var(--color-status-warn)' }
-      case 'skipped':
-        return { glyph: '·', color: 'var(--color-text-muted)' }
-      default:
-        return { glyph: '?', color: 'var(--color-text-muted)' }
-    }
-  }
+/** One read-only fact in a card: label left, value right. */
+function FactRow({ label, hint, children, testId }: { label: string; hint?: React.ReactNode; children: React.ReactNode; testId?: string }): React.JSX.Element {
   return (
-    <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+    <SettingRow label={label} hint={hint} testId={testId}>
+      {children}
+    </SettingRow>
+  )
+}
+
+// ── Server tab ───────────────────────────────────────────────────────────
+
+const CHECK_MARK: Record<string, { tone: HealthTone; word: string }> = {
+  pass: { tone: 'ok', word: 'Passed' },
+  fail: { tone: 'error', word: 'Must fix' },
+  warn: { tone: 'warn', word: 'Warning' },
+  skipped: { tone: 'neutral', word: 'Skipped' },
+}
+
+function PreflightRows({ report }: { report: PreflightReport }): React.JSX.Element {
+  return (
+    <>
       {report.checks.map((c) => {
-        const m = mark(c.status)
+        const m = CHECK_MARK[c.status] ?? { tone: 'neutral' as HealthTone, word: 'Not run' }
         return (
-          <div key={c.id} className="flex items-start gap-2 px-3 py-1.5">
-            <span className="w-3 flex-shrink-0 type-name " style={{ color: m.color }}>
-              {m.glyph}
-            </span>
-            <div className="flex-1 min-w-0">
-              <span className="type-row text-[var(--color-text-primary)]">{c.label}</span>
-              {c.detail && (
-                <p className="type-hint text-[var(--color-text-muted)] break-words">{c.detail}</p>
-              )}
+          <div key={c.id} className="px-4 py-3 flex items-start justify-between gap-6" data-testid="hosting-check" data-check={c.status}>
+            <div className="min-w-0 flex items-start gap-2.5">
+              <span className="mt-1.5 flex">
+                <StatusDot tone={m.tone} />
+              </span>
+              <div className="min-w-0">
+                <p className={SETTING_ROW_LABEL}>{c.label}</p>
+                {c.detail ? <p className={SETTING_ROW_HINT}>{c.detail}</p> : null}
+              </div>
             </div>
+            <span
+              className={`type-hint whitespace-nowrap ${
+                m.tone === 'error' ? 'text-[var(--color-status-error-soft)]' : m.tone === 'warn' ? 'text-[var(--color-status-warn-text)]' : 'text-[var(--color-text-secondary)]'
+              }`}
+            >
+              {m.word}
+            </span>
           </div>
         )
       })}
-      {report.portPlan && (
-        <div className="px-3 py-1.5 type-hint text-[var(--color-text-muted)]">
-          TLS/port plan: <span className="text-[var(--color-text-secondary)]">{report.portPlan}</span>
-        </div>
-      )}
-    </div>
+    </>
   )
 }
 
-function EnableProgress({ status }: { status: MailStatus }): React.JSX.Element {
+function InstallSteps({ status }: { status: MailStatus }): React.JSX.Element {
   const steps = status.enableProgress?.steps ?? {}
   const current = status.enableProgress?.current
   return (
-    <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+    <>
       {ENABLE_STEPS.map((s) => {
         const done = s.id in steps
         const active = current === s.id
         return (
-          <div key={s.id} className="flex items-center gap-2 px-3 py-1">
-            <span
-              className="w-3 flex-shrink-0 type-name "
-              style={{
-                color: done
-                  ? 'var(--color-status-ok)'
-                  : active
-                    ? 'var(--color-status-working)'
-                    : 'var(--color-text-muted)',
-              }}
-            >
-              {done ? '✓' : active ? '›' : '·'}
-            </span>
-            <span
-              className={`type-hint ${
-                done || active
-                  ? 'text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-muted)]'
-              }`}
-            >
-              {s.label}
-              {active && status.state === 'installing' ? '…' : ''}
+          <div key={s.id} className="px-4 py-2.5 flex items-center justify-between gap-6" data-testid="hosting-step">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <StatusDot tone={done ? 'ok' : active ? 'warn' : 'neutral'} />
+              <span className={done || active ? SETTING_ROW_LABEL : 'type-row text-[var(--color-text-secondary)]'}>{s.label}</span>
+            </div>
+            <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">
+              {done ? 'Done' : active ? (status.state === 'installing' ? 'Working…' : 'Stopped here') : 'Waiting'}
             </span>
           </div>
         )
       })}
-    </div>
+    </>
   )
 }
 
-function ServerPanel({
+function ServerTab({
   status,
   sample,
   canMutate,
   onChanged,
+  setNotice,
 }: {
   status: MailStatus
   sample: boolean
   canMutate: boolean
   onChanged: () => void
+  setNotice: (n: Notice | null) => void
 }): React.JSX.Element {
   const [preflight, setPreflight] = useState<PreflightReport | null>(sample ? SAMPLE_PREFLIGHT : null)
   const [preflightError, setPreflightError] = useState<string | null>(null)
@@ -302,17 +345,15 @@ function ServerPanel({
   const [hostname, setHostname] = useState('')
   const [busy, setBusy] = useState(false)
   const [enableError, setEnableError] = useState<string | null>(null)
-  // Uninstall danger-zone locals.
-  const [purge, setPurge] = useState(false)
-  const [confirmHost, setConfirmHost] = useState('')
+  const [dialog, setDialog] = useState<'disable' | 'uninstall' | null>(null)
+  const hostId = useId()
 
   const notInstalled = status.state === 'not-installed'
   const installing = status.state === 'installing'
-  const hasProgress =
-    status.enableProgress !== null &&
-    Object.keys(status.enableProgress?.steps ?? {}).length > 0
+  const hasProgress = status.enableProgress !== null && Object.keys(status.enableProgress?.steps ?? {}).length > 0
+  const info = stateInfo(status.state)
 
-  // Preflight renders before [Enable] (§5.1) — fetch it for the
+  // The checks show before Install (§5.1) — read them for the
   // not-installed view on a live daemon. One-shot per mount/state.
   useEffect(() => {
     if (sample || !notInstalled) return
@@ -325,8 +366,7 @@ function ServerPanel({
         setPreflightError(null)
       })
       .catch((e) => {
-        if (cancelled) return
-        setPreflightError(mailErrorMessage(e))
+        if (!cancelled) setPreflightError(reasonOf(e))
       })
       .finally(() => {
         if (!cancelled) setPreflightBusy(false)
@@ -342,7 +382,7 @@ function ServerPanel({
       setPreflight(await fetchPreflight())
       setPreflightError(null)
     } catch (e) {
-      setPreflightError(mailErrorMessage(e))
+      setPreflightError(reasonOf(e))
     } finally {
       setPreflightBusy(false)
     }
@@ -351,7 +391,7 @@ function ServerPanel({
   const doEnable = useCallback(async (): Promise<void> => {
     const host = hostname.trim() || status.hostname || ''
     if (!host) {
-      setEnableError('Enter the mail hostname first (e.g. mail.acme.dev).')
+      setEnableError('Enter the mail server’s name first, like mail.example.com.')
       return
     }
     setBusy(true)
@@ -359,369 +399,508 @@ function ServerPanel({
     try {
       const res = await enableServer(host)
       if (res.ok === false) {
-        // Failing preflight returns 200 + the report (§5.1 hard stops).
-        setEnableError(res.error?.hint ?? 'preflight found hard stops — fix them and re-enable')
+        // Failing checks return 200 + the report (§5.1 hard stops).
+        setEnableError(res.error?.hint ?? 'Some checks must pass first. Fix the ones marked Must fix, then try again.')
         if (res.report) setPreflight(res.report)
       }
       onChanged()
     } catch (e) {
-      setEnableError(mailErrorMessage(e))
+      setEnableError(reasonOf(e))
       onChanged()
     } finally {
       setBusy(false)
     }
   }, [hostname, status.hostname, onChanged])
 
-  const doDisable = useCallback(async (): Promise<void> => {
-    const confirmed = await useConfirmDialogStore.getState().confirm({
-      title: 'Disable the email server?',
-      message:
-        'Mail data is kept, but every verified domain’s MX record will point at a ' +
-        'STOPPED server — inbound mail bounces until you re-enable or update DNS.',
-      confirmLabel: 'Disable',
-      destructive: true,
-    })
-    if (!confirmed) return
+  const versionText = status.version ? `Version ${status.version}` : null
+
+  return (
+    <div className="space-y-6">
+      <SettingsGroup title="Server" card testId="hosting-server-card">
+        <FactRow
+          label="Status"
+          testId="hosting-status"
+          hint={
+            <>
+              {info.hint}
+              {status.lastError ? (
+                <span className="block text-[var(--color-status-error-soft)] mt-1">
+                  The server reported a problem: {status.lastError.trim().replace(/[.\s]+$/, '')}.
+                </span>
+              ) : null}
+            </>
+          }
+        >
+          <span className="inline-flex items-center gap-2 type-row text-[var(--color-text-primary)] whitespace-nowrap">
+            <StatusDot tone={status.lastError && info.tone === 'ok' ? 'warn' : info.tone} />
+            {info.word}
+          </span>
+        </FactRow>
+        {versionText ? (
+          <FactRow label="Version" hint={status.version !== status.pinnedVersion && status.pinnedVersion ? `K2 expects version ${status.pinnedVersion}.` : undefined}>
+            <span className="type-row text-[var(--color-text-secondary)] whitespace-nowrap">{versionText}</span>
+          </FactRow>
+        ) : null}
+        {status.hostname ? (
+          <FactRow label="Mail server name" hint="Mail apps and other mail servers reach this server by this name.">
+            <span className="type-row font-mono text-[var(--color-text-secondary)] truncate max-w-[16rem]">{status.hostname}</span>
+            <CopyButton text={status.hostname} label="mail server name" />
+          </FactRow>
+        ) : null}
+        {status.portPlan ? (
+          <FactRow label="How mail apps connect" hint="Which ports this server answers on. Set when it installed.">
+            <span className="type-hint font-mono text-[var(--color-text-secondary)] whitespace-nowrap">{status.portPlan}</span>
+          </FactRow>
+        ) : null}
+      </SettingsGroup>
+
+      {notInstalled ? (
+        <SettingsGroup
+          title="Install the email server"
+          hint="K2 checks this server first. Anything marked Must fix stops the install; warnings don’t."
+          card
+          testId="hosting-install"
+          action={
+            <Button onClick={() => void runPreflight()} disabled={preflightBusy || sample}>
+              {preflightBusy ? 'Checking…' : 'Check again'}
+            </Button>
+          }
+          state={
+            preflightError ? (
+              <SettingsLoadState
+                kind="error"
+                title="Couldn’t check this server"
+                detail={preflightError}
+                action={<Button onClick={() => void runPreflight()}>Try again</Button>}
+              >
+                Nothing was installed. Try the checks again in a moment.
+              </SettingsLoadState>
+            ) : preflight === null ? (
+              <SettingsLoadState kind="loading" title="Checking this server…">
+                Ports, disk space, memory and DNS.
+              </SettingsLoadState>
+            ) : undefined
+          }
+        >
+          {preflight ? <PreflightRows report={preflight} /> : null}
+        </SettingsGroup>
+      ) : null}
+
+      {notInstalled ? (
+        <SettingsGroup card testId="hosting-install-form">
+          <SettingRow
+            label="Mail server name"
+            hint="Point this name at this server first, and set the server’s reverse DNS to it at your hosting provider."
+            field
+          >
+            <Input
+              id={hostId}
+              aria-label="Mail server name"
+              className="w-full font-mono"
+              value={hostname}
+              disabled={!canMutate || busy}
+              onChange={(e) => {
+                setHostname(e.target.value)
+                setEnableError(null)
+              }}
+              placeholder="mail.example.com"
+            />
+          </SettingRow>
+          <div className="px-4 py-3 flex items-center justify-end gap-2">
+            <Button variant="accent" size="md" disabled={!canMutate || busy} onClick={() => void doEnable()}>
+              {busy ? 'Installing…' : 'Install email server'}
+            </Button>
+          </div>
+          {enableError ? (
+            <div className="px-4 py-3">
+              <FailedNote what="The email server didn’t install." detail={enableError} next="Nothing changed on this server. Fix what it says, then try again." />
+            </div>
+          ) : null}
+        </SettingsGroup>
+      ) : null}
+
+      {installing || (status.state === 'error' && hasProgress) ? (
+        <SettingsGroup
+          title={installing ? 'Installing' : 'Install steps'}
+          hint={installing ? 'This takes a few minutes. You can leave this page; it carries on.' : 'The install stopped at the step marked below.'}
+          card
+          testId="hosting-steps"
+          action={
+            status.state === 'error' ? (
+              <Button variant="accent" disabled={!canMutate || busy} onClick={() => void doEnable()}>
+                {busy ? 'Resuming…' : 'Resume install'}
+              </Button>
+            ) : undefined
+          }
+        >
+          <InstallSteps status={status} />
+        </SettingsGroup>
+      ) : null}
+
+      {status.state === 'error' && !hasProgress ? (
+        <SettingsGroup card>
+          <SettingRow label="Resume the install" hint="K2 carries on from the last step that finished.">
+            <Button variant="accent" disabled={!canMutate || busy} onClick={() => void doEnable()}>
+              {busy ? 'Resuming…' : 'Resume install'}
+            </Button>
+          </SettingRow>
+        </SettingsGroup>
+      ) : null}
+
+      {status.state === 'disabled' || status.state === 'stopped' ? (
+        <SettingsGroup card testId="hosting-resume">
+          <SettingRow label="Turn the server back on" hint="Your mail was kept. Your domains start receiving again.">
+            <Button variant="accent" disabled={!canMutate || busy} onClick={() => void doEnable()}>
+              {busy ? 'Turning on…' : 'Turn on'}
+            </Button>
+          </SettingRow>
+        </SettingsGroup>
+      ) : null}
+
+      {enableError && !notInstalled ? (
+        <FailedNote what="The email server didn’t start." detail={enableError} next="Nothing else changed. Try again in a moment." />
+      ) : null}
+
+      {!notInstalled && !installing ? (
+        <SettingsGroup title={status.state === 'disabled' || status.state === 'stopped' ? 'Remove' : 'Turn off or remove'} card testId="hosting-danger">
+          {status.state !== 'disabled' && status.state !== 'stopped' ? (
+            <SettingRow label="Turn off the email server" hint="Stops the server and keeps all mail. Incoming mail bounces until you turn it back on.">
+              <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => setDialog('disable')}>
+                Turn off…
+              </Button>
+            </SettingRow>
+          ) : null}
+          <SettingRow label="Uninstall the email server" hint="Removes the server program. Mail stays on this server unless you choose to delete it.">
+            <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => setDialog('uninstall')}>
+              Uninstall…
+            </Button>
+          </SettingRow>
+        </SettingsGroup>
+      ) : null}
+
+      {dialog === 'disable' ? (
+        <DisableDialog
+          onClose={() => setDialog(null)}
+          onDone={(warning) => {
+            setDialog(null)
+            setNotice({ tone: 'ok', text: 'Email server turned off. Your mail is kept; turn it back on here.', detail: warning })
+            onChanged()
+          }}
+        />
+      ) : null}
+      {dialog === 'uninstall' ? (
+        <UninstallDialog
+          hostname={status.hostname}
+          onClose={() => setDialog(null)}
+          onDone={(purged) => {
+            setDialog(null)
+            setNotice({ tone: 'ok', text: purged ? 'Email server uninstalled and its mail deleted.' : 'Email server uninstalled. Your mail is still on this server.' })
+            onChanged()
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function DisableDialog({ onClose, onDone }: { onClose: () => void; onDone: (warning?: string) => void }): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (): Promise<void> => {
     setBusy(true)
+    setError(null)
     try {
       const res = await disableServer()
-      if (res.warning) useToastStore.getState().addToast(res.warning, 'error', 10000)
+      onDone(res.warning)
     } catch (e) {
-      useToastStore.getState().addToast(`Disable failed: ${mailErrorMessage(e)}`, 'error')
+      setError(reasonOf(e))
     } finally {
       setBusy(false)
-      onChanged()
     }
-  }, [onChanged])
-
-  const doUninstall = useCallback(async (): Promise<void> => {
-    const confirmed = await useConfirmDialogStore.getState().confirm({
-      title: 'Uninstall the email server?',
-      message: purge
-        ? 'This removes the server AND permanently deletes all mail data.'
-        : 'This removes the server binary and unit. Mail data stays on disk.',
-      confirmLabel: 'Uninstall',
-      destructive: true,
-    })
-    if (!confirmed) return
-    setBusy(true)
-    try {
-      await uninstallServer(purge, purge ? confirmHost.trim() : undefined)
-      setPurge(false)
-      setConfirmHost('')
-    } catch (e) {
-      useToastStore.getState().addToast(`Uninstall failed: ${mailErrorMessage(e)}`, 'error')
-    } finally {
-      setBusy(false)
-      onChanged()
-    }
-  }, [purge, confirmHost, onChanged])
-
+  }
   return (
-    <div className="grid gap-6 grid-cols-[minmax(0,42rem)]">
-      <div className="min-w-0" data-settings-id="email-hosting.server">
-        <h2 className="type-title text-[var(--color-text-primary)]">Email server</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          K2 installs and supervises a mail server on this deployment. Agents mint addresses on
-          your domains, read their mail, and send under your governance — Send is available because
-          these inboxes live on your own server.
-        </p>
-        {notInstalled && (
-          <p className="type-hint text-[var(--color-text-muted)] mt-1">
-            The hosted server isn&rsquo;t installed yet — that&rsquo;s optional, not broken. Reading
-            and drafting still work for any account you connect under{' '}
-            <span className="text-[var(--color-text-secondary)]">Settings → Email Link</span>;
-            enabling a server here just adds <strong>hosted</strong> inboxes on your own domains
-            (the only inboxes that can send).
-          </p>
-        )}
-      </div>
-
-      {/* ── Status ── */}
-      <div className="space-y-2">
-        <SectionTitle>Status</SectionTitle>
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          <div className="flex items-center gap-2 px-3 py-2">
-            <span
-              className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
-              style={{ backgroundColor: stateColor(status.state) }}
-            />
-            <span className="type-row text-[var(--color-text-primary)]">{status.state}</span>
-            <span className="flex-1" />
-            <span className="type-hint text-[var(--color-text-muted)]">
-              {status.version ? `v${status.version}` : `pinned v${status.pinnedVersion}`}
-            </span>
-          </div>
-          {status.hostname && (
-            <div className="flex items-center gap-3 px-3 py-2">
-              <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
-                Mail hostname
-              </span>
-              <span className="type-row font-mono text-[var(--color-text-primary)] truncate">
-                {status.hostname}
-              </span>
-            </div>
-          )}
-          {status.portPlan && (
-            <div className="flex items-center gap-3 px-3 py-2">
-              <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
-                TLS/port plan
-              </span>
-              <span className="type-row text-[var(--color-text-primary)]">{status.portPlan}</span>
-            </div>
-          )}
-          {status.lastError && (
-            <div className="px-3 py-2">
-              <p className="type-hint text-[var(--color-status-error-soft)] break-words">
-                {status.lastError}
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── Enable / progress ── */}
-      {(notInstalled || installing || status.state === 'error' || status.state === 'disabled' || status.state === 'stopped') && (
-        <div className="space-y-2">
-          <SectionTitle>{notInstalled ? 'Enable' : installing ? 'Installing' : 'Resume'}</SectionTitle>
-
-          {notInstalled && (
-            <>
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Preflight runs first — hard stops block the install; warnings don&rsquo;t.
-              </p>
-              {preflightError ? (
-                <p className="type-hint text-[var(--color-status-error-soft)]">
-                  Preflight failed to run: {preflightError}
-                </p>
-              ) : preflight === null ? (
-                <p className="type-hint text-[var(--color-text-muted)]">Running preflight…</p>
-              ) : (
-                <PreflightChecklist report={preflight} />
-              )}
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={hostname}
-                  disabled={!canMutate || busy}
-                  onChange={(e) => setHostname(e.target.value)}
-                  placeholder="mail.acme.dev"
-                  className="flex-1 min-w-0 px-2 py-1.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
-                />
-                <button
-                  type="button"
-                  disabled={!canMutate || busy}
-                  onClick={() => void doEnable()}
-                  title={canMutate ? 'Preflight-gate, then install' : 'Not available on this deployment'}
-                  className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-                >
-                  {busy ? 'Starting…' : 'Enable Email Server'}
-                </button>
-                <button
-                  type="button"
-                  disabled={preflightBusy || sample}
-                  onClick={() => void runPreflight()}
-                  className="px-2 py-1.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer disabled:opacity-50 flex-shrink-0"
-                >
-                  {preflightBusy ? 'Checking…' : 'Re-run preflight'}
-                </button>
-              </div>
-              <p className="type-hint text-[var(--color-text-muted)] opacity-70">
-                Before anything works, point <span className="font-mono">A &lt;hostname&gt; → &lt;box IP&gt;</span> at
-                this box and set its reverse DNS (PTR) to the hostname at your VPS provider.
-              </p>
-            </>
-          )}
-
-          {(installing || status.state === 'error') && (
-            <>
-              {(installing || hasProgress) && <EnableProgress status={status} />}
-              {status.state === 'error' && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={!canMutate || busy}
-                    onClick={() => void doEnable()}
-                    className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
-                  >
-                    Resume install
-                  </button>
-                  <span className="type-hint text-[var(--color-text-muted)]">
-                    Re-enabling resumes from the last completed step.
-                  </span>
-                </div>
-              )}
-            </>
-          )}
-
-          {(status.state === 'disabled' || status.state === 'stopped') && (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={!canMutate || busy}
-                onClick={() => void doEnable()}
-                className="px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                Re-enable
-              </button>
-              <span className="type-hint text-[var(--color-text-muted)]">
-                Mail data was kept — re-enabling brings existing domains back online.
-              </span>
-            </div>
-          )}
-
-          {enableError && (
-            <p className="type-hint text-[var(--color-status-error-soft)] break-words">{enableError}</p>
-          )}
-        </div>
-      )}
-
-      {/* ── Danger zone (installed states only) ── */}
-      {!notInstalled && !installing && (
-        <div className="space-y-2 pb-6">
-          <SectionTitle>Danger zone</SectionTitle>
-          <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] divide-y divide-[var(--color-border)]">
-            <div className="flex items-center gap-3 px-3 py-2">
-              <div className="flex-1 min-w-0">
-                <p className="type-row text-[var(--color-text-primary)]">Disable</p>
-                <p className="type-hint text-[var(--color-text-muted)]">
-                  Stops the server, keeps all mail data. MX records will point at a dead port.
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={!canMutate || busy}
-                onClick={() => void doDisable()}
-                className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-              >
-                Disable
-              </button>
-            </div>
-            <div className="px-3 py-2 space-y-1.5">
-              <div className="flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="type-row text-[var(--color-text-primary)]">Uninstall</p>
-                  <p className="type-hint text-[var(--color-text-muted)]">
-                    Removes the server binary and unit.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  disabled={
-                    !canMutate ||
-                    busy ||
-                    (purge && confirmHost.trim() !== (status.hostname ?? ''))
-                  }
-                  onClick={() => void doUninstall()}
-                  className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-                >
-                  Uninstall
-                </button>
-              </div>
-              <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-                <Checkbox
-                  checked={purge}
-                  disabled={!canMutate || busy}
-                  onChange={(e) => setPurge(e.target.checked)}
-                  className="no-drag"
-                />
-                Also delete all mail data (permanent)
-              </label>
-              {purge && (
-                <input
-                  type="text"
-                  value={confirmHost}
-                  disabled={!canMutate || busy}
-                  onChange={(e) => setConfirmHost(e.target.value)}
-                  placeholder={`Type ${status.hostname ?? 'the mail hostname'} to confirm`}
-                  className="w-full px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-status-error-soft)] no-drag disabled:opacity-50"
-                />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Domain panel ─────────────────────────────────────────────────────────
-
-function DnsRecordTable({
-  records,
-  advancedOpen,
-  onToggleAdvanced,
-}: {
-  records: DnsRecordRow[]
-  advancedOpen: boolean
-  onToggleAdvanced: () => void
-}): React.JSX.Element {
-  const main = records.filter((r) => r.category !== 'advanced')
-  const advanced = records.filter((r) => r.category === 'advanced')
-  const row = (r: DnsRecordRow): React.JSX.Element => (
-    <div key={r.id} className="px-3 py-2 space-y-1">
-      <div className="flex items-center gap-2 min-w-0">
-        <span className="type-hint text-[var(--color-text-secondary)] w-12 flex-shrink-0">
-          {r.type}
-        </span>
-        <span className="type-hint font-mono text-[var(--color-text-primary)] truncate flex-1" title={r.name}>
-          {r.name}
-        </span>
-        <StatusChip status={r.status} />
-        <CopyButton text={r.expected} title={`Copy the ${r.type} value`} />
-      </div>
-      <p className="type-hint text-[var(--color-text-muted)]">{r.purpose}</p>
-      <div className="type-hint font-mono text-[var(--color-text-secondary)] break-all bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1">
-        {r.expectedDisplay}
-      </div>
-      {(r.status === 'wrong' || (r.status === 'missing' && (r.live?.length ?? 0) > 0)) && (
-        <div className="type-hint border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-2 py-1 space-y-0.5">
-          <p className="text-[var(--color-status-error-soft)] font-semibold">
-            {r.status === 'wrong' ? 'DNS serves a different value:' : 'DNS has other records at this name:'}
-          </p>
-          {(r.live ?? []).map((v, i) => (
-            <p key={i} className="font-mono text-[var(--color-text-secondary)] break-all">
-              {v}
-            </p>
-          ))}
-          <p className="text-[var(--color-text-muted)]">
-            Expected value above — copy it exactly (watch for a registrar auto-appending your
-            zone, or a DKIM value split incorrectly).
-          </p>
-        </div>
-      )}
-      {r.checkedAt != null && (
-        <p className="type-hint text-[var(--color-text-muted)] opacity-70">
-          checked {fmtDate(r.checkedAt)}
-        </p>
-      )}
-    </div>
-  )
-  return (
-    <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-      {main.map(row)}
-      {advanced.length > 0 && (
+    <AccessSheet
+      title="Turn off the email server?"
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-disable-dialog"
+      footer={
         <>
-          <button
-            type="button"
-            onClick={onToggleAdvanced}
-            className="w-full text-left px-3 py-1.5 type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-          >
-            {advancedOpen ? '▾' : '▸'} Advanced, optional records ({advanced.length}) —
-            autoconfig / MTA-STS / TLS-RPT / TLSA
-          </button>
-          {advancedOpen && advanced.map(row)}
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Turning off…' : 'Turn off'}
+          </Button>
         </>
-      )}
+      }
+    >
+      <p className={DIALOG_MUTED}>
+        Your mail is kept. Until you turn the server back on, mail sent to your domains bounces, and agents can’t send.
+      </p>
+      {error ? <FailedNote what="The email server is still on." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+    </AccessSheet>
+  )
+}
+
+function UninstallDialog({
+  hostname,
+  onClose,
+  onDone,
+}: {
+  hostname: string | null
+  onClose: () => void
+  onDone: (purged: boolean) => void
+}): React.JSX.Element {
+  const [purge, setPurge] = useState(false)
+  const [typed, setTyped] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const typedId = useId()
+  const needs = hostname ?? ''
+  const ready = !purge || (needs !== '' && typed.trim() === needs)
+  const run = async (): Promise<void> => {
+    if (!ready) return
+    setBusy(true)
+    setError(null)
+    try {
+      await uninstallServer(purge, purge ? typed.trim() : undefined)
+      onDone(purge)
+    } catch (e) {
+      setError(reasonOf(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title="Uninstall the email server?"
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-uninstall-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy || !ready}>
+            {busy ? 'Uninstalling…' : purge ? 'Uninstall and delete mail' : 'Uninstall'}
+          </Button>
+        </>
+      }
+    >
+      <p className={DIALOG_MUTED}>K2 removes the server program. Your domains and addresses stop working until you install it again.</p>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <Checkbox className="mt-0.5" checked={purge} disabled={busy} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all mail" />
+        <span>
+          <span className={SETTING_ROW_LABEL}>Also delete all mail</span>
+          <span className={`block ${DIALOG_MUTED}`}>Every mailbox on this server, for good. This can’t be undone.</span>
+        </span>
+      </label>
+      {purge ? (
+        <Field label={`Type ${needs || 'the mail server name'} to confirm`} htmlFor={typedId}>
+          <Input id={typedId} className={`${DIALOG_FIELD} font-mono`} value={typed} disabled={busy} onChange={(e) => setTyped(e.target.value)} placeholder={needs} />
+        </Field>
+      ) : null}
+      {error ? <FailedNote what="The email server wasn’t uninstalled." detail={error} next="It’s still installed and nothing was deleted. Try again in a moment." /> : null}
+    </AccessSheet>
+  )
+}
+
+// ── Domains tab ──────────────────────────────────────────────────────────
+
+function domainLine(d: DomainSummary): string {
+  const broken = (d.records?.wrong ?? 0) + (d.records?.missing ?? 0)
+  const mode = SEND_MODE_WORD[d.sendMode] ?? d.sendMode
+  if (d.status === 'verified') return `${mode}${d.verifiedAt ? ` · verified ${fmtDay(d.verifiedAt)}` : ''}`
+  if (broken > 0) return `${broken} DNS record${broken === 1 ? '' : 's'} to fix · ${mode.toLowerCase()}`
+  return `Waiting for its DNS records · ${mode.toLowerCase()}`
+}
+
+function DomainList({
+  domains,
+  error,
+  canMutate,
+  onOpen,
+  onAdd,
+  onRetry,
+}: {
+  domains: DomainSummary[] | null
+  error: string | null
+  canMutate: boolean
+  onOpen: (domain: string) => void
+  onAdd: () => void
+  onRetry: () => void
+}): React.JSX.Element {
+  const add = (
+    <Button variant="accent" disabled={!canMutate} onClick={onAdd}>
+      Add domain
+    </Button>
+  )
+  return (
+    <SettingsGroup
+      title="Domains"
+      hint="Agents get addresses on these domains. A domain starts working once its DNS records check out."
+      action={domains && domains.length > 0 ? add : undefined}
+      card
+      testId="hosting-domains"
+      state={
+        error ? (
+          <SettingsLoadState kind="error" title="Couldn’t load your domains" detail={error} action={<Button onClick={onRetry}>Try again</Button>}>
+            Your domains are fine; this page just couldn’t read the list.
+          </SettingsLoadState>
+        ) : domains === null ? (
+          <SettingsLoadState kind="loading" title="Loading domains…" />
+        ) : domains.length === 0 ? (
+          <SettingsLoadState kind="empty" title="No domains yet" action={add}>
+            Add a domain you own. K2 then shows the DNS records to add at your domain’s DNS provider.
+          </SettingsLoadState>
+        ) : undefined
+      }
+    >
+      {(domains ?? []).map((d) => {
+        const tag = domainTag(d.status)
+        return (
+          <button
+            key={d.domain}
+            type="button"
+            data-k2-focus=""
+            data-testid="hosting-domain-row"
+            data-domain={d.domain}
+            onClick={() => onOpen(d.domain)}
+            className={`w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+          >
+            <div className="min-w-0">
+              <p className="type-name text-[var(--color-text-primary)] truncate">{d.domain}</p>
+              <p className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">{domainLine(d)}</p>
+            </div>
+            <span className="flex items-center gap-3 flex-shrink-0">
+              <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
+              <svg aria-hidden="true" viewBox="0 0 16 16" className="w-3.5 h-3.5 text-[var(--color-text-secondary)]" fill="none" stroke="currentColor" strokeWidth={1.75}>
+                <path d="M6 3.5 10.5 8 6 12.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          </button>
+        )
+      })}
+    </SettingsGroup>
+  )
+}
+
+function AddDomainDialog({ onClose, onAdded, onExists }: { onClose: () => void; onAdded: (d: DomainDetail) => void; onExists: (domain: string) => void }): React.JSX.Element {
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const id = useId()
+  const formId = useId()
+  const dom = value.trim().toLowerCase()
+  const problem = dom && !/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(dom) ? 'Enter a domain name like example.com, without http:// or an address.' : null
+  const run = async (): Promise<void> => {
+    if (!dom || problem || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      onAdded(await addDomain(dom))
+    } catch (e) {
+      const { code } = mailErrorInfo(e)
+      if (code === 'exists') onExists(dom)
+      else setError(reasonOf(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title="Add a domain"
+      intro="Agents can get addresses on it once its DNS records check out. K2 shows you the records to add next."
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-add-domain"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!dom || !!problem || busy}>
+            {busy ? 'Adding…' : 'Add domain'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void run()
+        }}
+      >
+        <Field label="Domain" htmlFor={id} problem={problem} hint="A domain you own, like example.com. You’ll need access to its DNS settings.">
+          <Input
+            id={id}
+            autoFocus
+            className={`${DIALOG_FIELD} font-mono`}
+            value={value}
+            disabled={busy}
+            aria-invalid={problem ? true : undefined}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setError(null)
+            }}
+            placeholder="example.com"
+          />
+        </Field>
+        {error ? <FailedNote what={`Couldn’t add ${dom}.`} detail={error} next="Nothing was added. Check the name, then try again." /> : null}
+      </form>
+    </AccessSheet>
+  )
+}
+
+function RecordRow({ r }: { r: DnsRecordRow }): React.JSX.Element {
+  const tag = recordTag(r.status)
+  const live = r.live ?? []
+  return (
+    <div className="px-4 py-3" data-testid="hosting-record" data-record={r.id}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <p className={SETTING_ROW_LABEL}>{r.purpose}</p>
+          <p className={`${SETTING_ROW_HINT} break-all`}>
+            {r.category === 'instruction' ? 'Set at your hosting provider for ' : `${r.type} record at `}
+            <span className="font-mono">{r.name}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
+          {r.category !== 'instruction' ? <CopyButton text={r.expected} label={`the ${r.purpose} value`} /> : null}
+        </div>
+      </div>
+      <p
+        data-k2-chamfer="control"
+        className="mt-2 type-hint font-mono text-[var(--color-text-secondary)] break-all bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1"
+      >
+        {r.expectedDisplay}
+      </p>
+      {r.status === 'wrong' || (r.status === 'missing' && live.length > 0) ? (
+        <div className="mt-2" role="note">
+          <p className="type-hint text-[var(--color-status-error-soft)]">
+            {r.status === 'wrong'
+              ? 'Your DNS has a different value here. Replace it with the value above, exactly as shown.'
+              : 'Your DNS has other records at this name, but not this one. Add the value above.'}
+          </p>
+          <p className={`${SETTING_SERVER_REASON} font-mono`}>Now: {live.join(' · ')}</p>
+        </div>
+      ) : null}
     </div>
   )
 }
 
-function DomainPanel({
+function DomainDetailView({
   domain,
   sample,
   canMutate,
   revision,
+  justAdded,
+  onBack,
   onChanged,
   onRemoved,
 }: {
@@ -729,74 +908,55 @@ function DomainPanel({
   sample: boolean
   canMutate: boolean
   revision: number
+  justAdded: boolean
+  onBack: () => void
   onChanged: () => void
-  onRemoved: () => void
+  onRemoved: (domain: string, retired: number, purged: boolean) => void
 }): React.JSX.Element {
   const [detail, setDetail] = useState<DomainDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
+  const [checked, setChecked] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [purgeMail, setPurgeMail] = useState(false)
-  const [busy, setBusy] = useState(false)
-
-  // Sending block (S5-config routes may still be 501 — graceful state).
-  const [modeDraft, setModeDraft] = useState<string | null>(null)
-  const [relayHost, setRelayHost] = useState('')
-  const [relayPort, setRelayPort] = useState('587')
-  const [relayUser, setRelayUser] = useState('')
-  const [relayPass, setRelayPass] = useState('')
-  const [spfInclude, setSpfInclude] = useState('')
-  const [configNote, setConfigNote] = useState<string | null>(null)
-  const [configBusy, setConfigBusy] = useState(false)
-
-  // Doctor card — 501 until S6.
-  const [doctorNote, setDoctorNote] = useState<string | null>(null)
+  const [removing, setRemoving] = useState(false)
+  const [load, setLoad] = useState(0)
 
   useEffect(() => {
-    setModeDraft(null)
-    setConfigNote(null)
     setAdvancedOpen(false)
     if (sample) {
       setDetail(SAMPLE_DOMAIN_DETAILS[domain] ?? null)
-      setError(null)
-      setDoctorNote('Deliverability checks aren’t available yet.')
+      setError(SAMPLE_DOMAIN_DETAILS[domain] ? null : 'no sample for this domain')
       return
     }
     let cancelled = false
     fetchDomainDetail(domain)
       .then((d) => {
         if (cancelled) return
+        if (!d || !Array.isArray(d.records)) {
+          setError('the reply had no DNS records')
+          return
+        }
         setDetail(d)
         setError(null)
       })
       .catch((e) => {
-        if (cancelled) return
-        setError(mailErrorMessage(e))
-      })
-    fetchDoctor()
-      .then(() => {
-        if (!cancelled) setDoctorNote(null)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setDoctorNote(
-          isNotBuilt(e)
-            ? 'Deliverability checks aren’t available yet.'
-            : `Doctor unavailable: ${mailErrorMessage(e)}`,
-        )
+        if (!cancelled) setError(reasonOf(e))
       })
     return () => {
       cancelled = true
     }
-  }, [domain, sample, revision])
+  }, [domain, sample, revision, load])
 
   const checkNow = useCallback(async (): Promise<void> => {
     setChecking(true)
+    setCheckError(null)
+    setChecked(false)
     try {
       setDetail(await checkDomainNow(domain))
-      setError(null)
+      setChecked(true)
     } catch (e) {
-      useToastStore.getState().addToast(`Check failed: ${mailErrorMessage(e)}`, 'error')
+      setCheckError(reasonOf(e))
     } finally {
       setChecking(false)
       onChanged()
@@ -814,40 +974,173 @@ function DomainPanel({
     URL.revokeObjectURL(url)
   }, [detail])
 
-  const doRemove = useCallback(async (): Promise<void> => {
-    const confirmed = await useConfirmDialogStore.getState().confirm({
-      title: `Remove ${domain}?`,
-      message:
-        'This retires every address on the domain and destroys the domain in the mail server.' +
-        (purgeMail ? ' Mail data will ALSO be purged.' : ' Mail data is kept unless purged.'),
-      confirmLabel: 'Remove domain',
-      destructive: true,
-    })
-    if (!confirmed) return
-    setBusy(true)
-    try {
-      const res = await removeDomain(domain, purgeMail)
-      useToastStore
-        .getState()
-        .addToast(
-          `Removed ${domain} (${res.retiredAddresses} address${res.retiredAddresses === 1 ? '' : 'es'} retired)`,
-          'success',
-        )
-      onRemoved()
-    } catch (e) {
-      useToastStore.getState().addToast(`Remove failed: ${mailErrorMessage(e)}`, 'error')
-    } finally {
-      setBusy(false)
-    }
-  }, [domain, purgeMail, onRemoved])
+  const back = (
+    <button
+      type="button"
+      data-k2-focus=""
+      onClick={onBack}
+      className="inline-flex items-center gap-1 type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer outline-none"
+      data-testid="hosting-domain-back"
+    >
+      <svg aria-hidden="true" viewBox="0 0 16 16" className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={1.75}>
+        <path d="M10 3.5 5.5 8 10 12.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      All domains
+    </button>
+  )
 
-  const saveSendConfig = useCallback(async (): Promise<void> => {
-    if (!detail) return
-    const mode = modeDraft ?? detail.sendMode
-    setConfigBusy(true)
-    setConfigNote(null)
+  if (error || detail === null || detail.domain !== domain) {
+    return (
+      <div className="space-y-4">
+        {back}
+        {error ? (
+          <SettingsLoadState kind="error" title={`Couldn’t load ${domain}`} detail={error} action={<Button onClick={() => setLoad((n) => n + 1)}>Try again</Button>}>
+            The domain is unchanged; this page just couldn’t read its records.
+          </SettingsLoadState>
+        ) : (
+          <SettingsLoadState kind="loading" title={`Loading ${domain}…`} />
+        )}
+      </div>
+    )
+  }
+
+  const tag = domainTag(detail.status)
+  const main = detail.records.filter((r) => r.category !== 'advanced')
+  const advanced = detail.records.filter((r) => r.category === 'advanced')
+  const toFix = main.filter((r) => r.status === 'missing' || r.status === 'wrong').length
+
+  return (
+    <div className="space-y-6" data-testid="hosting-domain-detail" data-domain={domain}>
+      <div className="space-y-2">
+        {back}
+        <div className="flex items-center gap-3 min-w-0">
+          <h3 className="type-heading text-[var(--color-text-primary)] truncate">{detail.domain}</h3>
+          <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
+        </div>
+        <p className={SETTING_ROW_HINT}>
+          {detail.status === 'verified'
+            ? `Verified on ${fmtDay(detail.verifiedAt)}. K2 checks it again every day.`
+            : 'It starts working once the mail routing, sender and signing records below check out.'}{' '}
+          Plus addressing is on (name+anything@{detail.domain} reaches name@{detail.domain}); mail to names that don’t exist is
+          refused.
+        </p>
+      </div>
+
+      {justAdded ? (
+        <Callout tone="ok" role="status" className="type-hint" data-testid="hosting-domain-added">
+          Added {detail.domain}. Next, add the records below at your domain’s DNS provider, then choose Check now.
+        </Callout>
+      ) : null}
+      {detail.dmarcNag ? (
+        <Callout tone="warn" className="type-hint">
+          Add the DMARC record below too. It doesn’t stop the domain verifying, but other mail servers trust your mail more with it.
+        </Callout>
+      ) : null}
+
+      <SettingsGroup
+        title="DNS records"
+        hint={`Add these at your domain’s DNS provider, then choose Check now. Changes can take up to 48 hours to show up.${
+          toFix > 0 ? ` ${toFix} to fix.` : ''
+        }${detail.lastCheckedAt ? ` Last checked ${fmtWhen(detail.lastCheckedAt)}.` : ''}`}
+        card
+        testId="hosting-records"
+        action={
+          <span className="flex items-center gap-2">
+            <Button onClick={downloadZone}>Download zone file</Button>
+            <Button variant="accent" disabled={sample || checking} onClick={() => void checkNow()}>
+              {checking ? 'Checking…' : 'Check now'}
+            </Button>
+          </span>
+        }
+      >
+        {checkError ? (
+          <div className="px-4 py-3">
+            <FailedNote what="Couldn’t check the records." detail={checkError} next="The results below are from the last check. Try again in a moment." />
+          </div>
+        ) : checked ? (
+          <p className="px-4 py-3 type-hint text-[var(--color-status-ok-soft)]" role="status" data-testid="hosting-checked">
+            Checked just now.{' '}
+            {toFix > 0 ? `${toFix} record${toFix === 1 ? '' : 's'} still to fix.` : detail.status === 'verified' ? 'Everything checks out.' : 'Waiting for the rest to show up.'}
+          </p>
+        ) : null}
+        {main.map((r) => (
+          <RecordRow key={r.id} r={r} />
+        ))}
+        {advanced.length > 0 ? (
+          <button
+            type="button"
+            data-k2-focus=""
+            aria-expanded={advancedOpen}
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className={`w-full text-left px-4 py-3 flex items-center justify-between gap-6 cursor-pointer outline-none ${SETTING_LIST_ROW_HOVER}`}
+          >
+            <span className="min-w-0">
+              <span className={`block ${SETTING_ROW_LABEL}`}>Optional records ({advanced.length})</span>
+              <span className={`block ${SETTING_ROW_HINT}`}>Help mail apps set themselves up and make delivery stricter. Add them when you’re ready.</span>
+            </span>
+            <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap">{advancedOpen ? 'Hide' : 'Show'}</span>
+          </button>
+        ) : null}
+        {advancedOpen ? advanced.map((r) => <RecordRow key={r.id} r={r} />) : null}
+      </SettingsGroup>
+
+      <SendingGroup detail={detail} canMutate={canMutate} onChanged={onChanged} />
+
+      <SettingsGroup title="Remove" card testId="hosting-domain-danger">
+        <SettingRow label={`Remove ${detail.domain}`} hint="Retires every address on it. Its mail is kept unless you choose to delete it.">
+          <Button variant="danger-quiet" disabled={!canMutate} onClick={() => setRemoving(true)}>
+            Remove…
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
+
+      {removing ? (
+        <RemoveDomainDialog
+          domain={detail.domain}
+          onClose={() => setRemoving(false)}
+          onDone={(retired, purged) => {
+            setRemoving(false)
+            onRemoved(detail.domain, retired, purged)
+          }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+const SEND_MODE_HINT: Record<string, string> = {
+  'receive-only': 'Agents can receive mail on this domain but can’t send from it.',
+  direct: 'Mail goes straight from this server. Works best when your hosting provider doesn’t block outgoing mail.',
+  relay: 'Mail goes through a sending service you already use, such as your mail provider’s relay.',
+}
+
+function SendingGroup({ detail, canMutate, onChanged }: { detail: DomainDetail; canMutate: boolean; onChanged: () => void }): React.JSX.Element {
+  const [modeDraft, setModeDraft] = useState<string | null>(null)
+  const [relayHost, setRelayHost] = useState('')
+  const [relayPort, setRelayPort] = useState('587')
+  const [relayUser, setRelayUser] = useState('')
+  const [relayPass, setRelayPass] = useState('')
+  const [spfInclude, setSpfInclude] = useState('')
+  const [busy, setBusy] = useState(false)
+  const save = useSaveStatus()
+  const [notBuilt, setNotBuilt] = useState(false)
+
+  useEffect(() => {
+    setModeDraft(null)
+    setNotBuilt(false)
+    save.reset()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.domain])
+
+  const mode = modeDraft ?? detail.sendMode
+  const dirty = modeDraft !== null && modeDraft !== detail.sendMode
+  const relayReady = mode !== 'relay' || relayHost.trim() !== ''
+
+  const submit = async (): Promise<void> => {
+    setBusy(true)
+    setNotBuilt(false)
     try {
-      const body: Record<string, unknown> = { domain, sendMode: mode }
+      const body: Record<string, unknown> = { domain: detail.domain, sendMode: mode }
       if (mode === 'relay') {
         body.relayHost = relayHost.trim()
         body.relayPort = Number(relayPort) || 587
@@ -856,252 +1149,144 @@ function DomainPanel({
         if (spfInclude.trim()) body.spfInclude = spfInclude.trim()
       }
       await setMailConfig(body)
-      setConfigNote('Saved.')
+      save.saved()
       onChanged()
     } catch (e) {
-      if (isNotBuilt(e)) {
-        setConfigNote(
-          `Send-mode and relay settings aren’t available yet. This domain stays ${detail.sendMode} for now.`,
-        )
-      } else {
-        setConfigNote(mailErrorMessage(e))
-      }
+      if (isNotBuilt(e)) setNotBuilt(true)
+      save.failed(new Error(reasonOf(e)))
     } finally {
-      setConfigBusy(false)
+      setBusy(false)
     }
-  }, [detail, domain, modeDraft, relayHost, relayPort, relayUser, relayPass, spfInclude, onChanged])
-
-  if (error) {
-    return <p className="type-hint text-[var(--color-status-error-soft)]">Failed to load {domain}: {error}</p>
-  }
-  if (detail === null || detail.domain !== domain) {
-    return <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
   }
 
-  const effectiveMode = modeDraft ?? detail.sendMode
+  const relayField = (label: string, hint: string, value: string, set: (v: string) => void, placeholder: string, type = 'text'): React.JSX.Element => (
+    <SettingRow label={label} hint={hint} field>
+      <Input
+        aria-label={label}
+        type={type}
+        className="w-full font-mono"
+        value={value}
+        disabled={!canMutate || busy}
+        onChange={(e) => set(e.target.value)}
+        placeholder={placeholder}
+      />
+    </SettingRow>
+  )
 
   return (
-    <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
-      {/* ── Header ── */}
-      <div className="min-w-0" data-settings-id="email-hosting.domains">
-        <div className="flex items-center gap-2 min-w-0">
-          <h2 className="type-title text-[var(--color-text-primary)] truncate">
-            {detail.domain}
-          </h2>
-          <StatusChip status={detail.status} />
-        </div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          {detail.status === 'verified'
-            ? `Verified ${fmtDate(detail.verifiedAt)} · re-checked daily`
-            : 'Verifies when MX + SPF + at least one DKIM record are valid.'}
-          {' · '}last checked {fmtDate(detail.lastCheckedAt)}
-        </p>
-        {/* Catch-all / plus-addressing indicators (§6.1 V1 defaults —
-            per-domain values aren't surfaced by the daemon yet). */}
-        <div className="flex items-center gap-1.5 mt-2">
-          <Tag tone="ok">
-            Plus-addressing on
-          </Tag>
-          <Tag tone="muted">
-            Catch-all off
-          </Tag>
-          {detail.dmarcNag && (
-            <Tag
-              tone="warn"
-              title="DMARC is strongly recommended — it never blocks verification, but set it."
-            >
-              Set DMARC
-            </Tag>
-          )}
-        </div>
-      </div>
-
-      {/* ── DNS records ── */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <SectionTitle>DNS records</SectionTitle>
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={downloadZone}
-            className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-          >
-            Download zone file
-          </button>
-          <button
-            type="button"
-            disabled={sample || checking}
-            onClick={() => void checkNow()}
-            title={sample ? 'Not available on this deployment' : 'Re-verify every record now'}
-            className="px-2 py-0.5 type-control text-[var(--color-accent)] border border-[var(--color-accent)]/30 hover:bg-[var(--color-accent)]/10 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {checking ? 'Checking…' : 'Check now'}
-          </button>
-        </div>
-        <DnsRecordTable
-          records={detail.records}
-          advancedOpen={advancedOpen}
-          onToggleAdvanced={() => setAdvancedOpen((v) => !v)}
+    <SettingsGroup title="Sending" hint="How mail from this domain leaves the server." card settingId="email-hosting.send-mode" testId="hosting-sending">
+      <SettingRow label="How mail leaves" hint={SEND_MODE_HINT[mode] ?? ''} field>
+        <SettingDropdown
+          ariaLabel="How mail leaves"
+          value={mode}
+          disabled={!canMutate || busy}
+          onChange={(v) => {
+            setModeDraft(v)
+            save.reset()
+          }}
+          fullWidth
+          options={[
+            { value: 'receive-only', label: 'Receive only' },
+            { value: 'direct', label: 'Send from this server' },
+            { value: 'relay', label: 'Send through a relay' },
+          ]}
         />
-        <p className="type-hint text-[var(--color-text-muted)] opacity-70">{detail.note}.</p>
-      </div>
-
-      {/* ── Sending (send mode + relay, §8.3) ── */}
-      <div className="space-y-2" data-settings-id="email-hosting.send-mode">
-        <SectionTitle>Sending</SectionTitle>
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          <div className="flex items-center gap-3 px-3 py-2">
-            <span className="type-hint text-[var(--color-text-secondary)] w-24 flex-shrink-0">
-              Send mode
-            </span>
-            <SettingDropdown
-              ariaLabel="Send mode"
-              value={effectiveMode}
-              disabled={!canMutate || configBusy}
-              onChange={setModeDraft}
-              options={[
-                { value: 'receive-only', label: 'Receive only' },
-                { value: 'direct', label: 'Direct (from this box)' },
-                { value: 'relay', label: 'Relay (smart host)' },
-              ]}
-            />
-            {effectiveMode === 'direct' && (
-              <span className="type-hint text-[var(--color-text-muted)]">
-                Requires a passing deliverability-doctor grade.
-              </span>
-            )}
-          </div>
-          {effectiveMode === 'relay' && (
-            <div className="px-3 py-2 grid grid-cols-2 gap-2">
-              {(
-                [
-                  ['Host', relayHost, setRelayHost, 'smtp.mailgun.org'],
-                  ['Port', relayPort, setRelayPort, '587'],
-                  ['Username', relayUser, setRelayUser, 'postmaster@acme.dev'],
-                ] as const
-              ).map(([label, value, setter, placeholder]) => (
-                <label key={label} className="flex flex-col gap-0.5 min-w-0">
-                  <span className="type-hint text-[var(--color-text-secondary)]">{label}</span>
-                  <input
-                    type="text"
-                    value={value}
-                    disabled={!canMutate || configBusy}
-                    onChange={(e) => setter(e.target.value)}
-                    placeholder={placeholder}
-                    className="px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
-                  />
-                </label>
-              ))}
-              <label className="flex flex-col gap-0.5 min-w-0">
-                <span className="type-hint text-[var(--color-text-secondary)]">Password</span>
-                <input
-                  type="password"
-                  value={relayPass}
-                  disabled={!canMutate || configBusy}
-                  onChange={(e) => setRelayPass(e.target.value)}
-                  className="px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
-                />
-              </label>
-              <label className="flex flex-col gap-0.5 min-w-0 col-span-2">
-                <span className="type-hint text-[var(--color-text-secondary)]">
-                  SPF include (from your relay provider&rsquo;s setup page)
-                </span>
-                <input
-                  type="text"
-                  value={spfInclude}
-                  disabled={!canMutate || configBusy}
-                  onChange={(e) => setSpfInclude(e.target.value)}
-                  placeholder="include:mailgun.org"
-                  className="px-2 py-1 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
-                />
-              </label>
-              <p className="col-span-2 type-hint text-[var(--color-text-muted)]">
-                The relay&rsquo;s own DNS records (its DKIM CNAMEs etc.) must also be set at the
-                provider — the SPF row above updates to include the relay once saved.
-              </p>
-            </div>
-          )}
-          <div className="flex items-center gap-2 px-3 py-2">
-            <button
-              type="button"
-              disabled={!canMutate || configBusy}
-              onClick={() => void saveSendConfig()}
-              className="px-2.5 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {configBusy ? 'Saving…' : 'Save sending config'}
-            </button>
-            {configNote && (
-              <span className="type-hint text-[var(--color-text-muted)]">{configNote}</span>
-            )}
-          </div>
+      </SettingRow>
+      {mode === 'relay' ? (
+        <>
+          {relayField('Relay server', 'The sending service’s server name.', relayHost, setRelayHost, 'smtp.relay.example')}
+          {relayField('Port', 'Usually 587.', relayPort, setRelayPort, '587')}
+          {relayField('Username', 'The sign-in your relay gave you.', relayUser, setRelayUser, 'postmaster@example.com')}
+          {relayField('Password', 'Kept on this server; never shown again.', relayPass, setRelayPass, '', 'password')}
+          {relayField('SPF include', 'From your relay’s setup page. K2 adds it to the SPF record above.', spfInclude, setSpfInclude, 'include:relay.example')}
+        </>
+      ) : null}
+      <div className="px-4 py-3">
+        <div className="flex items-center justify-end gap-3">
+          <SaveNote state={save.state} />
+          <Button variant="accent" disabled={!canMutate || busy || !dirty || !relayReady} onClick={() => void submit()}>
+            {busy ? 'Saving…' : 'Save'}
+          </Button>
         </div>
-      </div>
-
-      {/* ── Deliverability doctor (S6) ── */}
-      <div className="space-y-2">
-        <SectionTitle>Deliverability doctor</SectionTitle>
-        {doctorNote ? (
-          <p className="type-hint text-[var(--color-text-muted)] italic">{doctorNote}</p>
+        {notBuilt ? (
+          <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed">
+            This server can’t change how mail leaves yet. {detail.domain} stays {(SEND_MODE_WORD[detail.sendMode] ?? detail.sendMode).toLowerCase()} for now.
+          </p>
         ) : (
-          <p className="type-hint text-[var(--color-text-muted)]">No doctor runs yet.</p>
+          <SaveError state={save.state} />
         )}
       </div>
-
-      {/* ── Danger zone ── */}
-      <div className="space-y-2 pb-6">
-        <SectionTitle>Danger zone</SectionTitle>
-        <div className="border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] px-3 py-2 space-y-1.5">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <p className="type-row text-[var(--color-text-primary)]">Remove this domain</p>
-              <p className="type-hint text-[var(--color-text-muted)]">
-                Retires all its addresses and destroys the domain in the mail server.
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={!canMutate || busy}
-              onClick={() => void doRemove()}
-              className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-            >
-              Remove domain
-            </button>
-          </div>
-          <label className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)] cursor-pointer">
-            <Checkbox
-              checked={purgeMail}
-              disabled={!canMutate || busy}
-              onChange={(e) => setPurgeMail(e.target.checked)}
-              className="no-drag"
-            />
-            Also purge the domain&rsquo;s mail data
-          </label>
-        </div>
-      </div>
-    </div>
+    </SettingsGroup>
   )
 }
 
-// ── Addresses panel ──────────────────────────────────────────────────────
+function RemoveDomainDialog({ domain, onClose, onDone }: { domain: string; onClose: () => void; onDone: (retired: number, purged: boolean) => void }): React.JSX.Element {
+  const [purge, setPurge] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await removeDomain(domain, purge)
+      onDone(typeof res?.retiredAddresses === 'number' ? res.retiredAddresses : 0, purge)
+    } catch (e) {
+      setError(reasonOf(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title={`Remove ${domain}?`}
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-remove-domain"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Removing…' : 'Remove domain'}
+          </Button>
+        </>
+      }
+    >
+      <p className={DIALOG_MUTED}>Every address on {domain} is retired and stops receiving mail. You can add the domain again later.</p>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <Checkbox className="mt-0.5" checked={purge} disabled={busy} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete this domain’s mail" />
+        <span>
+          <span className={SETTING_ROW_LABEL}>Also delete this domain’s mail</span>
+          <span className={`block ${DIALOG_MUTED}`}>For good. Leave it off to keep the mail on this server.</span>
+        </span>
+      </label>
+      {error ? <FailedNote what={`${domain} wasn’t removed.`} detail={error} next="Nothing changed. Try again in a moment." /> : null}
+    </AccessSheet>
+  )
+}
 
-function AddressesPanel({
+// ── Addresses tab ────────────────────────────────────────────────────────
+
+function AddressesTab({
   sample,
   canMutate,
   revision,
   onChanged,
+  setNotice,
 }: {
   sample: boolean
   canMutate: boolean
   revision: number
   onChanged: () => void
+  setNotice: (n: Notice | null) => void
 }): React.JSX.Element {
   const [rows, setRows] = useState<AddressRow[] | null>(sample ? SAMPLE_ADDRESSES : null)
   // The unified catalog (hosted rows only) — the access SSOT per address.
   const [inboxes, setInboxes] = useState<Inbox[] | null>(sample ? SAMPLE_INBOXES : null)
   const [error, setError] = useState<string | null>(null)
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [busyKind, setBusyKind] = useState<'retire' | 'rotate' | null>(null)
-  const [capNote, setCapNote] = useState<string | null>(null)
+  const [load, setLoad] = useState(0)
+  const [dialog, setDialog] = useState<{ kind: 'retire' | 'rotate'; row: AddressRow } | null>(null)
   const [onceCreds, setOnceCreds] = useState<RotatedMailboxPassword | null>(null)
   // FW4: which mailbox's Forwarding panel is open (one at a time; the
   // panel loads only when opened, never in sample mode).
@@ -1111,7 +1296,6 @@ function AddressesPanel({
     if (sample) {
       setRows(SAMPLE_ADDRESSES)
       setInboxes(SAMPLE_INBOXES)
-      setCapNote(null)
       return
     }
     let cancelled = false
@@ -1122,12 +1306,10 @@ function AddressesPanel({
         setError(null)
       })
       .catch((e) => {
-        if (cancelled) return
-        setError(mailErrorMessage(e))
+        if (!cancelled) setError(reasonOf(e))
       })
-    // Access rows for each hosted address (Primary + grants) — the shared
-    // <InboxAccessPanel> renders per address. Best-effort; a failure just
-    // hides the access panels, it doesn't error the addresses list.
+    // Access rows for each hosted address (Primary + grants). A failure
+    // just hides the access panels; it doesn't fail the address list.
     fetchInboxes()
       .then((all) => {
         if (!cancelled) setInboxes(all.filter((i) => i.source === 'hosted'))
@@ -1135,105 +1317,25 @@ function AddressesPanel({
       .catch(() => {
         if (!cancelled) setInboxes([])
       })
-    // Cap configuration rides GET /cli/mail/config — 501 until the
-    // config sub-slice lands; render the default policy instead.
-    fetchMailConfig()
-      .then(() => {
-        if (!cancelled) setCapNote(null)
-      })
-      .catch((e) => {
-        if (cancelled) return
-        setCapNote(
-          isNotBuilt(e)
-            ? 'Per-workspace limits aren’t available yet.'
-            : `Config unavailable: ${mailErrorMessage(e)}`,
-        )
-      })
     return () => {
       cancelled = true
     }
-  }, [sample, revision])
+  }, [sample, revision, load])
 
-  const retire = useCallback(
-    async (row: AddressRow): Promise<void> => {
-      const confirmed = await useConfirmDialogStore.getState().confirm({
-        title: `Retire ${row.address}?`,
-        message:
-          'The address stops receiving immediately; its mailbox data is kept for the ' +
-          'retention window, then purged. The cap slot frees immediately.',
-        confirmLabel: 'Retire address',
-        destructive: true,
-      })
-      if (!confirmed) return
-      setBusyId(row.id)
-      setBusyKind('retire')
-      try {
-        await retireAddress(row.holderProjectId, row.address)
-        // Optimistic: flip the row locally; the refetch confirms.
-        setRows(
-          (prev) =>
-            prev?.map((r) =>
-              r.id === row.id
-                ? { ...r, status: 'retired', retiredAt: Math.floor(Date.now() / 1000) }
-                : r,
-            ) ?? null,
-        )
-        onChanged()
-      } catch (e) {
-        useToastStore.getState().addToast(`Retire failed: ${mailErrorMessage(e)}`, 'error')
-      } finally {
-        setBusyId(null)
-        setBusyKind(null)
-      }
-    },
-    [onChanged],
-  )
-
-  const rotatePassword = useCallback(async (row: AddressRow): Promise<void> => {
-    const confirmed = await useConfirmDialogStore.getState().confirm({
-      title: `Rotate IMAP/SMTP password for ${row.address}?`,
-      message:
-        'IMAP/SMTP sessions on the old password die, and the mailbox\'s API keys and app passwords stop working too. The new password is shown once and cannot be retrieved again.',
-      confirmLabel: 'Rotate password',
-      destructive: true,
-    })
-    if (!confirmed) return
-    setBusyId(row.id)
-    setBusyKind('rotate')
-    try {
-      const creds = await rotateAddressPassword(row.address)
-      setOnceCreds(creds)
-    } catch (e) {
-      useToastStore.getState().addToast(`Rotate failed: ${mailErrorMessage(e)}`, 'error')
-    } finally {
-      setBusyId(null)
-      setBusyKind(null)
-    }
+  const patchInbox = useCallback((address: string, patch: (i: Inbox) => Inbox): void => {
+    setInboxes((prev) => (prev ? prev.map((i) => (i.address === address ? patch(i) : i)) : prev))
   }, [])
 
-  // Optimistic patch of one inbox's access row (primary/grants) — mutates
-  // the loaded catalog in place, no refetch (no fetch-in-render).
-  const patchInbox = useCallback(
-    (address: string, patch: (i: Inbox) => Inbox): void => {
-      setInboxes((prev) =>
-        prev ? prev.map((i) => (i.address === address ? patch(i) : i)) : prev,
-      )
-    },
-    [],
-  )
-
-  // Access row lookup, keyed by address (hosted inboxes only).
   const inboxByAddress = useMemo(() => {
     const m = new Map<string, Inbox>()
     for (const i of inboxes ?? []) m.set(i.address, i)
     return m
   }, [inboxes])
 
-  // Group by domain (the address's suffix — the owner list is flat).
   const groups = useMemo(() => {
     const byDomain = new Map<string, AddressRow[]>()
     for (const r of rows ?? []) {
-      const dom = r.address.split('@')[1] ?? '(unknown)'
+      const dom = r.address.split('@')[1] ?? 'Other'
       const list = byDomain.get(dom) ?? []
       list.push(r)
       byDomain.set(dom, list)
@@ -1241,182 +1343,231 @@ function AddressesPanel({
     return [...byDomain.entries()].sort(([a], [b]) => a.localeCompare(b))
   }, [rows])
 
-  return (
-    <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
-      {onceCreds && (
-        <div
-          className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2"
-          role="dialog"
-          aria-label="IMAP/SMTP password shown once"
-        >
-          <p className="type-name text-[var(--color-text-primary)]">
-            Store this password now — it cannot be retrieved again
-          </p>
-          <p className="type-hint text-[var(--color-text-muted)]">
-            {onceCreds.note ??
-              'IMAP/SMTP sessions on the old password die, and the mailbox\'s API keys and app passwords stop working too.'}
-          </p>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 type-hint text-[var(--color-text-primary)]">
-            <dt className="text-[var(--color-text-muted)]">Host</dt>
-            <dd className="font-mono break-all">{onceCreds.imap?.host || '—'}</dd>
-            <dt className="text-[var(--color-text-muted)]">IMAP</dt>
-            <dd className="font-mono">
-              {onceCreds.imap?.port ?? 443}
-              {onceCreds.imap?.alpn ? ' ALPN' : ''}
-            </dd>
-            <dt className="text-[var(--color-text-muted)]">SMTP</dt>
-            <dd className="font-mono">{onceCreds.submission?.port ?? 465}</dd>
-            <dt className="text-[var(--color-text-muted)]">User</dt>
-            <dd className="font-mono break-all">{onceCreds.username || onceCreds.address}</dd>
-            <dt className="text-[var(--color-text-muted)]">Password</dt>
-            <dd className="font-mono break-all select-all">{onceCreds.password}</dd>
-          </dl>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="type-hint text-[var(--color-accent)] cursor-pointer"
-              onClick={() => {
-                void navigator.clipboard?.writeText(onceCreds.password)
-              }}
-            >
-              Copy password
-            </button>
-            <button
-              type="button"
-              className="type-hint text-[var(--color-text-secondary)] cursor-pointer"
-              onClick={() => setOnceCreds(null)}
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-      <div className="min-w-0" data-settings-id="email-hosting.addresses">
-        <h2 className="type-title text-[var(--color-text-primary)]">Addresses</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          Agent mailboxes across every domain. Agents mint their own with{' '}
-          <span className="font-mono">k2 hostmail create</span> (default cap: 5 active addresses per
-          agent, 0 = unlimited); plus-addressing gives unlimited tags without new addresses.
-        </p>
-        {capNote && <p className="type-hint text-[var(--color-text-muted)] italic mt-1">{capNote}</p>}
-      </div>
+  const intro = (
+    <p className={SETTING_ROW_HINT} data-settings-id="email-hosting.addresses">
+      Agents make their own addresses on verified domains, up to five each. Plus addressing gives them more without new addresses.
+    </p>
+  )
 
-      {error ? (
-        <p className="type-hint text-[var(--color-status-error-soft)]">Failed to load addresses: {error}</p>
-      ) : rows === null ? (
-        <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-      ) : groups.length === 0 ? (
-        <p className="type-hint text-[var(--color-text-muted)] italic">
-          No addresses yet — agents mint them on verified domains with{' '}
-          <span className="font-mono">k2 hostmail create &lt;name&gt;@&lt;domain&gt;</span>, or add a
-          domain first.
-        </p>
-      ) : (
-        groups.map(([dom, list]) => (
-          <div key={dom} className="space-y-2">
-            <SectionTitle>{dom}</SectionTitle>
-            <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-              {list.map((r) => {
-                const inbox = r.status === 'active' ? inboxByAddress.get(r.address) : undefined
-                return (
-                  <div key={r.id} className="px-3 py-2 min-w-0 space-y-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className={`type-row font-mono truncate ${
-                              r.status === 'retired'
-                                ? 'text-[var(--color-text-muted)] line-through'
-                                : 'text-[var(--color-text-primary)]'
-                            }`}
-                          >
-                            {r.address}
-                          </span>
-                          {r.status === 'retired' && (
-                            <Tag tone="muted">
-                              Retired
-                            </Tag>
-                          )}
-                        </div>
-                        <p className="type-hint text-[var(--color-text-muted)] truncate">
-                          {r.holderWorkspace ?? 'unknown workspace'} · created {fmtDate(r.createdAt)}
-                          {r.retiredAt != null ? ` · retired ${fmtDate(r.retiredAt)}` : ''}
-                        </p>
-                      </div>
-                      {r.status === 'active' && (
-                        <>
-                          {!sample && (
-                            <button
-                              type="button"
-                              aria-expanded={forwardOpen === r.id}
-                              onClick={() => setForwardOpen((cur) => (cur === r.id ? null : r.id))}
-                              className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer flex-shrink-0"
-                            >
-                              Forwarding
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            disabled={!canMutate || busyId === r.id}
-                            onClick={() => void rotatePassword(r)}
-                            className="px-2 py-0.5 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-                          >
-                            {busyId === r.id && busyKind === 'rotate'
-                              ? 'Rotating…'
-                              : 'Rotate IMAP/SMTP password'}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!canMutate || busyId === r.id}
-                            onClick={() => void retire(r)}
-                            className="px-2 py-0.5 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-                          >
-                            {busyId === r.id && busyKind === 'retire' ? 'Retiring…' : 'Retire'}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                    {!sample && r.status === 'active' && forwardOpen === r.id && (
-                      <MailboxForwardingPanel address={r.address} canMutate={canMutate} />
-                    )}
-                    {inbox && (
-                      <div className="pt-1 border-t border-[var(--color-border)]">
-                        <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
-                      </div>
+  if (error || rows === null || groups.length === 0) {
+    return (
+      <div className="space-y-4">
+        {intro}
+        {error ? (
+          <SettingsLoadState kind="error" title="Couldn’t load addresses" detail={error} action={<Button onClick={() => setLoad((n) => n + 1)}>Try again</Button>}>
+            Your addresses are fine; this page just couldn’t read the list.
+          </SettingsLoadState>
+        ) : rows === null ? (
+          <SettingsLoadState kind="loading" title="Loading addresses…" />
+        ) : (
+          <SettingsLoadState kind="empty" title="No addresses yet">
+            Agents make addresses once a domain is verified. Add a domain on the Domains tab first.
+          </SettingsLoadState>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {intro}
+      {onceCreds ? <PasswordShownOnce creds={onceCreds} onClose={() => setOnceCreds(null)} /> : null}
+      {groups.map(([dom, list]) => (
+        <SettingsGroup key={dom} title={dom} card testId="hosting-address-group">
+          {list.map((r) => {
+            const inbox = r.status === 'active' ? inboxByAddress.get(r.address) : undefined
+            const retired = r.status === 'retired'
+            return (
+              <div key={r.id} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid="hosting-address-row" data-address={r.address}>
+                <div className="flex items-center justify-between gap-6">
+                  <div className="min-w-0">
+                    <p className={`type-name truncate ${retired ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'}`}>{r.address}</p>
+                    <p className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
+                      {r.holderWorkspace ? `Held by ${r.holderWorkspace}` : 'Its workspace was removed'}
+                      {r.createdAt ? ` · made ${fmtDay(r.createdAt)}` : ''}
+                      {r.retiredAt ? ` · retired ${fmtDay(r.retiredAt)}` : ''}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {retired ? (
+                      <StatusWord tone="neutral">Retired</StatusWord>
+                    ) : (
+                      <>
+                        {!sample ? (
+                          <Button aria-expanded={forwardOpen === r.id} onClick={() => setForwardOpen((cur) => (cur === r.id ? null : r.id))}>
+                            Forwarding
+                          </Button>
+                        ) : null}
+                        <Button disabled={!canMutate} onClick={() => setDialog({ kind: 'rotate', row: r })}>
+                          New password…
+                        </Button>
+                        <Button variant="danger-quiet" disabled={!canMutate} onClick={() => setDialog({ kind: 'retire', row: r })}>
+                          Retire…
+                        </Button>
+                      </>
                     )}
                   </div>
-                )
-              })}
-            </div>
-          </div>
-        ))
-      )}
+                </div>
+                {!sample && !retired && forwardOpen === r.id ? (
+                  <div className="mt-3">
+                    <MailboxForwardingPanel address={r.address} canMutate={canMutate} />
+                  </div>
+                ) : null}
+                {inbox ? (
+                  <div className="mt-3 pt-2 border-t border-[var(--color-border)]">
+                    <InboxAccessPanel inbox={inbox} canMutate={canMutate} patchInbox={patchInbox} />
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </SettingsGroup>
+      ))}
+
+      {dialog?.kind === 'retire' ? (
+        <RetireDialog
+          row={dialog.row}
+          onClose={() => setDialog(null)}
+          onDone={(row) => {
+            setDialog(null)
+            setRows((prev) => prev?.map((x) => (x.id === row.id ? { ...x, status: 'retired', retiredAt: Math.floor(Date.now() / 1000) } : x)) ?? null)
+            setNotice({ tone: 'ok', text: `Retired ${row.address}. It no longer receives mail; its mailbox is kept for a while, then deleted.` })
+            onChanged()
+          }}
+        />
+      ) : null}
+      {dialog?.kind === 'rotate' ? (
+        <RotateDialog
+          row={dialog.row}
+          onClose={() => setDialog(null)}
+          onDone={(creds) => {
+            setDialog(null)
+            setOnceCreds(creds)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
-// ── Approvals panel ──────────────────────────────────────────────────────
+function RetireDialog({ row, onClose, onDone }: { row: AddressRow; onClose: () => void; onDone: (row: AddressRow) => void }): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      await retireAddress(row.holderProjectId, row.address)
+      onDone(row)
+    } catch (e) {
+      setError(reasonOf(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title={`Retire ${row.address}?`}
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-retire-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Retiring…' : 'Retire address'}
+          </Button>
+        </>
+      }
+    >
+      <p className={DIALOG_MUTED}>
+        It stops receiving mail straight away. Its mailbox is kept for a while, then deleted. {row.holderWorkspace ?? 'The agent'} can make another address in its place.
+      </p>
+      {error ? <FailedNote what={`${row.address} wasn’t retired.`} detail={error} next="It still works. Try again in a moment." /> : null}
+    </AccessSheet>
+  )
+}
 
-function ApprovalCard({
-  item,
-  canMutate,
-  onDecided,
-}: {
-  item: ApprovalItem
-  canMutate: boolean
-  onDecided: (id: string) => void
-}): React.JSX.Element {
+function RotateDialog({ row, onClose, onDone }: { row: AddressRow; onClose: () => void; onDone: (c: RotatedMailboxPassword) => void }): React.JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const run = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    try {
+      onDone(await rotateAddressPassword(row.address))
+    } catch (e) {
+      setError(reasonOf(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <AccessSheet
+      title={`New password for ${row.address}?`}
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-rotate-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Making…' : 'Make new password'}
+          </Button>
+        </>
+      }
+    >
+      <p className={DIALOG_MUTED}>
+        Mail apps signed in with the old password are signed out, and its app passwords stop working. K2 shows the new one once.
+      </p>
+      {error ? <FailedNote what="No new password was made." detail={error} next="The old password still works. Try again in a moment." /> : null}
+    </AccessSheet>
+  )
+}
+
+function PasswordShownOnce({ creds, onClose }: { creds: RotatedMailboxPassword; onClose: () => void }): React.JSX.Element {
+  return (
+    <AccessSheet
+      title={`New password for ${creds.address}`}
+      onClose={onClose}
+      testId="hosting-password-once"
+      footer={
+        <Button variant="accent" size="md" onClick={onClose} autoFocus>
+          Done
+        </Button>
+      }
+    >
+      <p className={DIALOG_MUTED}>{creds.note ?? 'Use these in a mail app. Mail apps on the old password are signed out.'}</p>
+      <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+        <CopyLine label="Server" value={creds.imap?.host || creds.submission?.host || ''} />
+        <CopyLine label="Username" value={creds.username || creds.address} />
+        <CopyLine label="Password" value={creds.password} testId="hosting-once-password" />
+      </Surface>
+      <p className={DIALOG_MUTED}>
+        Incoming mail (IMAP) on port {creds.imap?.port ?? 443}, sending (SMTP) on port {creds.submission?.port ?? 465}. K2 won’t show this password again.
+      </p>
+    </AccessSheet>
+  )
+}
+
+// ── Approvals tab ────────────────────────────────────────────────────────
+
+function ApprovalRow({ item, canMutate, onDecided }: { item: ApprovalItem; canMutate: boolean; onDecided: (id: string, text: string, failed?: string) => void }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [denying, setDenying] = useState(false)
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState<'approve' | 'deny' | null>(null)
+  const [busy, setBusy] = useState(false)
   const [fullText, setFullText] = useState<string | null>(null)
+  const [rowError, setRowError] = useState<{ what: string; detail: string } | null>(null)
 
   const loadFullText = async (): Promise<void> => {
     try {
       setFullText(await fetchApprovalText(item.id))
     } catch (e) {
-      useToastStore.getState().addToast(mailErrorMessage(e), 'error')
+      setRowError({ what: 'Couldn’t load the whole message.', detail: reasonOf(e) })
     }
   }
 
@@ -1429,225 +1580,232 @@ function ApprovalCard({
       a.click()
       URL.revokeObjectURL(url)
     } catch (e) {
-      useToastStore.getState().addToast(mailErrorMessage(e), 'error')
+      setRowError({ what: `Couldn’t save ${file.name}.`, detail: reasonOf(e) })
     }
   }
 
   const approve = async (): Promise<void> => {
-    setBusy('approve')
+    setBusy(true)
+    setRowError(null)
     try {
       await approveOutbound(item.id)
-      onDecided(item.id)
+      onDecided(item.id, `Approved “${item.subject || 'No subject'}”. It’s on its way.`)
     } catch (e) {
-      // `engine` failures mean approved-but-not-submitted — surfaced
-      // loudly; the row leaves the pending queue either way.
-      useToastStore.getState().addToast(mailErrorMessage(e), 'error', 10000)
-      onDecided(item.id)
+      // `engine` failures mean approved-but-not-submitted: the row leaves
+      // the queue either way, and the page says it didn't go out.
+      onDecided(item.id, `Approved “${item.subject || 'No subject'}”, but it didn’t send.`, reasonOf(e))
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
-  const deny = async (): Promise<void> => {
-    if (!note.trim()) return
-    setBusy('deny')
-    try {
-      await denyOutbound(item.id, note.trim())
-      onDecided(item.id)
-    } catch (e) {
-      useToastStore.getState().addToast(`Deny failed: ${mailErrorMessage(e)}`, 'error')
-    } finally {
-      setBusy(null)
-    }
-  }
-
+  const to = [...item.to, ...item.cc.map((c) => `${c} (cc)`)].join(', ')
   return (
-    <div className="border border-[var(--color-border)] px-3 py-2 space-y-1.5">
-      <div className="flex items-center gap-2 min-w-0">
-        <span className="type-row text-[var(--color-text-primary)] truncate flex-1" title={item.subject}>
-          {item.subject || '(no subject)'}
-        </span>
-        <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
-          {fmtDate(item.createdAt)}
-        </span>
-      </div>
-      <p className="type-hint text-[var(--color-text-muted)] break-words">
-        <span className="font-mono">{item.from}</span>
-        {item.fromName ? <span> shown as “{item.fromName}”</span> : null}
-        {' → '}
-        <span className="font-mono">{item.to.join(', ')}</span>
-        {item.cc.length > 0 && <span className="font-mono"> · cc {item.cc.join(', ')}</span>}
-        {(item.bcc?.length ?? 0) > 0 && (
-          <span className="font-mono"> · bcc {item.bcc?.join(', ')}</span>
-        )}
-        {(item.policyBcc?.length ?? 0) > 0 && (
-          <span className="font-mono"> · bcc (owner policy) {item.policyBcc?.join(', ')}</span>
-        )}
-      </p>
-      {item.sourceCheck && (
-        <p className="type-hint text-[var(--color-status-warn)] break-words">
-          The original message {item.sourceCheck}. Its sender may be forged.
-        </p>
-      )}
-      {item.sourceDmarc && (
-        <p className={`type-hint break-words ${item.sourceDmarc === 'fail' ? 'text-[var(--color-status-warn)]' : 'text-[var(--color-text-muted)]'}`}>
-          The original message&apos;s DMARC check: {item.sourceDmarc}
-          {item.sourceDmarc === 'fail' ? '. Its sender may be forged.' : '.'}
-        </p>
-      )}
-      {item.forwardOf && (
-        <p className="type-hint text-[var(--color-text-muted)] break-words">
-          Forwards a message in <span className="font-mono">{item.forwardOf.mailbox}</span> from{' '}
-          <span className="font-mono">{item.forwardOf.sender}</span> (unverified)
-          {item.forwardOf.asEml ? ', whole, as an .eml file' : ''}.
-        </p>
-      )}
-      {(item.replyTo?.length ?? 0) > 0 && (
-        <p className="type-hint text-[var(--color-status-warn)] break-words">
-          Answers go to <span className="font-mono">{item.replyTo?.join(', ')}</span>, not to the sender.
-        </p>
-      )}
-      <p className="type-hint text-[var(--color-text-muted)]">
-        {item.agentName ?? 'agent'}
-        {item.workspace ? ` · ${item.workspace}` : ''} · expires {fmtDate(item.expiresAt)} (auto-deny)
-      </p>
-
-      {(item.files?.length ?? 0) > 0 && (
-        <div className="space-y-0.5">
-          <p className="type-hint text-[var(--color-text-muted)]">
-            Files that will leave, as they were when the agent sent this:
+    <div className="px-4 py-3 space-y-2" data-testid="hosting-approval" data-id={item.id}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <p className="type-name text-[var(--color-text-primary)] truncate" title={item.subject}>
+            {item.subject || 'No subject'}
           </p>
+          <p className={`${SETTING_ROW_HINT} break-words`}>
+            From <span className="font-mono">{item.from}</span>
+            {item.fromName ? ` shown as “${item.fromName}”` : ''} to <span className="font-mono">{to}</span>
+          </p>
+          <p className="type-hint text-[var(--color-text-muted)] mt-0.5">
+            {item.agentName ?? 'An agent'}
+            {item.workspace && item.workspace !== item.agentName ? ` in ${item.workspace}` : ''} · {fmtWhen(item.createdAt)}
+            {item.expiresAt ? ` · denied for you on ${fmtDay(item.expiresAt)} if you don’t decide` : ''}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button variant="danger-quiet" disabled={!canMutate || busy} onClick={() => setDenying(true)}>
+            Deny…
+          </Button>
+          <Button variant="accent" disabled={!canMutate || busy} onClick={() => void approve()}>
+            {busy ? 'Sending…' : 'Approve and send'}
+          </Button>
+        </div>
+      </div>
+
+      {(item.bcc?.length ?? 0) > 0 || (item.policyBcc?.length ?? 0) > 0 ? (
+        <p className="type-hint text-[var(--color-text-secondary)] break-words">
+          Hidden copies to <span className="font-mono">{[...(item.bcc ?? []), ...(item.policyBcc ?? [])].join(', ')}</span>
+          {(item.policyBcc?.length ?? 0) > 0 ? ' (some from your always-copy setting)' : ''}.
+        </p>
+      ) : null}
+      {(item.replyTo?.length ?? 0) > 0 ? (
+        <p className="type-hint text-[var(--color-status-warn-text)] break-words">
+          Replies go to <span className="font-mono">{item.replyTo?.join(', ')}</span>, not to the sender.
+        </p>
+      ) : null}
+      {item.sourceCheck ? <p className="type-hint text-[var(--color-status-warn-text)] break-words">The message it answers {item.sourceCheck}. Its sender may be forged.</p> : null}
+      {item.sourceDmarc ? (
+        <p className={`type-hint break-words ${item.sourceDmarc === 'fail' ? 'text-[var(--color-status-warn-text)]' : 'text-[var(--color-text-secondary)]'}`}>
+          The message it answers {item.sourceDmarc === 'fail' ? 'failed its sender check, so its sender may be forged.' : `had a sender check result of “${item.sourceDmarc}”.`}
+        </p>
+      ) : null}
+      {item.forwardOf ? (
+        <p className="type-hint text-[var(--color-text-secondary)] break-words">
+          Forwards a message in <span className="font-mono">{item.forwardOf.mailbox}</span> from <span className="font-mono">{item.forwardOf.sender}</span> (not checked)
+          {item.forwardOf.asEml ? ', attached whole' : ''}.
+        </p>
+      ) : null}
+
+      {(item.files?.length ?? 0) > 0 ? (
+        <div className="space-y-1">
+          <p className="type-hint text-[var(--color-text-secondary)]">Files that go with it, as they were when the agent sent this:</p>
           {item.files?.map((f) => (
-            <div key={f.n} className="flex items-center gap-2 min-w-0 type-hint">
-              <span className="font-mono truncate text-[var(--color-text-secondary)]" title={f.name}>{f.name}</span>
-              <span className="flex-shrink-0 text-[var(--color-text-muted)]">
-                {fmtFileSize(f.size)}{f.scanned ? '' : ' · not scanned'}
+            <div key={f.n} className="flex items-center justify-between gap-4 min-w-0">
+              <span className="type-hint min-w-0 truncate">
+                <span className="font-mono text-[var(--color-text-primary)]">{f.name}</span>
+                <span className="text-[var(--color-text-secondary)]">
+                  {' '}
+                  · {fmtFileSize(f.size)}
+                  {f.scanned ? '' : ' · not checked for secrets'}
+                </span>
               </span>
-              <button
-                type="button"
-                onClick={() => void saveFile(f)}
-                className="flex-shrink-0 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-              >
+              <Button variant="quiet" onClick={() => void saveFile(f)}>
                 Save a copy
-              </button>
+              </Button>
             </div>
           ))}
         </div>
-      )}
+      ) : null}
 
       {/* Body — NEVER auto-rendered; explicit expand, plain text only
           (untrusted external content, §8.1). */}
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-      >
-        {expanded ? '▾ Hide message body' : '▸ Show message body'}
-      </button>
-      {expanded && (
-        <div className="space-y-1">
-          <p className="type-section text-[var(--color-status-warn)] uppercase tracking-wide ">
-            Agent-composed content — plain-text preview
-          </p>
-          <pre className="type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 max-h-48 overflow-y-auto">
-            {fullText ?? item.bodyPreview ?? '(body preview unavailable)'}
-          </pre>
-          {fullText === null && item.bodyPreview !== null && item.bodyPreview.length >= 280 && (
-            <button
-              type="button"
-              onClick={() => void loadFullText()}
-              className="type-hint text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+      <div>
+        <Button variant="quiet" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Hide message' : 'Show message'}
+        </Button>
+        {expanded ? (
+          <div className="mt-2 space-y-1">
+            <p className="type-hint text-[var(--color-text-secondary)]">Written by the agent. Shown as plain text.</p>
+            <pre
+              data-k2-chamfer="control"
+              className="type-hint font-mono text-[var(--color-text-secondary)] whitespace-pre-wrap break-words bg-[var(--color-bg)] border border-[var(--color-border)] px-2 py-1.5 max-h-48 overflow-y-auto"
             >
-              Preview stops at 280 characters. Show the whole message
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="flex items-center gap-2 pt-0.5">
-        <button
-          type="button"
-          disabled={!canMutate || busy !== null}
-          onClick={() => void approve()}
-          className="px-2.5 py-1 type-control text-[var(--color-status-ok)] border border-[color-mix(in_srgb,var(--color-status-ok)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-ok)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {busy === 'approve' ? 'Approving…' : 'Approve & send'}
-        </button>
-        {!denying ? (
-          <button
-            type="button"
-            disabled={!canMutate || busy !== null}
-            onClick={() => setDenying(true)}
-            className="px-2.5 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Deny…
-          </button>
-        ) : (
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
-            <input
-              autoFocus
-              type="text"
-              value={note}
-              disabled={busy !== null}
-              onChange={(e) => setNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void deny()
-                else if (e.key === 'Escape') {
-                  e.stopPropagation()
-                  setDenying(false)
-                  setNote('')
-                }
-              }}
-              placeholder="Reason (flows back to the agent — required)"
-              className="flex-1 min-w-0 px-2 py-1 type-hint bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-status-error-soft)] no-drag"
-            />
-            <button
-              type="button"
-              disabled={!canMutate || busy !== null || note.trim().length === 0}
-              onClick={() => void deny()}
-              className="px-2 py-1 type-control text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
-            >
-              {busy === 'deny' ? 'Denying…' : 'Deny'}
-            </button>
+              {fullText ?? item.bodyPreview ?? 'This message has no text preview.'}
+            </pre>
+            {fullText === null && item.bodyPreview !== null && item.bodyPreview.length >= 280 ? (
+              <Button variant="quiet" onClick={() => void loadFullText()}>
+                Show the whole message
+              </Button>
+            ) : null}
           </div>
-        )}
+        ) : null}
       </div>
+      {rowError ? (
+        <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+          {rowError.what} <span className="text-[var(--color-text-muted)]">The server said: {rowError.detail.trim().replace(/[.\s]+$/, '')}.</span>
+        </p>
+      ) : null}
+
+      {denying ? (
+        <DenyDialog
+          item={item}
+          onClose={() => setDenying(false)}
+          onDone={() => {
+            setDenying(false)
+            onDecided(item.id, `Denied “${item.subject || 'No subject'}”. ${item.agentName ?? 'The agent'} gets your reason.`)
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
-/** Wire status → chip color for outbox history rows. */
-function outboundChip(status: string): { label: string; color: string } {
-  switch (status) {
-    case 'pending_approval':
-      return { label: 'Pending', color: 'var(--color-status-warn)' }
-    case 'approved':
-      return { label: 'Approved', color: 'var(--color-status-ok)' }
-    case 'submitted':
-      return { label: 'Submitted', color: 'var(--color-status-ok)' }
-    case 'rejected':
-      return { label: 'Denied', color: 'var(--color-status-error-soft)' }
-    case 'failed':
-      return { label: 'Failed', color: 'var(--color-status-error-soft)' }
-    default:
-      return { label: status, color: 'var(--color-text-muted)' }
+function DenyDialog({ item, onClose, onDone }: { item: ApprovalItem; onClose: () => void; onDone: () => void }): React.JSX.Element {
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const id = useId()
+  const formId = useId()
+  const run = async (): Promise<void> => {
+    if (!note.trim() || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await denyOutbound(item.id, note.trim())
+      onDone()
+    } catch (e) {
+      setError(reasonOf(e))
+    } finally {
+      setBusy(false)
+    }
   }
+  return (
+    <AccessSheet
+      title="Deny this message?"
+      intro={`“${item.subject || 'No subject'}” won’t be sent. ${item.agentName ?? 'The agent'} sees your reason.`}
+      onClose={onClose}
+      busy={busy}
+      testId="hosting-deny-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="danger-muted" size="md" disabled={busy || !note.trim()}>
+            {busy ? 'Denying…' : 'Deny'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void run()
+        }}
+      >
+        <Field label="Reason" htmlFor={id} hint="Say what to change, like “Send it to the vendor contact only.”">
+          <Input id={id} autoFocus className={DIALOG_FIELD} value={note} disabled={busy} onChange={(e) => setNote(e.target.value)} />
+        </Field>
+        {error ? <FailedNote what="The message wasn’t denied." detail={error} next="It’s still waiting for you. Try again in a moment." /> : null}
+      </form>
+    </AccessSheet>
+  )
 }
 
-function ApprovalsPanel({
+const OUTBOUND_TAG: Record<string, { label: string; tone: HealthTone }> = {
+  pending_approval: { label: 'Waiting', tone: 'warn' },
+  approved: { label: 'Approved', tone: 'ok' },
+  submitted: { label: 'Sent', tone: 'ok' },
+  rejected: { label: 'Denied', tone: 'error' },
+  failed: { label: 'Didn’t send', tone: 'error' },
+}
+
+const SAMPLE_HISTORY: OutboundItem[] = [
+  {
+    id: 'out_11ab', from: 'research-bot@example.org', to: ['noreply@service.example'], cc: [],
+    subject: 'Re: Verify your account', status: 'submitted', statusNote: 'accepted for delivery', note: null,
+    agentName: 'research-bot', decidedBy: 'owner', createdAt: 1751700000, decidedAt: 1751700120, sentAt: 1751700121,
+  },
+  {
+    id: 'out_09cd', from: 'signup-runner@example.org', to: ['everyone@company.example'], cc: [],
+    subject: 'Bulk outreach draft', status: 'rejected', statusNote: 'denied', note: 'Too many people. Send it to the vendor contact only.',
+    agentName: 'signup-runner', decidedBy: 'owner', createdAt: 1751600000, decidedAt: 1751600500, sentAt: null,
+  },
+]
+
+function ApprovalsTab({
   pending,
   pendingError,
   sample,
   canMutate,
   revision,
   onDecided,
+  onRetry,
 }: {
   pending: ApprovalItem[] | null
   pendingError: string | null
   sample: boolean
   canMutate: boolean
   revision: number
-  onDecided: (id: string) => void
+  onDecided: (id: string, text: string, failed?: string) => void
+  onRetry: () => void
 }): React.JSX.Element {
   // Decided history: per-workspace outbox (no owner-wide history route
   // yet — the picker selects which workspace's outbox to show).
@@ -1655,41 +1813,12 @@ function ApprovalsPanel({
   const [historyWs, setHistoryWs] = useState('')
   const [history, setHistory] = useState<OutboundItem[] | null>(null)
   const [historyError, setHistoryError] = useState<string | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyLoad, setHistoryLoad] = useState(0)
 
   useEffect(() => {
     if (sample) {
-      setHistory([
-        {
-          id: 'out_11ab',
-          from: 'research-bot@example.org',
-          to: ['noreply@saas.example'],
-          cc: [],
-          subject: 'Re: Verify your account',
-          status: 'submitted',
-          statusNote: 'accepted-for-delivery (final delivery is the receiving server’s business)',
-          note: null,
-          agentName: 'research-bot',
-          decidedBy: 'owner',
-          createdAt: 1751700000,
-          decidedAt: 1751700120,
-          sentAt: 1751700121,
-        },
-        {
-          id: 'out_09cd',
-          from: 'signup-runner@example.org',
-          to: ['all-staff@bigcorp.example'],
-          cc: [],
-          subject: 'Bulk outreach draft',
-          status: 'rejected',
-          statusNote: 'denied by your human — see the note',
-          note: 'Too broad a recipient list — narrow it to the vendor contact.',
-          agentName: 'signup-runner',
-          decidedBy: 'owner',
-          createdAt: 1751600000,
-          decidedAt: 1751600500,
-          sentAt: null,
-        },
-      ])
+      setHistory(SAMPLE_HISTORY)
       return
     }
     if (!historyWs) {
@@ -1698,6 +1827,7 @@ function ApprovalsPanel({
       return
     }
     let cancelled = false
+    setHistoryLoading(true)
     fetchOutbox(historyWs)
       .then((r) => {
         if (cancelled) return
@@ -1705,120 +1835,102 @@ function ApprovalsPanel({
         setHistoryError(null)
       })
       .catch((e) => {
-        if (cancelled) return
-        setHistoryError(mailErrorMessage(e))
+        if (!cancelled) setHistoryError(reasonOf(e))
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false)
       })
     return () => {
       cancelled = true
     }
-  }, [sample, historyWs, revision])
+  }, [sample, historyWs, revision, historyLoad])
+
+  const wsName = projects.find((p) => p.id === historyWs)?.name ?? 'this workspace'
 
   return (
-    <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
-      <div className="min-w-0" data-settings-id="email-hosting.approvals">
-        <h2 className="type-title text-[var(--color-text-primary)]">Approvals</h2>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1">
-          Agent sends queued for your decision (workspaces in approval mode). Approving submits
-          the message; denying returns your note to the agent. Pending items auto-deny after 7
-          days.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <SettingsGroup
+        title="Waiting for you"
+        hint="Mail your agents want to send from workspaces that need your approval. Anything you don’t decide within 7 days is denied for you."
+        card
+        testId="hosting-pending"
+        state={
+          pendingError ? (
+            <SettingsLoadState kind="error" title="Couldn’t load the messages waiting for you" detail={pendingError} action={<Button onClick={onRetry}>Try again</Button>}>
+              Nothing was sent or denied. Try again in a moment.
+            </SettingsLoadState>
+          ) : pending === null ? (
+            <SettingsLoadState kind="loading" title="Loading…" />
+          ) : pending.length === 0 ? (
+            <SettingsLoadState kind="empty" title="Nothing waiting">
+              When a workspace needs your approval to send, its agents’ mail waits here. Choose that in the workspace’s email settings.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        {(pending ?? []).map((item) => (
+          <ApprovalRow key={item.id} item={item} canMutate={canMutate} onDecided={onDecided} />
+        ))}
+      </SettingsGroup>
 
-      <div className="space-y-2">
-        <SectionTitle>Pending</SectionTitle>
-        {pendingError ? (
-          <p className="type-hint text-[var(--color-status-error-soft)]">
-            Failed to load the queue: {pendingError}
-          </p>
-        ) : pending === null ? (
-          <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-        ) : pending.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)] italic">
-            Nothing waiting. Agent sends land here when a workspace&rsquo;s send mode is
-            &ldquo;approval&rdquo; (the default is off — enable it per workspace with{' '}
-            <span className="font-mono">k2 hostmail config --agent-send approval</span>).
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {pending.map((item) => (
-              <ApprovalCard key={item.id} item={item} canMutate={canMutate} onDecided={onDecided} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-2 pb-6">
-        <div className="flex items-center gap-2">
-          <SectionTitle>History</SectionTitle>
-          <span className="flex-1" />
-          {!sample && (
+      <SettingsGroup
+        title="Sent and decided"
+        hint="What a workspace’s agents sent, and what you approved or denied."
+        card
+        testId="hosting-history"
+        action={
+          !sample ? (
             <SettingDropdown
-              ariaLabel="History workspace"
+              ariaLabel="Workspace"
               value={historyWs}
               onChange={setHistoryWs}
-              options={[
-                { value: '', label: 'Pick a workspace…' },
-                ...projects.map((p) => ({ value: p.id, label: p.name })),
-              ]}
+              placeholder="Pick a workspace"
+              options={projects.map((p) => ({ value: p.id, label: p.name }))}
             />
-          )}
-        </div>
-        {historyError ? (
-          <p className="type-hint text-[var(--color-status-error-soft)]">{historyError}</p>
-        ) : history === null ? (
-          <p className="type-hint text-[var(--color-text-muted)] italic">
-            Decided and sent messages live in each workspace&rsquo;s outbox — pick a workspace to
-            view its history (agents see their own with{' '}
-            <span className="font-mono">k2 mail outbox</span>).
-          </p>
-        ) : history.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)] italic">
-            No outbound messages in this workspace.
-          </p>
-        ) : (
-          <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-            {history.map((o) => {
-              const chip = outboundChip(o.status)
-              return (
-                <div key={o.id} className="px-3 py-2 space-y-0.5 min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className="type-badge px-1.5 py-0.5 uppercase tracking-wide flex-shrink-0"
-                      style={{
-                        color: chip.color,
-                        backgroundColor: `color-mix(in srgb, ${chip.color} 14%, transparent)`,
-                      }}
-                    >
-                      {chip.label}
-                    </span>
-                    <span className="type-row text-[var(--color-text-primary)] truncate flex-1">
-                      {o.subject || '(no subject)'}
-                    </span>
-                    <span className="type-hint text-[var(--color-text-muted)] flex-shrink-0">
-                      {fmtDate(o.decidedAt ?? o.createdAt)}
-                    </span>
-                  </div>
-                  <p className="type-hint text-[var(--color-text-muted)] break-words">
-                    <span className="font-mono">{o.from}</span>
-                    {' → '}
-                    <span className="font-mono">{o.to.join(', ')}</span>
-                  </p>
-                  {o.note && (
-                    <p className="type-hint text-[var(--color-text-secondary)]">
-                      Note: {o.note}
-                    </p>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
+          ) : undefined
+        }
+        state={
+          historyError ? (
+            <SettingsLoadState kind="error" title={`Couldn’t load what ${wsName} sent`} detail={historyError} action={<Button onClick={() => setHistoryLoad((n) => n + 1)}>Try again</Button>}>
+              Nothing changed. Try again in a moment.
+            </SettingsLoadState>
+          ) : historyLoading && history === null ? (
+            <SettingsLoadState kind="loading" title="Loading…" />
+          ) : history === null ? (
+            <SettingsLoadState kind="empty" title="Pick a workspace">
+              Choose a workspace above to see the mail its agents sent.
+            </SettingsLoadState>
+          ) : history.length === 0 ? (
+            <SettingsLoadState kind="empty" title="Nothing sent yet">
+              {wsName}’s agents haven’t sent any mail.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
+        {(history ?? []).map((o) => {
+          const tag = OUTBOUND_TAG[o.status] ?? { label: o.status, tone: 'neutral' as HealthTone }
+          return (
+            <div key={o.id} className="px-4 py-3 flex items-start justify-between gap-6" data-testid="hosting-history-row">
+              <div className="min-w-0">
+                <p className="type-name text-[var(--color-text-primary)] truncate">{o.subject || 'No subject'}</p>
+                <p className={`${SETTING_ROW_HINT} break-words`}>
+                  From <span className="font-mono">{o.from}</span> to <span className="font-mono">{o.to.join(', ')}</span>
+                </p>
+                {o.note ? <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Your reason: {o.note}</p> : null}
+              </div>
+              <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                <StatusWord tone={tag.tone}>{tag.label}</StatusWord>
+                <span className="type-hint text-[var(--color-text-muted)] whitespace-nowrap">{fmtWhen(o.decidedAt ?? o.createdAt)}</span>
+              </div>
+            </div>
+          )
+        })}
+      </SettingsGroup>
     </div>
   )
 }
 
-// ── The section root (master-detail shell) ───────────────────────────────
+// ── The section root ─────────────────────────────────────────────────────
 
 export function EmailHostingSection(): React.JSX.Element {
   const viewerReadOnly = useWindowModeStore((s) => s.resolved && s.mode === 'viewer')
@@ -1826,18 +1938,17 @@ export function EmailHostingSection(): React.JSX.Element {
   const [status, setStatus] = useState<MailStatus | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
   const [domains, setDomains] = useState<DomainSummary[] | null>(null)
+  const [domainsError, setDomainsError] = useState<string | null>(null)
   const [approvals, setApprovals] = useState<ApprovalItem[] | null>(null)
   const [approvalsError, setApprovalsError] = useState<string | null>(null)
-  const [selection, setSelection] = useState<Selection>({ kind: 'server' })
+  const [tab, setTab] = useState<Tab>('server')
+  const [openDomain, setOpenDomain] = useState<string | null>(null)
+  const [justAdded, setJustAdded] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [notice, setNotice] = useState<Notice | null>(null)
   // Bumped by mail:* events + local mutations → every loader refetches.
   const [revision, setRevision] = useState(0)
   const bump = useCallback(() => setRevision((r) => r + 1), [])
-
-  // Add-domain inline form.
-  const [addingDomain, setAddingDomain] = useState(false)
-  const [newDomain, setNewDomain] = useState('')
-  const [addError, setAddError] = useState<string | null>(null)
-  const [addBusy, setAddBusy] = useState(false)
 
   const sample = status !== null && !status.supported
   const canMutate = status !== null && status.supported && !viewerReadOnly
@@ -1854,35 +1965,41 @@ export function EmailHostingSection(): React.JSX.Element {
     fetchMailStatus()
       .then((s) => {
         if (cancelled) return
+        if (!isMailStatus(s)) {
+          setStatusError('the reply didn’t say whether this server can host mail')
+          return
+        }
         setStatus(s)
         setStatusError(null)
       })
       .catch((e) => {
-        if (cancelled) return
-        setStatusError(mailErrorMessage(e))
+        if (!cancelled) setStatusError(reasonOf(e))
       })
     return () => {
       cancelled = true
     }
   }, [revision])
 
-  // ── Left-column data: domains + the approvals queue. Sample mode
-  //    reads fixtures and stays network-silent. ─────────────────────
+  // ── Domains + the approvals queue. Sample mode reads fixtures and
+  //    stays network-silent. ────────────────────────────────────────
   useEffect(() => {
     if (supported === null) return
     if (!supported) {
       setDomains(SAMPLE_DOMAINS)
       setApprovals(SAMPLE_APPROVALS)
       setApprovalsError(null)
+      setDomainsError(null)
       return
     }
     let cancelled = false
     fetchDomains()
       .then((d) => {
-        if (!cancelled) setDomains(d)
+        if (cancelled) return
+        setDomains(d)
+        setDomainsError(null)
       })
-      .catch(() => {
-        if (!cancelled) setDomains([])
+      .catch((e) => {
+        if (!cancelled) setDomainsError(reasonOf(e))
       })
     fetchApprovals()
       .then((a) => {
@@ -1893,9 +2010,9 @@ export function EmailHostingSection(): React.JSX.Element {
       .catch((e) => {
         if (cancelled) return
         // Non-admin remote principals get the owner-or-admin gate here;
-        // show the queue as unavailable rather than erroring the page.
+        // the queue says it couldn't load, the rest of the page works.
         setApprovals(null)
-        setApprovalsError(mailErrorMessage(e))
+        setApprovalsError(reasonOf(e))
       })
     return () => {
       cancelled = true
@@ -1903,20 +2020,17 @@ export function EmailHostingSection(): React.JSX.Element {
   }, [supported, revision])
 
   // ── Live updates: the daemon's `mail_changed` broadcast on the window's
-  //    server's app bus (Home 0.43.2, Q7). It mirrors every mail:* hook
-  //    (server-state-changed / domain-status-changed /
-  //    send-approval-requested / send-decided), so a REMOTE server's page
-  //    refreshes live too; the old Tauri listener only ever heard this
-  //    computer's daemon. Refetch signal only. ─────────────────────────
+  //    server's app bus (Home 0.43.2, Q7). Refetch signal only. ──────
   useEffect(() => onWindowServerMailChanged(() => setRevision((r) => r + 1)), [])
 
-  // ── Enable-progress poll: only while an install is in flight (the
-  //    route's documented contract — poll GET /cli/mail/status). ─────
+  // ── Install-progress poll: only while an install is in flight. ─────
   useEffect(() => {
     if (!installing) return
     const t = window.setInterval(() => {
       fetchMailStatus()
-        .then((s) => setStatus(s))
+        .then((s) => {
+          if (isMailStatus(s)) setStatus(s)
+        })
         .catch(() => {
           /* transient — next tick retries */
         })
@@ -1924,273 +2038,171 @@ export function EmailHostingSection(): React.JSX.Element {
     return () => window.clearInterval(t)
   }, [installing])
 
-  // Selection healing: a removed domain falls back to the server panel.
+  // A removed domain falls back to the list.
   useEffect(() => {
-    if (selection.kind !== 'domain' || domains === null) return
-    if (!domains.some((d) => d.domain === selection.domain)) {
-      setSelection({ kind: 'server' })
-    }
-  }, [domains, selection])
-
-  const submitAddDomain = useCallback(async (): Promise<void> => {
-    const dom = newDomain.trim().toLowerCase()
-    if (!dom || addBusy) return
-    setAddBusy(true)
-    setAddError(null)
-    try {
-      const detail = await addDomain(dom)
-      setAddingDomain(false)
-      setNewDomain('')
-      setSelection({ kind: 'domain', domain: detail.domain })
-      bump()
-    } catch (e) {
-      const { code, hint } = mailErrorInfo(e)
-      setAddError(hint ?? mailErrorMessage(e))
-      if (code === 'exists') setSelection({ kind: 'domain', domain: dom })
-    } finally {
-      setAddBusy(false)
-    }
-  }, [newDomain, addBusy, bump])
+    if (openDomain === null || domains === null || justAdded === openDomain) return
+    if (!domains.some((d) => d.domain === openDomain)) setOpenDomain(null)
+  }, [domains, openDomain, justAdded])
 
   const onDecided = useCallback(
-    (id: string): void => {
-      // Optimistic removal from the pending queue; the event/refetch
-      // converges the rest.
+    (id: string, text: string, failed?: string): void => {
       setApprovals((prev) => prev?.filter((a) => a.id !== id) ?? null)
+      setNotice(failed ? { tone: 'error', text, detail: failed } : { tone: 'ok', text })
       bump()
     },
     [bump],
   )
 
-  const pendingCount = approvals?.length ?? 0
+  const header = (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)]">Email hosting</h2>
+      <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+        Run your own mail server so agents get addresses on your domains. They read their mail here, and send only the way you allow.
+      </p>
+    </header>
+  )
+
+  const frame = (body: React.ReactNode): React.JSX.Element => (
+    <div className="h-full min-h-0 overflow-y-auto" data-testid="email-hosting">
+      <div className="p-6">
+        <div className="w-full max-w-[52rem] space-y-5 pb-6">{body}</div>
+      </div>
+    </div>
+  )
 
   if (statusError) {
-    return (
-      <div className="p-6 space-y-2">
-        <p className="type-hint text-[var(--color-status-error-soft)]">
-          Couldn&rsquo;t read the mail server status: {statusError}
-        </p>
-        <button
-          type="button"
-          onClick={bump}
-          className="px-2.5 py-1 type-control text-[var(--color-text-secondary)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
-        >
-          Retry
-        </button>
-      </div>
+    return frame(
+      <>
+        {header}
+        <SettingsLoadState kind="error" title="Couldn’t read the email server’s status" detail={statusError} action={<Button onClick={bump}>Try again</Button>} testId="hosting-error">
+          Your mail is unaffected; this page just couldn’t reach the server. Try again in a moment.
+        </SettingsLoadState>
+      </>,
     )
   }
   if (status === null) {
-    return <p className="p-6 type-hint text-[var(--color-text-muted)]">Loading…</p>
+    return frame(
+      <>
+        {header}
+        <SettingsLoadState kind="loading" title="Checking the email server…" testId="hosting-loading">
+          Reading its status, domains and addresses.
+        </SettingsLoadState>
+      </>,
+    )
   }
 
-  return (
-    <div className="flex flex-col h-full min-h-0">
-      {/* ── D3 banner — pinned on top of the whole page when the DAEMON
-          reports unsupported (never navigator.platform). ── */}
-      {sample && (
-        <div className="flex-shrink-0 px-4 py-2 type-hint tracking-wide text-center text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_18%,transparent)] border-b border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)]">
-          {MAC_BANNER}
-        </div>
-      )}
+  const pendingCount = approvals?.length ?? 0
+  const pickTab = (t: Tab): void => {
+    setTab(t)
+    if (t !== 'domains') setOpenDomain(null)
+  }
 
-      <div className="flex flex-1 min-h-0">
-        {/* ── Left column ── */}
-        <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
-          {/* Server status card */}
-          <button
-            type="button"
-            onClick={() => setSelection({ kind: 'server' })}
-            className={`text-left px-3 py-2.5 border-b border-[var(--color-border)] transition-colors no-drag cursor-pointer ${
-              selection.kind === 'server'
-                ? 'bg-[var(--color-accent)]/10'
-                : 'hover:bg-[var(--color-bg-hover)]'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <span
-                className="w-2 h-2 rounded-[var(--radius-badge)] flex-shrink-0"
-                style={{ backgroundColor: stateColor(status.state) }}
-              />
-              <span className="type-name text-[var(--color-text-primary)]">
-                Email server
-              </span>
-              <span className="flex-1" />
-              <span className="type-hint text-[var(--color-text-muted)]">
-                {status.version ? `v${status.version}` : ''}
-              </span>
-            </div>
-            <p className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
-              {status.state}
-              {status.hostname ? ` · ${status.hostname}` : ''}
-              {status.portPlan ? ` · ${status.portPlan}` : ''}
-            </p>
-          </button>
+  return frame(
+    <>
+      {header}
+      {sample ? <LinuxOnlyNote what="Email hosting" /> : null}
+      {notice ? <NoticeBar notice={notice} onDismiss={() => setNotice(null)} /> : null}
 
-          {/* Approvals + Addresses nav */}
-          <button
-            type="button"
-            onClick={() => setSelection({ kind: 'approvals' })}
-            className={`flex items-center gap-2 text-left px-3 py-2 type-control transition-colors no-drag cursor-pointer ${
-              selection.kind === 'approvals'
-                ? 'bg-[var(--color-accent)]/10 text-[var(--color-text-primary)]'
-                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
-            }`}
-          >
-            Approvals
-            {pendingCount > 0 && (
-              <span className="type-hint px-1.5 py-0.5 text-[var(--color-status-warn-text)] bg-[color-mix(in_srgb,var(--color-status-warn)_20%,transparent)] flex-shrink-0">
-                {pendingCount}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelection({ kind: 'addresses' })}
-            className={`text-left px-3 py-2 type-control transition-colors no-drag cursor-pointer ${
-              selection.kind === 'addresses'
-                ? 'bg-[var(--color-accent)]/10 text-[var(--color-text-primary)]'
-                : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
-            }`}
-          >
-            Addresses
-          </button>
-
-          {/* Domain list */}
-          <div className="px-3 pt-3 pb-1 border-t border-[var(--color-border)] mt-1">
-            <SectionTitle>Domains</SectionTitle>
-          </div>
-          <div className="flex-1 overflow-y-auto px-1 py-1">
-            {domains === null ? (
-              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)]">Loading…</p>
-            ) : domains.length === 0 ? (
-              <p className="px-2 py-1 type-hint text-[var(--color-text-muted)] italic">
-                No domains yet.
-              </p>
-            ) : (
-              domains.map((d) => {
-                const isSelected = selection.kind === 'domain' && selection.domain === d.domain
-                const broken = d.records.wrong + d.records.missing
-                return (
-                  <button
-                    key={d.domain}
-                    type="button"
-                    onClick={() => setSelection({ kind: 'domain', domain: d.domain })}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors no-drag cursor-pointer min-w-0 ${
-                      isSelected
-                        ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)]'
-                        : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                    }`}
-                  >
-                    <span className="type-row font-mono truncate flex-1">{d.domain}</span>
-                    {broken > 0 && d.status !== 'verified' && (
-                      <span
-                        className="type-hint text-[var(--color-status-error-soft)] flex-shrink-0 tabular-nums"
-                        title={`${broken} record(s) missing or wrong`}
-                      >
-                        {broken}✖
-                      </span>
-                    )}
-                    <StatusChip status={d.status} />
-                  </button>
-                )
-              })
-            )}
-          </div>
-
-          {/* Add domain */}
-          <div className="px-2 py-2 border-t border-[var(--color-border)] flex-shrink-0">
-            {addingDomain ? (
-              <div className="space-y-1">
-                <div className="flex items-center gap-1">
-                  <input
-                    autoFocus
-                    type="text"
-                    value={newDomain}
-                    disabled={addBusy}
-                    onChange={(e) => {
-                      setNewDomain(e.target.value)
-                      setAddError(null)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void submitAddDomain()
-                      else if (e.key === 'Escape') {
-                        e.stopPropagation()
-                        setAddingDomain(false)
-                        setNewDomain('')
-                        setAddError(null)
-                      }
-                    }}
-                    placeholder="acme.dev"
-                    className="flex-1 min-w-0 px-2 py-1 type-hint font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
-                  />
-                  <button
-                    type="button"
-                    disabled={addBusy || newDomain.trim().length === 0}
-                    onClick={() => void submitAddDomain()}
-                    className="px-2 py-1 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 transition-colors cursor-pointer disabled:opacity-50 flex-shrink-0"
-                  >
-                    {addBusy ? '…' : 'Add'}
-                  </button>
-                </div>
-                {addError && (
-                  <p className="type-hint text-[var(--color-status-error-soft)] break-words">{addError}</p>
-                )}
-              </div>
-            ) : (
-              <button
-                type="button"
-                disabled={!canMutate}
-                onClick={() => setAddingDomain(true)}
-                title={
-                  canMutate
-                    ? 'Add a domain — K2 shows the DNS records to set at your registrar'
-                    : 'Not available on this deployment'
-                }
-                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 type-control text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] bg-[var(--color-bg-hover)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                </svg>
-                Add domain
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* ── Right panel ── */}
-        <div className="flex-1 overflow-y-auto p-6 min-h-0">
-          {selection.kind === 'server' && (
-            <ServerPanel status={status} sample={sample} canMutate={canMutate} onChanged={bump} />
-          )}
-          {selection.kind === 'domain' && (
-            <DomainPanel
-              domain={selection.domain}
-              sample={sample}
-              canMutate={canMutate}
-              revision={revision}
-              onChanged={bump}
-              onRemoved={() => {
-                setSelection({ kind: 'server' })
-                bump()
-              }}
-            />
-          )}
-          {selection.kind === 'addresses' && (
-            <AddressesPanel sample={sample} canMutate={canMutate} revision={revision} onChanged={bump} />
-          )}
-          {selection.kind === 'approvals' && (
-            <ApprovalsPanel
-              pending={approvals}
-              pendingError={approvalsError}
-              sample={sample}
-              canMutate={canMutate}
-              revision={revision}
-              onDecided={onDecided}
-            />
-          )}
-        </div>
+      <div role="tablist" aria-label="Email hosting" className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
+        {TABS.map((t) => {
+          const active = tab === t
+          return (
+            <button
+              key={t}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => pickTab(t)}
+              data-settings-id={TAB_SETTINGS_ID[t]}
+              data-k2-focus=""
+              className={`relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none inline-flex items-center gap-1.5 ${
+                active ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]' : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              {TAB_LABEL[t]}
+              {t === 'approvals' && pendingCount > 0 ? (
+                <Tag tone="warn" aria-label={`${pendingCount} waiting`}>
+                  {pendingCount}
+                </Tag>
+              ) : null}
+            </button>
+          )
+        })}
       </div>
-    </div>
+
+      <div className="pt-1">
+        {tab === 'server' ? <ServerTab status={status} sample={sample} canMutate={canMutate} onChanged={bump} setNotice={setNotice} /> : null}
+        {tab === 'domains' && openDomain === null ? (
+          <DomainList
+            domains={domains}
+            error={domainsError}
+            canMutate={canMutate}
+            onOpen={(d) => {
+              setJustAdded(null)
+              setOpenDomain(d)
+            }}
+            onAdd={() => setAdding(true)}
+            onRetry={bump}
+          />
+        ) : null}
+        {tab === 'domains' && openDomain !== null ? (
+          <DomainDetailView
+            domain={openDomain}
+            sample={sample}
+            canMutate={canMutate}
+            revision={revision}
+            justAdded={justAdded === openDomain}
+            onBack={() => {
+              setOpenDomain(null)
+              setJustAdded(null)
+            }}
+            onChanged={bump}
+            onRemoved={(d, retired, purged) => {
+              setOpenDomain(null)
+              setJustAdded(null)
+              setDomains((prev) => prev?.filter((x) => x.domain !== d) ?? null)
+              setNotice({
+                tone: 'ok',
+                text: `Removed ${d}. ${retired} address${retired === 1 ? '' : 'es'} retired${purged ? ' and its mail deleted' : '; its mail is kept'}.`,
+              })
+              bump()
+            }}
+          />
+        ) : null}
+        {tab === 'addresses' ? <AddressesTab sample={sample} canMutate={canMutate} revision={revision} onChanged={bump} setNotice={setNotice} /> : null}
+        {tab === 'approvals' ? (
+          <ApprovalsTab
+            pending={approvals}
+            pendingError={approvalsError}
+            sample={sample}
+            canMutate={canMutate}
+            revision={revision}
+            onDecided={onDecided}
+            onRetry={bump}
+          />
+        ) : null}
+      </div>
+
+      {adding ? (
+        <AddDomainDialog
+          onClose={() => setAdding(false)}
+          onAdded={(d) => {
+            setAdding(false)
+            setNotice(null)
+            setJustAdded(d.domain)
+            setOpenDomain(d.domain)
+            setTab('domains')
+            bump()
+          }}
+          onExists={(dom) => {
+            setAdding(false)
+            setJustAdded(null)
+            setNotice({ tone: 'ok', text: `${dom} is already on this server. Here are its records.` })
+            setOpenDomain(dom)
+            setTab('domains')
+          }}
+        />
+      ) : null}
+    </>,
   )
 }

@@ -1008,68 +1008,68 @@ export const SAMPLE_PREFLIGHT: PreflightReport = {
   ok: true,
   portPlan: 'tls-alpn',
   checks: [
-    { id: 'os', label: 'Operating system is Linux', status: 'pass', detail: 'Linux (example)' },
-    { id: 'mta', label: 'No existing mail server on :25', status: 'pass', detail: 'port 25 is free' },
-    { id: 'ports', label: 'SMTP ports 25/465/587 bindable', status: 'pass', detail: 'all free' },
-    { id: 'port-443', label: 'Port 443 availability', status: 'pass', detail: ':443 free — TLS-ALPN plan' },
-    { id: 'public-ip', label: 'Public IP + reverse DNS', status: 'pass', detail: '203.0.113.7 → mail.acme.dev' },
-    { id: 'outbound-25', label: 'Outbound port 25 reachable', status: 'warn', detail: 'blocked by provider — relay mode recommended' },
-    { id: 'disk', label: 'Disk ≥ 2 GB free', status: 'pass', detail: '38 GB free' },
-    { id: 'ram', label: 'RAM ≥ 1 GB', status: 'pass', detail: '4 GB total' },
+    { id: 'os', label: 'This server runs Linux', status: 'pass', detail: 'Linux (sample)' },
+    { id: 'mta', label: 'No other mail server is running', status: 'pass', detail: 'Port 25 is free' },
+    { id: 'ports', label: 'Mail ports are free', status: 'pass', detail: '25, 465 and 587 are free' },
+    { id: 'port-443', label: 'Secure web port is free', status: 'pass', detail: 'Port 443 is free, so mail apps connect over it' },
+    { id: 'public-ip', label: 'Public address and reverse DNS', status: 'pass', detail: '203.0.113.7 points back to mail.example.dev' },
+    { id: 'outbound-25', label: 'Outgoing mail port is open', status: 'warn', detail: 'Your provider blocks it, so send through a relay' },
+    { id: 'disk', label: 'At least 2 GB of disk free', status: 'pass', detail: '38 GB free' },
+    { id: 'ram', label: 'At least 1 GB of memory', status: 'pass', detail: '4 GB in all' },
   ],
 }
 
 const SAMPLE_RECORDS: DnsRecordRow[] = [
   {
-    id: 'mx', category: 'required', type: 'MX', name: 'acme.dev',
+    id: 'mx', category: 'required', type: 'MX', name: 'example.dev',
     purpose: 'Mail routing (MX)',
-    expected: '10 mail.acme.dev.', expectedDisplay: '10 mail.acme.dev.',
+    expected: '10 mail.example.dev.', expectedDisplay: '10 mail.example.dev.',
     status: 'valid', live: null, checkedAt: 1751800000,
   },
   {
-    id: 'spf', category: 'required', type: 'TXT', name: 'acme.dev',
-    purpose: 'SPF (sender policy)',
+    id: 'spf', category: 'required', type: 'TXT', name: 'example.dev',
+    purpose: 'Sender policy (SPF)',
     expected: 'v=spf1 mx -all', expectedDisplay: '"v=spf1 mx -all"',
     status: 'wrong', live: ['v=spf1 include:old-provider.example ~all'], checkedAt: 1751800000,
   },
   {
-    id: 'dkim:202601e', category: 'required', type: 'TXT', name: '202601e._domainkey.acme.dev',
-    purpose: 'DKIM signing key (Ed25519)',
+    id: 'dkim:202601e', category: 'required', type: 'TXT', name: '202601e._domainkey.example.dev',
+    purpose: 'Signing key (DKIM, Ed25519)',
     expected: 'v=DKIM1; k=ed25519; p=Fo0barEd25519KeyMaterialAAAA=',
     expectedDisplay: '"v=DKIM1; k=ed25519; p=Fo0barEd25519KeyMaterialAAAA="',
     status: 'valid', live: null, checkedAt: 1751800000,
   },
   {
-    id: 'dkim:202601r', category: 'required', type: 'TXT', name: '202601r._domainkey.acme.dev',
-    purpose: 'DKIM signing key (RSA)',
+    id: 'dkim:202601r', category: 'required', type: 'TXT', name: '202601r._domainkey.example.dev',
+    purpose: 'Signing key (DKIM, RSA)',
     expected: 'v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0FirstChunk…IDAQAB',
     expectedDisplay: '"v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG…" "…IDAQAB"',
     chunks: ['v=DKIM1; k=rsa; p=MIIBIjANBgkqhkiG…', '…IDAQAB'],
     status: 'missing', live: null, checkedAt: 1751800000,
   },
   {
-    id: 'dmarc', category: 'required', type: 'TXT', name: '_dmarc.acme.dev',
+    id: 'dmarc', category: 'required', type: 'TXT', name: '_dmarc.example.dev',
     purpose: 'DMARC policy',
-    expected: 'v=DMARC1; p=none; rua=mailto:postmaster@acme.dev',
-    expectedDisplay: '"v=DMARC1; p=none; rua=mailto:postmaster@acme.dev"',
+    expected: 'v=DMARC1; p=none; rua=mailto:postmaster@example.dev',
+    expectedDisplay: '"v=DMARC1; p=none; rua=mailto:postmaster@example.dev"',
     status: 'pending', live: null, checkedAt: null,
   },
   {
     id: 'ptr', category: 'instruction', type: 'PTR', name: '203.0.113.7',
-    purpose: 'Reverse DNS (set at your VPS provider)',
-    expected: 'Set reverse DNS of 203.0.113.7 → mail.acme.dev at your provider',
-    expectedDisplay: 'Set reverse DNS of 203.0.113.7 → mail.acme.dev at your provider',
+    purpose: 'Reverse DNS',
+    expected: 'Set reverse DNS of 203.0.113.7 to mail.example.dev at your hosting provider',
+    expectedDisplay: 'Set reverse DNS of 203.0.113.7 to mail.example.dev at your hosting provider',
     status: 'unverifiable', live: null, checkedAt: null,
   },
   {
-    id: 'adv:1', category: 'advanced', type: 'CNAME', name: 'autoconfig.acme.dev',
-    purpose: 'Mail client autoconfig (optional)',
-    expected: 'mail.acme.dev.', expectedDisplay: 'mail.acme.dev.',
+    id: 'adv:1', category: 'advanced', type: 'CNAME', name: 'autoconfig.example.dev',
+    purpose: 'Mail app setup (optional)',
+    expected: 'mail.example.dev.', expectedDisplay: 'mail.example.dev.',
     status: 'optional', live: null, checkedAt: null,
   },
   {
-    id: 'adv:2', category: 'advanced', type: 'TXT', name: '_mta-sts.acme.dev',
-    purpose: 'MTA-STS (optional)',
+    id: 'adv:2', category: 'advanced', type: 'TXT', name: '_mta-sts.example.dev',
+    purpose: 'Strict delivery, MTA-STS (optional)',
     expected: 'v=STSv1; id=1719000000', expectedDisplay: '"v=STSv1; id=1719000000"',
     status: 'optional', live: null, checkedAt: null,
   },
@@ -1077,7 +1077,7 @@ const SAMPLE_RECORDS: DnsRecordRow[] = [
 
 export const SAMPLE_DOMAINS: DomainSummary[] = [
   {
-    domain: 'acme.dev', status: 'pending', sendMode: 'receive-only',
+    domain: 'example.dev', status: 'pending', sendMode: 'receive-only',
     verifiedAt: null, lastCheckedAt: 1751800000, dmarcNag: true,
     records: { valid: 2, missing: 1, wrong: 1, pending: 1, unknown: 0 },
   },
@@ -1089,12 +1089,12 @@ export const SAMPLE_DOMAINS: DomainSummary[] = [
 ]
 
 export const SAMPLE_DOMAIN_DETAILS: Record<string, DomainDetail> = {
-  'acme.dev': {
-    ok: true, domain: 'acme.dev', status: 'pending', sendMode: 'receive-only',
+  'example.dev': {
+    ok: true, domain: 'example.dev', status: 'pending', sendMode: 'receive-only',
     verifiedAt: null, lastCheckedAt: 1751800000, createdAt: 1751400000,
     dmarcNag: true, records: SAMPLE_RECORDS,
     zoneFile:
-      '; Example zone for acme.dev\nacme.dev.\t3600\tIN\tMX\t10 mail.acme.dev.\nacme.dev.\t3600\tIN\tTXT\t"v=spf1 mx -all"\n',
+      '; Example zone for example.dev\nexample.dev.\t3600\tIN\tMX\t10 mail.example.dev.\nexample.dev.\t3600\tIN\tTXT\t"v=spf1 mx -all"\n',
     note: 'records can take up to 48 h to propagate',
   },
   'example.org': {
@@ -1103,12 +1103,12 @@ export const SAMPLE_DOMAIN_DETAILS: Record<string, DomainDetail> = {
     dmarcNag: false,
     records: SAMPLE_RECORDS.map((r) => ({
       ...r,
-      name: r.name.replace('acme.dev', 'example.org'),
+      name: r.name.replace('example.dev', 'example.org'),
       status: r.category === 'required' ? 'valid' : r.status,
       live: null,
     })),
     zoneFile:
-      '; Example zone for example.org\nexample.org.\t3600\tIN\tMX\t10 mail.acme.dev.\n',
+      '; Example zone for example.org\nexample.org.\t3600\tIN\tMX\t10 mail.example.dev.\n',
     note: 'records can take up to 48 h to propagate',
   },
 }

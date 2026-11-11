@@ -122,6 +122,9 @@ export interface HireResult {
   permissions: { cards: boolean; suggested: string[]; granted: string[]; carded: string[] }
   /** The first message the agent gets, on the first create only. */
   hello: string | null
+  /** The daemon started the agent and delivered `hello` itself. Missing on
+   *  an older daemon, which leaves the hello to the caller. */
+  helloDelivered?: boolean
   questions: HireQuestionState[]
 }
 
@@ -238,8 +241,9 @@ export function saveTemplate(scope: ServerScope, req: SaveTemplateRequest): Prom
   return templateCall(() => daemonCliPost<SaveTemplateResult>(scope, 'agent-templates/save', req), SAVE_UNSUPPORTED_TEXT)
 }
 
-/** After a create: start the agent, then give it the template's hello as its
- *  first message (what `k2 agent hire --launch` does). */
+/** After a create on an older daemon (no `helloDelivered`): start the agent,
+ *  then give it the template's hello as its first message (what
+ *  `k2 agent hire --launch` does). A newer daemon delivers it itself. */
 export async function sayHello(scope: ServerScope, path: string, hello: string): Promise<void> {
   await daemonCliPostQuery(scope, 'workspace/ensure-canonical-session', { project: path })
   await daemonCliPostQuery(scope, 'workspace/msg', {

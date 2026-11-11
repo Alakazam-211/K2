@@ -356,8 +356,9 @@ describe('CreateAgentSheet', () => {
     expect(screen.getByTestId('create-agent-charter').textContent).toContain('You write for Rosson.')
   })
 
-  it('Create posts for real, closes, opens the Thread and says hello', async () => {
+  it('Create posts for real, closes, opens the Thread; an older daemon (no helloDelivered) gets the hello from the app', async () => {
     await toReview()
+    expect(plan(false)).not.toHaveProperty('helloDelivered')
     await act(async () => {
       fireEvent.click(screen.getByTestId('create-agent-create'))
     })
@@ -370,6 +371,27 @@ describe('CreateAgentSheet', () => {
     expect(h.daemonCliPostQuery.mock.calls[0]).toEqual(['workspace/ensure-canonical-session', { project: '/home/r/agents/max' }])
     expect(h.daemonCliPostQuery.mock.calls[1][0]).toBe('workspace/msg')
     expect(h.daemonCliPostQuery.mock.calls[1][1]).toMatchObject({ workspace: '/home/r/agents/max', text: 'Say hello to Rosson.', wake: 'true' })
+  })
+
+  it('helloDelivered: true: the daemon said hello, so the app sends nothing', async () => {
+    await toReview()
+    h.daemonCliPost.mockImplementation(async (_r: string, body: { dryRun: boolean }) => ({ ...plan(body.dryRun), helloDelivered: !body.dryRun }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-create'))
+    })
+    expect(h.openWorkspaceThread).toHaveBeenCalledWith('ws-max')
+    await act(async () => {})
+    expect(h.daemonCliPostQuery).not.toHaveBeenCalled()
+  })
+
+  it('helloDelivered: false with a hello: the app still sends it', async () => {
+    await toReview()
+    h.daemonCliPost.mockImplementation(async (_r: string, body: { dryRun: boolean }) => ({ ...plan(body.dryRun), helloDelivered: false }))
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('create-agent-create'))
+    })
+    await waitFor(() => expect(h.daemonCliPostQuery).toHaveBeenCalledTimes(2))
+    expect(h.daemonCliPostQuery.mock.calls[1][0]).toBe('workspace/msg')
   })
 
   it('closing is held while the agent is being made', async () => {

@@ -15,8 +15,10 @@
 //      until the permissions step (T3) adds checkboxes.
 //
 // Create posts the same request for real, then opens the new agent's Chat tab
-// in the Thread view (the Kessel sheet's helper) and starts it with the
-// template's hello, as `k2 agent hire --launch` does. The daemon decides who
+// in the Thread view (the Kessel sheet's helper). The daemon starts the agent
+// and delivers the template's hello itself (`helloDelivered: true`); only an
+// older daemon, which leaves it out, gets the hello sent from here, as
+// `k2 agent hire --launch` does. The daemon decides who
 // may and what's written; its refusal is shown in the sheet's words with the
 // server's own underneath, and "Try again".
 //
@@ -356,7 +358,8 @@ function CreateAgentBody(): React.JSX.Element {
       const made = await hireFromTemplate(scope, request(false))
       close()
       void openWorkspaceThread(made.id || made.workspaceId)
-      if (made.hello) {
+      // Fallback for an older daemon only: a newer one has already said hello.
+      if (made.hello && made.helloDelivered !== true) {
         sayHello(scope, made.path, made.hello).catch((e) => console.warn('[create-agent] hello not delivered:', e))
       }
     } catch (e) {

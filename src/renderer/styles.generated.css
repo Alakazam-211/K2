@@ -1033,8 +1033,13 @@
 [data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([class~="border-[var(--color-control-edge)]"]):not([data-zen-root] *, [data-k2-thread-zen] *) {
   border-color: var(--tile-edge);
 }
-[data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
+/* A quiet destructive button (danger-quiet) keeps its own red hover fill: its
+   label turns white on hover, which the grey wash would leave unreadable. */
+[data-style="glass"] button[class~="border"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):not([class*="hover:bg-[var(--color-danger"]):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
   background: color-mix(in srgb, var(--tile-raised) 90%, var(--color-text-primary));
+}
+[data-style="glass"] button[class~="border"][class*="hover:bg-[var(--color-danger"]:not([class*=" bg-"]:not([class~="bg-transparent"]), [class^="bg-"]:not([class~="bg-transparent"])):hover:not(:disabled):not([data-zen-root] *, [data-k2-thread-zen] *) {
+  background: var(--color-danger-muted);
 }
 
 /* A Projects tile's body action (the asleep Wake, Retry) is hand-built so

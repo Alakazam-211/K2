@@ -2,6 +2,7 @@
 // and A1 built (b-asks.md "For D2", a1-asks-answers.md), the §17.8
 // "Waiting on you" shape, and the action → Agent tab row map.
 
+import { READ_TRANSCRIPTS_ROW } from './AgentsReadTranscriptsToggle'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -217,12 +218,21 @@ describe('the "Asked for this" chip map', () => {
     // The Org Chart's row is its own file, rendered in ProjectsSection's Org Chart group.
     const orgChart = readFileSync(join(__dirname, 'AgentsManageOrgChartToggle.tsx'), 'utf8')
     expect(projects.includes('<AgentsManageOrgChartToggle project={project}')).toBe(true)
+    // Read call transcripts is its own file too; it names its row by a constant.
+    const transcripts = readFileSync(join(__dirname, 'AgentsReadTranscriptsToggle.tsx'), 'utf8')
+    expect(projects.includes('<AgentsReadTranscriptsToggle project={project}')).toBe(true)
+    const transcriptsRow = transcripts.includes(`READ_TRANSCRIPTS_ROW = '${READ_TRANSCRIPTS_ROW}'`) ? READ_TRANSCRIPTS_ROW : null
+    expect(transcriptsRow).toBe('projects.agents-can-read-transcripts')
+    const inTranscripts = (row: string): boolean =>
+      row === transcriptsRow &&
+      transcripts.includes('data-settings-id={READ_TRANSCRIPTS_ROW}') &&
+      transcripts.includes('<AskedChip row={READ_TRANSCRIPTS_ROW} />')
     for (const row of new Set(Object.values(PERMISSION_ACTION_ROWS))) {
       const inProjects = projects.includes(`data-settings-id="${row}"`) || orgChart.includes(`data-settings-id="${row}"`)
       const inApps = row === 'projects.agents-can-manage-skin' && apps.includes('projects.agents-can-manage-skin')
-      expect(inProjects || inApps, row).toBe(true)
+      expect(inProjects || inApps || inTranscripts(row), row).toBe(true)
       // …and that row carries the chip.
-      expect(projects.includes(`<AskedChip row="${row}" />`) || orgChart.includes(`<AskedChip row="${row}" />`), `chip on ${row}`).toBe(true)
+      expect(projects.includes(`<AskedChip row="${row}" />`) || orgChart.includes(`<AskedChip row="${row}" />`) || inTranscripts(row), `chip on ${row}`).toBe(true)
     }
   })
 

@@ -59,6 +59,7 @@ const PERMISSION_SETTINGS = new Set([
   'projects.agents-can-manage-projects',
   'projects.agents-can-manage-gardens',
   'projects.agents-can-manage-org-chart',
+  'projects.agents-can-read-transcripts',
   'projects.agents-can-request-permissions',
   'projects.agents-can-refresh-chat',
   'projects.mail-agent-send',

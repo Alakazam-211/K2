@@ -545,6 +545,9 @@ impl SewOps for RealOps {
         v4.iter().map(ToString::to_string).chain(v6.iter().map(ToString::to_string)).collect()
     }
     fn cp(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value, CpError> {
+        if k2_core::airgap::enabled() {
+            return Err(CpError { status: 0, code: "airgap".into(), detail: k2_core::airgap::TEACHING.to_string() });
+        }
         let cfg = k2_core::tunnel::config::load()
             .map_err(|e| CpError { status: 0, code: "no_tunnel_config".into(), detail: e })?;
         if let Some(e) = cfg.token_read_error.as_deref() {

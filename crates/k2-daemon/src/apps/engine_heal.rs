@@ -183,7 +183,8 @@ fn install_step(ops: &dyn HealOps, plan: &Plan, seen: &mut Seen) -> Outcome {
         if !sig_path.is_file() {
             // A17: staged before the signature was published.
             let url = format!("{}/v{}/{name}.sig", plan.base_url, plan.want);
-            match ops.fetch(&url) {
+            // Air-gap: no fetch at all; the owner copies the .sig in.
+            match if ops.airgap() { Err(FetchError::NotFound) } else { ops.fetch(&url) } {
                 Ok(b) => {
                     if let Err(e) = std::fs::write(&sig_path, &b) {
                         return Outcome::Failed { why: format!("{}: {e}", sig_path.display()) };

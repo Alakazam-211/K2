@@ -129,7 +129,8 @@ pub fn spawn_loop() -> tokio::task::JoinHandle<()> {
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             t.tick().await;
-            if !k2_core::compute::ci_enabled() {
+            // Air-gap: no git ls-remote / fetch to the repo's remote.
+            if !k2_core::compute::ci_enabled() || k2_core::airgap::enabled() {
                 continue;
             }
             if let Err(e) = tokio::task::spawn_blocking(|| pass(ops().as_ref(), now())).await {

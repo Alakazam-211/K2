@@ -177,7 +177,13 @@ pub fn run_cycle(
             Vec::new()
         })
     };
+    // Air-gap: linked inboxes (Gmail, Outlook, IMAP) are off the box; the
+    // hosted mail server is on it and is still watched.
+    let airgap = k2_core::airgap::enabled();
     for (source, inbox_id) in watched {
+        if airgap && matches!(source, Source::Linked) {
+            continue;
+        }
         poll_one(sink, make_poller, pollers, source, &inbox_id, now);
     }
     flush_all(sink, now);

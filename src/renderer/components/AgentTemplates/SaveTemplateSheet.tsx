@@ -25,6 +25,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import {
   SAVE_UNSUPPORTED_TEXT,
   authorLabel,
+  listTemplates,
   saveErrorView,
   saveTemplate,
   type SaveErrorView,
@@ -70,9 +71,29 @@ export function formatBytes(n: number): string {
 
 /** The row in Settings → Workspaces → an agent: the button, or why not. */
 export function SaveTemplateRow({ project }: { project: { path: string; name: string } }): React.JSX.Element {
-  const hostKey = primaryScope().hostKey
+  const scope = primaryScope()
+  const hostKey = scope.hostKey
   const unsupported = useAgentTemplatesStore((s) => !!s.saveUnsupported[hostKey])
+  const markUnsupported = useAgentTemplatesStore((s) => s.markSaveUnsupported)
   const [open, setOpen] = useState(false)
+  // The list says up front whether this server can save (`canSave`). A
+  // server from before the flag leaves it out: the button stays, and a 404
+  // from the save marks it then.
+  useEffect(() => {
+    if (unsupported) return
+    let cancelled = false
+    listTemplates(scope).then(
+      (r) => {
+        if (!cancelled && r?.canSave === false) markUnsupported(hostKey)
+      },
+      () => {
+        /* unknown: keep the button; the save itself says why it can't */
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [scope, hostKey, unsupported, markUnsupported])
   return (
     <SettingRow label={SAVE_TEMPLATE_COPY.rowLabel} hint={unsupported ? SAVE_UNSUPPORTED_TEXT : SAVE_TEMPLATE_COPY.rowHint} testId="save-template-row">
       {unsupported ? null : (

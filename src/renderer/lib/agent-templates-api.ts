@@ -38,6 +38,9 @@ export interface TemplateSummary {
 
 export interface TemplateList {
   ok: true
+  /** The server has the save route (a static flag, not per caller: a caller
+   *  who may not save still gets 403 from it). Missing on an older server. */
+  canSave?: boolean
   templates: TemplateSummary[]
   /** Library folders the loader refused (shown nowhere yet). */
   problems: unknown[]

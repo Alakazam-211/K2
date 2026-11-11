@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
+  daemonCliGet: vi.fn(),
   daemonCliPost: vi.fn(),
   fetchWikiIndex: vi.fn(),
 }))
@@ -18,7 +19,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@/lib/daemon-cli', async () => {
   const { primaryOnly } = await import('@/test-utils/scope')
   return {
-    daemonCliGet: vi.fn(),
+    daemonCliGet: primaryOnly((...a: unknown[]) => h.daemonCliGet(...a)),
     daemonCliPostQuery: vi.fn(),
     daemonCliPost: primaryOnly((...a: unknown[]) => h.daemonCliPost(...a)),
   }
@@ -70,6 +71,12 @@ beforeEach(() => {
   resetAgentTemplatesForTests()
   h.daemonCliPost.mockReset()
   h.fetchWikiIndex.mockReset()
+  // The list, as a server from before `canSave` sends it (no flag).
+  h.daemonCliGet.mockReset()
+  h.daemonCliGet.mockImplementation(async (route: string) => {
+    if (route === 'agent-templates') return { ok: true, templates: [], problems: [] }
+    throw new Error(`unexpected GET ${route}`)
+  })
   h.fetchWikiIndex.mockResolvedValue({
     nodes: [note('Voice and style.md'), note('Home.md'), { ...note('Ghost.md'), exists: false }],
     links: [],
@@ -248,6 +255,28 @@ describe('SaveTemplateSheet', () => {
     expect(screen.getByTestId('save-template-open').textContent).toBe(SAVE_TEMPLATE_COPY.button)
     fireEvent.click(screen.getByTestId('save-template-open'))
     await waitFor(() => expect(screen.getByTestId('save-template-sheet')).toBeTruthy())
+  })
+
+  it('canSave: false: the row says the server can’t save yet, up front, with no button', async () => {
+    h.daemonCliGet.mockResolvedValue({ ok: true, canSave: false, templates: [], problems: [] })
+    render(<SaveTemplateRow project={PROJECT} />)
+    await waitFor(() => expect(screen.getByText(SAVE_UNSUPPORTED_TEXT)).toBeTruthy())
+    expect(screen.queryByTestId('save-template-open')).toBeNull()
+    expect(h.daemonCliGet.mock.calls[0][0]).toBe('agent-templates')
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+  })
+
+  it('canSave: true, or left out by an older server: the button stays', async () => {
+    for (const body of [{ ok: true, canSave: true, templates: [], problems: [] }, { ok: true, templates: [], problems: [] }]) {
+      h.daemonCliGet.mockResolvedValue(body)
+      render(<SaveTemplateRow project={PROJECT} />)
+      await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalled())
+      await act(async () => {})
+      expect(screen.getByTestId('save-template-open')).toBeTruthy()
+      expect(useAgentTemplatesStore.getState().saveUnsupported[primaryScope().hostKey]).toBeUndefined()
+      cleanup()
+      h.daemonCliGet.mockClear()
+    }
   })
 
   it('closing is held while it saves', async () => {

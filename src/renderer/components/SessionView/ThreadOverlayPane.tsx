@@ -739,6 +739,8 @@ export function ThreadItemRow({
       onVoid={onVoid}
       // The desktop Thread is where Zen's "More options" leads: the full card.
       secret={secret}
+      // Its closed cards dim their question (a Garden's Thread doesn't).
+      dimClosedCards
       onHandoffDecide={onHandoffDecide}
       handoffRemoteHost={handoffRemoteHost}
       still={still}

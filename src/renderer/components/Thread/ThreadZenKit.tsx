@@ -404,8 +404,9 @@ export interface ThreadBubbleSecret {
 /** The bubble's body text style: the bubble's own colour and size. One
  *  object, so the memoized body (and its Markdown parse) skips re-renders. */
 const BUBBLE_BODY_STYLE: CSSProperties = { color: 'inherit', fontSize: 'inherit' }
-/** A dismissed or withdrawn card's question: muted with its card, so the
- *  closed card never reads as still waiting. */
+/** A dismissed or withdrawn card's question in the desktop Thread
+ *  (`dimClosedCards`): muted with its card, so the closed card never reads
+ *  as still waiting. Never in a Garden. */
 const BUBBLE_BODY_CLOSED_STYLE: CSSProperties = { ...BUBBLE_BODY_STYLE, opacity: 0.6 }
 
 export interface ThreadBubbleProps {
@@ -469,6 +470,10 @@ export interface ThreadBubbleProps {
   /** No Reply in the message menu (the Chatter view: the mailbox has no
    *  message box of its own, and its words are not the person's Thread). */
   noReply?: boolean
+  /** The desktop Thread only: a dismissed or withdrawn card's question is
+   *  dimmed with its card. Off by default, so a Garden's Thread widget
+   *  (which themes itself) draws it as it always has. */
+  dimClosedCards?: boolean
 }
 
 /** The name line over another sender's run, and your status line under
@@ -616,6 +621,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   receipt = null,
   to = null,
   noReply = false,
+  dimClosedCards = false,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
   // A handoff doc as it arrived (a live frame, another server's row) is
@@ -670,7 +676,7 @@ export const ThreadBubble = memo(function ThreadBubble({
     [menuArgs],
   )
   const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)
-  const cardClosed = kind === 'choice' && item.doc.choice?.status === 'voided' && !!item.doc.choice.closedAs
+  const cardClosed = dimClosedCards && kind === 'choice' && item.doc.choice?.status === 'voided' && !!item.doc.choice.closedAs
   const maxWidth = threadBubbleMaxWidth(narrow)
   const column = threadSenderRootProps(mine ? null : sender, maxWidth, narrow)
   // Runs (the phone's layout): which details this bubble carries.

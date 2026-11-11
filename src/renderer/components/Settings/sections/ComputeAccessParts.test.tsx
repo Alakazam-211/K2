@@ -118,7 +118,7 @@ describe('Machines you can use', () => {
     render(<MachinesPart list={list([NODE])} onChanged={onChanged} />)
     expect(await screen.findByTestId('compute-oneclick-missing')).toHaveProperty(
       'textContent',
-      'One-click needs a K2 Connect update; meanwhile add a machine with an enroll code',
+      'Your k2.dev account needs an update for it. Until then, add a machine with an enroll code below.',
     )
     const row = screen.getByTestId('compute-machine-mini-1')
     const sw = within(row).getByRole('switch', { name: 'Use compute from mini-1' })
@@ -148,7 +148,7 @@ describe('Machines you can use', () => {
     await waitFor(() =>
       expect(offer).toHaveBeenCalledWith('acc-token', { controllerSub: 'rosson', nodeSub: 'z13', nodeFp: 'bb'.repeat(32), nodeName: 'z13' }),
     )
-    await waitFor(() => expect(within(screen.getByTestId('compute-machine-z13')).getByTestId('compute-machine-status').textContent).toBe('asked to join…'))
+    await waitFor(() => expect(within(screen.getByTestId('compute-machine-z13')).getByTestId('compute-machine-status').textContent).toBe('Asked to join…'))
     expect(screen.queryByTestId('compute-oneclick-missing')).toBeNull()
   })
 
@@ -164,7 +164,7 @@ describe('Machines you can use', () => {
     listMachines.mockResolvedValue({ ok: true, machines: [machine({ node_state: 'online', controller: 'other.k2.dev' })] })
     render(<MachinesPart list={list([])} onChanged={onChanged} />)
     const row = await screen.findByTestId('compute-machine-z13')
-    expect(within(row).getByTestId('compute-machine-status').textContent).toBe('used by other.k2.dev')
+    expect(within(row).getByTestId('compute-machine-status').textContent).toBe('Used by other.k2.dev')
     expect((within(row).getByRole('switch') as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -188,7 +188,7 @@ describe('Machines you can use', () => {
   it('a retiring machine shows off; switching it back on resumes it', async () => {
     render(<MachinesPart list={list([{ ...NODE, retiring: true, controllerPause: 'draining' }])} onChanged={onChanged} />)
     const row = await screen.findByTestId('compute-machine-mini-1')
-    expect(within(row).getByTestId('compute-machine-status').textContent).toBe('finishing jobs, then removed')
+    expect(within(row).getByTestId('compute-machine-status').textContent).toBe('Finishing its jobs, then removed')
     const sw = within(row).getByRole('switch')
     expect(sw.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(sw)
@@ -209,7 +209,7 @@ describe('Machines you can use', () => {
     listMachines.mockResolvedValue({ ok: true, machines: [machine({ node_state: 'pending', controller: 'rosson.k2.dev', sas: '999999' })] })
     render(<MachinesPart list={list([pending])} onChanged={onChanged} />)
     const row = await screen.findByTestId('compute-machine-z13')
-    await waitFor(() => expect(row.textContent).toContain("The codes differ: don't confirm"))
+    await waitFor(() => expect(row.textContent).toContain("The codes differ: don’t confirm"))
     expect(within(row).queryByRole('button', { name: 'Codes match: confirm' })).toBeNull()
   })
 
@@ -228,7 +228,7 @@ describe('agent access is not set on this page (Rosson 2026-10-11)', () => {
     vi.mocked(getAccountAccessToken).mockResolvedValue(null)
     render(<MachinesPart list={list([NODE])} onChanged={onChanged} />)
     expect(screen.getByTestId('compute-agents-note').textContent).toContain(
-      'Which agents can use these machines is set per agent: Settings → Workspaces / Agents → <agent> → Agent → Allow',
+      'Which agents may use them is set on each agent’s page. Open Workspaces / Agents',
     )
     expect(screen.queryByText('Agents that can use compute')).toBeNull()
   })

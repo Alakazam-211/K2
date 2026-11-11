@@ -404,7 +404,7 @@ describe('job tiers: Priority counts here (0.46.5)', () => {
     const old = screen.getByTestId('compute-server-row-3')
     const oldSw = within(old).getByRole('switch', { name: 'Priority counts here: old.k2.dev' })
     expect(oldSw.hasAttribute('disabled')).toBe(true)
-    expect(within(old).getByTestId('compute-server-priority').textContent).toContain('needs k2-node 0.46.5')
+    expect(within(old).getByTestId('compute-server-priority').textContent).toContain('needs a newer node version')
   })
 
   it('turning it on sends one request and says it waits for approval (a widening)', async () => {

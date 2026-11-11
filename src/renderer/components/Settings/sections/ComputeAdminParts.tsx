@@ -211,7 +211,7 @@ function RequestCard({
         </div>
       ))}
       {steps.length > 0 ? (
-        <button type="button" className={`type-hint ${muted} underline`} onClick={() => setShowArgs((v) => !v)}>
+        <button type="button" data-k2-focus="" className={`relative px-0.5 -mx-0.5 type-hint text-[var(--color-accent-text)] underline underline-offset-2 no-drag cursor-pointer`} onClick={() => setShowArgs((v) => !v)}>
           {showArgs ? 'Hide exact request' : 'Show exact request'}
         </button>
       ) : null}
@@ -334,27 +334,33 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
   if (hidden) return null
   if (!open) {
     return (
-      <button type="button" className={`type-hint ${secondary} underline`} onClick={() => setOpen(true)} data-testid={`compute-node-admin-open-${node}`}>
-        Health and admin
-      </button>
+      <div className="flex items-center justify-between gap-6">
+        <div className="min-w-0">
+          <div className="type-row text-[var(--color-text-primary)]">Health and updates</div>
+          <p className={`type-hint ${secondary} mt-0.5`}>How the machine is doing, its node version and offline alerts.</p>
+        </div>
+        <Button onClick={() => setOpen(true)} data-testid={`compute-node-admin-open-${node}`}>
+          Show
+        </Button>
+      </div>
     )
   }
   const lines = healthLines(view?.facts ?? null)
   const canUpdate = (view?.features ?? []).includes('self-update')
   const u = view?.update
   return (
-    <div className="space-y-1.5 border-t border-[var(--color-border)] pt-2" data-testid={`compute-node-admin-${node}`}>
-      <div className="flex items-center gap-2">
-        <span className="type-name text-[var(--color-text-primary)]">Health and admin</span>
-        <button type="button" className={`type-hint ${muted} underline`} onClick={() => setOpen(false)}>
+    <div className="space-y-1.5" data-testid={`compute-node-admin-${node}`}>
+      <div className="flex items-center justify-between gap-6">
+        <span className="type-row text-[var(--color-text-primary)]">Health and updates</span>
+        <Button variant="quiet" onClick={() => setOpen(false)}>
           Hide
-        </button>
+        </Button>
       </div>
-      {!view && !error ? <p className={`type-hint ${muted}`}>Loading…</p> : null}
+      {!view && !error ? <p className={`type-hint ${secondary}`} role="status">Loading…</p> : null}
       {view ? (
         <>
           <div className={`type-hint ${secondary}`}>
-            k2-node {view.nodeVersion ?? '?'} · remote admin {view.remoteAdmin ?? 'unknown'}
+            Node version {view.nodeVersion ?? 'unknown'} · {view.remoteAdmin === 'off' ? 'K2 can’t update it' : view.remoteAdmin === 'full' ? 'K2 keeps it updated and may run scripts you approve' : view.remoteAdmin === 'policy' ? 'K2 keeps it updated' : 'update setting not reported'}
             {view.at ? ` · reported ${formatRelativeTime(view.at, nowSec())}` : ''}
           </div>
           {view.needsPin ? (
@@ -372,7 +378,7 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
               ))}
             </ul>
           ) : (
-            <p className={`type-hint ${muted}`}>No health report yet (this k2-node may predate node admin).</p>
+            <p className={`type-hint ${secondary}`}>No health report yet. An older node version doesn’t send one.</p>
           )}
           {view.pendingApprovals > 0 ? (
             <div className="type-hint text-[var(--color-status-warn-amber-soft)]" data-testid="compute-node-pending">
@@ -387,14 +393,14 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
             {canUpdate ? (
               <>
                 <Button disabled={busy || !view.online} onClick={() => void act(() => updateNode(node))}>
-                  Update k2-node
+                  Update the node
                 </Button>
                 <Button variant="quiet" disabled={busy || !view.online} onClick={() => void act(() => rollbackNode(node))}>
                   Roll back
                 </Button>
               </>
             ) : (
-              <span className={`type-hint ${muted}`}>Remote update needs a k2-node with self-update.</span>
+              <span className={`type-hint ${muted}`}>This node version can’t update itself; update it at the machine.</span>
             )}
             <Button
               disabled={busy}
@@ -405,7 +411,7 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
             </Button>
           </div>
           <div className={`type-hint ${muted}`}>
-            Alerts go to {view.alertsTo ?? 'nobody yet (k2 compute node alerts --to <workspace>)'}. They only fire while this server is awake.
+            {view.alertsTo ? `Alerts go to ${view.alertsTo}.` : 'Alerts go to nobody yet: choose a workspace to receive them with the k2 CLI.'} They only fire while this server is awake.
           </div>
         </>
       ) : null}

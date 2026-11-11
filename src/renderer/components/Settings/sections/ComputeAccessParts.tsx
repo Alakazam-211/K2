@@ -15,14 +15,16 @@
 // open and sends the owner's gestures.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { SettingsGroup } from '../controls/SettingControls'
-import { Button, Callout, Toggle } from '@/components/ui'
+import { SettingsGroup, SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LABEL, SETTING_SERVER_REASON } from '../controls/SettingControls'
+import { Button, Input, Spinner, Toggle } from '@/components/ui'
+import { useSettingsStore } from '@/stores/settings'
+import { StatusDot, type HealthTone } from './ConnectionsParts'
+import { ActionError, SettingsLink, hardwareLine, osLine } from './ComputeBits'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { isAirgap } from '@/lib/airgap'
 import {
-  computeErrorMessage,
+  computeErrorInfo,
   confirmComputeNode,
-  formatBytes,
   pauseComputeNode,
   retireComputeNode,
   type ComputeNodesList,
@@ -63,7 +65,7 @@ export function MachinesPart({
   const [account, setAccount] = useState<AccountState>({ kind: 'loading' })
   const [requested, setRequested] = useState<Record<string, number>>({})
   const [busyKey, setBusyKey] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ what: string; reason: string } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [offerUnavailable, setOfferUnavailable] = useState(false)
   const mounted = useRef(true)
@@ -120,14 +122,15 @@ export function MachinesPart({
   const oneClickMissing =
     account.kind === 'unavailable' || offerUnavailable || (account.kind === 'ready' && (!sub || list?.ticketSupported === false))
 
-  const act = async (key: string, fn: () => Promise<void>): Promise<void> => {
+  const act = async (key: string, what: string, fn: () => Promise<void>): Promise<void> => {
     setBusyKey(key)
     setError(null)
     setNotice(null)
     try {
       await fn()
     } catch (err) {
-      setError(computeErrorMessage(err))
+      const { hint, code } = computeErrorInfo(err)
+      setError({ what, reason: hint || code || (err instanceof Error ? err.message : String(err)) })
     } finally {
       setBusyKey(null)
       void onChanged()
@@ -137,7 +140,7 @@ export function MachinesPart({
   const switchOn = async (row: MachineRow): Promise<void> => {
     if (row.status === 'retiring' && row.node) {
       const name = row.node.name
-      await act(row.key, async () => {
+      await act(row.key, `Couldn’t keep ${name}.`, async () => {
         await pauseComputeNode(name, 'resume')
         setNotice(`${name} stays: it takes jobs again.`)
       })
@@ -145,7 +148,7 @@ export function MachinesPart({
     }
     const m = row.machine
     if (!m || !sub) return
-    await act(row.key, async () => {
+    await act(row.key, `Couldn’t ask ${row.name} to join.`, async () => {
       const t = await token()
       if (!t) {
         setAccount({ kind: 'signed_out' })
@@ -154,11 +157,11 @@ export function MachinesPart({
       const out = await requestEnrollOffer(t, { controllerSub: sub, nodeSub: m.sub, nodeFp: m.node_fp, nodeName: nodeNameFor(m) })
       if (!out.ok) {
         if (out.unavailable) setOfferUnavailable(true)
-        else setError(out.message)
+        else setError({ what: `Couldn’t ask ${row.name} to join.`, reason: out.message })
         return
       }
       setRequested((r) => ({ ...r, [m.sub]: Date.now() }))
-      setNotice(`Asked ${row.name} to join; it checks in within a minute. Then confirm its code here.`)
+      setNotice(`Asked ${row.name} to join. It checks in within a minute; then confirm its code here.`)
     })
   }
 
@@ -175,70 +178,117 @@ export function MachinesPart({
       destructive: true,
     })
     if (!ok) return
-    await act(row.key, async () => {
+    await act(row.key, `Couldn’t stop using ${n.name}.`, async () => {
       const out = await retireComputeNode(n.name)
       setNotice(out.state === 'draining' ? `${n.name} finishes its jobs, then it's removed.` : `${n.name} removed.`)
     })
   }
 
+  const reconnect = account.kind === 'signed_out' || account.kind === 'error'
   return (
-    <SettingsGroup title="Machines you can use">
-      <div className="space-y-2 py-1" data-settings-id="compute.machines" data-testid="compute-machines">
-        <p className="type-hint text-[var(--color-text-muted)]">
-          Your machines with “Make this computer a node” on. Switch one on and agents you allow can run jobs there.
-        </p>
-        <p className="type-hint text-[var(--color-text-muted)]" data-testid="compute-agents-note">
-          Which agents can use these machines is set per agent: Settings → Workspaces / Agents → &lt;agent&gt; → Agent → Allow
-          compute nodes.
-        </p>
-        {account.kind === 'signed_out' ? (
-          <Callout tone="info">
-            Sign in to your k2.dev account (Settings → Tunnel) to list your machines. Machines added with a code still show here.
-          </Callout>
-        ) : null}
-        {oneClickMissing ? (
-          <Callout tone="info" data-testid="compute-oneclick-missing">
-            {account.kind === 'unavailable' && account.message !== ONE_CLICK_NEEDS_UPDATE ? account.message : ONE_CLICK_NEEDS_UPDATE}
-          </Callout>
-        ) : null}
-        {account.kind === 'error' ? <Callout tone="warn">{account.message}</Callout> : null}
-        {account.kind === 'loading' && rows.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-        ) : null}
-        {account.kind !== 'loading' && rows.length === 0 ? (
-          <p className="type-hint text-[var(--color-text-muted)]">
-            No machines yet. On another computer, open Settings → Compute and turn on “Make this computer a node”, or add
-            one with an enroll code below.
+    <SettingsGroup
+      card
+      title="Machines"
+      hint={
+        <span data-testid="compute-agents-note">
+          Your machines that can run jobs for this server. Switch one on to use it. Which agents may use them is set on each
+          agent’s page. <SettingsLink to="projects">Open Workspaces / Agents</SettingsLink>
+        </span>
+      }
+      settingId="compute.machines"
+      testId="compute-machines"
+    >
+      {account.kind === 'loading' && rows.length === 0 ? (
+        <div className="px-4 py-3 flex items-center gap-2" role="status" aria-busy="true">
+          <Spinner />
+          <span className="type-hint text-[var(--color-text-secondary)]">Looking for your machines…</span>
+        </div>
+      ) : null}
+      {account.kind !== 'loading' && rows.length === 0 ? (
+        <div className="px-4 py-3" data-testid="compute-machines-empty">
+          <p className={SETTING_ROW_LABEL}>No machines yet</p>
+          <p className={SETTING_ROW_HINT}>
+            Add one with an enroll code below, or on the other computer open Compute and turn on Make this computer a compute
+            node.
           </p>
-        ) : null}
-        {rows.map((row) => (
-          <MachineLine
-            key={row.key}
-            row={row}
-            busy={busyKey === row.key}
-            canOneClick={!oneClickMissing && !!sub && account.kind === 'ready'}
-            onOn={() => void switchOn(row)}
-            onOff={() => void switchOff(row)}
-            onConfirm={(sas) => {
-              const n = row.node
-              if (n) void act(row.key, async () => void (await confirmComputeNode(n.name, sas)))
-            }}
-          />
-        ))}
-        {notice ? <p className="type-hint text-[var(--color-text-secondary)]">{notice}</p> : null}
-        {error ? <Callout tone="error">{error}</Callout> : null}
-      </div>
+        </div>
+      ) : null}
+      {rows.map((row) => (
+        <MachineLine
+          key={row.key}
+          row={row}
+          busy={busyKey === row.key}
+          canOneClick={!oneClickMissing && !!sub && account.kind === 'ready'}
+          onOn={() => void switchOn(row)}
+          onOff={() => void switchOff(row)}
+          onConfirm={(sas) => {
+            const n = row.node
+            if (n) void act(row.key, `Couldn’t confirm ${n.name}.`, async () => void (await confirmComputeNode(n.name, sas)))
+          }}
+        />
+      ))}
+      {reconnect || oneClickMissing ? (
+        <div className="px-4 py-3 flex items-start justify-between gap-6" data-testid="compute-account-note">
+          <div className="min-w-0">
+            {account.kind === 'signed_out' ? (
+              <>
+                <p className={SETTING_ROW_LABEL}>Sign in to your k2.dev account to see all your machines</p>
+                <p className={SETTING_ROW_HINT}>Machines added with an enroll code show here either way.</p>
+              </>
+            ) : account.kind === 'error' ? (
+              <>
+                <p className={SETTING_ROW_LABEL}>Couldn’t list the machines on your k2.dev account</p>
+                <p className={SETTING_ROW_HINT}>Machines added with an enroll code still show. K2 tries again every 30 seconds.</p>
+                <p className={SETTING_SERVER_REASON}>The server said: {account.message.replace(/[.\s]+$/, '')}.</p>
+              </>
+            ) : (
+              <>
+                <p className={SETTING_ROW_LABEL}>One-click pairing isn’t available here yet</p>
+                <p className={SETTING_ROW_HINT} data-testid="compute-oneclick-missing">
+                  {account.kind === 'unavailable' && account.message !== ONE_CLICK_NEEDS_UPDATE
+                    ? account.message
+                    : 'Your k2.dev account needs an update for it. Until then, add a machine with an enroll code below.'}
+                </p>
+              </>
+            )}
+          </div>
+          {account.kind === 'signed_out' ? (
+            <Button onClick={() => useSettingsStore.getState().openSettings('k2-connect')}>Sign in…</Button>
+          ) : account.kind === 'error' ? (
+            <Button onClick={() => void loadAccount()}>Try again</Button>
+          ) : null}
+        </div>
+      ) : null}
+      {notice || error ? (
+        <div className="px-4 py-3">
+          {notice ? (
+            <p role="status" className="type-hint text-[var(--color-text-secondary)]">
+              {notice}
+            </p>
+          ) : null}
+          {error ? <ActionError what={error.what} reason={error.reason} /> : null}
+        </div>
+      ) : null}
     </SettingsGroup>
   )
 }
 
 const STATUS_TEXT: Record<MachineRow['status'], string> = {
-  on: 'on',
-  pending: 'waiting for your OK',
-  retiring: 'finishing jobs, then removed',
-  requested: 'asked to join…',
-  off: 'off',
-  elsewhere: 'used by another server',
+  on: 'In use',
+  pending: 'Waiting for your OK',
+  retiring: 'Finishing its jobs, then removed',
+  requested: 'Asked to join…',
+  off: 'Not in use',
+  elsewhere: 'Used by another server',
+}
+
+const STATUS_TONE: Record<MachineRow['status'], HealthTone> = {
+  on: 'ok',
+  pending: 'warn',
+  retiring: 'warn',
+  requested: 'neutral',
+  off: 'neutral',
+  elsewhere: 'neutral',
 }
 
 function MachineLine({
@@ -256,6 +306,7 @@ function MachineLine({
   onOff: () => void
   onConfirm: (sas: string) => void
 }): React.JSX.Element {
+  const [typed, setTyped] = useState('')
   const checked = row.status === 'on' || row.status === 'pending' || row.status === 'requested'
   const enrolledHere = !!row.node
   const disabled =
@@ -265,48 +316,82 @@ function MachineLine({
     else if (enrolledHere) onOff()
   }
   const agree = sasAgrees(row.node, row.machine)
+  // A paused node is still in use; say so rather than "In use".
+  const pause = row.node?.controllerPause
+  const statusText =
+    row.status === 'elsewhere' && row.elsewhere
+      ? `Used by ${row.elsewhere}`
+      : row.status === 'on' && pause
+        ? pause === 'paused'
+          ? 'Paused'
+          : 'Finishing its jobs'
+        : STATUS_TEXT[row.status]
+  const tone: HealthTone = row.status === 'on' && pause ? 'warn' : STATUS_TONE[row.status]
+  const desc = [osLine(row.os, row.arch), row.sub && row.sub !== row.name ? `${row.sub}.k2.dev` : null].filter(Boolean).join(' · ')
   return (
-    <div className="border border-[var(--color-border)] p-2 space-y-1" data-testid={`compute-machine-${row.name}`}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <Toggle
-          checked={row.status === 'retiring' ? false : checked}
-          onChange={toggle}
-          disabled={disabled}
-          aria-label={`Use compute from ${row.name}`}
-        />
-        <span className="type-name text-[var(--color-text-primary)]">{row.name}</span>
-        {row.sub && row.sub !== row.name ? (
-          <span className="type-hint text-[var(--color-text-muted)]">{row.sub}.k2.dev</span>
-        ) : null}
-        <span className="type-hint text-[var(--color-text-muted)]">{[row.os, row.arch].filter(Boolean).join(' / ') || '—'}</span>
-        <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-machine-hw">
-          {cores(row.cpuCores)} · {formatBytes(row.memBytes)} RAM · {formatBytes(row.diskFreeBytes)} free
-        </span>
-        <span className="type-hint" style={{ color: row.online ? 'var(--color-status-ok)' : 'var(--color-text-muted)' }}>
-          {row.online ? 'online' : 'offline'}
-        </span>
-        <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-machine-status">
-          {row.status === 'elsewhere' && row.elsewhere ? `used by ${row.elsewhere}` : STATUS_TEXT[row.status]}
-        </span>
+    <div className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid={`compute-machine-${row.name}`}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="type-name text-[var(--color-text-primary)]">{row.name}</span>
+            <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)]">
+              <StatusDot tone={row.online ? tone : 'neutral'} />
+              <span data-testid="compute-machine-status">{statusText}</span>
+              <span>· {row.online ? 'online' : 'offline'}</span>
+            </span>
+          </div>
+          <div className={SETTING_ROW_HINT}>
+            {desc ? `${desc} · ` : ''}
+            <span data-testid="compute-machine-hw">{hardwareLine(cores(row.cpuCores), row.memBytes, row.diskFreeBytes)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Toggle
+            checked={row.status === 'retiring' ? false : checked}
+            onChange={toggle}
+            disabled={disabled}
+            aria-label={`Use compute from ${row.name}`}
+          />
+        </div>
       </div>
       {row.status === 'pending' && row.node ? (
-        <div className="flex flex-wrap items-center gap-2 type-hint text-[var(--color-text-secondary)]">
-          <span>
-            This server&apos;s code: <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span>
-            {row.machine?.sas ? (
-              <>
-                {' '}· {row.name} shows <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.machine.sas)}</span>
-              </>
-            ) : null}
-          </span>
-          {agree && row.machine?.sas ? (
-            <Button variant="accent" disabled={busy} onClick={() => onConfirm((row.machine?.sas ?? '').replace(/\s+/g, ''))}>
-              Codes match: confirm
-            </Button>
-          ) : row.machine?.sas ? (
-            <span className="text-[var(--color-status-warn-amber-soft)]">The codes differ: don&apos;t confirm. Switch it off and on again.</span>
+        <div className="mt-2 flex flex-wrap items-center gap-2 type-hint text-[var(--color-text-secondary)]" data-testid={`compute-machine-confirm-${row.name}`}>
+          {row.machine?.sas ? (
+            <>
+              <span>
+                This server’s code <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span> · {row.name}{' '}
+                shows <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.machine.sas)}</span>
+              </span>
+              {agree ? (
+                <Button variant="accent" disabled={busy} onClick={() => onConfirm((row.machine?.sas ?? '').replace(/\s+/g, ''))}>
+                  Codes match: confirm
+                </Button>
+              ) : (
+                <span className="text-[var(--color-status-warn-text)]">The codes differ: don’t confirm. Switch it off and on again.</span>
+              )}
+            </>
           ) : (
-            <span className="text-[var(--color-text-muted)]">Type the code the machine shows in Node details below.</span>
+            <>
+              <span>
+                Type the 6-digit code {row.name} shows
+                {row.node.sas ? (
+                  <>
+                    ; it should match <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span>
+                  </>
+                ) : null}
+                .
+              </span>
+              <Input
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                placeholder="123 456"
+                aria-label={`Code ${row.name} shows`}
+                className="w-28 font-mono"
+              />
+              <Button variant="accent" disabled={busy || typed.trim().length === 0} onClick={() => onConfirm(typed.replace(/\s+/g, ''))}>
+                Confirm
+              </Button>
+            </>
           )}
         </div>
       ) : null}

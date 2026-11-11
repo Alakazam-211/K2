@@ -337,12 +337,12 @@ function ServerRow({
             aria-label={`Priority counts here: ${r.label}`}
           />
           <span className={secondary}>Priority counts here</span>
-          {r.priority === null ? <span className={muted}>needs k2-node 0.46.5</span> : null}
+          {r.priority === null ? <span className={muted}>needs a newer node version</span> : null}
         </div>
       ) : null}
       {r.sas && r.state === 'pending' ? (
         <div className={`type-hint ${primary}`} data-testid="compute-server-sas">
-          SAS <span className="font-mono">{r.sas}</span>: read it to {r.label}&apos;s owner.
+          Its code is <span className="font-mono">{r.sas}</span>: read it to {r.label}&rsquo;s owner so they can check it.
         </div>
       ) : null}
       {r.refusal && r.state === 'refused' ? (

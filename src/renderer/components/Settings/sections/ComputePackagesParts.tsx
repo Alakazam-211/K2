@@ -12,7 +12,7 @@
 // {compute}` signal), never in render paths. The daemon decides everything.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button, Callout, Input } from '@/components/ui'
+import { Button, Callout, Input, Tag } from '@/components/ui'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import type { ComputeNode } from './compute-api'
@@ -247,12 +247,9 @@ export function NodePackagesSummary({ node }: { node: ComputeNode }): React.JSX.
         <div className="flex flex-wrap items-center gap-x-2">
           {hostLine ? <span data-testid="compute-node-host">{hostLine}</span> : null}
           {reboot ? (
-            <span
-              className="type-hint text-[var(--color-status-warn-amber-soft)] border border-[var(--color-border)] px-1"
-              data-testid="compute-node-reboot"
-            >
+            <Tag tone="warn" data-testid="compute-node-reboot">
               reboot pending
-            </span>
+            </Tag>
           ) : null}
         </div>
       ) : null}

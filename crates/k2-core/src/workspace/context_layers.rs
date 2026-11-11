@@ -199,6 +199,17 @@ pub const SUBAGENTS_PACK_PATH: &str = ".k2/context/catalog/always-use-subagents.
 pub const SUBAGENTS_PACK_SOURCE: &str = "catalog:subagents";
 pub const SUBAGENTS_PACK_ID: &str = "subagents:pack";
 
+/// "Browser and computer use" (0.46.11): agent-browser and agent-desktop,
+/// where to get them, how to start, and the rules. Opt-in, like subagents.
+/// Before 0.46.11 it was a user pack on one server with the same slug, so a
+/// workspace that stacked `user:browser-and-computer-use` already has this
+/// path; [`migrate_old_browser_user_pack_rows`] moves its row over.
+pub const BROWSER_PACK_PATH: &str = ".k2/context/catalog/browser-and-computer-use.md";
+pub const BROWSER_PACK_SOURCE: &str = "catalog:browser";
+pub const BROWSER_PACK_ID: &str = "browser:pack";
+/// The source tag of the old user pack this one replaces.
+const OLD_BROWSER_USER_PACK_SOURCE: &str = "catalog:user:browser-and-computer-use";
+
 /// Which live-generated pack a layer is (if any).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LiveKind {
@@ -286,6 +297,17 @@ pub fn list_builtin_catalog() -> Vec<ContextCatalogEntry> {
             Some("1.0.0"),
             true, // recommended
             &["workflow", "subagents", "context"],
+        ),
+        builtin_catalog_entry(
+            BROWSER_PACK_ID,
+            BROWSER_PACK_PATH,
+            "Browser and computer use",
+            BROWSER_PACK_SOURCE,
+            "static",
+            "agent-browser (web) and agent-desktop (desktop apps): open-source CLIs, where to get them, how to start, and the safety rules.",
+            Some("1.0.0"),
+            false, // opt-in
+            &["browser", "computer-use", "tools"],
         ),
         builtin_catalog_entry(
             "manager:pack",
@@ -418,6 +440,7 @@ const RESERVED_ID_PREFIXES: &[&str] = &[
     "apps:",
     "skin:",
     "subagents:",
+    "browser:",
     "catalog:",
     "pinned:",
     "preset:",
@@ -458,6 +481,8 @@ const RESERVED_ALIASES: &[&str] = &[
     "wiki-hygiene",
     "always-use-subagents",
     "use-subagents",
+    "browser",
+    "browser-and-computer-use",
     "wiki-index",
     "wiki-home",
     "catalog",
@@ -471,6 +496,7 @@ const RESERVED_PATH_STEMS: &[&str] = &[
     "k5",
     "wiki-hygiene",
     "always-use-subagents",
+    "browser-and-computer-use",
     "connections-roster",
     "heartbeats-roster",
     "skills-roster",
@@ -773,8 +799,22 @@ pub fn create_user_pack_inner(
 }
 
 /// Remove a host user pack dir. Does **not** touch stacked workspace copies.
+///
+/// A pack whose slug a built-in took later (0.46.11:
+/// `browser-and-computer-use`) is skipped by the scan, but its folder can
+/// still be deleted here, so it isn't stuck on disk.
 pub fn delete_user_pack(id: &str) -> Result<(), ContextError> {
-    let (_canon, slug) = normalize_user_pack_id(id)?;
+    let slug = match normalize_user_pack_id(id) {
+        Ok((_canon, slug)) => slug,
+        Err(e) => {
+            let raw = id.trim();
+            let slug = raw.strip_prefix("user:").unwrap_or(raw);
+            if OLD_BROWSER_USER_PACK_SOURCE.strip_prefix("catalog:user:") != Some(slug) {
+                return Err(e);
+            }
+            slug.to_string()
+        }
+    };
     let dir = host_catalog_packs_dir().join(&slug);
     if !dir.is_dir() {
         return Err(ContextError::NotFound(format!(
@@ -1657,6 +1697,35 @@ const SUBAGENTS_PACK_MD: &str = r#"# Always use subagents
 Always use subagents in worktrees to do your heavy work to protect your context window. Review their work and cherry pick their changes onto main when they are done.
 "#;
 
+/// Browser and computer use (0.46.11): the text of the user pack it replaces,
+/// byte for byte (same H2 title, so a migrated workspace's file is unchanged).
+const BROWSER_PACK_MD: &str = r##"## Browser and computer use
+
+You can drive a web browser and this machine's desktop apps, not only a terminal. Two open-source CLIs, run through your shell, do it. Nothing needs to be "loaded". Remember this after every context compaction.
+
+**Get them if they're missing** (`command -v agent-browser agent-desktop`):
+- **agent-browser** (web, over Chrome's DevTools Protocol): https://github.com/vercel-labs/agent-browser, docs https://agent-browser.dev. Install with `npm install -g agent-browser` (or `brew install agent-browser`).
+- **agent-desktop** (desktop apps, through the accessibility tree): https://github.com/vercel-labs/agent-desktop, docs https://agent-browser.dev/desktop. Install with `npm install -g agent-desktop` (or `brew install agent-desktop`).
+- Installing software on a machine you don't own is the owner's call: ask with a permission card or your person rather than working around it.
+
+**How to start.** Each CLI ships its own version-matched guide; read it before the first command:
+- **Browser:**
+  - Read `agent-browser skills get core --full` first.
+  - Then the loop: `open <url>`, `read` / `snapshot` (gives @refs), `click`, `fill`.
+  - Use your own session: `export AGENT_BROWSER_SESSION=<task-name>`.
+  - **Signed-in work:** attach to the person's Chrome with `--auto-connect` or `--cdp <port>`. That needs Chrome running with `--remote-debugging-port`, so ask the person to start it. `--profile <name>` copies a Chrome profile, but logins often don't carry over.
+- **Desktop:**
+  - Read `agent-desktop skills get desktop` and `agent-desktop skills get platform` first.
+  - Then the loop: `snapshot` (@refs), `find`, `click`, `type`, `screenshot`.
+
+**Rules:**
+- **Focus:** if you ever have to take focus (bring a window or app to the front, or click with a physical, headed pointer), give it back to the window that had it before, in the same step. Never leave the person's focus somewhere else.
+- **Forms:** read web forms by field names and whether they're filled, never their values. A credential field isn't always `type=password`.
+- **Passwords:** never type them. Secrets come from a secret card or the vault, read inside your script and never echoed.
+- **Irreversible clicks:** ask your person before any irreversible or outward-facing click: submit, pay, publish, delete, send.
+- **Clean up:** close the tabs, sessions (`agent-browser close`) and windows you open.
+"##;
+
 /// Lean wiki hygiene — how to keep `.k2/wiki/` healthy without bloating AGENTS.md.
 const WIKI_HYGIENE_PACK_MD: &str = r#"# Wiki hygiene (always-on)
 
@@ -1736,6 +1805,13 @@ fn resolve_catalog_id(catalog_id: &str) -> Result<ContextCatalogEntry, ContextEr
         | "always-use-subagents"
         | "use-subagents"
         | "catalog:subagents" => SUBAGENTS_PACK_ID,
+        // The old user pack's ids name the built-in now (0.46.11).
+        "browser"
+        | "browser:pack"
+        | "browser-and-computer-use"
+        | "catalog:browser"
+        | "user:browser-and-computer-use"
+        | OLD_BROWSER_USER_PACK_SOURCE => BROWSER_PACK_ID,
         other => other,
     };
     let catalog = list_catalog();
@@ -1771,6 +1847,7 @@ fn is_materializing_pack(entry: &ContextCatalogEntry) -> bool {
             | K5_PACK_SOURCE
             | WIKI_HYGIENE_SOURCE
             | SUBAGENTS_PACK_SOURCE
+            | BROWSER_PACK_SOURCE
             | CONNECTIONS_ROSTER_SOURCE
             | HEARTBEATS_ROSTER_SOURCE
             | SKILLS_ROSTER_SOURCE
@@ -1817,6 +1894,7 @@ fn materialize_pack_if_needed(
             K5_PACK_SOURCE => K5_PACK_MD,
             WIKI_HYGIENE_SOURCE => WIKI_HYGIENE_PACK_MD,
             SUBAGENTS_PACK_SOURCE => SUBAGENTS_PACK_MD,
+            BROWSER_PACK_SOURCE => BROWSER_PACK_MD,
             _ => return Ok(()),
         };
         fs::write(&abs, body).map_err(|e| {
@@ -2111,11 +2189,31 @@ fn row_to_layer(
     }
 }
 
+/// 0.46.11: "Browser and computer use" was a user pack before it shipped
+/// built in, under the same slug. Its user pack is now skipped (reserved
+/// slug), so a workspace that stacked `user:browser-and-computer-use` gets
+/// its row moved to the built-in source. The path and the file on disk are
+/// the same, so nothing is rewritten; the row just points at a pack that
+/// exists. Idempotent, and a no-op once no old rows are left.
+fn migrate_old_browser_user_pack_rows(
+    conn: &rusqlite::Connection,
+    project_id: &str,
+) -> Result<(), ContextError> {
+    conn.execute(
+        "UPDATE project_context_layers SET source = ?1 \
+         WHERE project_id = ?2 AND source = ?3",
+        params![BROWSER_PACK_SOURCE, project_id, OLD_BROWSER_USER_PACK_SOURCE],
+    )
+    .map_err(|e| ContextError::Db(e.to_string()))?;
+    Ok(())
+}
+
 /// List optional layers for a registered project (all, ordered by position).
 pub fn list_layers(project_path: &str) -> Result<Vec<ContextLayer>, ContextError> {
     let project_id = resolve_project_id(project_path)?;
     let db = crate::db::shared();
     let conn = db.lock();
+    migrate_old_browser_user_pack_rows(&conn, &project_id)?;
     let mut stmt = conn
         .prepare(
             "SELECT id, path, enabled, position, source, label \

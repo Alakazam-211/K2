@@ -17,7 +17,8 @@ KEEP IT LEAN
 LAYERS
   `k2 agent context list|add|on|off|move|regen`
   `k2 agent context catalog` — local ids (wiki, connections:roster,
-  users:roster, apps:roster, leftover skin:roster, manager:pack, …).
+  users:roster, apps:roster, leftover skin:roster, manager:pack,
+  subagents:pack, browser:pack, …).
   Hire can seed: `k2 agent hire <dir> --context connections:roster`
 
   Live-generated rosters (connections / users / apps) are awareness.

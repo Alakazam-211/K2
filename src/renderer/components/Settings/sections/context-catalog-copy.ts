@@ -17,6 +17,7 @@ const BUILTIN_SUMMARY: Record<string, string> = {
   'wiki:home': 'Gives agents this workspace’s wiki home page.',
   'wiki:hygiene': 'Asks agents to keep the wiki tidy: link new notes, keep the index current, leave no note unlinked.',
   'subagents:pack': 'Asks agents to hand heavy work to helper agents in their own copy of the code, then review it.',
+  'browser:pack': 'Tells agents about agent-browser and agent-desktop, which let them use a web browser and this computer’s apps, and the rules: give focus back, never type passwords.',
   'manager:pack': 'Short standing orders for an agent that coordinates other workspaces.',
   'k2:pack': 'Short standing orders for K2’s own planning agent.',
   'connections:roster': 'Lists the agents connected to this workspace, on this computer and on others.',

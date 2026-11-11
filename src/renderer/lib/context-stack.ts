@@ -403,6 +403,20 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     tags: ['workflow', 'subagents', 'context'],
   },
   {
+    // 0.46.11: was a user pack (`user:browser-and-computer-use`) on one server.
+    id: 'browser:pack',
+    path: '.k2/context/catalog/browser-and-computer-use.md',
+    label: 'Browser and computer use',
+    source: 'catalog:browser',
+    kind: 'static',
+    recommended: false,
+    description:
+      'agent-browser (web) and agent-desktop (desktop apps): open-source CLIs, where to get them, how to start, and the safety rules.',
+    version: '1.0.0',
+    author: 'K2',
+    tags: ['browser', 'computer-use', 'tools'],
+  },
+  {
     id: 'manager:pack',
     path: '.k2/context/catalog/manager.md',
     label: 'Workspace Manager',

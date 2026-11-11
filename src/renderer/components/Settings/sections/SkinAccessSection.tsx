@@ -23,7 +23,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { K2_CAPS } from '@/lib/k2-caps.generated'
 import { AppsServerSection } from './AppsServerSection'
-import { AppsBoxSection } from './AppsBoxSection'
+import { AppAboutCard, AppsBoxSection } from './AppsBoxSection'
 import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
 import { AppPhonePairing } from './AppPhonePairing'
@@ -36,6 +36,7 @@ import {
   APPS_ROW_OFF,
   APPS_ROW_ON,
   AppMonogram,
+  AvatarFrame,
   PaneHeader,
   SelectedBar,
   StatusDot,
@@ -1203,8 +1204,7 @@ export function SkinAccessSection(): React.JSX.Element {
           ) : null}
           {showServer ? (
             <>
-              <AppsServerSection />
-              <AppsBoxSection />
+              <AppsServerSection middle={<AppsBoxSection />} />
               <AppsResourcesSection />
             </>
           ) : selectedApp == null ? null : (
@@ -1256,6 +1256,7 @@ export function SkinAccessSection(): React.JSX.Element {
                   hint="The sign-in for the whole server: its own sign-in page and any service that names no App. Anyone who has it can also open every App, so give it out sparingly."
                 />
               )}
+              {selectedPublished ? <AppAboutCard key={`about-${selectedPublished.id}`} appId={selectedPublished.name} /> : null}
               {selectedPublished?.helperNeedsRestart ? (
                 <Callout tone="warn" role="status" className="type-hint">
                   Waiting for a restart: this App&rsquo;s sign-in helper is older than per-App sign-in, so guests still sign in
@@ -1582,7 +1583,7 @@ export function SkinAccessSection(): React.JSX.Element {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-baseline gap-2 flex-wrap">
                                 <span className="type-name text-[var(--color-text-primary)]">{k.name || 'Unnamed token'}</span>
-                                <span className="type-hint font-mono text-[var(--color-text-secondary)]">{prefixLabel(k.prefix)}</span>
+                                <span className="type-hint text-[var(--color-text-secondary)]" title={prefixLabel(k.prefix)}>{keyEnding(k.prefix)}</span>
                               </div>
                               <p className={SETTING_ROW_HINT}>
                                 {k.caps.length ? k.caps.map((c) => shortCap(c)).join(', ') : 'No permissions'}
@@ -1593,7 +1594,7 @@ export function SkinAccessSection(): React.JSX.Element {
                             {editKeyId === k.id ? null : (
                               <div className="flex items-center gap-2 flex-shrink-0">
                                 <Button
-                                  aria-label={`Edit agents for ${k.name || prefixLabel(k.prefix)}`}
+                                  aria-label={`Edit agents for ${k.name || keyEnding(k.prefix)}`}
                                   onClick={() => {
                                     setEditKeyId(k.id)
                                     setEditKeyRooms(new Set(k.roomHandles))
@@ -1606,7 +1607,7 @@ export function SkinAccessSection(): React.JSX.Element {
                                   disabled={busy}
                                   onClick={() =>
                                     setAsk({
-                                      title: `Revoke ${k.name || prefixLabel(k.prefix)}?`,
+                                      title: `Revoke ${k.name || keyEnding(k.prefix)}?`,
                                       message: 'The service using it stops working at once. A revoked token can’t come back: make a new one instead.',
                                       confirmLabel: 'Revoke token',
                                       run: () => revokeKey(k.id),
@@ -1743,7 +1744,7 @@ export function SkinAccessSection(): React.JSX.Element {
                       ) : null}
                       <div className="flex justify-end">
                         <Button variant="accent" disabled={mintBusy || !mintName.trim() || mintRooms.size === 0} onClick={() => void mintKey()}>
-                          {mintBusy ? 'Making…' : 'Mint key'}
+                          {mintBusy ? 'Creating…' : 'Create key'}
                         </Button>
                       </div>
                     </div>
@@ -1753,7 +1754,7 @@ export function SkinAccessSection(): React.JSX.Element {
                     card
                     title="Sign-in for other sites"
                     settingId="skin-access.hydra"
-                    hint="Let other sites sign people in with this server (OpenID Connect). Turning on Apps doesn’t turn this on."
+                    hint="Let other sites sign people in with this server. Turning on Apps doesn’t turn this on."
                   >
                     {!hydra.supported ? (
                       <div className="px-4 py-3">
@@ -1782,6 +1783,7 @@ export function SkinAccessSection(): React.JSX.Element {
                             : 'On, but not answering yet.'
                           : 'Off. Each person signs in as their own guest account; nothing is copied to the service.'}
                       </p>
+                      <p className={SETTING_SERVER_REASON}>Uses OpenID Connect.</p>
                       {hydra.supported && (hydra.publicUrl || hydra.adminUrl) ? (
                         <p className={SETTING_SERVER_REASON}>
                           {hydra.publicUrl ? `Public address ${hydra.publicUrl}` : null}
@@ -1816,11 +1818,34 @@ export function SkinAccessSection(): React.JSX.Element {
   )
 }
 
-/** A plain-words name for a cap: the shared label, cut at its aside. */
+/** Short plain names for the caps whose shared label runs long; the full
+ *  label stays as the checkbox's tooltip. */
+const SHORT_CAP: Record<string, string> = {
+  'files:read': 'Read files',
+  'files:write': 'Write files',
+  'files:download': 'Save Thread files',
+  'tickets:read': 'Read tickets',
+  'tickets:post': 'Open and answer tickets',
+  'store:read': 'Read workspace data',
+  'store:write': 'Change table rows',
+  'heartbeats:read': 'See heartbeats',
+  'heartbeats:write': 'Change heartbeats',
+  'agent:identity': 'Change the agent’s name',
+  'agent:handle': 'Change the agent’s address',
+}
+
+/** A plain-words name for a cap: the short name, else the shared label cut at its aside. */
 function shortCap(cap: string): string {
+  if (SHORT_CAP[cap]) return SHORT_CAP[cap]
   const label = ROLE_CAP_LABELS[cap] ?? SKIN_CAP_LABELS[cap as SkinCap]
   if (!label) return cap
   return label.replace(/\s*\(.*\)\s*$/, '')
+}
+
+/** "Key ending in ab12": the last four characters a person can match. */
+export function keyEnding(prefix: string): string {
+  const tail = prefix.replace(/[^a-z0-9]/gi, '').slice(-4)
+  return tail ? `Key ending in ${tail}` : 'Key'
 }
 
 function trimReason(text: string): string {
@@ -1829,10 +1854,7 @@ function trimReason(text: string): string {
 
 function RailGlyph({ kind }: { kind: 'server' | 'host' }): React.JSX.Element {
   return (
-    <span
-      aria-hidden="true"
-      className="flex-shrink-0 w-6 h-6 inline-flex items-center justify-center rounded-[var(--radius-field)] border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)]"
-    >
+    <AvatarFrame>
       {kind === 'server' ? (
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} className="w-3.5 h-3.5">
           <rect x="2.5" y="3" width="11" height="4" />
@@ -1845,7 +1867,7 @@ function RailGlyph({ kind }: { kind: 'server' | 'host' }): React.JSX.Element {
           <path d="M3.5 13c.6-2.3 2.4-3.5 4.5-3.5s3.9 1.2 4.5 3.5" strokeLinecap="round" />
         </svg>
       )}
-    </span>
+    </AvatarFrame>
   )
 }
 

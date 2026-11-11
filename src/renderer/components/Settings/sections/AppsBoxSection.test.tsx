@@ -64,7 +64,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 
 import { useProjectsStore, type ProjectWithWorkspaces } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
-import { AppsBoxSection } from './AppsBoxSection'
+import { AppAboutCard, AppsBoxSection } from './AppsBoxSection'
 import { memoryLabel, parseBoxApps, postgresChip, stateLabel } from './app-access-api'
 
 function project(id: string, name: string, over: Partial<ProjectWithWorkspaces> = {}): ProjectWithWorkspaces {
@@ -177,12 +177,14 @@ describe('the Apps rows', () => {
   it('shows each App with its agent, state, memory, hostname and the agent’s access read-only', async () => {
     render(<AppsBoxSection />)
     const row = await screen.findByTestId('apps-row-shop')
-    expect(within(row).getByTestId('apps-row-shop-agent').textContent).toBe('Kept up by Sales · sales::rosson.k2.dev')
+    // Two lines: state and keeper (by name, never the raw agent address), then address and memory.
     expect(within(row).getByTestId('apps-row-shop-state').textContent).toBe('Running')
-    expect(row.textContent).toContain('Up to 512 MB of memory · shop.rosson.k2.dev')
-    expect(within(row).getByTestId('apps-row-shop-postgres').textContent).toContain('Postgres 16 · 17 available')
-    expect(screen.queryByTestId('apps-row-old-postgres')).toBeNull()
-    expect(within(row).getByTestId('apps-row-shop-access').textContent).toContain('Builds and runs its Apps · uses Database, Thread')
+    expect(within(row).getByTestId('apps-row-shop-agent').textContent).toContain('kept up by Sales')
+    expect(row.textContent).not.toContain('sales::rosson.k2.dev')
+    expect(within(row).getByTestId('apps-row-shop-meta').textContent).toBe('shop.rosson.k2.dev · up to 512 MB')
+    // The rest (database, what the agent may do) is on the App's own page.
+    expect(within(row).queryByTestId('apps-row-shop-postgres')).toBeNull()
+    expect(within(row).queryByTestId('apps-row-shop-access')).toBeNull()
     // A healthy App: Agent settings, and "Hand over…" in its menu (no park or uninstall here).
     const actions = within(row).getByTestId('apps-row-shop-actions')
     expect(within(actions).getByRole('button', { name: 'Agent settings' })).toBeTruthy()
@@ -193,15 +195,25 @@ describe('the Apps rows', () => {
     expect(h.gets.find((g) => g.route === 'app/list' && g.params?.box === '1')).toBeTruthy()
   })
 
+  it('the App’s page tells who keeps it up, what that agent may do and its database', async () => {
+    render(<AppAboutCard appId="shop" />)
+    const about = await screen.findByTestId('apps-about')
+    expect(about.textContent).toContain('Sales')
+    expect(about.textContent).not.toContain('sales::rosson.k2.dev')
+    expect(screen.getByTestId('apps-about-access').textContent).toContain('Builds and runs its Apps · uses Database, Thread')
+    expect(screen.getByTestId('apps-about-postgres').textContent).toBe('Postgres 16 · 17 available')
+    expect(about.textContent).toContain('Up to 512 MB')
+  })
+
   it('the agent’s switches follow the projects store live', async () => {
-    render(<AppsBoxSection />)
-    await screen.findByTestId('apps-row-shop')
+    render(<AppAboutCard appId="shop" />)
+    await screen.findByTestId('apps-about')
     act(() => {
       useProjectsStore.setState({
         projects: [project('ws-sales', 'sales', { agentsCanManageSkin: 1, agentsCanManageAppsFull: 1, appCores: '["files"]' })],
       })
     })
-    expect(screen.getByTestId('apps-row-shop-access').textContent).toContain(
+    expect(screen.getByTestId('apps-about-access').textContent).toContain(
       'Builds, runs and fully manages its Apps · uses Files and rooms',
     )
   })
@@ -219,7 +231,7 @@ describe('the Apps rows', () => {
     render(<AppsBoxSection />)
     const row = await screen.findByTestId('apps-row-old')
     expect(within(row).getByTestId('apps-row-old-state').textContent).toBe('Parked')
-    expect(row.textContent).toContain('No agent: you hold it')
+    expect(row.textContent).toContain('no agent: you hold it')
     const actions = await within(row).findByTestId('apps-row-old-actions')
     openMenu('old')
     expect(menuItem('park')).toBeNull()
@@ -298,7 +310,7 @@ describe('the Apps rows', () => {
     }
     render(<AppsBoxSection />)
     let actions = await screen.findByTestId('apps-row-lost-actions')
-    expect(screen.getByTestId('apps-row-lost').textContent).toContain('No agent: its workspace was removed')
+    expect(screen.getByTestId('apps-row-lost').textContent).toContain('no agent: its workspace was removed')
     expect(within(actions).getByRole('button', { name: 'Hand over…' })).toBeTruthy()
     openMenu('lost')
     fireEvent.click(menuItem('park') as HTMLElement)

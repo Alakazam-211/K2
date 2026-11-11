@@ -40,6 +40,7 @@ import {
   SETTING_LIST_ROW_HOVER,
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
+  SettingRow,
   SettingsGroup,
   SettingsLoadState,
 } from '../controls/SettingControls'
@@ -266,7 +267,6 @@ export function AppsBoxSection(): React.JSX.Element | null {
               const owner = needsOwner(app)
               const recent = handovers.get(app.appId)
               const st = app.parked ? { tone: 'idle' as const, words: 'Parked' } : appStateWords(app.state)
-              const chip = postgresChip(app.database)
               const handLabel = app.parked ? 'Unpark…' : 'Hand over…'
               const handOver = (): void => setSheet(app.appId)
               const menu: OverflowMenuItem[] = []
@@ -319,35 +319,24 @@ export function AppsBoxSection(): React.JSX.Element | null {
                       <AppMonogram name={app.appId} />
                     )}
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap">
-                        <span className="type-name text-[var(--color-text-primary)]">{app.appId}</span>
-                        <span className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)]" data-testid={`apps-row-${app.appId}-state`}>
+                      <div className="type-name text-[var(--color-text-primary)]">{app.appId}</div>
+                      <p className={`${SETTING_ROW_HINT} flex flex-wrap items-center gap-x-1.5`}>
+                        <span className="inline-flex items-center gap-1.5" data-testid={`apps-row-${app.appId}-state`}>
                           <StatusDot tone={st.tone} />
                           {st.words}
                         </span>
-                      </div>
-                      <p className={SETTING_ROW_HINT} data-testid={`apps-row-${app.appId}-agent`}>
-                        {app.maintainer.kind === 'agent'
-                          ? `Kept up by ${app.maintainer.agent ?? app.maintainer.handle ?? 'an agent'}${app.maintainer.address ? ` · ${app.maintainer.address}` : ''}`
-                          : app.parked
-                            ? 'No agent: you hold it until you hand it to one'
-                            : 'No agent: its workspace was removed'}
+                        <span data-testid={`apps-row-${app.appId}-agent`}>
+                          ·{' '}
+                          {app.maintainer.kind === 'agent'
+                            ? `kept up by ${app.maintainer.agent ?? app.maintainer.handle ?? 'an agent'}`
+                            : app.parked
+                              ? 'no agent: you hold it until you hand it on'
+                              : 'no agent: its workspace was removed'}
+                        </span>
                       </p>
-                      <p className={SETTING_ROW_HINT}>
-                        {memoryWords(app.memoryLimitBytes)}
-                        {app.hostnames.length ? ` · ${app.hostnames.join(', ')}` : ' · no public address'}
-                        {chip ? (
-                          <span data-testid={`apps-row-${app.appId}-postgres`} title={app.database?.name ? `Database ${app.database.name}` : undefined}>
-                            {' · '}
-                            {chip}
-                          </span>
-                        ) : null}
+                      <p className={SETTING_ROW_HINT} data-testid={`apps-row-${app.appId}-meta`}>
+                        {app.hostnames.length ? app.hostnames.join(', ') : 'No public address'} · {memoryWords(app.memoryLimitBytes).replace(/^Up to/, 'up to').replace(/^No memory/, 'no memory')}
                       </p>
-                      {app.maintainer.kind === 'agent' ? (
-                        <p className={SETTING_ROW_HINT} data-testid={`apps-row-${app.appId}-access`}>
-                          {accessLine(app, project)}
-                        </p>
-                      ) : null}
                       {recent && isStaff ? (
                         <div className="mt-2 flex items-center justify-between gap-3 flex-wrap" data-testid={`apps-row-${app.appId}-handover`}>
                           <span className={SETTING_ROW_HINT}>
@@ -489,13 +478,64 @@ export function AppsBoxSection(): React.JSX.Element | null {
   )
 }
 
-/** "Up to 512 MB of memory" / "No memory limit", in decimal units as the rest of the page. */
+/** "Up to 512 MB" / "No memory limit", in decimal units as the rest of the page. */
 export function memoryWords(bytes: number | null): string {
   if (bytes === null || bytes <= 0) return 'No memory limit'
   const mb = bytes / 1024 ** 2
   if (mb >= 1024) {
     const gb = mb / 1024
-    return `Up to ${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB of memory`
+    return `Up to ${Number.isInteger(gb) ? gb : gb.toFixed(1)} GB`
   }
-  return `Up to ${Math.round(mb)} MB of memory`
+  return `Up to ${Math.round(mb)} MB`
+}
+
+/** On an App's own page: who keeps it up, what that agent may do, its
+ *  memory and its database (the details the list leaves out). Reads the box
+ *  view and shows the App whose id is `appId`; nothing when there is none. */
+export function AppAboutCard({ appId }: { appId: string }): React.JSX.Element | null {
+  const projects = useProjectsStore((s) => s.projects)
+  const [app, setApp] = useState<BoxApp | null | 'loading'>('loading')
+  useEffect(() => {
+    let live = true
+    fetchBoxApps().then(
+      (apps) => live && setApp(apps.find((a) => a.appId === appId) ?? null),
+      () => live && setApp(null),
+    )
+    return () => {
+      live = false
+    }
+  }, [appId])
+  if (app === 'loading' || app === null) return null
+  const wsId = app.maintainer.workspaceId
+  const project = wsId ? projects.find((p) => p.id === wsId) : undefined
+  const chip = postgresChip(app.database)
+  return (
+    <SettingsGroup card title="About this App" testId="apps-about">
+      <SettingRow
+        label="Kept up by"
+        hint={
+          app.maintainer.kind === 'agent'
+            ? (app.maintainer.agent ?? app.maintainer.handle ?? 'An agent')
+            : app.parked
+              ? 'No agent: you hold it until you hand it on.'
+              : 'No agent: its workspace was removed.'
+        }
+      >
+        {wsId ? <Button onClick={() => openCard(wsId)}>Agent settings</Button> : null}
+      </SettingRow>
+      {app.maintainer.kind === 'agent' ? (
+        <SettingRow label="What its agent may do" hint={<span data-testid="apps-about-access">{accessLine(app, project)}</span>}>
+          {null}
+        </SettingRow>
+      ) : null}
+      <SettingRow label="Memory" hint={memoryWords(app.memoryLimitBytes)}>
+        {null}
+      </SettingRow>
+      {chip ? (
+        <SettingRow label="Database" hint={<span data-testid="apps-about-postgres">{chip}</span>}>
+          {null}
+        </SettingRow>
+      ) : null}
+    </SettingsGroup>
+  )
 }

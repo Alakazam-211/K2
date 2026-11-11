@@ -13,6 +13,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Callout } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
+import { formatRelativeTime } from '@/lib/format-relative-time'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
@@ -288,7 +289,7 @@ export function AppsResourcesSection(): React.JSX.Element | null {
               {plan.items.map((i) => (
                 <li key={`${i.kind}-${i.id}`} className="flex items-baseline gap-3 py-1.5 type-hint">
                   <span className="text-[var(--color-text-secondary)] flex-shrink-0">{CLEAN_WORDS[i.kind] ?? i.kind}</span>
-                  <span className="truncate text-[var(--color-text-primary)]">{i.id}</span>
+                  {i.kind === 'seed' || i.kind === 'engineSeed' ? null : <span className="truncate text-[var(--color-text-primary)]">{i.id}</span>}
                   {i.app ? <span className="text-[var(--color-text-secondary)]">{i.app}</span> : null}
                   <span className="ml-auto tabular-nums text-[var(--color-text-secondary)]">{sizeLabel(i.bytes)}</span>
                 </li>
@@ -321,14 +322,14 @@ function Ready(p: {
   const { usage, trends } = p
   const rows = biggestRows(usage.rows, 8).map((r) => ({
     key: `${r.kind}-${r.id}`,
-    name: r.id,
+    name: r.kind === 'shared' ? (SHARED_WORDS[r.id] ?? r.id) : r.id,
     detail: r.kind === 'shared' ? 'this server' : `${KIND_WORDS[r.kind] ?? r.kind}${r.owner ? ` · ${r.owner}` : ''}`,
     bytes: r.diskBytes ?? 0,
   }))
   const owners = usage.owners.slice(0, 5).map((o, i) => ({
     key: `owner-${o.handle ?? i}`,
     name: o.handle ?? 'an agent',
-    detail: o.address ?? '',
+    detail: '',
     bytes: o.diskBytes,
   }))
   const cpu = trends?.box.map((x) => x.cpuCores) ?? []
@@ -371,8 +372,8 @@ function Ready(p: {
         <div className="min-w-0">
           <p className={SETTING_ROW_LABEL}>Clean up</p>
           <p className={SETTING_ROW_HINT}>
-            {usage.k2WillClearBytes ? `K2 clears ${sizeLabel(usage.k2WillClearBytes)} of its own old Seeds at the next daily sweep. ` : ''}
-            Folders last measured {usage.scannedAt ? new Date(usage.scannedAt * 1000).toLocaleString() : 'not yet'}
+            {usage.k2WillClearBytes ? `K2 clears ${sizeLabel(usage.k2WillClearBytes)} of old starter copies at the next daily sweep. ` : ''}
+            {usage.scannedAt ? `Folders last measured ${formatRelativeTime(usage.scannedAt, Math.floor(Date.now() / 1000))}` : 'Folders not measured yet'}
             {usage.scanRunning ? '; a scan is running' : ''}.
           </p>
         </div>
@@ -383,5 +384,8 @@ function Ready(p: {
     </div>
   )
 }
+
+/** Things on the server that belong to no App, in plain words. */
+const SHARED_WORDS: Record<string, string> = { Seeds: 'Starter copies', seeds: 'Starter copies', mail: 'Mail', logs: 'Logs' }
 
 const KIND_WORDS: Record<string, string> = { app: 'App', service: 'service', database: 'database', workspace: 'workspace' }

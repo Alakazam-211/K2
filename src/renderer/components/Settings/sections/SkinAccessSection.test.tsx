@@ -111,7 +111,7 @@ async function openHost(): Promise<void> {
   await loaded()
   fireEvent.click(screen.getByRole('button', { name: 'Host' }))
   await waitFor(() => {
-    expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
+    expect(screen.getByText('Key ending in ab12')).not.toBeNull()
   })
 }
 
@@ -300,9 +300,10 @@ describe('SkinAccessSection', () => {
     expect(gets.some((r: string) => r === 'users' || r.startsWith('users/'))).toBe(false)
     expect(screen.queryByText('Leftover Caddy (optional)')).toBeNull()
     expect(screen.queryByRole('radio')).toBeNull()
-    expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
+    expect(screen.getByText('Key ending in ab12')).not.toBeNull()
     // The token's permissions in words, never raw cap ids.
     expect(screen.getByTestId('apps-token-tok-1').textContent).toContain('Read the Thread')
+    expect(screen.getByTestId('apps-token-tok-1').textContent).not.toContain('k2skn_')
     expect(screen.queryByText('thread:read')).toBeNull()
     expect(screen.queryByText(/Stub URLs only/i)).toBeNull()
   })
@@ -353,7 +354,7 @@ describe('SkinAccessSection', () => {
     await openHost()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
       expect(screen.getByText('k2skn_ONCESECRET')).not.toBeNull()
     })
@@ -386,7 +387,7 @@ describe('SkinAccessSection', () => {
       'files:download',
     ])
     expect(screen.getByText('Copy this token now. K2 can’t show it again.')).not.toBeNull()
-    expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
+    expect(screen.getByText('Key ending in ab12')).not.toBeNull()
   })
 
   it('T14: heartbeat caps are their own group, labelled, never default, and gated by app-heartbeats', async () => {
@@ -423,7 +424,7 @@ describe('SkinAccessSection', () => {
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(read)
     fireEvent.click(write)
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
       expect(screen.getByText('k2skn_HBSECRET')).not.toBeNull()
     })
@@ -448,7 +449,7 @@ describe('SkinAccessSection', () => {
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(screen.getByLabelText('Mint cap files:read'))
     fireEvent.click(screen.getByLabelText('Mint cap files:write'))
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
       expect(screen.getByText('k2skn_FILESECRET')).not.toBeNull()
     })
@@ -467,7 +468,7 @@ describe('SkinAccessSection', () => {
     await openHost()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toMatch(/mint returned no secret/)
     })
@@ -580,11 +581,11 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await openHost()
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'vercel' } })
-    expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'Create key' }) as HTMLButtonElement).disabled).toBe(
       true,
     )
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
-    expect((screen.getByRole('button', { name: 'Mint key' }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole('button', { name: 'Create key' }) as HTMLButtonElement).disabled).toBe(
       false,
     )
   })
@@ -1082,7 +1083,7 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
     fireEvent.change(screen.getByLabelText('Platform token name'), { target: { value: 'kiosk' } })
     fireEvent.click(screen.getByLabelText('Mint agent sales'))
     fireEvent.click(ident)
-    fireEvent.click(screen.getByRole('button', { name: 'Mint key' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create key' }))
     await waitFor(() => {
       expect(screen.getByText('k2skn_IDSECRET')).not.toBeNull()
     })

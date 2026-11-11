@@ -37,7 +37,7 @@ vi.mock('@/components/Presence/PresenceKickButton', () => ({ fetchViewerRole: vi
 import * as presence from '@/components/Presence/PresenceKickButton'
 import { useSettingsStore, appsSwitchFrom } from '@/stores/settings'
 import { AppsServerSection, APPS_SERVER_MANIFEST } from './AppsServerSection'
-import { appEngineLine, changeLines, needsPodmanInstall, parseAppEngine, parseAutoPrepare, parseDoctor, parseDryRun, parseUnprepResult } from './apps-server-api'
+import { appEngineLine, changeLines, needsPodmanInstall, parseAppEngine, parseAutoPrepare, parseDoctor, parseDryRun, parseUnprepResult, stepWords } from './apps-server-api'
 
 const role = vi.mocked(presence.fetchViewerRole)
 
@@ -108,6 +108,14 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
+/** Open the Set up card's "…" menu and return its Undo item. */
+async function openUndoItem(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByTestId('apps-setup-menu'))
+  const item = document.querySelector<HTMLElement>('[data-menu-item="unprep"]')
+  if (!item) throw new Error('no Undo item in the Set up menu')
+  return item
+}
+
 describe('the Apps (beta) switch', () => {
   it('is the owner’s: on, enabled, and a flip writes `apps` to the window’s server', async () => {
     gets({ 'app/box': () => doctor() })
@@ -166,13 +174,20 @@ describe('the box doctor', () => {
   it('shows each check with its status and fix', async () => {
     gets({ 'app/box': () => doctor() })
     render(<AppsServerSection />)
+    // A check that doesn't pass shows itself and its fix at once.
     const podman = await screen.findByTestId('apps-check-podman')
     expect(podman.getAttribute('data-status')).toBe('fail')
-    expect(podman.textContent).toMatch(/Podman 4\.9\.3/)
+    expect(podman.textContent).toMatch(/Container engine: Podman 4\.9\.3/)
     expect(podman.textContent).toMatch(/Fix: Prepare this server, under Set up\./)
+    expect(screen.getByTestId('apps-checks-summary').textContent).toMatch(/^Not ready yet: \d+ of \d+ checks need attention$/)
+    // The passing ones fold into the summary until Show details.
+    expect(screen.queryByTestId('apps-check-platform')).toBeNull()
+    const toggle = screen.getByTestId('apps-checks-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByTestId('apps-check-platform').textContent).not.toMatch(/Fix:/)
     expect(screen.getByTestId('apps-check-processEngine').getAttribute('data-status')).toBe('ok')
-    expect(screen.getByTestId('apps-doctor').textContent).toMatch(/Not ready yet/)
   })
 
   it('off Linux there is nothing to prepare', async () => {
@@ -194,8 +209,10 @@ describe('Prepare this box', () => {
     fireEvent.click(await screen.findByTestId('apps-prepare-dry-run'))
     const list = await screen.findByTestId('apps-dry-run')
     expect(postsTo('app/box/prepare')).toEqual([{ dryRun: true }])
-    expect(list.textContent).toMatch(/Install K2's Podman 5\.4\.2/)
-    expect(list.textContent).toMatch(/apps ensure-user/)
+    expect(list.textContent).toMatch(/Podman 5\.4\.2/)
+    // Each step in plain words, not the helper's verb.
+    expect(list.textContent).toMatch(/A separate user that runs Apps \(k2app\)/)
+    expect(list.textContent).not.toMatch(/apps ensure-user/)
     expect(list.textContent).toMatch(/abc123/)
     const apply = screen.getByTestId('apps-prepare-apply') as HTMLButtonElement
     expect(apply.textContent).toMatch(/installs Podman/)
@@ -257,7 +274,7 @@ describe('Install App engine', () => {
     render(<AppsServerSection />)
     const b = await screen.findByTestId('apps-engine-install')
     await waitFor(() => expect((b as HTMLButtonElement).disabled).toBe(false))
-    expect(b.textContent).toBe('Install App engine')
+    expect(b.textContent).toBe('Install App runtime')
     fireEvent.click(b)
     const notice = await screen.findByTestId('apps-server-notice')
     expect(notice.textContent).toMatch(/0\.46\.3 is installed and answering/)
@@ -281,7 +298,7 @@ describe('the App engine vs this K2 (0.46.4, update continuity R9)', () => {
     render(<AppsServerSection />)
     const line = await screen.findByTestId('apps-engine-status')
     expect(line.textContent).toBe(
-      'The App engine doesn’t match this K2: installed 0.46.4 (protocol 3), running 0.46.0 (protocol 2), this K2 0.46.4 (protocol 3). K2 updates it by itself; Install App engine does it now. 1 App(s) wait for it.'.replace('’', "'"),
+      'The App runtime doesn’t match this K2: installed 0.46.4 (protocol 3), running 0.46.0 (protocol 2), this K2 0.46.4 (protocol 3). K2 updates it by itself; Install App runtime does it now. 1 App(s) wait for it.'.replace('’', "'"),
     )
     expect(screen.getByTestId('apps-engine-install')).toBeTruthy()
   })
@@ -295,7 +312,7 @@ describe('the App engine vs this K2 (0.46.4, update continuity R9)', () => {
   })
 
   it('linger off and not answering say so', () => {
-    expect(appEngineLine(parseAppEngine(engine('needs_owner', { linger: false })))).toMatch(/Linger is off for the k2app user/)
+    expect(appEngineLine(parseAppEngine(engine('needs_owner', { linger: false })))).toMatch(/Keep Apps running after sign-out is off for the Apps user/)
     expect(appEngineLine(parseAppEngine(engine('not_answering')))).toMatch(/isn't answering\. No App starts until it does/)
   })
 })
@@ -332,7 +349,7 @@ describe('automatic prep stopped', () => {
     gets({ 'app/box': () => doctor({ autoPrepare: { ...blocked, blocked: false, outcome: { state: 'ready' }, undoneAt: 5 } }) })
     render(<AppsServerSection />)
     const stopped = await screen.findByTestId('apps-auto-prepare-stopped')
-    expect(stopped.textContent).toMatch(/Paused because you undid the box setup/)
+    expect(stopped.textContent).toMatch(/Paused because you undid the setup/)
     await screen.findByTestId('apps-switch-owner-only')
     expect((screen.getByTestId('apps-auto-prepare-retry') as HTMLButtonElement).disabled).toBe(true)
   })
@@ -370,16 +387,16 @@ describe('Undo box setup', () => {
             },
     })
     render(<AppsServerSection />)
-    const start = await screen.findByTestId('apps-unprep-start')
-    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(start)
+    await openUndoItem()
+    await waitFor(() => expect(document.querySelector('[data-menu-item="unprep"]')?.getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(document.querySelector('[data-menu-item="unprep"]') as HTMLElement)
     const plan = await screen.findByTestId('apps-unprep-plan')
     expect(plan.textContent).toMatch(/nft remove/)
-    expect(plan.textContent).toMatch(/It keeps: the k2app user/)
+    expect(plan.textContent).toMatch(/It keeps: The user that runs Apps/)
     expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }])
     fireEvent.click(screen.getByTestId('apps-unprep-confirm'))
     const notice = await screen.findByTestId('apps-server-notice')
-    expect(notice.textContent).toMatch(/The server setup is undone\. K2's Podman stays/)
+    expect(notice.textContent).toMatch(/The server setup is undone\. The Apps user, App data and K2’s container engine stay\./)
     expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }, { confirm: true }])
   })
 
@@ -387,9 +404,9 @@ describe('Undo box setup', () => {
     gets({ 'app/box': () => doctor() })
     posts({ 'app/box/unprep': () => PLAN })
     render(<AppsServerSection />)
-    const start = await screen.findByTestId('apps-unprep-start')
-    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(start)
+    await openUndoItem()
+    await waitFor(() => expect(document.querySelector('[data-menu-item="unprep"]')?.getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(document.querySelector('[data-menu-item="unprep"]') as HTMLElement)
     const plan = await screen.findByTestId('apps-unprep-plan')
     fireEvent.click(within(plan).getByText('Cancel'))
     expect(screen.queryByTestId('apps-unprep-plan')).toBeNull()
@@ -400,9 +417,9 @@ describe('Undo box setup', () => {
     gets({ 'app/box': () => doctor() })
     posts({ 'app/box/unprep': () => ({ ...PLAN, runningApps: ['shop', 'blog'] }) })
     render(<AppsServerSection />)
-    const start = await screen.findByTestId('apps-unprep-start')
-    await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(start)
+    await openUndoItem()
+    await waitFor(() => expect(document.querySelector('[data-menu-item="unprep"]')?.getAttribute('aria-disabled')).toBeNull())
+    fireEvent.click(document.querySelector('[data-menu-item="unprep"]') as HTMLElement)
     const running = await screen.findByTestId('apps-unprep-running')
     expect(running.textContent).toMatch(/Stop these Apps first: shop, blog/)
     expect((screen.getByTestId('apps-unprep-confirm') as HTMLButtonElement).disabled).toBe(true)
@@ -414,7 +431,9 @@ describe('Undo box setup', () => {
     gets({ 'app/box': () => doctor() })
     render(<AppsServerSection />)
     await screen.findByTestId('apps-switch-owner-only')
-    expect((screen.getByTestId('apps-unprep-start') as HTMLButtonElement).disabled).toBe(true)
+    // Undo lives in the Set up card's menu, shown but off for anyone but the owner.
+    const item = await openUndoItem()
+    expect(item.getAttribute('aria-disabled')).toBe('true')
   })
 })
 
@@ -439,9 +458,14 @@ describe('helpers', () => {
   it('lists the Podman install first, then the steps', () => {
     const d = parseDryRun(DRY)
     expect(needsPodmanInstall(d)).toBe(true)
-    expect(changeLines(d)[0]).toMatch(/Install K2's Podman 5\.4\.2/)
-    expect(changeLines(d)).toContain('  writes /opt/k2/podman')
-    expect(changeLines(d).slice(-3)).toEqual(DRY.steps)
+    expect(changeLines(d)[0]).toMatch(/Install K2's container engine \(Podman 5\.4\.2\)/)
+    // The bundle's file paths stay out of the list (the dialog shows its source quietly).
+    expect(changeLines(d).some((l) => l.includes('/opt/k2/podman'))).toBe(false)
+    // Each step in plain words; a step K2 has no words for shows as sent.
+    expect(changeLines(d).slice(-3)).toEqual(DRY.steps.map(stepWords))
+    expect(stepWords('apps ensure-user')).toBe('A separate user that runs Apps (k2app)')
+    expect(stepWords('apps nft apply 1,2 3,4 db')).toBe('Network rules for Apps')
+    expect(stepWords('apps something-new')).toBe('apps something-new')
     expect(needsPodmanInstall(parseDryRun({ podman: { action: 'keep' } }))).toBe(false)
   })
 

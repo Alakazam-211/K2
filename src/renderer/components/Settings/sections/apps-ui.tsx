@@ -3,7 +3,8 @@
 // Workspaces layout: a list on the left, a pane of card groups on the right).
 
 import React from 'react'
-import { SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT } from '../controls/SettingControls'
+import { AVATAR_ROUND, SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT } from '../controls/SettingControls'
+import { chamferCutFor } from '@/components/Thread/chamfer'
 
 /** The pane's reading width, as Gardens'. */
 export const APPS_CONTENT_WIDTH = 'max-w-[52rem]'
@@ -51,13 +52,14 @@ const DOT: Record<DotTone, string> = {
   idle: 'bg-[var(--color-text-muted)]',
 }
 
-/** A status dot (round in every look: a status mark, not a control). */
+/** A status dot: round in every look (a status mark, not a control), as
+ *  Connected Servers and Email Reader Log draw theirs. */
 export function StatusDot({ tone, className = '' }: { tone: DotTone; className?: string }): React.JSX.Element {
   return (
     <span
       aria-hidden="true"
       data-status-dot={tone}
-      className={`inline-block h-2 w-2 flex-shrink-0 rounded-[var(--radius-status)] ${DOT[tone]} ${className}`}
+      className={`inline-block h-2 w-2 flex-shrink-0 rounded-[var(--radius-badge)] ${DOT[tone]} ${className}`}
     />
   )
 }
@@ -88,18 +90,31 @@ export function appStateWords(state: string): { tone: DotTone; words: string } {
   }
 }
 
-/** A square monogram for an App with no agent picture: its first letter on
- *  the field ground (cut in Terminal, rounded in Glass by the field radius). */
+/** A letter mark for an App with no agent picture, drawn like an agent's
+ *  avatar (the same cut in Terminal, the same rounding in Glass), so every
+ *  mark in a list matches: its first letter on the raised ground. */
 export function AppMonogram({ name, size = 24 }: { name: string; size?: number }): React.JSX.Element {
   const letter = (name.match(/[a-z0-9]/i)?.[0] ?? '?').toUpperCase()
   return (
-    <span
-      aria-hidden="true"
-      data-app-monogram=""
-      style={{ width: size, height: size }}
-      className="flex-shrink-0 inline-flex items-center justify-center rounded-[var(--radius-field)] border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] type-hint font-medium text-[var(--color-text-secondary)]"
-    >
+    <AvatarFrame size={size} testId="app-monogram">
       {letter}
+    </AvatarFrame>
+  )
+}
+
+/** The avatar frame the monogram and the rail's glyphs share. */
+export function AvatarFrame({ size = 24, children, testId }: { size?: number; children: React.ReactNode; testId?: string }): React.JSX.Element {
+  const cut = { '--k2-ch-cut': `${chamferCutFor(size)}px`, '--k2-ch-bw': '1px', width: size, height: size } as React.CSSProperties
+  return (
+    <span aria-hidden="true" className={AVATAR_ROUND} data-testid={testId}>
+      <span
+        data-k2-chamfer="surface"
+        data-k2-avatar=""
+        style={cut}
+        className="inline-flex items-center justify-center border border-[var(--color-control-edge)] bg-[var(--color-bg-elevated)] type-hint font-medium text-[var(--color-text-secondary)]"
+      >
+        {children}
+      </span>
     </span>
   )
 }

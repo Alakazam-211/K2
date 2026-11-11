@@ -24,7 +24,7 @@
 // window regains focus. No fetchProjects().
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { BetaTag, Button, Callout, Toggle } from '@/components/ui'
+import { BetaTag, Button, Callout, OverflowMenu, Toggle } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { useSettingsStore } from '@/stores/settings'
 import { useConnectHostStore } from '@/stores/connect-host'
@@ -45,6 +45,7 @@ import type { SettingEntry } from '../searchManifest'
 import {
   changeLines,
   checkLabel,
+  undoWords,
   engineNeeded,
   appEngineLine,
   fetchAppBox,
@@ -80,7 +81,9 @@ type BoxState = { kind: 'loading' } | { kind: 'off' } | { kind: 'ready'; doctor:
 
 type Notice = { tone: 'ok' | 'error' | 'info' | 'warn'; text: string }
 
-export function AppsServerSection(): React.JSX.Element {
+/** `middle` renders between the Apps switch and the box checks: the page
+ *  puts the list of Apps there, so what a person comes for comes first. */
+export function AppsServerSection({ middle }: { middle?: React.ReactNode } = {}): React.JSX.Element {
   const apps = useSettingsStore((s) => s.apps)
   const setApps = useSettingsStore((s) => s.setApps)
   const activeHost = useConnectHostStore((s) => s.activeHost)
@@ -94,6 +97,7 @@ export function AppsServerSection(): React.JSX.Element {
     null | 'dry' | 'apply' | 'engine' | 'auto' | 'retry' | 'unprep-dry' | 'unprep'
   >(null)
   const [checking, setChecking] = useState(false)
+  const [showChecks, setShowChecks] = useState(false)
   const mounted = useRef(true)
 
   const isOwner = role === 'owner'
@@ -228,7 +232,7 @@ export function AppsServerSection(): React.JSX.Element {
       setUnprep(null)
       setNotice({
         tone: 'ok',
-        text: `The server setup is undone.${r.note ? ` ${r.note}` : ''}`,
+        text: `The server setup is undone.${r.kept.length || r.note ? ' The Apps user, App data and K2’s container engine stay.' : ''} Automatic setup pauses until you press Retry.`,
       })
       await load()
     } catch (e) {
@@ -244,10 +248,10 @@ export function AppsServerSection(): React.JSX.Element {
     setNotice(null)
     try {
       const r = await installEngine()
-      setNotice({ tone: 'ok', text: `The App engine ${r.version ?? ''} is installed and answering.`.replace('  ', ' ') })
+      setNotice({ tone: 'ok', text: `The App runtime ${r.version ?? ''} is installed and answering.`.replace('  ', ' ') })
       await load()
     } catch (e) {
-      setNotice({ tone: 'error', text: `Couldn’t install the App engine: ${daemonErrorText(e)}. Try again.` })
+      setNotice({ tone: 'error', text: `Couldn’t install the App runtime: ${daemonErrorText(e)}. Try again.` })
       await load()
     } finally {
       setBusy(null)
@@ -258,6 +262,7 @@ export function AppsServerSection(): React.JSX.Element {
   const appsOn = box.kind === 'off' ? false : doctor ? doctor.apps : apps
   const ownerOnly = !isOwner && role !== null
   const attention = doctor ? doctor.checks.filter((c) => c.status !== 'ok').length : 0
+  const okChecks = doctor ? doctor.checks.filter((c) => c.status === 'ok') : []
   const engineLine = doctor ? appEngineLine(doctor.appEngine) : null
 
   return (
@@ -305,6 +310,8 @@ export function AppsServerSection(): React.JSX.Element {
         </SettingRow>
       </SettingsGroup>
 
+      {middle}
+
       <SettingsGroup
         card
         title="Box checks"
@@ -340,29 +347,70 @@ export function AppsServerSection(): React.JSX.Element {
             <div className="px-4 py-3 flex items-start gap-3">
               <StatusDot tone={doctor.ready ? 'ok' : 'warn'} className="mt-1.5" />
               <div className="min-w-0 flex-1">
-                <div className="type-name text-[var(--color-text-primary)]">{doctor.ready ? 'Ready for Apps' : 'Not ready yet'}</div>
+                <div className="type-name text-[var(--color-text-primary)]" data-testid="apps-checks-summary">
+                  {checksSummary(doctor)}
+                </div>
                 <p className={SETTING_ROW_HINT}>
                   {!doctor.linux
                     ? 'Apps run walled on Linux servers. This machine can build and check Apps, not run them.'
                     : doctor.ready
-                      ? `Every check passes${attention ? `, with ${attention} to keep an eye on` : ''}.${doctor.runtime ? ` Containers run on ${doctor.runtime}.` : ''}`
-                      : 'Fix the checks marked below. Prepare this server, under Set up, fixes most of them.'}
+                      ? `${attention ? 'The checks below are worth a look. ' : ''}${doctor.runtime ? `Containers run on ${doctor.runtime}.` : ''}`
+                      : 'The checks below need attention. Prepare this server, under Set up, fixes most of them.'}
                 </p>
               </div>
+              {okChecks.length > 0 ? (
+                <Button
+                  aria-expanded={showChecks}
+                  aria-controls="apps-checks-passing"
+                  onClick={() => setShowChecks((v) => !v)}
+                  data-testid="apps-checks-toggle"
+                >
+                  {showChecks ? 'Hide details' : 'Show details'}
+                </Button>
+              ) : null}
             </div>
-            {doctor.checks.map((c) => (
-              <CheckRow key={c.id} check={c} />
-            ))}
+            {doctor.checks
+              .filter((c) => c.status !== 'ok')
+              .map((c) => (
+                <CheckRow key={c.id} check={c} />
+              ))}
+            {showChecks ? (
+              <div id="apps-checks-passing" className="divide-y divide-[var(--color-border)]">
+                {okChecks.map((c) => (
+                  <CheckRow key={c.id} check={c} />
+                ))}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </SettingsGroup>
 
       {doctor && doctor.linux ? (
-        <SettingsGroup card title="Set up this server" hint="K2 makes these changes through its own root helper. You see each change first.">
+        <SettingsGroup
+          card
+          title="Set up this server"
+          hint="K2 makes these changes through its admin helper. You see each change first."
+          action={
+            <OverflowMenu
+              label="More set-up actions"
+              triggerProps={{ 'data-testid': 'apps-setup-menu' }}
+              items={[
+                {
+                  id: 'unprep',
+                  label: busy === 'unprep-dry' ? 'Checking…' : 'Undo the setup…',
+                  hint: isOwner ? 'Removes what Prepare set up. Not while an App runs.' : 'Only the server’s owner can undo the setup',
+                  danger: true,
+                  disabled: !isOwner || busy !== null,
+                  onSelect: () => void unprepPlan(),
+                },
+              ]}
+            />
+          }
+        >
           <div data-testid="apps-setup" className="divide-y divide-[var(--color-border)]">
             {ownerOnly ? (
               <div className="px-4 py-3">
-                <p className={SETTING_ROW_HINT}>Only the server&rsquo;s owner can set up the server or install the App engine.</p>
+                <p className={SETTING_ROW_HINT}>Only the server&rsquo;s owner can set up the server or install the App runtime.</p>
               </div>
             ) : null}
             {doctor.autoPrepare ? (
@@ -383,16 +431,16 @@ export function AppsServerSection(): React.JSX.Element {
                   anyone typing commands on it. It stops and tells you if the server already runs containers another way.
                 </p>
                 {doctor.autoPrepare.state ? (
-                  <p className={SETTING_SERVER_REASON} data-testid="apps-auto-prepare-last">
-                    Last run: {doctor.autoPrepare.state}
-                    {doctor.autoPrepare.detail ? ` — ${doctor.autoPrepare.detail}` : ''}
+                  <p className={SETTING_ROW_HINT} data-testid="apps-auto-prepare-last">
+                    Last run: {LAST_RUN_WORDS[doctor.autoPrepare.state] ?? doctor.autoPrepare.state}
+                    {doctor.autoPrepare.detail ? ` (${doctor.autoPrepare.detail})` : '.'}
                   </p>
                 ) : null}
                 {doctor.autoPrepare.undoneAt !== null || doctor.autoPrepare.blocked ? (
                   <div className="mt-2 flex items-start justify-between gap-4" data-testid="apps-auto-prepare-stopped">
                     <p className="type-hint text-[var(--color-status-warn-text)] leading-relaxed">
                       {doctor.autoPrepare.undoneAt !== null
-                        ? 'Paused because you undid the box setup.'
+                        ? 'Paused because you undid the setup.'
                         : `Stopped: ${doctor.autoPrepare.detail ?? doctor.autoPrepare.code ?? 'this box can’t be prepared'}.`}{' '}
                       K2 won&apos;t try again until you press Retry or K2 updates.
                     </p>
@@ -421,7 +469,7 @@ export function AppsServerSection(): React.JSX.Element {
               </Button>
             </SettingRow>
             <SettingRow
-              label="App engine"
+              label="App runtime"
               hint={`Runs each App in its own container. Signed by K2 and matched to this server’s K2.${engineNeeded(doctor) ? '' : ' It’s installed and answering.'}`}
               below={
                 engineLine ? (
@@ -437,21 +485,7 @@ export function AppsServerSection(): React.JSX.Element {
                 disabled={!isOwner || busy !== null}
                 data-testid="apps-engine-install"
               >
-                {busy === 'engine' ? 'Installing…' : engineNeeded(doctor) ? 'Install App engine' : 'Reinstall App engine'}
-              </Button>
-            </SettingRow>
-            <SettingRow
-              testId="apps-unprep"
-              label="Undo the setup"
-              hint="Removes what Prepare set up. The Apps user, its data and the server’s own packages stay. Not while an App runs."
-            >
-              <Button
-                variant="danger-quiet"
-                onClick={() => void unprepPlan()}
-                disabled={!isOwner || busy !== null}
-                data-testid="apps-unprep-start"
-              >
-                {busy === 'unprep-dry' ? 'Checking…' : 'Undo setup…'}
+                {busy === 'engine' ? 'Installing…' : engineNeeded(doctor) ? 'Install App runtime' : 'Reinstall App runtime'}
               </Button>
             </SettingRow>
           </div>
@@ -526,13 +560,13 @@ export function AppsServerSection(): React.JSX.Element {
             <div className={SETTING_ROW_LABEL}>It removes</div>
             <ul className="list-disc ml-5 mt-1 space-y-0.5">
               {unprep.undoes.map((l, i) => (
-                <li key={i} className="type-hint text-[var(--color-text-primary)] break-words">
-                  {l}
+                <li key={i} className="type-hint text-[var(--color-text-primary)] break-words" title={l}>
+                  {undoWords(l)}
                 </li>
               ))}
             </ul>
           </div>
-          {unprep.kept.length ? <p className={SETTING_ROW_HINT}>It keeps: {unprep.kept.join('; ')}</p> : null}
+          {unprep.kept.length ? <p className={SETTING_ROW_HINT}>It keeps: {unprep.kept.map(undoWords).join('; ')}.</p> : null}
           {unprep.runningApps.length ? (
             <Callout tone="warn" className="type-hint" data-testid="apps-unprep-running">
               Stop these Apps first: {unprep.runningApps.join(', ')}
@@ -544,6 +578,22 @@ export function AppsServerSection(): React.JSX.Element {
   )
 }
 
+const LAST_RUN_WORDS: Record<string, string> = {
+  ready: 'nothing needed changing',
+  prepared: 'set things up',
+  skipped: 'skipped',
+  failed: 'failed',
+  blocked: 'stopped',
+}
+
+/** The one line that sums the checks up. */
+function checksSummary(d: BoxDoctor): string {
+  const total = d.checks.length
+  const ok = d.checks.filter((c) => c.status === 'ok').length
+  if (!d.ready) return `Not ready yet: ${total - ok} of ${total} checks need attention`
+  return ok === total ? `Ready for Apps: all ${total} checks pass` : `Ready for Apps: ${ok} of ${total} checks pass`
+}
+
 const CHECK_WORDS: Record<string, string> = { ok: 'OK', warn: 'Check', fail: 'Failed', unknown: 'Unknown' }
 const CHECK_DOT: Record<string, DotTone> = { ok: 'ok', warn: 'warn', fail: 'error', unknown: 'idle' }
 
@@ -551,7 +601,7 @@ const CHECK_DOT: Record<string, DotTone> = { ok: 'ok', warn: 'warn', fail: 'erro
  *  else the daemon's own words for the server. */
 export function fixWords(fix: string): string {
   if (fix.startsWith('k2 app box prepare')) return 'Fix: Prepare this server, under Set up.'
-  if (fix.startsWith('k2 app engine')) return 'Fix: Install App engine, under Set up.'
+  if (fix.startsWith('k2 app engine')) return 'Fix: Install App runtime, under Set up.'
   return `Fix on the server: ${fix}`
 }
 
@@ -560,8 +610,10 @@ function CheckRow({ check }: { check: BoxCheck }): React.JSX.Element {
     <div className="px-4 py-2.5 flex items-start gap-3" data-testid={`apps-check-${check.id}`} data-status={check.status}>
       <StatusDot tone={CHECK_DOT[check.status] ?? 'idle'} className="mt-1.5" />
       <div className="min-w-0 flex-1">
-        <span className="type-row text-[var(--color-text-primary)]">{checkLabel(check.id)}</span>
-        {check.detail ? <span className="type-hint text-[var(--color-text-secondary)]"> · {check.detail}</span> : null}
+        <span className="type-row text-[var(--color-text-primary)]">
+          {checkLabel(check.id)}
+          {check.detail ? `: ${check.id === 'podman' && /^\d/.test(check.detail) ? `Podman ${check.detail}` : check.detail}` : ''}
+        </span>
         {check.fix && check.status !== 'ok' ? <p className={SETTING_SERVER_REASON}>{fixWords(check.fix)}</p> : null}
       </div>
       <span className={`type-hint flex-shrink-0 ${check.status === 'ok' ? 'text-[var(--color-text-secondary)]' : check.status === 'fail' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-warn-text)]'}`}>

@@ -176,17 +176,17 @@ export function appEngineLine(s: AppEngineStatus | null): string | null {
   const waiting = s.waitingEngine > 0 ? ` ${s.waitingEngine} App(s) wait for it.` : ''
   switch (s.state) {
     case 'healing':
-      return `K2 is installing the App engine that matches this K2 (${s.want?.version ?? ''}).${waiting}`
+      return `K2 is installing the App runtime that matches this K2 (${s.want?.version ?? ''}).${waiting}`
     case 'not_answering':
-      return `The App engine isn't answering. No App starts until it does.${waiting}`
+      return `The App runtime isn't answering. No App starts until it does.${waiting}`
     case 'needs_owner':
       return s.linger
-        ? `The App engine needs the owner: it is ${v(s.running)} and this K2 needs ${v(s.want)}. Install App engine fixes it.${waiting}`
-        : 'Linger is off for the k2app user: every App stops at its next logout. Prepare this box turns it back on.'
+        ? `The App runtime needs the owner: it is ${v(s.running)} and this K2 needs ${v(s.want)}. Install App runtime fixes it.${waiting}`
+        : 'Keep Apps running after sign-out is off for the Apps user: every App stops at its next sign-out. Prepare this server turns it back on.'
     case 'failed':
-      return `K2 couldn't update the App engine (installed ${v(s.installed)}, running ${v(s.running)}). Install App engine retries now.${waiting}`
+      return `K2 couldn't update the App runtime (installed ${v(s.installed)}, running ${v(s.running)}). Install App runtime retries now.${waiting}`
     default:
-      return `The App engine doesn't match this K2: installed ${v(s.installed)}, running ${v(s.running)}, this K2 ${v(s.want)}. K2 updates it by itself; Install App engine does it now.${waiting}`
+      return `The App runtime doesn't match this K2: installed ${v(s.installed)}, running ${v(s.running)}, this K2 ${v(s.want)}. K2 updates it by itself; Install App runtime does it now.${waiting}`
   }
 }
 
@@ -287,38 +287,84 @@ export function changeLines(d: PrepareDryRun): string[] {
   if (needsPodmanInstall(d) && d.podman.bundle) {
     const b = d.podman.bundle
     out.push(
-      `Install K2's Podman ${b.version} for the k2app user only (the box has ${d.podman.have ?? 'none'}; the distro's Podman is left as it is)`,
+      `Install K2's container engine (Podman ${b.version}) for the Apps user only. The server has ${d.podman.have ?? 'none'}; its own copy is left as it is.`,
     )
-    for (const w of b.writes) out.push(`  writes ${w}`)
   }
-  for (const s of d.steps) out.push(s)
+  for (const s of d.steps) out.push(stepWords(s))
   return out
+}
+
+/** A prepare step (the root helper's verb, `apps ensure-user`) in plain
+ *  words; an unknown step shows as the daemon sent it. */
+const STEP_WORDS: [string, string][] = [
+  ['apps packages install-youki', 'Install a lightweight container runtime'],
+  ['apps packages install', 'Install the system packages Apps need'],
+  ['apps ensure-user', 'A separate user that runs Apps (k2app)'],
+  ['apps subid', 'Its own range of user IDs'],
+  ['apps delegate', 'Resource limits for Apps'],
+  ['apps linger', 'Keep Apps running after sign-out'],
+  ['apps reserve-ports', 'Reserve the network ports Apps use'],
+  ['apps io-cost', 'Share the disk fairly between Apps'],
+  ['apps nft', 'Network rules for Apps'],
+  ['apps process-unit', 'A service for Apps that run as a process'],
+  ['apps apparmor', 'A security profile for Apps'],
+  ['apps runtime', 'Choose the container runtime'],
+  ['apps cores-slice', 'Memory kept for K2’s own services'],
+  ['apps budget', 'Memory and process limits for Apps'],
+]
+export function stepWords(step: string): string {
+  const s = step.trim()
+  return STEP_WORDS.find(([verb]) => s === verb || s.startsWith(`${verb} `))?.[1] ?? s
+}
+
+/** What Undo setup removes or keeps (the daemon's list) in plain words;
+ *  anything unknown shows as sent. */
+const UNDO_WORDS: [RegExp, string][] = [
+  [/App engine's user unit/i, 'The App runtime’s service'],
+  [/nft table/i, 'Network rules for Apps'],
+  [/AppArmor/i, 'The security profile for Apps'],
+  [/process-App unit/i, 'The service for Apps that run as a process'],
+  [/k2cores slice/i, 'Memory kept for K2’s own services'],
+  [/io\.cost/i, 'Fair disk sharing between Apps'],
+  [/reserved App port range/i, 'The reserved network ports'],
+  [/OCI runtime/i, 'The container runtime choice'],
+  [/memory\/task budget/i, 'Memory and process limits for Apps'],
+  [/^linger/i, 'Keeping Apps running after sign-out'],
+  [/cgroup delegation/i, 'Resource limits for Apps'],
+  [/k2app user/i, 'The user that runs Apps'],
+  [/\/var\/lib\/k2app/i, 'App data'],
+  [/distro packages/i, 'The system packages'],
+  [/k2-app-engine binary/i, 'The App runtime program'],
+  [/K2's Podman/i, 'K2’s container engine'],
+]
+export function undoWords(line: string): string {
+  return UNDO_WORDS.find(([re]) => re.test(line))?.[1] ?? line
 }
 
 /** The doctor row names, in plain words. Unknown ids show as they are. */
 const CHECK_LABELS: Record<string, string> = {
   platform: 'Platform',
   processEngine: 'Unwalled process engine',
-  helper: 'Root helper',
-  helperStatus: 'Root helper status',
+  helper: 'Admin helper',
+  helperStatus: 'Admin helper status',
   kernel: 'Kernel',
-  cgroupV2: 'cgroup v2',
-  systemd: 'systemd',
-  podman: 'Podman',
-  pasta: 'pasta (networking)',
-  ociRuntime: 'OCI runtime',
-  conmon: 'conmon',
-  boxPrep: 'Box prepared',
-  appUser: 'k2app user',
-  subid: 'Sub-UIDs',
-  linger: 'Linger',
-  delegation: 'cgroup delegation',
-  reservedPorts: 'Reserved ports',
-  nft: 'Firewall table',
-  processUnit: 'Process unit',
-  mac: 'MAC (AppArmor/SELinux)',
-  engine: 'App engine',
-  ptraceScope: 'ptrace scope',
+  cgroupV2: 'Resource limits',
+  systemd: 'System services',
+  podman: 'Container engine',
+  pasta: 'Container networking',
+  ociRuntime: 'Container runtime',
+  conmon: 'Container monitor',
+  boxPrep: 'Server set up',
+  appUser: 'The user that runs Apps',
+  subid: 'User ID ranges',
+  linger: 'Keep Apps running after sign-out',
+  delegation: 'Resource limits for Apps',
+  reservedPorts: 'Reserved network ports',
+  nft: 'Network rules for Apps',
+  processUnit: 'Process App service',
+  mac: 'Security profile for Apps',
+  engine: 'App runtime',
+  ptraceScope: 'Process isolation',
   usernsRestricted: 'User namespaces',
   ownerConfirm: 'Owner confirm',
   disk: 'Free disk',

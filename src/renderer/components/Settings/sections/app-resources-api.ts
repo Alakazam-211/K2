@@ -276,8 +276,8 @@ export const LEVEL_COLOR: Record<Level, string> = {
 }
 
 export const CLEAN_WORDS: Record<string, string> = {
-  seed: 'Unused Seed (K2 copy)',
-  engineSeed: 'Unused Seed (walled copy)',
+  seed: 'Unused starter copy',
+  engineSeed: 'Unused starter copy (App runtime)',
   image: 'Unused image',
   engineLeftover: 'Engine leftover',
   rotatedLog: 'Rotated log',

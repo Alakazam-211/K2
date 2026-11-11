@@ -151,6 +151,9 @@ struct Queue {
     /// Layers that need a keyframe ask (sent by the source, which holds
     /// the sender).
     asks: Vec<u8>,
+    /// Layers the source said it can't run (the route's
+    /// [`LinkFeed::fail_layer`]), reported to the hub one at a time.
+    failed: VecDeque<(u8, String)>,
     ended: Option<String>,
 }
 
@@ -249,7 +252,7 @@ impl LinkFeed {
     /// [`Self::spawn`] with a queue of `cap` units (at least 1).
     pub fn with_queue<R: Read + Send + 'static>(mut frames: R, cap: usize) -> io::Result<LinkFeed> {
         let shared = Arc::new(Shared {
-            q: Mutex::new(Queue { units: VecDeque::new(), cap: cap.max(1), attached: 0, next_gen: 1, broken: HashSet::new(), asks: Vec::new(), ended: None }),
+            q: Mutex::new(Queue { units: VecDeque::new(), cap: cap.max(1), attached: 0, next_gen: 1, broken: HashSet::new(), asks: Vec::new(), failed: VecDeque::new(), ended: None }),
             cv: Condvar::new(),
             n: Counters::default(),
         });
@@ -275,6 +278,25 @@ impl LinkFeed {
     /// The pipe ended (EOF or a read error), and why.
     pub fn ended(&self) -> Option<String> {
         lock(&self.shared.q).ended.clone()
+    }
+
+    /// The source can't run `layer` (deskd's `layer_failed` event on its
+    /// control link: a codec it has no encoder for, a session that won't
+    /// open). The attached source reports it to its hub as
+    /// [`SourceError::LayerFailed`] (the hub moves that layer's viewers to
+    /// JPEG) ahead of any queued unit, and the layer's queued units go.
+    /// Nothing is attached: ignored (a new hub sends its own layers).
+    pub fn fail_layer(&self, layer: u8, why: impl Into<String>) {
+        let mut q = lock(&self.shared.q);
+        if q.attached == 0 {
+            return;
+        }
+        let before = q.units.len();
+        q.units.retain(|r| r.unit.header.layer != layer);
+        self.shared.count(&self.shared.n.dropped, before - q.units.len());
+        q.failed.push_back((layer, why.into()));
+        drop(q);
+        self.shared.cv.notify_all();
     }
 }
 
@@ -314,6 +336,7 @@ impl LinkSource {
             q.units.clear();
             q.broken.clear();
             q.asks.clear();
+            q.failed.clear();
             gen
         };
         shared.cv.notify_all();
@@ -381,6 +404,15 @@ impl EncodedSource for LinkSource {
                     if q.attached != self.gen {
                         return Err(SourceError::Ended(LaneError::Unavailable { message: "another stream took this link".into() }));
                     }
+                    // A failed layer goes to the hub first (one per call);
+                    // a layer the hub no longer has on is forgotten.
+                    while let Some((layer, why)) = q.failed.pop_front() {
+                        if self.on.contains(&layer) {
+                            self.on.remove(&layer);
+                            self.layer_display.remove(&layer);
+                            return Err(SourceError::LayerFailed { layer, why });
+                        }
+                    }
                     if !q.asks.is_empty() || !q.units.is_empty() {
                         break;
                     }
@@ -433,6 +465,7 @@ impl Drop for LinkSource {
                 q.attached = 0;
                 q.units.clear();
                 q.asks.clear();
+                q.failed.clear();
             }
             mine
         };
@@ -604,6 +637,38 @@ mod tests {
         assert_eq!(src.display(), 2);
         assert_eq!(src.sizes(), Some(SourceSizes { points: 1280, native_px: None }));
         assert_eq!(feed.stats().switches, 1);
+        assert_eq!(feed.stats().dropped, 2);
+    }
+
+    /// D6: deskd's `layer_failed` reaches the hub as `LayerFailed` ahead of
+    /// queued units, the layer's queued units go, its later units are stale,
+    /// and other layers keep flowing. A failure for a layer that isn't on,
+    /// or with nothing attached, is ignored.
+    #[test]
+    fn a_failed_layer_reaches_the_hub_first_and_others_keep_flowing() {
+        let (rx, mut tx) = std::io::pipe().expect("pipe");
+        let feed = LinkFeed::spawn(rx).expect("feed");
+        feed.fail_layer(0, "nothing attached");
+        let (send, _asked) = sender();
+        let mut src = LinkSource::attach(&feed, LinkClock::new(0, Instant::now()), 1, sizes(), send);
+        src.set_layers(&[layer(0), layer(1)]);
+        write_unit(&mut tx, &UnitHeader { source_start: true, ..hdr(0, 1, true, 1) }, b"k0").expect("w");
+        write_unit(&mut tx, &UnitHeader { source_start: true, ..hdr(1, 1, true, 1) }, b"k1").expect("w");
+        wait_read(&feed, 2);
+        feed.fail_layer(7, "never on");
+        feed.fail_layer(1, "no JPEG encoder on this Mac");
+        match src.next_unit(Duration::from_secs(5)) {
+            Err(SourceError::LayerFailed { layer, why }) => assert_eq!((layer, why.as_str()), (1, "no JPEG encoder on this Mac")),
+            other => panic!("want LayerFailed first, got {other:?}"),
+        }
+        write_unit(&mut tx, &hdr(1, 2, false, 1), b"d1").expect("w"); // the failed layer: stale
+        write_unit(&mut tx, &hdr(0, 2, false, 1), b"d0").expect("w");
+        wait_read(&feed, 4);
+        let mut got = Vec::new();
+        while let Some(u) = src.next_unit(Duration::from_millis(50)).expect("live") {
+            got.push((u.layer, u.seq));
+        }
+        assert_eq!(got, vec![(0, 1), (0, 2)], "layer 0 flows; layer 1's queued key and later delta are gone");
         assert_eq!(feed.stats().dropped, 2);
     }
 

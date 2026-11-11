@@ -211,133 +211,213 @@ fn status_json() -> CliResponse {
     }
 }
 
-/// Each principal's enabled App grants as the roster shows them:
-/// `{app, appServiceId, role, rooms}` (role name or null; room handles from
-/// the role, else the grant's own rooms scope).
-fn app_grants_by_principal() -> Result<HashMap<String, Vec<serde_json::Value>>, String> {
-    let grants = skin::list_grants()?;
-    let roles = skin::list_roles()?;
-    let mut out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
-    for g in grants.iter().filter(|g| g.enabled && g.kind == "app" && g.subject_kind == "principal") {
-        let role = g.role_id.as_deref().and_then(|id| roles.iter().find(|r| r.id == id));
-        let room_ids: Vec<String> = match role {
-            Some(r) => r.rooms.clone(),
-            None => g.scope.as_deref().and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()).unwrap_or_default(),
-        };
-        let app_id = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::deploy::store::get_app_by_service(&conn, &g.target_id).ok().flatten().map(|a| a.app_id)
-        };
-        out.entry(g.subject_id.clone()).or_default().push(serde_json::json!({
-            "app": app_id,
-            "appServiceId": g.target_id,
-            "role": role.map(|r| r.name.clone()),
-            "rooms": room_ids.iter().map(|id| crate::apps::routes::ws_handle(id)).collect::<Vec<_>>(),
-        }));
+/// The room ids a roster App grant shows: its role's rooms, else the
+/// grant's own rooms scope.
+fn grant_room_ids(g: &skin::SkinGrant, roles: &[skin::SkinRole]) -> Vec<String> {
+    match g.role_id.as_deref().and_then(|id| roles.iter().find(|r| r.id == id)) {
+        Some(r) => r.rooms.clone(),
+        None => g.scope.as_deref().and_then(|s| serde_json::from_str::<Vec<String>>(s).ok()).unwrap_or_default(),
     }
-    Ok(out)
 }
 
-pub fn handle_users_get() -> CliResponse {
-    match skin::list_principals() {
-        Ok(users) => {
-            // 0.46.4: a test guest says so (`test`: its App, its end).
-            let tests: HashMap<String, skin::test_guests::TestGuest> =
-                skin::test_guests::list(None).unwrap_or_default().into_iter().map(|t| (t.principal_id.clone(), t)).collect();
-            // agent-app-users R2: who is tied, and whose extra access waits.
-            let tied = match tie_display() {
-                Ok(t) => t,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            // Whose stored email an owner reset won't mail (any tie, or an
-            // email the owner hasn't confirmed; verification item 1).
-            let email_refused = match skin::ties::stored_email_refusals() {
-                Ok(m) => m,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            // app-user-profile U24: a name the person set themselves is
-            // shown with their username beside it; the picture's hash.
-            let marks = match skin::profile::marks() {
-                Ok(m) => m,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            // 0.46.5 (item 15): an App login's role and rooms live on its App
-            // grant, not the user row; the roster shows them per App.
-            let app_grants = match app_grants_by_principal() {
-                Ok(m) => m,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            // A login locked right now (too many wrong passwords): when the
-            // lock ends, for the list's Unlock action (0.46.6).
-            let locks = match skin::active_login_locks() {
-                Ok(m) => m,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            // Must change their password at next sign-in (0.46.6).
-            let must_change = match skin::must_change::flagged() {
-                Ok(m) => m,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            // A box login (a `host` grant, 0.46.6): only the owner resets,
-            // sets or unlocks it ([`owner_or_admin_for`]), so Settings can
-            // say so to an Admin before they try.
-            let grants = match skin::list_grants() {
-                Ok(g) => g,
-                Err(e) => return CliResponse::internal_error(e),
-            };
-            let users: Vec<serde_json::Value> = users
-                .iter()
-                .map(|u| {
-                    let mut v = serde_json::to_value(u).unwrap_or(serde_json::Value::Null);
-                    let (self_set, image_hash) = marks.get(&u.id).cloned().unwrap_or((false, None));
-                    v["nameSetBySelf"] = serde_json::json!(self_set);
-                    v["imageHash"] = serde_json::json!(image_hash);
-                    match tied.get(&u.id) {
-                        Some(t) => {
-                            v["pendingReset"] = serde_json::json!(t.pending);
-                            v["tiedTo"] = serde_json::json!(t.handle);
-                            v["tiedToId"] = serde_json::json!(t.tie.workspace_id);
-                            v["tiedReasons"] = serde_json::json!(t.tie.reasons);
-                            v["tiedBy"] = serde_json::json!(t.tie.set_by);
-                        }
-                        None => {
-                            v["pendingReset"] = serde_json::json!(false);
-                            v["tiedTo"] = serde_json::Value::Null;
-                        }
-                    }
-                    v["appGrants"] = serde_json::json!(app_grants.get(&u.id).cloned().unwrap_or_default());
-                    v["lockedUntil"] = match locks.get(&u.id) {
-                        Some(until) => serde_json::json!(until),
-                        None => serde_json::Value::Null,
-                    };
-                    v["passwordMustChange"] = serde_json::json!(must_change.contains(&u.id));
-                    v["boxLogin"] = serde_json::json!(has_box_login(&u.id, &grants));
-                    v["storedEmailRefused"] = match email_refused.get(&u.id) {
-                        Some(why) => serde_json::json!(why),
-                        None => serde_json::Value::Null,
-                    };
-                    if let Some(t) = tests.get(&u.id) {
-                        let app_id = {
-                            let db = k2_core::db::shared();
-                            let conn = db.lock();
-                            k2_core::deploy::store::get_app_by_service(&conn, &t.app).ok().flatten().map(|a| a.app_id)
-                        };
-                        v["test"] = serde_json::json!({
-                            "app": app_id,
-                            "appServiceId": t.app,
-                            "expiresAt": t.expires_at,
-                            "expired": t.expired_at(k2_core::deploy::now()),
-                            "createdBy": t.created_by,
-                        });
-                    }
-                    v
-                })
-                .collect();
-            CliResponse::ok_json(serde_json::json!({ "users": users }).to_string())
-        }
-        Err(e) => CliResponse::internal_error(e),
+/// The daemon-DB names the users list shows: each App's id by its service
+/// id, and each room's workspace handle (its id when the workspace is
+/// gone). Read under ONE daemon DB lock, so a server with many App grants
+/// and test guests never takes the lock per grant or per guest. Called
+/// with no skin store lock held (lock order: never skin → daemon DB).
+struct RosterNames {
+    app_ids: HashMap<String, String>,
+    room_handles: HashMap<String, String>,
+}
+
+fn roster_names(room_ids: &HashSet<String>) -> Result<RosterNames, String> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let app_ids = k2_core::deploy::store::list_apps(&conn, None)
+        .map_err(|e| format!("app list: {e}"))?
+        .into_iter()
+        .map(|a| (a.service_id, a.app_id))
+        .collect();
+    let room_handles = room_ids
+        .iter()
+        .map(|id| {
+            let handle = k2_core::workspace_session_handles::workspace_address_name(&conn, id).unwrap_or_else(|_| id.clone());
+            (id.clone(), handle)
+        })
+        .collect();
+    Ok(RosterNames { app_ids, room_handles })
+}
+
+/// Is `g` one of the App grants the roster shows?
+fn roster_app_grant(g: &skin::SkinGrant) -> bool {
+    g.enabled && g.kind == "app" && g.subject_kind == "principal"
+}
+
+/// Each principal's enabled App grants as the roster shows them:
+/// `{app, appServiceId, role, rooms}` (role name or null; room handles from
+/// [`grant_room_ids`]). Without `names` (the `apps` part failed) `app` is
+/// null and rooms are their ids.
+fn app_grants_by_principal(
+    grants: &[skin::SkinGrant],
+    roles: &[skin::SkinRole],
+    names: Option<&RosterNames>,
+) -> HashMap<String, Vec<serde_json::Value>> {
+    let mut out: HashMap<String, Vec<serde_json::Value>> = HashMap::new();
+    for g in grants.iter().filter(|g| roster_app_grant(g)) {
+        let role = g.role_id.as_deref().and_then(|id| roles.iter().find(|r| r.id == id));
+        let rooms: Vec<String> = grant_room_ids(g, roles)
+            .into_iter()
+            .map(|id| names.and_then(|n| n.room_handles.get(&id).cloned()).unwrap_or(id))
+            .collect();
+        out.entry(g.subject_id.clone()).or_default().push(serde_json::json!({
+            "app": names.and_then(|n| n.app_ids.get(&g.target_id).cloned()),
+            "appServiceId": g.target_id,
+            "role": role.map(|r| r.name.clone()),
+            "rooms": rooms,
+        }));
     }
+    out
+}
+
+// The users list's parts besides the users themselves. Each loads on its
+// own; one that fails is named in the reply's `errors` and its fields are
+// left off the rows, so the rest of the list still shows.
+pub const USERS_PART_TEST_GUESTS: &str = "testGuests";
+pub const USERS_PART_TIES: &str = "ties";
+pub const USERS_PART_STORED_EMAIL: &str = "storedEmail";
+pub const USERS_PART_PROFILE: &str = "profile";
+pub const USERS_PART_APPS: &str = "apps";
+pub const USERS_PART_APP_GRANTS: &str = "appGrants";
+pub const USERS_PART_LOCKS: &str = "locks";
+pub const USERS_PART_MUST_CHANGE: &str = "mustChange";
+pub const USERS_PART_BOX_LOGIN: &str = "boxLogin";
+
+/// `GET /cli/skin/users`: `{users: [...], errors?: {<part>: "<reason>"}}`.
+/// Only the users themselves are required (500 if they can't be read);
+/// every other part fails alone (the `USERS_PART_*` names), and a part's
+/// fields are left off the rows when it failed. Auth is the caller's
+/// (dispatcher / cell socket), checked before this runs.
+pub fn handle_users_get() -> CliResponse {
+    let users = match skin::list_principals() {
+        Ok(u) => u,
+        Err(e) => return CliResponse::internal_error(e),
+    };
+    let mut errors = serde_json::Map::new();
+    fn part<T>(errors: &mut serde_json::Map<String, serde_json::Value>, name: &str, r: Result<T, String>) -> Option<T> {
+        match r {
+            Ok(v) => Some(v),
+            Err(e) => {
+                errors.insert(name.to_string(), serde_json::json!(e));
+                None
+            }
+        }
+    }
+    // 0.46.4: a test guest says so (`test`: its App, its end).
+    let tests: Option<HashMap<String, skin::test_guests::TestGuest>> = part(
+        &mut errors,
+        USERS_PART_TEST_GUESTS,
+        skin::test_guests::list(None).map(|l| l.into_iter().map(|t| (t.principal_id.clone(), t)).collect()),
+    );
+    // agent-app-users R2: who is tied, and whose extra access waits.
+    let tied = part(&mut errors, USERS_PART_TIES, tie_display());
+    // Whose stored email an owner reset won't mail (any tie, or an email
+    // the owner hasn't confirmed; verification item 1).
+    let email_refused = part(&mut errors, USERS_PART_STORED_EMAIL, skin::ties::stored_email_refusals());
+    // app-user-profile U24: a name the person set themselves is shown with
+    // their username beside it; the picture's hash.
+    let marks = part(&mut errors, USERS_PART_PROFILE, skin::profile::marks());
+    // One grants read (and one roles read) serves the App grants and the
+    // box logins.
+    let grants = skin::list_grants();
+    let grants_and_roles = grants.as_ref().map_err(|e| e.clone()).and_then(|g| skin::list_roles().map(|r| (g, r)));
+    // App ids and room handles for the grants and test guests: one daemon
+    // DB lock for all of them.
+    let mut room_ids = HashSet::new();
+    if let Ok((g, r)) = &grants_and_roles {
+        for g in g.iter().filter(|g| roster_app_grant(g)) {
+            room_ids.extend(grant_room_ids(g, r));
+        }
+    }
+    let names = part(&mut errors, USERS_PART_APPS, roster_names(&room_ids));
+    // 0.46.5 (item 15): an App login's role and rooms live on its App
+    // grant, not the user row; the roster shows them per App.
+    let app_grants = part(
+        &mut errors,
+        USERS_PART_APP_GRANTS,
+        grants_and_roles.map(|(g, r)| app_grants_by_principal(g, &r, names.as_ref())),
+    );
+    // A login locked right now (too many wrong passwords): when the lock
+    // ends, for the list's Unlock action (0.46.6).
+    let locks = part(&mut errors, USERS_PART_LOCKS, skin::active_login_locks());
+    // Must change their password at next sign-in (0.46.6).
+    let must_change = part(&mut errors, USERS_PART_MUST_CHANGE, skin::must_change::flagged());
+    // A box login (a `host` grant, 0.46.6): only the owner resets, sets or
+    // unlocks it ([`owner_or_admin_for`]), so Settings can say so to an
+    // Admin before they try.
+    let box_grants = part(&mut errors, USERS_PART_BOX_LOGIN, grants);
+    let now = k2_core::deploy::now();
+    let users: Vec<serde_json::Value> = users
+        .iter()
+        .map(|u| {
+            let mut v = serde_json::to_value(u).unwrap_or(serde_json::Value::Null);
+            if let Some(marks) = &marks {
+                let (self_set, image_hash) = marks.get(&u.id).cloned().unwrap_or((false, None));
+                v["nameSetBySelf"] = serde_json::json!(self_set);
+                v["imageHash"] = serde_json::json!(image_hash);
+            }
+            if let Some(tied) = &tied {
+                match tied.get(&u.id) {
+                    Some(t) => {
+                        v["pendingReset"] = serde_json::json!(t.pending);
+                        v["tiedTo"] = serde_json::json!(t.handle);
+                        v["tiedToId"] = serde_json::json!(t.tie.workspace_id);
+                        v["tiedReasons"] = serde_json::json!(t.tie.reasons);
+                        v["tiedBy"] = serde_json::json!(t.tie.set_by);
+                    }
+                    None => {
+                        v["pendingReset"] = serde_json::json!(false);
+                        v["tiedTo"] = serde_json::Value::Null;
+                    }
+                }
+            }
+            if let Some(app_grants) = &app_grants {
+                v["appGrants"] = serde_json::json!(app_grants.get(&u.id).cloned().unwrap_or_default());
+            }
+            if let Some(locks) = &locks {
+                v["lockedUntil"] = match locks.get(&u.id) {
+                    Some(until) => serde_json::json!(until),
+                    None => serde_json::Value::Null,
+                };
+            }
+            if let Some(must_change) = &must_change {
+                v["passwordMustChange"] = serde_json::json!(must_change.contains(&u.id));
+            }
+            if let Some(grants) = &box_grants {
+                v["boxLogin"] = serde_json::json!(has_box_login(&u.id, grants));
+            }
+            if let Some(email_refused) = &email_refused {
+                v["storedEmailRefused"] = match email_refused.get(&u.id) {
+                    Some(why) => serde_json::json!(why),
+                    None => serde_json::Value::Null,
+                };
+            }
+            if let Some(t) = tests.as_ref().and_then(|tests| tests.get(&u.id)) {
+                v["test"] = serde_json::json!({
+                    "app": names.as_ref().and_then(|n| n.app_ids.get(&t.app).cloned()),
+                    "appServiceId": t.app,
+                    "expiresAt": t.expires_at,
+                    "expired": t.expired_at(now),
+                    "createdBy": t.created_by,
+                });
+            }
+            v
+        })
+        .collect();
+    let mut body = serde_json::json!({ "users": users });
+    if !errors.is_empty() {
+        body["errors"] = serde_json::Value::Object(errors);
+    }
+    CliResponse::ok_json(body.to_string())
 }
 
 /// One tied guest, for displays (agent-app-users R2, §5.2).

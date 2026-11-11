@@ -45,11 +45,12 @@ describe('K2 noun families (Help explorer)', () => {
 
   it('keeps the core nouns humans and agents run', () => {
     const nouns = items.map((i) => i.noun)
-    for (const need of ['msg', 'thread', 'read', 'inbox', 'feedback', 'whoami', 'connections', 'agent', 'preset', 'project', 'workspace', 'heartbeat', 'activity', 'mail', 'wiki', 'skills', 'publish', 'dns', 'checkin', 'compute', 'vault', 'study']) {
+    for (const need of ['msg', 'thread', 'read', 'inbox', 'feedback', 'whoami', 'connections', 'agent', 'preset', 'project', 'workspace', 'heartbeat', 'activity', 'mail', 'wiki', 'skills', 'publish', 'dns', 'done', 'compute', 'vault', 'study']) {
       expect(nouns).toContain(need)
     }
     expect(items.find((i) => i.noun === 'feedback')?.also).toEqual(['tickets'])
-    expect(items.find((i) => i.noun === 'checkin')?.also).toEqual(['done'])
+    // `k2 checkin` is retired (a stub that points at organization, inbox and done).
+    expect(items.flatMap((i) => [i.noun, ...(i.also ?? []), ...(i.leftover ?? [])])).not.toContain('checkin')
   })
 
   it('examples use k2, never k2so; blurbs never say k2so', () => {

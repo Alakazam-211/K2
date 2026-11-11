@@ -72,6 +72,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: 'k2 inbox list',
       },
       {
+        noun: 'done',
+        blurb: 'Mark your task done (or blocked); in an API cell it completes the session.',
+        example: 'k2 done --blocked "waiting on review"',
+      },
+      {
         noun: 'feedback',
         also: ['tickets'],
         blurb: 'Durable question for the human (Tickets page), with an HTML brief.',
@@ -127,12 +132,6 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
     title: 'Always-on & more',
     items: [
       { noun: 'heartbeat', blurb: 'Scheduled wakeups.', example: 'k2 heartbeat schedule list' },
-      {
-        noun: 'checkin',
-        also: ['done'],
-        blurb: 'Heartbeat ping / status; `k2 done` completes an API cell.',
-        example: 'k2 checkin --status "halfway"',
-      },
       { noun: 'activity', blurb: 'Audit log.', example: 'k2 activity --limit 20' },
       { noun: 'compute', blurb: 'Run builds and tests on your own machines (compute nodes).', example: 'k2 compute nodes' },
       { noun: 'ci', blurb: 'CI on compute: check every push, post GitHub statuses.', example: 'k2 ci status' },

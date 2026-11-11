@@ -227,6 +227,103 @@ describe('DraftCard', () => {
     await waitFor(() => expect(onDiscard).toHaveBeenCalledTimes(1))
   })
 
+  it('recipients start as one line, Edit opens To / Cc / Subject, and each edit reaches onChangeHeaders and Send', () => {
+    const onChangeHeaders = vi.fn()
+    const onSend = vi.fn()
+    render(
+      <DraftCard
+        text="Hi Sam"
+        agent="support-desk"
+        to={[{ name: 'Sam Okafor', address: 'sam@example.com' }]}
+        cc={['ana@example.com', 'bo@example.com']}
+        subject="Re: Field trip"
+        onChangeHeaders={onChangeHeaders}
+        onSend={onSend}
+        onDiscard={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('mr-draft-headers-summary').textContent).toBe('To Sam Okafor · Cc 2 people · Subject: Re: Field trip')
+    expect(screen.queryByTestId('mr-draft-headers')).toBeNull()
+    const toggle = screen.getByTestId('mr-draft-headers-toggle')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(screen.getByTestId('mr-draft-to'))
+    expect((screen.getByTestId('mr-draft-to') as HTMLInputElement).value).toBe('sam@example.com')
+    expect((screen.getByTestId('mr-draft-cc') as HTMLInputElement).value).toBe('ana@example.com, bo@example.com')
+    fireEvent.change(screen.getByTestId('mr-draft-to'), { target: { value: 'sam@example.com, lee@example.com' } })
+    expect(onChangeHeaders).toHaveBeenLastCalledWith({
+      to: ['sam@example.com', 'lee@example.com'],
+      cc: ['ana@example.com', 'bo@example.com'],
+      subject: 'Re: Field trip',
+    })
+    fireEvent.change(screen.getByTestId('mr-draft-subject'), { target: { value: 'Re: Field trip, Friday ' } })
+    expect(onChangeHeaders).toHaveBeenLastCalledWith(expect.objectContaining({ subject: 'Re: Field trip, Friday' }))
+    fireEvent.click(toggle)
+    expect(screen.getByTestId('mr-draft-headers-summary').textContent).toContain('To Sam Okafor +1')
+    fireEvent.click(screen.getByTestId('mr-draft-send'))
+    expect(onSend).toHaveBeenCalledWith('Hi Sam', {
+      to: ['sam@example.com', 'lee@example.com'],
+      cc: ['ana@example.com', 'bo@example.com'],
+      subject: 'Re: Field trip, Friday',
+    })
+  })
+
+  it('no subject: Send is off and says so', () => {
+    const onSend = vi.fn()
+    render(<DraftCard text="Hi" agent="bot" to={['sam@example.com']} subject="" onSend={onSend} onDiscard={() => {}} />)
+    expect((screen.getByTestId('mr-draft-send') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('mr-draft-blocker').textContent).toBe('Add a subject to send.')
+  })
+
+  it('read-only: plain text, no fields, no Send or Discard, and says where to edit it', () => {
+    render(
+      <DraftCard
+        text="Hi Sam"
+        agent="support-desk"
+        to={[{ name: 'Sam Okafor', address: 'sam@example.com' }]}
+        subject="Re: Field trip"
+        readOnly={{ provider: 'microsoft' }}
+      />,
+    )
+    const card = screen.getByTestId('mr-draft-card')
+    expect(card.textContent).toContain('Draft by support-desk')
+    expect(screen.getByTestId('mr-draft-unsent').textContent).toBe('not sent')
+    expect(screen.getByTestId('mr-draft-readonly').textContent).toBe('This draft can only be edited in Outlook.')
+    expect(card.getAttribute('aria-label')).toBe('Draft by support-desk, not sent. This draft can only be edited in Outlook.')
+    expect(screen.getByTestId('mr-draft-body').textContent).toBe('Hi Sam')
+    expect(screen.queryByTestId('mr-draft-send')).toBeNull()
+    expect(screen.queryByTestId('mr-draft-discard')).toBeNull()
+    expect(screen.queryByTestId('mr-draft-open')).toBeNull()
+    expect(screen.getByTestId('mr-draft-headers-toggle').textContent).toBe('Show recipients')
+    fireEvent.click(screen.getByTestId('mr-draft-headers-toggle'))
+    expect(screen.getByTestId('mr-draft-to').textContent).toBe('Sam Okafor <sam@example.com>')
+    expect(card.querySelector('textarea, input')).toBeNull()
+  })
+
+  it('read-only: the data’s own words win, and an Open link shows only when the data gives a URL', () => {
+    const onOpen = vi.fn()
+    render(
+      <DraftCard
+        text=""
+        agent="bot"
+        readOnly={{ provider: 'microsoft', note: 'K2 couldn’t read this draft just now.', openUrl: 'https://outlook.example.com/d/1', onOpen }}
+      />,
+    )
+    expect(screen.getByTestId('mr-draft-readonly').textContent).toContain('K2 couldn’t read this draft just now.')
+    expect(screen.getByTestId('mr-draft-body').textContent).toBe('K2 can’t show this draft’s text.')
+    const link = screen.getByTestId('mr-draft-open')
+    expect(link.textContent).toBe('Open in Outlook')
+    fireEvent.click(link)
+    expect(onOpen).toHaveBeenCalledWith('https://outlook.example.com/d/1')
+  })
+
+  it('readOnly={true} on any other mailbox names its own mail app', () => {
+    render(<DraftCard text="Hi" agent="bot" readOnly />)
+    expect(screen.getByTestId('mr-draft-readonly').textContent).toBe('This draft can only be edited in its mailbox’s own mail app.')
+    expect(screen.queryByTestId('mr-draft-headers-toggle')).toBeNull()
+  })
+
   it('sits at the top of the open conversation through threadTop', async () => {
     const { s } = source()
     render(

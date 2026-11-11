@@ -7,7 +7,7 @@
 // radius, attachment chips, and Send (primary), Save draft and Discard
 // (quiet). ⌘↩ (Ctrl+Enter) sends; Esc closes, asking first when something
 // has been written. `ComposerBody` is the body field on its own (DraftCard
-// edits in it).
+// edits in it, and its To / Cc / Subject in `FieldRow`s).
 
 import { useEffect, useRef, useState } from 'react'
 import { formatSize, splitAddresses } from '../format'
@@ -81,7 +81,8 @@ export function AttachmentChip({ file, onRemove }: { file: ComposeAttachment; on
   )
 }
 
-function FieldRow({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }): React.JSX.Element {
+/** A labelled row: To, Cc, Subject (DraftCard's recipients use it too). */
+export function FieldRow({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }): React.JSX.Element {
   return (
     <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-center gap-2">
       <label htmlFor={htmlFor} className="type-hint text-[var(--color-text-muted)]">

@@ -127,6 +127,26 @@ const EN = {
   draft_saved_ok: 'Draft saved. It’s still not sent.',
   draft_sent_ok: 'Sent. The draft is now in the conversation.',
   draft_discarded: 'Draft discarded.',
+  // draft card: recipients and subject
+  draft_headers: 'Recipients and subject',
+  draft_more: '+{count}',
+  draft_cc_count: '{count} people',
+  draft_no_recipients: 'no one yet',
+  draft_edit_headers: 'Edit',
+  draft_edit_headers_label: 'Edit recipients and subject',
+  draft_done_headers: 'Done',
+  draft_show_headers: 'Show recipients',
+  draft_hide_headers: 'Hide recipients',
+  draft_needs_to: 'Add a recipient to send.',
+  draft_needs_subject: 'Add a subject to send.',
+  // draft card: a draft K2 can show but not change
+  draft_readonly_in: 'This draft can only be edited in {app}.',
+  draft_readonly_elsewhere: 'This draft can only be edited in its mailbox’s own mail app.',
+  draft_open_in: 'Open in {app}',
+  draft_open_elsewhere: 'Open in its mail app',
+  draft_no_text: 'K2 can’t show this draft’s text.',
+  app_microsoft: 'Outlook',
+  app_gmail: 'Gmail',
 } as const
 
 export type MessageKey = keyof typeof EN

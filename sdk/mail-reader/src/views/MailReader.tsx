@@ -34,7 +34,7 @@ import type {
 } from '../types'
 import { IconButton, MailIcon, MailUiProvider, useMailUi, type MailReaderUi } from '../ui'
 import { Composer, type ComposeMode, type ComposeValues } from './Composer'
-import { DraftCard } from './DraftCard'
+import { DraftCard, type DraftHeaders } from './DraftCard'
 import { EmailList } from './EmailList'
 import type { MessageActions, RenderHtml } from './EmailViewer'
 import { FolderList } from './FolderList'
@@ -63,7 +63,8 @@ export interface MailReaderProps {
   /** The host's controls and icons (see ../ui); plain ones by default. */
   ui?: Partial<MailReaderUi>
   /** Shown at the top of an open conversation, under its subject: an agent's
-   *  unsent reply (DraftCard). Nothing feeds it yet; see DraftCard. */
+   *  unsent reply (DraftCard). The reader already shows a thread's own
+   *  drafts (`draft: true`) there; this is for anything else. */
   threadTop?: (messages: ReaderMessage[]) => React.ReactNode
 }
 
@@ -464,22 +465,37 @@ function Reader({
     if (h) clearTimeout(h)
     draftTimers.current.delete(draftId)
   }
-  const draftValues = (d: ReaderMessage, body: string): DraftEditInput => ({
-    to: (d.to ?? []).map((a) => a.address),
-    cc: (d.cc ?? []).map((a) => a.address),
-    subject: d.subject ?? '',
-    body,
-  })
-  const editThreadDraft = (d: ReaderMessage, body: string): void => {
+  // What the person has made of each draft so far (body, To, Cc, Subject),
+  // so a body edit keeps edited recipients and the reverse (the cards keep
+  // what's typed across a reload, so this does too). Another conversation
+  // starts from what the daemon served.
+  const draftEdits = useRef(new Map<string, DraftEditInput>())
+  useEffect(() => {
+    draftEdits.current.clear()
+  }, [selectedId])
+  const draftValues = (d: ReaderMessage, body?: string): DraftEditInput => {
+    const cur = draftEdits.current.get(d.draftId ?? d.id) ?? {
+      to: (d.to ?? []).map((a) => a.address),
+      cc: (d.cc ?? []).map((a) => a.address),
+      subject: d.subject ?? '',
+      body: d.text ?? '',
+    }
+    return body === undefined ? cur : { ...cur, body }
+  }
+  const editThreadDraft = (d: ReaderMessage, patch: Partial<DraftEditInput>): void => {
     const draftId = d.draftId ?? d.id
+    const values = { ...draftValues(d), ...patch }
+    draftEdits.current.set(draftId, values)
     stopDraftSave(draftId)
     draftTimers.current.set(
       draftId,
       setTimeout(() => {
         draftTimers.current.delete(draftId)
-        if (body.trim().length === 0) return
+        // The daemon refuses a draft with no text, no To or no Subject; the
+        // card says what's missing, so nothing is saved until it's there.
+        if (values.body.trim().length === 0 || values.to.length === 0 || values.subject.trim().length === 0) return
         source
-          .draftSave(draftId, draftValues(d, body))
+          .draftSave(draftId, values)
           .then(() => setNotice(t('draft_saved_ok')))
           .catch((e: unknown) => setNotice(t('error_prefix', { message: errText(e) })))
       }, DRAFT_SAVE_PAUSE_MS),
@@ -491,9 +507,9 @@ function Reader({
       return left && left.length > 0 ? left : null
     })
   }
-  const sendThreadDraft = async (d: ReaderMessage, body: string): Promise<void> => {
+  const sendThreadDraft = async (d: ReaderMessage, body: string, headers?: DraftHeaders): Promise<void> => {
     const draftId = d.draftId ?? d.id
-    const v = draftValues(d, body)
+    const v = { ...draftValues(d, body), ...headers }
     const ok = await confirm({
       title: t('confirm_send_draft_title'),
       message: t('confirm_send_message', { inbox: d.inbox, to: v.to.join(', ') }),
@@ -522,16 +538,32 @@ function Reader({
   }
   const draftCards = (drafts: ReaderMessage[]): React.ReactNode =>
     drafts.map((d) => {
-      const editable = d.editable !== false
+      const common = {
+        text: d.text ?? '',
+        agent: d.author?.name || t('owner_unknown'),
+        updatedAt: d.editedAt ? new Date(d.editedAt * 1000).toISOString() : null,
+        to: d.to ?? [],
+        cc: d.cc ?? [],
+        subject: d.subject ?? '',
+      }
+      // `editable: false`: K2 can show it but not change it; `hint` is the
+      // daemon's why, and the inbox's provider names the app to use instead.
+      if (d.editable === false) {
+        const provider = inboxes.find((i) => i.address === d.inbox)?.provider ?? null
+        // No copy to read (the server never said where it saved it): no
+        // recipients line to show either.
+        const known = (d.to?.length ?? 0) > 0 || !!d.subject
+        const headers = known ? {} : { to: undefined, cc: undefined, subject: undefined }
+        return <DraftCard key={d.draftId ?? d.id} {...common} {...headers} readOnly={{ provider, note: d.hint ?? null }} />
+      }
       return (
         <DraftCard
           key={d.draftId ?? d.id}
-          text={d.text ?? ''}
-          agent={d.author?.name || t('owner_unknown')}
-          updatedAt={d.editedAt ? new Date(d.editedAt * 1000).toISOString() : null}
-          onChange={editable ? (body) => editThreadDraft(d, body) : undefined}
-          onSend={(body) => (editable ? void sendThreadDraft(d, body) : setNotice(d.hint ?? null))}
-          onDiscard={() => (editable ? discardThreadDraft(d) : setNotice(d.hint ?? null))}
+          {...common}
+          onChange={(body) => editThreadDraft(d, { body })}
+          onChangeHeaders={(h) => editThreadDraft(d, h)}
+          onSend={(body, headers) => void sendThreadDraft(d, body, headers)}
+          onDiscard={() => discardThreadDraft(d)}
           confirm={confirm}
           busy={busy}
         />

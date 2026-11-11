@@ -344,13 +344,83 @@ describe('drafted replies at the top of the thread', () => {
     expect(screen.getByTestId('mr-viewer')).toBeTruthy()
   })
 
-  it('a draft K2 can only show saves nothing and sends nothing, and says why', async () => {
-    const f = fakeSource({ thread: [draft({ editable: false, hint: 'edit it in Outlook' }), message()] })
+  it('an edited To and Subject are saved with the text, and a later text edit keeps them', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const f = fakeSource({ thread: [draft(), message()] })
+      await openFirstThread(f)
+      await screen.findByTestId('mr-draft-card')
+      expect(screen.queryByTestId('mr-draft-to')).toBeNull()
+      fireEvent.click(screen.getByTestId('mr-draft-headers-toggle'))
+      fireEvent.change(screen.getByTestId('mr-draft-to'), { target: { value: 's@o.example, sam@example.com' } })
+      fireEvent.change(screen.getByTestId('mr-draft-subject'), { target: { value: 'Re: Hello there (23 of us)' } })
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+      })
+      const saved = { to: ['s@o.example', 'sam@example.com'], cc: ['bo@example.com'], subject: 'Re: Hello there (23 of us)' }
+      await waitFor(() => expect(f.writes()).toEqual([{ method: 'draftSave', args: ['d_1', { ...saved, body: 'agent words' }] }]))
+      fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'new words' } })
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+      })
+      await waitFor(() => expect(f.writes()).toHaveLength(2))
+      expect(f.writes()[1]).toEqual({ method: 'draftSave', args: ['d_1', { ...saved, body: 'new words' }] })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a draft with no To saves nothing, and Send says what is missing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const f = fakeSource({ thread: [draft(), message()] })
+      await openFirstThread(f)
+      await screen.findByTestId('mr-draft-card')
+      fireEvent.click(screen.getByTestId('mr-draft-headers-toggle'))
+      fireEvent.change(screen.getByTestId('mr-draft-to'), { target: { value: '' } })
+      await act(async () => {
+        vi.advanceTimersByTime(1500)
+      })
+      expect(f.writes()).toEqual([])
+      expect((screen.getByTestId('mr-draft-send') as HTMLButtonElement).disabled).toBe(true)
+      expect(screen.getByTestId('mr-draft-blocker').textContent).toBe('Add a recipient to send.')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a draft K2 can only show has no Send, Discard or fields, and says why in the daemon’s words', async () => {
+    const f = fakeSource({ thread: [draft({ editable: false, hint: 'This draft can only be edited in Outlook.' }), message()] })
+    await openFirstThread(f)
+    const card = await screen.findByTestId('mr-draft-card')
+    expect(card.getAttribute('data-readonly')).toBe('true')
+    expect(screen.getByTestId('mr-draft-unsent').textContent).toBe('not sent')
+    expect(screen.getByTestId('mr-draft-readonly').textContent).toBe('This draft can only be edited in Outlook.')
+    expect(screen.getByTestId('mr-draft-body').textContent).toBe('agent words')
+    expect(screen.queryByTestId('mr-draft-send')).toBeNull()
+    expect(screen.queryByTestId('mr-draft-discard')).toBeNull()
+    expect(card.querySelector('textarea, input')).toBeNull()
+    fireEvent.click(screen.getByTestId('mr-draft-headers-toggle'))
+    expect(screen.getByTestId('mr-draft-to').textContent).toBe('s@o.example')
+    expect(card.querySelector('textarea, input')).toBeNull()
+    expect(f.writes()).toEqual([])
+  })
+
+  it('a draft K2 can’t read shows no recipients line and says its text isn’t available', async () => {
+    const f = fakeSource({ thread: [draft({ editable: false, to: [], cc: [], subject: null, text: null }), message()] })
     await openFirstThread(f)
     await screen.findByTestId('mr-draft-card')
-    fireEvent.change(screen.getByTestId('mr-draft-body'), { target: { value: 'changed' } })
-    fireEvent.click(screen.getByTestId('mr-draft-send'))
-    expect((await screen.findByTestId('mr-notice')).textContent).toBe('edit it in Outlook')
-    expect(f.writes()).toEqual([])
+    expect(screen.queryByTestId('mr-draft-headers-toggle')).toBeNull()
+    expect(screen.getByTestId('mr-draft-body').textContent).toBe('K2 can’t show this draft’s text.')
+  })
+
+  it('without the daemon’s words, a read-only draft names its provider’s app', async () => {
+    const f = fakeSource({
+      inboxes: [{ ...INBOXES[1], provider: 'microsoft', source: 'linked' }],
+      thread: [draft({ editable: false, hint: null }), message()],
+    })
+    render(<MailReader source={f.source} renderHtml={() => null} confirm={async () => true} />)
+    fireEvent.click(await screen.findByTestId('mr-thread-m_1'))
+    expect((await screen.findByTestId('mr-draft-readonly')).textContent).toBe('This draft can only be edited in Outlook.')
   })
 })

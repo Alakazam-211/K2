@@ -2019,6 +2019,10 @@ async fn async_main() {
     // (holds nothing, sends nothing) while voice_rooms_preview is off.
     let _voice_occupancy_handle = crate::voice::occupancy::spawn();
 
+    // Remote desktop (D6): the routes and the stream talk to the real
+    // K2 Screen (k2-deskd); a switch left on starts it again.
+    crate::desktop::managed::boot();
+
     // Sew S27 grant hook: delivers `tool_outbox` rows (written in the same
     // skin.db transaction as each chat grant change) to Sew's mgmt socket,
     // and runs the reconcile sweep. Its FIRST pass is the boot pass, so

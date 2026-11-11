@@ -150,7 +150,15 @@ pub enum DeskdEvent {
     /// deskd's capture stopped or couldn't start (`no_screen_permission`,
     /// `no_such_display`, `capture_failed`); it retries on its own.
     CaptureError { display: u32, code: String, error: String },
+    /// An event this daemon's protocol module doesn't model yet, passed on
+    /// whole for the stream (D6): `cursor`, `cursor_pos`,
+    /// `displays_changed`, `locked` (deskd adds them with the out-of-band
+    /// cursor and the lock check).
+    Other(J),
 }
+
+/// deskd events the stream relays without this module modelling them.
+pub const RELAYED_EVENTS: &[&str] = &["cursor", "cursor_pos", "displays_changed", "locked"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeskdError {
@@ -234,6 +242,9 @@ struct Link {
     next_id: AtomicU64,
     alive: AtomicBool,
     hello: Hello,
+    /// When the hello was read (the stream's clock map, with its
+    /// `clock_ns`).
+    hello_at: Instant,
     guard: Mutex<Option<Box<dyn Send>>>,
     close: Option<Box<dyn Fn() + Send + Sync>>,
 }
@@ -252,6 +263,11 @@ impl Link {
     fn send(&self, req: &Request) -> io::Result<()> {
         let mut w = self.writer.lock().unwrap();
         wire::write_json(&mut *w, req)
+    }
+
+    fn send_json(&self, v: &J) -> io::Result<()> {
+        let mut w = self.writer.lock().unwrap();
+        wire::write_json(&mut *w, v)
     }
 }
 
@@ -448,7 +464,9 @@ impl DeskdManager {
             return Some(Duration::from_secs(30));
         }
         let hello = hello.expect("checked");
+        let hello_at = Instant::now();
         let link = Arc::new(Link {
+            hello_at,
             writer: Mutex::new(o.writer),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -495,6 +513,11 @@ impl DeskdManager {
             if let Some(tx) = link.pending.lock().unwrap().remove(&id) {
                 let _ = tx.send(v);
             }
+            return;
+        }
+        let relayed = v.get("event").and_then(J::as_str).is_some_and(|e| RELAYED_EVENTS.contains(&e));
+        if relayed {
+            self.broadcast(DeskdEvent::Other(v));
             return;
         }
         let Ok(ev) = serde_json::from_value::<Event>(v) else { return };
@@ -547,6 +570,37 @@ impl DeskdManager {
         let (tx, rx) = mpsc::channel();
         link.pending.lock().unwrap().insert(id, tx);
         if let Err(e) = link.send(&Request { id: Some(id), nr: false, op }) {
+            link.pending.lock().unwrap().remove(&id);
+            return Err(DeskdError::new("deskd_gone", format!("cannot reach K2 Screen: {e}")));
+        }
+        match rx.recv_timeout(timeout) {
+            Ok(v) if v.get("ok") == Some(&J::Bool(true)) => Ok(v),
+            Ok(v) => Err(DeskdError::new(v.get("code").and_then(J::as_str).unwrap_or("deskd_error"), v.get("error").and_then(J::as_str).unwrap_or("K2 Screen refused"))),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                link.pending.lock().unwrap().remove(&id);
+                Err(DeskdError::new("deskd_timeout", format!("K2 Screen didn't answer within {} s", timeout.as_secs())))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(DeskdError::new("deskd_gone", "K2 Screen stopped")),
+        }
+    }
+
+    /// deskd's hello on the live link, and when it was read.
+    pub fn hello_at(&self) -> Option<(Hello, Instant)> {
+        self.inner.lock().unwrap().link.as_ref().map(|l| (l.hello.clone(), l.hello_at))
+    }
+
+    /// [`Self::call`] for a request this module doesn't model (`op` is a
+    /// JSON object with its `op`; the id is added here): the stream's
+    /// `clipboard_get` and `clipboard_set`.
+    pub fn call_json(&self, mut op: J, timeout: Duration) -> Result<J, DeskdError> {
+        let link = self.link()?;
+        let id = link.next_id.fetch_add(1, Ordering::SeqCst);
+        let Some(o) = op.as_object_mut() else { return Err(DeskdError::new("bad_request", "a request is a JSON object")) };
+        o.insert("id".into(), J::from(id));
+        o.remove("nr");
+        let (tx, rx) = mpsc::channel();
+        link.pending.lock().unwrap().insert(id, tx);
+        if let Err(e) = link.send_json(&op) {
             link.pending.lock().unwrap().remove(&id);
             return Err(DeskdError::new("deskd_gone", format!("cannot reach K2 Screen: {e}")));
         }

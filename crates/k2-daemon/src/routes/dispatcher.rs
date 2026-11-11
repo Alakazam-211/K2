@@ -2748,6 +2748,22 @@ async fn handle_one_request(
             crate::sim_stream_ws::serve(stream, params, viewer, state.token.to_string()).await;
             return DispatchOutcome::Done;
         }
+        // Remote desktop (prd-remote-desktop-tab-v1 §4–§6, D6): this
+        // machine's screen on the stream engine. Only a single-use ticket
+        // from POST /cli/desktop/ticket (a Connect login) opens it; the
+        // handler's gate refuses everything else before the upgrade.
+        "/cli/desktop/stream" => {
+            let params = super::http::parse_params(&path, &query);
+            let path = match ingress {
+                Ingress::Loopback => k2_core::sim::stream::ViewerPath::Local,
+                Ingress::Lan => k2_core::sim::stream::ViewerPath::Lan,
+                Ingress::Tunnel | Ingress::App => k2_core::sim::stream::ViewerPath::Tunnel,
+            };
+            let ip = client_ip_for(ingress, stream).map(|i| i.to_string()).unwrap_or_else(|| "-".to_string());
+            let req = crate::desktop::stream::StreamReq { params, ingress: ingress.as_str().to_string(), path, ip, owner_token: state.token.to_string() };
+            crate::desktop::stream::serve(stream, req).await;
+            return DispatchOutcome::Done;
+        }
         // Kessel (A3): grid snapshot + delta WS endpoint.
         // Serves one Tauri thin client per session. Single-subscriber
         // by design. See `.k2so/prds/alacritty-v2.md`.

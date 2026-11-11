@@ -38,9 +38,17 @@ pub mod reason {
     pub const KICKED: &str = "kicked";
     pub const SAME_MACHINE: &str = "same_machine";
     pub const AUDIT_UNAVAILABLE: &str = "audit_unavailable";
+    /// 30 min with no input while the tab is hidden, or 8 h in all (S8).
+    pub const IDLE: &str = "idle";
+    pub const SESSION_LIMIT: &str = "session_limit";
+    /// Someone clicked Disconnect on the banner at the screen.
+    pub const DISCONNECTED_AT_SCREEN: &str = "disconnected_at_screen";
     /// 4410.
     pub const DESKTOP_OFF: &str = "desktop_off";
     pub const DESKD_ENDED: &str = "deskd_ended";
+    /// A layer K2 Screen couldn't run, with no other codec to move to (a
+    /// Mac's K2 Screen sends H.264 only).
+    pub const PICTURE_FAILED: &str = "picture_failed";
 }
 
 /// The stream's codec (`hello.codec`).
@@ -176,7 +184,14 @@ pub enum ServerMsg {
     #[serde(rename_all = "camelCase")]
     Cursor { id: u32, hot_x: u32, hot_y: u32, png: String },
     CursorPos { x: f32, y: f32, visible: bool },
-    Displays { displays: Vec<Display> },
+    /// The display list, and the one every viewer sees now (`display`;
+    /// absent from a daemon that doesn't say). A controller's switch
+    /// moves every viewer (v1: one capture per desktop).
+    Displays {
+        displays: Vec<Display>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<String>,
+    },
     /// The answer to `clipboard-get`. `text` is null with a `reason` when
     /// the host refused (`concealed`: a password manager's copy).
     Clipboard {
@@ -340,8 +355,13 @@ mod tests {
             json!({"t": "cursor-pos", "x": 10.5, "y": 20.0, "visible": true}),
         );
         round_trip_server(
-            ServerMsg::Displays { displays: vec![display()] },
+            ServerMsg::Displays { displays: vec![display()], display: None },
             json!({"t": "displays", "displays": [{"id": "1", "name": "Built-in", "widthPt": 1512, "heightPt": 982,
+                    "widthPx": 3024, "heightPx": 1964, "scale": 2.0, "main": true}]}),
+        );
+        round_trip_server(
+            ServerMsg::Displays { displays: vec![display()], display: Some("1".into()) },
+            json!({"t": "displays", "display": "1", "displays": [{"id": "1", "name": "Built-in", "widthPt": 1512, "heightPt": 982,
                     "widthPx": 3024, "heightPx": 1964, "scale": 2.0, "main": true}]}),
         );
         round_trip_server(

@@ -192,7 +192,7 @@ mod incoming_tests {
         assert_eq!(head, want, "stream/viewer.rs: the route's frame check must be the first thing the read branch does with a client frame");
         let after = &engine[check..check + 200.min(engine.len() - check)];
         assert!(after.contains("break 'serve;"), "stream/viewer.rs: a refused frame ends the socket");
-        for f in ["sim_stream_ws.rs"] {
+        for f in ["sim_stream_ws.rs", "desktop/stream.rs"] {
             let s = std::fs::read_to_string(src.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
             assert!(s.contains("crate::socket_access::IncomingCheck::new("), "{f} builds the check");
             assert!(s.contains("if incoming.frame_ok(f)"), "{f}: its Auth::frame asks the check");

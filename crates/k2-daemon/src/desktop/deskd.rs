@@ -24,6 +24,11 @@ pub trait Deskd: Send + Sync {
     fn disable(&self) -> Result<(), String>;
     /// The displays a viewer may pick.
     fn displays(&self) -> Vec<Display>;
+    /// The stream's side (`/cli/desktop/stream`, D6); `None` = no picture
+    /// here (the stream answers `desktop_unavailable`).
+    fn stream(&self) -> Option<Arc<dyn super::stream::StreamDeskd>> {
+        None
+    }
 }
 
 /// This OS's backend name.

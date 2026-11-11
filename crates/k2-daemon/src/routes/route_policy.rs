@@ -916,6 +916,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/desktop/policy", Owner),
     post("/cli/desktop/revoke", Owner),
     get("/cli/desktop/status", Member),
+    get("/cli/desktop/stream", Member),
     post("/cli/desktop/ticket", Member),
     get("/cli/desktop/viewers", Owner),
     post("/cli/dns-manage", Admin),

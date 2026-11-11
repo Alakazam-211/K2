@@ -3,8 +3,8 @@
 // Image drop into a terminal. Claude Code shows `[Image #N]` only when the
 // pasted text is a path it can fs.exists(), so image paths are quoted (never
 // backslash-escaped) and the whole payload is a bracketed paste, which is
-// the paste event Claude's image detector reads. These pin the helpers and
-// the in-app drag from the file tree onto a terminal.
+// the paste event Claude's image detector reads. These pin the in-app drag
+// from the file tree onto a terminal (the helpers: drop-payload.test.ts).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,54 +24,9 @@ vi.mock('@/lib/terminal-daemon', () => ({
   }),
 }))
 
-import {
-  BRACKETED_PASTE_END,
-  BRACKETED_PASTE_START,
-  beginFileDrag,
-  bracketPaste,
-  isFileDragActive,
-  isImagePath,
-  quotePathForImageDrop,
-} from './file-drag'
+import { beginFileDrag, isFileDragActive } from './file-drag'
+import { bracketPaste } from './drop-payload'
 import { fakeScope } from '@/test-utils/fake-scope'
-
-describe('isImagePath', () => {
-  it('knows the image and PDF extensions Claude Code reads, in any case', () => {
-    for (const ext of ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'heif', 'pdf']) {
-      expect(isImagePath(`/tmp/shot.${ext}`), ext).toBe(true)
-      expect(isImagePath(`/tmp/SHOT.${ext.toUpperCase()}`), ext.toUpperCase()).toBe(true)
-    }
-  })
-
-  it('goes by the last extension only', () => {
-    expect(isImagePath('/tmp/notes.txt')).toBe(false)
-    expect(isImagePath('/tmp/shot.png.txt')).toBe(false)
-    expect(isImagePath('/tmp/png')).toBe(false)
-    expect(isImagePath('/tmp/archive.tar.gz')).toBe(false)
-  })
-})
-
-describe('quotePathForImageDrop', () => {
-  it('leaves a plain path bare', () => {
-    expect(quotePathForImageDrop('/tmp/shot-1_a.png')).toBe('/tmp/shot-1_a.png')
-  })
-
-  it('single-quotes a path with spaces and keeps it literal (no backslashes)', () => {
-    expect(quotePathForImageDrop('/Users/a/Screen Shot 2026.png')).toBe("'/Users/a/Screen Shot 2026.png'")
-  })
-
-  it("closes and reopens the quotes around an apostrophe", () => {
-    expect(quotePathForImageDrop("/tmp/Bob's shot.png")).toBe("'/tmp/Bob'\\''s shot.png'")
-  })
-})
-
-describe('bracketPaste', () => {
-  it('wraps the text in the bracketed-paste start and end sequences', () => {
-    expect(BRACKETED_PASTE_START).toBe('\x1b[200~')
-    expect(BRACKETED_PASTE_END).toBe('\x1b[201~')
-    expect(bracketPaste('/tmp/a.png ')).toBe('\x1b[200~/tmp/a.png \x1b[201~')
-  })
-})
 
 describe('in-app drag from the file tree onto a terminal', () => {
   const scope = fakeScope('local', { remote: false })

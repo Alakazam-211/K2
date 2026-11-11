@@ -9,10 +9,10 @@ import {
   pathsAreComposeSurfaceImages,
 } from './compose-surface-drop'
 import {
-  BRACKETED_PASTE_START,
   formatInAppComposeInsert,
   inAppComposeDropElement,
 } from './file-drag'
+import { BRACKETED_PASTE_START } from './drop-payload'
 
 const dropMocks = vi.hoisted(() => ({
   executeBrowserFileDrop: vi.fn(async (..._args: unknown[]) => '/host/shot.png '),

@@ -11,11 +11,12 @@
 //   - Browser `File`s (no path, hosted web or an HTML5 drop): always
 //     uploaded the same way (`executeBrowserFileDrop`).
 // Returns the draft text to insert (shell-escaped, space-joined, trailing
-// space), or null when nothing was attached (cancelled, or an upload failed:
-// the drop path already toasted why).
+// space), or null when nothing was attached (cancelled, an upload failed, or
+// a name can't go as text: the drop path already toasted why).
 
 import type { ServerScope } from '@/kessel/server-scope'
-import { buildComposeDropPayload } from '@/lib/external-drop-router'
+import { buildComposeDropPayload } from '@/lib/drop-payload'
+import { dropTextOrToast } from '@/lib/drop-refusal'
 import { executeBrowserFileDrop, executeRemoteDrop } from '@/lib/handle-remote-drop'
 
 export interface ComposeAttachInput {
@@ -29,12 +30,13 @@ export interface ComposeAttachInput {
 
 export async function composeAttachPayload(scope: ServerScope, input: ComposeAttachInput): Promise<string | null> {
   const ctx = { workspacePath: input.workspacePath || undefined }
+  const build = (paths: string[]) => dropTextOrToast(buildComposeDropPayload(paths))
   if (input.paths && input.paths.length > 0) {
-    if (!scope.isRemote) return buildComposeDropPayload(input.paths)
-    return executeRemoteDrop(scope, input.paths, { kind: 'terminal' }, ctx, buildComposeDropPayload)
+    if (!scope.isRemote) return build(input.paths)
+    return executeRemoteDrop(scope, input.paths, { kind: 'terminal' }, ctx, build)
   }
   if (input.files && input.files.length > 0) {
-    return executeBrowserFileDrop(scope, input.files, { kind: 'terminal' }, ctx, buildComposeDropPayload)
+    return executeBrowserFileDrop(scope, input.files, { kind: 'terminal' }, ctx, build)
   }
   return null
 }

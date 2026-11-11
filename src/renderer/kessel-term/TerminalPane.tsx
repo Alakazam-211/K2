@@ -122,10 +122,9 @@ import {
   executeBrowserFileDrop,
   executeRemoteDrop,
 } from '@/lib/handle-remote-drop'
-import {
-  buildTerminalDropPayload,
-  filesFromDataTransfer,
-} from '@/lib/external-drop-router'
+import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import { buildTerminalDropPayload } from '@/lib/drop-payload'
+import { dropTextOrToast } from '@/lib/drop-refusal'
 import {
   anchorScrollPx,
   clampScrollPx,
@@ -364,6 +363,12 @@ function colWithin(rowDiv: Element, node: Node, offset: number): number {
     return 0
   }
   return r.toString().length
+}
+
+/** Dropped or pasted file paths as terminal text, or null after a refusal
+ *  toast. */
+function dropText(paths: string[]): string | null {
+  return dropTextOrToast(buildTerminalDropPayload(paths))
 }
 
 /** Whether a snapshot's visible grid contains any non-blank cell.
@@ -3724,7 +3729,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         daemonCliGet<string[]>(room.scope, 'fs/clipboard-paths')
           .then((paths) => {
             if (paths && paths.length > 0) {
-              sendInput(buildTerminalDropPayload(paths))
+              const data = dropText(paths)
+              if (data !== null) sendInput(data)
               return
             }
             if (text) sendInput(text)
@@ -4742,12 +4748,13 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
               paths,
               { kind: 'terminal' },
               { workspacePath: cwd },
-              buildTerminalDropPayload,
+              dropText,
             ).then((payload) => {
               if (payload) sendInput(payload)
             })
           } else {
-            sendInput(buildTerminalDropPayload(paths))
+            const data = dropText(paths)
+            if (data !== null) sendInput(data)
           }
           return
         }
@@ -4762,7 +4769,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
             browserFiles,
             { kind: 'terminal' },
             { workspacePath: cwd || undefined },
-            buildTerminalDropPayload,
+            dropText,
           ).then((payload) => {
             if (payload) sendInput(payload)
           })

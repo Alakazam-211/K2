@@ -4,7 +4,7 @@
 // I/O boundaries are mocked (same set as TerminalPane.spawn.test.tsx).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import {
   SessionViewChromeContext,
@@ -177,6 +177,9 @@ import { TerminalPane } from './TerminalPane'
 import { fixedStore, inRoom, renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
+import { useToastStore } from '@/stores/toast'
+import { daemonCliGet } from '@/lib/daemon-cli'
+import { CONTROL_CHAR_REFUSAL } from '@/lib/drop-payload'
 
 const room = testRoom({
   tabs: useTabsStore,
@@ -521,5 +524,64 @@ describe('the compose draft belongs to the pane, not the PTY', () => {
     if (!bar) throw new Error('terminal got no compose bar')
     expect(bar.sendDestination).toBe('pty')
     expect(bar.draftId).toBe('tab-pg-test')
+  })
+})
+
+// Same harness, another concern: the text a file drop or a Finder paste
+// types into this terminal (lib/drop-payload.ts builds it; tested there).
+describe('files dropped or pasted on the terminal', () => {
+  async function terminalPane(): Promise<HTMLElement> {
+    renderInRoom(room, pane(chrome({ viewTab: 'terminal' })))
+    await goReady()
+    const el = document.querySelector<HTMLElement>('[data-terminal-container]')
+    if (!el) throw new Error('no terminal container')
+    return el
+  }
+
+  function dropFiles(el: HTMLElement, paths: string[]): void {
+    fireEvent.drop(el, { dataTransfer: { files: paths.map((path) => ({ path })) } })
+  }
+
+  async function pasteFinderPaths(paths: string[]): Promise<void> {
+    vi.mocked(daemonCliGet).mockImplementation(async (_scope: unknown, path: string) =>
+      path === 'fs/clipboard-paths' ? paths : undefined,
+    )
+    const input = document.querySelector<HTMLTextAreaElement>('textarea')
+    if (!input) throw new Error('no shadow input')
+    const ev = new Event('paste', { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'clipboardData', { value: { getData: () => 'ignored' } })
+    await act(async () => {
+      input.dispatchEvent(ev)
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  const toasts = () => useToastStore.getState().toasts.map((t) => [t.message, t.type])
+
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] })
+  })
+
+  it('a dropped file is typed backslash-escaped with a trailing space', async () => {
+    const el = await terminalPane()
+    dropFiles(el, ['/tmp/my notes.txt'])
+    expect(sends('input').map((m) => m.text)).toEqual(['/tmp/my\\ notes.txt '])
+  })
+
+  it('a dropped name with a line break: a toast, and nothing typed', async () => {
+    const el = await terminalPane()
+    dropFiles(el, ['/tmp/notes\nrm -rf ~'])
+    expect(sends('input')).toEqual([])
+    expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('Finder paths pasted: the same text as a drop; a line break is refused', async () => {
+    await terminalPane()
+    await pasteFinderPaths(['/tmp/a b.txt'])
+    expect(sends('input').map((m) => m.text)).toEqual(['/tmp/a\\ b.txt '])
+
+    await pasteFinderPaths(['/tmp/x\ny.txt'])
+    expect(sends('input').map((m) => m.text)).toEqual(['/tmp/a\\ b.txt '])
+    expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
   })
 })

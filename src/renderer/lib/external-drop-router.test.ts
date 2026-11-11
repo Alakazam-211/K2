@@ -19,6 +19,11 @@ vi.mock('@tauri-apps/api/webview', () => ({
   }),
 }))
 
+const terminalWriteMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined))
+vi.mock('./terminal-daemon', () => ({
+  terminalWrite: (...args: unknown[]) => terminalWriteMock(...args),
+}))
+
 vi.mock('./is-web', () => ({
   isWebClient: () => isWebClientMock(),
 }))
@@ -27,8 +32,6 @@ import {
   parentDir,
   resolveFileTreeFolder,
   classifyExternalDrop,
-  buildTerminalDropPayload,
-  buildComposeDropPayload,
   pointInRect,
   panelOwnsFolderPath,
   findFileTreePanelAt,
@@ -41,7 +44,8 @@ import {
 } from './external-drop-router'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { COMPOSE_BAR_SELECTOR, COMPOSE_DROP_SURFACE_SELECTOR } from './compose-surface-drop'
-import { BRACKETED_PASTE_START, BRACKETED_PASTE_END } from './file-drag'
+import { CONTROL_CHAR_REFUSAL } from './drop-payload'
+import { useToastStore } from '@/stores/toast'
 import { primaryScope } from '@/kessel/server-scope'
 
 describe('parentDir', () => {
@@ -159,87 +163,6 @@ describe('classifyExternalDrop', () => {
       fileTreeFolder: null,
     })
     expect(target).toEqual({ kind: 'miss' })
-  })
-})
-
-describe('buildTerminalDropPayload', () => {
-  it('joins plain paths with a trailing space', () => {
-    expect(buildTerminalDropPayload(['/tmp/a.txt', '/tmp/b.txt'])).toBe(
-      '/tmp/a.txt /tmp/b.txt ',
-    )
-  })
-
-  it('wraps image drops in bracketed paste', () => {
-    const payload = buildTerminalDropPayload(['/tmp/shot.png'])
-    expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(true)
-    expect(payload.endsWith(BRACKETED_PASTE_END)).toBe(true)
-    expect(payload).toContain('/tmp/shot.png')
-  })
-
-  it('quotes an image path (Claude Code fs.exists() it) and backslash-escapes the rest', () => {
-    expect(buildTerminalDropPayload(['/Users/a/Screen Shot.png', '/Users/a/my notes.txt'])).toBe(
-      `${BRACKETED_PASTE_START}'/Users/a/Screen Shot.png' /Users/a/my\\ notes.txt ${BRACKETED_PASTE_END}`,
-    )
-    expect(buildTerminalDropPayload(['/Users/a/my notes.txt'])).toBe('/Users/a/my\\ notes.txt ')
-  })
-
-  // The terminal views (TerminalPane, AlacrittyTerminalView) call this
-  // builder for drops and Finder-copied paths, so the escape table is
-  // pinned here once.
-  it('backslash-escapes every shell special in a non-image path', () => {
-    const specials = ` '"\\()&|;<>$\`!#*?[]{}~`
-    const expected = specials
-      .split('')
-      .map((c) => `\\${c}`)
-      .join('')
-    expect(buildTerminalDropPayload([`/tmp/${specials}.txt`])).toBe(`/tmp/${expected}.txt `)
-  })
-
-  it('escapes $ and backticks so a dropped name cannot expand or run a command', () => {
-    expect(buildTerminalDropPayload(['/tmp/$HOME `id`.log'])).toBe('/tmp/\\$HOME\\ \\`id\\`.log ')
-  })
-
-  it('escapes a leading ~ so the shell does not expand it', () => {
-    expect(buildTerminalDropPayload(['~/notes.txt'])).toBe('\\~/notes.txt ')
-  })
-
-  it('escapes the backslashes in a Windows path', () => {
-    expect(buildTerminalDropPayload(['C:\\Users\\a b\\x.txt'])).toBe('C:\\\\Users\\\\a\\ b\\\\x.txt ')
-  })
-
-  it('leaves unicode, dashes, dots and commas as they are', () => {
-    expect(buildTerminalDropPayload(['/tmp/résumé-v1.2,final 日本.txt'])).toBe(
-      '/tmp/résumé-v1.2,final\\ 日本.txt ',
-    )
-  })
-
-  // Today's behaviour, not a ruling: a newline in a file name is not
-  // escaped, so a plain (non-image) drop of such a name would submit the
-  // line early. Change this test if the builder learns to quote it.
-  it('passes a newline in a non-image name through unescaped', () => {
-    expect(buildTerminalDropPayload(['/tmp/a\nb.txt'])).toBe('/tmp/a\nb.txt ')
-  })
-
-  it('single-quotes an image path with a quote in it, POSIX style', () => {
-    expect(buildTerminalDropPayload(["/tmp/it's.png"])).toBe(
-      `${BRACKETED_PASTE_START}'/tmp/it'\\''s.png' ${BRACKETED_PASTE_END}`,
-    )
-  })
-
-  it('leaves a safe image path bare and matches image extensions case-insensitively', () => {
-    expect(buildTerminalDropPayload(['/tmp/SHOT.PNG', '/tmp/doc.pdf'])).toBe(
-      `${BRACKETED_PASTE_START}/tmp/SHOT.PNG /tmp/doc.pdf ${BRACKETED_PASTE_END}`,
-    )
-  })
-})
-
-describe('buildComposeDropPayload', () => {
-  it('joins paths with a trailing space and no bracketed paste', () => {
-    const payload = buildComposeDropPayload(['/tmp/a.txt', '/tmp/shot.png'])
-    expect(payload.endsWith(' ')).toBe(true)
-    expect(payload).toContain('/tmp/a.txt')
-    expect(payload).toContain('/tmp/shot.png')
-    expect(payload.startsWith(BRACKETED_PASTE_START)).toBe(false)
   })
 })
 
@@ -668,5 +591,42 @@ describe('routeExternalDrop — thread surface images', () => {
     expect(term._events).toHaveLength(1)
     expect(term._events[0].type).toBe('k2so:terminal-write')
     expect((term._events[0] as CustomEvent<{ data: string }>).detail.data).toContain('/tmp/shot.png')
+  })
+})
+
+describe('routeExternalDrop — the text a terminal or draft gets', () => {
+  beforeEach(() => {
+    useConnectHostStore.setState({ activeHost: 'local' })
+    useToastStore.setState({ toasts: [] })
+    terminalWriteMock.mockClear()
+  })
+
+  function v2Terminal() {
+    const grid = surfaceNode({})
+    const term = surfaceNode({ terminalId: 'pty-1', terminalKind: 'v2', workspacePath: '/ws' }, [grid])
+    return { grid, term }
+  }
+
+  const toasts = () => useToastStore.getState().toasts.map((t) => [t.message, t.type])
+
+  it('a v2 terminal gets the backslash-escaped path and a trailing space', async () => {
+    const { grid, term } = v2Terminal()
+    await routeExternalDrop(primaryScope(), ['/tmp/my notes.txt'], { x: 3, y: 3 }, surfaceDoc(grid))
+    expect((term._events[0] as CustomEvent<{ data: string }>).detail.data).toBe('/tmp/my\\ notes.txt ')
+  })
+
+  it('a name with a line break: a toast, and nothing reaches the terminal', async () => {
+    const { grid, term } = v2Terminal()
+    await routeExternalDrop(primaryScope(), ['/tmp/notes\nrm -rf ~'], { x: 3, y: 3 }, surfaceDoc(grid))
+    expect(term._events).toHaveLength(0)
+    expect(terminalWriteMock).not.toHaveBeenCalled()
+    expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('a name with a line break on a compose bar: a toast, and no insert', async () => {
+    const bar = surfaceNode({ composeBar: '', sessionId: 's-1', workspacePath: '/ws' })
+    await routeExternalDrop(primaryScope(), ['/tmp/a\rb.txt'], { x: 3, y: 3 }, surfaceDoc(bar))
+    expect(bar._events).toHaveLength(0)
+    expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
   })
 })

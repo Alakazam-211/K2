@@ -30,6 +30,19 @@ import { useRemoteFolderPickerStore } from '@/stores/remote-folder-picker'
 import { useToastStore } from '@/stores/toast'
 import { useTransferProgressStore } from '@/stores/transfer-progress'
 import type { ServerScope } from '@/kessel/server-scope'
+import { CONTROL_CHAR_REFUSAL, hasControlChar } from './drop-payload'
+
+/** Builds the text injected for the uploaded paths; null when it refused
+ *  them (it has already said why). */
+export type DropPayloadBuilder = (remotePaths: string[]) => string | null
+
+/** A drop that will be pasted as text, of a name that can't be: refuse it
+ *  before any bytes move (the builder would refuse the uploaded path). */
+function refuseBeforeUpload(inject: boolean, names: string[]): boolean {
+  if (!inject || !names.some(hasControlChar)) return false
+  useToastStore.getState().addToast(CONTROL_CHAR_REFUSAL, 'warning')
+  return true
+}
 
 /** What the drop landed on (hit-tested at the drop position). */
 export type DropTarget =
@@ -146,11 +159,12 @@ export async function executeRemoteDrop(
   localPaths: string[],
   target: DropTarget,
   ctx: DropContext,
-  buildPayload?: (remotePaths: string[]) => string,
+  buildPayload?: DropPayloadBuilder,
 ): Promise<string | null> {
   if (!localPaths || localPaths.length === 0) return null
 
   const dest = resolveDropDestination(target, ctx)
+  if (refuseBeforeUpload(dest.inject && !!buildPayload, localPaths.map((p) => p.split(/[/\\]/).pop() || p))) return null
 
   // Resolve the destination directory. A `miss` (or a terminal with no
   // workspace anchor) has no synchronous destination → open the "Save
@@ -187,7 +201,7 @@ async function runRemoteDropUploads(
   localPaths: string[],
   destDir: string,
   inject: boolean,
-  buildPayload?: (remotePaths: string[]) => string,
+  buildPayload?: DropPayloadBuilder,
 ): Promise<string | null> {
   const toast = useToastStore.getState()
   const noun = localPaths.length === 1 ? 'file' : `${localPaths.length} files`
@@ -248,11 +262,12 @@ export async function executeBrowserFileDrop(
   files: File[],
   target: DropTarget,
   ctx: DropContext,
-  buildPayload?: (remotePaths: string[]) => string,
+  buildPayload?: DropPayloadBuilder,
 ): Promise<string | null> {
   if (!files || files.length === 0) return null
 
   const dest = resolveDropDestination(target, ctx)
+  if (refuseBeforeUpload(dest.inject && !!buildPayload, files.map((f) => f.name))) return null
   let destDir = dest.destDir
   if (destDir === null) {
     const open = ctx.openPicker ?? useRemoteFolderPickerStore.getState().open

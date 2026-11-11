@@ -27,10 +27,9 @@ import { useDialogCancel } from '@/components/ui/dialog-cancel'
 import { leaveComposeHandoff, takeComposeHandoff } from './composeHandoff'
 import { createPortal } from 'react-dom'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import {
-  buildComposeDropPayload,
-  filesFromDataTransfer,
-} from '@/lib/external-drop-router'
+import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import { buildComposeDropPayload } from '@/lib/drop-payload'
+import { dropTextOrToast } from '@/lib/drop-refusal'
 import { composeAttachPayload } from '@/lib/compose-attach'
 import {
   composeAttachPlan,
@@ -500,7 +499,8 @@ export function TerminalComposeBar({
     }
   }, [workspacePath])
 
-  const insertPathsText = useCallback((payload: string) => {
+  // null: nothing to insert (a refused drop already toasted why).
+  const insertPathsText = useCallback((payload: string | null) => {
     if (!payload) return
     const el = textareaRef.current
     const caret = el ? el.selectionStart : null
@@ -535,7 +535,7 @@ export function TerminalComposeBar({
           const paths = input.paths ?? []
           const inside = paths.filter((p) => isInsideWorkspace(p, workspacePath))
           const outside = paths.filter((p) => !inside.includes(p))
-          if (outside.length > 0) insertPathsText(buildComposeDropPayload(outside))
+          if (outside.length > 0) insertPathsText(dropTextOrToast(buildComposeDropPayload(outside)))
           got = inside.map(threadComposeFile)
         } else {
           got = await resolveThreadComposeFiles(scope, { ...input, workspacePath })
@@ -601,7 +601,7 @@ export function TerminalComposeBar({
               if (payload) insertPathsText(payload)
             })
           } else {
-            insertPathsText(buildComposeDropPayload(paths))
+            insertPathsText(dropTextOrToast(buildComposeDropPayload(paths)))
           }
           return
         }
@@ -652,7 +652,7 @@ export function TerminalComposeBar({
         .then((paths) => {
           if (!paths || paths.length === 0) return
           if (threadFilesOn) return addThreadFiles({ paths })
-          insertPathsText(buildComposeDropPayload(paths))
+          insertPathsText(dropTextOrToast(buildComposeDropPayload(paths)))
         })
         .catch((err) => {
           useToastStore.getState().addToast(
@@ -670,7 +670,7 @@ export function TerminalComposeBar({
       if (!path) return
       // A file picked on the server: already there.
       if (threadFilesOn) return addThreadFiles({ paths: [path], onServer: true })
-      insertPathsText(buildComposeDropPayload([path]))
+      insertPathsText(dropTextOrToast(buildComposeDropPayload([path])))
     })
   }, [addThreadFiles, insertPathsText, room, scope, threadFilesOn, workspacePath])
 
@@ -689,7 +689,7 @@ export function TerminalComposeBar({
           void addThreadFiles({ paths })
           return
         }
-        insertPathsText(buildComposeDropPayload(paths))
+        insertPathsText(dropTextOrToast(buildComposeDropPayload(paths)))
         return
       }
       const browserFiles = Array.from(list)

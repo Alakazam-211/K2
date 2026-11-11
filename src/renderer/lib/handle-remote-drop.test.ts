@@ -13,10 +13,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   resolveDropDestination,
   executeRemoteDrop,
+  executeBrowserFileDrop,
   remoteDropFlightKey,
   __clearRemoteDropFlightsForTests,
 } from './handle-remote-drop'
 import { primaryScope } from '@/kessel/server-scope'
+import { CONTROL_CHAR_REFUSAL } from './drop-payload'
 
 // Mock the upload substrate (the IO half) + the toast store. The router
 // imports `uploadToRemote` from upload-to-remote and the toast store; we
@@ -32,8 +34,11 @@ vi.mock('./upload-to-remote', async () => {
     uploadBrowserFile: primaryOnly(async (file: File, dir: string) => `${dir}/${file.name}`),
   }
 })
+const toastLog = vi.hoisted(() => [] as Array<[string, string]>)
 vi.mock('@/stores/toast', () => ({
-  useToastStore: { getState: () => ({ addToast: () => {} }) },
+  useToastStore: {
+    getState: () => ({ addToast: (message: string, type: string) => toastLog.push([message, type]) }),
+  },
 }))
 vi.mock('@/stores/connect-host', () => ({
   activeHostKey: () => 'local',
@@ -42,6 +47,7 @@ vi.mock('@/stores/connect-host', () => ({
 
 beforeEach(() => {
   __clearRemoteDropFlightsForTests()
+  toastLog.length = 0
   uploadMock.mockReset()
   // Default: echo a remote path inside the destination dir.
   uploadMock.mockImplementation(async (local: string, dir: string) => {
@@ -312,5 +318,67 @@ describe('executeRemoteDrop', () => {
       {},
     )
     expect(uploadMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+// A name with a control character can't be pasted as text (lib/drop-payload.ts),
+// so a drop that would be pasted is refused before any bytes move.
+describe('names with a control character', () => {
+  it('terminal drop: refused with a toast, nothing uploaded, nothing built', async () => {
+    const buildPayload = vi.fn((paths: string[]) => paths.join(' '))
+    const payload = await executeRemoteDrop(primaryScope(),
+      ['/local/ok.txt', '/local/notes\nrm -rf ~'],
+      { kind: 'terminal' },
+      { workspacePath: '/ws' },
+      buildPayload,
+    )
+    expect(payload).toBeNull()
+    expect(uploadMock).not.toHaveBeenCalled()
+    expect(buildPayload).not.toHaveBeenCalled()
+    expect(toastLog).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('folder drop: still uploads (nothing is pasted)', async () => {
+    const payload = await executeRemoteDrop(primaryScope(),
+      ['/local/a\nb.txt'],
+      { kind: 'folder', path: '/srv/inbox' },
+      {},
+    )
+    expect(payload).toBeNull()
+    expect(uploadMock).toHaveBeenCalledWith('/local/a\nb.txt', '/srv/inbox')
+    expect(toastLog.some(([m]) => m === CONTROL_CHAR_REFUSAL)).toBe(false)
+  })
+
+  it('a directory with a control character is fine: only the uploaded name counts', async () => {
+    const payload = await executeRemoteDrop(primaryScope(),
+      ['/local/odd\tdir/a.txt'],
+      { kind: 'terminal' },
+      { workspacePath: '/ws' },
+      (paths) => paths.join(' '),
+    )
+    expect(payload).toBe('/ws/.k2/downloads/a.txt')
+  })
+
+  it('a browser file drop onto a terminal: refused before upload', async () => {
+    const buildPayload = vi.fn((paths: string[]) => paths.join(' '))
+    const payload = await executeBrowserFileDrop(primaryScope(),
+      [new File(['x'], 'a\rb.txt')],
+      { kind: 'terminal' },
+      { workspacePath: '/ws' },
+      buildPayload,
+    )
+    expect(payload).toBeNull()
+    expect(buildPayload).not.toHaveBeenCalled()
+    expect(toastLog).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('a builder that refuses after upload gives null, not text', async () => {
+    const payload = await executeRemoteDrop(primaryScope(),
+      ['/local/a.txt'],
+      { kind: 'terminal' },
+      { workspacePath: '/ws' },
+      () => null,
+    )
+    expect(payload).toBeNull()
   })
 })

@@ -24,10 +24,9 @@ import {
   executeBrowserFileDrop,
   executeRemoteDrop,
 } from '@/lib/handle-remote-drop'
-import {
-  buildTerminalDropPayload,
-  filesFromDataTransfer,
-} from '@/lib/external-drop-router'
+import { filesFromDataTransfer } from '@/lib/external-drop-router'
+import { buildTerminalDropPayload } from '@/lib/drop-payload'
+import { dropTextOrToast } from '@/lib/drop-refusal'
 
 // ── Types matching Rust GridUpdate / CompactLine / StyleSpan ──────────
 
@@ -85,6 +84,12 @@ interface AlacrittyTerminalViewProps {
    *  end-to-end spawn→visible latency for parity comparison with
    *  Kessel. See tabs.ts TerminalItemData.spawnedAt. */
   spawnedAt?: number
+}
+
+/** Dropped or pasted file paths as terminal text, or null after a refusal
+ *  toast. */
+function dropText(paths: string[]): string | null {
+  return dropTextOrToast(buildTerminalDropPayload(paths))
 }
 
 function colorToCSS(c: number): string {
@@ -605,7 +610,8 @@ export function AlacrittyTerminalView({
       .then((paths) => {
         if (!ptyIdRef.current) return
         if (paths && paths.length > 0) {
-          terminalWrite(room.scope, ptyIdRef.current, buildTerminalDropPayload(paths))
+          const data = dropText(paths)
+          if (data !== null) terminalWrite(room.scope, ptyIdRef.current, data)
           return
         }
         writeText(text)
@@ -696,12 +702,13 @@ export function AlacrittyTerminalView({
             paths,
             { kind: 'terminal' },
             { workspacePath: cwd },
-            buildTerminalDropPayload,
+            dropText,
           ).then((payload) => {
             if (payload && pty) terminalWrite(room.scope, pty, payload)
           })
         } else {
-          terminalWrite(room.scope, ptyIdRef.current, buildTerminalDropPayload(paths))
+          const data = dropText(paths)
+          if (data !== null) terminalWrite(room.scope, ptyIdRef.current, data)
         }
         return
       }
@@ -714,7 +721,7 @@ export function AlacrittyTerminalView({
           browserFiles,
           { kind: 'terminal' },
           { workspacePath: cwd || undefined },
-          buildTerminalDropPayload,
+          dropText,
         ).then((payload) => {
           if (payload && pty) terminalWrite(room.scope, pty, payload)
         })

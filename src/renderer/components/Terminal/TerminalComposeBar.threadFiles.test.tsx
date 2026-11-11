@@ -63,6 +63,8 @@ import { fakeScope } from '@/test-utils/fake-scope'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { useContextMenuStore } from '@/stores/context-menu'
+import { useToastStore } from '@/stores/toast'
+import { CONTROL_CHAR_REFUSAL } from '@/lib/drop-payload'
 
 const WS = '/Users/me/ai/sales'
 
@@ -97,7 +99,7 @@ function renderBar(opts: { scope: ServerScope; dest?: 'thread' | 'pty'; isPrimar
 }
 
 function uploadsTo(dir: string) {
-  return async (_s: ServerScope, local: string[], _t: unknown, _c: unknown, build?: (r: string[]) => string) => {
+  return async (_s: ServerScope, local: string[], _t: unknown, _c: unknown, build?: (r: string[]) => string | null) => {
     const remote = local.map((p) => `${dir}/${p.split('/').pop()}`)
     return build ? build(remote) : null
   }
@@ -263,5 +265,41 @@ describe('S4: Thread compose files become attachments', () => {
     const box = screen.getByRole('textbox') as HTMLTextAreaElement
     await waitFor(() => expect(box.value).toContain(`${WS}/docs/plan.md`))
     expect(chipNames()).toEqual([])
+  })
+})
+
+// Path text in the draft (no Thread attachments): the same quoting as a
+// drop (lib/drop-payload.ts), and a name with a line break is refused.
+describe('path text in the draft', () => {
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] })
+  })
+
+  it('a picked file with a space is backslash-escaped', async () => {
+    renderBar({ scope: scopeOf('local', false, []), dest: 'pty' })
+    await pick(['/Users/me/my notes.txt'])
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement
+    await waitFor(() => expect(box.value).toBe('/Users/me/my\\ notes.txt '))
+  })
+
+  it('a picked name with a line break: a toast, and the draft stays empty', async () => {
+    renderBar({ scope: scopeOf('local', false, []), dest: 'pty' })
+    await pick(['/Users/me/notes\nrm -rf ~'])
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([CONTROL_CHAR_REFUSAL]),
+    )
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('another server: an uploaded name with a line break inserts nothing', async () => {
+    h.executeRemoteDrop.mockImplementation(uploadsTo('/srv/ws/.k2/downloads'))
+    renderBar({ scope: scopeOf('remote-b', true, []), dest: 'pty', isPrimary: false, ws: '/srv/ws' })
+    await pick(['/Users/me/a\rb.txt'])
+    await waitFor(() => expect(h.executeRemoteDrop).toHaveBeenCalled())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('')
+    expect(useToastStore.getState().toasts.map((t) => t.message)).toEqual([CONTROL_CHAR_REFUSAL])
   })
 })

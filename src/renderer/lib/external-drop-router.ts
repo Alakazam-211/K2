@@ -32,12 +32,12 @@ import { executeBrowserFileDrop, executeRemoteDrop } from './handle-remote-drop'
 import { planLocalExternalDrop } from './external-drop'
 import { daemonCliPost } from './daemon-cli'
 import { terminalWrite } from './terminal-daemon'
+import { isFileDragActive } from './file-drag'
 import {
-  isFileDragActive,
-  isImagePath,
-  quotePathForImageDrop,
-  bracketPaste,
-} from './file-drag'
+  buildComposeDropPayload,
+  buildTerminalDropPayload,
+} from './drop-payload'
+import { dropTextOrToast } from './drop-refusal'
 import { isWebClient } from './is-web'
 import {
   filesAreComposeSurfaceImages,
@@ -298,35 +298,11 @@ export function hitTestExternalDrop(
   return classifyExternalDrop({ compose: null, terminal: null, fileTreeFolder })
 }
 
-// ── Terminal payload builder (shared by TerminalPane / Alacritty) ─────
+// ── Terminal payload ──────────────────────────────────────────────────
 
-/** Backslash-escape shell specials, like iTerm2 and Terminal.app do. */
-function shellEscape(path: string): string {
-  return path.replace(/[ '"\\()&|;<>$`!#*?[\]{}~]/g, '\\$&')
-}
-
-function formatPathForTerminal(path: string): string {
-  return isImagePath(path) ? quotePathForImageDrop(path) : shellEscape(path)
-}
-
-/**
- * Build the inject payload for dropped paths. Images get bracketed paste
- * so Claude Code's paste-event image detector fires.
- */
-export function buildTerminalDropPayload(paths: string[]): string {
-  const formatted = paths.map(formatPathForTerminal).join(' ')
-  const trailing = formatted + ' '
-  return paths.some(isImagePath) ? bracketPaste(trailing) : trailing
-}
-
-/**
- * Paths for the agent message compose draft — shell-escaped, space-joined,
- * trailing space for continued typing. No bracketed paste (that's a TTY
- * paste-event wrapper; the composer is a plain text field).
- */
-export function buildComposeDropPayload(paths: string[]): string {
-  if (!paths || paths.length === 0) return ''
-  return paths.map(formatPathForTerminal).join(' ') + ' '
+/** The terminal text for `paths`, or null after a refusal toast. */
+function terminalText(paths: string[]): string | null {
+  return dropTextOrToast(buildTerminalDropPayload(paths))
 }
 
 // ── Inject / refresh side-effects ─────────────────────────────────────
@@ -385,12 +361,12 @@ function injectIntoCompose(
 
 /** A compose payload builder that also keeps the server paths it built
  *  from (an upload's answer). */
-function composePayloadCapture(): { build: (remote: string[]) => string; paths: () => string[] | null } {
+function composePayloadCapture(): { build: (remote: string[]) => string | null; paths: () => string[] | null } {
   let got: string[] | null = null
   return {
     build: (remote) => {
       got = [...remote]
-      return buildComposeDropPayload(remote)
+      return dropTextOrToast(buildComposeDropPayload(remote))
     },
     paths: () => got,
   }
@@ -488,11 +464,12 @@ export async function routeExternalDrop(
           paths,
           { kind: 'terminal' },
           { workspacePath: target.workspacePath || undefined },
-          buildTerminalDropPayload,
+          terminalText,
         )
         if (payload) injectIntoTerminal(scope, target, payload)
       } else {
-        injectIntoTerminal(scope, target, buildTerminalDropPayload(paths))
+        const payload = terminalText(paths)
+        if (payload !== null) injectIntoTerminal(scope, target, payload)
       }
       return
     }
@@ -510,7 +487,8 @@ export async function routeExternalDrop(
         )
         if (payload) injectIntoCompose(target, payload, cap.paths(), true)
       } else {
-        injectIntoCompose(target, buildComposeDropPayload(paths), paths, false)
+        const payload = dropTextOrToast(buildComposeDropPayload(paths))
+        if (payload !== null) injectIntoCompose(target, payload, paths, false)
       }
       return
     }
@@ -593,7 +571,7 @@ export async function routeBrowserFileDrop(
         files,
         { kind: 'terminal' },
         { workspacePath: target.workspacePath || undefined },
-        buildTerminalDropPayload,
+        terminalText,
       )
       if (payload) injectIntoTerminal(scope, target, payload)
       return

@@ -23,6 +23,7 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { roomForElement } from '@/stores/window-room'
 import { useToastStore } from '@/stores/toast'
+import { bracketPaste, isImagePath, quotePathForImageDrop } from '@/lib/drop-payload'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -51,49 +52,6 @@ function shellEscape(p: string): string {
     return "'" + p.replace(/'/g, "'\\''") + "'"
   }
   return p
-}
-
-// ── Image detection ──────────────────────────────────────────────────
-// Claude Code's `[Image #N]` detector reads the line, strips quotes, and
-// fs.exists()s the path. Backslash-escaped spaces (e.g. `Screen\ Shot.png`)
-// break that check, so for images we skip the backslash escape and only
-// wrap paths with whitespace/specials in single quotes.
-
-const IMAGE_EXTS = [
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif', '.pdf',
-]
-
-export function isImagePath(p: string): boolean {
-  const lower = p.toLowerCase()
-  return IMAGE_EXTS.some((ext) => lower.endsWith(ext))
-}
-
-/**
- * Quote a path minimally: bare if safe, single-quoted otherwise. Unlike
- * backslash-escaping this preserves the path's literal contents so
- * downstream readers (Claude Code's image detector) can resolve it.
- */
-export function quotePathForImageDrop(p: string): string {
-  if (/[^a-zA-Z0-9_\-./]/.test(p)) {
-    return "'" + p.replace(/'/g, "'\\''") + "'"
-  }
-  return p
-}
-
-// ── Bracketed paste ──────────────────────────────────────────────────
-// Interactive apps that enable bracketed paste (Claude Code, zsh, bash,
-// vim, etc.) toggle a flag when they see `\e[200~` / `\e[201~`. Claude
-// Code's image detector only runs on paste events — raw typed chars
-// never trigger it. Terminal.app / iTerm2 wrap drag-drop in these
-// escape sequences natively, which is why `[Image #N]` works there.
-
-export const BRACKETED_PASTE_START = '\x1b[200~'
-export const BRACKETED_PASTE_END = '\x1b[201~'
-
-/** Wrap text as a bracketed paste so the foreground app's paste handler
- *  sees a single paste event (Claude Code then runs image detection). */
-export function bracketPaste(text: string): string {
-  return BRACKETED_PASTE_START + text + BRACKETED_PASTE_END
 }
 
 // ── Ghost element ────────────────────────────────────────────────────

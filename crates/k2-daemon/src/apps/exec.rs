@@ -127,12 +127,56 @@ fn audit(app: &str, event: &str, who: &Who, payload: J) {
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(&format!("app-{event}"), &actor(who), outcome, "cli", "-", "cli"));
 }
 
-/// POST `/cli/app/exec {app, argv, timeout?}` (S28).
+/// Base64 characters of the largest stdin (`MAX_EXEC_STDIN`).
+pub const STDIN_B64_MAX: usize = (wire::MAX_EXEC_STDIN as usize).div_ceil(3) * 4;
+/// `/cli/app/exec`'s request body cap: the largest stdin, base64, plus the
+/// rest of the JSON (argv is at most 64 × 4 KiB).
+pub const EXEC_MAX_BODY: usize = STDIN_B64_MAX + 512 * 1024;
+
+/// `stdin` in an exec body (0.46.11): base64, at most 64 MiB decoded.
+/// `None` when absent (the command gets no stdin).
+pub(crate) fn stdin_of(v: &J) -> R<Option<Vec<u8>>> {
+    use base64::Engine as _;
+    let Some(raw) = v.get("stdin") else { return Ok(None) };
+    let text = raw.as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "stdin is a base64 string"))?;
+    if text.len() > STDIN_B64_MAX {
+        return Err(no(
+            codes::BAD_REQUEST,
+            413,
+            format!("stdin is about {} MiB; k2 app exec carries {} MiB at most", (text.len() / 4 * 3) >> 20, wire::MAX_EXEC_STDIN >> 20),
+        ));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(text).map_err(|e| no(codes::BAD_REQUEST, 400, format!("stdin isn't valid base64 ({e})")))?;
+    if bytes.len() as u64 > wire::MAX_EXEC_STDIN {
+        return Err(no(codes::BAD_REQUEST, 413, format!("stdin is {} bytes; k2 app exec carries {} MiB at most", bytes.len(), wire::MAX_EXEC_STDIN >> 20)));
+    }
+    Ok(Some(bytes))
+}
+
+/// An exec with stdin needs an engine that lists `exec-stdin`: refuse
+/// clearly on an older one (an older engine would refuse the request as
+/// malformed, or a plain exec would drop the input).
+pub(crate) fn stdin_engine_ok(has_feature: Result<bool, k2_core::deploy::engine::EngineError>) -> R<()> {
+    match has_feature {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(no(
+            codes::ENGINE_PROTOCOL_MISMATCH,
+            409,
+            "this box's App engine predates piped input (it doesn't list exec-stdin), so the command's stdin can't reach it. \
+             The owner installs the matching engine: k2 app engine install. To run it without input: k2 app exec --no-stdin …",
+        )),
+        Err(e) => Err(no(e.code, 503, format!("asking the App engine what it supports failed: {}", e.message))),
+    }
+}
+
+/// POST `/cli/app/exec {app, argv, timeout?, stdin?}` (S28; `stdin`
+/// 0.46.11: base64, the command's stdin, at most 64 MiB).
 pub(crate) fn exec_route(who: &Who, body: &[u8]) -> R<J> {
     may_exec(who)?;
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let argv = argv_of(&v)?;
+    let stdin = stdin_of(&v)?;
     let timeout = match v.get("timeout") {
         None | Some(J::Null) => EXEC_TIMEOUT_DEFAULT,
         Some(t) => t
@@ -141,13 +185,22 @@ pub(crate) fn exec_route(who: &Who, body: &[u8]) -> R<J> {
             .ok_or_else(|| no(codes::BAD_REQUEST, 400, "timeout is 1–600 seconds"))?,
     };
     let dep = live_guarded(&app)?;
+    if stdin.is_some() {
+        stdin_engine_ok(super::guarded::engine_has_feature(wire::FEATURE_EXEC_STDIN))?;
+    }
+    let stdin_bytes = stdin.as_ref().map(|s| s.len());
     let started = deploy::now();
-    let res = super::guarded::exec_once(&app.app_id, &dep, &argv, timeout);
+    let res = super::guarded::exec_once(&app.app_id, &dep, &argv, timeout, stdin.as_deref());
     let ended = deploy::now();
     let r = match res {
         Ok(r) => r,
         Err(e) => {
-            audit(&app.app_id, "exec", who, json!({ "deployment": dep, "argv": argv, "start": started, "end": ended, "exitCode": null, "error": e.message }));
+            audit(
+                &app.app_id,
+                "exec",
+                who,
+                json!({ "deployment": dep, "argv": argv, "stdinBytes": stdin_bytes, "start": started, "end": ended, "exitCode": null, "error": e.message }),
+            );
             return Err(no(e.code, 503, e.message));
         }
     };
@@ -159,13 +212,14 @@ pub(crate) fn exec_route(who: &Who, body: &[u8]) -> R<J> {
         &app.app_id,
         "exec",
         who,
-        json!({ "deployment": dep, "argv": argv, "start": started, "end": ended, "exitCode": exit, "timedOut": timed_out, "bytes": bytes }),
+        json!({ "deployment": dep, "argv": argv, "stdinBytes": stdin_bytes, "start": started, "end": ended, "exitCode": exit, "timedOut": timed_out, "bytes": bytes }),
     );
     Ok(json!({
         "ok": true,
         "app": app.app_id,
         "deployment": dep,
         "argv": argv,
+        "stdinBytes": stdin_bytes,
         "exitCode": exit,
         "timedOut": timed_out,
         "bytes": bytes,

@@ -134,18 +134,29 @@ pub fn call_at(socket: &Path, req: &Request, body: Option<(&mut dyn Read, u64)>,
     let mut line = serde_json::to_vec(req).map_err(|e| eng_err(codes::BAD_REQUEST, e.to_string()))?;
     line.push(b'\n');
     c.write_all(&line).map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("engine write: {e}")))?;
+    // An engine that refuses a request before reading its body (a cap, a
+    // bad field) answers and closes: the body write then fails. Its answer
+    // names the real cause, so read it before reporting the write.
+    let mut body_err = None;
     if let Some((r, len)) = body {
-        let n = std::io::copy(&mut r.take(len), &mut c).map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("engine body: {e}")))?;
-        if n != len {
-            return Err(eng_err(codes::ENGINE_UNAVAILABLE, format!("body ended at {n} of {len} bytes")));
+        match std::io::copy(&mut r.take(len), &mut c) {
+            Ok(n) if n != len => return Err(eng_err(codes::ENGINE_UNAVAILABLE, format!("body ended at {n} of {len} bytes"))),
+            Ok(_) => {}
+            Err(e) => body_err = Some(format!("engine body: {e}")),
         }
     }
     let _ = c.shutdown(std::net::Shutdown::Write);
     let mut ans = String::new();
-    BufReader::new(c)
-        .take(4 * wire::MAX_OUTPUT as u64)
-        .read_line(&mut ans)
-        .map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("engine answer: {e}")))?;
+    let read = BufReader::new(c).take(4 * wire::MAX_OUTPUT as u64).read_line(&mut ans);
+    if let Some(why) = body_err {
+        if let Ok(a) = serde_json::from_str::<Answer>(ans.trim()) {
+            if !a.ok {
+                return Err(eng_err(code_of(a.code.as_deref()), format!("App engine: {}", a.message.unwrap_or_default())));
+            }
+        }
+        return Err(eng_err(codes::ENGINE_UNAVAILABLE, why));
+    }
+    read.map_err(|e| eng_err(codes::ENGINE_UNAVAILABLE, format!("engine answer: {e}")))?;
     let a: Answer = serde_json::from_str(ans.trim()).map_err(|_| eng_err(codes::ENGINE_NOT_ANSWERING, "the App engine gave no answer"))?;
     if a.ok {
         Ok(a.data)
@@ -979,7 +990,7 @@ impl RuntimeEngine for GuardedEngine {
         if tty {
             return Err(eng_err(codes::ENGINE_UNAVAILABLE, "a terminal goes through exec_tty (k2 app shell)"));
         }
-        let v = exec_once(&h.app_id, &h.deployment_id, argv, wire::EXEC_TIMEOUT_DEFAULT)?;
+        let v = exec_once(&h.app_id, &h.deployment_id, argv, wire::EXEC_TIMEOUT_DEFAULT, None)?;
         Ok(ExecStream {
             exit_code: v["exitCode"].as_i64().and_then(|c| i32::try_from(c).ok()),
             output: v["output"].as_str().unwrap_or("").as_bytes().to_vec(),
@@ -1060,13 +1071,49 @@ fn spec_seed_hash(p: &Prepared) -> Option<String> {
 
 /// S28 one-shot exec into a guarded deployment's container (`k2 app
 /// exec`): `{exitCode, timedOut, bytes, ms, output}` (output raw; the route
-/// strips and frames it).
-pub fn exec_once(app: &str, deployment: &str, argv: &[String], timeout_secs: u64) -> Result<Value> {
-    call(
-        &Request::Exec { app: app.into(), deployment: deployment.into(), argv: argv.to_vec(), timeout_secs },
-        None,
-        Duration::from_secs(timeout_secs + 30),
-    )
+/// strips and frames it). `stdin` (0.46.11) goes as the request's body;
+/// send it only to an engine with [`wire::FEATURE_EXEC_STDIN`]
+/// ([`engine_has_feature`]): an older one refuses the request.
+pub fn exec_once(app: &str, deployment: &str, argv: &[String], timeout_secs: u64, stdin: Option<&[u8]>) -> Result<Value> {
+    if !cfg!(target_os = "linux") {
+        return Err(eng_err(codes::ENGINE_UNAVAILABLE, "the guarded engine runs on Linux boxes only"));
+    }
+    exec_once_at(Path::new(wire::SOCKET), app, deployment, argv, timeout_secs, stdin)
+}
+
+/// [`exec_once`] against the engine at `socket`.
+pub fn exec_once_at(socket: &Path, app: &str, deployment: &str, argv: &[String], timeout_secs: u64, stdin: Option<&[u8]>) -> Result<Value> {
+    let req = Request::Exec {
+        app: app.into(),
+        deployment: deployment.into(),
+        argv: argv.to_vec(),
+        timeout_secs,
+        stdin_len: stdin.map(|s| s.len() as u64),
+    };
+    let timeout = Duration::from_secs(timeout_secs + 30);
+    match stdin {
+        Some(s) => {
+            let mut r: &[u8] = s;
+            call_at(socket, &req, Some((&mut r, s.len() as u64)), timeout)
+        }
+        None => call_at(socket, &req, None, timeout),
+    }
+}
+
+/// Does the engine list `feature` in its `version` answer? (An engine
+/// update is a separate install from the daemon's: a box can run an older
+/// engine for a while.)
+pub fn engine_has_feature(feature: &str) -> Result<bool> {
+    engine_version_e().map(|v| lists_feature(&v, feature))
+}
+
+/// [`engine_has_feature`] against the engine at `socket`.
+pub fn engine_has_feature_at(socket: &Path, feature: &str) -> Result<bool> {
+    call_at(socket, &Request::Version, None, Duration::from_secs(10)).map(|v| lists_feature(&v, feature))
+}
+
+fn lists_feature(version: &Value, feature: &str) -> bool {
+    version["features"].as_array().is_some_and(|a| a.iter().any(|f| f.as_str() == Some(feature)))
 }
 
 /// S28 `k2 app shell`: ask the engine for a terminal; on `ok` the returned

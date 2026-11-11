@@ -232,6 +232,28 @@ pub fn too_large() -> CliResponse {
     refusal_response(&no(codes::BAD_REQUEST, 413, format!("request bodies here are at most {} KiB", MAX_BODY / 1024)))
 }
 
+/// A runtime route's request body cap: [`MAX_BODY`], except `k2 app exec`,
+/// whose body carries the command's stdin (0.46.11, 64 MiB as base64).
+pub fn max_body(path: &str) -> usize {
+    if path == "/cli/app/exec" {
+        super::exec::EXEC_MAX_BODY
+    } else {
+        MAX_BODY
+    }
+}
+
+/// [`too_large`] for `path`'s own cap.
+pub fn too_large_for(path: &str) -> CliResponse {
+    if path == "/cli/app/exec" {
+        return refusal_response(&no(
+            codes::BAD_REQUEST,
+            413,
+            format!("k2 app exec carries {} MiB of stdin at most", k2_root_proto::engine::MAX_EXEC_STDIN >> 20),
+        ));
+    }
+    too_large()
+}
+
 /// 404 for every runtime route while Apps (beta) are off on this server.
 pub fn dark() -> CliResponse {
     refusal_response(&no(codes::APPS_OFF, 404, APPS_OFF_HINT))

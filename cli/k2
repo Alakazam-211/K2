@@ -9233,10 +9233,13 @@ Box services (a walled App reaching a service on this box's loopback):
                                        At once. k2 app box-service --help.
 
 Debug it (guarded Apps; agents need "Allow this agent to manage Apps"):
-  k2 app exec <app-id> [--timeout 60] -- <command…>
+  k2 app exec <app-id> [--timeout 60] [--no-stdin] -- <command…>
                                        One command inside the App's container,
                                        as the App. Output is framed; exit = the
                                        command's (124 timeout, 3 refused).
+                                       A pipe or file on stdin reaches the
+                                       command (64 MiB at most); a terminal
+                                       or --no-stdin sends none.
   k2 app shell <app-id> [-- <command…>] A terminal in the container (/bin/sh).
                                        Hung up after 15 idle minutes. Audited.
 
@@ -11263,28 +11266,78 @@ for x in r:
 '
 }
 
-# k2 app exec <app-id> [--timeout 60|10m] [--json] -- <command…>   (S28)
+# POST a JSON body from FILE (too big for argv or a curl config line: an
+# exec's stdin). Same transports as _compute_send; sets _CP_STATUS/_CP_BODY.
+_app_rt_post_file() {
+    local path="$1" file="$2" sock out="" _K2_CFG=""
+    sock="$(_hook_sock)"
+    if [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
+        _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
+        _k2_cfg_add data-binary "@$file"
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
+            --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" -H "Content-Type: application/json" \
+            -w $'\n%{http_code}' 2>/dev/null)" || out=""
+        if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
+            _compute_split "$out"
+            return 0
+        fi
+    fi
+    _K2_CFG=""
+    _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
+    _k2_cfg_add data-binary "@$file"
+    out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "${K2_CP_MAX_TIME:-120}" \
+        -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000')"
+    _compute_split "$out"
+}
+
+# k2 app exec <app-id> [--timeout 60|10m] [--json] [--no-stdin] -- <command…>   (S28)
 # Runs one command inside the App's guarded container, as the App. The
 # output is framed as untrusted App text. Exit: the command's own exit code;
 # 3 (JSON) when K2 refuses or the App isn't reachable; 124 on timeout.
+# 0.46.11: a pipe or a file on stdin is the command's stdin (64 MiB at
+# most, exit 2 past it); a terminal, /dev/null or --no-stdin sends none.
 cmd_app_exec() {
-    local app="" timeout="" json_out=0
+    local app="" timeout="" json_out=0 no_stdin=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --timeout) timeout="$(_compute_secs "${2:-}")"; shift 2 ;;
             --json) json_out=1; shift ;;
+            --no-stdin) no_stdin=1; shift ;;
             -h|--help) _app_rt_usage; return 0 ;;
             --) shift; break ;;
             -*) echo "Unknown flag: $1 (put the command after --)" >&2; exit 2 ;;
             *) if [ -z "$app" ]; then app="$1"; shift; else break; fi ;;
         esac
     done
-    { [ -z "$app" ] || [ $# -eq 0 ]; } && { echo "usage: k2 app exec <app-id> [--timeout 60] -- <command…>" >&2; exit 2; }
+    { [ -z "$app" ] || [ $# -eq 0 ]; } && { echo "usage: k2 app exec <app-id> [--timeout 60] [--no-stdin] -- <command…>" >&2; exit 2; }
     local argv_json
     argv_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
-    local body
-    body="$(_compute_json K2_CJ_app="$app" K2_CJ_argv_j="$argv_json" K2_CJ_timeout_n="$timeout")"
-    K2_CP_MAX_TIME=$(( ${timeout:-60} + 60 )) _app_rt_post /cli/app/exec "$body"
+    if [ "$no_stdin" = 0 ] && [ ! -t 0 ] && { [ -p /dev/stdin ] || [ -f /dev/stdin ]; }; then
+        # The body carries the stdin as base64: from a temp file, never argv.
+        local tmpd rc=0
+        tmpd="$(mktemp -d "${TMPDIR:-/tmp}/k2-exec-XXXXXX")"
+        python3 -c '
+import base64, json, sys
+out, app, argv, timeout = sys.argv[1:5]
+cap = 64 << 20
+data = sys.stdin.buffer.read(cap + 1)
+if len(data) > cap:
+    sys.stderr.write("k2 app exec: stdin is over 64 MiB, the most one exec carries (split it, or move files in with k2 app data put)\n")
+    sys.exit(2)
+body = {"app": app, "argv": json.loads(argv), "stdin": base64.b64encode(data).decode("ascii")}
+if timeout:
+    body["timeout"] = int(timeout)
+with open(out, "w") as f:
+    json.dump(body, f)
+' "$tmpd/body.json" "$app" "$argv_json" "$timeout" || rc=$?
+        if [ "$rc" -ne 0 ]; then rm -rf "$tmpd"; exit "$rc"; fi
+        K2_CP_MAX_TIME=$(( ${timeout:-60} + 120 )) _app_rt_post_file /cli/app/exec "$tmpd/body.json"
+        rm -rf "$tmpd"
+    else
+        local body
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_argv_j="$argv_json" K2_CJ_timeout_n="$timeout")"
+        K2_CP_MAX_TIME=$(( ${timeout:-60} + 60 )) _app_rt_post /cli/app/exec "$body"
+    fi
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then
         printf '%s\n' "$_CP_BODY"
@@ -12797,7 +12850,8 @@ MEMORY AND DISK
   is your owner's call.
 
 DEBUGGING A GUARDED APP
-  k2 app exec <app-id> -- <command…>   one command, as the App
+  k2 app exec <app-id> -- <command…>   one command, as the App (a piped
+                                       file is its stdin, 64 MiB at most)
   k2 app shell <app-id>                a terminal (people; piped stdin works)
   Both run inside the App's wall (its user, no capabilities, its MAC
   profile), are audited, and need "Allow this agent to manage Apps".
@@ -14122,7 +14176,7 @@ walled App must be running (these go through its own exec, as the App).
   k2 app data put <app-id> <path> [--to <dir>] [--json]
                                        Copy a file or folder of your workspace
                                        into the data folder (64 MiB compressed
-                                       per put).
+                                       per put; any bytes: PDFs, images, tars).
   k2 app data ls <app-id> [<path>] [--json]
                                        List a folder (at most 2000 entries) or
                                        show one file. Links show as links,

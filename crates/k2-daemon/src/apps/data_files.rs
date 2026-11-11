@@ -572,7 +572,7 @@ fn data_of(app: &AppRow) -> R<Data> {
 
 fn with_exec<T>(app_id: &str, dep: &str, f: impl FnOnce(Exec<'_>) -> R<T>) -> R<T> {
     let exec = |argv: &[String]| -> Result<(i64, String), String> {
-        let r = super::guarded::exec_once(app_id, dep, argv, EXEC_TIMEOUT).map_err(|e| e.message)?;
+        let r = super::guarded::exec_once(app_id, dep, argv, EXEC_TIMEOUT, None).map_err(|e| e.message)?;
         if r["timedOut"].as_bool() == Some(true) {
             return Err(format!("the App's exec timed out after {EXEC_TIMEOUT}s"));
         }

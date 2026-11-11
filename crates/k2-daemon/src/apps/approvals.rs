@@ -849,6 +849,17 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
     }
     Some((|| {
         let v = json_body(body)?;
+        // 0.46.11: an exec's piped input (up to 64 MiB) is never kept on a
+        // held request: refuse, and say how to get it run.
+        if path == "/cli/app/exec" && v.get("stdin").is_some() {
+            return Err(no(
+                dcodes::APPS_MANAGE_OFF,
+                403,
+                "\"Build and run Apps\" is off for this agent, and an exec with piped input isn't kept on a held request: \
+                 ask your owner to turn the switch on (k2 app access <workspace> --build on from a terminal outside K2), \
+                 or run the command without input (k2 app exec --no-stdin …) to file it for approval",
+            ));
+        }
         let label = s(&v, "app")
             .map(str::to_ascii_lowercase)
             .or_else(|| s(&v, "folder").and_then(|f| std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().to_string())))

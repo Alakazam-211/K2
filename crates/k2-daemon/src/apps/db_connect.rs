@@ -1007,7 +1007,7 @@ fn in_wall(app: &AppRow, as_name: &str) -> super::db_probe::Probe {
         Ok(d) => d,
         Err(e) => return super::db_probe::Probe::fail("app_not_running", e.hint),
     };
-    match super::guarded::exec_once(&app.app_id, &dep, &super::db_probe::probe_argv(as_name), CHECK_TIMEOUT_SECS) {
+    match super::guarded::exec_once(&app.app_id, &dep, &super::db_probe::probe_argv(as_name), CHECK_TIMEOUT_SECS, None) {
         Ok(r) => {
             let out = r["output"].as_str().unwrap_or_default();
             super::db_probe::parse_marked(out).unwrap_or_else(|| {

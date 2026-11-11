@@ -303,6 +303,9 @@ pub const MAX_SEED_BYTES: u64 = 4 << 30;
 pub const MAX_IMAGE_BYTES: u64 = 4 << 30;
 /// Largest logs / exec output the engine returns.
 pub const MAX_OUTPUT: usize = 1024 * 1024;
+/// Largest stdin one exec carries (`exec-stdin`): `k2 app exec`'s piped
+/// input and one `k2 app data put` (64 MiB compressed).
+pub const MAX_EXEC_STDIN: u64 = 64 << 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "verb", rename_all = "kebab-case", deny_unknown_fields)]
@@ -326,8 +329,21 @@ pub enum Request {
     /// One command in the App's container, as the App (S28): its own
     /// user, capabilities, seccomp and MAC. Killed at `timeoutSecs`
     /// ([`EXEC_TIMEOUT_BOUNDS`]).
+    ///
+    /// 0.46.11 (`exec-stdin` in `version`'s `features`, no protocol bump):
+    /// `stdinLen` bytes follow the header, at most [`MAX_EXEC_STDIN`], and
+    /// are the command's stdin. The daemon sends `stdinLen` only to an
+    /// engine that lists the feature: an older one refuses the unknown
+    /// field, so a plain exec's line never carries it.
     #[serde(rename_all = "camelCase")]
-    Exec { app: String, deployment: String, argv: Vec<String>, timeout_secs: u64 },
+    Exec {
+        app: String,
+        deployment: String,
+        argv: Vec<String>,
+        timeout_secs: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stdin_len: Option<u64>,
+    },
     /// An interactive command on a terminal (S28 `k2 app shell`). After an
     /// `ok` answer line the connection carries [`tty`] frames both ways
     /// until the command exits.
@@ -872,7 +888,12 @@ pub const FEATURE_DB_FORWARD: &str = "db-forward";
 /// daemon always sent `None`), so the daemon sends `dbPort` only to an
 /// engine that lists this.
 pub const FEATURE_DB_DOOR: &str = "db-door";
-pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD, FEATURE_RELAXED, FEATURE_BUILD, FEATURE_DB_FORWARD, FEATURE_DB_DOOR];
+/// 0.46.11: an `exec` may carry its stdin as a body (`stdinLen`). The
+/// daemon checks for it before sending one; without it `k2 app data put`
+/// falls back to argv pieces under the argv cap and `k2 app exec` with
+/// input is refused (install the matching engine).
+pub const FEATURE_EXEC_STDIN: &str = "exec-stdin";
+pub const ENGINE_FEATURES: &[&str] = &[FEATURE_BOX_FORWARD, FEATURE_RELAXED, FEATURE_BUILD, FEATURE_DB_FORWARD, FEATURE_DB_DOOR, FEATURE_EXEC_STDIN];
 
 /// A box forward's port inside the wall: an App port shape (≥ 1024, not
 /// 8730, not K2's range), never the App's own port, never the database
@@ -1432,7 +1453,7 @@ mod tests {
         assert!(serde_json::from_str::<Request>("{\"verb\":\"stop\",\"app\":\"a\",\"deployment\":\"d-0123456789ab\",\"graceSecs\":1}").is_err());
         assert!(serde_json::from_str::<Request>("{\"verb\":\"shell\",\"cmd\":\"id\"}").is_err());
         // exec carries its timeout; exec-tty its terminal size.
-        let e = Request::Exec { app: "jobs".into(), deployment: "d-0123456789ab".into(), argv: vec!["ls".into()], timeout_secs: 60 };
+        let e = Request::Exec { app: "jobs".into(), deployment: "d-0123456789ab".into(), argv: vec!["ls".into()], timeout_secs: 60, stdin_len: None };
         let line = serde_json::to_string(&e).unwrap();
         assert!(line.contains("\"timeoutSecs\":60"), "{line}");
         assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), e);
@@ -1616,8 +1637,14 @@ mod tests {
         assert!(ENGINE_FEATURES.contains(&"exec-stdin"), "{ENGINE_FEATURES:?}");
         let line = r#"{"verb":"exec","app":"jobs","deployment":"d-0123456789ab","argv":["wc","-c"],"timeoutSecs":60,"stdinLen":5}"#;
         let req: Request = serde_json::from_str(line).expect("an exec with stdinLen parses");
+        assert_eq!(
+            req,
+            Request::Exec { app: "jobs".into(), deployment: "d-0123456789ab".into(), argv: vec!["wc".into(), "-c".into()], timeout_secs: 60, stdin_len: Some(5) }
+        );
         let back = serde_json::to_string(&req).unwrap();
         assert!(back.contains("\"stdinLen\":5"), "{back}");
+        assert_eq!(FEATURE_EXEC_STDIN, "exec-stdin");
+        assert_eq!(MAX_EXEC_STDIN, 64 << 20, "one data put's cap");
         let plain = r#"{"verb":"exec","app":"jobs","deployment":"d-0123456789ab","argv":["ls"],"timeoutSecs":60}"#;
         let req: Request = serde_json::from_str(plain).expect("the plain exec still parses");
         assert!(!serde_json::to_string(&req).unwrap().contains("stdinLen"), "no stdinLen on a plain exec: an older engine refuses unknown fields");

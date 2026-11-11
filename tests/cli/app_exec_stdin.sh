@@ -129,7 +129,7 @@ assert_contains "past 64 MiB: says the cap" "$err" "64 MiB"
 assert_eq "past 64 MiB: no request" "$(nreq)" "$before"
 
 echo "== help =="
-assert_eq "help names --no-stdin" "$(owner app exec --help 2>&1 | grep -c -- "--no-stdin" || true)" "1"
+assert_eq "help names --no-stdin" "$(owner app exec --help 2>&1 | grep -q -- "--no-stdin" && echo yes || echo no)" "yes"
 
 echo
 echo "app_exec_stdin: $pass passed, $fail failed"

@@ -188,7 +188,8 @@ MEMORY AND DISK
   is your owner's call.
 
 DEBUGGING A GUARDED APP
-  k2 app exec <app-id> -- <command…>   one command, as the App
+  k2 app exec <app-id> -- <command…>   one command, as the App (a piped
+                                       file is its stdin, 64 MiB at most)
   k2 app shell <app-id>                a terminal (people; piped stdin works)
   Both run inside the App's wall (its user, no capabilities, its MAC
   profile), are audited, and need "Allow this agent to manage Apps".

@@ -52,6 +52,11 @@ pub fn node_options(r: &wire::Resources) -> String {
     }
 }
 
+/// What an exec's argv must be (`wire::exec_argv_ok`), said in the refusal:
+/// a bare "argv" sent a 0.46.10 user hunting (a put of binary data broke
+/// the per-word cap). Bulk bytes go on stdin, never in argv.
+const ARGV_RULE: &str = "argv refused: 1 to 64 words, each 1 to 4096 bytes with no control characters (send bulk data on stdin)";
+
 fn bad(m: impl Into<String>) -> (&'static str, String) {
     (codes::BAD_REQUEST, m.into())
 }
@@ -77,6 +82,9 @@ pub struct Engine {
     /// `disk-usage`'s per-App measuring command (tests: plain `du`, no
     /// `podman unshare`); `None` = the real one (`usage::app_du_argv`).
     du_override: Option<Vec<String>>,
+    /// The program `exec` runs in place of `podman` (tests: a stand-in
+    /// that runs the argv after the container name on this machine).
+    exec_podman: Option<String>,
 }
 
 /// One instance's state file (`<state>/run/<app>/<deployment>.json`).
@@ -124,6 +132,7 @@ impl Engine {
             seed_asks: Mutex::new(std::collections::HashMap::new()),
             subid_files: (PathBuf::from(SUBUID_FILE), PathBuf::from(SUBGID_FILE)),
             du_override: None,
+            exec_podman: None,
         }
     }
 
@@ -131,6 +140,13 @@ impl Engine {
     /// instead of `podman unshare du`.
     pub fn with_du_command(mut self, argv: Vec<String>) -> Self {
         self.du_override = Some(argv);
+        self
+    }
+
+    /// Tests: `exec` runs this program with podman's arguments
+    /// (`exec --interactive… <container> <argv…>`) instead of podman.
+    pub fn with_exec_podman(mut self, prog: &str) -> Self {
+        self.exec_podman = Some(prog.to_string());
         self
     }
 
@@ -344,7 +360,7 @@ impl Engine {
             Request::Stop { app, deployment } => self.stop(&app, &deployment),
             Request::Liveness { app, deployment } => self.liveness(&app, &deployment),
             Request::Stats { app, deployment } => self.stats(&app, &deployment),
-            Request::Exec { app, deployment, argv, timeout_secs } => self.exec(&app, &deployment, &argv, timeout_secs),
+            Request::Exec { app, deployment, argv, timeout_secs, stdin_len } => self.exec(&app, &deployment, &argv, timeout_secs, stdin_len, body),
             // Answered in `serve_conn` (it streams); never reaches here.
             Request::ExecTty { .. } => Err(bad("exec-tty streams; it has no one-line answer")),
             Request::ProcessStage(spec) => crate::process::stage(self, &spec),
@@ -859,19 +875,39 @@ impl Engine {
     /// MAC profile and no-new-privileges to the exec process). No stdin,
     /// no tty, killed at the timeout. Output is raw here; the daemon frames
     /// and strips it.
-    fn exec(&self, app: &str, dep: &str, argv: &[String], timeout_secs: u64) -> R<Value> {
+    ///
+    /// 0.46.11 (`exec-stdin`): when the request declares `stdinLen`, that
+    /// many body bytes (at most [`wire::MAX_EXEC_STDIN`]) are the
+    /// command's stdin.
+    fn exec(&self, app: &str, dep: &str, argv: &[String], timeout_secs: u64, stdin_len: Option<u64>, body: &mut dyn Read) -> R<Value> {
         let (a, _) = Self::ids(app, dep)?;
         if !wire::exec_argv_ok(argv) {
-            return Err(bad("argv"));
+            return Err(bad(ARGV_RULE));
         }
         if !(EXEC_TIMEOUT_BOUNDS.0..=EXEC_TIMEOUT_BOUNDS.1).contains(&timeout_secs) {
             return Err(bad("timeout"));
         }
+        let stdin = match stdin_len {
+            None => None,
+            Some(len) if len > wire::MAX_EXEC_STDIN => {
+                return Err((codes::TOO_LARGE, format!("exec stdin is {len} bytes; the cap is {}", wire::MAX_EXEC_STDIN)));
+            }
+            Some(len) => {
+                let mut b = Vec::with_capacity(len as usize);
+                let n = body.take(len).read_to_end(&mut b).map_err(|e| (codes::IO, format!("exec stdin: {e}")))?;
+                if n as u64 != len {
+                    return Err((codes::IO, format!("exec stdin ended at {n} of {len} bytes")));
+                }
+                Some(b)
+            }
+        };
         let ctr = unit_stem(&a, dep);
-        let mut args: Vec<&str> = vec!["exec", "--interactive=false", &ctr];
+        let interactive = if stdin.is_some() { "--interactive=true" } else { "--interactive=false" };
+        let mut args: Vec<&str> = vec!["exec", interactive, &ctr];
         args.extend(argv.iter().map(String::as_str));
         let t0 = std::time::Instant::now();
-        let o = self.run(podman_bin(), &args, None, timeout_secs)?;
+        let prog = self.exec_podman.as_deref().unwrap_or(podman_bin());
+        let o = self.run(prog, &args, stdin, timeout_secs)?;
         let mut out = o.stdout.clone();
         out.extend_from_slice(&o.stderr);
         let bytes = out.len();
@@ -889,7 +925,7 @@ impl Engine {
     pub fn exec_tty_command(&self, app: &str, dep: &str, argv: &[String]) -> R<Command> {
         let (a, _) = Self::ids(app, dep)?;
         if !wire::exec_argv_ok(argv) {
-            return Err(bad("argv"));
+            return Err(bad(ARGV_RULE));
         }
         let ctr = unit_stem(&a, dep);
         let mut c = self.cmd(podman_bin());
@@ -1381,5 +1417,87 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         e.remove_owned(&outside);
         assert!(outside.is_dir());
+    }
+
+    /// 0.46.11 `exec-stdin`: the body after an exec header is the command's
+    /// stdin (`podman exec --interactive=true`), byte for byte; a plain exec
+    /// stays `--interactive=false` with no stdin; past the cap is
+    /// `too_large`, a short body `io_failed`; the argv cap stays and its
+    /// refusal says the rule. A stand-in for podman runs the argv after
+    /// the container name here.
+    #[test]
+    fn exec_feeds_the_body_to_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let fake = d.path().join("podman");
+        let seen = d.path().join("seen");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\n[ \"$1\" = exec ] || exit 99\nprintf '%s %s\\n' \"$2\" \"$3\" >> '{}'\nshift 3\nexec \"$@\"\n", seen.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let e = Engine::new(d.path().to_path_buf(), "/tmp".into()).with_exec_podman(&fake.to_string_lossy());
+        let ask = |argv: &[&str], stdin: Option<&[u8]>, declared: Option<u64>| -> Answer {
+            let (a, b) = UnixStream::pair().unwrap();
+            let mut req = json!({ "verb": "exec", "app": "jobs", "deployment": "d-0123456789ab", "argv": argv, "timeoutSecs": 60 });
+            if let Some(n) = declared {
+                req["stdinLen"] = json!(n);
+            }
+            let mut w = a.try_clone().unwrap();
+            let body = stdin.map(|s| s.to_vec());
+            let t = std::thread::spawn(move || {
+                let mut line = serde_json::to_vec(&req).unwrap();
+                line.push(b'\n');
+                let _ = w.write_all(&line);
+                if let Some(b) = body {
+                    let _ = w.write_all(&b);
+                }
+                let _ = w.shutdown(std::net::Shutdown::Write);
+            });
+            serve_conn(&e, b, &|_| Ok("k2".into()));
+            t.join().unwrap();
+            let mut s = String::new();
+            let mut r = a;
+            r.read_to_string(&mut s).unwrap();
+            serde_json::from_str(s.trim()).unwrap()
+        };
+        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+        let mib: Vec<u8> = (0..(1 << 20))
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                (x >> 24) as u8
+            })
+            .collect();
+        let a = ask(&["sh", "-c", "wc -c"], Some(&mib), Some(mib.len() as u64));
+        assert!(a.ok, "{a:?}");
+        assert_eq!(a.data["output"].as_str().unwrap().trim(), "1048576");
+        assert_eq!(a.data["exitCode"], 0);
+        let out = d.path().join("out.bin");
+        let a = ask(&["sh", "-c", &format!("cat > '{}'", out.display())], Some(&mib), Some(mib.len() as u64));
+        assert!(a.ok, "{a:?}");
+        assert_eq!(std::fs::read(&out).unwrap(), mib, "byte for byte");
+        let a = ask(&["sh", "-c", "wc -c"], None, None);
+        assert!(a.ok, "{a:?}");
+        assert_eq!(a.data["output"].as_str().unwrap().trim(), "0", "no stdin on a plain exec");
+        let lines = std::fs::read_to_string(&seen).unwrap();
+        let modes: Vec<&str> = lines.lines().map(|l| l.split(' ').next().unwrap()).collect();
+        assert_eq!(modes, vec!["--interactive=true", "--interactive=true", "--interactive=false"]);
+        assert!(lines.lines().all(|l| l.ends_with(" k2app-jobs--d-0123456789ab")), "{lines}");
+        // Past the cap: refused before a byte is read.
+        let a = ask(&["true"], None, Some(wire::MAX_EXEC_STDIN + 1));
+        assert_eq!(a.code.as_deref(), Some(codes::TOO_LARGE), "{a:?}");
+        // A body shorter than declared.
+        let a = ask(&["sh", "-c", "wc -c"], Some(b"abc"), Some(10));
+        assert_eq!(a.code.as_deref(), Some(codes::IO), "{a:?}");
+        assert!(a.message.as_deref().unwrap_or("").contains("3 of 10"), "{a:?}");
+        // The argv cap stays, and says what it is.
+        let long = "a".repeat(4097);
+        let a = ask(&["printf", "%s", &long], None, None);
+        assert_eq!(a.code.as_deref(), Some(codes::BAD_REQUEST), "{a:?}");
+        assert!(a.message.as_deref().unwrap_or("").contains("4096 bytes"), "{a:?}");
+        assert_eq!(std::fs::read_to_string(&seen).unwrap().lines().count(), 3, "refusals run nothing");
     }
 }

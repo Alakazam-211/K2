@@ -74,6 +74,9 @@ mod unix_impl {
             crate::docs::routes::max_body(target)
         } else if target.starts_with(crate::board_file::routes::PREFIX) {
             crate::board_file::routes::max_body(target)
+        } else if target.split('?').next() == Some("/cli/app/exec") {
+            // 0.46.11: `k2 app exec` carries its stdin (64 MiB as base64).
+            crate::apps::routes::max_body("/cli/app/exec")
         } else {
             MAX_BODY
         }
@@ -1039,8 +1042,8 @@ mod unix_impl {
                 if crate::apps::routes::is_post_route(p) && !is_post {
                     return ("405 Method Not Allowed".to_string(), "application/json", r#"{"error":"POST required"}"#.to_string());
                 }
-                if body.len() > crate::apps::routes::MAX_BODY {
-                    return from_cli(crate::apps::routes::too_large());
+                if body.len() > crate::apps::routes::max_body(p) {
+                    return from_cli(crate::apps::routes::too_large_for(p));
                 }
                 let who = crate::compute_routes::who_from_cell(this_session_id, principal);
                 from_cli(crate::apps::routes::handle(p, who, body, params))

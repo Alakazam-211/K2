@@ -360,11 +360,16 @@ pub fn retire(conn: &Connection, project_id: &str, name: &str, reason: &str, now
 }
 
 /// How many reminders this workspace fired in the last hour.
+///
+/// `fired_at` is written in local time with its offset, so it is compared
+/// as an instant (SQLite's `datetime()` turns any offset into UTC), never
+/// as a string: west of UTC a string compare missed every recent fire.
 pub fn fires_last_hour(conn: &Connection, project_id: &str, now: DateTime<Utc>) -> rusqlite::Result<i64> {
     let since = (now - chrono::Duration::hours(1)).to_rfc3339();
     conn.query_row(
         "SELECT COUNT(*) FROM heartbeat_fires \
-         WHERE project_id = ?1 AND mode = 'once' AND decision IN ('fired', 'fired_catchup') AND fired_at >= ?2",
+         WHERE project_id = ?1 AND mode = 'once' AND decision IN ('fired', 'fired_catchup') \
+           AND datetime(fired_at) >= datetime(?2)",
         params![project_id, since],
         |r| r.get(0),
     )
@@ -704,5 +709,44 @@ mod tests {
         assert!(set_by_a_person("user:rosson"));
         assert!(set_by_a_person(""));
         assert!(!set_by_a_person("agent:sales"));
+    }
+
+    /// `fired_at` is written in local time with its offset and the windows
+    /// are UTC: counts compare instants, so a zone west or east of UTC
+    /// can't hide a recent fire or count an old one. Two fires written at
+    /// -07:00 in the last half hour count; one written at +09:00 two hours
+    /// ago doesn't. (A string compare in UTC got this exactly backwards.)
+    #[test]
+    fn hour_counts_compare_instants_whatever_offset_a_fire_was_written_with() {
+        let (dir, pid) = workspace("offsets");
+        let now = chrono::Utc::now();
+        let west = chrono::FixedOffset::west_opt(7 * 3600).expect("-07:00");
+        let east = chrono::FixedOffset::east_opt(9 * 3600).expect("+09:00");
+        let rows = [
+            (now - chrono::Duration::minutes(10)).with_timezone(&west).to_rfc3339(),
+            (now - chrono::Duration::minutes(20)).with_timezone(&west).to_rfc3339(),
+            (now - chrono::Duration::hours(2)).with_timezone(&east).to_rfc3339(),
+        ];
+        let db = crate::db::shared();
+        let conn = db.lock();
+        for at in &rows {
+            conn.execute(
+                "INSERT INTO heartbeat_fires (project_id, agent_name, fired_at, mode, decision) VALUES (?1, 'manager', ?2, 'once', 'fired')",
+                params![pid, at],
+            )
+            .expect("fire");
+        }
+        assert_eq!(fires_last_hour(&conn, &pid, now).expect("count"), 2, "the reminder cap's hour: {rows:?}");
+        assert_eq!(
+            crate::wake_budget::wakes_since(&conn, &pid, now.timestamp() - 3600).expect("budget"),
+            2,
+            "the agent wake budget's hour: {rows:?}"
+        );
+        // The 90-day prune compares instants too: a cutoff one hour ago
+        // removes only the +09:00 row from two hours ago.
+        let cutoff = (now - chrono::Duration::hours(1)).to_rfc3339();
+        assert_eq!(crate::db::schema::HeartbeatFire::prune_before(&conn, &cutoff).expect("prune"), 1, "only the old row");
+        drop(conn);
+        std::fs::remove_dir_all(&dir).expect("clean up");
     }
 }

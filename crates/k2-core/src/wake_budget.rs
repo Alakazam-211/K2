@@ -22,12 +22,15 @@ pub const DECISION_AGENT_CAP: &str = "agent_cap";
 /// "couldn't count" for "room left".
 pub fn wakes_since(conn: &Connection, project_id: &str, since: i64) -> rusqlite::Result<u16> {
     let sources = i64::from(crate::sources::trigger_store::agent_fires_since(conn, project_id, since)?);
+    // heartbeat_fires.fired_at carries the local offset: the queries below
+    // compare instants with datetime(), not strings.
     let since_rfc = chrono::DateTime::<chrono::Utc>::from_timestamp(since, 0)
         .map(|t| t.to_rfc3339())
         .unwrap_or_default();
     let reminders: i64 = conn.query_row(
         "SELECT COUNT(*) FROM heartbeat_fires \
-         WHERE project_id = ?1 AND mode = 'once' AND decision IN ('fired', 'fired_catchup') AND fired_at >= ?2",
+         WHERE project_id = ?1 AND mode = 'once' AND decision IN ('fired', 'fired_catchup') \
+           AND datetime(fired_at) >= datetime(?2)",
         params![project_id, since_rfc],
         |r| r.get(0),
     )?;
@@ -41,7 +44,7 @@ pub fn wakes_since(conn: &Connection, project_id: &str, since: i64) -> rusqlite:
         "SELECT COUNT(*) FROM heartbeat_fires f \
          JOIN workspace_heartbeats h ON h.project_id = f.project_id AND h.name = f.schedule_name \
          WHERE f.project_id = ?1 AND h.kind = 'mail_digest' \
-           AND f.decision IN ('fired', 'fired_catchup') AND f.fired_at >= ?2",
+           AND f.decision IN ('fired', 'fired_catchup') AND datetime(f.fired_at) >= datetime(?2)",
         params![project_id, since_rfc],
         |r| r.get(0),
     )?;

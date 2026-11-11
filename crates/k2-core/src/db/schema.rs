@@ -3815,7 +3815,8 @@ impl HeartbeatFire {
     /// unboundedly (pre-0062 it had zero callers).
     pub fn prune_before(conn: &Connection, cutoff: &str) -> Result<usize> {
         conn.execute(
-            "DELETE FROM heartbeat_fires WHERE fired_at < ?1",
+            // fired_at carries the local offset: compare instants.
+            "DELETE FROM heartbeat_fires WHERE datetime(fired_at) < datetime(?1)",
             params![cutoff],
         )
     }

@@ -142,11 +142,8 @@ function EditorChoice({
 function ShortcutRow({ label, hint, keys }: { label: string; hint: string; keys: string[] }): React.JSX.Element {
   return (
     <SettingRow label={label} hint={hint}>
-      {keys.map((k, i) => (
-        <React.Fragment key={k}>
-          {i > 0 && <span className="type-hint text-[var(--color-text-secondary)]">or</span>}
-          <KeyChip combo={k} />
-        </React.Fragment>
+      {keys.map((k) => (
+        <KeyChip key={k} combo={k} />
       ))}
     </SettingRow>
   )
@@ -518,7 +515,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
             <EditorSwitch id="code-editor.vim-mode" field="vimMode" label="Vim mode" hint="Vim keys and modes: hjkl, insert and visual mode, : commands." />
             <ShortcutRow label="Select the next match" hint="Adds a cursor at the next match of the selected word." keys={[mac ? '⌘D' : 'Ctrl+D']} />
             <ShortcutRow label="Find and replace" hint="Opens search at the top of the file, with a replace field." keys={[mac ? '⌘F' : 'Ctrl+F']} />
-            <ShortcutRow label="Fold and unfold" hint="Collapses or expands the block at the cursor." keys={mac ? ['⌥⌘[', '⌥⌘]'] : ['Ctrl+Shift+[', 'Ctrl+Shift+]']} />
+            <ShortcutRow label="Fold and unfold" hint="The first collapses the block at the cursor; the second opens it again." keys={mac ? ['⌥⌘[', '⌥⌘]'] : ['Ctrl+Shift+[', 'Ctrl+Shift+]']} />
           </SettingsGroup>
         </div>
 

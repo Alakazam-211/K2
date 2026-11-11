@@ -94,6 +94,7 @@ export function KeybindingsSection(): React.JSX.Element {
   }
   const clashesWith = (id: string): string[] => {
     const combo = getEffectiveKeybinding(keybindings, id)
+    if (!combo) return []
     return (comboToIds[combo] ?? []).filter((o) => o !== id).map((o) => HOTKEYS.find((h) => h.id === o)?.label ?? o)
   }
 
@@ -344,7 +345,7 @@ function KeybindingRow({
     </span>
   ) : isCustom ? (
     <>
-      Changed. The default is {keysFor(hotkey.defaultKey)}.
+      {hotkey.defaultKey ? `Changed. The default is ${keysFor(hotkey.defaultKey)}.` : 'Changed. It has no shortcut by default.'}
     </>
   ) : undefined
 
@@ -393,7 +394,7 @@ function KeybindingRow({
         <button
           type="button"
           data-k2-chamfer="chip"
-          aria-label={`${hotkey.label}: ${formatKeyCombo(combo, isMacPlatform())}. Change`}
+          aria-label={`${hotkey.label}: ${combo ? formatKeyCombo(combo, isMacPlatform()) : 'no shortcut'}. Change`}
           onClick={() => {
             setRefused(null)
             save.reset()
@@ -407,7 +408,7 @@ function KeybindingRow({
               : cx(KEY_CHIP_REST, 'hover:border-[var(--color-text-muted)]'),
           )}
         >
-          <KeyCombo combo={formatKeyCombo(combo, isMacPlatform())} />
+          {combo ? <KeyCombo combo={formatKeyCombo(combo, isMacPlatform())} /> : <span className="font-sans text-[var(--color-text-secondary)]">Set…</span>}
         </button>
       )}
     </SettingRow>

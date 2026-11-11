@@ -746,9 +746,30 @@ pub fn is_due(status: &str, last_checked_at: Option<i64>, now: i64) -> bool {
     now - last >= interval
 }
 
+/// What one poller sweep did (the poller logs on changes; tests assert).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Sweep {
+    /// Air-gap is on: no resolver built, no lookup made.
+    AirGap,
+    /// Nothing was due.
+    Idle,
+    /// No resolver could be built (system config unreadable).
+    NoResolver,
+    /// This many due domains were checked.
+    Checked(usize),
+}
+
+/// One blocking sweep with the production resolver.
+fn sweep_once() -> Sweep {
+    sweep_with(&|| SystemResolver::new().map(|r| Box::new(r) as Box<dyn DnsResolver>))
+}
+
 /// One blocking sweep: check every due domain. The resolver is built
-/// once per sweep (system conf can change under us — cheap to reload).
-fn sweep_once() {
+/// once per sweep (system conf can change under us — cheap to reload),
+/// through `make_resolver` so tests can count lookups.
+pub(crate) fn sweep_with(
+    make_resolver: &dyn Fn() -> Result<Box<dyn DnsResolver>, String>,
+) -> Sweep {
     let due: Vec<String> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -760,20 +781,22 @@ fn sweep_once() {
             .collect()
     };
     if due.is_empty() {
-        return;
+        return Sweep::Idle;
     }
-    let resolver = match SystemResolver::new() {
+    let resolver = match make_resolver() {
         Ok(r) => r,
         Err(e) => {
             k2_core::log_debug!("[mail/dns] sweep skipped — {e}");
-            return;
+            return Sweep::NoResolver;
         }
     };
+    let checked = due.len();
     for domain in due {
-        if let Err(e) = check_domain_now(&resolver, &domain) {
+        if let Err(e) = check_domain_now(resolver.as_ref(), &domain) {
             k2_core::log_debug!("[mail/dns] check {domain} failed: {e:?}");
         }
     }
+    Sweep::Checked(checked)
 }
 
 /// Register the verification poller (main.rs, next to the other
@@ -883,6 +906,79 @@ mod tests {
             vec![vec!["v=DMARC1; p=none; rua=mailto:postmaster@acme.dev".to_string()]],
         );
         r
+    }
+
+    /// Counts every lookup; answers nothing (a due domain stays pending).
+    struct CountingResolver(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl CountingResolver {
+        fn hit(&self) -> DnsError {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            DnsError::NotFound
+        }
+    }
+
+    impl DnsResolver for CountingResolver {
+        fn mx(&self, _: &str) -> Result<Vec<MxHost>, DnsError> {
+            Err(self.hit())
+        }
+        fn txt(&self, _: &str) -> Result<Vec<Vec<String>>, DnsError> {
+            Err(self.hit())
+        }
+        fn a(&self, _: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError> {
+            Err(self.hit())
+        }
+        fn aaaa(&self, _: &str) -> Result<Vec<std::net::Ipv6Addr>, DnsError> {
+            Err(self.hit())
+        }
+        fn ptr(&self, _: std::net::IpAddr) -> Result<Vec<String>, DnsError> {
+            Err(self.hit())
+        }
+        fn srv(&self, _: &str) -> Result<Vec<SrvAnswer>, DnsError> {
+            Err(self.hit())
+        }
+    }
+
+    /// Air-gap promises no outbound network: the poller makes no DNS
+    /// lookup (it does not even build a resolver) while it is on, even
+    /// with a domain due. With air-gap off, the same domain IS looked up,
+    /// which proves the domain really was due.
+    #[test]
+    fn air_gap_poller_makes_no_dns_lookup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let _g = crate::mail::mail_server_test_lock();
+        let domain = "airgap-dns.example";
+        let wipe = || {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM mail_domains WHERE domain = ?1", rusqlite::params![domain]);
+        };
+        wipe();
+        let engine = FakeEngine { zone: ZONE_FIXTURE.replace("acme.dev", domain), ..FakeEngine::ok() };
+        add_domain(&engine, domain).expect("seed add");
+
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let built = AtomicUsize::new(0);
+        let make = || -> Result<Box<dyn DnsResolver>, String> {
+            built.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::new(CountingResolver(lookups.clone())))
+        };
+
+        {
+            let _air = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
+            assert_eq!(sweep_with(&make), Sweep::AirGap, "air-gap sweep must stop before any lookup");
+            assert_eq!(built.load(Ordering::SeqCst), 0, "air-gap must not even build a resolver");
+            assert_eq!(lookups.load(Ordering::SeqCst), 0, "air-gap must make no DNS lookup");
+        }
+        {
+            let _off = k2_core::test_env::EnvVar::set("K2_AIRGAP", "0");
+            let got = sweep_with(&make);
+            assert!(matches!(got, Sweep::Checked(n) if n >= 1), "the seeded domain is due: {got:?}");
+            assert!(lookups.load(Ordering::SeqCst) > 0, "air-gap off: the due domain is looked up");
+        }
+        wipe();
     }
 
     // ── Comparison rules ──

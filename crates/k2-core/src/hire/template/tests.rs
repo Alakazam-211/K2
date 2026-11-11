@@ -411,7 +411,7 @@ fn template_answers_for_a_note_not_written_go_to_role() {
     let out = apply(&r, &HireCaller::Owner).expect("apply");
     let role = read(&path, ".k2/agent/ROLE.md");
     assert!(role.contains("- **Where can I see how you write: a few samples or links?** example.k2.dev/blog"), "{role}");
-    assert!(!role.contains("in your wiki:"), "{role}");
+    assert!(!role.contains("Answered at hire, in your wiki"), "{role}");
     assert!(out.questions.iter().any(|q| q.id == "samples" && q.answered));
     // A dry run previews the answers in the charter and writes nothing.
     let dry = ws(&home, "dry-answers");

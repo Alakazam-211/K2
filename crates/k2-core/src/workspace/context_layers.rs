@@ -1589,11 +1589,11 @@ Your harness owns sub-agent/worktree spawn; K2 wires messaging and the tray.
 
 ## Every wake
 
-1. `k2 checkin` — messages, inbox, reviews, activity.
+1. `k2 inbox` and `k2 organization bulletin`: new work, then today's bulletin.
 2. Triage live msgs + `k2 inbox` (act / file / reply / archive).
 3. Prefer `k2 msg <ws> --inbox-wake <path>` for real work packages; live `msg` for short knocks.
 4. Peek with `k2 read <ws>` before injecting into a peer.
-5. `k2 checkin --status "…"` then `k2 done` (or `--blocked "…"`).
+5. `k2 organization update "…"` then `k2 done` (or `--blocked "…"`).
 
 ## Do not
 
@@ -1615,11 +1615,11 @@ Write durable plans under `.k2/prds/` / `.k2/milestones/`; keep PROJECT.md curre
 
 ## Every wake
 
-1. `k2 checkin` — inbox, peers, reviews.
+1. `k2 inbox` and `k2 organization bulletin`: new work, then today's bulletin.
 2. Capture work with `k2 inbox compose` / read tray packages.
 3. Plan in docs; register ship-ready items via inbox when useful.
 4. Coordinate with `k2 msg` / `--inbox-wake`; keep live msgs short.
-5. `k2 checkin --status "…"` then `k2 done`.
+5. `k2 organization update "…"` then `k2 done`.
 
 ## Do not
 

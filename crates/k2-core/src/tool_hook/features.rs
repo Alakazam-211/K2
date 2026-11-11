@@ -17,8 +17,10 @@
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //! | [`APP_RECORDING`], [`VOICE_RECORD_CAP`], [`RECORDING_REQUIRED`], [`MGMT_RECORDING_READS`] | Sew 0.9.0 (recording in Apps): read together as [`RecordingFeatures`] (`tool_hook::sew_recording_features()`). Sew 0.8.x reports none, so every recording change is inert there |
 //!
-//! The pin (Sew 0.9.0) reports thirty-five flags: 0.8.2's and 0.8.3's thirty-one plus the four
-//! recording flags above (its own `sew version --json`, held in a test). 0.8.2's thirty-one are
+//! The pin (Sew 0.9.2) reports thirty-seven flags: 0.9.0's thirty-five plus `group_dm_names` and
+//! `dm_order_activity` (group DM names and DMs listed by latest activity; K2 uses neither). 0.9.0's
+//! thirty-five are 0.8.2's and 0.8.3's thirty-one plus the four
+//! recording flags above (each release's own `sew version --json`, held in a test). 0.8.2's thirty-one are
 //! 0.8.0's and 0.8.1's thirty, which are 0.7.3's twenty-nine (the same as 0.7.2's) and
 //! `app_participant_links`, plus 0.8.2's `principal_erase` (`POST /mgmt/v1/principals/erase`).
 //! K2 keeps both and uses neither yet. Up to 0.6.1 they are 0.5.0's
@@ -421,7 +423,7 @@ mod tests {
         assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
     }
 
-    /// The pin, Sew 0.9.0, exactly as its own binary reports it (`sew
+    /// Sew 0.9.0 (the pin before 0.9.2), exactly as its own binary reports it (`sew
     /// version --json` of the published x86_64 build, sha256 d1888020…d302,
     /// 2026-11-10): K2's 0.8.2 list plus the four recording flags, nothing
     /// else, and every gate open. 0.8.3's binary reported the same list
@@ -448,6 +450,43 @@ mod tests {
         ensure_schema(&conn).unwrap();
         assert!(note(&conn, "chat", &got, 1).unwrap());
         assert_eq!(list(&conn, "chat").unwrap().len(), 35);
+        assert!(RecordingFeatures::read(&conn, "chat").unwrap().any());
+        assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
+        for flag in [APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, APP_RECORDING, VOICE_RECORD_CAP, RECORDING_REQUIRED, MGMT_RECORDING_READS] {
+            assert!(has(&conn, "chat", flag).unwrap(), "{flag}");
+        }
+    }
+
+    /// The pin, Sew 0.9.2, exactly as its own binary reports it (`sew
+    /// version --json` of the published x86_64 build, sha256 f13d7c7c…d1c6,
+    /// 2026-11-11): 0.9.0's thirty-five plus `group_dm_names` and
+    /// `dm_order_activity`, which K2 keeps and doesn't gate on. Every gate
+    /// stays open.
+    #[test]
+    fn sew_0_9_2_as_reported_keeps_every_gate_open() {
+        const REPORTED: [&str; 37] = [
+            "app_channel_create", "app_controls", "app_governed_spaces", "app_member_channels", "app_mode_gate",
+            "app_origin", "app_origins", "app_participant_links", "app_quotas", "app_recording",
+            "app_scoped_sessions", "app_session_member_role", "app_voice_channel_create", "call_credential",
+            "call_stats_native", "dm_order_activity", "group_dm_names", "home_client", "home_client_owner_approval",
+            "import_identity_map", "k2_managed_avatar", "k2_managed_guard", "member_external_id",
+            "mgmt_recording_reads", "mgmt_voice_states", "person_notifications", "principal_erase",
+            "principal_relink", "private_spaces", "recording_required", "server_governed_space", "space_unbind",
+            "turn_relay_only", "voice_channel_closing", "voice_media_path", "voice_record_cap", "voice_video_cap",
+        ];
+        let mut want: Vec<String> = sew_0_8_2();
+        want.extend(
+            ["app_recording", "voice_record_cap", "recording_required", "mgmt_recording_reads", "group_dm_names", "dm_order_activity"]
+                .map(String::from),
+        );
+        want.sort();
+        let mut got: Vec<String> = REPORTED.iter().map(|s| s.to_string()).collect();
+        got.sort();
+        assert_eq!(got, want, "K2's view of Sew's flags is what 0.9.2 reports");
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        assert!(note(&conn, "chat", &got, 1).unwrap());
+        assert_eq!(list(&conn, "chat").unwrap().len(), 37);
         assert!(RecordingFeatures::read(&conn, "chat").unwrap().any());
         assert!(VoiceFeatures::read(&conn, "chat").unwrap().rooms_ready());
         for flag in [APP_ORIGINS, APP_GOVERNED_SPACES, HOME_CLIENT_OWNER_APPROVAL, K2_MANAGED_AVATAR, APP_RECORDING, VOICE_RECORD_CAP, RECORDING_REQUIRED, MGMT_RECORDING_READS] {

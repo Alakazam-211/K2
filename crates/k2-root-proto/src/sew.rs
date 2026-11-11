@@ -9,9 +9,9 @@
 //! `/usr/local/bin/sew` the helper checks that the file on disk is a
 //! release this table knows ([`known_binary`]).
 //!
-//! **The pin is Sew 0.9.0 (2026-11-10, for K2 0.46.11)**, x86_64 and aarch64,
+//! **The pin is Sew 0.9.2 (2026-11-11, for K2 0.46.11)**, x86_64 and aarch64,
 //! with its media, transcriber and recorder sidecars and its App kit. The
-//! 0.1.0 placeholder and the 0.2.0 through 0.8.3 entries stay (a
+//! 0.1.0 placeholder and the 0.2.0 through 0.9.0 entries stay (a
 //! pin bump appends; the helper still recognises each release on a box as
 //! an upgrade or rollback source). While the last entry is a placeholder
 //! [`pinned_artifact`] refuses ("this build has no Sew pin"), so enable
@@ -516,6 +516,29 @@ pub const SEW_PG_BINARIES: [&str; 4] = ["postgres", "initdb", "pg_dump", "pg_res
 ///   Sew tested upgrades from 0.8.3, 0.8.2, 0.8.1 and 0.7.4, and a rollback
 ///   refused without `--accept-data-loss-since` and working with it. Client
 ///   crates 0.6.0 (mirror `c2fbd6bc`).
+/// - 0.9.2: fixes on 0.9.0 and the native plugin's recording rights (0.6.1:
+///   `set_recording_rights` and the `recording_controls` event decide Record
+///   and Stop). `Alakazam-211/sew-releases` v0.9.2 (a normal release,
+///   published 2026-11-11; Sew tag v0.9.2 = core
+///   `0489d7a54a7f1b172ca81fe705362ac25df4dff3`, release.json `git_sha`), the
+///   pin for K2 0.46.11 (0.9.0 stays: an upgrade source and rollback target).
+///   Printed by `scripts/sew-pins-from-release.sh` from the published assets,
+///   tarballs included (SHA256SUMS sha256 `8e9a63bb…3f25d`, release.json
+///   `1800442a…0ebc`), which checked every tarball and binary member and the
+///   App kit (`sew-app-kit-0.9.2.tar.gz`, [`SEW_APP_KITS`]); every hash Sew's
+///   note names is equal. The SUMS file is vendored as
+///   `testdata/sew/sew-0.9.2.SHA256SUMS` and a test holds this entry to it.
+///   Schema max 991001 (one new migration, 991001), so a rollback to 0.9.0 or
+///   older crosses a schema change and restores the pre-upgrade bundle (`k2
+///   hostchat rollback --accept-data-loss`). Sew: upgrade sew and sew-media
+///   together (K2 always does), then the recorder where it is installed (K2's
+///   upgrade runs `sew recording upgrade` there; its argv is 0.9.0's). Schema
+///   78 migrations; features (37): 0.9.0's thirty-five plus group_dm_names and
+///   dm_order_activity (both from the published binary's own `sew version
+///   --json`; K2 uses neither). The same three sidecars and no new
+///   root-helper verb. The speech model is the same file as 0.9.0's
+///   (base-q8_0, now in the release's own SHA256SUMS and `models[]`). Client
+///   crates 0.6.1 (mirror `85f5c87f`).
 pub const SEW_RELEASES: &[SewRelease] = &[
     SewRelease {
         version: "0.1.0",
@@ -1557,6 +1580,74 @@ pub const SEW_RELEASES: &[SewRelease] = &[
             ],
         }),
     },
+    SewRelease {
+        version: "0.9.2",
+        artifacts: &[
+            SewArtifact {
+                arch: "aarch64",
+                triple: "aarch64-unknown-linux-gnu",
+                tarball_sha256: "fce76f3ef55ad53ea6ad3f32614551f806fd112f5aede8caee4be8aced2c2038",
+                binary_sha256: "9af08256897c1a279ab1919c78eb2bb12af1561246f197f58eea3602b59117fd",
+            },
+            SewArtifact {
+                arch: "x86_64",
+                triple: "x86_64-unknown-linux-gnu",
+                tarball_sha256: "91985f336d747e4490bd26d56e733381492b11a4f8f7f1da81fbb440cb53dd8b",
+                binary_sha256: "f13d7c7cd3be3a114dceaf1b36ab0092735fd971471c53f68201a32b7cf0d1c6",
+            },
+        ],
+        media: Some(SewSidecar {
+            version: "0.9.2",
+            artifacts: &[
+                SewArtifact {
+                    arch: "aarch64",
+                    triple: "aarch64-unknown-linux-gnu",
+                    tarball_sha256: "8fb823bbfe24836a218741d57516b1920bd151b76fb10117b4c7e973b16d9649",
+                    binary_sha256: "4f22a87304caf304ad89898c4b47947b817676e0d5599f568406730edc4d0e29",
+                },
+                SewArtifact {
+                    arch: "x86_64",
+                    triple: "x86_64-unknown-linux-gnu",
+                    tarball_sha256: "ee9da2230c133e563909ee248d7fff30400c1c71ccbcbea25e7ebabe042c50e1",
+                    binary_sha256: "588089e75938668964b4eb41fd99b0c4916142bf2f947b8a6ce832fa04091097",
+                },
+            ],
+        }),
+        transcriber: Some(SewSidecar {
+            version: "0.9.2",
+            artifacts: &[
+                SewArtifact {
+                    arch: "aarch64",
+                    triple: "aarch64-unknown-linux-gnu",
+                    tarball_sha256: "53b0708c9ca1d4ec9363cadf1ffa33a04affff324b095957bcc1b5d3fbecea63",
+                    binary_sha256: "80f47009fe68e8a1af58e818241e108b69764b146b356d475058a7d51ceaf4b7",
+                },
+                SewArtifact {
+                    arch: "x86_64",
+                    triple: "x86_64-unknown-linux-gnu",
+                    tarball_sha256: "94dbee0b56afdf4b0f199f1facd2fe356426398f6792d6829f9dc991dbf457d5",
+                    binary_sha256: "6d419b90d810b7ad4bc6833ab00f376523b922ef56f352c50c638900ab085aa0",
+                },
+            ],
+        }),
+        recorder: Some(SewSidecar {
+            version: "0.9.2",
+            artifacts: &[
+                SewArtifact {
+                    arch: "aarch64",
+                    triple: "aarch64-unknown-linux-gnu",
+                    tarball_sha256: "ecf082ea188df04a6bbef4808eaf24e62afa64abd4d82d2747a7a3aec9d71ee0",
+                    binary_sha256: "c9b922529a02eebe1760d0c672666370cd8a0a27c48103a5f5f1a0156ce7c428",
+                },
+                SewArtifact {
+                    arch: "x86_64",
+                    triple: "x86_64-unknown-linux-gnu",
+                    tarball_sha256: "9e9354e76ecac2e9c3de54d219908ca8da3e8d63f10039eac5d6a8cb70278cf7",
+                    binary_sha256: "f42b0dbfaae6eb0d0ba96c693c46676c30b06a821c8dd3e7cd67f62daafdc43b",
+                },
+            ],
+        }),
+    },
 ];
 
 /// K2's fixture releases (`testdata/sew/*.tar.gz`, made by a deterministic
@@ -1730,7 +1821,7 @@ compile_error!("sew-test-pins-upgrade and sew-test-pin-next are two different Se
 /// (`k2-root-helper/tests/binary.rs` checks the built helper carries none
 /// of its hashes).
 ///
-/// **Placeholder until Sew's next test build (0.9.1) exists**:
+/// **Placeholder until Sew's next test build (0.9.3) exists**:
 /// while it is, a `sew-test-pin-next` build pins nothing it can install
 /// (`sew_not_released`). To drop the hashes in:
 /// 1. `gh release download <tag> -R Alakazam-211/sew-releases -p
@@ -1754,19 +1845,19 @@ compile_error!("sew-test-pins-upgrade and sew-test-pin-next are two different Se
 ///    the final release, clear `~/.k2/cache/sew/<version>/` there (the
 ///    final has new hashes).
 pub const SEW_TEST_NEXT: SewRelease = SewRelease {
-    version: "0.9.1",
+    version: "0.9.3",
     artifacts: &[
         SewArtifact {
             arch: "aarch64",
             triple: "aarch64-unknown-linux-gnu",
-            tarball_sha256: "PLACEHOLDER-sew-0.9.1-test-build-not-yet",
-            binary_sha256: "PLACEHOLDER-sew-0.9.1-test-build-not-yet",
+            tarball_sha256: "PLACEHOLDER-sew-0.9.3-test-build-not-yet",
+            binary_sha256: "PLACEHOLDER-sew-0.9.3-test-build-not-yet",
         },
         SewArtifact {
             arch: "x86_64",
             triple: "x86_64-unknown-linux-gnu",
-            tarball_sha256: "PLACEHOLDER-sew-0.9.1-test-build-not-yet",
-            binary_sha256: "PLACEHOLDER-sew-0.9.1-test-build-not-yet",
+            tarball_sha256: "PLACEHOLDER-sew-0.9.3-test-build-not-yet",
+            binary_sha256: "PLACEHOLDER-sew-0.9.3-test-build-not-yet",
         },
     ],
     media: None,
@@ -1776,7 +1867,7 @@ pub const SEW_TEST_NEXT: SewRelease = SewRelease {
 /// [`SEW_TEST_NEXT`]'s App kit (a placeholder is never a kit:
 /// [`app_kit`] wants 64 hex).
 pub const SEW_TEST_NEXT_APP_KIT: SewAppKit =
-    SewAppKit { version: "0.9.1", sha256: "PLACEHOLDER-sew-0.9.1-test-build-not-yet" };
+    SewAppKit { version: "0.9.3", sha256: "PLACEHOLDER-sew-0.9.3-test-build-not-yet" };
 
 /// [`SEW_RELEASES`] with [`SEW_TEST_NEXT`] appended (the pin).
 #[cfg(feature = "sew-test-pin-next")]
@@ -1948,6 +2039,7 @@ pub const SEW_APP_KITS: &[SewAppKit] = &[
     SewAppKit { version: "0.8.2", sha256: "d15e575379256381c1ffc0303a3d3adaf21307ed36d8ea285fc32945baa5e80e" },
     SewAppKit { version: "0.8.3", sha256: "406bdc38d6d10b2efcc22dbca1e6f42850fd889150c08a0820bc9fa04b376d3d" },
     SewAppKit { version: "0.9.0", sha256: "a3bd4d5dba566c5f9f8a30ad27a34bc716128fc29cf7944f992c41c8961b6c2c" },
+    SewAppKit { version: "0.9.2", sha256: "59f9ae96dcc9a54597daeba5f3b73fe3fc6f720a7acc7e0cb1e64caa45a34a20" },
 ];
 
 /// The fixture kit for `test-signer` builds
@@ -2945,6 +3037,7 @@ mod tests {
             assert_eq!(app_kit("0.8.2").map(|k| k.sha256), Some("d15e575379256381c1ffc0303a3d3adaf21307ed36d8ea285fc32945baa5e80e"));
             assert_eq!(app_kit("0.8.3").map(|k| k.sha256), Some("406bdc38d6d10b2efcc22dbca1e6f42850fd889150c08a0820bc9fa04b376d3d"));
             assert_eq!(app_kit("0.9.0").map(|k| k.sha256), Some("a3bd4d5dba566c5f9f8a30ad27a34bc716128fc29cf7944f992c41c8961b6c2c"));
+            assert_eq!(app_kit("0.9.2").map(|k| k.sha256), Some("59f9ae96dcc9a54597daeba5f3b73fe3fc6f720a7acc7e0cb1e64caa45a34a20"));
             if cfg!(feature = "sew-test-pin-next") {
                 // The test pin's kit counts once its hash is dropped in.
                 assert_eq!(pinned().version, SEW_TEST_NEXT.version);
@@ -3175,23 +3268,23 @@ mod tests {
         );
     }
 
-    /// The 0.9.0 pin is exactly the published SHA256SUMS (vendored from the
-    /// v0.9.0 release, sha256 7aed9b64…d8f5): every core and sidecar
-    /// tarball and binary member line, plus the App kit's. Each hash in
-    /// Sew's release note is checked here too, so a slip in either the
-    /// table or the vendored file fails.
+    /// 0.9.0 (the pin before 0.9.2; an upgrade source and rollback target)
+    /// is exactly the published SHA256SUMS (vendored from the v0.9.0
+    /// release, sha256 7aed9b64…d8f5): every core and sidecar tarball and
+    /// binary member line, plus the App kit's. Each hash in Sew's release
+    /// note is checked here too, so a slip in either the table or the
+    /// vendored file fails.
     #[test]
-    fn the_0_9_0_pin_equals_the_published_sha256sums() {
+    fn the_0_9_0_entry_equals_the_published_sha256sums() {
         let sums = include_str!("../testdata/sew/sew-0.9.0.SHA256SUMS");
         assert_eq!(
             sha256_hex(sums.as_bytes()),
             "7aed9b64320e982d4807e0ea85dadbfea12405ab6f03ec5a6f1d66359ecdd8f5",
             "the vendored SUMS file is the published one"
         );
-        assert_eq!(SEW_RELEASES.last().unwrap().version, "0.9.0", "0.9.0 is the pin");
         assert_eq!(pin_equals_sums("0.9.0", sums), 17, "4 binaries × 2 arches × (tarball, member) + the App kit");
         // Sew's note (sew-0.9.0-release-pins-2026-11-10): the tarballs and the kit.
-        let pin = SEW_RELEASES.last().unwrap();
+        let pin = SEW_RELEASES.iter().find(|r| r.version == "0.9.0").expect("0.9.0 is known");
         let tar = |side: Option<&SewSidecar>, arch: &str| {
             let arts = side.map(|s| s.artifacts).unwrap_or(pin.artifacts);
             arts.iter().find(|a| a.arch == arch).map(|a| a.tarball_sha256).expect("pinned")
@@ -3207,6 +3300,47 @@ mod tests {
         assert_eq!(
             SEW_APP_KITS.iter().find(|k| k.version == "0.9.0").map(|k| k.sha256),
             Some("a3bd4d5dba566c5f9f8a30ad27a34bc716128fc29cf7944f992c41c8961b6c2c")
+        );
+    }
+
+    /// The 0.9.2 pin is exactly the published SHA256SUMS (vendored from the
+    /// v0.9.2 release, sha256 8e9a63bb…3f25d): every core and sidecar
+    /// tarball and binary member line, plus the App kit's. Each hash in
+    /// Sew's pin note (2026-11-11) is checked here too, so a slip in either
+    /// the table or the vendored file fails.
+    #[test]
+    fn the_0_9_2_pin_equals_the_published_sha256sums() {
+        let sums = include_str!("../testdata/sew/sew-0.9.2.SHA256SUMS");
+        assert_eq!(
+            sha256_hex(sums.as_bytes()),
+            "8e9a63bb00acb76d14eb91d5fe927bc2b247bd1d4ef40422a3ea7a2654a3f25d",
+            "the vendored SUMS file is the published one"
+        );
+        assert_eq!(SEW_RELEASES.last().unwrap().version, "0.9.2", "0.9.2 is the pin");
+        assert_eq!(pin_equals_sums("0.9.2", sums), 17, "4 binaries × 2 arches × (tarball, member) + the App kit");
+        let pin = SEW_RELEASES.last().unwrap();
+        let bin = |side: Option<&SewSidecar>, arch: &str| {
+            let arts = side.map(|s| s.artifacts).unwrap_or(pin.artifacts);
+            arts.iter().find(|a| a.arch == arch).map(|a| (a.tarball_sha256, a.binary_sha256)).expect("pinned")
+        };
+        assert_eq!(
+            bin(None, "x86_64"),
+            ("91985f336d747e4490bd26d56e733381492b11a4f8f7f1da81fbb440cb53dd8b", "f13d7c7cd3be3a114dceaf1b36ab0092735fd971471c53f68201a32b7cf0d1c6")
+        );
+        assert_eq!(
+            bin(None, "aarch64"),
+            ("fce76f3ef55ad53ea6ad3f32614551f806fd112f5aede8caee4be8aced2c2038", "9af08256897c1a279ab1919c78eb2bb12af1561246f197f58eea3602b59117fd")
+        );
+        for (side, x86, arm) in [
+            (pin.media.as_ref(), "ee9da2230c133e563909ee248d7fff30400c1c71ccbcbea25e7ebabe042c50e1", "8fb823bbfe24836a218741d57516b1920bd151b76fb10117b4c7e973b16d9649"),
+            (pin.transcriber.as_ref(), "94dbee0b56afdf4b0f199f1facd2fe356426398f6792d6829f9dc991dbf457d5", "53b0708c9ca1d4ec9363cadf1ffa33a04affff324b095957bcc1b5d3fbecea63"),
+            (pin.recorder.as_ref(), "9e9354e76ecac2e9c3de54d219908ca8da3e8d63f10039eac5d6a8cb70278cf7", "ecf082ea188df04a6bbef4808eaf24e62afa64abd4d82d2747a7a3aec9d71ee0"),
+        ] {
+            assert_eq!((bin(side, "x86_64").0, bin(side, "aarch64").0), (x86, arm), "{:?}", side.map(|s| s.version));
+        }
+        assert_eq!(
+            SEW_APP_KITS.iter().find(|k| k.version == "0.9.2").map(|k| k.sha256),
+            Some("59f9ae96dcc9a54597daeba5f3b73fe3fc6f720a7acc7e0cb1e64caa45a34a20")
         );
     }
 
@@ -3261,7 +3395,7 @@ mod tests {
         for a in r.artifacts {
             assert_eq!(known_binary(a.binary_sha256, a.arch), Some("0.8.3"), "{}", a.arch);
         }
-        assert_eq!(pinned().version, "0.9.0");
+        assert_eq!(pinned().version, "0.9.2");
         assert_eq!(version_cmp("0.8.3", pinned().version), Some(std::cmp::Ordering::Less), "an upgrade, not a downgrade");
         assert_eq!(version_cmp("0.8.2", "0.8.3"), Some(std::cmp::Ordering::Less), "0.8.3 sits between 0.8.2 and the pin");
         for arch in ["x86_64", "aarch64"] {
@@ -3318,13 +3452,15 @@ mod tests {
     }
 
     /// The real table: the old 0.1.0 placeholder stays and refuses, 0.2.0
-    /// and 0.2.1 through 0.8.3 stay known; the pin is Sew 0.9.0 for both
+    /// and 0.2.1 through 0.9.0 stay known; the pin is Sew 0.9.2 for both
     /// linux-gnu triples, with all three sidecars, exactly as
     /// `scripts/sew-pins-from-release.sh` printed it from the verified
-    /// release (2026-11-10).
+    /// release (2026-11-11).
     #[test]
-    fn real_table_pins_sew_0_9_0_and_keeps_the_old_entries() {
-        assert_eq!(SEW_RELEASES.len(), 16);
+    fn real_table_pins_sew_0_9_2_and_keeps_the_old_entries() {
+        assert_eq!(SEW_RELEASES.len(), 17);
+        assert_eq!(SEW_RELEASES[15].version, "0.9.0");
+        assert!(release_is_pinned(&SEW_RELEASES[15]), "0.9.0 stays a real release (the upgrade source)");
         assert_eq!(SEW_RELEASES[14].version, "0.8.3");
         assert!(release_is_pinned(&SEW_RELEASES[14]), "0.8.3 is a real release (an upgrade source and rollback target)");
         assert_eq!(SEW_RELEASES[13].version, "0.8.2");
@@ -3360,12 +3496,12 @@ mod tests {
         assert!(artifact_in(old, "x86_64").unwrap_err().contains("no Sew pin"));
 
         let pin = SEW_RELEASES.last().unwrap();
-        assert_eq!(pin.version, "0.9.0");
+        assert_eq!(pin.version, "0.9.2");
         assert!(release_is_pinned(pin));
         assert!(artifact_in(pin, "riscv64").unwrap_err().contains("unsupported"));
         let want = [
-            ("x86_64", "761c432452baf5a488c3a319f96b40e05e88f762eeb8d122e29f6a2675f033d4", "d1888020cf7ea3b82bf25d83d65902cb5debe865d584d8376c5b0d5b064ad302"),
-            ("aarch64", "dc31ab060d142b166b455ff392303c49fe41bec33db7dab229fe02d6a61b7a1d", "ba88fdc2607bc9da3d88336c7e4adee1af7152a90a2bd8af1c6c6812caa1ac1d"),
+            ("x86_64", "91985f336d747e4490bd26d56e733381492b11a4f8f7f1da81fbb440cb53dd8b", "f13d7c7cd3be3a114dceaf1b36ab0092735fd971471c53f68201a32b7cf0d1c6"),
+            ("aarch64", "fce76f3ef55ad53ea6ad3f32614551f806fd112f5aede8caee4be8aced2c2038", "9af08256897c1a279ab1919c78eb2bb12af1561246f197f58eea3602b59117fd"),
         ];
         for (arch, tar, bin) in want {
             let a = artifact_in(pin, arch).expect("pinned");
@@ -3374,7 +3510,7 @@ mod tests {
         }
         for (name, s) in [("media", &pin.media), ("transcriber", &pin.transcriber), ("recorder", &pin.recorder)] {
             let s = s.as_ref().unwrap_or_else(|| panic!("{name} pinned"));
-            assert_eq!(s.version, "0.9.0", "{name}");
+            assert_eq!(s.version, "0.9.2", "{name}");
             let mut arches: Vec<&str> = s.artifacts.iter().map(|a| a.arch).collect();
             arches.sort();
             assert_eq!(arches, ["aarch64", "x86_64"], "{name}");
@@ -3383,19 +3519,19 @@ mod tests {
             assert!(!checksum_is_placeholder(a), "{a:?}");
         }
         // Every hash is distinct (no copy-paste slip between rows), across
-        // all fifteen real releases.
+        // all sixteen real releases.
         let mut seen = std::collections::HashSet::new();
         for r in &SEW_RELEASES[1..] {
             for a in all_artifacts(r) {
                 assert!(seen.insert(a.tarball_sha256) && seen.insert(a.binary_sha256), "{a:?}");
             }
         }
-        assert_eq!(seen.len(), 240);
+        assert_eq!(seen.len(), 256);
     }
 
     #[test]
     fn release_pinned_follows_the_last_entry() {
-        assert!(release_is_pinned(SEW_RELEASES.last().unwrap()), "0.9.0 is pinned (published 2026-11-10)");
+        assert!(release_is_pinned(SEW_RELEASES.last().unwrap()), "0.9.2 is pinned (published 2026-11-11)");
         assert!(release_is_pinned(TEST_RELEASES.last().unwrap()));
         if cfg!(feature = "sew-test-pin-next") && !cfg!(feature = "test-signer") {
             // The test pin until its hashes are dropped in pins nothing.
@@ -3431,17 +3567,17 @@ mod tests {
             // A tarball sha is never a binary sha.
             assert_eq!(known_binary(pin.artifacts[0].tarball_sha256, "x86_64"), None);
         } else if !cfg!(feature = "sew-test-pins") {
-            assert_eq!(pinned().version, "0.9.0");
+            assert_eq!(pinned().version, "0.9.2");
             for a in pinned().artifacts {
                 assert_eq!(pinned_artifact(a.arch).expect("pinned").binary_sha256, a.binary_sha256);
-                assert_eq!(known_binary(a.binary_sha256, a.arch), Some("0.9.0"));
+                assert_eq!(known_binary(a.binary_sha256, a.arch), Some("0.9.2"));
                 // Another arch's binary is not this arch's release.
                 let other = if a.arch == "x86_64" { "aarch64" } else { "x86_64" };
                 assert_eq!(known_binary(a.binary_sha256, other), None);
                 assert_eq!(known_binary(a.tarball_sha256, a.arch), None, "a tarball sha is never a binary sha");
             }
-            assert_eq!(pinned_media_artifact("x86_64").expect("media pinned").0, "0.9.0");
-            // 0.2.0 through 0.8.3 on a box are still recognised (upgrade sources).
+            assert_eq!(pinned_media_artifact("x86_64").expect("media pinned").0, "0.9.2");
+            // 0.2.0 through 0.9.0 on a box are still recognised (upgrade sources).
             for (r, v) in [
                 (&SEW_RELEASES[1], "0.2.0"),
                 (&SEW_RELEASES[2], "0.2.1"),
@@ -3457,6 +3593,7 @@ mod tests {
                 (&SEW_RELEASES[12], "0.8.1"),
                 (&SEW_RELEASES[13], "0.8.2"),
                 (&SEW_RELEASES[14], "0.8.3"),
+                (&SEW_RELEASES[15], "0.9.0"),
             ] {
                 assert_eq!(r.version, v);
                 for a in r.artifacts {
@@ -3600,8 +3737,8 @@ mod tests {
                 assert!(!checksum_is_placeholder(a), "{a:?}");
             }
         }
-        // The real pin (0.9.0) is never selected in a test-pins build.
-        assert_ne!(pinned().version, "0.9.0");
+        // The real pin (0.9.2) is never selected in a test-pins build.
+        assert_ne!(pinned().version, "0.9.2");
     }
 
     #[test]

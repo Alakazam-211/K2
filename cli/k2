@@ -51535,35 +51535,218 @@ cmd_setup() {
             exit 2
         fi
     fi
-    local raw="" rc=0
+    local body="" raw
     case "$sub" in
-        "") raw=$(cli_request "/cli/first-run/status") || rc=$? ;;
-        hide|show) raw=$(cli_post_json "/cli/first-run/$sub" '{}') || rc=$? ;;
-        dismiss-offer) raw=$(cli_post_json "/cli/first-run/offer/dismiss" '{}') || rc=$? ;;
         k5|chief-of-staff)
-            local body path="/cli/first-run/k5"
-            [ "$sub" = "chief-of-staff" ] && path="/cli/first-run/chief-of-staff"
-            body=$(K2_SETUP_SUB="$sub" K2_SETUP_TOOL="$k5_tool" K2_SETUP_NAME="$k5_name" K2_SETUP_HANDLE="$k5_handle" K2_SETUP_ABOUT="$k5_about" K2_SETUP_GROUP="$k5_group" python3 -c '
-import json, os
-e = os.environ
-out = {}
-for key, env in (("tool", "K2_SETUP_TOOL"), ("name", "K2_SETUP_NAME"), ("handle", "K2_SETUP_HANDLE"), ("about", "K2_SETUP_ABOUT"), ("focusGroup", "K2_SETUP_GROUP")):
-    if e.get(env):
-        out[key] = e[env]
-if e.get("K2_SETUP_SUB") == "chief-of-staff":
-    out.setdefault("about", "")
-print(json.dumps(out))')
-            raw=$(cli_post_json "$path" "$body") || rc=$? ;;
-        skip)
-            local body
-            body=$(K2_SETUP_ROW="$row" python3 -c 'import json, os; print(json.dumps({"row": os.environ["K2_SETUP_ROW"]}))')
-            raw=$(cli_post_json "/cli/first-run/skip" "$body") || rc=$? ;;
+            # The fields given, in this order; chief-of-staff always sends about.
+            local sep=""
+            body="{"
+            if [ -n "$k5_tool" ]; then _setup_jstr "$k5_tool"; body="${body}${sep}\"tool\": ${_SETUP_J}"; sep=", "; fi
+            if [ -n "$k5_name" ]; then _setup_jstr "$k5_name"; body="${body}${sep}\"name\": ${_SETUP_J}"; sep=", "; fi
+            if [ -n "$k5_handle" ]; then _setup_jstr "$k5_handle"; body="${body}${sep}\"handle\": ${_SETUP_J}"; sep=", "; fi
+            if [ -n "$k5_about" ] || [ "$sub" = "chief-of-staff" ]; then
+                _setup_jstr "$k5_about"; body="${body}${sep}\"about\": ${_SETUP_J}"; sep=", "
+            fi
+            if [ -n "$k5_group" ]; then _setup_jstr "$k5_group"; body="${body}${sep}\"focusGroup\": ${_SETUP_J}"; sep=", "; fi
+            body="${body}}" ;;
+        skip) _setup_jstr "$row"; body="{\"row\": ${_SETUP_J}}" ;;
+        hide|show|dismiss-offer) body='{}' ;;
     esac
-    if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then
+    case "$sub" in
+        "") raw="$(_setup_send GET /cli/first-run/status "$as_json")" ;;
+        hide|show) raw="$(_setup_send POST "/cli/first-run/$sub" "$as_json" "$body")" ;;
+        dismiss-offer) raw="$(_setup_send POST /cli/first-run/offer/dismiss "$as_json" "$body")" ;;
+        k5) raw="$(_setup_send POST /cli/first-run/k5 "$as_json" "$body")" ;;
+        chief-of-staff) raw="$(_setup_send POST /cli/first-run/chief-of-staff "$as_json" "$body")" ;;
+        skip) raw="$(_setup_send POST /cli/first-run/skip "$as_json" "$body")" ;;
+    esac
+    _setup_render "$sub" "$as_json" "$raw"
+}
+
+# k2 setup is pure bash + curl, like k2 git-tools: on a Mac without
+# Apple's Command Line Tools /usr/bin/python3 is one of Apple's shims (it
+# opens the installer instead of running), and that is the Mac the
+# dev_tools step is for. The daemon renders the lines (`?format=text`);
+# refusals stay JSON and are read here.
+
+# _setup_jstr VALUE: VALUE as a JSON string, quotes included, in _SETUP_J.
+_setup_jstr() {
+    local LC_ALL=C s="$1" out="" c i
+    if [[ "$s" != *[[:cntrl:]\\\"]* ]]; then
+        _SETUP_J="\"${s}\""
+        return 0
+    fi
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        case "$c" in
+            \\) out="${out}\\\\" ;;
+            \") out="${out}\\\"" ;;
+            $'\n') out="${out}\\n" ;;
+            $'\t') out="${out}\\t" ;;
+            $'\r') out="${out}\\r" ;;
+            $'\177') out="${out}${c}" ;;
+            [[:cntrl:]]) printf -v c '\\u%04x' "'$c"; out="${out}${c}" ;;
+            *) out="${out}${c}" ;;
+        esac
+    done
+    _SETUP_J="\"${out}\""
+}
+
+# _setup_junesc TEXT: a JSON string body (between its quotes) decoded, in
+# _SETUP_J.
+_setup_junesc() {
+    local LC_ALL=C s="$1" out="" c i hex cp
+    if [[ "$s" != *\\* ]]; then
+        _SETUP_J="$s"
+        return 0
+    fi
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        if [ "$c" != "\\" ]; then
+            out="${out}${c}"
+            continue
+        fi
+        i=$((i + 1))
+        c="${s:i:1}"
+        case "$c" in
+            n) out="${out}"$'\n' ;;
+            t) out="${out}"$'\t' ;;
+            r) out="${out}"$'\r' ;;
+            b) out="${out}"$'\b' ;;
+            f) out="${out}"$'\f' ;;
+            u)
+                hex="${s:i+1:4}"
+                i=$((i + 4))
+                [[ "$hex" =~ ^[0-9A-Fa-f]{4}$ ]] || continue
+                cp=$((16#$hex))
+                if [ "$cp" -lt 128 ]; then
+                    printf -v c "\\x$(printf '%02x' "$cp")"
+                elif [ "$cp" -lt 2048 ]; then
+                    printf -v c "\\x$(printf '%02x' $((192 | (cp >> 6))))\\x$(printf '%02x' $((128 | (cp & 63))))"
+                else
+                    printf -v c "\\x$(printf '%02x' $((224 | (cp >> 12))))\\x$(printf '%02x' $((128 | ((cp >> 6) & 63))))\\x$(printf '%02x' $((128 | (cp & 63))))"
+                fi
+                out="${out}${c}" ;;
+            *) out="${out}${c}" ;;
+        esac
+    done
+    _SETUP_J="$out"
+}
+
+# _setup_jfield KEY JSON: true with the first "KEY": "<string>" in JSON,
+# decoded, in _SETUP_J.
+_setup_jfield() {
+    local re='"'"$1"'"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"'
+    [[ "$2" =~ $re ]] || return 1
+    _setup_junesc "${BASH_REMATCH[1]}"
+}
+
+# _setup_send <GET|POST> <path> <as_json> [<body>]: the answer, then a
+# newline and the HTTP code. The token rides curl's config, never argv.
+_setup_send() {
+    local method="$1" path="$2" as_json="$3" body="${4:-}" q out try=1 code _K2_CFG
+    q="token=$(_git_tools_q "$TOKEN")"
+    [ "$as_json" = "1" ] || q="${q}&format=text"
+    while :; do
+        _K2_CFG=""
+        _k2_cfg_add url "${BASE_URL}${path}?${q}"
+        if [ "$method" = "GET" ]; then
+            out="$(_k2_curl "$_K2_CFG" -s --connect-timeout 5 --max-time 30 -w $'\n%{http_code}' 2>/dev/null; printf x)"
+        else
+            _k2_cfg_add data-raw "$body"
+            out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 30 \
+                -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null; printf x)"
+        fi
+        out="${out%x}"
+        code="${out##*$'\n'}"
+        # The daemon before it is ready (no handler ran): ask again.
+        if [ "$method" = "GET" ] && [ "$code" = "503" ] && [[ "$out" == *'"state":"migrating"'* ]] && [ "$try" -lt "$_K2_CURL_TRIES" ]; then
+            try=$((try + 1)); sleep 1; continue
+        fi
+        # A passport the daemon refused while restarting: once with the new one.
+        if _cli_retry_with_healed_passport "${out%$'\n'*}"; then
+            q="token=$(_git_tools_q "$TOKEN")"
+            [ "$as_json" = "1" ] || q="${q}&format=text"
+            continue
+        fi
+        break
+    done
+    printf '%s' "$out"
+}
+
+# _setup_render <sub> <as_json> <raw "body\ncode">: print the answer.
+# Exit 0 ok; 2 a usage mistake (usage, unknown_row, tool_not_signed_in);
+# 3 refused (person_only, session_only, forbidden, role_required, a token
+# or passport refusal); 4 no such Focus Group (unknown_focus_group,
+# ambiguous_focus_group); 1 anything else, as k2 setup always has.
+_setup_render() {
+    local sub="$1" as_json="$2" raw="$3" code body err_code="" hint="" low
+    code="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" = "000" ] || [ -z "$body" ]; then
         echo "Error: could not reach the K2 daemon (k2 setup)" >&2
         exit 1
     fi
-    printf '%s' "$raw" | K2_SETUP_JSON="$as_json" K2_SETUP_SUB="$sub" python3 -c '
+    _permission_note "$body"
+    local trimmed="${body#"${body%%[![:space:]]*}"}"
+    if [ "$code" = "200" ]; then
+        if [ "$as_json" = "1" ]; then
+            printf '%s\n' "$body"
+            return 0
+        fi
+        case "$trimmed" in
+            "{"*)
+                # A daemon from before ?format=text answers JSON.
+                printf '%s' "$body" | _setup_render_json_py "$sub" "$as_json"
+                return $? ;;
+        esac
+        printf '%s' "$body"
+        return 0
+    fi
+    case "$trimmed" in
+        "{"*) ;;
+        *)
+            echo "Error: the daemon sent something k2 setup does not understand: ${body:0:200}" >&2
+            exit 1 ;;
+    esac
+    local re_obj='"error"[[:space:]]*:[[:space:]]*\{(.*)$'
+    local re_str='"error"[[:space:]]*:[[:space:]]*"'
+    if [[ "$body" =~ $re_obj ]]; then
+        local rest="${BASH_REMATCH[1]}"
+        _setup_jfield code "$rest" && err_code="$_SETUP_J"
+        if _setup_jfield hint "$rest" && [ -n "$_SETUP_J" ]; then
+            hint="$_SETUP_J"
+        elif _setup_jfield message "$rest" && [ -n "$_SETUP_J" ]; then
+            hint="$_SETUP_J"
+        else
+            hint="$err_code"
+        fi
+    elif [[ "$body" =~ $re_str ]] && _setup_jfield error "$body"; then
+        hint="$_SETUP_J"
+    else
+        hint="${body:0:200}"
+    fi
+    if [ -n "$err_code" ] && [[ "$hint" != *"$err_code"* ]]; then
+        echo "Error: ${err_code}: ${hint}" >&2
+    else
+        echo "Error: ${hint}" >&2
+    fi
+    case "$err_code" in
+        usage|unknown_row|tool_not_signed_in) exit 2 ;;
+        unknown_focus_group|ambiguous_focus_group) exit 4 ;;
+    esac
+    low="$(printf '%s' "$err_code $hint" | tr '[:upper:]' '[:lower:]')"
+    case "$low" in
+        *person_only*|*session_only*|*forbidden*|*role_required*|*token*|*passport*) exit 3 ;;
+    esac
+    exit 1
+}
+
+# The list from a daemon before ?format=text (it answers JSON): the
+# renderer k2 setup used before the daemon drew the lines. Only an older
+# daemon (a --host one) gets here.
+_setup_render_json_py() {
+    K2_SETUP_SUB="$1" K2_SETUP_JSON="$2" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 try:
@@ -51652,18 +51835,14 @@ if d.get("offer") == "meet_k5":
 }
 
 # After a sign-in: the Meet K5 hint, when the offer would show (quiet when
-# it would not, or the daemon cannot say).
+# it would not, or the daemon cannot say). No python3 (k2 setup above).
 _setup_k5_hint() {
     local raw
-    raw=$(cli_request "/cli/first-run/status" 2>/dev/null) || return 0
-    if printf '%s' "$raw" | python3 -c 'import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(1)
-sys.exit(0 if isinstance(d, dict) and d.get("offer") == "meet_k5" else 1)' 2>/dev/null; then
-        echo "Next: meet K5, the agent that runs K2: k2 setup k5"
-    fi
+    raw="$(_setup_send GET /cli/first-run/status 1 2>/dev/null)" || return 0
+    [ "${raw##*$'\n'}" = "200" ] || return 0
+    case "${raw%$'\n'*}" in
+        *'"offer":"meet_k5"'*) echo "Next: meet K5, the agent that runs K2: k2 setup k5" ;;
+    esac
     return 0
 }
 

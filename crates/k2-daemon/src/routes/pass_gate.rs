@@ -383,6 +383,13 @@ mod tests {
             ("crate::chat_map_routes::WHOIS", vec![crate::chat_map_routes::WHOIS]),
             ("crate::chat_map_routes::SPACE", vec![crate::chat_map_routes::SPACE]),
             ("crate::chat_channel_routes::ROUTE", vec![crate::chat_channel_routes::ROUTE]),
+            // Sew 0.9.0 recording in Apps (0.46.11), their own arms (B9):
+            // recordings.list / get / transcript and the recordings.events
+            // socket (catalog rows; the App's own pass only, `app_of`).
+            ("crate::sew::app_recordings::LIST", vec![crate::sew::app_recordings::LIST]),
+            ("crate::sew::app_recordings::ONE", vec![crate::sew::app_recordings::ONE]),
+            ("crate::sew::app_recordings::TRANSCRIPT", vec![crate::sew::app_recordings::TRANSCRIPT]),
+            ("crate::sew::app_recordings::EVENTS", vec![crate::sew::app_recordings::EVENTS]),
             // Resumable transfers (0.46.9): the upload session routes and the
             // two download token routes (catalog rows).
             (

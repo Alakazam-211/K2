@@ -50889,7 +50889,7 @@ LABELS = {
     "k2_cli": "Try the k2 command",
 }
 NOTES = {
-    "needs_tunnel": "Away from home, your phone reaches this server through the tunnel, so that comes first.",
+    "needs_tunnel": "Away from home, your phone needs the tunnel first.",
 }
 MARK = {"done": "[x]", "todo": "[ ]", "skipped": "[-]"}
 rows = d.get("rows") or []

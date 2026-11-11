@@ -49,7 +49,7 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
   k2_cli: { label: 'Try the k2 command', line: 'Open a new Terminal window and type k2.' },
 }
 
-export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone reaches this server through the tunnel, so that comes first.'
+export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs the tunnel first.'
 
 export const CHECKLIST_TITLE = 'Setup checklist'
 

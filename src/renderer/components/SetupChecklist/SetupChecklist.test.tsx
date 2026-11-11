@@ -49,6 +49,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import {
   ALL_DONE_TEXT,
   CHECKLIST_ERROR_TEXT,
+  NEEDS_K5_NOTE,
   NEEDS_TUNNEL_NOTE,
   SETUP_CHECKLIST_COPY,
   SET_UP_TEXT,
@@ -189,6 +190,55 @@ describe('SetupChecklist', () => {
     h.daemonCliGet.mockResolvedValue(body())
     act(() => h.handlers.get('first_run_changed')?.forEach((fn) => fn()))
     expect(await screen.findByTestId('setup-row-tunnel')).toBeTruthy()
+  })
+
+  it('the K5 switch: chief_of_staff in first_agent\'s place, with its copy and the needs_k5 note', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({
+        rows: [
+          { id: 'llm_sign_in', state: 'done', opens: 'llm_sign_in' },
+          { id: 'chief_of_staff', state: 'todo', opens: 'k5_sheet', note: 'needs_k5' },
+          { id: 'tunnel', state: 'todo', opens: 'tunnel' },
+        ],
+      }),
+    )
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-chief_of_staff')
+    const ids = [...document.querySelectorAll('[data-setup-row]')].map((el) => el.getAttribute('data-setup-row'))
+    expect(ids).toEqual(['llm_sign_in', 'chief_of_staff', 'tunnel'])
+    expect(SETUP_CHECKLIST_COPY.chief_of_staff).toEqual({
+      label: 'Hire your Chief of Staff',
+      line: 'Your lead agent. K5 hires it with you.',
+    })
+    expect(NEEDS_K5_NOTE).toBe("K5 helps you hire it, so you'll meet K5 first.")
+    expect(row.textContent).toContain('Hire your Chief of Staff')
+    expect(row.textContent).toContain('Your lead agent. K5 hires it with you.')
+    expect(row.querySelector('[data-setup-note="needs_k5"]')?.textContent).toBe(NEEDS_K5_NOTE)
+    fireEvent.click(row)
+    expect(h.open).toHaveBeenCalledWith('k5_sheet')
+  })
+
+  it('once K5 exists the row has no note and opens K5\'s Thread with the hire started', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({ rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'k5_thread_cos' }] }),
+    )
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-chief_of_staff')
+    expect(row.querySelector('[data-setup-note]')).toBeNull()
+    expect(row.textContent).not.toContain(NEEDS_K5_NOTE)
+    fireEvent.click(row)
+    expect(h.open).toHaveBeenCalledWith('k5_thread_cos')
+  })
+
+  it('a done chief_of_staff row drops its line and its note', async () => {
+    h.daemonCliGet.mockResolvedValue(
+      body({ rows: [{ id: 'chief_of_staff', state: 'done', opens: 'k5_thread_cos', note: 'needs_k5' }, { id: 'tunnel', state: 'todo', opens: 'tunnel' }] }),
+    )
+    render(<SetupChecklist />)
+    const row = await screen.findByTestId('setup-row-chief_of_staff')
+    expect(row.textContent).toContain('Hire your Chief of Staff')
+    expect(row.textContent).not.toContain('K5 hires it with you.')
+    expect(row.querySelector('[data-setup-note]')).toBeNull()
   })
 
   it('ignores row ids it does not know, and a row whose opens it does not know opens nothing', async () => {

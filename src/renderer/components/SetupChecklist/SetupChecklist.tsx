@@ -33,6 +33,7 @@ import {
   useFirstRunStore,
   visibleRows,
   watchFirstRun,
+  type FirstRunNote,
   type FirstRunRow,
   type FirstRunRowId,
   type FirstRunRowState,
@@ -41,6 +42,7 @@ import {
 /** The contract's copy: what each step is for, never where or how it looks. */
 export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: string }> = {
   llm_sign_in: { label: 'Sign in to Claude, Codex or Grok', line: 'Your agents think with this account.' },
+  chief_of_staff: { label: 'Hire your Chief of Staff', line: 'Your lead agent. K5 hires it with you.' },
   first_agent: { label: 'Make your first agent', line: 'Each workspace is an agent with its own folder.' },
   tunnel: { label: 'Turn on the tunnel', line: 'Reach this server from anywhere.' },
   phone: { label: 'Connect your phone', line: 'Talk to your agents from your phone.' },
@@ -48,6 +50,13 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
 }
 
 export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs the tunnel first.'
+export const NEEDS_K5_NOTE = "K5 helps you hire it, so you'll meet K5 first."
+
+/** Each note's copy (a note this client doesn't know never reaches here). */
+export const SETUP_NOTE_COPY: Record<FirstRunNote, string> = {
+  needs_tunnel: NEEDS_TUNNEL_NOTE,
+  needs_k5: NEEDS_K5_NOTE,
+}
 
 export const CHECKLIST_TITLE = 'Setup checklist'
 
@@ -144,9 +153,9 @@ function ChecklistRow({ row }: { row: FirstRunRow }): React.JSX.Element {
             {copy.label}
           </span>
           {todo && <span className="block type-hint text-[var(--color-text-muted)] leading-snug">{copy.line}</span>}
-          {row.note === 'needs_tunnel' && todo && (
+          {row.note !== null && todo && (
             <span className="block type-hint text-[var(--color-text-secondary)] leading-snug mt-0.5" data-setup-note={row.note}>
-              {NEEDS_TUNNEL_NOTE}
+              {SETUP_NOTE_COPY[row.note]}
             </span>
           )}
         </span>

@@ -2,11 +2,13 @@
 // make K5, K2's own agent on this server, in two steps.
 //
 //   1. Name and folder: from the daemon's `k5Defaults`, all editable. The
-//      folder is `<home>/k2-agents/<handle>`, so the handle names it.
+//      folder is `<home>/k2-agents/<handle>`, so the handle names it. With
+//      focus groups on, the focus group K5 joins: Workspace settings' own
+//      Focus group picker, the active group chosen.
 //   2. What K5 thinks with: the claude, codex and grok tools signed in on
 //      this server, with the server default chosen.
 //
-// Create K5 posts `first-run/k5`, then opens K5's Chat tab in the Thread
+// Create K5 posts `first-run/k5` (with `focusGroup` when one is chosen), then opens K5's Chat tab in the Thread
 // view (asked for explicitly, not this client's "New agents open in"). The
 // daemon decides who may (owner token, Owner, Admin) and refuses anything
 // else; its refusal is shown as it says it. An Admin creator is told K5 asks
@@ -28,12 +30,13 @@ import { Button, Callout, DialogFrame, DialogScrim, Input, Radio, Spinner, Surfa
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { AgentsIcon, FolderIcon } from '@/components/icons/K2Icons'
 import { DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED, FailedNote } from '@/components/Settings/sections/AccessDialogs'
-import { SETTING_ROW_LABEL } from '@/components/Settings/controls/SettingControls'
+import { SETTING_ROW_LABEL, SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { openWorkspaceThread } from '@/lib/open-workspace-thread'
 import { primaryScope } from '@/kessel/server-scope'
 import { resolveAgentCommand } from '@/lib/agent-resolve'
 import { useFirstRunStore, watchFirstRun, type K5Defaults } from '@/stores/first-run'
+import { useFocusGroupsStore, type FocusGroup } from '@/stores/focus-groups'
 import { useK5SheetStore } from '@/stores/k5-sheet'
 import { useLlmAccountsStore, watchLlmAccounts, type LlmAccountsDoc } from '@/stores/llm-accounts'
 import { requestLlmSignIn } from '@/stores/llm-sign-in-request'
@@ -126,6 +129,17 @@ export function k5FolderFor(defaults: K5Defaults | null, handle: string): string
   const cut = path.lastIndexOf('/')
   const parent = cut > 0 ? path.slice(0, cut) : '~/k2-agents'
   return h ? `${parent}/${h}` : `${parent}/`
+}
+
+/** Workspace settings' Focus group options: No group, then each group. */
+export function focusGroupOptions(groups: readonly FocusGroup[]): { value: string; label: string }[] {
+  return [{ value: '', label: 'No group' }, ...groups.map((g) => ({ value: g.id, label: g.name }))]
+}
+
+/** The group the picker starts on: the active one while it's a group,
+ *  else No group. */
+export function defaultK5FocusGroup(groups: readonly FocusGroup[], active: string | null): string {
+  return active && groups.some((g) => g.id === active) ? active : ''
 }
 
 /** Admin rather than Owner or the owner token, from `auth/whoami`. */
@@ -302,12 +316,21 @@ function K5SheetBody(): React.JSX.Element {
   const accounts = useLlmAccountsStore((s) => s.entries[scope.id]?.doc)
   const tools = useMemo(() => signedInK5Tools(accounts), [accounts])
   const serverDefault = useServerDefaultTool()
+  const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
+  const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
+  const activeFocusGroupId = useFocusGroupsStore((s) => s.activeFocusGroupId)
+  const showGroups = focusGroupsEnabled && focusGroups.length > 0
 
   const [step, setStep] = useState<1 | 2>(1)
   const [name, setName] = useState('')
   const [handle, setHandle] = useState('')
   const [touched, setTouched] = useState(false)
   const [tool, setTool] = useState<string | null>(null)
+  /** The person's pick; null follows the active group. */
+  const [pickedGroup, setPickedGroup] = useState<string | null>(null)
+  const group = pickedGroup !== null && (pickedGroup === '' || focusGroups.some((g) => g.id === pickedGroup))
+    ? pickedGroup
+    : defaultK5FocusGroup(focusGroups, activeFocusGroupId)
   const [admin, setAdmin] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ exists: boolean; text: string } | null>(null)
@@ -360,7 +383,8 @@ function K5SheetBody(): React.JSX.Element {
     setBusy(true)
     setError(null)
     try {
-      const made = await useFirstRunStore.getState().createK5({ tool, name: name.trim(), handle: handle.trim() }, scope)
+      const req = { tool, name: name.trim(), handle: handle.trim(), ...(showGroups && group ? { focusGroup: group } : {}) }
+      const made = await useFirstRunStore.getState().createK5(req, scope)
       close()
       void openWorkspaceThread(made.workspaceId)
     } catch (e) {
@@ -510,6 +534,19 @@ function K5SheetBody(): React.JSX.Element {
             )}
           </div>
         </div>
+        {showGroups ? (
+          <div>
+            <p className={DIALOG_LABEL}>Focus group</p>
+            <SettingDropdown
+              fullWidth
+              ariaLabel="Focus group"
+              value={group}
+              options={focusGroupOptions(focusGroups)}
+              onChange={setPickedGroup}
+              triggerData={{ 'data-testid': 'k5-focus-group' }}
+            />
+          </div>
+        ) : null}
       </K5Frame>
     )
   }

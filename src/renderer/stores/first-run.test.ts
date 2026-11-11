@@ -187,6 +187,12 @@ describe('useFirstRunStore', () => {
     expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'claude' })
   })
 
+  it('createK5 sends the focus group when one is chosen', async () => {
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' })
+    await useFirstRunStore.getState().createK5({ tool: 'codex', focusGroup: 'fg-ops' })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'codex', focusGroup: 'fg-ops' })
+  })
+
   it('startChiefOfStaff posts the start and returns K5\'s workspace', async () => {
     h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5' })
     await expect(useFirstRunStore.getState().startChiefOfStaff()).resolves.toBe('ws-k5')

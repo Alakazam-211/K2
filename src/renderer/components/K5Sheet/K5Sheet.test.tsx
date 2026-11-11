@@ -5,7 +5,8 @@
 // chosen, an Admin creator is told K5 asks an Owner, Create K5 posts and then
 // opens K5's Chat tab in the Thread view, and a refusal is shown plainly.
 // Each step is a form (Enter moves on), a server with no tool signed in
-// offers Sign in, and K5 already there says so and opens it.
+// offers Sign in, and K5 already there says so and opens it. The sheet
+// opens centred, and with focus groups on step 1 picks K5's focus group.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -37,6 +38,18 @@ vi.mock('@/stores/session-events', () => {
     onAppHello: off,
   }
 })
+// The focus groups the sheet reads (the real store pulls in the projects
+// store and its daemon wiring): a plain store the tests set.
+vi.mock('@/stores/focus-groups', async () => {
+  const { create } = await import('zustand')
+  return {
+    useFocusGroupsStore: create(() => ({
+      focusGroupsEnabled: false,
+      focusGroups: [] as Array<{ id: string; name: string; color: string | null; tabOrder: number; createdAt: number }>,
+      activeFocusGroupId: null as string | null,
+    })),
+  }
+})
 vi.mock('@/stores/llm-sign-in-request', () => ({ requestLlmSignIn: () => h.requestLlmSignIn() }))
 vi.mock('@/lib/open-workspace-thread', () => ({ openWorkspaceThread: (id: string) => h.openWorkspaceThread(id) }))
 vi.mock('@/stores/settings', () => ({
@@ -60,6 +73,8 @@ import K5Sheet, {
   K5_SHEET_COPY,
   K5_STEP_INTRO,
   defaultK5Tool,
+  defaultK5FocusGroup,
+  focusGroupOptions,
   isAdminCreator,
   k5FolderFor,
   nameProblem,
@@ -68,6 +83,7 @@ import K5Sheet, {
 import { resetFirstRunForTests } from '@/stores/first-run'
 import { resetLlmAccountsForTests, parseAccountsDoc } from '@/stores/llm-accounts'
 import { useK5SheetStore } from '@/stores/k5-sheet'
+import { useFocusGroupsStore, type FocusGroup } from '@/stores/focus-groups'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -112,6 +128,7 @@ beforeEach(() => {
     throw new Error(`unexpected GET ${route}`)
   })
   useK5SheetStore.setState({ isOpen: true })
+  useFocusGroupsStore.setState({ focusGroupsEnabled: false, focusGroups: [], activeFocusGroupId: null })
 })
 
 afterEach(() => {
@@ -314,12 +331,87 @@ describe('K5Sheet', () => {
   })
 })
 
+/** An open Focus group list's option, by its value. */
+async function pickOption(value: string): Promise<HTMLElement> {
+  const menu = await screen.findByTestId('setting-dropdown-menu')
+  const option = menu.querySelector<HTMLElement>(`[data-value="${value}"]`)
+  if (!option) throw new Error(`no option ${value}`)
+  return option
+}
+
+const GROUPS: FocusGroup[] = [
+  { id: 'fg-ops', name: 'Ops', color: null, tabOrder: 0, createdAt: 1 },
+  { id: 'fg-home', name: 'Home', color: null, tabOrder: 1, createdAt: 1 },
+]
+
+describe('K5Sheet focus group', () => {
+  it('focus groups off: no picker, and Create K5 sends no focusGroup', async () => {
+    useFocusGroupsStore.setState({ focusGroupsEnabled: false, focusGroups: GROUPS, activeFocusGroupId: 'fg-ops' })
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' })
+    await openSheet()
+    expect(screen.queryByTestId('k5-focus-group')).toBeNull()
+    await toStep2()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('k5-create'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'codex', name: 'K5', handle: 'k5' })
+  })
+
+  it('focus groups on with no groups: no picker', async () => {
+    useFocusGroupsStore.setState({ focusGroupsEnabled: true, focusGroups: [], activeFocusGroupId: null })
+    await openSheet()
+    expect(screen.queryByTestId('k5-focus-group')).toBeNull()
+  })
+
+  it('focus groups on: the picker starts on the active group and Create K5 posts it', async () => {
+    useFocusGroupsStore.setState({ focusGroupsEnabled: true, focusGroups: GROUPS, activeFocusGroupId: 'fg-home' })
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' })
+    await openSheet()
+    const picker = screen.getByTestId('k5-focus-group')
+    expect(picker.getAttribute('aria-label')).toBe('Focus group')
+    expect(picker.textContent).toContain('Home')
+    await toStep2()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('k5-create'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'codex', name: 'K5', handle: 'k5', focusGroup: 'fg-home' })
+  })
+
+  it('a group picked in the sheet is the one posted; No group posts none', async () => {
+    useFocusGroupsStore.setState({ focusGroupsEnabled: true, focusGroups: GROUPS, activeFocusGroupId: 'fg-home' })
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' })
+    await openSheet()
+    fireEvent.click(screen.getByTestId('k5-focus-group'))
+    fireEvent.click(await pickOption('fg-ops'))
+    expect(screen.getByTestId('k5-focus-group').textContent).toContain('Ops')
+    fireEvent.click(screen.getByTestId('k5-focus-group'))
+    fireEvent.click(await pickOption(''))
+    expect(screen.getByTestId('k5-focus-group').textContent).toContain('No group')
+    await toStep2()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('k5-create'))
+    })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'codex', name: 'K5', handle: 'k5' })
+  })
+})
+
 async function toStep2NoTool(): Promise<void> {
   fireEvent.click(screen.getByTestId('k5-next'))
   await waitFor(() => expect(screen.getByTestId('k5-sign-in')).toBeTruthy())
 }
 
 describe('K5 sheet helpers', () => {
+  it('the focus-group picker is Workspace settings\u2019 options, starting on the active group', () => {
+    expect(focusGroupOptions(GROUPS)).toEqual([
+      { value: '', label: 'No group' },
+      { value: 'fg-ops', label: 'Ops' },
+      { value: 'fg-home', label: 'Home' },
+    ])
+    expect(defaultK5FocusGroup(GROUPS, 'fg-home')).toBe('fg-home')
+    expect(defaultK5FocusGroup(GROUPS, 'fg-gone')).toBe('')
+    expect(defaultK5FocusGroup(GROUPS, null)).toBe('')
+  })
+
   it('a folder K2 cannot write gets its own next step; anything else the general one', () => {
     expect(createFailedNext("couldn't make the folder /home/a/k2-agents/k5: Permission denied")).toBe(K5_CREATE_FAILED.permission)
     expect(createFailedNext('EACCES: open /x')).toBe(K5_CREATE_FAILED.permission)

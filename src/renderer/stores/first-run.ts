@@ -300,6 +300,8 @@ export interface CreateK5Request {
   tool: string
   name?: string
   handle?: string
+  /** The focus group K5 joins (its id); none when left out. */
+  focusGroup?: string
 }
 
 /** POST a gesture and take the body it returns (the same shape as GET). A
@@ -362,6 +364,7 @@ export const useFirstRunStore = create<FirstRunStore>((set, get) => ({
     const handle = req.handle?.trim()
     if (name) body.name = name
     if (handle) body.handle = handle
+    if (req.focusGroup) body.focusGroup = req.focusGroup
     const out = await daemonCliPost<unknown>(scope, FIRST_RUN_K5_PATH, body)
     void get().load(scope)
     const seat = parseK5Seat(out)

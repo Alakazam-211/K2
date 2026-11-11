@@ -51240,7 +51240,7 @@ if d:
 # from `GET /cli/first-run/status` (each step's done state is the server's
 # real state). Per person: the owner token and the logins the owner linked
 # share one list. Exit 0 ok; 2 a usage mistake; 3 refused (an agent, an app
-# pass, a Voice & Chat only login); 1 anything else.
+# pass, a Voice & Chat only login); 4 no such Focus Group; 1 anything else.
 _setup_usage() {
     cat <<'EOF'
 k2 setup [--json]       your setup list on this server: [x] done, [ ] to do, [-] skipped
@@ -51249,15 +51249,19 @@ k2 setup show           bring the list back, skipped steps included, even after 
 k2 setup skip <step>    skip one step: dev_tools, llm_sign_in, first_agent (or chief_of_staff), tunnel, phone, own_sign_in
 
 K5, K2's own agent (when the owner has turned on k5FirstRun):
-k2 setup k5 [--tool claude|codex|grok] [--name N] [--handle H]
+k2 setup k5 [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G]
                         meet K5, the agent that runs K2: its setup,
                         settings and agents. It helps you hire
                         your Chief of Staff. --tool defaults to the
                         server default (it must be signed in: k2 llm tokens);
                         --name K5 and --handle k5 by default (its folder is
-                        <hire root>/<handle>). Owner, Owner or Admin login.
-k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok
+                        <hire root>/<handle>); --focus-group puts it in a
+                        Focus Group (id or name; none by default).
+                        Owner, Owner or Admin login.
+k2 setup chief-of-staff --name N --about "what they do" --tool claude|codex|grok [--focus-group G]
                         hire this person's Chief of Staff, their lead agent.
+                        It joins K5's Focus Group unless --focus-group names
+                        another (id or name).
                         For K5 only: it works from K5's own pinned chat, never a
                         sidecar, another agent or a person (exit 3).
 k2 setup dismiss-offer  "Not now" on the Meet K5 offer (yours only)
@@ -51272,7 +51276,7 @@ EOF
 }
 
 cmd_setup() {
-    local sub="" as_json=0 row="" k5_tool="" k5_name="" k5_handle="" k5_about="" have_about=0
+    local sub="" as_json=0 row="" k5_tool="" k5_name="" k5_handle="" k5_about="" have_about=0 k5_group=""
     while [ $# -gt 0 ]; do
         case "$1" in
             -h|--help|help) _setup_usage; return 0 ;;
@@ -51280,7 +51284,7 @@ cmd_setup() {
             hide|show|k5|chief-of-staff|dismiss-offer)
                 [ -z "$sub" ] || { _setup_usage >&2; exit 2; }
                 sub="$1"; shift ;;
-            --tool|--name|--handle|--about)
+            --tool|--name|--handle|--about|--focus-group)
                 case "$sub" in
                     k5|chief-of-staff) ;;
                     *) echo "k2 setup: $1 goes with k2 setup k5 or k2 setup chief-of-staff" >&2; exit 2 ;;
@@ -51289,6 +51293,7 @@ cmd_setup() {
                 case "$1" in
                     --tool) k5_tool="$2" ;;
                     --name) k5_name="$2" ;;
+                    --focus-group) k5_group="$2" ;;
                     --handle)
                         [ "$sub" = "k5" ] || { echo "k2 setup chief-of-staff: no --handle (its folder comes from --name)" >&2; exit 2; }
                         k5_handle="$2" ;;
@@ -51308,7 +51313,7 @@ cmd_setup() {
     done
     if [ "$sub" = "chief-of-staff" ]; then
         if [ -z "$k5_name" ] || [ "$have_about" = "0" ] || [ -z "$k5_tool" ]; then
-            echo "usage: k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok (ask your person all three first)" >&2
+            echo "usage: k2 setup chief-of-staff --name N --about \"what they do\" --tool claude|codex|grok [--focus-group G] (ask your person all three first)" >&2
             exit 2
         fi
     fi
@@ -51320,11 +51325,11 @@ cmd_setup() {
         k5|chief-of-staff)
             local body path="/cli/first-run/k5"
             [ "$sub" = "chief-of-staff" ] && path="/cli/first-run/chief-of-staff"
-            body=$(K2_SETUP_SUB="$sub" K2_SETUP_TOOL="$k5_tool" K2_SETUP_NAME="$k5_name" K2_SETUP_HANDLE="$k5_handle" K2_SETUP_ABOUT="$k5_about" python3 -c '
+            body=$(K2_SETUP_SUB="$sub" K2_SETUP_TOOL="$k5_tool" K2_SETUP_NAME="$k5_name" K2_SETUP_HANDLE="$k5_handle" K2_SETUP_ABOUT="$k5_about" K2_SETUP_GROUP="$k5_group" python3 -c '
 import json, os
 e = os.environ
 out = {}
-for key, env in (("tool", "K2_SETUP_TOOL"), ("name", "K2_SETUP_NAME"), ("handle", "K2_SETUP_HANDLE"), ("about", "K2_SETUP_ABOUT")):
+for key, env in (("tool", "K2_SETUP_TOOL"), ("name", "K2_SETUP_NAME"), ("handle", "K2_SETUP_HANDLE"), ("about", "K2_SETUP_ABOUT"), ("focusGroup", "K2_SETUP_GROUP")):
     if e.get(env):
         out[key] = e[env]
 if e.get("K2_SETUP_SUB") == "chief-of-staff":
@@ -51361,6 +51366,8 @@ if err is not None or not isinstance(d, dict) or ("rows" not in d and not (made 
     low = (code + " " + hint).lower()
     if code in ("usage", "unknown_row", "tool_not_signed_in"):
         sys.exit(2)
+    if code in ("unknown_focus_group", "ambiguous_focus_group"):
+        sys.exit(4)
     if any(w in low for w in ("person_only", "session_only", "forbidden", "role_required", "token", "passport")):
         sys.exit(3)
     sys.exit(1)

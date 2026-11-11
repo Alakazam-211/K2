@@ -453,6 +453,7 @@ function RenameDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const id = useId()
+  const formId = useId()
   const next = label.trim()
   const submit = async (): Promise<void> => {
     if (!next || busy) return
@@ -464,8 +465,24 @@ function RenameDialog({
     else onClose()
   }
   return (
-    <AccessSheet title={`Rename “${account.label}”`} onClose={onClose} busy={busy} testId="llm-rename-dialog">
+    <AccessSheet
+      title={`Rename “${account.label}”`}
+      onClose={onClose}
+      busy={busy}
+      testId="llm-rename-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!next || busy}>
+            {busy ? 'Saving…' : 'Save name'}
+          </Button>
+        </>
+      }
+    >
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -481,14 +498,6 @@ function RenameDialog({
             <p>The server said: {error.replace(/[.\s]+$/, '')}.</p>
           </Callout>
         ) : null}
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!next || busy}>
-            {busy ? 'Saving…' : 'Save name'}
-          </Button>
-        </div>
       </form>
     </AccessSheet>
   )

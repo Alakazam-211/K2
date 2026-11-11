@@ -97,7 +97,7 @@ export function AddPersonDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [added, setAdded] = useState<Added | null>(null)
-  const ids = { user: useId(), first: useId(), last: useId(), agents: useId(), gardens: useId() }
+  const ids = { user: useId(), first: useId(), last: useId(), agents: useId(), gardens: useId(), form: useId() }
 
   const name = username.trim().toLowerCase()
   const nameProblem = usernameProblem(username) ?? (name && taken.includes(name) ? `${name} is already on this server.` : null)
@@ -150,7 +150,16 @@ export function AddPersonDialog({
   if (added) {
     const who = added.username
     return (
-      <AdminSheet title={`${who} can sign in now`} onClose={onClose} testId="person-added-dialog">
+      <AdminSheet
+        title={`${who} can sign in now`}
+        onClose={onClose}
+        testId="person-added-dialog"
+        footer={
+          <Button variant="accent" size="md" onClick={onClose} autoFocus>
+            Done
+          </Button>
+        }
+      >
         <p className={MUTED} data-testid="added-user-msg">
           Send {who} these details yourself.
           {added.password ? ' K2 won’t show this password again: once you close this, it’s gone.' : ' Use the password you typed.'}
@@ -176,11 +185,6 @@ export function AddPersonDialog({
             {added.temporary ? <li>K2 then asks them to choose their own password.</li> : null}
           </ol>
         </div>
-        <div className="flex justify-end">
-          <Button variant="accent" size="md" onClick={onClose} autoFocus>
-            Done
-          </Button>
-        </div>
       </AdminSheet>
     )
   }
@@ -192,8 +196,19 @@ export function AddPersonDialog({
       onClose={onClose}
       busy={busy}
       testId="add-person-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={ids.form} variant="accent" size="md" disabled={!ready || busy}>
+            {busy ? 'Adding…' : 'Add person'}
+          </Button>
+        </>
+      }
     >
       <form
+        id={ids.form}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -284,15 +299,6 @@ export function AddPersonDialog({
         </label>
 
         {error ? <FailedNote what={`Couldn’t add ${name}.`} detail={error} next="Nothing was added. Check the details above, then try again." /> : null}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!ready || busy}>
-            {busy ? 'Adding…' : 'Add person'}
-          </Button>
-        </div>
       </form>
     </AdminSheet>
   )
@@ -359,7 +365,7 @@ export function NameAndPictureDialog({
   const [lastName, setLastName] = useState(user.lastName ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const ids = { first: useId(), last: useId() }
+  const ids = { first: useId(), last: useId(), form: useId() }
   useEffect(() => setError(null), [firstName, lastName])
 
   const submit = async (): Promise<void> => {
@@ -371,7 +377,22 @@ export function NameAndPictureDialog({
   }
 
   return (
-    <AdminSheet title={`Name and picture for ${who}`} onClose={onClose} busy={busy} testId={`name-form-${who}`}>
+    <AdminSheet
+      title={`Name and picture for ${who}`}
+      onClose={onClose}
+      busy={busy}
+      testId={`name-form-${who}`}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={ids.form} variant="accent" size="md" disabled={busy}>
+            {busy ? 'Saving…' : 'Save name'}
+          </Button>
+        </>
+      }
+    >
       <div className="flex items-center gap-3">
         <PresenceChip name={who} role="member" size={40} color={user.color ?? null} names={user} pictureScope={primaryScope()} title="" />
         <div className="min-w-0 space-y-1">
@@ -381,6 +402,7 @@ export function NameAndPictureDialog({
       </div>
       <p className={MUTED}>A picture saves as soon as you pick it. PNG, JPEG or WebP, up to 2 MB.</p>
       <form
+        id={ids.form}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -397,14 +419,6 @@ export function NameAndPictureDialog({
         </div>
         <p className={`${MUTED} -mt-2`}>Leave both empty to show only the username.</p>
         {error ? <FailedNote what={`Couldn’t save ${who}’s name.`} detail={error} next="The name is unchanged. Try again in a moment." /> : null}
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={busy}>
-            {busy ? 'Saving…' : 'Save name'}
-          </Button>
-        </div>
       </form>
     </AdminSheet>
   )

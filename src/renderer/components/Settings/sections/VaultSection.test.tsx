@@ -259,7 +259,8 @@ describe('VaultSection', () => {
     fireEvent.click(screen.getByTestId('vault-recovery-start'))
     const pw = (await screen.findByTestId('vault-recovery-password')) as HTMLInputElement
     fireEvent.change(pw, { target: { value: 'correct horse battery' } })
-    fireEvent.click(within(screen.getByTestId('vault-recovery-setup')).getByRole('button', { name: 'Confirm' }))
+    // The buttons sit in the dialog's pinned footer, under the body.
+    fireEvent.click(within(screen.getByTestId('dialog-foot')).getByRole('button', { name: 'Confirm' }))
     await screen.findByTestId('vault-recovery-phrase')
     expect(pw.value).toBe('')
     expect(posts[1].body).toEqual({ action: 'recovery-setup', method: 'vault-password', label: 'recovery key', password: 'correct horse battery' })
@@ -267,7 +268,7 @@ describe('VaultSection', () => {
     for (const n of [3, 11, 20]) fireEvent.change(screen.getByTestId(`vault-recovery-word-${n}`), { target: { value: 'nope' } })
     fireEvent.click(screen.getByRole('button', { name: 'Confirm recovery key' }))
     await screen.findByTestId('vault-recovery-start')
-    expect(screen.getByTestId('vault-recovery-setup').textContent).toContain('Start again')
+    expect(screen.getByTestId('dialog-foot').textContent).toContain('Start again')
     expect(screen.getByTestId('vault-recovery-banner')).toBeTruthy()
   })
 

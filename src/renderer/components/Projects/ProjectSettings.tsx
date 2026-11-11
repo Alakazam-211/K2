@@ -339,6 +339,16 @@ function NewDashboardDialog({
       onClose={onClose}
       busy={busy}
       testId="new-dashboard-dialog"
+      footer={
+        <>
+            <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="accent" size="md" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
+              {busy ? 'Adding…' : 'Add dashboard'}
+            </Button>
+        </>
+      }
     >
       <Field label="Name" htmlFor={fieldId}>
         <Input
@@ -361,14 +371,6 @@ function NewDashboardDialog({
       {error && (
         <FailedNote what="Couldn’t add the dashboard." next="Nothing was added. Change the name and try again." detail={error} />
       )}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-          Cancel
-        </Button>
-        <Button variant="accent" size="md" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
-          {busy ? 'Adding…' : 'Add dashboard'}
-        </Button>
-      </div>
     </AccessSheet>
   )
 }
@@ -1615,6 +1617,16 @@ function NewProjectDialog({
       onClose={onClose}
       busy={busy}
       testId="new-project-dialog"
+      footer={
+        <>
+            <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="accent" size="md" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
+              {busy ? 'Creating…' : 'Create project'}
+            </Button>
+        </>
+      }
     >
       <Field label="Name" htmlFor={fieldId}>
         <Input
@@ -1637,14 +1649,6 @@ function NewProjectDialog({
       {error && (
         <FailedNote what="Couldn’t create the project." next="Nothing was created. Change the name and try again." detail={error} />
       )}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-          Cancel
-        </Button>
-        <Button variant="accent" size="md" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
-          {busy ? 'Creating…' : 'Create project'}
-        </Button>
-      </div>
     </AccessSheet>
   )
 }

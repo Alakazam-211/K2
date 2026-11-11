@@ -174,7 +174,7 @@ export function LlmLoginSheet({
   const loginRef = useRef<LlmLogin | null>(null)
   loginRef.current = login
   const reported = useRef(false)
-  const ids = { label: useId(), key: useId(), paste: useId() }
+  const ids = { label: useId(), key: useId(), paste: useId(), form: useId() }
 
   const done = login ? login.done || FINAL.has(login.state) : false
   const signedIn = login?.state === 'signed_in'
@@ -329,7 +329,16 @@ export function LlmLoginSheet({
   // ── Done: an API token was added ────────────────────────────────────
   if (keyDone) {
     return (
-      <AccessSheet title="API token added" onClose={onClose} testId="llm-login-sheet">
+      <AccessSheet
+        title="API token added"
+        onClose={onClose}
+        testId="llm-login-sheet"
+        footer={
+          <Button variant="accent" size="md" onClick={onClose} autoFocus>
+            Done
+          </Button>
+        }
+      >
         <Callout tone="ok" role="status" className="type-hint space-y-0.5" data-testid="llm-login-done">
           <p className="font-medium">
             {display} API token “{keyDone.label}” is saved on {server}.
@@ -340,11 +349,6 @@ export function LlmLoginSheet({
           {display} bills every chat that uses it per token. To use it, make it the server default on Subs / Tokens,
           or pick it for one workspace or chat from its Token menu.
         </p>
-        <div className="flex justify-end">
-          <Button variant="accent" size="md" onClick={onClose} autoFocus>
-            Done
-          </Button>
-        </div>
       </AccessSheet>
     )
   }
@@ -365,6 +369,44 @@ export function LlmLoginSheet({
         busy={busy}
         pressOutside={done}
         testId="llm-login-sheet"
+        footer={
+          <>
+            {!done ? (
+              <Button variant="ghost" size="md" onClick={() => void cancel()}>
+                Cancel sign-in
+              </Button>
+            ) : signedIn ? (
+              login.offerMakeActive && canChangeDefault && madeActive === null ? (
+                <>
+                  <Button size="md" onClick={() => setMadeActive('kept')}>
+                    Keep the current default
+                  </Button>
+                  <Button variant="accent" size="md" onClick={() => void makeActive()} autoFocus>
+                    Make it the default
+                  </Button>
+                </>
+              ) : (
+                <Button variant="accent" size="md" onClick={onClose} autoFocus>
+                  Done
+                </Button>
+              )
+            ) : (
+              <>
+                <Button variant="ghost" size="md" onClick={onClose}>
+                  Close
+                </Button>
+                {provider?.apiKeys && !relogin ? (
+                  <Button size="md" onClick={pasteInstead}>
+                    Paste an API token instead
+                  </Button>
+                ) : null}
+                <Button variant="accent" size="md" onClick={() => void begin()} disabled={busy} autoFocus>
+                  {busy ? 'Starting…' : 'Try again'}
+                </Button>
+              </>
+            )}
+          </>
+        }
       >
         {login.banner && !done ? (
           <Callout tone="warn" className="type-hint" data-testid="llm-login-banner">
@@ -527,43 +569,6 @@ export function LlmLoginSheet({
             ) : null}
           </div>
         )}
-
-        <div className="flex justify-end gap-2 pt-1">
-          {!done ? (
-            <Button variant="ghost" size="md" onClick={() => void cancel()}>
-              Cancel sign-in
-            </Button>
-          ) : signedIn ? (
-            login.offerMakeActive && canChangeDefault && madeActive === null ? (
-              <>
-                <Button size="md" onClick={() => setMadeActive('kept')}>
-                  Keep the current default
-                </Button>
-                <Button variant="accent" size="md" onClick={() => void makeActive()} autoFocus>
-                  Make it the default
-                </Button>
-              </>
-            ) : (
-              <Button variant="accent" size="md" onClick={onClose} autoFocus>
-                Done
-              </Button>
-            )
-          ) : (
-            <>
-              <Button variant="ghost" size="md" onClick={onClose}>
-                Close
-              </Button>
-              {provider?.apiKeys && !relogin ? (
-                <Button size="md" onClick={pasteInstead}>
-                  Paste an API token instead
-                </Button>
-              ) : null}
-              <Button variant="accent" size="md" onClick={() => void begin()} disabled={busy} autoFocus>
-                {busy ? 'Starting…' : 'Try again'}
-              </Button>
-            </>
-          )}
-        </div>
       </AccessSheet>
     )
   }
@@ -591,8 +596,31 @@ export function LlmLoginSheet({
       : `A subscription or API token your agents can use on ${server}. Adding one doesn’t change the server default.`
 
   return (
-    <AccessSheet title={title} intro={intro} onClose={onClose} busy={busy} testId="llm-login-sheet">
+    <AccessSheet
+      title={title}
+      intro={intro}
+      onClose={onClose}
+      busy={busy}
+      testId="llm-login-sheet"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          {how === 'key' ? (
+            <Button type="submit" form={ids.form} variant="accent" size="md" disabled={busy} data-testid="llm-key-add">
+              {busy ? 'Adding…' : 'Add API token'}
+            </Button>
+          ) : (
+            <Button type="submit" form={ids.form} variant="accent" size="md" disabled={busy} data-testid="llm-login-start">
+              {busy ? 'Starting…' : 'Start sign-in'}
+            </Button>
+          )}
+        </>
+      }
+    >
       <form
+        id={ids.form}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -742,21 +770,6 @@ export function LlmLoginSheet({
             <FailedNote what="The sign-in didn’t start." next="Nothing was saved. Try again in a moment." detail={error} />
           )
         ) : null}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          {how === 'key' ? (
-            <Button type="submit" variant="accent" size="md" disabled={busy} data-testid="llm-key-add">
-              {busy ? 'Adding…' : 'Add API token'}
-            </Button>
-          ) : (
-            <Button type="submit" variant="accent" size="md" disabled={busy} data-testid="llm-login-start">
-              {busy ? 'Starting…' : 'Start sign-in'}
-            </Button>
-          )}
-        </div>
       </form>
     </AccessSheet>
   )

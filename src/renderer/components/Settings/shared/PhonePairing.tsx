@@ -635,21 +635,28 @@ function PairingCards({ p }: { p: Pairing }): React.JSX.Element {
       )}
 
       {confirming && (
-        <AccessSheet title={`Remove ${confirming.name || 'this phone'}?`} onClose={closeConfirm} busy={removing} testId="pair-remove-dialog">
+        <AccessSheet
+          title={`Remove ${confirming.name || 'this phone'}?`}
+          onClose={closeConfirm}
+          busy={removing}
+          testId="pair-remove-dialog"
+          footer={
+            <>
+              <Button variant="ghost" size="md" onClick={closeConfirm} disabled={removing} autoFocus>
+                Cancel
+              </Button>
+              <Button variant="danger-muted" size="md" onClick={() => void confirmRemove()} disabled={removing}>
+                {removing ? 'Removing…' : 'Remove phone'}
+              </Button>
+            </>
+          }
+        >
           <p className={DIALOG_MUTED}>
             It&apos;s signed out of this server right away. To use K2 on it again, pair it with a new code.
           </p>
           {removeError && (
             <FailedNote what="Couldn't remove this phone." next="It's still paired. Try again." detail={removeError.hint} />
           )}
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" size="md" onClick={closeConfirm} disabled={removing} autoFocus>
-              Cancel
-            </Button>
-            <Button variant="danger-muted" size="md" onClick={() => void confirmRemove()} disabled={removing}>
-              {removing ? 'Removing…' : 'Remove phone'}
-            </Button>
-          </div>
         </AccessSheet>
       )}
     </div>

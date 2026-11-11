@@ -53,11 +53,6 @@ function Pick({ label, hint, children }: { label: string; hint?: React.ReactNode
   )
 }
 
-/** The dialog's buttons, on the right. */
-function Footer({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <div className="flex justify-end gap-2 pt-1">{children}</div>
-}
-
 /** "Agents can read this value" under a delivery choice that lets them. */
 function ReadableNote({ text }: { text: string }): React.JSX.Element {
   return (
@@ -291,6 +286,7 @@ function Waiting({ text }: { text: string }): React.JSX.Element {
 /** Show a value after a confirm. The value lives in this dialog only: masked
  *  until Show, gone after 30 seconds or when the dialog closes. */
 export function RevealDialog({ secret, onClose }: { secret: VaultSecret; onClose: () => void }): React.JSX.Element {
+  const formId = useId()
   const c = useVaultConfirm('reveal', secret.id, secret.name)
   const [shown, setShown] = useState<{ value: string; version: number } | null>(null)
   const [visible, setVisible] = useState(false)
@@ -347,7 +343,18 @@ export function RevealDialog({ secret, onClose }: { secret: VaultSecret; onClose
   const title = `Show ${secret.name}`
   if (shown) {
     return (
-      <Sheet title={title} onClose={onClose} testId="vault-reveal-dialog">
+      <Sheet
+        title={title}
+        onClose={onClose}
+        testId="vault-reveal-dialog"
+        footer={
+          <>
+            <Button variant="accent" size="md" onClick={onClose}>
+              Done
+            </Button>
+          </>
+        }
+      >
         <Surface chamfer material="tile" className="px-4 py-3 space-y-3" data-testid="vault-reveal-panel">
           <p className="font-mono type-row text-[var(--color-text-primary)] break-all select-all" data-testid="vault-reveal-value">
             {visible ? shown.value : '•'.repeat(Math.min(24, Math.max(8, shown.value.length)))}
@@ -360,28 +367,29 @@ export function RevealDialog({ secret, onClose }: { secret: VaultSecret; onClose
           </div>
         </Surface>
         <p className={MUTED}>Version {shown.version}. It hides again after 30 seconds, or when you close this.</p>
-        <Footer>
-          <Button variant="accent" size="md" onClick={onClose}>
-            Done
-          </Button>
-        </Footer>
       </Sheet>
     )
   }
   if (hidden) {
     return (
-      <Sheet title={title} onClose={onClose} testId="vault-reveal-dialog">
+      <Sheet
+        title={title}
+        onClose={onClose}
+        testId="vault-reveal-dialog"
+        footer={
+          <>
+            <Button variant="ghost" size="md" onClick={onClose}>
+              Close
+            </Button>
+            <Button variant="accent" size="md" onClick={() => void start()}>
+              Show again
+            </Button>
+          </>
+        }
+      >
         <p className={MUTED} role="status">
           The value is hidden again: K2 shows it for 30 seconds at a time.
         </p>
-        <Footer>
-          <Button variant="ghost" size="md" onClick={onClose}>
-            Close
-          </Button>
-          <Button variant="accent" size="md" onClick={() => void start()}>
-            Show again
-          </Button>
-        </Footer>
       </Sheet>
     )
   }
@@ -393,8 +401,25 @@ export function RevealDialog({ secret, onClose }: { secret: VaultSecret; onClose
       onClose={onClose}
       busy={busy}
       testId="vault-reveal-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          {pw ? (
+            <Button type="submit" form={formId} variant="accent" size="md" disabled={!c.hasPw || busy}>
+              {busy ? 'Confirming…' : 'Confirm'}
+            </Button>
+          ) : error && c.ask.step === 'idle' ? (
+            <Button variant="accent" size="md" onClick={() => void start()}>
+              Try again
+            </Button>
+          ) : null}
+        </>
+      }
     >
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -409,20 +434,6 @@ export function RevealDialog({ secret, onClose }: { secret: VaultSecret; onClose
             next={pw ? 'Nothing was shown. Check the password, then confirm again.' : 'Nothing was shown. Try again in a moment.'}
           />
         ) : null}
-        <Footer>
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          {pw ? (
-            <Button type="submit" variant="accent" size="md" disabled={!c.hasPw || busy}>
-              {busy ? 'Confirming…' : 'Confirm'}
-            </Button>
-          ) : error && c.ask.step === 'idle' ? (
-            <Button variant="accent" size="md" onClick={() => void start()}>
-              Try again
-            </Button>
-          ) : null}
-        </Footer>
       </form>
     </Sheet>
   )
@@ -457,6 +468,7 @@ export function AddSecretDialog({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const ids = { name: useId(), sites: useId(), value: useId() }
+  const formId = useId()
 
   const presetRow = presets.find((p) => p.id === preset) ?? null
   const presetSites = (presetRow?.hosts ?? []).map(siteLabel).join(', ')
@@ -509,8 +521,19 @@ export function AddSecretDialog({
       onClose={onClose}
       busy={busy}
       testId="vault-add-form"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!canSave} data-testid="vault-add-save">
+            {busy ? 'Saving…' : 'Save secret'}
+          </Button>
+        </>
+      }
     >
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -632,14 +655,6 @@ export function AddSecretDialog({
           <ValueField fieldRef={fieldRef} id={ids.value} label="Value" onPresence={setHas} multiline={isMultilineKind(kind)} />
         </Field>
         {error ? <FailedNote what="Couldn’t save the secret." detail={error} next="Nothing was saved. Check the name and sites, then try again." /> : null}
-        <Footer>
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!canSave} data-testid="vault-add-save">
-            {busy ? 'Saving…' : 'Save secret'}
-          </Button>
-        </Footer>
       </form>
     </Sheet>
   )
@@ -648,6 +663,7 @@ export function AddSecretDialog({
 // ── Rotate ──────────────────────────────────────────────────────────
 
 export function RotateDialog({ secret, onClose, onSaved }: { secret: VaultSecret; onClose: () => void; onSaved: (note: string) => void }): React.JSX.Element {
+  const formId = useId()
   const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
   const id = useId()
   const [has, setHas] = useState(false)
@@ -677,8 +693,19 @@ export function RotateDialog({ secret, onClose, onSaved }: { secret: VaultSecret
       onClose={onClose}
       busy={busy}
       testId="vault-rotate-panel"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={busy || !has}>
+            {busy ? 'Rotating…' : 'Rotate'}
+          </Button>
+        </>
+      }
     >
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -689,14 +716,6 @@ export function RotateDialog({ secret, onClose, onSaved }: { secret: VaultSecret
           <ValueField fieldRef={fieldRef} id={id} label={`New value for ${secret.name}`} onPresence={setHas} multiline={isMultilineKind(secret.kind)} />
         </Field>
         {error ? <FailedNote what="Couldn’t rotate it." detail={error} next="The old value still works. Paste the new one again, then try again." /> : null}
-        <Footer>
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={busy || !has}>
-            {busy ? 'Rotating…' : 'Rotate'}
-          </Button>
-        </Footer>
       </form>
     </Sheet>
   )
@@ -745,6 +764,13 @@ export function SitesDialog({ secret, onClose, onChanged }: { secret: VaultSecre
       onClose={onClose}
       busy={busy}
       testId="vault-sites-panel"
+      footer={
+        <>
+          <Button variant="accent" size="md" onClick={onClose} disabled={busy}>
+            Done
+          </Button>
+        </>
+      }
     >
       {hosts.length === 0 ? (
         <p className={MUTED}>No sites yet. Agents get it another way, or not at all, until you add one.</p>
@@ -777,11 +803,6 @@ export function SitesDialog({ secret, onClose, onChanged }: { secret: VaultSecre
       </form>
       {saved && !error ? <SavedLine text={saved} /> : null}
       {error ? <FailedNote what="Couldn’t change the sites." detail={error} next="The sites are as they were. Try again." /> : null}
-      <Footer>
-        <Button variant="accent" size="md" onClick={onClose} disabled={busy}>
-          Done
-        </Button>
-      </Footer>
     </Sheet>
   )
 }
@@ -818,7 +839,22 @@ export function DeliveryDialog({ secret, onClose, onSaved }: { secret: VaultSecr
     }
   }
   return (
-    <Sheet title={`How agents get ${secret.name}`} onClose={onClose} busy={busy} testId="vault-delivery-panel">
+    <Sheet
+      title={`How agents get ${secret.name}`}
+      onClose={onClose}
+      busy={busy}
+      testId="vault-delivery-panel"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="accent" size="md" disabled={busy} onClick={() => void save()}>
+            {busy ? 'Saving…' : 'Save'}
+          </Button>
+        </>
+      }
+    >
       <Pick label="Usually" hint="What an agent gets when it asks for it.">
         <SettingDropdown
           fullWidth
@@ -842,14 +878,6 @@ export function DeliveryDialog({ secret, onClose, onSaved }: { secret: VaultSecr
       </Pick>
       {deliveryReadable(delivery) && <ReadableNote text="Agents can see this value." />}
       {error ? <FailedNote what="Couldn’t save." detail={error} next="Nothing changed. Try again." /> : null}
-      <Footer>
-        <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-          Cancel
-        </Button>
-        <Button variant="accent" size="md" disabled={busy} onClick={() => void save()}>
-          {busy ? 'Saving…' : 'Save'}
-        </Button>
-      </Footer>
     </Sheet>
   )
 }
@@ -857,6 +885,7 @@ export function DeliveryDialog({ secret, onClose, onSaved }: { secret: VaultSecr
 // ── Share ───────────────────────────────────────────────────────────
 
 export function ShareDialog({ secret, onClose, onSaved }: { secret: VaultSecret; onClose: () => void; onSaved: (note: string) => void }): React.JSX.Element {
+  const formId = useId()
   const projects = useProjectsStore((s) => s.projects)
   const [to, setTo] = useState('ws:*')
   const [as, setAs] = useState(secret.defaultDelivery === 'proxy' ? 'fetch' : secret.defaultDelivery)
@@ -900,8 +929,25 @@ export function ShareDialog({ secret, onClose, onSaved }: { secret: VaultSecret;
   }
   const pw = c.ask.step === 'password'
   return (
-    <Sheet title={`Share ${secret.name}`} intro="Let other agents use it. They get it the way you choose here." onClose={onClose} busy={busy} testId="vault-share-panel">
+    <Sheet
+      title={`Share ${secret.name}`}
+      intro="Let other agents use it. They get it the way you choose here."
+      onClose={onClose}
+      busy={busy}
+      testId="vault-share-panel"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={pw ? c.reset : onClose} disabled={busy}>
+            {pw ? 'Back' : 'Cancel'}
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={busy || (pw && !c.hasPw) || c.ask.step === 'none'}>
+            {pw ? 'Confirm and share' : busy ? 'Sharing…' : 'Share'}
+          </Button>
+        </>
+      }
+    >
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -928,14 +974,6 @@ export function ShareDialog({ secret, onClose, onSaved }: { secret: VaultSecret;
         {deliveryReadable(as) && <ReadableNote text="They can see this value, so you confirm it’s you first." />}
         <ConfirmStep c={c} testId="vault-share-password" />
         {error ? <FailedNote what="Couldn’t share it." detail={error} next="Nothing was shared. Try again." /> : null}
-        <Footer>
-          <Button variant="ghost" size="md" onClick={pw ? c.reset : onClose} disabled={busy}>
-            {pw ? 'Back' : 'Cancel'}
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={busy || (pw && !c.hasPw) || c.ask.step === 'none'}>
-            {pw ? 'Confirm and share' : busy ? 'Sharing…' : 'Share'}
-          </Button>
-        </Footer>
       </form>
     </Sheet>
   )
@@ -944,6 +982,7 @@ export function ShareDialog({ secret, onClose, onSaved }: { secret: VaultSecret;
 // ── Delete ──────────────────────────────────────────────────────────
 
 export function DeleteDialog({ secret, onClose, onDeleted }: { secret: VaultSecret; onClose: () => void; onDeleted: (note: string) => void }): React.JSX.Element {
+  const formId = useId()
   const [typed, setTyped] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -963,11 +1002,27 @@ export function DeleteDialog({ secret, onClose, onDeleted }: { secret: VaultSecr
     }
   }
   return (
-    <Sheet title={`Delete ${secret.name}?`} onClose={onClose} busy={busy} testId="vault-destroy-panel">
+    <Sheet
+      title={`Delete ${secret.name}?`}
+      onClose={onClose}
+      busy={busy}
+      testId="vault-destroy-panel"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="danger-muted" size="md" disabled={!ready}>
+            {busy ? 'Deleting…' : 'Delete secret'}
+          </Button>
+        </>
+      }
+    >
       <p className={MUTED}>
         Every version goes from this server, and agents that use it stop getting it. This can’t be undone; to stop agents for now, turn it off instead.
       </p>
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -987,14 +1042,6 @@ export function DeleteDialog({ secret, onClose, onDeleted }: { secret: VaultSecr
           />
         </Field>
         {error ? <FailedNote what={`Couldn’t delete ${secret.name}.`} detail={error} next="It’s still in the vault. Try again." /> : null}
-        <Footer>
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="danger-muted" size="md" disabled={!ready}>
-            {busy ? 'Deleting…' : 'Delete secret'}
-          </Button>
-        </Footer>
       </form>
     </Sheet>
   )
@@ -1018,7 +1065,24 @@ export function HistoryDialog({ secret, onClose }: { secret: VaultSecret; onClos
     }
   }, [secret.id, nonce])
   return (
-    <Sheet title={`History of ${secret.name}`} intro="Every save, change and use, newest first." onClose={onClose} testId="vault-history-panel">
+    <Sheet
+      title={`History of ${secret.name}`}
+      intro="Every save, change and use, newest first."
+      onClose={onClose}
+      testId="vault-history-panel"
+      footer={
+        <>
+          {error ? (
+            <Button variant="ghost" size="md" onClick={() => setNonce((n) => n + 1)}>
+              Try again
+            </Button>
+          ) : null}
+          <Button variant="accent" size="md" onClick={onClose}>
+            Done
+          </Button>
+        </>
+      }
+    >
       <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]" data-testid="vault-history-facts">
         <div className="px-4 py-2.5">
           <p className="type-hint text-[var(--color-text-secondary)]">Where it came from</p>
@@ -1063,16 +1127,6 @@ export function HistoryDialog({ secret, onClose }: { secret: VaultSecret; onClos
           ))}
         </Surface>
       )}
-      <Footer>
-        {error ? (
-          <Button variant="ghost" size="md" onClick={() => setNonce((n) => n + 1)}>
-            Try again
-          </Button>
-        ) : null}
-        <Button variant="accent" size="md" onClick={onClose}>
-          Done
-        </Button>
-      </Footer>
     </Sheet>
   )
 }
@@ -1094,6 +1148,7 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
   const [error, setError] = useState<{ what: string; next: string; detail: string } | null>(null)
   const [typed, setTyped] = useState<string[]>(['', '', ''])
   const [busy, setBusy] = useState(false)
+  const formId = useId()
 
   const show = async (token: string): Promise<void> => {
     const challenge = await vaultApi.recoveryShowOnce(token)
@@ -1150,11 +1205,6 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
         <>
           <SavedLine text="The recovery key is set up." />
           <p className={MUTED}>Keep the words somewhere offline and safe. K2 won’t show them again.</p>
-          <Footer>
-            <Button variant="accent" size="md" onClick={onClose} autoFocus>
-              Done
-            </Button>
-          </Footer>
         </>
       )
     }
@@ -1175,16 +1225,6 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
             </ol>
           </Surface>
           <p className={MUTED}>There’s no copy button: anything on the clipboard, an agent could read.</p>
-          <Footer>
-            <Button
-              variant="accent"
-              size="md"
-              data-testid="vault-recovery-saved"
-              onClick={() => setState({ step: 'check', id: state.challenge.id, checkWords: state.challenge.checkWords })}
-            >
-              I’ve written them down
-            </Button>
-          </Footer>
         </div>
       )
     }
@@ -1192,6 +1232,7 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
       const { id, checkWords } = state
       return (
         <form
+          id={formId}
           className="space-y-4"
           data-testid="vault-recovery-check"
           onSubmit={(e) => {
@@ -1213,17 +1254,13 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
             ))}
           </div>
           {state.step === 'saving' ? <Waiting text="Checking…" /> : null}
-          <Footer>
-            <Button type="submit" variant="accent" size="md" disabled={state.step === 'saving' || typed.some((w) => w.trim() === '')}>
-              Confirm recovery key
-            </Button>
-          </Footer>
         </form>
       )
     }
     const pw = c.ask.step === 'password'
     return (
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -1240,25 +1277,58 @@ export function RecoveryDialog({ onClose, onConfirmed }: { onClose: () => void; 
         ) : null}
         <ConfirmStep c={c} testId="vault-recovery-password" other={{ text: 'Or set up the recovery key there instead:', command: 'k2 vault recovery show-once' }} />
         {error ? <FailedNote what={error.what} detail={error.detail} next={error.next} /> : null}
-        <Footer>
-          <Button variant="ghost" size="md" onClick={pw ? c.reset : onClose} disabled={busy}>
-            {pw ? 'Back' : 'Cancel'}
-          </Button>
-          {pw ? (
-            <Button type="submit" variant="accent" size="md" disabled={!c.hasPw || busy}>
-              Confirm
-            </Button>
-          ) : c.ask.step === 'idle' ? (
-            <Button type="submit" variant="accent" size="md" data-testid="vault-recovery-start">
-              {error ? 'Start again' : 'Continue'}
-            </Button>
-          ) : null}
-        </Footer>
       </form>
     )
   }
+  // The step's buttons, pinned under the body.
+  const foot = (): React.JSX.Element | null => {
+    if (state.step === 'done') {
+      return (
+        <Button variant="accent" size="md" onClick={onClose} autoFocus>
+          Done
+        </Button>
+      )
+    }
+    if (state.step === 'shown') {
+      const { challenge } = state
+      return (
+        <Button
+          variant="accent"
+          size="md"
+          data-testid="vault-recovery-saved"
+          onClick={() => setState({ step: 'check', id: challenge.id, checkWords: challenge.checkWords })}
+        >
+          I’ve written them down
+        </Button>
+      )
+    }
+    if (state.step === 'check' || state.step === 'saving') {
+      return (
+        <Button type="submit" form={formId} variant="accent" size="md" disabled={state.step === 'saving' || typed.some((w) => w.trim() === '')}>
+          Confirm recovery key
+        </Button>
+      )
+    }
+    const pw = c.ask.step === 'password'
+    return (
+      <>
+        <Button variant="ghost" size="md" onClick={pw ? c.reset : onClose} disabled={busy}>
+          {pw ? 'Back' : 'Cancel'}
+        </Button>
+        {pw ? (
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!c.hasPw || busy}>
+            Confirm
+          </Button>
+        ) : c.ask.step === 'idle' ? (
+          <Button type="submit" form={formId} variant="accent" size="md" data-testid="vault-recovery-start">
+            {error ? 'Start again' : 'Continue'}
+          </Button>
+        ) : null}
+      </>
+    )
+  }
   return (
-    <Sheet title="Set up a recovery key" onClose={onClose} busy={inFlight} testId="vault-recovery-dialog">
+    <Sheet title="Set up a recovery key" onClose={onClose} busy={inFlight} testId="vault-recovery-dialog" footer={foot()}>
       <div className="space-y-4" data-testid="vault-recovery-setup">
         {body()}
       </div>

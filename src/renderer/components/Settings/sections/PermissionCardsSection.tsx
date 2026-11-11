@@ -1052,7 +1052,29 @@ function AllowDialog({
     }
   }
   return (
-    <AccessSheet title={`Allow ${name}’s request?`} onClose={onClose} busy={busy} testId="permission-allow-dialog">
+    <AccessSheet
+      title={`Allow ${name}’s request?`}
+      onClose={onClose}
+      busy={busy}
+      testId="permission-allow-dialog"
+      footer={
+        <div className="flex flex-1 items-center justify-between gap-2">
+          <Button variant="ghost" size="md" onClick={onOpen} disabled={busy}>
+            Open card
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+              {failed?.gone ? 'Close' : 'Cancel'}
+            </Button>
+            {failed?.gone ? null : (
+              <Button variant="accent" size="md" onClick={() => void go()} disabled={busy}>
+                {busy ? 'Allowing…' : 'Allow'}
+              </Button>
+            )}
+          </div>
+        </div>
+      }
+    >
       <div className="space-y-1">
         <p className={SETTING_ROW_LABEL}>{p.whatChanges || p.setting}</p>
         <p className={DIALOG_MUTED}>
@@ -1067,21 +1089,6 @@ function AllowDialog({
           detail={failed.detail}
         />
       ) : null}
-      <div className="flex items-center justify-between gap-2">
-        <Button variant="ghost" size="md" onClick={onOpen} disabled={busy}>
-          Open card
-        </Button>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
-            {failed?.gone ? 'Close' : 'Cancel'}
-          </Button>
-          {failed?.gone ? null : (
-            <Button variant="accent" size="md" onClick={() => void go()} disabled={busy}>
-              {busy ? 'Allowing…' : 'Allow'}
-            </Button>
-          )}
-        </div>
-      </div>
     </AccessSheet>
   )
 }

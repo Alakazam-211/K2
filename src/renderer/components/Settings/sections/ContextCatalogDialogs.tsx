@@ -52,7 +52,7 @@ export function NewPackDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [created, setCreated] = useState<CreatedCatalogPack | null>(null)
-  const ids = { name: useId(), slug: useId(), tags: useId() }
+  const ids = { name: useId(), slug: useId(), tags: useId(), form: useId() }
 
   const shortName = slugEdited ? slug.trim() : shortNameFrom(name)
   const nameProblem = packNameProblem(name)
@@ -85,7 +85,21 @@ export function NewPackDialog({
   if (created) {
     const shown = created.entry.label || label
     return (
-      <Sheet title={`${shown} is in the catalog`} onClose={() => onClose(created)} testId="pack-created-dialog">
+      <Sheet
+        title={`${shown} is in the catalog`}
+        onClose={() => onClose(created)}
+        testId="pack-created-dialog"
+        footer={
+          <>
+            <Button variant="ghost" size="md" onClick={() => onClose(created)}>
+              Later
+            </Button>
+            <Button variant="accent" size="md" onClick={() => onWrite(created)} autoFocus>
+              Write it now
+            </Button>
+          </>
+        }
+      >
         <p className={MUTED}>
           It’s empty for now. Next, write what it asks of agents: an agent opens the pack with you, asks what it should say, and
           writes it down.
@@ -93,14 +107,6 @@ export function NewPackDialog({
         <p className={MUTED}>
           No workspace uses it yet. When it’s ready, add it to a workspace in Workspaces / Agents → the workspace → Context.
         </p>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={() => onClose(created)}>
-            Later
-          </Button>
-          <Button variant="accent" size="md" onClick={() => onWrite(created)} autoFocus>
-            Write it now
-          </Button>
-        </div>
       </Sheet>
     )
   }
@@ -112,8 +118,19 @@ export function NewPackDialog({
       onClose={() => onClose(null)}
       busy={busy}
       testId="new-pack-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={() => onClose(null)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={ids.form} variant="accent" size="md" disabled={!ready || busy}>
+            {busy ? 'Creating…' : 'Create pack'}
+          </Button>
+        </>
+      }
     >
       <form
+        id={ids.form}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -170,15 +187,6 @@ export function NewPackDialog({
         </Field>
 
         {error ? <FailedNote what={`Couldn’t create ${label || 'the pack'}.`} detail={error} next={createFailureNext(error)} /> : null}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={() => onClose(null)} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!ready || busy}>
-            {busy ? 'Creating…' : 'Create pack'}
-          </Button>
-        </div>
       </form>
     </Sheet>
   )
@@ -212,7 +220,22 @@ export function DeletePackDialog({
   }
 
   return (
-    <Sheet title={`Delete ${pack.label}?`} onClose={onClose} busy={busy} testId="delete-pack-dialog">
+    <Sheet
+      title={`Delete ${pack.label}?`}
+      onClose={onClose}
+      busy={busy}
+      testId="delete-pack-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
+            Cancel
+          </Button>
+          <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
+            {busy ? 'Deleting…' : 'Delete pack'}
+          </Button>
+        </>
+      }
+    >
       <p className={MUTED}>
         K2 removes it, and what it says, from the catalog. Workspaces that already use it keep their own copy; remove it there in
         Workspaces / Agents → the workspace → Context.
@@ -220,14 +243,6 @@ export function DeletePackDialog({
       {error ? (
         <FailedNote what={`Couldn’t delete ${pack.label}.`} detail={error} next="It’s still in the catalog. Try again in a moment." />
       ) : null}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onClose} disabled={busy} autoFocus>
-          Cancel
-        </Button>
-        <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
-          {busy ? 'Deleting…' : 'Delete pack'}
-        </Button>
-      </div>
     </Sheet>
   )
 }

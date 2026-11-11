@@ -16,7 +16,7 @@
 // A one-time link or password lives only in the open sheet's state: closing
 // the sheet unmounts it and drops it. Never logged, never sent to a Thread.
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useId, useState } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { Button, Input, Radio } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
@@ -52,9 +52,22 @@ export function expiryWords(expiresAt: number | null, ttlSecs: number | null): s
 }
 
 /** The page's sheets: the shared Access dialog frame. */
-function Sheet({ title, onClose, children, testId }: { title: string; onClose: () => void; children: React.ReactNode; testId: string }): React.JSX.Element {
+function Sheet({
+  title,
+  onClose,
+  children,
+  testId,
+  footer,
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+  testId: string
+  /** The buttons, pinned under the scrolling body. */
+  footer?: React.ReactNode
+}): React.JSX.Element {
   return (
-    <AccessSheet title={title} onClose={onClose} testId={testId}>
+    <AccessSheet title={title} onClose={onClose} testId={testId} footer={footer}>
       {children}
     </AccessSheet>
   )
@@ -227,7 +240,38 @@ export function ResetLinkDialog({
 
   const tie = tieLine(person)
   return (
-    <Sheet title={`Send ${person.username} a reset link`} onClose={onClose} testId="reset-link-dialog">
+    <Sheet
+      title={`Send ${person.username} a reset link`}
+      onClose={onClose}
+      testId="reset-link-dialog"
+      footer={
+        result ? (
+          <Button variant="accent" size="md" onClick={onClose} autoFocus>
+            Done
+          </Button>
+        ) : (
+          <>
+            <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            {mode === 'link' ? (
+              <Button variant="accent" size="md" disabled={busy} onClick={() => void run({ code: true })}>
+                Get link
+              </Button>
+            ) : (
+              <Button
+                variant="accent"
+                size="md"
+                disabled={busy || !to.trim()}
+                onClick={() => void run({ to: to.trim(), ...(from.trim() ? { from: from.trim() } : {}) })}
+              >
+                Send link
+              </Button>
+            )}
+          </>
+        )
+      }
+    >
       {result ? (
         <>
           {result.kind === 'link' ? (
@@ -252,11 +296,6 @@ export function ResetLinkDialog({
           ) : (
             <p className={NOTE}>{result.hint}</p>
           )}
-          <div className="flex justify-end">
-            <Button variant="accent" size="md" onClick={onClose} autoFocus>
-              Done
-            </Button>
-          </div>
         </>
       ) : (
         <>
@@ -325,25 +364,6 @@ export function ResetLinkDialog({
             what={mode === 'link' ? 'Couldn’t make a reset link.' : 'Couldn’t send the reset link.'}
             next="Their current password still works. Check the details, then try again."
           />
-          <div className="flex justify-end gap-2 pt-1">
-            <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-              Cancel
-            </Button>
-            {mode === 'link' ? (
-              <Button variant="accent" size="md" disabled={busy} onClick={() => void run({ code: true })}>
-                Get link
-              </Button>
-            ) : (
-              <Button
-                variant="accent"
-                size="md"
-                disabled={busy || !to.trim()}
-                onClick={() => void run({ to: to.trim(), ...(from.trim() ? { from: from.trim() } : {}) })}
-              >
-                Send link
-              </Button>
-            )}
-          </div>
         </>
       )}
     </Sheet>
@@ -388,6 +408,7 @@ export function AddUserDialog({
   const [from, setFrom] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const formId = useId()
 
   const hasEmail = email.trim().length > 0
   // "Send a link" needs an email: drop back when it is cleared.
@@ -458,8 +479,23 @@ export function AddUserDialog({
   }
 
   return (
-    <Sheet title="Add person" onClose={onClose} testId="add-user-dialog">
+    <Sheet
+      title="Add person"
+      onClose={onClose}
+      testId="add-user-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ready || busy}>
+            {mode === 'invite' ? 'Add and send link' : 'Add person'}
+          </Button>
+        </>
+      }
+    >
       <form
+        id={formId}
         className="space-y-2.5"
         onSubmit={(e) => {
           e.preventDefault()
@@ -587,14 +623,6 @@ export function AddUserDialog({
           </div>
         ) : null}
         <ErrorLine text={error} what="Couldn’t add this person." next="Nothing was added. Check the details above, then try again." />
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!ready || busy}>
-            {mode === 'invite' ? 'Add and send link' : 'Add person'}
-          </Button>
-        </div>
       </form>
     </Sheet>
   )
@@ -603,7 +631,16 @@ export function AddUserDialog({
 /** After Add user: the generated password or invite link, once. */
 export function AddedUserDialog({ added, onClose }: { added: AddedUser; onClose: () => void }): React.JSX.Element {
   return (
-    <Sheet title={`${added.username} added`} onClose={onClose} testId="added-user-dialog">
+    <Sheet
+      title={`${added.username} added`}
+      onClose={onClose}
+      testId="added-user-dialog"
+      footer={
+        <Button variant="accent" size="md" onClick={onClose} autoFocus>
+          Done
+        </Button>
+      }
+    >
       {added.secret ? (
         <OneTimeSecret
           label={
@@ -617,11 +654,6 @@ export function AddedUserDialog({ added, onClose }: { added: AddedUser; onClose:
         />
       ) : null}
       {added.note ? <p className={NOTE}>{added.note}</p> : null}
-      <div className="flex justify-end">
-        <Button variant="accent" size="md" onClick={onClose} autoFocus>
-          Done
-        </Button>
-      </div>
     </Sheet>
   )
 }

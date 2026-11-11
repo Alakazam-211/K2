@@ -319,6 +319,7 @@ export function PasswordResetDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState<ResetAnswer | null>(null)
+  const formId = useId()
   const pwProblem = mode === 'type' && password ? problem(password) : null
   const ready = mode === 'make' || (!!password && !pwProblem)
 
@@ -340,7 +341,16 @@ export function PasswordResetDialog({
 
   if (done) {
     return (
-      <AccessSheet title={`New password for ${who}`} onClose={onClose} testId="reset-done-dialog">
+      <AccessSheet
+        title={`New password for ${who}`}
+        onClose={onClose}
+        testId="reset-done-dialog"
+        footer={
+          <Button variant="accent" size="md" onClick={onClose} autoFocus>
+            Done
+          </Button>
+        }
+      >
         <p className={DIALOG_MUTED} data-testid="reset-password-msg">
           {done.temporary ? `Password reset for ${who}. ${MUST_CHANGE_NOTE}` : `Password reset for ${who}.`}
         </p>
@@ -358,18 +368,30 @@ export function PasswordResetDialog({
           </ol>
         </div>
         {done.password ? <p className={DIALOG_MUTED}>K2 won’t show this password again: once you close this, it’s gone.</p> : null}
-        <div className="flex justify-end">
-          <Button variant="accent" size="md" onClick={onClose} autoFocus>
-            Done
-          </Button>
-        </div>
       </AccessSheet>
     )
   }
 
   return (
-    <AccessSheet title={`Reset ${who}’s password`} intro={intro} onClose={onClose} busy={busy} testId={`reset-form-${who}`}>
+    <AccessSheet
+      title={`Reset ${who}’s password`}
+      intro={intro}
+      onClose={onClose}
+      busy={busy}
+      testId={`reset-form-${who}`}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form={formId} variant="accent" size="md" disabled={!ready || busy}>
+            {busy ? 'Resetting…' : 'Reset password'}
+          </Button>
+        </>
+      }
+    >
       <form
+        id={formId}
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
@@ -388,14 +410,6 @@ export function PasswordResetDialog({
         />
         {extra}
         {error ? <FailedNote what={`Couldn’t reset ${who}’s password.`} detail={error} next={mode === 'type' ? 'Their current password still works. Check what you typed, then try again.' : 'Their current password still works. Try again in a moment.'} /> : null}
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="accent" size="md" disabled={!ready || busy}>
-            {busy ? 'Resetting…' : 'Reset password'}
-          </Button>
-        </div>
       </form>
     </AccessSheet>
   )
@@ -422,16 +436,22 @@ export function ConfirmSheet({
   testId: string
 }): React.JSX.Element {
   return (
-    <AccessSheet title={title} onClose={onCancel} testId={testId}>
+    <AccessSheet
+      title={title}
+      onClose={onCancel}
+      testId={testId}
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onCancel} autoFocus>
+            Cancel
+          </Button>
+          <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={onConfirm}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
       <p className={DIALOG_MUTED}>{message}</p>
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="md" onClick={onCancel} autoFocus>
-          Cancel
-        </Button>
-        <Button variant={destructive ? 'danger-muted' : 'accent'} size="md" onClick={onConfirm}>
-          {confirmLabel}
-        </Button>
-      </div>
     </AccessSheet>
   )
 }

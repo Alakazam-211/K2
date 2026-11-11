@@ -45,6 +45,8 @@ export interface NotifyPrefs {
   /** Phones registered for this person on this daemon. */
   devices: number
   push: PushReadiness
+  /** Why push is dormant, in the server's words, when it says. */
+  pushReason: string | null
   /** Connect logins that are this same person (§3; e.g. the one Owner-role
    *  user when the caller is the owner token). Empty when none or when the
    *  daemon does not say. */
@@ -124,6 +126,7 @@ export function parseNotifyPrefs(raw: unknown): NotifyPrefs {
     defaultOn: o.default !== false,
     devices: asCount(o.devices),
     push: asPush(o.push),
+    pushReason: typeof o.pushReason === 'string' && o.pushReason.trim() ? o.pushReason.trim() : null,
     aliases: Array.isArray(o.aliases) ? o.aliases.filter((a): a is string => typeof a === 'string' && a !== '') : [],
     workspaces: parseWorkspaces(o.workspaces),
   }
@@ -222,7 +225,7 @@ export async function setPersonWorkspacePush(
   await daemonCliPost<unknown>(scope, 'notify/admin/set', { principal, workspace: { projectId, threadPush } })
 }
 
-/** "Default (on)" / "Set by you" / "Set by gina" for a workspace row. */
+/** "Default (on)" / "Set by you" / "Set by alex" for a workspace row. */
 export function sourceLabel(row: Pick<NotifyWorkspacePref, 'source' | 'updatedBy' | 'threadPush'>, me: string): string {
   if (row.source === 'user') {
     if (!row.updatedBy || row.updatedBy === me) return 'Set by you'
@@ -231,24 +234,56 @@ export function sourceLabel(row: Pick<NotifyWorkspacePref, 'source' | 'updatedBy
   return `Default (${row.threadPush ? 'on' : 'off'})`
 }
 
-/** The status line (§9 item 1). */
-export function pushStatusText(push: PushReadiness): string {
-  switch (push) {
-    case 'ready':
-      return 'Ready'
-    case 'airgap':
-      return 'Off: air-gap'
-    case 'dormant':
-      return 'Off: no push service'
-    default:
-      return 'Unknown'
-  }
+/** "2 phones paired" / "No phone paired yet". */
+export function deviceCountText(devices: number): string {
+  if (devices <= 0) return 'No phone paired yet'
+  return devices === 1 ? '1 phone paired' : `${devices} phones paired`
 }
 
-/** "2 phones registered" / "No phone yet: install K2 Companion". */
-export function deviceCountText(devices: number): string {
-  if (devices <= 0) return 'No phone yet: install K2 Companion'
-  return devices === 1 ? '1 phone registered' : `${devices} phones registered`
+/** The "Your phone" status row (§9 item 1): a dot, a plain title, a line
+ *  saying what it means, and whether the next step is pairing a phone.
+ *  `push` null (an early build that doesn't say) claims nothing about the
+ *  push service and speaks only of phones. */
+export interface PhoneStatus {
+  tone: 'ok' | 'warn' | 'neutral'
+  title: string
+  hint: string
+  /** The next step is pairing a phone (none yet). */
+  pair: boolean
+}
+
+export function phoneStatus(p: Pick<NotifyPrefs, 'push' | 'devices'>): PhoneStatus {
+  const phones = deviceCountText(p.devices)
+  if (p.push === 'airgap') {
+    return {
+      tone: 'warn',
+      title: 'This server can’t send pushes',
+      hint: `It’s air-gapped, so it can’t reach the push service. ${phones}; email notices still work.`,
+      pair: false,
+    }
+  }
+  if (p.push === 'dormant') {
+    return {
+      tone: 'warn',
+      title: 'This server can’t send pushes right now',
+      hint: `Its push service isn’t set up or isn’t answering. ${phones}; pushes start once the service works.`,
+      pair: p.devices <= 0,
+    }
+  }
+  if (p.devices <= 0) {
+    return {
+      tone: 'neutral',
+      title: phones,
+      hint: 'Pair your phone with K2 Companion to get a push when an agent posts in a Thread.',
+      pair: true,
+    }
+  }
+  return {
+    tone: 'ok',
+    title: phones,
+    hint: 'A push shows the agent’s name and opens that Thread. Reading a Thread here keeps its pushes quiet.',
+    pair: false,
+  }
 }
 
 /** Login role from `GET /cli/auth/whoami` (the owner token is `owner`). */

@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   agents: [] as unknown[],
   agentsStatus: 200,
   noticeStatus: 200,
+  setError: null as string | null,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}), emit: vi.fn(async () => {}) }))
@@ -52,6 +53,7 @@ vi.mock('@/lib/daemon-cli', async () => {
     daemonCliPost: primaryOnly(async (route: string, body: Record<string, unknown>) => {
       h.posts.push({ route, body })
       if (route === 'notify/email/address/set') {
+        if (h.setError) throw new Error(h.setError)
         h.pending = [{ id: 'eva_1', address: body.address, state: 'pending', createdAt: 1, expiresAt: 1_900_000_000, verifiedAt: null }]
         return { ok: true, sent: true }
       }
@@ -94,6 +96,7 @@ beforeEach(() => {
   h.agents = [{ workspace: 'ws-other', sender: 'taken@notify.brand.test', on: true, offReason: null, grantedAt: 1 }]
   h.agentsStatus = 200
   h.noticeStatus = 200
+  h.setError = null
 })
 afterEach(() => cleanup())
 
@@ -106,7 +109,7 @@ describe('EmailNoticePrefs', () => {
   it('shows the confirmed address and turns one workspace off for me', async () => {
     render(<EmailNoticePrefs scope={primaryScope()} workspaces={workspaces} />)
     expect(await screen.findByText('me@home.test')).toBeTruthy()
-    expect(screen.getByText(/Confirmed: agents here can email you/)).toBeTruthy()
+    expect(screen.getByText(/Confirmed\. Agents here email you at this address/)).toBeTruthy()
     fireEvent.click(screen.getByLabelText('Email notices from Ops'))
     await waitFor(() => expect(h.posts.find((p) => p.route === 'notify/email/mute')?.body).toEqual({ workspace: 'ws-ops', muted: true }))
     await waitFor(() => expect(screen.getByTestId('email-notice-ws-ws-ops').textContent).toContain('Off for you'))
@@ -120,8 +123,40 @@ describe('EmailNoticePrefs', () => {
     await waitFor(() => expect(h.posts.find((p) => p.route === 'notify/email/address/set')?.body).toEqual({ address: 'new@home.test' }))
     expect(await screen.findByTestId('email-notice-sent')).toBeTruthy()
     expect(await screen.findByTestId('email-notice-address-pending')).toBeTruthy()
+    expect(screen.getByTestId('email-notice-sent').textContent).toContain('Link sent to new@home.test')
+    // Remove asks first; Cancel changes nothing.
     fireEvent.click(screen.getByLabelText('Stop email notices to me@home.test'))
+    const sheet = await screen.findByTestId('email-notice-remove-confirm')
+    expect(sheet.textContent).toContain('me@home.test')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByTestId('email-notice-remove-confirm')).toBeNull())
+    expect(h.posts.some((p) => p.route === 'notify/email/address/remove')).toBe(false)
+    fireEvent.click(screen.getByLabelText('Stop email notices to me@home.test'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop notices' }))
     await waitFor(() => expect(h.posts.find((p) => p.route === 'notify/email/address/remove')?.body).toEqual({ address: 'me@home.test' }))
+    await waitFor(() => expect(screen.queryByText('me@home.test')).toBeNull())
+  })
+
+  it('a link that can’t be sent says so in plain words, with the server’s reason', async () => {
+    h.setError = 'address refused'
+    render(<EmailNoticePrefs scope={primaryScope()} workspaces={workspaces} />)
+    await screen.findByText('me@home.test')
+    fireEvent.change(screen.getByLabelText('Your address for email notices'), { target: { value: 'bad@home.test' } })
+    fireEvent.click(screen.getByText('Send confirm link'))
+    const err = await screen.findByTestId('email-notice-error')
+    expect(err.textContent).toContain('Couldn’t send a link to bad@home.test. Check the address and try again.')
+    expect(err.textContent).toContain('The server said: address refused.')
+    expect(screen.queryByTestId('email-notice-sent')).toBeNull()
+  })
+
+  it('a failed read shows the error card with Try again', async () => {
+    h.noticeStatus = 500
+    render(<EmailNoticePrefs scope={primaryScope()} workspaces={workspaces} />)
+    const card = await screen.findByTestId('email-notices-error')
+    expect(card.textContent).toContain('Couldn’t load your email notices')
+    h.noticeStatus = 200
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await screen.findByText('me@home.test')).toBeTruthy()
   })
 
   it('hides itself on a server without email notices', async () => {

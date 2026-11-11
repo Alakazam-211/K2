@@ -20,6 +20,7 @@ const cli = vi.hoisted(() => ({
   backgroundGets: [] as string[],
   posts: [] as Array<{ route: string; body: Json }>,
   adminError: null as Error | null,
+  prefsError: null as Error | null,
   postError: null as Error | null,
 }))
 
@@ -64,7 +65,9 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ label: 'main', listen: async () => () => undefined }),
 }))
 
-vi.mock('@/lib/daemon-cli', () => ({
+vi.mock('@/lib/daemon-cli', async () => {
+  const { DaemonHttpError } = await import('@/lib/daemon-http-error')
+  return {
   daemonCliGet: vi.fn(async (_scope: unknown, route: string) => {
     if (BACKGROUND_GETS.has(route)) {
       cli.backgroundGets.push(route)
@@ -72,7 +75,13 @@ vi.mock('@/lib/daemon-cli', () => ({
     }
     cli.gets.push(route)
     if (route === 'auth/whoami') return cli.whoami
-    if (route === 'notify/prefs') return cli.prefs
+    // Email notices have their own tests (EmailNoticePrefs.test.tsx): here
+    // the server has none, so that card hides.
+    if (route === 'notify/email/address') throw new DaemonHttpError('no route', 404, 'not_found')
+    if (route === 'notify/prefs') {
+      if (cli.prefsError) throw cli.prefsError
+      return cli.prefs
+    }
     if (route === 'notify/admin') {
       if (cli.adminError) throw cli.adminError
       return cli.admin
@@ -86,7 +95,8 @@ vi.mock('@/lib/daemon-cli', () => ({
     if (route === 'notify/admin/set') return { ok: true }
     throw new Error(`unexpected POST ${route}`)
   }),
-}))
+  }
+})
 
 vi.mock('@/stores/session-events', async (orig) => ({
   ...(await orig<typeof import('@/stores/session-events')>()),
@@ -185,6 +195,7 @@ beforeEach(() => {
   cli.backgroundGets = []
   cli.posts = []
   cli.adminError = null
+  cli.prefsError = null
   cli.postError = null
   events.handlers.clear()
   appSettings.settings = {}
@@ -204,6 +215,10 @@ function previewWrites(): Json[] {
 
 async function loaded(): Promise<void> {
   await waitFor(() => expect(screen.getByTestId('notifications-server-bell')).toBeTruthy())
+}
+
+function statusTitle(): string | null {
+  return screen.getByTestId('notifications-status-title').textContent
 }
 
 function row(projectId: string): HTMLElement {
@@ -252,10 +267,12 @@ describe('Settings → Notifications: gating', () => {
 })
 
 describe('Settings → Notifications: your notifications', () => {
-  it('shows the status line, the bell with the phone count, and each workspace’s effective value + source', async () => {
+  it('shows the phone status row, the bell, and each workspace’s effective value + source', async () => {
     render(<NotificationsSection />)
     await loaded()
-    expect(screen.getByTestId('notifications-status').textContent).toBe('Push: Ready · 2 phones registered')
+    expect(statusTitle()).toBe('2 phones paired')
+    expect(screen.getByTestId('notifications-status').getAttribute('data-tone')).toBe('ok')
+    expect(within(screen.getByTestId('notifications-status')).getByRole('button', { name: 'Manage phones' })).toBeTruthy()
     expect(switchIn(screen.getByTestId('notifications-server-bell')).getAttribute('aria-checked')).toBe('true')
 
     expect(switchIn(row('p-k2')).getAttribute('aria-checked')).toBe('true')
@@ -271,18 +288,49 @@ describe('Settings → Notifications: your notifications', () => {
     expect(within(row('p-ops')).getByText('Reset')).toBeTruthy()
   })
 
-  it('dormant / air-gap / no phone read as such', async () => {
-    cli.prefs = prefs({ push: 'dormant', devices: 0 })
+  it('dormant / air-gap / no phone read as such, each with its next step', async () => {
+    cli.prefs = prefs({ push: 'dormant', pushReason: 'no gateway configured', devices: 0 })
     render(<NotificationsSection />)
     await loaded()
-    expect(screen.getByTestId('notifications-status').textContent).toBe(
-      'Push: Off: no push service · No phone yet: install K2 Companion',
-    )
+    const status = (): HTMLElement => screen.getByTestId('notifications-status')
+    expect(statusTitle()).toBe('This server can’t send pushes right now')
+    expect(status().getAttribute('data-tone')).toBe('warn')
+    expect(status().textContent).toContain('No phone paired yet')
+    expect(status().textContent).toContain('The server said: no gateway configured.')
+    expect(within(status()).getByRole('button', { name: 'Pair a phone' })).toBeTruthy()
     cleanup()
     cli.prefs = prefs({ push: 'airgap', devices: 1 })
     render(<NotificationsSection />)
     await loaded()
-    expect(screen.getByTestId('notifications-status').textContent).toBe('Push: Off: air-gap · 1 phone registered')
+    expect(statusTitle()).toBe('This server can’t send pushes')
+    expect(status().textContent).toContain('1 phone paired')
+    expect(within(status()).queryByRole('button')).toBeNull()
+    cleanup()
+    cli.prefs = prefs({ push: 'ready', devices: 0 })
+    render(<NotificationsSection />)
+    await loaded()
+    expect(statusTitle()).toBe('No phone paired yet')
+    expect(status().getAttribute('data-tone')).toBe('neutral')
+    expect(within(status()).getByRole('button', { name: 'Pair a phone' })).toBeTruthy()
+  })
+
+  it('a failed read says so in plain words with the server’s reason and Try again', async () => {
+    cli.prefsError = new Error('database is locked')
+    render(<NotificationsSection />)
+    const card = await screen.findByTestId('notifications-load-error')
+    expect(card.textContent).toContain('Couldn’t load your notifications')
+    expect(card.textContent).toContain('The server said: database is locked.')
+    cli.prefsError = null
+    fireEvent.click(within(card).getByRole('button', { name: 'Try again' }))
+    await loaded()
+    expect(screen.queryByTestId('notifications-load-error')).toBeNull()
+  })
+
+  it('no workspaces: a quiet empty card, not an empty heading', async () => {
+    cli.prefs = prefs({ workspaces: [] })
+    render(<NotificationsSection />)
+    await loaded()
+    expect(screen.getByTestId('notifications-ws-empty').textContent).toContain('No workspaces on this server yet')
   })
 
   it('the bell and a workspace switch write the caller’s own row (no principal in the body)', async () => {
@@ -319,10 +367,19 @@ describe('Settings → Notifications: your notifications', () => {
     await loaded()
     cli.postError = new Error('usage: unknown projectId')
     fireEvent.click(switchIn(row('p-k2')))
-    await waitFor(() =>
-      expect(screen.getByTestId('notifications-save-error').textContent).toBe('usage: unknown projectId'),
-    )
+    await waitFor(() => expect(row('p-k2').querySelector('[data-save-error]')?.textContent).toContain('usage: unknown projectId'))
+    expect(row('p-k2').querySelector('[data-save-error]')?.textContent).toContain('Nothing changed; try again.')
     expect(switchIn(row('p-k2')).getAttribute('aria-checked')).toBe('true')
+    // Only the row that failed says so.
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('a landed write says Saved on its row', async () => {
+    render(<NotificationsSection />)
+    await loaded()
+    fireEvent.click(switchIn(row('p-k2')))
+    await waitFor(() => expect(row('p-k2').querySelector('[data-save-note]')?.textContent).toBe('Saved'))
+    expect(screen.getByTestId('notifications-server-bell').querySelector('[data-save-note]')).toBeNull()
   })
 
   it('refetches on notify_prefs_changed', async () => {
@@ -333,9 +390,7 @@ describe('Settings → Notifications: your notifications', () => {
     act(() => {
       for (const fn of events.handlers) fn()
     })
-    await waitFor(() =>
-      expect(screen.getByTestId('notifications-status').textContent).toBe('Push: Ready · 3 phones registered'),
-    )
+    await waitFor(() => expect(statusTitle()).toBe('3 phones paired'))
   })
 })
 
@@ -369,7 +424,7 @@ describe('Settings → Notifications: roles', () => {
       'notifications-person-gina',
       'notifications-person-sam',
     ])
-    expect(screen.getByTestId('notifications-person-sam').className).toContain('opacity-50')
+    expect(screen.getByTestId('notifications-person-sam').getAttribute('data-disabled')).toBe('true')
     expect(screen.getByTestId('notifications-person-sam').textContent).toContain('Disabled')
     expect(screen.getByTestId('notifications-person-gina').textContent).toContain('(you)')
     // Opened, an Admin still gets read-only values: no switch, no Reset.
@@ -379,8 +434,8 @@ describe('Settings → Notifications: roles', () => {
       expect(within(screen.getByTestId(`notifications-person-${who}`)).queryAllByText('Reset')).toHaveLength(0)
     }
     openPerson('gina')
-    expect(screen.getByTestId('notifications-person-gina').textContent).toContain('Server: off')
-    expect(screen.getByTestId('notifications-person-gina-ws-p-k2').textContent).toContain('off')
+    expect(screen.getByTestId('notifications-person-gina').textContent).toContain('Pushes from this server1 phone pairedOff')
+    expect(screen.getByTestId('notifications-person-gina-ws-p-k2').textContent).toContain('Off')
 
     const def = screen.getByTestId('notifications-default-p-docs')
     fireEvent.click(switchIn(def))
@@ -504,8 +559,8 @@ describe('Settings → Notifications: People accordion (Rosson 2026-10-18)', () 
     openPerson('sam')
     const card = screen.getByTestId('notifications-person-sam')
     expect(within(card).queryAllByRole('switch')).toHaveLength(0)
-    expect(card.textContent).toContain('Server: on')
-    expect(screen.getByTestId('notifications-person-sam-ws-p-k2').textContent).toContain('on')
+    expect(card.textContent).toContain('Pushes from this serverNo phone paired yetOn')
+    expect(screen.getByTestId('notifications-person-sam-ws-p-k2').textContent).toContain('On')
   })
 
   it('a refetch (notify_prefs_changed or after a write) keeps the open person open with fresh values', async () => {
@@ -562,26 +617,26 @@ describe('Settings → Notifications: People accordion (Rosson 2026-10-18)', () 
 })
 
 describe('Settings → Notifications: owner hint (person key, Q6)', () => {
-  it('shows "Also you: z3thon" from aliases when viewing as the owner token', async () => {
+  it('says signing in as z3thon counts as you, from aliases when viewing as the owner token', async () => {
     cli.prefs = prefs({ aliases: ['z3thon'] })
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-owner-hint')).toBeTruthy())
-    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Also you: z3thon')
+    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as z3thon counts as you here.')
   })
 
-  it('lists every linked login, comma-separated', async () => {
+  it('lists every linked login', async () => {
     cli.prefs = prefs({ aliases: ['rosson', 'z3thon'] })
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-owner-hint')).toBeTruthy())
-    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Also you: rosson, z3thon')
+    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as rosson or z3thon counts as you here.')
   })
 
-  it('a linked login (principal owner, not the owner token) sees "Also you" too', async () => {
+  it('a linked login (principal owner, not the owner token) sees the hint too', async () => {
     asAdmin()
     cli.prefs = prefs({ principal: 'owner', aliases: ['z3thon'] })
     render(<NotificationsSection />)
     await waitFor(() => expect(screen.getByTestId('notifications-owner-hint')).toBeTruthy())
-    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Also you: z3thon')
+    expect(screen.getByTestId('notifications-owner-hint').textContent).toBe('Signing in as z3thon counts as you here.')
   })
 
   it('no hint when nothing maps (single owner token, no Owner login)', async () => {

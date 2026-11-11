@@ -2,13 +2,27 @@
 // part2-v1 §4 N10, V): the person's own address for agent email notices
 // (add, its confirm status, remove) and which workspaces' agents may email
 // them. The same as `k2 notifications email address` and `k2 notify email
-// mute` (CLI). The daemon owns every value and rule; this block renders them
-// and sends the person's clicks to the server it is given.
+// mute` (CLI). The daemon owns every value and rule; these cards render
+// them and send the person's clicks to the server they are given.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Toggle, Input } from '@/components/ui'
+import { Button, Input, Toggle } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
+import {
+  SETTING_FIELD_WIDTH,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SETTING_SERVER_REASON,
+  SaveError,
+  SettingRow,
+  SettingSwitchRow,
+  SettingsGroup,
+  SettingsLoadState,
+  type SaveState,
+} from '../controls/SettingControls'
+import { ConfirmSheet } from './AccessDialogs'
+import { StatusDot } from './ConnectionsParts'
 import {
   errorText,
   fetchMyEmailNotices,
@@ -24,16 +38,28 @@ export interface NoticeWorkspace {
   name: string
 }
 
-const muted = 'type-hint text-[var(--color-text-muted)]'
+/** The last thing the address form did: sent a link, or failed to. */
+type Sent = { ok: true; address: string } | { ok: false; address: string; reason: string } | null
 
-export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; workspaces: NoticeWorkspace[] }): React.JSX.Element | null {
+export function EmailNoticePrefs({
+  scope,
+  workspaces,
+  avatar,
+}: {
+  scope: ServerScope
+  workspaces: NoticeWorkspace[]
+  /** The workspace's picture beside its name, as on the page's other rows. */
+  avatar?: (w: NoticeWorkspace) => React.ReactNode
+}): React.JSX.Element | null {
   const [mine, setMine] = useState<MyEmailNotices | null>(null)
   const [missing, setMissing] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState('')
-  const [sentTo, setSentTo] = useState<string | null>(null)
+  const [sent, setSent] = useState<Sent>(null)
+  /** Why the last remove or workspace switch failed, keyed by its row. */
+  const [rowError, setRowError] = useState<{ key: string; state: SaveState } | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -50,15 +76,22 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
     void load()
   }, [load])
 
-  const run = async (write: () => Promise<void>): Promise<boolean> => {
+  const retry = (): void => {
+    setLoadError(null)
+    setMine(null)
+    void load()
+  }
+
+  /** A write on one row; its failure shows on that row. */
+  const write = async (key: string, run: () => Promise<void>): Promise<boolean> => {
     setBusy(true)
-    setError(null)
+    setRowError(null)
     try {
-      await write()
+      await run()
       await load()
       return true
     } catch (e) {
-      setError(errorText(e))
+      setRowError({ key, state: { error: errorText(e) } })
       return false
     } finally {
       setBusy(false)
@@ -70,48 +103,98 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
   const add = async (): Promise<void> => {
     const address = draft.trim()
     if (!address) return
-    if (await run(() => setMyNoticeAddress(scope, address))) {
-      setSentTo(address)
+    setBusy(true)
+    setSent(null)
+    try {
+      await setMyNoticeAddress(scope, address)
+      setSent({ ok: true, address })
       setDraft('')
+      await load()
+    } catch (e) {
+      setSent({ ok: false, address, reason: errorText(e) })
+    } finally {
+      setBusy(false)
     }
   }
 
   const live = mine ? [...(mine.address ? [mine.address] : []), ...mine.pending] : []
   const mutedSet = new Set(mine?.mutedWorkspaces ?? [])
+  const stateOf = (key: string): SaveState => (rowError && rowError.key === key ? rowError.state : 'idle')
+
+  const state = loadError ? (
+    <SettingsLoadState
+      kind="error"
+      title="Couldn’t load your email notices"
+      detail={loadError}
+      action={<Button onClick={retry}>Try again</Button>}
+      testId="email-notices-error"
+    >
+      Your address and choices are unchanged; this page just couldn’t read them.
+    </SettingsLoadState>
+  ) : !mine ? (
+    <SettingsLoadState kind="loading" title="Loading your email notices…" />
+  ) : undefined
 
   return (
-    <div data-testid="email-notices" data-settings-id="notifications.email-notices" className="space-y-2">
-      <p className={`${muted} py-1`}>
-        Agents on this server can email you a short notice (&ldquo;the nightly build failed&rdquo;) once you confirm an
-        address and the owner turns notices on for that workspace. Each email has a link to stop them.
-      </p>
-      {loadError && (
-        <p role="alert" className="type-hint text-[var(--color-status-error)]">
-          Could not load your email notices: {loadError}
-        </p>
-      )}
-      {!mine && !loadError && <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>}
-      {mine && (
-        <>
-          {live.map((a) => (
-            <div key={a.id} data-testid={`email-notice-address-${a.state}`} className="flex items-center justify-between gap-3 py-2 border-b border-[var(--color-border)]">
-              <div className="min-w-0">
-                <div className="type-row text-[var(--color-text-primary)] truncate">{a.address}</div>
-                <div className={muted}>{noticeAddressStatus(a)}</div>
+    <div data-testid="email-notices" data-settings-id="notifications.email-notices" className="space-y-6">
+      <SettingsGroup
+        title="Email notices"
+        hint="Agents here can email you a short notice, like “the nightly build failed”, once you confirm your address. Each email has a link to stop them."
+        card
+        state={state}
+      >
+        {live.map((a) => {
+          const confirmed = a.state === 'verified'
+          return (
+            <SettingSwitchRow
+              key={a.id}
+              testId={`email-notice-address-${a.state}`}
+              control={
+                <Button
+                  variant="danger-quiet"
+                  disabled={busy}
+                  aria-label={`Stop email notices to ${a.address}`}
+                  onClick={() => setConfirmRemove(a.address)}
+                >
+                  Remove…
+                </Button>
+              }
+            >
+              <div className={`${SETTING_ROW_LABEL} flex items-center gap-2 min-w-0`}>
+                <StatusDot tone={confirmed ? 'ok' : 'warn'} />
+                <span className="truncate">{a.address}</span>
               </div>
-              <button
-                type="button"
-                disabled={busy}
-                aria-label={`Stop email notices to ${a.address}`}
-                onClick={() => void run(() => removeMyNoticeAddress(scope, a.address))}
-                className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
-              >
-                Remove
-              </button>
-            </div>
-          ))}
+              <div className={SETTING_ROW_HINT}>{noticeAddressStatus(a)}</div>
+              <SaveError state={stateOf(`remove:${a.address}`)} />
+            </SettingSwitchRow>
+          )
+        })}
+        <SettingRow
+          stack
+          label={live.length > 0 ? 'Use another address' : 'Your email address'}
+          hint="K2 emails you a link. Notices start once you open it and press Confirm."
+          below={
+            sent?.ok ? (
+              <p role="status" data-testid="email-notice-sent" className="flex items-start gap-1.5 type-hint text-[var(--color-status-ok-soft)] leading-relaxed">
+                <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 mt-0.5 flex-shrink-0">
+                  <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+                </svg>
+                <span>
+                  Link sent to {sent.address}. Open it and press Confirm; notices start after that.
+                </span>
+              </p>
+            ) : sent && !sent.ok ? (
+              <div role="alert" data-testid="email-notice-error">
+                <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
+                  Couldn’t send a link to {sent.address}. Check the address and try again.
+                </p>
+                <p className={SETTING_SERVER_REASON}>The server said: {sent.reason.trim().replace(/[.\s]+$/, '')}.</p>
+              </div>
+            ) : undefined
+          }
+        >
           <form
-            className="flex items-center gap-2 py-2"
+            className="flex items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault()
               void add()
@@ -122,50 +205,74 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
               value={draft}
               disabled={busy}
               onChange={(e) => setDraft(e.target.value)}
-              placeholder={mine.address ? 'Use another address…' : 'you@example.com'}
+              placeholder="you@example.com"
               aria-label="Your address for email notices"
-              className="flex-1 min-w-0 type-control"
+              className={`${SETTING_FIELD_WIDTH} type-control`}
             />
-            <button
-              type="submit"
-              disabled={busy || draft.trim() === ''}
-              className="px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer disabled:opacity-50"
-            >
+            <Button type="submit" variant="accent" disabled={busy || draft.trim() === ''} className="flex-shrink-0">
               Send confirm link
-            </button>
+            </Button>
           </form>
-          {sentTo && (
-            <p data-testid="email-notice-sent" className={muted}>
-              We sent a confirm link to {sentTo}. Open it and press Confirm; notices start after that.
-            </p>
-          )}
-          {workspaces.length > 0 && (
-            <div data-testid="email-notice-workspaces">
-              {workspaces.map((w) => {
-                const on = !mutedSet.has(w.projectId)
-                return (
-                  <div key={w.projectId} data-testid={`email-notice-ws-${w.projectId}`} className="flex items-center justify-between gap-4 py-2 border-b border-[var(--color-border)]">
-                    <div className="min-w-0">
-                      <div className="type-row text-[var(--color-text-primary)] truncate">{w.name}</div>
-                      <div className={muted}>{on ? 'May email you' : 'Off for you'}</div>
-                    </div>
+        </SettingRow>
+      </SettingsGroup>
+
+      {mine && workspaces.length > 0 && (
+        <SettingsGroup
+          title="Email notices by workspace"
+          hint="Turn a workspace off to stop its agent emailing you. The owner chooses which workspaces may send notices at all."
+          card
+        >
+          <div data-testid="email-notice-workspaces" className="divide-y divide-[var(--color-border)]">
+            {workspaces.map((w) => {
+              const on = !mutedSet.has(w.projectId)
+              const key = `mute:${w.projectId}`
+              return (
+                <SettingSwitchRow
+                  key={w.projectId}
+                  testId={`email-notice-ws-${w.projectId}`}
+                  control={
                     <Toggle
                       aria-label={`Email notices from ${w.name}`}
                       checked={on}
                       disabled={busy}
-                      onChange={(next) => void run(() => setMyNoticeMute(scope, w.projectId, !next))}
+                      onChange={(next) => void write(key, () => setMyNoticeMute(scope, w.projectId, !next))}
                     />
+                  }
+                >
+                  <div className="flex items-start gap-3 min-w-0">
+                    {avatar ? <div className="flex-shrink-0 pt-0.5">{avatar(w)}</div> : null}
+                    <div className="min-w-0">
+                      <div className={`${SETTING_ROW_LABEL} truncate`}>{w.name}</div>
+                      <div className={SETTING_ROW_HINT}>{on ? 'May email you' : 'Off for you'}</div>
+                      <SaveError state={stateOf(key)} />
+                    </div>
                   </div>
-                )
-              })}
-            </div>
-          )}
-        </>
+                </SettingSwitchRow>
+              )
+            })}
+          </div>
+        </SettingsGroup>
       )}
-      {error && (
-        <p role="alert" data-testid="email-notice-error" className="type-hint text-[var(--color-status-error)]">
-          {error}
-        </p>
+
+      {confirmRemove && (
+        <ConfirmSheet
+          title="Stop email notices to this address?"
+          message={
+            <>
+              Agents on this server stop emailing <strong className="text-[var(--color-text-primary)]">{confirmRemove}</strong>. You
+              can add it again any time; it needs a new confirm link.
+            </>
+          }
+          confirmLabel="Stop notices"
+          destructive
+          testId="email-notice-remove-confirm"
+          onCancel={() => setConfirmRemove(null)}
+          onConfirm={() => {
+            const address = confirmRemove
+            setConfirmRemove(null)
+            void write(`remove:${address}`, () => removeMyNoticeAddress(scope, address))
+          }}
+        />
       )}
     </div>
   )

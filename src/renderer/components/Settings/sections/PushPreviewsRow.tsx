@@ -13,13 +13,13 @@
 import React, { useEffect, useState } from 'react'
 
 import { Toggle } from '@/components/ui'
-import { SettingsGroup } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SaveError, SaveNote, SettingSwitchRow, SettingsGroup, useSaveStatus } from '../controls/SettingControls'
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 
 export const PUSH_PREVIEWS_KEY = 'pushMessagePreviews'
 export const PUSH_PREVIEWS_LABEL = 'Show message text in push notifications'
 export const PUSH_PREVIEWS_HINT =
-  "The text passes through K2's push relay and Apple or Google to reach your phone. When off, every phone on this server gets “New message in Thread” instead."
+  "On, a push shows the start of the agent’s message; the text passes through K2's push relay and Apple or Google to reach the phone. Off, every phone on this server gets “New message in Thread” instead."
 
 /** The switch's value, or `null` when this server doesn't have the key (an
  *  older daemon): the row hides. */
@@ -30,7 +30,7 @@ export function pushPreviewsValue(settings: Record<string, unknown> | null): boo
 
 export function PushPreviewsRow(): React.JSX.Element | null {
   const [on, setOn] = useState<boolean | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const { state: saved, saved: markSaved, failed } = useSaveStatus()
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
@@ -56,42 +56,35 @@ export function PushPreviewsRow(): React.JSX.Element | null {
     const prev = on
     setOn(next) // optimistic
     setBusy(true)
-    setError(null)
     try {
       const s = await settingsUpdate({ [PUSH_PREVIEWS_KEY]: next })
       const v = pushPreviewsValue(s as unknown as Record<string, unknown>)
       setOn(v ?? next)
+      markSaved()
     } catch (e) {
       setOn(prev)
-      setError(e instanceof Error ? e.message : String(e))
+      failed(e)
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <SettingsGroup title="Message previews">
-      <div
-        className="py-2 border-b border-[var(--color-border)]"
-        data-settings-id="notifications.previews"
-        data-testid="notifications-push-previews"
+    <SettingsGroup title="Message previews" card>
+      <SettingSwitchRow
+        settingId="notifications.previews"
+        testId="notifications-push-previews"
+        control={
+          <>
+            <SaveNote state={saved} />
+            <Toggle aria-label={PUSH_PREVIEWS_LABEL} checked={on} disabled={busy} onChange={(v: boolean) => void change(v)} />
+          </>
+        }
       >
-        <div className="flex items-center justify-between gap-4">
-          <span className="type-row text-[var(--color-text-primary)]">{PUSH_PREVIEWS_LABEL}</span>
-          <Toggle
-            aria-label={PUSH_PREVIEWS_LABEL}
-            checked={on}
-            disabled={busy}
-            onChange={(v: boolean) => void change(v)}
-          />
-        </div>
-        <p className="type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed">{PUSH_PREVIEWS_HINT}</p>
-        {error && (
-          <p role="alert" className="type-hint text-[var(--color-status-error)] mt-1">
-            {error}
-          </p>
-        )}
-      </div>
+        <div className={SETTING_ROW_LABEL}>{PUSH_PREVIEWS_LABEL}</div>
+        <p className={SETTING_ROW_HINT}>{PUSH_PREVIEWS_HINT}</p>
+        <SaveError state={saved} />
+      </SettingSwitchRow>
     </SettingsGroup>
   )
 }

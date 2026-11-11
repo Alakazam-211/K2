@@ -170,11 +170,15 @@ export class PasswordNeeded extends Error {
   }
 }
 
-/** "Confirmed" / "Waiting for you to click the link (expires …)". */
+/** "Confirmed" / "Waiting for you to open the link. It expires …". */
 export function noticeAddressStatus(a: NoticeAddress): string {
-  if (a.state === 'verified') return 'Confirmed: agents here can email you at this address.'
-  const exp = a.expiresAt ? new Date(a.expiresAt * 1000).toLocaleString() : null
-  return exp ? `Waiting for you to click the link we sent (it expires ${exp}).` : 'Waiting for you to click the link we sent.'
+  if (a.state === 'verified') return 'Confirmed. Agents here email you at this address.'
+  const exp = a.expiresAt
+    ? new Date(a.expiresAt * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null
+  return exp
+    ? `Waiting for you to open the link we sent and press Confirm. It expires ${exp}.`
+    : 'Waiting for you to open the link we sent and press Confirm.'
 }
 
 export function errorText(e: unknown): string {

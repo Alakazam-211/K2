@@ -57,6 +57,7 @@ import { jittered } from '@/lib/backoff'
 // daemon-settings client instead so the toggle works against any daemon.
 import { settingsGet, settingsUpdate } from '@/lib/daemon-settings'
 import { useSettingsStore } from '@/stores/settings'
+import { useCliCommandFocus, useCliCommandFocusStore } from '@/stores/cli-command-focus'
 import { useUpdateStore } from '@/stores/update'
 import { checkForUpdate } from '@/hooks/useUpdateChecker'
 import {
@@ -168,6 +169,25 @@ function CalloutLines({ title, detail }: { title: React.ReactNode; detail?: Reac
 // column beside the tab's cards, under the same title and tabs.
 const CONTENT_WIDTH = 'max-w-[52rem]'
 
+/** Bring the k2 command row into view and put the cursor on its first
+ *  control. Looks for a few frames: the tab and the row lay out after the
+ *  switch. */
+export function revealCliCommandRow(): void {
+  let tries = 0
+  const reveal = (): void => {
+    const el = document.querySelector<HTMLElement>('[data-settings-id="general.cli-version"]')
+    if (!el) {
+      if (++tries < 30) requestAnimationFrame(reveal)
+      return
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true })
+    el.classList.add('settings-search-pulse')
+    window.setTimeout(() => el.classList.remove('settings-search-pulse'), 1500)
+  }
+  requestAnimationFrame(() => requestAnimationFrame(reveal))
+}
+
 export function GeneralSection(): React.JSX.Element {
   const generalSubTab = useSettingsStore((s) => s.generalSubTab)
   const activeHost = useConnectHostStore((s) => s.activeHost)
@@ -180,6 +200,15 @@ export function GeneralSection(): React.JSX.Element {
     setTab(generalSubTab)
     useSettingsStore.setState({ generalSubTab: null })
   }, [generalSubTab])
+
+  // The setup checklist's k2 command row: open on that row (once per
+  // request), on the General tab where it lives.
+  const cliFocusSeq = useCliCommandFocus()
+  useEffect(() => {
+    if (!useCliCommandFocusStore.getState().takeRequest()) return
+    setTab('general')
+    revealCliCommandRow()
+  }, [cliFocusSeq])
 
   const width = isRemote ? 'max-w-[106rem]' : CONTENT_WIDTH
 

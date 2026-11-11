@@ -1,11 +1,12 @@
 // Setup checklist: what each row's `opens` value opens. Every opener opens
 // the thing itself (the sign-in sheet, the folder pick, the pairing block,
-// the account prompt), never a page to go looking on. A value this client
+// the account prompt, the k2 command row), never a page to go looking on. A value this client
 // doesn't know does nothing.
 
 import { useSettingsStore } from '@/stores/settings'
 import { requestLlmSignIn } from '@/stores/llm-sign-in-request'
 import { usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
+import { useCliCommandFocusStore } from '@/stores/cli-command-focus'
 import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-reopen'
 import { promptEligible } from '@/components/OwnerAccountPrompt/OwnerAccountPrompt'
 import { startAddWorkspace } from '@/lib/start-add-workspace'
@@ -24,6 +25,10 @@ const OPENERS: Record<FirstRunOpens, () => void> = {
     // the same choice is General → Your account.
     if (promptEligible()) useOwnerAccountPromptReopenStore.getState().reopen()
     else useSettingsStore.getState().openSettings('general')
+  },
+  cli_settings: () => {
+    useCliCommandFocusStore.getState().requestCliCommandFocus()
+    useSettingsStore.getState().openSettings('general')
   },
 }
 

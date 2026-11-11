@@ -897,6 +897,19 @@ describe('frosted glass behind the message box', () => {
     expect(FOOTER_TINT_STOPS_OPAQUE.at(-1)).toEqual([6, 95])
   })
 
+  it("Glass's bottom band tints with the page's own colour, never black, in every palette", () => {
+    const css = src('../globals.css')
+    const rules = css.split('\n').filter((l) => l.includes('.thread-footer-fade > .thread-footer-tint'))
+    // The blur band and its no-blur fallback: one rule each, for every palette.
+    expect(rules).toHaveLength(2)
+    expect(rules.some((l) => l.includes('[data-palette='))).toBe(false)
+    const bodies = rules.map((l) => (l.includes('{ background') ? l : css.slice(css.indexOf(l) + l.length).split('}')[0]))
+    for (const body of bodies) {
+      expect(body).toContain('color-mix(in srgb, var(--color-bg) ')
+      expect(body).not.toMatch(/rgba\(0, 0, 0|#000\b/)
+    }
+  })
+
   it('the field on the bar is see-through (stronger in light), opaque with reduced transparency; the tab keeps its own fill', () => {
     const field = '[data-k2-thread-zen] [data-zen-compose] [data-zen-compose-box]'
     const tab = '[data-k2-thread-zen] [data-zen-compose] [data-zen-drawer-tile]'

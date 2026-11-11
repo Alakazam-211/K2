@@ -2014,8 +2014,9 @@ html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade > .thread-foot
 html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-2:not([data-zen-root] *) { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 40%, transparent 80%); mask-image: linear-gradient(to top, #000 0%, #000 40%, transparent 80%); }
 html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-3:not([data-zen-root] *) { -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 60%); mask-image: linear-gradient(to top, #000 0%, #000 25%, transparent 60%); }
 html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-blur-4:not([data-zen-root] *) { -webkit-backdrop-filter: blur(24px); backdrop-filter: blur(24px); -webkit-mask-image: linear-gradient(to top, #000 0%, #000 12%, transparent 40%); mask-image: linear-gradient(to top, #000 0%, #000 12%, transparent 40%); }
-html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.55) 45%, rgba(0, 0, 0, 0) 100%); }
-html[data-style="glass"][data-palette="veil"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 85%, transparent) 0%, color-mix(in srgb, var(--color-bg) 55%, transparent) 45%, transparent 100%); }
+/* The tint is the page's own colour in every palette (as the Thread's top
+   fade), so the band melts into the page instead of darkening it. */
+html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) { background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 85%, transparent) 0%, color-mix(in srgb, var(--color-bg) 55%, transparent) 45%, transparent 100%); }
 
 /* The phone's band starts 24px above its bar; the kit's strip stops at 6px. */
 html[data-style="glass"] [data-k2-thread-zen] .thread-footer-fade:not([data-zen-root] *) { margin-top: -18px; }
@@ -2030,9 +2031,6 @@ html[data-style="glass"][data-frost="tile"][data-palette="veil"] .k2-header-tint
   background: linear-gradient(to bottom, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 96%, transparent) 0%, color-mix(in srgb, var(--k2-header-tint, var(--color-bg)) 88%, transparent) 60%, transparent 100%);
 }
 html[data-style="glass"][data-frost="tile"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) {
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.88) 60%, rgba(0, 0, 0, 0) 100%);
-}
-html[data-style="glass"][data-frost="tile"][data-palette="veil"] [data-k2-thread-zen] .thread-footer-fade > .thread-footer-tint:not([data-zen-root] *) {
   background: linear-gradient(to top, color-mix(in srgb, var(--color-bg) 96%, transparent) 0%, color-mix(in srgb, var(--color-bg) 88%, transparent) 60%, transparent 100%);
 }
 

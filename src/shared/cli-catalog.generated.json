@@ -1499,11 +1499,6 @@
     "description": "Certificates for hostnames attached on THIS server: list, issue, renew. A role-mail hostname goes into the mail server too; only the primary mail host is its default certificate. Not k2 hostmail cert. Locked dns tool."
    },
    {
-    "name": "checkin",
-    "usage": "k2 checkin [--status \"msg\"] [--done]",
-    "description": "Agent check-in / status update."
-   },
-   {
     "name": "heartbeat",
     "usage": "k2 heartbeat",
     "description": "List this workspace's active heartbeat schedules (named scheduled wakes; = 'heartbeat schedule list'). Some people call these routines, scheduled tasks or cron jobs. --help anywhere prints usage and never mutates."

@@ -396,6 +396,8 @@ _cli_tool_id_for_verb() {
         --schema|schema) echo "schema" ;;
         study) echo "study" ;;
         whats-new) echo "whats-new" ;;
+        # `checkin` is retired (a stub) but the tool id stays: `done` and
+        # the `status` pointer still map to it (open by default).
         checkin|done|status) echo "checkin" ;;
         activity) echo "activity" ;;
         read) echo "read" ;;
@@ -1046,6 +1048,8 @@ fi
 # `k2 hooks emit` (GL45) checks its own session passport and transport
 # (cell socket first), and must not need the owner token's PORT/TOKEN pair.
 [ "${1:-}" = "hooks" ] && [ "${2:-}" = "emit" ] && _skip_conn_gate=1
+# `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
+[ "${1:-}" = "checkin" ] && _skip_conn_gate=1
 # `k2 tickets template` prints the static brief skeleton (H42).
 case "${1:-}" in
     tickets|feedback) [ "${2:-}" = "template" ] && _skip_conn_gate=1 ;;
@@ -1837,7 +1841,7 @@ cmd_respond() {
 # message to the respond drain ring. Same transport as `k2 respond`
 # (UDS then scoped Bearer). Discriminator is K2_API_CELL (D6) — NOT sock
 # or scoped-token presence (workspace agents under COMPAT-58 also have
-# those and must keep legacy `checkin --done` meaning).
+# those and must keep the plain `/cli/done` meaning).
 _is_api_lifecycle_context() {
     case "${K2_API_CELL:-${K2SO_API_CELL:-}}" in
         1|true|yes|YES|True) return 0 ;;
@@ -6423,7 +6427,7 @@ except: pass
 
     if [ -n "$manager_terminal" ]; then
         # Manager is awake — send triage message
-        local msg="New work detected. Run k2 checkin to see your inbox and triage work."
+        local msg="New work detected. Run k2 inbox to see your inbox and triage work."
         cli_request_post "/cli/terminal/write" "id=$(urlencode "$manager_terminal")&message=$(urlencode "$msg")"
         echo "{\"status\":\"notified\",\"terminalId\":\"$manager_terminal\"}"
     else
@@ -6451,7 +6455,7 @@ try:
 except: pass
 " 2>/dev/null)
             if [ -n "$new_id" ]; then
-                local msg="New work detected. Run k2 checkin to see your inbox and triage work."
+                local msg="New work detected. Run k2 inbox to see your inbox and triage work."
                 cli_request_post "/cli/terminal/write" "id=$(urlencode "$new_id")&message=$(urlencode "$msg")"
                 echo "{\"status\":\"launched_and_notified\",\"terminalId\":\"$new_id\"}"
                 return
@@ -21611,143 +21615,6 @@ sys.exit(0)
 }
 
 # ── Agent Skill Surface ─────────────────────────────────────────────
-
-cmd_checkin() {
-    local agent="${K2SO_AGENT_NAME:-}"
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            *) shift ;;
-        esac
-    done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
-    cli_request_post "/cli/checkin" "agent=$agent" | python3 -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read())
-    if 'error' in d:
-        print('Error: %s' % d['error'])
-        sys.exit(1)
-
-    print('== Agent Check-in ==')
-    print('Agent: %s' % d.get('agent', '?'))
-    print('Project: %s' % d.get('project', '?'))
-    print()
-
-    # Current task
-    task = d.get('task')
-    if task and task is not None:
-        if isinstance(task, dict):
-            print('Current Task:')
-            print('  Title: %s' % task.get('title', '(untitled)'))
-            print('  Priority: %s' % task.get('priority', 'normal'))
-            if task.get('from'): print('  From: %s' % task['from'])
-            if task.get('body'): print('  %s' % task['body'][:200])
-        else:
-            print('Current Task: (active)')
-    else:
-        print('Current Task: None')
-    print()
-
-    # Inbox (unified: work items from filesystem + messages from DB)
-    inbox = d.get('inbox', {})
-    if isinstance(inbox, dict):
-        work = inbox.get('work', [])
-        messages = inbox.get('messages', [])
-    else:
-        # Legacy format (list)
-        work = inbox if isinstance(inbox, list) else []
-        messages = []
-
-    if messages:
-        print('Messages (%d):' % len(messages))
-        for msg in messages:
-            frm = msg.get('from', '?')
-            txt = msg.get('text', '')
-            print('  [%s] %s' % (frm, txt[:120]))
-    else:
-        print('Messages: None')
-    print()
-
-    if work:
-        print('Work Items (%d):' % len(work))
-        for item in work:
-            if isinstance(item, dict):
-                pri = item.get('priority', 'normal')
-                title = item.get('title', item.get('file', '?'))
-                frm = item.get('from')
-                src = ' (from %s)' % frm if frm and frm != 'null' else ''
-                print('  [%s] %s%s' % (pri, title, src))
-            else:
-                print('  - %s' % item)
-    else:
-        print('Work Items: None')
-    print()
-
-    # Peers
-    peers = d.get('peers', [])
-    if peers:
-        print('Peers (%d):' % len(peers))
-        for p in peers:
-            status = p.get('status', '?')
-            msg = p.get('statusMessage', '')
-            proj = p.get('project', '')
-            detail = ' - %s' % msg if msg else ''
-            loc = ' (%s)' % proj if proj else ''
-            print('  %s: %s%s%s' % (p.get('agent', '?'), status, detail, loc))
-    else:
-        print('Peers: None')
-    print()
-
-    # Reservations
-    res = d.get('reservations', {})
-    if res and isinstance(res, dict) and len(res) > 0:
-        print('File Reservations:')
-        for path, info in res.items():
-            agent_name = info.get('agent', '?') if isinstance(info, dict) else '?'
-            print('  %s (held by %s)' % (path, agent_name))
-    else:
-        print('File Reservations: None')
-    print()
-
-    # Feed
-    feed = d.get('feed', [])
-    if feed:
-        print('Recent Activity:')
-        for e in feed[:5]:
-            etype = e.get('eventType', e.get('type', '?'))
-            agent_name = e.get('agent', '')
-            summary = e.get('summary', '')
-            print('  %s: %s %s' % (agent_name or '-', etype, summary or ''))
-    else:
-        print('Recent Activity: None')
-    print()
-
-    # Wake-up instructions — the agent's wakeup.md (or the shipped default
-    # template if the user hasn't edited it yet). Null for agent-template
-    # types, which are dispatched by a manager with explicit orders.
-    wakeup = d.get('wakeupInstructions')
-    if wakeup:
-        print('== Wake-up Instructions ==')
-        print(wakeup)
-except Exception as e:
-    sys.stderr.write('Error: %s\n' % e)
-" 2>/dev/null
-}
-
-cmd_status() {
-    local agent="${K2SO_AGENT_NAME:-}"
-    local message=""
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --agent) agent="$2"; shift 2 ;;
-            *) message="$1"; shift ;;
-        esac
-    done
-    [[ -z "$agent" ]] && { echo "Error: --agent required (or set K2SO_AGENT_NAME)" >&2; exit 1; }
-    [[ -z "$message" ]] && { echo "Error: status message required" >&2; exit 1; }
-    cli_request_post "/cli/status" "agent=$agent&message=$(urlencode "$message")"
-}
 
 cmd_done() {
     local agent="${K2SO_AGENT_NAME:-}"
@@ -46543,7 +46410,7 @@ EOF
 #   RENAME, REMOVE, or change the flags of a verb, update this manifest
 #   in the same commit. It intentionally covers the agent-facing surface
 #   (msg / talk / read / terminal / inbox / review / sessions /
-#   connections / checkin / workspace / activity / --schema / ...), not
+#   connections / workspace / activity / --schema / ...), not
 #   every internal/deprecated arm. See the report note re: a generated
 #   approach (feasible later via a router+help introspection pass).
 cmd_schema() {
@@ -48810,16 +48677,6 @@ cmd_schema() {
       "description": "Certificates for hostnames attached on THIS server: list, issue, renew. A role-mail hostname goes into the mail server too; only the primary mail host is its default certificate. Not k2 hostmail cert. Locked dns tool.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
-    },
-    {
-      "name": "checkin",
-      "usage": "k2 checkin [--status \"msg\"] [--done]",
-      "description": "Agent check-in / status update.",
-      "args": [],
-      "flags": [
-        {"name": "--status", "arg": "msg", "description": "Post a status message."},
-        {"name": "--done", "arg": null, "description": "Mark current work done."}
-      ]
     },
     {
       "name": "heartbeat",
@@ -64406,7 +64263,9 @@ HARD-DEPRECATED (verb removed; commands exit non-zero with pointer)
 
   state list|get|set              → (removed — Workspace States retired)
   app-update                      → update --app
-  status "msg"                    → checkin --status "msg"
+  status "msg"                    → organization update "<news>"
+  checkin                         → organization bulletin|update, thread, tickets, inbox
+  checkin --done                  → done [--blocked "reason"]
 
   # 0.40.31 — legacy per-agent adaptive heartbeat control removed
   # (heartbeat.json; nothing consumed it since 0.39.0d). Named
@@ -64435,8 +64294,8 @@ EXAMPLES OF MIGRATION
   New: k2 msg scout_v3 "hello"            # workspace-implicit; --agent removed
 
   # Marking a task done
-  Old: k2 done --blocked "Stripe API access"
-  New: k2 checkin --done --blocked "Stripe API access"   (or just `done`)
+  Old: k2 checkin --done --blocked "Stripe API access"
+  New: k2 done --blocked "Stripe API access"
 EOF
 }
 
@@ -64825,12 +64684,8 @@ YOUR INBOX
   inbox delete <id>                     Move to macOS Recycle Bin (recoverable from Trash)
   inbox search "query"                  Search inbox + folders
   inbox folders                         List folders this workspace has created
-
-CHECKIN
-  checkin                               Heartbeat ping ("I'm alive")
-  checkin --status "message"            Report status update
-  checkin --done [--blocked "reason"]   Task complete (or blocked)
-  done                                  API cell (K2_API_CELL=1): complete (grace); else checkin --done
+  done [--blocked "reason"]             Mark your task done (or blocked) via /cli/done;
+                                        in an API cell (K2_API_CELL=1): complete (grace)
 
 AGENTS
   agent                                 Hire, configure, list, retire this server's agents;
@@ -66146,46 +66001,28 @@ cmd_msg_v2() {
     cmd_msg "$@"
 }
 
-# ── Phase 2.1: checkin --status / --done flag handlers ───────────────
+# ── k2 checkin: retired 0.46.11 ──────────────────────────────────────
 
-cmd_checkin_v2() {
-    # Detect --status or --done flags; dispatch to legacy cmd_status /
-    # cmd_done. Without those flags, defer to legacy cmd_checkin.
-    local has_status="false" has_done="false"
-    for arg in "$@"; do
-        case "$arg" in
-            --status) has_status="true" ;;
-            --done) has_done="true" ;;
+# `k2 checkin [--status "msg"] [--done]` no longer runs: it points at the
+# verbs that replace it, on stderr, and exits 2.
+_checkin_retired() {
+    local form="checkin"
+    case " $* " in
+        *" --done "*) form="checkin --done" ;;
+        *" --status "*) form="checkin --status" ;;
+    esac
+    {
+        echo "Error: 'k2 $form' is retired. Use instead:"
+        case "$form" in
+            "checkin --done") echo "  finish your task: k2 done [--blocked \"reason\"]" ;;
+            "checkin --status") echo "  send status to your head: k2 organization update \"<news>\"" ;;
+            *)
+                echo "  bulletin and status: k2 organization bulletin / k2 organization update \"<news>\""
+                echo "  people: k2 thread    work: k2 tickets, k2 inbox    finishing: k2 done"
+                ;;
         esac
-    done
-    if [[ "$has_done" == "true" ]]; then
-        local blocked=""
-        local agent_arg="${K2SO_AGENT_NAME:-}"
-        while [[ $# -gt 0 ]]; do
-            case "$1" in
-                --done) shift ;;
-                --blocked) blocked="$2"; shift 2 ;;
-                --agent) agent_arg="$2"; shift 2 ;;
-                *) shift ;;
-            esac
-        done
-        local args=("--agent" "$agent_arg")
-        [[ -n "$blocked" ]] && args+=("--blocked" "$blocked")
-        cmd_done "${args[@]}"
-    elif [[ "$has_status" == "true" ]]; then
-        local message=""
-        local agent_arg="${K2SO_AGENT_NAME:-}"
-        while [[ $# -gt 0 ]]; do
-            case "$1" in
-                --status) message="$2"; shift 2 ;;
-                --agent) agent_arg="$2"; shift 2 ;;
-                *) shift ;;
-            esac
-        done
-        cmd_status "--agent" "$agent_arg" "$message"
-    else
-        cmd_checkin "$@"
-    fi
+    } >&2
+    exit 2
 }
 
 # ── Phase 2.1: commit --merge flag handler ───────────────────────────
@@ -99517,19 +99354,20 @@ case "${1:-help}" in
         shift; cmd_settings "$@"
         ;;
     checkin)
-        # Phase 2.1: checkin --status / --done flag handlers.
-        shift; cmd_checkin_v2 "$@"
+        # Retired 0.46.11: it needed K2SO_AGENT_NAME, so it failed for
+        # normal agents. The arm stays so old AGENT.md / SKILL.md text
+        # gets a pointer. `/cli/checkin` stays on the daemon (public API).
+        shift; _checkin_retired "$@"
         ;;
     status)
-        # Phase 2.1: hard-deprecated. Use checkin --status.
-        # (Top-level only; --status flag on checkin keeps working.)
-        fail_deprecated "status" "k2 checkin --status \"msg\""
+        # Hard-deprecated (top-level only).
+        fail_deprecated "status" "k2 organization update \"<news>\""
         ;;
     done)
         # API host-session / sandbox (K2_API_CELL=1): lifecycle complete
-        # (mark Grace, no drain message). Outside that context: legacy
-        # daily-tier shortcut for `checkin --done` (k2so / A2.2). D6:
-        # never use sock/token presence as the discriminator.
+        # (mark Grace, no drain message). Outside that context: mark your
+        # task done (or --blocked) via /cli/done. D6: never use
+        # sock/token presence as the discriminator.
         if _is_api_lifecycle_context; then
             shift; cmd_session_complete "$@"
         else

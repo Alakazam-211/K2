@@ -40,6 +40,10 @@ export const AVATAR_ROUND = 'inline-flex flex-shrink-0 overflow-hidden rounded-[
  *  one never runs the full width of a wide window. */
 export const SETTING_ROW_LABEL = 'type-row text-[var(--color-text-primary)]'
 export const SETTING_ROW_HINT = 'type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]'
+/** The server's own reason under a plain error line ("The server said: …"):
+ *  the hint role, one step quieter than a hint (muted text still reads at
+ *  4.5:1 on every ground), so the plain line leads. */
+export const SETTING_SERVER_REASON = 'type-hint text-[var(--color-text-muted)] mt-1 leading-relaxed max-w-[75ch] break-words'
 
 /** A list row that answers the pointer: the shared hover band
  *  (--color-row-hover, about 1.3:1 against the resting row on dark palettes
@@ -245,7 +249,7 @@ export function SettingsLoadState({
           <div className="min-w-0">
             <p className={kind === 'error' ? 'type-row text-[var(--color-status-error-soft)]' : SETTING_ROW_LABEL}>{title}</p>
             {children && <p className={SETTING_ROW_HINT}>{children}</p>}
-            {reason && <p className={SETTING_ROW_HINT}>The server said: {reason}.</p>}
+            {reason && <p className={SETTING_SERVER_REASON} data-load-detail="">The server said: {reason}.</p>}
           </div>
         </div>
         {action && <div className="flex items-center gap-2 flex-shrink-0">{action}</div>}

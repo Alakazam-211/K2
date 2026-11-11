@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useId, useState } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { Button, Input, Tag, type TagTone } from '@/components/ui'
-import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_SERVER_REASON, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { ConfirmSheet } from './AccessDialogs'
 import { handoffApi, splitPeer, type HandoffView } from './handoff-api'
 import { agentUseWords, deliveryReadable, whenWords } from './vault-copy'
@@ -220,7 +220,7 @@ function IncomingRow({
           <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
             Couldn’t {failed} {row.name}. Nothing changed{clash ? '; pick another name or replace the one there.' : '; you can try again.'}
           </p>
-          <p className={SETTING_ROW_HINT}>The server said: {error}.</p>
+          <p className={SETTING_SERVER_REASON}>The server said: {error}.</p>
         </div>
       ) : null}
       {confirmReplace ? (

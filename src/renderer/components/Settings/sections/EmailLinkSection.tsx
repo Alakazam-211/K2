@@ -43,6 +43,7 @@ import {
   SaveError,
   SaveNote,
   SETTING_ROW_HINT,
+  SETTING_SERVER_REASON,
   SETTING_ROW_LABEL,
   SettingDropdown,
   SettingRow,
@@ -917,7 +918,7 @@ function ImapForm({
           <div role="alert" data-testid="imap-error" className="leading-relaxed max-w-[75ch]">
             <p className="type-hint text-[var(--color-status-error-soft)]">Couldn’t connect this account. {error.line}</p>
             {error.detail && (
-              <p className={SETTING_ROW_HINT}>The server said: {error.detail.trim().replace(/[.\s]+$/, '')}.</p>
+              <p className={SETTING_SERVER_REASON}>The server said: {error.detail.trim().replace(/[.\s]+$/, '')}.</p>
             )}
           </div>
         )}

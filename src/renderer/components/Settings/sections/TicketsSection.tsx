@@ -17,6 +17,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
 import {
   SETTING_ROW_HINT,
+  SETTING_SERVER_REASON,
   SaveNote,
   SettingDropdown,
   SettingRow,
@@ -123,7 +124,7 @@ function RowSaveError({ state, status }: { state: SaveState; status: number | nu
   return (
     <div role="alert" data-save-error="" data-testid="tickets-settings-save-error" className="mt-1">
       <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">{lead}</p>
-      {reason && <p className={SETTING_ROW_HINT}>The server said: {reason}.</p>}
+      {reason && <p className={SETTING_SERVER_REASON}>The server said: {reason}.</p>}
     </div>
   )
 }

@@ -346,7 +346,7 @@ function rowStatus(row: SystemHeartbeatRow): { text: string; tone: 'next' | 'pau
 
 function NoteReason({ reason }: { reason?: string }): React.JSX.Element | null {
   if (!reason) return null
-  return <span className="block text-[var(--color-text-secondary)]">The server said: {reason}.</span>
+  return <span className="block mt-1 text-[var(--color-text-muted)]">The server said: {reason}.</span>
 }
 
 function FireRow({
@@ -998,7 +998,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
             <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
             <span>
               Stopped updating; showing the last runs K2 read.{' '}
-              {firesError && <span className="text-[var(--color-text-secondary)]">The server said: {firesError}.</span>}
+              {firesError && <span className="text-[var(--color-text-muted)]">The server said: {firesError}.</span>}
             </span>
           </p>
         ) : (

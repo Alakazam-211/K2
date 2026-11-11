@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { menuLayerForTrigger, SaveError, SaveNote, SETTING_ROW_HINT, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, useSaveStatus } from './SettingControls'
+import { menuLayerForTrigger, SaveError, SaveNote, SETTING_ROW_HINT, SETTING_SERVER_REASON, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, useSaveStatus } from './SettingControls'
 
 function triggerUnder(...layers: Array<{ zIndex?: string; position?: string }>): HTMLElement {
   const root = document.createElement('div')
@@ -229,6 +229,16 @@ describe('SettingsLoadState', () => {
     render(<SettingsLoadState kind="error" title={"Couldn\u2019t load your domains"} detail="database is locked." action={<button>Try again</button>}>Check this server is running.</SettingsLoadState>)
     const el = screen.getByRole('alert')
     expect(el.textContent).toBe('Couldn\u2019t load your domainsCheck this server is running.The server said: database is locked.Try again')
+  })
+  it("the server's reason is a quieter line than the plain line above it", () => {
+    render(<SettingsLoadState kind="error" title="Couldn\u2019t load" detail="database is locked">Check this server is running.</SettingsLoadState>)
+    const plain = screen.getByText('Check this server is running.')
+    const reason = screen.getByText('The server said: database is locked.')
+    expect(plain.className).toContain('text-[var(--color-text-secondary)]')
+    expect(reason.className).toContain('type-hint')
+    expect(reason.className).toContain('text-[var(--color-text-muted)]')
+    expect(reason.className).not.toContain('text-[var(--color-text-secondary)]')
+    expect(SETTING_SERVER_REASON).toBe(reason.className)
   })
   it('loading is a busy status; empty is a status with no reason line', () => {
     const { unmount } = render(<SettingsLoadState kind="loading" title="Loading\u2026" />)

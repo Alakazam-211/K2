@@ -1277,7 +1277,7 @@ export function K2ConnectSection({
               <>
                 {summary.hint}
                 {summary.detail && (
-                  <span className="block text-[var(--color-text-secondary)]">
+                  <span className="block mt-1 text-[var(--color-text-muted)]">
                     The server said: {summary.detail.replace(/[.\s]+$/, '')}.
                   </span>
                 )}

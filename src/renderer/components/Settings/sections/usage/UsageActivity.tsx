@@ -275,7 +275,7 @@ export function UsageActivity({
                 <p className="type-hint text-[var(--color-text-primary)] flex items-center gap-2" role="alert" data-testid="usage-activity-more-error">
                   <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
                   <span>
-                    {moreError.what} <span className="text-[var(--color-text-secondary)]">The server said: {moreError.reason.replace(/[.\s]+$/, '')}.</span>
+                    {moreError.what} <span className="text-[var(--color-text-muted)]">The server said: {moreError.reason.replace(/[.\s]+$/, '')}.</span>
                   </span>
                 </p>
               ) : (

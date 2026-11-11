@@ -545,7 +545,7 @@ export function AdminAccessPanel(): React.JSX.Element {
           {ownerAccounts.error ? (
             <div role="alert" className="px-4 py-2.5 type-hint leading-relaxed">
               <p className="text-[var(--color-status-error-soft)]">Couldn’t tell which of these logins is yours. Reopen this page to try again.</p>
-              <p className="text-[var(--color-text-secondary)]">The server said: {ownerAccounts.error.replace(/[.\s]+$/, '')}.</p>
+              <p className="text-[var(--color-text-muted)] mt-1">The server said: {ownerAccounts.error.replace(/[.\s]+$/, '')}.</p>
             </div>
           ) : null}
         </SettingsGroup>

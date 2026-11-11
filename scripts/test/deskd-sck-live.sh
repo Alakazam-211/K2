@@ -5,7 +5,7 @@
 # process, the way K2 Screen does).
 #
 #   1. Build the example on that Mac's compute node and fetch it:
-#        k2 compute run k2n1-m4 --sha <c> --os macos --cpus 7 --mem 8G --needs rust@stable \
+#        k2 compute run <mac-node> --sha <c> --os macos --cpus 7 --mem 8G --needs rust@stable \
 #            --artifact target/release/examples/sck_live \
 #            -- cargo build --release -p k2-deskd --example sck_live --locked
 #        k2 compute fetch <job> --out <dir>

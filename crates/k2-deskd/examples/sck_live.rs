@@ -9,7 +9,7 @@
 //! ScreenCaptureKit needs a logged-in GUI session and Screen Recording for
 //! the process that captures, so this is an example run as an app with
 //! `open` in the console user's session, not a cargo test in a compute job
-//! (those run as `_k2node`, with no GUI). `scripts/test/deskd-sck-live.sh`
+//! (those run as the node user, with no GUI). `scripts/test/deskd-sck-live.sh`
 //! bundles the binary as `K2 Screen Live Test.app` (ad hoc signed,
 //! `dev.k2.test.screen-live`) and opens it. Without Screen Recording it
 //! writes `{"state": "needs_permission"}` and, with `--request`, shows the

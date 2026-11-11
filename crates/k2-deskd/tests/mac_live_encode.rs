@@ -7,7 +7,7 @@
 //! buffers like ScreenCaptureKit's (a moving bar at the plan's rate, made
 //! once and cycled), handed over only while the "screen" moves. So this
 //! runs with no GUI session and no Screen Recording (a compute job on
-//! k2n1-m4 as `_k2node`). The ScreenCaptureKit half is
+//! a Mac compute node as its node user). The ScreenCaptureKit half is
 //! `examples/sck_live.rs`, which needs a logged-in session and the grant.
 //!
 //!   cargo test -p k2-deskd --features mac-live --test mac_live_encode -- --nocapture --test-threads=1

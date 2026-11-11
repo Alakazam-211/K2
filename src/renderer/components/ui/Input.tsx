@@ -8,6 +8,12 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   variant?: 'default' | 'search'
 }
 
+/** A field the form marks wrong (`aria-invalid`): the error colour as its
+ *  edge, focused or not, and on Terminal's cut corners too (--k2-ch-edge).
+ *  The error text colour, so the edge clears 3:1 on every ground. */
+export const FIELD_INVALID =
+  'aria-[invalid=true]:border-[var(--color-status-error-text)] aria-[invalid=true]:[--k2-ch-edge:var(--color-status-error-text)]'
+
 const FIELD = cx(
   'k2-focus no-drag border border-[var(--color-control-edge)] text-[var(--color-text-primary)]',
   'placeholder:text-[var(--color-text-muted)]',
@@ -15,6 +21,7 @@ const FIELD = cx(
   'rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',
   '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
   'focus:border-[var(--color-accent)]',
+  FIELD_INVALID,
 )
 
 const DATE_TYPES = new Set(['date', 'time', 'datetime-local', 'month', 'week'])
@@ -46,6 +53,7 @@ const TEXT_BOX = cx(
   'type-control px-2 py-1 outline-none',
   'rounded-[var(--radius-field-multiline)] [box-shadow:var(--ring-field)]',
   'focus:border-[var(--color-accent)]',
+  FIELD_INVALID,
 )
 
 /** The multi-line field: <Input>'s well, edge and focus (in Terminal the cut

@@ -234,6 +234,10 @@ pub mod bg_proc;
 pub mod win_fs;
 #[cfg(windows)]
 pub mod win_proc;
+/// macOS process facts from libproc and sysctl (no setuid `ps`). Built
+/// for tests everywhere so its reply parser is tested on Linux too.
+#[cfg(any(target_os = "macos", test))]
+pub mod mac_proc;
 pub mod private_home;
 pub mod session_archive;
 pub mod session_homes;

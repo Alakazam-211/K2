@@ -1,11 +1,10 @@
 // Settings is about the window's server: heartbeats open in the primary
 // room's tabs.
 import { useTabsStore } from '@/stores/tabs'
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
 import { useConnectHostStore } from '@/stores/connect-host'
-import { useToastStore } from '@/stores/toast'
 import { heartbeatHistoryActorLine } from '@/lib/heartbeat-actor'
 import type { SettingEntry } from '../searchManifest'
 import { WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
@@ -20,7 +19,8 @@ import { primaryScope } from '@/kessel/server-scope'
 import { spanLabel } from '@/lib/heartbeat-wait'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
 import { useHeartbeatDueRefetch } from '@/hooks/useHeartbeatDueRefetch'
-import { BetaTag, Checkbox, Toggle } from '@/components/ui'
+import { BetaTag, Button, Segmented, Toggle } from '@/components/ui'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 
 export const WAKE_SCHEDULER_MANIFEST: SettingEntry[] = [
   {
@@ -96,39 +96,6 @@ interface SystemFireRow {
   actor?: string | null
 }
 
-/** Decision → terse one-letter chip color. `fired` is the happy path; all
- *  the `skipped_*` decisions are routine non-events; `error` is the only
- *  one that should pop on visual scan. */
-function decisionStyle(decision: string): { label: string; color: string } {
-  if (decision === 'fired') return { label: '●', color: 'text-[var(--color-status-ok)]' }
-  // Catch-up fires are successes for a previously-missed occurrence —
-  // amber dot so a recovered miss is scannable.
-  if (decision === 'fired_catchup') return { label: '●', color: 'text-[var(--color-status-warn-amber)]' }
-  if (
-    decision === 'error' ||
-    decision === 'wakeup_file_missing' ||
-    decision === 'schedule_invalid' ||
-    decision === 'auto_disabled' ||
-    decision === 'auto_disabled_failing' ||
-    decision === 'tick_gap'
-  )
-    return { label: '!', color: 'text-[var(--color-status-error-soft)]' }
-  if (decision === 'not_due') return { label: '·', color: 'text-[var(--color-text-muted)]' }
-  return { label: '○', color: 'text-[var(--color-text-muted)]' }
-}
-
-/** "2026-05-19T07:01:23.456Z" → "07:01" today, "May 18 21:13" earlier, etc. */
-function formatFiredAt(iso: string): string {
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return iso.slice(0, 16)
-  const now = new Date()
-  const sameDay = d.toDateString() === now.toDateString()
-  const hh = d.getHours().toString().padStart(2, '0')
-  const mm = d.getMinutes().toString().padStart(2, '0')
-  if (sameDay) return `${hh}:${mm}`
-  const mon = d.toLocaleString('en-US', { month: 'short' })
-  return `${mon} ${d.getDate()} ${hh}:${mm}`
-}
 
 /** Row shape returned by the `k2so_heartbeat_list_all` Tauri command —
  *  every active heartbeat across all workspaces with the parent project's
@@ -189,18 +156,18 @@ function tickerDownMessage(status: SchedulerStatus | null): string | null {
   const since = (iso: string | null | undefined): string => {
     const t = iso ? Date.parse(iso) : NaN
     return Number.isNaN(t)
-      ? '— no check has ever been recorded'
-      : `for ${spanLabel(Date.now() - t)} (since ${new Date(t).toLocaleString()})`
+      ? 'yet: no check has been recorded'
+      : `for ${spanLabel(Date.now() - t)} (since ${formatClock(iso)})`
   }
   if (status.ticker) {
     const stale = status.ticker.staleSecs == null || status.ticker.staleSecs > 180
     if (!stale) return null
     // HB9: the daemon's own tick stamp (`lastDaemonTickAt`).
-    return `Heartbeats are not being checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. K2 checks every minute while this computer is awake; it may be stopped or restarting. Missed heartbeats under 12 hours late fire once when it is back.`
+    return `Heartbeats haven’t been checked ${since(status.ticker.lastTickAt ?? status.lastDaemonTickAt)}. K2 may be stopped or restarting on this server. When it’s back, any heartbeat less than 12 hours late runs once.`
   }
   const stale = status.staleSecs == null || status.staleSecs > 180
   if (!stale) return null
-  return `Heartbeat ticks are not arriving ${since(status.lastTickAt)}. Update K2 on this server: newer versions check heartbeats on their own every minute.`
+  return `Heartbeats haven’t been checked ${since(status.lastTickAt)}. Update K2 on this server so it checks them on its own every minute.`
 }
 
 /** Compact one-liner for the heartbeat list row — "Every day at 9 AM",
@@ -227,43 +194,202 @@ function describeHeartbeatSpec(specJson: string, frequency: string): string {
       : ''
   switch (frequency) {
     case 'daily': return `Every day${at}${win}`
-    case 'weekly': return `${(spec.days as string[] | undefined ?? []).join(', ') || '—'}${at}${win}`
+    case 'weekly': {
+      const days = (spec.days as string[] | undefined ?? []).map((d) => d.charAt(0).toUpperCase() + d.slice(1))
+      return days.length ? `Every ${days.join(', ')}${at}${win}` : `Weekly${at}${win}`
+    }
     case 'monthly': return `Day(s) ${(spec.days_of_month as number[] | undefined ?? []).join(', ') || '—'}${at}${win}`
     case 'yearly': return `${(spec.months as string[] | undefined ?? []).join(', ')} day(s) ${(spec.days_of_month as number[] | undefined ?? []).join(', ') || '—'}${at}${win}`
     case 'hourly': {
       const every = (spec.every_seconds as number | undefined) ?? 3600
       const start = fmt12((spec.start as string | undefined) ?? '00:00')
       const end = fmt12((spec.end as string | undefined) ?? '23:59')
-      return `Every ${Math.round(every / 60)}min ${start}–${end}`
+      return `Every ${Math.round(every / 60)} min, ${start}–${end}`
     }
     default: return frequency
   }
 }
 
+const CONTENT_WIDTH = 'max-w-[52rem]'
+
+/** A list reply from the daemon or the in-process command. Anything else
+ *  (null, an error envelope, an object) is a failed read, not an empty list:
+ *  the page shows its error card instead of crashing on `.length`. */
+export function listReply<T>(raw: unknown): T[] {
+  if (Array.isArray(raw)) return raw as T[]
+  throw new Error('the reply wasn’t a list')
+}
+
+/** The scheduler status is an object; anything else is a failed read. */
+function statusReply(raw: unknown): SchedulerStatus {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as SchedulerStatus
+  throw new Error('the reply wasn’t a status')
+}
+
+function errorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
+  return raw.trim()
+}
+
+type Tone = 'ok' | 'late' | 'problem' | 'skip'
+
+/** A run's decision in plain words, and how it reads at a glance. */
+export function describeDecision(decision: string): { text: string; tone: Tone } {
+  switch (decision) {
+    case 'fired':
+      return { text: 'Ran', tone: 'ok' }
+    case 'fired_catchup':
+      return { text: 'Ran late, catching up a missed time', tone: 'late' }
+    case 'error':
+      return { text: 'Failed', tone: 'problem' }
+    case 'wakeup_file_missing':
+      return { text: 'Failed: its wakeup file is missing', tone: 'problem' }
+    case 'schedule_invalid':
+      return { text: 'Failed: its schedule isn’t valid', tone: 'problem' }
+    case 'auto_disabled':
+    case 'auto_disabled_failing':
+      return { text: 'Paused by K2 after failing several times', tone: 'problem' }
+    case 'tick_gap':
+      return { text: 'Missed: K2 wasn’t checking then', tone: 'problem' }
+    case 'skipped_missed':
+      return { text: 'Skipped: more than 12 hours late', tone: 'problem' }
+    case 'not_due':
+      return { text: 'Not due yet', tone: 'skip' }
+  }
+  const SKIPS: Record<string, string> = {
+    skipped_locked: 'another check was already running',
+    skipped_already_fired: 'it already ran for this time',
+    skipped_overlap: 'its last run was still going',
+    skipped_archived: 'the workspace is archived',
+    skipped_user_session: 'you were using its chat',
+    skipped_quality_gate: 'held back by a quality check',
+    skipped_no_primary: 'there was no agent to wake',
+    skipped_empty: 'its wakeup file is empty',
+    skipped_custom_timing: 'it wasn’t its time yet',
+    skipped_busy: 'the agent was busy',
+  }
+  if (decision.startsWith('skipped_')) {
+    return { text: `Skipped: ${SKIPS[decision] ?? decision.slice('skipped_'.length).replace(/_/g, ' ')}`, tone: 'skip' }
+  }
+  return { text: decision.replace(/_/g, ' '), tone: 'skip' }
+}
+
+const DOT: Record<Tone, string> = {
+  ok: 'bg-[var(--color-status-ok)]',
+  late: 'bg-[var(--color-status-warn)]',
+  problem: 'bg-[var(--color-status-error)]',
+  skip: 'bg-[var(--color-text-muted)]',
+}
+
+function Dot({ tone }: { tone: Tone }): React.JSX.Element {
+  return <span aria-hidden="true" className={`mt-1.5 inline-block h-2 w-2 flex-shrink-0 rounded-[var(--radius-status)] ${DOT[tone]}`} />
+}
+
+/** What a row says after its last change: paused / resumed for a moment,
+ *  or why the change didn't take. */
+type RowNote = { kind: 'saved' | 'error'; text: string }
+
+function FireRow({ fire, open, onToggle }: { fire: SystemFireRow; open: boolean; onToggle: () => void }): React.JSX.Element {
+  const d = describeDecision(fire.decision)
+  const actor = heartbeatHistoryActorLine(fire)
+  const when = new Date(fire.firedAt)
+  const fields: Array<[string, string | null | undefined]> = [
+    ['When', Number.isNaN(when.getTime()) ? fire.firedAt : when.toLocaleString()],
+    ['Result', fire.decision],
+    ['Reason', fire.reason],
+    ['Took', fire.durationMs != null ? `${(fire.durationMs / 1000).toFixed(1)} s` : null],
+    ['How', fire.mode],
+    ['Who', actor || null],
+  ]
+  const detailId = `heartbeat-run-${fire.id}`
+  return (
+    <li data-fire-row="" data-tone={d.tone}>
+      <button
+        type="button"
+        data-k2-focus=""
+        aria-expanded={open}
+        aria-controls={detailId}
+        onClick={onToggle}
+        className="group relative w-full grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-start gap-x-3 px-4 py-3 text-left no-drag cursor-pointer outline-none transition-colors hover:bg-[var(--color-bg-hover)]"
+      >
+        <Dot tone={d.tone} />
+        <span className="min-w-0">
+          <span className="block type-row text-[var(--color-text-primary)] truncate">
+            <span className="type-name">{fire.scheduleName ?? 'Heartbeat'}</span>
+            <span className="text-[var(--color-text-secondary)]"> in {fire.projectName}</span>
+          </span>
+          <span className={`block type-hint mt-0.5 ${d.tone === 'problem' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'}`}>
+            {d.text}
+          </span>
+          {fire.reason && !open && (
+            <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">{fire.reason}</span>
+          )}
+        </span>
+        <span className="type-hint text-[var(--color-text-secondary)] tabular-nums whitespace-nowrap">{formatClock(fire.firedAt)}</span>
+        <span aria-hidden="true" className={`type-row text-[var(--color-text-muted)] group-hover:text-[var(--color-text-primary)] transition-transform ${open ? 'rotate-90' : ''}`}>
+          ›
+        </span>
+      </button>
+      {open && (
+        <dl id={detailId} className="grid grid-cols-[6rem_minmax(0,1fr)] gap-x-4 gap-y-1 px-4 pb-3 pl-9">
+          {fields
+            .filter(([, v]) => v != null && v !== '')
+            .map(([k, v]) => (
+              <React.Fragment key={k}>
+                <dt className="type-hint text-[var(--color-text-secondary)]">{k}</dt>
+                <dd className={`type-hint text-[var(--color-text-primary)] break-words ${k === 'Result' ? 'font-mono' : ''}`}>{v}</dd>
+              </React.Fragment>
+            ))}
+        </dl>
+      )}
+    </li>
+  )
+}
+
 export function WakeSchedulerSection(): React.JSX.Element {
-  // 0.38.3 — system-wide heartbeat list rendered in the right column.
-  // Loads on mount + refreshes after any per-row toggle so the on-disk
-  // state and the visible state stay in lockstep.
-  const [heartbeats, setHeartbeats] = useState<SystemHeartbeatRow[]>([])
+  // Every heartbeat on this server, across workspaces. null = not read yet.
+  const [heartbeats, setHeartbeats] = useState<SystemHeartbeatRow[] | null>(null)
   const [heartbeatsLoading, setHeartbeatsLoading] = useState(true)
+  const [heartbeatsError, setHeartbeatsError] = useState<{ detail: string; oldHost: boolean } | null>(null)
   // When non-null, render the `WakeupEditor` overlay (AIFileEditor +
   // live preview, scoped to this heartbeat's WAKEUP.md). null = list view.
   const [editingHeartbeat, setEditingHeartbeat] = useState<SystemHeartbeatRow | null>(null)
-  // 0.38.3 — universal audit log (right-most column). Most recent 100
-  // fires across all workspaces. Polled every 5s so the user sees
-  // newly-firing heartbeats live without having to reopen the page.
-  const [fires, setFires] = useState<SystemFireRow[]>([])
-  // Scheduler + wake status from the daemon (S2: ticker, wake, awake).
-  // Polled every 15s; also refreshed right after the wake switch moves.
+  // The newest 100 runs across all workspaces, polled every 5 s.
+  const [fires, setFires] = useState<SystemFireRow[] | null>(null)
+  const [firesError, setFiresError] = useState<string | null>(null)
+  const [firesAttempt, setFiresAttempt] = useState(0)
+  const [firesView, setFiresView] = useState<'all' | 'problems'>('all')
+  const [openFire, setOpenFire] = useState<number | null>(null)
+  // Scheduler + wake status from the daemon (S2: ticker, wake, awake),
+  // polled every 15 s and right after the wake switch moves.
   const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
+  const [statusAttempt, setStatusAttempt] = useState(0)
   // The wake switch is daemon truth (`wakeForHeartbeats`); this only
   // tracks a request in flight (the macOS admin dialog can take a while).
   const [wakeSaving, setWakeSaving] = useState(false)
-  const toast = useToastStore((s) => s.addToast)
+  const [wakeNote, setWakeNote] = useState<RowNote | null>(null)
+  const [rowNotes, setRowNotes] = useState<Record<string, RowNote>>({})
+  const noteTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+
+  useEffect(() => () => Object.values(noteTimers.current).forEach(clearTimeout), [])
+
+  const noteRow = useCallback((id: string, note: RowNote | null) => {
+    clearTimeout(noteTimers.current[id])
+    setRowNotes((n) => {
+      const next = { ...n }
+      if (note) next[id] = note
+      else delete next[id]
+      return next
+    })
+    // A confirmation fades; an error stays until the next try.
+    if (note?.kind === 'saved') noteTimers.current[id] = setTimeout(() => noteRow(id, null), 6000)
+  }, [])
 
   const refreshStatus = useCallback(async () => {
-    const status = await daemonCliGet<SchedulerStatus>(primaryScope(), 'heartbeat/scheduler-status', {})
+    const status = statusReply(await daemonCliGet<unknown>(primaryScope(), 'heartbeat/scheduler-status', {}))
     setSchedulerStatus(status)
+    setStatusError(null)
   }, [])
 
   /** D8 / D11 — flip "Wake this computer for heartbeats" (or "Also on
@@ -272,6 +398,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
   const handleSetWake = useCallback(
     async (enabled: boolean, onBattery?: boolean) => {
       setWakeSaving(true)
+      setWakeNote(null)
       try {
         const resp = await daemonCliPost<{
           success?: boolean
@@ -279,96 +406,79 @@ export function WakeSchedulerSection(): React.JSX.Element {
           message?: string
         }>(primaryScope(), 'heartbeat/wake', { enabled, onBattery })
         if (resp?.success === false) {
-          toast(resp.message ?? 'Wake stays off.', 'info', 10000)
+          setWakeNote({ kind: 'error', text: `Wake stays off. ${resp.message ?? 'The server didn’t say why.'}` })
+        } else {
+          setWakeNote({ kind: 'saved', text: 'Saved' })
         }
         await refreshStatus()
       } catch (err) {
-        toast(`Failed to change wake: ${String(err)}`, 'error')
+        setWakeNote({
+          kind: 'error',
+          text: `Couldn’t change wake: ${errorText(err).replace(/[.\s]+$/, '') || 'no answer from this server'}. Nothing changed; try again.`,
+        })
       } finally {
         setWakeSaving(false)
       }
     },
-    [toast, refreshStatus],
+    [refreshStatus],
   )
 
-  // 0.38.3 — load system-wide heartbeats for the right-column list.
-  // Sort case-insensitively by project name, then heartbeat name —
-  // the backend ORDER BY uses default collation (case-sensitive ASCII)
-  // so uppercase-prefixed workspaces clump above lowercase-prefixed
-  // ones. Override here for natural alphabetical reading.
+  // Sort case-insensitively by workspace, then heartbeat name — the
+  // backend ORDER BY is case-sensitive ASCII.
   const refreshHeartbeats = useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setHeartbeatsLoading(true)
     try {
-      // 0.40.48 host-aware: connected to a REMOTE host, the cross-project
-      // roster comes from ITS new /cli/heartbeat/list-all route — this
-      // page is the fleet-audit surface, so it must show the machine
-      // you're connected to (needs the host on >=0.40.48; older hosts
-      // error honestly instead of silently showing the wrong machine).
-      // LOCAL keeps the in-process command: same machine, same DB, and
-      // no dependency on the local daemon having the new route.
-      const rows =
+      // Host-aware (0.40.48): connected to a REMOTE host, the roster comes
+      // from ITS /cli/heartbeat/list-all route; LOCAL keeps the in-process
+      // command (same machine, same DB).
+      const raw =
         useConnectHostStore.getState().activeHost !== 'local'
-          ? await daemonCliGet<SystemHeartbeatRow[]>(primaryScope(), 'heartbeat/list-all')
-          : await invoke<SystemHeartbeatRow[]>('k2so_heartbeat_list_all')
-      const sorted = [...rows].sort((a, b) => {
+          ? await daemonCliGet<unknown>(primaryScope(), 'heartbeat/list-all')
+          : await invoke<unknown>('k2so_heartbeat_list_all')
+      const sorted = [...listReply<SystemHeartbeatRow>(raw)].sort((a, b) => {
         const byProj = a.projectName.toLowerCase().localeCompare(b.projectName.toLowerCase())
         if (byProj !== 0) return byProj
         return a.name.toLowerCase().localeCompare(b.name.toLowerCase())
       })
       setHeartbeats(sorted)
+      setHeartbeatsError(null)
     } catch (err) {
-      // Older-host signature: a pre-0.40.48 daemon has no list-all route,
-      // so the request falls into its project-scoped catch-all and answers
-      // "Missing 'project' (or project_path) parameter" — which reads like
-      // a client bug. Translate it into what it actually means.
+      // An older host has no list-all route: its project-scoped catch-all
+      // answers "Missing 'project' parameter", which means "update the host".
       const s = useConnectHostStore.getState()
-      const oldHost =
-        s.activeHost !== 'local' && /missing '?project/i.test(String(err))
-      if (oldHost) {
-        const v = s.serverVersion ? ` (it's on v${s.serverVersion})` : ''
-        toast(
-          `Auditing this host's heartbeats from here needs K2 0.40.48+ on the host${v}. ` +
-            `Update the host, then reopen this page.`,
-          'info',
-          10000,
-        )
-      } else {
-        toast(`Failed to load heartbeats: ${String(err)}`, 'error')
-      }
-      setHeartbeats([])
+      const oldHost = s.activeHost !== 'local' && /missing '?project/i.test(String(err))
+      setHeartbeatsError({ detail: oldHost ? '' : errorText(err), oldHost })
     } finally {
       setHeartbeatsLoading(false)
     }
-  }, [toast])
+  }, [])
 
   useEffect(() => {
     void refreshHeartbeats()
   }, [refreshHeartbeats])
 
-  // Heartbeat S4: rows carry the daemon's `nextFireAt` / `waitReason` on
-  // a server with `heartbeat-next-fire`. The roster stays mount-only (no
-  // event subscription); one quiet refetch when a row's fire time + 120 s
-  // passes (HB29), so a fired or overdue row never sits stale.
+  // Heartbeat S4: one quiet refetch when a row's fire time + 120 s passes
+  // (HB29), so a fired or overdue row never sits stale.
   const nextFire = primaryScope().serverSupports('heartbeat-next-fire')
-  useHeartbeatDueRefetch(heartbeats, () => void refreshHeartbeats({ quiet: true }), nextFire)
+  useHeartbeatDueRefetch(heartbeats ?? [], () => void refreshHeartbeats({ quiet: true }), nextFire)
 
-  // 0.38.3 — fires audit log. Polled every 5s so newly-firing
-  // heartbeats appear without page reload. Limit 100 keeps the list
-  // bounded; older fires fall off the visible window but stay in SQL.
+  // Recent runs, polled every 5 s. A failed poll keeps the last good list
+  // and says it stopped updating; a failed first read shows the error card.
   useEffect(() => {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        // 0.40.48 host-aware: audit the ACTIVE host's fires (new
-        // /cli/heartbeat/fires-list-all route); local keeps in-process.
-        const rows =
+        const raw =
           useConnectHostStore.getState().activeHost !== 'local'
-            ? await daemonCliGet<SystemFireRow[]>(primaryScope(), 'heartbeat/fires-list-all', { limit: 100 })
-            : await invoke<SystemFireRow[]>('k2so_heartbeat_fires_list_all', { limit: 100 })
-        if (!cancelled) setFires(rows)
-      } catch {
-        // Silent — the audit log is a read-only convenience; a transient
-        // failure shouldn't toast.
+            ? await daemonCliGet<unknown>(primaryScope(), 'heartbeat/fires-list-all', { limit: 100 })
+            : await invoke<unknown>('k2so_heartbeat_fires_list_all', { limit: 100 })
+        const rows = listReply<SystemFireRow>(raw)
+        if (!cancelled) {
+          setFires(rows)
+          setFiresError(null)
+        }
+      } catch (err) {
+        if (!cancelled) setFiresError(errorText(err) || 'no answer from this server')
       }
     }
     void tick()
@@ -377,16 +487,19 @@ export function WakeSchedulerSection(): React.JSX.Element {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [])
+  }, [firesAttempt])
 
   useEffect(() => {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        const status = await daemonCliGet<SchedulerStatus>(primaryScope(), 'heartbeat/scheduler-status', {})
-        if (!cancelled) setSchedulerStatus(status)
-      } catch {
-        // Silent — health polling must never toast on a transient miss.
+        const status = statusReply(await daemonCliGet<unknown>(primaryScope(), 'heartbeat/scheduler-status', {}))
+        if (!cancelled) {
+          setSchedulerStatus(status)
+          setStatusError(null)
+        }
+      } catch (err) {
+        if (!cancelled) setStatusError(errorText(err) || 'no answer from this server')
       }
     }
     void tick()
@@ -395,112 +508,85 @@ export function WakeSchedulerSection(): React.JSX.Element {
       cancelled = true
       window.clearInterval(id)
     }
-  }, [])
+  }, [statusAttempt])
 
   const handleToggleEnabled = useCallback(
     async (row: SystemHeartbeatRow, next: boolean) => {
       // Optimistic — flip locally, fall back if the daemon rejects.
-      setHeartbeats((rows) =>
-        rows.map((r) => (r.id === row.id ? { ...r, enabled: next } : r)),
-      )
+      setHeartbeats((rows) => rows && rows.map((r) => (r.id === row.id ? { ...r, enabled: next } : r)))
+      noteRow(row.id, null)
       try {
         await daemonCliPostQuery(primaryScope(), 'heartbeat/enable', {
           project: row.projectPath,
           name: row.name,
           enabled: next,
         })
+        noteRow(row.id, {
+          kind: 'saved',
+          text: next ? 'Resumed. It runs on its schedule again.' : 'Paused. It won’t run until you turn it back on.',
+        })
       } catch (err) {
-        toast(`Toggle failed for ${row.projectName}/${row.name}: ${String(err)}`, 'error')
-        setHeartbeats((rows) =>
-          rows.map((r) => (r.id === row.id ? { ...r, enabled: !next } : r)),
-        )
+        setHeartbeats((rows) => rows && rows.map((r) => (r.id === row.id ? { ...r, enabled: !next } : r)))
+        noteRow(row.id, {
+          kind: 'error',
+          text: `Couldn’t ${next ? 'resume' : 'pause'} it: ${errorText(err).replace(/[.\s]+$/, '') || 'no answer from this server'}. Nothing changed; try again.`,
+        })
       }
     },
-    [toast],
+    [noteRow],
   )
 
-  // Delivery drop-down (replaces the pinned-chat checkbox) — persist
-  // where this heartbeat's wakeup goes. Optimistic like
-  // handleToggleEnabled: flip locally, revert on daemon rejection.
+  // Where each heartbeat's wakeup goes. Optimistic like the switch.
   const handleSetDelivery = useCallback(
     async (row: SystemHeartbeatRow, next: HeartbeatDeliveryTarget) => {
-      setHeartbeats((rows) =>
-        rows.map((r) => (r.id === row.id ? applyDeliveryTarget(r, next) : r)),
-      )
+      setHeartbeats((rows) => rows && rows.map((r) => (r.id === row.id ? applyDeliveryTarget(r, next) : r)))
+      noteRow(row.id, null)
       try {
-        // Host-aware default (0.40.48): this page's roster now comes from
-        // the ACTIVE host's list-all route, so delivery-target writes go
-        // to the same host the rows came from.
+        // Writes go to the same host the rows came from (0.40.48).
         await setHeartbeatSession(row.projectPath, row.name, next)
+        noteRow(row.id, { kind: 'saved', text: 'Saved. The next run goes there.' })
       } catch (err) {
-        toast(`Wakeup delivery change failed for ${row.projectName}/${row.name}: ${String(err)}`, 'error')
-        setHeartbeats((rows) =>
-          rows.map((r) => (r.id === row.id ? row : r)),
-        )
+        setHeartbeats((rows) => rows && rows.map((r) => (r.id === row.id ? row : r)))
+        noteRow(row.id, {
+          kind: 'error',
+          text: `Couldn’t change where it runs: ${errorText(err).replace(/[.\s]+$/, '') || 'no answer from this server'}. Nothing changed; try again.`,
+        })
       }
     },
-    [toast],
+    [noteRow],
   )
 
-  const handleEditWakeup = useCallback((row: SystemHeartbeatRow) => {
-    setEditingHeartbeat(row)
-  }, [])
-
-  // 0.38.3 — when the user clicks "Edit Wakeup" on a row, render the
-  // WakeupEditor (AIFileEditor) takeover. The agent-name resolution
-  // uses the project-name slug as a best-effort fallback; the proper
-  // resolver lives in ProjectsSection (`primaryAgentName` useEffect)
-  // and post-0.39.0f Phase 2.1 calls `k2so_workspace_agent_display_name`.
-  // This panel renders the system-wide heartbeat list and doesn't have
-  // a per-row resolved name handy, so the slug is the cheap fallback
-  // for now — WakeupEditor's AGENT.md fetch fails-soft on mismatch.
+  // "Edit wakeup" opens the WakeupEditor takeover. The agent name falls back
+  // to the workspace slug; WakeupEditor's AGENT.md read fails soft.
   if (editingHeartbeat) {
-    // Convert SystemHeartbeatRow → HeartbeatRow shape WakeupEditor expects
-    const hb: HeartbeatRow = {
-      id: editingHeartbeat.id,
-      projectId: editingHeartbeat.projectId,
-      name: editingHeartbeat.name,
-      frequency: editingHeartbeat.frequency,
-      specJson: editingHeartbeat.specJson,
-      wakeupPath: editingHeartbeat.wakeupPath,
-      enabled: editingHeartbeat.enabled,
-      lastFired: editingHeartbeat.lastFired,
+    const toRow = (r: SystemHeartbeatRow): HeartbeatRow => ({
+      id: r.id,
+      projectId: r.projectId,
+      name: r.name,
+      frequency: r.frequency,
+      specJson: r.specJson,
+      wakeupPath: r.wakeupPath,
+      enabled: r.enabled,
+      lastFired: r.lastFired,
       createdAt: 0,
-      useWorkspaceSession: editingHeartbeat.useWorkspaceSession,
-      lastSessionId: editingHeartbeat.lastSessionId,
-      sessionProvider: editingHeartbeat.sessionProvider,
-      consecutiveFailures: editingHeartbeat.consecutiveFailures,
+      useWorkspaceSession: r.useWorkspaceSession,
+      lastSessionId: r.lastSessionId,
+      sessionProvider: r.sessionProvider,
+      consecutiveFailures: r.consecutiveFailures,
       nextRetryAt: null,
-      disabledReason: editingHeartbeat.disabledReason,
-      scheduleError: editingHeartbeat.scheduleError,
-    }
+      disabledReason: r.disabledReason,
+      scheduleError: r.scheduleError,
+    })
     const slug = editingHeartbeat.projectName.toLowerCase().replace(/\s+/g, '-')
-    const otherHeartbeats: HeartbeatRow[] = heartbeats
+    const otherHeartbeats = (heartbeats ?? [])
       .filter((r) => r.projectId === editingHeartbeat.projectId && r.id !== editingHeartbeat.id)
-      .map((r) => ({
-        id: r.id,
-        projectId: r.projectId,
-        name: r.name,
-        frequency: r.frequency,
-        specJson: r.specJson,
-        wakeupPath: r.wakeupPath,
-        enabled: r.enabled,
-        lastFired: r.lastFired,
-        createdAt: 0,
-        useWorkspaceSession: r.useWorkspaceSession,
-        lastSessionId: r.lastSessionId,
-        sessionProvider: r.sessionProvider,
-        consecutiveFailures: r.consecutiveFailures,
-        nextRetryAt: null,
-        disabledReason: r.disabledReason,
-        scheduleError: r.scheduleError,
-      }))
+      .map(toRow)
     return (
       <div className="absolute inset-0 overflow-hidden bg-[var(--color-bg)]">
         <WakeupEditor
           projectPath={editingHeartbeat.projectPath}
           agentName={slug}
-          heartbeat={hb}
+          heartbeat={toRow(editingHeartbeat)}
           otherHeartbeats={otherHeartbeats}
           onClose={() => {
             setEditingHeartbeat(null)
@@ -511,292 +597,328 @@ export function WakeSchedulerSection(): React.JSX.Element {
     )
   }
 
-  return (
-    // 0.38.3 — Two-column layout: left = how heartbeats fire and the
-    // S2 wake switch; right = system-wide heartbeat list with
-    // per-row enable toggle, pinned-chat checkbox, and edit-wakeup
-    // button. The right column inherits the same parent container so
-    // the page just spreads naturally on wider Settings panes.
-    <div data-settings-id="heartbeats" className="flex flex-col gap-4">
-      {/* Heartbeat S2 — the daemon's own 60 s check has stopped. Above
-          both columns: nothing below fires while it is down. */}
-      {tickerDownMessage(schedulerStatus) && (
-        <div className="border border-[var(--color-status-error-soft)]/60 bg-[var(--color-status-error-soft)]/10 px-3 py-2 type-hint text-[var(--color-status-error-soft)] leading-relaxed">
-          {tickerDownMessage(schedulerStatus)}
+  const tickerDown = tickerDownMessage(schedulerStatus)
+  const lastCheck = schedulerStatus?.ticker?.lastTickAt ?? schedulerStatus?.lastDaemonTickAt ?? schedulerStatus?.lastTickAt ?? null
+
+  // ── How heartbeats run: status, wake, battery ──────────────────────
+  const statusState =
+    schedulerStatus === null ? (
+      statusError ? (
+        <SettingsLoadState
+          kind="error"
+          title="K2 couldn’t read the scheduler"
+          detail={statusError}
+          action={<Button onClick={() => setStatusAttempt((n) => n + 1)}>Try again</Button>}
+          testId="heartbeats-status-error"
+        >
+          Whether heartbeats are being checked is unknown right now. Your heartbeats are unchanged.
+        </SettingsLoadState>
+      ) : (
+        <SettingsLoadState kind="loading" title="Checking the scheduler…" testId="heartbeats-status-loading" />
+      )
+    ) : undefined
+
+  const wake = schedulerStatus?.wake
+  const wakeOn = schedulerStatus?.wakeForHeartbeats === true
+  const onBattery = schedulerStatus?.wakeOnBattery === true
+  const note = wakePlatformNote(wake?.platform)
+
+  const statusGroup = (
+    <SettingsGroup card title="How heartbeats run" state={statusState} testId="heartbeats-status">
+      <div className="px-4 py-3 flex items-start gap-3" data-testid="heartbeats-checking">
+        <Dot tone={tickerDown ? 'problem' : 'ok'} />
+        <div className="min-w-0 flex-1">
+          <p className={SETTING_ROW_LABEL}>{tickerDown ? 'Heartbeats aren’t being checked' : 'Checking every minute'}</p>
+          <p className={SETTING_ROW_HINT}>
+            {tickerDown ??
+              `${lastCheck ? `Last check ${formatClock(lastCheck)}. ` : ''}K2 checks while this computer is awake, with or without the app open. A heartbeat missed while it slept runs once when it wakes, if it is less than 12 hours late.`}
+          </p>
+        </div>
+      </div>
+
+      {schedulerStatus && !wake && (
+        <div className="px-4 py-3">
+          <p className={SETTING_ROW_LABEL}>Wake this computer for heartbeats</p>
+          <p className={SETTING_ROW_HINT}>This server runs an older K2 that can’t wake the computer. Update K2 on it to use this.</p>
         </div>
       )}
-      <div className="flex gap-8 items-start">
-      {/* ── Left column: when heartbeats fire, and waking ──────────── */}
-      <div className="w-1/3 min-w-[280px] max-w-[420px] flex-shrink-0">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1 flex items-center gap-2">
-        Heartbeats
-        <BetaTag />
-      </h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-4 leading-relaxed">
-        K2 checks your heartbeats every minute while this computer is awake, with or
-        without the app open. A heartbeat missed while the computer slept fires once
-        when it wakes, if it is less than 12 hours late; older ones are skipped and
-        logged. Heartbeat schedules themselves are set per workspace in{' '}
-        <span className="text-[var(--color-text-secondary)]">Workspaces → Heartbeats</span>.
-      </p>
 
-      {schedulerStatus && !schedulerStatus.wake && (
-        <p className="type-hint text-[var(--color-text-muted)] py-2 border-b border-[var(--color-border)] leading-relaxed">
-          This server runs an older K2 that cannot wake the computer for heartbeats.
-          Update K2 on it to use this setting.
-        </p>
-      )}
-
-      {schedulerStatus?.wake && (() => {
-        const wake = schedulerStatus.wake
-        const on = schedulerStatus.wakeForHeartbeats === true
-        const onBattery = schedulerStatus.wakeOnBattery === true
-        const floor = wake.batteryFloorPercent ?? 20
-        const note = wakePlatformNote(wake.platform)
-        return (
-          <>
-            <div
-              data-settings-id="wake-scheduler.wake"
-              className="flex items-start justify-between py-2 border-b border-[var(--color-border)]"
-            >
-              <div className="flex-1 min-w-0 mr-3">
-                <span className="type-row text-[var(--color-text-secondary)]">
-                  Wake this computer for heartbeats
-                </span>
-                <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                  {on
-                    ? 'On: K2 wakes this computer a minute before the next heartbeat.'
-                    : 'Off: K2 does not wake this computer from sleep. Heartbeats still fire whenever it is awake.'}
-                  {note ? ` ${note}` : ''}
+      {wake && (
+        <div className="px-4 py-3" data-settings-id="wake-scheduler.wake">
+          <div className="flex items-start justify-between gap-6">
+            <div className="min-w-0 flex-1">
+              <p className={SETTING_ROW_LABEL}>Wake this computer for heartbeats</p>
+              <p className={SETTING_ROW_HINT}>
+                {wakeOn
+                  ? 'K2 wakes this computer a minute before the next heartbeat.'
+                  : 'Off: K2 doesn’t wake this computer from sleep. Heartbeats still fire whenever it is awake.'}
+                {note ? ` ${note}` : ''}
+              </p>
+              {wakeSaving && wake.platform === 'macos' && !wakeOn && (
+                <p className="type-hint text-[var(--color-text-primary)] mt-1" role="status">
+                  Approve the admin dialog on this Mac to finish turning wake on.
                 </p>
-                {wakeSaving && wake.platform === 'macos' && !on && (
-                  <p className="type-hint text-[var(--color-text-secondary)] mt-1">
-                    Approve the admin dialog on this Mac to finish turning wake on.
-                  </p>
-                )}
-              </div>
-              <Toggle size="sm"
-                checked={on}
-                onChange={() => void handleSetWake(!on)}
+              )}
+              {wakeOn && wake.state === 'ok' && (
+                <p className="type-hint text-[var(--color-text-primary)] mt-1">
+                  {wake.nextWakeAt
+                    ? `Next wake ${formatClock(wake.nextWakeAt)}${wake.nextFireAt ? `, for a heartbeat at ${formatClock(wake.nextFireAt)}` : ''}.`
+                    : 'No heartbeat is scheduled, so no wake is set.'}
+                </p>
+              )}
+              {wakeOn && (wake.state === 'unavailable' || wake.state === 'paused') && (
+                <p className="type-hint text-[var(--color-status-warn-amber-soft)] mt-1">
+                  {wake.state === 'paused' ? 'Paused: ' : 'Not available: '}
+                  {wake.reason}
+                </p>
+              )}
+              {wakeOn && wake.notes?.wakeTimers && (
+                <p className={SETTING_ROW_HINT}>
+                  Wake timers in this power plan: plugged in {wake.notes.wakeTimers.pluggedIn.replace('_', ' ')}, on battery{' '}
+                  {wake.notes.wakeTimers.onBattery.replace('_', ' ')}.
+                  {wake.notes.steps ? ` To allow them: ${wake.notes.steps}` : ''}
+                </p>
+              )}
+              {schedulerStatus?.awake?.held && (
+                <p className={SETTING_ROW_HINT}>Keeping this computer awake now: {schedulerStatus.awake.reasons.join(', ')}.</p>
+              )}
+              {wakeNote?.kind === 'error' && (
+                <p role="alert" className="type-hint text-[var(--color-status-error-soft)] mt-1 max-w-[75ch]">
+                  {wakeNote.text}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {wakeNote?.kind === 'saved' && !wakeSaving && (
+                <span role="status" className="type-hint text-[var(--color-status-ok-soft)]">
+                  Saved
+                </span>
+              )}
+              <Toggle
+                size="sm"
+                checked={wakeOn}
+                onChange={() => void handleSetWake(!wakeOn)}
                 aria-label="Wake this computer for heartbeats"
                 disabled={wakeSaving}
-                className="mt-0.5"
                 style={wakeSaving ? { cursor: 'wait' } : undefined}
               />
             </div>
-
-            {on && (
-              <label
-                data-settings-id="wake-scheduler.battery"
-                className="flex items-start gap-2 py-2 border-b border-[var(--color-border)] cursor-pointer no-drag"
-              >
-                <Checkbox
-                  checked={onBattery}
-                  disabled={wakeSaving}
-                  onChange={(e) => void handleSetWake(true, e.target.checked)}
-                  className="mt-0.5"
-                />
-                <div className="flex-1 min-w-0">
-                  <span className="type-row text-[var(--color-text-secondary)]">Also on battery</span>
-                  <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-                    Without this, K2 wakes the computer only while it is plugged in. Never below {floor}% battery.
-                  </p>
-                </div>
-              </label>
-            )}
-
-            {on && (
-              <div className="py-2 type-hint leading-relaxed">
-                {wake.state === 'ok' && wake.nextWakeAt && (
-                  <span className="text-[var(--color-text-secondary)]">
-                    Next wake {formatClock(wake.nextWakeAt)}
-                    {wake.nextFireAt ? `, for a heartbeat at ${formatClock(wake.nextFireAt)}` : ''}.
-                  </span>
-                )}
-                {wake.state === 'ok' && !wake.nextWakeAt && (
-                  <span className="text-[var(--color-text-muted)]">No heartbeat is scheduled, so no wake is set.</span>
-                )}
-                {(wake.state === 'unavailable' || wake.state === 'paused') && (
-                  <span className="text-[var(--color-status-warn-amber)]">
-                    {wake.state === 'paused' ? 'Paused: ' : 'Not available: '}
-                    {wake.reason}
-                  </span>
-                )}
-                {wake.notes?.wakeTimers && (
-                  <p className="text-[var(--color-text-muted)] mt-1">
-                    Wake timers in this power plan: plugged in {wake.notes.wakeTimers.pluggedIn.replace('_', ' ')},
-                    on battery {wake.notes.wakeTimers.onBattery.replace('_', ' ')}.
-                    {wake.notes.steps ? ` To allow them: ${wake.notes.steps}` : ''}
-                  </p>
-                )}
-              </div>
-            )}
-
-            {schedulerStatus.awake?.held && (
-              <p className="type-hint text-[var(--color-text-muted)] py-1">
-                Keeping this computer awake now: {schedulerStatus.awake.reasons.join(', ')}.
-              </p>
-            )}
-          </>
-        )
-      })()}
-      </div>
-      {/* ── Right column: every heartbeat across all workspaces ──────── */}
-      <div className="flex-1 min-w-0 max-w-[640px]">
-        <div className="flex items-baseline justify-between mb-1">
-          <h2 className="type-title text-[var(--color-text-primary)]">
-            All Heartbeats
-          </h2>
-          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
-            {heartbeatsLoading ? 'loading…' : `${heartbeats.length} total`}
-          </span>
-        </div>
-        <p className="type-hint text-[var(--color-text-muted)] mb-3 leading-relaxed">
-          Every active heartbeat across every workspace. Toggle to
-          enable/disable, pick where each heartbeat&apos;s wake is
-          delivered (the workspace&apos;s pinned chat, its own session,
-          or a saved session), and click <span className="text-[var(--color-text-secondary)]">Edit Wakeup</span> to
-          open the prompt template in your default editor.
-        </p>
-        {heartbeats.length === 0 && !heartbeatsLoading && (
-          <div className="type-hint text-[var(--color-text-muted)] italic py-3">
-            No heartbeats configured. Add one inside any workspace at
-            <span className="text-[var(--color-text-secondary)]"> Workspaces → Heartbeats</span>.
           </div>
-        )}
-        <div className="space-y-1">
-          {heartbeats.map((row) => (
-            <div
-              key={row.id}
-              className="border border-[var(--color-border)] hover:border-[var(--color-text-secondary)] transition-colors px-3 py-2 flex items-center gap-3"
-            >
-              <div className="flex-1 min-w-0">
-                <div className="type-row text-[var(--color-text-secondary)] flex items-baseline gap-2">
-                  <span className="text-[var(--color-text-primary)] font-medium truncate">
-                    {row.projectName}
-                  </span>
-                  <span className="text-[var(--color-text-muted)]">/</span>
-                  <span className="truncate">{row.name}</span>
-                </div>
-                <div className="type-hint text-[var(--color-text-muted)] mt-0.5 truncate">
-                  {describeHeartbeatSpec(row.specJson, row.frequency)}
-                </div>
-                {/* Heartbeat S4 (HB31): the drawer's formatter —
-                    next fire or the daemon's wait reason. */}
-                <HeartbeatStatusLine
-                  row={row}
-                  nextFire={nextFire}
-                  nextPrefix="Next: "
-                  className="type-hint mt-0.5 truncate"
-                />
+        </div>
+      )}
+
+      {wake && wakeOn && (
+        <div className="px-4 py-3 flex items-start justify-between gap-6" data-settings-id="wake-scheduler.battery">
+          <div className="min-w-0 flex-1">
+            <p className={SETTING_ROW_LABEL}>Also on battery</p>
+            <p className={SETTING_ROW_HINT}>
+              Without this, K2 wakes the computer only while it is plugged in. Never below {wake.batteryFloorPercent ?? 20}% battery.
+            </p>
+          </div>
+          <Toggle
+            size="sm"
+            checked={onBattery}
+            disabled={wakeSaving}
+            onChange={() => void handleSetWake(true, !onBattery)}
+            aria-label="Also wake on battery"
+          />
+        </div>
+      )}
+    </SettingsGroup>
+  )
+
+  // ── Your heartbeats ────────────────────────────────────────────────
+  const listState = heartbeatsError ? (
+    <SettingsLoadState
+      kind="error"
+      title={heartbeatsError.oldHost ? 'This server can’t list its heartbeats here yet' : 'Your heartbeats couldn’t load'}
+      detail={heartbeatsError.detail || null}
+      action={<Button onClick={() => void refreshHeartbeats()}>Try again</Button>}
+      testId="heartbeats-list-error"
+    >
+      {heartbeatsError.oldHost
+        ? 'Update K2 on the server, then try again.'
+        : 'K2 couldn’t read the heartbeats on this server. They still run on their schedules; try again in a moment.'}
+    </SettingsLoadState>
+  ) : heartbeats === null && heartbeatsLoading ? (
+    <SettingsLoadState kind="loading" title="Loading your heartbeats…" testId="heartbeats-list-loading" />
+  ) : heartbeats !== null && heartbeats.length === 0 ? (
+    <SettingsLoadState kind="empty" title="No heartbeats yet" testId="heartbeats-list-empty">
+      A heartbeat wakes a workspace’s agent on a schedule. Add one in a workspace’s settings, under Workspaces → Heartbeats.
+    </SettingsLoadState>
+  ) : undefined
+
+  const listGroup = (
+    <SettingsGroup
+      card
+      title="Your heartbeats"
+      hint="Every heartbeat in every workspace. Pause one to stop it running until you turn it back on."
+      state={listState}
+      testId="heartbeats-list"
+    >
+      {(heartbeats ?? []).map((row) => {
+        const target = deriveDeliveryTarget(row)
+        const rowNote = rowNotes[row.id]
+        return (
+          <div key={row.id} className="px-4 py-3" data-testid={`heartbeat-row-${row.id}`}>
+            <div className="flex items-start justify-between gap-6">
+              <div className="min-w-0 flex-1">
+                <p className="type-row text-[var(--color-text-primary)] truncate">
+                  <span className="type-name">{row.name}</span>
+                  <span className="text-[var(--color-text-secondary)]"> in {row.projectName}</span>
+                </p>
+                <p className={SETTING_ROW_HINT}>{describeHeartbeatSpec(row.specJson, row.frequency)}</p>
+                {/* Heartbeat S4 (HB31): next run or the daemon's wait reason. */}
+                {/* Paused by a person reads plainly; paused by K2 keeps the
+                    formatter's reason. */}
+                {!row.enabled && !row.disabledReason && !row.waitDetail && (!row.waitReason || row.waitReason === 'disabled:user') ? (
+                  <p className="type-hint text-[var(--color-text-secondary)] mt-0.5">Paused. Turn it on to resume.</p>
+                ) : (
+                  <HeartbeatStatusLine row={row} nextFire={nextFire} nextPrefix="Next run: " className="type-hint mt-0.5" />
+                )}
+                {rowNote && (
+                  <p
+                    role={rowNote.kind === 'error' ? 'alert' : 'status'}
+                    data-row-note={rowNote.kind}
+                    className={`type-hint mt-1 max-w-[75ch] ${rowNote.kind === 'error' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-ok-soft)]'}`}
+                  >
+                    {rowNote.text}
+                  </p>
+                )}
               </div>
-              {/* Delivery drop-down (replaces the pinned-chat checkbox)
-                  — pinned chat / own session / a trained saved session
-                  — plus an open-target button that jumps to the
-                  heartbeat's chat (drawer-row-click flow). */}
-              <div className="flex items-center gap-0.5 flex-shrink-0">
+              <div className="flex items-center gap-2 flex-shrink-0">
                 <HeartbeatSessionPicker
+                  variant="field"
+                  ariaLabel={`Where ${row.name} runs`}
                   projectPath={row.projectPath}
                   projectId={row.projectId}
-                  value={deriveDeliveryTarget(row)}
-                  onSelect={(next) => { void handleSetDelivery(row, next) }}
+                  value={target}
+                  onSelect={(next) => {
+                    void handleSetDelivery(row, next)
+                  }}
                 />
-                <button
-                  type="button"
-                  onClick={() => { void openHeartbeatTarget(useTabsStore, row.projectPath, row.name, deriveDeliveryTarget(row).mode) }}
-                  title={
-                    deriveDeliveryTarget(row).mode === 'pinned'
-                      ? 'Open the workspace’s pinned chat tab'
-                      : 'Open this heartbeat’s chat session'
-                  }
-                  aria-label="Open this heartbeat's wakeup destination"
-                  className="inline-flex items-center justify-center h-4 w-4 rounded-[var(--radius-field)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer flex-shrink-0"
+                <Button
+                  variant="quiet"
+                  onClick={() => {
+                    void openHeartbeatTarget(useTabsStore, row.projectPath, row.name, target.mode)
+                  }}
+                  title={target.mode === 'pinned' ? 'Open the workspace’s pinned chat' : 'Open this heartbeat’s chat'}
+                  aria-label={`Open the chat ${row.name} runs in`}
                 >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M15 3h6v6" />
-                    <path d="M10 14L21 3" />
-                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                  </svg>
-                </button>
+                  Open chat
+                </Button>
+                <Button onClick={() => setEditingHeartbeat(row)} title={`Edit ${row.wakeupPath}`} aria-label={`Edit the wakeup for ${row.name}`}>
+                  Edit wakeup
+                </Button>
+                <Toggle
+                  size="sm"
+                  checked={row.enabled}
+                  onChange={() => void handleToggleEnabled(row, !row.enabled)}
+                  aria-label={`Run ${row.name} in ${row.projectName}`}
+                  title={row.enabled ? 'On: turn off to pause it' : 'Paused: turn on to resume it'}
+                />
               </div>
-              {/* Edit-wakeup */}
-              <button
-                type="button"
-                onClick={() => handleEditWakeup(row)}
-                className="type-control px-2 py-1 border border-[var(--color-border)] hover:bg-white/[0.04] hover:border-[var(--color-text-secondary)] transition-colors cursor-pointer no-drag flex-shrink-0"
-                title={`Open ${row.wakeupPath}`}
-              >
-                Edit Wakeup
-              </button>
-              {/* Enable toggle */}
-              <Toggle size="sm"
-                checked={row.enabled}
-                onChange={() => handleToggleEnabled(row, !row.enabled)}
-                title={row.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
-              />
             </div>
+          </div>
+        )
+      })}
+    </SettingsGroup>
+  )
+
+  // ── Recent runs ────────────────────────────────────────────────────
+  const shown = (fires ?? []).filter((f) => firesView === 'all' || describeDecision(f.decision).tone === 'problem')
+  const problemCount = (fires ?? []).filter((f) => describeDecision(f.decision).tone === 'problem').length
+  const firesState =
+    fires === null ? (
+      firesError ? (
+        <SettingsLoadState
+          kind="error"
+          title="Recent runs couldn’t load"
+          detail={firesError}
+          action={<Button onClick={() => setFiresAttempt((n) => n + 1)}>Try again</Button>}
+          testId="heartbeats-runs-error"
+        >
+          K2 couldn’t read what the scheduler did. Your heartbeats still run; try again in a moment.
+        </SettingsLoadState>
+      ) : (
+        <SettingsLoadState kind="loading" title="Loading recent runs…" testId="heartbeats-runs-loading" />
+      )
+    ) : fires.length === 0 ? (
+      <SettingsLoadState kind="empty" title="No runs yet" testId="heartbeats-runs-empty">
+        Each time a heartbeat is due, what K2 did shows here: ran, skipped or failed, and why.
+      </SettingsLoadState>
+    ) : undefined
+
+  const runsGroup = (
+    <SettingsGroup
+      card
+      title="Recent runs"
+      hint="What K2 did each time a heartbeat was due, newest first. Open a run to see why."
+      action={
+        fires && fires.length > 0 ? (
+          <Segmented<'all' | 'problems'>
+            aria-label="Show runs"
+            value={firesView}
+            onChange={(next) => {
+              setFiresView(next)
+              setOpenFire(null)
+            }}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'problems', label: problemCount > 0 ? `Problems (${problemCount})` : 'Problems' },
+            ]}
+          />
+        ) : undefined
+      }
+      state={firesState}
+      testId="heartbeats-runs"
+    >
+      {shown.length === 0 ? (
+        <div className="px-4 py-6">
+          <p className={SETTING_ROW_LABEL}>No problems</p>
+          <p className={SETTING_ROW_HINT}>Every run in the last {fires?.length ?? 0} ran or was skipped on purpose.</p>
+        </div>
+      ) : (
+        <ul className="max-h-[32rem] overflow-y-auto divide-y divide-[var(--color-border)]" data-testid="heartbeats-runs-rows">
+          {shown.map((fire) => (
+            <FireRow key={fire.id} fire={fire} open={openFire === fire.id} onToggle={() => setOpenFire((id) => (id === fire.id ? null : fire.id))} />
           ))}
-        </div>
+        </ul>
+      )}
+      <div className="px-4 py-2.5">
+        {firesError ? (
+          <p role="alert" className="type-hint text-[var(--color-text-primary)] flex items-center gap-2">
+            <span aria-hidden="true" className="inline-block h-2 w-2 rounded-[var(--radius-status)] bg-[var(--color-status-error)]" />
+            <span>
+              Stopped updating; showing the last runs K2 read.{' '}
+              <span className="text-[var(--color-text-secondary)]">The server said: {firesError.replace(/[.\s]+$/, '')}.</span>
+            </span>
+          </p>
+        ) : (
+          <p className="type-hint text-[var(--color-text-secondary)]">
+            {firesView === 'problems' ? `${shown.length} of the last ${fires?.length ?? 0} runs` : `The last ${fires?.length ?? 0} runs`}. Updates every few
+            seconds.
+          </p>
+        )}
       </div>
-      {/* ── Right-most column: universal fire audit log ──────────────── */}
-      <div className="flex-1 min-w-0 max-w-[420px]">
-        <div className="flex items-baseline justify-between mb-1">
-          <h2 className="type-title text-[var(--color-text-primary)]">
-            Recent Fires
-          </h2>
-          <span className="type-hint text-[var(--color-text-muted)] tabular-nums">
-            last {fires.length}
-          </span>
-        </div>
-        <p className="type-hint text-[var(--color-text-muted)] mb-3 leading-relaxed">
-          Live audit feed of every scheduler decision across all
-          workspaces — fires, skips, errors. Updates every 5s. Hover
-          a row for the full skip reason.
+    </SettingsGroup>
+  )
+
+  return (
+    <div data-settings-id="heartbeats" className={`w-full ${CONTENT_WIDTH} space-y-6 pb-6`}>
+      <header className="min-w-0">
+        <h2 className="type-title text-[var(--color-text-primary)] flex items-center gap-2">
+          Heartbeats
+          <BetaTag />
+        </h2>
+        <p className={SETTING_ROW_HINT}>
+          Heartbeats wake your agents on a schedule. Here you see every one on this server, pause or resume them, and
+          find out why one didn’t run.
         </p>
-        <div className="space-y-0.5 max-h-[600px] overflow-y-auto">
-          {fires.length === 0 && (
-            <div className="type-hint text-[var(--color-text-muted)] italic py-3">
-              No fire decisions recorded yet. Heartbeats will appear
-              here on their next scheduler tick.
-            </div>
-          )}
-          {fires.map((fire) => {
-            const style = decisionStyle(fire.decision)
-            return (
-              <div
-                key={fire.id}
-                className="px-2 py-1 flex items-center gap-2 hover:bg-white/[0.03] transition-colors type-hint font-mono"
-                title={[
-                  fire.reason ? `${fire.decision} — ${fire.reason}` : fire.decision,
-                  heartbeatHistoryActorLine(fire),
-                ]
-                  .filter(Boolean)
-                  .join('\n')}
-              >
-                <span className={`flex-shrink-0 ${style.color}`} aria-hidden="true">
-                  {style.label}
-                </span>
-                <span className="flex-shrink-0 text-[var(--color-text-muted)] tabular-nums w-[68px]">
-                  {formatFiredAt(fire.firedAt)}
-                </span>
-                <span className="flex-1 min-w-0 truncate text-[var(--color-text-secondary)]">
-                  <span className="text-[var(--color-text-primary)]">{fire.projectName}</span>
-                  {fire.scheduleName && (
-                    <>
-                      <span className="text-[var(--color-text-muted)]"> / </span>
-                      <span>{fire.scheduleName}</span>
-                    </>
-                  )}
-                </span>
-                <span className="flex-shrink-0 text-[var(--color-text-muted)] uppercase tracking-wider type-badge">
-                  {fire.decision === 'fired' ? 'fired' : fire.decision.replace(/^skipped_/, '')}
-                </span>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-      </div>
+      </header>
+      {statusGroup}
+      {listGroup}
+      {runsGroup}
     </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
+import { Button } from '@/components/ui/Button'
 import { createPortal } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
@@ -44,6 +45,8 @@ import { useBrowserOverlay } from '@/lib/browser-overlay'
  * explicit session's title, `chat/list` also loads once on mount.
  */
 
+const TRIGGER_TITLE = "Where this heartbeat's wakeup is delivered — the workspace's pinned chat, its own session, or a saved session"
+
 interface HeartbeatSessionPickerProps {
   projectPath: string
   /** Canonical workspace id — keys the `workspace_session_get` read
@@ -51,6 +54,11 @@ interface HeartbeatSessionPickerProps {
   projectId: string
   value: HeartbeatDeliveryTarget
   onSelect: (next: HeartbeatDeliveryTarget) => void
+  /** `inline` (default): the drawer's small text trigger. `field`: a
+   *  Settings row's control, sized and ringed like the quiet button. */
+  variant?: 'inline' | 'field'
+  /** Names the trigger for screen readers (e.g. with the heartbeat's name). */
+  ariaLabel?: string
 }
 
 export function HeartbeatSessionPicker({
@@ -58,6 +66,8 @@ export function HeartbeatSessionPicker({
   projectId,
   value,
   onSelect,
+  variant = 'inline',
+  ariaLabel = 'Heartbeat wakeup destination',
 }: HeartbeatSessionPickerProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   // null = not fetched yet (distinct from an empty workspace).
@@ -215,23 +225,46 @@ export function HeartbeatSessionPicker({
 
   const listReady = sessions !== null && pinnedResolved
 
+  const triggerBody = (
+    <>
+      <span className="truncate max-w-[24ch]">{label}</span>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
+        <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
+      </svg>
+    </>
+  )
+
   return (
     <div ref={rootRef} className="relative inline-flex min-w-0">
-      <button
-        ref={buttonRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="Where this heartbeat's wakeup is delivered — the workspace's pinned chat, its own session, or a saved session"
-        aria-label="Heartbeat wakeup destination"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
-      >
-        <span className="truncate max-w-[24ch]">{label}</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="flex-shrink-0">
-          <path d={open ? 'M18 15l-6-6-6 6' : 'M6 9l6 6 6-6'} />
-        </svg>
-      </button>
+      {variant === 'field' ? (
+        // A Settings row's control: the quiet button itself, so its size,
+        // edge and focus ring match the buttons beside it.
+        <Button
+          ref={buttonRef}
+          variant="quiet"
+          onClick={() => setOpen((v) => !v)}
+          title={TRIGGER_TITLE}
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className="inline-flex items-center gap-1.5 min-w-0"
+        >
+          {triggerBody}
+        </Button>
+      ) : (
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          title={TRIGGER_TITLE}
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-field)] text-[10px] font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors no-drag cursor-pointer min-w-0"
+        >
+          {triggerBody}
+        </button>
+      )}
       {open && menuBox && createPortal(
         <div
           ref={menuRef}

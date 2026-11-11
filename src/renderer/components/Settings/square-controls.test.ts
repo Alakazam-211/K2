@@ -59,15 +59,15 @@ describe('Settings square controls', () => {
     expect(hits).toEqual([])
   })
 
-  it('Wake Scheduler "Also on battery" is a Checkbox', () => {
+  it('Wake Scheduler "Also on battery" is the shared Toggle, like the wake switch above it', () => {
     const src = readFileSync(join(ROOT, 'sections', 'WakeSchedulerSection.tsx'), 'utf8')
     const at = src.indexOf('Also on battery')
     expect(at).toBeGreaterThan(-1)
-    const before = src.slice(0, at)
-    const lastSquare = before.lastIndexOf('<Checkbox')
-    expect(lastSquare).toBeGreaterThan(-1)
-    expect(before.slice(lastSquare)).toContain('handleSetWake(true, e.target.checked)')
-    expect(before.lastIndexOf('<input')).toBeLessThan(lastSquare)
+    const after = src.slice(at)
+    const toggle = after.indexOf('<Toggle')
+    expect(toggle).toBeGreaterThan(-1)
+    expect(after.slice(toggle, toggle + 300)).toContain('handleSetWake(true, !onBattery)')
+    expect(src).not.toContain('<input')
   })
 })
 

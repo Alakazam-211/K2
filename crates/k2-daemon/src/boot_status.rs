@@ -1422,6 +1422,7 @@ mod tests {
                 "app-chat-space-v1",
                 "app-recordings-v1",
                 "app-hosted-sign-in-v1",
+                "app-sign-in-door-status-v1",
                 "live-access-v1",
                 "activity-live-busy",
                 "publish-dev-v1",

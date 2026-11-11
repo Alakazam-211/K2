@@ -4,7 +4,7 @@
 // Tab titles Chat/Inbox vs Work Board stay locked in stores/tabs.test.ts.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

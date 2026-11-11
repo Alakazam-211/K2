@@ -3,7 +3,7 @@
 // browser on click, through the opener plugin. Only http, https and mailto
 // open; the click never reaches the message around the link.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 
 const opener = vi.hoisted(() => ({ openUrl: vi.fn<(url: string) => Promise<void>>() }))
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: (url: string) => opener.openUrl(url) }))

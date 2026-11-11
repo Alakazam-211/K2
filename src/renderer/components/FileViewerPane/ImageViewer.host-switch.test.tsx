@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, waitFor } from '@testing-library/react'
+import { cleanup, waitFor } from '@testing-library/react'
 
 const daemonCliGet = vi.fn()
 vi.mock('@/lib/daemon-cli', async (importOriginal) => {

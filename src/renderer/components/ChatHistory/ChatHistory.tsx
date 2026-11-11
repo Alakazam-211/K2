@@ -1,6 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { onChatHistoryChanged } from '@/stores/session-events'
-import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import { useRoom, useRoomProjects, useRoomTabs } from '@/components/Room/RoomContext'

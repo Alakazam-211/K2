@@ -1,6 +1,6 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { AgentItemData, Tab, TerminalItemData } from '@/stores/tabs'
-import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
+import { scopedKey, type ServerScope } from '@/kessel/server-scope'
 
 /** SSOT display: non-empty trimmed customName, else provider title. */
 export function chatDisplayName(s: { customName?: string | null; title: string }): string {

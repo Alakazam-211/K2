@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach, vi } from 'vitest'
-import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
+import { screen, cleanup, act, fireEvent } from '@testing-library/react'
 import { COMPOSE_DROP_SURFACE_SELECTOR } from '@/lib/compose-surface-drop'
 import { ThreadOverlayColumn } from './ThreadOverlayColumn'
 import { renderInRoom, testRoom } from '@/test-utils/room'

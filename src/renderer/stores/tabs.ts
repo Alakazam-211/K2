@@ -1,5 +1,4 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
-import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliGetText, daemonCliPost, RecoveringError } from '@/lib/daemon-cli'
 import { pathBaseName, pickUntitledName, untitledNamesInUse } from '@/lib/untitled-file'
 import { jittered } from '@/lib/backoff'

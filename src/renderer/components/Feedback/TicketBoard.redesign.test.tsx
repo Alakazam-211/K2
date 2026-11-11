@@ -8,7 +8,6 @@
 // surface: the ticket thread with the options above its text area and
 // Send, and the asking session's terminal. No bottom action bar: status and
 // reassign live in the header.
-import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { FeedbackBrief, FeedbackListRow, FeedbackShow } from './feedback-api'

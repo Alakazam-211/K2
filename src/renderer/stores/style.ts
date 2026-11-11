@@ -24,7 +24,6 @@ import {
   canonicalStyleSelection,
   paletteSlots,
   parseSchemeMode,
-  resolvePalette,
   resolveStyleSelection,
   type SchemeMode,
   type StyleSelection,

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
+import { screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { continueHarnessKeys } from './ContinueNewChatDialog'
 
 const PROJECT = '/work/continue-new-chat'

@@ -174,7 +174,7 @@ vi.mock('@/stores/connect-host', () => ({
 
 
 import { TerminalPane } from './TerminalPane'
-import { fixedStore, inRoom, renderInRoom, testRoom } from '@/test-utils/room'
+import { fixedStore, renderInRoom, testRoom } from '@/test-utils/room'
 import { useTabsStore } from '@/stores/tabs'
 import { useSettingsStore } from '@/stores/settings'
 import { useToastStore } from '@/stores/toast'

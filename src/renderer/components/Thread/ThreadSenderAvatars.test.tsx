@@ -4,7 +4,7 @@
 // that Thread is open; one picture per run; never on your own messages; no
 // motion class under reduced motion.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, screen, waitFor } from '@testing-library/react'
 import { ThreadOverlayPane } from '@/components/SessionView/ThreadOverlayPane'
 import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'

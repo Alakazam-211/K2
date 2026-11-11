@@ -13,7 +13,7 @@ import {
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { useSettingsStore } from '@/stores/settings'
 import { keyEventToSequence, naturalTextEditingSequence } from '@/lib/key-mapping'
-import { isFileDragActive, markDropConsumed } from '@/lib/file-drag'
+import { isFileDragActive } from '@/lib/file-drag'
 import { detectLinks, type DetectedLink } from './terminalLinkDetector'
 import { TerminalComposeBar } from './TerminalComposeBar'
 import { useRoom } from '@/components/Room/RoomContext'

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { terminalListRunning, terminalWrite } from '@/lib/terminal-daemon'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'

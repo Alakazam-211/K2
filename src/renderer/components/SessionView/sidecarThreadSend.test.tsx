@@ -3,7 +3,7 @@
 // with the draft and goes once the address comes. Fail loud — no skip.
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { useSessionViewChrome } from './sessionViewChrome'
 
 const h = vi.hoisted(() => {

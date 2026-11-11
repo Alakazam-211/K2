@@ -24,7 +24,6 @@
 // Term + byte reader + APC filter. None of that here.
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { readText as tauriClipboardReadText, writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
 import { desktopOsFromNavigator } from '@/lib/desktop-chrome'
 import { terminalClipboardChord } from '@/lib/terminal-clipboard-chord'

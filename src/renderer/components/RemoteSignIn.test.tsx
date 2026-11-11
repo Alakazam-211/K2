@@ -6,7 +6,6 @@
 // top-bar). Fail loud: exact URLs, exact bodies, exact copy.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import React from 'react'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 
 const fakeKeychain = new Map<string, string>()

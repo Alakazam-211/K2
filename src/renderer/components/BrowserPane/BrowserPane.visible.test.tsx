@@ -2,7 +2,7 @@
 // Fail loud. Focus must not hide the native page. Cover and a hidden tab must.
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup } from '@testing-library/react'
 import { invoke } from '@tauri-apps/api/core'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import { RoomParkedContext } from '@/contexts/RoomParkedContext'

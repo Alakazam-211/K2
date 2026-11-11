@@ -10,7 +10,7 @@
 // falls back to the inline pane when the workspace isn't exempt.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, cleanup, act } from '@testing-library/react'
+import { cleanup, act } from '@testing-library/react'
 import { useEffect, useRef } from 'react'
 
 const h = vi.hoisted(() => ({

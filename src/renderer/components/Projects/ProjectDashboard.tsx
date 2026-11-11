@@ -58,7 +58,7 @@
 
 import { PrimaryRoom } from '@/components/Room/PrimaryRoom'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
+import { daemonCliGet } from '@/lib/daemon-cli'
 import { tryFocusPreferredInputInDashboardPane } from '@/lib/workspace-switch-focus'
 import { startHostFileTextPoll } from '@/lib/host-file-text-poll'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'

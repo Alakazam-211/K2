@@ -8,7 +8,6 @@
 // Settings overlay, and App.tsx must keep using the shared layer constant.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import React from 'react'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { render, screen, cleanup, act } from '@testing-library/react'

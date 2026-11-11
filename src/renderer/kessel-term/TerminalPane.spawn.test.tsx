@@ -25,7 +25,7 @@
 // are mocked (fetch, WebSocket, daemon creds, Tauri invoke, stores).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, waitFor } from '@testing-library/react'
+import { cleanup, waitFor } from '@testing-library/react'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 
 // ── I/O boundary mocks ────────────────────────────────────────────────────

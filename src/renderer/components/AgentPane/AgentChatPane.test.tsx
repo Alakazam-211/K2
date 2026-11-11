@@ -20,7 +20,7 @@
 // args, onChildExit).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { act, render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
+import { act, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useEffect } from 'react'

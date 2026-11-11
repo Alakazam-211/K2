@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { useState } from 'react'
-import { act, render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { act, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import ContextMenu from '@/components/ContextMenu/ContextMenu'
 import { useContextMenuStore } from '@/stores/context-menu'
 

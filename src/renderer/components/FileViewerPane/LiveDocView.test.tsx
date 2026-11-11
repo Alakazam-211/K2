@@ -15,7 +15,6 @@
 //   - closed for another reason (idle): says why, and Reopen connects again.
 
 import '../../../../vendor/k2-mpc-base/client/test/jsdom-shims'
-import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { EditorView } from '@codemirror/view'

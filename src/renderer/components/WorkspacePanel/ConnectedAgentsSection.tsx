@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { activateProject, useProjectsStore } from '@/stores/projects'
+import { activateProject } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
 import { SectionManageCog } from './SectionManageCog'
 import { scopedKey } from '@/kessel/server-scope'

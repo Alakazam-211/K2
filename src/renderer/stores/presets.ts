@@ -12,7 +12,7 @@ import { ensureOneCli, installableCliProgram } from '@/lib/ensure-cli'
 import { parseCommand } from '@/lib/agent-resolve'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { registerPresetsStore, type TabsStore } from './tabs'
-import type { TerminalPane, Tab, PaneGroup, Item } from './tabs'
+import type { TerminalPane } from './tabs'
 import { primaryScope } from '@/kessel/server-scope'
 import { hostScopedKey } from '@/lib/host-scoped-storage'
 

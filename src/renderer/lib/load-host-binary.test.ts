@@ -144,7 +144,7 @@ describe('revokeObjectUrl', () => {
   })
 })
 
-import { sniffImageMime, coerceImageBytesForPreview, bytesToObjectUrl } from './load-host-binary'
+import { sniffImageMime, coerceImageBytesForPreview } from './load-host-binary'
 
 describe('sniffImageMime / coerceImageBytesForPreview', () => {
   it('sniffs PNG magic', () => {

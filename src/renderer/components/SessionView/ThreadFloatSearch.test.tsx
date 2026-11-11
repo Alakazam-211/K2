@@ -5,7 +5,6 @@ import type { ReactNode } from 'react'
 import { ThreadFloatSearch, isThreadFindKey } from './ThreadFloatSearch'
 import { ThreadOverlayPane } from './ThreadOverlayPane'
 import {
-  THREAD_SEARCH_HIGHLIGHT,
   THREAD_SEARCH_HIGHLIGHT_CURRENT,
   findThreadMatches,
   threadSearchState,

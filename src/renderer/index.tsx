@@ -1,7 +1,6 @@
 import './globals.css'
 // Dev-only room-frame shim (Home P1.5 spike). Must stay the first JS import.
 import './dev/room-frame-shim'
-import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { ConnectionGate } from './components/ConnectionGate'

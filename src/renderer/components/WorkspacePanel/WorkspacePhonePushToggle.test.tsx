@@ -4,7 +4,6 @@
 // caller's own row (POST /cli/notify/prefs), shows the effective value and
 // where it came from, offers Reset on the caller's own row, refetches on
 // `notify_prefs_changed`, and hides on a server without `thread-push-v1`.
-import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 

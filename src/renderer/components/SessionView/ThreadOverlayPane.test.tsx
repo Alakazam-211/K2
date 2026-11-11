@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, afterEach, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { createElement, useState, type ReactNode } from 'react'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import {

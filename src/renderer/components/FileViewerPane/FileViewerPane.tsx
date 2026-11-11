@@ -103,7 +103,6 @@ import {
   getDefaultViewMode,
   isBinaryPreviewCategory,
   supportsViewToggle,
-  type FileCategory,
   type ViewMode,
 } from './fileCategory'
 import { isNewUntitledFile, saveNewUntitledFile, untitledNamesInUse } from '@/lib/untitled-file'

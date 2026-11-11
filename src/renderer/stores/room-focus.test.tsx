@@ -47,7 +47,7 @@ import { usePageViewStore } from '@/stores/page-view'
 import { useHomesStore } from '@/stores/homes'
 import { useProjectsStore } from '@/stores/projects'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
-import { projectsStoreOf, testRoom } from '@/test-utils/room'
+import { testRoom } from '@/test-utils/room'
 
 /** A tabs store double that records every room operation it receives. */
 function recordingTabs(name: string, log: string[]) {

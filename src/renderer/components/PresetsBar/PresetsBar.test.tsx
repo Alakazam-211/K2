@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { PresetsBar } from './PresetsBar'
 import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 import { usePresetsStore } from '@/stores/presets'

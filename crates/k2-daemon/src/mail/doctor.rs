@@ -1933,6 +1933,11 @@ pub fn nightly_due(server_status: Option<&str>, last_ran_at: Option<i64>, now: i
 /// network: tests pass a recording fake; only `spawn_nightly` binds
 /// the real [`run`] — the house rule that no test path can dial out.
 fn nightly_sweep_once(run_server_doctor: &dyn Fn()) {
+    // The doctor resolves and dials off the box (blocklists, :25, HTTPS):
+    // never on a timer under air-gap. `k2 hostmail doctor` still can.
+    if k2_core::airgap::enabled() {
+        return;
+    }
     let (status, last_ran_at): (Option<String>, Option<i64>) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2950,8 +2955,16 @@ mod tests {
         nightly_sweep_once(&fake_run);
         assert_eq!(calls.load(Ordering::SeqCst), 0, "stopped → no run");
 
-        // Running + no server-level run on file → runs once.
+        // Running + due, but air-gap on → never runs.
         seed_server("running");
+        {
+            let _air = k2_core::test_env::EnvVar::set("K2_AIRGAP", "1");
+            nightly_sweep_once(&fake_run);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "air-gap → no run");
+
+        // Running + no server-level run on file → runs once.
+        let _off = k2_core::test_env::EnvVar::set("K2_AIRGAP", "0");
         nightly_sweep_once(&fake_run);
         assert_eq!(calls.load(Ordering::SeqCst), 1, "running + nothing on file → due");
 

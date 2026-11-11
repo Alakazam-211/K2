@@ -27,7 +27,8 @@
 //! shape (detached tokio task, blocking sweep via `spawn_blocking`).
 //! Cadence: pending/error domains re-check every ~5 min (verification
 //! "retries for 48 h, never fail-fasts" — pre-mortem #4; in fact it
-//! never stops), Verified domains re-verify DAILY (§6.3).
+//! never stops), Verified domains re-verify DAILY (§6.3). Under air-gap
+//! (`K2_AIRGAP`) the poller makes no lookup at all.
 //!
 //! DNS is behind the [`DnsResolver`] trait: production =
 //! [`SystemResolver`] (hickory, system config); every test uses canned
@@ -770,6 +771,11 @@ fn sweep_once() -> Sweep {
 pub(crate) fn sweep_with(
     make_resolver: &dyn Fn() -> Result<Box<dyn DnsResolver>, String>,
 ) -> Sweep {
+    // Air-gap promises no outbound network: no lookup, not even a
+    // resolver (read every tick, so turning it on or off takes effect).
+    if k2_core::airgap::enabled() {
+        return Sweep::AirGap;
+    }
     let due: Vec<String> = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -805,9 +811,22 @@ pub fn spawn() -> JoinHandle<()> {
     tokio::spawn(async move {
         let tick = tick_interval();
         k2_core::log_debug!("[mail/dns] poller started — tick={}s", tick.as_secs());
+        // One line when air-gap turns the poller off (or back on), never
+        // one per tick.
+        let mut was_air = false;
         loop {
             // Blocking DNS + SQLite — keep it off the async reactor.
-            let _ = tokio::task::spawn_blocking(sweep_once).await;
+            let Ok(sweep) = tokio::task::spawn_blocking(sweep_once).await else {
+                tokio::time::sleep(tick).await;
+                continue;
+            };
+            let air = sweep == Sweep::AirGap;
+            if air && !was_air {
+                k2_core::log_debug!("[mail/dns] poller off under air-gap (K2_AIRGAP): no DNS lookups");
+            } else if !air && was_air {
+                k2_core::log_debug!("[mail/dns] air-gap off: poller resumes");
+            }
+            was_air = air;
             tokio::time::sleep(tick).await;
         }
     })

@@ -49,9 +49,9 @@
       "$description": "Checkbox outlines and other controls needing more contrast than border."
     },
     "control-edge": {
-      "$value": "#6b6b72",
+      "$value": "#7a7a82",
       "$type": "color",
-      "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, bg-elevated being the worst case. Hairline dividers stay on border."
+      "$description": "Outline of interactive controls (buttons, fields, dropdowns, checkboxes, radios, switch tracks, segmented pickers): at least 3:1 on every background, the hovered list row (row-hover over a card, #2c2c2c: 3.28) being the worst case. Hairline dividers stay on border."
     },
     "divider": {
       "$value": "#48484b",

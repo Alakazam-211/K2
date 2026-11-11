@@ -50805,8 +50805,9 @@ k2 setup skip <step>    skip one step: llm_sign_in, first_agent (or chief_of_sta
 
 K5, K2's own agent (when the owner has turned on k5FirstRun):
 k2 setup k5 [--tool claude|codex|grok] [--name N] [--handle H]
-                        meet K5, your chief of staff for K2: it runs setup,
-                        settings and your agents. --tool defaults to the
+                        meet K5, the agent that runs K2: its setup,
+                        settings and agents. It helps you hire
+                        your Chief of Staff. --tool defaults to the
                         server default (it must be signed in: k2 llm tokens);
                         --name K5 and --handle k5 by default (its folder is
                         <hire root>/<handle>). Owner, Owner or Admin login.
@@ -50968,7 +50969,7 @@ k5 = d.get("k5")
 if k5:
     print("K5: %s at %s (k2 thread <its handle> to talk to it)" % (k5.get("name"), k5.get("path")))
 if d.get("offer") == "meet_k5":
-    print("Next: meet K5, your chief of staff: k2 setup k5")
+    print("Next: meet K5, the agent that runs K2: k2 setup k5")
 '
 }
 
@@ -50983,7 +50984,7 @@ try:
 except Exception:
     sys.exit(1)
 sys.exit(0 if isinstance(d, dict) and d.get("offer") == "meet_k5" else 1)' 2>/dev/null; then
-        echo "Next: meet K5, your chief of staff: k2 setup k5"
+        echo "Next: meet K5, the agent that runs K2: k2 setup k5"
     fi
     return 0
 }

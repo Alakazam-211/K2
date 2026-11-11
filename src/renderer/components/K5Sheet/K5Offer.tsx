@@ -14,7 +14,7 @@ import { openK5Sheet } from '@/stores/k5-sheet'
 
 /** The contract's copy (purpose only). */
 export const K5_OFFER_COPY = {
-  title: 'Meet K5, your chief of staff',
+  title: "Meet K5, K2's own agent",
   line: 'K5 runs K2 for you: setup, settings and your agents. It will help you hire your own Chief of Staff.',
   meet: 'Meet K5',
   notNow: 'Not now',

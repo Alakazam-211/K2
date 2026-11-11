@@ -24,7 +24,7 @@ function sliceFn(src: string, name: string, until: string): string {
 }
 
 const agentRowStatus = sliceFn(sidebarSrc, 'AgentRowStatus', 'function NavWorktreeRow')
-const singleProjectItem = sliceFn(sidebarSrc, 'SingleProjectItem', 'function WorkspaceButton')
+const singleProjectItem = sliceFn(sidebarSrc, 'SingleProjectItem', '// ── Sidebar ──')
 // The two-row template lives in the shared row shell (Agents + Home rows).
 const agentRowButton = sliceFn(sidebarSrc, 'AgentRowButton', 'function SingleProjectItem')
 const activeBarItem = sliceFn(activeBarSrc, 'ActiveBarItem', 'export default function ActiveBar')

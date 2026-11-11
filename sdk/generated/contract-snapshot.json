@@ -6,7 +6,7 @@
   "runtimeSha256": "92df683d1130bee4e59d32c9d1937728993a75d6fd590b56314529ebc68f8ab5",
   "files": {
     "cli/k2": "893a494bf9e14840dc991f6404bca6a283b476559968e12b7867e59a82327b36",
-    "cli/k2#refusals": "41692d47c48d65c338a0590b8a2e61e16c052c7e40cc1cb39ebf1a8162cfaaa2",
+    "cli/k2#refusals": "918cf48da27b7bbec061c77da292cb4bcbf48b3365aa124963efa30ea4c47191",
     "cli/k2#study app-api": "13a1a1d0ce00c2ebb9ec497eb090754d15a84b3e28ce7094028e7003455e9083",
     "cli/k2#study live": "7f314f6dcdbee2c019329bbfaf2e35ed524f9e067d738c44addc18b4ec91487e",
     "cli/k2#zen guide libs": "31aa703aa91f797b7ff5ae5c47c6147c22ab973224bc660973e813046034d820",

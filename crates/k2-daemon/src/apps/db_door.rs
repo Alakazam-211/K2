@@ -118,7 +118,27 @@ pub struct Admit {
 /// `<db>_app_<app id with - as _>` (an App id never holds `_`, so the map
 /// is one to one).
 pub fn app_group_role(db: &str, app: &str) -> String {
-    format!("{db}_app_{}", app.replace('-', "_"))
+    let full = format!("{db}_app_{}", app.replace('-', "_"));
+    if full.len() <= MAX_GROUP {
+        return full;
+    }
+    // Too long for Postgres once a generation is added (a workspace's
+    // database name is already 39+ characters): the database's first
+    // characters and a hash of (database, App), still one to one.
+    use sha2::Digest as _;
+    let h = sha2::Sha256::digest(format!("{db}\0{app}").as_bytes());
+    let tag: String = h.iter().take(5).map(|b| format!("{b:02x}")).collect();
+    let keep = MAX_GROUP - "_app_".len() - tag.len();
+    format!("{}_app_{tag}", &db[..db.len().min(keep)])
+}
+
+/// The longest group role name: room for `__g` and four digits under
+/// Postgres's 63.
+pub const MAX_GROUP: usize = MAX_NAME - 7;
+
+/// The App's login role of generation `n` on `db`: `<group>__g<n>`.
+pub fn app_login_role(db: &str, app: &str, n: u32) -> String {
+    format!("{}__g{}", app_group_role(db, app), n.clamp(1, 9999))
 }
 
 /// The App's own roles on `db`: its group role and its login generations
@@ -137,9 +157,37 @@ pub fn is_app_role(role: &str, db: &str, app: &str) -> bool {
 }
 
 impl Admit {
+    /// The role is one this connection admits on this database. An App's
+    /// own login (S2) is in `roles` only while `k2 app db connect` holds a
+    /// connection for it there (`app_db_connections`), so a disconnect
+    /// shuts the door on it at the next connection and cuts its open
+    /// sessions ([`recheck_open`]). `app` is kept for the callers' shape.
     pub fn allows(&self, role: &str, app: &str) -> bool {
-        self.roles.iter().any(|r| r == role) || is_app_role(role, &self.database, app)
+        let _ = app;
+        self.roles.iter().any(|r| r == role)
     }
+}
+
+/// The App's own roles K2 connected it with on `database`: its current
+/// login and its group role, from `app_db_connections` (S2). Only names
+/// [`is_app_role`] accepts for this App count (a hand-edited row can't
+/// admit another App's or a workspace's role).
+pub fn connected_roles_in(conn: &rusqlite::Connection, app_id: &str, database: &str) -> Vec<String> {
+    let rows: Vec<(String, String)> = conn
+        .prepare("SELECT login_role, group_role FROM app_db_connections WHERE app_id = ?1 AND database_name = ?2 AND kind = 'box' ORDER BY as_name")
+        .and_then(|mut st| {
+            st.query_map(rusqlite::params![app_id, database], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map(|it| it.flatten().collect())
+        })
+        .unwrap_or_default();
+    let mut out: Vec<String> = Vec::new();
+    for (login, group) in rows {
+        for r in [login, group] {
+            if is_app_role(&r, database, app_id) && !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    }
+    out
 }
 
 /// What `app` may open, from K2's records (live: a grant or revoke counts
@@ -147,7 +195,7 @@ impl Admit {
 /// its test database) with `{db}_agent` and `{db}_migrator`, and databases
 /// granted to the workspace with the workspace's grantee role; each on a
 /// cluster K2 made or adopted, in the band. The App's own roles (S2) on
-/// each are admitted by name ([`is_app_role`]).
+/// each are admitted while it is connected there ([`connected_roles_in`]).
 pub fn admitted_in(conn: &rusqlite::Connection, app_id: &str) -> Vec<Admit> {
     let Some(row) = k2_core::deploy::store::get_app(conn, app_id).ok().flatten() else { return Vec::new() };
     let ws = row.owner_workspace.as_str();
@@ -174,7 +222,8 @@ pub fn admitted_in(conn: &rusqlite::Connection, app_id: &str) -> Vec<Admit> {
         if !c.holds_k2_databases() || c.major == 0 || !k2_root_proto::pg_major::in_band(c.port) {
             continue;
         }
-        let roles = if is_owned { vec![format!("{name}_agent"), format!("{name}_migrator")] } else { vec![grantee.clone()] };
+        let mut roles = if is_owned { vec![format!("{name}_agent"), format!("{name}_migrator")] } else { vec![grantee.clone()] };
+        roles.extend(connected_roles_in(conn, app_id, &name));
         out.push(Admit { database: name, roles, port: c.port, owned: is_owned });
     }
     out

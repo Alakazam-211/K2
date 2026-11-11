@@ -1092,14 +1092,83 @@ exit: 0
     },
     {
       "name": "db dsn",
-      "usage": "k2 db dsn [--db <name|id>] [--ref] [--json] [--workspace <ws>]",
-      "description": "DSN for this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
+      "usage": "k2 db dsn [--db <name|id>] [--reveal | --ref [--as NAME]] [--test [--actor migrator]] [--json] [--workspace <ws>]",
+      "description": "The DSN of this workspace's Postgres LOGIN on the unscoped DB (its default: the oldest one it owns, else the first grant), or with --db on one database by name, id or create --id (owned or granted). Since 0.46.11 it prints NO password (dsnHasPassword: false and a dsnHint): --reveal prints the full DSN on purpose, k2 db run -- <cmd> hands it to a command without printing it, --ref keeps it in the vault. A script that did psql \"$(k2 db dsn)\" now fails auth: use k2 db run. --workspace/--project (path, handle, or uuid) selects that workspace. Owner token only for a foreign workspace; a cell stamp still pins identity. Never logs the DSN.",
       "args": [],
       "flags": [
-        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test, --actor or --ref."},
-        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (k2 db list). Not with --test or --actor."},
+        {"name": "--reveal", "arg": null, "description": "Print the full DSN, password included (keep it out of chats, logs, notes and git)."},
+        {"name": "--ref", "arg": null, "description": "Keep it in the vault and print its k2v:// reference: DATABASE_URL (the default database), DATABASE_URL_<NAME> with --db, or --as NAME."},
+        {"name": "--as", "arg": "NAME", "description": "With --ref: the reference's name."},
+        {"name": "--test", "arg": null, "description": "The test database's agent DSN (--actor migrator: its migrator's)."},
+        {"name": "--json", "arg": null, "description": "JSON output ({name, dsn (no password), dsnHasPassword, dsnHint}, or {ref, name})."},
         {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."},
         {"name": "--project", "arg": "ws", "description": "Alias for --workspace."}
+      ]
+    },
+    {
+      "name": "db run",
+      "usage": "k2 db run [--db <name|id>] [--test [--actor migrator]] [--as NAME] -- <command…>",
+      "description": "Run one command with the database's DSN in its environment as DATABASE_URL (or --as NAME), the way k2 vault run hands a secret: never on argv, never printed. The command replaces k2 (its exit code is the command's). Same database rules as k2 db dsn.",
+      "args": [{"name": "command", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "One database by name, id or create --id (default: the workspace's default)."},
+        {"name": "--test", "arg": null, "description": "The test database (--actor migrator: as its migrator)."},
+        {"name": "--as", "arg": "NAME", "description": "The env name (default DATABASE_URL)."}
+      ]
+    },
+    {
+      "name": "db list",
+      "usage": "k2 db list [--json] [--workspace <ws>]",
+      "description": "The databases this workspace owns (active and test) and the ones granted to it, never dropped ones. --json: {databases: [{id, name, status, cap: {used, cap}, …}], cap}; the top-level cap is the workspace's limit (k2 db cap shows and sets it).",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "JSON output."},
+        {"name": "--workspace", "arg": "ws", "description": "Workspace path, handle, or uuid. Alias --project."}
+      ]
+    },
+    {
+      "name": "db migrate",
+      "usage": "k2 db migrate [--dir .k2/db/migrations] [--db <name|id>] [--json]",
+      "description": "Apply SQL migrations as the database's migrator ({db}_migrator), in order. Files are numbered: NNNN_name.sql (0001_users.sql, 0002_orders.sql); anything else (init.sql, an empty file) is a loud usage error. An unchanged file already applied is skipped; a rewritten applied file is refused (checksum_mismatch). After each file K2 grants USAGE, table DML and sequences on every migrator-owned schema to the agent (and so to every App connected with k2 app db connect). Never CREATE ROLE or FORCE ROW LEVEL SECURITY in a migration (usage).",
+      "args": [],
+      "flags": [
+        {"name": "--dir", "arg": "path", "description": "Workspace-relative folder of NNNN_name.sql files (default .k2/db/migrations)."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{applied: [...], discovered, noop}."}
+      ]
+    },
+    {
+      "name": "db dump",
+      "usage": "k2 db dump [--out .k2/db/dumps/<ts>.dump] [--db <name|id>] [--json]",
+      "description": "pg_dump (custom format) of a database this workspace owns into a workspace-relative file, plus a grants sidecar (who was granted what; never a secret). Default: .k2/db/dumps/<timestamp>.dump.",
+      "args": [],
+      "flags": [
+        {"name": "--out", "arg": "path", "description": "Workspace-relative output file (no .., no absolute path)."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{path}."}
+      ]
+    },
+    {
+      "name": "db restore",
+      "usage": "k2 db restore <file> [--db <name|id>] [--json]",
+      "description": "pg_restore a workspace-relative dump into a database this workspace owns, with the pg_restore of that database's major, then replays the grants sidecar. Refusals (--json prints {error: {code, hint}} on stderr): usage (a path outside the workspace, with .., or absolute; exit 2), not_found (no such file or database; exit 1), not_ready (Postgres not running, or the database is moving to another major; exit 1), engine (pg_restore failed: the hint has its error; exit 1).",
+      "args": [{"name": "file", "required": true}],
+      "flags": [
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns (default: its default database)."},
+        {"name": "--json", "arg": null, "description": "{restored}."}
+      ]
+    },
+    {
+      "name": "db drop",
+      "usage": "k2 db drop --yes [--db <name|id>] [--test] [--json]",
+      "description": "Drop a live database this workspace owns (default: its default database) and its own roles; --test drops only the test database (404 if none). Frees one slot of the cap. Apps connected to it are told; their door refuses it from then.",
+      "args": [],
+      "flags": [
+        {"name": "--yes", "arg": null, "description": "Required: there is no undo."},
+        {"name": "--db", "arg": "name|id", "description": "A database this workspace owns."},
+        {"name": "--test", "arg": null, "description": "The test database only."},
+        {"name": "--json", "arg": null, "description": "{dropped}."}
       ]
     },
     {
@@ -2740,6 +2809,53 @@ exit: 0
       "flags": [
         {"name": "--dir", "arg": "path", "description": "A folder in this workspace instead of a published App."},
         {"name": "--json", "arg": null, "description": "{ok, status, target, dir, files, errors, warnings, skipped}."}
+      ]
+    },
+    {
+      "name": "app db connect",
+      "usage": "k2 app db connect <app-id> (--new [--major N] [--cluster NAME] [--name DB] | --db <name|id>) [--as NAME_URL] [--no-migrate-url] [--wait [--timeout 10m]] [--reason TEXT] [--json]",
+      "description": "Connect an App to a Postgres database on this box, end to end: create one for it (--new; again is the same one) or pick one its workspace owns or was granted (--db); give the App its own login (never the agent's); grant it DATABASE_URL and, on its own workspace's database, DATABASE_MIGRATE_URL (env secrets, never printed); open its database door; re-host it; check it from inside the App (select 1 as the App). --major takes any major K2 runs here (k2 app db status lists them); a major or cluster this box doesn't run is refused (app_db_cluster_missing, exit 3), never installed. An agent missing a switch, or connecting another workspace's database, gets ONE held card naming each switch by its Settings name (exit 2; run its Ask with: line). Exit 0 PASS (or the check skipped: not running), 1 FAIL or usage, 2 held, 3 refused.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--new", "arg": null, "description": "A new database for this App."},
+        {"name": "--major", "arg": "N", "description": "With --new: the Postgres major (default: the box's)."},
+        {"name": "--cluster", "arg": "NAME", "description": "With --new: a named cluster of this workspace (k2 db clusters)."},
+        {"name": "--name", "arg": "DB", "description": "With --new: the database's name."},
+        {"name": "--db", "arg": "name|id", "description": "An existing database its workspace owns or was granted (k2 db list)."},
+        {"name": "--as", "arg": "NAME_URL", "description": "The env name (default DATABASE_URL; the migrator's becomes NAME_MIGRATE_URL)."},
+        {"name": "--no-migrate-url", "arg": null, "description": "Don't grant DATABASE_MIGRATE_URL."},
+        {"name": "--wait", "arg": null, "description": "When held, wait for the owner's answer (--timeout, default 10m), then print the result."},
+        {"name": "--json", "arg": null, "description": "{app, as, kind, db, cluster, major, roles[], secrets[], doorOpen, check: {ok, version, latencyMs, step, error, appOutput[]}, checkedAt, rehost}; held: {status: held, request, switches[]}."}
+      ]
+    },
+    {
+      "name": "app db status",
+      "usage": "k2 app db status <app-id> [--json]",
+      "description": "An App's databases: each name (DATABASE_URL, --as) with its database, major, cluster, login, door and last check; its connect cards waiting for the owner; the Postgres majors K2 runs here. Never a URL.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{app, kind, running, postgres, majors, connections[], pending[]}."}
+      ]
+    },
+    {
+      "name": "app db check",
+      "usage": "k2 app db check <app-id> [--as NAME_URL] [--json]",
+      "description": "The live check again, no card needed: log in as the App's own login from inside the App (the daemon for a process App) and run select 1 and version(). FAIL names the step (no_url, no_door, door_refused, auth_failed, db_missing, app_not_running, rehost_failed, exec_failed) and shows the App's last output lines. Exit 0 PASS, 1 FAIL.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--as", "arg": "NAME_URL", "description": "Which connection (default DATABASE_URL)."},
+        {"name": "--json", "arg": null, "description": "The connect answer's shape."}
+      ]
+    },
+    {
+      "name": "app db disconnect",
+      "usage": "k2 app db disconnect <app-id> [--as NAME_URL] [--drop-roles] [--json]",
+      "description": "Take the database away from the App, at once and with no card: its login stops (NOLOGIN), its open sessions end, its door refuses it, its secrets go, and it is re-hosted. The database is never dropped. --drop-roles also drops the App's roles where they own nothing.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--as", "arg": "NAME_URL", "description": "Which connection (default DATABASE_URL)."},
+        {"name": "--drop-roles", "arg": null, "description": "Drop the App's roles too."},
+        {"name": "--json", "arg": null, "description": "{app, as, db, roles, rolesDropped, secrets, doorOpen, sessionsCut, rehost}."}
       ]
     },
     {

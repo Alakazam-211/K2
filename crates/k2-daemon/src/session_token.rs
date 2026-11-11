@@ -1182,6 +1182,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/egress/log",
         "/cli/app/egress/mode",
         "/cli/app/egress/rm",
+        // 0.46.11: k2 app db connect (an agent without every switch gets
+        // one held card), status, check, disconnect (narrowing, at once).
+        "/cli/app/db/check",
+        "/cli/app/db/connect",
+        "/cli/app/db/disconnect",
+        "/cli/app/db/status",
         // Box services (0.46.0): read, request (applies at once with switch
         // 2, else held for the owner), revoke (narrowing, at once).
         "/cli/app/box-service",

@@ -72,7 +72,11 @@ pub mod status;
 pub mod egress_proxy;
 /// The container database door (S21): a Postgres startup on the App's own
 /// proxy listener, checked against its databases, spliced to the cluster.
+// 0.46.11 (prd-app-database-integrations-v1 S2): k2 app db connect,
+// status, check and disconnect, and the live check they run.
+pub mod db_connect;
 pub mod db_door;
+pub mod db_probe;
 pub mod egress_routes;
 pub mod box_service_routes;
 /// The box view and clash naming (agents talk to each other, §4.1–4.2).

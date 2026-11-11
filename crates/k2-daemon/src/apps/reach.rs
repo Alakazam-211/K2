@@ -223,7 +223,7 @@ fn ports(p: &[u16]) -> String {
     p.iter().map(u16::to_string).collect::<Vec<_>>().join(", ")
 }
 
-fn app_row(app: &str) -> Option<AppRow> {
+pub(crate) fn app_row(app: &str) -> Option<AppRow> {
     let h = k2_core::db::shared();
     let conn = h.lock();
     store::get_app(&conn, app).ok().flatten()

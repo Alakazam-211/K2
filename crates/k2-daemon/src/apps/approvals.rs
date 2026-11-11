@@ -706,6 +706,12 @@ fn apply_door(r: &reqs::AppRequest, by: &str) -> R<J> {
             if route == super::handover::UNDO_ROUTE {
                 return super::handover::apply_undo(r, by);
             }
+            // 0.46.11: a connect card (`k2 app db connect`): the switches it
+            // listed go on and the App is connected, as the owner who
+            // approved it, never replayed as the agent.
+            if route == super::db_connect::APPLY_ROUTE {
+                return super::db_connect::apply(r, by);
+            }
             // 0.46.4: an agent's App-grant owner steps (copy-host, the
             // guests-rooms grant, a label transfer), run as the owner with
             // exactly the values the request showed.

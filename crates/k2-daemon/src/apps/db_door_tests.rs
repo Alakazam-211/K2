@@ -380,11 +380,24 @@ fn an_app_may_open_its_workspaces_databases_and_its_grants_only() {
         "never b_main (another workspace's), never a dropped database"
     );
     assert!(admitted_in(&conn, "no-such-app").is_empty());
-    // The App's own roles (S2 makes them), never another App's.
+    // The App's own roles (S2 makes them) only while it is connected there
+    // (`k2 app db connect`), never another App's.
+    let before = &admitted_in(&conn, "door-rec")[0];
+    for not_yet in ["dr_main_app_door_rec", "dr_main_app_door_rec__g1"] {
+        assert!(!before.allows(not_yet, "door-rec"), "{not_yet}: not connected yet");
+    }
+    conn.execute(
+        "INSERT INTO app_db_connections (app_id, database_name, database_project, group_role, login_role, generation, inherit_from, created_by, created_at) \
+         VALUES ('door-rec', 'dr_main', ?1, 'dr_main_app_door_rec', 'dr_main_app_door_rec__g12', 12, 'dr_main_agent', 'owner', 1)",
+        [&f.ws_a],
+    )
+    .unwrap();
     let a = &admitted_in(&conn, "door-rec")[0];
-    for ok in ["dr_main_app_door_rec", "dr_main_app_door_rec__g1", "dr_main_app_door_rec__g12"] {
+    for ok in ["dr_main_app_door_rec", "dr_main_app_door_rec__g12"] {
         assert!(a.allows(ok, "door-rec"), "{ok}");
     }
+    assert!(!a.allows("dr_main_app_door_rec__g1", "door-rec"), "only the connected generation");
+    assert!(!admitted_in(&conn, "door-rec")[1].allows("dr_main_app_door_rec__g12", "door-rec"), "only on the database it is connected to");
     for no in [
         "dr_main_app_door_rec_other",
         "dr_main_app_door_rec__g",
@@ -396,7 +409,14 @@ fn an_app_may_open_its_workspaces_databases_and_its_grants_only() {
     ] {
         assert!(!a.allows(no, "door-rec"), "{no}");
     }
-    assert!(!a.allows("dr_main_app_door_rec", "door-rec-other"), "another App's group role");
+    // A row naming another App's roles admits nothing (names are checked).
+    conn.execute(
+        "INSERT INTO app_db_connections (app_id, as_name, database_name, database_project, group_role, login_role, inherit_from, created_by, created_at) \
+         VALUES ('door-rec', 'OTHER_URL', 'dr_main', ?1, 'dr_main_app_door_rec_other', 'dr_main_app_door_rec_other__g1', 'dr_main_agent', 'owner', 1)",
+        [&f.ws_a],
+    )
+    .unwrap();
+    assert!(!admitted_in(&conn, "door-rec")[0].allows("dr_main_app_door_rec_other__g1", "door-rec"), "another App's login");
     // App `door-rec-g1`'s group role is never App `door-rec`'s login.
     assert_eq!(app_group_role("dr_main", "door-rec-g1"), "dr_main_app_door_rec_g1");
     assert!(!is_app_role("dr_main_app_door_rec_g1", "dr_main", "door-rec"));
@@ -516,7 +536,20 @@ fn another_apps_role_or_database_is_refused() {
     let r = login(f.door, &long, "dr_main").unwrap_err();
     assert_eq!(r.code, codes::BAD_STARTUP, "{r:?}");
     assert!(f.pg16.startups.lock().unwrap().is_empty() && f.pg17.startups.lock().unwrap().is_empty(), "nothing reached a cluster");
-    // The App's own role (S2) on its own database: through.
+    // The App's own role (S2) on its own database: refused until it is
+    // connected there, then through.
+    let r = login(f.door, "dr_main_app_door_a__g1", "dr_main").unwrap_err();
+    assert_eq!(r.code, codes::ROLE_REFUSED, "not connected yet: {r:?}");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        conn.execute(
+            "INSERT INTO app_db_connections (app_id, database_name, database_project, group_role, login_role, inherit_from, created_by, created_at) \
+             VALUES ('door-a', 'dr_main', ?1, 'dr_main_app_door_a', 'dr_main_app_door_a__g1', 'dr_main_agent', 'owner', 1)",
+            [&f.ws_a],
+        )
+        .unwrap();
+    }
     let (mut s, _) = login(f.door, "dr_main_app_door_a__g1", "dr_main").unwrap_or_else(|r| panic!("{r:?}"));
     assert_eq!(select1(&mut s).unwrap(), "1");
 }

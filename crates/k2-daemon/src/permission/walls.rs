@@ -1358,6 +1358,8 @@ mod tests {
             (403, "POST", "/cli/app/domain/external", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
             (202, "POST", "/cli/app/build", vec![], None, json!({"status":"held","request":{"id":"w_1"}}), "apps.approve"),
             (202, "POST", "/cli/app/deploy", vec![], None, json!({"status":"held","request":{"id":"w_2"}}), "apps.approve"),
+            // 0.46.11: k2 app db connect's one card asks with its request id.
+            (202, "POST", "/cli/app/db/connect", vec![], None, json!({"status":"held","request":{"id":"w_3"}}), "apps.approve"),
             (403, "POST", "/cli/sew/server/disable", vec![], None, json!({"error":{"code":"chat_manage_off"}}), "chat.manage"),
             (403, "POST", "/cli/vault/set", vec![], None, json!({"error":{"code":"vault_manage_required"}}), "vault.manage"),
             (403, "POST", "/cli/sources/pin", vec![], None, json!({"error":{"code":"person_only"}}), "gardens.manage"),

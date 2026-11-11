@@ -337,6 +337,13 @@ pub const ROUTES: &[Route] = &[
     // only the App's own workspace folder; switch 1 for passports).
     post("/cli/app/data/put", Admin),
     post("/cli/app/data/rm", Admin),
+    // 0.46.11: an App's database (db_connect.rs). Connect and disconnect
+    // change the App (no Member); the check changes nothing but runs inside
+    // the App, as exec does (no Member); status is a read.
+    post("/cli/app/db/check", Admin),
+    post("/cli/app/db/connect", Admin),
+    post("/cli/app/db/disconnect", Admin),
+    get("/cli/app/db/status", Member),
     // deny is an Owner/Admin human's, or the requester's withdraw (handler).
     post("/cli/app/deny", Admin),
     post("/cli/app/deploy", Admin),

@@ -202,6 +202,7 @@ pub const AREAS: &[(&str, &str)] = &[
     ("door", "passes, App keys, quotas, suspend"),
     ("data", "k2 app data and exec"),
     ("egress", "where an App may connect out"),
+    ("database", "an App's own database: k2 app db connect, check, disconnect"),
     ("box", "box prep, box services, Podman"),
     ("domains", "labels and custom domains"),
     ("handover", "moving Apps between workspaces and boxes"),

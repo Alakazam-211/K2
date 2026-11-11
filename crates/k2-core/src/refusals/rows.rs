@@ -54,8 +54,27 @@ pub(super) const ROWS: &[Refusal] = &[
     // ── runtime ──
     // `k2 app config --db-raw on`, a database grant or a DATABASE_URL for a
     // container App (apps::reach): no approval or re-host opens the door.
-    r("app_db_door_missing", "runtime", 409, Who::Owner, "A guarded container App can't reach this box's Postgres yet: its database door isn't built, so nothing answers on 127.0.0.1:5432 inside the container.",
-        "The owner makes it a process App (k2 app exception <app-id> on), or the App's agent moves its data to SQLite in $K2_APP_DATA."),
+    r("app_db_door_missing", "runtime", 409, Who::Owner, "The App's database door can't serve this: the box's App engine predates the door (0.46.11), or it was --db-raw on (a private App database K2 doesn't make yet).",
+        "The owner updates the engine (k2 app engine install), then re-hosts the App. For a database, connect it instead: k2 app db connect <app-id> --new | --db <name>."),
+    // ── database (k2 app db, prd-app-database-integrations-v1 S2) ──
+    r("app_db_no_postgres", "database", 409, Who::Owner, "This box runs no Postgres for Apps: K2 runs Postgres on Linux boxes only.",
+        "Keep the App's data in SQLite in $K2_APP_DATA, or run the App on a Linux K2 box."),
+    r("app_db_cluster_missing", "database", 409, Who::Owner, "The Postgres major or named cluster the new database would go on isn't running on this box, and connect never installs Postgres.",
+        "Make it first (k2 db create --major <N>, or k2 db cluster create <N> --name <name>), or connect on a major this box runs (k2 app db status <app-id> lists them)."),
+    r("app_db_cluster_not_yours", "database", 403, Who::Owner, "That named cluster belongs to another workspace: only its Apps get databases in it.",
+        "Connect without --cluster, or make a cluster for this workspace: k2 db cluster create <N> --name <name>."),
+    r("app_db_major_unsupported", "database", 409, Who::Agent, "K2 doesn't run that Postgres major. The refusal lists the ones it does.",
+        "Pick one of those: k2 app db connect <app-id> --new --major <N>."),
+    r("app_db_major_mismatch", "database", 409, Who::Agent, "--major and --cluster disagree: the named cluster runs another major.",
+        "Leave out --major (the cluster's major is used), or name a cluster on that major."),
+    r("app_db_not_connected", "database", 404, Who::Agent, "The App has no database connected under that name (DATABASE_URL, or --as).",
+        "See what it has: k2 app db status <app-id>. Connect one: k2 app db connect <app-id> --new | --db <name>."),
+    r("app_db_already_connected", "database", 409, Who::Agent, "That name (DATABASE_URL, or --as) is already connected to another database.",
+        "Disconnect it first (k2 app db disconnect <app-id> --as <NAME>), or connect the other database under another name with --as."),
+    r("app_db_vault_closed", "database", 503, Who::Owner, "The vault is closed, and an App's database URL lives there.",
+        "The owner opens the vault (k2 vault status says how), then run the command again."),
+    r("app_db_failed", "database", 502, Who::K2, "Postgres or the vault refused a step of connecting. The hint says which and why.",
+        "Read the hint; check k2 db status and k2 vault status, then run the command again. If it repeats, report it."),
     // A crashloop is a deployment's result: `_app_rt_deployment_exit` in
     // cli/k2 exits 1 for any result that isn't live, pending or stalled.
     r("crashlooping", "runtime", 409, Who::Agent, "The App crashed 6 times in an hour, so K2 stopped restarting it.",

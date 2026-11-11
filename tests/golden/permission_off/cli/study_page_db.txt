@@ -23,14 +23,14 @@ HOW MANY (the cap)
   `k2 db create --id <key>` with a new key makes another database
   (`ws_<id>_<key>`); the same key answers the one it made. Without
   --id or --name, create answers the workspace's default database.
-  Create shows no password: fetch the DSN with `k2 db dsn --db <name>`.
+  Create shows no password. For an App: k2 app db connect <app> --db <name>.
   dsn / migrate / dump / restore / drop take `--db <name|id|key>`;
   without it they act on the default (oldest) database.
 
 --test (disposable scratch; not cap)
   `k2 db create --test` next to the live databases (not counted).
-  Its answer shows no passwords: `k2 db dsn --test` is the agent DSN,
-  `k2 db dsn --test --actor migrator` the migrator's. Owner or
+  Its answer shows no passwords: `k2 db run --test -- <cmd>` runs as the
+  agent, `k2 db run --test --actor migrator -- <cmd>` as the migrator. Owner or
   owning-workspace cell only.
   Guest GET dsn is 403; guests never hold a DSN. Grant-path 403.
   `k2 db drop --test --yes` loads status=test only (404 if missing,
@@ -48,6 +48,7 @@ AGENT VERBS (workspace identity from the token)
   k2 db create [--id <key>] [--db-access write] [--json]
   k2 db create --test
   k2 db list | cap | dsn [--db <name>] | dsn --test | dsn --test --actor migrator
+  k2 db run [--db <name>] [--test [--actor migrator]] -- <cmd>
   k2 db migrate [--dir .k2/db/migrations] [--db <name>]
   k2 db dump / restore <workspace-relative-file> [--db <name>]
   k2 db drop --yes [--db <name>] | drop --test --yes
@@ -59,9 +60,11 @@ OWNER VERBS (agents exit 3)
   Ask your human. Do not retry-loop.
 
 DSN
-  Re-fetch with `k2 db dsn` when you need it. Never log it, never
-  paste it into study notes, never commit it. Unflagged dsn is the
-  live agent. Dump-table HTTP is the guest path that never holds a DSN.
+  `k2 db dsn` prints it without its password (0.46.11). A command that
+  needs it: k2 db run [--db <name>] -- <cmd> (DATABASE_URL in its env,
+  never printed). `k2 db dsn --reveal` prints it on purpose: never log
+  it, paste it into notes or commit it. Unflagged dsn is the live agent.
+  Dump-table HTTP is the guest path that never holds a DSN.
 
 MIGRATIONS
   Numbered `0001_name.sql` files. Empty or `init.sql` is a loud error.

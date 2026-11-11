@@ -299,6 +299,13 @@ pub(crate) fn rehost_now(app: &AppRow) -> Turn {
     turn(&LiveOps, app, Some(Forced::default()))
 }
 
+/// [`rehost_now`] even when its sessions live in memory (`k2 app db
+/// connect`: the new database URL arrives only at a start, and connecting
+/// it is the reason to re-host).
+pub(crate) fn rehost_now_yes(app: &AppRow) -> Turn {
+    turn(&LiveOps, app, Some(Forced { yes: true, pause: false }))
+}
+
 /// Is the App due (and not held), and why.
 fn due(ops: &dyn WaveOps, app: &AppRow) -> Option<&'static str> {
     if app.live_seed.is_none() || app.state != store::STATE_RUNNING || ops.runs_unwalled(app) {

@@ -732,6 +732,55 @@ pub(crate) fn create_for_app_install(project_id: &str, path: &str, major: u32, a
     Ok(serde_json::json!({ "name": name, "major": v["major"], "ref": body["ref"], "created": true }))
 }
 
+/// `k2 app db connect <app> --new` (prd-app-database-integrations-v1 S2):
+/// the App's database, made like `k2 db create --id app-<app>` (so a
+/// second connect answers the same one), on `major` or in the workspace's
+/// named `cluster`, named `name` when given. The caller already checked
+/// who may (the connect card covers an agent's switches). Answers its
+/// Postgres name.
+pub(crate) fn create_for_app_connect(
+    project_id: &str,
+    app_id: &str,
+    major: u32,
+    cluster: Option<&str>,
+    name: Option<&str>,
+) -> Result<String, (u16, &'static str, String)> {
+    if !sql_supported() && !cfg!(test) {
+        return Err((409, "app_db_no_postgres", "K2 runs Postgres on Linux boxes only".into()));
+    }
+    let path = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::Project::get(&conn, project_id).map(|p| p.path).unwrap_or_default()
+    };
+    let secrets = FileSecretStore::default();
+    let client_id = format!("app-{app_id}");
+    let v = match cluster {
+        Some(c) => ops::create_database_in_cluster(ops(), &secrets, project_id, cap_for(&path), Some(&client_id), name, Some(major), c),
+        None => ops::create_database_on(ops(), &secrets, project_id, cap_for(&path), Some(&client_id), name, Some(major)),
+    }
+    .map_err(|e| (e.status().get(..3).and_then(|s| s.parse().ok()).unwrap_or(500), e.code(), e.hint().to_string()))?;
+    let mut answer = v;
+    crate::apps::reach::after_db_change(&mut answer);
+    answer["name"].as_str().map(str::to_string).ok_or_else(|| (500, "engine", "the new database has no name".into()))
+}
+
+/// The App's roles on its database (`ops::provision_app_roles`), on this
+/// daemon's ops.
+pub(crate) fn provision_app_roles(target: &ops::AppDbTarget, group: &str, login: &str, password: &str) -> Result<(), OpsError> {
+    ops::provision_app_roles(ops(), target, group, login, password).map(|_| ())
+}
+
+/// Take an App's access to `db` away (`ops::revoke_app_roles`).
+pub(crate) fn revoke_app_roles(db: &str, group: &str, logins: &[String], inherit_from: &str, group_too: bool, drop: bool) -> Result<(), OpsError> {
+    ops::revoke_app_roles(ops(), db, group, logins, inherit_from, group_too, drop)
+}
+
+/// The migrator's URL of a database `workspace` owns.
+pub(crate) fn migrator_url(workspace: &str, db: &str) -> Result<String, OpsError> {
+    ops::migrator_url_for(&FileSecretStore::default(), workspace, db)
+}
+
 /// `k2 db upgrade`'s re-point (V35): the same `k2 db dsn --ref` upsert,
 /// from the record (already on the new cluster), under the same ref.
 pub(crate) fn dsn_ref_for_move(project_id: &str, v: &serde_json::Value, test: bool) -> CliResponse {

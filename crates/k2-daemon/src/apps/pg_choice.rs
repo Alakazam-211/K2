@@ -312,7 +312,7 @@ fn unmet(hint: String, extra: J) -> Unmet {
 }
 
 fn create_hint(cluster: &str) -> String {
-    format!("create it there: k2 db create --cluster {cluster} --name <db>, then point the App's DATABASE_URL at it (k2 db dsn --ref --db <db>)")
+    format!("create it there: k2 db create --cluster {cluster} --name <db>, then connect the App to it: k2 app db connect <app> --db <db> (its own login and DATABASE_URL, checked from inside)")
 }
 
 /// Pure: the App's database against `requires.postgres: {cluster, major?}`.

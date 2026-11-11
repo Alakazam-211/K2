@@ -50,6 +50,7 @@ ALLOWLIST=(
   "sql::tests::real_pg::real_pg_guest_doors_smoke"                  # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
   "sql::tests::real_pg::real_pg_search_path_pin_holds"              # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
   "apps::db_door::real_pg_door::real_pg_door_end_to_end"            # needs REALPG_DOOR=1 and Postgres binaries (it makes its own server)
+  "apps::db_connect::real_pg_connect::real_pg_connect_end_to_end"   # needs REALPG_CONNECT=1 and Postgres binaries (it makes its own server)
 )
 
 # Root-only ignored tests the gate RUNS explicitly when it is root:

@@ -117,6 +117,8 @@ pub fn is_route(p: &str) -> bool {
         || super::updates_routes::ROUTES.contains(&p)
         // 0.46.7 (prd-tauri-core-0467-v1 TC-15): k2 app status.
         || super::status::ROUTES.contains(&p)
+        // 0.46.11: k2 app db connect|status|check|disconnect (db_connect.rs).
+        || super::db_connect::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -149,6 +151,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::init::POST_ROUTES.contains(&p)
         // 0.46.7: k2 app updates key|token set, push, promote, rollback, pull.
         || super::updates_routes::POST_ROUTES.contains(&p)
+        // 0.46.11: k2 app db connect|check|disconnect (db_connect.rs).
+        || super::db_connect::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -494,6 +498,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         super::init::STORE_ROUTE => super::init::store_route(&who, body),
         // 0.46.7: the update feed, k2 app updates … (updates_routes.rs).
         p if super::updates_routes::ROUTES.contains(&p) => super::updates_routes::handle(p, &who, body, params),
+        // 0.46.11: an App's database, connected and checked (db_connect.rs).
+        p if super::db_connect::ROUTES.contains(&p) => super::db_connect::handle(p, &who, body, params),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
         "/cli/app/deploy" => deploy_route(&who, body),
@@ -1010,6 +1016,25 @@ fn install(who: &Who, body: &[u8]) -> R<J> {
     if let Some((cfg, _)) = tunnel_cfg {
         if let Err(e) = crate::publish_runtime::attach_hostname(&ws.id, &app_id, port, &cfg.token, &cfg.subdomain, false) {
             return Err(undo(format!("the URL step failed: {e}")));
+        }
+    }
+    // 0.46.11 (prd-app-database-integrations-v1 §4.8): a Seed's
+    // requires.postgres (or --pg-major) goes through `k2 app db connect`'s
+    // code: the App gets its own login and its DATABASE_URL (and
+    // DATABASE_MIGRATE_URL) before its first start, never the agent's DSN.
+    // The install's gates above are the connect's (one hold, not two).
+    let mut database = database;
+    if let Some(name) = database.as_ref().and_then(|d| d["name"].as_str()).map(str::to_string) {
+        match super::db_connect::connect_for_install(&actor(who), &app_id, &name) {
+            Ok(c) => {
+                if let Some(d) = database.as_mut() {
+                    d["connect"] = json!({ "as": c["as"], "roles": c["roles"], "secrets": c["secrets"], "doorOpen": c["doorOpen"] });
+                }
+            }
+            Err(e) => {
+                let _ = undo(String::new());
+                return Err(no(e.code, e.status, format!("{app_id} needs Postgres and connecting it to {name} failed, so it wasn't installed: {}", e.hint)));
+            }
         }
     }
     audit_human(&app_id, "install", who, json!({ "workspace": ws.id, "tunnel": tunnel, "frontPort": port, "memoryLimitBytes": memory, "transfer": transfer }));
@@ -2282,7 +2307,7 @@ fn history(who: &Who, params: &HashMap<String, String>) -> R<J> {
     }))
 }
 
-fn read_log(app_id: &str, deployment: &str) -> String {
+pub(crate) fn read_log(app_id: &str, deployment: &str) -> String {
     let p = deploy::deployment_log_path(app_id, deployment);
     let mut text = std::fs::read_to_string(p.with_extension("log.1")).unwrap_or_default();
     text.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
@@ -2578,6 +2603,9 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     }
     // K-M3: the seal key's grant goes; --purge destroys the key too.
     super::seal::forget(&app.app_id, &app.service_id, purge);
+    // 0.46.11: uninstalling disconnects its databases (its logins stop,
+    // its database secrets go; the databases stay).
+    super::db_connect::forget_for_uninstall(&app);
     // prd-custom-app-push-v1 CP17: its push devices, settings and keys go.
     crate::app_push::forget_app(&app.service_id);
     // prd-app-phone-pairing-v1: its pairing config, codes and link files go.

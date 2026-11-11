@@ -4352,6 +4352,184 @@ pub(crate) fn exec_guest_query(
     }
 }
 
+// ── an App's own database roles (prd-app-database-integrations-v1 S2) ──
+//
+// `k2 app db connect` gives an App its own login on one database, never the
+// workspace agent's (`{db}_agent`, field report B6):
+// - a NOLOGIN group role `<db>_app_<app>` (`apps::db_door::app_group_role`)
+//   that holds the App's privileges: membership in the role the App's
+//   workspace uses there (`{db}_agent` on a database it owns, its grantee
+//   login on one it was granted), so every privilege sync after a migration
+//   reaches the App too, and CONNECT on the database;
+// - a login role `<group>__g<n>` (S1's naming; `n` is the generation a
+//   rotate moves on), member of the group: INHERIT, no superuser, no
+//   CREATEDB, no CREATEROLE, no REPLICATION, no BYPASSRLS, CONNECTION LIMIT
+//   20. Its password lives only in the App's vaulted URL.
+// Made by the daemon through the root helper's superuser psql, never by a
+// migration (roles are cluster-wide).
+
+/// The connection limit of an App's login role.
+pub const APP_LOGIN_CONNECTION_LIMIT: u32 = 20;
+
+/// A database an App may be connected to: one its workspace owns, or one
+/// granted to its workspace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppDbTarget {
+    pub id: String,
+    pub name: String,
+    /// The workspace that owns the database.
+    pub project_id: String,
+    /// The App's workspace owns it (else: granted to it).
+    pub owned: bool,
+    /// `write` on an owned database, else the grant's level.
+    pub level: &'static str,
+    /// The role whose privileges the App's group holds there.
+    pub inherit_from: String,
+}
+
+/// Resolve `spec` (a name, id or create `--id`) for an App of `workspace`:
+/// a database it owns, else one granted to it. 404 otherwise.
+pub(crate) fn app_db_target(workspace: &str, spec: &str) -> Result<AppDbTarget, OpsError> {
+    match owned_row(workspace, spec) {
+        Ok(row) => {
+            let inherit_from = agent_login_for(&row);
+            return Ok(AppDbTarget { id: row.id, name: row.name, project_id: row.project_id, owned: true, level: "write", inherit_from });
+        }
+        Err(OpsError::NotFound(_)) => {}
+        Err(e) => return Err(e),
+    }
+    let missing = || OpsError::NotFound(format!("no database '{}' owned by or granted to the App's workspace — see 'k2 db list'", spec.trim()));
+    let row = find_database(spec, None).map_err(|e| match e {
+        OpsError::NotFound(_) => missing(),
+        other => other,
+    })?;
+    let level = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        grant_level_on(&conn, &row.id, workspace)
+    }
+    .ok_or_else(missing)?;
+    Ok(AppDbTarget { id: row.id, name: row.name, project_id: row.project_id, owned: false, level, inherit_from: default_agent_role(workspace) })
+}
+
+/// The SQL (cluster superuser, database `postgres`) that makes or refreshes
+/// an App's group and login roles on `db`. Idempotent: an existing login
+/// gets the new password and K2's options again.
+pub(crate) fn app_roles_sql(db: &str, group: &str, login: &str, password: &str, inherit_from: &str) -> String {
+    let (g, l) = (pg_quote_ident(group), pg_quote_ident(login));
+    let opts = format!(
+        "INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT {APP_LOGIN_CONNECTION_LIMIT}"
+    );
+    format!(
+        "DO $k2app$\nBEGIN\n  CREATE ROLE {g} NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+         EXCEPTION WHEN duplicate_object THEN NULL;\nEND $k2app$;\n\
+         ALTER ROLE {g} WITH NOLOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+         DO $k2app$\nBEGIN\n  CREATE ROLE {l} LOGIN PASSWORD {pw} {opts};\n\
+         EXCEPTION WHEN duplicate_object THEN NULL;\nEND $k2app$;\n\
+         ALTER ROLE {l} WITH LOGIN PASSWORD {pw} {opts};\n\
+         GRANT {g} TO {l};\n\
+         GRANT {from} TO {g};\n\
+         GRANT CONNECT ON DATABASE {d} TO {g};\n",
+        pw = pg_quote_literal(password),
+        from = pg_quote_ident(inherit_from),
+        d = pg_quote_ident(db),
+    )
+}
+
+/// The SQL that takes an App's access to `db` away: each login stops
+/// logging in and its open sessions end now; with `group_too` (the App's
+/// last connection there) its group also loses the workspace role and
+/// CONNECT. `drop`: the roles go too, where they own nothing.
+pub(crate) fn app_roles_revoke_sql(db: &str, group: &str, logins: &[String], inherit_from: &str, group_too: bool, drop: bool) -> String {
+    let mut s = String::new();
+    if group_too {
+        s.push_str(&format!(
+            "DO $k2app$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {gl}) THEN\n\
+             \x20   EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM %I', {dl}, {gl});\n\
+             \x20   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {fl}) THEN\n\
+             \x20     EXECUTE format('REVOKE %I FROM %I', {fl}, {gl});\n\
+             \x20   END IF;\n\
+             \x20 END IF;\nEND $k2app$;\n",
+            gl = pg_quote_literal(group),
+            dl = pg_quote_literal(db),
+            fl = pg_quote_literal(inherit_from),
+        ));
+    }
+    for l in logins {
+        let ll = pg_quote_literal(l);
+        s.push_str(&format!(
+            "DO $k2app$\nBEGIN\n  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = {ll}) THEN\n\
+             \x20   EXECUTE format('ALTER ROLE %I NOLOGIN', {ll});\n\
+             \x20 END IF;\nEND $k2app$;\n\
+             SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = {ll};\n"
+        ));
+    }
+    if drop {
+        for r in logins.iter().map(String::as_str).chain(group_too.then_some(group)) {
+            s.push_str(&format!(
+                "DO $k2app$BEGIN DROP ROLE IF EXISTS {q}; EXCEPTION WHEN dependent_objects_still_exist THEN \
+                 RAISE WARNING 'k2: role % still holds objects; kept', {l}; END$k2app$;\n",
+                q = pg_quote_ident(r),
+                l = pg_quote_literal(r),
+            ));
+        }
+    }
+    s
+}
+
+/// Make (or refresh) the App's roles on `target` with `password` for its
+/// login. Returns the database's cluster.
+pub(crate) fn provision_app_roles(
+    ops: &dyn SystemOps,
+    target: &AppDbTarget,
+    group: &str,
+    login: &str,
+    password: &str,
+) -> Result<Cluster, OpsError> {
+    require_running()?;
+    refuse_if_moving(&target.name)?;
+    let cl = cluster_of(&target.name)?;
+    let sql = app_roles_sql(&target.name, group, login, password, &target.inherit_from);
+    refuse_dangerous_role_sql(&sql)?;
+    su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
+    Ok(cl)
+}
+
+/// Take the App's access to database `db` away (see [`app_roles_revoke_sql`]).
+pub(crate) fn revoke_app_roles(
+    ops: &dyn SystemOps,
+    db: &str,
+    group: &str,
+    logins: &[String],
+    inherit_from: &str,
+    group_too: bool,
+    drop: bool,
+) -> Result<(), OpsError> {
+    let cl = cluster_of(db)?;
+    let sql = app_roles_revoke_sql(db, group, logins, inherit_from, group_too, drop);
+    su_psql(ops, &cl, "postgres", &["-v", "ON_ERROR_STOP=1"], Some(sql.as_bytes()))?;
+    Ok(())
+}
+
+/// The box URL of an App login on `db` (its cluster's loopback port; a
+/// walled App's start points it at its database door).
+pub(crate) fn app_login_url(db: &str, login: &str, password: &str) -> Result<String, OpsError> {
+    dsn_for(db, login, password)
+}
+
+/// The migrator's URL of a database `workspace` owns (`DATABASE_MIGRATE_URL`).
+pub(crate) fn migrator_url_for(secrets: &dyn SecretStore, workspace: &str, db: &str) -> Result<String, OpsError> {
+    let row = owned_row(workspace, db)?;
+    let (user, pw) = migrator_creds(secrets, &row)?;
+    dsn_for(&row.name, &user, &pw)
+}
+
+/// The cluster a database lives on: (port, major, label).
+pub(crate) fn cluster_facts(db: &str) -> Result<(u16, u32, String), OpsError> {
+    let cl = cluster_of(db)?;
+    Ok((cl.port, cl.major, cl.label()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

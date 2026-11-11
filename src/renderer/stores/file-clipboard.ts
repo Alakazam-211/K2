@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { formatDropPaths } from '@/lib/drop-payload'
+import { useToastStore } from '@/stores/toast'
 
 export type ClipboardMode = 'copy' | 'cut'
 
@@ -15,34 +17,24 @@ interface FileClipboardState {
   hasPaths: () => boolean
 }
 
-/**
- * Shell-escape a path for safe pasting into a terminal command line.
- * Mirrors `lib/file-drag.ts::shellEscape` so dragged-paths and
- * copied-paths produce the same on-clipboard representation.
- *
- * Backslash-style escape would break Claude Code's image detector
- * (it strips quotes then `fs.exists()`s the path), but for plain
- * file paths through Cmd+C → Cmd+V the user almost always wants the
- * literal text in the terminal — single-quoting is the conservative
- * choice that survives shells, the image detector, and copy/paste
- * roundtrips.
- */
-function shellEscape(p: string): string {
-  if (/[^a-zA-Z0-9_\-./]/.test(p)) {
-    return "'" + p.replace(/'/g, "'\\''") + "'"
-  }
-  return p
-}
+/** What the OS clipboard gets when a copy's names can't go as text. */
+export const COPY_AS_TEXT_REFUSAL =
+  "Copied in K2 only: a file name has a line break in it, so it can't be pasted as text."
 
 /** Mirror the in-app file clipboard to the OS clipboard so Cmd+V in
- *  the terminal (or any other native app) pastes the file paths.
- *  Best-effort: failures silently fall back to in-app-only behavior
- *  since the tree's own Paste action still works from the Zustand
- *  state. */
+ *  the terminal (or any other native app) pastes the file paths, quoted
+ *  the same way as a drop (lib/drop-payload.ts). A name with a control
+ *  character is not mirrored (a pasted line break would run what follows
+ *  it); the tree's own Paste still works from the Zustand state.
+ *  Best-effort: a clipboard write failure falls back to in-app only. */
 function mirrorToOSClipboard(paths: string[]): void {
   if (paths.length === 0 || typeof navigator === 'undefined') return
-  const text = paths.map(shellEscape).join(' ')
-  navigator.clipboard?.writeText(text).catch(() => { /* ignored */ })
+  const r = formatDropPaths(paths, { trailingSpace: false })
+  if (!r.ok) {
+    useToastStore.getState().addToast(COPY_AS_TEXT_REFUSAL, 'warning')
+    return
+  }
+  navigator.clipboard?.writeText(r.text).catch(() => { /* ignored */ })
 }
 
 export const useFileClipboardStore = create<FileClipboardState>((set, get) => ({

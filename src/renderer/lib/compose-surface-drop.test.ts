@@ -9,10 +9,9 @@ import {
   pathsAreComposeSurfaceImages,
 } from './compose-surface-drop'
 import {
-  formatInAppComposeInsert,
   inAppComposeDropElement,
 } from './file-drag'
-import { BRACKETED_PASTE_START } from './drop-payload'
+import { BRACKETED_PASTE_START, buildComposeDropPayload } from './drop-payload'
 
 const dropMocks = vi.hoisted(() => ({
   executeBrowserFileDrop: vi.fn(async (..._args: unknown[]) => '/host/shot.png '),
@@ -156,9 +155,10 @@ describe('in-app file drag compose target', () => {
   }
 
   it('inserts quoted image paths with no bracketed paste', () => {
-    const payload = formatInAppComposeInsert(['/tmp/Screen Shot.png', '/tmp/a.txt'])
-    expect(payload).toBe("'/tmp/Screen Shot.png' /tmp/a.txt ")
-    expect(payload.includes(BRACKETED_PASTE_START)).toBe(false)
+    const r = buildComposeDropPayload(['/tmp/Screen Shot.png', '/tmp/a.txt'])
+    if (!r.ok) throw new Error(r.refusal)
+    expect(r.text).toBe("'/tmp/Screen Shot.png' /tmp/a.txt ")
+    expect(r.text.includes(BRACKETED_PASTE_START)).toBe(false)
   })
 
   it('image on the thread list targets that column’s compose bar', () => {

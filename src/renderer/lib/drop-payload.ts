@@ -1,6 +1,6 @@
-// One builder for the text a file path becomes when it lands in a terminal
-// or a compose draft from an external drop (Finder, a browser upload), a
-// Finder paste or a picked file. Pure: no stores, no DOM. Callers turn a refusal into a toast
+// One builder for the text a file path becomes when it lands in a terminal,
+// a compose draft or the OS clipboard: an external drop (Finder, a browser
+// upload), an in-app drag from the file tree, or a copy in the tree. Pure: no stores, no DOM. Callers turn a refusal into a toast
 // (`drop-refusal.ts`).
 //
 // Quoting: backslash before every shell special, like iTerm2 and

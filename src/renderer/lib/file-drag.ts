@@ -23,7 +23,8 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { roomForElement } from '@/stores/window-room'
 import { useToastStore } from '@/stores/toast'
-import { bracketPaste, isImagePath, quotePathForImageDrop } from '@/lib/drop-payload'
+import { buildComposeDropPayload, buildTerminalDropPayload } from '@/lib/drop-payload'
+import { dropTextOrToast } from '@/lib/drop-refusal'
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -43,15 +44,6 @@ export function markDropConsumed(): void {
 
 export function wasDropConsumed(): boolean {
   return dropConsumed
-}
-
-// ── Shell-escape helper ──────────────────────────────────────────────
-
-function shellEscape(p: string): string {
-  if (/[^a-zA-Z0-9_\-./]/.test(p)) {
-    return "'" + p.replace(/'/g, "'\\''") + "'"
-  }
-  return p
 }
 
 // ── Ghost element ────────────────────────────────────────────────────
@@ -103,15 +95,6 @@ export function isFileDragActive(): boolean {
 
 export function getFileDragPaths(): string[] {
   return dragPaths
-}
-
-/** Draft text for an in-app file drop on a compose bar. No bracketed paste. */
-export function formatInAppComposeInsert(paths: string[]): string {
-  return (
-    paths
-      .map((p) => (isImagePath(p) ? quotePathForImageDrop(p) : shellEscape(p)))
-      .join(' ') + ' '
-  )
 }
 
 /**
@@ -231,11 +214,10 @@ export function beginFileDrag(
     if (el) {
       const composeBar = inAppComposeDropElement(el as HTMLElement, dragPaths)
       if (composeBar) {
-        composeBar.dispatchEvent(
-          new CustomEvent('k2so:compose-insert', {
-            detail: { data: formatInAppComposeInsert(dragPaths) },
-          }),
-        )
+        const data = dropTextOrToast(buildComposeDropPayload(dragPaths))
+        if (data !== null) {
+          composeBar.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail: { data } }))
+        }
         dragPaths = []
         return
       }
@@ -243,15 +225,11 @@ export function beginFileDrag(
       // Hit-test: is the drop over a terminal container?
       const termContainer = (el as HTMLElement).closest('[data-terminal-id]') as HTMLElement | null
       if (termContainer && termContainer.dataset.terminalId) {
-        // Paste paths into the terminal. Images use minimal quoting so Claude
-        // Code's `[Image #N]` detector can fs.exists() them, and the whole
-        // payload is bracketed-paste-wrapped when any image is present so
-        // Claude's paste-event handler fires.
-        const formatted = dragPaths.map((p) =>
-          isImagePath(p) ? quotePathForImageDrop(p) : shellEscape(p)
-        ).join(' ')
-        const data = dragPaths.some(isImagePath) ? bracketPaste(formatted) : formatted
-        if (termContainer.dataset.terminalKind === 'v2') {
+        // Paste paths into the terminal: the same text as an external drop
+        // (lib/drop-payload.ts). A refused name writes nothing.
+        const isV2 = termContainer.dataset.terminalKind === 'v2'
+        const data = dropTextOrToast(buildTerminalDropPayload(dragPaths))
+        if (data !== null && isV2) {
           // V2 sessions live in the daemon's session_lookup and
           // accept input over a WS owned by the React TerminalPane.
           // The legacy `terminal_write` Tauri command knows only the
@@ -261,7 +239,7 @@ export function beginFileDrag(
           termContainer.dispatchEvent(
             new CustomEvent('k2so:terminal-write', { detail: { data } }),
           )
-        } else {
+        } else if (data !== null) {
           const tid = termContainer.dataset.terminalId
           if (tid) {
             terminalWrite(targetRoom?.scope ?? source.scope, tid, data).catch((e) => console.warn('[file-drag]', e))

@@ -109,8 +109,7 @@ function emitProjectsChanged(): void {
 export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.list', section: 'projects', label: 'Workspaces', description: 'Every workspace on this server, its focus group and its settings', keywords: ['workspaces', 'projects', 'focus groups'] },
   { id: 'projects.add', section: 'projects', label: 'New workspace', description: 'Add a folder as a workspace with its own agent', keywords: ['add', 'new', 'workspace', 'project', 'folder'] },
-  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context', description: 'What this agent always reads: its role, the project notes and any layers you add', keywords: ['context', 'stack', 'agents.md', 'project.md', 'persona', 'wiki', 'role.md'] },
-  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context (AGENTS.md)', description: 'The files K2 joins into the one set of instructions every AI tool reads', keywords: ['context', 'stack', 'stack', 'agents.md', 'layers', 'wiki', 'always-on'] },
+  { id: 'projects.context-stack', section: 'projects', label: 'Always-on context', description: 'What this agent always reads: its role, the project notes and any layers you add', keywords: ['context', 'stack', 'agents.md', 'project.md', 'persona', 'wiki', 'role.md', 'layers', 'always-on'] },
   { id: 'projects.heartbeat', section: 'projects', label: 'Heartbeats', description: 'When this agent wakes up on its own, and what it did', keywords: ['heartbeat', 'schedule', 'cron', 'hourly', 'scheduled'] },
   { id: 'projects.agents', section: 'projects', label: 'Project Agents', description: 'Agent personas and wake-up notes for this workspace', keywords: ['agent', 'persona', 'wakeup', 'create'] },
   { id: 'projects.worktrees', section: 'projects', label: 'Worktrees', description: 'The git worktrees this workspace has open, and ones on disk you can reopen', keywords: ['worktree', 'git', 'branch'] },

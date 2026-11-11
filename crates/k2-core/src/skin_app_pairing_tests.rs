@@ -436,6 +436,32 @@ fn bad(v: serde_json::Value, field: &str) {
 }
 
 #[test]
+fn desktop_only_is_said_out_loud_names_no_phone_app_and_keeps_every_other_check() {
+    use serde_json::json;
+    // 0.46.12: no phone app, said with desktopOnly: true.
+    let ok = parse_input(&json!({"app": "x", "desktopOnly": true, "nativeOrigins": ["tauri://localhost"], "hosts": ["jobs.box.k2.dev"]})).expect("desktop only");
+    assert!(ok.ios.is_empty() && ok.android.is_empty(), "{ok:?}");
+    assert_eq!(ok.native_origins, ["tauri://localhost"]);
+    assert!(parse_input(&json!({"desktopOnly": null, "ios": ["ABCDE12345.com.you.app"]})).is_ok(), "null = left out");
+    bad(json!({"desktopOnly": false}), "ios and/or android");
+    bad(json!({}), "ios and/or android");
+    bad(json!({"desktopOnly": "true"}), "desktopOnly");
+    bad(json!({"desktopOnly": true, "ios": ["ABCDE12345.com.you.app"]}), "desktopOnly");
+    bad(json!({"desktopOnly": true, "android": [{"package": "com.you.app", "sha256": [FPR]}]}), "desktopOnly");
+    bad(json!({"desktopOnly": true, "linkPaths": ["/jobs/*"]}), "linkPaths");
+    bad(json!({"desktopOnly": true, "nativeOrigins": ["localhost"]}), "nativeOrigins");
+    bad(json!({"desktopOnly": true, "hosts": ["not a host"]}), "hosts");
+    bad(json!({"desktopOnly": true, "store": {"ios": "https://evil.example/app"}}), "store.ios");
+    // Saved, it is on (and desktop only) until it is turned off.
+    let f = fx("desk");
+    let c = set_config(&f.app, &ok, "owner").expect("set");
+    assert!(c.is_on() && c.ios.is_empty() && c.android.is_empty(), "{c:?}");
+    assert!(set_off(&f.app, "owner").expect("off"), "it was on");
+    let c = config(&f.app).expect("read").expect("kept");
+    assert!(!c.is_on() && c.ios.is_empty() && c.android.is_empty());
+}
+
+#[test]
 fn every_field_is_checked_and_the_error_names_it() {
     use serde_json::json;
     let ok = parse_input(&json!({

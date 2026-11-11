@@ -545,3 +545,134 @@ async fn origins_content_type_limits_and_a_suspended_app() {
     assert_eq!((r.status, r.code()), (403, "app_suspended".to_string()), "{}", r.body);
     let _ = (&s.other_app, &s.other_svc);
 }
+
+// ── on the link: the door's status, a device refresh (0.46.12) ───────
+
+/// Open `app`'s gateway link (any free port); its App pass and port.
+fn open_link(ws: &Ws, app: &str, svc: &str) -> (String, u16) {
+    let spec = gateway::LinkSpec { app_id: app.to_string(), service_id: svc.to_string(), workspace_id: ws.id.clone(), port: 0, caps: vec![], rooms: vec![ws.id.clone()] };
+    let pass = gateway::open(spec, Some(Arc::new(|_: &str| Ok(())))).expect("link");
+    (pass, gateway::port_of(app).expect("link port"))
+}
+
+/// One request on a gateway link, with `pass` as the Bearer (none when empty).
+async fn on_link(link: u16, method: &'static str, path: &'static str, pass: &str, body: Option<Value>) -> R {
+    let auth = if pass.is_empty() { String::new() } else { format!("Authorization: Bearer {pass}\r\n") };
+    tokio::task::spawn_blocking(move || {
+        let mut t = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Connection: close\r\n");
+        match body.map(|v| v.to_string()) {
+            Some(b) => t.push_str(&format!("{JSON_CT}\r\nContent-Length: {}\r\n\r\n{b}", b.len())),
+            None => t.push_str("\r\n"),
+        }
+        parse(&raw(link, &t))
+    })
+    .await
+    .unwrap()
+}
+
+const DOOR_STATUS: &str = "/cli/skin/auth/door";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn door_status_on_the_link_answers_for_the_links_own_app_only() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let s = seed(&env, "v7");
+    let (app_pass, link) = open_link(&s.ws, &s.app, &s.svc);
+    let (other_pass, other_link) = open_link(&s.ws, &s.other_app, &s.other_svc);
+
+    // Off (the default): the box switch is off, so no door anywhere.
+    let r = on_link(link, "GET", DOOR_STATUS, &app_pass, None).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    assert_eq!(
+        (v["ok"].as_bool(), v["on"].as_bool(), v["box"].as_bool(), v["appOff"].as_bool(), v["app"].as_str(), v["door"].as_str()),
+        (Some(true), Some(false), Some(false), Some(false), Some(s.app.as_str()), Some("/.k2/auth")),
+        "{v}"
+    );
+    let hosts = v["hosts"].as_array().unwrap_or_else(|| panic!("hosts: {v}"));
+    assert!(hosts.iter().all(|h| h["door"] == json!(false) && h["host"].is_string()), "{v}");
+
+    // The owner turns the box's door on: on for this App.
+    door_on();
+    let v = on_link(link, "GET", DOOR_STATUS, &app_pass, None).await.json();
+    assert_eq!((v["on"].as_bool(), v["box"].as_bool(), v["appOff"].as_bool()), (Some(true), Some(true), Some(false)), "{v}");
+
+    // One App's own switch shows on its own link only.
+    door_store::set_off(&s.other_svc, true, "test").expect("off");
+    auth_door::invalidate();
+    let o = on_link(other_link, "GET", DOOR_STATUS, &other_pass, None).await.json();
+    assert_eq!((o["on"].as_bool(), o["appOff"].as_bool(), o["app"].as_str()), (Some(false), Some(true), Some(s.other_app.as_str())), "{o}");
+    let v = on_link(link, "GET", DOOR_STATUS, &app_pass, None).await.json();
+    assert_eq!((v["on"].as_bool(), v["appOff"].as_bool(), v["app"].as_str()), (Some(true), Some(false), Some(s.app.as_str())), "{v}");
+
+    // Never another App's state: this App's pass on the other App's link
+    // is refused by the gate, and nothing in the request picks the App.
+    let r = on_link(other_link, "GET", DOOR_STATUS, &app_pass, None).await;
+    assert_eq!((r.status, r.code()), (403, "pass_wrong_link".to_string()), "{}", r.body);
+    let r = on_link(link, "GET", "/cli/skin/auth/door?app=aov7", &app_pass, None).await;
+    assert_eq!((r.status, r.json()["app"].as_str()), (200, Some(s.app.as_str())), "a query never names another App: {}", r.body);
+    // No pass: the link's pass_required.
+    let r = on_link(link, "GET", DOOR_STATUS, "", None).await;
+    assert_eq!((r.status, r.code()), (401, "pass_required".to_string()), "{}", r.body);
+
+    // A guest's own session of this App: the App's own data is the App pass's.
+    let dev = skin::app_login::Device { id: "install-v7".into(), name: "Laptop".into() };
+    let ds = skin::app_login::login_device(&s.user, &s.svc, &dev).expect("device sign-in").expect("stay signed in is on by default");
+    let r = on_link(link, "GET", DOOR_STATUS, &ds.session.raw, None).await;
+    assert_eq!((r.status, r.code()), (403, "not_exposed".to_string()), "{}", r.body);
+
+    // A write is refused: it is a read.
+    let r = on_link(link, "POST", DOOR_STATUS, &app_pass, Some(json!({}))).await;
+    assert!(r.status == 404 || r.status == 405, "GET only on the link: {} {}", r.status, r.body);
+
+    // Off a link: no such route, even for the owner.
+    let r = get(d.port, DOOR_STATUS, OWNER, "").await;
+    assert_eq!(r.status, 404, "{}", r.body);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_device_refresh_on_the_link_takes_the_app_pass_and_only_that_apps_tokens() {
+    let env = setup(&[]);
+    let _d = k2_daemon::test_harness::start(OWNER).await;
+    let s = seed(&env, "v8");
+    let (app_pass, link) = open_link(&s.ws, &s.app, &s.svc);
+    let (other_pass, other_link) = open_link(&s.ws, &s.other_app, &s.other_svc);
+    let ada = "adav8";
+    skin::add_principal_for_app(ada, None, &s.other_svc, None, "test").expect("guest of the other App");
+    skin::set_principal_password(ada, Some(PW)).expect("password");
+    let dev = |id: &str| skin::app_login::Device { id: id.into(), name: "Laptop".into() };
+    let mine = skin::app_login::login_device(&s.user, &s.svc, &dev("install-a")).expect("sign-in").expect("stay signed in");
+    let theirs = skin::app_login::login_device(ada, &s.other_svc, &dev("install-b")).expect("sign-in").expect("stay signed in");
+
+    // The link wants a pass even for this Public route: none is pass_required.
+    let r = on_link(link, "POST", "/cli/skin/refresh", "", Some(json!({"refresh": mine.refresh}))).await;
+    assert_eq!((r.status, r.code()), (401, "pass_required".to_string()), "{}", r.body);
+
+    // With the App pass and no `app` (the BFF's call): a new pass and the
+    // next refresh token, with the documented fields (seconds since the epoch).
+    let r = on_link(link, "POST", "/cli/skin/refresh", &app_pass, Some(json!({"refresh": mine.refresh}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = r.json();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    assert!(v["token"].as_str().is_some_and(|t| t.starts_with("k2skn_") && t != mine.session.raw), "{v}");
+    let next = v["refresh"].as_str().unwrap_or_else(|| panic!("refresh: {v}")).to_string();
+    assert!(next.starts_with("k2skr_") && next != mine.refresh, "{v}");
+    let pass_exp = v["passExpiresAt"].as_i64().unwrap_or_else(|| panic!("passExpiresAt: {v}"));
+    let refresh_exp = v["refreshExpiresAt"].as_i64().unwrap_or_else(|| panic!("refreshExpiresAt: {v}"));
+    assert!(pass_exp > now && pass_exp < now + 400 * 86_400, "seconds since the epoch: {v}");
+    assert!(refresh_exp >= pass_exp, "{v}");
+    assert_eq!((v["app"].as_str(), v["device"]["id"].as_str()), (Some(s.svc.as_str()), Some("install-a")), "{v}");
+
+    // Another App's refresh token through this App's link: refused, even
+    // when the body names that App; the token itself isn't used up.
+    let r = on_link(link, "POST", "/cli/skin/refresh", &app_pass, Some(json!({"refresh": theirs.refresh, "app": s.other_svc}))).await;
+    assert_eq!((r.status, r.code()), (401, "refresh_invalid".to_string()), "{}", r.body);
+    let r = on_link(link, "POST", "/cli/skin/refresh", &app_pass, Some(json!({"refresh": theirs.refresh}))).await;
+    assert_eq!((r.status, r.code()), (401, "refresh_invalid".to_string()), "{}", r.body);
+    let r = on_link(other_link, "POST", "/cli/skin/refresh", &other_pass, Some(json!({"refresh": theirs.refresh}))).await;
+    assert_eq!((r.status, r.json()["app"].as_str()), (200, Some(s.other_svc.as_str())), "still good on its own App's link: {}", r.body);
+
+    // Reuse ends the device's sign-in (unchanged).
+    let r = on_link(link, "POST", "/cli/skin/refresh", &app_pass, Some(json!({"refresh": mine.refresh}))).await;
+    assert_eq!((r.status, r.code()), (401, "refresh_reused".to_string()), "{}", r.body);
+}

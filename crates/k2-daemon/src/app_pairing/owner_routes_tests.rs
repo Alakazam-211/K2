@@ -11,7 +11,7 @@ use rusqlite::params;
 use serde_json::{json, Value as J};
 
 use super::*;
-use crate::app_pairing::guest_routes::tests::{fx, pass_for, start_call, Fx};
+use crate::app_pairing::guest_routes::tests::{fx, pass_for, redeem_call, start_call, Fx};
 use crate::app_pairing::links::{Fetched, Fetcher};
 
 fn agent(ws: &str) -> Who {
@@ -113,6 +113,75 @@ fn only_the_owner_in_person_with_a_fresh_confirm_sets_the_phone_apps() {
     let set = super::super::links::get(&f.app_id).expect("snapshot");
     assert_eq!(set.ios, ["TEAM123456.com.jobs.app"]);
     assert_eq!(set.link_paths, ["/jobs/*"]);
+}
+
+#[test]
+fn a_desktop_only_app_turns_pairing_on_with_no_phone_app_and_pairs_by_a_typed_code() {
+    let f = fx("odesk");
+    // Start from an App that never set pairing up (fx turns it on with an iOS id).
+    assert_eq!(store::purge_app(&f.app).expect("purge"), 1);
+    super::super::refresh_links(&f.app);
+    let vault = crate::vault::ensure_test_vault();
+    let tok = || vault.confirm.mint(super::super::CONFIRM_ACTION, Some(&f.app), "owner", "local-auth");
+    let hint = |v: &J| v["error"]["hint"].as_str().unwrap_or_else(|| panic!("hint: {v}")).to_string();
+    // Leaving the ids out is still refused, and says how to say "desktop only".
+    let (st, v) = post(SET, &Who::Owner, json!({"app": f.app, "confirmToken": tok()}));
+    assert_eq!((st, code(&v)), (400, "usage"), "{v}");
+    assert!(hint(&v).contains("desktopOnly: true"), "{v}");
+    // Every other value is still checked, before the confirm is spent.
+    let t = tok();
+    for (bad, field) in [
+        (json!({"desktopOnly": true, "ios": ["TEAM123456.com.jobs.app"]}), "desktopOnly"),
+        (json!({"desktopOnly": true, "android": [{"package": "com.jobs.app", "sha256": [FPR]}]}), "desktopOnly"),
+        (json!({"desktopOnly": true, "linkPaths": ["/jobs/*"]}), "linkPaths"),
+        (json!({"desktopOnly": true, "nativeOrigins": ["localhost"]}), "nativeOrigins"),
+        (json!({"desktopOnly": "yes"}), "desktopOnly"),
+        (json!({"desktopOnly": false}), "ios and/or android"),
+    ] {
+        let mut b = bad.clone();
+        b["app"] = json!(f.app);
+        b["confirmToken"] = json!(t);
+        let (st, v) = post(SET, &Who::Owner, b);
+        assert_eq!((st, code(&v)), (400, "usage"), "{bad}: {v}");
+        assert!(hint(&v).starts_with(field), "{bad}: {v}");
+    }
+    // Still the owner in person, with a fresh confirm.
+    let body = json!({"app": f.app, "desktopOnly": true, "nativeOrigins": ["tauri://localhost"]});
+    switches(&f.ws, true, true);
+    let (st, v) = post(SET, &agent(&f.ws), body.clone());
+    assert_eq!((st, code(&v)), (403, "owner_only"), "{v}");
+    let (st, v) = post(SET, &Who::Owner, body.clone());
+    assert_eq!((st, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let mut b = body.clone();
+    b["confirmToken"] = json!(t);
+    let (st, v) = post(SET, &Who::Owner, b);
+    assert_eq!(st, 200, "{v}");
+    assert_eq!((v["state"].as_str(), v["desktopOnly"].as_bool()), (Some("on"), Some(true)), "{v}");
+    assert_eq!((v["ios"].clone(), v["android"].clone()), (json!([]), json!([])), "{v}");
+    assert_eq!(v["nativeOrigins"], json!(["tauri://localhost"]), "{v}");
+    let warnings = v["warnings"].to_string();
+    assert!(warnings.contains("desktop only") && !warnings.contains("apple-app-site-association"), "{v}");
+    // K2 serves no iOS or Android file for it: the App's own pass through.
+    let host = format!("{}.box.k2.dev", f.app_id);
+    assert!(super::super::links::answer(&f.app_id, "GET", super::super::links::AASA, Some(&host)).is_none());
+    assert!(super::super::links::answer(&f.app_id, "GET", super::super::links::ASSETLINKS, Some(&host)).is_none());
+    // The person starts on the web; the desktop app redeems the typed code.
+    let (pass, _) = pass_for("dana", &f.app);
+    let (st, started) = start_call(&pass, json!({}));
+    assert_eq!(st, 200, "{started}");
+    let typed = started["code"].as_str().expect("code").to_string();
+    let ctx = crate::app_pairing::guest_routes::Ctx { link_app: None, ip: "203.0.113.9".into() };
+    let (st, r, _) = redeem_call(
+        json!({"code": typed, "app": f.app, "device": {"id": "desk-1", "name": "Dana's laptop"}}),
+        "\r\nUser-Agent: LedgerDesktop/1.0\r\n",
+        &ctx,
+    );
+    assert_eq!(st, 200, "{r}");
+    assert_eq!((r["via"].as_str(), r["device"]["id"].as_str()), (Some("pairing"), Some("desk-1")), "{r}");
+    assert!(r["refresh"].as_str().is_some_and(|x| x.starts_with("k2skr_")), "{r}");
+    // Off still turns it off.
+    let (st, v) = post(OFF, &Who::Owner, json!({"app": f.app}));
+    assert_eq!((st, v["state"].as_str(), v["wasOn"].as_bool()), (200, Some("off"), Some(true)), "{v}");
 }
 
 #[test]

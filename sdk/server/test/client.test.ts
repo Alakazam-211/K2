@@ -439,6 +439,82 @@ describe('login (must-not-break: the BFF logs its guests in)', () => {
   })
 })
 
+describe('guests.refresh (K2 0.46.12): the documented call works with no guest bound', () => {
+  const REFRESHED = { ok: true, token: GUEST, refresh: 'k2skr_next', passExpiresAt: 1_900_000_000, refreshExpiresAt: 1_902_000_000, username: 'ada', principalId: 'p1', app: 'svc-jobs-1', device: { id: 'install-1', name: 'Laptop' } }
+
+  it('k2.guests.refresh({refresh}) goes with the App pass, names this App, and renames token to pass', async () => {
+    const k2 = client()
+    answer = () => ({ status: 200, body: REFRESHED })
+    const s = await k2.guests.refresh({ refresh: 'k2skr_old' })
+    expect(s.pass).toBe(GUEST)
+    expect(s.refresh).toBe('k2skr_next')
+    expect(s.passExpiresAt).toBe(1_900_000_000)
+    expect(s.refreshExpiresAt).toBe(1_902_000_000)
+    expect(gw.seen[0]?.url).toBe('/cli/skin/refresh')
+    expect(bearer(gw.seen[0] as Seen)).toBe(APP1)
+    expect(JSON.parse(gw.seen[0]?.body ?? '')).toEqual({ refresh: 'k2skr_old', app: 'svc-jobs-1' })
+  })
+
+  it('inside withGuest and from asGuest it still presents the App pass (the old pass has usually ended)', async () => {
+    const k2 = client()
+    answer = () => ({ status: 200, body: REFRESHED })
+    await k2.withGuest(GUEST, () => k2.guests.refresh({ refresh: 'k2skr_a' }))
+    await k2.asGuest(GUEST).guests.refresh({ refresh: 'k2skr_b' })
+    await k2.asApp().guests.refresh({ refresh: 'k2skr_c' })
+    expect(gw.seen.map(bearer)).toEqual([APP1, APP1, APP1])
+  })
+
+  it('a rotated App pass is read again once on pass_invalid; a refused token is the K2Error', async () => {
+    const k2 = client()
+    let n = 0
+    answer = () => {
+      n += 1
+      if (n === 1) {
+        writeFileSync(join(dir, 'pass'), `${APP2}\n`)
+        return { status: 401, body: { ok: false, error: { code: 'pass_invalid', hint: 'rotated' } } }
+      }
+      if (n === 2) return { status: 200, body: REFRESHED }
+      return { status: 401, body: { ok: false, error: { code: 'refresh_reused', hint: 'that refresh token was already used' } } }
+    }
+    await k2.guests.refresh({ refresh: 'k2skr_x' })
+    expect(gw.seen.map(bearer)).toEqual([APP1, APP2])
+    const err = (await k2.guests.refresh({ refresh: 'k2skr_x' }).catch((e: unknown) => e)) as K2Error
+    expect(err).toBeInstanceOf(K2Error)
+    expect(err.code).toBe('refresh_reused')
+  })
+
+  it('a --cmd service (no pass file) refreshes with no credential (the main port route is Public)', async () => {
+    const k2 = client({ K2_PASS_FILE: join(dir, 'none') })
+    answer = () => ({ status: 200, body: REFRESHED })
+    await k2.guests.refresh({ refresh: 'k2skr_old' })
+    expect(gw.seen[0]?.headers.authorization).toBeUndefined()
+  })
+})
+
+describe('auth.doorStatus (K2 0.46.12): is the sign-in door on for this App', () => {
+  const STATUS = { ok: true, on: true, app: 'jobs', box: true, appOff: false, door: '/.k2/auth', hosts: [{ host: 'jobs.box.example.k2.dev', door: true }] }
+
+  it('k2.auth.doorStatus() is a GET with the App pass, answer projected', async () => {
+    const k2 = client()
+    answer = () => ({ status: 200, body: { ...STATUS, extra: 'dropped' } })
+    const d = await k2.auth.doorStatus()
+    expect(d).toEqual(STATUS)
+    expect(gw.seen[0]?.method).toBe('GET')
+    expect(gw.seen[0]?.url).toBe('/cli/skin/auth/door')
+    expect(bearer(gw.seen[0] as Seen)).toBe(APP1)
+    await k2.asApp().auth.doorStatus()
+    expect(bearer(gw.seen[1] as Seen)).toBe(APP1)
+  })
+
+  it('asGuest sends the guest pass as written, and K2 answers not_exposed', async () => {
+    const k2 = client()
+    answer = () => ({ status: 403, body: { ok: false, error: { code: 'not_exposed', hint: 'never a guest' } } })
+    const e2 = (await k2.asGuest(GUEST).auth.doorStatus().catch((e: unknown) => e)) as K2Error
+    expect(e2.code).toBe('not_exposed')
+    expect(bearer(gw.seen.at(-1) as Seen)).toBe(GUEST)
+  })
+})
+
 describe('login: must change password (K2 0.46.6, catalog v37)', () => {
   const TOKEN = 'k2chg_' + 'ab12'.repeat(16)
   const mustChange = (extra: Record<string, unknown> = {}): Answer => ({

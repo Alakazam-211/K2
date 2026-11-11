@@ -812,7 +812,8 @@ echo "== k2 study app-pairing (prd-app-phone-pairing-v1, 0.46.5) =="
 pp_out="$("$K2" study app-pairing)"
 assert_contains "title" "$pp_out" "k2 study app-pairing — pair your App's own phone app by QR"
 for needle in "pairing.start" "POST /cli/skin/pair/check" "POST /cli/skin/pair {code" "never a wildcard" "k2 app pairing setup" \
-    "pair_code_invalid" "K2_APP_PAIRING=off" "k2 users pair-phone"; do
+    "pair_code_invalid" "K2_APP_PAIRING=off" "k2 users pair-phone" \
+    "A DESKTOP APP AND NO PHONE APP" "--desktop-only" "desktopOnly: true"; do
     assert_contains "app-pairing: $needle" "$pp_out" "$needle"
 done
 pp_lines="$(printf '%s\n' "$pp_out" | wc -l | tr -d ' ')"
@@ -838,14 +839,17 @@ echo "== k2 study auth-pages (prd-app-hosted-sign-in-v1, 0.46.9) =="
 ap_out="$("$K2" study auth-pages)"
 assert_contains "title" "$ap_out" "k2 study auth-pages — your own sign-in page, passwords straight to K2"
 for needle in "/.k2/auth/ping" "/.k2/auth/sign-in" "k2.auth.begin()" "k2.auth.exchange" "/v1/apps/<service id>/auth/exchange" "/cli/skin/auth/exchange" \
-    "password_change_required" "bad_origin" "k2 app auth door on" "tauri://localhost" "send no password" "authAt"; do
+    "password_change_required" "bad_origin" "k2 app auth door on" "tauri://localhost" "send no password" "authAt" \
+    "k2.auth.doorStatus()" "/cli/skin/auth/door" "hosts: [{host, door}]" "passExpiresAt" "refreshExpiresAt" "k2skr_" \
+    "k2.guests.refresh({refresh})" "It goes with the App pass" "/cli/skin/refresh {refresh}" "refresh_reused"; do
     assert_contains "auth-pages: $needle" "$ap_out" "$needle"
 done
 # The responsibility statement waits for its legal review (vs-live V30):
 # the public CLI never carries the draft.
 assert_absent "auth-pages: no draft statement" "$ap_out" "DRAFT WORDING"
 ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
-if [ "$ap_lines" -le 80 ]; then echo "  PASS: auth-pages is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: auth-pages is $ap_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
+# 0.46.12: + IS THE DOOR ON? and DEVICE SIGN-IN AND REFRESH (80 → 100).
+if [ "$ap_lines" -le 100 ]; then echo "  PASS: auth-pages is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: auth-pages is $ap_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: auth-pages row" "$("$K2" study)" "  auth-pages          Your own sign-in page posts passwords to K2"
 echo "== k2 study tauri (prd-tauri-core-0467-v1 TC-14, 0.46.7) =="
 ta_out="$("$K2" study tauri)"

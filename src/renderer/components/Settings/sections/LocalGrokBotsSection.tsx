@@ -18,13 +18,11 @@ import type { SettingEntry } from '../searchManifest'
 import {
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
-  SaveError,
-  SaveNote,
   SettingSwitchRow,
   SettingsGroup,
   SettingsLoadState,
-  useSaveStatus,
 } from '../controls/SettingControls'
+import { DENIED_LINE, RowSaveError, RowSaveNote, useRowSave } from './row-save'
 import { Button, Tag, Toggle } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { daemonErrorText } from '@/lib/daemon-error'
@@ -58,7 +56,7 @@ export const LOCAL_GROKBOTS_MANIFEST: SettingEntry[] = [
   },
 ]
 
-export const GROK_READ_ONLY_LINE = 'Only the server’s owner or an admin can change these.'
+export const GROK_READ_ONLY_LINE = DENIED_LINE
 const SHOW_LABEL = 'Show Grok Bot agents'
 const SEND_LABEL = 'Let people message them'
 
@@ -137,8 +135,8 @@ export function LocalGrokBotsSection(): React.JSX.Element {
   const [found, setFound] = useState<GrokDetection | null>(null)
   const [findError, setFindError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const showSave = useSaveStatus()
-  const sendSave = useSaveStatus()
+  const showSave = useRowSave()
+  const sendSave = useRowSave()
 
   // The preview is an admin read (folder + names, no chat, no token).
   const look = useCallback((): void => {
@@ -162,15 +160,16 @@ export function LocalGrokBotsSection(): React.JSX.Element {
   useEffect(() => load(), [load])
 
   const save = useCallback(
-    async (change: { show?: boolean; send?: boolean }, status: ReturnType<typeof useSaveStatus>): Promise<void> => {
+    async (change: { show?: boolean; send?: boolean }, status: ReturnType<typeof useRowSave>): Promise<void> => {
       setBusy(true)
+      status.saving()
       try {
         const scope = primaryScope()
         setSettings(await saveGrokSettings(scope, change))
         status.saved()
         void useGrokBotsStore.getState().refresh(scope)
       } catch (e) {
-        status.failed(daemonErrorText(e))
+        status.failed(e)
       } finally {
         setBusy(false)
       }
@@ -214,6 +213,16 @@ export function LocalGrokBotsSection(): React.JSX.Element {
 
   const canEdit = settings.canEdit
   const locked = !canEdit || busy
+  // Show can't be turned on until K2 has found Grok Bot here (it can always
+  // be turned off).
+  const showWaits =
+    !canEdit || settings.show || found?.installed
+      ? null
+      : findError
+        ? 'You can turn this on once K2 can check this computer for Grok Bot.'
+        : found
+          ? 'You can turn this on once Grok Bot is installed on this computer.'
+          : 'You can turn this on once K2 has finished looking for Grok Bot.'
 
   const foundState = !canEdit ? undefined : findError ? (
     <SettingsLoadState
@@ -272,11 +281,11 @@ export function LocalGrokBotsSection(): React.JSX.Element {
           control={
             canEdit ? (
               <>
-                <SaveNote state={showSave.state} />
+                <RowSaveNote state={showSave.state} />
                 <Toggle
                   aria-label={SHOW_LABEL}
                   checked={settings.show}
-                  disabled={locked}
+                  disabled={locked || showWaits !== null}
                   onChange={(v) => void save(v ? { show: true } : { show: false, send: false }, showSave)}
                 />
               </>
@@ -290,14 +299,19 @@ export function LocalGrokBotsSection(): React.JSX.Element {
             List its agents in Agents and on your Homes and read their chats, for the user K2 runs as. Agents and App guests
             never see them.
           </div>
-          <SaveError state={showSave.state} />
+          {showWaits && (
+            <div className={SETTING_ROW_HINT} data-testid="grokbots-show-waits">
+              {showWaits}
+            </div>
+          )}
+          <RowSaveError state={showSave.state} testId="grokbots-show-error" />
         </SettingSwitchRow>
         <SettingSwitchRow
           settingId="grokbots.send"
           control={
             canEdit ? (
               <>
-                <SaveNote state={sendSave.state} />
+                <RowSaveNote state={sendSave.state} />
                 <Toggle
                   aria-label={SEND_LABEL}
                   checked={settings.send && settings.show}
@@ -320,7 +334,7 @@ export function LocalGrokBotsSection(): React.JSX.Element {
               </span>
             )}
           </div>
-          <SaveError state={sendSave.state} />
+          <RowSaveError state={sendSave.state} testId="grokbots-send-error" />
         </SettingSwitchRow>
       </SettingsGroup>
     </div>

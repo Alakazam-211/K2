@@ -27,6 +27,16 @@ fn pinned_ws(env: &Env, handle: &str) -> Ws {
     ws
 }
 
+/// Wake the agent first (`k2 msg`, the test shim), as thread_delta does: a
+/// person's dismiss is delivered to the agent like an answer, and it must
+/// land on a live Chat inside this test's temp `$HOME`, not after it.
+async fn warm_up(port: u16, handle: &str) {
+    let pq = format!("/cli/workspace/msg?token={}&workspace={}&text=warm-up&from=tester&wake=true&wake_timeout=2", enc(OWNER), enc(handle));
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", &pq, None)).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.json()["success"].as_bool(), Some(true), "the warm-up wake: {}", r.body);
+}
+
 async fn card(port: u16, handle: &str, id: &str) -> Value {
     let r = get(port, "/cli/thread", OWNER, &format!("addr={}", enc(handle))).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -46,6 +56,7 @@ async fn dismiss_and_withdraw_are_daemon_states_read_headless() {
     let other = pinned_ws(&env, &format!("cdother{tag}"));
     let h = ws.handle.clone();
     let agent = passport(&ws);
+    warm_up(port, &h).await;
 
     let ask = |prompt: &'static str| {
         let (h, agent) = (h.clone(), agent.clone());
@@ -92,4 +103,6 @@ async fn dismiss_and_withdraw_are_daemon_states_read_headless() {
     let r = post(port, "/cli/thread/void", OWNER, json!({ "addr": h, "id": a })).await;
     assert_eq!(r.status, 409, "{}", r.body);
     assert_eq!(r.code(), "card_not_pending");
+    // The dismiss reaches the agent's lane before the temp home goes.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 }

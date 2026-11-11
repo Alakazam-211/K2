@@ -735,8 +735,9 @@ pub async fn notify_once(client: &MgmtClient) -> Result<usize, String> {
     let rooms = k5.rooms.clone();
     let space = k5.space.clone();
     let sent = blocking(move || -> Result<usize, String> {
+        // Read before taking the store: skin.db's connection isn't re-entrant.
+        let readers: HashSet<String> = store::readers()?.into_iter().collect();
         store::with_store(|c| {
-            let readers: HashSet<String> = store::readers()?.into_iter().collect();
             let told = store::notified_in(c)?;
             let notes = due(&all, &subs, &readers, &told);
             let now = chrono::Utc::now().timestamp();

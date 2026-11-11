@@ -102,7 +102,6 @@ import { usePromptStashStore } from '@/stores/prompt-stash'
 import { useToastStore } from '@/stores/toast'
 import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
-import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { newClientMsgId, POST_IDEMPOTENCY_FEATURE } from '@/components/SessionView/threadOutbox'
 import { clientToCssPx } from '@/lib/app-zoom'
 
@@ -466,10 +465,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         title="Drag to resize"
       />
       {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
-      {/* Header row — identity only; the close toggle sits in the
-          composer row, across from Send (Rosson, 0.46.0). */}
       {/* Two lines (the owner's mockup): "Project chat" over who gets each
-          message. */}
+          message; then the bell and the × that closes the chat, the corner
+          the project bar's Chat button opens it from. */}
       <div className="flex items-center gap-2 min-h-[52px] pl-3.5 pr-2 py-1.5 border-b border-[var(--color-border)] flex-shrink-0" data-project-chat-header="">
         <div className="min-w-0 flex-1">
           <p className="type-name font-semibold text-[var(--color-text-primary)] truncate">Project chat</p>
@@ -484,6 +482,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           )}
         </div>
         <MuteToggleButton kind="project" id={show.id} noun="project chat" />
+        <CloseChatButton />
       </div>
 
       {/* The stream and the message box wear the Thread's look in every
@@ -603,7 +602,6 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 view-only look). */}
             <ZenActivityDrawer turn={pocTurn} attached={false} />
             <div className="flex items-center gap-2" data-project-chat-actions="">
-              <HideChatButton />
               <div
                 role="note"
                 data-testid="project-chat-readonly"
@@ -692,13 +690,6 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                 </ThreadChatNote>
               ) : undefined
             }
-            // Hide (left) beside the box, across from Send (right, in the
-            // box); level with a one-line field (40px) at its bottom.
-            leading={
-              <div data-project-chat-hide-slot="" className="flex-shrink-0" style={{ paddingBottom: 4 }}>
-                <HideChatButton />
-              </div>
-            }
           />
         )}
       </ThreadChatScope>
@@ -707,18 +698,23 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   )
 }
 
-/** Close the project chat: the drawer's » toggle, at the bottom left of the
- *  panel across from Send. (Closed, the « toggle with the unread dot sits
- *  at the far right of the dashboard tab row.) */
-function HideChatButton(): React.JSX.Element {
+/** Close the project chat: an × at the right end of the chat's header, the
+ *  corner the project bar's Chat button (which opens it) sits by. */
+function CloseChatButton(): React.JSX.Element {
   return (
-    <DrawerToggleButton
-      side="right"
-      placement="drawer"
-      name="chat"
-      size="square"
-      onToggle={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
-    />
+    <button
+      type="button"
+      className="k2-focus no-drag flex items-center justify-center w-6 h-6 flex-shrink-0 rounded-[var(--radius-field)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-row-hover)] transition-colors"
+      data-k2-chamfer="control"
+      aria-label="Close the chat"
+      title="Close the chat"
+      onClick={() => useProjectGroupsStore.getState().setChatCollapsed(true)}
+      data-project-chat-close=""
+    >
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" className="w-3.5 h-3.5 block">
+        <path d="M4 4l8 8M12 4l-8 8" />
+      </svg>
+    </button>
   )
 }
 

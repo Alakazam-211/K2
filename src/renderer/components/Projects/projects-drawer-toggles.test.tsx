@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 //
-// Drawer toggles on the Projects page (0.46.0): no nav / chat toggles in
-// the top bar. The chat panel's » / « sits in its own slot at the far right
-// of the dashboard tab row while closed (with the unread dot) and in the
-// chat header, at the end nearest the dashboard, while open. The nav (which
-// collapses to a rail, never fully hides) gets the main nav's pattern: the
-// toggle at the bottom of the nav and of the rail.
+// Toggles on the Projects page. 0.46.0: no nav / chat toggles in the top
+// bar; the nav (which collapses to a rail, never fully hides) gets the main
+// nav's pattern, the toggle at the bottom of the nav and of the rail.
+// 0.46.12 (projects-reorg-draft §3.5, the owner's mockup): the chat opens
+// from the project bar's Chat button (with the unread count), which steps
+// aside while the chat is open; the × in the chat's own header closes it.
+// The » at the bottom left of the chat is gone.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -77,8 +78,8 @@ const SHOW: ProjectGroupShow = {
   dashboards: [{ id: 'd1', name: 'Main', revision: 1, sortOrder: 0 } as unknown as ProjectGroupShow['dashboards'][number]],
 }
 
-function chatToggle(): HTMLElement | null {
-  return document.querySelector('[data-drawer-tabbar-toggle="right"]')
+function chatButton(): HTMLElement {
+  return must(document.querySelector('[data-project-chat-button]') as HTMLElement | null, 'chat button')
 }
 
 function must(el: HTMLElement | null, what: string): HTMLElement {
@@ -117,21 +118,21 @@ describe('Projects top bar', () => {
   })
 })
 
-describe('Projects chat drawer toggle', () => {
-  it('closed: « in its own slot at the far right of the dashboard tab row', async () => {
+describe('Project chat toggle (the project bar)', () => {
+  it('closed: the bar\'s Chat button is the only chat toggle, last in the bar', async () => {
     await renderPage()
-    const btn = must(chatToggle(), 'chat toggle')
-    expect(btn.getAttribute('aria-label')).toBe('Show project chat')
-    expect(btn.getAttribute('data-placement')).toBe('room')
-    expect(btn.querySelector('svg')!.getAttribute('data-double-chevron')).toBe('left')
-    const slot = must(btn.closest('[data-project-chat-toggle-slot]'), 'slot')
-    expect(slot.parentElement!.lastElementChild).toBe(slot)
-    // After the layout-presets menu: the row's far right.
-    expect(slot.previousElementSibling).toBe(screen.getByTestId('presets-stub'))
+    const btn = chatButton()
+    expect(btn.textContent).toContain('Chat')
+    expect(btn.getAttribute('title')).toBe('Open the project chat')
+    const actions = must(btn.closest('[data-project-actions]') as HTMLElement | null, 'bar actions')
+    expect(actions.lastElementChild).toBe(btn)
+    // No drawer » / « toggles for the chat anywhere on the page.
+    expect(document.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
+    expect(document.querySelector('[data-project-chat-toggle-slot]')).toBeNull()
     expect(btn.querySelector('[data-project-chat-unread]')).toBeNull()
   })
 
-  it('closed with unread messages: the dot rides the toggle', async () => {
+  it('closed with unread messages: the count rides the Chat button', async () => {
     useUnreadStore.setState({
       byKey: {
         'project:g1': { kind: 'project', id: 'g1', projectId: null, lastReadSeq: 1, lastSeq: 3, unread: 2, waiting: 0, muted: false, mutedUntil: null },
@@ -141,54 +142,40 @@ describe('Projects chat drawer toggle', () => {
       loaded: true,
     })
     await renderPage()
-    expect(must(chatToggle(), 'chat toggle').querySelector('[data-project-chat-unread]')).not.toBeNull()
+    const badge = must(chatButton().querySelector('[data-project-chat-unread]') as HTMLElement | null, 'unread count')
+    expect(badge.textContent).toBe('2')
   })
 
-  it('open: » at the bottom left, across from Send; clicking it closes the chat', async () => {
+  it('open: the × in the chat header closes it; no » at the bottom of the chat', async () => {
     await renderPage()
-    fireEvent.click(must(chatToggle(), 'chat toggle'))
+    fireEvent.click(chatButton())
     expect(useProjectGroupsStore.getState().chatCollapsed).toBe(false)
-    expect(document.querySelector('[data-project-chat-toggle-slot]')).toBeNull()
+    // The bar's button steps aside while the chat is open.
+    expect(document.querySelector('[data-project-chat-button]')).toBeNull()
     // The composer shows once the member role resolves.
     await waitFor(() => expect(screen.getByTestId('project-chat-send')).toBeTruthy())
-    const hide = must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle')
-    expect(hide.getAttribute('title')).toBe('Hide chat')
-    expect(hide.getAttribute('data-placement')).toBe('drawer')
-    expect(hide.querySelector('svg')!.getAttribute('data-double-chevron')).toBe('right')
-    // The Thread's message box (2026-10-18): Hide first (left, beside the
-    // box), Send last (right, in the box).
-    const row = must(hide.closest('[data-thread-chat-compose]') as HTMLElement | null, 'the message box')
-    expect(row.hasAttribute('data-zen-compose')).toBe(true)
-    const hideSlot = must(hide.closest('[data-project-chat-hide-slot]') as HTMLElement | null, 'hide slot')
-    const line = must(hideSlot.parentElement, 'compose line')
-    expect(line.firstElementChild).toBe(hideSlot)
-    const send = screen.getByTestId('project-chat-send')
-    expect(line.lastElementChild!.contains(send)).toBe(true)
-    expect(send.getAttribute('aria-label')).toBe('Send message')
-    // Same 32×32 box as the nav's » / « by New Project.
-    const navToggle = must(document.querySelector('[data-projects-nav-toggle]') as HTMLElement | null, 'nav toggle')
-    for (const cls of NAV_TOGGLE_BOX.split(' ')) {
-      expect([cls, hide.classList.contains(cls)]).toEqual([cls, true])
-      expect([cls, navToggle.classList.contains(cls)]).toEqual([cls, true])
-    }
-    expect(NAV_TOGGLE_BOX).toBe('h-8 w-8')
-    expect(hide.getAttribute('data-size')).toBe('square')
-    expect(hide.classList.contains('h-full')).toBe(false)
-    // Level with a one-line field: the line sits on the box's bottom edge.
-    expect(line.className).toContain('items-end')
-    // Not in the chat header any more.
-    const header = must(screen.getByText('Project chat').parentElement, 'chat header')
-    expect(header.querySelector('[data-drawer-tabbar-toggle]')).toBeNull()
-    // The chat sits in the sliding drawer box.
-    expect(hide.closest('[data-drawer-side="right"]')).not.toBeNull()
-
-    fireEvent.click(hide)
-    expect(useProjectGroupsStore.getState().chatCollapsed).toBe(true)
     expect(screen.queryByRole('button', { name: 'Hide chat' })).toBeNull()
-    expect(chatToggle()).not.toBeNull()
+    expect(document.querySelector('[data-project-chat-hide-slot]')).toBeNull()
+    const close = screen.getByRole('button', { name: 'Close the chat' })
+    // In the chat's own header, at its right end (the bar's Chat button's corner).
+    const header = must(document.querySelector('[data-project-chat-header]') as HTMLElement | null, 'chat header')
+    expect(header.lastElementChild).toBe(close)
+    // The chat sits in the sliding drawer box.
+    expect(close.closest('[data-drawer-side="right"]')).not.toBeNull()
+    fireEvent.click(close)
+    expect(useProjectGroupsStore.getState().chatCollapsed).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Close the chat' })).toBeNull()
+    expect(chatButton()).toBeTruthy()
   })
 
-  it('Hide chat slides the chat to 0 and removes it without a full-width frame', async () => {
+  it('an open chat has no Chat button in the bar (its × closes it)', async () => {
+    useProjectGroupsStore.setState({ chatCollapsed: false })
+    await renderPage()
+    expect(document.querySelector('[data-project-chat-button]')).toBeNull()
+    expect(await screen.findByRole('button', { name: 'Close the chat' })).toBeTruthy()
+  })
+
+  it('closing slides the chat to 0 and removes it without a full-width frame', async () => {
     const realMatchMedia = window.matchMedia
     window.matchMedia = ((query: string) => ({
       matches: false,
@@ -203,11 +190,9 @@ describe('Projects chat drawer toggle', () => {
     try {
       useProjectGroupsStore.setState({ chatCollapsed: false })
       await renderPage()
-      // The composer row (and its Hide chat button) settles once the member role resolves.
-      await waitFor(() => expect(screen.getByTestId('project-chat-send')).toBeTruthy())
-      const hide = must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle')
-      const el = must(hide.closest('[data-drawer-side="right"]') as HTMLElement | null, 'chat drawer')
-      fireEvent.click(hide)
+      const close = await waitFor(() => screen.getByRole('button', { name: 'Close the chat' }))
+      const el = must(close.closest('[data-drawer-side="right"]') as HTMLElement | null, 'chat drawer')
+      fireEvent.click(close)
       expect(el.dataset.drawerAnim).toBe('closing')
       expect(el.style.width).toBe('0px')
       // End the slide outside act(): the end of this task is the next
@@ -220,18 +205,31 @@ describe('Projects chat drawer toggle', () => {
     }
   })
 
-  it('viewers (no composer) still get the Hide chat button at the bottom', async () => {
+  it('viewers (no composer) close it from the same × in the header', async () => {
     viewerRole.current = null
     try {
       useProjectGroupsStore.setState({ chatCollapsed: false })
       await renderPage()
-      const hide = await waitFor(() => must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle'))
       await waitFor(() => expect(screen.getByText(/View only: you can read but not post/)).toBeTruthy())
-      expect(hide.parentElement!.firstElementChild).toBe(hide)
+      expect(screen.getByRole('button', { name: 'Close the chat' })).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Hide chat' })).toBeNull()
       expect(screen.queryByText('Send')).toBeNull()
     } finally {
       viewerRole.current = 'member'
     }
+  })
+})
+
+describe('Project settings from the bar', () => {
+  it('⚙ opens this project\'s settings over the page (the sheet), focus returning to ⚙', async () => {
+    useProjectGroupsStore.setState({ settingsSheet: null })
+    await renderPage()
+    const gear = screen.getByRole('button', { name: 'Project settings' })
+    fireEvent.click(gear)
+    const sheet = useProjectGroupsStore.getState().settingsSheet
+    expect(sheet?.groupId).toBe('g1')
+    expect(sheet?.opener).toBe(gear)
+    act(() => useProjectGroupsStore.getState().closeProjectSettingsSheet())
   })
 })
 
@@ -240,6 +238,8 @@ describe('Projects nav toggle (main nav pattern)', () => {
     render(<ProjectNavCollapseButton />)
     const btn = screen.getByRole('button', { name: 'Collapse projects nav' })
     expect(btn.querySelector('svg')!.getAttribute('data-double-chevron')).toBe('left')
+    for (const cls of NAV_TOGGLE_BOX.split(' ')) expect(btn.classList.contains(cls)).toBe(true)
+    expect(NAV_TOGGLE_BOX).toBe('h-8 w-8')
     fireEvent.click(btn)
     expect(useProjectGroupsStore.getState().navCollapsed).toBe(true)
     const open = screen.getByRole('button', { name: 'Open projects nav' })
@@ -252,6 +252,8 @@ describe('Projects nav toggle (main nav pattern)', () => {
     const inNav = document.querySelectorAll('[data-projects-nav-toggle]')
     expect(inNav.length).toBe(1)
     expect(inNav[0].getAttribute('aria-label')).toBe('Collapse projects nav')
+    const nav = must(document.querySelector('[data-projects-nav]') as HTMLElement | null, 'nav')
+    expect(nav.lastElementChild!.contains(inNav[0])).toBe(true)
     act(() => {
       fireEvent.click(inNav[0])
     })

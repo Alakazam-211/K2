@@ -63,7 +63,6 @@
     "src/renderer/components/Settings/sections/DataSourcesBatchDialog.tsx": 1,
     "src/renderer/components/Settings/sections/HeartbeatsSection.tsx": 1,
     "src/renderer/components/Settings/sections/HomesSyncSection.tsx": 1,
-    "src/renderer/components/Settings/sections/KeybindingsSection.tsx": 2,
     "src/renderer/components/Settings/sections/SkinAccessSection.tsx": 3,
     "src/renderer/components/Settings/sections/data-sources-ui.ts": 3,
     "src/renderer/components/Settings/shared/LlmLoginPicker.tsx": 1,

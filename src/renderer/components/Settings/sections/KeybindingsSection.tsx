@@ -2,19 +2,31 @@ import React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { useSettingsStore, getEffectiveKeybinding } from '@/stores/settings'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
+import type { ShortcutModifierLayout } from '@/stores/terminal-settings'
 import {
   HOTKEYS,
-  RESERVED_KEYS,
   formatKeyCombo,
   keyEventToCombo,
   isReservedKey,
 } from '@shared/hotkeys'
 import type { HotkeyDefinition } from '@shared/hotkeys'
 import { KeyCombo } from '@/components/KeySymbol'
+import { Button, cx } from '@/components/ui'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import type { SettingEntry } from '../searchManifest'
 import { ZEN_CHORD_COMBO, ZEN_CHORD_LABEL } from '@/lib/zen/zen-shortcut'
 import { zenAvailable } from '@/lib/zen/zen-platform'
+import {
+  SaveError,
+  SaveNote,
+  SETTING_ROW_HINT,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  useSaveStatus,
+} from '../controls/SettingControls'
+import { KEY_CHIP, KEY_CHIP_REST, KeyChip } from '../shared/KeyChip'
+import { AccessSheet, FailedNote } from './AccessDialogs'
 
 /** prd-zen-mode-v1 Z30/Z56: the Zen escape chord is fixed (the native menu
  *  accelerator on macOS, a capture listener elsewhere). Shown here as taken;
@@ -33,160 +45,215 @@ export const KEYBINDINGS_MANIFEST: SettingEntry[] = [
   {
     id: 'keybindings.shortcut-layout',
     section: 'keybindings',
-    label: 'Workspace Number Shortcuts',
-    description: '⌘ 1-9 for Active vs Pinned (swap)',
-    keywords: ['workspace', 'shortcut', 'layout', 'number', 'cmd', 'pinned', 'active'],
+    label: 'Number keys open',
+    description: 'Which workspaces ⌘ 1–9 and ⌥⌘ 1–9 switch to',
+    keywords: ['workspace', 'shortcut', 'layout', 'number', 'cmd', 'pinned', 'active', 'swap'],
   },
   {
     id: 'keybindings.reset-all',
     section: 'keybindings',
-    label: 'Reset All to Defaults',
-    description: 'Revert every keybinding to its default',
-    keywords: ['reset', 'defaults', 'keybindings'],
+    label: 'Reset all shortcuts',
+    description: 'Puts every shortcut back to its default',
+    keywords: ['reset', 'defaults', 'keybindings', 'shortcuts'],
   },
   ...HOTKEYS.map((h) => ({
     id: `keybindings.${h.id}`,
     section: 'keybindings' as const,
     group: h.category,
     label: h.label,
-    description: `Rebind the ${h.category} hotkey for ${h.label}`,
+    description: `Change the shortcut for ${h.label}`,
     keywords: [h.id, h.category.toLowerCase(), 'hotkey', 'shortcut', 'keybinding', 'rebind'],
   })),
 ]
+
+const CATEGORIES = ['Terminal', 'Tabs', 'Navigation', 'App'] as const
+const ACTIVE_FIRST: ShortcutModifierLayout = 'cmd-active-cmdshift-pinned'
+
+function keysFor(combo: string): string {
+  return formatKeyCombo(combo, isMacPlatform())
+}
 
 export function KeybindingsSection(): React.JSX.Element {
   const keybindings = useSettingsStore((s) => s.keybindings)
   const updateKeybinding = useSettingsStore((s) => s.updateKeybinding)
   const resetKeybinding = useSettingsStore((s) => s.resetKeybinding)
-  const resetAllKeybindings = useSettingsStore((s) => s.resetAllKeybindings)
   const shortcutLayout = useTerminalSettingsStore((s) => s.shortcutLayout)
   const setShortcutLayout = useTerminalSettingsStore((s) => s.setShortcutLayout)
   const [capturing, setCapturing] = useState<string | null>(null)
+  const [confirmReset, setConfirmReset] = useState(false)
+  const [resetNote, setResetNote] = useState<string | null>(null)
+  const layoutSave = useSaveStatus()
+  const mac = isMacPlatform()
 
-  // Build a map of combo -> ids to detect conflicts
+  // Which shortcuts share keys.
   const comboToIds: Record<string, string[]> = {}
   for (const h of HOTKEYS) {
     const combo = getEffectiveKeybinding(keybindings, h.id)
     if (!comboToIds[combo]) comboToIds[combo] = []
     comboToIds[combo].push(h.id)
   }
-
-  const hasConflict = (id: string): boolean => {
+  const clashesWith = (id: string): string[] => {
     const combo = getEffectiveKeybinding(keybindings, id)
-    return (comboToIds[combo]?.length ?? 0) > 1
+    return (comboToIds[combo] ?? []).filter((o) => o !== id).map((o) => HOTKEYS.find((h) => h.id === o)?.label ?? o)
   }
 
-  // Group hotkeys by category
-  const categories = ['Terminal', 'Tabs', 'Navigation', 'App'] as const
-  const grouped = categories.map((cat) => ({
-    category: cat,
-    items: HOTKEYS.filter((h) => h.category === cat)
-  }))
+  const changed = HOTKEYS.filter((h) => !!keybindings[h.id]).length
+  const activeFirst = shortcutLayout === ACTIVE_FIRST
+  const numberKey = mac ? '⌘ 1–9' : 'Ctrl+1–9'
+  const altNumberKey = mac ? '⌥⌘ 1–9' : 'Ctrl+Alt+1–9'
 
   return (
-    <div className="max-w-2xl">
-      <div className="flex items-center justify-between mb-4">
+    <div className="w-full max-w-[52rem] space-y-6 pb-6" data-testid="keybindings-page">
+      <header className="min-w-0">
         <h2 className="type-title text-[var(--color-text-primary)]">Key Bindings</h2>
-        <button
-          onClick={resetAllKeybindings}
-          className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
+        <p className={SETTING_ROW_HINT}>
+          Shortcuts for K2 on this computer. Click a shortcut and press the new keys; it saves at once. Escape cancels.
+        </p>
+      </header>
+
+      <SettingsGroup card title="Workspace numbers" testId="keys-layout">
+        <SettingRow
+          settingId="keybindings.shortcut-layout"
+          label="Number keys open"
+          hint={
+            <>
+              Which workspaces {numberKey} and {altNumberKey} switch to, by their place in the sidebar.{' '}
+              <SaveNote state={layoutSave.state} />
+            </>
+          }
+          field
         >
-          Reset All to Defaults
-        </button>
-      </div>
+          <SettingDropdown
+            fullWidth
+            ariaLabel="Number keys open"
+            value={shortcutLayout}
+            options={[
+              { value: 'cmd-active-cmdshift-pinned', label: `${numberKey} Active, ${altNumberKey} Pinned` },
+              { value: 'cmd-pinned-cmdshift-active', label: `${numberKey} Pinned, ${altNumberKey} Active` },
+            ]}
+            onChange={(v) => {
+              setShortcutLayout(v as ShortcutModifierLayout)
+              layoutSave.saved()
+            }}
+          />
+        </SettingRow>
+      </SettingsGroup>
 
-      <div className="type-hint text-[var(--color-text-muted)] mb-3">
-        Click a binding to rebind. Press Escape to cancel. Reserved keys: {RESERVED_KEYS.join(', ')}
-      </div>
-
-      {/* Workspace number shortcut layout */}
-      <div className="mb-4 border border-[var(--color-border)] px-3 py-2.5 flex items-center justify-between">
-        <div>
-          <div className="type-row text-[var(--color-text-primary)]">Workspace Number Shortcuts</div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">
-            {shortcutLayout === 'cmd-active-cmdshift-pinned'
-              ? <><KeyCombo combo="⌘" /> 1-9 switches Active, <KeyCombo combo="⇧⌘" /> 1-9 switches Pinned</>
-              : <><KeyCombo combo="⌘" /> 1-9 switches Pinned, <KeyCombo combo="⇧⌘" /> 1-9 switches Active</>
-            }
-          </div>
-        </div>
-        <button
-          onClick={() => setShortcutLayout(
-            shortcutLayout === 'cmd-active-cmdshift-pinned'
-              ? 'cmd-pinned-cmdshift-active'
-              : 'cmd-active-cmdshift-pinned'
+      {CATEGORIES.map((category) => (
+        <SettingsGroup key={category} card title={category} testId={`keys-${category.toLowerCase()}`}>
+          {category === 'Navigation' && (
+            <>
+              <SettingRow label="Active workspaces" hint="Set by Number keys open, above.">
+                <KeyChip combo={activeFirst ? numberKey : altNumberKey} />
+              </SettingRow>
+              <SettingRow label="Pinned workspaces" hint="Set by Number keys open, above.">
+                <KeyChip combo={activeFirst ? altNumberKey : numberKey} />
+              </SettingRow>
+            </>
           )}
-          className="px-3 py-1 type-control text-[var(--color-text-muted)] border border-[var(--color-border)] hover:text-[var(--color-text-primary)] hover:border-[var(--color-text-muted)] no-drag cursor-pointer font-mono flex-shrink-0"
-        >
-          Swap
-        </button>
-      </div>
+          {category === 'App' && zenAvailable() && (
+            <div data-zen-keybinding="">
+              <SettingRow label="Enter or leave Zen mode" hint="Always this shortcut, so you can get back from a Garden.">
+                <KeyChip combo={mac ? ZEN_CHORD_LABEL.mac : ZEN_CHORD_LABEL.other} />
+              </SettingRow>
+            </div>
+          )}
+          {HOTKEYS.filter((h) => h.category === category).map((hotkey) => (
+            <KeybindingRow
+              key={hotkey.id}
+              hotkey={hotkey}
+              combo={getEffectiveKeybinding(keybindings, hotkey.id)}
+              isCustom={!!keybindings[hotkey.id]}
+              clashes={clashesWith(hotkey.id)}
+              capturing={capturing === hotkey.id}
+              onStartCapture={() => setCapturing(hotkey.id)}
+              onCapture={async (combo) => {
+                setCapturing(null)
+                await Promise.resolve(updateKeybinding(hotkey.id, combo))
+                return useSettingsStore.getState().keybindings[hotkey.id] === combo
+              }}
+              onCancelCapture={() => setCapturing(null)}
+              onReset={async () => {
+                await Promise.resolve(resetKeybinding(hotkey.id))
+                return !useSettingsStore.getState().keybindings[hotkey.id]
+              }}
+            />
+          ))}
+        </SettingsGroup>
+      ))}
 
-      <div className="space-y-4">
-        {grouped.map(({ category, items }) => (
-          <div key={category}>
-            <div className="type-badge text-[var(--color-text-muted)] uppercase tracking-wider mb-1 px-1">
-              {category}
-            </div>
-            {category === 'Navigation' && (
-              <div className="border border-[var(--color-border)] mb-px">
-                <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)]">
-                  <div>
-                    <span className="type-row text-[var(--color-text-secondary)]">Active Workspaces</span>
-                    <span className="type-hint text-[var(--color-text-muted)] ml-2">1-9</span>
-                  </div>
-                  <span className="type-row font-mono text-[var(--color-text-muted)] bg-white/[0.06] px-2 py-0.5">
-                    <KeyCombo combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌘ 1-9' : '⌥⌘ 1-9'} />
-                  </span>
-                </div>
-                <div className="flex items-center justify-between px-3 py-2">
-                  <div>
-                    <span className="type-row text-[var(--color-text-secondary)]">Pinned Workspaces</span>
-                    <span className="type-hint text-[var(--color-text-muted)] ml-2">1-9</span>
-                  </div>
-                  <span className="type-row font-mono text-[var(--color-text-muted)] bg-white/[0.06] px-2 py-0.5">
-                    <KeyCombo combo={shortcutLayout === 'cmd-active-cmdshift-pinned' ? '⌥⌘ 1-9' : '⌘ 1-9'} />
-                  </span>
-                </div>
-              </div>
-            )}
-            {category === 'App' && zenAvailable() && (
-              <div className="border border-[var(--color-border)] mb-px" data-zen-keybinding="">
-                <div className="flex items-center justify-between px-3 py-2">
-                  <div>
-                    <span className="type-row text-[var(--color-text-secondary)]">Enter / Exit Zen Mode</span>
-                    <span className="type-hint text-[var(--color-text-muted)] ml-2">Not rebindable</span>
-                  </div>
-                  <span className="type-row font-mono text-[var(--color-text-muted)] bg-[var(--color-bg-hover)] px-2 py-0.5">
-                    <KeyCombo combo={isMacPlatform() ? ZEN_CHORD_LABEL.mac : ZEN_CHORD_LABEL.other} />
-                  </span>
-                </div>
-              </div>
-            )}
-            <div className="border border-[var(--color-border)]">
-              {items.map((hotkey, i) => (
-                <KeybindingRow
-                  key={hotkey.id}
-                  hotkey={hotkey}
-                  combo={getEffectiveKeybinding(keybindings, hotkey.id)}
-                  isCustom={!!keybindings[hotkey.id]}
-                  conflict={hasConflict(hotkey.id)}
-                  capturing={capturing === hotkey.id}
-                  onStartCapture={() => setCapturing(hotkey.id)}
-                  onCapture={(combo) => {
-                    updateKeybinding(hotkey.id, combo)
-                    setCapturing(null)
-                  }}
-                  onCancelCapture={() => setCapturing(null)}
-                  onReset={() => resetKeybinding(hotkey.id)}
-                  hasBorder={i < items.length - 1}
-                />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+      <SettingsGroup card title="Reset" testId="keys-reset">
+        <SettingRow
+          settingId="keybindings.reset-all"
+          label="Reset all shortcuts"
+          hint={
+            resetNote ? (
+              <span role="status" data-testid="keys-reset-note">
+                {resetNote}
+              </span>
+            ) : changed > 0 ? (
+              `Puts the ${changed === 1 ? 'one shortcut' : `${changed} shortcuts`} you changed back to K2’s defaults.`
+            ) : (
+              'Every shortcut is on its default.'
+            )
+          }
+        >
+          <Button variant="danger-quiet" disabled={changed === 0} onClick={() => setConfirmReset(true)}>
+            Reset all…
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
+
+      {confirmReset && (
+        <ResetAllDialog
+          changed={changed}
+          onClose={() => setConfirmReset(false)}
+          onDone={() => {
+            setConfirmReset(false)
+            setResetNote('All shortcuts are back to their defaults.')
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+function ResetAllDialog({ changed, onClose, onDone }: { changed: number; onClose: () => void; onDone: () => void }): React.JSX.Element {
+  const resetAllKeybindings = useSettingsStore((s) => s.resetAllKeybindings)
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const run = async (): Promise<void> => {
+    setBusy(true)
+    setFailed(false)
+    await Promise.resolve(resetAllKeybindings())
+    setBusy(false)
+    if (Object.keys(useSettingsStore.getState().keybindings).length === 0) onDone()
+    else setFailed(true)
+  }
+  return (
+    <AccessSheet
+      title="Reset all shortcuts?"
+      intro={`The ${changed === 1 ? 'shortcut' : `${changed} shortcuts`} you changed go back to K2’s defaults. You can change them again any time.`}
+      onClose={onClose}
+      busy={busy}
+      testId="keys-reset-confirm"
+    >
+      {failed && (
+        <FailedNote
+          what="Your shortcuts weren’t reset."
+          next="They are as they were. Try again in a moment."
+          detail="the settings didn’t save"
+        />
+      )}
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+          Cancel
+        </Button>
+        <Button variant="danger-muted" size="md" onClick={() => void run()} disabled={busy}>
+          {busy ? 'Resetting…' : 'Reset all'}
+        </Button>
+      </div>
+    </AccessSheet>
   )
 }
 
@@ -194,28 +261,32 @@ interface KeybindingRowProps {
   hotkey: HotkeyDefinition
   combo: string
   isCustom: boolean
-  conflict: boolean
+  /** Labels of the other shortcuts on the same keys. */
+  clashes: string[]
   capturing: boolean
   onStartCapture: () => void
-  onCapture: (combo: string) => void
+  /** Saves the new keys; true when they stuck. */
+  onCapture: (combo: string) => Promise<boolean>
   onCancelCapture: () => void
-  onReset: () => void
-  hasBorder: boolean
+  /** Back to the default; true when it stuck. */
+  onReset: () => Promise<boolean>
 }
 
 function KeybindingRow({
   hotkey,
   combo,
   isCustom,
-  conflict,
+  clashes,
   capturing,
   onStartCapture,
   onCapture,
   onCancelCapture,
   onReset,
-  hasBorder
 }: KeybindingRowProps): React.JSX.Element {
   const captureRef = useRef<HTMLButtonElement>(null)
+  const save = useSaveStatus()
+  /** Keys the last press tried that can't be a shortcut, and why. */
+  const [refused, setRefused] = useState<string | null>(null)
 
   useEffect(() => {
     if (!capturing) return
@@ -225,18 +296,27 @@ function KeybindingRow({
       e.stopPropagation()
 
       if (e.key === 'Escape') {
+        setRefused(null)
         onCancelCapture()
         return
       }
 
-      const newCombo = keyEventToCombo(e)
       // Ignore bare modifier presses
       if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return
+      const newCombo = keyEventToCombo(e)
 
-      if (isReservedKey(newCombo)) return
-      if (isZenChordCombo(newCombo)) return
+      if (isReservedKey(newCombo)) {
+        setRefused(`${formatKeyCombo(newCombo, isMacPlatform())} goes to the program in the terminal, so it can’t be a shortcut. Try other keys.`)
+        return
+      }
+      if (isZenChordCombo(newCombo)) {
+        setRefused(`${formatKeyCombo(newCombo, isMacPlatform())} enters and leaves Zen mode. Try other keys.`)
+        return
+      }
 
-      onCapture(newCombo)
+      setRefused(null)
+      save.reset()
+      void onCapture(newCombo).then((ok) => (ok ? save.saved() : save.failed('')))
     }
 
     window.addEventListener('keydown', handler, true)
@@ -249,45 +329,87 @@ function KeybindingRow({
     }
   }, [capturing])
 
+  const conflict = clashes.length > 0
+  const hint = capturing ? (
+    refused ? (
+      <span role="alert" className="text-[var(--color-status-error-soft)]">
+        {refused}
+      </span>
+    ) : (
+      'Press the new keys. Escape cancels.'
+    )
+  ) : conflict ? (
+    <span className="text-[var(--color-status-error-soft)]" data-keybinding-conflict="">
+      Same keys as {clashes.join(' and ')}. Change one of them.
+    </span>
+  ) : isCustom ? (
+    <>
+      Changed. The default is {keysFor(hotkey.defaultKey)}.
+    </>
+  ) : undefined
+
   return (
-    <div
-      className={`flex items-center justify-between px-3 py-1.5 ${
-        hasBorder ? 'border-b border-[var(--color-border)]' : ''
-      } ${conflict ? 'bg-[color-mix(in_srgb,var(--color-status-error)_10%,transparent)]' : ''}`}
+    <SettingRow
+      settingId={`keybindings.${hotkey.id}`}
+      testId={`keybinding-${hotkey.id}`}
+      label={hotkey.label}
+      hint={
+        hint || save.state !== 'idle' ? (
+          <>
+            {hint} <SaveNote state={save.state} />
+            <SaveError state={save.state} />
+          </>
+        ) : undefined
+      }
     >
-      <span className="type-row text-[var(--color-text-secondary)] flex-1">{hotkey.label}</span>
-
-      <div className="flex items-center gap-2">
-        {capturing ? (
-          <button
-            ref={captureRef}
-            className="px-2 py-0.5 type-control bg-[var(--color-accent)]/20 border border-[var(--color-accent)]/50 text-[var(--color-accent)] no-drag cursor-pointer animate-pulse"
-          >
-            Press a key...
-          </button>
-        ) : (
-          <button
-            onClick={onStartCapture}
-            className={`px-2 py-0.5 type-control border no-drag cursor-pointer ${
-              conflict
-                ? 'bg-[color-mix(in_srgb,var(--color-status-error)_20%,transparent)] border-[color-mix(in_srgb,var(--color-status-error)_40%,transparent)] text-[var(--color-status-error-soft)]'
-                : 'bg-[var(--color-bg-surface)] border-[var(--color-border)] text-[var(--color-text-primary)]'
-            } hover:border-[var(--color-text-muted)]`}
-          >
-            <KeyCombo combo={formatKeyCombo(combo, isMacPlatform())} />
-          </button>
-        )}
-
-        {isCustom && (
-          <button
-            onClick={onReset}
-            className="type-control text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer"
-            title="Reset to default"
-          >
-            x
-          </button>
-        )}
-      </div>
-    </div>
+      {isCustom && !capturing && (
+        <Button
+          variant="quiet"
+          title="Reset to default"
+          aria-label={`Reset ${hotkey.label} to default`}
+          onClick={() => {
+            save.reset()
+            void onReset().then((ok) => (ok ? save.saved() : save.failed('')))
+          }}
+        >
+          Reset
+        </Button>
+      )}
+      {capturing ? (
+        <button
+          ref={captureRef}
+          type="button"
+          data-k2-chamfer="chip"
+          aria-label={`Recording a new shortcut for ${hotkey.label}`}
+          onClick={() => {
+            setRefused(null)
+            onCancelCapture()
+          }}
+          className={cx(KEY_CHIP, 'k2-focus no-drag cursor-pointer bg-[var(--color-bg)] border-[var(--color-accent)] text-[var(--color-text-primary)]')}
+        >
+          Press keys…
+        </button>
+      ) : (
+        <button
+          type="button"
+          data-k2-chamfer="chip"
+          aria-label={`${hotkey.label}: ${formatKeyCombo(combo, isMacPlatform())}. Change`}
+          onClick={() => {
+            setRefused(null)
+            save.reset()
+            onStartCapture()
+          }}
+          className={cx(
+            KEY_CHIP,
+            'k2-focus no-drag cursor-pointer transition-colors',
+            conflict
+              ? 'bg-[var(--color-bg-elevated)] border-[var(--color-status-error-soft)] text-[var(--color-status-error-soft)]'
+              : cx(KEY_CHIP_REST, 'hover:border-[var(--color-text-muted)]'),
+          )}
+        >
+          <KeyCombo combo={formatKeyCombo(combo, isMacPlatform())} />
+        </button>
+      )}
+    </SettingRow>
   )
 }

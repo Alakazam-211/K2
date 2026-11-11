@@ -635,8 +635,7 @@ fn handle_cos_start(actor: &Actor) -> CliResponse {
 }
 
 /// `POST /cli/first-run/chief-of-staff {name, about, tool, focusGroup?}`:
-/// the one
-/// agent-callable route here. **Only K5's own pinned chat** may call it:
+/// the one agent-callable route here. **Only K5's own pinned chat** may call it:
 /// the passport's workspace is the seat's K5 and its map key is the
 /// canonical one (`map_key == project_id`, as `k2 agent refresh` checks;
 /// `K2_SESSION_ID` is never trusted). Then: the `chief-of-staff` template,

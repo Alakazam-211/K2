@@ -47,8 +47,13 @@ pub const ROUTES: &[&str] = &[
     crate::ci_routes::EVIDENCE,
     crate::ci_routes::FREEZE,
     crate::ci_routes::INIT,
+    // prd-compute-blacksmith-class-v1 O1: monitors (POST) and their list.
+    crate::ci_routes::MONITOR,
+    crate::ci_routes::MONITORS,
     crate::ci_routes::RELEASE,
     crate::ci_routes::RUN,
+    // O1: per-check stats (a reader verb).
+    crate::ci_routes::STATS,
     crate::ci_routes::STATUS,
     // prd-compute-blacksmith-class-v1 T1: test history (a reader verb).
     crate::ci_routes::TESTS,
@@ -94,6 +99,8 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/local/remote-admin",
     "/cli/compute/local/resume",
     "/cli/compute/local/status",
+    // O1: `k2 compute logs --search` (a reader).
+    crate::compute_logsearch::PATH,
     "/cli/compute/nodes",
     "/cli/compute/nodes/alerts",
     "/cli/compute/nodes/confirm",
@@ -139,6 +146,7 @@ pub const POST_ROUTES: &[&str] = &[
     crate::ci_routes::EVIDENCE,
     crate::ci_routes::FREEZE,
     crate::ci_routes::INIT,
+    crate::ci_routes::MONITOR,
     crate::ci_routes::RELEASE,
     crate::ci_routes::RUN,
     crate::ci_routes::WATCH,
@@ -704,6 +712,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/jobs" => views::jobs_list(&who, params),
         "/cli/compute/jobs/get" => views::job_get(&who, params),
         "/cli/compute/jobs/logs" => job_logs(&who, params),
+        // O1 (prd-compute-blacksmith-class-v1 §4.5.3): one string across logs.
+        crate::compute_logsearch::PATH => crate::compute_logsearch::handle(&who, params),
         "/cli/compute/jobs/receipt" => job_receipt(&who, params),
         "/cli/compute/jobs/artifact" => job_artifact(&who, params),
         "/cli/compute/jobs/cancel" => views::job_cancel(&who, body),

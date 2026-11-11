@@ -2550,6 +2550,13 @@ pub(crate) fn post_clone_text_line(conversation_id: &str, project_id: &str, addr
     }
 }
 
+/// The workspace (project id) whose Thread `addr` names, when it resolves
+/// to one that takes a post (prd-compute-blacksmith-class-v1 O1: a CI
+/// monitor's `--to thread:<addr>`).
+pub(crate) fn thread_project_of(addr: &str) -> Option<String> {
+    resolve_addr(addr).ok().map(|r| r.project_id)
+}
+
 /// One plain K2 line on a workspace's own Thread (its pinned Chat), e.g.
 /// "job collect added" (`k2 job`, item 5 Q14). No wake, no inject, no
 /// push: it is a record for the person who reads that Thread.

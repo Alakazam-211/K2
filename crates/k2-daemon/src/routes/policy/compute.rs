@@ -67,6 +67,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/local/remote-admin", Owner),
     post("/cli/compute/local/resume", Owner),
     get("/cli/compute/local/status", Member),
+    // prd-compute-blacksmith-class-v1 O1: search the caller's own job logs.
+    get("/cli/compute/logs/search", Member),
     get("/cli/compute/nodes", Member),
     post("/cli/compute/nodes/alerts", Admin),
     post("/cli/compute/nodes/confirm", Owner),

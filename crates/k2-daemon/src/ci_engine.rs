@@ -86,6 +86,10 @@ pub trait Ops: Send + Sync {
     fn junit(&self, _job_id: &str) -> JunitFetch {
         JunitFetch { note: Some("no JUnit fetch here".into()), ..Default::default() }
     }
+    /// prd-compute-blacksmith-class-v1 O1 (§4.5.4): one message, the run's
+    /// `[ci]` line or a monitor's, to a workspace (its live session, else
+    /// its inbox) or a Thread. Facts only; never blocks the reap.
+    fn notify(&self, to: &k2_core::ci_monitors::To, title: &str, text: &str);
 }
 
 /// What [`Ops::junit`] found for one check job.
@@ -625,6 +629,70 @@ fn finish(o: &dyn Ops, run: &RunRow, checks: &[CheckRow], now: i64) {
         ci::set_run_state(&conn, &run.id, state, Some(&detail), Some(now));
     }
     sync_statuses(o, run);
+    run_ended(o, run, checks, now);
+}
+
+/// prd-compute-blacksmith-class-v1 O1 (§4.5.4, BK-10): a checks run ended.
+/// One `[ci]` message to the workspace (its live session, else its inbox):
+/// it replaces the per-check `[compute]` notes, which check jobs no longer
+/// send (`compute_ws::finalize`). Then the workspace's monitors, each
+/// that fires to where it says. Release runs keep their own flow.
+fn run_ended(o: &dyn Ops, run: &RunRow, checks: &[CheckRow], now: i64) {
+    let (ended, totals, fired) = {
+        let db = db();
+        let conn = db.lock();
+        let Some(r) = ci::run_by_id(&conn, &run.id) else { return };
+        if r.kind != k2_core::ci_release::kind::CHECKS {
+            return;
+        }
+        let totals = k2_core::ci_tests::run_totals(&conn, &r.id);
+        let fired = k2_core::ci_monitors::evaluate(&conn, &r, now);
+        (r, totals, fired)
+    };
+    let slowest = checks
+        .iter()
+        .filter_map(|c| c.job_id.as_deref().and_then(|j| o.job(j)).filter(|f| f.secs > 0).map(|f| (c.name.as_str(), f.secs)))
+        .max_by_key(|(_, s)| *s);
+    let text = ci::run_message(&ended, checks, slowest, totals.as_ref());
+    let to = k2_core::ci_monitors::To::Workspace(ended.workspace_id.clone());
+    o.notify(&to, &format!("CI run {} {}", ended.short(), ended.state), &text);
+    for f in fired {
+        o.notify(&f.to, &format!("CI monitor {}", f.name), &f.text);
+    }
+}
+
+// ── the [ci] message sink (tests) ────────────────────────────────────
+
+/// `(to, text)` of every message the real [`Ops::notify`] sent, while a
+/// test holds the sink open ([`test_sink_open`]); nothing is delivered then.
+static SINK: Mutex<Option<Vec<(k2_core::ci_monitors::To, String)>>> = Mutex::new(None);
+
+/// Test seam: catch `[ci]` messages instead of delivering them.
+#[doc(hidden)]
+pub fn test_sink_open() {
+    *SINK.lock().unwrap_or_else(|p| p.into_inner()) = Some(Vec::new());
+}
+
+/// Test seam: the messages caught so far (the sink stays open).
+#[doc(hidden)]
+pub fn test_sink_take() -> Vec<(k2_core::ci_monitors::To, String)> {
+    SINK.lock().unwrap_or_else(|p| p.into_inner()).as_mut().map(std::mem::take).unwrap_or_default()
+}
+
+/// Test seam: close the sink (messages are delivered again).
+#[doc(hidden)]
+pub fn test_sink_close() {
+    *SINK.lock().unwrap_or_else(|p| p.into_inner()) = None;
+}
+
+fn sink(to: &k2_core::ci_monitors::To, text: &str) -> bool {
+    match SINK.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+        Some(v) => {
+            v.push((to.clone(), text.to_string()));
+            true
+        }
+        None => false,
+    }
 }
 
 // ── statuses ─────────────────────────────────────────────────────────
@@ -845,6 +913,36 @@ impl Ops for Real {
         gh.create_status(token, owner, repo, sha, state, context, description).map_err(|(_, m)| m)
     }
 
+    fn notify(&self, to: &k2_core::ci_monitors::To, title: &str, text: &str) {
+        use k2_core::ci_monitors::To;
+        if sink(to, text) {
+            return;
+        }
+        let (to, title, text) = (to.clone(), title.to_string(), text.to_string());
+        // In the daemon's runtime, off the reap (a live delivery waits on
+        // the session's lock).
+        let spawned = crate::rt::spawn("ci-message", move || match &to {
+            To::Workspace(ws_id) => {
+                let Some(ws) = crate::compute_routes::ws_by_id(ws_id) else { return };
+                // The live session when there is one (no wake), else the inbox.
+                let live = crate::workspace_msg::deliver_live(&ws.path, &text, "ci", "", false, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT);
+                if !live.success {
+                    if let Err(e) = k2_core::inbox::compose(Path::new(&ws.path), &title, &text, None, Some("ci"), Some("ci")) {
+                        log_debug!("[ci] inbox message for {}: {e}", ws.handle);
+                    }
+                }
+            }
+            To::Thread(addr) => {
+                if let Err(e) = crate::overlay_routes::post_workspace_note(addr, &text, "ci") {
+                    log_debug!("[ci] Thread message to {addr}: {e}");
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            log_debug!("[ci] message not delivered: {e}");
+        }
+    }
+
     fn junit(&self, job_id: &str) -> JunitFetch {
         use k2_core::compute::proto::results::MAX_HISTORY_JUNIT_BYTES;
         let job = {
@@ -913,6 +1011,8 @@ mod tests {
         /// T1: each job's JUnit, as `Ops::junit` answers it.
         junit: Mutex<HashMap<String, JunitFetch>>,
         junit_asked: Mutex<Vec<String>>,
+        /// O1: every `[ci]` message, as `(to, title, text)`.
+        notes: Mutex<Vec<(k2_core::ci_monitors::To, String, String)>>,
     }
 
     impl Fake {
@@ -989,6 +1089,96 @@ mod tests {
             self.junit_asked.lock().unwrap().push(job_id.to_string());
             self.junit.lock().unwrap().get(job_id).cloned().unwrap_or_default()
         }
+        fn notify(&self, to: &k2_core::ci_monitors::To, title: &str, text: &str) {
+            self.notes.lock().unwrap().push((to.clone(), title.to_string(), text.to_string()));
+        }
+    }
+
+    /// prd-compute-blacksmith-class-v1 O1 (§4.5.4, BK-10): a run that ends
+    /// sends ONE `[ci]` message to its workspace (facts only, counts and
+    /// never a test name); a fail-streak monitor fires on the third failed
+    /// run of its branch, once, where it says.
+    #[test]
+    fn a_run_end_sends_one_ci_message_and_monitors_fire() {
+        use k2_core::ci_monitors::{self as mon, To};
+        let _db = k2_core::db::scoped_for_test();
+        let f = Fake::default();
+        let ws = seed_ws();
+        watch(&ws, 8);
+        {
+            let db = db();
+            let conn = db.lock();
+            let m = mon::Monitor {
+                workspace_id: ws.id.clone(),
+                name: "main-red".into(),
+                kind: mon::Kind::FailStreak,
+                check: None,
+                branch: Some("main".into()),
+                count: Some(2),
+                over_milli: None,
+                over_secs: None,
+                cooldown_secs: mon::DEFAULT_COOLDOWN_SECS,
+                to: To::Thread("ciws".into()),
+                muted_until: None,
+                last_fired_at: None,
+                fired: 0,
+                created_by: "owner".into(),
+                created_at: 1,
+            };
+            mon::add(&conn, &m).unwrap();
+        }
+        let (a, b) = (sha('a'), sha('b'));
+        f.configs.lock().unwrap().insert(a.clone(), CFG.into());
+        f.configs.lock().unwrap().insert(b.clone(), CFG.into());
+        *f.tips.lock().unwrap() = format!("{a}\trefs/heads/main\n");
+        tick(&f, 100);
+        assert!(f.notes.lock().unwrap().is_empty(), "nothing while it runs");
+        let unit_a = job_of(&f, &a, "unit");
+        let xml = r#"<testsuites><testsuite name="k2-core"><testcase name="sync::reconnect @user" classname="k2-core"><failure message="boom"/></testcase><testcase name="ok" classname="k2-core"/></testsuite></testsuites>"#;
+        f.junit.lock().unwrap().insert(unit_a.clone(), JunitFetch { files: vec![("j.xml".into(), xml.into())], tree: Some("t".repeat(40)), attempt: 1, ..Default::default() });
+        f.finish("unit", 100);
+        f.finish("lint", 0);
+        tick(&f, 200);
+        let notes = f.notes.lock().unwrap().clone();
+        assert_eq!(notes.len(), 1, "one message per run: {notes:?}");
+        assert_eq!(notes[0].0, To::Workspace(ws.id.clone()));
+        let run_a = runs(&ws).into_iter().find(|r| r.sha == a).unwrap();
+        assert_eq!(
+            notes[0].2,
+            format!(
+                "[ci] run {} failed · main @ {} · 1 passed, 1 failed, 0 error · tests 1 passed, 1 failed (1 new) · slowest: unit 1m00s · k2 ci status {}",
+                run_a.short(),
+                &a[..12],
+                run_a.short()
+            )
+        );
+        assert!(!notes[0].2.contains("reconnect") && !notes[0].2.contains("@user"), "no test names");
+        // The second failed run on main: the monitor fires to its Thread.
+        *f.tips.lock().unwrap() = format!("{b}\trefs/heads/main\n");
+        {
+            let db = db();
+            let conn = db.lock();
+            conn.execute("UPDATE ci_workspaces SET last_poll_at = NULL WHERE workspace_id = ?1", rusqlite::params![ws.id]).unwrap();
+        }
+        tick(&f, 300);
+        {
+            let mut jobs = f.jobs.lock().unwrap();
+            let bodies = f.bodies.lock().unwrap();
+            for bdy in bodies.iter().filter(|x| x["sha"] == b.as_str()) {
+                let j = jobs.get_mut(bdy["clientJobId"].as_str().unwrap()).unwrap();
+                j.state = "done".into();
+                j.exit = Some(1);
+            }
+        }
+        tick(&f, 400);
+        let notes = f.notes.lock().unwrap().clone();
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        assert!(notes[1].2.starts_with("[ci] run ") && notes[1].2.contains(" failed · main @ "), "{}", notes[1].2);
+        assert_eq!(notes[2].0, To::Thread("ciws".into()));
+        assert!(notes[2].2.starts_with("[ci] monitor main-red: main failed 2 runs in a row"), "{}", notes[2].2);
+        // Once: another tick sends nothing.
+        tick(&f, 500);
+        assert_eq!(f.notes.lock().unwrap().len(), 3);
     }
 
     /// The job id of `check` in the run of `sha`.

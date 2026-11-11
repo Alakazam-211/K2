@@ -34,15 +34,21 @@ use crate::compute_routes::{audit, b, grant_target_ws, json_body, n, need_admin,
 pub const EVIDENCE: &str = "/cli/ci/evidence";
 pub const FREEZE: &str = "/cli/ci/freeze";
 pub const INIT: &str = "/cli/ci/init";
+/// prd-compute-blacksmith-class-v1 O1: `k2 ci monitor add|mute|rm` (POST)
+/// and `k2 ci monitors` (GET).
+pub const MONITOR: &str = "/cli/ci/monitor";
+pub const MONITORS: &str = "/cli/ci/monitors";
 pub const RELEASE: &str = "/cli/ci/release";
 pub const RUN: &str = "/cli/ci/run";
+/// prd-compute-blacksmith-class-v1 O1: `k2 ci stats`.
+pub const STATS: &str = "/cli/ci/stats";
 pub const STATUS: &str = "/cli/ci/status";
 /// prd-compute-blacksmith-class-v1 T1: `k2 ci tests` (test history).
 pub const TESTS: &str = "/cli/ci/tests";
 pub const WATCH: &str = "/cli/ci/watch";
 
-pub const ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, STATUS, TESTS, WATCH];
-pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, RELEASE, RUN, WATCH];
+pub const ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, RELEASE, RUN, STATS, STATUS, TESTS, WATCH];
+pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, RELEASE, RUN, WATCH];
 
 /// Longest freeze (`k2 ci freeze --until`).
 pub const MAX_FREEZE_SECS: i64 = 30 * 86_400;
@@ -55,6 +61,10 @@ pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, S
     match p {
         STATUS => status(who, params),
         TESTS => tests(who, params),
+        // O1 (prd-compute-blacksmith-class-v1 §4.5.2, §4.5.4).
+        STATS => stats(who, params),
+        MONITORS => monitors(who, params),
+        MONITOR => monitor(who, body, mgr),
         RUN => run(who, body),
         // 0.46.11 (C5/C6b, `ci_release`): a release set and its evidence.
         RELEASE => crate::ci_release::release(who, body),
@@ -261,6 +271,253 @@ fn tests(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
         "days": days,
         "tests": rows,
     }))
+}
+
+// ── GET /cli/ci/stats ────────────────────────────────────────────────
+
+/// `k2 ci stats [--check C] [--branch B] [--days 14]` (prd-compute-
+/// blacksmith-class-v1 §4.5.2): per check, run time and queue wait p50/p95,
+/// failure and flaky rates, CPU-hours, cache hit rate. A reader verb.
+fn stats(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    use k2_core::ci_stats as st;
+    let ws = reader(who, params.get("workspace").map(String::as_str))?;
+    let get = |k: &str| params.get(k).map(|c| c.trim()).filter(|c| !c.is_empty());
+    let check = get("check");
+    if let Some(c) = check {
+        if !k2_core::compute::proto::ci::is_name(c) {
+            return Err(no("bad_request", 400, format!("--check {c:?}: a check name ([a-z0-9._-])")));
+        }
+    }
+    let branch = get("branch");
+    if branch.is_some_and(|b| b.len() > 200 || b.chars().any(|c| c.is_whitespace() || c.is_control())) {
+        return Err(no("bad_request", 400, "--branch: a branch name"));
+    }
+    let days = match get("days") {
+        None => st::DEFAULT_DAYS,
+        Some(d) => d.trim_end_matches('d').parse::<i64>().ok().filter(|d| (1..=st::MAX_DAYS).contains(d)).ok_or_else(|| no("bad_request", 400, format!("--days: 1-{}", st::MAX_DAYS)))?,
+    };
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        st::stats(&conn, &ws.id, check, branch, now() - days * 86_400)
+    };
+    Ok(serde_json::json!({"workspace": ws.handle, "check": check, "branch": branch, "days": days, "checks": rows}))
+}
+
+// ── GET /cli/ci/monitors, POST /cli/ci/monitor ───────────────────────
+
+/// `90s`, `10m`, `6h`, `1d`, or seconds.
+fn dur_secs(s: &str) -> Option<i64> {
+    let s = s.trim();
+    let (num, mul) = match s.chars().last()? {
+        'd' => (&s[..s.len() - 1], 86_400),
+        'h' => (&s[..s.len() - 1], 3600),
+        'm' => (&s[..s.len() - 1], 60),
+        's' => (&s[..s.len() - 1], 1),
+        c if c.is_ascii_digit() => (s, 1),
+        _ => return None,
+    };
+    num.parse::<i64>().ok().filter(|n| *n > 0).and_then(|n| n.checked_mul(mul))
+}
+
+fn monitor_json(m: &k2_core::ci_monitors::Monitor) -> serde_json::Value {
+    let mut v = serde_json::to_value(m).unwrap_or_default();
+    v["watches"] = m.describe().into();
+    // A workspace target by its handle, never a bare id.
+    if let k2_core::ci_monitors::To::Workspace(id) = &m.to {
+        v["to"] = serde_json::json!({"kind": "workspace", "target": crate::compute_routes::ws_handle(id)});
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.remove("workspaceId");
+    }
+    v
+}
+
+/// `k2 ci monitors`: this workspace's monitors.
+fn monitors(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    let ws = reader(who, params.get("workspace").map(String::as_str))?;
+    let list = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::ci_monitors::list(&conn, &ws.id)
+    };
+    Ok(serde_json::json!({"workspace": ws.handle, "monitors": list.iter().map(monitor_json).collect::<Vec<_>>()}))
+}
+
+/// `k2 ci monitor add|mute|rm <name> …` (§4.5.4). An agent for its own
+/// workspace (its messages go to itself or its own Thread); people (Admin)
+/// for any, to any workspace. Audited.
+fn monitor(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
+    use k2_core::ci_monitors::{self as mon, codes as mc, Kind, Monitor, To};
+    let v = json_body(body)?;
+    let ws = changer(who, s(&v, "workspace"), mgr)?;
+    let bad = |m: String| no(mc::INVALID, 400, m);
+    let name = s(&v, "name").ok_or_else(|| bad("name the monitor: k2 ci monitor add <name> --kind …".into()))?.to_string();
+    if !mon::valid_name(&name) {
+        return Err(bad(format!("monitor name {name:?}: 1-40 of a-z 0-9 . _ -, starting with a letter or digit")));
+    }
+    let action = s(&v, "action").unwrap_or("add");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let missing = || no(mc::NOT_FOUND, 404, format!("no monitor '{name}' in this workspace (k2 ci monitors)"));
+    match action {
+        "rm" | "remove" => {
+            if !mon::remove(&conn, &ws.id, &name) {
+                return Err(missing());
+            }
+            drop(conn);
+            audit(who, "ci.monitor.rm", None, Some(&ws.id), None, serde_json::json!({"name": name}));
+            Ok(serde_json::json!({"workspace": ws.handle, "removed": name}))
+        }
+        "mute" => {
+            let f = s(&v, "for").ok_or_else(|| bad("mute --for 1d (at most 30d), or --for off".into()))?;
+            let until = match f {
+                "off" | "0" => None,
+                d => Some(now() + dur_secs(d).filter(|x| *x <= mon::MAX_MUTE_SECS).ok_or_else(|| bad("--for: like 2h or 1d (at most 30d), or off".into()))?),
+            };
+            if !mon::mute(&conn, &ws.id, &name, until) {
+                return Err(missing());
+            }
+            let m = mon::get(&conn, &ws.id, &name).ok_or_else(missing)?;
+            drop(conn);
+            audit(who, "ci.monitor.mute", None, Some(&ws.id), None, serde_json::json!({"name": name, "until": until}));
+            Ok(serde_json::json!({"workspace": ws.handle, "monitor": monitor_json(&m)}))
+        }
+        "add" => {
+            let kind_s = s(&v, "kind").ok_or_else(|| bad("--kind fail-streak|slow|queue-wait|new-flaky".into()))?;
+            let kind = Kind::parse(kind_s).ok_or_else(|| bad(format!("--kind {kind_s:?}: fail-streak, slow, queue-wait or new-flaky")))?;
+            let check = s(&v, "check").map(str::to_string);
+            if let Some(c) = &check {
+                if !k2_core::compute::proto::ci::is_name(c) {
+                    return Err(bad(format!("--check {c:?}: a check name ([a-z0-9._-])")));
+                }
+            }
+            let branch = s(&v, "branch").map(str::to_string);
+            if branch.as_deref().is_some_and(|b| b.len() > 200 || b.contains('*') || b.chars().any(|c| c.is_whitespace() || c.is_control())) {
+                return Err(bad("--branch: one branch name (no glob)".into()));
+            }
+            let over = s(&v, "over");
+            let (mut count, mut over_milli, mut over_secs) = (None, None, None);
+            match kind {
+                Kind::FailStreak => {
+                    if branch.is_none() {
+                        return Err(bad("fail-streak needs --branch (e.g. --branch main)".into()));
+                    }
+                    let c = n(&v, "count").unwrap_or(mon::DEFAULT_STREAK);
+                    if !(1..=mon::MAX_STREAK).contains(&c) {
+                        return Err(bad(format!("--count: 1-{}", mon::MAX_STREAK)));
+                    }
+                    count = Some(c);
+                }
+                Kind::Slow => {
+                    if check.is_none() {
+                        return Err(bad("slow needs --check (a [checks.<name>] of .k2/ci.toml)".into()));
+                    }
+                    let m = match over {
+                        None => mon::DEFAULT_OVER_MILLI,
+                        Some(o) => mon::parse_ratio(o).filter(|m| (mon::MIN_OVER_MILLI..=mon::MAX_OVER_MILLI).contains(m)).ok_or_else(|| bad("--over: a ratio like 1.5x (1.1x-10x)".into()))?,
+                    };
+                    over_milli = Some(m);
+                }
+                Kind::QueueWait => {
+                    let w = match over {
+                        None => mon::DEFAULT_WAIT_SECS,
+                        Some(o) => dur_secs(o).filter(|w| (mon::MIN_WAIT_SECS..=mon::MAX_WAIT_SECS).contains(w)).ok_or_else(|| bad("--over: a wait like 10m (1m-1d)".into()))?,
+                    };
+                    over_secs = Some(w);
+                }
+                Kind::NewFlaky => {}
+            }
+            if !matches!(kind, Kind::FailStreak) && branch.is_some() {
+                return Err(bad("--branch goes with --kind fail-streak".into()));
+            }
+            if matches!(kind, Kind::FailStreak | Kind::QueueWait) && check.is_some() {
+                return Err(bad(format!("--check doesn't go with --kind {}", kind.as_str())));
+            }
+            if matches!(kind, Kind::FailStreak | Kind::NewFlaky) && over.is_some() {
+                return Err(bad(format!("--over doesn't go with --kind {}", kind.as_str())));
+            }
+            let cooldown = match s(&v, "cooldown") {
+                None => mon::DEFAULT_COOLDOWN_SECS,
+                Some(c) => dur_secs(c).filter(|c| (mon::MIN_COOLDOWN_SECS..=mon::MAX_COOLDOWN_SECS).contains(c)).ok_or_else(|| bad("--cooldown: like 6h (5m-7d)".into()))?,
+            };
+            // Where: this workspace (default), its Thread, or (people) another workspace.
+            let to = match s(&v, "to") {
+                None => To::Workspace(ws.id.clone()),
+                Some(t) => match t.strip_prefix("thread:").or(if t == "thread" { Some("") } else { None }) {
+                    Some(addr) => {
+                        let addr = if addr.is_empty() { ws.handle.as_str() } else { addr };
+                        drop(conn);
+                        let owner = crate::overlay_routes::thread_project_of(addr).ok_or_else(|| bad(format!("--to thread:{addr}: no Thread at that address (k2 thread's address)")))?;
+                        if who.passport().is_some() && owner != ws.id {
+                            return Err(no("forbidden", 403, "an agent's monitor may post only to its own workspace's Thread"));
+                        }
+                        return add_monitor(who, &ws, Monitor {
+                            workspace_id: ws.id.clone(),
+                            name,
+                            kind,
+                            check,
+                            branch,
+                            count,
+                            over_milli,
+                            over_secs,
+                            cooldown_secs: cooldown,
+                            to: To::Thread(addr.to_string()),
+                            muted_until: None,
+                            last_fired_at: None,
+                            fired: 0,
+                            created_by: who.label(),
+                            created_at: now(),
+                        });
+                    }
+                    None => {
+                        let other = crate::compute_routes::ws_by_token(t).ok_or_else(|| bad(format!("--to {t:?}: no such workspace (or thread:<addr>)")))?;
+                        if other.id != ws.id && who.passport().is_some() {
+                            return Err(no("forbidden", 403, "an agent's monitor may message only its own workspace (or its own Thread)"));
+                        }
+                        To::Workspace(other.id)
+                    }
+                },
+            };
+            drop(conn);
+            add_monitor(who, &ws, Monitor {
+                workspace_id: ws.id.clone(),
+                name,
+                kind,
+                check,
+                branch,
+                count,
+                over_milli,
+                over_secs,
+                cooldown_secs: cooldown,
+                to,
+                muted_until: None,
+                last_fired_at: None,
+                fired: 0,
+                created_by: who.label(),
+                created_at: now(),
+            })
+        }
+        other => Err(bad(format!("action {other:?}: add, mute or rm"))),
+    }
+}
+
+fn add_monitor(who: &Who, ws: &Ws, m: k2_core::ci_monitors::Monitor) -> R<serde_json::Value> {
+    use k2_core::ci_monitors::codes as mc;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::ci_monitors::add(&conn, &m).map_err(|(code, hint)| {
+            let (code, status) = match code {
+                c if c == mc::EXISTS => (mc::EXISTS, 409),
+                c if c == mc::LIMIT => (mc::LIMIT, 409),
+                _ => ("internal", 500),
+            };
+            no(code, status, hint)
+        })?;
+    }
+    audit(who, "ci.monitor.add", None, Some(&ws.id), None, serde_json::json!({"name": m.name, "kind": m.kind.as_str()}));
+    Ok(serde_json::json!({"workspace": ws.handle, "monitor": monitor_json(&m)}))
 }
 
 // ── POST /cli/ci/run ─────────────────────────────────────────────────

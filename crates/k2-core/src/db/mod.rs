@@ -1962,6 +1962,13 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // Renumber freely on a slip (and edit the migration-order tests).
         // The writer is k2-daemon's `ci_engine` (`crate::ci_tests`).
         ("0295_ci_test_history", include_str!("../../drizzle_sql/0295_ci_test_history.sql")),
+        // 0297 — CI monitors (prd-compute-blacksmith-class-v1 O1): how this
+        // server wants to hear about a workspace's CI (fail streaks, slow
+        // checks, long queue waits, newly flaky tests). 0296 stays reserved
+        // for O2's job stats; B2's trusted branches moved to 0300. Renumber
+        // freely on a slip (and edit the migration-order tests). The store is
+        // `crate::ci_monitors`.
+        ("0297_ci_monitors", include_str!("../../drizzle_sql/0297_ci_monitors.sql")),
         // 0299 — hiring and sidecars become two switches (0.46.12, Rosson):
         // `projects.agents_can_hire_agents` ("Let this agent hire agents"),
         // on wherever 0132's `agents_can_manage_agents` was on. That column
@@ -2915,6 +2922,8 @@ mod tests {
                 "0294_app_db_connections",
                 // CI test history (compute Blacksmith class T1).
                 "0295_ci_test_history",
+                // CI monitors (compute Blacksmith class O1).
+                "0297_ci_monitors",
                 // 0.46.12: hiring and sidecars, two switches.
                 "0299_agents_hire",
                 // 0.46.12: "Allow a virtual desktop".
@@ -3107,6 +3116,8 @@ mod tests {
                 "0294_app_db_connections",
                 // CI test history (compute Blacksmith class T1).
                 "0295_ci_test_history",
+                // CI monitors (compute Blacksmith class O1).
+                "0297_ci_monitors",
                 // 0.46.12: hiring and sidecars, two switches.
                 "0299_agents_hire",
                 // 0.46.12: "Allow a virtual desktop".
@@ -3463,12 +3474,11 @@ mod tests {
                 "0293_orchestrator",
                 "0294_app_db_connections",
                 "0295_ci_test_history",
+                "0297_ci_monitors",
                 "0299_agents_hire",
-            ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0.46.12's 0295 and 0299)",
                 "0301_desktop_agents"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0.46.12's 0301)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0297 and 0299, then 0.46.12's 0301)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4313,7 +4323,10 @@ mod tests {
             // 0301 ("Allow a virtual desktop", 0.46.12) is the newest: its
             // record goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0301_desktop_agents'", []).unwrap();
-            // 0295 (CI test history) came before 0299: its record goes (its
+            // 0297 (CI monitors) came before 0299: its record goes (its
+            // table is IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0297_ci_monitors'", []).unwrap();
+            // 0295 (CI test history) came before 0297: its record goes (its
             // tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0295_ci_test_history'", []).unwrap();
             // 0299 (hiring and sidecars, two switches, 0.46.12) is the

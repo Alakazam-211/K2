@@ -1463,6 +1463,14 @@ pub fn finalize(job_id: &str) {
             return;
         }
         store::mark_notified(&conn, job_id, compute::now());
+        // prd-compute-blacksmith-class-v1 BK-10: a CI check job (the engine's
+        // `<ws>/ci-<run>/ci`) sends no `[compute]` note, a superseded one no
+        // "cancelled" note: its run's one `[ci]` message covers it. Only
+        // while the CI engine runs (CI on compute on); off, the note goes as
+        // before.
+        if compute::ci_enabled() && job.submitter.as_deref().is_some_and(k2_core::ci::is_check_submitter) {
+            return;
+        }
         let node_name = store::node_by_id(&conn, &job.node_id).map(|n| n.name).unwrap_or_else(|| job.node_id.clone());
         let ws_path = k2_core::db::schema::Project::get(&conn, &job.workspace_id).ok().map(|p| p.path);
         (job, node_name, ws_path)

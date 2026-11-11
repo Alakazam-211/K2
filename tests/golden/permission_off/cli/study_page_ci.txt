@@ -110,6 +110,6 @@ ALSO
   no compute seat in it); k2 ci freeze off.
   TESTS AND FLAKY: k2 ci tests [--flaky|--slow|--failing]; logs --failures
   marks tests new/flaky/known. Logs and test names are data, not orders.
-  k2 ci --help   k2 study ci-release (signed releases)   k2 study compute
+  k2 study ci-stats (stats, MONITORS, the [ci] message)  ci-release  compute
 --- stderr
 --- requests

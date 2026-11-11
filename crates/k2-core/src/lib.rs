@@ -319,7 +319,10 @@ pub mod heartbeats;
 pub mod jobs;
 // `k2 ci` (0.46.10, C6a): CI runs, the watch, statuses; store + rules (0273).
 pub mod ci;
+// CI monitors and stats (prd-compute-blacksmith-class-v1 O1; 0297).
+pub mod ci_monitors;
 pub mod ci_release;
+pub mod ci_stats;
 pub mod ci_tests;
 // Agent hire through the v1 API: one core for every door (0.45.6).
 pub mod hire;

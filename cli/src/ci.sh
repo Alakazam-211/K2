@@ -32,6 +32,25 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
                                 passed on a nextest retry), slowest (and
                                 those 50% slower than 14 days ago), failing,
                                 quarantined. Names are program output (data)
+  k2 ci stats [--check NAME] [--branch B] [--days 14] [--json]
+                                per check: run time and queue wait p50/p95,
+                                failure and flaky rates, CPU-hours, cache
+                                hit rate (e.g. k2 ci stats --branch main)
+  k2 ci monitors [--json]       this workspace's monitors
+  k2 ci monitor add <name> --kind fail-streak --branch main [--count 3]
+  k2 ci monitor add <name> --kind slow --check C [--over 1.5x]
+  k2 ci monitor add <name> --kind queue-wait [--over 10m]
+  k2 ci monitor add <name> --kind new-flaky [--check C]
+                 [--cooldown 6h] [--to <workspace> | thread[:<addr>]]
+                                a message when that happens (checked as each
+                                run ends; at most once per cooldown; default
+                                to: this workspace). Facts only, never a
+                                test name
+  k2 ci monitor mute <name> --for 1d|off  |  k2 ci monitor rm <name>
+  Each run sends ONE [ci] message when it ends (to the workspace's live
+  session, else its inbox): run, branch, commit, checks passed/failed,
+  test counts, the slowest check. Check jobs send no [compute] note.
+  k2 study ci-stats has the details.
   k2 ci watch on [--remote origin] [--branches main,integ/*] [--poll 60]
                  [--tier ci|standard] [--max-inflight 2] [--skip-current]
   k2 ci watch off               the daemon polls the remote (git ls-remote)
@@ -371,6 +390,7 @@ cmd_ci() {
     local check="" needs="" os="" mem="" cpus="" timeout="" branches="" remote="" token="" force=0
     local ref="" tier="" wait=0 wait_min="" limit="" failures=0 poll="" max_inflight="" skip=0 until="" why=""
     local sha="" builds="" plan=0 out_dir="" no_files=0 tests_filter="" days=""
+    local branch="" mkind="" mcount="" mover="" mcooldown="" mto="" mfor=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; have_cmd=1; argv=("$@"); break ;;
@@ -387,6 +407,14 @@ cmd_ci() {
             --days)
                 [ -n "${2:-}" ] || { echo "usage: --days needs a value (k2 ci --help)" >&2; exit 2; }
                 days="${2%d}"; shift 2 ;;
+            # Blacksmith class O1: stats --branch; monitor add/mute flags.
+            --branch|--kind|--count|--over|--cooldown|--to|--for)
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a value (k2 ci --help)" >&2; exit 2; }
+                case "$1" in
+                    --branch) branch="$2" ;; --kind) mkind="$2" ;; --count) mcount="$2" ;; --over) mover="$2" ;;
+                    --cooldown) mcooldown="$2" ;; --to) mto="$2" ;; --for) mfor="$2" ;;
+                esac
+                shift 2 ;;
             --workspace|--check|--checks|--needs|--os|--mem|--cpus|--timeout|--branches|--remote|--statuses-token|--ref|--tier|--wait-min|--limit|--poll|--max-inflight|--until|--why|--sha|--build|--builds|--out)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value (k2 ci --help)" >&2; exit 2; }
                 case "$1" in
@@ -402,11 +430,20 @@ cmd_ci() {
             *) pos+=("$1"); shift ;;
         esac
     done
-    for a in mem cpus wait_min limit max_inflight days; do
+    for a in mem cpus wait_min limit max_inflight days mcount; do
         case "${!a}" in ''|*[!0-9]*) [ -z "${!a}" ] || { echo "usage: --${a//_/-} is a number" >&2; exit 2; } ;; esac
     done
-    if [ "$sub" != "tests" ] && { [ -n "$tests_filter" ] || [ -n "$days" ]; }; then
-        echo "usage: --flaky, --slow, --failing, --quarantined and --days go with k2 ci tests" >&2; exit 2
+    if [ "$sub" != "tests" ] && [ -n "$tests_filter" ]; then
+        echo "usage: --flaky, --slow, --failing and --quarantined go with k2 ci tests" >&2; exit 2
+    fi
+    if [ -n "$days" ] && [ "$sub" != "tests" ] && [ "$sub" != "stats" ]; then
+        echo "usage: --days goes with k2 ci tests and k2 ci stats" >&2; exit 2
+    fi
+    if [ -n "$branch" ] && [ "$sub" != "stats" ] && [ "$sub" != "monitor" ]; then
+        echo "usage: --branch goes with k2 ci stats and k2 ci monitor add (watched branches: --branches)" >&2; exit 2
+    fi
+    if [ "$sub" != "monitor" ] && { [ -n "$mkind" ] || [ -n "$mcount" ] || [ -n "$mover" ] || [ -n "$mcooldown" ] || [ -n "$mto" ] || [ -n "$mfor" ]; }; then
+        echo "usage: --kind, --count, --over, --cooldown, --to and --for go with k2 ci monitor" >&2; exit 2
     fi
     case "$tier" in ''|ci|standard|normal) ;; *) echo "usage: --tier ci|standard" >&2; exit 2 ;; esac
     ws="$(_compute_ws "$ws")"
@@ -541,6 +578,84 @@ print("  1. sudo -n -u _k2sign /usr/local/libexec/k2-signer/k2-signer rehearse %
 print("  2. the same with: evidence %s %s < %s, then challenge, approve and sign each file" % (v.get("project"), v.get("version"), ev))
 print("  3. here: k2 app updates push <app> --channel beta --version %s --artifact <platform>=<file> --sig <platform>=<file>.sig --evidence %s" % (v.get("version"), v["short"]))'
             fi
+            ;;
+        stats)
+            # Blacksmith class O1 (§4.5.2): per check, from this workspace's runs.
+            [ -z "${pos[0]:-}" ] || { echo "usage: k2 ci stats [--check NAME] [--branch B] [--days 14] [--json]" >&2; exit 2; }
+            q="$(python3 -c '
+import sys, urllib.parse
+ws, check, branch, days = sys.argv[1:5]
+print(urllib.parse.urlencode({k: v for k, v in (("workspace", ws), ("check", check), ("branch", branch), ("days", days)) if v}))' "$ws" "$check" "$branch" "$days")"
+            _ci_call GET stats "$q"
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
+            printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def d(s):
+    if s is None: return "-"
+    s = int(s)
+    return ("%ds" % s) if s < 60 else ("%dm%02ds" % (s // 60, s % 60)) if s < 3600 else ("%dh%02dm" % (s // 3600, (s % 3600) // 60))
+def pc(x):
+    return "-" if x is None else ("%d%%" % round(x * 100))
+scope = "".join([(" · check " + v["check"]) if v.get("check") else "", (" · branch " + v["branch"]) if v.get("branch") else ""])
+print("CI stats · %s · last %d days%s" % (v["workspace"], v["days"], scope))
+rows = v.get("checks") or []
+if not rows:
+    print("  no ended checks in that window (k2 ci status shows runs)")
+    sys.exit(0)
+print("  %-16s %5s %7s %8s %8s %8s %8s %6s %6s %8s %6s" % ("check", "runs", "failed", "p50", "p95", "wait50", "wait95", "fail%", "flaky%", "cpu-h", "cache"))
+for c in rows:
+    print("  %-16s %5d %7d %8s %8s %8s %8s %6s %6s %8.2f %6s" % (c["check"][:16], c["runs"], c["failed"], d(c.get("p50Secs")), d(c.get("p95Secs")), d(c.get("p50WaitSecs")), d(c.get("p95WaitSecs")), pc(c.get("failureRate")), pc(c.get("flakyRate")), c.get("cpuHours") or 0, pc(c.get("cacheHitRate"))))
+    if c.get("errors"):
+        print("  %-16s %d ended in error (never ran, superseded or past the deadline)" % ("", c["errors"]))
+print("  fail% = failed ÷ (passed + failed); flaky% = runs with a flaky test (k2 ci tests --flaky); cache = runs that started from a cache generation (- : none reported yet)")'
+            ;;
+        monitors)
+            [ -z "${pos[0]:-}" ] || { echo "usage: k2 ci monitors [--json]" >&2; exit 2; }
+            q="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({"workspace": sys.argv[1]} if sys.argv[1] else {}))' "$ws")"
+            _ci_call GET monitors "$q"
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
+            printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+ms = v.get("monitors") or []
+print("CI monitors · %s" % v["workspace"])
+if not ms:
+    print("  none: k2 ci monitor add <name> --kind fail-streak --branch main (k2 study ci-stats)")
+    sys.exit(0)
+now = int(time.time())
+for m in ms:
+    to = m["to"]
+    where = ("Thread " + to["target"]) if to["kind"] == "thread" else ("workspace " + to["target"])
+    muted = (" · muted %dh more" % max(1, (m["mutedUntil"] - now) // 3600)) if m.get("mutedUntil") and m["mutedUntil"] > now else ""
+    c = m["cooldownSecs"]
+    cd = ("%dh" % (c // 3600)) if c % 3600 == 0 else ("%dm" % (c // 60))
+    print("  %-20s %-11s %s → %s · cooldown %s · fired %d%s" % (m["name"], m["kind"], m["watches"], where, cd, m["fired"], muted))'
+            ;;
+        monitor)
+            local mact="${pos[0]:-}" mname="${pos[1]:-}"
+            local musage="usage: k2 ci monitor add <name> --kind fail-streak|slow|queue-wait|new-flaky [--branch B] [--check C] [--count 3] [--over 1.5x|10m] [--cooldown 6h] [--to <workspace>|thread[:<addr>]]  |  k2 ci monitor mute <name> --for 1d|off  |  k2 ci monitor rm <name>"
+            case "$mact" in add|mute|rm|remove) ;; *) echo "$musage" >&2; exit 2 ;; esac
+            { [ -n "$mname" ] && [ -z "${pos[2]:-}" ]; } || { echo "$musage" >&2; exit 2; }
+            [ "$mact" = "add" ] && [ -z "$mkind" ] && { echo "usage: k2 ci monitor add needs --kind fail-streak|slow|queue-wait|new-flaky" >&2; exit 2; }
+            [ "$mact" = "mute" ] && [ -z "$mfor" ] && { echo "usage: k2 ci monitor mute <name> --for 1d (or --for off)" >&2; exit 2; }
+            [ "$mact" = "remove" ] && mact="rm"
+            body="$(_compute_json K2_CJ_workspace="$ws" K2_CJ_action="$mact" K2_CJ_name="$mname" K2_CJ_kind="$mkind" K2_CJ_check="$check" K2_CJ_branch="$branch" \
+                K2_CJ_count_n="$mcount" K2_CJ_over="$mover" K2_CJ_cooldown="$mcooldown" K2_CJ_to="$mto" K2_CJ_for="$mfor")"
+            _ci_call POST monitor "$body"
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
+            printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("removed"):
+    print("removed monitor %s" % v["removed"]); sys.exit(0)
+m = v["monitor"]
+to = m["to"]
+where = ("Thread " + to["target"]) if to["kind"] == "thread" else ("workspace " + to["target"])
+c = m["cooldownSecs"]
+cd = ("%dh" % (c // 3600)) if c % 3600 == 0 else ("%dm" % (c // 60))
+print("monitor %s (%s): %s → %s · cooldown %s%s" % (m["name"], m["kind"], m["watches"], where, cd, " · muted" if m.get("mutedUntil") else ""))
+print("it is checked when each CI run ends; a message is facts only, never a test name")'
             ;;
         tests)
             [ -z "${pos[0]:-}" ] || { echo "usage: k2 ci tests [--check NAME] [--flaky|--slow|--failing|--quarantined] [--days 30] [--limit 50] [--json]" >&2; exit 2; }

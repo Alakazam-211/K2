@@ -143,6 +143,39 @@ pub fn recorded(conn: &Connection, job_id: &str) -> Option<Recorded> {
     .flatten()
 }
 
+/// prd-compute-blacksmith-class-v1 O1 (§4.5.4): every recorded job of one
+/// CI run summed, for the `[ci]` run message (counts only). `None` when no
+/// check of the run recorded any test.
+pub fn run_totals(conn: &Connection, run_id: &str) -> Option<Recorded> {
+    conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(total),0), COALESCE(SUM(passed),0), COALESCE(SUM(failed),0), COALESCE(SUM(errors),0), \
+         COALESCE(SUM(skipped),0), COALESCE(SUM(flaky),0), COALESCE(SUM(quarantined),0), COALESCE(SUM(new_failures),0), \
+         COALESCE(SUM(retried),0) FROM ci_test_jobs WHERE run_id = ?1",
+        params![run_id],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                Recorded {
+                    state: "done".into(),
+                    total: r.get(1)?,
+                    passed: r.get(2)?,
+                    failed: r.get(3)?,
+                    errors: r.get(4)?,
+                    skipped: r.get(5)?,
+                    flaky: r.get(6)?,
+                    quarantined: r.get(7)?,
+                    new_failures: r.get(8)?,
+                    retried: r.get(9)?,
+                    note: None,
+                },
+            ))
+        },
+    )
+    .ok()
+    .filter(|(jobs, r)| *jobs > 0 && r.total > 0)
+    .map(|(_, r)| r)
+}
+
 fn clip(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()

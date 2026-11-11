@@ -175,6 +175,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/ci/evidence", Member),
     post("/cli/ci/freeze", Member),
     post("/cli/ci/init", Member),
+    // prd-compute-blacksmith-class-v1 O1: monitors (add/mute/rm, and list).
+    post("/cli/ci/monitor", Member),
+    get("/cli/ci/monitors", Member),
     post("/cli/ci/release", Member),
     post("/cli/ci/run", Member),
     // Signer pairing (0.46.10 C3a, vs-live V17; `compute_trust`): a person
@@ -185,6 +188,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/ci/signer/remove", Admin),
     post("/cli/ci/signer/reveal", Admin),
     get("/cli/ci/signers", Admin),
+    // prd-compute-blacksmith-class-v1 O1: CI stats, a reader like status.
+    get("/cli/ci/stats", Member),
     get("/cli/ci/status", Member),
     // prd-compute-blacksmith-class-v1 T1: test history, a reader like status.
     get("/cli/ci/tests", Member),

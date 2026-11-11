@@ -595,3 +595,137 @@ async fn ci_refusals_init_and_freeze() {
     let r = get(d.port, "/cli/ci/run", OWNER, &format!("workspace={}", ws.id)).await;
     assert_eq!(r.status, 405, "{}", r.body);
 }
+
+/// prd-compute-blacksmith-class-v1 O1 (§4.5.2–§4.5.4, BK-10), end to end:
+/// a run that ends sends ONE `[ci]` message (no per-check `[compute]` note:
+/// `finalize` of a check job delivers nothing), a monitor fires where it
+/// says, `k2 ci stats` reads the run, `k2 compute logs --search` finds a
+/// line in a check job's log and narrows by check and state; refusals.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_ci_message_per_run_monitors_stats_and_log_search() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let toml = "version = 1\n[checks.unit]\nargv = [\"true\"]\nmem_gb = 1\n[checks.lint]\nargv = [\"sh\", \"-c\", \"exit 3\"]\nmem_gb = 1\n";
+    let (ws, _bare) = seed_repo_ws(&env, "o1app", Some(toml));
+    let (other, _) = seed_repo_ws(&env, "o1other", None);
+    let sha = git(&ws.path, &["rev-parse", "HEAD"]);
+    active_node("o1-1", "k2n9", &ws, true);
+    let _node = compute_ws::test_attach("o1-1", offer());
+    let agent = passport(&ws);
+    k2_daemon::ci_engine::test_sink_open();
+
+    // Monitors: refusals, then one fail-streak of 1 on main.
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"name": "slow", "kind": "slow"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (400, "ci_monitor_invalid"), "slow needs --check: {}", r.body);
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"name": "Bad Name", "kind": "new-flaky"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (400, "ci_monitor_invalid"), "{}", r.body);
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"name": "away", "kind": "new-flaky", "to": "o1other"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "forbidden"), "an agent messages only its own workspace: {}", r.body);
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"name": "main-red", "kind": "fail-streak", "branch": "main", "count": 1, "cooldown": "1h"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["monitor"]["to"], json!({"kind": "workspace", "target": "o1app"}));
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"name": "main-red", "kind": "queue-wait"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (409, "ci_monitor_exists"), "{}", r.body);
+    let r = get(d.port, "/cli/ci/monitors", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["monitors"].as_array().unwrap().len(), 1);
+    assert_eq!(j(&r)["monitors"][0]["watches"], "main failed 1 run in a row");
+    let r = get(d.port, "/cli/ci/monitors", &agent, &format!("workspace={}", other.id)).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "forbidden"), "{}", r.body);
+    let r = get(d.port, "/cli/ci/monitor", &agent, "").await;
+    assert_eq!(r.status, 405, "a mutation is POST only: {}", r.body);
+
+    // A run on main: unit passes, lint fails.
+    let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": "main"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let run = j(&r)["run"].clone();
+    let short = run["id"].as_str().unwrap()[..8].to_string();
+    let unit_job = check(&run, "unit")["job"].as_str().unwrap().to_string();
+    let lint_job = check(&run, "lint")["job"].as_str().unwrap().to_string();
+    // Their logs, as the node streamed them.
+    k2_core::compute::logs::append(&unit_job, 1, 1, k2_core::compute::proto::frames::LogStream::Out, b"running 3 tests\ntest ok ... ok\n").unwrap();
+    k2_core::compute::logs::append(&lint_job, 1, 1, k2_core::compute::proto::frames::LogStream::Err, b"thread 'main' panicked at src/lib.rs:4\n").unwrap();
+    finish_job(&unit_job, 0);
+    finish_job(&lint_job, 3);
+    tick().await;
+    let msgs = k2_daemon::ci_engine::test_sink_take();
+    assert_eq!(msgs.len(), 2, "one [ci] message and one monitor message: {msgs:?}");
+    let to_ws = k2_core::ci_monitors::To::Workspace(ws.id.clone());
+    assert_eq!(msgs[0].0, to_ws);
+    assert_eq!(msgs[0].1, format!("[ci] run {short} failed · main @ {} · 1 passed, 1 failed, 0 error · slowest: unit 1m30s · k2 ci status {short}", &sha[..12]));
+    assert_eq!(msgs[1].0, to_ws);
+    assert!(msgs[1].1.starts_with("[ci] monitor main-red: main failed 1 run in a row"), "{}", msgs[1].1);
+    tick().await;
+    assert!(k2_daemon::ci_engine::test_sink_take().is_empty(), "once per run");
+    // BK-10: the check jobs' own ends send no [compute] note.
+    for job in [&unit_job, &lint_job] {
+        k2_daemon::compute_ws::finalize(job);
+        assert!(row(job).notified_at.is_some(), "marked, so nothing sends it later");
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(k2_core::inbox::list_all(&ws.path).is_empty(), "no [compute] note in the inbox: {:?}", k2_core::inbox::list_all(&ws.path));
+
+    // Stats.
+    let r = get(d.port, "/cli/ci/stats", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let checks = j(&r)["checks"].clone();
+    let by = |n: &str| checks.as_array().unwrap().iter().find(|c| c["check"] == n).cloned().unwrap_or_else(|| panic!("{n}: {checks}"));
+    assert_eq!((by("unit")["runs"].as_i64(), by("unit")["passed"].as_i64(), by("unit")["p50Secs"].as_i64()), (Some(1), Some(1), Some(90)));
+    assert_eq!((by("lint")["failed"].as_i64(), by("lint")["failureRate"].as_f64()), (Some(1), Some(1.0)));
+    assert_eq!(by("unit")["cacheHitRate"], Value::Null, "no generations yet");
+    let r = get(d.port, "/cli/ci/stats", &agent, "check=unit&branch=nope").await;
+    assert_eq!(j(&r)["checks"], json!([]), "{}", r.body);
+    let r = get(d.port, "/cli/ci/stats", &agent, "days=500").await;
+    assert_eq!(r.status, 400, "{}", r.body);
+
+    // Log search.
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=panicked").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!(v["matches"].as_array().unwrap().len(), 1, "{v}");
+    assert_eq!((v["matches"][0]["job"].as_str(), v["matches"][0]["check"].as_str(), v["matches"][0]["stream"].as_str()), (Some(lint_job.as_str()), Some("lint"), Some("err")));
+    assert_eq!(v["matches"][0]["line"], "thread 'main' panicked at src/lib.rs:4");
+    assert_eq!(v["cut"], Value::Null);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=PANICKED").await;
+    assert!(j(&r)["matches"].as_array().unwrap().is_empty(), "case matters without fold");
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=PANICKED&fold=1").await;
+    assert_eq!(j(&r)["matches"].as_array().unwrap().len(), 1, "{}", r.body);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=panicked&check=unit").await;
+    assert!(j(&r)["matches"].as_array().unwrap().is_empty(), "--check unit: {}", r.body);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=ok&state=passed").await;
+    let jobs: Vec<String> = j(&r)["matches"].as_array().unwrap().iter().map(|m| m["job"].as_str().unwrap().to_string()).collect();
+    assert_eq!(jobs, vec![unit_job.clone()], "--state passed: {}", r.body);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=test&limit=1").await;
+    assert_eq!(j(&r)["cut"], "limit", "{}", r.body);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=x").await;
+    assert_eq!((r.status, code(&r).as_str()), (400, "bad_request"), "too short: {}", r.body);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, "search=panicked&since=30d").await;
+    assert_eq!(r.status, 400, "logs are kept 14 days: {}", r.body);
+    let r = get(d.port, "/cli/compute/logs/search", &agent, &format!("search=panicked&workspace={}", other.id)).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "forbidden"), "{}", r.body);
+
+    // mute and rm.
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"action": "mute", "name": "main-red", "for": "1d"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(j(&r)["monitor"]["mutedUntil"].as_i64().unwrap() > k2_core::compute::now());
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"action": "mute", "name": "main-red", "for": "40d"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (400, "ci_monitor_invalid"), "{}", r.body);
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"action": "rm", "name": "main-red"})).await;
+    assert_eq!((r.status, j(&r)["removed"].as_str()), (200, Some("main-red")), "{}", r.body);
+    let r = post(d.port, "/cli/ci/monitor", &agent, json!({"action": "rm", "name": "main-red"})).await;
+    assert_eq!((r.status, code(&r).as_str()), (404, "ci_monitor_not_found"), "{}", r.body);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM compute_events WHERE workspace_id = ?1 AND kind LIKE 'ci.monitor.%' ORDER BY id")
+            .unwrap()
+            .query_map(params![ws.id], |r| r.get(0))
+            .unwrap()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["ci.monitor.add", "ci.monitor.mute", "ci.monitor.rm"], "audited");
+    }
+    k2_daemon::ci_engine::test_sink_close();
+}

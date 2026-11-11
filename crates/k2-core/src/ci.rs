@@ -592,6 +592,44 @@ pub fn run_verdict<'a>(states: impl IntoIterator<Item = &'a str>) -> &'static st
     }
 }
 
+/// A check job's submitter (prd-compute-blacksmith-class-v1 BK-10): the CI
+/// engine submits as the workspace with the session `ci-<run>` and the
+/// name `ci` (`compute_routes::submitter_for`: `<ws>/ci-xxxxx/ci`). Its end
+/// sends no `[compute]` note: the run's one `[ci]` message covers it. A
+/// release job (`…/release`) still sends its own.
+pub fn is_check_submitter(submitter: &str) -> bool {
+    let mut parts = submitter.rsplit('/');
+    matches!((parts.next(), parts.next()), (Some("ci"), Some(sid)) if sid.starts_with("ci-"))
+}
+
+/// The `[ci]` run message (§4.5.4, BK-10): one per run when it ends, facts
+/// only. Run id, branch, commit, checks passed / failed / error, test
+/// counts (never a name, §4.3.5), the slowest check, and the line to see
+/// more. `slowest` is `(check, seconds)`; check names come from the
+/// committed `.k2/ci.toml` (`[a-z0-9._-]`).
+pub fn run_message(run: &RunRow, checks: &[CheckRow], slowest: Option<(&str, i64)>, tests: Option<&crate::ci_tests::Recorded>) -> String {
+    let count = |s: &str| checks.iter().filter(|c| c.state == s).count();
+    let mut parts = vec![
+        format!("[ci] run {} {}", run.short(), run.state),
+        format!("{} @ {}", run.git_ref.as_deref().filter(|r| is_branch_text(r)).unwrap_or("(no branch)"), &run.sha[..run.sha.len().min(12)]),
+        format!("{} passed, {} failed, {} error", count(check_state::SUCCESS), count(check_state::FAILURE), count(check_state::ERROR)),
+    ];
+    if let Some(t) = tests {
+        parts.push(t.counts_phrase());
+    }
+    if let Some((name, secs)) = slowest.filter(|(n, _)| crate::compute::proto::ci::is_name(n)) {
+        parts.push(format!("slowest: {name} {}", crate::compute::message::duration(secs)));
+    }
+    parts.push(format!("k2 ci status {}", run.short()));
+    parts.join(" · ")
+}
+
+/// A ref as stored (`watch`: from `ls-remote`; manual: checked by
+/// `k2 ci run`): printable, no spaces, bounded.
+fn is_branch_text(r: &str) -> bool {
+    !r.is_empty() && r.len() <= 200 && r.chars().all(|c| c.is_ascii_graphic())
+}
+
 /// The compute job id a check asks for (`clientJobId`, idempotent per
 /// run and check).
 pub fn client_job_id(run_id: &str, index: usize) -> String {
@@ -890,6 +928,54 @@ mod tests {
         // A client job id compute accepts: 16-64 of A-Z a-z 0-9 - _.
         let id = client_job_id(&uuid::Uuid::new_v4().simple().to_string(), 31);
         assert!((16..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'), "{id}");
+    }
+
+    /// prd-compute-blacksmith-class-v1 O1 (BK-10): the CI engine's check
+    /// jobs are known by their submitter; the `[ci]` message is facts only.
+    #[test]
+    fn check_submitters_and_the_run_message() {
+        assert!(is_check_submitter("app/ci-1a2b3/ci"));
+        assert!(!is_check_submitter("app/ci-1a2b3/release"), "a release job keeps its own note");
+        assert!(!is_check_submitter("app/5f0c2b1e/ci"), "an agent's own --submitter ci is not the engine");
+        assert!(!is_check_submitter("ci"));
+        let run = RunRow {
+            id: "ab12cd34".to_string() + &"0".repeat(24),
+            workspace_id: "ws".into(),
+            sha: "1a2b3c4d5e6f7a8b".to_string() + &"0".repeat(24),
+            git_ref: Some("main".into()),
+            trigger: "watch".into(),
+            state: run_state::FAILED.into(),
+            detail: None,
+            created_by: "watch".into(),
+            tier: "ci".into(),
+            statuses: None,
+            created_at: 1,
+            ended_at: Some(2),
+            kind: "checks".into(),
+        };
+        let check = |name: &str, state: &str| CheckRow {
+            run_id: run.id.clone(),
+            name: name.into(),
+            job_id: None,
+            state: state.into(),
+            description: "sync::reconnect @user failed".into(),
+            posted: None,
+            post_tries: 0,
+            post_error: None,
+        };
+        let checks = vec![check("unit", check_state::FAILURE), check("lint", check_state::SUCCESS)];
+        let t = crate::ci_tests::Recorded { total: 415, passed: 412, failed: 3, flaky: 1, new_failures: 1, ..Default::default() };
+        let m = run_message(&run, &checks, Some(("unit", 252)), Some(&t));
+        assert_eq!(
+            m,
+            "[ci] run ab12cd34 failed · main @ 1a2b3c4d5e6f · 1 passed, 1 failed, 0 error · tests 412 passed, 3 failed (1 flaky, 1 new) · slowest: unit 4m12s · k2 ci status ab12cd34"
+        );
+        assert!(!m.contains("reconnect") && !m.contains("@user"), "no test names: {m}");
+        let manual = RunRow { git_ref: None, state: run_state::PASSED.into(), ..run.clone() };
+        assert_eq!(
+            run_message(&manual, &[check("unit", check_state::SUCCESS)], None, None),
+            "[ci] run ab12cd34 passed · (no branch) @ 1a2b3c4d5e6f · 1 passed, 0 failed, 0 error · k2 ci status ab12cd34"
+        );
     }
 
     #[test]

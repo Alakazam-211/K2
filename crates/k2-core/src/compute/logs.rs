@@ -155,6 +155,137 @@ pub fn cursor_after_seq(job_id: &str, generation: i64, since_seq: u64) -> u64 {
     }
 }
 
+/// One matching line of a search (prd-compute-blacksmith-class-v1 §4.5.3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    pub stream: u8,
+    pub line: String,
+}
+
+/// What [`search`] read of one log.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Scan {
+    pub hits: Vec<Hit>,
+    /// Bytes of the file read.
+    pub bytes: u64,
+    /// It stopped early: `max_hits` reached, or the byte budget.
+    pub cut: bool,
+}
+
+/// Longest line a hit keeps (characters).
+pub const HIT_MAX_CHARS: usize = 400;
+
+/// Terminal escapes and control characters out (the CLI's own `logs`
+/// does the same), so a match is plain text.
+pub fn plain(line: &[u8]) -> String {
+    let s = String::from_utf8_lossy(line);
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.peek() {
+                // CSI: ESC [ … final byte @–~.
+                Some('[') => {
+                    chars.next();
+                    for d in chars.by_ref() {
+                        if ('@'..='~').contains(&d) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: ESC ] … BEL or ESC \.
+                Some(']') => {
+                    chars.next();
+                    while let Some(d) = chars.next() {
+                        if d == '\u{7}' {
+                            break;
+                        }
+                        if d == '\u{1b}' {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    chars.next();
+                }
+            }
+            continue;
+        }
+        if c == '\t' {
+            out.push(' ');
+        } else if !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Search one job attempt's log for `needle` (a plain string; `fold`:
+/// ASCII case folded), line by line per stream (a line can span records).
+/// At most `max_hits` hits and `max_bytes` read.
+pub fn search(job_id: &str, generation: i64, needle: &str, fold: bool, max_hits: usize, max_bytes: u64) -> Scan {
+    let mut scan = Scan::default();
+    let Ok(mut f) = std::fs::File::open(path(job_id, generation)) else { return scan };
+    let want = if fold { needle.to_ascii_lowercase() } else { needle.to_string() };
+    let mut partial: HashMap<u8, Vec<u8>> = HashMap::new();
+    let mut head = [0u8; HEADER];
+    let check = |stream: u8, raw: &[u8], scan: &mut Scan| {
+        let text = plain(raw);
+        let hay = if fold { text.to_ascii_lowercase() } else { text.clone() };
+        if hay.contains(&want) {
+            let line: String = text.trim_end().chars().take(HIT_MAX_CHARS).collect();
+            scan.hits.push(Hit { stream, line });
+        }
+    };
+    'read: loop {
+        if scan.bytes >= max_bytes {
+            scan.cut = true;
+            break;
+        }
+        if f.read_exact(&mut head).is_err() {
+            break;
+        }
+        let len = u32::from_be_bytes(head[9..13].try_into().unwrap_or([0; 4])) as usize;
+        let mut data = vec![0u8; len];
+        if f.read_exact(&mut data).is_err() {
+            break;
+        }
+        scan.bytes += (HEADER + len) as u64;
+        let stream = head[8];
+        let buf = partial.entry(stream).or_default();
+        buf.extend_from_slice(&data);
+        while let Some(i) = buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=i).collect();
+            check(stream, &line[..line.len() - 1], &mut scan);
+            if scan.hits.len() >= max_hits {
+                scan.cut = true;
+                break 'read;
+            }
+        }
+        // A line longer than 64 KiB with no newline is checked as it is.
+        if buf.len() > 64 * 1024 {
+            let line = std::mem::take(buf);
+            check(stream, &line, &mut scan);
+            if scan.hits.len() >= max_hits {
+                scan.cut = true;
+                break;
+            }
+        }
+    }
+    if !scan.cut {
+        for (stream, rest) in partial.into_iter().filter(|(_, b)| !b.is_empty()) {
+            check(stream, &rest, &mut scan);
+            if scan.hits.len() >= max_hits {
+                scan.cut = true;
+                break;
+            }
+        }
+    }
+    scan.hits.truncate(max_hits);
+    scan
+}
+
 /// Delete logs older than `days`. Best effort.
 pub fn sweep(days: u64) {
     let Ok(rd) = std::fs::read_dir(dir()) else { return };
@@ -199,6 +330,31 @@ mod tests {
             assert_eq!(one.len(), 1);
             // Another generation is its own log.
             assert_eq!(last_seq("j", 2), 0);
+        });
+    }
+
+    /// prd-compute-blacksmith-class-v1 O1 (§4.5.3): lines found across
+    /// records, per stream, escapes stripped, case folded on ask, capped.
+    #[test]
+    fn search_finds_lines_across_records_and_caps() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            assert!(append("s", 1, 1, LogStream::Out, b"compiling\nthread 'main' pan").unwrap());
+            assert!(append("s", 1, 2, LogStream::Err, b"\x1b[31merror[E0599]\x1b[0m: no method\n").unwrap());
+            assert!(append("s", 1, 3, LogStream::Out, b"icked at src/lib.rs:4\nok\nThread PANICKED again").unwrap());
+            let s = search("s", 1, "panicked", false, 50, 1 << 30);
+            assert_eq!(s.hits, vec![Hit { stream: 0, line: "thread 'main' panicked at src/lib.rs:4".into() }]);
+            assert!(!s.cut);
+            let s = search("s", 1, "panicked", true, 50, 1 << 30);
+            assert_eq!(s.hits.len(), 2, "{s:?}");
+            assert_eq!(s.hits[1].line, "Thread PANICKED again", "the last partial line counts");
+            let s = search("s", 1, "error[E0599]", false, 50, 1 << 30);
+            assert_eq!(s.hits, vec![Hit { stream: 1, line: "error[E0599]: no method".into() }], "escapes stripped");
+            let s = search("s", 1, "a", true, 1, 1 << 30);
+            assert_eq!((s.hits.len(), s.cut), (1, true), "max hits");
+            let s = search("s", 1, "zzz", false, 50, 1);
+            assert!(s.cut && s.hits.is_empty(), "the byte budget");
+            assert_eq!(search("nope", 1, "a", false, 50, 1 << 30), Scan::default());
+            assert_eq!(plain(b"a\tb\x07c\x1b]0;title\x07d"), "a bcd");
         });
     }
 }

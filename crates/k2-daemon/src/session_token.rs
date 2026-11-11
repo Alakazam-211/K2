@@ -863,8 +863,14 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/ci/evidence",
         "/cli/ci/freeze",
         "/cli/ci/init",
+        // prd-compute-blacksmith-class-v1 O1: its own workspace's monitors
+        // and CI stats (a Thread target must be its own workspace's: the
+        // handler).
+        "/cli/ci/monitor",
+        "/cli/ci/monitors",
         "/cli/ci/release",
         "/cli/ci/run",
+        "/cli/ci/stats",
         "/cli/ci/status",
         // prd-compute-blacksmith-class-v1 T1: its own workspace's test history.
         "/cli/ci/tests",
@@ -909,6 +915,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/compute/jobs/move",
         "/cli/compute/grants",
         "/cli/compute/local/status",
+        // prd-compute-blacksmith-class-v1 O1: search its own job logs.
+        "/cli/compute/logs/search",
         // Node sharing (0.46.3): a node's queue, redacted per §7.
         "/cli/compute/queue",
         // prd-compute-blacksmith-class-v1 R1: its own workspace's run sizes.

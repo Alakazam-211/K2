@@ -168,6 +168,8 @@ const CI_TABLES: &[&str] = &[
     "ci_test_jobs",
     "ci_test_failures",
     "ci_test_stats",
+    // 0297 (compute Blacksmith class O1): monitors.
+    "ci_monitors",
 ];
 
 fn ci_rows() -> Vec<(String, i64)> {
@@ -187,7 +189,7 @@ fn ci_routes() -> Vec<(&'static str, &'static str)> {
         assert!(k2_daemon::compute_routes::is_ci_route(p), "{p} is a CI route");
         out.push((*p, if k2_daemon::compute_routes::is_post_route(p) { "POST" } else { "GET" }));
     }
-    assert_eq!(out.len(), 31, "8 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
+    assert_eq!(out.len(), 34, "11 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1, stats, monitors and monitor since O1) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
     out
 }
 
@@ -246,6 +248,13 @@ async fn every_ci_route_is_dark_until_the_owner_turns_the_ci_preview_on() {
     assert_dark(&r, "receiptV 2");
     let r = call(d.port, "POST", "/cli/compute/run", &agent, "", Some(run_v1.clone())).await;
     assert_not_dark(&r, "a v1 run");
+    // Blacksmith class R1/O1: rightsize, --mem auto and log search are dark too.
+    let r = call(d.port, "GET", "/cli/compute/rightsize", &agent, "check=unit", None).await;
+    assert_dark(&r, "rightsize");
+    let r = call(d.port, "POST", "/cli/compute/run", &agent, "", Some(json!({"plan": true, "argv": ["true"], "noSource": true, "memAuto": true}))).await;
+    assert_dark(&r, "--mem auto");
+    let r = call(d.port, "GET", "/cli/compute/logs/search", &agent, "search=panicked", None).await;
+    assert_dark(&r, "logs --search");
     // A lane grant in the vault.
     let r = call(d.port, "POST", "/cli/vault/grant", OWNER, "", Some(lane_grant(&secret_id))).await;
     assert_dark(&r, "lane grant");
@@ -264,7 +273,7 @@ async fn every_ci_route_is_dark_until_the_owner_turns_the_ci_preview_on() {
 
     for (p, m) in &routes {
         let (query, body) = match (*p, *m) {
-            ("/cli/ci/status", _) | ("/cli/ci/tests", _) => ("workspace=gate", None),
+            ("/cli/ci/status", _) | ("/cli/ci/tests", _) | ("/cli/ci/stats", _) | ("/cli/ci/monitors", _) => ("workspace=gate", None),
             (_, "POST") => ("", Some(json!({}))),
             _ => ("", None),
         };

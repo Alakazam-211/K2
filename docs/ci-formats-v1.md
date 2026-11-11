@@ -590,8 +590,9 @@ is the first `[watch]` branch without a glob, else `main`
 |---|---|---|
 | 0295 | `ci_test_history` | T1 |
 | 0296 | `compute_job_stats` | O2 |
-| 0297 | `ci_monitors` (+ `ci_workspaces.trusted_branches_json`) | O1, B2 |
+| 0297 | `ci_monitors` | O1 |
 | 0298 | `compute_boxes` | X1 |
+| 0300 | `ci_workspaces.trusted_branches_json` | B2 |
 
 ### Refusal codes
 

@@ -797,28 +797,37 @@ missing and reports changed:false when there is nothing to do.
 
 USAGE
   k2 agent hire <dir> [flags]
-  k2 agent hire [<dir>] --template <id> --name <name> [--agent <preset>]
+  k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
                 [--param <key>=<value>]... [--answer <id>=<text>]...
-                [--dry-run | --launch] [flags]   (no <dir>: <hire root>/<handle>)
+                [--dry-run | --launch] [flags]
+
+  The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
+  With --template and no <dir>, the folder is <hire root>/<handle>
+  (k2 agent hire-root), or <hire root>/<template id> with no --name.
 
 FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
   1. Look:    k2 agent template list, then k2 agent template show <id>
-  2. Review:  the same hire with --dry-run: the folder, and every file, layer
-              and suggested permission, marked would write / skip / yours.
-              Nothing is written.
+  2. Review:  the same hire with --dry-run: the folder, and each file, layer
+              and permission with its label: would write · skip ·
+              yours, kept · suggested. Nothing is written.
   3. Hire:    the same line without --dry-run. Nothing starts unless you add
-              --launch; with it, K2 starts the agent and it says hello on
-              its Thread. Tell your person what you hired.
+              --launch; with it, K2 starts the agent and, on this first
+              create only, it says hello on its Thread. Tell your person
+              what you hired.
+  The hello goes with the first create only: re-running later with
+  --launch starts the agent but sends no hello. An agent first opened
+  without it starts from its ROLE.md, which tells it to ask its person
+  the questions still open.
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).
-                          Optional with --template: the agent goes in the hire
-                          root (`k2 agent hire-root`), in a folder named from
-                          --name in lowercase with dashes ("Rita Lee" → rita-lee),
-                          else the template id. --dry-run prints the folder.
+                          Optional with --template: then <hire root>/<handle>,
+                          or <hire root>/<template id> with no --name.
+                          --dry-run prints the folder.
 
 FLAGS
-  --name <name>           Agent's display name (default: the folder's basename, as-is)
+  --name <name>           Agent's display name (default: the folder's basename,
+                          as-is). Its handle is the name in lowercase with dashes.
   --template <id>         Make the agent from an agent template: its charter
                           (ROLE.md), starter wiki notes and context layers.
                           Types: general, lead, developer, app-owner, designer,
@@ -829,8 +838,9 @@ FLAGS
                           manager = lead, qa = reviewer.
                           Writes only what's missing and never replaces the
                           agent's own files. One template per agent: hiring an
-                          agent made from one template with another is
-                          refused (exit 3); re-running with the same one is safe.
+                          agent made from one template with another is not
+                          allowed (template_conflict, exit 3); re-running with
+                          the same one is safe.
                           A template only SUGGESTS permissions; nothing is
                           turned on for the agent by the hire. The output
                           lists each one as "suggested", for a person to turn
@@ -854,7 +864,7 @@ FLAGS
                           agent checks it with its person). On its first
                           start the agent asks its person the questions left
                           out, on the Thread, and its hello names them. An unknown
-                          id is refused (exit 2) with the valid ids, in a
+                          id is a usage error (exit 2) naming the valid ids, in a
                           --dry-run too. Like --param, it is written once: a
                           re-run never changes what the agent has, so to
                           correct an answer later, tell the agent.
@@ -865,10 +875,11 @@ FLAGS
                           "off" also sets --enabled false.
   --agent <preset>        Which AGENT PROGRAM this workspace launches — an agent
                           preset id, label, or command token (see `k2 preset list`).
-                          Sets the workspace's default agent during hire. Without
-                          this, an unset workspace falls back to the global default
-                          and ultimately to Claude — hiring a "codex agent" without
-                          --agent codex would silently launch Claude.
+                          Sets the workspace's default agent during hire. Left
+                          out: the template's suggested tool if it names one
+                          (K2's built-ins don't), else this server's default
+                          tool, else Claude. So to hire a Codex agent, pass
+                          --agent codex.
   --enabled <bool>        true | false (default: true). false pauses the agent
                           without changing its configured mode.
   --connect <name>        Wire a connection to another agent (repeatable): a
@@ -922,14 +933,21 @@ FLAGS
 
   A failed step (a connect, a project, a context…) doesn't stop the others:
   every step's result is printed, then the exit is non-zero (the first
-  failure's: 4 not_found, 2 usage, 3 refused, 1 other). Only a failure to
-  make the workspace itself stops the rest (reported "not run").
+  failure's code). Only a failure to make the workspace itself stops the
+  rest (reported "not run").
 
-  Template refusals: unknown_template (4: k2 agent template list --all),
-  usage (2: a param or answer it doesn't take; the valid ones are named),
-  template_conflict (3: the folder has another template), folder_exists
-  (3: <hire root>/<handle> is taken; another --name, or pass it as <dir>).
-  Every code and its fix: k2 study agent-templates.
+EXIT CODES (the same for k2 agent hire and k2 agent template)
+  0  ok
+  1  refused for what it is: id_reserved, id_taken, secret_found,
+     too_large; or the daemon failed
+  2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
+     bad_template, no_charter)
+  3  not allowed here: template_conflict, folder_exists, system_template,
+     own_workspace_only, not_author, role_required, owner_only
+  4  not found: unknown_template, no_template, no_workspace, no_note,
+     no_folder, not_found (an unknown --agent preset or --connect)
+  folder_exists: <hire root>/<handle> is taken; pick another --name, or
+  pass that folder as <dir>. Every code and its fix: k2 study agent-templates.
 
 WHO MAY
   A person: the owner, or a login in Settings or a terminal. An agent: only
@@ -2748,7 +2766,7 @@ if template_hello:
         ha.update(status="done", reason="sent by K2 when it started the agent")
         changed = True
     elif not la:
-        ha.update(status="skipped", reason="not launched; pass --launch to have it say hello")
+        ha.update(status="skipped", reason="not launched: the hello goes only with --launch on the first create")
     elif la["status"] == "failed":
         ha.update(status="not-run", reason="launch failed")
     else:

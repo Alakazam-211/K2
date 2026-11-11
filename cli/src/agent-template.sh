@@ -11,7 +11,7 @@ Step by step, with every error code: k2 study agent-templates.
 USAGE
   k2 agent template list [--all] [--json]
   k2 agent template show <id> [--files] [--json]
-  k2 agent hire [<dir>] --template <id> --name <name> [--agent <preset>]
+  k2 agent hire [<dir>] --template <id> [--name <name>] [--agent <preset>]
       [--param <key>=<value>]... [--answer <id>=<text>]... [--dry-run | --launch]
                                      (make an agent from one: k2 agent hire --help)
   k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run] [--json]
@@ -26,7 +26,8 @@ COMMANDS
                   support, ops), then any saved on this server, under "Yours".
                   --all also shows K2's system templates, kessel and
                   chief-of-staff (hired by id only). --json also carries
-                  canSave: this server can save templates.
+                  canSave: this server supports saving templates (not
+                  whether you may).
   show <id>       What one gives: its charter, params (--param on hire; marked
                   when required), its first-conversation questions, starter
                   notes, context layers, suggested permissions and the hello
@@ -34,15 +35,21 @@ COMMANDS
                   An old id works too: worker = general, manager = lead,
                   qa = reviewer. An unknown id exits 4.
   save <ws>       Save an agent's setup as a new template you can hire from.
-                  <ws> is the agent's folder or handle ("." works). An
-                  agent saves its own only; an Owner or Admin person, any
-                  agent's. It takes the charter (ROLE.md), its
-                  context layers, the skills it made, its heartbeats, its
-                  tool, and the permission switches now on (as suggestions).
-                  Wiki notes only with --wiki. Never Threads, transcripts,
-                  vault secrets, mail, sign-ins, .env files or connections.
-                  A file holding a secret-shaped string (a token, an API
-                  key, a private key) is refused, naming the file and line.
+                  <ws> is the agent's folder or handle; "." is the
+                  workspace you are in (in a K2 terminal, your own). People
+                  need Owner or Admin (a Member gets role_required). An
+                  agent may save its own workspace only (another one is
+                  own_workspace_only); role_required never applies to it.
+                  It takes the ROLE.md charter with its "Your notes" part,
+                  its context layers, the skills it made, its heartbeats,
+                  its tool, and the permission switches now on (as
+                  suggestions). Wiki notes only with --wiki. Never Threads,
+                  transcripts, vault secrets, mail, sign-ins, .env files or
+                  connections. A file holding a secret-shaped string (a
+                  token, an API key, a private key) is refused
+                  (secret_found), naming the file and line, in a --dry-run
+                  too. There is no override: for a false alarm, such as an
+                  example key in a note, reword or remove it.
                   Saving the same --id again writes its next version (v2,
                   v3, ...); an id someone else saved, or a K2 id, is refused.
                   Try --dry-run first: it lists every file it would write.
@@ -88,18 +95,25 @@ FLAGS
   --id <id>       save: the new template id (a-z, 0-9, -; at most 40)
   --name <n>      save: its name in the list (default: the agent's name)
   --summary <s>   save: one line on what it is for (default: none)
-  --wiki <note>   save: take this wiki note too (repeatable; none by default)
+  --wiki <note>   save: take this wiki note too: its name as k2 wiki list
+                  shows it, not a path (.md optional), e.g.
+                  --wiki "Voice and style" (repeatable; none by default)
   --version N     remove: only this version
   --dry-run       save, add, upgrade: show what would be written; write nothing
   --json          JSON output
   Hiring flags (--name, --agent, --param, --answer, --dry-run, --launch):
   k2 agent hire --help.
 
-EXIT CODES
-  0 ok · 1 refused (id_reserved, id_taken, secret_found, too_large) ·
-  2 bad usage (bad_id, bad_template, no_charter) · 3 not allowed
-  (own_workspace_only, not_author, role_required) · 4 not found
-  (unknown_template, no_template, no_workspace, no_note, no_folder).
+EXIT CODES (the same for k2 agent hire and k2 agent template)
+  0  ok
+  1  refused for what it is: id_reserved, id_taken, secret_found,
+     too_large; or the daemon failed
+  2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
+     bad_template, no_charter)
+  3  not allowed here: template_conflict, folder_exists, system_template,
+     own_workspace_only, not_author, role_required, owner_only
+  4  not found: unknown_template, no_template, no_workspace, no_note,
+     no_folder, not_found
   Each code and its fix: k2 study agent-templates.
 
 EXAMPLES
@@ -175,7 +189,7 @@ cmd_agent_template() {
                 esac
             done
             [ -n "$ws" ] && [ -n "$id" ] || { echo "Usage: k2 agent template save <ws> --id <id> [--name <n>] [--summary <s>] [--wiki <note>]... [--dry-run]  (<ws>: a folder or handle; . for this one)" >&2; exit 2; }
-            if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+            ws="$(_agent_template_ws "$ws")"
             local body
             body="$(WS="$ws" TID="$id" TNAME="$name" TSUM="$summary" TSUMSET="$summary_set" TDRY="$dry" python3 -c '
 import json, os, sys
@@ -241,8 +255,8 @@ print(json.dumps(b))')" \
             done
             local n=${#args[@]} body
             if [ "$n" -eq 1 ]; then
-                local ws="${args[0]}"
-                if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+                local ws
+                ws="$(_agent_template_ws "${args[0]}")"
                 body="$(WS="$ws" TDRY="$dry" python3 -c 'import json, os; print(json.dumps({"workspace": os.environ["WS"], "dryRun": os.environ["TDRY"] == "true"}))')"
             elif [ "$n" -eq 3 ] && [ "$sub" = diff ]; then
                 body="$(TID="${args[0]}" A="${args[1]#v}" B="${args[2]#v}" python3 -c '
@@ -264,6 +278,22 @@ print(json.dumps({"id": os.environ["TID"], "from": a, "to": b}))')" || exit 2
         *)
             echo "Unknown: k2 agent template $sub (see: k2 agent template --help)" >&2; exit 2 ;;
     esac
+}
+
+# The workspace a save / upgrade / diff names. "." is the workspace you
+# are in: in a K2 terminal the passport's own (from any subfolder or
+# worktree), else the folder found from the current one (K2_PROJECT_PATH,
+# or the nearest .k2 above it). Another folder is made absolute; a handle
+# passes through for the daemon to resolve.
+_agent_template_ws() {
+    if [ "$1" = "." ]; then
+        _cli_use_passport_project
+        printf '%s' "$PROJECT"
+    elif [ -d "$1" ]; then
+        (cd "$1" && pwd)
+    else
+        printf '%s' "$1"
+    fi
 }
 
 # POST a template-library route. Inside a K2 terminal it carries the
@@ -298,9 +328,9 @@ if err:
         sys.exit(2)
     # Refusals of the template itself: exit 1, even when the hint names a
     # token (secret_found says "a GitHub token", not a sign-in problem).
-    if code in ("id_reserved", "id_taken", "secret_found", "too_large", "template_conflict"):
+    if code in ("id_reserved", "id_taken", "secret_found", "too_large"):
         sys.exit(1)
-    if code in ("forbidden", "role_required", "own_workspace_only", "not_author", "owner_only") or "token" in hint.lower():
+    if code in ("forbidden", "role_required", "own_workspace_only", "not_author", "owner_only", "template_conflict") or "token" in hint.lower():
         sys.exit(3)
     if code in ("not_found", "unknown_template", "no_workspace", "no_folder", "no_note", "no_template"):
         sys.exit(4)

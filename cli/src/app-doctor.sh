@@ -2164,35 +2164,46 @@ WHAT A TEMPLATE IS
   (--all shows them) and are hired by id only. Old ids still work:
   worker = general, manager = lead, qa = reviewer.
   A template carries no authority: it only suggests permissions.
+  The handle is the name in lowercase with dashes ("Rita Lee" → rita-lee).
 
 1. LOOK
-  k2 agent template list                  the types (--json also has canSave)
+  k2 agent template list                  the types
   k2 agent template show writer           its charter, params, questions,
                                           starter notes, layers, suggestions
                                           and the hello it sends
   k2 agent template show writer --files   every file in full
+  list --json carries canSave: this server supports saving templates (not
+  whether you may).
 
 2. REVIEW, THEN HIRE
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
-    Writes nothing. Prints the folder it would use (<hire root>/max; see
-    k2 agent hire-root) and every row: would write, skip, yours (kept),
+    Writes nothing. Prints the folder (<hire root>/<handle>, here
+    <hire root>/max; k2 agent hire-root) and each file, layer and
+    permission with its label: would write · skip · yours, kept ·
     suggested. Read it before you hire.
   k2 agent hire --template writer --name "Max" --agent codex
     Writes the folder, ROLE.md, starter notes, context layers and
-    .k2/agent/template.lock. Nothing starts: the agent waits until someone
-    opens it.
+    .k2/agent/template.lock. Nothing starts.
   k2 agent hire --template writer --name "Max" --agent codex --launch
-    The same, then K2 starts it, and on its first create it says hello to
-    its person on the Thread (once; never on a re-run).
+    The same, then K2 starts it and, on this first create only, it says
+    hello to its person on the Thread.
+  The hello goes with the first create only: re-running later with
+  --launch starts the agent but sends no hello. An agent first opened
+  without it starts from its ROLE.md, which tells it to ask its person
+  the questions still open.
+  --name <name>      optional; default: the folder's name. No --name and
+                     no <dir>: the folder is <hire root>/<template id>.
   --agent <preset>   the tool it runs: an id, label or command word from
                      k2 preset list (codex, claude, ...). Left out: the
-                     template's suggestion, else the server default.
+                     template's suggested tool if it names one (K2's
+                     built-ins don't), else this server's default tool,
+                     else Claude.
   --param key=value  a value the template asks for; every built-in takes
                      about="what to focus on" (show lists them).
   --answer id=text   answer a first-conversation question (show lists the
                      ids). Answer only what you know; the agent asks its
                      person the rest on its first start.
-  <dir>              optional: a folder instead of <hire root>/<name>.
+  <dir>              optional: a folder instead of <hire root>/<handle>.
   Re-running the same hire is safe: it writes only what is missing and
   never replaces a file the agent changed. One template per agent.
   The hire prints the folder; tell your person who you hired and why.
@@ -2207,17 +2218,24 @@ WHAT A TEMPLATE IS
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
   k2 agent template save . --id my-writer --wiki "Voice and style"
-  <ws> is a folder or handle ("." = the one you are in). An agent saves
-  its own workspace only; an Owner or Admin person, any agent's.
-  Taken: the ROLE.md charter and your notes (no frontmatter), stacked
-  catalog ids, your own context layers, skills you made (not K2's),
-  heartbeats (name, schedule, WAKEUP text), the tool, and the permission
-  switches now on, as suggestions. Wiki notes only with --wiki.
+  <ws> is a folder or handle; "." is the workspace you are in (in a K2
+  terminal, your own, from any subfolder). Who: people need Owner or
+  Admin (a Member gets role_required). An agent may save its own
+  workspace only (another one is own_workspace_only); role_required
+  never applies to it.
+  Taken: the ROLE.md charter with its "Your notes" part (no
+  frontmatter), stacked catalog ids, your own context layers, skills you
+  made (not K2's), heartbeats (name, schedule, WAKEUP text), the tool, and
+  the permission switches now on, as suggestions. Wiki notes only with
+  --wiki <note>: the note's name as k2 wiki list shows it, not a path
+  (.md optional).
   Never taken: Threads, transcripts, vault secrets, mail accounts,
   sign-ins, .env files, App logins, connections, or any other file.
   Secrets: a token, API key or private key in a taken file stops the save
-  with secret_found, naming the file and line; the secret is never
-  printed. Remove it (keep it in the vault: k2 study vault), save again.
+  with secret_found, naming the file and line, in a --dry-run too; the
+  secret is never printed. Keep it in the vault (k2 study vault) and save
+  again. No override: for a false alarm, such as an example key in a
+  note, reword or remove it.
   Versions: the first save of an id is v1; you saving it again writes v2,
   v3, ... and keeps the older ones. A hire uses the newest.
 
@@ -2248,14 +2266,25 @@ WHAT A TEMPLATE IS
   K2's built-ins upgrade by themselves when K2 updates; a saved template
   only when someone runs upgrade.
 
+EXIT CODES (the same for k2 agent hire and k2 agent template)
+  0  ok
+  1  refused for what it is: id_reserved, id_taken, secret_found,
+     too_large; or the daemon failed
+  2  bad usage: a wrong flag, param, answer or id (usage, bad_id,
+     bad_template, no_charter)
+  3  not allowed here: template_conflict, folder_exists, system_template,
+     own_workspace_only, not_author, role_required, owner_only
+  4  not found: unknown_template, no_template, no_workspace, no_note,
+     no_folder, not_found
+
 ERRORS (code (exit): what to do)
   unknown_template (4)    no such id: k2 agent template list --all
   usage (2)               a param or answer the template doesn't take; the
                           message lists the valid ones
   template_conflict (3)   that folder was made from another template; one
                           per agent: pick another folder or --name
-  folder_exists (3)       <hire root>/<name> is taken: another --name, or
-                          pass that folder as <dir>
+  folder_exists (3)       <hire root>/<handle> is taken: another --name,
+                          or pass that folder as <dir>
   system_template (3)     an API key can't hire kessel or chief-of-staff
   bad_id (2)              ids are a-z, 0-9 and -, at most 40 characters
   id_reserved (1)         a K2 id or old id: pick another id
@@ -2269,7 +2298,7 @@ ERRORS (code (exit): what to do)
                           placeholders); the message says which
   own_workspace_only (3)  an agent works on its own workspace; ask a person
   not_author (3)          an agent removes only what it saved; ask a person
-  role_required (3)       saving and managing templates needs an Owner or Admin
+  role_required (3)       a Member person: saving needs Owner or Admin
   no_workspace (4)        no such folder or handle registered on this server
   no_template (4)         upgrade/diff: that agent wasn't made from one
 EOF

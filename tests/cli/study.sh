@@ -1037,18 +1037,21 @@ assert_contains "catalog --json: app-databases" "$("$K2" study --json)" '"id":"a
 echo "== k2 study agent-templates (prd-agent-templates-v1 T9, 0.46.13) =="
 at_out="$("$K2" study agent-templates)"
 for needle in "k2 agent template list" "k2 agent template show writer" "kessel and chief-of-staff" "canSave" \
-    'k2 agent hire --template writer --name "Max" --agent codex --dry-run' "Nothing starts" "--launch" "says hello" \
+    'k2 agent hire --template writer --name "Max" --agent codex --dry-run' "Nothing starts" "--launch" "hello to its person on the Thread" \
     "--param key=value" "--answer id=text" "SUGGESTED, NOT GRANTED" "never gets more than the hirer may give" \
-    "k2 agent template save . --id my-writer" "Never taken" "secret_found" "the secret is never" "v2," \
+    "k2 agent template save . --id my-writer" "Never taken" "secret_found" "secret is never printed" "v2," \
     "k2 agent template add" "k2 agent template remove my-writer --version 1" "k2 agent template upgrade . --dry-run" \
     "<file>.proposed" "K2:MANAGED" "Never changed: permissions" ".k2/agent/template.lock" \
     "unknown_template (4)" "template_conflict (3)" "folder_exists (3)" "id_reserved (1)" "id_taken (1)" \
-    "too_large (1)" "bad_id (2)" "own_workspace_only (3)" "not_author (3)" "no_template (4)" "role_required (3)"; do
+    "too_large (1)" "bad_id (2)" "own_workspace_only (3)" "not_author (3)" "no_template (4)" "role_required (3)" \
+    "first create only" "sends no hello" "No override" "not a path" "\"Your notes\" part" "role_required
+  never applies" \
+    "would write · skip ·" "yours, kept" "(the same for k2 agent hire and k2 agent template)"; do
     assert_contains "agent-templates names $needle" "$at_out" "$needle"
 done
 assert_absent "agent-templates: no PRD path" "$at_out" ".k2/prds"
 at_lines="$(printf '%s\n' "$at_out" | wc -l | tr -d ' ')"
-if [ "$at_lines" -le 130 ]; then echo "  PASS: agent-templates is bounded ($at_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: agent-templates is $at_lines lines (max 130)" >&2; fail=$((fail + 1)); fi
+if [ "$at_lines" -le 160 ]; then echo "  PASS: agent-templates is bounded ($at_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: agent-templates is $at_lines lines (max 160)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: agent-templates row" "$("$K2" study)" "  agent-templates     Hire a type of agent"
 assert_contains "usage lists agent-templates" "$("$K2" study --help)" "  agent-templates"
 assert_contains "catalog --json: agent-templates" "$("$K2" study --json)" '"id":"agent-templates"'
@@ -1056,13 +1059,15 @@ assert_contains "agent-templates --json id" "$("$K2" study agent-templates --jso
 # The help names the page and every flag the page teaches (prints with no daemon).
 th="$("$K2" agent template --help)"
 for needle in "k2 study agent-templates" "--all" "--files" "--id <id>" "--name <n>" "--summary <s>" "--wiki <note>" \
-    "--version N" "--dry-run" "--json" "EXIT CODES" "secret_found" "kessel and" "canSave" "<file>.proposed"; do
+    "--version N" "--dry-run" "--json" "(the same for k2 agent hire and k2 agent template)" "secret_found" "kessel and" "canSave" \
+    "<file>.proposed" "whether you may" "role_required never applies" "no override" "not a path"; do
     assert_contains "agent template --help names $needle" "$th" "$needle"
 done
 assert_eq "agent template save --help is the same page" "$("$K2" agent template save --help)" "$th"
 hh="$("$K2" agent hire --help)"
 for needle in "k2 study agent-templates" "--template <id>" "--agent <preset>" "--param <key>=<value>" "--answer <id>=<text>" \
-    "--dry-run" "--launch" "--take-app <app>" "--brief <file>" "suggested" "unknown_template (4" "folder_exists"; do
+    "--dry-run" "--launch" "--take-app <app>" "--brief <file>" "suggested" "(the same for k2 agent hire and k2 agent template)" \
+    "folder_exists" "[--name <name>]" "would write · skip ·" "yours, kept" "sends no hello" "else Claude"; do
     assert_contains "agent hire --help names $needle" "$hh" "$needle"
 done
 at_schema="$("$K2" --schema)"

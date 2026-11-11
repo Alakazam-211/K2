@@ -126,6 +126,13 @@ s2="$(k2 agent template save "$mpath" --id max-writer --json)"
 k2 agent template show max-writer | grep -q "Versions: v1, v2" || fail "show lists both versions"
 ok "save v1 → v2"
 
+echo "== save . names the workspace you are in, from a subfolder too =="
+dot="$(cd "$mpath/.k2/wiki" && env -i HOME="$SANDBOX_HOME" PATH="$PATH" K2_AIRGAP=1 K2_PORT="$K2SO_PORT" \
+    "$K2_CLI" agent template save . --id max-writer --dry-run --json)" || fail "save . from a subfolder: $dot"
+[ "$(jq -r .version <<<"$dot")" = "3" ] || fail "save . resolves to Max (next is v3): $dot"
+[ ! -e "$SANDBOX_HOME/.k2/agent-templates/max-writer/v3" ] || fail "a dry run writes nothing"
+ok "save ."
+
 echo "== save refuses a secret, naming the file and line, never echoing it =="
 role="$mpath/.k2/agent/ROLE.md"
 cp "$role" "$WORK/ROLE.md.bak"
@@ -138,6 +145,10 @@ grep -q "secret_found" "$WORK/sec.err" || fail "names secret_found: $(cat "$WORK
 grep -q ".k2/agent/ROLE.md line $line" "$WORK/sec.err" || fail "names the file and line $line: $(cat "$WORK/sec.err")"
 if grep -q "FAKEfake" "$WORK/sec.err" "$WORK/sec.out"; then fail "the secret was echoed"; fi
 [ ! -e "$SANDBOX_HOME/.k2/agent-templates/max-writer/v3" ] || fail "nothing written on a refusal"
+rc="$(run_rc "$WORK/secd.out" "$WORK/secd.err" agent template save "$mpath" --id max-writer --dry-run)"
+[ "$rc" = "1" ] || fail "a dry run refuses the secret too (got $rc): $(cat "$WORK/secd.out" "$WORK/secd.err")"
+grep -q ".k2/agent/ROLE.md line $line" "$WORK/secd.err" || fail "dry run names the file and line"
+if grep -q "FAKEfake" "$WORK/secd.err" "$WORK/secd.out"; then fail "the secret was echoed (dry run)"; fi
 rc="$(run_rc "$WORK/secj.out" "$WORK/secj.err" agent template save "$mpath" --id max-writer --json)"
 [ "$rc" = "1" ] || fail "secret_found --json exits 1 (got $rc)"
 if grep -q "FAKEfake" "$WORK/secj.err" "$WORK/secj.out"; then fail "the secret was echoed (--json)"; fi

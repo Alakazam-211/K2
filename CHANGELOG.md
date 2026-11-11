@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.2.18 (2026-11-10): pairs with kit v0.13.1
+
+**Requires `k2-mpc-base` v0.13.1** (the tag at its public cut 6ef688e4). This pack's code and
+tests are unchanged from v0.2.17.
+
+- Pairs with kit v0.13.1 (no kit API change since v0.13.0).
+- `scripts/check-private.sh` is the kit's (k2-mpc-base `tools/check-private.sh`): its patterns
+  are no longer in the tree. It reads them from `MPC_PRIVATE_PATTERNS`, else the file
+  `MPC_PRIVATE_PATTERNS_FILE` names, else `~/.config/k2-mpc/private-patterns.txt`, and with
+  none it exits 2. `scripts/private-allow.txt` works as before.
+- `Cargo.lock`: k2-mpc-base 0.13.1 (only the kit's crate version moves; no `mpce` entry); the
+  crate version.
+
+## v0.2.17 (2026-11-10): pairs with kit v0.13.0
+
+**Requires `k2-mpc-base` v0.13.0** (the tag at its public cut 8bcbc39b; release commit
+3e967520). This pack's code and tests are unchanged from v0.2.16.
+
+- Pairs with kit v0.13.0: the structure index, anchors, comment threads and claims by node for
+  blob packs (opt-in per pack and per host). This pack is a text pack with no index, so nothing
+  here changes.
+- `Cargo.lock`: k2-mpc-base 0.13.0 (only the kit's crate version moves; no `mpce` entry); the
+  crate version.
+
 ## v0.2.16 (2026-11-07): pairs with kit v0.12.0
 
 **Requires `k2-mpc-base` v0.12.0** (the tag at its public cut 178b449e; release commit

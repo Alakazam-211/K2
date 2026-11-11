@@ -127,6 +127,12 @@ export interface VideoController {
   attach(track: string, canvas: HTMLCanvasElement, opts: AttachOptions): () => void
   /** A tile's muted or paused state changed. */
   setHeld(track: string, held: boolean): void
+  /** This viewer zoomed in on the tile (share-zoom.ts; 1 is fit): the sink
+   *  asks for a picture that many times its box, so small text stays sharp
+   *  when it's magnified. Only this viewer's subscription changes; the
+   *  plugin caps the size, and the media server sends at most the layer the
+   *  sharer publishes. */
+  setZoom(track: string, zoom: number): void
   openPrivacySettings(pane: PrivacyPane): Promise<void>
   clearNotice(): void
   /** Open sinks, for tests and the demo. */
@@ -144,6 +150,8 @@ interface Sink {
   decoder: SinkDecoder
   box: TileBox
   held: boolean
+  /** The viewer's zoom on the tile (1: fit). */
+  zoom: number
   /** What the plugin was last told. */
   sent: { width: number; height: number; visible: boolean; tile: SinkTile } | null
   unwatch: (() => void) | null
@@ -187,7 +195,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
 
   const sendUpdate = (s: Sink, withStats = false): void => {
     if (s.closed || !s.info || !engine) return
-    const dpr = deps.devicePixelRatio()
+    const dpr = deps.devicePixelRatio() * s.zoom
     const want = {
       width: Math.round(s.box.width * dpr),
       height: Math.round(s.box.height * dpr),
@@ -251,7 +259,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
     void (async () => {
       const decode = await decodeList
       if (s.closed) return
-      const dpr = deps.devicePixelRatio()
+      const dpr = deps.devicePixelRatio() * s.zoom
       const req = {
         track: s.track,
         width: Math.round(s.box.width * dpr),
@@ -309,6 +317,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
         info: null,
         box: { width: 0, height: 0, visible: true },
         held: opts.held === true,
+        zoom: 1,
         sent: null,
         unwatch: null,
         closeTimer: null,
@@ -355,6 +364,14 @@ export function createVideoController(deps: VideoDeps): VideoController {
     s.held = held
     if (held) s.decoder.hold()
     else s.decoder.resume()
+    scheduleUpdate(s)
+  }
+
+  const setZoom = (track: string, zoom: number): void => {
+    const s = sinks.get(track)
+    const z = Number.isFinite(zoom) && zoom > 1 ? zoom : 1
+    if (!s || s.zoom === z) return
+    s.zoom = z
     scheduleUpdate(s)
   }
 
@@ -621,6 +638,7 @@ export function createVideoController(deps: VideoDeps): VideoController {
     setCameraDevice,
     attach,
     setHeld,
+    setZoom,
     openPrivacySettings,
     clearNotice: () => store.setState({ notice: null }),
     sinks: () => [...sinks.values()].map((s) => ({ track: s.track, info: s.info, refs: s.refs, stats: s.decoder.stats })),

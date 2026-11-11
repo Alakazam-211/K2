@@ -212,6 +212,25 @@ describe('sinks', () => {
     ])
   })
 
+  it("a viewer's zoom asks the sink for a picture that many times its box, and fit goes back (debounced like a resize)", async () => {
+    const s = await live()
+    s.ctl.attach('TR_7', s.canvas(), { tile: 'large' })
+    await settle()
+    const id = s.engine.sinkFor('TR_7')?.info.sinkId
+    s.ctl.setZoom('TR_7', 4)
+    // Unknown tracks and nonsense are ignored.
+    s.ctl.setZoom('TR_nope', 4)
+    await vi.advanceTimersByTimeAsync(SINK_UPDATE_DEBOUNCE_MS)
+    s.ctl.setZoom('TR_7', Number.NaN)
+    await vi.advanceTimersByTimeAsync(SINK_UPDATE_DEBOUNCE_MS)
+    s.ctl.setZoom('TR_7', 1)
+    await vi.advanceTimersByTimeAsync(SINK_UPDATE_DEBOUNCE_MS)
+    expect(s.engine.calls.filter((c) => c.startsWith('video_sink_update'))).toEqual([
+      `video_sink_update {"sink_id":${id},"width":2560,"height":1440,"visible":true,"tile":"large"}`,
+      `video_sink_update {"sink_id":${id},"width":640,"height":360,"visible":true,"tile":"large"}`,
+    ])
+  })
+
   it('sends decode stats for the beacon', async () => {
     const s = await live()
     s.ctl.attach('TR_7', s.canvas(), { tile: 'grid' })

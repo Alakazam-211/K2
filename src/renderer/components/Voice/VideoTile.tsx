@@ -2,13 +2,17 @@
 // person's name and mic at its bottom left, and in place of the picture: their
 // avatar while the camera's off, or a line saying why it's paused. A tile may
 // carry one more label at its bottom right (the floating tile's call time). Labels sit on the picture on a chip of their own
-// (`--color-media-label-*`), readable on any video in every Style.
+// (`--color-media-label-*`), readable on any video in every Style. A
+// `zoomable` tile (a share in the middle, the call view's grid) lets this
+// viewer zoom in and move around its picture (TileZoom).
 
 import { useEffect, useRef, type ReactNode } from 'react'
 import PresenceAvatar from '@/components/Presence/PresenceAvatar'
 import { MicOffIcon } from '@/components/icons/K2Icons'
 import { pausedText, type VideoTile as Tile } from '@/lib/voice/video-labels'
+import { sinkZoom, viewTransform, zoomResetKey } from '@/lib/voice/share-zoom'
 import type { VideoController } from '@/stores/video-core'
+import { useTileZoom, ZoomControls } from './TileZoom'
 
 function placeholderLine(t: Tile): string | null {
   switch (t.state) {
@@ -37,10 +41,13 @@ export interface VideoTileProps {
   /** Fill the box it's given (a share in the middle) instead of keeping 16:9 itself;
    *  the picture is letterboxed inside. */
   fill?: boolean
+  /** This viewer may zoom in on the picture while it's live (TileZoom). */
+  zoomable?: boolean
 }
 
-export default function VideoTile({ tile, ctl, corner, fill = false }: VideoTileProps): React.JSX.Element {
+export default function VideoTile({ tile, ctl, corner, fill = false, zoomable = false }: VideoTileProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
   const held = tile.state !== 'live'
   // Off and unsupported tracks never need a sink; paused ones keep theirs, held.
   const wantsSink = tile.state === 'live' || tile.state === 'paused'
@@ -58,29 +65,60 @@ export default function VideoTile({ tile, ctl, corner, fill = false }: VideoTile
     ctl.setHeld(tile.key, held)
   }, [ctl, tile.key, held])
 
+  const zoomOn = zoomable && tile.state === 'live'
+  const zoom = useTileZoom({ enabled: zoomOn, resetKey: zoomResetKey(tile.key, tile.state), frameRef, canvasRef })
+  // The sink asks for a sharper picture while zoomed in; fit again after.
+  const wantSharp = sinkZoom(zoom.view)
+  useEffect(() => {
+    if (wantSharp === 1) return
+    ctl.setZoom(tile.key, wantSharp)
+    return () => ctl.setZoom(tile.key, 1)
+  }, [ctl, tile.key, wantSharp])
+
   const line = placeholderLine(tile)
+  const transform = viewTransform(zoom.view)
   return (
     <div
+      ref={frameRef}
+      {...(zoomOn
+        ? {
+            ...zoom.frameProps,
+            tabIndex: 0,
+            role: 'group',
+            'aria-label': `${tile.name}: zoom with + and −, move with the arrow keys while zoomed, Esc to fit`,
+          }
+        : {})}
       data-testid="video-tile"
       data-track={tile.key}
       data-state={tile.state}
       data-speaking={tile.speaking ? 'true' : 'false'}
       data-large={tile.large ? 'true' : 'false'}
       data-self={tile.self ? 'true' : 'false'}
-      className={`relative min-h-0 min-w-0 overflow-hidden border bg-black ${
+      data-zoomable={zoomOn ? 'true' : undefined}
+      data-zoomed={zoom.zoomed ? 'true' : undefined}
+      className={`relative min-h-0 min-w-0 overflow-hidden border bg-black ${zoomOn ? 'group/zoom' : ''} ${zoom.zoomed ? 'cursor-grab active:cursor-grabbing' : ''} ${
         tile.speaking ? 'border-[var(--color-accent)] outline outline-2 outline-[var(--color-accent)]' : 'border-[var(--color-border)]'
       } ${tile.large && !fill ? 'col-span-2 row-span-2' : ''} ${fill ? 'h-full w-full' : ''}`}
       style={fill ? undefined : { aspectRatio: '16 / 9' }}
     >
-      <canvas
-        // A canvas per track: a sink that's closing (its short grace period)
-        // must never draw over the next track's picture on a reused canvas.
-        key={tile.key}
-        ref={canvasRef}
-        data-testid="video-canvas"
-        className="absolute inset-0 h-full w-full object-contain"
-        style={{ transform: tile.mirrored ? 'scaleX(-1)' : undefined, visibility: line === null ? 'visible' : 'hidden' }}
-      />
+      {/* The zoom's layer: always there, so the canvas never moves to a new
+          parent (its sink watches the parent's box, which a transform never
+          changes). */}
+      <div
+        data-testid="video-zoom-layer"
+        className="absolute inset-0"
+        style={transform ? { transform, transformOrigin: '0 0', willChange: 'transform' } : undefined}
+      >
+        <canvas
+          // A canvas per track: a sink that's closing (its short grace period)
+          // must never draw over the next track's picture on a reused canvas.
+          key={tile.key}
+          ref={canvasRef}
+          data-testid="video-canvas"
+          className="absolute inset-0 h-full w-full object-contain"
+          style={{ transform: tile.mirrored ? 'scaleX(-1)' : undefined, visibility: line === null ? 'visible' : 'hidden' }}
+        />
+      </div>
       {line !== null ? (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-[var(--color-bg-elevated)]">
           {tile.state === 'off' && tile.source === 'camera' ? <PresenceAvatar name={tile.self ? 'You' : tile.name} role="member" size={36} /> : null}
@@ -104,6 +142,7 @@ export default function VideoTile({ tile, ctl, corner, fill = false }: VideoTile
           {corner}
         </div>
       ) : null}
+      {zoomOn ? <ZoomControls zoom={zoom} name={tile.name} chip={MEDIA_LABEL} /> : null}
     </div>
   )
 }

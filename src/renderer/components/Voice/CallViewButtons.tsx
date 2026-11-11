@@ -25,15 +25,30 @@ export function PictureButton({
   label,
   testId,
   onPress,
+  disabled = false,
+  wide = false,
   children,
 }: {
   label: string
   testId: string
   onPress: () => void
+  disabled?: boolean
+  /** A word, not an icon (the zoom's Fit): as wide as it needs. */
+  wide?: boolean
   children: React.ReactNode
 }): React.JSX.Element {
+  const cls = wide ? ON_PICTURE.replace('w-6', 'w-auto px-1.5 text-[11px] leading-[14px]') : ON_PICTURE
   return (
-    <button type="button" aria-label={label} title={label} data-testid={testId} className={ON_PICTURE} style={noDrag} onClick={onPress}>
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      data-testid={testId}
+      disabled={disabled}
+      className={`${cls} disabled:opacity-40`}
+      style={noDrag}
+      onClick={onPress}
+    >
       {children}
     </button>
   )

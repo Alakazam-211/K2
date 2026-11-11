@@ -48,7 +48,7 @@ export function useStageTiles(ctl: VideoController, people: readonly CallPerson[
   return useMemo(() => withSpeakerEmphasis(videoTiles(tracks, local, people), lastSpeaker), [tracks, local, people, lastSpeaker])
 }
 
-/** The grid of tiles. */
+/** The grid of tiles. Each live one zooms (this viewer's only: TileZoom). */
 export function StageGrid({ tiles, ctl, className = '' }: { tiles: ReturnType<typeof videoTiles>; ctl: VideoController; className?: string }): React.JSX.Element {
   const columns = gridColumns(tiles.reduce((n, t) => n + (t.large ? 4 : 1), 0))
   return (
@@ -59,7 +59,7 @@ export function StageGrid({ tiles, ctl, className = '' }: { tiles: ReturnType<ty
       style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
     >
       {tiles.map((t) => (
-        <VideoTile key={t.key} tile={t} ctl={ctl} />
+        <VideoTile key={t.key} tile={t} ctl={ctl} zoomable />
       ))}
     </div>
   )

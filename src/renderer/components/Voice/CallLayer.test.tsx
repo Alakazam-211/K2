@@ -883,6 +883,46 @@ describe('a screen share in the middle, the people on the left', () => {
     await waitFor(() => expect(video.sinks().map((s) => s.track).sort()).toEqual(['TR_8', 'TR_S7']))
   })
 
+  it('expanded: the share in the middle zooms (only it, not the column); Esc on it fits first, the next Esc shrinks', async () => {
+    await inCall()
+    fourPeopleAndAShare()
+    await screen.findByTestId('call-tile')
+    // The floating tile never zooms: its clicks and double-clicks are its own.
+    expect(within(screen.getByTestId('call-tile')).queryByTestId('video-zoom-controls')).toBeNull()
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    const main = within(await screen.findByTestId('call-share-main')).getByTestId('video-tile')
+    expect(main.dataset.zoomable).toBe('true')
+    expect(within(screen.getByTestId('call-share-column')).queryAllByTestId('video-zoom-controls')).toEqual([])
+    fireEvent.click(within(main).getByTestId('video-zoom-in'))
+    expect(main.dataset.zoomed).toBe('true')
+    expect(within(main).getByTestId('video-zoom-percent').textContent).toBe('150%')
+    // The view's Esc (a window listener) leaves a zoomed share's Esc to it.
+    const zoomIn = within(main).getByTestId('video-zoom-in')
+    zoomIn.focus()
+    fireEvent.keyDown(zoomIn, { key: 'Escape' })
+    expect(useCallExpand.getState().expanded).toBe(true)
+    expect(main.dataset.zoomed).toBeUndefined()
+    fireEvent.keyDown(zoomIn, { key: 'Escape' })
+    expect(useCallExpand.getState().expanded).toBe(false)
+  })
+
+  it('a zoomed share that stops takes its zoom with it; the next share starts at fit', async () => {
+    await inCall()
+    fourPeopleAndAShare()
+    await screen.findByTestId('call-tile')
+    fireEvent.click(screen.getByTestId('call-tile-expand'))
+    const main = within(await screen.findByTestId('call-share-main')).getByTestId('video-tile')
+    fireEvent.click(within(main).getByTestId('video-zoom-in'))
+    expect(main.dataset.zoomed).toBe('true')
+    act(() => h.videoEngine?.setTracks([fakeTrack('8')]))
+    expect(await screen.findByTestId('video-grid')).toBeTruthy()
+    act(() => h.videoEngine?.setTracks([fakeTrack('9', { source: 'screen', track: 'TR_S9' }), fakeTrack('8')]))
+    const next = within(await screen.findByTestId('call-share-main')).getByTestId('video-tile')
+    expect(next.dataset.track).toBe('TR_S9')
+    expect(next.dataset.zoomed).toBeUndefined()
+    expect(within(next).queryByTestId('video-zoom-percent')).toBeNull()
+  })
+
   it('no share: the grid, as before', async () => {
     await inCall()
     act(() => h.videoEngine?.setTracks([fakeTrack('7'), fakeTrack('8')]))
@@ -1128,6 +1168,11 @@ describe('pop out: the call in its own window', () => {
     expect(within(win).getByTestId('call-share-layout').dataset.main).toBe('TR_S7')
     expect(within(within(win).getByTestId('call-share-people')).getAllByTestId('video-tile')).toHaveLength(4)
     expect(within(win).queryByTestId('video-grid')).toBeNull()
+    // The share zooms here too.
+    const main = within(within(win).getByTestId('call-share-main')).getByTestId('video-tile')
+    fireEvent.doubleClick(main)
+    expect(main.dataset.zoomed).toBe('true')
+    expect(within(main).getByTestId('video-zoom-percent').textContent).toBe('200%')
   })
 
   it('Pop in closes the call window and hands the call back: the call view opens where it came from, with the same share in the middle', async () => {

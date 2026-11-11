@@ -29,6 +29,8 @@
 //     `folder`, `folder-input`, `star`, `square-pen`, `mail-open`,
 //     `download`, `x`, squared; `reply`, `reply-all`, `forward`, `flag`,
 //     `paperclip`, `refresh-cw` keep round caps (their strokes are curves).
+//   Plus, Minus (a video tile's zoom in / out)
+//     Lucide 1.58 `plus`, `minus`, squared.
 //   Gardens
 //     Not here: K2's own brush ensō, `ZenIcon` (components/Zen/ZenIcon.tsx).
 //
@@ -958,6 +960,25 @@ export function CloseIcon(props: K2IconProps = {}): React.JSX.Element {
     <svg {...iconProps('x', props)}>
       <path d="M18 6 6 18" />
       <path d="M6 6l12 12" />
+    </svg>
+  )
+}
+
+/** Zoom in (a video tile's zoom): Lucide `plus`, squared. */
+export function PlusIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('plus', props)}>
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </svg>
+  )
+}
+
+/** Zoom out (a video tile's zoom): Lucide `minus`, squared. */
+export function MinusIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('minus', props)}>
+      <path d="M5 12h14" />
     </svg>
   )
 }

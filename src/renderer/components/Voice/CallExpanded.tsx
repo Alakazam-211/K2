@@ -6,7 +6,8 @@
 // (mute, deafen, camera, share, leave) sit along its bottom.
 //
 // Shrink (top right), a click on the scrim round it, or Esc put it back as it
-// was: the tile, or the call view. Focus moves to Shrink on open, stays in the
+// was: the tile, or the call view (Esc on a zoomed-in share takes it back to
+// fit first). Focus moves to Shrink on open, stays in the
 // view while it's open, and goes back to the Expand button on shrink.
 //
 // Mounted while the call has video; it draws only while expanded, and its
@@ -61,6 +62,9 @@ function View({ call, video, actions }: CallExpandedProps): React.JSX.Element {
     shrinkRef.current?.focus()
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
+      // A zoomed-in share with focus takes this Esc back to fit (TileZoom);
+      // the next one shrinks.
+      if (e.target instanceof Element && e.target.closest('[data-testid="video-tile"][data-zoomed="true"]')) return
       // Only this: not a drawer or a dialog under the view too.
       e.preventDefault()
       e.stopPropagation()

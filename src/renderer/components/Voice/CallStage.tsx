@@ -2,7 +2,8 @@
 // window): with a screen share, the share in the middle and the people in a
 // column of smaller tiles on the left (lib/voice/call-share.ts has the rule,
 // and which share is in the middle with several); with none, the grid as the
-// call view draws it.
+// call view draws it. The share in the middle zooms (this viewer's only:
+// TileZoom).
 
 import { useMemo } from 'react'
 import { shareLayout, type ShareLayout } from '@/lib/voice/call-share'
@@ -57,7 +58,7 @@ function ShareView({ layout, ctl, callId, className }: { layout: ShareLayout; ct
         </div>
       </div>
       <div data-testid="call-share-main" className="relative min-h-0 min-w-0 flex-1">
-        <VideoTile tile={main} ctl={ctl} fill />
+        <VideoTile tile={main} ctl={ctl} fill zoomable />
       </div>
     </div>
   )

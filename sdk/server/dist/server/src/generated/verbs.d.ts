@@ -1,6 +1,6 @@
 import type { K2Error } from '../errors.ts';
 /** The catalog version this table was generated from. */
-export declare const CATALOG_VERSION = 53;
+export declare const CATALOG_VERSION = 54;
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = {
     readonly [key: string]: unknown;
@@ -9474,6 +9474,271 @@ export declare const APP_VERBS: {
             readonly type: "object";
         };
     };
+    readonly 'recordings.list': {
+        readonly cap: null;
+        readonly effect: "read";
+        readonly kind: "call";
+        readonly feature: "app-recordings-v1";
+        readonly door: "link";
+        readonly http: {
+            readonly method: "GET";
+            readonly route: "/cli/sew/app/recordings";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly app: {
+                    readonly type: "string";
+                };
+                readonly next: {
+                    readonly type: readonly ["string", "null"];
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly recordings: {
+                    readonly items: {
+                        readonly additionalProperties: false;
+                        readonly properties: {
+                            readonly channelId: {
+                                readonly type: "string";
+                            };
+                            readonly consents: {
+                                readonly items: {
+                                    readonly additionalProperties: false;
+                                    readonly properties: {
+                                        readonly consent: {
+                                            readonly type: "string";
+                                        };
+                                        readonly externalId: {
+                                            readonly type: "string";
+                                        };
+                                    };
+                                    readonly type: "object";
+                                };
+                                readonly type: "array";
+                            };
+                            readonly id: {
+                                readonly type: "string";
+                            };
+                            readonly spaceId: {
+                                readonly type: "string";
+                            };
+                            readonly startedAt: {
+                                readonly type: "string";
+                            };
+                            readonly startedBy: {
+                                readonly type: readonly ["string", "null"];
+                            };
+                            readonly state: {
+                                readonly type: "string";
+                            };
+                            readonly stopReason: {
+                                readonly type: readonly ["string", "null"];
+                            };
+                            readonly stoppedAt: {
+                                readonly type: readonly ["string", "null"];
+                            };
+                            readonly transcriptReady: {
+                                readonly type: "boolean";
+                            };
+                            readonly trigger: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly type: "object";
+                    };
+                    readonly type: "array";
+                };
+                readonly spaceId: {
+                    readonly type: "string";
+                };
+            };
+            readonly type: "object";
+        };
+    };
+    readonly 'recordings.get': {
+        readonly cap: null;
+        readonly effect: "read";
+        readonly kind: "call";
+        readonly feature: "app-recordings-v1";
+        readonly door: "link";
+        readonly http: {
+            readonly method: "GET";
+            readonly route: "/cli/sew/app/recording";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly app: {
+                    readonly type: "string";
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly recording: {
+                    readonly additionalProperties: false;
+                    readonly properties: {
+                        readonly channelId: {
+                            readonly type: "string";
+                        };
+                        readonly consents: {
+                            readonly items: {
+                                readonly additionalProperties: false;
+                                readonly properties: {
+                                    readonly consent: {
+                                        readonly type: "string";
+                                    };
+                                    readonly externalId: {
+                                        readonly type: "string";
+                                    };
+                                };
+                                readonly type: "object";
+                            };
+                            readonly type: "array";
+                        };
+                        readonly id: {
+                            readonly type: "string";
+                        };
+                        readonly spaceId: {
+                            readonly type: "string";
+                        };
+                        readonly startedAt: {
+                            readonly type: "string";
+                        };
+                        readonly startedBy: {
+                            readonly type: readonly ["string", "null"];
+                        };
+                        readonly state: {
+                            readonly type: "string";
+                        };
+                        readonly stopReason: {
+                            readonly type: readonly ["string", "null"];
+                        };
+                        readonly stoppedAt: {
+                            readonly type: readonly ["string", "null"];
+                        };
+                        readonly transcriptReady: {
+                            readonly type: "boolean";
+                        };
+                        readonly trigger: {
+                            readonly type: "string";
+                        };
+                    };
+                    readonly type: "object";
+                };
+            };
+            readonly type: "object";
+        };
+    };
+    readonly 'recordings.transcript': {
+        readonly cap: null;
+        readonly effect: "read";
+        readonly kind: "call";
+        readonly feature: "app-recordings-v1";
+        readonly door: "link";
+        readonly http: {
+            readonly method: "GET";
+            readonly route: "/cli/sew/app/recording/transcript";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly app: {
+                    readonly type: "string";
+                };
+                readonly next: {
+                    readonly type: readonly ["string", "null"];
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly recordingId: {
+                    readonly type: "string";
+                };
+                readonly turns: {
+                    readonly items: {
+                        readonly additionalProperties: false;
+                        readonly properties: {
+                            readonly endMs: {
+                                readonly type: "integer";
+                            };
+                            readonly id: {
+                                readonly type: "string";
+                            };
+                            readonly speakerExternalId: {
+                                readonly type: "string";
+                            };
+                            readonly startMs: {
+                                readonly type: "integer";
+                            };
+                            readonly text: {
+                                readonly type: "string";
+                            };
+                        };
+                        readonly type: "object";
+                    };
+                    readonly type: "array";
+                };
+            };
+            readonly type: "object";
+        };
+    };
+    readonly 'recordings.events': {
+        readonly cap: null;
+        readonly effect: "read";
+        readonly kind: "subscribe";
+        readonly feature: "app-recordings-v1";
+        readonly door: "both";
+        readonly http: null;
+        readonly socket: {
+            readonly path: "/cli/sew/app/recordings/events";
+            readonly param: "app";
+            readonly frame: "recording_changed";
+            readonly refetch: "recordings.list";
+            readonly query: {};
+        };
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly at: {
+                    readonly type: "string";
+                };
+                readonly change: {
+                    readonly type: "string";
+                };
+                readonly channelId: {
+                    readonly type: "string";
+                };
+                readonly kind: {
+                    readonly enum: readonly ["recording_changed", "recordings_refetch"];
+                };
+                readonly recordingId: {
+                    readonly type: "string";
+                };
+                readonly seq: {
+                    readonly type: "integer";
+                };
+                readonly spaceId: {
+                    readonly type: "string";
+                };
+            };
+            readonly type: "object";
+        };
+    };
     readonly 'project.list': {
         readonly cap: "thread:read";
         readonly effect: "read";
@@ -11871,6 +12136,70 @@ export interface AppChatSpace {
     /** The Spaces bound to this App (k2 hostchat app-space bind). */
     readonly spaces: AppChatSpaceRow[];
 }
+export interface AppRecordingConsent {
+    /** granted | declined | withdrawn | pending. */
+    readonly consent: string;
+    readonly externalId: string;
+}
+export interface AppRecording {
+    readonly channelId: string;
+    /** Who consented to be recorded. */
+    readonly consents: AppRecordingConsent[];
+    readonly id: string;
+    readonly spaceId: string;
+    readonly startedAt: string;
+    /** Who started it (an external id), when a person did. */
+    readonly startedBy: string | null;
+    /** active | stopped (a newer state may appear). */
+    readonly state: string;
+    /** Sew's stop reason (a number or a name; never match it exhaustively). */
+    readonly stopReason: string | null;
+    readonly stoppedAt: string | null;
+    readonly transcriptReady: boolean;
+    /** manual | auto | required. */
+    readonly trigger: string;
+}
+export interface AppRecordingsPage {
+    readonly app: string;
+    /** The next page's cursor (pass it as after), or null at the end. */
+    readonly next: string | null;
+    readonly ok: boolean;
+    readonly recordings: AppRecording[];
+    readonly spaceId: string;
+}
+export interface AppRecordingOne {
+    readonly app: string;
+    readonly ok: boolean;
+    readonly recording: AppRecording;
+}
+export interface AppTranscriptTurn {
+    /** Milliseconds from the start of the recording (a duration). */
+    readonly endMs: number;
+    readonly id: string;
+    readonly speakerExternalId: string;
+    /** Milliseconds from the start of the recording (a duration). */
+    readonly startMs: number;
+    /** Markdown-escaped. */
+    readonly text: string;
+}
+export interface AppTranscriptPage {
+    readonly app: string;
+    /** The next page's cursor (pass it as after), or null at the end. */
+    readonly next: string | null;
+    readonly ok: boolean;
+    readonly recordingId: string;
+    readonly turns: AppTranscriptTurn[];
+}
+export interface AppRecordingFrame {
+    readonly at?: string;
+    /** started | stopped | transcript_ready | audio_expired | deleted (a newer one may appear). */
+    readonly change?: string;
+    readonly channelId?: string;
+    readonly kind: 'recording_changed' | 'recordings_refetch';
+    readonly recordingId?: string;
+    readonly seq?: number;
+    readonly spaceId?: string;
+}
 export interface AppProjectMember {
     readonly handle: string;
     /** The member agent's project id. */
@@ -11973,7 +12302,7 @@ export interface AppProjectFrame {
     readonly waiting?: number;
 }
 /** The shared error codes (catalog `errors`). */
-export declare const APP_ERROR_CODES: readonly ["cap_not_granted", "not_bound", "rate_limited", "too_large", "unknown_verb", "verb_unavailable", "verb_local", "not_exposed", "sending_off", "server_not_saved", "unreachable", "removed", "no_history", "failed", "conflict", "space_full", "value_too_large", "bad_key", "not_granted", "resync", "author_unknown", "stale_widget", "store_full", "bad_tx", "tx_expired", "busy", "paused", "blob_missing", "bad_args", "bad_shape", "pass_required", "access_lost", "pass_invalid", "pass_wrong_link", "not_on_link", "json_required", "skin_room", "usage", "not_found", "bad_login", "locked", "card_not_pending", "guest_required", "no_app_pass", "no_app_key", "no_chat_grant", "no_chat_caps", "app_claim_invalid", "not_app_granted", "chat_off_for_person", "shared_person", "has_assistants", "chat_limit", "username_unusable", "chat_not_app_scoped", "no_chat_member", "sew_feature_missing", "chat_key_required", "sew_unreachable", "sew_refused", "space_unbound", "app_mismatch", "channel_type_mismatch", "client_msg_id_reused", "chat_unavailable", "app_pass_required", "grant_required", "outside_app_rooms", "above_role", "has_role", "confirm_required", "declined", "refresh_invalid", "refresh_reused", "person_pass_required", "wallet_off", "push_off", "push_server_only", "not_for_host", "channel_unavailable", "push_devices_full", "push_not_configured", "too_many_recipients", "push_queue_full", "airgap", "vault_closed", "token_in_use", "pairing_off", "pairing_from_device", "reauth_required", "device_signin_off", "host_not_paired", "no_public_host", "pairing_not_served", "pair_code_invalid", "pairing_not_from_browser", "duplicate_label", "needs_editor", "retired", "card_person_only", "edit_off", "type_refused", "type_mismatch", "bad_image", "agent_login", "email_off", "no_sender", "sender_not_granted", "system_sender", "recipient_out_of_scope", "header_not_allowed", "message_too_large", "domain_not_ready", "dmarc_missing", "relay_not_ready", "idempotency_conflict", "no_mail_path", "email_paused", "all_suppressed", "password_change_required", "password_unchanged", "bad_code", "app_suspended", "not_a_repo", "attachment_secret", "sidecar_live", "sidecar_attached", "worktree_sidecar", "guest_pass_required", "too_many_transfers", "no_space", "transfer_expired", "transfer_token_expired", "transfer_token_invalid", "transfer_token_required", "upload_done", "upload_incomplete", "checksum_mismatch", "bad_range"];
+export declare const APP_ERROR_CODES: readonly ["cap_not_granted", "not_bound", "rate_limited", "too_large", "unknown_verb", "verb_unavailable", "verb_local", "not_exposed", "sending_off", "server_not_saved", "unreachable", "removed", "no_history", "failed", "conflict", "space_full", "value_too_large", "bad_key", "not_granted", "resync", "author_unknown", "stale_widget", "store_full", "bad_tx", "tx_expired", "busy", "paused", "blob_missing", "bad_args", "bad_shape", "pass_required", "access_lost", "pass_invalid", "pass_wrong_link", "not_on_link", "json_required", "skin_room", "usage", "not_found", "bad_login", "locked", "card_not_pending", "guest_required", "no_app_pass", "no_app_key", "no_chat_grant", "no_chat_caps", "app_claim_invalid", "not_app_granted", "chat_off_for_person", "shared_person", "has_assistants", "chat_limit", "username_unusable", "chat_not_app_scoped", "no_chat_member", "sew_feature_missing", "recording_server_read_off", "app_not_governing", "chat_key_required", "sew_unreachable", "sew_refused", "space_unbound", "app_mismatch", "channel_type_mismatch", "client_msg_id_reused", "chat_unavailable", "app_pass_required", "grant_required", "outside_app_rooms", "above_role", "has_role", "confirm_required", "declined", "refresh_invalid", "refresh_reused", "person_pass_required", "wallet_off", "push_off", "push_server_only", "not_for_host", "channel_unavailable", "push_devices_full", "push_not_configured", "too_many_recipients", "push_queue_full", "airgap", "vault_closed", "token_in_use", "pairing_off", "pairing_from_device", "reauth_required", "device_signin_off", "host_not_paired", "no_public_host", "pairing_not_served", "pair_code_invalid", "pairing_not_from_browser", "duplicate_label", "needs_editor", "retired", "card_person_only", "edit_off", "type_refused", "type_mismatch", "bad_image", "agent_login", "email_off", "no_sender", "sender_not_granted", "system_sender", "recipient_out_of_scope", "header_not_allowed", "message_too_large", "domain_not_ready", "dmarc_missing", "relay_not_ready", "idempotency_conflict", "no_mail_path", "email_paused", "all_suppressed", "password_change_required", "password_unchanged", "bad_code", "app_suspended", "not_a_repo", "attachment_secret", "sidecar_live", "sidecar_attached", "worktree_sidecar", "guest_pass_required", "too_many_transfers", "no_space", "transfer_expired", "transfer_token_expired", "transfer_token_invalid", "transfer_token_required", "upload_done", "upload_incomplete", "checksum_mismatch", "bad_range"];
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number];
 /** Every App verb: its arguments and its answer (or frame). */
 export interface AppVerbs {
@@ -13014,6 +13343,34 @@ export interface AppVerbs {
         };
         value: AppChatSpace;
     };
+    'recordings.list': {
+        args: {
+            after?: string;
+            limit?: number;
+            space: string;
+        };
+        value: AppRecordingsPage;
+    };
+    'recordings.get': {
+        args: {
+            id: string;
+        };
+        value: AppRecordingOne;
+    };
+    'recordings.transcript': {
+        args: {
+            after?: string;
+            id: string;
+            limit?: number;
+        };
+        value: AppTranscriptPage;
+    };
+    'recordings.events': {
+        args: {
+            app: string;
+        };
+        value: AppRecordingFrame;
+    };
     'project.list': {
         args: Record<string, never>;
         value: AppProjectList;
@@ -13049,8 +13406,8 @@ export interface AppVerbs {
         value: AppProjectFrame;
     };
 }
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
-export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events';
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'auth.exchange' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'profile.deleteAccount' | 'diagnostics.send' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.attachmentToken' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.downloadToken' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.uploadCreate' | 'files.uploadStatus' | 'files.uploadComplete' | 'files.uploadAbort' | 'files.uploadToken' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'chat.channels' | 'chat.setChannels' | 'chat.space' | 'recordings.list' | 'recordings.get' | 'recordings.transcript' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
+export type AppSubscribeVerb = 'me.events' | 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'recordings.events' | 'project.events';
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
     readonly me: {
@@ -13819,6 +14176,28 @@ export interface AppSurfaces {
             app?: string;
         }): Promise<AppChatSpace>;
     };
+    readonly recordings: {
+        /** The recordings in one of the Spaces this App governs, newest first; only with the owner's server_read on (no audio, ever). no cap · GET /cli/sew/app/recordings. e.g. `const {recordings} = await k2.asApp().recordings.list({space: spaceId})` */
+        list(args: {
+            after?: string;
+            limit?: number;
+            space: string;
+        }): Promise<AppRecordingsPage>;
+        /** One recording in a Space this App governs: who started it, the trigger, who consented; only with the owner's server_read on. no cap · GET /cli/sew/app/recording. e.g. `const {recording} = await k2.asApp().recordings.get({id})` */
+        get(args: {
+            id: string;
+        }): Promise<AppRecordingOne>;
+        /** A recording's transcript, a page of turns; only with the owner's server_read on, named in each consent notice, every read logged. no cap · GET /cli/sew/app/recording/transcript. e.g. `const {turns, next} = await k2.asApp().recordings.transcript({id})` */
+        transcript(args: {
+            after?: string;
+            id: string;
+            limit?: number;
+        }): Promise<AppTranscriptPage>;
+        /** A recording in this App's Spaces started, stopped, got its transcript or lost its audio: ids only, never content; recordings_refetch means read recordings.list again. no cap · WS /cli/sew/app/recordings/events?app=. e.g. `const off = k2.asApp().recordings.onChanged({app: me.serviceId}, (f) => f.kind === 'recordings_refetch' ? reload() : fetchOne(f.recordingId))` */
+        events(args: {
+            app: string;
+        }, onFrame: (frame: AppRecordingFrame) => void, onError?: (error: K2Error) => void): () => void;
+    };
     readonly project: {
         /** The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read. cap thread:read · GET /cli/skin/projects. e.g. `const {projects} = await k2.project.list()` */
         list(args?: Record<string, never>): Promise<AppProjectList>;
@@ -13847,4 +14226,4 @@ export interface AppSurfaces {
     };
 }
 /** The surface names, in catalog order (the client builds one object each). */
-export declare const APP_SURFACES: readonly ["me", "roomAgents", "guests", "auth", "app", "password", "profile", "diagnostics", "push", "pairing", "email", "thread", "files", "resources", "tickets", "wiki", "storeDocs", "db", "heartbeats", "activity", "agentIdentity", "room", "chat", "project"];
+export declare const APP_SURFACES: readonly ["me", "roomAgents", "guests", "auth", "app", "password", "profile", "diagnostics", "push", "pairing", "email", "thread", "files", "resources", "tickets", "wiki", "storeDocs", "db", "heartbeats", "activity", "agentIdentity", "room", "chat", "recordings", "project"];

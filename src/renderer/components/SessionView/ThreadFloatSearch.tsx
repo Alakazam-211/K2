@@ -247,7 +247,7 @@ export function ThreadFloatSearch({ bar }: { bar?: FloatButtonLook } = {}): JSX.
         aria-atomic="true"
         data-testid="thread-search-count"
         data-empty={status.text === 'No matches' ? '' : undefined}
-        className="thread-search-count flex-shrink-0 tabular-nums text-[var(--color-text-muted)] whitespace-nowrap"
+        className="thread-search-count flex-shrink-0 tabular-nums text-[var(--color-text-secondary)] whitespace-nowrap"
       >
         <span aria-hidden="true">{status.text}</span>
         <span className="sr-only">{status.spoken}</span>

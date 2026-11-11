@@ -2559,7 +2559,8 @@ html:is([data-style="glass"], [data-style="glass-classic"]) [data-thread-search]
 .thread-search-input::-webkit-search-cancel-button,
 .thread-search-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; display: none; }
 .thread-search-count { font-size: var(--type-xs); padding-inline: 2px 4px; min-width: 7ch; text-align: end; }
-.thread-search-count[data-empty] { color: var(--color-text-secondary); }
+/* The count reads in text-secondary (ThreadFloatSearch): text-muted sat at
+   4.33:1 on the field's fill in Glass light (#6e6e73 on #ededed). */
 [data-thread-searching].grid,
 [data-thread-searching] > .grid { grid-template-columns: minmax(0, 1fr); }
 :is([data-thread-searching].grid, [data-thread-searching] > .grid) > :not(.thread-float-scrim):not(:has([data-thread-search])) { display: none; }

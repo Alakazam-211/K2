@@ -81,6 +81,21 @@ describe('the Styles list', () => {
     }
   })
 
+  it('rows are tiles in Glass, and Terminal rows run the column’s width so names line up with the heading', () => {
+    useTerminalCharcoal()
+    render(<StylesSection />)
+    for (const r of rows()) {
+      expect(r.getAttribute('data-material')).toBe('tile')
+      // Full width: out past the list's 16px padding on both sides, and the
+      // same padding back inside (Glass puts its tile back on the heading's line).
+      expect(r.className).toContain('-mx-4')
+      expect(r.className).toContain('px-4')
+    }
+    // The selected row's accent bar is marked, so Glass can leave it out.
+    expect(rowNamed('Terminal').querySelector('[data-row-bar]')).not.toBeNull()
+    expect(rowNamed('Glass').querySelector('[data-row-bar]')).toBeNull()
+  })
+
   it('describes Glass in plain words', () => {
     useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'dark' })
     render(<StylesSection />)

@@ -396,6 +396,11 @@ export function StylesSection(): React.JSX.Element {
             How K2 looks on this computer. Point at a style to try it; click to use it.
           </p>
         </div>
+        {/* Terminal: full-width list rows, so the names line up with the
+            heading and the selected row's bar sits on the column's edge.
+            Glass: each style is a tile you press (Usage's totals), its edge
+            on the heading's line and the selected one edged in the accent
+            (styles/glass/overrides.css, [data-style-row]). */}
         <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-1 [scrollbar-gutter:stable]">
           {PICKER_STYLES.map((style) => {
             const isActive = style.id === styleId
@@ -416,13 +421,18 @@ export function StylesSection(): React.JSX.Element {
                 }}
                 onMouseLeave={endPreview}
                 data-k2-focus=""
+                data-material="tile"
                 className={cx(
-                  'relative w-full flex flex-col gap-2 px-3 py-2.5 text-left no-drag cursor-pointer transition-colors outline-none',
+                  'relative -mx-4 w-[calc(100%+2rem)] flex flex-col gap-2 px-4 py-2.5 text-left no-drag cursor-pointer transition-colors outline-none',
                   isSelected ? 'bg-[var(--color-accent)]/15' : 'hover:bg-[var(--color-wash-1)]',
                 )}
               >
                 {isSelected && (
-                  <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
+                  <span
+                    aria-hidden="true"
+                    data-row-bar=""
+                    className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]"
+                  />
                 )}
                 <span className="flex items-center gap-2 min-w-0">
                   <span data-style-name className="type-name text-[var(--color-text-primary)] truncate flex-1">

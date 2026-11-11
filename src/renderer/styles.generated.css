@@ -1040,6 +1040,22 @@
   box-shadow: none;
 }
 [data-style="glass"] [data-settings-card]:not([data-zen-root] *) { border-radius: var(--radius-box); }
+/* Settings → Styles: each style is a tile you press, like Usage's totals. Its
+   edge sits on the heading's line (Terminal's rows run the column's width);
+   the edge is the control edge (3:1 on the page), lighter on hover, and the
+   accent on the selected one. The tile's own fill replaces Terminal's accent
+   wash, and Terminal's bar is not drawn. (Doubled attribute to outrank Veil's
+   tile edge above.) */
+[data-style="glass"] [data-style-row][data-style-row][data-material]:not([data-zen-root] *) {
+  margin-inline: 0;
+  width: 100%;
+  padding-inline: 12px;
+  border-color: var(--color-control-edge);
+}
+[data-style="glass"] [data-style-row][data-material]:not(:last-child):not([data-zen-root] *) { margin-block-end: 8px; }
+[data-style="glass"] [data-style-row][data-style-row][data-material]:hover:not([data-zen-root] *) { border-color: var(--color-text-muted); }
+[data-style="glass"] [data-style-row][data-style-row][data-material][aria-current="true"]:not([data-zen-root] *) { border-color: var(--color-accent-text); }
+[data-style="glass"] [data-style-row] > [data-row-bar]:not([data-zen-root] *) { display: none; }
 /* The mode toggle is two circles, like the page tabs: the lit one is filled.
    It sits in the terminal's bar (0.46.11), so the circles are its own. */
 [data-style="glass"] [data-mode-toggle]:not([data-zen-root] *) { border-width: 0; border-radius: var(--radius-pill); gap: 4px; }

@@ -159,3 +159,26 @@ describe('Usage total tiles', () => {
     }
   })
 })
+
+describe('Settings → Styles list in Glass: the Usage tile, pressable', () => {
+  const sel = (tail: string): string => `[data-style="glass"] [data-style-row][data-style-row][data-material]${tail}:not([data-zen-root] *)`
+
+  it('edges the tile in the control edge, lighter on hover, the selected one in the readable accent, and drops Terminal’s bar', () => {
+    expect(rule(generated, sel(''))).toContain('border-color: var(--color-control-edge)')
+    expect(rule(generated, sel(':hover'))).toContain('border-color: var(--color-text-muted)')
+    expect(rule(generated, sel('[aria-current="true"]'))).toContain('border-color: var(--color-accent-text)')
+    expect(rule(generated, '[data-style="glass"] [data-style-row] > [data-row-bar]:not([data-zen-root] *)')).toContain('display: none')
+    // The selected rule comes after hover, so a hovered selected tile keeps the accent.
+    expect(generated.indexOf(sel('[aria-current="true"]'))).toBeGreaterThan(generated.indexOf(sel(':hover')))
+  })
+
+  it.each(LOOKS.filter(([s]) => s === 'glass'))('every edge holds 3:1 on the page and a card (%s %s)', (style, id) => {
+    const p = palette(style, id)
+    for (const ground of ['bg', 'bg-surface'] as const) {
+      const g = resolve(style, id, p[ground])
+      expect(contrast(resolve(style, id, p['control-edge']), g), `${id} edge on ${ground}`).toBeGreaterThanOrEqual(3)
+      expect(contrast(resolve(style, id, p['text-muted']), g), `${id} hover edge on ${ground}`).toBeGreaterThanOrEqual(3)
+      expect(contrast(accentText(style, id), g), `${id} selected edge on ${ground}`).toBeGreaterThanOrEqual(3)
+    }
+  })
+})

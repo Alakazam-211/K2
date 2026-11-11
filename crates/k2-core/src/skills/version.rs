@@ -79,10 +79,12 @@ pub const SKILL_END_MARKER: &str = "<!-- K2:MANAGED:END -->";
 /// `k2 tickets template` + `ask --html` and `k2 study ticket-brief`.
 /// Bumped to 13 (0.43.2, assignee policy): "Ask a human" teaches
 /// `--assign <user>` (a user on this server; required in a future update).
-pub const SKILL_VERSION_MANAGER: u32 = 13;
-pub const SKILL_VERSION_K2SO_AGENT: u32 = 13;
-pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 13;
-pub const SKILL_VERSION_TEMPLATE: u32 = 3;
+/// Bumped to 14 (template to 4) in 0.46.11: `k2 checkin` is retired, so
+/// the tiers teach `inbox`, `organization bulletin` / `update` and `done`.
+pub const SKILL_VERSION_MANAGER: u32 = 14;
+pub const SKILL_VERSION_K2SO_AGENT: u32 = 14;
+pub const SKILL_VERSION_CUSTOM_AGENT: u32 = 14;
+pub const SKILL_VERSION_TEMPLATE: u32 = 4;
 /// K2 Canonical Agent skill (canonical-agents feature). v1 = first ship.
 /// v2 = authored persona file is `.k2/agent/ROLE.md`.
 pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;

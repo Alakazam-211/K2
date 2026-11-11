@@ -105,7 +105,7 @@ import {
   SearchField,
   type OverflowMenuItem,
 } from '@/components/ui'
-import { SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
+import { SETTING_LIST_ROW_BAND, SETTING_ROW_LABEL, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { AccessSheet, DIALOG_FIELD, DIALOG_MUTED, Field } from './AccessDialogs'
 import {
   ConnectionRow,
@@ -178,6 +178,8 @@ type FormProblem = {
   field?: 'address' | 'name' | 'username' | 'password'
   /** The address didn't answer: offer to go on anyway. */
   anyway?: boolean
+  /** The address is already saved as this server: offer to use it. */
+  existing?: { id: string; label: string }
 }
 
 function emptyDraft(): DraftHost {
@@ -261,6 +263,16 @@ export function ConnectionsSection(): React.JSX.Element {
     isNew: boolean
   } | null>(null)
   const [serverQuery, setServerQuery] = useState('')
+  /** A saved server picked from the Add dialog: its row is banded and
+   *  brought into view for a moment. */
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!highlightId) return
+    const row = Array.from(document.querySelectorAll<HTMLElement>('[data-host-id]')).find((el) => el.dataset.hostId === highlightId)
+    row?.scrollIntoView?.({ block: 'nearest' })
+    const t = setTimeout(() => setHighlightId(null), 4000)
+    return () => clearTimeout(t)
+  }, [highlightId])
   // Bumped after a successful "Pair as federated peer" so FederationOverview
   // reloads peers without a full Settings remount.
   const [fedRefreshKey, setFedRefreshKey] = useState(0)
@@ -326,11 +338,21 @@ export function ConnectionsSection(): React.JSX.Element {
     const editKeepsKey =
       d.id !== null && hosts.some((h) => h.id === d.id && homeHostKey(h) === homeHostKey(parsed))
     if (dup && !editKeepsKey) {
-      setProblem({
-        what: `You’ve already saved this server as ${dup.label || dup.hostname}.`,
-        next: 'Use that one, or edit it from its row’s menu.',
-        field: 'address',
-      })
+      const label = dup.label || dup.hostname
+      setProblem(
+        d.id === null
+          ? {
+              what: `You’ve already saved this server as ${label}.`,
+              next: `Use ${label}, or change the address to add a different server.`,
+              field: 'address',
+              existing: { id: dup.id, label },
+            }
+          : {
+              what: `You’ve already saved this server as ${label}.`,
+              next: 'Change the address, or edit that one from its row’s menu.',
+              field: 'address',
+            },
+      )
       return null
     }
     return parsed
@@ -623,6 +645,7 @@ export function ConnectionsSection(): React.JSX.Element {
                 activePeerSideLabel={activeHostLabel}
                 onEdit={() => beginEdit(h)}
                 onRemove={() => forgetHost(h)}
+                highlight={highlightId === h.id}
                 onFederationPeersChanged={() => setFedRefreshKey((n) => n + 1)}
               />
             ))
@@ -686,6 +709,13 @@ export function ConnectionsSection(): React.JSX.Element {
           busy={busy}
           labelRef={labelRef}
           onContinue={(anyway) => void continueToSignIn(anyway)}
+          onUseExisting={(existing) => {
+            closeForm()
+            setServerQuery('')
+            setHighlightId(existing.id)
+            setNotice({ tone: 'info', text: `${existing.label} was already saved, so nothing new was added. It’s highlighted in the list.` })
+          }}
+          onChangeAddress={() => setProblem(null)}
           onBack={() => {
             setProblem(null)
             setDraft({ ...draft, step: 'address', password: '' })
@@ -714,6 +744,8 @@ function ServerFormDialog({
   busy,
   labelRef,
   onContinue,
+  onUseExisting,
+  onChangeAddress,
   onBack,
   onSave,
   onClose,
@@ -727,6 +759,8 @@ function ServerFormDialog({
   busy: string | null
   labelRef: React.RefObject<HTMLInputElement | null>
   onContinue: (anyway: boolean) => void
+  onUseExisting: (existing: { id: string; label: string }) => void
+  onChangeAddress: () => void
   onBack: () => void
   onSave: () => void
   onClose: () => void
@@ -855,8 +889,25 @@ function ServerFormDialog({
     </Field>
   )
 
+  const existing = step === 'address' ? problem?.existing : undefined
   const footer =
-    rotation !== null ? undefined : step === 'done' ? (
+    rotation !== null ? undefined : existing ? (
+      <>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            onChangeAddress()
+            labelRef.current?.focus()
+            labelRef.current?.select()
+          }}
+        >
+          Change address
+        </Button>
+        <Button variant="accent" autoFocus onClick={() => onUseExisting(existing)}>
+          Use {existing.label}
+        </Button>
+      </>
+    ) : step === 'done' ? (
       <Button variant="accent" autoFocus onClick={onClose}>
         Done
       </Button>
@@ -922,7 +973,7 @@ function ServerFormDialog({
             <p className={SETTING_ROW_LABEL}>
               {draft.voiceOnly ? `Added ${name}` : `Connected to ${name}`}
             </p>
-            <p className={`${DIALOG_MUTED} font-mono truncate`}>{address}</p>
+            <p className={`${DIALOG_MUTED} truncate`}>{address}</p>
             <p className={`${DIALOG_MUTED} mt-1`}>
               {draft.voiceOnly
                 ? voiceChatAddedText(name)
@@ -953,14 +1004,14 @@ function ServerFormDialog({
               <div className="flex items-center justify-between gap-4 min-w-0" data-testid="connections-form-server">
                 <div className="min-w-0">
                   <p className={`${SETTING_ROW_LABEL} truncate`}>{name}</p>
-                  <p className={`${DIALOG_MUTED} font-mono truncate`}>{address}</p>
+                  <p className={`${DIALOG_MUTED} truncate`}>{address}</p>
                 </div>
                 <button
                   type="button"
                   data-k2-focus=""
                   disabled={busy !== null}
                   onClick={onBack}
-                  className="type-hint text-[var(--color-accent-hover)] hover:underline cursor-pointer flex-shrink-0 disabled:opacity-60"
+                  className="type-hint text-[var(--color-accent-text)] hover:underline cursor-pointer flex-shrink-0 disabled:opacity-60"
                 >
                   Change
                 </button>
@@ -1261,6 +1312,7 @@ function HostTile({
   onEdit,
   onRemove,
   onFederationPeersChanged,
+  highlight = false,
 }: {
   host: ConnectHost
   isActive: boolean
@@ -1270,6 +1322,8 @@ function HostTile({
   onEdit: () => void
   onRemove: () => void
   onFederationPeersChanged?: () => void
+  /** Banded for a moment: picked from the Add dialog as already saved. */
+  highlight?: boolean
 }): React.JSX.Element {
   const label = host.label || host.hostname
   const peerSide = activePeerSideLabel === 'This computer' ? 'this computer' : activePeerSideLabel
@@ -1846,6 +1900,9 @@ function HostTile({
   return (
     <ConnectionRow
       data-server-row={label}
+      data-host-id={host.id}
+      data-highlight={highlight ? '' : undefined}
+      className={highlight ? SETTING_LIST_ROW_BAND : undefined}
       mark={<StatusDot tone={health.tone} />}
       // Line 1: the name and its address. Line 2: its state in words, always
       // in the same order (health, password, pairing, agents across servers,

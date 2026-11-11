@@ -20,6 +20,8 @@ vi.mock('@/lib/federation', async (orig) => ({
 
 import { FederationOverview } from './FederationOverview'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { useProjectsStore } from '@/stores/projects'
+import { useSettingsStore } from '@/stores/settings'
 
 const CONN = {
   remote: true,
@@ -81,6 +83,24 @@ describe('FederationOverview', () => {
     act(() => useConfirmDialogStore.getState().onResolve?.(true))
     await waitFor(() => expect(remove).toHaveBeenCalledWith('/srv/cortana', 'ai::rpm.k2.dev'))
     await waitFor(() => screen.getByText('Removed ai from Cortana.'))
+  })
+
+  it('a gone agent says where to add it again, with a link to that tab', async () => {
+    const open = vi.fn()
+    const prevOpen = useSettingsStore.getState().openSettings
+    useSettingsStore.setState({ openSettings: open } as never)
+    useProjectsStore.setState({ projects: [{ id: 'p-cortana', name: 'Cortana', path: '/srv/cortana' }] } as never)
+    try {
+      list.mockResolvedValue([{ ...CONN, gone: true }])
+      render(<FederationOverview />)
+      const note = await screen.findByText(/Add it again from Cortana’s Connections tab\./)
+      expect(note.textContent).toContain('Its workspace is no longer on rpm.k2.dev.')
+      fireEvent.click(screen.getByRole('button', { name: 'Open Cortana’s Connections tab' }))
+      expect(open).toHaveBeenCalledWith('projects', 'p-cortana', 'connections')
+    } finally {
+      useSettingsStore.setState({ openSettings: prevOpen } as never)
+      useProjectsStore.setState({ projects: [] } as never)
+    }
   })
 
   it('a Remove that fails says so on the row and keeps it', async () => {

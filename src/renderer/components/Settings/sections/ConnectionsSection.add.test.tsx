@@ -94,11 +94,27 @@ describe('Add a server', () => {
     expect(screen.getByLabelText('Address').getAttribute('aria-invalid')).toBe('true')
   })
 
-  it('an address already saved names the saved server', async () => {
+  it('an address already saved names the saved server and offers to use it', async () => {
     openAdd()
     type('Address', 'studio.example.com')
     await submit()
     expect(screen.getByTestId('connections-form-problem').textContent).toContain('You’ve already saved this server as Studio Mac.')
+    expect(screen.queryByRole('button', { name: 'Continue' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Use Studio Mac' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.querySelector('[data-server-row="Studio Mac"]')?.hasAttribute('data-highlight')).toBe(true)
+    expect(screen.getByTestId('connections-notice').textContent).toContain('Studio Mac was already saved')
+    expect(useConnectHostStore.getState().hosts).toHaveLength(1)
+  })
+
+  it('Change address goes back to the address with the problem cleared', async () => {
+    openAdd()
+    type('Address', 'studio.example.com')
+    await submit()
+    fireEvent.click(screen.getByRole('button', { name: 'Change address' }))
+    expect(screen.queryByTestId('connections-form-problem')).toBeNull()
+    expect(document.activeElement).toBe(screen.getByLabelText('Address'))
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeTruthy()
   })
 
   it('an address that doesn’t answer says so, and can go on anyway', async () => {

@@ -60,10 +60,10 @@ export function Facts({ children }: { children: React.ReactNode }): React.JSX.El
 }
 
 /** A server's address on its first line, beside its name: quieter, in the
- *  monospace that addresses use elsewhere in Settings. */
+ *  theme's own text font (Terminal's is already the code face). */
 export function ServerAddress({ lock, children }: { lock?: React.ReactNode; children: React.ReactNode }): React.JSX.Element {
   return (
-    <span className="type-hint font-mono text-[var(--color-text-secondary)] inline-flex items-center gap-1 min-w-0 ml-1">
+    <span className="type-hint text-[var(--color-text-secondary)] inline-flex items-center gap-1 min-w-0 ml-1">
       {lock}
       <span className="truncate">{children}</span>
     </span>

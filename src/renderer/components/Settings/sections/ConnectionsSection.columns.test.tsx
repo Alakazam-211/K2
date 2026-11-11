@@ -152,6 +152,7 @@ describe('Connected Servers layout', () => {
     const goneChip = gone.querySelector<HTMLElement>('[data-server-status="health"]')!
     expect(goneChip.textContent).toBe('Gone')
     expect(goneChip.dataset.tone).toBe('warn')
-    expect(gone.querySelector('[data-gone="true"]')?.textContent).toContain('no longer exists on rpm.k2.dev')
+    expect(gone.querySelector('[data-gone="true"]')?.textContent).toContain('Its workspace is no longer on rpm.k2.dev.')
+    expect(gone.querySelector('[data-gone="true"]')?.textContent).toContain('Add it again from Atlas’s Connections tab.')
   })
 })

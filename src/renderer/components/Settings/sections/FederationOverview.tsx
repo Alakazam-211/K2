@@ -10,15 +10,21 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { useProjectsStore } from '@/stores/projects'
+import { useSettingsStore } from '@/stores/settings'
 import {
   listAllRemoteConnections,
   removeRemoteConnection,
-  remoteConnectionGoneNote,
   type AggregatedRemoteConnection,
 } from '@/lib/federation'
 import { Button, Callout } from '@/components/ui'
 import { SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { ConnectionRow, Facts, ProblemNote, ServerAddress, StatusDot, StatusFact } from './ConnectionsParts'
+
+/** Why a gone agent stopped working, in plain words. */
+function goneLine(host: string): string {
+  return `Its workspace is no longer on ${host || 'that server'}.`
+}
 
 export function FederationOverview({
   /** Bump after pairing / connection edits so the list reloads. */
@@ -34,6 +40,12 @@ export function FederationOverview({
   const [loading, setLoading] = useState(true)
   const [conns, setConns] = useState<AggregatedRemoteConnection[]>([])
   const confirm = useConfirmDialogStore((s) => s.confirm)
+  const projects = useProjectsStore((s) => s.projects)
+  /** A workspace's Connections tab, where a gone agent is added again. */
+  const openConnectionsTab = (sourcePath: string): void => {
+    const id = projects.find((p) => p.path === sourcePath)?.id
+    if (id) useSettingsStore.getState().openSettings('projects', id, 'connections')
+  }
   const [removingKey, setRemovingKey] = useState<string | null>(null)
   /** The last Remove that failed, on its own row. */
   const [error, setError] = useState<{ key: string; message: string } | null>(null)
@@ -150,7 +162,7 @@ export function FederationOverview({
               meta={
                 <Facts>
                   {c.gone ? (
-                    <StatusFact kind="health" tone="warn" title={remoteConnectionGoneNote(c.host)}>
+                    <StatusFact kind="health" tone="warn" title={goneLine(c.host)}>
                       Gone
                     </StatusFact>
                   ) : (
@@ -176,9 +188,22 @@ export function FederationOverview({
               }
             >
               {c.gone && (
-                <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed" data-gone="true">
-                  {remoteConnectionGoneNote(c.host)}
-                </p>
+                <div className="type-hint text-[var(--color-text-secondary)] leading-relaxed" data-gone="true">
+                  <p>
+                    {goneLine(c.host)} Add it again from {c.sourceWorkspace}’s Connections tab.
+                  </p>
+                  {projects.some((p) => p.path === c.sourcePath) && (
+                    <button
+                      type="button"
+                      data-k2-focus=""
+                      data-open-connections={c.sourcePath}
+                      onClick={() => openConnectionsTab(c.sourcePath)}
+                      className="mt-1 type-hint text-[var(--color-accent-text)] hover:underline cursor-pointer"
+                    >
+                      Open {c.sourceWorkspace}’s Connections tab
+                    </button>
+                  )}
+                </div>
               )}
               {error?.key === key && (
                 <ProblemNote

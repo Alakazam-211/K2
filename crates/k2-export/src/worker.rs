@@ -1,6 +1,7 @@
 //! The worker process (`k2-export`): hello, read one header, run one
-//! `describe` or `export` through the kit's `ExportRegistry`, send exactly
-//! one final frame, exit. It never opens a file, a socket or a database:
+//! `describe` or `export` through the kit's `ExportRegistry`, or one
+//! `index` (a pack's structure indexer on hostile bytes), send exactly one
+//! final frame, exit. It never opens a file, a socket or a database:
 //! its input is stdin, its output stdout, its errors stderr (the host keeps
 //! a ring of them for its log, never for callers).
 //!
@@ -41,12 +42,23 @@ fn registry() -> ExportRegistry {
     r
 }
 
+/// The structure indexers this worker runs (the `index` op), by pack name.
+pub const INDEXERS: &[&str] = &[k2_mpc_psd::pack::PACK];
+
+fn indexer(pack: &str) -> Option<Box<dyn k2_mpc_base::session::BlobPack>> {
+    match pack {
+        p if p == k2_mpc_psd::pack::PACK => Some(Box::new(k2_mpc_psd::PsdPack)),
+        _ => None,
+    }
+}
+
 /// The hello payload.
 pub fn hello() -> serde_json::Value {
     serde_json::json!({
         "proto": proto::PROTO,
         "version": proto::VERSION,
         "exporters": exporters().iter().map(|e| e.id()).collect::<Vec<_>>(),
+        "indexers": INDEXERS,
         "hostile": cfg!(feature = "test-hostile"),
     })
 }
@@ -126,6 +138,33 @@ pub fn run(input: &mut dyn BufRead, output: &mut dyn Write, set_memory_cap: &dyn
             match proto::write_frame(output, proto::TAG_REPORT, body.as_bytes()) {
                 Ok(()) => proto::EXIT_OK,
                 Err(_) => proto::EXIT_ERROR,
+            }
+        }
+        Header::Index { pack, limits, index, size, .. } => {
+            set_memory_cap(limits.memory_bytes, error_frame(&ExportError::Limit("memory")));
+            let Some(p) = indexer(&pack) else {
+                return fail(output, &ExportError::Internal { exporter: "k2-export".into(), message: format!("no indexer for pack {pack:?}") });
+            };
+            let mut stdin = (&mut *input).take(size);
+            match k2_mpc_base::index::index_to_wire(p.as_ref(), &mut stdin, size, &index) {
+                Ok(wire) => {
+                    for chunk in wire.chunks(proto::MAX_FRAME) {
+                        if proto::write_frame(output, proto::TAG_DATA, chunk).is_err() {
+                            return proto::EXIT_ERROR;
+                        }
+                    }
+                    let body = serde_json::json!({ "bytes": wire.len() }).to_string();
+                    match proto::write_frame(output, proto::TAG_REPORT, body.as_bytes()) {
+                        Ok(()) => proto::EXIT_OK,
+                        Err(_) => proto::EXIT_ERROR,
+                    }
+                }
+                // The kit's own report (MPC-E714 for a draft it refuses).
+                Err(e) => {
+                    let _ = output.write_all(&proto::frame(proto::TAG_ERROR, e.report().to_json().as_bytes()));
+                    let _ = output.flush();
+                    proto::EXIT_ERROR
+                }
             }
         }
         Header::Export { kind, target, options, limits, name, size, .. } => {
@@ -279,6 +318,38 @@ mod tests {
         let r: serde_json::Value = serde_json::from_slice(r).expect("json");
         assert_eq!(r["targets"][0]["id"], serde_json::json!("as-is"));
         assert_eq!(r["targets"][0]["fidelity"], serde_json::json!("lossless"));
+    }
+
+    /// The `index` op runs the PSD pack's indexer on the bytes after the
+    /// header and sends the kit's wire result; a file that isn't one is the
+    /// pack's recorded refusal, still a result (never a crash).
+    #[test]
+    fn index_runs_the_psd_indexer_and_sends_the_kits_wire_result() {
+        let il = k2_mpc_base::index::IndexLimits::new(1000, 32, 1 << 20, 4096);
+        let body = b"not a layered image at all".to_vec();
+        let h = Header::Index { job: "j".into(), pack: "psd".into(), limits: limits(), index: il, size: body.len() as u64 };
+        let mut input = h.json().to_string().into_bytes();
+        input.push(b'\n');
+        input.extend_from_slice(&body);
+        let mut out = Vec::new();
+        assert_eq!(run(&mut &input[..], &mut out, &|_, _| {}), proto::EXIT_OK);
+        let f = frames(&out);
+        let wire: Vec<u8> = f.iter().filter_map(|x| if let Frame::Data(d) = x { Some(d.clone()) } else { None }).flatten().collect();
+        let Some(Frame::Report(r)) = f.last() else { panic!("no report: {f:?}") };
+        let r: serde_json::Value = serde_json::from_slice(r).expect("report json");
+        assert_eq!(r["bytes"], serde_json::json!(wire.len()));
+        let outcome = k2_mpc_base::index::IndexOutcome::from_wire(&wire, &il).expect("the kit reads its own wire back");
+        assert!(matches!(outcome, k2_mpc_base::index::IndexOutcome::Refused(_)), "not a PSD: the pack's refusal");
+
+        let h = Header::Index { job: "j".into(), pack: "nope".into(), limits: limits(), index: il, size: 0 };
+        let mut input = h.json().to_string().into_bytes();
+        input.push(b'\n');
+        let mut out = Vec::new();
+        assert_eq!(run(&mut &input[..], &mut out, &|_, _| {}), proto::EXIT_ERROR);
+        let f = frames(&out);
+        let Some(Frame::Error(e)) = f.last() else { panic!("no error frame: {f:?}") };
+        let e: serde_json::Value = serde_json::from_slice(e).expect("json");
+        assert_eq!(e["id"], serde_json::json!("MPC-E007"), "{e}");
     }
 
     #[test]

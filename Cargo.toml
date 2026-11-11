@@ -66,6 +66,7 @@ exclude = [
     "vendor/k2-mpc-base",
     "vendor/k2-mpc-board",
     "vendor/k2-mpc-markdown",
+    "vendor/k2-mpc-psd",
     "vendor/k2-mpc-text",
 ]
 

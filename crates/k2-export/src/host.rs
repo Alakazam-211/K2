@@ -125,6 +125,15 @@ pub fn describe(s: &Spawn, kind: &Kind, bounds: Bounds) -> Result<(Hello, Vec<se
     Ok((done.hello, targets))
 }
 
+/// What follows the header on the worker's stdin.
+pub enum Input<'a> {
+    /// A file's first `size` bytes.
+    File(&'a Path, u64),
+    /// A stream's first `size` bytes (a verified blob stream: the caller
+    /// reads it to its end afterwards, so the check isn't skipped).
+    Reader(&'a mut (dyn Read + Send), u64),
+}
+
 /// Run one header: the input file's first `size` bytes follow it on stdin
 /// (`input`), the `D` bytes go to `out`. `cancel` is polled by the
 /// watchdog; `progress` gets each `P` frame.
@@ -132,6 +141,19 @@ pub fn run(
     s: &Spawn,
     header: &Header,
     input: Option<(&Path, u64)>,
+    bounds: Bounds,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(u64, u64),
+    out: &mut dyn Write,
+) -> Result<Done, Failed> {
+    run_input(s, header, input.map(|(p, n)| Input::File(p, n)), bounds, cancel, progress, out)
+}
+
+/// [`run`] with any [`Input`].
+pub fn run_input(
+    s: &Spawn,
+    header: &Header,
+    input: Option<Input<'_>>,
     bounds: Bounds,
     cancel: &AtomicBool,
     progress: &dyn Fn(u64, u64),
@@ -169,16 +191,21 @@ pub fn run(
         // stdin: the header, then exactly `size` input bytes, then EOF. A
         // worker that dies first makes this fail (EPIPE); nothing to do.
         if let Some(mut w) = stdin {
-            let input = input.map(|(p, n)| (p.to_path_buf(), n));
             let line = header_line.clone();
             scope.spawn(move || {
                 if w.write_all(&line).is_err() {
                     return;
                 }
-                if let Some((path, size)) = input {
-                    if let Ok(f) = std::fs::File::open(&path) {
-                        let _ = io::copy(&mut f.take(size), &mut w);
+                match input {
+                    Some(Input::File(path, size)) => {
+                        if let Ok(f) = std::fs::File::open(path) {
+                            let _ = io::copy(&mut f.take(size), &mut w);
+                        }
                     }
+                    Some(Input::Reader(r, size)) => {
+                        let _ = io::copy(&mut r.take(size), &mut w);
+                    }
+                    None => {}
                 }
                 drop(w);
             });

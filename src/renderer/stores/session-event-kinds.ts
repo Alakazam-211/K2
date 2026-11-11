@@ -136,6 +136,13 @@ export const SESSION_EVENT_ROUTES = {
   fs_changed: { class: 'app', app: true, carried: true },
   // A .k5board was saved through K2: an open Board tab re-reads it (read?ifHash).
   board_file_changed: { class: 'app', app: true },
+  // A blob doc's structure index or comments changed (a PSD/PSB file's
+  // layers indexed, a comment op, an anchor's state, a node claim). The
+  // layer panel and comment pins will subscribe; nothing listens yet.
+  doc_structure_changed: {
+    class: 'app',
+    ignored: 'No client surface yet: the layer panel and comment pins are still to be built.',
+  },
   // Changes tab v1 (prd-changes-tab-v1): the Changes tab refetches its
   // snapshot on it. Carried, so a pinned room's tab stays live too.
   git_changed: { class: 'app', app: true, carried: true },

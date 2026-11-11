@@ -20,6 +20,9 @@
 //! | [`export_worker`] | the `k2-export` worker: which binary, its hello, limits, slots |
 //! | [`live`] | `WS /cli/docs/live`: the Live view's socket (plan L2), one person's tab joined to the kit's session |
 //! | [`live_wire`] | that socket's JSON frames |
+//! | [`blob_packs`] | which pack a tier-0 file opens with (PSD/PSB files: the PSD pack, with a layer index) and its verbs |
+//! | [`indexer`] | the structure indexer (jobs in the `k2-export` worker) and the blob-doc change events |
+//! | [`annotations`] | comments: mention notes, the owner's purge and participant erasure |
 //!
 //! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
 //! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
@@ -35,12 +38,17 @@
 //! and, when a workspace is removed, destroys its blob key with its docs
 //! (`purge_space_key`).
 
+pub mod annotations;
+#[cfg(test)]
+mod blob_flow_tests;
+pub mod blob_packs;
 pub mod caller;
 pub mod claims;
 pub mod cores;
 pub mod export;
 pub mod export_worker;
 pub mod host;
+pub mod indexer;
 pub mod live;
 pub mod live_wire;
 pub mod routes;
@@ -56,7 +64,7 @@ use std::time::Duration;
 
 use k2_core::log_debug;
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
-use k2_mpc_base::session::{AnyFile, BlobSession, Config, PoolStats, Session, SessionError, SessionManager};
+use k2_mpc_base::session::{BlobSession, Config, PoolStats, Session, SessionError, SessionManager};
 use k2_mpc_base::store::{DocKey, DocStore};
 
 /// The vendored kit writes docs back to their files (its C4, base
@@ -365,10 +373,16 @@ impl Runtime {
     }
 
     /// Tier 0: the blob doc for any other file at `abs` inside `root`
-    /// (`open_blob_file`: import, or reconcile a stored doc with the file).
+    /// (`open_blob_file`: import, or reconcile a stored doc with the file),
+    /// with its file type's pack ([`blob_packs::pack_for`]: PSD/PSB files
+    /// get the PSD pack and its layer index). A version with no index yet
+    /// is queued for the indexer.
     pub fn open_blob(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<BlobSession>, SessionError> {
-        let s = self.manager.open_blob_file(Arc::new(AnyFile), key, abs, root)?;
+        let s = self.manager.open_blob_file(blob_packs::pack_for(&key.path), key, abs, root)?;
         self.note_opened(key, abs);
+        if blob_packs::indexes(&key.path) {
+            indexer::on_open(&s, key);
+        }
         Ok(s)
     }
 
@@ -576,13 +590,26 @@ impl Runtime {
         let Some(blobs) = self.blobs() else { return true };
         match blobs.purge_space_key(space) {
             Ok(r) => {
-                if r.key_destroyed || r.blobs_removed > 0 {
+                // Index rows hold layer names and text: when some went and
+                // the kit's rewrite failed, their bytes stay in freed pages.
+                // Try the rewrite once more and say what happened.
+                let mut rewritten = r.store_rewritten;
+                if r.index_rows_removed > 0 && !rewritten {
+                    match self.store().map(|st| st.rewrite_file()) {
+                        Some(Ok(_)) => rewritten = true,
+                        Some(Err(e)) => log_debug!(
+                            "[docs] WARN: {space}'s index rows were removed but the store file wasn't rewritten ({e}); their bytes stay in freed pages until a later rewrite"
+                        ),
+                        None => {}
+                    }
+                }
+                if r.key_destroyed || r.blobs_removed > 0 || r.index_rows_removed > 0 {
                     host::audit(
                         host::AUDIT_SPACE_KEY_PURGED,
                         "k2",
                         format!(
-                            "space={space} key_destroyed={} blobs={} bytes={} reason=workspace_removed",
-                            r.key_destroyed, r.blobs_removed, r.bytes_removed
+                            "space={space} key_destroyed={} blobs={} bytes={} index_rows={} store_rewritten={rewritten} reason=workspace_removed",
+                            r.key_destroyed, r.blobs_removed, r.bytes_removed, r.index_rows_removed
                         ),
                     );
                 }

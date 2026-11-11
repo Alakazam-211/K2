@@ -941,10 +941,15 @@ pub const ROUTES: &[Route] = &[
     post("/cli/docs/approve", Member),
     get("/cli/docs/blame", Member),
     post("/cli/docs/claim", Member),
+    // Comments on any-file docs: the owner's purge and participant erasure
+    // (the handler and the kit both ask for the doc owner: the box owner
+    // or an Admin login, never an agent).
+    post("/cli/docs/comments/purge", Admin),
     get("/cli/docs/cores", Member),
     post("/cli/docs/cursor", Member),
     get("/cli/docs/diff", Member),
     post("/cli/docs/edit", Member),
+    post("/cli/docs/erase", Admin),
     post("/cli/docs/export", Member),
     post("/cli/docs/export/cancel", Member),
     get("/cli/docs/export/fetch", Member),

@@ -52444,13 +52444,34 @@ ANY-FILE DOCS (tier 0: images, PDFs, office files, binaries; refused text)
   .k2/conflicts/, "photo (conflict Sam 2026-10-27 093000).png". Leases end
   when a daemon restarts (renew: exit 2, take it again).
 
+PSD/PSB FILES (layers, claims and comments)
+  K2 reads PSD and PSB files (.psd, .psb) into an index of their layers
+  after each save: a tree with a key for each layer (@lyid:12 from the
+  file, or @k:r3.1). They are any-file docs.
+  k2 doc outline art.psd               every layer, #N in reading order
+  k2 doc node "Logo" art.psd           one layer in full (a key, #N or a name)
+  k2 doc layer diff 3 5 art.psd        what changed between versions 3 and 5
+  k2 doc layer blame art.psd           who made each layer as it is
+  k2 doc claim --node @lyid:12 --note "recolour" art.psd   advisory; exit 5 if
+                                       someone else claims that layer
+  k2 doc comment --node @lyid:12 --body "too dark" art.psd
+  k2 doc comments art.psd · reply ann-3 --body "..." · resolve ann-3
+  You never write a .psd or .psb (agent_write_refused, exit 2). Save your
+  version as a new file and comment on this one:
+    k2 doc comment --doc --body "brighter logo, see the file" --proposal art.v2.psd art.psd
+  Reads page: a page ending "truncated: true" gives a cursor for --cursor.
+  A version not read yet: exit 1, index_pending; try again shortly.
+  Comments work on every any-file doc (--doc pins one to the whole file).
+  Moving a pin (reanchor) is a proposal a person confirms.
+
 RIGHTS
   Your own workspace: read, edit and history. Another workspace: it must
   be connected to yours (k2 connections) AND a person must share the file
   or a folder with yours. A share is read-only unless it grants write;
-  history (k2 doc log) is its own grant. Refused: not_connected,
+  history (k2 doc log) is its own grant, and so is commenting on a
+  read-only share (edit includes it). Refused: not_connected,
   doc_not_shared (ask with the permission card the error names),
-  doc_forbidden (read-only), history_forbidden.
+  doc_forbidden (read-only), history_forbidden, forbidden_comment.
   Secrets, the vault folder, git's own folder, files K2 writes itself
   (AGENTS.md, K2's skills) and K2's other .k2/ configuration are never live
   docs (exit 4, declined); nor is any file over 32 MiB.
@@ -96550,6 +96571,8 @@ Export (a copy of the doc, now or at a version, as a new file; any doc):
                                       taken name gets " (2)", " (3)" … before the
                                       extension (notes.v42 (2).md, a.tar.v42 (2).gz);
                                       nothing is overwritten.
+  k2 doc export --to T --node ADDR <f>   one layer of a PSD/PSB file (no exporter
+                                      writes one yet: export_needs_renderer, exit 4)
   k2 doc export --to T --version V <f>   version V: the version id, the FIRST
                                       column of k2 doc versions (needs the history
                                       right). The name carries that version's doc
@@ -96578,7 +96601,8 @@ Export (a copy of the doc, now or at a version, as a new file; any doc):
   and K2's own files aren't docs (exit 4).
 Any-file docs (tier 0: files that aren't text, and refused text): presence, a
 lease, versions and restore, no live merging. The text verbs above (grep, sed,
-undo, claim …) refuse with not_a_text_doc and say why the file isn't live text.
+undo, claim --lines …) refuse with not_a_text_doc and say why the file isn't
+live text.
   k2 doc cat <f> (its bytes; pipe them) · who|open|leave|status|flush|watch <f>
   k2 doc view --region "page 3" <f>   say what you're looking at
   k2 doc lease [--ttl 5m] <f>         take the lease (exit 5 while someone else has it)
@@ -96594,6 +96618,58 @@ undo, claim …) refuse with not_a_text_doc and say why the file isn't live text
   A program that saves the file while someone holds the lease keeps both:
   its save is current, the old content a version and a "(conflict …)" copy
   under .k2/conflicts/ (status lists them). Files over 32 MiB are declined.
+PSD/PSB files (.psd, .psb): K2 reads PSD and PSB files into an index of
+their layers, a tree with a key for each layer (@lyid:12, from the file, or
+@k:r3.1). Read it, claim layers and comment on them. Agents never write
+these files (agent_write_refused, exit 2): save your version as a new file
+and comment on this one with --proposal <new file>.
+  k2 doc outline [--depth N] [--kind K] [--under ADDR] [--tree] [--version V] <f>
+                                      every layer in reading order, each with
+                                      its #N (no text or pixels)
+  k2 doc node ADDR... [--depth N] [--text] [--whole] [--version V] <f>
+                                      layers in full; ADDR is a key, #N or a
+                                      name (a name two layers share: exit 2,
+                                      ambiguous_address, with each one's key);
+                                      one that names nothing: exit 4, the rest
+                                      still listed
+  k2 doc layer list|show ... <f>      the same as outline and node
+  k2 doc layer diff V1 [V2] <f>       what changed, layer by layer (history;
+                                      V1, V2: version numbers from k2 doc
+                                      versions; no V2: the current one)
+  k2 doc layer blame [--version V] <f>   who made each layer as it is (history)
+  Reads come in pages (--read-budget BYTES, at least 16384): a page that ends
+  "truncated: true" names a cursor; pass it with --cursor C and the same
+  arguments for the next one (another version: stale_cursor, exit 1).
+  --json prints the page as JSON. Layers are read in the background after
+  each save; until then a read waits a few seconds, then exits 1
+  (index_pending): try again shortly.
+  k2 doc claim --node ADDR... [--ttl 2m] [--note "why"] <f>   "I'm working on
+                                      these layers": advisory, it never blocks
+                                      a write; someone else's claim on one of
+                                      them: exit 5
+  k2 doc claim --renew|--release [--id claim-N] <f>   (a .psd or .psb file;
+                                      no --id: every claim of yours)
+Comments on any-file docs (pinned to the whole file, or on PSD/PSB files to
+a layer). They need edit, or a share with --comment; they make no version.
+  k2 doc comment --doc|--node ADDR --body "text" [--mention P]... [--proposal FILE]... <f>
+                                      P: me, a login, a workspace or a pid
+  k2 doc reply ann-N --body "text" [--mention P]... <f>
+  k2 doc resolve ann-N [--reopen] <f>
+  k2 doc comment --delete ann-N [--n N] <f>   its author, the person it was
+                                      for, or an owner
+  k2 doc comments [--open|--resolved] [--on KEY] [--since SEQ] [--after ann-N] [--limit N] <f>
+                                      each thread with its pin's state:
+                                      attached, hint-stale, suspect, hidden or
+                                      orphaned; --since SEQ: what changed
+                                      after SEQ (pass the last page's head)
+  k2 doc comments --log [ann-N] [--since SEQ] <f>   what happened to the
+                                      threads (history)
+  k2 doc reanchor ann-N --doc|--node ADDR <f>   move a pin; an agent's move is
+                                      a proposal a person confirms by running
+                                      the same reanchor
+  The box owner or an Admin only (never agents):
+  k2 doc purge-comments --thread ann-N [--n N] | --text "..." | --all <f>
+  k2 doc erase-participant --participant P --pseudonym NAME <f>
 Board files (.k5board, Beta): k2 doc takes k2 board's verbs on them, with the
 same answers, exits and bytes: k2 doc new plan.k5board, add sticky --text hi
 plan.k5board, update s-1 --rev sha256-… --text new, list, read, meta, merge,
@@ -96604,7 +96680,8 @@ bytes are only written through its format's codec, so every other doc verb
 (cat, write, restore, versions …) refuses a .k5board: board_file, exit 4 (not
 a doc).
 Sharing with another workspace (people only):
-  k2 doc share <file-or-folder> --with <ws> [--write] [--history] -w <ws>
+  k2 doc share <file-or-folder> --with <ws> [--write] [--history] [--comment] -w <ws>
+                                      (--comment: a read-only share may comment)
   k2 doc unshare <file-or-folder> --with <ws> -w <ws> · shares [-w <ws>]
 
 Flags (any verb): -w/--workspace <ws> (a relative path is then inside it;
@@ -96626,6 +96703,7 @@ or (agents) a claim on those lines; the error names who and for how long ·
 6 the docs store failed ·
 8 too old (a revert past the window: restore a version instead; a write
 base no longer kept: read again). See `k2 study docs`.
+Errors from the docs kit also name its id (MPC-E…) and what to do next.
 EOF
 }
 
@@ -96999,6 +97077,125 @@ _doc_tool() {
     _doc_print_tool
 }
 
+# Any-file doc verbs the docs kit runs itself (BlobSession::run_tool):
+# comments on any file; on PSD/PSB files the layer index and claims by
+# layer. The doc is the last argument that isn't a flag's value; K2's own
+# flags (-w, --on-behalf-of, --host, --token, --fence, --no-fence,
+# --read-budget) are K2's, and everything else goes to the kit as typed,
+# in order (--json and --text included: the kit prints the JSON page).
+_DOC_KIT_VALUE_FLAGS=" --body --note --hint --mention --proposal --cursor --kind --under --version --depth --ttl --id --node --on --since --after --limit --n "
+_doc_blob_tool() {
+    local verb="$1"; shift
+    local -a k2args=() toks=()
+    local last=-1 budget=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -w|--workspace|--on-behalf-of|--host|--token)
+                [ $# -ge 2 ] || _doc_die usage "$1 needs a value"
+                k2args+=("$1" "$2"); shift 2 ;;
+            --workspace=*|--on-behalf-of=*|--host=*|--fence|--no-fence) k2args+=("$1"); shift ;;
+            --read-budget)
+                [ $# -ge 2 ] || _doc_die usage "--read-budget needs a number of bytes"
+                budget="$2"; shift 2 ;;
+            --read-budget=*) budget="${1#*=}"; shift ;;
+            --) shift
+                while [ $# -gt 0 ]; do toks+=("$1"); last=$((${#toks[@]} - 1)); shift; done ;;
+            -*)
+                if [[ "$_DOC_KIT_VALUE_FLAGS" == *" $1 "* ]]; then
+                    [ $# -ge 2 ] || _doc_die usage "$1 needs a value (k2 doc --help)"
+                    toks+=("$1" "$2"); shift 2
+                else
+                    toks+=("$1"); shift
+                fi ;;
+            *) toks+=("$1"); last=$((${#toks[@]} - 1)); shift ;;
+        esac
+    done
+    [ "$last" -ge 0 ] || _doc_die usage "name the doc last: k2 doc $verb [flags] <file>"
+    case "$budget" in *[!0-9]*) _doc_die usage "--read-budget takes a number of bytes (at least 16384)" ;; esac
+    local path="${toks[$last]}"
+    unset 'toks[last]'
+    _doc_parse "${k2args[@]}"
+    path="$(_doc_path "$path")"
+    local argv
+    argv="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$verb" "${toks[@]}")"
+    _doc_tmp
+    if [ -n "$budget" ]; then
+        _doc_body "$path" argv "$argv" readBudget "@int:$budget" >"$_DOC_TMPD/tool.json" </dev/null
+    else
+        _doc_body "$path" argv "$argv" >"$_DOC_TMPD/tool.json" </dev/null
+    fi
+    _doc_call_file POST /cli/docs/tool "" "$_DOC_TMPD/tool.json"
+    _doc_print_tool
+}
+
+# `claim` on a .psd/.psb file, or with --node: a claim by layer through the
+# kit (`--ttl` as a duration, sent as milliseconds).
+_doc_node_claim() {
+    local -a args=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ttl|--ttl=*)
+                local ttl
+                if [ "$1" = --ttl ]; then ttl="${2:-}"; shift 2; else ttl="${1#*=}"; shift; fi
+                ttl="$(python3 -c '
+import re, sys
+m = re.fullmatch(r"(\d+)(ms|s|m)?", sys.argv[1].strip())
+if not m or int(m.group(1)) == 0:
+    sys.exit(1)
+print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
+' "$ttl")" || _doc_die usage "--ttl takes a duration: 30s, 5m, or milliseconds"
+                args+=(--ttl "$ttl") ;;
+            *) args+=("$1"); shift ;;
+        esac
+    done
+    _doc_blob_tool claim "${args[@]}"
+}
+
+# The owner's comment purge and participant erasure on an any-file doc.
+_doc_owner_purge() {
+    local verb="$1"; shift
+    local thread="" n="" text="" all=0 who="" pseudo=""
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --thread) thread="${2:-}"; shift 2 ;;
+            --n) n="${2:-}"; shift 2 ;;
+            --text) text="${2:-}"; shift 2 ;;
+            --all) all=1; shift ;;
+            --participant) who="${2:-}"; shift 2 ;;
+            --pseudonym) pseudo="${2:-}"; shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    case "$n" in *[!0-9]*) _doc_die usage "--n takes a comment number" ;; esac
+    _doc_parse "${rest[@]}"
+    _doc_one_path "$verb"; local path="$_DOC_PATH"
+    local -a kv=()
+    if [ "$verb" = purge-comments ]; then
+        [ -n "$thread" ] && kv+=(thread "$thread")
+        [ -n "$n" ] && kv+=(n "@int:$n")
+        [ -n "$text" ] && kv+=(text "$text")
+        [ "$all" = 1 ] && kv+=(all "@true")
+        [ ${#kv[@]} -gt 0 ] || _doc_die usage "k2 doc purge-comments --thread ann-N [--n N] | --text \"...\" | --all <file>"
+        _doc_call POST /cli/docs/comments/purge "$(_doc_body "$path" "${kv[@]}" </dev/null)"
+    else
+        [ -n "$who" ] && [ -n "$pseudo" ] || _doc_die usage "k2 doc erase-participant --participant P --pseudonym NAME <file>"
+        _doc_call POST /cli/docs/erase "$(_doc_body "$path" participant "$who" pseudonym "$pseudo" </dev/null)"
+    fi
+    _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+c = v.get("counts") or {}
+if v.get("erased"):
+    print("erased %s as %s from %s (%s attributions, %s comments cleared)" % (v["erased"], v.get("pseudonym"), v["doc"]["path"], c.get("attributions", 0), c.get("comments", 0)))
+else:
+    print("purged %s comment(s) and %s pin copies from %s" % (c.get("comments", 0), c.get("anchors", 0), v["doc"]["path"]))
+print("store file rewritten" if v.get("storeRewritten") else "the store file was NOT rewritten: purged bytes stay in freed pages until the next rewrite", file=sys.stderr)
+for n in v.get("notReached") or []:
+    print("not reached: %s%s" % (n.get("describe"), (" (" + n["k2"] + ")") if n.get("k2") else ""), file=sys.stderr)
+'
+}
+
 # One positional (the doc) for the plain verbs → _DOC_PATH (called in the
 # main shell, so a usage error exits the CLI).
 _doc_one_path() {
@@ -97327,11 +97524,13 @@ _doc_history_diff() {
 # an --out outside every workspace (or any --host call) writes the bytes
 # itself from `export/fetch`, never over an existing file.
 _doc_export() {
-    local to="" ver="" out="" list=0
+    local to="" ver="" out="" list=0 node=""
     local -a opts=() rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --list) list=1; shift ;;
+            --node) [ $# -ge 2 ] || _doc_die usage "--node needs a layer address (k2 doc outline <file>)"; node="$2"; shift 2 ;;
+            --node=*) node="${1#*=}"; shift ;;
             --to) [ $# -ge 2 ] || _doc_die usage "--to needs a target (k2 doc export --list <file> shows them)"; to="$2"; shift 2 ;;
             --to=*) to="${1#*=}"; shift ;;
             --version) [ $# -ge 2 ] || _doc_die usage "--version needs a version id (k2 doc versions <file>)"; ver="$2"; shift 2 ;;
@@ -97392,9 +97591,9 @@ if not w.get("available"):
         fi
     fi
     _doc_tmp
-    python3 - "$_DOC_WS" "$_DOC_OB" "$path" "$to" "$ver" "$send_out" "$([ "$remote" = 1 ] && [ -n "$out" ] && echo 1 || echo 0)" "${opts[@]}" >"$_DOC_TMPD/export.json" <<'PY' || _doc_die usage "couldn't build the request"
+    python3 - "$_DOC_WS" "$_DOC_OB" "$path" "$to" "$ver" "$send_out" "$([ "$remote" = 1 ] && [ -n "$out" ] && echo 1 || echo 0)" "$node" "${opts[@]}" >"$_DOC_TMPD/export.json" <<'PY' || _doc_die usage "couldn't build the request"
 import json, sys
-ws, ob, path, to, ver, out, fetch, opts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7] == "1", sys.argv[8:]
+ws, ob, path, to, ver, out, fetch, node, opts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7] == "1", sys.argv[8], sys.argv[9:]
 # A short first wait: the poll loop (where Ctrl-C / SIGTERM cancel) takes over.
 d = {"path": path, "target": to, "options": opts, "waitMs": 2000}
 if ws:
@@ -97407,6 +97606,8 @@ if out:
     d["out"] = out
 if fetch:
     d["fetch"] = True
+if node:
+    d["node"] = node
 print(json.dumps(d))
 PY
     _doc_call_file POST /cli/docs/export "" "$_DOC_TMPD/export.json"
@@ -97750,6 +97951,12 @@ cmd_doc() {
             fi ;;
         cat|head|wc|grep|sed|patch|apply|append|insert|replace|delete)
             _doc_tool "$verb" "$@" ;;
+        layer|outline|node|comment|reply|resolve|comments|reanchor)
+            # Any-file docs, through the docs kit: comments (any file);
+            # PSD/PSB files' layer index (k2 doc --help, "PSD/PSB files").
+            _doc_blob_tool "$verb" "$@" ;;
+        purge-comments|erase-participant)
+            _doc_owner_purge "$verb" "$@" ;;
         view)
             # `view --region "page 3"`: what you look at in an any-file doc
             # (tier 0); otherwise the text tool (`view --lines a,b`).
@@ -97821,6 +98028,14 @@ sys.exit(int(v.get("exit", 0)))
 '
             exit $? ;;
         claim)
+            # A .psd/.psb file (or --node): a claim by layer, through the kit.
+            local _a _node=0
+            for _a in "$@"; do case "$_a" in --node|--node=*) _node=1 ;; esac; done
+            case "${@: -1}" in *.[pP][sS][dDbB]) _node=1 ;; esac
+            if [ "$_node" = 1 ]; then
+                _doc_node_claim "$@"
+                return $?
+            fi
             # Agent presence: "I'm working on lines a-b" (expires; your own
             # edit there ends it unless --hold). Others' agents' edits into
             # it bounce (exit 5) and wait in line; people are never held.
@@ -98160,7 +98375,7 @@ if v.get("hint"):
     print(v["hint"], file=sys.stderr)
 ' ;;
         share|unshare)
-            local with="" write=@false history=@false
+            local with="" write=@false history=@false comment=@false
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -98168,6 +98383,7 @@ if v.get("hint"):
                     --with=*) with="${1#*=}"; shift ;;
                     --write) write=@true; shift ;;
                     --history) history=@true; shift ;;
+                    --comment) comment=@true; shift ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -98177,7 +98393,7 @@ if v.get("hint"):
             [ ${#_DOC_ARGS[@]} -eq 1 ] || _doc_die usage "k2 doc $verb <file-or-folder> --with <workspace> -w <ws>"
             local rel="${_DOC_ARGS[0]}"
             if [ "$verb" = share ]; then
-                _doc_call POST /cli/docs/share "$(_doc_body "$rel" with "$with" write "$write" history "$history")"
+                _doc_call POST /cli/docs/share "$(_doc_body "$rel" with "$with" write "$write" history "$history" comment "$comment")"
             else
                 _doc_call POST /cli/docs/unshare "$(_doc_body "$rel" with "$with")"
             fi
@@ -98185,7 +98401,7 @@ if v.get("hint"):
 import json, sys
 v = json.load(sys.stdin)
 s = v.get("share") or v.get("removed") or {}
-grants = ["read"] + [g for g in ("write", "history") if s.get(g)]
+grants = ["read"] + [g for g in ("write", "history", "comment") if s.get(g)]
 what = "shared" if v.get("share") else "unshared"
 print("%s %s (%s) · %s" % (what, s.get("path") or ".", "folder" if s.get("folder") else "file", ", ".join(grants) if what == "shared" else ""))
 ' ;;
@@ -98206,7 +98422,7 @@ rows = json.load(sys.stdin).get("shares") or []
 if not rows:
     print("No shares.")
 for s in rows:
-    grants = ["read"] + [g for g in ("write", "history") if s.get(g)]
+    grants = ["read"] + [g for g in ("write", "history", "comment") if s.get(g)]
     print("%s:%s%s -> %s  (%s)" % (s.get("owner"), s.get("path") or ".", "/" if s.get("folder") else "", s.get("sharee"), ", ".join(grants)))
 ' ;;
         blame)

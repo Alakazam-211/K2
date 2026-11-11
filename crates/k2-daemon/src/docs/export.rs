@@ -31,6 +31,15 @@
 //! every workspace the job keeps the bytes and the CLI writes them itself
 //! (`fetch`). `fetch: true` (every `--host` call) does the same.
 //!
+//! **One node** (`node`: an address in the exported version, on a file
+//! whose pack keeps a structure index: PSD/PSB files). K2 resolves it with
+//! `index_nodes` at that version and passes the node's key as the kit's
+//! `node` option (`export::NODE_OPTION`), so an exporter never sees a name
+//! or a position. A target that writes no single node (as-is, and every
+//! target today: the PSD pack has no raster exporter yet) answers
+//! `MPC-E716 export_needs_renderer` (exit 4); so does an exporter that
+//! can't write that node's kind.
+//!
 //! **Audit:** one `doc-exported` line per export, refusals and failures
 //! too, metadata only.
 
@@ -98,7 +107,7 @@ fn kit_status(id: &str) -> &'static str {
         "MPC-E001" | "MPC-E002" => "400 Bad Request",
         "MPC-E003" => "413 Payload Too Large",
         "MPC-E004" => "409 Conflict",
-        "MPC-E005" => "422 Unprocessable Entity",
+        "MPC-E005" | "MPC-E716" => "422 Unprocessable Entity",
         _ => "500 Internal Server Error",
     }
 }
@@ -773,15 +782,30 @@ pub(super) fn doc_route(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliRe
             &target_id,
         );
     }
-    let options = match parse_options(c.input) {
+    let mut options = match parse_options(c.input) {
         Ok(o) => o,
         Err(r) => return audit_refusal(r, version, &target_id),
     };
+    if options.iter().any(|(k, _)| k == k2_mpc_base::export::NODE_OPTION.name) {
+        return audit_refusal(routes::bad("name the node with node=<address> (K2 passes its key), not --option node=…"), version, &target_id);
+    }
     let kind = doc.kind(c.target);
     let (exporter, target_ext, in_worker) = match pick_target(&kind, &target_id, &options) {
         Ok(x) => x,
         Err(r) => return audit_refusal(r, version, &target_id),
     };
+    // One node (`--node`): its key at the exported version, as the kit's
+    // node option, for a target that writes one.
+    if let Some(addr) = c.input.str("node").map(|n| n.trim().to_string()).filter(|n| !n.is_empty()) {
+        let (key, node_kind) = match resolve_node(&doc, c, &addr, version) {
+            Ok(n) => n,
+            Err(r) => return audit_refusal(r, version, &target_id),
+        };
+        if !target_takes_node(&kind, &target_id) {
+            return audit_refusal(no_node_exporter(&c.target.rel, &target_id, &node_kind), version, &target_id);
+        }
+        options.push((k2_mpc_base::export::NODE_OPTION.name.to_string(), key));
+    }
     let place = if c.input.flag("fetch") {
         Place::Fetch
     } else {
@@ -887,6 +911,86 @@ pub(super) fn doc_route(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliRe
         .unwrap_or(MAX_WAIT)
         .min(MAX_WAIT);
     state_response(&job, &job.wait(wait))
+}
+
+/// The node `addr` names in `version` (`None`: now): its key and kind
+/// (`index_nodes`, as the caller). A file whose pack keeps no index is
+/// `MPC-E711`; an address that names nothing `MPC-E172`, with what exists;
+/// one several nodes share `MPC-E170`; an index not recorded yet is waited
+/// for once (`MPC-E713`).
+fn resolve_node(doc: &Doc, c: &Call, addr: &str, version: Option<u64>) -> Result<(String, String), CliResponse> {
+    let Doc::Blob(s) = doc else {
+        return Err(routes::session_error(&SessionError::IndexUnsupported));
+    };
+    let j = s.join_shared(c.caller.participant(c.on_behalf), Stay::UntilIdle).map_err(|e| routes::session_error(&e))?;
+    let addrs = [addr.to_string()];
+    let mut waited = false;
+    let read = loop {
+        match s.index_nodes(j.conn, &addrs, version, 0) {
+            Ok(r) => break r,
+            Err(SessionError::IndexPending { version: v, .. }) if !waited => {
+                waited = true;
+                super::indexer::wait_ready(s, &c.target.key(), v, super::indexer::VERB_WAIT);
+            }
+            Err(e) => return Err(routes::session_error(&e)),
+        }
+    };
+    if let Some(Some(n)) = read.nodes.first() {
+        return Ok((n.node.key.as_str().to_string(), n.node.kind.clone()));
+    }
+    let candidates: Vec<Value> = read
+        .missing
+        .first()
+        .map(|m| m.candidates.iter().map(|c| json!({ "address": c.address, "position": c.position })).collect())
+        .unwrap_or_default();
+    let mut hint = format!(
+        "{addr} names nothing in version {} of {}: nothing was exported. k2 doc outline {} lists the layers",
+        read.version, c.target.rel, c.target.rel
+    );
+    for cand in &candidates {
+        hint.push_str(&format!("\n  {}", cand["address"].as_str().unwrap_or("?")));
+    }
+    Err(CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: json!({
+            "ok": false,
+            "error": {
+                "code": "address_not_found",
+                "id": "MPC-E172",
+                "exit": exit::NOT_FOUND,
+                "hint": hint,
+                "details": { "missing": [{ "address": addr, "candidates": candidates }], "version": read.version },
+            },
+        })
+        .to_string(),
+    })
+}
+
+/// Whether `target` takes the kit's node option (as-is never does).
+fn target_takes_node(kind: &Kind, target: &str) -> bool {
+    if target == AS_IS {
+        return false;
+    }
+    let Ok((_, targets)) = export_worker::targets(kind) else { return false };
+    targets
+        .iter()
+        .find(|t| t["id"] == target)
+        .and_then(|t| t["options"].as_array())
+        .is_some_and(|o| o.iter().any(|o| o["name"] == k2_mpc_base::export::NODE_OPTION.name))
+}
+
+/// `MPC-E716` when no exporter here writes one node: the kit's id, exit 4,
+/// and the way on (export the whole file).
+fn no_node_exporter(rel: &str, target: &str, node_kind: &str) -> CliResponse {
+    let r = ExportError::NeedsRenderer { kind: node_kind.to_string() }.report();
+    kit_response(
+        r.id(),
+        r.exit(),
+        &format!("{target} doesn't write one {node_kind} node of {rel}: no exporter on this server writes a single layer yet. Nothing was exported"),
+        &format!("Export the whole file instead: k2 doc export --to as-is {rel}"),
+        json!({ "kind": node_kind, "target": target }),
+    )
 }
 
 /// `options`: a list of `k=v` strings, or an object.

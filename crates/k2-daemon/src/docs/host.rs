@@ -87,36 +87,45 @@ pub fn collect_disk_errors<R>(f: impl FnOnce() -> R) -> (R, Vec<(DocKey, String)
 }
 
 /// What one principal may do with one doc (K2's copy of the kit's `Rights`,
-/// with a wire shape). `owner` (break a tier-0 lease, purge) is never
-/// implied by the others.
+/// with a wire shape). `owner` (break a tier-0 lease, purge, erase a
+/// participant) is never implied by the others. `comment` is the explicit
+/// comment grant of a read-only share: edit implies commenting (Rosson's
+/// ruling), so editors need nothing extra, and a read-only share comments
+/// only when it was granted (`k2 doc share --comment`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DocRights {
     pub read: bool,
     pub edit: bool,
     pub history: bool,
     pub owner: bool,
+    pub comment: bool,
 }
 
 impl DocRights {
-    pub const NONE: DocRights = DocRights { read: false, edit: false, history: false, owner: false };
-    pub const FULL: DocRights = DocRights { read: true, edit: true, history: true, owner: false };
+    pub const NONE: DocRights = DocRights { read: false, edit: false, history: false, owner: false, comment: false };
+    pub const FULL: DocRights = DocRights { read: true, edit: true, history: true, owner: false, comment: false };
     /// The box owner and Admin logins: everything, and the doc owner's acts.
-    pub const OWNER: DocRights = DocRights { read: true, edit: true, history: true, owner: true };
+    pub const OWNER: DocRights = DocRights { read: true, edit: true, history: true, owner: true, comment: false };
 
-    /// The kit's view. Nothing without read; edit, history and owner only
-    /// with it.
+    /// The kit's view. Nothing without read; edit, history, owner and the
+    /// comment grant only with it (`Rights::with_comment`; edit implies it).
     pub fn kit(self) -> Rights {
         let base = match (self.read, self.edit) {
             (true, true) => Rights::editor(),
             (true, false) => Rights::read_only(),
             _ => return Rights::none(),
         };
-        base.with_history(self.history).with_owner(self.owner)
+        base.with_history(self.history).with_owner(self.owner).with_comment(self.comment)
     }
 
-    /// Wire shape: `{read, edit, history}`.
+    /// Whether these rights may comment: read, and edit or the comment grant.
+    pub fn may_comment(self) -> bool {
+        self.kit().may_comment()
+    }
+
+    /// Wire shape: `{read, edit, history, comment}` (`comment`: may comment).
     pub fn json(self) -> serde_json::Value {
-        serde_json::json!({ "read": self.read, "edit": self.edit, "history": self.history })
+        serde_json::json!({ "read": self.read, "edit": self.edit, "history": self.history, "comment": self.may_comment() })
     }
 }
 
@@ -185,8 +194,8 @@ pub fn person_rights(person_key: &str) -> DocRights {
 /// An agent's rights on a doc in workspace `space`. Its own workspace: all.
 /// Another workspace: a comms connection is required but not enough; a
 /// person must have shared the file or a folder above it (MI25, K-PERM-4):
-/// read, plus write and history only where a share grants them. `store`
-/// holds the shares (`None` once released: nothing is shared then).
+/// read, plus write, history and comment only where a share grants them.
+/// `store` holds the shares (`None` once released: nothing is shared then).
 pub fn agent_rights(agent_project: &str, space: &str, rel: &str, store: Option<&DocStore>) -> Result<DocRights, CrossRefusal> {
     if agent_project == space {
         return Ok(DocRights::FULL);
@@ -194,7 +203,7 @@ pub fn agent_rights(agent_project: &str, space: &str, rel: &str, store: Option<&
     if !k2_core::connections::are_local_peers(agent_project, space) {
         return Err(CrossRefusal::NotConnected);
     }
-    let granted = store.and_then(|st| match super::shares::grant(st, space, agent_project, rel) {
+    let granted = store.and_then(|st| match super::shares::grant_all(st, space, agent_project, rel) {
         Ok(g) => g,
         Err(e) => {
             log_debug!("[docs] WARN: share lookup failed (refusing): {e}");
@@ -202,7 +211,7 @@ pub fn agent_rights(agent_project: &str, space: &str, rel: &str, store: Option<&
         }
     });
     match granted {
-        Some((write, history)) => Ok(DocRights { read: true, edit: write, history, owner: false }),
+        Some(g) => Ok(DocRights { read: true, edit: g.write, history: g.history, owner: false, comment: g.comment }),
         None => Err(CrossRefusal::NotShared),
     }
 }
@@ -342,6 +351,16 @@ impl Host for K2Host {
             // Agent presence (kit amendments 13/14): when a claim (or its
             // hand-off) ends with someone waiting, that agent is told the
             // lines are free and the version to re-read at. Off the lock.
+            // Claims by node on a blob doc (kit A5): the roster's claims
+            // changed; open tabs refresh the layer panel. Nobody waits in
+            // line for a node claim (another's claim refuses, exit 5).
+            AuditEvent::ClaimTaken { key, lines, .. } if lines.root == k2_mpc_base::session::NODE_CLAIM_ROOT => {
+                super::indexer::changed(key, super::indexer::Change::ClaimTaken, None, None, None)
+            }
+            AuditEvent::ClaimEnded { key, pid, how, lines, version, .. } if lines.root == k2_mpc_base::session::NODE_CLAIM_ROOT => {
+                log_debug!("[docs] {pid}'s node claim on {} ended ({})", key_label(key), how.as_str());
+                super::indexer::changed(key, super::indexer::Change::ClaimEnded, Some(*version), None, None)
+            }
             AuditEvent::ClaimEnded { key, pid, how, lines, version, next_waiter, .. } => {
                 log_debug!("[docs] {pid}'s claim on {} lines {}-{} ended ({})", key_label(key), lines.first, lines.last, how.as_str());
                 if let Some((_, waiter)) = next_waiter.as_ref().filter(|_| !matches!(how, ClaimEnd::Reset)) {
@@ -355,6 +374,38 @@ impl Host for K2Host {
                 {
                     super::claims::notify_free(key.clone(), waiter.clone(), pid.clone(), (lines.first, lines.last), *version);
                 }
+            }
+            // The structure index (kit A1): a version wants indexing. The
+            // session is locked: only queue the job (`indexer`).
+            AuditEvent::IndexWanted { key, version } => super::indexer::want(key, *version),
+            AuditEvent::IndexReady { key, version, nodes } => {
+                log_debug!("[docs] {} version {version} indexed ({nodes} nodes)", key_label(key));
+                super::indexer::changed(key, super::indexer::Change::IndexReady, Some(*version), None, None)
+            }
+            AuditEvent::IndexNotIndexed { key, version } => {
+                log_debug!("[docs] {} version {version} has no index (k2 doc status says why)", key_label(key));
+                super::indexer::changed(key, super::indexer::Change::IndexNotIndexed, Some(*version), None, None)
+            }
+            // Comments (kit A4): never a body. The people and agents a
+            // comment mentions are told off the lock (the body is read with
+            // `thread()` there); open tabs catch up with `comments --since`.
+            AuditEvent::Annotation { key, seq, thread, comment, op, pid, on_behalf_of, mentions, .. } => {
+                super::indexer::changed(key, super::indexer::Change::Annotation, None, Some(*seq), Some(thread.to_string()));
+                if !mentions.is_empty() {
+                    super::annotations::notify_mentions(super::annotations::Mention {
+                        key: key.clone(),
+                        thread: *thread,
+                        comment: *comment,
+                        op: op.name(),
+                        by: pid.clone(),
+                        on_behalf_of: on_behalf_of.clone(),
+                        mentions: mentions.clone(),
+                    });
+                }
+            }
+            AuditEvent::AnchorState { key, thread, version, now, .. } => {
+                log_debug!("[docs] {} {thread}: anchor {} at version {version}", key_label(key), now.name());
+                super::indexer::changed(key, super::indexer::Change::AnchorState, Some(*version), None, Some(thread.to_string()))
             }
             AuditEvent::RecheckFailed { key, error } => {
                 log_debug!("[docs] WARN: rights re-check failed on {}: {error}", key_label(key))
@@ -553,7 +604,7 @@ mod tests {
     #[test]
     fn kit_rights_follow_read_edit_and_history() {
         assert_eq!(DocRights::FULL.kit(), Rights::full());
-        let r = |read, edit, history, owner| DocRights { read, edit, history, owner };
+        let r = |read, edit, history, owner| DocRights { read, edit, history, owner, comment: false };
         assert_eq!(r(true, false, true, false).kit(), Rights::read_only().with_history(true));
         assert_eq!(r(true, true, false, false).kit(), Rights::editor());
         assert_eq!(r(false, true, true, true).kit(), Rights::none());

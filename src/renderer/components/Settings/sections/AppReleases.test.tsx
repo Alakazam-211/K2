@@ -6,7 +6,7 @@
 // daemon's words; a non-runtime App has no panel.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent, cleanup } from '@testing-library/react'
 
 const h = vi.hoisted(() => ({ daemonCliGet: vi.fn(), daemonCliPost: vi.fn() }))
 
@@ -126,10 +126,13 @@ describe('AppReleases', () => {
     fireEvent.click(screen.getByText('Roll beta back to this'))
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('stay on it'))
     expect(h.daemonCliPost).toHaveBeenCalledWith('app/updates/rollback', { app: 'svc-1', channel: 'beta', to: '1.4.0' })
-    const pulls = screen.getAllByText('Pull')
+    const pulls = screen.getAllByText('Pull…')
     fireEvent.click(pulls[0])
+    // Asks first: a dialog names the version; nothing is sent until it's confirmed.
     expect(h.daemonCliPost).not.toHaveBeenCalledWith('app/updates/pull', expect.anything())
-    fireEvent.click(screen.getByText('Pull 1.5.0: sure?'))
+    const ask = screen.getByTestId('release-pull-confirm')
+    expect(ask.textContent).toContain('No channel offers it any more')
+    fireEvent.click(within(ask).getByRole('button', { name: 'Pull 1.5.0' }))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('app/updates/pull', { app: 'svc-1', version: '1.5.0' }))
   })
 
@@ -156,10 +159,12 @@ describe('AppReleases', () => {
     await waitFor(() => expect(container.textContent).toBe(''))
   })
 
-  it('points at the CLI when there are no releases yet', async () => {
+  it('says in plain words that there are no releases yet', async () => {
     routes({ ...LIST, key: null, channels: [], releases: [] })
     render(<AppReleases app="svc-1" />)
-    await waitFor(() => expect(screen.getByText(/k2 app updates push jobs/)).toBeTruthy())
-    expect(screen.getByText(/updater public key/)).toBeTruthy()
+    const empty = await screen.findByTestId('releases-empty')
+    expect(empty.textContent).toMatch(/No desktop releases yet/)
+    expect(empty.textContent).toMatch(/update signing key/)
+    expect(empty.textContent).not.toMatch(/k2 app/)
   })
 })

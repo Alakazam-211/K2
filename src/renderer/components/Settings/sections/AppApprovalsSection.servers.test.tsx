@@ -128,6 +128,7 @@ describe('App Approvals across servers', () => {
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_box'))
+    fireEvent.click(await screen.findByTestId('app-approve-confirm-w_box'))
     const pw = await screen.findByTestId('app-approve-password')
     ;(pw as HTMLInputElement).value = 'hunter2'
     fireEvent.change(pw, { target: { value: 'hunter2' } })

@@ -169,7 +169,7 @@ describe('the box doctor', () => {
     const podman = await screen.findByTestId('apps-check-podman')
     expect(podman.getAttribute('data-status')).toBe('fail')
     expect(podman.textContent).toMatch(/Podman 4\.9\.3/)
-    expect(podman.textContent).toMatch(/Fix: k2 app box prepare --install-podman/)
+    expect(podman.textContent).toMatch(/Fix: Prepare this server, under Set up\./)
     expect(screen.getByTestId('apps-check-platform').textContent).not.toMatch(/Fix:/)
     expect(screen.getByTestId('apps-check-processEngine').getAttribute('data-status')).toBe('ok')
     expect(screen.getByTestId('apps-doctor').textContent).toMatch(/Not ready yet/)
@@ -200,7 +200,7 @@ describe('Prepare this box', () => {
     const apply = screen.getByTestId('apps-prepare-apply') as HTMLButtonElement
     expect(apply.textContent).toMatch(/installs Podman/)
     fireEvent.click(apply)
-    await screen.findByText('The box is prepared.')
+    await screen.findByText('The server is prepared.')
     expect(postsTo('app/box/prepare')).toEqual([{ dryRun: true }, { installPodman: true }])
   })
 
@@ -216,7 +216,7 @@ describe('Prepare this box', () => {
     fireEvent.click(await screen.findByTestId('apps-prepare-dry-run'))
     await screen.findByTestId('apps-dry-run')
     fireEvent.click(screen.getByTestId('apps-prepare-apply'))
-    await screen.findByText('The box is prepared.')
+    await screen.findByText('The server is prepared.')
     expect(postsTo('app/box/prepare')).toEqual([{ dryRun: true }, {}])
   })
 
@@ -323,7 +323,7 @@ describe('automatic prep stopped', () => {
     const retry = screen.getByTestId('apps-auto-prepare-retry') as HTMLButtonElement
     await waitFor(() => expect(retry.disabled).toBe(false))
     fireEvent.click(retry)
-    await screen.findByText('Automatic prep will run again now.')
+    await screen.findByText('Automatic setup will run again now.')
     expect(postsTo('app/box/auto-prepare/retry')).toEqual([{}])
   })
 
@@ -375,11 +375,11 @@ describe('Undo box setup', () => {
     fireEvent.click(start)
     const plan = await screen.findByTestId('apps-unprep-plan')
     expect(plan.textContent).toMatch(/nft remove/)
-    expect(plan.textContent).toMatch(/Kept: the k2app user/)
+    expect(plan.textContent).toMatch(/It keeps: the k2app user/)
     expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }])
     fireEvent.click(screen.getByTestId('apps-unprep-confirm'))
     const notice = await screen.findByTestId('apps-server-notice')
-    expect(notice.textContent).toMatch(/The box setup is undone\. K2's Podman stays/)
+    expect(notice.textContent).toMatch(/The server setup is undone\. K2's Podman stays/)
     expect(postsTo('app/box/unprep')).toEqual([{ dryRun: true }, { confirm: true }])
   })
 

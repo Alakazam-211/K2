@@ -131,6 +131,11 @@ describe('AppApprovalsSection', () => {
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
+    // Asks first: the dialog shows the change; nothing is sent until Approve.
+    const dialog = await screen.findByTestId('app-approve-dialog-w_dep1')
+    expect(dialog.textContent).toContain('+ cap mail:send')
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('app-approve-confirm-w_dep1'))
     await waitFor(() => expect(postsTo('app/approve')).toEqual([{ request: 'w_dep1', confirmToken: 'k2vc_tok' }]))
     expect(postsTo('vault/confirm/start')).toEqual([{ action: 'app-approve', secretId: 'w_dep1' }])
     expect(postsTo('vault/confirm/finish')).toEqual([
@@ -152,6 +157,7 @@ describe('AppApprovalsSection', () => {
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
+    fireEvent.click(await screen.findByTestId('app-approve-confirm-w_dep1'))
     const pw = (await screen.findByTestId('app-approve-password')) as HTMLInputElement
     expect(postsTo('app/approve')).toEqual([])
     expect(screen.getByText('Your vault password')).toBeTruthy()
@@ -175,6 +181,8 @@ describe('AppApprovalsSection', () => {
     posts({ 'app/deny': () => ({ ok: true, status: 'denied', request: req({ status: 'denied' }) }) })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-deny-w_dep1'))
+    // Deny asks first, in a dialog with the optional note.
+    expect(screen.getByTestId('app-deny-dialog-w_dep1')).toBeTruthy()
     const note = screen.getByTestId('app-deny-note-w_dep1') as HTMLTextAreaElement
     expect(note.maxLength).toBe(500)
     fireEvent.change(note, { target: { value: '  no mail from the shop yet  ' } })
@@ -198,7 +206,10 @@ describe('AppApprovalsSection', () => {
     serve([req()], [req()], { available: false, methods: [], hint })
     render(<AppApprovalsSection />)
     const banner = await screen.findByTestId('app-approvals-no-confirm')
-    expect(banner.textContent).toBe(hint)
+    // Plain words and the next step, never the daemon's CLI hint.
+    expect(banner.textContent).toContain('this server has no way to confirm it’s you')
+    expect(banner.textContent).not.toContain('k2 vault')
+    expect(screen.getByTestId('app-approvals-open-vault')).toBeTruthy()
     const approve = screen.getByTestId('app-approve-w_dep1') as HTMLButtonElement
     expect(approve.disabled).toBe(true)
     fireEvent.click(approve)
@@ -218,6 +229,7 @@ describe('AppApprovalsSection', () => {
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
+    fireEvent.click(await screen.findByTestId('app-approve-confirm-w_dep1'))
     const err = await screen.findByTestId('app-request-error-w_dep1')
     expect(err.textContent).toBe("only the server's owner approves App requests, in person")
     // The request is still there, waiting.
@@ -237,6 +249,7 @@ describe('AppApprovalsSection', () => {
     })
     render(<AppApprovalsSection />)
     fireEvent.click(await screen.findByTestId('app-approve-w_dep1'))
+    fireEvent.click(await screen.findByTestId('app-approve-confirm-w_dep1'))
     const notice = await screen.findByTestId('app-approvals-notice')
     expect(notice.textContent).toContain("but applying it failed: nothing on this daemon applies 'db_raw' requests yet")
   })
@@ -244,7 +257,9 @@ describe('AppApprovalsSection', () => {
   it('shows a load failure', async () => {
     h.daemonCliGet.mockRejectedValue(new Error('{"error":{"code":"unauthorized","hint":"sign in again"}}'))
     render(<AppApprovalsSection />)
-    expect(await screen.findByText('sign in again')).toBeTruthy()
+    const card = await screen.findByRole('alert')
+    expect(card.textContent).toContain('K2 couldn’t read the waiting requests')
+    expect(card.textContent).toContain('The server said: sign in again.')
   })
 
   it('History shows decided requests from state=all', async () => {
@@ -264,9 +279,10 @@ describe('AppApprovalsSection', () => {
     expect(f.textContent).toContain('Approved, failed to apply')
     expect(f.textContent).toContain('via local-auth')
     expect(f.textContent).toContain('nothing applies it yet')
-    // The pending one is still a card, not a history row.
-    expect(screen.getByTestId('app-request-w_dep1')).toBeTruthy()
+    // The pending one is not a history row; it waits on the Waiting tab.
     expect(screen.queryByTestId('app-history-w_dep1')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: /Waiting/ }))
+    expect(await screen.findByTestId('app-request-w_dep1')).toBeTruthy()
   })
 
   it('reloads when the window regains focus', async () => {

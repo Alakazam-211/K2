@@ -4,7 +4,7 @@
 // Fail loud: errors surface, mint without secret throws, routes are exact.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react'
 
 const h = vi.hoisted(() => ({
   daemonCliGet: vi.fn(),
@@ -301,7 +301,9 @@ describe('SkinAccessSection', () => {
     expect(screen.queryByText('Leftover Caddy (optional)')).toBeNull()
     expect(screen.queryByRole('radio')).toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
-    expect(screen.getAllByText('thread:read').length).toBeGreaterThan(0)
+    // The token's permissions in words, never raw cap ids.
+    expect(screen.getByTestId('apps-token-tok-1').textContent).toContain('Read the Thread')
+    expect(screen.queryByText('thread:read')).toBeNull()
     expect(screen.queryByText(/Stub URLs only/i)).toBeNull()
   })
 
@@ -331,10 +333,12 @@ describe('SkinAccessSection', () => {
       throw new Error(`unexpected GET ${route}`)
     })
     render(<SkinAccessSection />)
+    // The page's own error card: what failed in words, then the server's reason.
     await waitFor(() => {
-      expect(screen.getByRole('alert').textContent).toMatch(/users roster down/)
+      expect(screen.getByTestId('apps-page-error').textContent).toMatch(/users roster down/)
     })
-    expect(screen.getByRole('alert').textContent).not.toMatch(/front-door/)
+    expect(screen.getByTestId('apps-page-error').textContent).toMatch(/K2 couldn’t read everything on this page/)
+    expect(screen.getByTestId('apps-page-error').textContent).not.toMatch(/front-door/)
     expect(screen.queryByText('Leftover Caddy (optional)')).toBeNull()
   })
 
@@ -381,7 +385,7 @@ describe('SkinAccessSection', () => {
       'agent:handle',
       'files:download',
     ])
-    expect(screen.getByText('Store this key now — it cannot be retrieved again')).not.toBeNull()
+    expect(screen.getByText('Copy this token now. K2 can’t show it again.')).not.toBeNull()
     expect(screen.getByText('k2skn_…ab12')).not.toBeNull()
   })
 
@@ -467,18 +471,20 @@ describe('SkinAccessSection', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert').textContent).toMatch(/mint returned no secret/)
     })
-    expect(screen.queryByText('Store this key now — it cannot be retrieved again')).toBeNull()
+    expect(screen.queryByText('Copy this token now. K2 can’t show it again.')).toBeNull()
   })
 
   it('fails loud when GET routes reject', async () => {
     h.daemonCliGet.mockRejectedValue(new Error('skin routes missing'))
     render(<SkinAccessSection />)
     await waitFor(() => {
-      expect(screen.getByRole('alert').textContent).toMatch(/skin routes missing/)
+      expect(screen.getByTestId('apps-page-error').textContent).toMatch(/skin routes missing/)
     })
-    expect(screen.getByRole('alert').textContent).not.toMatch(/front-door/)
-    expect(screen.getByRole('alert').textContent).toMatch(/users/)
-    expect(screen.getByRole('alert').textContent).toMatch(/keys/)
+    const card = screen.getByTestId('apps-page-error')
+    expect(card.textContent).not.toMatch(/front-door/)
+    expect(card.textContent).toMatch(/users/)
+    expect(card.textContent).toMatch(/keys/)
+    expect(within(card).getByRole('button', { name: 'Try again' })).toBeTruthy()
   })
 
   it('revokes via skin-tokens/revoke', async () => {
@@ -486,6 +492,10 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await openHost()
     fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    // Asks first in a dialog (never window.confirm); nothing is sent until it's confirmed.
+    expect(confirm).not.toHaveBeenCalled()
+    expect(h.daemonCliPost).not.toHaveBeenCalledWith('skin-tokens/revoke', expect.anything())
+    fireEvent.click(within(screen.getByTestId('apps-confirm')).getByRole('button', { name: 'Revoke token' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin-tokens/revoke', { id: 'tok-1' })
     })
@@ -496,7 +506,8 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await openHost()
     expect(h.daemonCliGet.mock.calls.map((c) => c[0])).toContain('skin/hydra')
-    expect(screen.getByText(/THIS FEATURE ONLY WORKS ON LINUX DEPLOYMENTS/i)).not.toBeNull()
+    expect(screen.getByTestId('apps-hydra-linux').textContent).toBe('This runs on Linux servers. On this Mac it can’t be turned on.')
+    expect(screen.queryByText(/THIS FEATURE ONLY WORKS/)).toBeNull()
     const sw = screen.getByRole('switch', { name: 'Turn on Hydra OIDC issuer' })
     expect(sw.getAttribute('aria-checked')).toBe('false')
     expect((sw as HTMLButtonElement).disabled).toBe(true)
@@ -634,7 +645,7 @@ describe('SkinAccessSection', () => {
     expect(screen.queryByText('role-other')).toBeNull()
     expect(screen.getByText('default rooms: secret-room')).toBeTruthy()
     expect(
-      screen.getByText(/Skin roles are not Connect owner\/admin\/member\/viewer/),
+      screen.getByText(/These aren’t the server’s Owner, Admin or Member roles/),
     ).not.toBeNull()
     fireEvent.click(screen.getByLabelText('bob login role'))
     const menu = screen.getByTestId('setting-dropdown-menu')
@@ -745,13 +756,13 @@ describe('SkinAccessSection', () => {
     expect(screen.queryByRole('heading', { name: 'Guests' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign-in for other sites' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Roles' })).toBeNull()
     expect(screen.queryByLabelText('New skin username')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Host' }))
     expect(screen.getByRole('heading', { name: 'Roles' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Platform tokens' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Sign-in for other sites' })).toBeTruthy()
     expect(screen.getByLabelText('New skin role name')).toBeTruthy()
     expect(screen.queryByRole('heading', { name: 'Leftover Caddy (optional)' })).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Guests' })).toBeNull()
@@ -829,14 +840,12 @@ describe('SkinAccessSection', () => {
       { project: 'proj-sales' },
       { project: 'proj-support' },
     ])
-    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/skin/)
-    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/running/)
-    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/local-only/)
-    expect(screen.getByRole('button', { name: 'Open shell' }).textContent).toMatch(/cmd/)
-    expect(screen.getByRole('button', { name: 'Open shell' }).textContent).toMatch(/stopped/)
-    expect(screen.getByRole('button', { name: 'Open boot' }).textContent).toMatch(/starting/)
-    expect(screen.getByRole('button', { name: 'Open old' }).textContent).toMatch(/exited/)
-    expect(screen.getByRole('button', { name: 'Open mailer' }).textContent).toMatch(/unhealthy/)
+    // Each App's state in words beside its dot (cmd and skin publishes alike).
+    expect(screen.getByRole('button', { name: 'Open wiki' }).textContent).toMatch(/Running · only on this server/)
+    expect(screen.getByRole('button', { name: 'Open shell' }).textContent).toMatch(/Stopped/)
+    expect(screen.getByRole('button', { name: 'Open boot' }).textContent).toMatch(/Starting/)
+    expect(screen.getByRole('button', { name: 'Open old' }).textContent).toMatch(/Stopped/)
+    expect(screen.getByRole('button', { name: 'Open mailer' }).textContent).toMatch(/Not healthy/)
     fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
     expect(screen.getByRole('heading', { name: 'Roles' })).toBeTruthy()
     expect(screen.getByText('Sales · workspace')).toBeTruthy()
@@ -852,9 +861,11 @@ describe('SkinAccessSection', () => {
       roomAccess: [],
       appId: 'svc-wiki',
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Start wiki' }))
+    // Running: the header's one action is Stop.
+    expect(screen.queryByRole('button', { name: 'Start wiki' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Stop wiki' }))
     await waitFor(() => {
-      expect(h.daemonCliPost).toHaveBeenCalledWith('publish/start', {
+      expect(h.daemonCliPost).toHaveBeenCalledWith('publish/stop', {
         name: 'wiki',
         project: 'proj-sales',
       })
@@ -895,7 +906,7 @@ describe('SkinAccessSection', () => {
     expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
     expect(screen.queryByRole('heading', { name: 'Platform tokens' })).toBeNull()
-    expect(screen.queryByRole('heading', { name: 'OIDC issuer (Hydra)' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign-in for other sites' })).toBeNull()
     fireEvent.click(screen.getByLabelText('App user'))
     fireEvent.click(screen.getByRole('button', { name: 'ada' }))
     fireEvent.click(screen.getByLabelText('App user role'))
@@ -970,16 +981,16 @@ describe('SkinAccessSection', () => {
     render(<SkinAccessSection />)
     await loaded()
     fireEvent.click(screen.getByRole('button', { name: 'Open wiki' }))
-    expect(screen.getByText(/enforced at login since 0\.45\.5/)).toBeTruthy()
-    expect(screen.getByRole('status').textContent).toMatch(/Waiting for a restart/)
+    expect(screen.getByText(/Only the people here can sign in to this App/)).toBeTruthy()
+    expect(screen.getByText(/Waiting for a restart/).getAttribute('role')).toBe('status')
     expect(screen.getByText('rooms: support')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Add everyone who has the box login' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add them all' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/grants/copy-host', { app: 'svc-wiki' })
     })
     // The host row has no copy-host button (it IS the box login).
     fireEvent.click(screen.getByRole('button', { name: 'Host' }))
-    expect(screen.queryByRole('button', { name: 'Add everyone who has the box login' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add them all' })).toBeNull()
   })
 })
 

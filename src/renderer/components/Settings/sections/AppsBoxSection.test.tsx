@@ -133,6 +133,15 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
+/** Open a row's "…" menu. */
+function openMenu(app: string): void {
+  fireEvent.click(screen.getByRole('button', { name: `More actions for ${app}` }))
+}
+
+function menuItem(id: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-menu-item="${id}"]`)
+}
+
 describe('parsing', () => {
   it('reads the box view, sorted, with plain-words state and memory', () => {
     const apps = parseBoxApps(BOX)
@@ -168,16 +177,19 @@ describe('the Apps rows', () => {
   it('shows each App with its agent, state, memory, hostname and the agent’s access read-only', async () => {
     render(<AppsBoxSection />)
     const row = await screen.findByTestId('apps-row-shop')
-    expect(within(row).getByTestId('apps-row-shop-agent').textContent).toBe('Sales · sales::rosson.k2.dev')
-    expect(row.textContent).toContain('running')
-    expect(row.textContent).toContain('512 MiB · shop.rosson.k2.dev')
-    expect(within(row).getByTestId('apps-row-shop-postgres').textContent).toBe('Postgres 16 · 17 available')
+    expect(within(row).getByTestId('apps-row-shop-agent').textContent).toBe('Kept up by Sales · sales::rosson.k2.dev')
+    expect(within(row).getByTestId('apps-row-shop-state').textContent).toBe('Running')
+    expect(row.textContent).toContain('Up to 512 MB of memory · shop.rosson.k2.dev')
+    expect(within(row).getByTestId('apps-row-shop-postgres').textContent).toContain('Postgres 16 · 17 available')
     expect(screen.queryByTestId('apps-row-old-postgres')).toBeNull()
-    expect(within(row).getByTestId('apps-row-shop-access').textContent).toContain('Build and run Apps · uses Database, Thread')
-    // A healthy App: only "Hand over…" (no park or uninstall here).
+    expect(within(row).getByTestId('apps-row-shop-access').textContent).toContain('Builds and runs its Apps · uses Database, Thread')
+    // A healthy App: Agent settings, and "Hand over…" in its menu (no park or uninstall here).
     const actions = within(row).getByTestId('apps-row-shop-actions')
-    expect(within(actions).getByRole('button', { name: 'Hand over…' })).toBeTruthy()
-    expect(within(actions).queryByRole('button', { name: 'Park' })).toBeNull()
+    expect(within(actions).getByRole('button', { name: 'Agent settings' })).toBeTruthy()
+    openMenu('shop')
+    expect(menuItem('handover')?.textContent).toContain('Hand over…')
+    expect(menuItem('park')).toBeNull()
+    expect(menuItem('uninstall')).toBeNull()
     expect(h.gets.find((g) => g.route === 'app/list' && g.params?.box === '1')).toBeTruthy()
   })
 
@@ -190,7 +202,7 @@ describe('the Apps rows', () => {
       })
     })
     expect(screen.getByTestId('apps-row-shop-access').textContent).toContain(
-      'Build and run, manage end to end · uses Files and rooms',
+      'Builds, runs and fully manages its Apps · uses Files and rooms',
     )
   })
 
@@ -206,23 +218,29 @@ describe('the Apps rows', () => {
   it('a parked App: the owner unparks it to an agent or uninstalls it (with a second click)', async () => {
     render(<AppsBoxSection />)
     const row = await screen.findByTestId('apps-row-old')
-    expect(row.textContent).toContain('Parked (held by the owner)')
-    expect(row.textContent).toContain('No agent maintains it')
+    expect(within(row).getByTestId('apps-row-old-state').textContent).toBe('Parked')
+    expect(row.textContent).toContain('No agent: you hold it')
     const actions = await within(row).findByTestId('apps-row-old-actions')
-    expect(within(actions).queryByRole('button', { name: 'Park' })).toBeNull()
+    openMenu('old')
+    expect(menuItem('park')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
     fireEvent.click(within(actions).getByRole('button', { name: 'Unpark…' }))
     const sheet = await screen.findByTestId('apps-handover-old')
     pickValue(within(sheet).getByLabelText('Agent for old'), 'ws-ops')
     await screen.findByTestId('apps-handover-old-plan')
     expect(h.gets.find((g) => g.route === 'app/handover/plan')?.params).toEqual({ app: 'old', to: 'ws-ops' })
-    fireEvent.click(within(screen.getByTestId('apps-handover-old-plan')).getByRole('button', { name: 'Unpark' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Unpark' }))
     await waitFor(() => expect(h.posts.map((p) => p.route)).toEqual(['app/unpark', 'vault/confirm/start', 'vault/confirm/finish', 'app/approve']))
     expect(h.posts[0].body).toEqual({ app: 'old', to: 'ws-ops' })
     await screen.findByText('old is handed over. You can undo it for 72 hours.')
 
-    fireEvent.click(within(screen.getByTestId('apps-row-old-actions')).getByRole('button', { name: 'Uninstall' }))
+    openMenu('old')
+    fireEvent.click(menuItem('uninstall') as HTMLElement)
+    // Asks first: nothing is sent until the dialog's Uninstall.
     expect(h.posts).toHaveLength(4)
-    fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
+    const confirm = await screen.findByTestId('apps-uninstall-old')
+    expect(confirm.textContent).toContain('Its data stays')
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Uninstall' }))
     await waitFor(() => expect(h.posts[4]).toEqual({ route: 'app/uninstall', body: { app: 'old' } }))
   })
 
@@ -235,27 +253,30 @@ describe('the Apps rows', () => {
       },
     ]
     render(<AppsBoxSection />)
-    const actions = await screen.findByTestId('apps-row-old-actions')
-    fireEvent.click(within(actions).getByRole('button', { name: 'Uninstall' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
+    await screen.findByTestId('apps-row-old-actions')
+    openMenu('old')
+    fireEvent.click(menuItem('uninstall') as HTMLElement)
+    fireEvent.click(within(await screen.findByTestId('apps-uninstall-old')).getByRole('button', { name: 'Uninstall' }))
     const loss = await screen.findByTestId('apps-row-old-loss')
     expect(within(loss).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['3 App logins', '1 chat Space bound to it'])
-    expect(loss.textContent).toContain('k2 app expose old --tunnel')
+    expect(loss.textContent).not.toContain('k2 app')
     expect(screen.queryByText(/uninstall_drops_access/)).toBeNull()
     expect(h.posts).toEqual([{ route: 'app/uninstall', body: { app: 'old' } }])
 
-    // Keep it: nothing more is sent.
-    fireEvent.click(within(loss).getByRole('button', { name: 'Keep it' }))
+    // Keep it: nothing more is sent, and the dialog closes.
+    fireEvent.click(within(screen.getByTestId('apps-uninstall-old')).getByRole('button', { name: 'Keep it' }))
     expect(screen.queryByTestId('apps-row-old-loss')).toBeNull()
+    expect(screen.queryByTestId('apps-uninstall-old')).toBeNull()
     expect(h.posts).toHaveLength(1)
 
     // Again, then anyway: the second call carries dropAccess.
     h.refuse['app/uninstall'] = [{ code: 'uninstall_drops_access', hint: '…', wouldDrop: { logins: 1, total: 1 } }]
-    fireEvent.click(within(screen.getByTestId('apps-row-old-actions')).getByRole('button', { name: 'Uninstall' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Uninstall old (data stays)' }))
+    openMenu('old')
+    fireEvent.click(menuItem('uninstall') as HTMLElement)
+    fireEvent.click(within(await screen.findByTestId('apps-uninstall-old')).getByRole('button', { name: 'Uninstall' }))
     const again = await screen.findByTestId('apps-row-old-loss')
     expect(within(again).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['1 App login'])
-    fireEvent.click(within(again).getByRole('button', { name: 'Uninstall anyway' }))
+    fireEvent.click(within(screen.getByTestId('apps-uninstall-old')).getByRole('button', { name: 'Uninstall anyway' }))
     await waitFor(() => expect(h.posts[2]).toEqual({ route: 'app/uninstall', body: { app: 'old', dropAccess: true } }))
     await screen.findByText('old is uninstalled; its data stays.')
     expect(screen.queryByTestId('apps-row-old-loss')).toBeNull()
@@ -277,8 +298,10 @@ describe('the Apps rows', () => {
     }
     render(<AppsBoxSection />)
     let actions = await screen.findByTestId('apps-row-lost-actions')
-    expect(screen.getByTestId('apps-row-lost').textContent).toContain('Unassigned (its workspace was removed)')
-    fireEvent.click(within(screen.getByTestId('apps-row-lost-actions')).getByRole('button', { name: 'Park' }))
+    expect(screen.getByTestId('apps-row-lost').textContent).toContain('No agent: its workspace was removed')
+    expect(within(actions).getByRole('button', { name: 'Hand over…' })).toBeTruthy()
+    openMenu('lost')
+    fireEvent.click(menuItem('park') as HTMLElement)
     await waitFor(() => expect(h.posts[0]).toEqual({ route: 'app/park', body: { app: 'lost' } }))
     cleanup()
 
@@ -286,8 +309,9 @@ describe('the Apps rows', () => {
     render(<AppsBoxSection />)
     actions = await screen.findByTestId('apps-row-lost-actions')
     await waitFor(() => expect((within(actions).getByRole('button', { name: 'Hand over…' }) as HTMLButtonElement).disabled).toBe(true))
-    expect(within(actions).getByRole('button', { name: 'Park' })).toBeTruthy()
-    expect(within(actions).getByRole('button', { name: 'Uninstall' })).toBeTruthy()
+    openMenu('lost')
+    expect(menuItem('park')).toBeTruthy()
+    expect(menuItem('uninstall')).toBeTruthy()
     cleanup()
 
     h.role = 'member'
@@ -303,7 +327,8 @@ describe('the Apps rows', () => {
     render(<AppsBoxSection />)
     fireEvent.click(within(await screen.findByTestId('apps-row-old-actions')).getByRole('button', { name: 'Unpark…' }))
     pickValue(within(await screen.findByTestId('apps-handover-old')).getByLabelText('Agent for old'), 'ws-ops')
-    fireEvent.click(within(await screen.findByTestId('apps-handover-old-plan')).getByRole('button', { name: 'Unpark' }))
+    await screen.findByTestId('apps-handover-old-plan')
+    fireEvent.click(within(screen.getByTestId('apps-handover-old')).getByRole('button', { name: 'Unpark' }))
     expect((await screen.findByTestId('apps-handover-old-error')).textContent).toContain(hint)
     expect(h.posts.map((p) => p.route)).toEqual(['app/unpark'])
   })
@@ -320,13 +345,14 @@ describe('the Apps rows', () => {
 describe('the Hand over… sheet (0.46.5)', () => {
   it('shows every line of the plan, asks for what the plan needs, then files the card and approves it with a confirm', async () => {
     render(<AppsBoxSection />)
-    const row = await screen.findByTestId('apps-row-shop')
-    fireEvent.click(within(row).getByRole('button', { name: 'Hand over…' }))
+    await screen.findByTestId('apps-row-shop')
+    openMenu('shop')
+    fireEvent.click(menuItem('handover') as HTMLElement)
     const sheet = await screen.findByTestId('apps-handover-shop')
     // The current agent isn't offered.
-    // K2's themed menu; "Hand it to…" is the placeholder, not an option.
+    // K2's themed menu; "Pick an agent" is the placeholder, not an option.
     const trigger = within(sheet).getByLabelText('Agent for shop')
-    expect(trigger.textContent).toBe('Hand it to…')
+    expect(trigger.textContent).toBe('Pick an agent')
     expect(menuValues(trigger)).toEqual(['ws-ops'])
     pickValue(within(sheet).getByLabelText('Agent for shop'), 'ws-ops')
     const plan = await screen.findByTestId('apps-handover-shop-plan')
@@ -336,7 +362,7 @@ describe('the Hand over… sheet (0.46.5)', () => {
     await waitFor(() => expect(h.gets.filter((g) => g.route === 'app/handover/plan').at(-1)?.params).toEqual({ app: 'shop', to: 'ws-ops', db: 'share' }))
     expect(within(plan).getByLabelText(/Use the new agent’s own values/)).toBeTruthy()
     expect(within(plan).getByLabelText(/Take over the guests/)).toBeTruthy()
-    fireEvent.click(within(screen.getByTestId('apps-handover-shop-plan')).getByRole('button', { name: 'Hand over' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Hand over' }))
     await waitFor(() => expect(h.posts.map((p) => p.route)).toEqual(['app/handover', 'vault/confirm/start', 'vault/confirm/finish', 'app/approve']))
     expect(h.posts[0].body).toEqual({ app: 'shop', to: 'ws-ops', db: 'share' })
     expect(h.posts[1].body).toEqual({ action: 'app-approve', secretId: 'w_card1' })
@@ -347,20 +373,25 @@ describe('the Hand over… sheet (0.46.5)', () => {
   it('a blocked plan says why and can’t be handed over; a password box asks for the password', async () => {
     h.plan = { ...PLAN, ready: false, blockers: [{ code: 'handover_db_busy', hint: 'its database is being upgraded', names: [] }] }
     render(<AppsBoxSection />)
-    fireEvent.click(within(await screen.findByTestId('apps-row-shop')).getByRole('button', { name: 'Hand over…' }))
+    await screen.findByTestId('apps-row-shop')
+    openMenu('shop')
+    fireEvent.click(menuItem('handover') as HTMLElement)
     pickValue(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), 'ws-ops')
     const plan = await screen.findByTestId('apps-handover-shop-plan')
     expect(within(plan).getByTestId('apps-handover-shop-blocker').textContent).toBe('its database is being upgraded')
-    expect((within(plan).getByRole('button', { name: 'Hand over' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((within(screen.getByTestId('apps-handover-shop')).getByRole('button', { name: 'Hand over' }) as HTMLButtonElement).disabled).toBe(true)
     cleanup()
 
     h.plan = PLAN
     h.confirmMethods = ['vault-password']
     h.posts = []
     render(<AppsBoxSection />)
-    fireEvent.click(within(await screen.findByTestId('apps-row-shop')).getByRole('button', { name: 'Hand over…' }))
+    await screen.findByTestId('apps-row-shop')
+    openMenu('shop')
+    fireEvent.click(menuItem('handover') as HTMLElement)
     pickValue(within(await screen.findByTestId('apps-handover-shop')).getByLabelText('Agent for shop'), 'ws-ops')
-    fireEvent.click(within(await screen.findByTestId('apps-handover-shop-plan')).getByRole('button', { name: 'Hand over' }))
+    await screen.findByTestId('apps-handover-shop-plan')
+    fireEvent.click(within(screen.getByTestId('apps-handover-shop')).getByRole('button', { name: 'Hand over' }))
     const pw = await screen.findByLabelText('Password to confirm')
     fireEvent.change(pw, { target: { value: 'hunter2' } })
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))

@@ -532,6 +532,18 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
             }
             unit = sub.units.recv() => {
                 let Some(u) = unit else {
+                    // The hub let this viewer go (its source ended, or its
+                    // JPEG layer failed). It sends `Ended` before it drops
+                    // the units sender, but select! may see the closed
+                    // units first: give the reason before the close.
+                    while let Ok(ev) = sub.events.try_recv() {
+                        if let HubEvent::Ended(why) = ev {
+                            if let Some(t) = ended(&why) {
+                                let _ = write.send(Message::Text(t)).await;
+                            }
+                            break;
+                        }
+                    }
                     close(&mut write, CLOSE_DEVICE_STOPPED, &ended_reason).await;
                     break 'serve;
                 };

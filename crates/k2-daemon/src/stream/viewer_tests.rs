@@ -561,3 +561,75 @@ fn a_source_change_arrives_as_a_source_start_key_and_the_gate_resyncs() {
         ends(server).await;
     });
 }
+
+/// A source whose every layer of `fail` fails as soon as it is on (a Mac
+/// deskd asked for JPEG).
+struct FailsLayers {
+    fail: LinkCodec,
+    pending: Vec<u8>,
+    failed: Vec<u8>,
+}
+
+impl EncodedSource for FailsLayers {
+    fn next_unit(&mut self, wait: Duration) -> Result<Option<k2_core::stream::EncodedUnit>, k2_core::stream::SourceError> {
+        if let Some(layer) = self.pending.pop() {
+            return Err(k2_core::stream::SourceError::LayerFailed { layer, why: "no JPEG encoder on this Mac".into() });
+        }
+        std::thread::sleep(wait.min(Duration::from_millis(5)));
+        Ok(None)
+    }
+    fn set_layers(&mut self, layers: &[LayerSpec]) {
+        for l in layers.iter().filter(|l| l.on && l.codec == self.fail) {
+            if !self.failed.contains(&l.id) {
+                self.failed.push(l.id);
+                self.pending.push(l.id);
+            }
+        }
+    }
+    fn request_keyframe(&mut self, _layer: u8, _since: Option<Instant>) {}
+    fn sizes(&self) -> Option<k2_core::stream::SourceSizes> {
+        Some(k2_core::stream::SourceSizes { points: 1280, native_px: Some(2560) })
+    }
+}
+
+/// D6: a failed JPEG layer ends its viewer WITH the reason. The hub sends
+/// `Ended` and then drops the viewer's units; select! may see the closed
+/// units first, so the loop drains the events before it closes. Run many
+/// times: the race was random.
+#[test]
+fn a_failed_jpeg_layer_sends_its_reason_before_the_close_every_time() {
+    rt().block_on(async {
+        for round in 0..25 {
+            let source = Source {
+                key: SourceKey::Desktop { desktop: format!("test-jpeg-fails-{round}") },
+                kind: SourceKind::Desktop,
+                open: Box::new(|| Ok(Box::new(FailsLayers { fail: LinkCodec::Jpeg, pending: Vec::new(), failed: Vec::new() }) as Box<dyn EncodedSource>)),
+                gives: vec![],
+            };
+            let mut h = hooks(Default::default(), false, Rec::default());
+            h.ended = Box::new(|why: &str| Some(serde_json::json!({ "t": "state", "state": "ended", "message": why }).to_string()));
+            let (mut c, server) = open(source, &[("codecs", "jpeg")], h).await;
+            let hello = next_text(&mut c).await;
+            assert_eq!(hello["codec"], "jpeg");
+            let mut said = None;
+            let code = loop {
+                let m = tokio::time::timeout(Duration::from_secs(5), c.next()).await.expect("within 5 s");
+                match m {
+                    Some(Ok(Message::Text(t))) => {
+                        let v: serde_json::Value = serde_json::from_str(&t).expect("JSON");
+                        if v["t"] == "state" {
+                            said = v["message"].as_str().map(str::to_string);
+                        }
+                    }
+                    Some(Ok(Message::Close(f))) => break f.map(|f| u16::from(f.code)),
+                    Some(Ok(_)) => {}
+                    other => panic!("round {round}: {other:?}"),
+                }
+            };
+            assert_eq!(code, Some(CLOSE_DEVICE_STOPPED), "round {round}");
+            let said = said.unwrap_or_else(|| panic!("round {round}: closed with no reason text"));
+            assert!(said.contains("no JPEG encoder on this Mac"), "round {round}: {said}");
+            ends(server).await;
+        }
+    });
+}

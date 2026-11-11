@@ -2371,8 +2371,10 @@ impl ReconfigureRequest {
 /// (Sew 2026-10-27: after an upgrade from 0.3.0).
 pub const SEW_RECONFIGURE_BELOW: &str = "0.3.1";
 
-/// `engine sew config` stdin: the four keys `sew config set` accepts, each
-/// optional, each validated. Applied in a fixed order.
+/// `engine sew config` stdin: the keys `sew config set` accepts, each
+/// optional, each validated. Applied in a fixed order. Protocol 15
+/// (0.46.11, `namespaces.sewrecording`) adds
+/// `recording.consent_prompt_timeout_ms` (a 14 helper refuses it as unknown).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigRequest {
@@ -2384,6 +2386,25 @@ pub struct ConfigRequest {
     pub mirror_kind: Option<String>,
     #[serde(rename = "keys.mirror.path", default, skip_serializing_if = "Option::is_none")]
     pub mirror_path: Option<String>,
+    /// Sew 0.9.0 `[recording] consent_prompt_timeout_ms`: how long a person
+    /// still `pending` on a recording notice stays in a room where declining
+    /// means not joining (Sew then drops them, `recording_consent_timeout`).
+    /// Whole milliseconds, [`CONSENT_TIMEOUT_MIN_MS`]..=[`CONSENT_TIMEOUT_MAX_MS`].
+    #[serde(rename = "recording.consent_prompt_timeout_ms", default, skip_serializing_if = "Option::is_none")]
+    pub consent_prompt_timeout_ms: Option<String>,
+}
+
+/// The shortest and longest `recording.consent_prompt_timeout_ms` K2 sets
+/// (Sew's default is 120000).
+pub const CONSENT_TIMEOUT_MIN_MS: u64 = 10_000;
+pub const CONSENT_TIMEOUT_MAX_MS: u64 = 600_000;
+
+/// A `recording.consent_prompt_timeout_ms` value: decimal, in range.
+pub fn consent_timeout_ok(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= 7
+        && v.bytes().all(|b| b.is_ascii_digit())
+        && v.parse::<u64>().is_ok_and(|n| (CONSENT_TIMEOUT_MIN_MS..=CONSENT_TIMEOUT_MAX_MS).contains(&n))
 }
 
 impl ConfigRequest {
@@ -2392,8 +2413,12 @@ impl ConfigRequest {
             && self.public_url.is_none()
             && self.mirror_kind.is_none()
             && self.mirror_path.is_none()
+            && self.consent_prompt_timeout_ms.is_none()
         {
             return Err("config refused: no keys");
+        }
+        if self.consent_prompt_timeout_ms.as_deref().is_some_and(|v| !consent_timeout_ok(v)) {
+            return Err("config refused: recording.consent_prompt_timeout_ms");
         }
         if self.jwks_url.as_deref().is_some_and(|v| !jwks_url_ok(v)) {
             return Err("config refused: identity.k2.jwks_url");
@@ -2426,6 +2451,9 @@ impl ConfigRequest {
         }
         if let Some(x) = &self.mirror_kind {
             v.push(("keys.mirror.kind", x.as_str()));
+        }
+        if let Some(x) = &self.consent_prompt_timeout_ms {
+            v.push(("recording.consent_prompt_timeout_ms", x.as_str()));
         }
         v
     }
@@ -3749,6 +3777,14 @@ mod tests {
             r#"{"jwksUrl":"http://127.0.0.1:1/v1/chat/jwks"}"#,
         ] {
             assert!(serde_json::from_str::<InstallRequest>(bad).is_err(), "{bad}");
+        }
+        // Protocol 15: the K5 rooms' consent timeout, whole ms in range.
+        let c: ConfigRequest = serde_json::from_str(r#"{"recording.consent_prompt_timeout_ms":"60000"}"#).unwrap();
+        assert!(c.validate().is_ok());
+        assert_eq!(c.pairs(), vec![("recording.consent_prompt_timeout_ms", "60000")]);
+        for bad in ["", "5000", "600001", "6e4", "-1", "60000 ", "060000x"] {
+            let c = ConfigRequest { consent_prompt_timeout_ms: Some(bad.into()), ..Default::default() };
+            assert!(c.validate().is_err(), "{bad:?}");
         }
         let c: ConfigRequest = serde_json::from_str(r#"{"keys.mirror.kind":"k2"}"#).unwrap();
         assert!(c.validate().is_err(), "k2 mirror kind waits for Q1");

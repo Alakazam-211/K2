@@ -79,6 +79,18 @@ pub mod paths {
     pub fn recording_consent(recording_id: &str) -> String {
         format!("/api/v1/recordings/{recording_id}/consent")
     }
+    /// Record (Sew 0.9.0 `CHANNEL_RECORDING_START`).
+    pub fn recording_start(channel_id: &str) -> String {
+        format!("/api/v1/channels/{channel_id}/recording/start")
+    }
+    /// Stop (Sew 0.9.0 `RECORDING_STOP`).
+    pub fn recording_stop(recording_id: &str) -> String {
+        format!("/api/v1/recordings/{recording_id}/stop")
+    }
+    /// The channel as the person sees it (its `my_perms`).
+    pub fn channel(channel_id: &str) -> String {
+        format!("/api/v1/channels/{channel_id}")
+    }
 }
 
 /// Seconds a client waits before retrying a "pending" answer.
@@ -256,6 +268,12 @@ impl SewAnswer {
 pub trait SewApi: Send + Sync {
     /// POST `path` with `bearer` (a `sews_` session) or none.
     fn post(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String>;
+    /// GET `path` with `bearer` (the recording controls read the channel's
+    /// `my_perms`). A fake that never reads answers this.
+    fn get(&self, bearer: Option<&str>, path: &str) -> Result<SewAnswer, String> {
+        let _ = bearer;
+        Err(format!("{path}: this Sew client sends no GET"))
+    }
 }
 
 /// The real client: Sew's loopback client listener (`sew::ops::client_addr`).
@@ -274,7 +292,28 @@ fn http() -> Result<&'static reqwest::blocking::Client, String> {
     Ok(C.get_or_init(|| c))
 }
 
+fn answer_of(path: &str, r: reqwest::blocking::Response) -> Result<SewAnswer, String> {
+    let status = r.status().as_u16();
+    let text = r.text().map_err(|e| format!("{path}: reading the answer: {e}"))?;
+    let body = if text.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text.chars().take(200).collect::<String>() }))
+    };
+    Ok(SewAnswer { status, body })
+}
+
 impl SewApi for HttpSew {
+    fn get(&self, bearer: Option<&str>, path: &str) -> Result<SewAnswer, String> {
+        let url = format!("http://{}{path}", crate::sew::ops::client_addr());
+        let mut req = http()?.get(&url);
+        if let Some(b) = bearer {
+            req = req.bearer_auth(b);
+        }
+        let r = req.send().map_err(|e| format!("{path}: {e}"))?;
+        answer_of(path, r)
+    }
+
     fn post(&self, bearer: Option<&str>, path: &str, body: &Value) -> Result<SewAnswer, String> {
         let url = format!("http://{}{path}", crate::sew::ops::client_addr());
         let mut req = http()?.post(&url).header("content-type", "application/json").body(body.to_string());
@@ -282,14 +321,7 @@ impl SewApi for HttpSew {
             req = req.bearer_auth(b);
         }
         let r = req.send().map_err(|e| format!("{path}: {e}"))?;
-        let status = r.status().as_u16();
-        let text = r.text().map_err(|e| format!("{path}: reading the answer: {e}"))?;
-        let body = if text.trim().is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_str(&text).unwrap_or_else(|_| json!({ "raw": text.chars().take(200).collect::<String>() }))
-        };
-        Ok(SewAnswer { status, body })
+        answer_of(path, r)
     }
 }
 
@@ -1060,6 +1092,118 @@ pub fn recording_consent(p: &Person, req: &ConsentReq, d: &Deps) -> Result<Value
         return Err(consent_refusal(&a));
     }
     Ok(json!({ "ok": true, "recordingId": req.recording_id, "consent": req.consent, "recording": a.body }))
+}
+
+// ── Record and Stop (Sew 0.9.0, K-g) ─────────────────────────────────
+
+/// Sew's permission bits K2 reads (`sew_proto::perms::Perms`; a channel's
+/// `my_perms` is a decimal string of the u64).
+pub mod perms {
+    /// May start a recording (`RECORD_CALLS`, bit 23).
+    pub const RECORD_CALLS: u64 = 1 << 23;
+    /// May manage channels (`MANAGE_CHANNELS`, bit 32): stops anyone's
+    /// recording.
+    pub const MANAGE_CHANNELS: u64 = 1 << 32;
+}
+
+/// One GET as the person; a 401 (the session ran out) renews once.
+fn get_as_person(p: &Person, d: &Deps, path: &str) -> Result<SewAnswer, Refusal> {
+    let tok = session(p, d, false)?;
+    let a = d.sew.get(Some(&tok), path).map_err(unreachable)?;
+    if a.status != 401 {
+        return Ok(a);
+    }
+    let tok = session(p, d, true)?;
+    d.sew.get(Some(&tok), path).map_err(unreachable)
+}
+
+/// What the person asks of a room's recording.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordingAct {
+    /// Record `room` (a slug, number, channel id or name).
+    Start { room: String },
+    /// Stop recording `recording_id` (Sew's decimal id).
+    Stop { recording_id: String },
+}
+
+/// A Sew refusal of a Record or Stop, in K2's words. Sew's own error stays
+/// under `details.sew` (its `reason` is what a client branches on).
+fn recording_act_refusal(a: &SewAnswer) -> Refusal {
+    let reason = a.body.pointer("/error/details/reason").and_then(Value::as_str).unwrap_or("");
+    let sew = a.body.get("error").cloned().unwrap_or(Value::Null);
+    let status = if a.status >= 400 { a.status } else { 502 };
+    let (code, hint): (&str, &str) = match reason {
+        "recording_required" => ("recording_required", "this room records every call with two or more people, so its recording can't be stopped while two or more are in it"),
+        "recording_active" => ("recording_active", "this room is already being recorded"),
+        "recording_not_active" => ("recording_not_active", "that recording isn't running any more"),
+        "not_in_voice" => ("not_in_voice", "you aren't in that room's call: Record and Stop are pressed from inside the call"),
+        "recording_disabled" => ("recording_disabled", "recording is off on this server (k2 hostchat recording enable)"),
+        "recording_unavailable" | "recorder_unavailable" | "transcriber_unavailable" | "recording_capacity" => {
+            return Refusal::new(503, "recording_unavailable", "recording isn't available on this server's voice right now")
+                .details(json!({ "sew": sew }))
+                .retry(RETRY_SECS)
+        }
+        "cap_ceiling" => ("cap_ceiling", "your login's chat pass doesn't carry voice:record here"),
+        "agents_cannot_record" => ("agents_not_in_voice", "agents don't start or stop recordings"),
+        _ if a.status == 403 => ("cannot_record", "you may not start or stop a recording in this room"),
+        _ if a.status == 404 => ("recording_not_found", "no recording or room with that id that this login can see"),
+        _ => return sew_refusal(a),
+    };
+    Refusal::new(status, code, hint).details(json!({ "sew": sew }))
+}
+
+/// `POST /cli/voice/recording/start {room}` and `…/stop {recordingId}`:
+/// the person's own Record or Stop, sent to Sew as them (their own Sew
+/// session, as consent is). Sew decides who may; pressing Record is the
+/// starter's own consent and nobody else's.
+pub fn recording_act(p: &Person, act: &RecordingAct, rooms: &[RoomRow], d: &Deps) -> Result<Value, Refusal> {
+    let path = match act {
+        RecordingAct::Start { room } => {
+            let r = find_room(rooms, room)?;
+            paths::recording_start(open_channel(r)?)
+        }
+        RecordingAct::Stop { recording_id } => paths::recording_stop(recording_id),
+    };
+    let a = as_person(p, d, &path, &json!({}))?;
+    if !a.ok() {
+        return Err(recording_act_refusal(&a));
+    }
+    let what = match act {
+        RecordingAct::Start { .. } => "started",
+        RecordingAct::Stop { .. } => "stopped",
+    };
+    Ok(json!({ "ok": true, "action": what, "recording": a.body }))
+}
+
+/// `GET /cli/voice/recording/controls?room=`: what the person's own Sew
+/// permissions in a room allow (Sew 0.9.0 has no `can_record` / `can_stop`
+/// in its plugin until 0.9.2; the client derives the buttons from these,
+/// `recording-controls.ts`).
+pub fn recording_perms(p: &Person, room: &str, rooms: &[RoomRow], d: &Deps) -> Result<Value, Refusal> {
+    let r = find_room(rooms, room)?;
+    let channel = open_channel(r)?.to_string();
+    let a = get_as_person(p, d, &paths::channel(&channel))?;
+    if !a.ok() {
+        return Err(sew_refusal(&a));
+    }
+    let bits = match a.body.get("my_perms") {
+        Some(Value::String(s)) => s.trim().parse::<u64>().ok(),
+        Some(Value::Number(n)) => n.as_u64(),
+        _ => None,
+    };
+    let Some(bits) = bits else {
+        return Err(Refusal::new(502, "chat_unavailable", "this server's chat answered the room without the person's permissions"));
+    };
+    Ok(json!({
+        "ok": true,
+        "room": r.slug,
+        "channelId": channel,
+        "myPerms": bits.to_string(),
+        "recordCalls": bits & perms::RECORD_CALLS != 0,
+        "manageChannels": bits & perms::MANAGE_CHANNELS != 0,
+        "recordingRule": a.body.get("recording_rule").cloned().unwrap_or(Value::Null),
+        "recordingRequired": a.body.get("recording_required").cloned().unwrap_or(Value::Null),
+    }))
 }
 
 /// Moderation actions (§9.1 `POST /cli/voice/moderate`).

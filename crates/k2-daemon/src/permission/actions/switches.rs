@@ -2,7 +2,8 @@
 //! `compute.operate`, `compute.manage`, `agents.manage`, `projects.manage`,
 //! `apps.build`, `apps.manage-full`, `apps.core`, `chat.manage`,
 //! `vault.manage`, `gardens.manage`, `dns.manage`, `mail.manage`,
-//! `mail.send-mode`, `db.agent-access` and `organization.manage` (the two
+//! `mail.send-mode`, `db.agent-access`, `organization.manage` and
+//! `voice.transcripts-read` (the two
 //! connection switches are in
 //! `connections.rs`), and each one's `to=off` twin, `<id>-off`.
 //!
@@ -304,7 +305,7 @@ const LEVEL: &[ParamSpec] =
 
 /// The Agent tab's switches, in Settings order. Index = the const generic
 /// of [`check_on`] / [`apply_on`] and their twins.
-pub(crate) static SWITCHES: [Switch; 18] = [
+pub(crate) static SWITCHES: [Switch; 19] = [
     Switch {
         on: on_spec(
             "compute.use",
@@ -714,6 +715,32 @@ pub(crate) static SWITCHES: [Switch; 18] = [
         ),
         writer: Writer::Access("org_chart_manage"),
     },
+    // 0.46.11 (Rosson 2026-11-10): "Read call transcripts", so agents
+    // review this server's own calls afterwards. Privacy: off by default;
+    // the Owner turns it on (every person's recording notice then says
+    // agents may read the transcript); the Owner or an Admin turns it off.
+    Switch {
+        on: on_spec(
+            "voice.transcripts-read",
+            "voice.transcripts-read-off",
+            Floor::Owner,
+            &[],
+            "Read call transcripts",
+            "Let {ws} read the transcripts of recorded calls in this server's voice rooms",
+            "Every read is logged. Each person's recording notice will say that agents on this server may read the transcript. An App's own calls are not included.",
+            &[code_wall("transcripts_read_off", "/cli/voice/")],
+            WallCoverage::Code,
+        ),
+        off: off_spec(
+            "voice.transcripts-read-off",
+            Floor::Admin,
+            &[],
+            "Read call transcripts",
+            "Stop {ws} reading call transcripts",
+            "It stops getting transcript notes too. What it already read stays in the read log.",
+        ),
+        writer: Writer::Access("voice_transcripts"),
+    },
 ];
 
 // ── state and apply, per writer ─────────────────────────────────────
@@ -753,6 +780,7 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
             let conn = db.lock();
             Ok(k2_core::org_chart::store::agents_can_manage(&conn, ws))
         }
+        Writer::Access("voice_transcripts") => path().map(|_| k2_core::voice_transcripts::can_read(ws)),
         Writer::Access("sim") => {
             path()?;
             let db = k2_core::db::shared();
@@ -873,7 +901,7 @@ macro_rules! register {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
+    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
 }
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────

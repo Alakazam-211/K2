@@ -9,7 +9,7 @@
 //! | Const | What it holds back |
 //! |---|---|
 //! | [`RECORDING_IN_APPS`] | `voice:record` in a manifest's caps and in role room lines ([`crate::skin::parse_caps`], `deploy::validate`), and with it Meet's `requires.k2 >= 0.46.11`, and the grandfather step of the cap rollout. **On** since the pin slice (Sew 0.9.0 pin day, S9, K2 0.46.11) |
-//! | [`CLIENT_CONSENT_SHEET`] | the K5 rooms' "require recording" switch (`POST /cli/voice/recording/settings` `required`): K2's desktop can't answer a consent prompt until its consent sheet ships (K-g, S7), and a required room holds every join for consent (Rosson's answer 6) |
+//! | [`CLIENT_CONSENT_SHEET`] | the K5 rooms' "require recording" switch (`POST /cli/voice/recording/settings` `required`): a required room holds every join for the notice, so it waited for K2's desktop to answer one (K-g, S7; Rosson's answer 6). **On** since K-g (K2 0.46.11) |
 //!
 //! Tests flip them through [`set_for_tests`]; nothing else does.
 
@@ -21,8 +21,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// `voice_record_cap`, the rollout skips without it).
 pub const RECORDING_IN_APPS: bool = true;
 
-/// K2's desktop answers recording consent prompts (K-g). Off until it ships.
-pub const CLIENT_CONSENT_SHEET: bool = false;
+/// K2's desktop answers recording notices (K-g). On since K2 0.46.11: in
+/// K2's own rooms the notice is "OK" (the person's grant) or "Leave call"
+/// (Rosson 2026-11-10), so the K5 rooms' "require recording" switch is
+/// available to the owner.
+pub const CLIENT_CONSENT_SHEET: bool = true;
 
 static TEST_RECORDING_IN_APPS: AtomicBool = AtomicBool::new(false);
 static TEST_CONSENT_SHEET: AtomicBool = AtomicBool::new(false);
@@ -37,9 +40,8 @@ pub fn consent_sheet() -> bool {
     CLIENT_CONSENT_SHEET || TEST_CONSENT_SHEET.load(Ordering::Relaxed)
 }
 
-/// Tests only: act as if K-g had flipped [`CLIENT_CONSENT_SHEET`] (and, for
-/// the record, [`RECORDING_IN_APPS`]; it is on since the pin, so `false` no
-/// longer turns it off).
+/// Tests only: the overrides (both consts are on since 0.46.11, so `false`
+/// no longer turns either off).
 /// Process-wide (nextest gives each test its own process).
 #[doc(hidden)]
 pub fn set_for_tests(in_apps: bool, consent_sheet: bool) {
@@ -49,12 +51,12 @@ pub fn set_for_tests(in_apps: bool, consent_sheet: bool) {
 
 #[cfg(test)]
 mod tests {
-    /// Pin day (Sew 0.9.0, K2 0.46.11): `voice:record` is K2's whatever a test
-    /// override says; the desktop consent sheet (K-g) is still off.
+    /// K2 0.46.11: `voice:record` is K2's (the pin) and K2's desktop answers
+    /// recording notices (K-g), whatever a test override says.
     #[test]
-    fn the_pin_turned_recording_in_apps_on_and_the_consent_sheet_stays_off() {
+    fn recording_in_apps_and_the_consent_sheet_are_on() {
         super::set_for_tests(false, false);
         assert!(super::in_apps(), "on with no test override: a test can't turn the pin back off");
-        assert!(!super::consent_sheet(), "K-g's consent sheet is still off");
+        assert!(super::consent_sheet(), "K-g shipped: the desktop answers recording notices");
     }
 }

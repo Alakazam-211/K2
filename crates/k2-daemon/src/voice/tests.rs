@@ -229,6 +229,10 @@ impl SewApi for FakeSew {
         let q = g.get_mut(path).ok_or_else(|| format!("fake sew: no answer for {path}"))?;
         Ok(if q.len() > 1 { q.remove(0) } else { q[0].clone() })
     }
+    /// A GET is recorded with the body `"GET"`.
+    fn get(&self, bearer: Option<&str>, path: &str) -> Result<SewAnswer, String> {
+        self.post(bearer, path, &json!("GET"))
+    }
 }
 
 fn deps(sew: Arc<FakeSew>) -> Deps {
@@ -691,6 +695,112 @@ fn recording_consent_reaches_sew_as_the_person() {
     let r = refused(422, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": "not_space_member"}}}));
     assert_eq!(r.code, "voice_member_pending", "the voice mapping covers the rest");
     bff::forget_all();
+}
+
+/// K-g: Record and Stop reach Sew's client routes as the person (their own
+/// Sew session), Record by the room's channel, Stop by the recording; Sew's
+/// refusals come back in K2's words with Sew's reason kept.
+#[test]
+fn record_and_stop_reach_sew_as_the_person() {
+    let _l = lane::test_lock();
+    bff::forget_all();
+    let sew = Arc::new(FakeSew::default());
+    session_ok(&sew, "sews_ada");
+    let start = bff::paths::recording_start("901");
+    let stop = bff::paths::recording_stop("42");
+    assert_eq!((start.as_str(), stop.as_str()), ("/api/v1/channels/901/recording/start", "/api/v1/recordings/42/stop"));
+    sew.answer(&start, 200, json!({"id": "42", "state": "starting", "trigger": "manual", "my_consent": "granted"}));
+    sew.answer(&stop, 200, json!({"id": "42", "state": "stopping"}));
+    let d = deps(sew.clone());
+    let ada = person("ada", UUID_ADA, Role::Member, "tok-ada-rec");
+    let rooms = vec![room(1, "901", ROOM_ACTIVE), room(2, "902", ROOM_CLOSING)];
+
+    let v = bff::recording_act(&ada, &bff::RecordingAct::Start { room: "room-1".into() }, &rooms, &d).expect("record");
+    assert_eq!((v["action"].as_str(), v["recording"]["id"].as_str()), (Some("started"), Some("42")), "{v}");
+    let v = bff::recording_act(&ada, &bff::RecordingAct::Stop { recording_id: "42".into() }, &rooms, &d).expect("stop");
+    assert_eq!(v["action"], "stopped");
+    let calls = sew.calls();
+    assert_eq!(calls[1], (Some("sews_ada".to_string()), start.clone(), json!({})), "Record as ada, by the room's channel");
+    assert_eq!(calls[2], (Some("sews_ada".to_string()), stop.clone(), json!({})), "Stop as ada");
+    // A closing room takes no Record; Sew isn't asked.
+    let r = bff::recording_act(&ada, &bff::RecordingAct::Start { room: "room-2".into() }, &rooms, &d).unwrap_err();
+    assert_eq!(r.code, "room_closing");
+    assert_eq!(sew.calls().len(), 3);
+
+    let refused = |path: &str, status: u16, reason: &str| {
+        let s = Arc::new(FakeSew::default());
+        session_ok(&s, "sews_x");
+        s.answer(path, status, json!({"error": {"code": "invalid_state", "hint": "", "details": {"reason": reason}}}));
+        bff::forget_all();
+        let act = if path.ends_with("/start") {
+            bff::RecordingAct::Start { room: "1".into() }
+        } else {
+            bff::RecordingAct::Stop { recording_id: "42".into() }
+        };
+        bff::recording_act(&ada, &act, &rooms, &deps(s)).unwrap_err()
+    };
+    let r = refused(&stop, 422, "recording_required");
+    assert_eq!((r.status, r.code.as_str()), (422, "recording_required"), "a required room's Stop with 2+ in it");
+    assert_eq!(r.details.as_ref().unwrap()["sew"]["details"]["reason"], "recording_required", "Sew's reason kept");
+    assert_eq!(refused(&start, 409, "recording_active").code, "recording_active");
+    assert_eq!(refused(&start, 403, "cap_ceiling").code, "cap_ceiling");
+    assert_eq!(refused(&start, 403, "something_else").code, "cannot_record");
+    bff::forget_all();
+}
+
+/// Sew 0.9.0's plugin has no `can_record` / `can_stop` (0.9.2 adds them):
+/// K2 reads the person's own `my_perms` on the room's channel for the
+/// client's buttons (RECORD_CALLS bit 23, MANAGE_CHANNELS bit 32).
+#[test]
+fn the_controls_read_the_persons_own_perms() {
+    let _l = lane::test_lock();
+    bff::forget_all();
+    let sew = Arc::new(FakeSew::default());
+    session_ok(&sew, "sews_ada");
+    let ch = bff::paths::channel("901");
+    let both = (1u64 << 23) | (1u64 << 32) | 1;
+    sew.answer(&ch, 200, json!({"id": "901", "my_perms": both.to_string(), "recording_rule": "required", "recording_required": true}));
+    sew.answer(&ch, 200, json!({"id": "901", "my_perms": "1"}));
+    let d = deps(sew.clone());
+    let ada = person("ada", UUID_ADA, Role::Member, "tok-ada-ctl");
+    let rooms = vec![room(1, "901", ROOM_ACTIVE)];
+    let v = bff::recording_perms(&ada, "room-1", &rooms, &d).expect("perms");
+    assert_eq!((v["recordCalls"].as_bool(), v["manageChannels"].as_bool()), (Some(true), Some(true)), "{v}");
+    assert_eq!((v["recordingRule"].as_str(), v["recordingRequired"].as_bool()), (Some("required"), Some(true)));
+    assert_eq!(sew.calls().last().unwrap(), &(Some("sews_ada".to_string()), ch.clone(), json!("GET")), "a GET as ada");
+    let v = bff::recording_perms(&ada, "1", &rooms, &d).expect("perms");
+    assert_eq!((v["recordCalls"].as_bool(), v["manageChannels"].as_bool()), (Some(false), Some(false)), "{v}");
+    bff::forget_all();
+}
+
+/// K-g routes: POST-only; the owner token, agents and Voice & Chat only
+/// logins never record (before any body is read or Sew is asked).
+#[test]
+fn record_and_stop_refuse_who_never_records() {
+    let _home = k2_core::test_env::TempHome::new();
+    k2_core::voice_preview::set_enabled(true);
+    let code_of = |r: &crate::cli_response::CliResponse| -> (String, String) {
+        let v: Value = serde_json::from_str(&r.body).unwrap();
+        (r.status.to_string(), v["error"]["code"].as_str().unwrap_or("").to_string())
+    };
+    for p in [routes::RECORDING_START, routes::RECORDING_STOP, routes::RECORDING_CONTROLS] {
+        assert!(routes::is_post_route(p), "{p}");
+        let r = routes::handle(p, Caller::OwnerToken, "owner", false, b"");
+        assert_eq!(r.status, "405 Method Not Allowed", "{p}: a GET");
+        let r = routes::handle(p, Caller::OwnerToken, "owner", true, br#"{"room":"1","recordingId":"42"}"#);
+        assert_eq!(code_of(&r).1, "owner_token_cannot_join", "{p}");
+        let r = routes::handle(p, Caller::Passport, "owner", true, br#"{"room":"1","recordingId":"42"}"#);
+        assert_eq!(code_of(&r).1, "agents_not_in_voice", "{p}");
+    }
+    let vc = Caller::Login { username: "vic".into(), role: Role::VoiceChat, token: "t".into() };
+    for p in [routes::RECORDING_START, routes::RECORDING_STOP] {
+        let r = routes::handle(p, vc.clone(), "owner", true, br#"{"room":"1","recordingId":"42"}"#);
+        assert_eq!(code_of(&r), ("403 Forbidden".to_string(), "voice_chat_not_allowed".to_string()), "{p}");
+    }
+    let member = Caller::Login { username: "mo".into(), role: Role::Member, token: "t".into() };
+    let r = routes::handle(routes::RECORDING_STOP, member, "owner", true, br#"{"recordingId":"042"}"#);
+    assert_eq!(code_of(&r).1, "usage", "Sew's ids are whole numbers from 1");
+    k2_core::voice_preview::set_enabled(false);
 }
 
 #[test]

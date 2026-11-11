@@ -165,6 +165,9 @@ pub mod tool_hook;
 // K2 voice rooms (prd-k2-voice-rooms-v1): preview switches, room bounds
 // and names, the hosting state. The Admin Space is `tool_hook::admin_space`.
 pub mod voice_rooms;
+// Agents review the K5 rooms' transcripts (0.46.11): the switch, the read
+// log, the per-room notes. Routes: k2-daemon `voice::transcripts`.
+pub mod voice_transcripts;
 // Garden v3 data sources (prd-garden-v3-external-data-cards-v1): HTTP JSON
 // checks the daemon polls, their state, card view and triggers. Pure half;
 // the poller and routes live in k2-daemon. See module docs.

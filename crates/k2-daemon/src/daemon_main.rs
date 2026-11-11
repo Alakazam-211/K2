@@ -1750,6 +1750,11 @@ async fn async_main() {
         .await;
     });
 
+    // 0.46.11: a K5 room's transcript is ready → a note to the agents the
+    // room sends transcripts to (opt-in per room). Idle (one skin.db read a
+    // minute) while no room sends any.
+    tokio::spawn(crate::voice::transcripts::run_notifier());
+
     // Session-archive daily sweep (session_archive.rs): protects agent
     // transcripts from provider reaping (~30d) by copying aged sessions
     // into `.k2/session-archive/`. First pass ~2 min after boot (off the

@@ -295,6 +295,36 @@ fn enable_stages_installs_then_sets_the_org_policy_on() {
     assert!(!t.recording_calls().iter().any(|a| a.ends_with("stage") || a.ends_with("install")), "{:?}", t.recording_calls());
 }
 
+/// Rosson 2026-11-10: in K2's own rooms nobody stays in a recorded call
+/// unrecorded. Enable sets Sew's `[recording] consent_prompt_timeout_ms` to
+/// 60 s through the helper's `engine sew config` (Sew drops a person still
+/// `pending` after it), once; status shows it; a second enable sends nothing.
+#[test]
+fn enable_sets_the_consent_timeout_to_a_minute_once() {
+    let t = t();
+    let (st, v) = t.enable(json!({}));
+    assert_eq!(st, "200 OK", "{v}");
+    let configs: Vec<Value> = t
+        .ops
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| c.argv == "engine sew config")
+        .map(|c| serde_json::from_slice(c.stdin.as_ref().expect("stdin")).expect("json"))
+        .collect();
+    assert_eq!(configs, [json!({"recording.consent_prompt_timeout_ms": "60000"})]);
+    let req: k2_root_proto::sew::ConfigRequest = serde_json::from_value(configs[0].clone()).expect("the helper's own type takes it");
+    assert!(req.validate().is_ok());
+    let r = t.get(&Who::Owner, ROUTE);
+    assert_eq!(r["consentTimeoutMs"], 60_000, "{r}");
+    assert_eq!(r["consentTimeoutError"], Value::Null, "{r}");
+    t.reset();
+    let (st, _) = t.enable(json!({}));
+    assert_eq!(st, "200 OK");
+    assert!(!t.ops.calls.lock().unwrap().iter().any(|c| c.argv == "engine sew config"), "set once");
+}
+
 /// The Kessel Steward's condition R28 for the model's licence files too: a
 /// licence file beside --model-file whose sha256 isn't the pin (or none
 /// there) refuses before anything is staged or any Sew step runs.

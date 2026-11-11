@@ -146,6 +146,9 @@ pub struct Recording {
     pub id: String,
     pub space_id: String,
     pub channel_id: String,
+    /// Sew 0.9.0 `transcript_state` (`pending` until a turn, then `done`
+    /// unless a test sets it: [`FakeSew::set_transcript_state`]).
+    pub transcript_state: Option<String>,
     /// Whatever Sew would send beyond K2's fields (an audio link): K2 must
     /// never pass it on.
     pub extra: Value,
@@ -315,6 +318,8 @@ struct State {
     rec_seq: u64,
     /// Feed changes at or below this seq were pruned (older cursors → 410).
     rec_floor: u64,
+    /// Sew 0.9.0: `POST /mgmt/v1/channels/{id}/recording` bodies, merged.
+    channel_recording: BTreeMap<String, Value>,
 }
 
 pub struct FakeSew {
@@ -844,6 +849,7 @@ impl FakeSew {
                     space_id: space_id.into(),
                     channel_id: channel_id.into(),
                     extra: json!({"audio_url": format!("https://sew.invalid/recordings/{id}/audio.opus")}),
+                    transcript_state: None,
                     turns: Vec::new(),
                 },
             );
@@ -858,6 +864,16 @@ impl FakeSew {
             r.turns.push(json!({"id": format!("m{}", n + 1), "speaker_external_id": speaker, "start_ms": n * 1000,
                                 "end_ms": n * 1000 + 900, "text": text, "audio_offset_url": "https://sew.invalid/x"}));
         })
+    }
+
+    /// Recording `id`'s `transcript_state` (Sew 0.9.0's compliance view).
+    pub fn set_transcript_state(&self, id: &str, state: &str) {
+        self.with(|s| s.recordings.get_mut(id).expect("add_recording first").transcript_state = Some(state.to_string()))
+    }
+
+    /// A voice room's recording settings as K2 set them over mgmt.
+    pub fn channel_recording(&self, channel_id: &str) -> Option<Value> {
+        self.with(|s| s.channel_recording.get(channel_id).cloned())
     }
 
     /// Append an App feed change (`kind` started | stopped |
@@ -1186,9 +1202,9 @@ fn handle(
             p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/voice/states") => voice_states_get(s, p),
             p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/voice/changes") => voice_changes_get(s, p, query),
             // Sew 0.9.0 (flag `mgmt_recording_reads`).
-            p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/recordings") => recordings_read(s, p, query),
-            p if p.starts_with("/mgmt/v1/apps/") && p.ends_with("/recordings/changes") => recordings_read(s, p, query),
-            p if p.starts_with("/mgmt/v1/recordings/") => recordings_read(s, p, query),
+            p if p.starts_with("/mgmt/v1/spaces/") && p.ends_with("/recordings") => recordings_read(s, p, query, actor),
+            p if p.starts_with("/mgmt/v1/apps/") && p.ends_with("/recordings/changes") => recordings_read(s, p, query, actor),
+            p if p.starts_with("/mgmt/v1/recordings/") => recordings_read(s, p, query, actor),
             _ => {
                 s.bad_paths.push(format!("GET {path}"));
                 err(
@@ -1275,6 +1291,8 @@ fn handle(
         sew_wire::MGMT_CHANNELS_BULK => channels_bulk(s, body),
         // Sew 0.7.0: SW-4 closing, SW-11 media path.
         p if p.starts_with("/mgmt/v1/channels/") && p.ends_with("/closing") => channel_closing(s, p, body),
+        // Sew 0.9.0 (flag `app_recording`): a voice room's recording settings.
+        p if p.starts_with("/mgmt/v1/channels/") && p.ends_with("/recording") => channel_recording_set(s, p, body),
         sew_wire::MGMT_VOICE_MEDIA_PATH => media_path_set(s, body),
         p if p.starts_with("/mgmt/v1/apps/") && p.ends_with("/settings") => app_settings(s, p, body),
         p if acting.is_some() => chat_post(s, acting.expect("acting"), p, body),
@@ -3286,7 +3304,89 @@ fn app_read_gate(s: &State, app: &str, space: &str) -> Result<(), (u16, String)>
     Ok(())
 }
 
-fn recordings_read(s: &mut State, path: &str, query: &str) -> (u16, String) {
+/// `POST /mgmt/v1/channels/{id}/recording` (Sew 0.9.0
+/// `MgmtChannelRecordingRequest`, `deny_unknown_fields`).
+fn channel_recording_set(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    if !has_flag(s, APP_RECORDING) {
+        s.bad_paths.push(format!("POST {path} (no {APP_RECORDING} flag)"));
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    let id = path.trim_start_matches("/mgmt/v1/channels/").trim_end_matches("/recording").to_string();
+    let v: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return bad_body(s, "channel recording", e, body),
+    };
+    let Some(o) = v.as_object() else { return bad_body(s, "channel recording", "not an object", body) };
+    if let Some(k) = o.keys().find(|k| !matches!(k.as_str(), "app_id" | "auto" | "required" | "audio_days" | "require_consent")) {
+        return bad_body(s, "channel recording", format!("unknown field {k}"), body);
+    }
+    let cur = s.channel_recording.entry(id.clone()).or_insert_with(|| json!({}));
+    for (k, x) in o {
+        if k != "app_id" {
+            cur[k.as_str()] = x.clone();
+        }
+    }
+    let mut out = json!({"channel_id": id, "auto": cur.get("auto").cloned().unwrap_or(json!(false)), "rule": "none"});
+    if let Some(r) = cur.get("require_consent") {
+        out["require_consent"] = r.clone();
+    }
+    (200, out.to_string())
+}
+
+/// Sew 0.9.0's names for a recording on the compliance view
+/// (`MgmtRecordingSummary`): `participants`, `transcript_state`.
+fn rec_summary_090(r: &Recording) -> Value {
+    let state = r.transcript_state.clone().unwrap_or_else(|| if r.turns.is_empty() { "pending".into() } else { "done".into() });
+    json!({"id": r.id, "space_id": r.space_id, "channel_id": r.channel_id, "state": "stopped", "trigger": "manual",
+           "started_by": "k2:owner", "started_at": TS, "stopped_at": TS, "stop_reason": "left", "record_message_id": "1",
+           "transcript_state": state, "audio_state": "available", "audio_keep_days": 0,
+           "participants": [{"external_id": "k2:owner", "consent": "granted", "recorded": true}],
+           "audio_url": format!("https://sew.invalid/recordings/{}/audio.opus", r.id)})
+}
+
+/// Sew 0.9.0's compliance view (no `app_id`): the install's Owner or an
+/// Admin named by `Sew-Actor` (the fake knows `k2:owner`), over every Space.
+fn compliance_read(s: &mut State, path: &str, query: &str, actor: Option<&str>, after: Option<String>, limit: usize) -> (u16, String) {
+    if actor != Some("k2:owner") {
+        return err(403, "missing_permission", "an Owner or Admin Sew-Actor", json!({"reason": "sew_actor_admin_required"}));
+    }
+    if let Some(space) = path.strip_prefix("/mgmt/v1/spaces/").and_then(|r| r.strip_suffix("/recordings")) {
+        let items: Vec<Value> = s
+            .recordings
+            .values()
+            .filter(|r| r.space_id == space && after.as_deref().is_none_or(|a| r.id.parse::<u64>().unwrap_or(0) > a.parse::<u64>().unwrap_or(0)))
+            .take(limit)
+            .map(rec_summary_090)
+            .collect();
+        let next = (items.len() == limit).then(|| items.last().map(|i| i["id"].clone())).flatten();
+        return (200, json!({"items": items, "next": next}).to_string());
+    }
+    let _ = query;
+    let rest = path.trim_start_matches("/mgmt/v1/recordings/");
+    let (id, transcript) = match rest.strip_suffix("/transcript") {
+        Some(id) => (id.to_string(), true),
+        None => (rest.to_string(), false),
+    };
+    let Some(r) = s.recordings.get(&id).cloned() else {
+        return err(404, "not_found", "no such recording", json!({}));
+    };
+    if !transcript {
+        return (200, rec_summary_090(&r).to_string());
+    }
+    let start = after.as_deref().and_then(|a| r.turns.iter().position(|t| t["id"] == a).map(|i| i + 1)).unwrap_or(0);
+    let turns: Vec<Value> = r
+        .turns
+        .iter()
+        .skip(start)
+        .take(limit)
+        .map(|t| json!({"message_id": t["id"], "speaker_external_id": t["speaker_external_id"], "start_ms": t["start_ms"],
+                         "end_ms": t["end_ms"], "text": t["text"]}))
+        .collect();
+    let next = (start + turns.len() < r.turns.len()).then(|| turns.last().map(|t| t["message_id"].clone())).flatten();
+    (200, json!({"recording_id": id, "transcript_state": "done", "turns": turns, "next": next}).to_string())
+}
+
+fn recordings_read(s: &mut State, path: &str, query: &str, actor: Option<&str>) -> (u16, String) {
     if !has_flag(s, MGMT_RECORDING_READS) {
         s.bad_paths.push(format!("GET {path} (no {MGMT_RECORDING_READS} flag)"));
         return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
@@ -3325,9 +3425,8 @@ fn recordings_read(s: &mut State, path: &str, query: &str) -> (u16, String) {
         return (200, json!({"changes": changes, "next": next.to_string()}).to_string());
     }
     let Some(app) = query_param(query, "app_id").map(pct_decode) else {
-        // The Owner/Admin compliance view (no app_id) belongs to K-e (S8).
-        s.bad_bodies.push(format!("GET {path}: no app_id"));
-        return err(400, "validation_failed", "app_id", json!({"field": "app_id"}));
+        // The Owner/Admin compliance view (no app_id).
+        return compliance_read(s, path, query, actor, after, limit);
     };
     if let Some(space) = path.strip_prefix("/mgmt/v1/spaces/").and_then(|r| r.strip_suffix("/recordings")) {
         let space = space.to_string();

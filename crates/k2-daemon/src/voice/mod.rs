@@ -29,6 +29,7 @@ pub mod occupancy;
 pub mod routes;
 pub mod sew_lane;
 pub mod signal_lane;
+pub mod transcripts;
 
 #[cfg(test)]
 mod tests;

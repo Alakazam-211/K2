@@ -1209,7 +1209,7 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         hook::PolicyRead::NotRead
     };
     let k = kind.to_string();
-    blocking(move || {
+    let swept = blocking(move || {
         hook::set_health(&k, true, None)?;
         // Sew 0.6.0: each bound App's manifest chat block, then members
         // first (a keyed App's users get their chat grant, which provisions
@@ -1249,7 +1249,18 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         }
         Ok(())
     })
-    .await
+    .await;
+    // Sew 0.9.0 (Rosson 2026-11-10): K2's own rooms are "declining means not
+    // joining", so nobody stays in a recorded call unrecorded. Logged, never
+    // the sweep's failure.
+    if swept.is_ok() && kind == hook::CHAT_KIND && recording && k2_core::voice_preview::enabled() {
+        match crate::voice::transcripts::ensure_consent_mode(client).await {
+            Ok(set) if !set.is_empty() => log_debug!("[voice-rooms] consent mode set for rooms {set:?}"),
+            Ok(_) => {}
+            Err(e) => log_debug!("[voice-rooms] consent mode: {e}"),
+        }
+    }
+    swept
 }
 
 /// `GET /mgmt/v1/policies` → the `identity.managed_fields` value (`None` =

@@ -12,6 +12,16 @@
 //! POST /cli/voice/moderate {room, person, action}   kick|mute|unmute|deafen|undeafen (owner/Admin login)
 //! POST /cli/voice/recording/consent {recording_id, consent, notice_version?}
 //!                                          a person's own login only → Sew's recording
+//! POST /cli/voice/recording/start {room}   Record (Sew 0.9.0): a person's own login only
+//! POST /cli/voice/recording/stop {recordingId}   Stop (Sew 0.9.0): the same callers
+//! POST /cli/voice/recording/controls {room} the person's Sew permissions in a room
+//!                                          (RECORD_CALLS, MANAGE_CHANNELS) for the buttons
+//! GET  /cli/voice/recordings[?room=]       this server's rooms' recordings (voice::transcripts)
+//! GET  /cli/voice/transcript?id=[&after=]  one recording's transcript (voice::transcripts)
+//! POST /cli/voice/recording/start {room}   Record (Sew 0.9.0): a person's own login only
+//! POST /cli/voice/recording/stop {recordingId}  Stop (Sew 0.9.0): a person's own login only
+//! GET  /cli/voice/recording/controls?room= the person's Sew permissions in a room
+//!                                          (RECORD_CALLS, MANAGE_CHANNELS), for the buttons
 //! POST /cli/voice/repair {}                check the K5 Space with Sew and repair it
 //!                                          (owner/Admin, or an agent with Manage Chat / Voice Hosting)
 //! ```
@@ -78,6 +88,11 @@ pub const SESSION_KEY_PACKAGES: &str = "/cli/voice/session/keys/key_packages";
 pub const SESSION_KEYS_JOIN: &str = "/cli/voice/session/keys/join";
 pub const MODERATE: &str = "/cli/voice/moderate";
 pub const RECORDING_CONSENT: &str = "/cli/voice/recording/consent";
+/// Sew 0.9.0 (K-g): the person's own Record and Stop, and what their Sew
+/// permissions allow in a room.
+pub const RECORDING_START: &str = "/cli/voice/recording/start";
+pub const RECORDING_STOP: &str = "/cli/voice/recording/stop";
+pub const RECORDING_CONTROLS: &str = "/cli/voice/recording/controls";
 /// Sew 0.9.0: the K5 rooms' recording (`required`, `startLevel`); read
 /// through `GET /cli/voice/status` (`recording`).
 pub const RECORDING_SETTINGS: &str = "/cli/voice/recording/settings";
@@ -96,6 +111,9 @@ pub const POST_ROUTES: &[&str] = &[
     SESSION_KEYS_JOIN,
     MODERATE,
     RECORDING_CONSENT,
+    RECORDING_START,
+    RECORDING_STOP,
+    RECORDING_CONTROLS,
     RECORDING_SETTINGS,
     REPAIR,
 ];
@@ -477,6 +495,10 @@ fn rooms_view(c: &Caller, owner_token: &str) -> CliResponse {
         "canManage": c.manages(),
         "lane": super::lane::state(),
         "feed": occupancy::feed_status().state,
+        // 0.46.11: an agent on this server holds "Read call transcripts", so
+        // K2's recording notice says "Agents on this server may read the
+        // transcript." (every login's client reads it, Voice & Chat only too).
+        "agentReaders": super::transcripts::any_reader(),
     }))
 }
 
@@ -540,6 +562,10 @@ fn recording_view() -> Value {
         // K2's desktop answers consent prompts (K-g): until then the
         // "require recording" switch stays hidden and refused.
         "consentSheet": k2_core::recording::consent_sheet(),
+        // 0.46.11: agents that may read the rooms' transcripts (the notice
+        // says so while any does), and the line K2's notice shows.
+        "agentReaders": super::transcripts::any_reader(),
+        "agentReadersLine": k2_core::voice_transcripts::AGENT_READERS_LINE,
     })
 }
 
@@ -866,6 +892,84 @@ fn consent(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     }
 }
 
+/// A Voice & Chat only login never starts or stops a recording (the kit
+/// door's rule, `kit_door::voice_chat_kit_refusal`); it is still told about
+/// one and may leave.
+fn voice_chat_cannot_record() -> CliResponse {
+    no(403, "voice_chat_not_allowed", "a Voice & Chat only login can't start or stop a recording")
+}
+
+/// Sew's recording id: a whole number from 1, at most 19 digits.
+fn recording_id_ok(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 19 && !id.starts_with('0') && id.bytes().all(|x| x.is_ascii_digit())
+}
+
+/// `POST /cli/voice/recording/start {room}` / `…/stop {recordingId}`: the
+/// caller's class first, then the body, then the person's own login.
+fn recording_act(c: &Caller, owner_token: &str, path: &str, b: &Value) -> CliResponse {
+    if let Some(r) = not_a_person(c) {
+        return r;
+    }
+    if matches!(c, Caller::Login { role: Role::VoiceChat, .. }) {
+        return voice_chat_cannot_record();
+    }
+    let act = if path == RECORDING_START {
+        match field(b, "room") {
+            Some(room) => bff::RecordingAct::Start { room },
+            None => return no(400, "usage", "send {\"room\": \"room-1\"}"),
+        }
+    } else {
+        match field(b, "recordingId").or_else(|| field(b, "recording_id")) {
+            Some(id) if recording_id_ok(&id) => bff::RecordingAct::Stop { recording_id: id },
+            _ => return no(400, "usage", "send {\"recordingId\": \"<Sew's recording id, a whole number>\"}"),
+        }
+    };
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    };
+    match bff::recording_act(&p, &act, &view.rooms, &bff::deps()) {
+        Ok(v) => ok(v),
+        Err(r) => refuse(&r),
+    }
+}
+
+/// `POST /cli/voice/recording/controls {room}`: the person's own Sew
+/// permissions in a room, and whether agents may read its transcripts. A
+/// Voice & Chat only login is told it can't record.
+fn recording_controls(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
+    if let Some(r) = not_a_person(c) {
+        return r;
+    }
+    let Some(room) = field(b, "room") else {
+        return no(400, "usage", "send {\"room\": \"room-1\"}");
+    };
+    let p = match need_person(c, owner_token) {
+        Ok(p) => p,
+        Err(r) => return r,
+    };
+    let view = match k2_core::tool_hook::admin_space_view() {
+        Ok(v) => v,
+        Err(e) => return no(503, "voice_unavailable", &format!("K2 could not read the rooms: {e}")),
+    };
+    match bff::recording_perms(&p, &room, &view.rooms, &bff::deps()) {
+        Ok(mut v) => {
+            if p.role == Role::VoiceChat {
+                v["recordCalls"] = json!(false);
+                v["manageChannels"] = json!(false);
+                v["voiceChatOnly"] = json!(true);
+            }
+            v["agentReaders"] = json!(super::transcripts::any_reader());
+            ok(v)
+        }
+        Err(r) => refuse(&r),
+    }
+}
+
 fn moderate(c: &Caller, owner_token: &str, b: &Value) -> CliResponse {
     match c {
         Caller::OwnerToken => {
@@ -998,6 +1102,8 @@ pub fn handle(path: &str, caller: Caller, owner_token: &str, is_post: bool, body
         SESSION_KEYS_JOIN => session(&caller, owner_token, Forward::KeysJoin, &b),
         MODERATE => moderate(&caller, owner_token, &b),
         RECORDING_CONSENT => consent(&caller, owner_token, &b),
+        RECORDING_START | RECORDING_STOP => recording_act(&caller, owner_token, path, &b),
+        RECORDING_CONTROLS => recording_controls(&caller, owner_token, &b),
         RECORDING_SETTINGS => recording_settings(&caller, &b),
         REPAIR => repair(&caller),
         _ => CliResponse::not_found(),
@@ -1013,21 +1119,21 @@ mod role_name_tests {
         (r.status.to_string(), v["error"]["code"].as_str().unwrap_or("").to_string())
     }
 
-    /// PRD §8 K-c (Rosson's answer 6): the K5 rooms' `required` is refused
-    /// `client_consent_missing` while K2's desktop can't answer consent (the
-    /// K-g const off), for the owner too; with it on, the owner gets past it
-    /// (here to Sew's flag), an Admin never.
+    /// PRD §8 K-c (Rosson's answer 6): the K5 rooms' `required` waited for
+    /// K2's desktop to answer a recording notice (K-g). K-g shipped in
+    /// 0.46.11: with no test override the owner gets past it (here to Sew's
+    /// flag), an Admin never, an agent never.
     #[test]
-    fn k5_required_waits_for_the_desktop_consent_sheet() {
+    fn k5_required_is_the_owners_now_the_desktop_answers_notices() {
         let _home = k2_core::test_env::TempHome::new();
         k2_core::recording::set_for_tests(false, false);
         for v in [json!({"required": true}), json!({"required": false}), json!({"required": null})] {
             let r = recording_settings(&Caller::OwnerToken, &v);
-            assert_eq!(code_of(&r), ("409 Conflict".to_string(), "client_consent_missing".to_string()), "{v}: {}", r.body);
+            assert_ne!(code_of(&r).1, "client_consent_missing", "{v}: {}", r.body);
+            assert_eq!(code_of(&r), ("409 Conflict".to_string(), "sew_feature_missing".to_string()), "{v}: Sew 0.8.x: {}", r.body);
         }
         let r = recording_settings(&Caller::Passport, &json!({"required": true}));
         assert_eq!(code_of(&r).1, "owner_or_admin_only", "an agent never");
-        k2_core::recording::set_for_tests(false, true);
         let admin = Caller::Login { username: "ada".into(), role: Role::Admin, token: "t".into() };
         assert_eq!(code_of(&recording_settings(&admin, &json!({"required": true}))).1, "owner_only");
         assert_eq!(code_of(&recording_settings(&Caller::OwnerToken, &json!({"required": true}))).1, "sew_feature_missing", "Sew 0.8.x");

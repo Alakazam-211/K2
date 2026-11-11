@@ -1738,6 +1738,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     crate::tool_hook::admin_space::ensure_schema(&conn)?;
     // Sew 0.9.0: recording in Apps (the cap rollout, locks, the feed).
     crate::tool_hook::recording::ensure_schema(&conn)?;
+    // 0.46.11: agents review the K5 rooms' transcripts.
+    crate::voice_transcripts::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest

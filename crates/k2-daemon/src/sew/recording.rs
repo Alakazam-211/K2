@@ -70,6 +70,12 @@ pub const RECORD: &str = "recording";
 /// Free disk kept for the first recordings beyond the staged files and the
 /// disk guard's reserve.
 pub const RECORDINGS_HEADROOM: u64 = 2 * sup::GIB;
+/// How long a person may leave a recording notice unanswered in one of K2's
+/// own rooms before Sew drops them (Rosson 2026-11-10: in K2's rooms people
+/// are told and can't stay in unrecorded; declining means not joining).
+/// Sew's `[recording] consent_prompt_timeout_ms`; Sew's default is 120000.
+pub const CONSENT_TIMEOUT_MS: u64 = 60_000;
+
 /// Where Sew keeps recordings (its blob store) and where the model goes.
 pub const DISK_PATH: &str = "/var/lib";
 
@@ -96,6 +102,12 @@ pub struct State {
     pub installed_at: Option<i64>,
     /// `{step, result: running|done|error, error?, at}`.
     pub progress: Option<Value>,
+    /// Sew's `[recording] consent_prompt_timeout_ms` as K2 last set it
+    /// ([`CONSENT_TIMEOUT_MS`]); `None` until it took.
+    pub consent_timeout_ms: Option<u64>,
+    /// Why the last attempt to set it failed (the enable still succeeds:
+    /// Sew's own default, 120 s, still drops a silent person).
+    pub consent_timeout_error: Option<String>,
     pub last_error: Option<String>,
     pub updated_at: i64,
 }
@@ -519,6 +531,9 @@ pub fn status(env: &Env) -> Value {
         "ready": ready,
         "progress": st.progress,
         "lastError": st.last_error,
+        // K2's own rooms: a silent person is dropped after this long.
+        "consentTimeoutMs": st.consent_timeout_ms,
+        "consentTimeoutError": st.consent_timeout_error,
         "rules": "recording needs 8 GiB of RAM; disable keeps the recorder and every recording; uninstall removes the recorder and never deletes recordings",
     })
 }
@@ -567,6 +582,8 @@ fn enable_steps(env: &Env, files: &Files) -> R<Value> {
         }
         model = Some(m.name.to_string());
     }
+    step(env, "consent-timeout");
+    set_consent_timeout(env);
     step(env, "policy");
     set_policy(env, true)?;
     let after = live(env);
@@ -589,6 +606,37 @@ fn enable_steps(env: &Env, files: &Files) -> R<Value> {
         "model": model,
         "next": "Apps and K5 rooms still choose who may record (Settings → Chat / Voice Hosting); each person consents for themselves",
     }))
+}
+
+/// Set Sew's `[recording] consent_prompt_timeout_ms` to [`CONSENT_TIMEOUT_MS`]
+/// once (the root helper's `engine sew config`, protocol 15), then restart
+/// Sew if it runs so the value takes. A refusal is recorded and shown in
+/// `k2 hostchat recording status`, never the enable's failure.
+pub fn set_consent_timeout(env: &Env) {
+    if load(env).consent_timeout_ms == Some(CONSENT_TIMEOUT_MS) {
+        return;
+    }
+    let body = json!({ "recording.consent_prompt_timeout_ms": CONSENT_TIMEOUT_MS.to_string() });
+    let r = (|| -> Result<(), String> {
+        let out = sup::helper_stdin(env, &["config"], body.to_string().as_bytes())?;
+        if let Some(n) = sup::sew_exit(&out).filter(|n| *n != 0) {
+            return Err(format!("Sew refused recording.consent_prompt_timeout_ms (exit {n}): {}", sup::sew_message(&out)));
+        }
+        if env.ops.unit(k2_root_proto::sew::UNIT_SEW).is_active() {
+            sup::helper_json(env, &["systemctl", "restart"])?;
+        }
+        Ok(())
+    })();
+    update(env, |st| match r {
+        Ok(()) => {
+            st.consent_timeout_ms = Some(CONSENT_TIMEOUT_MS);
+            st.consent_timeout_error = None;
+        }
+        Err(e) => {
+            k2_core::log_debug!("[sew] recording consent timeout: {e}");
+            st.consent_timeout_error = Some(e);
+        }
+    });
 }
 
 /// `POST /cli/sew/recording/disable`: the org policy off. The sidecars stay

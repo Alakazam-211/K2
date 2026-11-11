@@ -8653,6 +8653,37 @@ async fn handle_one_request(
             crate::voice::events_ws::serve(stream, token, state.token.to_string()).await;
             return DispatchOutcome::Done;
         }
+        // 0.46.11: agents review the K5 rooms' transcripts (the switch "Read
+        // call transcripts", the read log, the per-room notes). Dark with the
+        // rest of the family; the handler classifies every caller.
+        p if crate::voice::transcripts::is_route(p) => {
+            if !k2_core::voice_preview::enabled() {
+                let _ = stream.read(&mut buf).await;
+                let r = crate::voice::routes::dark();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            if crate::voice::transcripts::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::voice::transcripts::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        let r = crate::voice::routes::too_large();
+                        super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let r = crate::voice::transcripts::handle(p, &who, is_post, &params, &body_bytes).await;
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Voice rooms (preview, prd-k2-voice-rooms-v1 §9.1, lane C): dark
         // (404 voice_rooms_off) while voice_rooms_preview is off. Floors for
         // logins live in route_policy; the handler classifies every caller.

@@ -1565,17 +1565,50 @@ pub struct AppRecordingSettings {
     pub audio_max_days: Patch<u32>,
 }
 
-/// `POST /mgmt/v1/channels/{channel_id}/recording`: a channel's own
-/// recording rule. K2 doesn't send it in 0.46.11 (the CUI/FCI lock works
-/// through the Space's settings); the shape is here for the compat replay
-/// and Sew must confirm the full body.
+/// `POST /mgmt/v1/channels/{channel_id}/recording`: a voice room's own
+/// recording settings (Sew 0.9.0 `MgmtChannelRecordingRequest`; absent
+/// fields are kept). K2 sends `require_consent: true` for the K5 rooms
+/// (Rosson 2026-11-10: in K2's own rooms people are told, and declining
+/// means not joining). No `app_id` for the server-governed Space.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MgmtChannelRecording {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_id: Option<String>,
+    /// Record from the room's first join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
+    /// Record every call with two or more people (`null` inherits).
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
-    pub recording_required: Patch<bool>,
+    pub required: Patch<bool>,
+    /// The room's default audio keep days (`null` inherits the org's).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub audio_days: Patch<u16>,
+    /// Declining the recording notice means not joining (`null` inherits
+    /// the org policy `recording.require_consent_to_join`).
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub require_consent: Patch<bool>,
+}
+
+/// The `Sew-Actor` of K2's own compliance reads (Owner/Admin view, no
+/// `app_id`). An agent reading a K5 room's transcript on its switch reads
+/// as the owner who turned the switch on; K2's own log names the agent
+/// (`voice_transcripts::log_read`).
+pub const OWNER_ACTOR: &str = "k2:owner";
+
+/// `GET /mgmt/v1/recordings/{id}` (the compliance view: no `app_id`).
+pub fn compliance_recording_path(id: &str) -> String {
+    format!("/mgmt/v1/recordings/{}", pct_path(id))
+}
+
+/// `GET /mgmt/v1/recordings/{id}/transcript?after=&limit=` (no `app_id`).
+pub fn compliance_transcript_path(id: &str, after: Option<&str>, limit: u32) -> String {
+    format!("/mgmt/v1/recordings/{}/transcript?{}", pct_path(id), &page_query(after, limit)[1..])
+}
+
+/// `GET /mgmt/v1/spaces/{space_id}/recordings?after=&limit=` (no `app_id`).
+pub fn compliance_space_recordings_path(space_id: &str, after: Option<&str>, limit: u32) -> String {
+    format!("/mgmt/v1/spaces/{}/recordings?{}", pct_path(space_id), &page_query(after, limit)[1..])
 }
 
 /// `POST /mgmt/v1/channels/{channel_id}/recording`.
@@ -1680,8 +1713,22 @@ pub struct RecordingSummary {
     pub stop_reason: Option<String>,
     #[serde(default)]
     pub transcript_ready: bool,
-    #[serde(default)]
+    /// Sew 0.9.0 `transcript_state` (`pending | running | done | partial |
+    /// failed`; a string, so a newer value parses). Read
+    /// [`RecordingSummary::transcript_final`], not this or `transcript_ready`.
+    #[serde(default, deserialize_with = "de_opt_stringy", skip_serializing_if = "Option::is_none")]
+    pub transcript_state: Option<String>,
+    /// Sew 0.9.0 names them `participants` (`{external_id, consent, recorded}`).
+    #[serde(default, alias = "participants")]
     pub consents: Vec<RecordingConsent>,
+}
+
+impl RecordingSummary {
+    /// The transcript is final: Sew's `transcript_state` says `done`,
+    /// `partial` or `failed`, or (K2's early name) `transcript_ready`.
+    pub fn transcript_final(&self) -> bool {
+        self.transcript_ready || matches!(self.transcript_state.as_deref(), Some("done" | "partial" | "failed"))
+    }
 }
 
 fn trigger_manual() -> String {
@@ -1700,7 +1747,8 @@ pub struct RecordingsPage {
 /// One transcript turn: markdown-escaped text, the speaker, the offsets.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptTurn {
-    #[serde(default, deserialize_with = "de_stringy")]
+    /// The turn's message id (Sew 0.9.0 `message_id`).
+    #[serde(default, alias = "message_id", deserialize_with = "de_stringy")]
     pub id: String,
     #[serde(default, deserialize_with = "de_stringy")]
     pub speaker_external_id: String,

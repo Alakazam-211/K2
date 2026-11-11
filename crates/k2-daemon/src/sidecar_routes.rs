@@ -1763,11 +1763,12 @@ fn handle_access(
         && toggle != "app_users"
         && toggle != "sim"
         && toggle != "org_chart_manage"
+        && toggle != "voice_transcripts"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim' or 'vault_manage'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1801,6 +1802,33 @@ fn handle_access(
         _ => return Err(err("bad_request", 400, "value must be true or false")),
     };
     let ws = target_workspace(caller, str_field(&v, "workspace"))?;
+    if toggle == "voice_transcripts" {
+        // "Read call transcripts" (0.46.11, Rosson 2026-11-10: off by
+        // default, the Owner turns it on). The owner raises; the owner or an
+        // Admin lowers. A passport never reaches here (`/cli/agent-access/set`
+        // is not an agent verb). Off also drops the agent's room notes.
+        if value && !caller_is_owner(caller) {
+            return Err(err(
+                "owner_only",
+                403,
+                "only the server's owner turns on \"Read call transcripts\" (Settings → Workspaces → <agent> → Agent); an Admin may turn it off",
+            ));
+        }
+        k2_core::voice_transcripts::set_reader(&ws.id, value, &caller.audit_user()).map_err(|e| err("store_unavailable", 503, e))?;
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "voice.transcripts_read_switch",
+            &caller.audit_user(),
+            format!("agent {} {}", ws.handle, if value { "on" } else { "off" }),
+            "-",
+            "-",
+            "cli",
+        ));
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncProjects, serde_json::Value::Null);
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "voice_transcripts", "agentsCanReadTranscripts": value }),
+            format!("ok {} voice_transcripts={value}", ws.handle),
+        ));
+    }
     if toggle == "org_chart_manage" {
         // "Manage the org chart" (0283, prd-org-chart-v1 §7; Rosson
         // 2026-11-10: off by default, the Owner turns it on). The owner

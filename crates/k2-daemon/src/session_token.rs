@@ -984,8 +984,19 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/voice/session/keys/join",
         "/cli/voice/moderate",
         "/cli/voice/recording/consent",
+        "/cli/voice/recording/start",
+        "/cli/voice/recording/stop",
+        "/cli/voice/recording/controls",
         "/cli/voice/recording/settings",
         "/cli/voice/repair",
+        // 0.46.11: the K5 rooms' transcripts. An agent with "Read call
+        // transcripts" reads; without it, the handler's transcripts_read_off
+        // (the card line), never the cell's bare 403.
+        "/cli/voice/recordings",
+        "/cli/voice/transcript",
+        "/cli/voice/transcripts",
+        "/cli/voice/transcripts/reads",
+        "/cli/voice/transcripts/subscribe",
         "/cli/sew/media/preflight",
         "/cli/sew/media/install",
         "/cli/sew/media/url",
@@ -2488,6 +2499,9 @@ mod tests {
     #[test]
     fn every_voice_route_is_an_agent_verb() {
         for p in crate::voice::routes::GET_ROUTES.iter().chain(crate::voice::routes::POST_ROUTES) {
+            assert!(is_agent_verb(p), "{p}");
+        }
+        for p in crate::voice::transcripts::GET_ROUTES.iter().chain(crate::voice::transcripts::POST_ROUTES.iter()) {
             assert!(is_agent_verb(p), "{p}");
         }
     }

@@ -120,7 +120,10 @@
 //!   `sew-transcriber` tarballs and the pinned speech model staged by
 //!   sha256, the model name as JSON on stdin, Sew's own `sew recording …`
 //!   steps with `--i-am-k2`), under `namespaces.sewrecording`,
-//!   [`SEW_RECORDING_MIN_PROTOCOL`]; a 14 helper refuses that argv.
+//!   [`SEW_RECORDING_MIN_PROTOCOL`]; a 14 helper refuses that argv. In the
+//!   same namespace, `engine sew config` takes a fifth key,
+//!   `recording.consent_prompt_timeout_ms` (the K5 rooms' notice timeout;
+//!   a 14 helper refuses it as unknown).
 //!   Another 0.46.11 lane that needs a helper change joins 15 here with its
 //!   own namespace flag; never 16 before 15 ships.
 //!

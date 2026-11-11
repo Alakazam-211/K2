@@ -285,6 +285,15 @@ mod tests {
         ("principal_person_claims", "an older marker, read by a migration only"),
         ("skin_app_backfill", "a one-time marker"),
         // K2's outbox and ledgers toward Sew: Sew's own events cover that side.
+        // 0.46.11: agents review the K5 rooms' transcripts. The switch is
+        // checked by the transcript routes themselves, never by a pass
+        // resolve; the rest is a read log, notes and Sew-side marks.
+        ("voice_transcript_readers", "the \"Read call transcripts\" switch; the transcript routes check it, no pass does"),
+        ("voice_transcript_reads", "the transcript read log"),
+        ("voice_transcript_subscriptions", "which agents get a note when a room's transcript is ready"),
+        ("voice_transcript_notified", "notes already sent"),
+        ("voice_transcript_cursor", "the notifier's place in Sew's list"),
+        ("voice_room_consent_mode", "the K5 rooms K2 set to declining means not joining, toward Sew"),
         ("tool_admin_members", "toward Sew"),
         ("tool_admin_rooms", "toward Sew"),
         ("tool_admin_space", "toward Sew"),

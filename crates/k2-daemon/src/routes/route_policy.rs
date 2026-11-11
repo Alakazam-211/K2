@@ -2430,9 +2430,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/voice/join", VoiceChat),
     post("/cli/voice/moderate", Admin),
     post("/cli/voice/recording/consent", VoiceChat),
+    // Sew 0.9.0 (K-g): a person's own Record and Stop, and what their Sew
+    // permissions allow; a Voice & Chat only login never records.
+    post("/cli/voice/recording/controls", Member),
     // Sew 0.9.0: the K5 rooms' recording (the owner; start level an Admin
-    // too; `required` waits for K2's desktop consent sheet: handler).
+    // too; `required` the owner only: handler).
     post("/cli/voice/recording/settings", Admin),
+    post("/cli/voice/recording/start", Member),
+    post("/cli/voice/recording/stop", Member),
+    // 0.46.11: the K5 rooms' recordings and transcripts. Logins: the
+    // owner's and Admins'; agents with "Read call transcripts" (passports
+    // are the handler's).
+    get("/cli/voice/recordings", Admin),
     post("/cli/voice/repair", Admin),
     get("/cli/voice/rooms", VoiceChat),
     post("/cli/voice/rooms/close", Admin),
@@ -2444,6 +2453,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/voice/session/stats", VoiceChat),
     post("/cli/voice/settings", Admin),
     get("/cli/voice/status", Admin),
+    get("/cli/voice/transcript", Admin),
+    get("/cli/voice/transcripts", Admin),
+    get("/cli/voice/transcripts/reads", Admin),
+    post("/cli/voice/transcripts/subscribe", Admin),
     get("/cli/whats_new", Member),
     post("/cli/whats_new/mark_seen", Member),
     post("/cli/whats_new/reset", Member),

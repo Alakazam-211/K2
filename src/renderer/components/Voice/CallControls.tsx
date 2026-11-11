@@ -242,7 +242,7 @@ export function RecordingBadge({ call, variant }: { call: VoiceCall; variant: Ca
       className="flex shrink-0 items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-status-error)]"
       style={noDrag}
     >
-      <span aria-hidden className="inline-block h-2 w-2 rounded-full bg-[var(--color-status-error)]" />
+      <span aria-hidden className="inline-block h-2 w-2 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />
       Recording
     </span>
   )
@@ -306,7 +306,7 @@ export default function CallControls({ variant, call, actions, video }: CallCont
       {video ? <ScreenButton variant={variant} video={video} busy={busy} /> : null}
       {rec.canRecord && actions.startRecording ? (
         <CallButton variant={variant} label="Record" dead={busy} testId={`call-${variant}-record`} onPress={() => void actions.startRecording?.()}>
-          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full border-2 border-[var(--color-status-error)]" />
+          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[var(--radius-pill)] border-2 border-[var(--color-status-error)]" />
         </CallButton>
       ) : null}
       {rec.canStop && actions.stopRecording ? (

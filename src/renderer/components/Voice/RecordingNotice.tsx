@@ -37,7 +37,7 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
     <div
       ref={root}
       data-testid="recording-notice"
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-[var(--color-scrim)]"
       // Never dismissed into an answer: a click outside does nothing.
       onClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
@@ -56,7 +56,7 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
         className="w-[min(420px,calc(100vw-32px))] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 text-[var(--color-text-primary)] outline-none"
       >
         <div className="mb-2 flex items-center gap-2">
-          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-full bg-[var(--color-status-error)]" />
+          <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />
           <h2 id="recording-notice-title" className="text-sm font-semibold">
             {text.title}
           </h2>

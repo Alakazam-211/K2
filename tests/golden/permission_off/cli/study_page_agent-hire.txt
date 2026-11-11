@@ -7,7 +7,9 @@ THE CALL
   POST /v1/agents/hire  (Authorization: Bearer k2sk_…, Idempotency-Key: <key>)
   One call makes one agent ({"agent": {…}}) or a team ({"team": {"name"},
   "members": [{…, "lead": true}, …]}) from an inline recipe: role, handle,
-  name, color, persona (ROLE.md body), preset, model, wiki (default on),
+  name, color, persona (ROLE.md body) or template (+ params, and answers
+  to its first-conversation questions: {"audience": "…"}; k2 agent
+  template show <id> lists the ids), preset, model, wiki (default on),
   wikiNotes, context, layers, skills, heartbeats, brief (+ launch),
   dbAccess, appLogin, linkTo. Unknown fields refuse. dryRun:true plans only.
   All or nothing: any failure undoes every step (folders to the Trash).

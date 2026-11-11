@@ -46941,7 +46941,7 @@ cmd_schema() {
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
       "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": false}],
       "flags": [
@@ -46949,6 +46949,7 @@ cmd_schema() {
         {"name": "--agent", "arg": "preset", "description": "Which agent PROGRAM this workspace launches (preset id/label/command token; see k2 preset list). Must exist and be enabled. Without it, spawns fall through to the global default and ultimately Claude."},
         {"name": "--template", "arg": "id", "description": "An agent template id (k2 agent template list: general, lead, developer, app-owner, designer, researcher, reviewer, writer, support, ops; old ids worker, manager, qa still work). Writes only what's missing, never the agent's own files; one template per agent; suggests permissions, grants none. Mutually exclusive with --persona (both = exit 2)."},
         {"name": "--param", "arg": "key=value", "description": "A value the template asks for (repeatable; k2 agent template show <id> lists them), e.g. about=\"the billing service\"."},
+        {"name": "--answer", "arg": "question-id=text", "description": "Answer one of the template's first-conversation questions at hire (repeatable; k2 agent template show <id> lists the ids and questions). Written into the agent's ROLE.md or a starter wiki note. Leave out what you can't answer: the agent asks its person the rest on its first start. An unknown id = exit 2, naming the valid ids."},
         {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/ROLE.md)."},
         {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
@@ -46980,7 +46981,7 @@ cmd_schema() {
     {
       "name": "agent template show",
       "usage": "k2 agent template show <id> [--files] [--json]",
-      "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4.",
+      "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), its first-conversation questions (ids and questions; --answer id=text on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4.",
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--files", "arg": null, "description": "Print every file of the template."},
@@ -53574,7 +53575,9 @@ THE CALL
   POST /v1/agents/hire  (Authorization: Bearer k2sk_…, Idempotency-Key: <key>)
   One call makes one agent ({"agent": {…}}) or a team ({"team": {"name"},
   "members": [{…, "lead": true}, …]}) from an inline recipe: role, handle,
-  name, color, persona (ROLE.md body), preset, model, wiki (default on),
+  name, color, persona (ROLE.md body) or template (+ params, and answers
+  to its first-conversation questions: {"audience": "…"}; k2 agent
+  template show <id> lists the ids), preset, model, wiki (default on),
   wikiNotes, context, layers, skills, heartbeats, brief (+ launch),
   dbAccess, appLogin, linkTo. Unknown fields refuse. dryRun:true plans only.
   All or nothing: any failure undoes every step (folders to the Trash).
@@ -61189,6 +61192,22 @@ FLAGS
                           Every built-in takes `about` (optional: what to focus
                           on). `show` lists each template's params and which
                           are required.
+  --answer <id>=<text>    Answer one of the template's first-conversation
+                          questions now (repeatable). Each built-in asks its
+                          person 3–5 short questions (a writer: audience,
+                          samples, avoid, drafts); `k2 agent template show <id>`
+                          lists the ids and the questions. The text is plain
+                          words or a link, up to 1000 characters; quote it
+                          like --param: --answer audience="Local customers".
+                          It goes into the agent's ROLE.md ("What I know about
+                          my work") or the starter wiki note the question
+                          names. Answer only what you know; don't guess: on
+                          its first start the agent asks its person the rest
+                          on the Thread, and its hello names them. An unknown
+                          id is refused (exit 2) with the valid ids, in a
+                          --dry-run too. Like --param, it is written once: a
+                          re-run never changes what the agent has, so to
+                          correct an answer later, tell the agent.
   --persona <file.md>     Use this file as the agent's persona (copied to
                           <dir>/.k2/agent/ROLE.md). Mutually exclusive with
                           --template (passing both = exit 2).
@@ -61255,6 +61274,8 @@ EXAMPLES
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
   k2 agent hire --template writer --name "Max" --agent codex --launch
   k2 agent hire ~/agents/coder --template developer --param about="the billing service"
+  k2 agent hire --template writer --name "Max" \
+      --answer audience="Small-business owners" --answer samples="https://example.k2.dev/blog" --launch
   k2 agent hire ~/agents/scout --template general --connect "Appa" --launch
   k2 agent hire ~/agents/qa-bot --persona ./qa-persona.md --name "QA Bot" \
       --connect "Manager" --onboard "Welcome aboard — read your persona and check in."
@@ -61745,7 +61766,7 @@ cmd_agent_hire() {
     local launch=false dry_run=false as_json=false no_wiki=false
     local no_agents_md=false fanout=false db_access="" color="" focus_group=""
     local take_app="" take_brief_file=""
-    local connects=() projects=() contexts=() params=()
+    local connects=() projects=() contexts=() params=() answers=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --name)
@@ -61764,6 +61785,13 @@ cmd_agent_hire() {
                     *) _agent_err "bad_usage" "--param takes key=value, got '$2'"; exit 2 ;;
                 esac
                 params+=("$2"); shift 2 ;;
+            --answer)
+                [ $# -ge 2 ] || { _agent_err "bad_usage" "--answer requires question-id=text (see: k2 agent template show <id>)"; exit 2; }
+                case "$2" in
+                    ?*=*) ;;
+                    *) _agent_err "bad_usage" "--answer takes question-id=text, got '$2' (see: k2 agent template show <id>)"; exit 2 ;;
+                esac
+                answers+=("$2"); shift 2 ;;
             --persona)
                 [ $# -ge 2 ] || { _agent_err "bad_usage" "--persona requires a file path"; exit 2; }
                 persona="$2"; shift 2 ;;
@@ -61829,6 +61857,10 @@ cmd_agent_hire() {
         _agent_err "bad_usage" "--param goes with --template <id>"
         exit 2
     fi
+    if [ ${#answers[@]} -gt 0 ] && [ -z "$template" ]; then
+        _agent_err "bad_usage" "--answer goes with --template <id>"
+        exit 2
+    fi
     # 0.46.12 (prd-agent-templates-v1 AT1): the daemon holds every template
     # and writes the persona; the CLI sends the id and the params.
     if [ -n "$persona" ] && { [ ! -f "$persona" ] || [ ! -r "$persona" ]; }; then
@@ -61886,8 +61918,21 @@ cmd_agent_hire() {
     local params_json
     params_json=$(python3 -c 'import json,sys; print(json.dumps(dict(a.split("=", 1) for a in sys.argv[1:])))' \
         ${params[@]+"${params[@]}"})
+    # --answer id=text: a repeated id is a usage error (not a silent last-wins).
+    local answers_json
+    answers_json=$(python3 -c '
+import json, sys
+out = {}
+for a in sys.argv[1:]:
+    k, v = a.split("=", 1)
+    k = k.strip()
+    if k in out:
+        sys.stderr.write(json.dumps({"error": {"code": "bad_usage", "hint": "--answer %s given twice" % k}}) + "\n")
+        sys.exit(2)
+    out[k] = v
+print(json.dumps(out))' ${answers[@]+"${answers[@]}"}) || exit 2
 
-    HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_PARAMS="$params_json" \
+    HIRE_DIR="$dir" NAME="$name" TEMPLATE="$template" TEMPLATE_PARAMS="$params_json" TEMPLATE_ANSWERS="$answers_json" \
     PERSONA_FILE="$persona" MODE="$mode" ENABLED="$enabled" CONNECTS="$connects_json" \
     PROJECTS="$projects_json" CONTEXTS="$contexts_json" \
     LAUNCH="$launch" ONBOARD="$onboard" DRY_RUN="$dry_run" AGENT_PRESET="$agent_preset" \
@@ -61903,6 +61948,7 @@ dir_arg = os.environ["HIRE_DIR"]
 name = os.environ.get("NAME", "")
 template = os.environ.get("TEMPLATE", "").strip()
 template_params = json.loads(os.environ.get("TEMPLATE_PARAMS") or "{}")
+template_answers = json.loads(os.environ.get("TEMPLATE_ANSWERS") or "{}")
 persona_file = os.environ.get("PERSONA_FILE", "")
 mode = os.environ.get("MODE", "")
 enabled = os.environ.get("ENABLED", "")
@@ -61982,6 +62028,8 @@ def template_body(extra):
     """The /cli/agents/hire body for a template hire (0.46.12)."""
     b = {"template": template, "params": template_params, "noWiki": no_wiki,
          "noAgentsMd": no_agents_md, "fanout": fanout}
+    if template_answers:
+        b["answers"] = template_answers
     if name:
         b["name"] = name
     b.update(extra)
@@ -62560,6 +62608,19 @@ def emit(ok, changed):
                 print("      %-12s %s" % (words.get(r.get("status"), r.get("status")), txt))
             if a.get("permissionsNote"):
                 print("      %s" % a["permissionsNote"])
+            # First-conversation questions, when this call writes ROLE.md
+            # (a re-run writes nothing, so it has nothing to say).
+            qs = a.get("questions") or []
+            writes_role = any(r.get("step") == "role" and r.get("status") in ("write", "done") for r in a.get("rows") or [])
+            if qs and writes_role:
+                got = [q["id"] for q in qs if q.get("answered")]
+                left = [q for q in qs if not q.get("answered")]
+                if got:
+                    print("      %-12s %s" % ("answered", ", ".join(got)))
+                if left:
+                    print("      %-12s %s  (the agent asks its person on its first start)" % ("open", ", ".join(q["id"] for q in left)))
+                else:
+                    print("      %-12s none: every question was answered" % "open")
     if not dry_run:
         n = sum(1 for a in actions if a["status"] == "done")
         print("%s: %s" % (display_name,
@@ -62601,6 +62662,7 @@ def take_template_rows(a, resp, applied):
     a["rows"] = resp.get("rows") or []
     a["info"] = resp.get("template") or {}
     a["permissions"] = resp.get("permissions") or {}
+    a["questions"] = resp.get("questions") or []
     if (a["permissions"].get("suggested") or a["permissions"].get("cards")) and not (a["permissions"].get("granted")):
         a["permissionsNote"] = TEMPLATE_PERMS_NOTE
     busy = [r for r in a["rows"] if r.get("status") in ("write", "done") and r.get("step") not in ("folder", "register")]
@@ -94567,10 +94629,23 @@ COMMANDS
                   support, ops), then any saved on this server, under "Yours".
                   --all also shows K2's system templates (hired by id only).
   show <id>       What one gives: its charter, params (--param on hire; marked
-                  when required), starter notes, context layers, suggested
-                  permissions and the hello it sends on its first launch.
+                  when required), its first-conversation questions, starter
+                  notes, context layers, suggested permissions and the hello
+                  it sends on its first launch.
                   An old id works too: worker = general, manager = lead,
                   qa = reviewer. An unknown id exits 4.
+
+QUESTIONS
+  Each built-in asks its person a few short questions on its first start,
+  so it can fit its ROLE.md to their work (a writer: who they write for,
+  samples, what to avoid, where drafts go). `show` lists each question's
+  id, the question, and where the answer goes (ROLE.md, or a starter note).
+  If you are hiring for someone and know an answer, pass it at hire (--name
+  is the new agent's name):
+    k2 agent hire --template writer --name "Max" --answer audience="Founders"
+  Answer only what you know; don't guess. The agent asks its person the
+  rest, one or two at a time, on the Thread, and its hello names the open
+  ones. An answer is written once; to correct one later, tell the agent.
 
 FLAGS
   --all           list: include system templates
@@ -94581,6 +94656,7 @@ EXAMPLES
   k2 agent template list
   k2 agent template show writer
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
+  k2 agent hire --template writer --name "Max" --answer audience="Founders" --answer samples="https://example.k2.dev/blog"
 EOF
 }
 
@@ -94685,6 +94761,13 @@ if params:
     print("  Params (--param key=value):")
     for k, p in params.items():
         print("    %s: %s (up to %s characters%s)" % (k, p.get("label"), p.get("max"), ", required" if p.get("required") else ""))
+qs = t.get("questions") or []
+if qs:
+    print("  Questions (answer at hire with --answer id=text; the agent asks its person the rest):")
+    for q in qs:
+        f = q.get("fills") or ""
+        where = "ROLE.md" if f == "role" else (f[len("wiki:"):].replace("#", " > ") if f.startswith("wiki:") else f)
+        print("    %s: %s  -> %s" % (q.get("id"), q.get("ask"), where))
 for label, key in (("Wiki notes", "wiki"), ("Context layers", "catalog"), ("Own layers", "layers"), ("Skills", "skills")):
     if t.get(key):
         print("  %s: %s" % (label, ", ".join(t[key])))
@@ -94697,7 +94780,7 @@ if perm.get("cards"):
 print("  Suggests: %s" % (", ".join(sugg) if sugg else "nothing"))
 print("    (suggestions only: a person turns a switch on, or the agent asks on a card)")
 if t.get("hello"):
-    print("  Hello: %s" % t["hello"])
+    print("  Hello: %s" % t["hello"].replace("\n", "\n         "))
 if t.get("versions"):
     print("  Versions: %s" % ", ".join("v%s" % v for v in t["versions"]))
 print("  Hash: %s" % t.get("hash"))

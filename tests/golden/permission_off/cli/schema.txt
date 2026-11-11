@@ -487,7 +487,7 @@ exit: 0
     },
     {
       "name": "agent hire",
-      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
+      "usage": "k2 agent hire [<dir>] [--name <n>] [--agent <preset>] [--template <id> [--param <key>=<value>]... [--answer <question-id>=<text>]...|--persona <file.md>] [--mode <m>] [--enabled <bool>] [--connect <name>]... [--project <p>]... [--focus-group <g>] [--color <hex|rgb>] [--context <path|catalog-id>]... [--db-access off|read|write] [--no-wiki] [--no-agents-md] [--fanout] [--launch] [--onboard <msg>] [--dry-run] [--json]",
       "description": "Provision a new agent in <dir> in ONE atomic, idempotent call: create dir, write persona, register workspace, seed wiki (Home + _Index; --no-wiki to skip), plant cwd AGENTS.md (--no-agents-md to skip), optionally leftover harness fan-out (--fanout), set mode + default agent program, wire connections, join projects, assign a focus group and color, seed context layers (--context), optionally launch + onboard. With --template <id> the agent is made from an agent template (charter, starter wiki notes, context layers; see k2 agent template list) and <dir> is optional (<hire root>/<handle>). Re-running converges (changed:false). Exit codes: 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
       "args": [{"name": "dir", "required": false}],
       "flags": [
@@ -495,6 +495,7 @@ exit: 0
         {"name": "--agent", "arg": "preset", "description": "Which agent PROGRAM this workspace launches (preset id/label/command token; see k2 preset list). Must exist and be enabled. Without it, spawns fall through to the global default and ultimately Claude."},
         {"name": "--template", "arg": "id", "description": "An agent template id (k2 agent template list: general, lead, developer, app-owner, designer, researcher, reviewer, writer, support, ops; old ids worker, manager, qa still work). Writes only what's missing, never the agent's own files; one template per agent; suggests permissions, grants none. Mutually exclusive with --persona (both = exit 2)."},
         {"name": "--param", "arg": "key=value", "description": "A value the template asks for (repeatable; k2 agent template show <id> lists them), e.g. about=\"the billing service\"."},
+        {"name": "--answer", "arg": "question-id=text", "description": "Answer one of the template's first-conversation questions at hire (repeatable; k2 agent template show <id> lists the ids and questions). Written into the agent's ROLE.md or a starter wiki note. Leave out what you can't answer: the agent asks its person the rest on its first start. An unknown id = exit 2, naming the valid ids."},
         {"name": "--persona", "arg": "file.md", "description": "Use this file as the agent's persona (copied to <dir>/.k2/agent/ROLE.md)."},
         {"name": "--mode", "arg": "mode", "description": "off | custom | manager | k2 (default: custom). 'off' also sets enabled=false."},
         {"name": "--enabled", "arg": "bool", "description": "true | false (default: true). false pauses without changing mode."},
@@ -526,7 +527,7 @@ exit: 0
     {
       "name": "agent template show",
       "usage": "k2 agent template show <id> [--files] [--json]",
-      "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4.",
+      "description": "What one agent template gives a new agent: charter, params (--param key=value on hire), its first-conversation questions (ids and questions; --answer id=text on hire), starter wiki notes, context layers, suggested permissions (suggestions only; nothing is granted) and its hello. Old ids work: worker, manager, qa. Unknown id = exit 4.",
       "args": [{"name": "id", "required": true}],
       "flags": [
         {"name": "--files", "arg": null, "description": "Print every file of the template."},

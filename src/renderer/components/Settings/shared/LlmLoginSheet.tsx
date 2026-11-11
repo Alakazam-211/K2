@@ -29,7 +29,6 @@ import React from 'react'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import type { ServerScope } from '@/kessel/server-scope'
-import { isWebClient } from '@/lib/is-web'
 import AgentIcon from '@/components/AgentIcon/AgentIcon'
 import { Button, Callout, Input, Radio, Segmented, Spinner, Surface } from '@/components/ui'
 import { SETTING_ROW_LABEL } from '../controls/SettingControls'
@@ -42,6 +41,7 @@ import {
   loginAgain,
   loginStatus,
   sendLoginInput,
+  serverInSentence,
   switchLogin,
   WALLET_TOOLS,
   LOGIN_POLL_MS,
@@ -171,7 +171,7 @@ export function LlmLoginSheet({
   const done = login ? login.done || FINAL.has(login.state) : false
   const signedIn = login?.state === 'signed_in'
   const display = provider?.display ?? (start.kind === 'new' ? 'the provider' : start.toolLabel)
-  const server = isWebClient() ? 'this server' : scope.label
+  const server = serverInSentence(scope)
 
   // Poll the login while it runs (no terminal needed on a phone).
   useEffect(() => {

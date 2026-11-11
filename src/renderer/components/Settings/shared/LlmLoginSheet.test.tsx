@@ -266,7 +266,7 @@ describe('Add a token: choose, sign in or paste, then done or failed', () => {
       await vi.advanceTimersByTimeAsync(1600)
     })
     expect(screen.getByRole('dialog', { name: 'Signed in to Claude' })).toBeTruthy()
-    expect(screen.getByTestId('llm-login-done').textContent).toContain('Claude “work” is signed in and saved on')
+    expect(screen.getByTestId('llm-login-done').textContent).toContain('Claude “work” is signed in and saved on this computer.')
     expect(screen.getByTestId('llm-login-done').textContent).toContain('Workspaces and chats can pick it from their Token menu.')
     expect(onDone).toHaveBeenCalledTimes(1)
     expect(onDone).toHaveBeenCalledWith({ tool: 'claude', label: 'work', method: 'signin' })
@@ -319,7 +319,8 @@ describe('Add a token: choose, sign in or paste, then done or failed', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add API token' }))
     await screen.findByRole('dialog', { name: 'API token added' })
     expect(h.addApiKey).toHaveBeenCalledWith(primaryScope(), 'gemini', 'ci', 'sample-key-0000-abcd')
-    expect(screen.getByTestId('llm-login-done').textContent).toContain('Gemini API token “ci” is saved on')
+    // Running text names this computer in lower case, never "on This computer".
+    expect(screen.getByTestId('llm-login-done').textContent).toContain('Gemini API token “ci” is saved on this computer.')
     expect(screen.getByTestId('llm-key-tail').textContent).toContain('•••• abcd')
     expect(document.body.innerHTML).not.toContain('sample-key-0000-abcd')
     expect(onDone).toHaveBeenCalledWith({ tool: 'gemini', label: 'ci', method: 'key' })

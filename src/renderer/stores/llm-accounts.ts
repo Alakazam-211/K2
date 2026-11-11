@@ -258,13 +258,21 @@ export function loadErrorReason(e: unknown): string | null {
   return errorText(e)
 }
 
-/** A load failure as a person reads it, naming the server (hosted web
- *  is one server, and its primary scope's label reads "This computer"). */
+/** The server as running text names it: "this computer" (or "this
+ *  server" on hosted web, which is one server and whose primary scope's
+ *  label reads "This computer"), else the saved server's own name. */
+export function serverInSentence(scope: ServerScope): string {
+  if (isWebClient()) return 'this server'
+  return scope.isRemote ? scope.label : 'this computer'
+}
+
+/** A load failure as a person reads it, naming the server. */
 export function loadErrorText(scope: ServerScope, e: unknown): string {
-  const name = isWebClient() ? 'This server' : scope.label
+  const name = serverInSentence(scope)
+  const Name = name.charAt(0).toUpperCase() + name.slice(1)
   const raw = rawMessage(e)
   if (NO_WALLET.test(raw)) {
-    return `${name} runs a K2 older than 0.45.0, which has no LLM tokens. Update that server to manage its tokens here.`
+    return `${Name} runs a K2 older than 0.45.0, which has no LLM tokens. Update that server to manage its tokens here.`
   }
   if (ROLE_REFUSED.test(raw)) {
     return `Your login on ${name} can't see its LLM tokens. Ask the server's owner for a Member login or higher.`

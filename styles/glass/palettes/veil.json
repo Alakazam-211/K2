@@ -68,8 +68,9 @@
       "$type": "color"
     },
     "accent-hover": {
-      "$value": "color-mix(in srgb, var(--color-accent) 85%, black)",
-      "$type": "color"
+      "$value": "color-mix(in srgb, var(--color-accent) 72%, black)",
+      "$type": "color",
+      "$description": "Deeper accent: hover text, and text on an accent wash (the info Callout). Deep enough to clear 4.5:1 on that wash over any Veil surface."
     },
     "accent-soft": {
       "$value": "color-mix(in srgb, var(--color-accent) 60%, white)",

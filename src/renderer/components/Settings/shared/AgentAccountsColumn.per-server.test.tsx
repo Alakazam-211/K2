@@ -45,7 +45,9 @@ import { __resetConnectHostStoreForTests, useConnectHostStore, type ConnectHost 
 import { primaryScope } from '@/kessel/server-scope'
 import {
   errorText,
+  loadErrorText,
   resetLlmAccountsForTests,
+  serverInSentence,
   switchLogin,
   useLlmAccountsStore,
   watchLlmAccounts,
@@ -229,6 +231,12 @@ describe('LLM tokens store follows the window server', () => {
     switchTo('local')
     await switchLogin(primaryScope(), 'acc_local')
     expect(h.posts.at(-1)).toEqual({ hostKey: 'local', route: 'llm/accounts/switch', body: { id: 'acc_local' } })
+  })
+
+  it('this computer reads in lower case mid-sentence; a saved server keeps its name', () => {
+    expect(serverInSentence(primaryScope())).toBe('this computer')
+    expect(loadErrorText(primaryScope(), new Error('database is locked'))).toBe("Couldn't load LLM tokens from this computer: database is locked")
+    expect(loadErrorText(primaryScope(), new Error('route_unclassified'))).toMatch(/^This computer runs a K2 older than 0\.45\.0/)
   })
 
   it('a role refusal and an old server read as sentences, not codes', () => {

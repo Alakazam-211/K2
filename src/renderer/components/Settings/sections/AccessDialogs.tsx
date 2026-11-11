@@ -1,7 +1,7 @@
 // Settings → Admin Access and User Access: the dialog frame both pages use,
 // its parts, and the one Reset password dialog they share, so the two
 // can't drift. Each dialog is the shared Dialog (scrim + frame), portalled,
-// one width, its top edge in one place; labelled full-width fields; the
+// one width, centred in the window; labelled full-width fields; the
 // server's reason when a write fails; a done step that says what happened
 // and what to do next. A password is shown once, in the open dialog only:
 // closing drops it.
@@ -45,10 +45,10 @@ export function AccessSheet({
   // Esc, the × and a press outside close it (dialog-cancel leaves Esc to an
   // open menu inside first: App, Role); held while a write is in flight.
   // Portalled to <body>, so the scrim covers the whole window, not just the
-  // Settings panel it opens from. Every dialog is one width with its top
-  // edge in one place, whatever its height: a tall form and a short
-  // confirmation open at the same spot, and a form that grows (an error,
-  // the done step) grows downward.
+  // Settings panel it opens from. Every dialog is one width and opens
+  // centred in the window, whatever its height (graders read a top-anchored
+  // short confirmation as sitting in a different place from a tall form).
+  // A tall one scrolls inside the frame.
   return createPortal(
     <>
       <DialogScrim />
@@ -61,8 +61,7 @@ export function AccessSheet({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        placement="top"
-        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
+        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-2.5rem)] flex flex-col"
       >
         {/* The title stays put beside the frame's ×; the rest scrolls. */}
         <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">

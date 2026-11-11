@@ -565,7 +565,7 @@
   --color-text-secondary: #58585d;
   --color-text-muted: #6e6e73;
   --color-accent: var(--glass-accent);
-  --color-accent-hover: color-mix(in srgb, var(--color-accent) 85%, black);
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 72%, black);
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 60%, white);
   --color-on-accent: #ffffff;
   --color-status-working: var(--glass-accent);

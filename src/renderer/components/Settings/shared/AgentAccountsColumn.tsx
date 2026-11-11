@@ -43,6 +43,7 @@ import {
   refreshLogins,
   removeLogin,
   renameLogin,
+  serverInSentence,
   STATE_LABELS,
   switchLogin,
   tokenName,
@@ -351,7 +352,7 @@ function AccountRow({
   if (account.inUse) facts.push('In use by a chat right now')
 
   return (
-    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid={`llm-account-${account.id}`}>
+    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-bg-hover)]" data-testid={`llm-account-${account.id}`}>
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3">
         <span title={STATE_LABELS[account.state] ?? account.state} className="flex">
           <StatusDot tone={STATE_TONE[account.state] ?? 'neutral'} />
@@ -613,7 +614,7 @@ export function AgentAccountsColumn(): React.JSX.Element {
   const supportedRows = LOGIN_TOOL_ROWS.filter((r) => byTool.get(r.id)?.supported === true)
   const notYet = LOGIN_TOOL_ROWS.filter((r) => byTool.get(r.id)?.supported !== true).map((r) => r.label)
   const total = supportedRows.reduce((n, r) => n + (byTool.get(r.id)?.accounts.length ?? 0), 0)
-  const server = isWebClient() ? 'this server' : scope.label
+  const server = serverInSentence(scope)
 
   const addButton = (
     <Button variant="accent" onClick={() => setSheet({ kind: 'new' })} disabled={!doc || supportedRows.length === 0}>

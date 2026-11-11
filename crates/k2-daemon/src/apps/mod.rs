@@ -70,6 +70,9 @@ pub mod checks;
 /// `k2 app status` (prd-tauri-core-0467-v1 TC-15).
 pub mod status;
 pub mod egress_proxy;
+/// The container database door (S21): a Postgres startup on the App's own
+/// proxy listener, checked against its databases, spliced to the cluster.
+pub mod db_door;
 pub mod egress_routes;
 pub mod box_service_routes;
 /// The box view and clash naming (agents talk to each other, §4.1–4.2).

@@ -581,10 +581,12 @@ async fn s13_config_applies_narrowing_now_and_holds_widening() {
     assert_eq!((r.status, r.code()), (409, "engine_unavailable".to_string()), "{}", r.body);
     assert!(r.body.contains("k2 app exception"), "{}", r.body);
     // dbRaw (on the per-event list) is refused up front for a container
-    // App, the owner token included: it has no database door yet (0.46.11).
+    // App, the owner token included: it is a private-database connection
+    // K2 doesn't make, and the answer points at the database door (0.46.12).
     let r = post(d.port, "/cli/app/config", OWNER, json!({"app": "cfg-app", "dbRaw": "on"})).await;
     assert_eq!((r.status, r.code()), (409, "app_db_door_missing".to_string()), "{}", r.body);
-    assert!(r.body.contains("guarded container Apps can't reach box Postgres yet"), "{}", r.body);
+    assert!(r.body.contains("--db-raw is the raw connection to an App's private database"), "{}", r.body);
+    assert!(r.body.contains("through its database door: 127.0.0.1:5432 inside its wall"), "{}", r.body);
     // An owner-only widening: the agent proposes, the owner applies.
     let r = post(d.port, "/cli/app/config", &agent, json!({"app": "cfg-app", "dbPrivate": "on"})).await;
     assert_eq!(r.status, 202, "{}", r.body);

@@ -874,6 +874,13 @@ pub fn db_port_ok(p: u16) -> bool {
     (crate::apps::DB_PORTS.lo..=crate::apps::DB_PORTS.hi).contains(&p)
 }
 
+/// S1 (not built yet): the engine's "this App's own door" check.
+pub const FEATURE_DB_DOOR: &str = "db-door";
+pub fn db_port_is_own(db_port: Option<u16>, px_port: u16) -> bool {
+    let _ = (db_port, px_port);
+    true
+}
+
 /// The pass folder inside the container, read-only.
 pub const PASS_MOUNT: &str = "/run/k2";
 /// Where the App pass appears inside the container (`K2_PASS_FILE`).
@@ -1308,32 +1315,38 @@ mod tests {
         assert!(serde_json::from_str::<Resources>(r#"{"memoryMib":null,"tasks":512,"nofile":4096,"cpuWeight":null,"logBytes":1048576,"swap":1}"#).is_err());
     }
 
+    /// S1 (prd-app-database-integrations-v1): the door is the App's own
+    /// proxy port; a cluster port in the band is never a door (it would
+    /// skip the door's role and database check).
     #[test]
     fn the_db_door_forward() {
         let mut s = spec();
-        s.db_port = Some(5432);
+        s.db_port = Some(38_901);
         assert!(check_start(&s).is_ok());
-        assert!(serde_json::to_string(&s).unwrap().contains("\"dbPort\":5432"));
-        // K2's Postgres band (0.46.3): a database on another major's
-        // cluster (5433…5449) is reachable through the door too.
-        s.db_port = Some(5433);
-        assert!(check_start(&s).is_ok(), "the band the nft table admits");
-        s.db_port = Some(5449);
-        assert!(check_start(&s).is_ok());
-        s.db_port = Some(5450);
-        assert_eq!(check_start(&s), Err("db port"), "only the range the nft table admits");
-        s.db_port = Some(5431);
-        assert_eq!(check_start(&s), Err("db port"));
+        assert!(serde_json::to_string(&s).unwrap().contains("\"dbPort\":38901"));
+        for p in [crate::apps::PROXY_PORTS.lo, crate::apps::PROXY_PORTS.hi] {
+            s.db_port = Some(p);
+            assert!(check_start(&s).is_ok(), "{p}: the proxy range");
+        }
+        // Never straight to a cluster, on any major; never a gateway port.
+        for p in [5432, 5433, 5449, 5450, 5431, 38_600, 38_899, 22] {
+            s.db_port = Some(p);
+            assert_eq!(check_start(&s), Err("db port"), "{p}");
+            assert!(!db_port_ok(p), "{p}");
+        }
+        // Once the engine knows the slot: this App's proxy port only.
+        assert!(db_port_is_own(Some(38_901), 38_901) && db_port_is_own(None, 38_901));
+        assert!(!db_port_is_own(Some(38_902), 38_901), "another App's door");
         // With the door, nothing else of the App's may sit on 5432 inside.
         let mut s = relaxed();
-        s.db_port = Some(5432);
+        s.db_port = Some(38_901);
         s.extra_ports = vec![5432];
         assert_eq!(check_start(&s), Err("extra ports"));
         let mut s = spec();
-        s.db_port = Some(5432);
+        s.db_port = Some(38_901);
         s.box_forwards = vec![BoxForward { app_port: IN_WALL_DB_PORT, host_port: 8470 }];
         assert_eq!(check_start(&s), Err("box forward"));
-        assert!(!db_port_ok(22) && db_port_ok(5432));
+        assert!(ENGINE_FEATURES.contains(&FEATURE_DB_DOOR));
     }
 
     fn bspec() -> BuildSpec {

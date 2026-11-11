@@ -582,6 +582,12 @@ pub fn walled_door(dsn: &str, cluster_port: u16) -> Option<(String, u16)> {
     Some((format!("{scheme}://{at}127.0.0.1:{}/{tail}", k2_root_proto::engine::IN_WALL_DB_PORT), cluster_port))
 }
 
+/// S21 (not built yet): the in-wall form of a box-Postgres URL.
+pub fn in_wall_dsn(dsn: &str) -> Option<String> {
+    let _ = dsn;
+    None
+}
+
 // ── status (PA17) ─────────────────────────────────────────────────────
 
 /// `database: {name, major, source, sharedWith[], requires, available[]}`
@@ -691,21 +697,36 @@ mod tests {
         assert_eq!(check("jobs", "x", &known_db(16)).unwrap_err().code, "requires_unmet");
     }
 
-    /// PA15: a walled App keeps dialling 127.0.0.1:5432 in its wall across
-    /// a database switch (16 on 5432 → 17 on 5433); only the door's host
-    /// port follows the cluster. Pinned now, with `db_port` still stubbed.
+    /// PA15 with the door (S21): a walled App keeps dialling 127.0.0.1:5432
+    /// in its wall across a database switch (16 on 5432 → 17 on 5433); the
+    /// door picks the cluster by name. Only box-Postgres URLs move.
     #[test]
     fn a_walled_app_keeps_the_in_wall_address_across_a_switch() {
-        let on16 = "postgres://ws_jobs_agent:pw@127.0.0.1:5432/ws_jobs?sslmode=disable";
-        let on17 = "postgres://ws_jobs_agent:pw@127.0.0.1:5433/ws_jobs?sslmode=disable";
-        let (a, door_a) = walled_door(on16, 5432).unwrap();
-        let (b, door_b) = walled_door(on17, 5433).unwrap();
+        let on16 = "postgres://ws_jobs_agent:pw@127.0.0.1:5432/ws_jobs";
+        let on17 = "postgres://ws_jobs_agent:pw@127.0.0.1:5433/ws_jobs?sslmode=require&application_name=jobs";
+        let a = in_wall_dsn(on16).unwrap();
         assert_eq!(a, "postgres://ws_jobs_agent:pw@127.0.0.1:5432/ws_jobs?sslmode=disable");
-        assert_eq!(a, b, "the App's DSN never changes on a switch");
-        assert_eq!((door_a, door_b), (5432, 5433), "the door follows the cluster");
-        assert_eq!(walled_door("postgres://u:p@db.example.com:6543/x", 5433).unwrap().0, "postgres://u:p@127.0.0.1:5432/x");
-        assert!(walled_door(on17, 6000).is_none(), "outside the band");
-        assert!(walled_door("mysql://u@h/x", 5433).is_none());
+        assert_eq!(in_wall_dsn(on17).unwrap(), "postgres://ws_jobs_agent:pw@127.0.0.1:5432/ws_jobs?application_name=jobs&sslmode=disable");
+        assert_eq!(in_wall_dsn(&a).unwrap(), a, "already in-wall: unchanged");
+        assert_eq!(
+            in_wall_dsn("postgresql://u:p@localhost:5449/x?sslnegotiation=direct").unwrap(),
+            "postgresql://u:p@127.0.0.1:5432/x?sslmode=disable"
+        );
+        assert_eq!(in_wall_dsn("postgres://u:p@[::1]/x").unwrap(), "postgres://u:p@127.0.0.1:5432/x?sslmode=disable");
+        assert_eq!(in_wall_dsn("postgres://u@127.0.0.1").unwrap(), "postgres://u@127.0.0.1:5432?sslmode=disable");
+        // Not a box database: left alone (an outside host is S4's).
+        for keep in [
+            "postgres://u:p@db.example.com:6543/x",
+            "postgres://u:p@10.0.0.5:5432/x",
+            "postgres://u:p@127.0.0.1:6000/x",
+            "postgres://u:p@127.0.0.1:5432,127.0.0.1:5433/x",
+            "postgres://u@/x?host=/run/postgresql",
+            "postgres://u@127.0.0.1/x?port=5433",
+            "mysql://u@127.0.0.1:5432/x",
+            "not a url",
+        ] {
+            assert!(in_wall_dsn(keep).is_none(), "{keep}");
+        }
     }
 
     /// PA7: the install table.

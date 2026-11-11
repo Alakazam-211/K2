@@ -363,6 +363,11 @@ pub fn secret_items(env: Vec<(String, String)>, files: Vec<(String, Vec<u8>)>) -
     (out, dropped)
 }
 
+/// S21 (not built yet): box database URLs pointed at the door.
+pub fn in_wall_db_env(env: Vec<(String, String)>) -> (Vec<(String, String)>, Vec<String>) {
+    (env, Vec::new())
+}
+
 /// The App's memory cap on the wire (MiB). `None` = no per-App cap (L1,
 /// Rosson 2026-10-10, confirmed in Q4 2026-10-17: the 512 MiB default is
 /// gone; the Apps slice's ceiling is the bound).

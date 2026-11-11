@@ -57,6 +57,33 @@ pub fn container_no_db(app: &str) -> String {
     )
 }
 
+/// S21 (not built yet): the words the door's answers will use.
+pub fn door_line(app: &str) -> String {
+    format!(
+        "{app} reaches its workspace's databases (and ones granted to it) through its database door: 127.0.0.1:5432 inside its \
+         wall, checked per connection (k2 app doctor {app})"
+    )
+}
+
+pub fn engine_no_door(app: &str) -> String {
+    format!(
+        "{app} runs in a container, and this box's App engine predates the database door, so nothing answers on 127.0.0.1:5432 \
+         in its wall: the owner updates it (k2 app engine install), then k2 app rehost {app}"
+    )
+}
+
+pub fn db_raw_refusal(app: &str) -> String {
+    format!(
+        "--db-raw is the raw connection to an App's private database, which K2 doesn't make yet, so approving it would change \
+         nothing. {}; no widening needed",
+        door_line(app)
+    )
+}
+
+pub fn door_serves(app: &str) -> bool {
+    super::db_door::live_door(app).is_some() || super::db_door::engine_ready()
+}
+
 /// Does this isolation put the App in a container (no database door)?
 pub fn container_isolation(isolation: &str) -> bool {
     isolation == "container" || isolation == "vm"

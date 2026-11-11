@@ -271,26 +271,35 @@ fn doctor_reports_a_box_service_approved_but_not_applied() {
     super::super::box_service_routes::forget_live("boxed");
 }
 
-/// A guarded container has no database door (S21 isn't built): `dbRaw`
-/// and a Postgres box service are refused up front, a database grant and
-/// the doctor say why.
+/// S21 (0.46.12): a container App reaches box Postgres through its
+/// database door. `dbRaw` is still refused up front (a private-database
+/// connection K2 doesn't make), and says where the door is; a Postgres box
+/// service points at the door; a grant needs no rule change (the door
+/// checks per connection), and the container's rule names no cluster port.
 #[test]
-fn a_container_app_is_told_it_has_no_database_door() {
+fn a_container_app_reaches_box_postgres_through_its_door() {
     let f = fx("door");
-    let words = "guarded container Apps can't reach box Postgres yet: boxed runs in a container, where nothing answers on 127.0.0.1:5432 \
-                 (its database door isn't built), and no approval or re-host changes that. Use a process App (the owner turns it on: \
-                 k2 app exception boxed on) or SQLite";
-    assert_eq!(container_no_db("boxed"), words);
+    super::super::db_door::test_seams::set_engine_ready(true);
+    let door = "boxed reaches its workspace's databases (and ones granted to it) through its database door: 127.0.0.1:5432 inside \
+                its wall, checked per connection (k2 app doctor boxed)";
+    assert_eq!(door_line("boxed"), door);
 
-    // --db-raw on: refused for the owner too, before anything is held.
+    // --db-raw on: refused for the owner too, before anything is held,
+    // and pointed at the door.
     let r = super::super::routes::handle("/cli/app/config", Who::Owner, json!({"app": "boxed", "dbRaw": "on"}).to_string().as_bytes(), &HashMap::new());
     assert!(r.status.starts_with("409"), "{} {}", r.status, r.body);
     let v: J = serde_json::from_str(&r.body).unwrap();
     assert_eq!(v["error"]["code"], codes::DB_DOOR_MISSING, "{v}");
-    assert_eq!(v["error"]["hint"], words, "{v}");
-    // (A process App's is held for the person, as before: access_tests.)
+    assert_eq!(
+        v["error"]["hint"],
+        format!(
+            "--db-raw is the raw connection to an App's private database, which K2 doesn't make yet, so approving it would change \
+             nothing. {door}; no widening needed"
+        ),
+        "{v}"
+    );
 
-    // A Postgres box service for it: never, and why.
+    // A Postgres box service for it: never, and where the way in is.
     let agent = Who::Agent { project_id: f.ws_a.clone(), session_id: "sess-a".into() };
     let e = super::super::box_service_routes::handle(
         "/cli/app/box-service/request",
@@ -300,22 +309,65 @@ fn a_container_app_is_told_it_has_no_database_door() {
     )
     .unwrap_err();
     assert_eq!((e.status, e.code), (403, super::super::box_service_routes::codes::BOX_SERVICE_REFUSED));
-    assert_eq!(e.hint, format!("port 5433 can never be a box service: it is Postgres (5432-5449). And {words}"));
+    assert_eq!(e.hint, format!("port 5433 can never be a box service: it is Postgres (5432-5449). {door}"));
 
-    // A grant while it runs: its rule moves, and the answer and its agent
-    // say it still can't reach it.
+    // Its rule names no cluster port (the door dials, not pasta), so a
+    // grant while it runs moves nothing and says nothing: the door admits
+    // the granted database at the next connection.
     super::super::guarded::install_gateway_rule("boxed", 38_602).unwrap();
+    assert_eq!(last_rule(), "apps nft app boxed 38602 --db");
     grant_b_to_a(&f);
+    let n = test_seams::sent().len();
     let mut v = json!({"ok": true});
     after_db_change(&mut v);
-    let boxed = v["apps"].as_array().unwrap().iter().find(|a| a["app"] == "boxed").cloned().unwrap_or(J::Null);
-    assert_eq!(boxed["note"], format!("App boxed: {words}"), "{v}");
-    assert!(msgs().contains(&format!("[k2 apps] App boxed: {words}")), "{:?}", msgs());
+    assert_eq!(test_seams::sent().len(), n, "no rule to re-send for a container");
+    assert!(v["apps"].as_array().is_none_or(|a| a.iter().all(|x| x["app"] != "boxed")), "{v}");
+    assert!(!msgs().iter().any(|m| m.contains("App boxed")), "{:?}", msgs());
 
-    // The doctor: it asks for Postgres (requires.postgres) and has no door.
+    // The doctor: running with a door, its database admitted: nothing.
+    super::super::db_door::record_live("boxed", &json!({"dbPort": 38_902}));
+    let d = doctor_json(&app("boxed"));
+    assert_eq!(d["ok"], true, "{d}");
+    assert_eq!(d["dbDoor"]["hostPort"], 38_902, "{d}");
+    assert_eq!(d["dbDoor"]["inWallPort"], 5432, "{d}");
+    assert_eq!(d["dbDoor"]["databases"], json!(["dr_main", "shared17"]), "{d}");
+    // Running without one (started on an older engine): re-host.
+    super::super::db_door::forget_live("boxed");
+    let d = doctor_json(&app("boxed"));
+    assert_eq!(
+        findings(&d),
+        vec!["boxed's running deployment has no database door (it started before this box's App engine had one). Takes effect after a re-host: k2 app rehost boxed"],
+        "{d}"
+    );
+    assert_eq!(d["findings"][0]["id"], "database_door_missing");
+    super::super::db_door::test_seams::set_engine_ready(false);
+}
+
+/// The cases the door still can't serve keep `app_db_door_missing`'s
+/// up-front words: an App engine that predates the door.
+#[test]
+fn a_container_app_on_an_engine_without_the_door_is_told_why() {
+    let f = fx("olddoor");
+    super::super::db_door::test_seams::set_engine_ready(false);
+    let words = "boxed runs in a container, and this box's App engine predates the database door, so nothing answers on \
+                 127.0.0.1:5432 in its wall: the owner updates it (k2 app engine install), then k2 app rehost boxed";
+    assert_eq!(engine_no_door("boxed"), words);
+    let agent = Who::Agent { project_id: f.ws_a.clone(), session_id: "sess-a".into() };
+    let e = super::super::box_service_routes::handle(
+        "/cli/app/box-service/request",
+        &agent,
+        json!({"app": "boxed", "name": "pg", "hostPort": 5432}).to_string().as_bytes(),
+        &HashMap::new(),
+    )
+    .unwrap_err();
+    assert_eq!(e.hint, format!("port 5432 can never be a box service: it is Postgres (5432-5449). {words}"));
+    let v = after_service_grant(&svc("boxed"), Some("DATABASE_URL")).unwrap();
+    assert_eq!(v["rehost"], "no_door", "{v}");
+    assert_eq!(v["note"], format!("App boxed: {words}"));
+    assert!(msgs().contains(&format!("[k2 apps] App boxed: {words}")), "{:?}", msgs());
+    // The doctor says it even while the App is stopped.
     let d = doctor_json(&app("boxed"));
     assert!(findings(&d).contains(&words.to_string()), "{d}");
-    assert_eq!(d["findings"].as_array().unwrap().last().unwrap()["id"], "database_door_missing");
 }
 
 /// A secret granted to an App reaches it at its next start: the answer
@@ -344,10 +396,13 @@ fn a_secret_granted_to_a_running_app_says_rehost() {
     );
     assert_eq!(test_seams::kicks().len(), 1, "only a DATABASE_URL re-hosts by itself");
 
-    // A container: no door, whatever re-host.
+    // A container with the door (S21): like any App, the URL arrives at
+    // its next start, and K2 re-hosts an idle one itself.
+    super::super::db_door::test_seams::set_engine_ready(true);
     let v = after_service_grant(&svc("boxed"), Some("DATABASE_URL")).unwrap();
-    assert_eq!(v["rehost"], "no_door", "{v}");
-    assert_eq!(v["note"], format!("App boxed: {}", container_no_db("boxed")));
+    super::super::db_door::test_seams::set_engine_ready(false);
+    assert_eq!(v["rehost"], "started", "{v}");
+    assert_eq!(test_seams::kicks(), vec!["ledger".to_string(), "boxed".to_string()]);
     // Not running: it gets it at its start. Not an App: nothing to say.
     let v = after_service_grant(&svc("stopped"), Some("DATABASE_URL")).unwrap();
     assert_eq!((v["rehost"].as_str(), v["note"].as_str()), (Some("not_running"), Some("App stopped gets DATABASE_URL when it next starts")));

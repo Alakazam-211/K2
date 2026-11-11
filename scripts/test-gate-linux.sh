@@ -49,6 +49,7 @@ ALLOWLIST=(
   "cell_egress::tests::refused_localhost_port_is_refused_while_a_cell_table_exists" # root + nft; run below as root
   "sql::tests::real_pg::real_pg_guest_doors_smoke"                  # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
   "sql::tests::real_pg::real_pg_search_path_pin_holds"              # needs a throwaway Postgres 16; run below when K2_GATE_REALPG_* is set
+  "apps::db_door::real_pg_door::real_pg_door_end_to_end"            # needs REALPG_DOOR=1 and Postgres binaries (it makes its own server)
 )
 
 # Root-only ignored tests the gate RUNS explicitly when it is root:

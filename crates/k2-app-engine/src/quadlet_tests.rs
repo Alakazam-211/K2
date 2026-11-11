@@ -140,7 +140,7 @@ fn the_relaxed_container_keeps_the_floor_but_the_listed_four() {
     r.app_port = 3000;
     r.extra_ports = &[9000, 9001];
     r.box_forwards = &fwd;
-    r.db_port = Some(5432);
+    r.db_port = Some(38_901);
     let u = render(&r);
     for want in [
         "\nLabel=k2.wall=relaxed\n",
@@ -149,7 +149,7 @@ fn the_relaxed_container_keeps_the_floor_but_the_listed_four() {
         "\nPublishPort=127.0.0.1:41234:3000\n",
         "\nPublishPort=127.0.0.1:9000:9000\n",
         "\nPublishPort=127.0.0.1:9001:9001\n",
-        "\nNetwork=pasta:-T,8730:38601,-T,38901,-T,8470:8470,-T,5432:5432\n",
+        "\nNetwork=pasta:-T,8730:38601,-T,38901,-T,8470:8470,-T,5432:38901\n",
         // The floor stays.
         "\nDropCapability=all\n",
         "\nNoNewPrivileges=true\n",

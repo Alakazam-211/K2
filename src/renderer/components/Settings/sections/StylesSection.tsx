@@ -1,4 +1,4 @@
-// Settings → Styles (Style System P3, prd-style-system-v1 §5 / ST5).
+// Settings → Themes, section id `styles` (Style System P3, prd-style-system-v1 §5 / ST5).
 //
 // List and detail, like Workspaces / Agents side by side: the styles on the
 // left (the one in use tagged), the shown style's settings on the right in
@@ -48,15 +48,15 @@ import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
 
 export const STYLES_MANIFEST: SettingEntry[] = [
-  { id: 'styles.style-picker', section: 'styles', label: 'Style', description: 'How the whole app looks: Terminal or Glass', keywords: ['style', 'skin', 'theme', 'appearance', 'look', 'terminal', 'square', 'glass', 'round', 'calm'] },
-  { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'The set of colours the style uses', keywords: ['palette', 'color', 'colors', 'colour', 'colours', 'theme', 'charcoal', 'paper', 'obsidian', 'veil', 'dark mode', 'light mode'] },
+  { id: 'styles.style-picker', section: 'styles', label: 'Theme', description: 'How the whole app looks: Terminal or Glass', keywords: ['theme', 'themes', 'style', 'styles', 'skin', 'appearance', 'look', 'terminal', 'square', 'glass', 'round', 'calm'] },
+  { id: 'styles.palette', section: 'styles', label: 'Palette', description: 'The set of colours the theme uses', keywords: ['palette', 'color', 'colors', 'colour', 'colours', 'theme', 'charcoal', 'paper', 'obsidian', 'veil', 'dusk', 'yellow', 'dark mode', 'light mode'] },
   { id: 'styles.scheme', section: 'styles', label: 'Light or dark', description: 'Light, Dark, or Auto to follow your system', keywords: ['scheme', 'light', 'dark', 'auto', 'appearance', 'mode', 'night', 'day', 'os', 'system'] },
-  { id: 'styles.auto-palettes', section: 'styles', label: 'Palettes for Auto', description: 'Under Auto, the palette for a light system and for a dark system', keywords: ['auto', 'system', 'light', 'dark', 'swap', 'palette', 'theme', 'yellow'] },
+  { id: 'styles.auto-palettes', section: 'styles', label: 'Palettes for Auto', description: 'Under Auto, the palette for a light system and for a dark system', keywords: ['auto', 'system', 'light', 'dark', 'swap', 'palette', 'theme', 'dusk', 'yellow'] },
   { id: 'styles.accent', section: 'styles', label: 'Accent colour', description: 'The colour of buttons, switches, links and focus rings, for each palette, with a reset', keywords: ['accent', 'colour', 'color', 'tint', 'highlight', 'custom', 'reset', 'picker', 'hex', 'palette'] },
   { id: 'styles.density', section: 'styles', label: 'Spacing', description: 'Compact, Regular or Spacious room between panes and tiles', keywords: ['density', 'gaps', 'spacing', 'compact', 'regular', 'spacious', 'padding', 'tiles'] },
   { id: 'styles.dials', section: 'styles', label: 'Frost', description: 'How much Glass blurs what is behind menus and popovers', keywords: ['dials', 'frost', 'blur', 'adjust', 'tweak', 'slider', 'glass', 'effects', 'translucency'] },
-  { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight', description: 'How thick text looks in terminals, saved for each style', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
-  { id: 'styles.reset-defaults', section: 'styles', label: 'Reset to defaults', description: 'Put the style, light and dark, palettes, accent colours, spacing, Frost and text weight back to how K2 ships', keywords: ['reset', 'defaults', 'default', 'restore', 'factory', 'start over', 'undo', 'original', 'theme', 'look'] },
+  { id: 'styles.text-weight', section: 'styles', label: 'Terminal text weight', description: 'How thick text looks in terminals, saved for each theme', keywords: ['gamma', 'weight', 'thickness', 'bold', 'thin', 'chonky', 'webgl', 'text', 'terminal'] },
+  { id: 'styles.reset-defaults', section: 'styles', label: 'Reset to defaults', description: 'Put the theme, light and dark, palettes, accent colours, spacing, Frost and text weight back to how K2 ships', keywords: ['reset', 'defaults', 'default', 'restore', 'factory', 'start over', 'undo', 'original', 'theme', 'style', 'look'] },
 ]
 
 /** A palette's accent as its swatch shows it: its saved choice, else its own. */
@@ -397,7 +397,7 @@ export function StylesSection(): React.JSX.Element {
   // every palette's accent, dial and text weight and applies DEFAULT_SELECTION.
   const handleResetToDefaults = async (): Promise<void> => {
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Put Styles back to how K2 ships?',
+      title: 'Put Themes back to how K2 ships?',
       message: 'Your look, light and dark, palettes and accent colours go back to the defaults on this computer.',
       confirmLabel: 'Reset',
     })
@@ -431,14 +431,14 @@ export function StylesSection(): React.JSX.Element {
     <div className="h-full min-h-0 flex">
       {/* ── The styles ── */}
       <aside
-        aria-label="Styles"
+        aria-label="Themes"
         data-settings-id="styles.style-picker"
         className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
       >
         <div className="flex-shrink-0 px-4 pt-6 pb-3">
-          <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">Styles</h2>
+          <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">Themes</h2>
           <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
-            How K2 looks on this computer. Point at a style to try it; click to use it.
+            How K2 looks on this computer. Point at a theme to try it; click to use it.
           </p>
         </div>
         {/* Terminal: full-width list rows, so the names line up with the
@@ -828,7 +828,7 @@ export function StylesSection(): React.JSX.Element {
               (canvas, tab strip, tiled terminal panes using the real --term-*
               colors), so it always shows the CURRENTLY STAMPED style,
               including hover previews. */}
-          <SettingsGroup title="Preview" hint="The style in use, or the one you're pointing at." settingId="styles.preview" card>
+          <SettingsGroup title="Preview" hint="The theme in use, or the one you're pointing at." settingId="styles.preview" card>
             <div className="p-4">
               <div
                 data-k2-chamfer="surface"
@@ -921,7 +921,7 @@ export function StylesSection(): React.JSX.Element {
             <SettingRow
               settingId="styles.reset-defaults"
               label="Reset to defaults"
-              hint="The style, light and dark, palettes, accent colours, spacing, Frost and text weight, as K2 ships them. Only on this computer."
+              hint="The theme, light and dark, palettes, accent colours, spacing, Frost and text weight, as K2 ships them. Only on this computer."
               below={unsaved === 'defaults' ? <RowError>{NOT_SAVED}</RowError> : undefined}
             >
               {savedNote('defaults')}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Settings → Styles: the style list, the Colours card, the accent's hex
+// Settings → Themes (section id `styles`): the style list, the Colours card, the accent's hex
 // field, Reset states, and saves that fail. Bezel is retired: compiled, but
 // not in the picker (prd-themes-terminal-glass-v1 §7).
 
@@ -20,6 +20,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { getStyle } from '@/styles.generated'
 import { STYLES_MANIFEST, StylesSection } from './StylesSection'
+import { SECTION_LABELS, searchManifest } from '../searchManifest'
 
 afterEach(() => {
   cleanup()
@@ -156,7 +157,9 @@ describe('Colours', () => {
     cleanup()
     useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'dark' })
     render(<StylesSection />)
-    expect(paletteCards()).toEqual(['Obsidian', 'Veil', 'Yellow'])
+    // Glass's dark gold palette reads Dusk; its id stays `yellow`.
+    expect(paletteCards()).toEqual(['Obsidian', 'Veil', 'Dusk'])
+    expect(document.querySelector('[data-palette-id="yellow"] [data-palette-name]')?.textContent).toBe('Dusk')
   })
 
   it('a palette card is a focusable button with the shared focus ring', () => {
@@ -191,6 +194,16 @@ describe('Colours', () => {
     expect(useStyleStore.getState().schemeMode).toBe('auto')
     expect(useStyleStore.getState().autoPalettes?.light).toBe('yellow')
     expect(localStorage.getItem('k2.palette.light')).toBe('yellow')
+  })
+
+  it('Glass under Auto: the dark side reads Dusk, saved as yellow', () => {
+    useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'auto' })
+    render(<StylesSection />)
+    const group = screen.getByRole('radiogroup', { name: 'When my system is dark' })
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Obsidian', 'Veil', 'Dusk'])
+    fireEvent.click(within(group).getByRole('radio', { name: 'Dusk' }))
+    expect(useStyleStore.getState().autoPalettes?.dark).toBe('yellow')
+    expect(localStorage.getItem('k2.palette.dark')).toBe('yellow')
   })
 })
 
@@ -335,7 +348,7 @@ describe('Reset to defaults', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reset to defaults' }))
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
     expect(confirm).toHaveBeenCalledWith({
-      title: 'Put Styles back to how K2 ships?',
+      title: 'Put Themes back to how K2 ships?',
       message: 'Your look, light and dark, palettes and accent colours go back to the defaults on this computer.',
       confirmLabel: 'Reset',
     })
@@ -424,6 +437,16 @@ describe('search', () => {
     const picker = STYLES_MANIFEST.find((e) => e.id === 'styles.style-picker')!
     expect(picker.keywords).toEqual(expect.arrayContaining(['terminal', 'square', 'glass']))
     expect(picker.keywords).not.toContain('bezel')
+  })
+
+  it('the page is Themes, and style, dusk and yellow still find it', () => {
+    expect(SECTION_LABELS.styles).toBe('Themes')
+    expect(STYLES_MANIFEST.find((e) => e.id === 'styles.style-picker')!.label).toBe('Theme')
+    expect(searchManifest(STYLES_MANIFEST, 'styles').map((e) => e.id)).toContain('styles.style-picker')
+    for (const q of ['dusk', 'yellow']) {
+      const ids = searchManifest(STYLES_MANIFEST, q).map((e) => e.id)
+      expect(ids, q).toEqual(expect.arrayContaining(['styles.palette', 'styles.auto-palettes']))
+    }
   })
 
   it('every entry points at a row on the page', () => {

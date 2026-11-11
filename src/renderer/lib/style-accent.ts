@@ -3,7 +3,7 @@
 // The user's accent for a palette lives in localStorage
 // (`k2.accent.<styleId>.<paletteId>`): `yellow`, a `#rrggbb` custom colour,
 // or nothing for that palette's own accent. Each palette keeps its own, so
-// Obsidian, Veil and Yellow never share one. This module turns that untrusted raw string
+// Obsidian, Veil and Dusk (id `yellow`) never share one. This module turns that untrusted raw string
 // into the concrete CSS values the store writes onto <html>. Pure
 // functions, no DOM or storage access: stores/style.ts owns the side effects.
 //

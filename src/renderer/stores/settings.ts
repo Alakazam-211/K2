@@ -503,7 +503,7 @@ function mergeEditorDefaults(result: Partial<EditorSettingsBackend> | undefined)
   return { ...DEFAULT_EDITOR, ...result }
 }
 
-/** Defaults matching Glass / yellow / auto / base density (same as
+/** Defaults matching Glass / yellow (the Dusk palette) / auto / base density (same as
  *  style-resolve DEFAULT_SELECTION). Used only as the settings-store
  *  initial value before the style store is consulted. */
 const DEFAULT_STYLE: StyleSettingsBackend = {

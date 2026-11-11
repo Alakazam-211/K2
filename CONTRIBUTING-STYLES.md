@@ -39,7 +39,7 @@ Read [`styles/README.md`](styles/README.md) for the folder anatomy and
 
 Run the app from source (`bun run dev`) with `bun run styles:watch` in a second
 terminal: every save of a style file regenerates the outputs and hot-reloads
-into the running app — your style shows up as a card in Settings → Styles, with
+into the running app — your style shows up as a card in Settings → Themes, with
 live palette hover-previews, while you edit its JSON.
 
 ## Submitting
@@ -47,7 +47,7 @@ live palette hover-previews, while you edit its JSON.
 1. `bun run styles:build` — regenerates `src/renderer/styles.generated.{css,ts}`;
    commit the regenerated files with your package.
 2. `bun run typecheck:web && bun run styles:lint` — both must pass.
-3. Screenshot what you made (the Settings→Styles preview is a good subject) and
+3. Screenshot what you made (the Settings → Themes preview is a good subject) and
    put it in the PR description. CI also captures a screen matrix per style
    configuration and attaches it to the PR as an artifact.
 4. One Style or palette per PR.

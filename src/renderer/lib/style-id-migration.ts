@@ -1,7 +1,7 @@
 // One-shot localStorage migration for retired style ids.
 //
-// Square became Terminal. Bezel users land on Glass: Graphite on the Yellow
-// palette, Porcelain on Veil with Bezel's gold accent. glass-next became Glass,
+// Square became Terminal. Bezel users land on Glass: Graphite on the Dusk
+// palette (id `yellow`), Porcelain on Veil with Bezel's gold accent. glass-next became Glass,
 // keeping its palette, accent and tuning. The pre-paint bootstrap and every incoming id
 // already go through the alias table in lib/style-resolve; this moves what's
 // SAVED so per-style keys follow.
@@ -117,7 +117,7 @@ export function migrateRetiredStyleKeys(): void {
  *
  * Glass's shared key holding Yellow on a client past the one-time 0.46.11
  * switch came from that switch, not from the person (it forced Yellow onto
- * Obsidian, Veil and Yellow alike): it is dropped, so each palette shows its
+ * Obsidian, Veil and Dusk alike): it is dropped, so each palette shows its
  * own accent. Runs before the switch, so a client meeting both at once keeps
  * a Yellow it chose. Never throws.
  */

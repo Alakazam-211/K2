@@ -98,7 +98,7 @@ interface StyleState extends StyleSelection {
   textGamma: number
   /** The applied palette's accent choice: `yellow`, a #rrggbb colour, or
    *  null for the palette's own accent. Saved per palette
-   *  (`k2.accent.<styleId>.<paletteId>`); Settings → Styles owns it. */
+   *  (`k2.accent.<styleId>.<paletteId>`); Settings → Themes owns it. */
   accent: AccentChoice | null
   /** Resolve `sel` (merged over the current selection), stamp <html>,
    *  refresh the localStorage mirror. Idempotent. Does NOT talk to the
@@ -560,8 +560,8 @@ let _seededDefaultAccents: [string, AccentChoice][] = []
 
 /**
  * The one-time switch to the default look (Rosson, 2026-11-11): every client,
- * new or existing, starts 0.46.11 on Glass under Auto (Obsidian light, Yellow
- * dark), once. It writes only the accents DEFAULT_PALETTE_ACCENTS names, each
+ * new or existing, starts 0.46.11 on Glass under Auto (Obsidian light, Dusk
+ * dark, id `yellow`), once. It writes only the accents DEFAULT_PALETTE_ACCENTS names, each
  * on its own palette; every other palette keeps its accent. Runs before the first read of the
  * mirror; index.html's bootstrap paints the same look while the flag is
  * missing, so the first frame is already Glass.

@@ -45,7 +45,7 @@ export interface ResolvedStyle {
 
 /**
  * The look for a client that has never picked one (Rosson, 2026-11-11):
- * Glass under Auto, Obsidian when the system is light and Yellow when it is
+ * Glass under Auto, Obsidian when the system is light and Dusk (id `yellow`) when it is
  * dark (both dark palettes: Auto lets the palette decide the scheme), each
  * palette with DEFAULT_PALETTE_ACCENTS. `paletteId` is the dark side's, the
  * palette a switch from Auto to Dark keeps. A saved choice is never replaced
@@ -67,7 +67,7 @@ export const DEFAULT_SELECTION: Readonly<StyleSelection> = Object.freeze({
  * #rrggbb colour.
  *
  *   {}                      no accent written: every palette its own (now)
- *   { obsidian: 'yellow' }  Obsidian with the Yellow accent, Yellow its own
+ *   { obsidian: 'yellow' }  Obsidian with the Yellow accent, Dusk (id `yellow`) its own
  *
  * Change it here, then update `defaultAccent` in index.html's pre-paint
  * bootstrap to match: stores/style-accent.test.ts derives the values from

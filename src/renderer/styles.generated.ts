@@ -298,7 +298,7 @@ export const STYLES: readonly StyleMeta[] = [
       },
       {
         "id": "yellow",
-        "name": "Yellow",
+        "name": "Dusk",
         "schemes": [
           "dark"
         ],

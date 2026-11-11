@@ -145,11 +145,16 @@ describe('accentFillHex', () => {
 })
 
 describe('the Yellow palettes', () => {
-  it.each(['terminal', 'glass', 'glass-classic'])('%s has three palettes, with Yellow as a dark one', (id) => {
+  // Glass shows its `yellow` palette as Dusk; the id (saved choices) stays.
+  it.each([
+    ['terminal', 'Yellow'],
+    ['glass', 'Dusk'],
+    ['glass-classic', 'Yellow'],
+  ])('%s has three palettes, with id yellow (%s) as a dark one', (id, name) => {
     const style = getStyle(id)!
     expect(style.palettes).toHaveLength(3)
     const yellow = style.palettes.find((p) => p.id === 'yellow')!
-    expect(yellow.name).toBe('Yellow')
+    expect(yellow.name).toBe(name)
     expect(yellow.schemes).toEqual(['dark'])
     expect(yellow.swatch.accent).toBe('#ffc700')
   })

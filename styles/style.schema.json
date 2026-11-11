@@ -22,7 +22,7 @@
       "required": ["id", "name", "author", "version", "schemaVersion", "defaultPalette", "capabilities"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "Folder name and data-style attribute value." },
-        "name": { "type": "string", "description": "User-facing name shown in Settings→Styles." },
+        "name": { "type": "string", "description": "User-facing name shown in Settings → Themes." },
         "author": { "type": "string" },
         "version": { "type": "string" },
         "schemaVersion": { "const": 1 },
@@ -50,7 +50,7 @@
         },
         "dials": {
           "type": "array",
-          "description": "Optional user-adjustable knobs surfaced in Settings→Styles (e.g. Glass tint opacity).",
+          "description": "Optional user-adjustable knobs surfaced in Settings → Themes (e.g. Glass tint opacity).",
           "items": {
             "type": "object",
             "required": ["id", "label", "token", "min", "max"],

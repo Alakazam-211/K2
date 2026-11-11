@@ -1,7 +1,7 @@
 {
   "$schema": "../../style.schema.json#/$defs/palette",
   "id": "yellow",
-  "name": "Yellow",
+  "name": "Dusk",
   "schemes": [
     "dark"
   ],

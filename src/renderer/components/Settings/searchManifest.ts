@@ -145,7 +145,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   notifications: 'Notifications',
   'token-usage': 'Usage',
-  styles: 'Styles',
+  styles: 'Themes',
   projects: 'Workspaces / Agents',
   'project-groups': 'Projects',
   tickets: 'Tickets',

@@ -210,7 +210,7 @@ export function settingsNav({
     ...(notifications
       ? ([{ kind: 'item', id: 'notifications' as const, label: 'Notifications' }] satisfies NavBlock[])
       : []),
-    { kind: 'item', id: 'styles', label: 'Styles' },
+    { kind: 'item', id: 'styles', label: 'Themes' },
     { kind: 'item', id: 'projects', label: 'Workspaces / Agents' },
     { kind: 'item', id: 'project-groups', label: 'Projects' },
     { kind: 'item', id: 'tickets', label: 'Tickets' },

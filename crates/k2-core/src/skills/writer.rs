@@ -293,20 +293,20 @@ pub fn write_agent_skill_file(project_path: &str, agent_name: &str, agent_type: 
     // same canonical source, also upgrade-tracked.
     let description = match agent_type {
         "manager" | "coordinator" | "pod-leader" => format!(
-            "K2SO Workspace Manager commands for {} — checkin, delegate, message, reserve files",
+            "K2SO Workspace Manager commands for {} — inbox, organization, message, reserve files",
             agent_name
         ),
         // Stage A dual-read: `k2` and legacy `k2so` share the builtin description.
         "k2so" | "k2" => format!(
-            "K2SO Agent commands for {} — full surface (checkin, heartbeats, work, messaging, reserves)",
+            "K2SO Agent commands for {} — full surface (inbox, organization, heartbeats, messaging, reserves)",
             agent_name
         ),
         "custom" => format!(
-            "K2SO agent commands for {} — checkin, message connected workspaces, reserve files",
+            "K2SO agent commands for {} — inbox, message connected workspaces, reserve files",
             agent_name
         ),
         _ => format!(
-            "K2SO agent template commands for {} — checkin, status, done, reserve files",
+            "K2SO agent template commands for {} — inbox, organization update, done, reserve files",
             agent_name
         ),
     };

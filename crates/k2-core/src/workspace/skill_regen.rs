@@ -2028,6 +2028,7 @@ mod tests {
         "k2so agents list",
         "k2so agents running",
         "k2so agents work",
+        "k2so checkin",
     ];
 
     fn assert_regen_body_has_no_deprecated_verbs(body: &str, context: &str) {
@@ -2070,9 +2071,10 @@ mod tests {
         // Sanity: at least one canonical A25 verb should appear so an
         // accidental empty-body regression doesn't trivially pass.
         assert!(
-            body.contains("k2so checkin")
-                && body.contains("k2so inbox"),
-            "regen body must reference canonical A25 verbs (k2so checkin, k2so inbox), got first 400 chars:\n{}",
+            body.contains("k2so inbox")
+                && body.contains("k2so organization update")
+                && body.contains("k2so done"),
+            "regen body must reference canonical verbs (k2so inbox, k2so organization update, k2so done), got first 400 chars:\n{}",
             &body[..body.len().min(400)],
         );
 

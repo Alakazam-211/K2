@@ -78,10 +78,10 @@ Standard CLI tools are available in your terminal (`gh`, `git`,
 
 ```
 k2so terminal spawn --title "..." --command "..."   # run parallel tasks
-k2so checkin                                        # read peer messages + inbox + reviews + activity
-k2so checkin --status "<message>"                   # update visible status
-k2so checkin --done                                 # signal task completion
-k2so done                                           # shortcut for `checkin --done`
+k2so inbox                                          # your inbox: new work at the top
+k2so organization bulletin                          # today's bulletin of orgs and heads
+k2so organization update "<news>"                   # send your status to your org's head
+k2so done [--blocked "reason"]                      # signal task completion (or blocked)
 ```
 "#;
 
@@ -304,7 +304,7 @@ pub fn generate_manager_skill_content(project_path: &str, project_name: &str) ->
 
 On each wake, run through this in order:
 
-1. `k2so checkin` — peer messages, inbox arrivals, pending reviews, recent activity.
+1. `k2so inbox` and `k2so organization bulletin`: new work, then today's bulletin of orgs and heads.
 2. **Triage messages** — respond to live messages from connected workspaces or the user.
 3. **Triage the inbox** — `k2so inbox` shows new arrivals at the top level. Sort by priority (critical > high > normal > low) and decide for each item:
    - **Act on it** — work it yourself when scoped.
@@ -312,8 +312,8 @@ On each wake, run through this in order:
    - **Reply** — `k2so inbox respond <id> "text"` (to sender) or `k2so msg <ws> "..."` (live, to another workspace).
    - **Archive** — `k2so inbox archive <id>` when complete.
 4. **Review pending merges** — `k2so reviews`, then `k2so review approve|reject|feedback <branch>` per A23.3 framing: worktrees may come from your harness, from a human, or from an integration — your job is to read the diff and decide regardless of origin.
-5. **Report status** — `k2so checkin --status "triaging 3 inbox items"` to update the visible activity feed.
-6. **Signal completion** — `k2so checkin --done` (or shortcut `k2so done`), optionally `--blocked "reason"`.
+5. **Report status**: `k2so organization update "triaging 3 inbox items"` sends it to your org's head.
+6. **Signal completion**: `k2so done`, optionally `--blocked "reason"`.
 
 "#);
 
@@ -363,13 +363,12 @@ k2so review feedback <branch> -m "..."         # send feedback without rejecting
     // ── 7. Communication ──
     skill.push_str(r#"## Communication
 
-### Check in
+### Status and completion
 ```
-k2so checkin                                   # full snapshot (inbox + messages + reviews + activity)
-k2so checkin --status "working on auth refactor"   # update visible status
-k2so checkin --done                            # signal task complete
-k2so checkin --done --blocked "waiting for API spec"
-k2so done                                      # shortcut for `checkin --done`
+k2so organization bulletin                     # today's bulletin of orgs and heads
+k2so organization update "working on auth refactor"   # status to your org's head
+k2so done                                      # signal task complete
+k2so done --blocked "waiting for API spec"
 ```
 
 ### Message another workspace — or read what it's doing
@@ -472,7 +471,8 @@ Run `k2so glossary <term>` for definitions of K2SO-specific terms (workspace, sk
 }
 
 /// Generate the skill protocol for custom agents.
-/// Has checkin, status, done, msg (to connected workspaces), reserve/release.
+/// Has inbox, organization bulletin / update, done, msg (to connected
+/// workspaces), reserve/release.
 /// No delegation — custom agents send work to workspace inboxes.
 pub fn generate_custom_agent_skill_content(project_name: &str, agent_name: &str) -> String {
     let mut skill = format!(
@@ -491,13 +491,12 @@ You are {agent_name}, a custom agent for {project_name}.
         skill.push_str(&custom_layers);
     }
 
-    skill.push_str(r#"## Check in (do this first on every wake)
+    skill.push_str(r#"## Start of every wake
 
 ```
-k2so checkin
+k2so inbox                          # new work at the top
+k2so organization bulletin          # today's bulletin of orgs and heads
 ```
-
-Returns peer messages, inbox arrivals, pending reviews, and the recent activity feed for the workspace.
 
 ## Triage your inbox
 
@@ -519,10 +518,9 @@ k2so inbox folders                  # list folders you have created
 ## Report status + completion
 
 ```
-k2so checkin --status "reviewing security audit"
-k2so checkin --done
-k2so checkin --done --blocked "waiting for API access"
-k2so done                           # shortcut for `checkin --done`
+k2so organization update "reviewing security audit"   # status to your org's head
+k2so done
+k2so done --blocked "waiting for API access"
 ```
 
 ## Message another workspace — or read what it's doing
@@ -656,10 +654,9 @@ This skill lists the full daily + power-user CLI surface so you can triage, mess
     skill.push_str(r#"## Every wake (do this first)
 
 ```
-k2so checkin
+k2so inbox                          # new work at the top
+k2so organization bulletin          # today's bulletin of orgs and heads
 ```
-
-Returns peer messages, inbox arrivals, pending reviews, and the recent activity feed.
 
 ## Triage your inbox
 
@@ -681,10 +678,9 @@ K2SO does not impose a folder taxonomy — organize like email (e.g., `projects/
 ## Report status + completion
 
 ```
-k2so checkin --status "drafting auth v2 PRD"
-k2so checkin --done
-k2so checkin --done --blocked "waiting for design review"
-k2so done                            # shortcut for `checkin --done`
+k2so organization update "drafting auth v2 PRD"   # status to your org's head
+k2so done
+k2so done --blocked "waiting for design review"
 ```
 
 ## Your role: planning, not implementation
@@ -1084,13 +1080,12 @@ A skill is a documentation profile — a persona / capability set the harness ca
         skill.push_str(&custom_layers);
     }
 
-    skill.push_str(r#"## Check in (do this first on every wake)
+    skill.push_str(r#"## Start of every wake
 
 ```
-k2so checkin
+k2so inbox                          # new work at the top
+k2so organization bulletin          # today's bulletin of orgs and heads
 ```
-
-Returns peer messages, inbox arrivals, pending reviews, and the recent activity feed.
 
 ## Triage your inbox
 
@@ -1107,10 +1102,9 @@ k2so inbox respond <id> "text"      # reply to sender
 ## Report status + completion
 
 ```
-k2so checkin --status "implementing JWT validation"
-k2so checkin --done
-k2so checkin --done --blocked "need clarification on auth flow"
-k2so done                           # shortcut for `checkin --done`
+k2so organization update "implementing JWT validation"   # status to your org's head
+k2so done
+k2so done --blocked "need clarification on auth flow"
 ```
 
 ## Glossary
@@ -1570,7 +1564,7 @@ mod tests {
     //!      deprecated verbs Phase 2.1 retired (`k2so delegate`,
     //!      `k2so work create`, `k2so signal`, `k2so app-update`).
     //!   4. Each generator references the canonical A25 verbs
-    //!      (`k2so inbox`, `k2so msg`, `k2so checkin`, `k2so workspace`).
+    //!      (`k2so inbox`, `k2so msg`, `k2so done`, `k2so workspace`).
     //!
     //! The Tier-2.2 PRD calls these "snapshot tests" — they're not
     //! literal value-byte snapshots (those rot fast as templates evolve)
@@ -1604,6 +1598,9 @@ mod tests {
         "k2so agents list",
         "k2so agents running",
         "k2so agents work",
+        // Retired 0.46.11: `checkin` (and its --status / --done forms)
+        // is a stub that points at organization / inbox / done.
+        "k2so checkin",
     ];
 
     fn assert_no_deprecated_verbs(content: &str, generator: &str) {
@@ -1660,7 +1657,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             &body,
             "generate_manager_skill_content",
-            &["k2so inbox", "k2so checkin", "k2so reviews"],
+            &["k2so inbox", "k2so organization update", "k2so done", "k2so reviews"],
         );
     }
 
@@ -1929,7 +1926,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             &body,
             "generate_custom_agent_skill_content",
-            &["k2so inbox", "k2so checkin", "k2so msg"],
+            &["k2so inbox", "k2so organization update", "k2so done", "k2so msg"],
         );
     }
 
@@ -1963,7 +1960,8 @@ mod tests {
             "generate_k2so_agent_skill_content",
             &[
                 "k2so inbox",
-                "k2so checkin",
+                "k2so organization update",
+                "k2so done",
                 "k2so msg",
                 "k2so heartbeat",
                 "k2so connections",
@@ -2277,7 +2275,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             &body,
             "generate_template_skill_content",
-            &["k2so checkin", "k2so inbox"],
+            &["k2so inbox", "k2so organization update", "k2so done"],
         );
     }
 
@@ -2291,7 +2289,7 @@ mod tests {
         assert_contains_canonical_a25_verbs(
             CUSTOM_AGENT_HEARTBEAT_DOCS,
             "CUSTOM_AGENT_HEARTBEAT_DOCS",
-            &["k2so heartbeat", "k2so checkin"],
+            &["k2so heartbeat", "k2so done"],
         );
     }
 

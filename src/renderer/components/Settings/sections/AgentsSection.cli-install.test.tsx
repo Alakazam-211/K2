@@ -56,6 +56,13 @@ function toolRow(program: string): HTMLElement {
   return screen.getByTestId(`tool-row-${program}`)
 }
 
+/** Waits for the tool check to answer. The featured rows (Claude, Codex)
+ *  and their status lines show while it still says Checking…, so waiting
+ *  for a row can pass before the answer is drawn on a slow run. */
+async function toolCheckDone(): Promise<void> {
+  await waitFor(() => expect(screen.queryByTestId('tools-loading')).toBeNull())
+}
+
 beforeEach(() => {
   useCliInstallStore.setState({ installing: null })
   setPresets(SAMPLE)
@@ -221,7 +228,7 @@ describe('Agent tools on this computer', () => {
   it('lists installed tools first with their version, the rest folded under More agents', async () => {
     mockCliStatus({ tools: FOUR })
     render(<AgentsSection />)
-    await screen.findByTestId('tool-row-claude')
+    await toolCheckDone()
     expect(within(toolRow('claude')).getByText('Installed')).toBeTruthy()
     expect(screen.getByTestId('tool-status-claude').textContent).toBe('Version 2.1.12')
     expect(screen.getByTestId('tool-status-codex').textContent).toBe('Version 0.58.0')
@@ -235,7 +242,7 @@ describe('Agent tools on this computer', () => {
   it('a broken tool says it is installed but didn’t answer, with the reason quietly and a next step', async () => {
     const recheck = mockCliStatus({ tools: [installedTool('claude', '2.1.12'), tool('codex', { installed: true, path: '/usr/local/bin/codex', launches: true, error: '--version exited 1: bad option' }), tool('grok'), tool('gemini')] })
     render(<AgentsSection />)
-    await screen.findByTestId('tool-row-codex')
+    await toolCheckDone()
     expect(within(toolRow('codex')).getByText('Not working')).toBeTruthy()
     expect(within(toolRow('codex')).queryByText('Installed')).toBeNull()
     expect(screen.getByTestId('tool-status-codex').textContent).toBe('Installed, but it didn’t answer when K2 checked.')
@@ -254,7 +261,7 @@ describe('Agent tools on this computer', () => {
   it('a missing tool says Not installed and offers Install', async () => {
     mockCliStatus({ tools: [installedTool('claude', '2.1.12'), tool('codex'), tool('grok'), tool('gemini')] })
     render(<AgentsSection />)
-    await screen.findByTestId('tool-row-claude')
+    await toolCheckDone()
     fireEvent.click(screen.getByRole('button', { name: /More agents/ }))
     expect(screen.getByTestId('tool-status-gemini').textContent).toContain('Not installed')
     fireEvent.click(screen.getByRole('button', { name: 'Show how to install Gemini CLI' }))
@@ -306,7 +313,8 @@ describe('Agent tools on this computer', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     reply = { tools: [installedTool('claude', '2.1.12')] }
     await act(async () => { fireEvent.click(within(err).getByRole('button', { name: 'Try again' })) })
-    expect((await screen.findByTestId('tool-status-claude')).textContent).toBe('Version 2.1.12')
+    await toolCheckDone()
+    expect(screen.getByTestId('tool-status-claude').textContent).toBe('Version 2.1.12')
   })
 
   it('says Checking… in each row while the check runs, and doesn’t guess', () => {
@@ -371,7 +379,7 @@ describe('Agent tools on this computer', () => {
     mockCliStatus(() => ({ tools: [installedTool('claude', '2.1.12'), tool('codex'), done ? installedTool('grok', '0.9.3') : tool('grok'), tool('gemini')] }))
     vi.spyOn(daemonCli, 'daemonCliPost').mockImplementation((async () => { done = true; return { ok: true, installed: true } }) as typeof daemonCli.daemonCliPost)
     render(<AgentsSection />)
-    await screen.findByTestId('tool-row-claude')
+    await toolCheckDone()
     fireEvent.click(screen.getByRole('button', { name: /More agents/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Show how to install Grok' }))
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Install Grok' })) })

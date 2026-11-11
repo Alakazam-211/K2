@@ -120,6 +120,11 @@ export const REPORTED_FEATURES = {
    *  converted where the box can). With it, an image attachment draws as
    *  the picture under the bubble (S3); without it, today's chip. */
   'thread-images-v1': 'thread-images-v1',
+  /** thread-message-delete-v1 (0.46.11): `POST /cli/thread/message/delete`
+   *  `{addr, id}` deletes a person's own post (the owner: anyone's) and the
+   *  doc comes back as a tombstone (`deleted`). With it, the message menu
+   *  offers Delete message on your own posts; without it, no such row. */
+  'thread-message-delete-v1': 'thread-message-delete-v1',
   /** ticket-attachments-v1 (0.46.6, prd-ticket-attachments-v1): files on
    *  ticket messages. `show` comments carry `id` and `attachments`;
    *  `attachments` on `POST /cli/feedback/comment`; the door

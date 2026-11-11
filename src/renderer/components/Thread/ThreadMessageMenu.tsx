@@ -17,8 +17,11 @@ import type { ServerScope } from '@/kessel/server-scope'
 import { copyToClipboard } from '@/components/common/chat-copy'
 import { StashGlyph } from '@/components/PromptStash/PromptStash'
 import { stashThreadText } from '@/components/PromptStash/StashFromThread'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useContextMenuStore, type ContextMenuItemDef } from '@/stores/context-menu'
 import { useToastStore } from '@/stores/toast'
+import { daemonCliPost } from '@/lib/daemon-cli'
+import { daemonErrorText } from '@/lib/daemon-error'
 import {
   threadReplyComposerOpen,
   threadReplyFirstLine,
@@ -45,6 +48,37 @@ export interface ThreadMessageMenuArgs {
   quote?: { text: string; from: string } | null
   /** The reply this message would start (null: no Reply). */
   reply: { key: string; target: ThreadReplyTarget } | null
+  /** Delete message (thread-message-delete-v1): on your own post, where the
+   *  Thread's server has the feature. Null: no such row. */
+  del?: ThreadMessageDelete | null
+}
+
+/** What Delete message removes: this post on this Thread's server. */
+export interface ThreadMessageDelete {
+  scope: ServerScope
+  addr: string
+  id: string
+}
+
+/** The confirm (Rosson 2026-11-11: a sensitive message, said plainly). */
+export const DELETE_MESSAGE_CONFIRM = {
+  title: 'Delete this message?',
+  message: "It's removed from this Thread and from the agent's server. The agent is told you deleted it; it can't be undone.",
+  confirmLabel: 'Delete',
+  destructive: true,
+} as const
+
+/** Confirm, then delete. The bubble turns into "You deleted this message"
+ *  when the daemon's frame (or the answer) comes back. */
+export async function deleteThreadMessage(del: ThreadMessageDelete): Promise<boolean> {
+  if (!(await useConfirmDialogStore.getState().confirm(DELETE_MESSAGE_CONFIRM))) return false
+  try {
+    await daemonCliPost(del.scope, 'thread/message/delete', { addr: del.addr, id: del.id })
+    return true
+  } catch (err) {
+    useToastStore.getState().addToast(`Couldn't delete the message: ${daemonErrorText(err) || String(err)}`, 'error')
+    return false
+  }
 }
 
 /** The text selected inside `el` alone, else null (nothing selected, or a
@@ -80,6 +114,10 @@ export function threadMessageMenuItems(args: ThreadMessageMenuArgs, selection: s
     icon: <StashGlyph size={12} />,
     enabled: args.text.trim().length > 0 || !!args.quote,
   })
+  if (args.del) {
+    items.push({ id: 'sep-delete', label: '', type: 'separator' })
+    items.push({ id: 'delete', label: 'Delete message' })
+  }
   return items
 }
 
@@ -101,6 +139,8 @@ export async function openThreadMessageMenu(
     } catch (err) {
       useToastStore.getState().addToast(`Couldn't copy: ${err instanceof Error ? err.message : String(err)}`, 'error')
     }
+  } else if (picked === 'delete' && args.del) {
+    await deleteThreadMessage(args.del)
   } else if (picked === 'stash') {
     await stashThreadText({
       scope: args.scope,

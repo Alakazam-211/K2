@@ -405,6 +405,13 @@ export interface OverlayDoc {
    *  window's pending bubble for the post is matched by it. Absent on posts
    *  sent without one and on older servers. */
   clientMsgId?: string | null
+  /** thread-message-delete-v1 (0.46.11): the person who sent it deleted
+   *  it (or the server owner did). A tombstone: no body, files or options;
+   *  it keeps its place. Drawn as "You deleted this message" / "Message
+   *  deleted". */
+  deleted?: boolean | null
+  deletedAt?: number | null
+  deletedBy?: ThreadAuthor | null
 }
 
 /** `doc.stash` on a `stash.offer` card. */

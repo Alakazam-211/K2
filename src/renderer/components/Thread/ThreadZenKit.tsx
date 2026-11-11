@@ -408,6 +408,16 @@ const BUBBLE_BODY_STYLE: CSSProperties = { color: 'inherit', fontSize: 'inherit'
  *  (`dimClosedCards`): muted with its card, so the closed card never reads
  *  as still waiting. Never in a Garden. */
 const BUBBLE_BODY_CLOSED_STYLE: CSSProperties = { ...BUBBLE_BODY_STYLE, opacity: 0.6 }
+/** A deleted post (thread-message-delete-v1): muted words in an outline,
+ *  no fill, so it never reads as a message. */
+const DELETED_BUBBLE_STYLE: CSSProperties = {
+  padding: '6px 12px',
+  borderRadius: 'var(--zen-bubble-radius)',
+  border: '1px dashed var(--zen-text-muted, var(--color-text-muted))',
+  color: 'var(--zen-text-muted, var(--color-text-muted))',
+  fontStyle: 'italic',
+  fontSize: '0.9em',
+}
 
 export interface ThreadBubbleProps {
   item: OverlayThreadItem
@@ -649,9 +659,13 @@ export const ThreadBubble = memo(function ThreadBubble({
   const source = useThreadAttachmentSource()
   const offer = threadStashOffer(item)
   const menuText = offer ? stashOfferView(offer).saved : bodyText
-  const menuOn = !pending && !!source && kind !== 'secret' && (menuText.trim().length > 0 || !!reply)
+  // thread-message-delete-v1: a deleted post keeps its place with no words.
+  const deleted = item.doc.deleted === true
+  const menuOn = !deleted && !pending && !!source && kind !== 'secret' && (menuText.trim().length > 0 || !!reply)
   const fromLabel = mine ? item.doc.from?.trim() || 'you' : author.split(' · via ')[0]
   const replyAddr = source?.addr ?? ''
+  // Delete message: your own post, where its server has the feature.
+  const canDelete = mine && kind === 'text' && !!source && !!replyAddr && source.scope.serverSupports('thread-message-delete-v1')
   const menuArgs = useMemo<ThreadMessageMenuArgs>(
     () => ({
       scope: source?.scope ?? null,
@@ -667,8 +681,9 @@ export const ThreadBubble = memo(function ThreadBubble({
               target: { id: item.id, seq: item.seq, from: fromLabel, addr: replyAddr, text: menuText, part: false },
             }
           : null,
+      del: canDelete && source ? { scope: source.scope, addr: replyAddr, id: item.id } : null,
     }),
-    [source, replyAddr, menuText, mine, item.doc.from, item.id, item.seq, author, fromLabel, reply, noReply],
+    [source, replyAddr, menuText, mine, item.doc.from, item.id, item.seq, author, fromLabel, reply, noReply, canDelete],
   )
   const bubbleRef = useRef<HTMLDivElement | null>(null)
   const openMenu = useCallback(
@@ -689,7 +704,11 @@ export const ThreadBubble = memo(function ThreadBubble({
   const shownReceipt = statusBelow && !pending && receipt ? receipt : null
   // (A post that is only files has no words to act on: no menu, no bubble.)
   const more = menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => openMenu(x, y, null)} /> : null
-  const bubbleNode = bubble ? (
+  const bubbleNode = deleted ? (
+    <div data-thread-deleted="" role="note" style={DELETED_BUBBLE_STYLE}>
+      {mine ? 'You deleted this message' : 'Message deleted'}
+    </div>
+  ) : bubble ? (
     <div
       ref={bubbleRef}
       className="selectable-copy"

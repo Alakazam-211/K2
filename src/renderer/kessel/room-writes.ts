@@ -130,6 +130,9 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'thread/post': 'post a Thread message to the agent on B',
   'thread/answer': 'answer a Thread ask on B',
   'thread/void': 'void a Thread message on B',
+  // thread-message-delete-v1 (0.46.11): B checks that this login sent it
+  // (B's owner may delete anyone's) and tells B's agent.
+  'thread/message/delete': 'delete a Thread message you sent to the agent on B',
   // Permission cards (Beta, prd-agent-settings-cards-v1 §4.3, §4.4): absent
   // on B while its switch is off. A note is for a login below the card's
   // floor; "Turn off again" is Admin and up (the card's own floor on B).

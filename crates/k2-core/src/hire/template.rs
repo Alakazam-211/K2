@@ -27,6 +27,7 @@
 //! it. No `.k2/agent/template.lock` yet (T2).
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -216,20 +217,29 @@ fn hash(b: &Builtin) -> String {
 }
 
 /// Fill `{{key}}` from `values`. Any other `{{…}}` is an error (a template
-/// bug, caught by the built-in test).
+/// bug, caught by the built-in test). A line whose placeholder is empty is
+/// dropped (an optional param left out), as the T2 loader does.
 pub fn render(text: &str, values: &BTreeMap<String, String>) -> Result<String, HireError> {
     let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(i) = rest.find("{{") {
-        out.push_str(&rest[..i]);
-        let after = &rest[i + 2..];
-        let j = after.find("}}").ok_or_else(|| bad("an unclosed {{"))?;
-        let key = after[..j].trim();
-        let val = values.get(key).ok_or_else(|| bad(format!("unknown placeholder {{{{{key}}}}}")))?;
-        out.push_str(val);
-        rest = &after[j + 2..];
+    for line in text.split_inclusive('\n') {
+        let mut rendered = String::with_capacity(line.len());
+        let mut rest = line;
+        let mut empty = false;
+        while let Some(i) = rest.find("{{") {
+            rendered.push_str(&rest[..i]);
+            let after = &rest[i + 2..];
+            let j = after.find("}}").ok_or_else(|| bad("an unclosed {{"))?;
+            let key = after[..j].trim();
+            let val = values.get(key).ok_or_else(|| bad(format!("unknown placeholder {{{{{key}}}}}")))?;
+            empty |= val.trim().is_empty();
+            rendered.push_str(val);
+            rest = &after[j + 2..];
+        }
+        rendered.push_str(rest);
+        if !empty {
+            out.push_str(&rendered);
+        }
     }
-    out.push_str(rest);
     Ok(out)
 }
 
@@ -274,10 +284,10 @@ fn values(p: &Parsed, req: &ApplyRequest, name: &str, caller: &HireCaller) -> Re
     Ok(out)
 }
 
-/// The ROLE.md body (frontmatter is the persona writer's): the charter in a
-/// `K2:MANAGED` block, then the person's own part.
-pub fn role_body(charter: &str) -> String {
-    format!("{BEGIN}\n{}\n{END}\n\n## Your notes\n\n", charter.trim_end())
+/// The ROLE.md body (frontmatter is the persona writer's): the heading, the
+/// charter in a `K2:MANAGED` block, then the person's own part (T2's shape).
+pub fn role_body(name: &str, charter: &str) -> String {
+    format!("# Persona — {name}\n\n{BEGIN}\n{}\n{END}\n\n## Your notes\n\n", charter.trim_end())
 }
 
 fn step(step: &str, target: Option<&str>, status: &str, reason: Option<String>) -> ApplyStep {
@@ -338,6 +348,15 @@ pub fn apply(req: &ApplyRequest, caller: &HireCaller) -> Result<ApplyReport, Hir
         .or_else(|| (p.tool != "default").then(|| p.tool.clone()));
 
     let existing = converge::lookup_project_row(&converge::expand_hire_path(&path)?);
+    // No path given: `<hire root>/<handle>` must be new, or an agent this
+    // template already made (T2 checks its lock; the shim, registration).
+    if req.path.as_deref().map(str::trim).is_none_or(str::is_empty) && existing.is_none() && Path::new(&path).exists() {
+        return Err(HireError::new(
+            409,
+            "folder_exists",
+            format!("{path} already exists and isn't a {} agent: pick another name or handle", p.name),
+        ));
+    }
     if req.dry_run {
         return Ok(ApplyReport {
             path,
@@ -359,7 +378,7 @@ pub fn apply(req: &ApplyRequest, caller: &HireCaller) -> Result<ApplyReport, Hir
         path: path.clone(),
         name: Some(name.clone()),
         preset: if set_tool { tool.clone() } else { None },
-        persona: Some(role_body(&charter)),
+        persona: Some(role_body(&name, &charter)),
         role: Some(p.role.clone()),
         default_model: if existing.is_none() { req.model.clone() } else { None },
         ..ConvergeRequest::default()
@@ -409,7 +428,6 @@ pub fn has_persona(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn every_builtin_parses_and_renders_with_only_known_placeholders() {
@@ -447,12 +465,15 @@ mod tests {
         assert_eq!(render("hi {{name}}!", &vals).expect("ok"), "hi K5!");
         assert!(render("hi {{nope}}", &vals).is_err());
         assert!(render("hi {{name", &vals).is_err());
+        let with_empty: BTreeMap<String, String> = [("name".to_string(), "K5".to_string()), ("about".to_string(), String::new())].into();
+        assert_eq!(render("a {{name}}\nWhat they do: {{about}}\nb\n", &with_empty).expect("ok"), "a K5\nb\n", "an empty param drops its line");
     }
 
     #[test]
     fn the_role_body_is_a_managed_block_then_the_persons_part() {
-        let body = role_body("# K5\n\ncharter\n");
-        assert!(body.starts_with(BEGIN), "{body}");
+        let body = role_body("K5", "charter\n");
+        assert!(body.starts_with("# Persona — K5\n\n"), "{body}");
+        assert!(body.contains(BEGIN), "{body}");
         let end = body.find(END).expect("end marker");
         assert!(body[..end].contains("charter"));
         assert!(body[end..].contains("## Your notes"), "{body}");
@@ -528,6 +549,12 @@ mod tests {
         assert_eq!(out2.hello, None);
         assert!(std::fs::read_to_string(&role_path).expect("ROLE.md").ends_with("my own line\n"));
         assert_eq!(default_agent_of(&out.path).as_deref(), Some("codex"), "the tool is set once");
+
+        // A folder already there that isn't this template's agent: 409.
+        std::fs::create_dir_all(root.join("taken")).expect("mkdir");
+        let mut taken = ApplyRequest::new("k5");
+        taken.handle = Some("taken".into());
+        assert_eq!(apply(&taken, &HireCaller::Owner).expect_err("taken").code, "folder_exists");
     }
 
     #[test]

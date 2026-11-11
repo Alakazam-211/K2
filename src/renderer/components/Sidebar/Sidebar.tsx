@@ -735,7 +735,6 @@ type NavZone = 'pinned' | 'unpinned'
 export default function Sidebar(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
-  const removeProject = useProjectsStore((s) => s.removeProject)
   const fetchProjects = useProjectsStore((s) => s.fetchProjects)
 
   const reorderProjects = useProjectsStore((s) => s.reorderProjects)

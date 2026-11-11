@@ -103,7 +103,6 @@ export default function IconRail(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const activeProjectId = useProjectsStore((s) => s.activeProjectId)
   const setActiveProject = useProjectsStore((s) => s.setActiveProject)
-  const removeProject = useProjectsStore((s) => s.removeProject)
 
   const expand = useSidebarStore((s) => s.expand)
 

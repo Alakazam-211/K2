@@ -150,14 +150,6 @@ function toasts(): string[] {
   return useToastStore.getState().toasts.map((t) => `${t.type}: ${t.message}`)
 }
 
-async function graph3d(): Promise<HTMLElement> {
-  return waitFor(() => {
-    const el = document.querySelector('[data-stub="graph3d"]')
-    if (!(el instanceof HTMLElement)) throw new Error('3D view not shown')
-    return el
-  })
-}
-
 describe('F5 chunk load failure', () => {
   it('falls back to 2D with one toast and keeps working', async () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => undefined)

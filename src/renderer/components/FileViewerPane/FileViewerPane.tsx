@@ -183,11 +183,6 @@ function getFileName(filePath: string): string {
   return filePath.split('/').pop() || filePath
 }
 
-function getShortPath(filePath: string): string {
-  if (filePath.length > 60) return '...' + filePath.slice(-57)
-  return filePath
-}
-
 // ── Error Boundary ───────────────────────────────────────────────────────
 
 class EditorErrorBoundary extends React.Component<
@@ -365,7 +360,6 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
 
 
   const fileName = getFileName(filePath)
-  const shortPath = getShortPath(filePath)
 
   // Reset view mode when file changes
   useEffect(() => {

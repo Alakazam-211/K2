@@ -374,8 +374,6 @@ export function AIFileEditor({
     onClose()
   }, [cwd, onClose, isDirty, onSaveRequested])
 
-  const fileName = filePath.split('/').pop() || 'file'
-
   return (
     <div className="flex flex-col h-full">
       {/* ── Top bar ── */}

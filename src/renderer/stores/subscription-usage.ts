@@ -72,7 +72,7 @@ export function usageEntryFor(key: string): UsageEntry | null {
   return useSubscriptionUsageStore.getState().entries[key] ?? null
 }
 
-export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, get) => {
+export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set) => {
   const write = (key: string, epoch: number, next: Partial<UsageEntry>): void => {
     if (epoch !== epochOf(key)) return
     set((s) => {

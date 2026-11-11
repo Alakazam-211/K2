@@ -304,17 +304,6 @@ function describeSpec(frequency: string, specJson: string): string {
   return freq
 }
 
-/** Strip a leading YAML frontmatter block (if any) from a markdown
- *  body. Mirrors wake.rs::strip_frontmatter so the wakeup body the
- *  Launch button pastes into a running session is the same content
- *  scheduled fires send via --append-system-prompt. */
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith('---')) return content.trim()
-  const end = content.slice(3).indexOf('---')
-  if (end < 0) return content.trim()
-  return content.slice(3 + end + 3).trim()
-}
-
 /** Convert "HH:MM" → "h AM/PM" (minute elided when 00 to keep the
  *  schedule line tight in the narrow Workspace panel). */
 function fmt12h(time: string): string {

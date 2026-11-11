@@ -165,7 +165,6 @@ function ColumnResizeHandle({
 function TabGroupColumn({
   groupIndex,
   cwd,
-  isActive,
   onFocus,
   style
 }: {

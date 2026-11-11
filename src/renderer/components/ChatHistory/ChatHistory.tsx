@@ -200,19 +200,6 @@ function DateWithHeartbeat({
   )
 }
 
-/** Get the right-most leaf node ID in a mosaic tree */
-function getRightmostLeaf(tree: unknown): string | null {
-  if (tree === null || tree === undefined) return null
-  if (typeof tree === 'string') return tree
-  if (typeof tree === 'object' && tree !== null && 'second' in tree) {
-    return getRightmostLeaf((tree as { second: unknown }).second)
-  }
-  if (typeof tree === 'object' && tree !== null && 'first' in tree) {
-    return getRightmostLeaf((tree as { first: unknown }).first)
-  }
-  return null
-}
-
 // ── Icons ────────────────────────────────────────────────────────────
 //
 // Provider→icon mapping lives in the shared ProviderIcon module (also
@@ -320,7 +307,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
   // opening history in workspace A must show A's chats even when B is
   // globally active. Falls back to the global pointers only when no host
   // path is supplied (defensive — every real mount passes one).
-  const { project: activeProject, workspace: activeWorkspace, projectPath } = useMemo(
+  const { workspace: activeWorkspace, projectPath } = useMemo(
     () => resolveChatHistoryHost(projects, hostProjectPath, activeProjectId, activeWorkspaceId),
     [projects, hostProjectPath, activeProjectId, activeWorkspaceId],
   )
@@ -900,10 +887,6 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
       throw new Error(continueSendError(status))
     }
   }, [continueSession, projectPath, customNames])
-
-  const handleRenameStart = useCallback((_session: ChatSession, _e: React.MouseEvent) => {
-    // Now handled via context menu above
-  }, [])
 
   const handleRenameSubmit = useCallback(async () => {
     if (!renamingSession || !renameValue.trim()) {

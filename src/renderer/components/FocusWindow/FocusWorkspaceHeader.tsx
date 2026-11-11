@@ -52,7 +52,6 @@ export default function FocusWorkspaceHeader({ side }: FocusWorkspaceHeaderProps
   if (!project) return null
 
   const hasWorktrees = project.worktreeMode === 1 && project.workspaces.length > 1
-  const activeWorkspace = project.workspaces.find((w) => w.id === activeWorkspaceId)
 
   return (
     <div

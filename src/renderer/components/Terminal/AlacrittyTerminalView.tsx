@@ -811,7 +811,7 @@ export function AlacrittyTerminalView({
 
   // ── Link detection: mouse-down/up validation ────────────────────────
 
-  const handleLinkMouseDown = useCallback((e: React.MouseEvent) => {
+  const handleLinkMouseDown = useCallback(() => {
     // Store the link at mouse-down so we can validate on click
     mouseDownLinkRef.current = hoveredLink?.link ?? null
   }, [hoveredLink])

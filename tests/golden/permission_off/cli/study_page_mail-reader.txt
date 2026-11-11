@@ -38,6 +38,16 @@ ACTING ON MAIL
   workspace may not do it you get exit 3 (not_allowed) and the fix. Reader
   sends can't attach files yet.
 
+DRAFTED REPLIES
+  When an agent drafts a reply (k2 mail draft <id>), the draft is a real
+  draft in the inbox's Drafts folder, and thread shows it first, marked
+  "DRAFT, NOT SENT" with who drafted it and when it was last edited. Its id
+  is d_…; drafts <inbox> lists them. draft-save <d_id> changes To, Cc,
+  Subject or the text; draft-send <d_id> sends it by the workspace's send
+  rule (as send does), then it leaves Drafts and shows in the thread as
+  sent; draft-discard <d_id> removes it. Each is logged like any other
+  access. The agent that drafted it is told, and sees it in k2 mail drafts.
+
 WHAT YOU SEE
   Plain text by default; --html prints the HTML as K2 cleaned it: no script,
   no remote pictures, links shown as data, not clickable. Attachments save

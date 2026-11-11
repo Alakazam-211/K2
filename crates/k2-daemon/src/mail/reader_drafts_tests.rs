@@ -82,6 +82,17 @@ fn set_gate(fx: &Fx, mode: &str) {
         .expect("set the workspace's send gate");
 }
 
+/// The lines the drafting agent was told about `draft_id` (its session line).
+fn told(fx: &Fx, draft_id: &str) -> Vec<String> {
+    crate::mail::drafts::TOLD
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .filter(|(project, text)| project == &fx.ws_id && text.contains(draft_id))
+        .map(|(_, text)| text.clone())
+        .collect()
+}
+
 /// The agent's own view of its drafts (`k2 mail drafts`).
 fn agent_view(fx: &Fx, draft_id: &str) -> serde_json::Value {
     let pp = passport(fx);
@@ -208,6 +219,10 @@ async fn d3_editing_a_draft_saves_it() {
         let mine = agent_view(&fx, &id);
         assert_eq!(mine["status"], "edited", "{mine}");
         assert_eq!(mine["editedBy"], "oa0admin", "{mine}");
+        let lines = told(&fx, &id);
+        assert_eq!(lines.len(), 1, "the agent hears of the first edit once: {lines:?}");
+        assert!(lines[0].contains("was edited by oa0admin") && lines[0].contains("k2 mail drafts"), "{lines:?}");
+        assert!(!lines[0].contains("better words") && !lines[0].contains("ada@example.com"), "no mail text in the line: {lines:?}");
     });
 }
 
@@ -266,6 +281,9 @@ async fn d4_send_goes_through_governance_and_becomes_a_sent_message() {
         let mine = agent_view(&fx, &id);
         assert_eq!(mine["status"], "sent", "{mine}");
         assert!(mine["outboundId"].as_str().is_some_and(|o| !o.is_empty()), "the outbox row: {mine}");
+        let lines = told(&fx, &id);
+        assert_eq!(lines.len(), 1, "told once, after the send that went out: {lines:?}");
+        assert!(lines[0].contains("was sent by Owner"), "{lines:?}");
     });
 }
 
@@ -288,6 +306,9 @@ async fn d5_discard_removes_the_draft() {
         let mine = agent_view(&fx, &id);
         assert_eq!(mine["status"], "discarded", "{mine}");
         assert_eq!(mine["stateBy"], "oa0admin", "{mine}");
+        let lines = told(&fx, &id);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("was discarded by oa0admin"), "{lines:?}");
     });
 }
 

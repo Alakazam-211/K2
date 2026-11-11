@@ -73298,7 +73298,8 @@ STATUS
   waiting     nobody has touched it yet
   edited      a person changed it (the "edited by" name); still a draft
   sent        a person sent it ("outbox <id>": see it with 'k2 mail outbox <id>')
-  held        a person sent it and it waits for approval in the outbox
+  held        a person sent it and it waits for your human's approval
+              ('k2 mail outbox <id>' shows it)
   discarded   a person removed it, or it left the mailbox's Drafts folder
 
 FLAGS
@@ -80455,11 +80456,15 @@ DRAFTED REPLIES (an agent's 'k2 mail draft <id>', or yours; 'thread' shows them 
                                   what became of each: waiting, edited, sent, held
                                   (waiting for approval), discarded
   draft-show <draft-id>           One draft: who drafted it, To, Cc, Subject, text
-  draft-save <draft-id> [--to <a>] [--cc <a>] [--subject <s>] [--body <text>]
+  draft-save <draft-id> [--to <a>] [--cc <a>] [--subject <s>] [--body <text>|-]
                                   Change it; what you leave out stays as it is
   draft-send <draft-id> [same flags as draft-save]
-                                  Send it, by the same send rule as 'send'; it
-                                  leaves Drafts and joins the thread as sent
+                                  Send it, by the same send rule as 'send': off
+                                  refuses (exit 3, the draft stays); approval
+                                  queues it for the owner (Settings → Email →
+                                  Approvals, or k2 hostmail approvals) and the
+                                  draft shows "held"; on sends. Either way it
+                                  leaves Drafts; once sent it joins the thread
   draft-discard <draft-id>        Remove it from Drafts (hosted: deleted; linked: Trash)
                                   The agent that drafted it is told what you did
 
@@ -81659,7 +81664,10 @@ Save a DRAFT into an inbox's Drafts folder. It never sends. Two forms:
   human's own Gmail/IMAP Drafts, for them to finish in their mail client.
 
 Sending yourself is 'k2 mail reply' / 'k2 mail send' (level 'send' and the
-workspace's Sending rule). A hosted reply draft takes no --attach yet.
+workspace's Sending rule). A hosted reply draft takes no --attach yet (it
+answers a usage error, exit 2): draft the text, and if a file must go,
+send it yourself with 'k2 mail reply <id> --attach <path>' or ask your
+human. Your level on each inbox (read < draft < send): 'k2 mail inboxes'.
 
 USAGE
   k2 mail draft <message-id> (--body <text> | --body-file <f>) [--attach <path>] [--json]
@@ -81683,8 +81691,9 @@ FLAGS
   --body-file <f>        Read the draft text from a file
   --attach <path>        Workspace-relative file to attach (repeatable; 10 / 25MiB;
                          linked inboxes only)
-  --json                 JSON output ({ok,id?,draftId?,address,folder,hint};
-                         draftId is the reply draft's d_… id for 'k2 mail drafts')
+  --json                 JSON output ({ok,id?,draftId?,address,folder,hint}):
+                         id = the message the draft answers (m_…); draftId =
+                         the draft itself (d_…), as 'k2 mail drafts' lists it
 EOF
 }
 

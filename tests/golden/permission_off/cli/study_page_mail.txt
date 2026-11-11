@@ -128,7 +128,8 @@ AGENT SURFACE
   k2 mail watch    hear that mail arrived without blocking: VIPs at once,
                    the rest in a digest (k2 study mail-watch)
   k2 mail send / reply / outbox
-  k2 mail draft    linked Gmail Drafts (always on for draft)
+  k2 mail draft    reply drafts in Drafts (hosted or linked; a person edits
+                   and sends them from the thread); k2 mail drafts = their state
   k2 calendar      calendars of a HOSTED inbox or a LINKED Microsoft 365
                    or Google account (alias k2 cal; other linked inboxes exit 3
                    capability_missing with the fix). Existing

@@ -18,12 +18,15 @@ export function ThreadFloatBell({
   cwd,
   bar,
   label,
+  offLabel,
 }: {
   projectId?: string
   cwd?: string
   bar?: FloatButtonLook
   /** In a bar: the switch's name ("Ring when sales finishes"). */
   label?: string
+  /** Its tooltip while off ("Won't ring when sales finishes"). */
+  offLabel?: string
 }): JSX.Element | null {
   const project = useRoomProjects(
     useCallback(
@@ -37,7 +40,7 @@ export function ThreadFloatBell({
   if (!project) return null
   return (
     <Suspense fallback={null}>
-      <WorkspaceCompletionSoundBell project={project} floating={!bar} bar={bar} label={label} />
+      <WorkspaceCompletionSoundBell project={project} floating={!bar} bar={bar} label={label} offLabel={offLabel} />
     </Suspense>
   )
 }

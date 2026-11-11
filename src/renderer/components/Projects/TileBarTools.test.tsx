@@ -99,6 +99,23 @@ describe("an agent tile's bell and search", () => {
     expect(search.getAttribute('aria-label')).toBe('Search this Thread')
   })
 
+  it('a bell turned off says so in words and stays marked in the bar', async () => {
+    const muted = testRoom({
+      tabs: {},
+      scope: primaryScope(),
+      projects: [{ id: 'ws-sales', path: '/w/sales', handle: 'sales', completionSoundEnabled: 0 } as unknown as ProjectWithWorkspaces],
+    })
+    renderInRoom(muted, <Tile view="thread" />)
+    const bell = await screen.findByTestId('workspace-completion-bell')
+    expect(bell.getAttribute('aria-checked')).toBe('false')
+    // Its name stays the switch's; the tooltip says what off means.
+    expect(bell.getAttribute('aria-label')).toBe('Ring when sales finishes')
+    expect(bell.getAttribute('title')).toBe('Won’t ring when sales finishes')
+    // The off state is drawn (a soft fill and full ink), not only the icon.
+    expect(bell.hasAttribute('data-bell-off')).toBe(true)
+    expect(TILE_BAR_BUTTON.className).toContain('data-[bell-off]:bg-[color-mix(in_srgb,var(--color-text-primary)_10%,transparent)]')
+  })
+
   it('then a thin rule, ⌘N and the ×, in that order', () => {
     renderInRoom(room, <Tile view="thread" />)
     const end = bar().querySelector('[data-tile-end]') as HTMLElement

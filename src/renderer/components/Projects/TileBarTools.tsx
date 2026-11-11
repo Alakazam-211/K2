@@ -27,6 +27,9 @@ export const TILE_BAR_BUTTON: FloatButtonLook = {
     'rounded-[var(--radius-pill)] bg-transparent text-[var(--color-text-secondary)]',
     'hover:bg-[color-mix(in_srgb,var(--color-text-primary)_10%,transparent)] hover:text-[var(--color-text-primary)]',
     'aria-expanded:bg-[color-mix(in_srgb,var(--color-text-primary)_10%,transparent)] aria-expanded:text-[var(--color-text-primary)]',
+    // The bell turned off stays marked, not just its icon: the soft fill
+    // and full ink (with the cross-out), so a muted tile reads at a glance.
+    'data-[bell-off]:bg-[color-mix(in_srgb,var(--color-text-primary)_10%,transparent)] data-[bell-off]:text-[var(--color-text-primary)]',
     'active:bg-[color-mix(in_srgb,var(--color-text-primary)_16%,transparent)]',
     'disabled:pointer-events-none disabled:opacity-50',
   ].join(' '),
@@ -50,7 +53,12 @@ export function TileBarTools({ view, workspaceId, name }: { view: TileView; work
     <>
       {threadFloatShown('bell', place) ? (
         <span className="flex" data-tile-tool="bell">
-          <ThreadFloatBell projectId={workspaceId} bar={TILE_BAR_BUTTON} label={`Ring when ${name} finishes`} />
+          <ThreadFloatBell
+            projectId={workspaceId}
+            bar={TILE_BAR_BUTTON}
+            label={`Ring when ${name} finishes`}
+            offLabel={`Won’t ring when ${name} finishes`}
+          />
         </span>
       ) : null}
       {threadFloatShown('search', place) ? (

@@ -91,6 +91,7 @@ export function WorkspaceCompletionSoundBell({
   floating = false,
   bar,
   label,
+  offLabel,
 }: {
   project: SoundProject
   floating?: boolean
@@ -99,6 +100,9 @@ export function WorkspaceCompletionSoundBell({
   /** The switch's own name (an agent tile's "Ring when sales finishes"):
    *  on or off is its state, and the tooltip says which. */
   label?: string
+  /** The tooltip while it's off, in words ("Won't ring when sales
+   *  finishes"); default: the label with "(off)". */
+  offLabel?: string
 }): React.JSX.Element {
   // Home M4: the drawer's room's server; a view-only room writes nothing.
   const room = useRoom()
@@ -130,9 +134,12 @@ export function WorkspaceCompletionSoundBell({
         ...floatProps(floating, 'round'),
         className: 'flex-shrink-0 p-0.5 no-drag cursor-pointer disabled:opacity-50 text-[var(--color-text-primary)]',
       })}
+      data-bell-off={enabled ? undefined : ''}
       title={
         label
-          ? `${label}${enabled ? '' : ' (off)'}`
+          ? enabled
+            ? label
+            : (offLabel ?? `${label} (off)`)
           : enabled
             ? 'Completion sound on — click to mute this workspace'
             : 'Completion sound muted for this workspace'

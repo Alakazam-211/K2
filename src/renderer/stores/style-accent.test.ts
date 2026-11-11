@@ -47,8 +47,12 @@ async function freshStore() {
   return (await import('./style')).useStyleStore
 }
 
-/** A client that already saved Terminal / Charcoal / Dark. */
+const SWITCHED = 'k2.style.migrated-0-46-11-glass'
+
+/** A client that already had 0.46.11's one-time switch, then saved Terminal /
+ *  Charcoal / Dark. */
 function seedTerminal(): void {
+  mem.set(SWITCHED, '1')
   mem.set('k2.style', 'terminal')
   mem.set('k2.palette', 'charcoal')
   mem.set('k2.scheme', 'dark')
@@ -346,6 +350,7 @@ describe('the default look on a client with nothing saved', () => {
   })
 
   it('an existing Glass client with no accent saved stays on the palette’s accent', async () => {
+    mem.set(SWITCHED, '1')
     mem.set('k2.style', 'glass')
     mem.set('k2.palette', 'obsidian')
     mem.set('k2.scheme', 'dark')
@@ -358,7 +363,8 @@ describe('the default look on a client with nothing saved', () => {
     expect(accentVar()).toBe('')
   })
 
-  it('never replaces an accent already saved for Glass', async () => {
+  it('past the one-time switch, never replaces an accent already saved for Glass', async () => {
+    mem.set(SWITCHED, '1')
     mem.set('k2.accent.glass', '#00ff88')
     const store = await freshStore()
     expect(store.getState().accent).toBe('#00ff88')
@@ -376,8 +382,11 @@ describe('the default look on a client with nothing saved', () => {
 })
 
 describe('the daemon’s style echo on a new client', () => {
+  // A client past the one-time switch whose saved style is gone: the path
+  // where the older daemon migration can still run.
   beforeEach(() => {
     mem.clear()
+    mem.set(SWITCHED, '1')
   })
 
   it('the daemon’s never-set default (square / charcoal / dark) does not replace the default look', async () => {
@@ -389,7 +398,7 @@ describe('the daemon’s style echo on a new client', () => {
     expect(mem.get('k2.style.migrated')).toBe('1')
   })
 
-  it('a style someone chose on the daemon still seeds a new client, with its own accent', async () => {
+  it('a style someone chose on the daemon still seeds such a client, with its own accent', async () => {
     const store = await freshStore()
     const { migrateStyleFromDaemon, __setPreBootMirrorCompleteForTests } = await import('./style')
     __setPreBootMirrorCompleteForTests(false)
@@ -397,6 +406,133 @@ describe('the daemon’s style echo on a new client', () => {
     expect([store.getState().styleId, store.getState().resolvedPaletteId]).toEqual(['glass', 'veil'])
     expect(store.getState().accent).toBeNull()
     expect(mem.has('k2.accent.glass')).toBe(false)
+  })
+})
+
+describe('the one-time switch to the default look (first launch of 0.46.11)', () => {
+  /** A client from before 0.46.11: Terminal / Charcoal / Dark, a pink accent,
+   *  the older daemon migration done, and no switch flag. */
+  const seedOldTerminal = (): void => {
+    mem.clear()
+    mem.set('k2.style', 'terminal')
+    mem.set('k2.palette', 'charcoal')
+    mem.set('k2.palette.dark', 'charcoal')
+    mem.set('k2.scheme', 'dark')
+    mem.set('k2.accent.terminal', '#ff00aa')
+    mem.set(
+      'k2.accent.stamp.dark',
+      JSON.stringify({ style: 'terminal', palette: 'charcoal', vars: { '--color-accent': '#ff00aa' } }),
+    )
+    mem.set('k2.style.migrated', '1')
+  }
+
+  it('moves an existing Terminal client to Glass / Auto / Obsidian + Veil / Yellow, and sets the flag', async () => {
+    seedOldTerminal()
+    const store = await freshStore()
+    const s = store.getState()
+    expect([s.styleId, s.schemeMode, s.autoPalettes, s.resolvedPaletteId, s.accent]).toEqual([
+      'glass',
+      'auto',
+      { dark: 'obsidian', light: 'veil' },
+      'obsidian',
+      'yellow',
+    ])
+    expect(mem.get(SWITCHED)).toBe('1')
+    expect([mem.get('k2.style'), mem.get('k2.scheme'), mem.get('k2.palette.dark'), mem.get('k2.palette.light')]).toEqual([
+      'glass',
+      'auto',
+      'obsidian',
+      'veil',
+    ])
+    expect(mem.get('k2.accent.glass')).toBe('yellow')
+    expect(html.getAttribute('data-style')).toBe('glass')
+    expect(accentVar()).toBe('#ffc700')
+    // Terminal's own accent is kept for if they go back.
+    expect(mem.get('k2.accent.terminal')).toBe('#ff00aa')
+  })
+
+  it('the first frame of 0.46.11 is already Glass with Yellow, before any module runs', () => {
+    seedOldTerminal()
+    runBootstrap()
+    expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), html.getAttribute('data-scheme')]).toEqual([
+      'glass',
+      'obsidian',
+      'dark',
+    ])
+    expect(accentVar()).toBe('#ffc700')
+    clearHtml()
+    osLight = true
+    runBootstrap()
+    expect([html.getAttribute('data-style'), html.getAttribute('data-palette'), accentVar()]).toEqual([
+      'glass',
+      'veil',
+      '#e6b400',
+    ])
+  })
+
+  it('happens once: Terminal chosen afterwards stays Terminal, on every later launch and first paint', async () => {
+    seedOldTerminal()
+    const store = await freshStore()
+    store.getState().applyStyle({ styleId: 'terminal', paletteId: 'charcoal', schemeMode: 'dark' })
+    const again = await freshStore()
+    expect([again.getState().styleId, again.getState().resolvedPaletteId, again.getState().schemeMode]).toEqual([
+      'terminal',
+      'charcoal',
+      'dark',
+    ])
+    expect(again.getState().accent).toBe('#ff00aa')
+    clearHtml()
+    runBootstrap()
+    expect([html.getAttribute('data-style'), accentVar()]).toEqual(['terminal', '#ff00aa'])
+  })
+
+  it('a person who then resets Glass to the palette’s accent keeps that', async () => {
+    seedOldTerminal()
+    const store = await freshStore()
+    store.getState().resetAccent()
+    const again = await freshStore()
+    expect([again.getState().styleId, again.getState().accent]).toEqual(['glass', null])
+    expect(accentVar()).toBe('')
+  })
+
+  it('a fresh client gets the default and the flag, with the accent written once', async () => {
+    mem.clear()
+    const setItem = vi.spyOn(localStorage, 'setItem')
+    try {
+      const store = await freshStore()
+      expect([store.getState().styleId, store.getState().accent]).toEqual(['glass', 'yellow'])
+      expect(setItem.mock.calls.filter(([k]) => k === 'k2.accent.glass')).toHaveLength(1)
+      expect(setItem.mock.calls.filter(([k]) => k === SWITCHED)).toHaveLength(1)
+    } finally {
+      setItem.mockRestore()
+    }
+    expect(mem.get(SWITCHED)).toBe('1')
+    expect(mem.get('k2.style.migrated')).toBe('1')
+  })
+
+  it('switches a client whose older daemon migration is not done, and the daemon echo can’t undo it', async () => {
+    seedOldTerminal()
+    mem.delete('k2.style.migrated')
+    const store = await freshStore()
+    const { migrateStyleFromDaemon } = await import('./style')
+    migrateStyleFromDaemon({ id: 'terminal', palette: 'paper', scheme: 'light', gaps: '' })
+    expect([store.getState().styleId, store.getState().resolvedPaletteId]).toEqual(['glass', 'obsidian'])
+    expect(mem.get('k2.style.migrated')).toBe('1')
+  })
+
+  it('does nothing when storage won’t keep the flag, so it never repeats every launch', async () => {
+    seedOldTerminal()
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementation((k: string, v: string) => {
+      if (k === SWITCHED) throw new Error('QuotaExceededError')
+      mem.set(k, v)
+    })
+    try {
+      const store = await freshStore()
+      expect(store.getState().styleId).toBe('terminal')
+      expect(mem.has('k2.accent.glass')).toBe(false)
+    } finally {
+      setItem.mockRestore()
+    }
   })
 })
 

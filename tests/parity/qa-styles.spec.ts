@@ -100,6 +100,8 @@ async function boot(page: Page, cfg: QaConfig): Promise<void> {
     if (c.gaps) localStorage.setItem('k2.gaps', c.gaps)
     // Skip one-shot daemon→local migration; seed is the authority.
     localStorage.setItem('k2.style.migrated', '1')
+    // Past 0.46.11's one-time switch to the default look, or that would win.
+    localStorage.setItem('k2.style.migrated-0-46-11-glass', '1')
   }, cfg)
   await installTauriShim(page)
   await installMockDaemon(page)

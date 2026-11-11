@@ -58,6 +58,10 @@ export const LS_SCHEME = 'k2.scheme' // the MODE, including 'auto'
 export const LS_GAPS = 'k2.gaps'
 /** One-shot upgrade flag: after `1`, daemon style is never re-applied. */
 export const LS_STYLE_MIGRATED = 'k2.style.migrated'
+/** One-time switch to the default look at the first launch of 0.46.11. After
+ *  `1`, the style is never touched again, so a later pick sticks. index.html's
+ *  bootstrap reads it too. */
+export const LS_STYLE_MIGRATED_DEFAULT_GLASS = 'k2.style.migrated-0-46-11-glass'
 
 /** Per-scheme resolved palette (`k2.palette.dark` / `k2.palette.light`)
  *  so the pre-paint bootstrap is right even after an OS appearance flip
@@ -538,6 +542,46 @@ function seedDefaultAccent(): boolean {
 let _seededDefaultAccent = false
 
 /**
+ * The one-time switch to the default look (Rosson, 2026-11-11): every client,
+ * new or existing, starts 0.46.11 on Glass under Auto (Obsidian dark, Veil
+ * light) with the Yellow accent, once. Runs before the first read of the
+ * mirror; index.html's bootstrap paints the same look while the flag is
+ * missing, so the first frame is already Glass.
+ *
+ * The flag is written first and read back: if it can't be saved the switch
+ * doesn't happen at all, so a client whose storage refuses writes is never
+ * switched on every launch. It also marks the older daemon migration done:
+ * a daemon's style echo must never undo the switch. The daemon never holds
+ * the style (settings.updateStyleSettings is local-only), so there is
+ * nothing to send it. Returns whether it switched. Never throws.
+ */
+function migrateToDefaultLook(): boolean {
+  if (typeof localStorage === 'undefined') return false
+  try {
+    if (localStorage.getItem(LS_STYLE_MIGRATED_DEFAULT_GLASS) === '1') return false
+    localStorage.setItem(LS_STYLE_MIGRATED_DEFAULT_GLASS, '1')
+    if (localStorage.getItem(LS_STYLE_MIGRATED_DEFAULT_GLASS) !== '1') return false
+  } catch {
+    return false
+  }
+  try {
+    const sel = defaultSelection()
+    const resolved = resolveStyleSelection(sel, osPrefersLight())
+    localStorage.setItem(LS_STYLE, sel.styleId)
+    localStorage.setItem(LS_PALETTE, resolved.resolvedPalette.id)
+    localStorage.setItem(LS_SCHEME, sel.schemeMode)
+    localStorage.setItem(LS_GAPS, sel.gapsPreset)
+    localStorage.setItem(lsPaletteFor('dark'), sel.autoPalettes!.dark!)
+    localStorage.setItem(lsPaletteFor('light'), sel.autoPalettes!.light!)
+    localStorage.setItem(accentStorageKey(sel.styleId), DEFAULT_ACCENT)
+    localStorage.setItem(LS_STYLE_MIGRATED, '1')
+  } catch {
+    // Part-written: the store reads what landed and re-stamps the mirror.
+  }
+  return true
+}
+
+/**
  * One-shot upgrade migration: seed localStorage from a daemon style
  * echo only when this install has no prior local selection.
  *
@@ -617,6 +661,7 @@ export function styleSelectionToBackend(sel: {
 // Before the first read of the mirror, so the store and every per-style
 // key lookup after it only ever see current ids.
 migrateRetiredStyleKeys()
+migrateToDefaultLook()
 _seededDefaultAccent = seedDefaultAccent()
 
 const bootSelection = readMirror()

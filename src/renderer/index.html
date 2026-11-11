@@ -36,11 +36,13 @@
         function read(key, fallback) {
           try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
         }
-        // No saved style: the default look, Glass under Auto (Obsidian for a
+        // No saved style, or the first launch of 0.46.11 (its one-time switch
+        // flag is missing): the default look, Glass under Auto (Obsidian for a
         // dark system, Veil for a light one) with the Yellow accent. The store
-        // saves that accent on this first launch (stores/style.ts).
-        var fresh = !read('k2.style', '');
-        var savedStyle = read('k2.style', 'glass');
+        // saves it on this launch (stores/style.ts migrateToDefaultLook).
+        var switching = read('k2.style.migrated-0-46-11-glass', '') !== '1';
+        var fresh = switching || !read('k2.style', '');
+        var savedStyle = fresh ? 'glass' : read('k2.style', 'glass');
         var style = savedStyle === 'square' ? 'terminal'
           : savedStyle === 'bezel' || savedStyle === 'glass-next' || savedStyle === 'glass-classic' ? 'glass'
           : savedStyle;
@@ -90,7 +92,7 @@
         };
         try {
           var accent = JSON.parse(read('k2.accent.stamp.' + side, '') || 'null');
-          if (fresh && !(accent && accent.style === style && accent.palette === palette)) accent = defaultAccent[side];
+          if (switching || (fresh && !(accent && accent.style === style && accent.palette === palette))) accent = defaultAccent[side];
           if (accent && accent.style === style && accent.palette === palette && accent.vars) {
             Object.keys(accent.vars).forEach(function (name) {
               if (/^--[a-z-]+$/.test(name) && /^#[0-9a-f]{6}$/i.test(accent.vars[name])) {

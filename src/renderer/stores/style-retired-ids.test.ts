@@ -35,6 +35,8 @@ const stamped = (): Record<string, string | null> => ({
 })
 
 function seed(style: string, palette: string, scheme: string, gaps = ''): void {
+  // Past 0.46.11's one-time switch to the default look, or that would win.
+  mem.set('k2.style.migrated-0-46-11-glass', '1')
   mem.set('k2.style', style)
   mem.set('k2.palette', palette)
   mem.set(`k2.palette.${scheme}`, palette)

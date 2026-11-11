@@ -19,7 +19,13 @@
 //! Member floor. The GET chain (an agent's cell socket) refuses as a belt.
 //!
 //! **Frames.** `first_run_changed` to that person's sockets on hide, show,
-//! skip and finish.
+//! skip and finish, and to the owner's when the `k2` command check moves.
+//!
+//! **The `k2` command (`k2_cli`, owner token only).** The check probes the
+//! login shell, so a read never runs it: the daemon checks at boot after
+//! its heal ([`check_k2_cli_now`]), and an owner-token read of a missing or
+//! stale answer starts one background re-check ([`kick_k2_cli_check`]).
+//! The read answers from the cache; a changed answer sends the frame.
 
 use k2_core::first_run::{self, Action, Viewer};
 use k2_core::notify_prefs::People;
@@ -78,6 +84,28 @@ pub fn refuse_outside_person_arm(path: &str, is_post: bool) -> Option<CliRespons
 /// `GET /cli/first-run/status`.
 pub fn emit_changed(person: Option<String>) {
     let _ = crate::session_events::emit(SessionEvent::FirstRunChanged { person });
+}
+
+/// Check the `k2` command now and store it, telling the owner's sockets
+/// when the answer moved. Probes the login shell: a background thread only.
+pub fn check_k2_cli_now() {
+    if first_run::set_k2_cli_found(first_run::check_k2_cli()) {
+        emit_changed(Some(k2_core::notify_prefs::OWNER.to_string()));
+    }
+}
+
+/// The owner token is reading: when the cached `k2` command answer is
+/// missing or older than [`first_run::K2_CLI_RECHECK_AFTER`], re-check it
+/// once in the background. Never in unit tests (no real shell probes).
+fn kick_k2_cli_check() {
+    if cfg!(test) || !first_run::claim_k2_cli_check(first_run::K2_CLI_RECHECK_AFTER) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("first-run-k2-cli".into()).spawn(check_k2_cli_now);
+    if spawned.is_err() {
+        // Release the claim so a later read tries again.
+        let _ = first_run::set_k2_cli_found(first_run::k2_cli_found());
+    }
 }
 
 fn person_for(actor: &Actor) -> Result<String, CliResponse> {
@@ -147,6 +175,9 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
         Ok(a) => a,
         Err(r) => return r,
     };
+    if viewer == Viewer::OwnerToken {
+        kick_k2_cli_check();
+    }
     let people = match People::load() {
         Ok(p) => p,
         Err(e) => return error("500 Internal Server Error", "store", e),

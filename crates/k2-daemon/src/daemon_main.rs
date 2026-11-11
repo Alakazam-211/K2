@@ -1063,6 +1063,9 @@ async fn async_main() {
             Some(Err(e)) => log_debug!("[daemon] WARN: k2 CLI heal: {e}"),
             None => {}
         }
+        // The setup checklist's k2 command row reads this answer (owner
+        // token only); re-checked in the background on a stale read.
+        crate::first_run_routes::check_k2_cli_now();
     });
     #[cfg(not(unix))]
     let _ = staged_cli;

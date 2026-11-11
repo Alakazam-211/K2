@@ -4,44 +4,63 @@
 // Member's list comes back filtered, and K2's own (`system`) secrets only
 // come back to people allowed to see them, as metadata.
 //
-// Values: the only place a value is ever on screen is the reveal panel,
-// after a confirm (the Mac's own sheet, or a password). It lives in that
-// panel's state only, masked until "Show", and goes after 30 seconds or when
-// the panel closes. Pasted values (add, rotate) are read from their field
-// once on submit, sent as `valueB64` in the POST body, and the field is
-// emptied. Nothing is stored, logged or kept in a store.
+// Values: the only place a value is ever on screen is the Show (reveal)
+// dialog, after a confirm (the Mac's own sheet, or a password). It lives in
+// that dialog's state only, masked until "Show", and goes after 30 seconds
+// or when the dialog closes. Pasted values (add, rotate) are read from their
+// field once on submit, sent as `valueB64` in the POST body, and the field
+// is emptied. Nothing is stored, logged or kept in a store.
 //
 // VS1 is deferred for 0.45.2 (Rosson): this page talks to the daemon with
 // the app's owner token like every other Settings page; no attested channel.
 // Recovery-key setup (0.45.4): the owner token alone isn't a person (VS2),
 // so the page first asks for a confirm (the Mac's sheet, or a password),
 // then shows the 24 words once and has the person type back three. The
-// words live in that panel's state only, are never copied to the
+// words live in that dialog's state only, are never copied to the
 // clipboard, and are gone once the check step starts.
+//
+// Layout: the Settings reference pattern (page header, tab strip, card
+// groups of rows, one primary action per tab, dialogs from
+// AccessDialogs.tsx). Words: vault-copy.ts; dialogs: VaultDialogs.tsx.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { SettingEntry } from '../searchManifest'
-import { useProjectsStore } from '@/stores/projects'
-import { Radio } from '@/components/ui'
+import { Button, OverflowMenu, Surface, Tag, type TagTone } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { siteLabel } from '@/components/SessionView/SecretCard'
-import {
-  fromBase64,
-  toBase64,
-  vaultApi,
-  type VaultAuditRow,
-  type VaultRecoveryChallenge,
-  type VaultPreset,
-  type VaultRequest,
-  type VaultSecret,
-  type VaultStatus,
-} from './vault-api'
+import { vaultApi, type VaultPreset, type VaultRequest, type VaultSecret, type VaultStatus } from './vault-api'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
-import { SettingDropdown } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL, SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
 import { useServerSupports } from '@/lib/server-capabilities'
-import { handoffOriginText, takeRequestedVaultTab } from './handoff-api'
+import { takeRequestedVaultTab } from './handoff-api'
 import { IncomingList, SentList } from './HandoffLists'
 import type { ServerScope } from '@/kessel/server-scope'
+import { useActiveHostRole } from './useActiveHostRole'
+import {
+  AddSecretDialog,
+  DeleteDialog,
+  DeliveryDialog,
+  HistoryDialog,
+  RecoveryDialog,
+  RevealDialog,
+  RotateDialog,
+  ShareDialog,
+  SitesDialog,
+} from './VaultDialogs'
+import { deliveryLabel, groupSecrets, kindLabel, sourceWords, whenWords } from './vault-copy'
+
+export {
+  REVEAL_SHOW_MS,
+  ceilingChoices,
+  deliveryChoices,
+  deliveryLabel,
+  deliveryReadable,
+  groupSecrets,
+  isMultilineKind,
+  originLabel,
+  withCurrent,
+  type SecretGroup,
+} from './vault-copy'
 
 export const VAULT_MANIFEST: SettingEntry[] = [
   {
@@ -74,1093 +93,107 @@ export const VAULT_MANIFEST: SettingEntry[] = [
   },
 ]
 
-/** How long a revealed value stays on screen. */
-export const REVEAL_SHOW_MS = 30_000
+const CHECK = (
+  <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 mt-0.5 flex-shrink-0">
+    <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+  </svg>
+)
 
-// ── Copy ─────────────────────────────────────────────────────────────
+const OWNER_ONLY_REVEAL = 'Only an Owner or Admin of this server can see a value.'
 
-const DELIVERY_LABEL: Record<string, string> = {
-  fetch: 'K2 adds it to calls',
-  proxy: 'K2 adds it to calls',
-  agent: 'ssh signs through K2; nobody sees the key',
-  file: 'a file the agent can read',
-  env: 'an environment variable the agent can read',
-  api: 'the agent can print it',
-  none: 'not given to agents',
-}
+// ── Rows ─────────────────────────────────────────────────────────────
 
-export function deliveryLabel(d: string): string {
-  return DELIVERY_LABEL[d] ?? d
-}
+type RowAction = 'reveal' | 'rotate' | 'sites' | 'delivery' | 'share' | 'toggle' | 'history' | 'copy' | 'delete'
 
-/** Can an agent read the value with this delivery? (file, env, api; the
- * daemon's `Delivery::readable`). fetch, proxy and agent never show it. */
-export function deliveryReadable(d: string): boolean {
-  return d === 'file' || d === 'env' || d === 'api'
-}
-
-/** The delivery choices for a kind: `agent` only for SSH keys, and never
- * `fetch` for them (an SSH key is never put in a request). */
-export function deliveryChoices(kind: string): string[] {
-  return kind === 'ssh_key' ? ['agent', 'file', 'env'] : ['fetch', 'file', 'env']
-}
-
-/** The ceiling choices for a kind. */
-export function ceilingChoices(kind: string): string[] {
-  return [...deliveryChoices(kind), 'api']
-}
-
-/** `choices`, plus `current` when it isn't one of them, so a select always
- * shows the value it will send. */
-export function withCurrent(choices: string[], current: string): string[] {
-  return choices.includes(current) ? choices : [...choices, current]
-}
-
-/** Delivery modes as K2 menu options, labelled the way the vault says them. */
-function deliveryOptions(choices: string[]): { value: string; label: string }[] {
-  return choices.map((d) => ({ value: d, label: deliveryLabel(d) }))
-}
-
-const KIND_LABEL: Record<string, string> = {
-  api_key: 'API key',
-  password: 'password',
-  oauth_token: 'sign-in token',
-  ssh_key: 'SSH key',
-  tls_key: 'TLS key',
-  dsn: 'database address',
-  url: 'URL',
-  generic: 'secret',
-}
-
-function kindLabel(k: string): string {
-  return KIND_LABEL[k] ?? k.replace(/_/g, ' ')
-}
-
-/** Where a secret came from, in words. */
-export function originLabel(s: Pick<VaultSecret, 'origin' | 'createdBy'> & Pick<Partial<VaultSecret>, 'handoff'>): string {
-  if (s.origin.startsWith('thread:')) return 'Thread card'
-  if (s.origin.startsWith('handoff:')) return handoffOriginText(s.origin, s.handoff)
-  if (s.origin.startsWith('adopt:')) return 'moved in from older K2 storage'
-  if (s.createdBy.startsWith('agent:')) return `agent ${s.createdBy.slice('agent:'.length)}`
-  if (s.createdBy.startsWith('guest:')) return `guest ${s.createdBy.slice('guest:'.length)}`
-  return 'a person'
-}
-
-// ── Grouping ─────────────────────────────────────────────────────────
-
-export interface SecretGroup {
-  key: string
-  title: string
-  rows: VaultSecret[]
-}
-
-/** Server, then each workspace (A–Z), then chats, then anything else. */
-export function groupSecrets(secrets: readonly VaultSecret[]): SecretGroup[] {
-  const server: VaultSecret[] = []
-  const chats: VaultSecret[] = []
-  const other: VaultSecret[] = []
-  const byWs = new Map<string, VaultSecret[]>()
-  for (const s of secrets) {
-    if (s.namespace !== 'user') continue
-    const kind = s.scope?.kind
-    if (kind === 'server') server.push(s)
-    else if (kind === 'session') chats.push(s)
-    else if (kind === 'workspace') {
-      const label = s.workspace || s.scope.id || 'workspace'
-      const list = byWs.get(label) ?? []
-      list.push(s)
-      byWs.set(label, list)
-    } else other.push(s)
-  }
-  const byName = (a: VaultSecret, b: VaultSecret) => a.name.localeCompare(b.name)
-  const out: SecretGroup[] = []
-  if (server.length) out.push({ key: 'server', title: 'Server (only the agents you share with)', rows: server.sort(byName) })
-  for (const ws of [...byWs.keys()].sort((a, b) => a.localeCompare(b))) {
-    out.push({ key: `ws:${ws}`, title: ws, rows: byWs.get(ws)!.sort(byName) })
-  }
-  if (chats.length) out.push({ key: 'session', title: 'Chats', rows: chats.sort(byName) })
-  if (other.length) out.push({ key: 'other', title: 'Other', rows: other.sort(byName) })
-  return out
-}
-
-// ── Shared bits ──────────────────────────────────────────────────────
-
-const btn =
-  'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
-const btnPrimary =
-  'px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
-const input =
-  'w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]'
-const muted = 'text-[var(--color-text-muted)]'
-const danger = 'text-[var(--color-danger,#e5484d)]'
-
-function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null {
-  if (!text) return null
-  return (
-    <p className={`type-hint ${danger}`} role="alert">
-      {text}
-    </p>
-  )
-}
-
-function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }): React.JSX.Element {
-  const [copied, setCopied] = useState(false)
-  return (
-    <button
-      type="button"
-      className={btn}
-      onClick={() => {
-        void navigator.clipboard?.writeText(text)
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1500)
-      }}
-    >
-      {copied ? 'Copied' : label}
-    </button>
-  )
-}
-
-/** A password field whose text never enters React state. */
-/** Kinds whose value is several lines (a PEM or OpenSSH key): a one-line
- * field would drop the line breaks and store a broken key. */
-export function isMultilineKind(kind: string): boolean {
-  return kind === 'ssh_key' || kind === 'tls_key'
-}
-
-type ValueRef = React.RefObject<HTMLInputElement | HTMLTextAreaElement | null>
-
-function ValueField({
-  fieldRef,
-  label,
-  onPresence,
-  multiline = false,
+/** One secret: its name (a person's words first, when it has them), what it
+ *  is and where it may go, how agents get it, and where it came from. Show
+ *  on the right; everything else in the row's menu, Delete last. */
+export function SecretRow({
+  secret,
+  member,
+  busy,
+  onAction,
 }: {
-  fieldRef: ValueRef
-  label: string
-  onPresence: (has: boolean) => void
-  multiline?: boolean
+  secret: VaultSecret
+  member: boolean
+  busy: boolean
+  onAction: (a: RowAction) => void
 }): React.JSX.Element {
-  if (multiline) {
-    // A key keeps its line breaks: a textarea (masked) plus a file picker.
-    return (
-      <div className="space-y-1">
-        <textarea
-          ref={fieldRef as React.RefObject<HTMLTextAreaElement | null>}
-          autoComplete="off"
-          spellCheck={false}
-          aria-label={label}
-          placeholder="Paste the whole key, BEGIN and END lines included"
-          rows={4}
-          onChange={(e) => onPresence(e.currentTarget.value !== '')}
-          className={`${input} font-mono rounded-[var(--radius-field-multiline)]`}
-          style={{ WebkitTextSecurity: 'disc' } as React.CSSProperties}
-          data-testid="vault-value-multiline"
-        />
-        <input
-          type="file"
-          aria-label={`${label} from a file`}
-          className={`type-control ${muted}`}
-          onChange={async (e) => {
-            const f = e.currentTarget.files?.[0]
-            const ta = fieldRef.current
-            if (f && ta) {
-              ta.value = await f.text()
-              onPresence(ta.value !== '')
-            }
-            e.currentTarget.value = ''
-          }}
-        />
-      </div>
-    )
-  }
-  return (
-    <input
-      ref={fieldRef as React.RefObject<HTMLInputElement | null>}
-      type="password"
-      autoComplete="off"
-      spellCheck={false}
-      aria-label={label}
-      placeholder="Paste the value"
-      onChange={(e) => onPresence(e.currentTarget.value !== '')}
-      className={input}
-    />
-  )
-}
-
-// ── Status ───────────────────────────────────────────────────────────
-
-// ── Recovery key setup ──────────────────────────────────────────────
-
-type RecoveryState =
-  | { step: 'idle' }
-  | { step: 'starting' }
-  | { step: 'mac' }
-  | { step: 'password'; method: string }
-  | { step: 'shown'; challenge: VaultRecoveryChallenge }
-  | { step: 'check'; id: string; checkWords: number[] }
-  | { step: 'saving' }
-
-/** Set up the vault's recovery key from the app (§7.4, VS2). */
-export function RecoverySetup({ onConfirmed }: { onConfirmed: () => void }): React.JSX.Element {
-  const [state, setState] = useState<RecoveryState>({ step: 'idle' })
-  const [error, setError] = useState<string | null>(null)
-  const pwRef = useRef<HTMLInputElement>(null)
-  const [hasPw, setHasPw] = useState(false)
-  const [typed, setTyped] = useState<string[]>(['', '', ''])
-
-  const show = async (method: string, password?: string): Promise<void> => {
-    const { token } = await vaultApi.confirmFinish({
-      action: 'recovery-setup',
-      method,
-      label: 'recovery key',
-      ...(password !== undefined ? { password } : {}),
-    })
-    const challenge = await vaultApi.recoveryShowOnce(token)
-    setState({ step: 'shown', challenge })
-  }
-
-  const start = async (): Promise<void> => {
-    setError(null)
-    setState({ step: 'starting' })
-    try {
-      const { methods } = await vaultApi.confirmStart('recovery-setup')
-      if (methods.includes('local-auth')) {
-        setState({ step: 'mac' })
-        await show('local-auth')
-        return
-      }
-      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
-      if (pw) {
-        setState({ step: 'password', method: pw })
-        return
-      }
-      setState({ step: 'idle' })
-      setError('No way to confirm here yet. From your own SSH login or a terminal outside K2: k2 vault recovery show-once.')
-    } catch (e) {
-      setState({ step: 'idle' })
-      setError(daemonErrorText(e))
-    }
-  }
-
-  const submitPassword = async (method: string): Promise<void> => {
-    const el = pwRef.current
-    if (!el) return
-    const pw = el.value
-    el.value = ''
-    setHasPw(false)
-    setError(null)
-    try {
-      await show(method, pw)
-    } catch (e) {
-      setState({ step: 'idle' })
-      setError(daemonErrorText(e))
-    }
-  }
-
-  const submitWords = async (id: string): Promise<void> => {
-    setError(null)
-    setState({ step: 'saving' })
-    try {
-      await vaultApi.recoveryConfirm(
-        id,
-        typed.map((w) => w.trim().toLowerCase()),
-      )
-      setTyped(['', '', ''])
-      setState({ step: 'idle' })
-      onConfirmed()
-    } catch (e) {
-      // The daemon drops the phrase on a wrong answer: start again.
-      setTyped(['', '', ''])
-      setState({ step: 'idle' })
-      setError(`${daemonErrorText(e)} Start again to get a new recovery key.`)
-    }
-  }
-
-  return (
-    <div className="space-y-1.5" data-testid="vault-recovery-setup">
-      {state.step === 'idle' && (
-        <button type="button" className={btnPrimary} onClick={() => void start()} data-testid="vault-recovery-start">
-          Set up recovery key
-        </button>
-      )}
-      {state.step === 'starting' && <p className={`type-hint ${muted}`}>Asking the vault…</p>}
-      {state.step === 'mac' && <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>}
-      {state.step === 'password' && (
-        <form
-          className="flex flex-col gap-1.5 max-w-sm"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submitPassword(state.method)
-          }}
-        >
-          <label className={`type-hint ${muted}`}>
-            {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <input
-              ref={pwRef}
-              type="password"
-              autoComplete="current-password"
-              data-testid="vault-recovery-password"
-              onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className={`${input} mt-1`}
-            />
-          </label>
-          <div className="flex gap-1.5">
-            <button type="submit" className={btn} disabled={!hasPw}>
-              Confirm
-            </button>
-            <button type="button" className={btn} onClick={() => setState({ step: 'idle' })}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-      {state.step === 'shown' && (
-        <div className="border border-[var(--color-border)] bg-[var(--color-bg)] p-2 space-y-2" data-testid="vault-recovery-phrase">
-          <p className="type-hint text-[var(--color-text-primary)]">
-            Write these 24 words down, in order, and keep them offline. K2 shows them once and keeps only the public
-            half. Anyone with these words and a copy of the vault can read every secret.
-          </p>
-          <ol className="grid grid-cols-3 sm:grid-cols-4 gap-x-3 gap-y-0.5 font-mono type-hint text-[var(--color-text-primary)] select-none">
-            {state.challenge.phrase.split(/\s+/).map((w, i) => (
-              <li key={i} data-testid="vault-recovery-word">
-                <span className={muted}>{i + 1}.</span> {w}
-              </li>
-            ))}
-          </ol>
-          <div className="flex gap-1.5">
-            <button
-              type="button"
-              className={btnPrimary}
-              data-testid="vault-recovery-saved"
-              onClick={() => setState({ step: 'check', id: state.challenge.id, checkWords: state.challenge.checkWords })}
-            >
-              I&rsquo;ve written it down
-            </button>
-          </div>
-        </div>
-      )}
-      {(state.step === 'check' || state.step === 'saving') && (
-        <form
-          className="flex flex-col gap-1.5 max-w-sm"
-          data-testid="vault-recovery-check"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (state.step === 'check') void submitWords(state.id)
-          }}
-        >
-          <p className={`type-hint ${muted}`}>Type back these words from your copy.</p>
-          {state.step === 'check' &&
-            state.checkWords.map((n, i) => (
-              <label key={n} className={`type-hint ${muted}`}>
-                Word {n}
-                <input
-                  value={typed[i] ?? ''}
-                  autoComplete="off"
-                  spellCheck={false}
-                  data-testid={`vault-recovery-word-${n}`}
-                  onChange={(e) => {
-                    const v = e.currentTarget.value
-                    setTyped((t) => t.map((x, j) => (j === i ? v : x)))
-                  }}
-                  className={`${input} mt-1`}
-                />
-              </label>
-            ))}
-          {state.step === 'saving' && <p className={`type-hint ${muted}`}>Checking…</p>}
-          {state.step === 'check' && (
-            <div className="flex gap-1.5">
-              <button type="submit" className={btnPrimary} disabled={typed.some((w) => w.trim() === '')}>
-                Confirm recovery key
-              </button>
-            </div>
-          )}
-        </form>
-      )}
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-export function VaultStatusCard({
-  status,
-  onRecoveryConfirmed,
-}: {
-  status: VaultStatus
-  onRecoveryConfirmed?: () => void
-}): React.JSX.Element {
-  if (!status.open) {
-    return (
-      <div className="border border-[var(--color-border)] p-3 space-y-1" data-testid="vault-status">
-        <div className="type-name text-[var(--color-text-primary)]">The vault isn&rsquo;t open</div>
-        <p className={`type-hint ${muted}`}>{status.error?.hint || status.error?.code || 'K2 couldn’t open the vault on this server.'}</p>
-      </div>
-    )
-  }
-  const recoveryOk = status.recovery === 'confirmed'
-  const tamperOk = !status.tamper || status.tamper === 'ok'
-  return (
-    <div className="space-y-2" data-testid="vault-status">
-      {!recoveryOk && (
-        <div
-          role="alert"
-          data-testid="vault-recovery-banner"
-          className="border border-[var(--color-danger,#e5484d)] bg-[var(--color-danger,#e5484d)]/10 p-3 space-y-1"
-        >
-          <div className={`type-name ${danger}`}>The vault has no confirmed recovery key</div>
-          <p className="type-hint text-[var(--color-text-primary)]">
-            {status.recoveryHint ||
-              'Only you should do this, from your own SSH login or a terminal outside K2: k2 vault recovery show-once.'}
-          </p>
-          <RecoverySetup onConfirmed={() => onRecoveryConfirmed?.()} />
-        </div>
-      )}
-      <div className="border border-[var(--color-border)] p-3 space-y-1.5">
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 type-hint">
-          <dt className={muted}>Where the key lives</dt>
-          <dd className="text-[var(--color-text-primary)]" data-testid="vault-key-home">
-            {status.keyHomeLabel || status.keyHome || 'unknown'}
-          </dd>
-          <dt className={muted}>Recovery key</dt>
-          <dd className={recoveryOk ? 'text-[var(--color-text-primary)]' : danger}>
-            {recoveryOk
-              ? `confirmed${status.recoveryConfirmedAt ? ` ${status.recoveryConfirmedAt.slice(0, 10)}` : ''}`
-              : 'not confirmed'}
-          </dd>
-          <dt className={muted}>Rollback guard</dt>
-          <dd className={status.rollback ? danger : 'text-[var(--color-text-primary)]'}>
-            {status.rollbackGuard || 'off'}
-            {status.rollback ? ' · the vault file looks older than expected' : ''}
-          </dd>
-          <dt className={muted}>Tamper check</dt>
-          <dd className={tamperOk ? 'text-[var(--color-text-primary)]' : danger} data-testid="vault-tamper">
-            {tamperOk ? 'ok' : status.tamper}
-          </dd>
-          <dt className={muted}>Vault password</dt>
-          <dd className="text-[var(--color-text-primary)]">{status.confirmPassword ? 'set' : 'not set'}</dd>
-          {status.counts && (
-            <>
-              <dt className={muted}>Secrets</dt>
-              <dd className="text-[var(--color-text-primary)]">
-                {status.counts.user} yours · {status.counts.system} K2&rsquo;s own · {status.counts.pendingRequests} waiting
-                {status.counts.rotateDue ? ` · ${status.counts.rotateDue} due for rotation` : ''}
-              </dd>
-            </>
-          )}
-        </dl>
-        {status.honest && (
-          <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed" data-testid="vault-honest">
-            {status.honest}
-          </p>
-        )}
-        <p className={`type-hint ${muted} leading-relaxed`}>
-          For now, an agent that gets hold of this server&rsquo;s owner token can change a secret&rsquo;s sites or how
-          it&rsquo;s given out, as you can. Each secret&rsquo;s history records it.
-        </p>
-        {status.adopted && status.adopted.length > 0 && (
-          <p className={`type-hint ${muted}`} data-testid="vault-adopted">
-            Moved in from older storage:{' '}
-            {status.adopted.map((a) => `${a.store} (${a.moved} moved${a.kept ? `, ${a.kept} kept` : ''})`).join(', ')}.
-            {status.legacyCopies ? ` ${status.legacyCopies[0].toUpperCase()}${status.legacyCopies.slice(1)}.` : ''}
-          </p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── Reveal ───────────────────────────────────────────────────────────
-
-type RevealState =
-  | { step: 'idle' }
-  | { step: 'starting' }
-  | { step: 'mac' }
-  | { step: 'password'; method: string }
-  | { step: 'shown'; value: string; version: number }
-
-/** Reveal after a confirm. The value lives here only, for 30 seconds. */
-export function RevealPanel({ secret }: { secret: VaultSecret }): React.JSX.Element {
-  const [state, setState] = useState<RevealState>({ step: 'idle' })
-  const [visible, setVisible] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const pwRef = useRef<HTMLInputElement>(null)
-  const [hasPw, setHasPw] = useState(false)
-
-  const hide = useCallback(() => {
-    setState({ step: 'idle' })
-    setVisible(false)
-  }, [])
-
-  useEffect(() => {
-    if (state.step !== 'shown') return
-    const t = setTimeout(hide, REVEAL_SHOW_MS)
-    return () => clearTimeout(t)
-  }, [state, hide])
-
-  const finish = async (method: string, password?: string): Promise<void> => {
-    const { token } = await vaultApi.confirmFinish({
-      action: 'reveal',
-      secretId: secret.id,
-      method,
-      label: secret.name,
-      ...(password !== undefined ? { password } : {}),
-    })
-    const r = await vaultApi.reveal(secret.id, token)
-    setState({ step: 'shown', value: fromBase64(r.valueB64), version: r.version })
-    setVisible(false)
-  }
-
-  const start = async (): Promise<void> => {
-    setError(null)
-    setState({ step: 'starting' })
-    try {
-      const { methods } = await vaultApi.confirmStart('reveal', secret.id)
-      if (methods.includes('local-auth')) {
-        setState({ step: 'mac' })
-        await finish('local-auth')
-        return
-      }
-      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
-      if (pw) {
-        setState({ step: 'password', method: pw })
-        return
-      }
-      setState({ step: 'idle' })
-      setError('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
-    } catch (e) {
-      setState({ step: 'idle' })
-      setError(daemonErrorText(e))
-    }
-  }
-
-  const submitPassword = async (method: string): Promise<void> => {
-    const el = pwRef.current
-    if (!el) return
-    const pw = el.value
-    el.value = ''
-    setHasPw(false)
-    setError(null)
-    try {
-      await finish(method, pw)
-    } catch (e) {
-      setError(daemonErrorText(e))
-    }
-  }
-
-  return (
-    <div className="space-y-1.5" data-testid="vault-reveal">
-      {state.step === 'idle' && (
-        <button type="button" className={btn} onClick={() => void start()} data-testid="vault-reveal-start">
-          Reveal
-        </button>
-      )}
-      {state.step === 'starting' && <p className={`type-hint ${muted}`}>Asking the vault…</p>}
-      {state.step === 'mac' && <p className={`type-hint ${muted}`}>Confirm on your Mac.</p>}
-      {state.step === 'password' && (
-        <form
-          className="flex flex-col gap-1.5 max-w-sm"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submitPassword(state.method)
-          }}
-        >
-          <label className={`type-hint ${muted}`}>
-            {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <input
-              ref={pwRef}
-              type="password"
-              autoComplete="current-password"
-              data-testid="vault-reveal-password"
-              onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className={`${input} mt-1`}
-            />
-          </label>
-          <div className="flex gap-1.5">
-            <button type="submit" className={btn} disabled={!hasPw}>
-              Confirm
-            </button>
-            <button type="button" className={btn} onClick={hide}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-      {state.step === 'shown' && (
-        <div className="border border-[var(--color-border)] p-2 space-y-1.5" data-testid="vault-reveal-panel">
-          <div className="font-mono type-hint text-[var(--color-text-primary)] break-all select-all" data-testid="vault-reveal-value">
-            {visible ? state.value : '•'.repeat(Math.min(24, Math.max(8, state.value.length)))}
-          </div>
-          <div className="flex gap-1.5 items-center">
-            <button type="button" className={btn} onClick={() => setVisible((v) => !v)}>
-              {visible ? 'Hide' : 'Show'}
-            </button>
-            <CopyButton text={state.value} />
-            <button type="button" className={btn} onClick={hide}>
-              Done
-            </button>
-            <span className={`type-hint ${muted}`}>Version {state.version}. Hides after 30 seconds.</span>
-          </div>
-        </div>
-      )}
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-// ── Row actions ──────────────────────────────────────────────────────
-
-type Mode = null | 'sites' | 'delivery' | 'share' | 'rotate' | 'destroy' | 'history' | 'reveal'
-
-function SitesPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
-  const [draft, setDraft] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const run = async (body: { addHosts?: string[]; removeHosts?: string[] }) => {
-    setBusy(true)
-    setError(null)
-    try {
-      await vaultApi.policy({ id: secret.id, ...body })
-      setDraft('')
-      onDone()
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="space-y-1.5" data-testid="vault-sites-panel">
-      {secret.hosts.length === 0 && <p className={`type-hint ${muted}`}>No sites yet.</p>}
-      {secret.hosts.map((h) => (
-        <div key={h} className="flex items-center gap-2 type-hint">
-          <span className="font-mono text-[var(--color-text-primary)]">{siteLabel(h)}</span>
-          <button type="button" className={btn} disabled={busy} onClick={() => void run({ removeHosts: [h] })}>
-            Remove
-          </button>
-        </div>
-      ))}
-      <div className="flex gap-1.5 max-w-md">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Add a site, like api.example.com"
-          className={input}
-          aria-label="Add a site"
-        />
-        <button
-          type="button"
-          className={btn}
-          disabled={busy || !draft.trim()}
-          onClick={() =>
-            void run({
-              addHosts: draft
-                .split(/[,\s]+/)
-                .map((x) => x.trim())
-                .filter(Boolean),
-            })
-          }
-        >
-          Add
-        </button>
-      </div>
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-function DeliveryPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
-  const [delivery, setDelivery] = useState(secret.defaultDelivery === 'proxy' ? 'fetch' : secret.defaultDelivery)
-  const [ceiling, setCeiling] = useState(secret.deliveryCeiling === 'proxy' ? 'fetch' : secret.deliveryCeiling)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const save = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      await vaultApi.policy({ id: secret.id, delivery, ceiling })
-      onDone()
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="space-y-1.5 max-w-md" data-testid="vault-delivery-panel">
-      <div className={`block type-hint ${muted}`}>
-        How agents get it
-        <SettingDropdown
-          fullWidth
-          menuAlign="left"
-          className="mt-1"
-          ariaLabel="How agents get it"
-          triggerData={{ 'data-testid': 'vault-delivery-select' }}
-          value={delivery}
-          options={deliveryOptions(withCurrent(deliveryChoices(secret.kind), delivery))}
-          onChange={setDelivery}
-        />
-      </div>
-      <div className={`block type-hint ${muted}`}>
-        The most an agent may ever get
-        <SettingDropdown
-          fullWidth
-          menuAlign="left"
-          className="mt-1"
-          ariaLabel="The most an agent may ever get"
-          value={ceiling}
-          options={deliveryOptions(withCurrent(ceilingChoices(secret.kind), ceiling))}
-          onChange={setCeiling}
-        />
-      </div>
-      {deliveryReadable(delivery) && <p className={`type-hint ${muted}`}>Agents can see this value.</p>}
-      <button type="button" className={btn} disabled={busy} onClick={() => void save()}>
-        Save
-      </button>
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-function SharePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
-  const projects = useProjectsStore((s) => s.projects)
-  const [to, setTo] = useState('ws:*')
-  const [as, setAs] = useState(secret.defaultDelivery === 'proxy' ? 'fetch' : secret.defaultDelivery)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  // VC-B2: a share they can read needs a confirm first, like reveal.
-  const [pwMethod, setPwMethod] = useState<string | null>(null)
-  const [hasPw, setHasPw] = useState(false)
-  const pwRef = useRef<HTMLInputElement>(null)
-  const grantWith = async (confirmToken?: string): Promise<void> => {
-    await vaultApi.grant({ id: secret.id, to, as, ...(confirmToken ? { confirmToken } : {}) })
-    onDone()
-  }
-  const confirmAndGrant = async (method: string, password?: string): Promise<void> => {
-    const { token } = await vaultApi.confirmFinish({
-      action: 'grant-read',
-      secretId: secret.id,
-      method,
-      label: secret.name,
-      ...(password !== undefined ? { password } : {}),
-    })
-    await grantWith(token)
-  }
-  const share = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      if (!deliveryReadable(as)) {
-        await grantWith()
-        return
-      }
-      const { methods } = await vaultApi.confirmStart('grant-read', secret.id)
-      if (methods.includes('local-auth')) {
-        await confirmAndGrant('local-auth')
-        return
-      }
-      const pw = methods.find((m) => m === 'connect-password' || m === 'vault-password')
-      if (pw) {
-        setPwMethod(pw)
-        return
-      }
-      setError('No way to confirm here yet. Set a vault password from a terminal outside K2: k2 vault confirm-password set.')
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const submitPassword = async (method: string): Promise<void> => {
-    const el = pwRef.current
-    if (!el) return
-    const pw = el.value
-    el.value = ''
-    setHasPw(false)
-    setError(null)
-    setBusy(true)
-    try {
-      await confirmAndGrant(method, pw)
-      setPwMethod(null)
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="space-y-1.5 max-w-md" data-testid="vault-share-panel">
-      <div className={`block type-hint ${muted}`}>
-        Share with
-        <SettingDropdown
-          fullWidth
-          menuAlign="left"
-          className="mt-1"
-          ariaLabel="Share with"
-          value={to}
-          options={[
-            { value: 'ws:*', label: 'all my agents' },
-            ...projects.map((p) => ({ value: `ws:${p.id}`, label: p.handle || p.name })),
-          ]}
-          onChange={setTo}
-        />
-      </div>
-      <div className={`block type-hint ${muted}`}>
-        How they get it
-        <SettingDropdown
-          fullWidth
-          menuAlign="left"
-          className="mt-1"
-          ariaLabel="How they get it"
-          triggerData={{ 'data-testid': 'vault-share-as' }}
-          value={as}
-          options={deliveryOptions(withCurrent(deliveryChoices(secret.kind), as))}
-          onChange={setAs}
-        />
-      </div>
-      {deliveryReadable(as) && <p className={`type-hint ${muted}`}>They can see this value, so you confirm first.</p>}
-      {pwMethod === null ? (
-        <button type="button" className={btn} disabled={busy} onClick={() => void share()}>
-          Share
-        </button>
-      ) : (
-        <form
-          className="flex flex-col gap-1.5 max-w-sm"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void submitPassword(pwMethod)
-          }}
-        >
-          <label className={`type-hint ${muted}`}>
-            {pwMethod === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <input
-              ref={pwRef}
-              type="password"
-              autoComplete="current-password"
-              data-testid="vault-share-password"
-              onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className={`${input} mt-1`}
-            />
-          </label>
-          <div className="flex gap-1.5">
-            <button type="submit" className={btn} disabled={!hasPw || busy}>
-              Confirm and share
-            </button>
-            <button type="button" className={btn} onClick={() => setPwMethod(null)}>
-              Cancel
-            </button>
-          </div>
-        </form>
-      )}
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-function RotatePanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
-  const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
-  const [has, setHas] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const rotate = async () => {
-    const el = fieldRef.current
-    if (!el || !el.value) return
-    setBusy(true)
-    setError(null)
-    try {
-      const valueB64 = toBase64(el.value)
-      el.value = ''
-      setHas(false)
-      await vaultApi.rotate({ id: secret.id, valueB64 })
-      onDone()
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="space-y-1.5 max-w-md" data-testid="vault-rotate-panel">
-      <p className={`type-hint ${muted}`}>Paste the new value from {secret.provider || 'the provider'}. Agents use it from their next call.</p>
-      <ValueField fieldRef={fieldRef} label={`New value for ${secret.name}`} onPresence={setHas} multiline={isMultilineKind(secret.kind)} />
-      <button type="button" className={btn} disabled={busy || !has} onClick={() => void rotate()}>
-        Rotate
-      </button>
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-function DestroyPanel({ secret, onDone }: { secret: VaultSecret; onDone: () => void }): React.JSX.Element {
-  const [typed, setTyped] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const destroy = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      await vaultApi.destroy(secret.id)
-      onDone()
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <div className="space-y-1.5 max-w-md" data-testid="vault-destroy-panel">
-      <p className="type-hint text-[var(--color-text-primary)]">
-        Destroy removes every version from this server. Earlier backups keep it until they expire.
-      </p>
-      <label className={`block type-hint ${muted}`}>
-        Type {secret.name} to confirm
-        <input value={typed} onChange={(e) => setTyped(e.target.value)} className={`${input} mt-1`} aria-label="Type the name to confirm" />
-      </label>
-      <button
-        type="button"
-        className={`${btn} ${danger}`}
-        disabled={busy || typed !== secret.name}
-        onClick={() => void destroy()}
-      >
-        Destroy
-      </button>
-      <ErrorLine text={error} />
-    </div>
-  )
-}
-
-function HistoryPanel({ secret }: { secret: VaultSecret }): React.JSX.Element {
-  const [rows, setRows] = useState<VaultAuditRow[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  useEffect(() => {
-    let live = true
-    vaultApi
-      .show(secret.id)
-      .then((r) => live && setRows(Array.isArray(r?.audit) ? r.audit : []))
-      .catch((e) => live && setError(daemonErrorText(e)))
-    return () => {
-      live = false
-    }
-  }, [secret.id])
-  return (
-    <div className="space-y-1" data-testid="vault-history-panel">
-      <ErrorLine text={error} />
-      {rows === null && !error && <p className={`type-hint ${muted}`}>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p className={`type-hint ${muted}`}>Nothing yet.</p>}
-      {rows?.map((r) => (
-        <div key={r.seq} className="type-hint font-mono text-[var(--color-text-secondary)] break-all">
-          {r.ts} · {r.action} · {r.actor}
-          {r.consumer ? ` · ${r.consumer}` : ''}
-          {r.targetHost ? ` · ${r.targetHost}` : ''} · {r.outcome}
-          {r.count > 1 ? ` ×${r.count}` : ''}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChanged: () => void }): React.JSX.Element {
-  const [mode, setMode] = useState<Mode>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-  const disabled = secret.status === 'disabled'
-  const done = () => {
-    setMode(null)
-    onChanged()
-  }
-  const toggleStatus = async () => {
-    setBusy(true)
-    setError(null)
-    try {
-      if (disabled) await vaultApi.enable(secret.id)
-      else await vaultApi.disable(secret.id)
-      onChanged()
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const pick = (m: Exclude<Mode, null>) => setMode((cur) => (cur === m ? null : m))
+  const off = secret.status === 'disabled'
   const sites = secret.hostsDisplay ?? secret.hosts.map((origin) => ({ origin, unicode: '', mixedScript: false }))
+  const title = secret.description?.trim() || secret.name
   return (
-    <div className="p-3 space-y-1.5" data-testid="vault-secret-row" data-secret={secret.name}>
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="type-name font-mono text-[var(--color-text-primary)]">{secret.name}</span>
-        <span className={`type-hint ${muted}`}>{kindLabel(secret.kind)}</span>
-        <span className={`type-hint ${muted}`}>v{secret.latestVersion}</span>
-        {disabled && <span className="type-hint px-1 border border-[var(--color-border)] text-[var(--color-text-secondary)]">disabled</span>}
-        {secret.agentCanSee && (
-          <span
-            className="type-hint px-1 border border-[var(--color-status-warn)] text-[var(--color-text-secondary)]"
-            data-testid="vault-agent-can-see"
-          >
-            agent can see this
-          </span>
-        )}
-      </div>
-      <div className="type-hint text-[var(--color-text-secondary)] space-y-0.5">
-        <div>
-          Sites:{' '}
-          {sites.length === 0
-            ? 'none'
-            : sites.map((h, i) => (
-                <span key={h.origin}>
-                  {i > 0 ? ', ' : ''}
-                  <span className="font-mono">{siteLabel(h.origin)}</span>
-                  {h.mixedScript && (
-                    <span className={danger} data-testid="vault-mixed-script">
-                      {' '}
-                      (mixed scripts{h.unicode ? `; reads as ${h.unicode}` : ''})
-                    </span>
-                  )}
-                </span>
-              ))}
-        </div>
-        <div>How agents get it: {deliveryLabel(secret.defaultDelivery)}</div>
-        <div>
-          From {originLabel(secret)}
-          {secret.expiresAt ? ` · until ${secret.expiresAt.slice(0, 16).replace('T', ' ')}` : ''}
-        </div>
-        {secret.ref && (
-          <div className="flex items-center gap-2">
-            <span className="font-mono type-hint text-[var(--color-text-primary)] select-all">{secret.ref}</span>
-            <CopyButton text={secret.ref} label="Copy reference" />
+    <div className="px-4 py-3 transition-colors hover:bg-[var(--color-wash-1)]" data-testid="vault-secret-row" data-secret={secret.name}>
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <span className={`type-name ${off ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-primary)]'}`}>{title}</span>
+            {off ? <Tag tone="muted">Off</Tag> : null}
+            {secret.agentCanSee ? (
+              <Tag tone="warn" data-testid="vault-agent-can-see" title="Agents get the value itself, as a file, a variable or printed.">
+                Agents can read it
+              </Tag>
+            ) : null}
           </div>
-        )}
+          <p className={SETTING_ROW_HINT}>
+            {title !== secret.name ? <span className="font-mono">{secret.name} · </span> : null}
+            {kindLabel(secret.kind)} ·{' '}
+            {sites.length === 0 ? (
+              'no sites'
+            ) : (
+              <>
+                only sent to{' '}
+                {sites.map((h, i) => (
+                  <span key={h.origin}>
+                    {i > 0 ? ', ' : ''}
+                    <span className="font-mono">{siteLabel(h.origin)}</span>
+                    {h.mixedScript && (
+                      <span className="text-[var(--color-status-error-soft)]" data-testid="vault-mixed-script">
+                        {' '}
+                        (mixed scripts{h.unicode ? `; reads as ${h.unicode}` : ''})
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </>
+            )}
+          </p>
+          <p className={SETTING_ROW_HINT}>
+            {off ? 'Off: agents can’t use it' : `Agents: ${deliveryLabel(secret.defaultDelivery)}`} · {sourceWords(secret)} · version {secret.latestVersion}
+            {secret.expiresAt ? ` · until ${whenWords(secret.expiresAt)}` : ''}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button
+            onClick={() => onAction('reveal')}
+            disabled={member || busy}
+            title={member ? OWNER_ONLY_REVEAL : undefined}
+            aria-label={`Show the value of ${secret.name}`}
+            data-testid="vault-row-reveal"
+          >
+            Show value
+          </Button>
+          <OverflowMenu
+            label={`More actions for ${secret.name}`}
+            items={[
+              { id: 'rotate', label: 'Rotate…', hint: 'Paste a new value', onSelect: () => onAction('rotate') },
+              { id: 'sites', label: 'Edit sites…', onSelect: () => onAction('sites') },
+              { id: 'delivery', label: 'How agents get it…', onSelect: () => onAction('delivery') },
+              { id: 'share', label: 'Share…', onSelect: () => onAction('share') },
+              {
+                id: 'toggle',
+                label: off ? 'Turn on' : 'Turn off',
+                hint: off ? 'Agents can use it again' : 'Agents can’t use it until you turn it on',
+                disabled: busy,
+                onSelect: () => onAction('toggle'),
+              },
+              { id: 'history', label: 'History…', group: true, onSelect: () => onAction('history') },
+              ...(secret.ref ? [{ id: 'copy', label: 'Copy reference', hint: 'How an agent names it', onSelect: () => onAction('copy') }] : []),
+              { id: 'delete', label: 'Delete…', danger: true, group: true, onSelect: () => onAction('delete') },
+            ]}
+          />
+        </div>
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        <button type="button" className={btn} onClick={() => pick('sites')}>
-          Edit sites
-        </button>
-        <button type="button" className={btn} onClick={() => pick('delivery')}>
-          Change delivery
-        </button>
-        <button type="button" className={btn} onClick={() => pick('share')}>
-          Share
-        </button>
-        <button type="button" className={btn} onClick={() => pick('rotate')}>
-          Rotate
-        </button>
-        <button type="button" className={btn} disabled={busy} onClick={() => void toggleStatus()}>
-          {disabled ? 'Enable' : 'Disable'}
-        </button>
-        <button type="button" className={btn} onClick={() => pick('destroy')}>
-          Destroy
-        </button>
-        <button type="button" className={btn} onClick={() => pick('history')}>
-          History
-        </button>
-        <button type="button" className={btn} onClick={() => pick('reveal')} data-testid="vault-row-reveal">
-          Reveal
-        </button>
-      </div>
-      <ErrorLine text={error} />
-      {mode === 'sites' && <SitesPanel secret={secret} onDone={done} />}
-      {mode === 'delivery' && <DeliveryPanel secret={secret} onDone={done} />}
-      {mode === 'share' && <SharePanel secret={secret} onDone={done} />}
-      {mode === 'rotate' && <RotatePanel secret={secret} onDone={done} />}
-      {mode === 'destroy' && <DestroyPanel secret={secret} onDone={done} />}
-      {mode === 'history' && <HistoryPanel secret={secret} />}
-      {mode === 'reveal' && <RevealPanel secret={secret} />}
     </div>
   )
 }
@@ -1168,236 +201,203 @@ export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChange
 /** K2's own secrets: metadata only, never actions. The one exception is a
  *  secret the daemon marks `personReveal` (Sew's recovery key): the Owner or
  *  an Admin may reveal it, with the same confirm as any reveal. */
-function SystemRow({ secret }: { secret: VaultSecret }): React.JSX.Element {
+function SystemRow({ secret, onReveal }: { secret: VaultSecret; onReveal: () => void }): React.JSX.Element {
+  const title = secret.description?.trim() || secret.name
   return (
-    <div className="px-3 py-2 type-hint space-y-1.5" data-testid="vault-system-row">
-      <div className="flex flex-wrap gap-x-3">
-        <span className="font-mono text-[var(--color-text-primary)]">{secret.name}</span>
-        {secret.personReveal && secret.description ? <span className="text-[var(--color-text-primary)]">{secret.description}</span> : null}
-        <span className={muted}>{kindLabel(secret.kind)}</span>
-        <span className={muted}>v{secret.latestVersion}</span>
-        <span className={muted}>{secret.status}</span>
-      </div>
-      {secret.personReveal && secret.status === 'active' ? <RevealPanel secret={secret} /> : null}
-    </div>
-  )
-}
-
-// ── Add secret ───────────────────────────────────────────────────────
-
-function AddSecretForm({ presets, onDone, onCancel }: { presets: VaultPreset[]; onDone: () => void; onCancel: () => void }): React.JSX.Element {
-  const projects = useProjectsStore((s) => s.projects)
-  const [name, setName] = useState('')
-  const [scope, setScope] = useState<'workspace' | 'server'>('workspace')
-  const [workspace, setWorkspace] = useState(projects[0]?.id ?? '')
-  const [preset, setPreset] = useState('')
-  const [sites, setSites] = useState('')
-  const [delivery, setDelivery] = useState('fetch')
-  const [kind, setKind] = useState('api_key')
-  const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
-  const [has, setHas] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const presetRow = presets.find((p) => p.id === preset) ?? null
-  const presetSites = (presetRow?.hosts ?? []).map(siteLabel).join(', ')
-  const siteList = sites
-    .split(/[,\s]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-  const needsSite = delivery === 'fetch' && siteList.length === 0
-  const canSave = has && name.trim() !== '' && !needsSite && !busy && (scope === 'server' || workspace !== '')
-
-  const save = async () => {
-    const el = fieldRef.current
-    if (!el || !canSave) return
-    setBusy(true)
-    setError(null)
-    try {
-      const valueB64 = toBase64(el.value)
-      await vaultApi.set({
-        name: name.trim(),
-        scope,
-        ...(scope === 'workspace' ? { workspace } : {}),
-        valueB64,
-        kind,
-        delivery,
-        ...(preset ? { preset } : {}),
-        // The preset's own sites go in by the preset; send the field only
-        // when the person changed it.
-        ...(sites !== presetSites ? { hosts: siteList } : {}),
-        mode: 'create',
-      })
-      el.value = ''
-      setHas(false)
-      onDone()
-    } catch (e) {
-      setError(daemonErrorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="border border-[var(--color-border)] p-3 space-y-2 max-w-lg" data-testid="vault-add-form">
-      <h3 className="type-heading text-[var(--color-text-primary)]">Add a secret</h3>
-      <label className={`block type-hint ${muted}`}>
-        Name
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="STRIPE_KEY" className={`${input} mt-1 font-mono`} />
-      </label>
-      <fieldset className="type-hint space-y-1">
-        <legend className={muted}>Keep it for</legend>
-        <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
-          <Radio checked={scope === 'workspace'} onChange={() => setScope('workspace')} />
-          one workspace
-        </label>
-        {scope === 'workspace' && (
-          <SettingDropdown
-            fullWidth
-            menuAlign="left"
-            ariaLabel="Workspace"
-            value={workspace}
-            options={projects.map((p) => ({ value: p.id, label: p.handle || p.name }))}
-            onChange={setWorkspace}
-          />
-        )}
-        <label className="flex items-center gap-1.5 text-[var(--color-text-secondary)] cursor-pointer">
-          <Radio checked={scope === 'server'} onChange={() => setScope('server')} />
-          the server (share it with agents after)
-        </label>
-      </fieldset>
-      <div className={`block type-hint ${muted}`}>
-        Kind
-        <SettingDropdown
-          fullWidth
-          menuAlign="left"
-          className="mt-1"
-          ariaLabel="Kind"
-          triggerData={{ 'data-testid': 'vault-add-kind' }}
-          value={kind}
-          options={[
-            { value: 'api_key', label: 'API key' },
-            { value: 'password', label: 'password' },
-            { value: 'oauth_token', label: 'sign-in token' },
-            { value: 'ssh_key', label: 'SSH key' },
-            { value: 'generic', label: 'other' },
-          ]}
-          onChange={(k) => {
-            // A re-pick of the same kind keeps the value and delivery.
-            if (k === kind) return
-            setKind(k)
-            // The value field may change shape (one line vs a key): start empty.
-            setHas(false)
-            // agent is for SSH keys only; an SSH key starts as a file (the daemon's default).
-            if (k === 'ssh_key') setDelivery('file')
-            else if (delivery === 'agent') setDelivery('fetch')
-          }}
-        />
-      </div>
-      {presets.length > 0 && (
-        <div className={`block type-hint ${muted}`}>
-          Service
-          <SettingDropdown
-            fullWidth
-            menuAlign="left"
-            className="mt-1"
-            ariaLabel="Service"
-            triggerData={{ 'data-testid': 'vault-add-preset' }}
-            value={preset}
-            options={[
-              { value: '', label: 'None (I’ll set the sites)' },
-              ...presets.map((p) => ({ value: p.id, label: p.label })),
-            ]}
-            onChange={(id) => {
-              // A re-pick of the same service keeps sites typed since.
-              if (id === preset) return
-              setPreset(id)
-              const p = presets.find((x) => x.id === id)
-              setSites((p?.hosts ?? []).map(siteLabel).join(', '))
-            }}
-          />
+    <div className="px-4 py-3" data-testid="vault-system-row">
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1 min-w-0">
+          <p className="type-name text-[var(--color-text-primary)]">{title}</p>
+          <p className={SETTING_ROW_HINT}>
+            {title !== secret.name ? <span className="font-mono">{secret.name} · </span> : null}
+            {kindLabel(secret.kind)} · version {secret.latestVersion}
+            {secret.status !== 'active' ? ` · ${secret.status}` : ''}
+          </p>
         </div>
-      )}
-      <label className={`block type-hint ${muted}`}>
-        Only send it to
-        <input
-          value={sites}
-          onChange={(e) => setSites(e.target.value)}
-          placeholder="api.example.com"
-          className={`${input} mt-1 font-mono`}
-          data-testid="vault-add-sites"
-        />
-      </label>
-      <div className={`block type-hint ${muted}`}>
-        How agents get it
-        <SettingDropdown
-          fullWidth
-          menuAlign="left"
-          className="mt-1"
-          ariaLabel="How agents get it"
-          triggerData={{ 'data-testid': 'vault-add-delivery' }}
-          value={delivery}
-          options={deliveryOptions(deliveryChoices(kind))}
-          onChange={setDelivery}
-        />
+        {secret.personReveal && secret.status === 'active' ? (
+          <Button onClick={onReveal} aria-label={`Show the value of ${secret.name}`} data-testid="vault-reveal-start">
+            Show value
+          </Button>
+        ) : null}
       </div>
-      {deliveryReadable(delivery) && <p className={`type-hint ${muted}`}>Agents can see this value.</p>}
-      {needsSite && <p className={`type-hint ${danger}`}>Add a site, or let agents read it.</p>}
-      <ValueField fieldRef={fieldRef} label="Value" onPresence={setHas} multiline={isMultilineKind(kind)} />
-      <p className={`type-hint ${muted}`}>
-        A key can still do anything its service allows it to. Use a restricted key if you can.
-      </p>
-      <div className="flex gap-1.5">
-        <button type="button" className={btnPrimary} disabled={!canSave} onClick={() => void save()} data-testid="vault-add-save">
-          Save
-        </button>
-        <button type="button" className={btn} onClick={onCancel}>
-          Cancel
-        </button>
-      </div>
-      <ErrorLine text={error} />
     </div>
   )
 }
 
 // ── Requests ─────────────────────────────────────────────────────────
 
-const REQUEST_STATUS: Record<string, string> = { pending: 'waiting', set: 'saved', void: 'declined', expired: 'expired' }
+const REQUEST_STATUS: Record<string, { label: string; tone: TagTone }> = {
+  pending: { label: 'Waiting', tone: 'warn' },
+  set: { label: 'Saved', tone: 'ok' },
+  void: { label: 'Declined', tone: 'muted' },
+  expired: { label: 'Expired', tone: 'muted' },
+}
 
 function RequestsList(): React.JSX.Element {
   const [rows, setRows] = useState<VaultRequest[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
   useEffect(() => {
     let live = true
     vaultApi
       .requests()
-      .then((r) => live && setRows(r))
+      .then((r) => {
+        if (!live) return
+        setRows(r)
+        setError(null)
+      })
       .catch((e) => live && setError(daemonErrorText(e)))
     return () => {
       live = false
     }
-  }, [])
+  }, [nonce])
+  const retry = (): void => {
+    setError(null)
+    setRows(null)
+    setNonce((n) => n + 1)
+  }
   return (
-    <div className="space-y-1" data-testid="vault-requests">
-      <ErrorLine text={error} />
-      {rows === null && !error && <p className={`type-hint ${muted}`}>Loading…</p>}
-      {rows !== null && rows.length === 0 && <p className={`type-hint ${muted}`}>No secret cards yet.</p>}
-      {rows !== null && rows.length > 0 && (
-        <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-          {rows.map((r) => (
-            <div key={r.cardId} className="p-2 type-hint space-y-0.5" data-testid="vault-request-row">
-              <div className="flex flex-wrap gap-x-3">
-                <span className="font-mono text-[var(--color-text-primary)]">{r.name}</span>
-                <span className="text-[var(--color-text-secondary)]">asked by {r.requestedBy}</span>
-                <span className={muted}>{REQUEST_STATUS[r.status] ?? r.status}</span>
-                <span className={muted}>{r.createdAt.slice(0, 16).replace('T', ' ')}</span>
+    <SettingsGroup
+      title="Secret requests"
+      hint="When an agent asks you for a secret in a Thread, the card is listed here too. Answer it in that Thread."
+      card
+      testId="vault-requests"
+      state={
+        error ? (
+          <SettingsLoadState kind="error" title="Couldn’t load the requests" detail={error} action={<Button onClick={retry}>Try again</Button>}>
+            Nothing was lost. Try again in a moment.
+          </SettingsLoadState>
+        ) : rows === null ? (
+          <SettingsLoadState kind="loading" title="Loading requests…" />
+        ) : rows.length === 0 ? (
+          <SettingsLoadState kind="empty" title="No requests yet">
+            When an agent needs a secret it doesn’t have, it asks in a Thread, and the card shows here.
+          </SettingsLoadState>
+        ) : undefined
+      }
+    >
+      {rows?.map((r) => {
+        const st = REQUEST_STATUS[r.status] ?? { label: r.status, tone: 'muted' as TagTone }
+        return (
+          <div key={r.cardId} className="px-4 py-3" data-testid="vault-request-row">
+            <div className="flex items-start justify-between gap-6">
+              <div className="flex-1 min-w-0">
+                <p className="type-name text-[var(--color-text-primary)] font-mono">{r.name}</p>
+                <p className={SETTING_ROW_HINT}>
+                  Asked by {r.requestedBy} · {whenWords(r.createdAt)}
+                  {r.answeredBy ? ` · answered by ${r.answeredBy}` : ''}
+                </p>
+                {r.prompt ? <p className={`${SETTING_ROW_HINT} whitespace-pre-wrap break-words`}>“{r.prompt}”</p> : null}
               </div>
-              {r.prompt && <div className={`${muted} whitespace-pre-wrap break-words`}>{r.prompt}</div>}
+              <Tag tone={st.tone}>{st.label}</Tag>
             </div>
-          ))}
+          </div>
+        )
+      })}
+    </SettingsGroup>
+  )
+}
+
+// ── About this vault ────────────────────────────────────────────────
+
+function Value({ children, tone = 'plain', testId }: { children: React.ReactNode; tone?: 'plain' | 'bad'; testId?: string }): React.JSX.Element {
+  return (
+    <span data-testid={testId} className={`type-row ${tone === 'bad' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-text-secondary)]'}`}>
+      {children}
+    </span>
+  )
+}
+
+const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
+function AboutVault({ status }: { status: VaultStatus }): React.JSX.Element {
+  const recoveryOk = status.recovery === 'confirmed'
+  const tamperOk = !status.tamper || status.tamper === 'ok'
+  return (
+    <SettingsGroup
+      title="About this vault"
+      hint={status.honest ? <span data-testid="vault-honest">{status.honest}</span> : undefined}
+      card
+      settingId="vault.status"
+      testId="vault-status"
+    >
+      <SettingRow label="Where the key lives" hint="The key that unlocks every secret here.">
+        <Value testId="vault-key-home">{status.keyHomeLabel || status.keyHome || 'Unknown'}</Value>
+      </SettingRow>
+      <SettingRow label="Recovery key" hint="The way back in if that key is ever lost.">
+        {recoveryOk ? (
+          <Value>Set up{status.recoveryConfirmedAt ? ` ${whenWords(status.recoveryConfirmedAt).split(' ').slice(0, 2).join(' ')}` : ''}</Value>
+        ) : (
+          <Tag tone="warn">Not set up</Tag>
+        )}
+      </SettingRow>
+      <SettingRow
+        label="Rollback check"
+        hint="Notices if the vault file is swapped for an older copy."
+        below={status.rollback ? <p className="type-hint text-[var(--color-status-error-soft)]">The vault file looks older than expected.</p> : undefined}
+      >
+        <Value tone={status.rollback ? 'bad' : 'plain'}>{cap(status.rollbackGuard || 'off')}</Value>
+      </SettingRow>
+      <SettingRow label="Tamper check" hint="Checks the vault file hasn’t been changed outside K2.">
+        <Value tone={tamperOk ? 'plain' : 'bad'} testId="vault-tamper">
+          {tamperOk ? 'No problems' : status.tamper}
+        </Value>
+      </SettingRow>
+      <SettingRow label="Vault password" hint="Confirms it’s you where Touch ID isn’t available.">
+        <Value>{status.confirmPassword ? 'Set' : 'Not set'}</Value>
+      </SettingRow>
+      {status.counts ? (
+        <SettingRow label="Secrets" hint="Yours, K2’s own, and requests waiting for you.">
+          <Value>
+            {status.counts.user} yours · {status.counts.system} K2’s · {status.counts.pendingRequests} waiting
+            {status.counts.rotateDue ? ` · ${status.counts.rotateDue} due for rotation` : ''}
+          </Value>
+        </SettingRow>
+      ) : null}
+      {status.adopted && status.adopted.length > 0 ? (
+        <div className="px-4 py-3">
+          <p className={SETTING_ROW_LABEL}>Moved in from older storage</p>
+          <p className={SETTING_ROW_HINT} data-testid="vault-adopted">
+            {status.adopted.map((a) => `${a.store} (${a.moved} moved${a.kept ? `, ${a.kept} kept` : ''})`).join(', ')}.
+            {status.legacyCopies ? ` ${cap(status.legacyCopies)}.` : ''}
+          </p>
         </div>
-      )}
-    </div>
+      ) : null}
+      <div className="px-4 py-3">
+        <p className={SETTING_ROW_LABEL}>What it can’t stop yet</p>
+        <p className={SETTING_ROW_HINT}>
+          An agent that gets hold of this server’s owner token can change a secret’s sites or how it’s given out, as you can. Each secret’s history
+          records it.
+        </p>
+      </div>
+    </SettingsGroup>
+  )
+}
+
+/** The vault has no confirmed recovery key: what that risks, and the one
+ *  step to fix it (the Owner's; a Member is told who can). */
+function RecoveryPrompt({ member, onSetUp }: { member: boolean; onSetUp: () => void }): React.JSX.Element {
+  return (
+    <Surface chamfer material="tile" className="px-4 py-3" data-testid="vault-recovery-banner">
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <p className={SETTING_ROW_LABEL}>Set up a recovery key</p>
+            <Tag tone="warn">Not set up</Tag>
+          </div>
+          <p className={SETTING_ROW_HINT}>
+            Without one, losing this server’s vault key means losing every secret in it. It takes a minute: you write down 24 words and type three
+            back.
+          </p>
+          {member ? <p className={SETTING_ROW_HINT}>Only the server’s owner can set it up.</p> : null}
+        </div>
+        {member ? null : (
+          <Button className="flex-shrink-0" onClick={onSetUp} data-testid="vault-recovery-open">
+            Set up recovery key
+          </Button>
+        )}
+      </div>
+    </Surface>
   )
 }
 
@@ -1413,9 +413,21 @@ const TAB_SETTINGS_ID: Record<VaultTab, string> = {
   requests: 'vault.requests',
 }
 
+type Dialog =
+  | { kind: 'add' }
+  | { kind: 'recovery' }
+  | { kind: Exclude<RowAction, 'toggle' | 'copy'>; secret: VaultSecret }
+  | null
+
+type Notice = { tone: 'ok'; text: string } | { tone: 'error'; text: string; detail: string } | null
+
 /** `scope`: this window's server, from Settings (Incoming/Sent list and decide there). */
 export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Element {
   const handoff = useServerSupports('vault-handoff')
+  const { role } = useActiveHostRole()
+  // A Member keeps workspace secrets and changes their own; showing values
+  // and server-wide secrets are an Owner's or Admin's. The server decides.
+  const member = role.kind === 'known' && role.role === 'member'
   const [tab, setTab] = useState<VaultTab>(() => {
     const want = takeRequestedVaultTab()
     return want === 'incoming' || want === 'sent' ? want : 'secrets'
@@ -1427,7 +439,9 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
   const [presets, setPresets] = useState<VaultPreset[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
-  const [adding, setAdding] = useState(false)
+  const [dialog, setDialog] = useState<Dialog>(null)
+  const [notice, setNotice] = useState<Notice>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     const [st, list, sys, pre] = await Promise.allSettled([
@@ -1455,97 +469,212 @@ export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Eleme
 
   const groups = useMemo(() => groupSecrets(secrets), [secrets])
   const vaultClosed = status !== null && !status.open
+  const close = (): void => setDialog(null)
+  const saved = (text: string): void => {
+    setDialog(null)
+    setNotice({ tone: 'ok', text })
+    void refresh()
+  }
+  const retry = (): void => {
+    setLoaded(false)
+    setError(null)
+    void refresh()
+  }
+
+  const onRow = async (s: VaultSecret, a: RowAction): Promise<void> => {
+    setNotice(null)
+    if (a === 'copy') {
+      const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+      if (!clip || !s.ref) return setNotice({ tone: 'error', text: 'Couldn’t copy the reference.', detail: 'the clipboard isn’t available here' })
+      try {
+        await clip.writeText(s.ref)
+        setNotice({ tone: 'ok', text: `Copied ${s.name}’s reference. An agent can ask for it by that name.` })
+      } catch (e) {
+        setNotice({ tone: 'error', text: 'Couldn’t copy the reference.', detail: daemonErrorText(e) })
+      }
+      return
+    }
+    if (a === 'toggle') {
+      const off = s.status === 'disabled'
+      setBusyId(s.id)
+      try {
+        if (off) await vaultApi.enable(s.id)
+        else await vaultApi.disable(s.id)
+        setNotice({
+          tone: 'ok',
+          text: off ? `${s.name} is on again. Agents can use it from their next call.` : `${s.name} is off. Agents can’t use it until you turn it on.`,
+        })
+        void refresh()
+      } catch (e) {
+        setNotice({ tone: 'error', text: off ? `Couldn’t turn ${s.name} on.` : `Couldn’t turn ${s.name} off.`, detail: daemonErrorText(e) })
+      } finally {
+        setBusyId(null)
+      }
+      return
+    }
+    setDialog({ kind: a, secret: s })
+  }
+
+  const header = (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)]">Vault</h2>
+      <p className="type-hint text-[var(--color-text-secondary)] mt-1 leading-relaxed max-w-[75ch]">
+        API keys, passwords and tokens your agents use. Each one is sent only to the sites you pick, and every use is logged.
+      </p>
+      <AccessAuditLink className="mt-1" />
+    </header>
+  )
+
+  if (vaultClosed && status) {
+    return (
+      <div className="w-full max-w-[52rem] space-y-6 pb-6">
+        {header}
+        <SettingsLoadState
+          kind="error"
+          title="The vault isn’t open"
+          detail={status.error?.hint || status.error?.code || null}
+          action={<Button onClick={retry}>Try again</Button>}
+          testId="vault-not-open"
+        >
+          Your secrets are kept safe, but until it opens agents can’t use them and you can’t add or change any. Fix what the server says below, then
+          try again.
+        </SettingsLoadState>
+      </div>
+    )
+  }
+
+  const secretsTab = (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-6">
+        <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed max-w-[75ch]">
+          {member
+            ? 'As a Member you can add secrets for a workspace and change the ones you added. Seeing a value needs an Owner or Admin.'
+            : 'Grouped by which agents can use them. Show a value, rotate it or change where it goes from its row.'}
+        </p>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <Button variant="ghost" onClick={retry} disabled={!loaded}>
+            Refresh
+          </Button>
+          <Button
+            variant="accent"
+            disabled={vaultClosed}
+            onClick={() => {
+              setNotice(null)
+              setDialog({ kind: 'add' })
+            }}
+            data-testid="vault-add"
+          >
+            Add secret
+          </Button>
+        </div>
+      </div>
+
+      {notice ? (
+        <Surface chamfer material="tile" className="px-4 py-2.5" data-testid="vault-notice">
+          <div className="flex items-start justify-between gap-4">
+            {notice.tone === 'ok' ? (
+              <p role="status" className="flex items-start gap-1.5 type-hint text-[var(--color-status-ok-soft)]">
+                {CHECK}
+                {notice.text}
+              </p>
+            ) : (
+              <div role="alert" className="min-w-0">
+                <p className="type-row text-[var(--color-status-error-soft)]">{notice.text}</p>
+                <p className={SETTING_ROW_HINT}>Nothing changed. Try again. The server said: {notice.detail.trim().replace(/[.\s]+$/, '')}.</p>
+              </div>
+            )}
+            <Button variant="quiet" className="flex-shrink-0" onClick={() => setNotice(null)}>
+              Dismiss
+            </Button>
+          </div>
+        </Surface>
+      ) : null}
+
+      {status && status.open && status.recovery !== 'confirmed' ? (
+        <RecoveryPrompt member={member} onSetUp={() => setDialog({ kind: 'recovery' })} />
+      ) : null}
+
+      {!loaded ? (
+        <SettingsLoadState kind="loading" title="Opening the vault…" testId="vault-loading">
+          Reading the secrets on this server.
+        </SettingsLoadState>
+      ) : error ? (
+        <SettingsLoadState kind="error" title="Couldn’t load your secrets" detail={error} action={<Button onClick={retry}>Try again</Button>} testId="vault-error">
+          Your secrets are safe; this page just couldn’t read the list. Try again in a moment.
+        </SettingsLoadState>
+      ) : groups.length === 0 ? (
+        <SettingsLoadState kind="empty" title="No secrets yet" testId="vault-empty">
+          Add an API key, password or token with Add secret. You choose the sites K2 may send it to.
+        </SettingsLoadState>
+      ) : (
+        groups.map((g) => (
+          <div key={g.key} data-testid="vault-group" data-group={g.key}>
+            <SettingsGroup title={g.title} hint={g.hint} card>
+              {g.rows.map((s) => (
+                <SecretRow key={s.id} secret={s} member={member} busy={busyId === s.id} onAction={(a) => void onRow(s, a)} />
+              ))}
+            </SettingsGroup>
+          </div>
+        ))
+      )}
+
+      {system.length > 0 ? (
+        <SettingsGroup title="K2’s own secrets" hint="K2 uses these itself. This page shows their names only." card testId="vault-system">
+          {system.map((s) => (
+            <SystemRow key={s.id} secret={s} onReveal={() => setDialog({ kind: 'reveal', secret: s })} />
+          ))}
+        </SettingsGroup>
+      ) : null}
+
+      {status && status.open ? <AboutVault status={status} /> : null}
+    </div>
+  )
 
   return (
-    <div className="max-w-4xl space-y-4" data-settings-id="vault.status">
-      <div>
-        <h2 className="type-title text-[var(--color-text-primary)]">Vault</h2>
-        <p className={`type-hint ${muted} mt-1 max-w-2xl`}>
-          Secrets your agents use: API keys, passwords, tokens. Each one is only sent to the sites you pick, and every
-          use is logged.
-        </p>
-        <AccessAuditLink className="mt-1" />
-      </div>
+    <div className="w-full max-w-[52rem] space-y-5 pb-6">
+      {header}
 
-      {status && <VaultStatusCard status={status} onRecoveryConfirmed={() => void refresh()} />}
-
-      <div className="flex gap-1 border-b border-[var(--color-border)]" role="tablist">
-        {tabs.map((t) => (
-          <button
-            key={t}
-            type="button"
-            role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            data-settings-id={TAB_SETTINGS_ID[t]}
-            className={`px-3 py-1.5 type-control cursor-pointer -mb-px border-b-2 ${
-              tab === t
-                ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
-                : 'border-transparent text-[var(--color-text-muted)]'
-            }`}
-          >
-            {TAB_LABEL[t]}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'requests' && <RequestsList />}
-      {handoff && tab === 'incoming' && <IncomingList scope={scope} />}
-      {handoff && tab === 'sent' && <SentList scope={scope} />}
-
-      {tab === 'secrets' && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
+      <div role="tablist" aria-label="Vault" className="flex flex-wrap gap-0.5 border-b border-[var(--color-border)] w-full">
+        {tabs.map((t) => {
+          const active = tab === t
+          return (
             <button
+              key={t}
               type="button"
-              className={btnPrimary}
-              disabled={vaultClosed}
-              onClick={() => setAdding(true)}
-              data-testid="vault-add"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t)}
+              data-settings-id={TAB_SETTINGS_ID[t]}
+              data-k2-focus=""
+              className={`relative px-3 py-2 type-control transition-colors no-drag cursor-pointer border-b-2 -mb-px outline-none ${
+                active
+                  ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]'
+                  : 'border-transparent text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              }`}
             >
-              Add secret
+              {TAB_LABEL[t]}
             </button>
-            <button type="button" className={btn} onClick={() => void refresh()}>
-              Refresh
-            </button>
-          </div>
-          {adding && (
-            <AddSecretForm
-              presets={presets}
-              onCancel={() => setAdding(false)}
-              onDone={() => {
-                setAdding(false)
-                void refresh()
-              }}
-            />
-          )}
-          <ErrorLine text={error} />
-          {loaded && !error && groups.length === 0 && <p className={`type-hint ${muted}`}>No secrets yet.</p>}
-          {groups.map((g) => (
-            <div key={g.key} className="space-y-1" data-testid="vault-group" data-group={g.key}>
-              <h3 className={`type-heading ${muted}`}>{g.title}</h3>
-              <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-                {g.rows.map((s) => (
-                  <SecretRow key={s.id} secret={s} onChanged={() => void refresh()} />
-                ))}
-              </div>
-            </div>
-          ))}
-          {system.length > 0 && (
-            <details className="border border-[var(--color-border)]" data-testid="vault-system">
-              <summary className={`px-3 py-2 type-control ${muted} cursor-pointer`}>
-                K2&rsquo;s own secrets ({system.length})
-              </summary>
-              <p className={`px-3 type-hint ${muted}`}>K2 uses these itself. This page shows their names only.</p>
-              <div className="divide-y divide-[var(--color-border)]">
-                {system.map((s) => (
-                  <SystemRow key={s.id} secret={s} />
-                ))}
-              </div>
-            </details>
-          )}
-        </div>
-      )}
+          )
+        })}
+      </div>
+
+      <div className="pt-1">
+        {tab === 'secrets' && secretsTab}
+        {tab === 'requests' && <RequestsList />}
+        {handoff && tab === 'incoming' && <IncomingList scope={scope} />}
+        {handoff && tab === 'sent' && <SentList scope={scope} />}
+      </div>
+
+      {dialog?.kind === 'add' ? <AddSecretDialog presets={presets} member={member} onClose={close} onSaved={saved} /> : null}
+      {dialog?.kind === 'recovery' ? <RecoveryDialog onClose={close} onConfirmed={() => void refresh()} /> : null}
+      {dialog?.kind === 'reveal' ? <RevealDialog secret={dialog.secret} onClose={close} /> : null}
+      {dialog?.kind === 'rotate' ? <RotateDialog secret={dialog.secret} onClose={close} onSaved={saved} /> : null}
+      {dialog?.kind === 'sites' ? <SitesDialog secret={dialog.secret} onClose={close} onChanged={() => void refresh()} /> : null}
+      {dialog?.kind === 'delivery' ? <DeliveryDialog secret={dialog.secret} onClose={close} onSaved={saved} /> : null}
+      {dialog?.kind === 'share' ? <ShareDialog secret={dialog.secret} onClose={close} onSaved={saved} /> : null}
+      {dialog?.kind === 'delete' ? <DeleteDialog secret={dialog.secret} onClose={close} onDeleted={saved} /> : null}
+      {dialog?.kind === 'history' ? <HistoryDialog secret={dialog.secret} onClose={close} /> : null}
     </div>
   )
 }
+

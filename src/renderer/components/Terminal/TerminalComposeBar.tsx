@@ -226,8 +226,10 @@ export function TerminalComposeBar({
   const agentName = useRoomProjects((projects) =>
     composeAgentNameFromProjects(projects, workspacePath),
   )
-  const messagePlaceholder = composeMessagePlaceholder(agentName)
   const sessionChrome = useSessionViewChrome()
+  // The agent by the name its view shows ("Message Atlas", as its tile's bar
+  // and the Thread's empty state say), else the Agents-list name.
+  const messagePlaceholder = composeMessagePlaceholder(sessionChrome?.displayName || agentName)
   // The Thread's bar wears the Zen Thread widget's look (2026-10-16); the
   // terminal's bar keeps its own. Same keys, same commands, same send.
   const zenLook = sendDestination === 'thread'
@@ -1587,7 +1589,10 @@ export function TerminalComposeBar({
       placeholder={messagePlaceholder}
       title={`Enter to send, Shift+Enter for newline. ${stashChord} stashes the draft. Drop files for paths.`}
       data-zen-compose-input={zenLook ? '' : undefined}
-      className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+      // The empty box is one line tall: a long placeholder in a narrow
+      // box ("Message Design System" in a 230px tile) ends in an ellipsis
+      // rather than wrapping to a second line the box cuts off.
+      className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] placeholder:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis focus:outline-none"
       style={{
         display: 'block',
         width: '100%',

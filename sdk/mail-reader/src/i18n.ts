@@ -81,6 +81,48 @@ const EN = {
   confirm_delete_message: 'It moves to Trash in {inbox}.',
   done: 'Done.',
   error_prefix: 'Couldn’t do that: {message}',
+  // layout (narrow: one column at a time)
+  back: 'Back',
+  mailboxes: 'Mailboxes',
+  conversations: 'Conversations',
+  resize_sidebar: 'Resize the mailbox column',
+  resize_list: 'Resize the message list',
+  more: 'More',
+  message_actions: 'Message actions',
+  forward: 'Forward',
+  dismiss: 'Dismiss',
+  // states
+  pick_message_title: 'No conversation open',
+  pick_message_hint: 'Pick one from the list to read it here. Opening it doesn’t mark it read.',
+  thread_loading: 'Opening the conversation…',
+  thread_error_title: 'This conversation didn’t open',
+  list_error_title: 'The messages didn’t load',
+  try_again: 'Try again',
+  // auth badges: what each check is, and what its result means
+  auth_spf: 'SPF: was it sent from a server the sender’s domain allows?',
+  auth_dkim: 'DKIM: is the domain’s signature on it intact?',
+  auth_dmarc: 'DMARC: does it pass the sender domain’s own policy?',
+  auth_ok: 'Passed ({result}).',
+  auth_warn: 'Not confirmed ({result}): treat it with some care.',
+  auth_fail: 'Failed ({result}): the sender may not be who they say.',
+  // composer
+  attach: 'Attach',
+  attach_unavailable: 'Attaching files from the reader isn’t available yet.',
+  remove_attachment: 'Remove {name}',
+  discard: 'Discard',
+  send_hint: '⌘ Enter sends · Esc closes',
+  confirm_discard_title: 'Discard this message?',
+  confirm_discard_message: 'What you wrote isn’t saved anywhere.',
+  keep_editing: 'Keep editing',
+  new_message_title: 'New message',
+  reply_title: 'Reply to {to}',
+  // draft card
+  draft_by: 'Draft by {agent}',
+  draft_not_sent: 'not sent',
+  draft_updated: 'Updated {time}',
+  draft_hint: 'An agent wrote this reply. Nothing has gone out; edit it here, then send or discard it.',
+  confirm_discard_draft_title: 'Discard this draft?',
+  confirm_discard_draft_message: '{agent}’s draft is removed and nothing is sent.',
 } as const
 
 export type MessageKey = keyof typeof EN

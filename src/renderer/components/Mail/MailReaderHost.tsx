@@ -1,5 +1,6 @@
 // The Mail page's body (lazy chunk): @k2/mail-reader wired to this window's
-// server, K2's inert frame, K2's confirm dialog and download.
+// server, K2's inert frame, K2's confirm dialog and download, and K2's own
+// controls and icons (mail-ui).
 
 import { useMemo } from 'react'
 import { MailReader, type ReaderAttachmentFile } from '@k2/mail-reader'
@@ -8,6 +9,7 @@ import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { saveBlobInBrowser } from '@/lib/fs-transfer'
 import { daemonMailReaderSource } from './mail-reader-source'
 import { renderInertMail } from './InertMailFrame'
+import { K2_MAIL_UI } from './mail-ui'
 
 /** The thin bar over the reader (prd-ocmail-admin-in-k2-v1 §5.2). */
 export const MAIL_READER_BAR = 'Opening a message here doesn’t mark it read. Every access is logged.'
@@ -19,6 +21,7 @@ export default function MailReaderHost({ hostKey }: { hostKey: string }): React.
     <MailReader
       key={hostKey}
       source={source}
+      ui={K2_MAIL_UI}
       renderHtml={renderInertMail}
       confirm={(o) =>
         useConfirmDialogStore.getState().confirm({

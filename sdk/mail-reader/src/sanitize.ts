@@ -87,7 +87,7 @@ export function mailFrameDocument(cleanHtml: string): string {
   return (
     '<!doctype html><html><head><meta charset="utf-8"><meta name="color-scheme" content="light">' +
     '<style>html,body{margin:0;background:Canvas;color:CanvasText}' +
-    'body{padding:12px 16px;font:14px/1.45 system-ui,sans-serif;overflow-wrap:anywhere}' +
+    'body{padding:20px 24px;font:14px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}' +
     'img{max-width:100%;height:auto}table{max-width:100%}a[title]{text-decoration:underline;cursor:help}</style>' +
     `</head><body>${cleanHtml}</body></html>`
   )

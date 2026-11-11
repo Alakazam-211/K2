@@ -10,6 +10,7 @@ import { t } from '../i18n'
 import { groupEmailsByThread, sortThreadGroups } from '../thread-utils'
 import type { ReaderEmail, ThreadGroup } from '../types'
 import { ThreadListItem } from './ThreadListItem'
+import { MailIcon, useMailUi } from '../ui'
 
 export function EmailList({
   emails,
@@ -20,6 +21,7 @@ export function EmailList({
   selectedId,
   onSelect,
   onLoadMore,
+  onRetry,
 }: {
   emails: ReaderEmail[]
   loading: boolean
@@ -29,12 +31,17 @@ export function EmailList({
   selectedId: string | null
   onSelect: (thread: ThreadGroup) => void
   onLoadMore: () => void
+  /** The list's read failed: ask again. */
+  onRetry?: () => void
 }): React.JSX.Element {
+  const ui = useMailUi()
   const threads = useMemo(() => sortThreadGroups(groupEmailsByThread(emails)), [emails])
   return (
     <div data-mr="email-list" className="flex flex-col min-h-0 h-full">
-      <div className="px-4 py-2 border-b border-[var(--color-border)] type-hint text-[var(--color-text-muted)]">
-        {loading
+      <div className="px-4 py-1.5 border-b border-[var(--color-border)] type-hint text-[var(--color-text-muted)]" aria-live="polite">
+        {error
+          ? '—'
+          : loading
           ? t('loading')
           : hasMore
             ? t('conversations_count_plus', { count: threads.length })
@@ -42,12 +49,31 @@ export function EmailList({
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto">
         {error && (
-          <p data-testid="mr-list-error" className="px-4 py-3 type-row text-[var(--color-status-error-text)]">
-            {error}
-          </p>
+          <div role="alert" className="px-4 py-6 flex flex-col items-center text-center gap-1">
+            <p className="type-row text-[var(--color-status-error-text)]">{t('list_error_title')}</p>
+            <p data-testid="mr-list-error" className="type-hint text-[var(--color-text-muted)] max-w-[40ch]">
+              {error}
+            </p>
+            {onRetry && (
+              <ui.Button variant="default" className="mt-2" onClick={onRetry}>
+                {t('try_again')}
+              </ui.Button>
+            )}
+          </div>
+        )}
+        {!error && loading && threads.length === 0 && (
+          <div data-mr="list-skeleton" aria-hidden="true" className="flex flex-col">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <div key={i} className="pl-6 pr-4 py-3 border-b border-[var(--color-border)] flex flex-col gap-2">
+                <span className="h-2.5 w-2/5 rounded-[var(--radius-badge)] bg-[var(--color-bg-elevated)]" />
+                <span className="h-2.5 w-4/5 rounded-[var(--radius-badge)] bg-[var(--color-bg-elevated)]" />
+              </div>
+            ))}
+          </div>
         )}
         {!error && !loading && threads.length === 0 && (
-          <div className="px-4 py-8 text-center">
+          <div data-mr="list-empty" className="px-4 py-10 flex flex-col items-center text-center gap-1">
+            <MailIcon name="inbox" size={22} className="mb-1 text-[var(--color-text-muted)]" />
             <p className="type-row text-[var(--color-text-primary)]">{t('no_emails')}</p>
             <p className="type-hint text-[var(--color-text-muted)]">{t('no_emails_description')}</p>
           </div>
@@ -63,15 +89,9 @@ export function EmailList({
         {threads.length > 0 && (
           <div className="py-3 flex justify-center">
             {hasMore ? (
-              <button
-                type="button"
-                data-testid="mr-load-more"
-                disabled={loadingMore}
-                onClick={onLoadMore}
-                className="px-3 py-1 type-row border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] disabled:opacity-60"
-              >
+              <ui.Button variant="default" data-testid="mr-load-more" disabled={loadingMore} onClick={onLoadMore}>
                 {loadingMore ? t('loading_more') : t('load_more')}
-              </button>
+              </ui.Button>
             ) : (
               <span className="type-hint text-[var(--color-text-muted)]">{t('no_more_emails')}</span>
             )}

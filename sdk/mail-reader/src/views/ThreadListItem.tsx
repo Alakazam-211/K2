@@ -8,6 +8,7 @@
 import { formatDate } from '../format'
 import { t } from '../i18n'
 import type { ThreadGroup } from '../types'
+import { MailIcon, useMailUi } from '../ui'
 
 export function ThreadListItem({
   thread,
@@ -18,6 +19,7 @@ export function ThreadListItem({
   selected: boolean
   onSelect: (thread: ThreadGroup) => void
 }): React.JSX.Element {
+  const ui = useMailUi()
   const latest = thread.latestEmail
   const unread = thread.hasUnread
   const who =
@@ -32,31 +34,47 @@ export function ThreadListItem({
       data-unread={unread ? 'true' : 'false'}
       aria-current={selected ? 'true' : undefined}
       onClick={() => onSelect(thread)}
-      className={`relative w-full text-left px-4 py-2 border-b border-[var(--color-border)] hover:bg-[var(--color-bg-hover)] ${
-        selected ? 'bg-[var(--color-accent-soft)]' : ''
+      className={`relative w-full text-left pl-6 pr-4 py-2.5 border-b border-[var(--color-border)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--color-accent)] ${
+        selected ? 'bg-[var(--color-bg-elevated)]' : 'hover:bg-[var(--color-bg-hover)]'
       }`}
     >
+      {selected && <span aria-hidden="true" data-mr="selected-bar" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />}
       {unread && (
         <span
           aria-label="unread"
           data-mr="unread-dot"
-          className="absolute left-1.5 top-1/2 -translate-y-1/2 w-1.5 h-1.5 bg-[var(--color-accent)]"
+          className="absolute left-2.5 top-[1.05rem] w-2 h-2 rounded-[var(--radius-badge)] bg-[var(--color-accent)]"
         />
       )}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-baseline justify-between gap-2">
         <span
-          className={`truncate type-row ${unread ? 'font-semibold text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}
+          className={`truncate type-row ${unread ? 'font-semibold text-[var(--color-text-primary)]' : 'text-[var(--color-text-primary)]'}`}
         >
           {who}
-          {thread.emailCount > 1 && <span className="ml-1 type-hint text-[var(--color-text-muted)]">{thread.emailCount}</span>}
         </span>
-        <span className="flex-shrink-0 type-hint tabular-nums text-[var(--color-text-muted)]">
-          {thread.hasAttachment && <span data-mr="attachment-mark" className="mr-1" aria-label="has attachment">⎘</span>}
+        <span className="flex-shrink-0 flex items-center gap-1.5 type-hint tabular-nums text-[var(--color-text-muted)]">
+          {thread.hasAttachment && (
+            <span data-mr="attachment-mark" aria-label="has attachment" title="Has attachments" className="inline-flex">
+              <MailIcon name="attach" size={12} />
+              {!ui.Icon && '+'}
+            </span>
+          )}
           {formatDate(latest.date)}
         </span>
       </div>
-      <div className={`truncate type-row ${unread ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
-        {latest.subject || t('no_subject')}
+      <div className="flex items-center gap-2 mt-0.5">
+        <span className={`flex-1 min-w-0 truncate type-row ${unread ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
+          {latest.subject || t('no_subject')}
+        </span>
+        {thread.emailCount > 1 && (
+          <span
+            data-mr="thread-count"
+            title={t('messages_in_thread', { count: thread.emailCount })}
+            className="flex-shrink-0 min-w-[18px] px-1 text-center type-hint tabular-nums rounded-[var(--radius-badge)] bg-[var(--color-bg-elevated)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
+          >
+            {thread.emailCount}
+          </span>
+        )}
       </div>
     </button>
   )

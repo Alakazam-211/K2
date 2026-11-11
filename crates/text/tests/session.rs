@@ -2,15 +2,18 @@
 //! with the pack the file name picks, agents editing through the kit's verbs, write-back,
 //! outside edits and refusals. Fidelity is checked on the file on disk.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 
+use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::session::{
-    AuditEvent, Config, ConnId, DiskCheck, DiskState, Host, Pack, Participant, ParticipantKind,
-    Rights, Session, SessionError, SessionManager, Stay, WriteOutcome,
+    AuditEvent, Config, ConnId, Declined, DiskCheck, DiskState, Host, NoteKind, Pack, PackContent,
+    PackError, Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
+    WriteOutcome,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_text::{Family, TextPack, ROOT};
@@ -681,4 +684,348 @@ fn a_column_move_rewrites_every_row_and_a_concurrent_cell_edit_conflicts() {
     let mut want = b"\xEF\xBB\xBF".to_vec();
     want.extend_from_slice(swapped.as_bytes());
     assert_eq!(f.bytes(name), want, "only the swap landed");
+}
+
+// ---------- JSON and notebooks: whole-line merges of JSON text ----------
+//
+// A whole-file save is merged by whole lines (the kit's rule). In JSON a comma or a bracket on
+// one line depends on the lines around it, so two honest saves can merge into text that is no
+// longer JSON. These rows pin what the merge does to JSON files today.
+
+/// A small settings file: two keys in one object.
+const SETTINGS: &str = "{\n  \"editor.fontSize\": 14,\n  \"editor.tabSize\": 2\n}\n";
+
+/// A minimal Jupyter notebook (nbformat 4.5): two Markdown cells, `a` and `b`.
+const NOTEBOOK: &str = r##"{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "a",
+   "metadata": {},
+   "source": [
+    "# One"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b",
+   "metadata": {},
+   "source": [
+    "# Two"
+   ]
+  }
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+"##;
+
+/// Cell `c`, as a notebook editor writes it before another cell (it ends `},`).
+const CELL_C: &str = r##"  {
+   "cell_type": "markdown",
+   "id": "c",
+   "metadata": {},
+   "source": [
+    "# Three"
+   ]
+  },
+"##;
+
+/// The line that closes cell `a`, then cell `b`.
+const A_CLOSE_AND_CELL_B: &str = r##"  },
+  {
+   "cell_type": "markdown",
+   "id": "b",
+   "metadata": {},
+   "source": [
+    "# Two"
+   ]
+  }
+"##;
+
+fn json_ok(text: &[u8]) -> Result<(), String> {
+    serde_json::from_slice::<serde_json::Value>(text)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// The settings file with a key added at the end of the object (the last line gains a comma).
+fn settings_plus(key: &str, value: &str) -> String {
+    edit(
+        SETTINGS,
+        "  \"editor.tabSize\": 2\n",
+        &format!("  \"editor.tabSize\": 2,\n  \"{key}\": {value}\n"),
+    )
+}
+
+/// The notebook with cell `c` inserted after cell `a`.
+fn notebook_insert_c() -> String {
+    let cell_b = &A_CLOSE_AND_CELL_B["  },\n".len()..];
+    edit(
+        NOTEBOOK,
+        A_CLOSE_AND_CELL_B,
+        &format!("  }},\n{CELL_C}{cell_b}"),
+    )
+}
+
+/// The notebook with cell `b` deleted (cell `a` is then the last: its `},` becomes `}`).
+fn notebook_delete_b() -> String {
+    edit(NOTEBOOK, A_CLOSE_AND_CELL_B, "  }\n")
+}
+
+/// Every text the JSON rows start from is JSON.
+#[test]
+fn the_json_rows_start_from_valid_json() {
+    for (what, t) in [
+        ("settings", SETTINGS.to_owned()),
+        (
+            "settings + autoSave",
+            settings_plus("files.autoSave", "\"off\""),
+        ),
+        (
+            "settings + wordWrap",
+            settings_plus("editor.wordWrap", "\"on\""),
+        ),
+        ("notebook", NOTEBOOK.to_owned()),
+        ("notebook + c", notebook_insert_c()),
+        ("notebook - b", notebook_delete_b()),
+    ] {
+        json_ok(t.as_bytes()).unwrap_or_else(|e| panic!("{what}: {e}\n{t}"));
+    }
+}
+
+/// What an outside save over a live edit left: the file's bytes after the write-back, every
+/// version's text, and the agent's removal notes, each as (its text, the named version's text).
+struct AfterSave {
+    file: Vec<u8>,
+    versions: Vec<String>,
+    removed: Vec<(String, String)>,
+}
+
+/// An agent's change is live (not yet written back) when a person saves the file from an
+/// editor. The kit merges the save onto the live text by whole lines, keeping both sides where
+/// they overlap (unless the pack refuses the merge: then the save is taken whole), then writes
+/// the result back. `agent` and `person` are both made from `base`. `pack` opens the file.
+fn outside_save_with(
+    pack: Arc<dyn Pack>,
+    tag: &str,
+    name: &str,
+    base: &str,
+    agent: &str,
+    person: &str,
+) -> AfterSave {
+    let f = fx(tag);
+    f.write(name, base.as_bytes());
+    let s = f
+        .mgr
+        .open_file(pack, &key(name), &f.path(name), &f.ws)
+        .unwrap();
+    let c = f.join(&s, "agent");
+    let v = s.read(c).unwrap().version;
+    let out = s.write_base(c, ROOT, v, agent).unwrap();
+    assert!(matches!(out, WriteOutcome::Applied(_)), "{name}: {out:?}");
+    f.write(name, person.as_bytes());
+    let check = s.file_changed().unwrap();
+    assert!(
+        matches!(check, DiskCheck::Ingested { .. }),
+        "{name}: {check:?}"
+    );
+    s.flush(c).unwrap();
+    let show = |v| s.show(c, v).unwrap()[0].1.clone();
+    let removed = verb(&s, c, &["cat"], b"")
+        .notes
+        .notes
+        .iter()
+        .filter(|n| n.kind == NoteKind::Overwritten)
+        .filter_map(|n| n.overwrite.clone())
+        .map(|o| (o.yours, show(o.version.expect("the note names a version"))))
+        .collect();
+    let versions = s.versions(c).unwrap().iter().map(|i| show(i.id)).collect();
+    AfterSave {
+        file: f.bytes(name),
+        versions,
+        removed,
+    }
+}
+
+/// [`outside_save_with`] the pack the file name picks.
+fn outside_save_over_a_live_edit(
+    tag: &str,
+    name: &str,
+    base: &str,
+    agent: &str,
+    person: &str,
+) -> AfterSave {
+    let pack = Arc::new(TextPack::for_path(name).expect("a text name"));
+    outside_save_with(pack, tag, name, base, agent, person)
+}
+
+/// The plant: the pack the file name picks, with its merge check skipped (every merge taken).
+struct NoCheck(TextPack);
+
+impl Pack for NoCheck {
+    fn schema(&self) -> k2_mpc_base::Schema {
+        self.0.schema()
+    }
+    fn decode(&self, bytes: &[u8]) -> Result<PackContent, Declined> {
+        self.0.decode(bytes)
+    }
+    fn encode(&self, content: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError> {
+        self.0.encode(content, codec)
+    }
+    fn normalize_input<'a>(&self, root: &str, text: &'a str) -> Cow<'a, str> {
+        self.0.normalize_input(root, text)
+    }
+}
+
+/// A JSON merge that stays JSON merges as before: the agent changes one key, the person
+/// another, and the file holds both changes. The same for two cells of a notebook.
+#[test]
+fn a_json_outside_save_that_stays_valid_merges_as_before() {
+    let agent = edit(
+        SETTINGS,
+        "\"editor.fontSize\": 14",
+        "\"editor.fontSize\": 16",
+    );
+    let person = edit(SETTINGS, "\"editor.tabSize\": 2", "\"editor.tabSize\": 4");
+    let got = outside_save_over_a_live_edit("json-ok", "settings.json", SETTINGS, &agent, &person);
+    let want = "{\n  \"editor.fontSize\": 16,\n  \"editor.tabSize\": 4\n}\n";
+    assert_eq!(String::from_utf8_lossy(&got.file), want);
+    json_ok(&got.file).unwrap();
+    assert!(got.removed.is_empty(), "nothing removed: {:?}", got.removed);
+    let agent = edit(NOTEBOOK, "\"# One\"", "\"# One, edited\"");
+    let person = edit(NOTEBOOK, "\"# Two\"", "\"# Two, edited\"");
+    let got = outside_save_over_a_live_edit("ipynb-ok", "nb.ipynb", NOTEBOOK, &agent, &person);
+    let want = edit(&agent, "\"# Two\"", "\"# Two, edited\"");
+    assert_eq!(String::from_utf8_lossy(&got.file), want);
+    json_ok(&got.file).unwrap();
+}
+
+/// `Err(row: what)` unless `ok`.
+fn need(ok: bool, row: &str, what: impl FnOnce() -> String) -> Result<(), String> {
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("{row}: {}", what()))
+    }
+}
+
+/// The file after the save is the person's save, and JSON; a version holds the agent's text.
+fn taken_whole(row: &str, got: &AfterSave, agent: &str, person: &str) -> Result<(), String> {
+    let file = String::from_utf8_lossy(&got.file);
+    need(json_ok(&got.file).is_ok(), row, || {
+        format!("the file is not JSON:\n{file}")
+    })?;
+    need(file == person, row, || {
+        format!("the file is not the person's save:\n{file}")
+    })?;
+    need(got.versions.iter().any(|v| v == agent), row, || {
+        "no version holds the agent's text".to_owned()
+    })
+}
+
+/// Reproduction (settings.json): the agent adds a key at the end of the object, live; the
+/// person, from the same text, adds another key there and saves. Each text is JSON, but the
+/// whole-line merge keeps both sides' lines, and one side's last line has no comma (at kit
+/// v0.13.1, which had no merge check: `"files.autoSave": "off"` then `"editor.tabSize": 2,`
+/// again, then `"editor.wordWrap": "on"`). Now the pack refuses that merge and the save is
+/// taken whole: the file is the person's save, and JSON; the agent's key is in the version
+/// before the save, and the removal note gives it back and names that version.
+fn json_row(pack: Arc<dyn Pack>) -> Result<(), String> {
+    const ROW: &str = "a_json_outside_save_never_leaves_invalid_json_on_disk";
+    let agent = settings_plus("files.autoSave", "\"off\"");
+    let person = settings_plus("editor.wordWrap", "\"on\"");
+    let got = outside_save_with(pack, "json-bad", "settings.json", SETTINGS, &agent, &person);
+    taken_whole(ROW, &got, &agent, &person)?;
+    need(
+        got.removed
+            .iter()
+            .any(|(yours, v)| yours.contains("\"files.autoSave\": \"off\"") && *v == agent),
+        ROW,
+        || format!("no note gives the agent's key back: {:?}", got.removed),
+    )
+}
+
+/// Reproduction (a notebook): the person inserts cell `c` after cell `a` and saves; the agent,
+/// live, deleted cell `b` (so `a`'s `},` became `}`). The cells' lines are alike, so the line
+/// diff pairs cell `c`'s lines with cell `b`'s, and the merge interleaved the two cells (at kit
+/// v0.13.1: cell `a` lost its `},`, cell `c`'s fields followed it, and a stub of `b` was left):
+/// a notebook Jupyter can't open. Now the save is taken whole: the file is the person's
+/// notebook, and JSON; the agent's (cell `b` deleted) is in the version before the save. The
+/// agent wrote no text of its own there (a deletion), so no note carries any.
+fn notebook_row(pack: Arc<dyn Pack>) -> Result<(), String> {
+    const ROW: &str = "a_notebook_outside_save_never_leaves_invalid_json_on_disk";
+    let (agent, person) = (notebook_delete_b(), notebook_insert_c());
+    let got = outside_save_with(pack, "ipynb-bad", "nb.ipynb", NOTEBOOK, &agent, &person);
+    taken_whole(ROW, &got, &agent, &person)
+}
+
+#[test]
+fn a_json_outside_save_never_leaves_invalid_json_on_disk() {
+    json_row(Arc::new(TextPack::for_path("settings.json").unwrap())).unwrap();
+}
+
+#[test]
+fn a_notebook_outside_save_never_leaves_invalid_json_on_disk() {
+    notebook_row(Arc::new(TextPack::for_path("nb.ipynb").unwrap())).unwrap();
+}
+
+/// The plant: with the pack's merge check skipped, each reproduction row goes red, by name.
+#[test]
+fn the_planted_skipped_json_check_is_caught_by_name() {
+    let json = NoCheck(TextPack::for_path("settings.json").unwrap());
+    let e = json_row(Arc::new(json)).expect_err("planted, the JSON row fails");
+    assert!(
+        e.starts_with("a_json_outside_save_never_leaves_invalid_json_on_disk: "),
+        "{e}"
+    );
+    let nb = NoCheck(TextPack::for_path("nb.ipynb").unwrap());
+    let e = notebook_row(Arc::new(nb)).expect_err("planted, the notebook row fails");
+    assert!(
+        e.starts_with("a_notebook_outside_save_never_leaves_invalid_json_on_disk: "),
+        "{e}"
+    );
+}
+
+/// The same two shapes as two agents' `write --base` from one version: the strict merge
+/// refuses the second (they overlap), nothing of it is applied, and the file stays JSON.
+#[test]
+fn the_same_shapes_by_write_base_conflict_and_apply_nothing() {
+    for (tag, name, base, first, second) in [
+        (
+            "json-wb",
+            "settings.json",
+            SETTINGS.to_owned(),
+            settings_plus("files.autoSave", "\"off\""),
+            settings_plus("editor.wordWrap", "\"on\""),
+        ),
+        (
+            "ipynb-wb",
+            "nb.ipynb",
+            NOTEBOOK.to_owned(),
+            notebook_delete_b(),
+            notebook_insert_c(),
+        ),
+    ] {
+        let f = fx(tag);
+        f.write(name, base.as_bytes());
+        let s = f.open(name);
+        let (a, b) = (f.join(&s, "agent-a"), f.join(&s, "agent-b"));
+        let v = s.read(a).unwrap().version;
+        let out = s.write_base(a, ROOT, v, &first).unwrap();
+        assert!(matches!(out, WriteOutcome::Applied(_)), "{name}: {out:?}");
+        match s.write_base(b, ROOT, v, &second).unwrap() {
+            WriteOutcome::Conflicts(c) => assert!(!c.is_empty(), "{name}"),
+            other => panic!("{name}: the second write merged: {other:?}"),
+        }
+        s.flush(a).unwrap();
+        let got = f.bytes(name);
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            first,
+            "{name}: only the first"
+        );
+        json_ok(&got).unwrap();
+    }
 }

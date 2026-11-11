@@ -60,11 +60,24 @@ impl Family {
     }
 }
 
-/// A file type: its family and its codec settings.
+/// What a whole-line merge of a file must still be (the kit's `Pack::check_merged`): two
+/// valid texts can merge, line by line, into one that isn't, when a format's lines depend on
+/// each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Syntax {
+    /// Any text: every merge is taken as it is.
+    Free,
+    /// Strict JSON (RFC 8259, as `serde_json` reads it): a merge that leaves the text no longer
+    /// JSON is refused. JSON5 and JSON with comments aren't strict JSON and stay [`Syntax::Free`].
+    Json,
+}
+
+/// A file type: its family, its codec settings, and what a merge must keep it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileType {
     pub family: Family,
     pub settings: Settings,
+    pub syntax: Syntax,
 }
 
 /// One row of the table: a type and the files that have it.
@@ -96,12 +109,14 @@ const fn ty(family: Family, max_bytes: usize, new_eol: Eol) -> FileType {
     FileType {
         family,
         settings: settings(max_bytes, new_eol),
+        syntax: Syntax::Free,
     }
 }
 
 /// A file whose type the table doesn't know: plain text, under the strict guard.
 pub const UNKNOWN: FileType = FileType {
     family: Family::Text,
+    syntax: Syntax::Free,
     settings: Settings {
         max_bytes: MAX_BYTES,
         new_eol: Eol::Lf,
@@ -354,16 +369,31 @@ pub const TABLE: &[Group] = &[
         prefixes: &[],
     },
     Group {
+        // strict JSON: a merge that leaves the file no longer JSON is refused (`Syntax::Json`)
+        label: "json",
+        ty: FileType {
+            syntax: Syntax::Json,
+            ..ty(Family::Config, MAX_BYTES, Eol::Lf)
+        },
+        extensions: &[
+            "json",
+            "geojson",
+            "webmanifest",
+            // Jupyter notebooks are JSON: plain text here until a notebook pack serves them
+            "ipynb",
+        ],
+        names: &[],
+        prefixes: &[],
+    },
+    Group {
+        // JSONC and JSON5 aren't strict JSON, and JSON Lines merge as whole lines: unguarded
         label: "config",
         ty: ty(Family::Config, MAX_BYTES, Eol::Lf),
         extensions: &[
-            "json",
             "jsonc",
             "json5",
             "jsonl",
             "ndjson",
-            "geojson",
-            "webmanifest",
             "yaml",
             "yml",
             "toml",
@@ -632,6 +662,8 @@ mod tests {
             ("Makefile.am", Code),
             ("install.bat", Code),
             ("package.json", Config),
+            ("analysis.ipynb", Config),
+            ("Notebooks/Q3.IPYNB", Config),
             ("tsconfig.json", Config),
             ("docker-compose.yml", Config),
             ("Cargo.toml", Config),
@@ -712,6 +744,20 @@ mod tests {
         assert_eq!(s("t.tsv").controls, Controls::Allow);
         assert_eq!(Family::CsvAsText.name(), "csv-as-text");
         assert_eq!(s("blob.xyz").controls, Controls::Refuse);
+        let syntax = |p: &str| lookup(p).file_type().unwrap().syntax;
+        for p in ["a.json", "nb.IPYNB", "map.geojson", "site.webmanifest"] {
+            assert_eq!(syntax(p), Syntax::Json, "{p}");
+        }
+        for p in [
+            "tsconfig.jsonc",
+            "a.json5",
+            "log.jsonl",
+            "a.ndjson",
+            "a.yaml",
+            "a.xyz",
+        ] {
+            assert_eq!(syntax(p), Syntax::Free, "{p}");
+        }
         assert_eq!(s("blob.txt").controls, Controls::Allow);
     }
 

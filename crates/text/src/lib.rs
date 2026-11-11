@@ -13,6 +13,10 @@
 //!   refused with a typed reason, never mangled.
 //! - [`TextPack`]: the pack a host opens a text file with, for that file's type
 //!   ([`TextPack::for_path`]). [`PACK`] is the pack for files of unknown type.
+//! - Merges that must stay valid: a type's [`Syntax`]. For strict JSON (`.json`, `.ipynb`,
+//!   `.geojson`, `.webmanifest`) the pack refuses a whole-line merge that leaves the text no
+//!   longer JSON ([`Pack::check_merged`]); the kit then takes an
+//!   outside save whole, or refuses `write --base` as a conflict.
 //! - Verb map and parity list: `docs/PARITY.md`, and the same list as data ([`parity`]).
 //!   The kit's text verbs cover every row; this pack adds none.
 
@@ -27,7 +31,7 @@ pub mod parity;
 pub mod types;
 
 pub use codec::{Controls, Eol, Format, Refusal, Settings};
-pub use types::{lookup, Family, FileType, Lookup};
+pub use types::{lookup, Family, FileType, Lookup, Syntax};
 
 /// Name of the root text. Editor bindings attach to it. (The kit's `TextFilePack::ROOT`.)
 pub const ROOT: &str = "source";
@@ -107,6 +111,20 @@ impl Pack for TextPack {
     fn normalize_input<'a>(&self, _root: &str, text: &'a str) -> Cow<'a, str> {
         codec::normalize_input(text)
     }
+
+    /// A merge of a strict-JSON type must still be JSON ([`Syntax::Json`]); any other type
+    /// takes every merge. The kit acts on a refusal only when both merged texts were JSON.
+    fn check_merged(&self, _root: &str, text: &str) -> Result<(), Declined> {
+        match self.ty.syntax {
+            Syntax::Free => Ok(()),
+            Syntax::Json => serde_json::from_str::<serde_json::Value>(text)
+                .map(|_| ())
+                .map_err(|e| Declined {
+                    code: "invalid_json",
+                    message: format!("the merged text is not JSON: {e}"),
+                }),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +174,23 @@ mod tests {
         assert_eq!(kit.schema().roots, SCHEMA.roots);
         let k = kit.decode(bytes).unwrap();
         assert_eq!(PACK.encode(&k.roots, &k.codec).unwrap(), bytes);
+    }
+
+    #[test]
+    fn json_types_refuse_a_merge_that_is_not_json() {
+        let json = TextPack::for_path("a.json").unwrap();
+        assert_eq!(json.check_merged(ROOT, "{\"a\": [1, 2]}\n"), Ok(()));
+        let e = json
+            .check_merged(ROOT, "{\"a\": 1\n\"b\": 2}\n")
+            .unwrap_err();
+        assert_eq!(e.code, "invalid_json", "{e}");
+        let nb = TextPack::for_path("nb.ipynb").unwrap();
+        assert!(nb.check_merged(ROOT, "{\"cells\": [}").is_err());
+        // not strict JSON: every merge is taken
+        for p in ["a.jsonc", "a.json5", "a.yaml", "a.txt", "a.xyz"] {
+            let pack = TextPack::for_path(p).unwrap();
+            assert_eq!(pack.check_merged(ROOT, "{,"), Ok(()), "{p}");
+        }
     }
 
     #[test]

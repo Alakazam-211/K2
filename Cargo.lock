@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "redb",
  "regex-automata",
@@ -282,10 +282,11 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-text"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "k2-mpc-base",
  "proptest",
+ "serde_json",
 ]
 
 [[package]]

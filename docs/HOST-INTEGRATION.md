@@ -24,6 +24,8 @@ specific to plain-text files.
    Markdown pack, and later `.ipynb` goes to its own. This pack is the fallback for text.
    It does not list the files other packs serve. Given one anyway, it opens it as plain
    text. `.csv` and `.tsv` are the exception for now: see [CSV and TSV](#csv-and-tsv-until-a-grid-pack).
+   So is `.ipynb`: until a notebook pack exists, a Jupyter notebook opens here as JSON text
+   (the `config` family).
 2. Call `TextPack::for_path(path)`:
    - `None` (`Lookup::NotText`: images, media, office files, archives, binaries, fonts,
      databases): not for this pack. Open the file the host's non-live way (for example,

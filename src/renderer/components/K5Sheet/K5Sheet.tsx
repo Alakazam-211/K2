@@ -43,8 +43,8 @@ import { useSettingsStore } from '@/stores/settings'
 /** The contract's copy (purpose only). */
 export const K5_SHEET_COPY = {
   step1: 'Name and folder',
-  step2: 'What K5 thinks with',
-  adminCreator: 'K5 will ask an Owner before changing your organization.',
+  step2: 'Choose K5’s tool',
+  adminCreator: 'K5 will ask an Owner before changing your Org Chart.',
   create: 'Create K5',
 } as const
 
@@ -57,7 +57,7 @@ export const K5_STEP_INTRO = {
 /** The title while there's no step to show (loading, switched off). */
 export const K5_SHEET_TITLE = 'Meet K5'
 
-/** The tools K5 can think with, in the checklist's order. */
+/** The tools K5 can use, in the checklist's order. */
 export const K5_TOOLS = ['claude', 'codex', 'grok'] as const
 
 export const K5_NO_TOOL_TEXT = 'None is signed in yet. Sign in to Claude, Codex or Grok, then come back to make K5.'
@@ -65,10 +65,21 @@ export const K5_EXISTS_TEXT = 'K5 is already on this server.'
 /** The already-there view: its title and line. */
 export const K5_EXISTS_TITLE = 'K5 is already on this server'
 export const K5_EXISTS_INTRO = 'Open K5 to talk with it in its Thread.'
-export const K5_OFF_TEXT = "K5 isn't turned on for this server."
+export const K5_OFF_TEXT = 'K5 isn’t turned on for this server.'
+/** K5 was made by someone else while this person was on step 2. */
+export const K5_MADE_ELSEWHERE = {
+  title: 'Someone else just made K5',
+  intro: 'This one wasn’t made, since a server has one K5. Open it to talk with it in its Thread.',
+  /** Until the status shows that K5 (an older or slow server). */
+  line: 'Someone else just made K5, so this one wasn’t made.',
+} as const
+/** Said beside the buttons while K5 is being made. */
+export const K5_BUSY_TEXT = 'Making K5’s folder and starting it…'
+/** The main button after a failed create. */
+export const K5_TRY_AGAIN = 'Try again'
 export const K5_CREATE_FAILED = {
   what: 'K2 couldn’t create K5.',
-  next: 'Nothing was made. Try again in a moment.',
+  next: 'Nothing was made. Fix what the server says, then try again.',
 } as const
 
 export interface K5Tool {
@@ -118,7 +129,7 @@ export function isAdminCreator(who: unknown): boolean {
 export function handleProblem(handle: string): string | null {
   const h = handle.trim()
   if (!h) return 'Give K5 a folder name.'
-  if (/[/\\]/.test(h) || h === '.' || h === '..') return "The folder name can't have slashes."
+  if (/[/\\]/.test(h) || h === '.' || h === '..') return 'The folder name can’t have slashes.'
   return null
 }
 
@@ -131,7 +142,7 @@ export function nameProblem(name: string): string | null {
  *  off in the sheet's words, anything else in the server's. */
 function refusal(e: unknown): { exists: boolean; text: string } {
   const code = (e as { code?: unknown } | null)?.code
-  if (code === 'k5_exists') return { exists: true, text: K5_EXISTS_TEXT }
+  if (code === 'k5_exists') return { exists: true, text: K5_MADE_ELSEWHERE.line }
   if (code === 'k5_first_run_off') return { exists: false, text: K5_OFF_TEXT }
   return { exists: false, text: (e instanceof Error ? e.message : String(e)).replace(/^Error:\s*/, '') }
 }
@@ -151,13 +162,21 @@ export default function K5Sheet(): React.JSX.Element | null {
 }
 
 /** The frame every state shares: the step (when there is one), the title
- *  and its line pinned beside the ×, then the body, which scrolls. */
+ *  and its line pinned beside the ×, the body, which scrolls, and the sheet
+ *  one height across steps and states (a min-height that holds the tallest
+ *  usual state, a refusal, so the buttons stay put), and
+ *  the footer: an optional status line, then the buttons. With `onSubmit`
+ *  the body and footer are one form, so Enter answers it. */
 function K5Frame({
   title,
   step,
   intro,
   busy,
   onCancel,
+  onSubmit,
+  onKeyDown,
+  status,
+  footer,
   children,
 }: {
   title: string
@@ -165,10 +184,25 @@ function K5Frame({
   intro?: string
   busy: boolean
   onCancel: () => void
+  onSubmit?: () => void
+  onKeyDown?: (e: React.KeyboardEvent<HTMLFormElement>) => void
+  status?: React.ReactNode
+  footer: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   const titleId = useId()
   const introId = useId()
+  const inner = (
+    <>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-1 space-y-4" data-testid="k5-body">
+        {children}
+      </div>
+      <div className="flex-shrink-0 flex items-center gap-3 px-5 pt-5 pb-5" data-testid="k5-footer">
+        <div className="min-w-0 flex-1">{status}</div>
+        <div className="flex flex-shrink-0 gap-2">{footer}</div>
+      </div>
+    </>
+  )
   return (
     <>
       <DialogScrim />
@@ -182,7 +216,7 @@ function K5Frame({
         aria-busy={busy || undefined}
         data-testid="k5-sheet"
         placement="top"
-        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
+        className="w-[min(36rem,calc(100vw-2.5rem))] min-h-[min(21.5rem,calc(100vh-var(--dialog-top)-1rem))] max-h-[calc(100vh-var(--dialog-top)-1rem)] flex flex-col"
       >
         <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
           {step ? (
@@ -199,7 +233,21 @@ function K5Frame({
             </p>
           ) : null}
         </div>
-        <div className="min-h-0 overflow-y-auto px-5 pb-5 space-y-4">{children}</div>
+        {onSubmit ? (
+          <form
+            className="flex min-h-0 flex-1 flex-col"
+            noValidate
+            onKeyDown={onKeyDown}
+            onSubmit={(e) => {
+              e.preventDefault()
+              onSubmit()
+            }}
+          >
+            {inner}
+          </form>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col">{inner}</div>
+        )}
       </DialogFrame>
     </>
   )
@@ -214,6 +262,19 @@ function FolderPath({ path, testId }: { path: string; testId?: string }): React.
         {path}
       </span>
     </span>
+  )
+}
+
+/** K5 and its folder, on a tile. */
+function K5Tile({ name, path }: { name: string; path: string }): React.JSX.Element {
+  return (
+    <Surface chamfer material="tile" className="flex items-start gap-2.5 px-4 py-2.5" data-testid="k5-exists">
+      <AgentsIcon size={16} className="mt-px flex-shrink-0 text-[var(--color-accent-text)]" />
+      <div className="min-w-0 space-y-0.5">
+        <p className={SETTING_ROW_LABEL}>{name}</p>
+        {path ? <FolderPath path={path} /> : null}
+      </div>
+    </Surface>
   )
 }
 
@@ -240,6 +301,8 @@ function K5SheetBody(): React.JSX.Element {
   const [admin, setAdmin] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<{ exists: boolean; text: string } | null>(null)
+  /** Create K5 found K5 already made (by someone else, meanwhile). */
+  const [madeElsewhere, setMadeElsewhere] = useState(false)
 
   // Fill step 1 from the daemon's defaults until the person types.
   useEffect(() => {
@@ -295,7 +358,10 @@ function K5SheetBody(): React.JSX.Element {
       setError(why)
       // Someone made K5 meanwhile: read the status, so the sheet shows the
       // K5 that's there and opens it.
-      if (why.exists) void useFirstRunStore.getState().load(scope)
+      if (why.exists) {
+        setMadeElsewhere(true)
+        void useFirstRunStore.getState().load(scope)
+      }
     } finally {
       setBusy(false)
     }
@@ -313,30 +379,41 @@ function K5SheetBody(): React.JSX.Element {
   }
 
   if (seat) {
+    const words = madeElsewhere ? K5_MADE_ELSEWHERE : { title: K5_EXISTS_TITLE, intro: K5_EXISTS_INTRO }
     return (
-      <K5Frame title={K5_EXISTS_TITLE} intro={K5_EXISTS_INTRO} busy={false} onCancel={close}>
-        <Surface chamfer material="tile" className="flex items-start gap-2.5 px-4 py-2.5" data-testid="k5-exists">
-          <AgentsIcon size={16} className="mt-px flex-shrink-0 text-[var(--color-accent-text)]" />
-          <div className="min-w-0 space-y-0.5">
-            <p className={SETTING_ROW_LABEL}>{seat.name}</p>
-            {seat.path ? <FolderPath path={seat.path} /> : null}
-          </div>
-        </Surface>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={close}>
-            Close
-          </Button>
-          <Button variant="accent" size="md" onClick={openK5} autoFocus data-testid="k5-open">
-            Open {seat.name}
-          </Button>
-        </div>
+      <K5Frame
+        title={words.title}
+        intro={words.intro}
+        busy={false}
+        onCancel={close}
+        footer={
+          <>
+            <Button variant="ghost" size="md" onClick={close}>
+              Close
+            </Button>
+            <Button variant="accent" size="md" onClick={openK5} autoFocus data-testid="k5-open">
+              Open {seat.name}
+            </Button>
+          </>
+        }
+      >
+        <K5Tile name={seat.name} path={seat.path} />
       </K5Frame>
     )
   }
 
   if (loading || !defaults) {
     return (
-      <K5Frame title={K5_SHEET_TITLE} busy={false} onCancel={close}>
+      <K5Frame
+        title={K5_SHEET_TITLE}
+        busy={false}
+        onCancel={close}
+        footer={
+          <Button variant="ghost" size="md" onClick={close}>
+            Close
+          </Button>
+        }
+      >
         {loading ? (
           <div className="flex items-center gap-2" role="status" data-testid="k5-loading">
             <Spinner />
@@ -347,11 +424,6 @@ function K5SheetBody(): React.JSX.Element {
             {firstRun?.error ?? K5_OFF_TEXT}
           </p>
         )}
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="ghost" size="md" onClick={close}>
-            Close
-          </Button>
-        </div>
       </K5Frame>
     )
   }
@@ -359,147 +431,106 @@ function K5SheetBody(): React.JSX.Element {
   if (step === 1) {
     const showHandleProblem = touched && problem
     return (
-      <K5Frame title={K5_SHEET_COPY.step1} step={1} intro={K5_STEP_INTRO.step1} busy={false} onCancel={close}>
-        <form
-          className="space-y-4"
-          noValidate
-          onSubmit={(e) => {
-            e.preventDefault()
-            next()
-          }}
-        >
-          <div>
-            <label htmlFor={ids.name} className={DIALOG_LABEL}>
-              Name
-            </label>
-            <Input
-              id={ids.name}
-              autoFocus
-              className={DIALOG_FIELD}
-              value={name}
-              autoComplete="off"
-              aria-invalid={touched && noName ? true : undefined}
-              onChange={(e) => {
-                setTouched(true)
-                setName(e.target.value)
-              }}
-              data-testid="k5-name"
-            />
-            {touched && noName ? (
-              <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="k5-name-problem">
-                {noName}
-              </p>
-            ) : null}
-          </div>
-          <div>
-            <label htmlFor={ids.handle} className={DIALOG_LABEL}>
-              Folder name
-            </label>
-            <Input
-              id={ids.handle}
-              className={`${DIALOG_FIELD} font-mono`}
-              value={handle}
-              autoComplete="off"
-              spellCheck={false}
-              aria-invalid={showHandleProblem ? true : undefined}
-              aria-describedby={ids.handleHint}
-              onChange={(e) => {
-                setTouched(true)
-                setHandle(e.target.value)
-              }}
-              data-testid="k5-handle"
-            />
-            <div id={ids.handleHint} className="mt-1">
-              {showHandleProblem ? (
-                <p className="type-hint text-[var(--color-status-error-soft)]" data-testid="k5-handle-problem">
-                  {problem}
-                </p>
-              ) : (
-                <FolderPath path={k5FolderFor(defaults, handle)} testId="k5-folder" />
-              )}
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <Button variant="ghost" size="md" onClick={close}>
+      <K5Frame
+        title={K5_SHEET_COPY.step1}
+        step={1}
+        intro={K5_STEP_INTRO.step1}
+        busy={false}
+        onCancel={close}
+        onSubmit={next}
+        footer={
+          <>
+            <Button variant="ghost" size="md" onClick={close} data-testid="k5-cancel">
               Cancel
             </Button>
             <Button type="submit" variant="accent" size="md" disabled={!!problem || !!noName} data-testid="k5-next">
               Next
             </Button>
+          </>
+        }
+      >
+        <div>
+          <label htmlFor={ids.name} className={DIALOG_LABEL}>
+            Name
+          </label>
+          <Input
+            id={ids.name}
+            autoFocus
+            className={DIALOG_FIELD}
+            value={name}
+            autoComplete="off"
+            aria-invalid={touched && noName ? true : undefined}
+            onChange={(e) => {
+              setTouched(true)
+              setName(e.target.value)
+            }}
+            data-testid="k5-name"
+          />
+          {touched && noName ? (
+            <p className="type-hint text-[var(--color-status-error-soft)] mt-1" data-testid="k5-name-problem">
+              {noName}
+            </p>
+          ) : null}
+        </div>
+        <div>
+          <label htmlFor={ids.handle} className={DIALOG_LABEL}>
+            Folder name
+          </label>
+          <Input
+            id={ids.handle}
+            className={`${DIALOG_FIELD} font-mono`}
+            value={handle}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={showHandleProblem ? true : undefined}
+            aria-describedby={ids.handleHint}
+            onChange={(e) => {
+              setTouched(true)
+              setHandle(e.target.value)
+            }}
+            data-testid="k5-handle"
+          />
+          <div id={ids.handleHint} className="mt-1">
+            {showHandleProblem ? (
+              <p className="type-hint text-[var(--color-status-error-soft)]" data-testid="k5-handle-problem">
+                {problem}
+              </p>
+            ) : (
+              <FolderPath path={k5FolderFor(defaults, handle)} testId="k5-folder" />
+            )}
           </div>
-        </form>
+        </div>
       </K5Frame>
     )
   }
 
   const noTool = !accountsLoading && tools.length === 0
+  const failed = !!error && !error.exists
   return (
-    <K5Frame title={K5_SHEET_COPY.step2} step={2} intro={K5_STEP_INTRO.step2} busy={busy} onCancel={close}>
-      <form
-        className="space-y-4"
-        noValidate
-        onSubmit={(e) => {
+    <K5Frame
+      title={K5_SHEET_COPY.step2}
+      step={2}
+      intro={K5_STEP_INTRO.step2}
+      busy={busy}
+      onCancel={close}
+      onSubmit={() => (noTool ? signIn() : void create())}
+      onKeyDown={(e) => {
+        // Enter on a tool makes K5, as it would in a text field.
+        if (e.key === 'Enter' && (e.target as HTMLInputElement).type === 'radio') {
           e.preventDefault()
-          if (noTool) signIn()
-          else void create()
-        }}
-        onKeyDown={(e) => {
-          // Enter on a tool makes K5, as it would in a text field.
-          if (e.key === 'Enter' && (e.target as HTMLInputElement).type === 'radio') {
-            e.preventDefault()
-            void create()
-          }
-        }}
-      >
-        {accountsLoading ? (
-          <div className="flex items-center gap-2" role="status" data-testid="k5-tools-loading">
+          void create()
+        }
+      }}
+      status={
+        busy ? (
+          <p className="flex items-center gap-2 type-hint text-[var(--color-text-secondary)]" role="status" data-testid="k5-busy">
             <Spinner />
-            <span className={DIALOG_MUTED}>Loading…</span>
-          </div>
-        ) : noTool ? (
-          <p className={DIALOG_MUTED} data-testid="k5-no-tool">
-            {K5_NO_TOOL_TEXT}
+            <span className="min-w-0">{K5_BUSY_TEXT}</span>
           </p>
-        ) : (
-          <div role="radiogroup" aria-label={K5_SHEET_COPY.step2} className="space-y-2" data-testid="k5-tools">
-            {tools.map((t) => (
-              <label key={t.tool} className="flex items-start gap-2 cursor-pointer" data-k5-tool={t.tool}>
-                <Radio
-                  name="k5-tool"
-                  className="mt-0.5"
-                  value={t.tool}
-                  checked={tool === t.tool}
-                  autoFocus={tool === t.tool}
-                  disabled={busy}
-                  onChange={() => setTool(t.tool)}
-                  data-testid={`k5-tool-${t.tool}`}
-                />
-                <span className={`${SETTING_ROW_LABEL} inline-flex items-center gap-1.5`}>
-                  <AgentIcon agent={t.tool} size={14} />
-                  {t.display}
-                  {t.tool === serverDefault ? <Tag className="ml-1">Server default</Tag> : null}
-                </span>
-              </label>
-            ))}
-          </div>
-        )}
-        {admin ? (
-          <Callout tone="info" className="type-hint" data-testid="k5-admin-line">
-            {K5_SHEET_COPY.adminCreator}
-          </Callout>
-        ) : null}
-        {error ? (
-          <div data-testid="k5-error">
-            {error.exists ? (
-              <Callout tone="info" role="status" className="type-hint">
-                {error.text}
-              </Callout>
-            ) : (
-              <FailedNote what={K5_CREATE_FAILED.what} next={K5_CREATE_FAILED.next} detail={error.text} />
-            )}
-          </div>
-        ) : null}
-        <div className="flex justify-end gap-2 pt-1">
+        ) : null
+      }
+      footer={
+        <>
           <Button variant="ghost" size="md" disabled={busy} onClick={() => setStep(1)} data-testid="k5-back">
             Back
           </Button>
@@ -509,11 +540,62 @@ function K5SheetBody(): React.JSX.Element {
             </Button>
           ) : (
             <Button type="submit" variant="accent" size="md" disabled={busy || !tool || accountsLoading} data-testid="k5-create">
-              {busy ? 'Creating K5…' : K5_SHEET_COPY.create}
+              {busy ? 'Creating K5…' : failed ? K5_TRY_AGAIN : K5_SHEET_COPY.create}
             </Button>
           )}
+        </>
+      }
+    >
+      {accountsLoading ? (
+        <div className="flex items-center gap-2" role="status" data-testid="k5-tools-loading">
+          <Spinner />
+          <span className={DIALOG_MUTED}>Loading…</span>
         </div>
-      </form>
+      ) : noTool ? (
+        <p className={DIALOG_MUTED} data-testid="k5-no-tool">
+          {K5_NO_TOOL_TEXT}
+        </p>
+      ) : (
+        <div role="radiogroup" aria-label={K5_SHEET_COPY.step2} className="space-y-2" data-testid="k5-tools">
+          {tools.map((t) => (
+            <label key={t.tool} className="flex items-start gap-2 cursor-pointer" data-k5-tool={t.tool}>
+              <Radio
+                name="k5-tool"
+                className="mt-0.5"
+                value={t.tool}
+                checked={tool === t.tool}
+                autoFocus={tool === t.tool}
+                disabled={busy}
+                onChange={() => setTool(t.tool)}
+                data-testid={`k5-tool-${t.tool}`}
+              />
+              <span className={`${SETTING_ROW_LABEL} flex items-center gap-1.5`}>
+                <span aria-hidden="true" className="flex w-5 flex-shrink-0 items-center justify-center" data-k5-tool-icon="">
+                  <AgentIcon agent={t.tool} size={14} />
+                </span>
+                {t.display}
+                {t.tool === serverDefault ? <Tag className="ml-1">Server default</Tag> : null}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {admin ? (
+        <Callout tone="info" className="type-hint" data-testid="k5-admin-line">
+          {K5_SHEET_COPY.adminCreator}
+        </Callout>
+      ) : null}
+      {error ? (
+        <div data-testid="k5-error">
+          {error.exists ? (
+            <Callout tone="info" role="status" className="type-hint">
+              {K5_MADE_ELSEWHERE.line}
+            </Callout>
+          ) : (
+            <FailedNote what={K5_CREATE_FAILED.what} next={K5_CREATE_FAILED.next} detail={error.text} />
+          )}
+        </div>
+      ) : null}
     </K5Frame>
   )
 }

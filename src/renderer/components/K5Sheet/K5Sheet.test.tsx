@@ -50,7 +50,9 @@ import { act } from 'react'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import K5Sheet, {
   K5_CREATE_FAILED,
-  K5_EXISTS_TEXT,
+  K5_MADE_ELSEWHERE,
+  K5_BUSY_TEXT,
+  K5_TRY_AGAIN,
   K5_EXISTS_TITLE,
   K5_NO_TOOL_TEXT,
   K5_SHEET_COPY,
@@ -198,6 +200,7 @@ describe('K5Sheet', () => {
     expect(err).toContain(K5_CREATE_FAILED.what)
     expect(err).toContain(K5_CREATE_FAILED.next)
     expect(err).toContain('The server said: tool codex is not signed in.')
+    expect(screen.getByTestId('k5-create').textContent).toBe(K5_TRY_AGAIN)
     expect(useK5SheetStore.getState().isOpen).toBe(true)
     expect(h.openWorkspaceThread).not.toHaveBeenCalled()
   })
@@ -209,7 +212,7 @@ describe('K5Sheet', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('k5-create'))
     })
-    expect(screen.getByTestId('k5-error').textContent).toBe(K5_EXISTS_TEXT)
+    expect(screen.getByTestId('k5-error').textContent).toBe(K5_MADE_ELSEWHERE.line)
     // The status is read again, so the sheet can show the K5 that's there.
     await waitFor(() => expect(h.daemonCliGet.mock.calls.filter((c) => c[0] === 'first-run/status').length).toBeGreaterThan(1))
     cleanup()
@@ -236,6 +239,9 @@ describe('K5Sheet', () => {
     })
     await waitFor(() => expect(screen.getByTestId('k5-exists')).toBeTruthy())
     expect(screen.getByTestId('k5-exists').textContent).toContain('/home/r/k2-agents/k5')
+    // Its own words, not the ones for opening the sheet later.
+    expect(screen.getByRole('heading').textContent).toBe(K5_MADE_ELSEWHERE.title)
+    expect(screen.getByTestId('k5-intro').textContent).toBe(K5_MADE_ELSEWHERE.intro)
   })
 
   it('each step says which it is and what it is for, and names the dialog', async () => {
@@ -277,6 +283,7 @@ describe('K5Sheet', () => {
     const create = screen.getByTestId('k5-create') as HTMLButtonElement
     expect(create.disabled).toBe(true)
     expect(create.textContent).toBe('Creating K5…')
+    expect(screen.getByTestId('k5-busy').textContent).toBe(K5_BUSY_TEXT)
     expect((screen.getByTestId('k5-back') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('k5-tool-claude') as HTMLInputElement).disabled).toBe(true)
     expect((screen.getByTestId('dialog-close') as HTMLButtonElement).disabled).toBe(true)

@@ -404,12 +404,6 @@ fn other_agent_holding(id: &str, handle: &str) {
     .expect("other agent");
 }
 
-fn workspaces() -> i64 {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    conn.query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0)).expect("count")
-}
-
 #[test]
 fn kessel_taken_by_another_agent_makes_kessel_as_kessel5() {
     let _e = env(true, &["codex"]);

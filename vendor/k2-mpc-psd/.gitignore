@@ -1,0 +1,7 @@
+target/
+*.log
+.DS_Store
+__pycache__/
+.venv-oracle/
+.oracle/
+.corpus/

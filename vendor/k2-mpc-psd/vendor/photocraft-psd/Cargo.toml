@@ -1,0 +1,36 @@
+# Changed by Alakazam Labs (see VENDORED.md): workspace inheritance replaced with the same values; the description names only the format; publish = false.
+[package]
+name = "photocraft-psd"
+description = "Faithful, lossless reader and writer for PSD (v1) and PSB (v2) files"
+version = "0.9.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+publish = false
+
+[lib]
+name = "photocraft_psd"
+path = "src/lib.rs"
+
+[features]
+# Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
+corpus = []
+default = []
+serde = ["dep:serde"]
+testgen = []
+
+[dependencies]
+thiserror = "2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { version = "1", features = ["derive", "rc"], optional = true }
+
+[dev-dependencies]
+proptest = "1"
+photocraft-psd = { path = ".", features = ["testgen"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"

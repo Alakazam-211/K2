@@ -161,6 +161,22 @@ export function visibleRows(doc: FirstRunDoc | null | undefined): FirstRunRow[] 
   return doc.rows
 }
 
+function checklistShowingIn(entries: Record<string, FirstRunEntry>): boolean {
+  return visibleRows(entries[primaryScope().id]?.doc) !== null
+}
+
+/** Whether the setup checklist is drawn for the window's server right now
+ *  (its rows, not the "You're set up" moment). For stores and handlers. */
+export function isSetupChecklistShowing(): boolean {
+  return checklistShowingIn(useFirstRunStore.getState().entries)
+}
+
+/** `isSetupChecklistShowing`, as a hook. It reads the store only; the
+ *  checklist and its rail button are what watch the server. */
+export function useSetupChecklistShowing(): boolean {
+  return useFirstRunStore((s) => checklistShowingIn(s.entries))
+}
+
 /** Rows still to do (not done, not skipped). */
 export function rowsLeft(rows: readonly FirstRunRow[]): number {
   return rows.filter((r) => r.state === 'todo').length

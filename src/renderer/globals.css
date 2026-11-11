@@ -1263,6 +1263,60 @@ html[data-style="terminal"] input[data-k2-chamfer]:not([type="checkbox"], [type=
   box-shadow: inset 0 0 0 1px var(--color-accent-text);
   outline: none;
 }
+/* Date and time fields (WebKit's own editor; every <Input type="date">).
+   WebKit focuses the part being edited (day, month, year) inside the field,
+   so the input never matches :focus-visible: the ring above shows whenever
+   the field holds focus. The focused part is the accent button's pair (its
+   fill and label colour, 4.5:1), square in Terminal; an empty field's faint
+   mm/dd/yyyy is the muted text (4.5:1), marked data-k2-empty by <Input>. */
+html[data-style="terminal"] input[data-k2-chamfer]:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]):focus-within:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  --k2-ch-bw: 2px;
+  --k2-ch-edge: var(--color-accent-text);
+  border-color: var(--color-accent-text);
+  box-shadow: inset 0 0 0 1px var(--color-accent-text);
+  outline: none;
+}
+html:not([data-style="terminal"]) input.k2-focus:is([type="date"], [type="time"], [type="datetime-local"], [type="month"], [type="week"]):focus-within:not([data-zen-root] *, [data-k2-thread-zen] *) {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: 2px;
+}
+input[data-k2-empty]::-webkit-datetime-edit-day-field,
+input[data-k2-empty]::-webkit-datetime-edit-month-field,
+input[data-k2-empty]::-webkit-datetime-edit-year-field,
+input[data-k2-empty]::-webkit-datetime-edit-hour-field,
+input[data-k2-empty]::-webkit-datetime-edit-minute-field,
+input[data-k2-empty]::-webkit-datetime-edit-second-field,
+input[data-k2-empty]::-webkit-datetime-edit-millisecond-field,
+input[data-k2-empty]::-webkit-datetime-edit-meridiem-field,
+input[data-k2-empty]::-webkit-datetime-edit-week-field {
+  -webkit-text-fill-color: var(--color-text-muted) !important;
+  opacity: 1 !important;
+}
+input::-webkit-datetime-edit-day-field:focus,
+input::-webkit-datetime-edit-month-field:focus,
+input::-webkit-datetime-edit-year-field:focus,
+input::-webkit-datetime-edit-hour-field:focus,
+input::-webkit-datetime-edit-minute-field:focus,
+input::-webkit-datetime-edit-second-field:focus,
+input::-webkit-datetime-edit-millisecond-field:focus,
+input::-webkit-datetime-edit-meridiem-field:focus,
+input::-webkit-datetime-edit-week-field:focus {
+  background-color: var(--color-accent-fill);
+  color: var(--color-on-accent);
+  -webkit-text-fill-color: var(--color-on-accent) !important;
+  outline: none;
+}
+html[data-style="terminal"] input::-webkit-datetime-edit-day-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-month-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-year-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-hour-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-minute-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-second-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-millisecond-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-meridiem-field:focus,
+html[data-style="terminal"] input::-webkit-datetime-edit-week-field:focus {
+  border-radius: 0;
+}
 /* A box-shadow can't follow a cut (it never paints under the box, leaving a
    light notch at each corner), so floating surfaces carry a drop-shadow on a
    wrapper and the chamfered box inside drops its box-shadow. */

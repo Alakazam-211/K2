@@ -193,6 +193,7 @@ export function TimerSection(): React.JSX.Element {
   const loadError = useTimerStore((s) => s.entriesError)
   const fetchEntries = useTimerStore((s) => s.fetchEntries)
   const deleteEntry = useTimerStore((s) => s.deleteEntry)
+  const restoreEntry = useTimerStore((s) => s.restoreEntry)
   const exportEntries = useTimerStore((s) => s.exportEntries)
   const updateTimerSetting = useTimerStore((s) => s.updateTimerSetting)
   const projects = useProjectsStore((s) => s.projects)
@@ -206,6 +207,25 @@ export function TimerSection(): React.JSX.Element {
   const [to, setTo] = useState('')
   const [project, setProject] = useState('')
   const [exportState, setExportState] = useState<null | { kind: 'saved' | 'error'; text: string }>(null)
+  // The entry just deleted, so the page can say so and offer Undo.
+  const [deleted, setDeleted] = useState<null | { entry: TimeEntry; undo: 'idle' | 'busy' | 'failed' }>(null)
+
+  const deleteAndNote = useCallback(
+    async (id: string): Promise<boolean> => {
+      const entry = entries.find((e) => e.id === id)
+      const ok = await deleteEntry(id)
+      if (ok && entry) setDeleted({ entry, undo: 'idle' })
+      return ok
+    },
+    [entries, deleteEntry],
+  )
+
+  const undoDelete = useCallback(async () => {
+    if (!deleted) return
+    setDeleted({ ...deleted, undo: 'busy' })
+    const ok = await restoreEntry(deleted.entry)
+    setDeleted(ok ? null : { ...deleted, undo: 'failed' })
+  }, [deleted, restoreEntry])
 
   const bounds = useMemo(() => rangeBounds(range, from, to), [range, from, to])
   const filtered = range !== 'all' || project !== ''
@@ -404,6 +424,28 @@ export function TimerSection(): React.JSX.Element {
               {!from && !to && <p className="type-hint text-[var(--color-text-secondary)] pb-2">Pick a first day, a last day, or both.</p>}
             </div>
           )}
+          {deleted && (
+            <div className="flex items-center justify-between gap-4" data-testid="timer-deleted">
+              <p
+                role={deleted.undo === 'failed' ? 'alert' : 'status'}
+                className={`type-hint min-w-0 ${deleted.undo === 'failed' ? 'text-[var(--color-status-error-soft)]' : 'text-[var(--color-status-ok-soft)]'}`}
+              >
+                {deleted.undo === 'failed'
+                  ? 'Couldn’t bring the entry back. Try Undo again in a moment.'
+                  : `Deleted the entry “${deleted.entry.memo?.trim() || 'No note'}” (${formatSpent(deleted.entry.durationSeconds)}${
+                      projectName(deleted.entry.projectId) ? `, ${projectName(deleted.entry.projectId)}` : ''
+                    }).`}
+              </p>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Button variant="quiet" onClick={() => setDeleted(null)} disabled={deleted.undo === 'busy'}>
+                  Dismiss
+                </Button>
+                <Button onClick={() => void undoDelete()} disabled={deleted.undo === 'busy'}>
+                  {deleted.undo === 'busy' ? 'Restoring…' : 'Undo'}
+                </Button>
+              </div>
+            </div>
+          )}
           {exportState && (
             <p
               role={exportState.kind === 'error' ? 'alert' : 'status'}
@@ -443,7 +485,7 @@ export function TimerSection(): React.JSX.Element {
                     </div>
                     <ul className="divide-y divide-[var(--color-border)] border-b border-[var(--color-border)]">
                       {monthEntries.map((entry) => (
-                        <EntryRow key={entry.id} entry={entry} projectName={projectName(entry.projectId)} timezone={timezone} onDelete={deleteEntry} />
+                        <EntryRow key={entry.id} entry={entry} projectName={projectName(entry.projectId)} timezone={timezone} onDelete={deleteAndNote} />
                       ))}
                     </ul>
                   </section>

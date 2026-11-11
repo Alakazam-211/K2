@@ -8,6 +8,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 const h = vi.hoisted(() => ({
   fetchEntries: vi.fn(async () => undefined),
   deleteEntry: vi.fn(async () => true),
+  restoreEntry: vi.fn(async () => true),
   exportEntries: vi.fn(async () => 'id\n'),
   updateTimerSetting: vi.fn(async () => true),
   state: {} as Record<string, unknown>,
@@ -37,6 +38,7 @@ function setState(extra: Record<string, unknown> = {}): void {
     entriesError: null,
     fetchEntries: h.fetchEntries,
     deleteEntry: h.deleteEntry,
+    restoreEntry: h.restoreEntry,
     exportEntries: h.exportEntries,
     updateTimerSetting: h.updateTimerSetting,
     ...extra,
@@ -44,7 +46,7 @@ function setState(extra: Record<string, unknown> = {}): void {
 }
 
 beforeEach(() => {
-  for (const f of [h.fetchEntries, h.deleteEntry, h.exportEntries, h.updateTimerSetting]) f.mockClear()
+  for (const f of [h.fetchEntries, h.deleteEntry, h.restoreEntry, h.exportEntries, h.updateTimerSetting]) f.mockClear()
   setState()
 })
 afterEach(() => cleanup())
@@ -118,6 +120,28 @@ describe('TimerSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete the entry “Design review”' }))
     await waitFor(() => expect(screen.getByText('Couldn’t delete this entry. It’s still here; try again.')).toBeTruthy())
     expect(h.deleteEntry).toHaveBeenCalledWith('t1')
+  })
+
+  it('a delete says what was deleted and Undo puts it back', async () => {
+    render(<TimerSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete “Design review”' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the entry “Design review”' }))
+    await waitFor(() => expect(screen.getByTestId('timer-deleted')).toBeTruthy())
+    expect(screen.getByRole('status').textContent).toBe('Deleted the entry “Design review” (1h, atlas).')
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(screen.queryByTestId('timer-deleted')).toBeNull())
+    expect(h.restoreEntry).toHaveBeenCalledWith(ENTRY)
+  })
+
+  it('an Undo that fails says so and keeps Undo', async () => {
+    h.restoreEntry.mockResolvedValueOnce(false)
+    render(<TimerSection />)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete “Design review”' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete the entry “Design review”' }))
+    await waitFor(() => expect(screen.getByTestId('timer-deleted')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(screen.getByText('Couldn’t bring the entry back. Try Undo again in a moment.')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
   })
 
   it('an export with no file says it failed', async () => {

@@ -255,6 +255,35 @@ describe('timer store — Plan B host-aware migration', () => {
     expect(emitMock).not.toHaveBeenCalledWith('sync:timer-entries')
   })
 
+  it('restoreEntry re-creates the same entry, puts it back newest first, and emits sync', async () => {
+    daemonCliPost.mockResolvedValueOnce({ success: true })
+    const older: TimeEntry = { id: 'old', projectId: null, startTime: 1, endTime: 2, durationSeconds: 1, memo: null, createdAt: 1 }
+    const back: TimeEntry = { id: 'back', projectId: 'p1', startTime: 10, endTime: 70, durationSeconds: 60, memo: 'Review', createdAt: 2 }
+    useTimerStore.setState({ entries: [older] })
+
+    expect(await useTimerStore.getState().restoreEntry(back)).toBe(true)
+
+    expect(daemonCliPost).toHaveBeenCalledWith('timer/create', {
+      id: 'back',
+      projectId: 'p1',
+      startTime: 10,
+      endTime: 70,
+      durationSeconds: 60,
+      memo: 'Review',
+    })
+    expect(useTimerStore.getState().entries.map((e) => e.id)).toEqual(['back', 'old'])
+    expect(emitMock).toHaveBeenCalledWith('sync:timer-entries')
+  })
+
+  it('restoreEntry failure leaves the list alone and resolves false', async () => {
+    daemonCliPost.mockRejectedValueOnce(new Error('nope'))
+    useTimerStore.setState({ entries: [] })
+    const e: TimeEntry = { id: 'x', projectId: null, startTime: 1, endTime: 2, durationSeconds: 1, memo: null, createdAt: 1 }
+    expect(await useTimerStore.getState().restoreEntry(e)).toBe(false)
+    expect(useTimerStore.getState().entries).toEqual([])
+    expect(emitMock).not.toHaveBeenCalledWith('sync:timer-entries')
+  })
+
   it('exportEntries uses the RAW-TEXT GET (no JSON parse) for both formats', async () => {
     daemonCliGetText.mockResolvedValueOnce('id,duration\nx,1')
     const csv = await useTimerStore.getState().exportEntries('csv', 1, 2, 'proj-1')

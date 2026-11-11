@@ -81,6 +81,9 @@ interface TimerState {
   fetchEntries: (start?: number, end?: number, projectId?: string) => Promise<void>
   /** Resolves true when the server deleted it, false when it didn't. */
   deleteEntry: (id: string) => Promise<boolean>
+  /** Puts a deleted entry back as it was (Undo). Resolves true when the
+   *  server saved it again. */
+  restoreEntry: (entry: TimeEntry) => Promise<boolean>
   exportEntries: (format: 'csv' | 'json', start?: number, end?: number, projectId?: string) => Promise<string>
 
   // Settings actions
@@ -388,6 +391,28 @@ export const useTimerStore = create<TimerState>((set, get) => ({
       return true
     } catch (err) {
       console.error('[timer] Failed to delete entry:', err)
+      return false
+    }
+  },
+
+  restoreEntry: async (entry: TimeEntry) => {
+    try {
+      await daemonCliPost(primaryScope(), 'timer/create', {
+        id: entry.id,
+        projectId: entry.projectId,
+        startTime: entry.startTime,
+        endTime: entry.endTime,
+        durationSeconds: entry.durationSeconds,
+        memo: entry.memo,
+      })
+      // Back in place, newest first, without a refetch.
+      if (!get().entries.some((e) => e.id === entry.id)) {
+        set({ entries: [...get().entries, entry].sort((a, b) => b.startTime - a.startTime) })
+      }
+      emitEntriesChanged()
+      return true
+    } catch (err) {
+      console.error('[timer] Failed to restore entry:', err)
       return false
     }
   },

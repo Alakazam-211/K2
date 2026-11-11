@@ -17,16 +17,22 @@ const FIELD = cx(
   'focus:border-[var(--color-accent)]',
 )
 
+const DATE_TYPES = new Set(['date', 'time', 'datetime-local', 'month', 'week'])
+
 /** Terminal's text-field idiom: app-bg well, 1px border, accent focus border. */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { className, variant = 'default', ...rest },
   ref
 ) {
   if (variant === 'search') return <SearchField ref={ref} className={className} {...rest} />
+  // A date or time field with no value: WebKit paints its parts (mm/dd/yyyy)
+  // in a faint colour of its own, so globals.css re-colours them by this mark.
+  const empty = rest.type !== undefined && DATE_TYPES.has(rest.type) && rest.value === ''
   return (
     <input
       ref={ref}
       data-k2-chamfer="control"
+      data-k2-empty={empty ? '' : undefined}
       className={cx(FIELD, 'bg-[var(--color-bg)]', className)}
       {...rest}
     />

@@ -177,6 +177,7 @@ pub mod pending_live;
 // lane; nothing is wired, so with the switches off K2 is unchanged.
 mod permission;
 pub mod pinned_chat;
+pub mod pinned_chat_choice;
 // S1 (presence/multiplayer arc): process-wide connected-users registry +
 // roster broadcast. Registered from the `/cli/sessions/events` WS handler.
 pub mod presence;

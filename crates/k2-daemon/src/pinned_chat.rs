@@ -542,6 +542,12 @@ pub fn handle_ensure_pinned_chat(body: &[u8]) -> HandlerResult {
         /// resume, and not `explicitSelection`.
         #[serde(default)]
         fresh_provider: Option<String>,
+        /// The harness the person picked for a never-chatted agent's first
+        /// chat ([`crate::pinned_chat_choice`]): saved as the workspace's
+        /// default agent, then the chat starts on it. Ignored once the
+        /// agent has a pinned chat.
+        #[serde(default)]
+        harness: Option<String>,
     }
 
     let req: Req = match serde_json::from_slice(body) {
@@ -573,6 +579,25 @@ pub fn handle_ensure_pinned_chat(body: &[u8]) -> HandlerResult {
             status: "400 Bad Request",
             body: r#"{"error":"freshProvider cannot be combined with explicitSelection"}"#.into(),
         };
+    }
+    let harness = req.harness.as_deref().map(str::trim).filter(|h| !h.is_empty());
+    if harness.is_some() && (fresh.is_some() || req.explicit_selection) {
+        return HandlerResult {
+            status: "400 Bad Request",
+            body: r#"{"error":"harness cannot be combined with freshProvider or explicitSelection"}"#.into(),
+        };
+    }
+    // The first pinned chat on a new server asks which LLM to start
+    // (0.46.11): nothing starts until the person picks.
+    if fresh.is_none() && !req.explicit_selection {
+        let refused = match harness {
+            Some(h) => crate::pinned_chat_choice::choose(&req.project, h).err(),
+            None => crate::pinned_chat_choice::needs_choice(&req.project)
+                .map(|choices| crate::pinned_chat_choice::choice_needed_response(&choices)),
+        };
+        if let Some(r) = refused {
+            return HandlerResult { status: r.status, body: r.body };
+        }
     }
     let ensured = if let Some(provider) = fresh {
         ensure_pinned_chat_fresh(&req.project, provider)

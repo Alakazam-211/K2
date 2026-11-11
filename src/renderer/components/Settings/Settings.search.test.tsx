@@ -79,7 +79,7 @@ describe('Settings search palette', () => {
   it('a picked result opens its section and closes the palette', async () => {
     await openSettingsOn('timer')
     fireEvent.keyDown(window, { key: 'f', metaKey: true })
-    fireEvent.change(palette()!, { target: { value: 'Scrollback Buffer' } })
+    fireEvent.change(palette()!, { target: { value: 'Letter spacing' } })
     fireEvent.keyDown(palette()!, { key: 'Enter' })
     expect(palette()).toBeNull()
     expect(useSettingsStore.getState().activeSection).toBe('terminal')

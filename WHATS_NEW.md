@@ -88,6 +88,25 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### Threads
 - **Delete a message you sent.** Sent something sensitive in a Thread? Right-click your message (or use its ⋯ menu) and choose Delete message. Its text and the files K2 uploaded with it are removed from the server that holds the Thread, along with their thumbnails and the copy in your send history, and "You deleted this message" stays in its place (others see "Message deleted"). The agent gets one line saying you deleted a message, never what it said, and is asked not to repeat, store or act on it. A message still waiting to reach the agent is never sent. Only the person who sent a message can delete it (the server's owner can delete anyone's); agents can't. From a terminal: `k2 thread delete <addr> <seq|id>`. A file the message only pointed at in the workspace stays where it is.
 
+### Look and feel
+- **Glass is the new default look:** Glass, following your system's light and dark (Obsidian by day, the Yellow palette at night). New installs start there, and every computer switches to it once when it updates to 0.46.11. Pick anything else in Settings → Styles, and your choice sticks.
+- **Each Glass palette keeps its own accent colour.** The Accent colour row edits the palette you're looking at, and Reset puts that palette back. **Reset to defaults** at the bottom of Styles puts the whole look back the way K2 ships.
+- **Styles is tidier:** Glass is listed first, the rows line up with the heading, and in Glass each style is a tile.
+- **Activity dots follow your accent colour** everywhere they show, and stay readable with a custom accent.
+- **The Thread's top and bottom fade use the page's own colour** in Glass, not black.
+- **Images in a Thread open in a viewer,** with **Open in tab**.
+
+### Projects
+- **Agent tiles open in Thread,** with a switch in the middle of the tile bar: Terminal, Thread, Chatter or Heartbeats. A hidden tile's terminal stops drawing but keeps its session.
+- **Each project has a default view** (Terminal, Thread or Chatter) that its tiles open in. Admins set it in the project's settings or with `k2 project view <project> <view>`.
+
+### Getting started
+- **A Get started list** walks a new owner through: installing Apple's developer tools (only on a Mac that's missing them), signing in to an AI tool, meeting K5 (K2's own agent, which hires your Chief of Staff), linking your subdomain and connecting your phone. Hide it and it folds into a **Get started** button in your accent colour; the sidebar's collapse button and ⌘B wait until setup is done. `k2 setup` prints the same list and runs on a fresh Mac with nothing installed.
+
+### Workspaces and sync
+- **The eye/pencil (watch or drive a session) is always on the terminal's bar,** not only when someone else is there.
+- **Homes Sync says "Change Home Sync"** instead of "Stop syncing". Turning it off for this computer is a choice inside, which explains that nothing is deleted.
+
 ### Fixes
 - **`--avoid` takes a node that isn't yours.** `k2 compute run --avoid k2n9` (and `--plan`, `test`, `move --auto`) no longer fails with `node_not_found` when that node isn't granted to your workspace, or doesn't exist: it could never be picked, so the job runs and one note says `--avoid k2n9: not one of your nodes; nothing to avoid`. A standing "never those nodes" list now works as flags. The note is the same whether such a node exists or not.
 - **Tags in a job's checkout.** `git describe --tags`, or a semver check against a tag (`--baseline v0.9.2`), now works on a compute node with no archive to ship. The checkout has the repo's tags that point into its history: from the remote, the tags in the history the node fetched (as in a clone, a tag the node already has keeps its place); from your machine, for a commit the remote doesn't have yet, the tags that point into it, an unpushed local tag too. Nothing is fetched from any other remote. Needs this K2 and k2-node 0.46.12; an older node or server leaves tags out, as before.

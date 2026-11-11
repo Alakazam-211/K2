@@ -58,7 +58,15 @@ fn row<'a>(rows: &'a [Row], id: &str) -> &'a Row {
 }
 
 fn all_done() -> Facts {
-    Facts { llm_signed_in: true, has_agent: true, tunnel_done: true, airgap: false, owner_linked: true, phones: 1 }
+    Facts {
+        llm_signed_in: true,
+        has_agent: true,
+        tunnel_done: true,
+        airgap: false,
+        owner_linked: true,
+        phones: 1,
+        ..Facts::default()
+    }
 }
 
 // ── rows: done and todo ──────────────────────────────────────────────
@@ -464,4 +472,147 @@ fn phones_are_each_logins_own_and_the_owners_are_every_linked_logins() {
     assert!(!f.tunnel_done && !f.has_agent && !f.llm_signed_in, "{f:?}");
     let f = load_facts(&conn, &p, &settings, "gina").expect("facts");
     assert_eq!(f.phones, 0);
+}
+
+// ── K5 at first run (prd-setup-checklist-v1 §10, k5-first-run-contract) ──
+
+fn k5_live() -> crate::orchestrator::Live {
+    crate::orchestrator::Live { workspace_id: "w-k5".into(), name: "K5".into(), path: "/home/r/k2-agents/k5".into() }
+}
+
+/// The flag on, a tool signed in, no K5: the offer's every condition.
+fn offer_facts() -> Facts {
+    Facts { k5_first_run: true, llm_signed_in: true, k5_default_path: "/home/r/k2-agents/k5".into(), ..Facts::default() }
+}
+
+#[test]
+fn the_offer_shows_only_with_the_flag_a_tool_no_k5_and_an_admin_or_better() {
+    let f = offer_facts();
+    for v in [Viewer::OwnerToken, Viewer::Login(Role::Owner), Viewer::Login(Role::Admin)] {
+        assert_eq!(k5_status(v, &f, false).expect("on").offer, Some(OFFER_MEET_K5), "{v:?}");
+    }
+    for v in [Viewer::Login(Role::Member), Viewer::Login(Role::VoiceChat)] {
+        assert_eq!(k5_status(v, &f, false).expect("on").offer, None, "{v:?}");
+    }
+    assert_eq!(k5_status(Viewer::OwnerToken, &Facts { k5_first_run: false, ..f.clone() }, false), None, "flag off: nothing");
+    assert_eq!(k5_status(Viewer::OwnerToken, &Facts { llm_signed_in: false, ..f.clone() }, false).expect("on").offer, None, "no tool");
+    let with_k5 = Facts { k5: Some(k5_live()), ..f.clone() };
+    let s = k5_status(Viewer::OwnerToken, &with_k5, false).expect("on");
+    assert_eq!(s.offer, None, "K5 is there");
+    assert_eq!(s.k5.expect("k5").workspace_id, "w-k5");
+    assert_eq!(k5_status(Viewer::OwnerToken, &f, true).expect("on").offer, None, "dismissed");
+    let d = k5_status(Viewer::OwnerToken, &f, false).expect("on").k5_defaults;
+    assert_eq!((d.name.as_str(), d.handle.as_str(), d.path.as_str()), ("K5", "k5", "/home/r/k2-agents/k5"));
+}
+
+#[test]
+fn dismissing_the_offer_is_per_person_and_show_keeps_it() {
+    let conn = db();
+    let p = people();
+    let f = offer_facts();
+    let admin = Viewer::Login(Role::Admin);
+    let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::DismissOffer, 5).expect("dismiss");
+    assert_eq!(s.k5.expect("on").offer, None, "julie said not now");
+    let o = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 6).expect("owner");
+    assert_eq!(o.k5.expect("on").offer, Some(OFFER_MEET_K5), "the owner still gets it");
+    // The owner token and a linked login are one person.
+    apply_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, &Action::DismissOffer, 7).expect("dismiss");
+    assert_eq!(status_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, 8).expect("z3thon").k5.expect("on").offer, None);
+    let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::Show, 9).expect("show");
+    assert_eq!(s.k5.expect("on").offer, None, "show brings the list back, not the offer");
+    assert_eq!(load_record(&conn, "julie").expect("load").expect("row").offer_dismissed_at, Some(5));
+}
+
+#[test]
+fn the_chief_of_staff_row_replaces_first_agent_only_with_the_flag_on() {
+    let off = rows(Viewer::OwnerToken, &Facts::default(), &none());
+    assert_eq!(ids(&off), V1_ROWS.to_vec(), "flag off: first_agent as today");
+    let f = Facts { k5_first_run: true, has_agent: true, ..Facts::default() };
+    let on = rows(Viewer::OwnerToken, &f, &none());
+    assert_eq!(ids(&on), K5_ROWS.to_vec(), "same position");
+    let cos = row(&on, "chief_of_staff");
+    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, "k5_sheet", Some(NOTE_NEEDS_K5)), "no K5 yet");
+    let with_k5 = Facts { k5: Some(k5_live()), ..f.clone() };
+    let cos = row(&rows(Viewer::Login(Role::Admin), &with_k5, &none()), "chief_of_staff").clone();
+    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, "k5_thread_cos", None));
+    let hired = Facts { chief_of_staff: true, ..with_k5 };
+    assert_eq!(row(&rows(Viewer::OwnerToken, &hired, &none()), "chief_of_staff").state, State::Done);
+    // A Member sees neither row.
+    let m = rows(Viewer::Login(Role::Member), &f, &none());
+    assert!(!ids(&m).contains(&"chief_of_staff") && !ids(&m).contains(&"first_agent"), "{m:?}");
+    // Order: every id is known, in contract order.
+    let order: Vec<usize> = on.iter().map(|r| ROW_IDS.iter().position(|id| *id == r.id).expect("known id")).collect();
+    let mut sorted = order.clone();
+    sorted.sort();
+    assert_eq!(order, sorted);
+}
+
+#[test]
+fn the_k5_wire_shape_is_the_contracts_and_absent_with_the_flag_off() {
+    let conn = db();
+    let p = people();
+    let s = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &Facts { has_agent: true, ..Facts::default() }, false, 1).expect("off");
+    let v = serde_json::to_value(&s).expect("json");
+    for k in ["offer", "k5", "k5Defaults"] {
+        assert!(v.get(k).is_none(), "{k} is not sent with the flag off: {v}");
+    }
+    let f = Facts { has_agent: true, tunnel_done: true, ..offer_facts() };
+    let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 2).expect("on")).expect("json");
+    assert_eq!(v["offer"], serde_json::json!("meet_k5"));
+    assert_eq!(v["k5"], serde_json::Value::Null);
+    assert_eq!(v["k5Defaults"], serde_json::json!({ "name": "K5", "handle": "k5", "path": "/home/r/k2-agents/k5" }));
+    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "k5_sheet", "note": "needs_k5" }));
+    let f = Facts { k5: Some(k5_live()), ..f };
+    let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 3).expect("on")).expect("json");
+    assert_eq!(v["offer"], serde_json::Value::Null);
+    assert_eq!(v["k5"], serde_json::json!({ "workspaceId": "w-k5", "name": "K5", "path": "/home/r/k2-agents/k5" }));
+    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "k5_thread_cos" }));
+}
+
+/// The facts read the seat: K5 doesn't count as the person's first agent,
+/// a live Chief of Staff is, and a deleted K5 workspace empties the seat.
+#[test]
+fn load_facts_reads_the_seat_and_a_deleted_k5_clears_it() {
+    let _home = crate::test_env::TempHome::new();
+    let conn = db();
+    let p = People::load().expect("people");
+    let mut settings = crate::app_settings::AppSettings::default();
+    settings.k5_first_run = true;
+    for (id, path) in [("w-k5", "/tmp/fr-k5"), ("w-cos", "/tmp/fr-cos")] {
+        conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?1, ?2)", rusqlite::params![id, path]).expect("project");
+    }
+    conn.execute("DELETE FROM projects WHERE id = 'w-cos'", []).expect("no cos yet");
+    crate::orchestrator::record_k5(&conn, "w-k5", "K5", "owner", 1).expect("seat");
+    let f = load_facts(&conn, &p, &settings, OWNER).expect("facts");
+    assert!(f.k5_first_run);
+    assert_eq!(f.k5.as_ref().map(|l| l.workspace_id.as_str()), Some("w-k5"));
+    assert!(!f.has_agent, "K5 alone isn't the person's first agent");
+    assert!(!f.chief_of_staff);
+    assert!(f.k5_default_path.ends_with("k2-agents/k5"), "{}", f.k5_default_path);
+
+    conn.execute("INSERT INTO projects (id, name, path) VALUES ('w-cos', 'w-cos', '/tmp/fr-cos')", []).expect("cos");
+    crate::orchestrator::record_chief_of_staff(&conn, "w-cos").expect("record");
+    let f = load_facts(&conn, &p, &settings, OWNER).expect("facts");
+    assert!(f.chief_of_staff && f.has_agent);
+    let rs = rows(Viewer::OwnerToken, &f, &none());
+    assert_eq!(row(&rs, "chief_of_staff").state, State::Done);
+
+    conn.execute("DELETE FROM projects WHERE id = 'w-k5'", []).expect("delete K5");
+    let f = load_facts(&conn, &p, &settings, OWNER).expect("facts");
+    assert_eq!(f.k5, None, "a deleted K5 workspace clears the seat");
+    let s = k5_status(Viewer::OwnerToken, &Facts { llm_signed_in: true, ..f.clone() }, false).expect("on");
+    assert_eq!(s.offer, Some(OFFER_MEET_K5), "the offer comes back");
+    assert_eq!(row(&rows(Viewer::OwnerToken, &f, &none()), "chief_of_staff").opens, "k5_sheet");
+}
+
+#[test]
+fn signed_in_tools_are_each_tools_own() {
+    use crate::llm_accounts::{kind, state};
+    let es = [
+        entry("claude", kind::SUBSCRIPTION, state::NEEDS_LOGIN),
+        entry("codex", kind::SUBSCRIPTION, state::SIGNED_IN),
+        entry("grok", kind::API_KEY, state::NOT_SET_UP),
+        entry("gemini", kind::SUBSCRIPTION, state::SIGNED_IN),
+    ];
+    assert_eq!(signed_in_tools(&es), vec!["codex", "grok"]);
 }

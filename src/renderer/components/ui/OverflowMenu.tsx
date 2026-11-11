@@ -16,6 +16,17 @@ export interface OverflowMenuItem {
   danger?: boolean
   /** Start a new group, with a hairline above. */
   group?: boolean
+  /** A leading icon (14px), as the app's other menus draw one. */
+  icon?: React.ReactNode
+}
+
+/** What a custom trigger gets: its ref (the menu anchors to it), the menu
+ *  semantics and the toggle. */
+export interface OverflowMenuTriggerProps {
+  ref: React.Ref<HTMLButtonElement>
+  'aria-haspopup': 'menu'
+  'aria-expanded': boolean
+  onClick: () => void
 }
 
 export interface OverflowMenuProps {
@@ -25,6 +36,10 @@ export interface OverflowMenuProps {
   /** Extra attributes for the trigger (a `data-*` search target). */
   triggerProps?: Record<string, string | undefined>
   className?: string
+  /** Draw your own trigger (the nav's Add) instead of the "…" button. */
+  renderTrigger?: (t: OverflowMenuTriggerProps) => React.ReactNode
+  /** Which trigger edge the menu lines up with. Default 'end'. */
+  align?: 'start' | 'end'
 }
 
 function menuItems(root: HTMLElement | null): HTMLElement[] {
@@ -36,7 +51,7 @@ function menuItems(root: HTMLElement | null): HTMLElement[] {
  *  actions that don't earn a button of their own. Portalled, so a chamfered
  *  or scrolling ancestor can't clip it. Opening puts focus on the first item,
  *  arrows move, Esc closes and returns focus to the button. */
-export function OverflowMenu({ items, label, triggerProps, className }: OverflowMenuProps): React.JSX.Element {
+export function OverflowMenu({ items, label, triggerProps, className, renderTrigger, align = 'end' }: OverflowMenuProps): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const menu = useAnchoredMenu<HTMLButtonElement>({
     open,
@@ -44,7 +59,7 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
     gap: 4,
     width: 'min',
     minWidth: 180,
-    align: 'end',
+    align,
     estimatedHeight: 40 + items.length * 30,
   })
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -84,6 +99,9 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
 
   return (
     <>
+      {renderTrigger ? (
+        renderTrigger({ ref: menu.anchorRef, 'aria-haspopup': 'menu', 'aria-expanded': open, onClick: () => setOpen((v) => !v) })
+      ) : (
       <Button
         ref={menu.anchorRef}
         variant="quiet"
@@ -101,6 +119,7 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
           <circle cx="11" cy="7" r="1.2" />
         </svg>
       </Button>
+      )}
       {open &&
         menu.portal(
           <div
@@ -151,7 +170,16 @@ export function OverflowMenu({ items, label, triggerProps, className }: Overflow
                           ),
                     )}
                   >
-                    <span className="block whitespace-nowrap">{item.label}</span>
+                    {item.icon ? (
+                      <span className="flex items-center gap-2 whitespace-nowrap">
+                        <span aria-hidden="true" className="flex w-3.5 flex-shrink-0 items-center justify-center" data-menu-icon="">
+                          {item.icon}
+                        </span>
+                        {item.label}
+                      </span>
+                    ) : (
+                      <span className="block whitespace-nowrap">{item.label}</span>
+                    )}
                     {item.hint && (
                       <span className="block type-hint text-[var(--color-text-secondary)] mt-0.5 max-w-[20rem]">
                         {item.hint}

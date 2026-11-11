@@ -22,7 +22,7 @@ import { fetchClonePerms, pullAllowed, pushAllowed } from '@/lib/clone-permissio
 import { openableHosts } from '@/lib/voice-chat-only'
 import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
-import { ADD_MENU_TITLE, showAddMenu } from './add-menu'
+import { ADD_MENU_TITLE, AddMenu } from './add-menu'
 import { primaryScope } from '@/kessel/server-scope'
 import { revealInFileManagerLabel } from '@/lib/reveal-label'
 import { installedEditorsDefaultFirst } from '@/lib/installed-editors'
@@ -314,20 +314,25 @@ export default function IconRail(): React.JSX.Element {
       {/* Add (Create an agent, Add Workspace), then open the full nav. The rail is one icon wide. */}
       <div className="flex flex-col items-center mt-1 flex-shrink-0" data-nav-rail-actions="">
         <SetupChecklistRailButton />
-        <button
-          data-material="frost"
-          data-frost-shape="round"
-          data-nav-control=""
-          className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
-          onClick={(e) => void showAddMenu(e.currentTarget, () => void handleAddProject())}
-          title={ADD_MENU_TITLE}
-          aria-label={ADD_MENU_TITLE}
-          aria-haspopup="menu"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-        </button>
+        <AddMenu
+          addWorkspace={() => void handleAddProject()}
+          trigger={(t) => (
+            <button
+              {...t}
+              type="button"
+              data-material="frost"
+              data-frost-shape="round"
+              data-nav-control=""
+              className="no-drag flex items-center justify-center w-8 h-8 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-white/[0.06] transition-colors"
+              title={ADD_MENU_TITLE}
+              aria-label={ADD_MENU_TITLE}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+          )}
+        />
         <SidebarCollapseButton />
       </div>
     </div>

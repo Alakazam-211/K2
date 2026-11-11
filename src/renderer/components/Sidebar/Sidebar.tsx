@@ -5,7 +5,7 @@ import { useFocusGroupsStore } from '@/stores/focus-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { NAV_FOOTER_ROW_CLASS, NavFooterButton, NavFooterPlus } from './NavFooterButton'
-import { ADD_MENU_LABEL, ADD_MENU_TITLE, showAddMenu } from './add-menu'
+import { ADD_MENU_LABEL, ADD_MENU_TITLE, AddMenu } from './add-menu'
 import { useToastStore } from '@/stores/toast'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { useAgentStatus } from '@/components/AgentStatus/useAgentStatus'
@@ -797,17 +797,17 @@ export default function Sidebar(): React.JSX.Element {
       {/* Add (Create an agent, Add Workspace) + collapse the nav */}
       <div className="p-3 border-t border-[var(--color-border)]" data-nav-footer="">
         <div className={NAV_FOOTER_ROW_CLASS}>
-          <NavFooterButton
-            label={ADD_MENU_LABEL}
-            title={ADD_MENU_TITLE}
-            aria-haspopup="menu"
-            icon={<NavFooterPlus />}
-            onClick={
-              !focusGroupsEnabled && projects.length >= 15
-                ? undefined
-                : (e) => void showAddMenu(e.currentTarget, () => void handleAddProject())
-            }
-            disabled={!focusGroupsEnabled && projects.length >= 15}
+          <AddMenu
+            addWorkspace={() => void handleAddProject()}
+            trigger={(t) => (
+              <NavFooterButton
+                label={ADD_MENU_LABEL}
+                title={ADD_MENU_TITLE}
+                icon={<NavFooterPlus />}
+                disabled={!focusGroupsEnabled && projects.length >= 15}
+                {...t}
+              />
+            )}
           />
           <SidebarCollapseButton footer />
         </div>

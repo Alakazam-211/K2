@@ -30,7 +30,8 @@ runs only root-owned tools by absolute path (a pinned minisign 0.12, a pinned
 gh 2.83.1, `/usr/bin/openssl`, the Command Line Tools python3; never
 `/opt/homebrew`, and never Xcode.app's python, because `/Applications` is
 admin-writable). It signs only inside a **session** Rosson opened with
-**one approval** at `release.sh` Step 0.46 (before any build), bound to the
+**one approval** at `release.sh` Step 1.55 (after the pre-flight gates,
+before any build), bound to the
 version, the base commit and the asset list, for 12 hours, and only files
 that pass its own checks (below). Every signature is in
 `/var/k2sign/audit/<version>/signatures.tsv` (`~/k2-release-audit` gets a
@@ -123,7 +124,7 @@ never typed; no U3 is made on z3mbp. Check first with
 `bash scripts/k2sign/sitting.sh agents --allow-agent <pid>`.
 Sitting 2 (both Macs) first rebuilds K2 Release Approve from its commit and
 checks it lists `timeout` (`--capabilities`); sitting 3 checks again, and
-`release.sh` Step 0.46 refuses an app without it. Rebuilding keeps the
+`release.sh` Step 1.55 refuses an app without it. Rebuilding keeps the
 approver key (it lives in `~/.k2-release-approve`, not in the app).
 
 **Order against landing.** The lane stays held until the public keys exist,
@@ -145,7 +146,7 @@ the steps below show that order.)
    **together** on main.
 3. Sitting `3` on each Mac from that main commit: re-pin, preflight, the
    S2-6 proof, the real-app proof.
-4. Release from either Mac: one approval at Step 0.46. The signer then
+4. Release from either Mac: one approval at Step 1.55. The signer then
    checks every file itself before signing it (slice S3): Linux daemons
    against GitHub (the tag, base + bump only, base on main, the build
    attestation from daemon-binaries.yml at the tag, the bytes);

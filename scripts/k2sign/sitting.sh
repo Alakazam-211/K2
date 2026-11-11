@@ -147,7 +147,7 @@ agents_check() {
     ok "no other agent runs as $me"
 }
 agents_running() { { /usr/bin/pgrep -u "$(id -un)" -f "$AGENT_RE" 2>/dev/null || true; } | wc -l | tr -d ' '; }
-# The approval app must close its own sheet (--timeout): Step 0.46 refuses an
+# The approval app must close its own sheet (--timeout): Step 1.55 refuses an
 # older build, so the sittings rebuild it and check before going on.
 app_check() {
     printf '\n\033[1m▶ check: K2 Release Approve supports --timeout\033[0m\n    %s --capabilities   (must list timeout)\n' "$(show "$APPBIN")"
@@ -403,7 +403,7 @@ agents) agents_check ;;
     must_say "the signer checks a real app as _k2sign: team, notarization, then refuses only for the version" "K2.app is 0.46.5, session is 0.0.1" \
         /bin/sh -c 'sudo -n -u _k2sign "$1/k2sign" sign u2 K2.app.tar.gz 0.0.1 raw < "$2/K2.app.tar.gz"' sh "$LIBEXEC" "${TMPDIR:-/tmp}/k2-s3proof"
     step "Remove the downloaded app" /bin/rm -rf "${TMPDIR:-/tmp}/k2-s3proof"
-    note "Done. A release run on this Mac asks for its own approval at Step 0.46 and signs with $KEY."
+    note "Done. A release run on this Mac asks for its own approval at Step 1.55 and signs with $KEY."
     [ "$RUN" = 1 ] || how_to_run
     ;;
 reenrol)

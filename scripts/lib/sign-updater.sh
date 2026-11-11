@@ -22,7 +22,7 @@
 #             (scripts/k2sign/). k2u_sign streams the file to
 #             `sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign sign` on
 #             stdin and gets the signature on stdout; the signer needs an
-#             approved Touch ID session (release.sh Step 0.46,
+#             approved Touch ID session (release.sh Step 1.55,
 #             scripts/lib/sign-approve.sh) and checks each file itself. This
 #             side still verifies every signature against the source tree's
 #             keys (an alarm: the tree belongs to this user) and keeps a COPY

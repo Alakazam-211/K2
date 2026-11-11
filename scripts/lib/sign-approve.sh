@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # sign-approve.sh — open the release's signing session: one approval (Touch ID
 # or the Mac login password, in the system sheet) per
-# release (prd-signing-user-v1 rev 2 §4.4, S2). Sourced by release.sh
-# (Step 0.46, before any build) after scripts/lib/sign-updater.sh. Sets no
-# shell options.
+# release (prd-signing-user-v1 rev 2 §4.4, S2). Sourced by release.sh after
+# scripts/lib/sign-updater.sh; called at Step 1.55, after the pre-flight
+# gates (a failed gate costs no approval) and before anything is built.
+# Sets no shell options.
 #
 #   k2sa_open_session <version> <base-commit> [--windows] <asset>...
 #

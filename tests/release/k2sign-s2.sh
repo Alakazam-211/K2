@@ -220,7 +220,7 @@ check "pubkeys refuses a repeated key" 1 "every key must be a different key" bas
 REAL_U1="$(sed -n 's/^pub const LEGACY_UPDATER_KEY_B64: &str = "\(.*\)";/\1/p' "$REPO/crates/k2-release-keys/src/lib.rs")"
 check "pubkeys refuses U1 (the real retired key) as a key" 1 "retired key" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$tmp/pkroot" "$REAL_U1" "$U2B_LINE" "$U3_LINE"
 
-echo "== sign-approve.sh: Step 0.46 =="
+echo "== sign-approve.sh: Step 1.55 =="
 sa() { bash -c 'source "$1"; source "$2"; shift 2; "$@"' _ "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$@"; }
 helper="$tmp/helper.sh"
 cat > "$helper" <<SH
@@ -236,7 +236,7 @@ export K2_SIGN_APPROVE_CMD="$helper"
 check "a new release: one approval" 0 "signing session" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}"
 grep -q 'open -W -n -a "$app" --args --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
     && grep -q '"$K2_SIGN_APPROVE_CMD" --challenge "$cf" --out "$of" --timeout "$limit"' "$TREE/scripts/lib/sign-approve.sh" \
-    && pass "Step 0.46 gives the app the watchdog's limit as --timeout (the sheet closes when the watchdog fires)" || fail "helper --timeout wiring"
+    && pass "Step 1.55 gives the app the watchdog's limit as --timeout (the sheet closes when the watchdog fires)" || fail "helper --timeout wiring"
 [ "$(wc -l < "$tmp/helper.calls" | tr -d ' ')" = 1 ] && pass "the helper ran once" || fail "helper calls"
 check "a resumed run reuses the valid session (no prompt)" 0 "using 0.46.13's approved signing session" sa k2sa_open_session 0.46.13 "$B1" "${ASSETS[@]}"
 [ "$(wc -l < "$tmp/helper.calls" | tr -d ' ')" = 1 ] && pass "no second prompt" || fail "helper called again"
@@ -272,28 +272,60 @@ K2_SIGN_APPROVE_CMD="$tmp/sleep.sh" K2_SIGN_APPROVE_TIMEOUT_MIN=1 expect 1 \
 t1="$(date +%s)"
 [ "$rc" = 0 ] && [ $((t1 - t0)) -le 90 ] && pass "S2-5 exit 1 within 90 s ($((t1 - t0)) s) with the re-run line" || fail "S2-5 watchdog" "$(cat "$tmp/r") ($((t1 - t0)) s)"
 pgrep -f "$tmp/sleep.sh" >/dev/null && fail "the helper still runs after the watchdog" || pass "the watchdog killed the helper"
-# An approval app built before --timeout never reaches a release: Step 0.46 refuses it before opening it.
+# An approval app built before --timeout never reaches a release: Step 1.55 refuses it before opening it.
 old="$tmp/Old Approve.app/Contents/MacOS"; mkdir -p "$old"
 printf '#!/bin/sh\necho "K2 Release Approve: usage: --enrol | --challenge <file> --out <file>" >&2\nexit 1\n' > "$old/K2 Release Approve"; chmod +x "$old/K2 Release Approve"
 env -u K2_SIGN_APPROVE_CMD K2_SIGN_APPROVE_APP="$tmp/Old Approve.app" bash -c 'source "$1"; source "$2"; shift 2; "$@"' _ \
     "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" k2sa_open_session 0.46.17 "$B1" "${ASSETS[@]}" > "$tmp/r" 2>&1 && rc=0 || rc=$?
 [ "$rc" = 1 ] && grep -q "is too old (no --timeout)" "$tmp/r" && grep -q "bash scripts/k2sign/approve/build.sh" "$tmp/r" \
-    && pass "Step 0.46 refuses an approval app without --timeout (and says how to rebuild)" || fail "old app" "rc=$rc $(cat "$tmp/r")"
+    && pass "Step 1.55 refuses an approval app without --timeout (and says how to rebuild)" || fail "old app" "rc=$rc $(cat "$tmp/r")"
 printf '#!/bin/sh\n[ "$1" = --capabilities ] && echo "k2-release-approve 2 timeout replace key-dir" && exit 0\nexit 7\n' > "$old/K2 Release Approve"
 env -u K2_SIGN_APPROVE_CMD bash -c 'source "$1"; source "$2"; shift 2; k2sa_app_current "$@"' _ \
     "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$tmp/Old Approve.app" \
     && pass "a build that lists timeout passes the check" || fail "current app check"
-# release.sh: Step 0.46 sits after the preflight (0.45) and before every build
-# step, and a failed approval exits.
-python3 -I - "$REPO/scripts/release.sh" <<'PY' && pass "release.sh: Step 0.46 runs after 0.45, before 0.5 and any build; its failure exits 1" || fail "release.sh order"
+# release.sh: the approval (Step 1.55) comes after every pre-flight gate and
+# check that builds nothing (a failed gate costs no approval: 0.46.11), and
+# before anything is built, signed or published; it sits outside the
+# SKIP_BUILD blocks (K2_RELEASE_RESUME runs reach it), and its failure exits.
+python3 -I - "$REPO/scripts/release.sh" <<'PY' && pass "release.sh: the approval runs after 0.45, the 0.5 gates, 0.55, 0.6, the bump and 1.5; before 1.6c and any build; outside SKIP_BUILD; its failure exits 1" || fail "release.sh order"
 import re, sys
 s = open(sys.argv[1]).read()
-i045 = s.index('bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"')
-i046 = s.index('k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}" || exit 1')
-i05 = s.index('echo "Step 0.5: Pre-flight gates')
-first_build = s.index('k2_build_mac_binaries "target/release/bundle/macos/K2.app"')
-assert i045 < i046 < i05 < first_build, (i045, i046, i05, first_build)
+def at(needle):
+    assert s.count(needle) == 1, (needle, s.count(needle))
+    return s.index(needle)
+approve = at('k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}" || exit 1')
+before = [
+    'k2_rust_pin_check',
+    'bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"',
+    'RUSTFLAGS="-D warnings" cargo check --workspace --all-targets',
+    'bun run typecheck:web',
+    'bunx vitest run --reporter=dot',
+    'bun run vite:build:web',
+    'bash "$PROJECT_DIR/scripts/sign-root-helper.sh" --preflight',
+    'bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --preflight',
+    'bash "$PROJECT_DIR/scripts/sign-app-engine.sh" --preflight',
+    '"$PROJECT_DIR/scripts/linux-build-gate.sh"',
+    'echo "Step 1: Bumping version to ${VERSION}..."',
+    'echo "  Found \'## ${VERSION}\' entry. OK to proceed."',
+]
+for b in before:
+    assert at(b) < approve, ("must come before the approval", b)
+# The Windows decision (the approval's asset list names it): its first copy.
+assert s.index('export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"') < approve
+# Top-level lines (column 0, so not a comment or a function body): the first
+# of each comes after the approval.
+for pat in (r'^k2_shadow_start$', r'^k2_build_mac_binaries ', r'^codesign --force', r'^k2u_sign ',
+            r'^xcrun notarytool submit', r'^git push origin', r'^gh release create'):
+    m = re.search(pat, s, re.M)
+    assert m and m.start() > approve, ("must come after the approval", pat)
+# Outside every `if [ "$SKIP_BUILD" = 0 ]` block: resumed runs open or reuse the session.
+opens = [m.start() for m in re.finditer(r'^if \[ "\$SKIP_BUILD" = 0 \]; then$', s, re.M)]
+closes = [m.start() for m in re.finditer(r'^fi # SKIP_BUILD\b', s, re.M)]
+assert len(opens) == len(closes) == 2, (opens, closes)
+depth_ok = all(not (o < approve < c) for o, c in zip(opens, closes))
+assert depth_ok and opens[0] < closes[0] < approve < opens[1] < closes[1], (opens, closes, approve)
 assert re.search(r'for _k2_seam in [^;]*K2SIGN_TEST_ROOT[^;]*K2_SIGN_APPROVE_CMD', s)
+assert 'Step 0.46' not in s, "a stale Step 0.46 label"
 PY
 
 finish

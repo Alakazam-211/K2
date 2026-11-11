@@ -4,7 +4,7 @@
 # then the setup, its checksum and the windows-x86_64 entry in latest.json.
 #
 # Why a separate script: release.sh opens ONE signing session per release
-# before it builds (Step 0.46), and that session names the asset list and
+# before it builds (Step 1.55), and that session names the asset list and
 # whether the Windows setup is in it. A release that shipped with Windows
 # off has a session without it, and k2sa_open_session refuses to change an
 # existing session's parameters ("Investigate before re-approving"). The

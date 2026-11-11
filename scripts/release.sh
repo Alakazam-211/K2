@@ -26,8 +26,8 @@
 #     file goes to `sudo -n -u _k2sign …/k2sign sign` on stdin, and the
 #     signer signs only inside a session Rosson approved ONCE (Touch ID or his
 #     Mac login password)
-#     at Step 0.46 (before any build), bound to the version, the base commit
-#     and the asset list. Every update file is signed with BOTH keys.
+#     at Step 1.55 (after the pre-flight gates, before any build), bound to
+#     the version, the base commit and the asset list. Every update file is signed with BOTH keys.
 #     K2_SIGNER=keychain is the rollback to the stopgap (key files in
 #     ~/.k2-updater, passwords in the login keychain, readable by every
 #     process of this user); it is removed after two green k2sign releases.
@@ -289,6 +289,8 @@ cd "$PROJECT_DIR"
 # (0.40.109: Step 7.5 scp to the Tart guest). Does NOT re-bump or rebuild.
 #   K2_RELEASE_RESUME=7.5  — skip 0.5–7; run pairing smoke + publish
 #   K2_RELEASE_RESUME=8    — skip 0.5–7.5; publish only
+# Either way Step 1.55 (the signing approval) still runs: it reuses the
+# session the first run opened (same base commit and assets, within 12 h).
 SKIP_BUILD=0
 SKIP_SMOKE=0
 case "${K2_RELEASE_RESUME:-}" in
@@ -630,37 +632,14 @@ echo "Step 0.45: Update-signing preflight..."
 cargo test -p k2-release-keys
 bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"
 
-# Windows is decided here (not at Step 9.5) because the approval names it.
+# Windows is decided here (not at Step 9.5) because the approval (Step 1.55)
+# names it.
 # Same rule as before: off unless K2_SKIP_WINDOWS_NSIS=0 or
 # K2_REQUIRE_WINDOWS_NSIS=1.
 if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
     export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
 else
     export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"
-fi
-
-# ── Step 0.46: Signing approval, once: Touch ID or the login password (prd-signing-user-v1 S2) ──
-# Before any build: a missed prompt times out (K2_SIGN_APPROVE_TIMEOUT_MIN,
-# default 30) and costs nothing. The session binds this version, the base
-# commit (HEAD now; the bump is committed at Step 8.9) and the asset list,
-# for 12 h, which covers K2_RELEASE_RESUME and by-hand sign-daemon.sh
-# re-runs; after that it asks to RE-APPROVE. K2_SIGNER=keychain skips it.
-echo ""
-echo "Step 0.46: Signing approval (Touch ID or your Mac login password)..."
-if [ "$K2_SIGNER" = k2sign ]; then
-    K2_SIGN_BASE="$(git rev-parse HEAD)"
-    # A resumed run after Step 8.9 sits on the release commit: its parent
-    # is the base the session was approved for.
-    if [ "$(git log -1 --format=%s HEAD)" = "chore(release): ${TAG}" ]; then
-        K2_SIGN_BASE="$(git rev-parse HEAD^)"
-    fi
-    K2_SIGN_ASSETS=(K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64)
-    if [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
-        K2_SIGN_ASSETS+=(--windows setup.exe "K2_${VERSION}_x64-setup.exe")
-    fi
-    k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}" || exit 1
-else
-    echo "  K2_SIGNER=keychain (rollback): no approval session; the stopgap signs as this user."
 fi
 
 # ── Step 0.5: Pre-flight quality gates ──
@@ -782,7 +761,41 @@ if ! grep -qE "^## ${VERSION//./\\.} " WHATS_NEW.md; then
     exit 1
 fi
 echo "  Found '## ${VERSION}' entry. OK to proceed."
+fi # SKIP_BUILD (the checks before the approval)
 
+# ── Step 1.55: Signing approval, once: Touch ID or the login password (prd-signing-user-v1 S2) ──
+# After every check that builds nothing (Steps 0.4–1.5: the pin, the
+# signing preflights, the pre-flight gates, the Linux build gate, the version
+# bump in the working tree, WHATS_NEW) and before anything is built, signed
+# or published (Step 1.6c on). A gate that fails (a flaky vitest) then costs
+# no approval: fix it, commit, re-run, and that run asks once for its own
+# base commit. (0.46.11: the approval came first, a gate failed, and the
+# re-run with the fix commit was refused for the different base.)
+# A missed prompt times out (K2_SIGN_APPROVE_TIMEOUT_MIN, default 30) and
+# costs nothing. The session binds this version, the base commit (HEAD now;
+# the bump is committed at Step 8.9) and the asset list, for 12 h, which
+# covers K2_RELEASE_RESUME (resumed runs skip 0.5–7 but still come here and
+# reuse the session) and by-hand sign-daemon.sh re-runs; after that it asks
+# to RE-APPROVE. K2_SIGNER=keychain skips it.
+echo ""
+echo "Step 1.55: Signing approval (Touch ID or your Mac login password)..."
+if [ "$K2_SIGNER" = k2sign ]; then
+    K2_SIGN_BASE="$(git rev-parse HEAD)"
+    # A resumed run after Step 8.9 sits on the release commit: its parent
+    # is the base the session was approved for.
+    if [ "$(git log -1 --format=%s HEAD)" = "chore(release): ${TAG}" ]; then
+        K2_SIGN_BASE="$(git rev-parse HEAD^)"
+    fi
+    K2_SIGN_ASSETS=(K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64)
+    if [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
+        K2_SIGN_ASSETS+=(--windows setup.exe "K2_${VERSION}_x64-setup.exe")
+    fi
+    k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}" || exit 1
+else
+    echo "  K2_SIGNER=keychain (rollback): no approval session; the stopgap signs as this user."
+fi
+
+if [ "$SKIP_BUILD" = 0 ]; then
 # ── Step 1.6c: Linux builds on K2 Compute (shadow or compute mode, background) ──
 k2_shadow_start
 

@@ -32,6 +32,7 @@ import {
   resetSewStatusCacheForTests,
   sewErrorInfo,
   sewErrorMessage,
+  sewFailure,
   sewStatusCached,
 } from './sew-api'
 
@@ -95,7 +96,8 @@ describe('tables match the daemon', () => {
     expect(alarmInfo('brand_new')).toEqual({
       severity: 'warn',
       title: 'brand_new',
-      fix: 'K2 has no description for this one yet. The server’s chat status says more.',
+      fix: 'K2 has no description for this one yet.',
+      ask: 'Ask an admin to check chat’s status on the server.',
       command: 'k2 hostchat status',
     })
   })
@@ -113,8 +115,37 @@ describe('tables match the daemon', () => {
   it('the wizard label per state', () => {
     expect(enableLabel('not-installed')).toBe('Set up chat and voice')
     expect(enableLabel('error')).toBe('Resume setup')
-    for (const s of ['disabled', 'stopped', 'removed']) expect(enableLabel(s)).toBe('Turn back on')
+    for (const s of ['disabled', 'stopped']) expect(enableLabel(s)).toBe('Turn back on')
+    // Uninstalled: the fresh setup again.
+    expect(enableLabel('removed')).toBe('Set up chat and voice')
     for (const s of ['running', 'degraded', 'installing', 'upgrading']) expect(enableLabel(s)).toBeNull()
+  })
+})
+
+describe('plain failures', () => {
+  it('maps the daemon codes it really sends to a plain line, keeping its words for later', () => {
+    const space = sewFailure(new DaemonHttpError('Sew backup job j1 failed: pg_dump: write failed: no space left on device', 500, 'backup_failed'))
+    expect(space.line).toBe('The backup ran out of disk space.')
+    expect(space.next).toBe('Free up space on the server, then back up again.')
+    expect(space.detail).toContain('no space left on device')
+    expect(sewFailure(new DaemonHttpError('must be exactly https://<host> (lowercase, no port, no path)', 400, 'bad_request')).line).toBe(
+      'The address must start with https:// and have no path.',
+    )
+    expect(sewFailure(new DaemonHttpError('Sew says that Space belongs to another App: jobs', 409, 'space_bound')).line).toBe('That Space is already connected to another App.')
+    expect(sewFailure(new DaemonHttpError('a Sew backup is already running; try again when it finishes', 409, 'backup_busy')).line).toBe('A backup is already running.')
+    expect(sewFailure(new DaemonHttpError('x', 403, 'owner_only')).line).toBe('Only the server owner or an admin can manage chat and voice.')
+  })
+
+  it('an unknown failure has no plain line, so the caller’s own words lead', () => {
+    expect(sewFailure(new DaemonHttpError('something new', 500, 'brand_new'))).toEqual({ line: null, next: null, detail: 'something new', code: 'brand_new' })
+  })
+
+  it('every alarm with a command says what to ask an admin, in plain words', () => {
+    for (const [name, info] of Object.entries(SEW_ALARMS)) {
+      if (!info.command) continue
+      expect(info.ask, name).toMatch(/^(To renew it now, a|A)sk an admin/)
+      expect(info.ask, name).not.toMatch(/k2 hostchat/)
+    }
   })
 })
 

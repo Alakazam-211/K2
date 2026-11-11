@@ -299,55 +299,117 @@ export type SewAlarmAction = 'backup' | 'offbox' | 'recovery-key' | 'public-url'
 export interface SewAlarmInfo {
   severity: 'error' | 'warn'
   title: string
-  /** What it means and what to do, in plain words. */
+  /** What it means, in plain words. */
   fix: string
-  /** The command a server admin runs for it, shown quietly with Copy. */
+  /** What to ask a server admin to do, in plain words (with `command`). */
+  ask?: string
+  /** The command that admin runs, shown quietly with Copy. */
   command?: string
   action?: SewAlarmAction
 }
 
 const cli = (verb: string): string => `${SEW_CLI} ${verb}`
-const DOCTOR = 'An admin runs the chat health check on the server; it says what to do next.'
+const HEALTH = { ask: 'Ask an admin to run a health check on the server. It says what to do next.', command: cli('doctor') }
+const RENEW = { ask: 'Ask an admin to renew the voice certificate on the server.', command: cli('media renew') }
 
 /** Every alarm Sew and K2 report (S29 §8.3 table, `supervisor::k2_alarms`,
  *  `voice::status`, `sew_wire::BACKUP_ALARMS`). Unknown alarms render
- *  verbatim via {@link alarmInfo}. */
+ *  with their name via {@link alarmInfo}. */
 export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
-  db_down: { severity: 'error', title: 'Chat’s database is down', fix: 'The chat server can’t reach its database, so it can’t load or save messages. Restart the server’s chat database.' },
-  jobs_dead: { severity: 'warn', title: 'Some background jobs failed', fix: `Chat gave up on some background work. ${DOCTOR}`, command: cli('doctor') },
-  keys_provider_down: { severity: 'error', title: 'Chat can’t read its encryption key', fix: `Chat can’t open any message until it can. ${DOCTOR}`, command: cli('doctor') },
-  keys_current_month_missing: { severity: 'error', title: 'This month’s encryption key is missing', fix: `New messages can’t be saved. ${DOCTOR}`, command: cli('doctor') },
-  keys_mirror_stale: { severity: 'warn', title: 'Keys aren’t copied off this server', fix: 'Choose where the keys go under Backups and keys.', action: 'offbox' },
+  db_down: { severity: 'error', title: 'Chat’s database is down', fix: 'The chat server can’t reach its database, so it can’t load or save messages.', ...HEALTH },
+  jobs_dead: { severity: 'warn', title: 'Some background jobs failed', fix: 'Chat gave up on some background work.', ...HEALTH },
+  keys_provider_down: { severity: 'error', title: 'Chat can’t read its encryption key', fix: 'Chat can’t open any message until it can.', ...HEALTH },
+  keys_current_month_missing: { severity: 'error', title: 'This month’s encryption key is missing', fix: 'New messages can’t be saved.', ...HEALTH },
+  keys_mirror_stale: { severity: 'warn', title: 'Keys aren’t kept on another machine', fix: 'Choose where copies of the keys go, under Backups and keys.', action: 'offbox' },
   keys_shred_pending: { severity: 'warn', title: 'A key is still being deleted', fix: 'Chat finishes this on its own. Nothing to do unless it stays.' },
-  keys_resurrected: { severity: 'error', title: 'A deleted key came back', fix: `A restored copy of the keys holds a key that was deleted. ${DOCTOR}`, command: cli('doctor') },
-  keys_rewrap_stalled: { severity: 'warn', title: 'Changing the encryption key stalled', fix: 'An admin starts the key change again on the server, then runs the chat health check.', command: cli('rotate-master') },
+  keys_resurrected: { severity: 'error', title: 'A deleted key came back', fix: 'A restored copy of the keys holds a key that was deleted.', ...HEALTH },
+  keys_rewrap_stalled: { severity: 'warn', title: 'Changing the encryption key stalled', fix: 'The key change stopped partway.', ask: 'Ask an admin to start the key change again on the server, then run a health check.', command: cli('rotate-master') },
   search_lagging: { severity: 'warn', title: 'Search is behind', fix: 'New messages may not show up in search yet. It catches up on its own.' },
-  backup_stale: { severity: 'warn', title: 'No backup in 36 hours', fix: 'Back up now, and check that the server’s backup timer runs.', action: 'backup' },
+  backup_stale: { severity: 'warn', title: 'No backup in 36 hours', fix: 'Back up now, and check that scheduled backups run.', action: 'backup' },
   backup_failed: { severity: 'error', title: 'The last backup failed', fix: 'Back up now to see what went wrong.', action: 'backup' },
-  drill_failed: { severity: 'error', title: 'The last restore test failed', fix: `A backup couldn’t be restored in the test. ${DOCTOR}`, command: cli('doctor') },
-  drill_stale: { severity: 'warn', title: 'No restore test in 8 days', fix: 'The server tests a backup every day. Check that its restore-test timer runs.' },
-  k2_mgmt_unreachable: { severity: 'error', title: 'K2 can’t reach the chat server', fix: `Chat’s services run, but K2 can’t talk to them. ${DOCTOR}`, command: cli('doctor') },
+  drill_failed: { severity: 'error', title: 'The last restore test failed', fix: 'A backup couldn’t be restored in the test.', ...HEALTH },
+  drill_stale: { severity: 'warn', title: 'No restore test in 8 days', fix: 'The server tests a backup every day. Check that scheduled restore tests run.' },
+  k2_mgmt_unreachable: { severity: 'error', title: 'K2 can’t reach the chat server', fix: 'Chat’s services run, but K2 can’t talk to them.', ...HEALTH },
   k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key isn’t in the vault yet', fix: 'K2 copies it into the vault on its own, at start or when you show it. If this stays, check that the vault is open.', action: 'recovery-key' },
-  k2_master_key_due: { severity: 'warn', title: 'Time to change the encryption key', fix: 'An admin changes it from a terminal on the server.', command: cli('rotate-master') },
-  k2_vault_key_mismatch: { severity: 'error', title: 'K2’s key doesn’t match chat’s', fix: `Don’t change anything yet. ${DOCTOR}`, command: cli('doctor') },
+  k2_master_key_due: { severity: 'warn', title: 'Time to change the encryption key', fix: 'Changing it now and then keeps old messages safe if a key ever leaks.', ask: 'Ask an admin to change the key on the server.', command: cli('rotate-master') },
+  k2_vault_key_mismatch: { severity: 'error', title: 'K2’s key doesn’t match chat’s', fix: 'Don’t change anything yet.', ...HEALTH },
   k2_helper_pin_mismatch: { severity: 'warn', title: 'K2’s system helper is out of date', fix: 'Update K2 on this server, then update chat.' },
-  k2_jwks_url_drift: { severity: 'error', title: 'Chat can’t check K2 sign-ins', fix: `K2’s network port changed. ${DOCTOR}`, command: cli('doctor') },
+  k2_jwks_url_drift: { severity: 'error', title: 'Chat can’t check K2 sign-ins', fix: 'K2’s network port changed.', ...HEALTH },
   k2_owner_blocked: { severity: 'warn', title: 'Setting you up as owner failed', fix: 'Try again from User Access, where it syncs people to chat.' },
-  k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where backups go under Backups and keys, so a disk loss doesn’t take them too.', action: 'offbox' },
-  k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied off', fix: 'Check where backups go under Backups and keys.', action: 'offbox' },
-  k2_upgrade_rollback_failed: { severity: 'error', title: 'An update failed and couldn’t go back', fix: 'Someone has to fix this on the server itself. The update’s record says what happened.', command: 'cat /usr/local/lib/sew/upgrade-state.json' },
-  k2_turn_cert_missing: { severity: 'error', title: 'Voice calls have no certificate', fix: 'Calls can’t connect securely. An admin renews it on the server.', command: cli('media renew') },
-  k2_turn_cert_expired: { severity: 'error', title: 'The voice certificate expired', fix: 'Calls can’t connect securely. An admin renews it on the server.', command: cli('media renew') },
-  k2_turn_cert_expiring: { severity: 'warn', title: 'The voice certificate expires soon', fix: 'K2 renews it on its own. An admin can renew it now on the server.', command: cli('media renew') },
-  k2_turn_tls_mismatch: { severity: 'error', title: 'Voice uses the wrong certificate', fix: 'An admin renews it on the server, then runs the chat health check.', command: cli('media renew') },
-  k2_voice_probe_failed: { severity: 'warn', title: 'A test call from outside failed', fix: 'Check that the server’s firewall lets the voice ports through, then test again.', command: cli('media probe') },
-  voice_engine_down: { severity: 'error', title: 'Voice calls are down', fix: 'The voice service stopped. An admin checks it on the server.', command: cli('media status') },
-  voice_not_installed: { severity: 'warn', title: 'Voice calls aren’t installed', fix: 'Chat works; calls don’t yet. An admin installs voice on the server.', command: cli('media install') },
+  k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where copies of the backups go, so a disk loss doesn’t take them too.', action: 'offbox' },
+  k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied to another machine', fix: 'Check where copies of the backups go, under Backups and keys.', action: 'offbox' },
+  k2_upgrade_rollback_failed: { severity: 'error', title: 'An update failed and couldn’t go back', fix: 'Someone has to fix this on the server itself.', ask: 'Ask an admin to read the update’s record on the server.', command: 'cat /usr/local/lib/sew/upgrade-state.json' },
+  k2_turn_cert_missing: { severity: 'error', title: 'Voice calls have no certificate', fix: 'Calls can’t connect securely.', ...RENEW },
+  k2_turn_cert_expired: { severity: 'error', title: 'The voice certificate expired', fix: 'Calls can’t connect securely.', ...RENEW },
+  k2_turn_cert_expiring: { severity: 'warn', title: 'The voice certificate expires soon', fix: 'K2 renews it on its own before then.', ask: 'To renew it now, ask an admin to renew the voice certificate on the server.', command: cli('media renew') },
+  k2_turn_tls_mismatch: { severity: 'error', title: 'Voice uses the wrong certificate', fix: 'Calls may fail to connect.', ...RENEW },
+  k2_voice_probe_failed: { severity: 'warn', title: 'A test call from outside failed', fix: 'The server’s firewall may be blocking the voice ports.', ask: 'Ask an admin to open the voice ports, then test a call again on the server.', command: cli('media probe') },
+  voice_engine_down: { severity: 'error', title: 'Voice calls are down', fix: 'The voice service stopped.', ask: 'Ask an admin to check the voice service on the server.', command: cli('media status') },
+  voice_not_installed: { severity: 'warn', title: 'Voice calls aren’t installed', fix: 'Chat works; calls don’t yet.', ask: 'Ask an admin to install voice on the server.', command: cli('media install') },
 }
 
 /** Info for any alarm string; unknown ones keep their name as the title. */
 export function alarmInfo(alarm: string): SewAlarmInfo {
-  return SEW_ALARMS[alarm] ?? { severity: 'warn', title: alarm, fix: 'K2 has no description for this one yet. The server’s chat status says more.', command: cli('status') }
+  return SEW_ALARMS[alarm] ?? { severity: 'warn', title: alarm, fix: 'K2 has no description for this one yet.', ask: 'Ask an admin to check chat’s status on the server.', command: cli('status') }
+}
+
+/** The daemon's setup warnings (`supervisor::split_setup_warnings`,
+ *  `public_url_warning`, `voice::status`) in plain words. An unknown one
+ *  shows a plain title with the server's own words quietly. */
+const SEW_WARNINGS: Record<string, Omit<SewAlarmInfo, 'severity'>> = {
+  no_offbox_key_copy: { title: 'Keys aren’t kept on another machine', fix: 'Backups can’t be read after a disk loss without a copy of the keys. Choose where copies of the keys go.', action: 'offbox' },
+  public_url_unset: { title: 'Chat’s web address isn’t set', fix: 'Setup links and invites won’t open from outside this server until it is.', action: 'public-url' },
+  voice_unprobed: { title: 'Calls haven’t been tested from outside yet', fix: 'Test a call from another network, so you know people outside can join.', ask: 'Then ask an admin to record the test on the server.', command: cli('media probe') },
+  voice_probe_stale: { title: 'The last outside call test is out of date', fix: 'Test a call from another network again.', ask: 'Then ask an admin to record the test on the server.', command: cli('media probe') },
+}
+
+export function warningInfo(w: SewWarning): Omit<SewAlarmInfo, 'severity'> & { detail?: string } {
+  return SEW_WARNINGS[w.code] ?? { title: 'Chat reported something to check', fix: 'K2 has no plain description for this one yet.', detail: w.message }
+}
+
+/** A failed call in plain words: `line` says what went wrong (null when
+ *  K2 has no plain wording for it), `next` what to do (null: the caller's),
+ *  `detail` the server's own words, shown quietly after. Codes and hints
+ *  are the daemon's (`sew::supervisor`, `sew::s32`, `sew::voice`). */
+export interface SewFailure {
+  line: string | null
+  next: string | null
+  detail: string
+  code: string | null
+}
+
+export function sewFailure(e: unknown): SewFailure {
+  const { code, status, message } = sewErrorInfo(e)
+  const hint = message
+  const f = (line: string | null, next: string | null = null): SewFailure => ({ line, next, detail: hint, code })
+  if (code === 'owner_confirm_required') return f('This step needs you to confirm it’s you first.', 'Try again and confirm when K2 asks.')
+  if (code === 'owner_only' || code === 'forbidden' || code === 'wrong_credential' || (status === 403 && !code)) return f(SEW_NO_PERMISSION, 'Ask the server’s owner or an admin to do it.')
+  if (code === 'owner_not_ready') return f('Chat is still setting you up as owner.', 'Wait a minute, then try again.')
+  if (status === 429) return f('Too many tries.', 'Wait a minute, then try again.')
+  if (code === 'backup_busy') return f('A backup is already running.', 'Wait for it to finish; it shows under Saved backups.')
+  if (code === 'lifecycle_in_progress' || code === 'upgrade_in_progress' || code === 'rotation_in_progress') return f('Another chat change is still running.', 'Wait for it to finish, then try again.')
+  if (code === 'not_installed' || code === 'unknown_sew_binary') return f('Chat isn’t installed on this server.', 'Set it up from the Overview tab first.')
+  if (code === 'not_running' || code === 'sew_not_running' || code === 'mgmt_unreachable' || code === 'sew_unreachable' || code === 'sew_unavailable') return f('Chat isn’t running, so it can’t do this right now.', 'Wait for chat to come back (the Overview tab shows it), then try again.')
+  if (code === 'backups_unavailable') return f('This chat server can’t make backups.', 'Update chat from the Overview tab, then try again.')
+  if (code === 'vault_closed' || code === 'vault_error') return f('The K2 vault is locked, so K2 can’t reach chat’s keys.', 'Open the vault (Settings → Vault), then try again.')
+  if (code === 'invalid_path') return f('That folder isn’t there on the server, or K2 can’t write to it.', 'Check that the disk is mounted and the folder exists, then try again.')
+  if (code === 'space_bound') return f('That Space is already connected to another App.', 'Check the Space ID, or disconnect it from the other App first.')
+  if (code === 'space_not_found') return f('Chat has no Space with that ID.', 'Copy the Space ID again from the App’s settings.')
+  if (code === 'app_mismatch') return f('That Space belongs to a different App.', 'Check the App and the Space ID.')
+  if (code === 'space_unbound') return f('That Space isn’t connected to an App here.', 'Connect it under App Spaces first.')
+  if (code === 'provider_is_standalone') return f('Chat here uses its own accounts, so it has no App Spaces.')
+  if (code === 'not_available') return f('That choice isn’t available yet.', 'Pick another one.')
+  if (code === 'preflight_failed') return f('The server checks found something to fix first.', 'Fix what’s marked Needs fixing, then try again.')
+  if (code === 'config_failed' || code === 'restart_failed' || code === 'reconfigure_failed') return f('Chat didn’t accept the change.', 'Nothing changed. Try again in a moment.')
+  if (code === 'db_error' || code === 'io_error') return f('K2 couldn’t save the change on the server.', 'Try again in a moment.')
+  if (code === 'unsupported') return f('Chat and voice run on Linux servers only.')
+  if (code === 'backup_failed') {
+    if (/no space|disk full|ENOSPC|out of (disk|space)/i.test(hint)) return f('The backup ran out of disk space.', 'Free up space on the server, then back up again.')
+    return f('The backup didn’t finish.', 'Your earlier backups are untouched. Try again in a moment.')
+  }
+  if (code === 'bad_request' && /https:\/\/|lowercase, no port, no path/.test(hint)) return f('The address must start with https:// and have no path.', 'Use just the address, like https://chat.example.com, then save again.')
+  if (code === 'bad_request' && /kind dir needs path/.test(hint)) return f('Pick a folder for the copies.', null)
+  return f(null)
 }
 
 /** Status chip label + color token per state. */
@@ -383,9 +445,11 @@ export function enableLabel(state: string): string | null {
       return 'Set up chat and voice'
     case 'error':
       return 'Resume setup'
+    case 'removed':
+      // Uninstalled: the page is the fresh setup again (its data comes back).
+      return 'Set up chat and voice'
     case 'disabled':
     case 'stopped':
-    case 'removed':
       return 'Turn back on'
     default:
       return null

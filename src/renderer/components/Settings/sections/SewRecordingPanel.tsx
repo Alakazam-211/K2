@@ -24,6 +24,8 @@ import {
   setAppRecording,
   setSpaceRecordingLock,
   sewErrorMessage,
+  sewFailure,
+  type SewFailure,
   type AppRecordingChange,
   type AppRecordingView,
   type SewConfirmAction,
@@ -74,7 +76,7 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
   const [apps, setApps] = useState<AppRecordingView[]>([])
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [notBuilt, setNotBuilt] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<SewFailure | null>(null)
   /** Which change is in flight (its button says so). */
   const [pending, setPending] = useState<string | null>(null)
   const [days, setDays] = useState<Record<string, string>>({})
@@ -101,7 +103,7 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
       setRowErrors(errs)
     } catch (e) {
       if (isNotBuilt(e)) setNotBuilt(true)
-      else setError(sewErrorMessage(e))
+      else setError(sewFailure(e))
     }
   }, [sample])
 
@@ -132,7 +134,7 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
       }
       await load()
     } catch (e) {
-      setError(sewErrorMessage(e))
+      setError(sewFailure(e))
     } finally {
       setPending(null)
     }
@@ -154,7 +156,7 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
   return (
     <div className="space-y-6" data-settings-id="sew.recording">
       {ui}
-      {error ? <SewFailed what="Couldn’t change the recording settings." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+      {error ? <SewFailed what="Couldn’t change the recording settings." failure={error} next="Nothing changed. Try again in a moment." /> : null}
       {notBuilt ? (
         <SettingsLoadState kind="empty" title="This server doesn’t report recording settings yet">
           Update chat from the Overview tab to set recording in Apps here.
@@ -199,7 +201,7 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
           {Object.entries(rowErrors).map(([id, msg]) => (
             <SettingsGroup
               key={id}
-              title={`The ${id} App`}
+              title={`The ${id[0] ? id[0].toUpperCase() + id.slice(1) : id} App`}
               card
               state={
                 <SettingsLoadState kind="error" title="Couldn’t load this App’s recording settings" detail={msg} action={<Button onClick={() => void load()}>Try again</Button>}>
@@ -338,7 +340,7 @@ function AppRow({
         {a.spaces.map((s, i) => (
           <div key={s.spaceId} data-testid="sew-recording-space">
             <SettingRow
-              label={a.spaces.length === 1 ? `${a.app.name}’s Space` : `${a.app.name}’s Space ${i + 1}`}
+              label={a.spaces.length === 1 ? `The ${a.app.name} App’s Space` : `The ${a.app.name} App’s Space ${i + 1}`}
               hint={
                 <>
                   {s.locked

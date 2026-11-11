@@ -7,7 +7,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { Button, Callout, Input, Surface } from '@/components/ui'
 import { AccessSheet, ConfirmSheet, CopyLine, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED } from './AccessDialogs'
-import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction } from './sew-api'
+import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction, type SewFailure } from './sew-api'
 
 export const muted = 'text-[var(--color-text-muted)]'
 export const secondary = 'text-[var(--color-text-secondary)]'
@@ -33,31 +33,53 @@ export function CopyButton({ value, label }: { value: string; label: string }): 
   )
 }
 
-/** A command a server admin runs: a plain lead-in, the command quiet in
- *  monospace, and Copy. Never the primary line. */
-export function CommandLine({ command, lead = 'An admin runs this on the server:' }: { command: string; lead?: string }): React.JSX.Element {
+/** What to ask a server admin to do: the plain ask as a sentence, then the
+ *  command quiet in a small value box, with Copy. Never the primary line. */
+export function CommandLine({ command, ask = 'Ask an admin to run this on the server.' }: { command: string; ask?: string }): React.JSX.Element {
   return (
-    <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[var(--color-text-muted)]" data-testid="sew-command">
-      <span>{lead}</span>
-      <code className="font-mono break-all">{command}</code>
-      <CopyButton value={command} label={`Copy the command ${command}`} />
+    <span className="block mt-1" data-testid="sew-command">
+      <span className="block">{ask}</span>
+      <span className="mt-1 flex flex-wrap items-center gap-2 text-[var(--color-text-muted)]">
+        <code data-k2-chamfer="chip" className="font-mono break-all px-1.5 py-0.5 rounded-[var(--radius-field)] border border-[var(--color-border)] bg-[var(--color-bg)]">
+          {command}
+        </code>
+        <CopyButton value={command} label={`Copy the command ${command}`} />
+      </span>
     </span>
   )
 }
 
-/** A failed action: what failed in plain words, what to do now, then the
- *  server's own reason, quieter. */
-export function SewFailed({ what, detail, next }: { what: string; detail: string; next: string }): React.JSX.Element {
+/** A failed action: what went wrong in plain words (the daemon's code
+ *  mapped by `sewFailure`, else the caller's `what`), what to do now, an
+ *  optional next-step button, then the server's own words, quieter. */
+export function SewFailed({
+  what,
+  failure,
+  next,
+  action,
+}: {
+  what: string
+  failure: SewFailure | string
+  next: string
+  action?: React.ReactNode
+}): React.JSX.Element {
+  const f: SewFailure = typeof failure === 'string' ? { line: null, next: null, detail: failure, code: null } : failure
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     ref.current?.scrollIntoView?.({ block: 'nearest' })
-  }, [detail])
+  }, [f.detail])
+  const detail = f.detail.trim().replace(/[.\s]+$/, '')
   return (
     <div ref={ref}>
-      <Callout tone="error" role="alert" className="type-hint space-y-0.5 leading-relaxed" data-testid="dialog-error">
-        <p className="font-medium">{what}</p>
-        <p>{next}</p>
-        <p className="text-[var(--color-text-secondary)]">The server said: {detail.trim().replace(/[.\s]+$/, '')}.</p>
+      <Callout tone="error" role="alert" className="type-hint leading-relaxed" data-testid="dialog-error">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-0.5">
+            <p className="font-medium">{f.line ?? what}</p>
+            <p>{f.next ?? next}</p>
+            {detail && detail !== f.line?.replace(/[.\s]+$/, '') ? <p className="text-[var(--color-text-secondary)]">The server said: {detail}.</p> : null}
+          </div>
+          {action ? <div className="flex-shrink-0">{action}</div> : null}
+        </div>
       </Callout>
     </div>
   )
@@ -100,7 +122,7 @@ export function TypeToConfirm({
       <label htmlFor={id} className={DIALOG_LABEL}>
         {label}
       </label>
-      <Input id={id} aria-label={label} value={value} disabled={disabled} placeholder={expect} autoComplete="off" spellCheck={false} onChange={(e) => onChange(e.target.value)} className={`${DIALOG_FIELD} font-mono`} />
+      <Input id={id} aria-label={label} value={value} disabled={disabled} placeholder={expect} autoComplete="off" spellCheck={false} onChange={(e) => onChange(e.target.value)} className={DIALOG_FIELD} />
     </div>
   )
 }

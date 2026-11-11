@@ -122,7 +122,7 @@ vi.mock('@/stores/session-events', async (orig) => ({
 
 import { SewSection } from './SewSection'
 
-const OFFBOX_NOTE = 'Every K2 server shows Degraded until its chat backups and keys have copies off the server.'
+const OFFBOX_NOTE = 'Every K2 server shows Degraded until copies of its chat backups and keys are kept on another machine.'
 /** The status word; not installed shows its card instead. */
 const chip = (): string => (screen.queryByTestId('sew-not-installed') ? 'Not installed' : (screen.getAllByTestId('sew-state-chip')[0].textContent ?? ''))
 const tab = (name: string): void => {
@@ -186,7 +186,7 @@ describe('Chat Hosting flow against a fake supervisor', () => {
     expect(document.body.innerHTML).not.toContain('FLOW-RECOVERY-KEY')
 
     tab('Overview')
-    fireEvent.click(screen.getByRole('button', { name: 'Go to off-box copies' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose where copies go' }))
     await tick(10)
     fireEvent.click(screen.getByLabelText('Backups: a folder on another disk'))
     fireEvent.change(screen.getByLabelText('Backups folder'), { target: { value: '/mnt/offbox/sew' } })

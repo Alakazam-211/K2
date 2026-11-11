@@ -185,6 +185,10 @@ describe('status read', () => {
     render(<SewSection />)
     expect((await screen.findByTestId('sew-forbidden')).textContent).toContain(SEW_NO_PERMISSION)
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+    // It names who to ask and a next step.
+    expect(screen.getByTestId('sew-forbidden').textContent).toContain('Ask the server’s owner or an admin')
+    expect(screen.getByRole('button', { name: 'See who’s an admin' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy()
   })
 
   it('another failure shows the error card with Try again, which reads again', async () => {
@@ -335,8 +339,10 @@ describe('setup', () => {
     await renderReady('Set up chat and voice')
     fireEvent.click(await enableReady())
     const note = await screen.findByTestId('dialog-error')
-    expect(note.textContent).toContain('Couldn’t start setup.')
-    expect(note.textContent).toContain('Another chat and voice change is still running. Wait for it to finish.')
+    // The daemon's code reads as a plain line; its own words follow quietly.
+    expect(note.textContent).toContain('Another chat change is still running.')
+    expect(note.textContent).toContain('Wait for it to finish, then try again.')
+    expect(note.textContent).toContain('The server said: Another Sew action.')
   })
 
   it('while installing, status polls every 2 s and stops when it leaves', async () => {
@@ -539,24 +545,37 @@ describe('turn off or uninstall', () => {
   })
 })
 
-describe('services follow the state', () => {
-  it('a turned-off or uninstalled server never reads as running', async () => {
-    gets({ 'sew/status': running({ state: 'disabled' }) })
+describe('status rows follow the state', () => {
+  it('a turned-off server never reads as running', async () => {
+    gets({ 'sew/status': running({ state: 'disabled' }), 'sew/preflight': { ready: true, checks: [] } })
     await renderReady('Turned off')
     expect(screen.getByTestId('sew-services').textContent).toBe('Turned off')
-    cleanup()
-    gets({ 'sew/status': running({ state: 'removed' }) })
-    await renderReady('Uninstalled, data kept')
-    expect(screen.getByTestId('sew-services').textContent).toBe('Removed')
+    expect(screen.getByTestId('sew-version').textContent).toBe('Version 0.3.0')
     expect(document.body.textContent).not.toContain('Database and chat running')
   })
 
-  it('the install ID is a quiet line with Copy, not a row', async () => {
+  it('after an uninstall the page is the fresh setup, and its words agree', async () => {
+    gets({ 'sew/status': running({ state: 'removed' }), 'sew/preflight': { ready: true, checks: [] } })
+    await renderReady('Set up chat and voice')
+    expect(screen.getByTestId('sew-removed').textContent).toContain('Set it up again below to bring them back.')
+    expect(screen.queryByText('Turn chat and voice back on')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Turn back on' })).toBeNull()
+    expect(screen.queryByTestId('sew-services')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Delete data…' })).toBeTruthy()
+  })
+
+  it('while setup runs, each row waits for its step', async () => {
+    gets({ 'sew/status': running({ state: 'installing', installedVersion: null, enableProgress: { steps: { postgres: { at: 1 } }, current: 'stage' } }) })
+    await renderReady('Setting up…')
+    expect(screen.getByTestId('sew-services').textContent).toBe('Database waiting, chat waiting')
+    expect(screen.getByTestId('sew-owner').textContent).toBe('Waiting')
+    expect(screen.getByTestId('sew-version').textContent).toBe('Waiting')
+  })
+
+  it('no install ID or other raw id is shown', async () => {
     gets({ 'sew/status': running() })
     await renderReady('Running')
-    expect(screen.getByTestId('sew-install-id').textContent).toContain('ins_1')
-    expect(within(screen.getByTestId('sew-status')).queryByText('ins_1')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Copy the install ID' })).toBeTruthy()
+    expect(document.body.textContent).not.toContain('ins_1')
   })
 })
 
@@ -644,9 +663,9 @@ describe('panels', () => {
     await renderReady('Degraded')
     expect(screen.getByTestId('sew-alarm-backup_failed').textContent).toContain('The last backup failed')
     expect(screen.getByTestId('sew-alarm-mystery_alarm').textContent).toContain('k2 hostchat status')
-    fireEvent.click(screen.getAllByRole('button', { name: 'Go to off-box copies' })[0])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Choose where copies go' })[0])
     expect(screen.getByRole('tab', { name: 'Backups and keys' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByText('Where backups go')).toBeTruthy()
+    expect(screen.getByText('Where copies of backups go')).toBeTruthy()
   })
 
   it('backups: back up now, then the list refreshes and the page says so', async () => {
@@ -677,8 +696,10 @@ describe('panels', () => {
     tab('Backups and keys')
     fireEvent.click(await screen.findByRole('button', { name: 'Back up now' }))
     const note = await screen.findByTestId('dialog-error')
-    expect(note.textContent).toContain('Couldn’t back up chat and voice.')
-    expect(note.textContent).toContain('no space left on device')
+    expect(note.textContent).toContain('The backup ran out of disk space.')
+    expect(note.textContent).toContain('Free up space on the server, then back up again.')
+    expect(note.textContent).toContain('The server said: no space left on device.')
+    expect(within(note).getByRole('button', { name: 'Back up again' })).toBeTruthy()
   })
 
   it('backups: a job without a result is polled until it ends', async () => {
@@ -731,7 +752,7 @@ describe('panels', () => {
     fireEvent.click(screen.getByLabelText('Keys: a folder on another disk'))
     fireEvent.change(screen.getByLabelText('Keys folder'), { target: { value: '/mnt/keys' } })
     fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[1])
-    await answer('Change where keys go?', 'Save and restart')
+    await answer('Change where copies of keys go?', 'Save and restart')
     await waitFor(() => expect(postBodies('sew/server/mirror')).toEqual([{ kind: 'dir', path: '/mnt/keys' }]))
     expect(document.body.textContent).not.toMatch(/escrow/i)
   })
@@ -747,7 +768,7 @@ describe('panels', () => {
     expect(document.body.textContent).toContain(`The server said: ${reason}.`)
     const radio = screen.getByLabelText("Backups: with this server's own backup") as HTMLInputElement
     expect(radio.checked).toBe(true)
-    expect(screen.getByText(/K2 can’t see the server’s backup take them off yet\. Check/)).toBeTruthy()
+    expect(screen.getAllByText(/K2 can’t see the server’s backup keep them on another machine yet\. Check that scheduled backups are turned on\./).length).toBeGreaterThan(0)
     expect(screen.queryByLabelText("Keys: with this server's own backup")).toBeNull()
     const save = screen.getAllByRole('button', { name: 'Save' })[0] as HTMLButtonElement
     expect(save.disabled).toBe(true)
@@ -760,7 +781,7 @@ describe('panels', () => {
     gets({ 'sew/status': running({ publicUrl: null, warnings: [{ code: 'public_url_unset', message: 'set a public URL' }] }) })
     posts({ 'sew/server/config': { ok: true } })
     await renderReady('Running')
-    expect(screen.getByTestId('sew-warning-public_url_unset').textContent).toContain('Set a public URL')
+    expect(screen.getByTestId('sew-warning-public_url_unset').textContent).toContain('Chat’s web address isn’t set')
     fireEvent.click(screen.getByRole('button', { name: 'Set' }))
     fireEvent.change(screen.getByLabelText('Chat web address'), { target: { value: 'http://hearth.box.k2.dev' } })
     expect(screen.getByText('Use an address that starts with https://.')).toBeTruthy()
@@ -779,23 +800,24 @@ describe('panels', () => {
     await renderReady('Running')
     tab('App Spaces')
     expect(screen.getByTestId('sew-app-spaces').textContent).toContain('Admin Access never adds anyone.')
-    expect(await screen.findByText('3 members · 0 waiting · 1 held')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Bind a Space' }))
-    fireEvent.change(screen.getByLabelText('App id'), { target: { value: 'meet' } })
-    fireEvent.change(screen.getByLabelText('Space id'), { target: { value: 'spc_2' } })
-    fireEvent.click(within(screen.getByTestId('sew-bind-dialog')).getByRole('button', { name: 'Bind' }))
+    expect(await screen.findByText('3 members · 1 on hold until their App access is fixed')).toBeTruthy()
+    expect(screen.getByText('Hearth App')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Connect an App Space' }))
+    fireEvent.change(screen.getByLabelText('App name'), { target: { value: 'meet' } })
+    fireEvent.change(screen.getByLabelText('Space ID'), { target: { value: 'spc_2' } })
+    fireEvent.click(within(screen.getByTestId('sew-bind-dialog')).getByRole('button', { name: 'Connect' }))
     await waitFor(() => expect(postBodies('sew/app-spaces/bind')).toEqual([{ app: 'meet', spaceId: 'spc_2' }]))
     expect(await screen.findByText('spc_2')).toBeTruthy()
     // S32 Q3: unbinding is a choice; the default keeps everyone.
-    fireEvent.click(screen.getByRole('button', { name: /^Unbind hearth/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Disconnect the Hearth App/ }))
     expect(postBodies('sew/app-spaces/unbind')).toEqual([])
-    fireEvent.click(within(screen.getByTestId('sew-unbind-choice')).getByRole('button', { name: 'Unbind' }))
+    fireEvent.click(within(screen.getByTestId('sew-unbind-choice')).getByRole('button', { name: 'Disconnect' }))
     await waitFor(() => expect(postBodies('sew/app-spaces/unbind')).toEqual([{ app: 'hearth', spaceId: 'spc_1' }]))
     await waitFor(() => expect(screen.queryByTestId('sew-unbind-choice')).toBeNull())
     expect(screen.getByTestId('sew-notice').textContent).toContain('Everyone stays in it.')
-    fireEvent.click(screen.getByRole('button', { name: /^Unbind hearth/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Disconnect the Hearth App/ }))
     fireEvent.click(screen.getByLabelText('Remove the people K2 added'))
-    fireEvent.click(within(screen.getByTestId('sew-unbind-choice')).getByRole('button', { name: 'Unbind' }))
+    fireEvent.click(within(screen.getByTestId('sew-unbind-choice')).getByRole('button', { name: 'Disconnect' }))
     await waitFor(() =>
       expect(postBodies('sew/app-spaces/unbind')).toEqual([
         { app: 'hearth', spaceId: 'spc_1' },
@@ -809,7 +831,7 @@ describe('panels', () => {
     await renderReady('Running')
     tab('App Spaces')
     expect(await screen.findByText('This server doesn’t report App Spaces yet')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Bind a Space' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Connect an App Space' })).toBeNull()
   })
 
   // Sew 0.9.0 recording in Apps (K-c; vs-live B22).

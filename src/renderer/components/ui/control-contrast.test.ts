@@ -215,6 +215,27 @@ describe('Keyboard focus', () => {
     }
   })
 
+  it('a hovered switch keeps its edge at 3:1 on the card in every look (brighter on dark, darker on light)', () => {
+    const hover = (scheme: 'dark' | 'light'): number => {
+      const re = scheme === 'light' ? /:root\[data-scheme="light"\] \{ --k2-switch-hover: ([0-9.]+); \}/ : /:root \{ --k2-switch-hover: ([0-9.]+); \}/
+      const m = re.exec(globals)
+      if (!m) throw new Error(`no --k2-switch-hover for ${scheme}`)
+      return Number(m[1])
+    }
+    expect(rule(globals, '.k2-switch:hover:not(:disabled)')).toContain('filter: brightness(var(--k2-switch-hover))')
+    expect(hover('dark')).toBeGreaterThan(1)
+    expect(hover('light')).toBeLessThan(1)
+    for (const [style, id] of LOOKS) {
+      const c = palette(style, id)
+      const light = id === 'paper' || id === 'veil'
+      const f = hover(light ? 'light' : 'dark')
+      const edge = hex(c['control-edge']).map((v) => Math.min(255, Math.round(v * f))) as Rgb
+      for (const ground of ['bg-surface', 'bg-elevated', 'bg']) {
+        expect(contrast(edge, hex(c[ground])), `${style}/${id} hovered switch edge on ${ground}`).toBeGreaterThanOrEqual(3)
+      }
+    }
+  })
+
   it('switch, segment, slider thumb, menu items and dropdown options ring in the readable accent', () => {
     expect(rule(globals, '.k2-switch:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')
     expect(rule(globals, '.k2-segment:focus-visible')).toContain('outline: 2px solid var(--color-accent-text)')

@@ -1700,7 +1700,14 @@ html:not([data-style="terminal"]) .k2-radio:checked {
    Cuts set by eye with Rosson, 2026-11-09. */
 html[data-style="terminal"] .k2-switch { --k2-ch-cut: var(--k2-sw-cut); }
 html[data-style="terminal"] .k2-switch-knob { --k2-ch-cut: var(--k2-sw-knob-cut, 2.828px); }
-.k2-switch:hover:not(:disabled) { filter: brightness(1.12); }
+/* Hover lifts the switch a step: brighter on a dark ground, darker on a
+   light one, so its edge moves away from the card and keeps 3:1 (brightening
+   Veil's edge on a white tile dropped it to 2.8:1). */
+:root { --k2-switch-hover: 1.12; }
+:root[data-scheme="light"] { --k2-switch-hover: 0.9; }
+/* Gardens keep their own look: their switches hover as before. */
+:is([data-zen-root], [data-k2-thread-zen]) { --k2-switch-hover: 1.12; }
+.k2-switch:hover:not(:disabled) { filter: brightness(var(--k2-switch-hover)); }
 .k2-switch:focus-visible { outline: 2px solid var(--color-accent-text); outline-offset: 2px; }
 .k2-switch:disabled { cursor: not-allowed; opacity: 0.5; }
 .k2-switch-knob {

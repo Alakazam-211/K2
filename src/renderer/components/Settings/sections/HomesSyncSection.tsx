@@ -5,27 +5,43 @@
 // that server lists the devices syncing from it. Here: this computer's sync
 // state, "Change Home Sync" / "Sync again", and the devices syncing their Homes
 // from this computer, each with Remove. No "personal device" labels.
+//
+// Card groups: This computer (a status row with a dot and the one action),
+// then Devices syncing from this computer (a list; Remove asks first). A
+// server without homes-sync-v1 gets one card that says so, with the next step.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Button } from '@/components/ui'
+import { Button, Tag } from '@/components/ui'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { useSettingsStore } from '@/stores/settings'
 import { onHomesDeviceRemoved, onHomesChanged } from '@/stores/session-events'
 import { scopeForHost } from '@/kessel/server-scope'
 import {
   parseDevices,
   readControl,
   startSyncing,
-  statusLine,
   stopSyncing,
   useHomesSyncStatus,
+  writeControl,
+  type HomesSyncStatus,
   type HomesSyncTransport,
   type KeyValue,
   type SyncedDevice,
 } from '@/lib/homes-sync/runner'
 import { localKv, localTransport } from '@/lib/homes-sync'
 import { parseSyncState } from '@/lib/homes-sync/engine'
+import { daemonErrorText } from '@/lib/daemon-error'
 import { HOMES_SYNC_STORAGE_KEY } from '@/stores/homes'
 import type { SettingEntry } from '../searchManifest'
+import {
+  SETTING_LIST_ROW_HOVER,
+  SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
+  SETTING_SERVER_REASON,
+  SettingsGroup,
+  SettingsLoadState,
+} from '../controls/SettingControls'
+import { StatusDot, type HealthTone } from './ConnectionsParts'
 
 export const HOMES_SYNC_MANIFEST: SettingEntry[] = [
   {
@@ -46,6 +62,8 @@ const PLATFORM_LABEL: Record<string, string> = {
   web: 'Browser',
 }
 
+const PAGE = 'w-full max-w-[52rem] space-y-6 pb-6'
+
 function ago(ms: number | null, now: number): string {
   if (ms === null) return 'never synced'
   const s = Math.max(0, Math.round((now - ms) / 1000))
@@ -57,6 +75,119 @@ function ago(ms: number | null, now: number): string {
   return `synced ${Math.round(h / 24)} days ago`
 }
 
+function changes(n: number): string {
+  return n === 1 ? '1 change' : `${n} changes`
+}
+
+/** This computer's sync state in words: a dot, a short title and one line. */
+export function homesStatusView(
+  s: HomesSyncStatus,
+  enabled: boolean,
+  now: number,
+): { tone: HealthTone; title: string; hint: string; reason: string | null } {
+  if (!enabled) {
+    return {
+      tone: 'neutral',
+      title: 'Off for this computer',
+      hint: 'Its Homes stay here and don’t sync with your phone. Turn it on to keep them in step.',
+      reason: null,
+    }
+  }
+  switch (s.phase) {
+    case 'synced':
+      return {
+        tone: 'ok',
+        title: 'On for this computer',
+        hint:
+          s.pending > 0
+            ? `${changes(s.pending)} waiting to sync; the rest is up to date.`
+            : s.lastSyncAt !== null
+              ? `Up to date, ${ago(s.lastSyncAt, now)}.`
+              : 'Up to date.',
+        reason: null,
+      }
+    case 'syncing':
+      return { tone: 'ok', title: 'Syncing now…', hint: 'Sending and fetching changes with this computer’s K2 server.', reason: null }
+    case 'offline':
+      return {
+        tone: 'warn',
+        title: 'Paused',
+        hint:
+          s.pending > 0
+            ? `This computer’s K2 server can’t be reached. ${changes(s.pending)} wait here and sync when it’s back.`
+            : 'This computer’s K2 server can’t be reached. Homes sync again when it’s back.',
+        reason: null,
+      }
+    case 'removed':
+      return {
+        tone: 'warn',
+        title: 'Taken off Homes Sync',
+        hint: 'This computer was removed from Homes Sync. Its Homes are still here; sync again to rejoin.',
+        reason: null,
+      }
+    case 'unsupported':
+      return {
+        tone: 'neutral',
+        title: 'Not available here',
+        hint: 'This computer’s K2 server doesn’t sync Homes. Update K2 to turn it on.',
+        reason: null,
+      }
+    case 'error':
+      return {
+        tone: 'error',
+        title: 'Couldn’t sync',
+        hint: 'Homes Sync hit a problem and tries again by itself. Your Homes here are unchanged.',
+        reason: s.error,
+      }
+    case 'off':
+    default:
+      return { tone: 'neutral', title: 'Starting…', hint: 'Homes Sync starts in a moment.', reason: null }
+  }
+}
+
+function Header(): React.JSX.Element {
+  return (
+    <header className="min-w-0">
+      <h2 className="type-title text-[var(--color-text-primary)]">Homes Sync</h2>
+      <p className={`${SETTING_ROW_HINT} mt-1`}>
+        Keep your Homes the same on this computer and your phone. Each device keeps its own copy, so Home opens even offline,
+        and changes made apart are combined when they meet again.
+      </p>
+    </header>
+  )
+}
+
+/** What the last action did, in words: done (quiet, with a check) or failed
+ *  (what failed, nothing changed, then the server's reason). */
+type Outcome = { kind: 'done'; text: string } | { kind: 'failed'; text: string; reason: string } | null
+
+function OutcomeNote({ outcome, testId }: { outcome: Outcome; testId: string }): React.JSX.Element | null {
+  if (!outcome) return null
+  if (outcome.kind === 'done') {
+    return (
+      <p role="status" data-testid={testId} className="mt-2 inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)]">
+        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3 flex-shrink-0">
+          <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+        </svg>
+        {outcome.text}
+      </p>
+    )
+  }
+  const reason = outcome.reason.trim().replace(/[.\s]+$/, '')
+  return (
+    <div role="alert" data-testid={testId} className="mt-2">
+      <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">{outcome.text} Nothing changed; try again.</p>
+      {reason && <p className={SETTING_SERVER_REASON}>The server said: {reason}.</p>}
+    </div>
+  )
+}
+
+const openUpdates = (): void => {
+  useSettingsStore.setState({ pendingUpdateCheck: true })
+  useSettingsStore.getState().setSection('general')
+}
+const openCompanion = (): void => useSettingsStore.getState().openSettings('companion')
+
 export function HomesSyncSection(props: {
   transport?: HomesSyncTransport
   kv?: KeyValue | null
@@ -67,20 +198,29 @@ export function HomesSyncSection(props: {
   const [kv] = useState<KeyValue | null>(() => (props.kv !== undefined ? props.kv : localKv()))
   const status = useHomesSyncStatus()
   const [devices, setDevices] = useState<SyncedDevice[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<{ plain: string; reason: string | null } | null>(null)
   const [busy, setBusy] = useState(false)
   const [enabled, setEnabled] = useState(() => readControl(kv).enabled)
+  const [thisOutcome, setThisOutcome] = useState<Outcome>(null)
+  const [listOutcome, setListOutcome] = useState<Outcome>(null)
   const supported = transport.supported()
 
   const deviceId = parseSyncState(kv?.getItem(HOMES_SYNC_STORAGE_KEY) ?? null)?.deviceId ?? ''
 
   const refresh = useCallback(async (): Promise<void> => {
     if (!supported) return
+    let raw: unknown
     try {
-      setDevices(parseDevices(await transport.listDevices(deviceId)))
-      setError(null)
+      raw = await transport.listDevices(deviceId)
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setLoadError({ plain: 'This page couldn’t read the list from this computer’s K2 server.', reason: daemonErrorText(err) })
+      return
+    }
+    try {
+      setDevices(parseDevices(raw))
+      setLoadError(null)
+    } catch {
+      setLoadError({ plain: 'This computer’s K2 server sent a list K2 couldn’t read. Updating K2 usually fixes this.', reason: null })
     }
   }, [supported, transport, deviceId])
 
@@ -91,137 +231,193 @@ export function HomesSyncSection(props: {
     return () => offs.forEach((off) => off())
   }, [refresh])
 
+  const retry = (): void => {
+    setDevices(null)
+    setLoadError(null)
+    void refresh()
+  }
+
+  const turnOff = async (): Promise<boolean> => {
+    setBusy(true)
+    try {
+      await stopSyncing(kv, transport)
+      setEnabled(false)
+      await refresh()
+      return true
+    } catch (err) {
+      // stopSyncing turned the control off before the server call failed:
+      // put it back, so this computer keeps syncing as the page says.
+      writeControl(kv, { enabled: true, epoch: readControl(kv).epoch })
+      setEnabled(true)
+      setThisOutcome({ kind: 'failed', text: 'Couldn’t take this computer off Homes Sync.', reason: daemonErrorText(err) })
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // Rosson 11-11: "Stop syncing" read as a scare word. The button says
   // "Change Home Sync"; turning it off is a choice inside, with what it
   // keeps spelled out.
   const change = async (): Promise<void> => {
+    setThisOutcome(null)
     const ok = await useConfirmDialogStore.getState().confirm({
       title: 'Change Home Sync',
       message:
         'This computer keeps its Homes in step with your phone through this computer’s K2 server. You can turn that off for this computer: its Homes stay here, nothing is deleted, and you can turn it back on at any time.',
       confirmLabel: 'Turn off for this computer',
     })
-    if (ok) await stop()
-  }
-
-  const stop = async (): Promise<void> => {
-    setBusy(true)
-    try {
-      await stopSyncing(kv, transport)
-      setEnabled(false)
-      await refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+    if (!ok) return
+    if (await turnOff()) setThisOutcome({ kind: 'done', text: 'Homes Sync is off for this computer. Its Homes stay here.' })
   }
 
   const start = (): void => {
     startSyncing(kv)
     setEnabled(true)
+    setThisOutcome({ kind: 'done', text: 'Homes Sync is on. This computer joins the list in a moment.' })
     // The runner registers this computer; the list follows.
     setTimeout(() => void refresh(), 1500)
   }
 
   const remove = async (d: SyncedDevice): Promise<void> => {
+    setListOutcome(null)
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Remove device',
+      title: d.current ? 'Remove this computer?' : `Remove ${d.name}?`,
       message: d.current
-        ? 'Take this computer off Homes Sync? Its Homes stay as they are here.'
-        : `Take “${d.name}” off Homes Sync? Its Homes stay on that device, and it can sync again later from its own settings.`,
+        ? 'This computer stops syncing its Homes. Its Homes stay as they are here, and you can turn Homes Sync back on at any time.'
+        : `${d.name} stops syncing its Homes with this computer. Its Homes stay on that device, and it can sync again later from its own settings.`,
       confirmLabel: 'Remove',
       destructive: true,
     })
     if (!ok) return
+    if (d.current) {
+      if (await turnOff()) setListOutcome({ kind: 'done', text: 'Removed this computer. Its Homes stay here.' })
+      return
+    }
     setBusy(true)
     try {
-      if (d.current) {
-        await stopSyncing(kv, transport)
-        setEnabled(false)
-      } else {
-        await transport.remove(d.deviceId)
-      }
+      await transport.remove(d.deviceId)
       await refresh()
+      setListOutcome({ kind: 'done', text: `Removed ${d.name}. Its Homes stay on it.` })
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setListOutcome({ kind: 'failed', text: `Couldn’t remove ${d.name}.`, reason: daemonErrorText(err) })
     } finally {
       setBusy(false)
     }
   }
 
-  const now = Date.now()
-  return (
-    <div className="max-w-2xl" data-settings-id="homes-sync.devices" data-testid="homes-sync-section">
-      <h2 className="type-title text-[var(--color-text-primary)] mb-1">Homes Sync</h2>
-      <p className="type-hint text-[var(--color-text-muted)] mb-4">
-        Your Homes stay in step between this computer and your phone through this computer’s K2 server. Every device keeps
-        its own copy, so Home always opens, even offline; changes made while apart are combined when they meet again.
-        Which Home you’re looking at stays on each device. Your prompt stash syncs the same way, with these devices; its
-        files stay on the device that saved them.
-      </p>
+  if (!supported) {
+    return (
+      <div className={PAGE} data-settings-id="homes-sync.devices" data-testid="homes-sync-section">
+        <Header />
+        <SettingsLoadState
+          kind="empty"
+          title="This computer’s K2 server doesn’t sync Homes yet"
+          action={<Button onClick={openUpdates}>Check for updates</Button>}
+          testId="homes-sync-unsupported"
+        >
+          Update K2 on this computer to 0.46.1 or newer, then come back here to turn on Homes Sync. Your Homes stay on this
+          computer until then.
+        </SettingsLoadState>
+      </div>
+    )
+  }
 
-      {!supported ? (
-        <p className="type-row text-[var(--color-text-secondary)]" data-testid="homes-sync-unsupported">
-          This computer’s K2 server doesn’t sync Homes yet. Update K2 to turn it on.
-        </p>
-      ) : (
-        <>
-          <div className="flex items-center justify-between gap-3 border border-[var(--color-border)] px-3 py-2 mb-4">
-            <div className="min-w-0">
-              <div className="type-row text-[var(--color-text-primary)]">This computer</div>
-              <div className="type-hint text-[var(--color-text-muted)]" data-testid="homes-sync-status">
-                {enabled ? statusLine(status) : statusLine({ ...status, phase: 'off' })}
+  const now = Date.now()
+  const view = homesStatusView(status, enabled, now)
+  const removed = enabled && status.phase === 'removed'
+
+  const listState = loadError ? (
+    <SettingsLoadState
+      kind="error"
+      title="Couldn’t load the devices"
+      detail={loadError.reason}
+      action={<Button onClick={retry}>Try again</Button>}
+      testId="homes-sync-devices-error"
+    >
+      {loadError.plain} Your Homes are unchanged.
+    </SettingsLoadState>
+  ) : devices === null ? (
+    <SettingsLoadState kind="loading" title="Loading devices…" testId="homes-sync-devices-loading" />
+  ) : devices.length === 0 ? (
+    <SettingsLoadState
+      kind="empty"
+      title="No devices sync here yet"
+      action={<Button onClick={openCompanion}>Pair a phone</Button>}
+      testId="homes-sync-no-devices"
+    >
+      Pair K2 Companion on your phone and choose this computer as its server; it shows here once it syncs.
+    </SettingsLoadState>
+  ) : undefined
+
+  return (
+    <div className={PAGE} data-settings-id="homes-sync.devices" data-testid="homes-sync-section">
+      <Header />
+
+      <section>
+        <SettingsGroup title="This computer" card testId="homes-sync-this-computer">
+          <div className="px-4 py-3" data-tone={view.tone}>
+            <div className="flex items-start justify-between gap-6">
+              <div className="min-w-0">
+                <div className={`${SETTING_ROW_LABEL} flex items-center gap-2`}>
+                  <StatusDot tone={view.tone} />
+                  <span data-testid="homes-sync-title">{view.title}</span>
+                </div>
+                <div className={SETTING_ROW_HINT} data-testid="homes-sync-status">
+                  {view.hint}
+                </div>
+                {view.reason && <p className={SETTING_SERVER_REASON}>The server said: {view.reason.replace(/[.\s]+$/, '')}.</p>}
+              </div>
+              {enabled && !removed ? (
+                <Button variant="quiet" className="flex-shrink-0" disabled={busy} onClick={() => void change()}>
+                  Change Home Sync
+                </Button>
+              ) : (
+                <Button variant="accent" className="flex-shrink-0" disabled={busy} onClick={start}>
+                  {removed ? 'Sync again' : 'Start syncing'}
+                </Button>
+              )}
+            </div>
+          </div>
+        </SettingsGroup>
+        <OutcomeNote outcome={thisOutcome} testId="homes-sync-this-outcome" />
+      </section>
+
+      <section>
+        <SettingsGroup
+          title="Devices syncing from this computer"
+          hint="Phones and computers that keep their Homes here. Removing one stops its sync; its Homes stay on it. Your prompt stash syncs with them too, and its files stay on the device that saved them."
+          card
+          state={listState}
+          testId="homes-sync-devices"
+        >
+          {(devices ?? []).map((d) => (
+            <div key={d.deviceId} className={`px-4 py-3 ${SETTING_LIST_ROW_HOVER}`} data-testid="homes-sync-device">
+              <div className="flex items-center justify-between gap-6">
+                <div className="min-w-0">
+                  <div className={`${SETTING_ROW_LABEL} flex items-center gap-2 min-w-0`}>
+                    <span className="truncate">{d.name}</span>
+                    {d.current && <Tag tone="neutral">This computer</Tag>}
+                  </div>
+                  <div className={SETTING_ROW_HINT}>
+                    {PLATFORM_LABEL[d.platform] ?? d.platform} · {ago(d.lastSyncAt, now)}
+                  </div>
+                </div>
+                <Button
+                  variant="danger-quiet"
+                  className="flex-shrink-0"
+                  disabled={busy}
+                  onClick={() => void remove(d)}
+                  aria-label={`Remove ${d.name}`}
+                >
+                  Remove
+                </Button>
               </div>
             </div>
-            {enabled && status.phase !== 'removed' ? (
-              <Button variant="ghost" disabled={busy} onClick={() => void change()}>
-                Change Home Sync
-              </Button>
-            ) : (
-              <Button variant="accent" disabled={busy} onClick={start}>
-                {status.phase === 'removed' ? 'Sync again' : 'Start syncing'}
-              </Button>
-            )}
-          </div>
-
-          <h3 className="type-heading text-[var(--color-text-primary)] mb-1">Devices syncing from this computer</h3>
-          <p className="type-hint text-[var(--color-text-muted)] mb-2">
-            Phones and computers that keep their Homes here. Removing one stops its sync; its Homes stay on it.
-          </p>
-          {error && (
-            <p className="type-hint text-[var(--color-status-error,#e5484d)] mb-2" role="alert">
-              {error}
-            </p>
-          )}
-          {devices === null ? (
-            <p className="type-hint text-[var(--color-text-muted)]">Loading…</p>
-          ) : devices.length === 0 ? (
-            <p className="type-hint text-[var(--color-text-muted)]" data-testid="homes-sync-no-devices">
-              No devices sync their Homes here yet.
-            </p>
-          ) : (
-            <ul className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
-              {devices.map((d) => (
-                <li key={d.deviceId} className="flex items-center justify-between gap-3 px-3 py-2" data-testid="homes-sync-device">
-                  <div className="min-w-0">
-                    <div className="type-row text-[var(--color-text-primary)] truncate">
-                      {d.name}
-                      {d.current && <span className="ml-2 type-hint text-[var(--color-text-muted)]">(this computer)</span>}
-                    </div>
-                    <div className="type-hint text-[var(--color-text-muted)]">
-                      {PLATFORM_LABEL[d.platform] ?? d.platform} · {ago(d.lastSyncAt, now)}
-                    </div>
-                  </div>
-                  <Button variant="ghost" disabled={busy} onClick={() => void remove(d)} aria-label={`Remove ${d.name}`}>
-                    Remove
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </>
-      )}
+          ))}
+        </SettingsGroup>
+        <OutcomeNote outcome={listOutcome} testId="homes-sync-list-outcome" />
+      </section>
     </div>
   )
 }

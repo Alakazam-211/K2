@@ -16,6 +16,13 @@ import {
   seedWindowChromeIfMissing,
   writeWindowChrome,
 } from '@/lib/window-chrome'
+// 0.46.13: drawer tab order is per-client view state (not daemon settings).
+import {
+  type DrawerSide,
+  forgetTab,
+  readDrawerTabOrder,
+  writeDrawerTabOrder,
+} from '@/lib/drawer-tab-order'
 
 // 0.46.0 (Rosson 2026-10-16): the right drawer's Changes tab is replaced by
 // Agent (the room's agent: picture, color, name, handle, permissions). The
@@ -38,6 +45,12 @@ interface PanelsState {
   rightPanelActiveTab: PanelTab
   rightPanelTabs: PanelTab[]
 
+  // This client's drag order for each drawer's tabs (`lib/drawer-tab-order`);
+  // null = the base order above. Which drawer a tab is in stays in the
+  // arrays above (daemon settings); this only re-orders them.
+  leftPanelTabOrder: string[] | null
+  rightPanelTabOrder: string[] | null
+
   // Focus window: which side shows the workspace header
   focusWorkspaceHeaderSide: 'left' | 'right'
 
@@ -52,6 +65,11 @@ interface PanelsState {
   // Move a tab from one side to the other
   moveTabToLeft: (tab: PanelTab) => void
   moveTabToRight: (tab: PanelTab) => void
+
+  /** Save a drawer's tab order on this client (drag or Alt+Arrow in TabbedPanel). */
+  reorderDrawerTabs: (side: DrawerSide, order: readonly PanelTab[]) => void
+  /** Forget a drawer's saved order (the tab menu's Reset Tab Order). */
+  resetDrawerTabOrder: (side: DrawerSide) => void
 
   // Move workspace header between sides (focus window)
   moveFocusWorkspaceHeader: (side: 'left' | 'right') => void
@@ -106,6 +124,17 @@ function shouldSuppressPersist(): boolean {
   return true
 }
 
+/** A tab moved to the other drawer leaves both saved orders: the source no
+ *  longer has it, and the target appends it at the end (as before 0.46.13). */
+function forgetMovedTab(tab: PanelTab): void {
+  const s = usePanelsStore.getState()
+  const left = forgetTab(s.leftPanelTabOrder, tab)
+  const right = forgetTab(s.rightPanelTabOrder, tab)
+  usePanelsStore.setState({ leftPanelTabOrder: left, rightPanelTabOrder: right })
+  writeDrawerTabOrder('left', left)
+  writeDrawerTabOrder('right', right)
+}
+
 export const usePanelsStore = create<PanelsState>((set, get) => ({
   leftPanelOpen: bootChrome?.leftOpen ?? true,
   leftPanelWidth: SIDEBAR_DEFAULT_WIDTH,
@@ -116,6 +145,9 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
   rightPanelWidth: SIDEBAR_DEFAULT_WIDTH,
   rightPanelActiveTab: 'history',
   rightPanelTabs: ['history', 'agent'],
+
+  leftPanelTabOrder: readDrawerTabOrder('left'),
+  rightPanelTabOrder: readDrawerTabOrder('right'),
 
   focusWorkspaceHeaderSide: 'left',
 
@@ -147,6 +179,7 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
   },
 
   moveTabToLeft: (tab) => {
+    forgetMovedTab(tab)
     set((s) => ({
       leftPanelTabs: s.leftPanelTabs.includes(tab) ? s.leftPanelTabs : [...s.leftPanelTabs, tab],
       rightPanelTabs: s.rightPanelTabs.filter((t) => t !== tab),
@@ -167,6 +200,7 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
   },
 
   moveTabToRight: (tab) => {
+    forgetMovedTab(tab)
     set((s) => ({
       rightPanelTabs: s.rightPanelTabs.includes(tab)
         ? s.rightPanelTabs
@@ -186,6 +220,17 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
       leftPanelActiveTab: s.leftPanelActiveTab,
       rightPanelActiveTab: s.rightPanelActiveTab
     }).catch((e: unknown) => console.error('[panels]', e))
+  },
+
+  reorderDrawerTabs: (side, order) => {
+    const next = [...order]
+    set(side === 'left' ? { leftPanelTabOrder: next } : { rightPanelTabOrder: next })
+    writeDrawerTabOrder(side, next)
+  },
+
+  resetDrawerTabOrder: (side) => {
+    set(side === 'left' ? { leftPanelTabOrder: null } : { rightPanelTabOrder: null })
+    writeDrawerTabOrder(side, null)
   },
 
   moveFocusWorkspaceHeader: (side) => {

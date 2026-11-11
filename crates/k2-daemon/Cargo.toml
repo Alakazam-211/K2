@@ -1,6 +1,6 @@
 [package]
 name = "k2-daemon"
-version = "0.46.10"
+version = "0.46.11"
 edition = "2021"
 license = "MIT"
 publish = false

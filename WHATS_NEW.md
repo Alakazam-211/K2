@@ -3,7 +3,7 @@
 User-facing highlights of recent updates. Developer-facing per-version notes
 live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
-## 0.46.11
+## 0.46.11 — Kessel, a new look, and a Get started list
 
 ### App SDK
 - **`k2.guests.refresh({refresh})` works as documented.** It now goes with your App pass, like a login, instead of failing `guest_required` when no guest is bound (the device's old pass has usually ended by then). On an App's link only that App's refresh tokens work, whatever the body names. `k2 study auth-pages` lists the device sign-in fields (`refresh`, `passExpiresAt`, `refreshExpiresAt`, in seconds since the epoch) and the refresh call.

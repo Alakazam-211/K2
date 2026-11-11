@@ -2,31 +2,27 @@
 // component each so they move with the layout (0.46.12).
 //
 // Page-sized states (the project list, one project, no dashboard, the chat,
-// the Feedback tab) are the shared state card (`SettingsLoadState`: title,
-// one plain line, the server's reason quietly, the next step). A tile is too
-// small for a card in a card: `TileState` is the same anatomy, centred, with
-// no card around it.
+// the Feedback tab) are the owner's state card (StateCard.tsx: an icon, a
+// title, one plain line, the server's reason quietly, the next step). A tile
+// is too small for a card in a card: `TileState` is the same anatomy,
+// centred, with no card around it.
 
 import React, { useEffect, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useWindowModeStore } from '@/stores/window-mode'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
-import { SettingsLoadState } from '@/components/Settings/controls/SettingControls'
-import { Button } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { CreateProjectForm } from './ProjectNav'
 import { projectSettingsCaps, type ProjectRole } from './project-settings'
 import { createErrorMessage, createProjectGroupDashboard } from './projects-api'
-import { TryAgain } from './TileState'
-
-/** A page-sized state, centred on the canvas. */
-function Canvas({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <div className="flex-1 min-h-0 flex items-center justify-center p-6">
-      <div className="w-full max-w-md">{children}</div>
-    </div>
-  )
-}
+import {
+  PlusGlyph,
+  ProjectStateCard,
+  ProjectsIcon,
+  StateAction,
+  StateCanvas as Canvas,
+  StateRetry,
+} from './StateCard'
 
 /** The project list is loading, or its read failed (never an endless
  *  "Loading…": the store keeps the failure in `groupsError`). */
@@ -43,17 +39,17 @@ export function ProjectListLoadState(): React.JSX.Element {
   return (
     <Canvas>
       {error && !retrying ? (
-        <SettingsLoadState
+        <ProjectStateCard
           kind="error"
           title="Couldn’t load your projects"
           detail={error}
           testId="projects-list-error"
-          action={<TryAgain onClick={retry} />}
+          action={<StateRetry onClick={retry} />}
         >
-          K2 couldn’t read the project list from this server.
-        </SettingsLoadState>
+          K2 couldn’t get the project list from the server. Your agents are fine.
+        </ProjectStateCard>
       ) : (
-        <SettingsLoadState kind="loading" title="Loading your projects…" testId="projects-list-loading" />
+        <ProjectStateCard kind="loading" title="Loading your projects…" testId="projects-list-loading" />
       )}
     </Canvas>
   )
@@ -64,9 +60,9 @@ export function ProjectsEmptyState(): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   return (
     <Canvas>
-      <SettingsLoadState
+      <ProjectStateCard
         kind="empty"
-        stack
+        icon={<ProjectsIcon />}
         title="No projects yet"
         testId="projects-empty"
         action={
@@ -75,40 +71,43 @@ export function ProjectsEmptyState(): React.JSX.Element {
               <CreateProjectForm onDone={() => setCreating(false)} />
             </div>
           ) : (
-            <Button variant="accent" onClick={() => setCreating(true)}>
+            <StateAction onClick={() => setCreating(true)} glyph={<PlusGlyph />}>
               New project
-            </Button>
+            </StateAction>
           )
         }
       >
-        A project keeps the agents working on one goal together, on a shared dashboard with one chat.
-      </SettingsLoadState>
+        A project puts a few agents on one dashboard, with one shared chat.
+      </ProjectStateCard>
     </Canvas>
   )
 }
 
 /** One project's members and dashboards are loading, or failed to load. */
 export function ProjectLoadState({
+  name,
   error,
   onRetry,
 }: {
+  /** The project's name, from the list (the card says which failed). */
+  name: string | null
   error: string | null
   onRetry: () => void
 }): React.JSX.Element {
   return (
     <Canvas>
       {error ? (
-        <SettingsLoadState
+        <ProjectStateCard
           kind="error"
-          title="Couldn’t open this project"
+          title={name ? `Couldn’t load ${name}` : 'Couldn’t load this project'}
           detail={error}
           testId="project-load-error"
-          action={<TryAgain onClick={onRetry} />}
+          action={<StateRetry onClick={onRetry} />}
         >
-          K2 couldn’t read its agents and dashboards from this server.
-        </SettingsLoadState>
+          K2 couldn’t get this project from the server. Your agents are fine.
+        </ProjectStateCard>
       ) : (
-        <SettingsLoadState kind="loading" title="Loading the project…" testId="project-loading" />
+        <ProjectStateCard kind="loading" title={name ? `Loading ${name}…` : 'Loading the project…'} testId="project-loading" />
       )}
     </Canvas>
   )
@@ -155,32 +154,33 @@ export function NoDashboardState({
   return (
     <Canvas>
       {error ? (
-        <SettingsLoadState
+        <ProjectStateCard
           kind="error"
           title="Couldn’t create the dashboard"
           detail={error}
           testId="project-dashboard-create-error"
-          action={<TryAgain onClick={create} busy={busy} />}
+          action={<StateRetry onClick={create} disabled={busy} />}
         >
           Nothing changed in this project.
-        </SettingsLoadState>
+        </ProjectStateCard>
       ) : (
-        <SettingsLoadState
+        <ProjectStateCard
           kind="empty"
+          icon={<ProjectsIcon />}
           title="This project has no dashboard yet"
           testId="project-no-dashboard"
           action={
             canCreate ? (
-              <Button variant="accent" onClick={create} disabled={busy}>
+              <StateAction onClick={create} disabled={busy} glyph={<PlusGlyph />}>
                 Create a dashboard
-              </Button>
+              </StateAction>
             ) : undefined
           }
         >
           {canCreate
             ? 'A dashboard is where the project’s agents sit side by side.'
             : 'Only the project’s owner or an admin can add one.'}
-        </SettingsLoadState>
+        </ProjectStateCard>
       )}
     </Canvas>
   )

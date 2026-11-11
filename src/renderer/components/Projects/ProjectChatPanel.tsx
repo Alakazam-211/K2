@@ -40,8 +40,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { useAutoMarkRead } from '@/stores/unread'
 import { MuteToggleButton } from '@/components/common/UnreadBadge'
-import { SettingsLoadState } from '@/components/Settings/controls/SettingControls'
-import { TryAgain } from './TileState'
+import { ProjectStateCard, StateCanvas, StateRetry } from './StateCard'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import {
@@ -465,21 +464,21 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       {resizing && <div className="fixed inset-0 z-50" style={{ cursor: 'col-resize' }} />}
       {/* Header row — identity only; the close toggle sits in the
           composer row, across from Send (Rosson, 0.46.0). */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-[var(--color-border)] flex-shrink-0">
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-muted)] flex-shrink-0">
-          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
-        </svg>
-        <span className="type-name text-[var(--color-text-primary)] whitespace-nowrap">Project chat</span>
-        <span className="flex-1" />
-        {poc && (
-          <span
-            className="type-hint text-[var(--color-text-secondary)] truncate min-w-0"
-            title={`Point of contact: ${poc}. Each message here also goes to ${poc}.`}
-            data-project-chat-poc=""
-          >
-            Point of contact: {poc}
-          </span>
-        )}
+      {/* Two lines (the owner's mockup): "Project chat" over who gets each
+          message. */}
+      <div className="flex items-center gap-2 min-h-[52px] pl-3.5 pr-2 py-1.5 border-b border-[var(--color-border)] flex-shrink-0" data-project-chat-header="">
+        <div className="min-w-0 flex-1">
+          <p className="type-name font-semibold text-[var(--color-text-primary)] truncate">Project chat</p>
+          {poc && (
+            <p
+              className="type-hint text-[var(--color-text-secondary)] truncate"
+              title={`Point of contact: ${poc}. Each message here also goes to ${poc}.`}
+              data-project-chat-poc=""
+            >
+              Point of contact: {poc}
+            </p>
+          )}
+        </div>
         <MuteToggleButton kind="project" id={show.id} noun="project chat" />
       </div>
 
@@ -510,22 +509,21 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
           }}
         >
           {loadError && !retrying ? (
-            <ChatStateSlot>
-              <SettingsLoadState
+            <StateCanvas>
+              <ProjectStateCard
                 kind="error"
-                stack
                 title="Couldn’t load the chat"
                 detail={loadError}
                 testId="project-chat-error"
-                action={<TryAgain onClick={retryLoad} />}
+                action={<StateRetry onClick={retryLoad} />}
               >
-                K2 couldn’t read this project’s messages from the server.
-              </SettingsLoadState>
-            </ChatStateSlot>
+                K2 couldn’t get this project’s messages from the server.
+              </ProjectStateCard>
+            </StateCanvas>
           ) : messages === null ? (
-            <ChatStateSlot>
-              <SettingsLoadState kind="loading" stack title="Loading the chat…" testId="project-chat-loading" />
-            </ChatStateSlot>
+            <StateCanvas>
+              <ProjectStateCard kind="loading" title="Loading the chat…" testId="project-chat-loading" />
+            </StateCanvas>
           ) : messages.length === 0 ? (
             <ThreadChatEmpty testId="project-chat-empty">
               <p className="type-row" style={{ color: 'var(--zen-text)' }}>No messages yet</p>
@@ -601,7 +599,7 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
                   <rect x="4" y="11" width="16" height="10" rx="2" />
                   <path d="M8 11V7a4 4 0 018 0v4" />
                 </svg>
-                <span className="min-w-0">View only: you can read this chat but not post in it.</span>
+                <span className="min-w-0">View only: you can read but not post.</span>
               </div>
             </div>
           </div>
@@ -678,11 +676,6 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       </WorkspaceFileLinks>
     </div>
   )
-}
-
-/** Holds a state card in the chat column, a little in from its edges. */
-function ChatStateSlot({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <div className="h-full flex items-center justify-center px-1">{children ? <div className="w-full">{children}</div> : null}</div>
 }
 
 /** Close the project chat: the drawer's » toggle, at the bottom left of the

@@ -270,7 +270,7 @@ describe('tile states', () => {
     const state = screen.getByTestId('tile-error')
     expect(state.getAttribute('role')).toBe('alert')
     expect(state.textContent).toContain('Couldn’t reach sales’s session.')
-    expect(state.textContent).toContain('The server said: session registry is not answering.')
+    expect(state.querySelector('[data-load-detail]')?.textContent).toBe('session registry is not answering')
     const again = screen.getByRole('button', { name: 'Try again' })
     expect(again.getAttribute('data-k2-chamfer')).toBe('control')
     await act(async () => {

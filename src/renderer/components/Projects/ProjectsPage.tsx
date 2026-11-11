@@ -64,10 +64,13 @@ const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 // ── Selected-project main area ────────────────────────────────────────────
 
 function SelectedProjectView({
+  name,
   show,
   error,
   onReload,
 }: {
+  /** The project's name from the list (its state cards say which). */
+  name: string
   show: ProjectGroupShow | null
   error: string | null
   /** Read the project again (Try again; after creating its dashboard). */
@@ -111,7 +114,7 @@ function SelectedProjectView({
     )
   }, [paneRequestNonce])
 
-  if (error || !show) return <ProjectLoadState error={error} onRetry={onReload} />
+  if (error || !show) return <ProjectLoadState name={name} error={error} onRetry={onReload} />
 
   const activeDashboard = dashboards.find((d) => d.id === activeTab) ?? null
 
@@ -399,6 +402,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
                that would briefly mount the wrong project's panes). */
             <SelectedProjectView
               key={selectedGroup.id}
+              name={selectedGroup.name}
               show={show?.id === selectedGroup.id ? show : null}
               error={showError?.id === selectedGroup.id ? showError.message : null}
               onReload={reloadShow}

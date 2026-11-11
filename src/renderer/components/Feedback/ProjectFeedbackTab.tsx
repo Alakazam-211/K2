@@ -13,8 +13,7 @@ import { useFeedbackStore } from '@/stores/feedback'
 import type { ProjectGroupMemberInfo } from '@/components/Projects/projects-api'
 import { fetchAllFeedback, type FeedbackListRow, type FeedbackProjectRef } from './feedback-api'
 import { TicketBoard } from './TicketBoard'
-import { SettingsLoadState } from '@/components/Settings/controls/SettingControls'
-import { TryAgain } from '@/components/Projects/TileState'
+import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 
 /** Pure scoping helper (unit-tested): the fan-out refs for a project's
  *  member list. Members whose workspace has been unregistered since
@@ -90,19 +89,17 @@ export function ProjectFeedbackTab({
   // board (a refetch failing under loaded tickets keeps the board's line).
   if (error && !retrying && (rows === null || rows.length === 0)) {
     return (
-      <div className="flex-1 min-h-0 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          <SettingsLoadState
-            kind="error"
-            title="Couldn’t load this project’s tickets"
-            detail={error}
-            testId="project-feedback-error"
-            action={<TryAgain onClick={retry} />}
-          >
-            K2 couldn’t read the tickets from this server.
-          </SettingsLoadState>
-        </div>
-      </div>
+      <StateCanvas>
+        <ProjectStateCard
+          kind="error"
+          title="Couldn’t load this project’s tickets"
+          detail={error}
+          testId="project-feedback-error"
+          action={<StateRetry onClick={retry} />}
+        >
+          K2 couldn’t get the tickets from the server. Your agents are fine.
+        </ProjectStateCard>
+      </StateCanvas>
     )
   }
 

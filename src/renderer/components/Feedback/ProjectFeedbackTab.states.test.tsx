@@ -40,7 +40,7 @@ describe('Feedback tab states', () => {
     render(<ProjectFeedbackTab members={MEMBERS} />)
     const card = await screen.findByTestId('project-feedback-error')
     expect(card.textContent).toContain('Couldn’t load this project’s tickets')
-    expect(card.textContent).toContain('The server said: the reply had no ticket list.')
+    expect(card.querySelector('[data-load-detail]')?.textContent).toBe('the reply had no ticket list')
     expect(card.textContent).not.toMatch(/feedback\/|list-all|Failed to load/)
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(screen.getByTestId('board').getAttribute('data-rows')).toBe('0'))

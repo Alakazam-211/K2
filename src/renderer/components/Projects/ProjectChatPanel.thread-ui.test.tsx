@@ -289,7 +289,7 @@ describe('project chat in the Thread look', () => {
     await mount()
     await flush()
     expect(screen.queryByTestId('project-chat-compose')).toBeNull()
-    expect(screen.getByText(/View only: you can read this chat but not post in it/)).toBeTruthy()
+    expect(screen.getByText(/View only: you can read but not post/)).toBeTruthy()
     const drawer = document.querySelector('[data-zen-drawer]') as HTMLElement | null
     if (!drawer) throw new Error('no free strip')
     expect(drawer.getAttribute('data-zen-drawer-attached')).toBe('false')
@@ -344,7 +344,7 @@ describe('project chat states and header', () => {
     const card = await screen.findByTestId('project-chat-error')
     expect(card.getAttribute('role')).toBe('alert')
     expect(card.textContent).toContain('Couldn’t load the chat')
-    expect(card.textContent).toContain('The server said: database is locked.')
+    expect(card.querySelector('[data-load-detail]')?.textContent).toBe('database is locked')
     expect(card.textContent).not.toContain('Failed to load chat')
     fail = false
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
@@ -365,7 +365,10 @@ describe('project chat states and header', () => {
 
   it('the header reads "Project chat" and names the point of contact in full', async () => {
     await mount()
-    expect(screen.getByText('Project chat').className).not.toContain('uppercase')
+    const title = screen.getByText('Project chat')
+    expect(title.className).not.toContain('uppercase')
+    // Two lines: the title over who gets each message.
+    expect(title.nextElementSibling?.hasAttribute('data-project-chat-poc')).toBe(true)
     const poc = document.querySelector('[data-project-chat-poc]') as HTMLElement
     expect(poc.textContent).toBe('Point of contact: Ada')
     expect(poc.getAttribute('title')).toContain('Point of contact: Ada')

@@ -233,9 +233,7 @@ export function SaveError({ state }: { state: SaveState }): React.JSX.Element | 
  *  title saying what happened, a plain line under it, and the next step on
  *  the right (Try again, Add …). Use it in place of the card the data would
  *  fill, so the page keeps its shape. `detail` is the server's own reason,
- *  shown quietly after the plain line, never instead of it. `stack` centres
- *  the card's text with the next step under it, for a narrow column or a
- *  card standing alone on an empty canvas. */
+ *  shown quietly after the plain line, never instead of it. */
 export function SettingsLoadState({
   kind,
   title,
@@ -243,7 +241,6 @@ export function SettingsLoadState({
   detail,
   action,
   testId,
-  stack = false,
 }: {
   kind: 'loading' | 'error' | 'empty'
   title: string
@@ -251,7 +248,6 @@ export function SettingsLoadState({
   detail?: string | null
   action?: React.ReactNode
   testId?: string
-  stack?: boolean
 }): React.JSX.Element {
   const reason = detail?.trim().replace(/[.\s]+$/, '')
   return (
@@ -264,7 +260,7 @@ export function SettingsLoadState({
       data-testid={testId}
       className="px-4 py-3"
     >
-      <div className={stack ? 'flex flex-col items-center gap-3 text-center' : 'flex items-center justify-between gap-6'} data-load-stack={stack ? '' : undefined}>
+      <div className="flex items-center justify-between gap-6">
         <div className="flex items-start gap-2 min-w-0">
           {kind === 'loading' && <Spinner className="mt-0.5" />}
           <div className="min-w-0">
@@ -273,7 +269,7 @@ export function SettingsLoadState({
             {reason && <p className={SETTING_SERVER_REASON} data-load-detail="">The server said: {reason}.</p>}
           </div>
         </div>
-        {action && <div className={stack ? 'w-full flex justify-center gap-2' : 'flex items-center gap-2 flex-shrink-0'}>{action}</div>}
+        {action && <div className="flex items-center gap-2 flex-shrink-0">{action}</div>}
       </div>
     </Surface>
   )

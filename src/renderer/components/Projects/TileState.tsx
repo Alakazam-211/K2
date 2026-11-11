@@ -53,8 +53,12 @@ export function TileState({
       </p>
       {children && <p className="type-hint text-[var(--color-text-secondary)] max-w-[40ch]">{children}</p>}
       {reason && (
-        <p className="type-hint text-[var(--color-text-muted)] max-w-[40ch] break-words" data-load-detail="">
-          The server said: {reason}.
+        <p
+          data-load-detail=""
+          title="What the server said"
+          className="mt-1 max-w-[40ch] px-2.5 py-1 type-hint font-mono text-[var(--color-text-muted)] bg-[var(--color-wash-1)] rounded-[var(--radius-field)] break-words"
+        >
+          {reason}
         </p>
       )}
       {action && <div className="mt-2 flex items-center gap-2">{action}</div>}

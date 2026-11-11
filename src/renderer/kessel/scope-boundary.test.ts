@@ -119,6 +119,10 @@ const PRIMARY_SCOPE_CALLERS: readonly string[] = [
   'components/SetupChecklist/SetupChecklist.tsx',
   // Kessel at first run: the Kessel sheet makes Kessel on the window's own server.
   'components/KesselSheet/KesselSheet.tsx',
+  // Agent templates (0.46.12): Create an agent and Save as template work on
+  // the window's own server, like the Kessel sheet.
+  'components/AgentTemplates/CreateAgentSheet.tsx',
+  'components/AgentTemplates/SaveTemplateSheet.tsx',
   'components/MergeDialog/MergeDialog.tsx',
   // 0.46.0: the "Your account" setup prompt is about the window's own server.
   'components/OwnerAccountPrompt/OwnerAccountPrompt.tsx',

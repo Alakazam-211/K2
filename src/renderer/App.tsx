@@ -19,6 +19,7 @@ import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
 import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
 import KesselSheet from './components/KesselSheet/KesselSheet'
+import CreateAgentSheet from './components/AgentTemplates/CreateAgentSheet'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
 import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
 import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
@@ -1153,6 +1154,8 @@ function AppRoot(): React.JSX.Element {
       <OwnerAccountPrompt />
       {/* Kessel at first run: opened by the sign-in offer or the setup checklist. */}
       <KesselSheet />
+      {/* Create an agent from a template: opened from the sidebar's add menu. */}
+      <CreateAgentSheet />
       <MemoryWatcher />
       <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />

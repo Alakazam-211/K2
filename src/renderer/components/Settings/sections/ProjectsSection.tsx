@@ -51,6 +51,7 @@ import { MailWatchPanel } from './MailWatchPanel'
 import { showContextMenu } from '@/lib/context-menu'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import type { SettingEntry } from '../searchManifest'
+import { SaveTemplateRow } from '@/components/AgentTemplates/SaveTemplateSheet'
 import { useRemoveWorkspaceDialogStore } from '@/stores/remove-workspace-dialog'
 import { HeartbeatsPanel, HistoryPanel, WakeupEditor, type HeartbeatRow } from './HeartbeatsSection'
 import { ContextStackEditor, type ContextEditTarget } from './ContextStackEditor'
@@ -1793,6 +1794,12 @@ function ProjectDetail({
                     </SettingRow>
                   )}
                   <FolderTrustRow scope={primaryScope()} projectPath={project.path} />
+                </SettingsGroup>
+
+                <SettingsGroup title="Template" card>
+                  {/* prd-agent-templates-v1 §7: this agent's setup, kept as
+                      a template to make more like it. */}
+                  <SaveTemplateRow project={project} />
                 </SettingsGroup>
 
                 <SettingsGroup title="Remove" card>

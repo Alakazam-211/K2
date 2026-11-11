@@ -62,6 +62,7 @@ export const ACCENT_VARS = [
   '--color-accent-text',
   '--color-accent-fill',
   '--color-accent-fill-hover',
+  '--color-accent-edge',
   '--color-on-accent',
   '--glass-accent',
 ] as const
@@ -79,6 +80,8 @@ const TEXT_CONTRAST = 4.5
 const WHITE_ON_ACCENT_MIN = 3
 /** A filled control's label: AA with room for a 90% hover over a white card. */
 const FILL_LABEL_CONTRAST = 5
+/** A filled control against the page around it (WCAG 1.4.11). */
+const FILL_EDGE_CONTRAST = 3
 
 function parseHex(raw: string): Rgb | null {
   const m = /^#([0-9a-f]{6})$/i.exec(raw.trim())
@@ -138,14 +141,21 @@ function surfaceColor(raw: string, base: Rgb | null): Rgb | null {
  * reads on the palette's grounds, else moved toward black (light palettes) or
  * white (dark) until it clears AA on all of them.
  */
-export function accentTextFor(hex: string, palette: StylePaletteMeta, scheme: StyleScheme): string {
-  const accent = parseHex(hex)
-  if (!accent) return hex
+/** The palette's grounds (page, surface, elevated) as opaque colours; plain
+ *  white or black when none can be read. */
+function paletteGrounds(palette: StylePaletteMeta, scheme: StyleScheme): Rgb[] {
   const base = surfaceColor(palette.swatch.bg, null)
   const grounds = [palette.swatch.bg, palette.swatch.surface, palette.swatch.elevated]
     .map((s) => surfaceColor(s, base))
     .filter((c): c is Rgb => c !== null)
   if (grounds.length === 0) grounds.push(scheme === 'light' ? WHITE : BLACK)
+  return grounds
+}
+
+export function accentTextFor(hex: string, palette: StylePaletteMeta, scheme: StyleScheme): string {
+  const accent = parseHex(hex)
+  if (!accent) return hex
+  const grounds = paletteGrounds(palette, scheme)
   const reads = (c: Rgb): boolean => grounds.every((g) => contrast(c, g) >= TEXT_CONTRAST)
   const target = scheme === 'light' ? BLACK : WHITE
   for (let t = 0; t <= 1; t += 0.02) {
@@ -207,6 +217,21 @@ export function accentFillHoverFor(fillHex: string, onAccent: string): string {
   return toHex(fill)
 }
 
+/**
+ * The edge of a filled accent control (the accent Button's border): the fill
+ * itself when the fill stands out at 3:1 on every ground of the palette, else
+ * the accent as text (`text`, from accentTextFor), which reads at 4.5:1 on all
+ * of them. So a pale accent on a light palette (yellow on Paper) or a dark one
+ * on a dark palette (navy on Charcoal) still has a visible boundary. Without
+ * a custom accent the var is unset and the Button falls back to the fill.
+ */
+export function accentEdgeFor(fill: string, text: string, palette: StylePaletteMeta, scheme: StyleScheme): string {
+  const c = parseHex(fill)
+  if (!c) return fill
+  const stands = paletteGrounds(palette, scheme).every((g) => contrast(c, g) >= FILL_EDGE_CONTRAST)
+  return stands ? toHex(c) : text
+}
+
 /** The CSS values for an accent colour on a palette. */
 export function deriveAccentVars(
   hex: string,
@@ -220,15 +245,17 @@ export function deriveAccentVars(
   // Same direction the palettes take: hover lifts on dark, deepens on light.
   const toward = scheme === 'light' ? BLACK : WHITE
   const onAccent = own.onAccent ?? onAccentFor(accent)
+  const text = accentTextFor(accent, palette, scheme)
   const fill = accentFillFor(accent, onAccent)
   return {
     '--color-accent': accent,
     '--color-accent-hover': own.hover ?? toHex(mix(base, toward, 0.16)),
     '--color-accent-active': toHex(mix(base, BLACK, scheme === 'light' ? 0.28 : 0.16)),
     '--color-accent-soft': own.soft ?? toHex(mix(base, WHITE, 0.42)),
-    '--color-accent-text': accentTextFor(accent, palette, scheme),
+    '--color-accent-text': text,
     '--color-accent-fill': fill,
     '--color-accent-fill-hover': accentFillHoverFor(fill, onAccent),
+    '--color-accent-edge': accentEdgeFor(fill, text, palette, scheme),
     '--color-on-accent': onAccent,
     '--glass-accent': accent,
   }

@@ -60,6 +60,7 @@ export const ZEN_STYLE_SHIELD: Readonly<Record<string, string>> = {
   '--color-accent-text': zen('accent'),
   '--color-accent-fill': zen('accent'),
   '--color-accent-fill-hover': zen('accent'),
+  '--color-accent-edge': zen('accent'),
   '--color-on-accent': zen('accent-text'),
   // Status
   '--color-status-working': zen('working'),

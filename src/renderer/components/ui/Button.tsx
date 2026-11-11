@@ -17,9 +17,12 @@ const VARIANTS: Record<string, string> = {
   /** Primary action. The fill is the accent deep enough for its label to
    *  read (--color-accent-fill). Hover is a visible step away from it
    *  (--color-accent-fill-hover, 1.3:1 or more, away from the label so it
-   *  reads better), and press goes a little further. */
+   *  reads better), and press goes a little further. The edge is the fill,
+   *  unless a custom accent's fill is too close to the page (under 3:1):
+   *  then --color-accent-edge (lib/style-accent) draws it in the accent text
+   *  colour, at rest, on hover and on press. */
   accent:
-    'bg-[var(--color-accent-fill)] border border-[var(--color-accent-fill)] text-[var(--color-on-accent)] hover:bg-[var(--color-accent-fill-hover)] hover:border-[var(--color-accent-fill-hover)] active:bg-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)] active:border-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)] [--k2-ch-focus-inner:var(--color-on-accent)]',
+    'bg-[var(--color-accent-fill)] border border-[var(--color-accent-edge,var(--color-accent-fill))] text-[var(--color-on-accent)] hover:bg-[var(--color-accent-fill-hover)] hover:border-[var(--color-accent-edge,var(--color-accent-fill-hover))] active:bg-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)] active:border-[var(--color-accent-edge,color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black))] [--k2-ch-focus-inner:var(--color-on-accent)]',
   /** Destructive action (red-600/700 idiom). */
   danger:
     'bg-[var(--color-danger)] border border-[var(--color-danger)] text-[var(--color-on-accent)] hover:bg-[var(--color-danger-active)] hover:border-[var(--color-danger-active)] [--k2-ch-focus-inner:var(--color-on-accent)]',

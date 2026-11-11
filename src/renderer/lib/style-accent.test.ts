@@ -1,11 +1,14 @@
 // The accent choice: what a stored value means, and that the colours it
 // derives stay readable on every palette.
 
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { STYLES, getStyle } from '@/styles.generated'
 import {
   ACCENT_VARS,
   accentFillFor,
+  accentEdgeFor,
   accentFillHoverFor,
   accentFillHex,
   accentTextFor,
@@ -202,5 +205,54 @@ describe('the accent as a fill under its label', () => {
   it('leaves a colour alone when its label already reads, and a bright one under dark ink', () => {
     expect(accentFillFor('#1e3a8a', '#ffffff')).toBe('#1e3a8a')
     expect(accentFillFor('#ffc700', '#1a1400')).toBe('#ffc700')
+  })
+})
+
+describe('the edge of a filled accent control', () => {
+  const looks = [
+    ['terminal', 'charcoal', 'dark'],
+    ['terminal', 'paper', 'light'],
+    ['glass', 'obsidian', 'dark'],
+    ['glass', 'veil', 'light'],
+  ] as const
+  // The palette's grounds the edge must stand out on, as accentTextFor reads them.
+  const solid = (c: string): boolean => /^#[0-9a-f]{6}$/i.test(c)
+
+  it.each(['#ffd60a', '#ff9f0a', '#ff2d55', '#1f3a93', '#3b82f6', '#ffffff', '#000000'])(
+    '%s: the fill or its edge stands out at 3:1 on every ground, in every look',
+    (c) => {
+      for (const [style, id, scheme] of looks) {
+        const p = palette(style, id)
+        const vars = accentVarsFor(c, p, scheme)
+        const edge = vars['--color-accent-edge']
+        const fill = vars['--color-accent-fill']
+        for (const g of [p.swatch.bg, p.swatch.surface, p.swatch.elevated].filter(solid)) {
+          const best = Math.max(contrast(edge, g), contrast(fill, g))
+          expect(best, `${c} on ${id} ${g}`).toBeGreaterThanOrEqual(3)
+        }
+      }
+    },
+  )
+
+  it('is the fill itself when the fill already stands out', () => {
+    const vars = accentVarsFor('#ff2d55', palette('glass', 'veil'), 'light')
+    expect(vars['--color-accent-edge']).toBe(vars['--color-accent-fill'])
+    expect(accentEdgeFor('#1f3a93', '#000000', palette('terminal', 'paper'), 'light')).toBe('#1f3a93')
+  })
+
+  it('is the accent text colour when the fill is too close to the page: yellow on light, navy on dark', () => {
+    const yellow = accentVarsFor('#ffd60a', palette('terminal', 'paper'), 'light')
+    expect(yellow['--color-accent-edge']).toBe(yellow['--color-accent-text'])
+    expect(yellow['--color-accent-edge']).not.toBe(yellow['--color-accent-fill'])
+    const navy = accentVarsFor('#1f3a93', palette('glass', 'obsidian'), 'dark')
+    expect(navy['--color-accent-edge']).toBe(navy['--color-accent-text'])
+  })
+
+  it('is unset without a custom accent, so the accent Button falls back to the fill', () => {
+    for (const [style, id, scheme] of looks) {
+      expect(accentVarsFor(null, palette(style, id), scheme)['--color-accent-edge']).toBeUndefined()
+    }
+    const button = readFileSync(join(__dirname, '..', 'components', 'ui', 'Button.tsx'), 'utf8')
+    expect(button).toContain('border-[var(--color-accent-edge,var(--color-accent-fill))]')
   })
 })

@@ -120,12 +120,12 @@ describe('Filled accent controls', () => {
 
   it('the accent Button hovers and presses on the hover slot', () => {
     const cls = /\n  accent:\s*'([^']+)'/.exec(readFileSync(join(__dirname, 'Button.tsx'), 'utf8'))![1]
-    expect(cls).toContain('hover:bg-[var(--color-accent-fill-hover)] hover:border-[var(--color-accent-fill-hover)]')
-    expect(cls).toContain('active:bg-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)]')
+    expect(cls).toContain('hover:bg-[var(--color-accent-fill-hover)] hover:border-[var(--color-accent-edge,var(--color-accent-fill-hover))]')
+    expect(cls).toContain('active:bg-[color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black)] active:border-[var(--color-accent-edge,color-mix(in_srgb,var(--color-accent-fill-hover)_90%,black))]')
   })
 
   it('the Button, the selected segment and Glass\'s segment thumb paint the fill', () => {
-    expect(readFileSync(join(__dirname, 'Button.tsx'), 'utf8')).toContain("'bg-[var(--color-accent-fill)] border border-[var(--color-accent-fill)] text-[var(--color-on-accent)]")
+    expect(readFileSync(join(__dirname, 'Button.tsx'), 'utf8')).toContain("'bg-[var(--color-accent-fill)] border border-[var(--color-accent-edge,var(--color-accent-fill))] text-[var(--color-on-accent)]")
     expect(rule(globals, '.k2-segment-thumb')).toContain('background: var(--color-accent-fill)')
     expect(rule(generated, '[data-style="glass"] .k2-segment-thumb:not([data-zen-root] *)')).toContain('background: var(--color-accent-fill);')
   })

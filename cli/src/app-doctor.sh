@@ -2176,23 +2176,25 @@ WHAT A TEMPLATE IS
   whether you may).
 
 2. REVIEW, THEN HIRE
+  Step 1, review (writes and starts nothing, even with --launch):
   k2 agent hire --template writer --name "Max" --agent codex --dry-run
-    Writes nothing. Prints the folder (<hire root>/<handle>, here
-    <hire root>/max; k2 agent hire-root) and each file, layer and
-    permission with its label: would write · skip · yours, kept ·
-    suggested. Read it before you hire.
-  k2 agent hire --template writer --name "Max" --agent codex
-    Writes the folder, ROLE.md, starter notes, context layers and
-    .k2/agent/template.lock. Nothing starts.
+    Prints the folder (<hire root>/<handle>, here <hire root>/max;
+    k2 agent hire-root) and each file, layer and permission with its
+    label: would write · skip · yours, kept · suggested. Read it first.
+  Step 2, hire and start it:
   k2 agent hire --template writer --name "Max" --agent codex --launch
-    The same, then K2 starts it and, on this first create only, it says
-    hello to its person on the Thread.
-  The hello goes with the first create only: re-running later with
-  --launch starts the agent but sends no hello. An agent first opened
-  without it starts from its ROLE.md, which tells it to ask its person
-  the questions still open.
-  --name <name>      optional; default: the folder's name. No --name and
-                     no <dir>: the folder is <hire root>/<template id>.
+    Writes the folder, ROLE.md, starter notes, context layers and
+    .k2/agent/template.lock, then K2 starts the agent and it says hello
+    to its person on the Thread (the Thread is the person's chat with
+    the agent).
+  Or, to make it without starting it, leave out --launch: nothing starts.
+  Add --launch the first time if you want the hello; a later --launch
+  starts the agent without one. An agent first opened without a hello
+  starts from its ROLE.md, which tells it to ask its person the
+  questions still open.
+  --name <name>      optional; the display name. Left out, it is the
+                     folder's name: the template id with no <dir>
+                     (<hire root>/writer), else the <dir> folder's name.
   --agent <preset>   the tool it runs: an id, label or command word from
                      k2 preset list (codex, claude, ...). Left out: the
                      template's suggested tool if it names one (K2's
@@ -2204,9 +2206,12 @@ WHAT A TEMPLATE IS
                      ids). Answer only what you know; the agent asks its
                      person the rest on its first start.
   <dir>              optional: a folder instead of <hire root>/<handle>.
-  Re-running the same hire is safe: it writes only what is missing and
-  never replaces a file the agent changed. One template per agent.
-  The hire prints the folder; tell your person who you hired and why.
+  Re-running the same hire is safe: the same --template and --name with
+  no <dir> reuse <hire root>/<handle>; it writes only what is missing and
+  never replaces a file the agent changed. folder_exists means that
+  folder holds something else (another agent or other files). One
+  template per agent. The hire prints the folder; tell your person who
+  you hired and why.
 
 3. PERMISSIONS: SUGGESTED, NOT GRANTED
   A hire never gets more than the hirer may give. Today a hire turns no
@@ -2218,8 +2223,9 @@ WHAT A TEMPLATE IS
 4. SAVE YOUR OWN SETUP AS A TEMPLATE
   k2 agent template save . --id my-writer --summary "Writes our posts" --dry-run
   k2 agent template save . --id my-writer --wiki "Voice and style"
-  <ws> is a folder or handle; "." is the workspace you are in (in a K2
-  terminal, your own, from any subfolder). Who: people need Owner or
+  <ws> is a folder or handle; "." is the workspace you are in, from any
+  subfolder (in a K2 terminal, your own; elsewhere, the nearest folder
+  with a .k2 above where you stand). Who: people need Owner or
   Admin (a Member gets role_required). An agent may save its own
   workspace only (another one is own_workspace_only); role_required
   never applies to it.
@@ -2285,7 +2291,10 @@ ERRORS (code (exit): what to do)
                           per agent: pick another folder or --name
   folder_exists (3)       <hire root>/<handle> is taken: another --name,
                           or pass that folder as <dir>
-  system_template (3)     an API key can't hire kessel or chief-of-staff
+  system_template (3)     an API key can't hire kessel or chief-of-staff;
+                          people and agents may, by id
+  owner_only (3)          that step needs this server's owner (such as
+                          --db-access read or write for yourself)
   bad_id (2)              ids are a-z, 0-9 and -, at most 40 characters
   id_reserved (1)         a K2 id or old id: pick another id
   id_taken (1)            another author saved that id: pick another id
@@ -2300,6 +2309,9 @@ ERRORS (code (exit): what to do)
   not_author (3)          an agent removes only what it saved; ask a person
   role_required (3)       a Member person: saving needs Owner or Admin
   no_workspace (4)        no such folder or handle registered on this server
+  no_folder (4)           add: that path is not a folder
+  not_found (4)           hire: an unknown --agent preset (k2 preset list)
+                          or --connect peer
   no_template (4)         upgrade/diff: that agent wasn't made from one
 EOF
 }

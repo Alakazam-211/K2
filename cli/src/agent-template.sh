@@ -36,7 +36,9 @@ COMMANDS
                   qa = reviewer. An unknown id exits 4.
   save <ws>       Save an agent's setup as a new template you can hire from.
                   <ws> is the agent's folder or handle; "." is the
-                  workspace you are in (in a K2 terminal, your own). People
+                  workspace you are in, from any subfolder (in a K2
+                  terminal, your own; elsewhere, the nearest folder with a
+                  .k2 above where you stand). People
                   need Owner or Admin (a Member gets role_required). An
                   agent may save its own workspace only (another one is
                   own_workspace_only); role_required never applies to it.

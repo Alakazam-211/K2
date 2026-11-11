@@ -814,10 +814,14 @@ FROM A TEMPLATE, IN THREE STEPS (k2 study agent-templates)
               --launch; with it, K2 starts the agent and, on this first
               create only, it says hello on its Thread. Tell your person
               what you hired.
-  The hello goes with the first create only: re-running later with
-  --launch starts the agent but sends no hello. An agent first opened
-  without it starts from its ROLE.md, which tells it to ask its person
-  the questions still open.
+  Add --launch the first time if you want the hello; a later --launch
+  starts the agent without one. An agent first opened without a hello
+  starts from its ROLE.md, which tells it to ask its person the
+  questions still open. --dry-run with --launch or --onboard only
+  previews: nothing is written or started.
+  Re-running the same --template and --name with no <dir> reuses
+  <hire root>/<handle>; folder_exists means that folder holds something
+  else (another agent or other files).
 
 ARGUMENTS
   <dir>                   Directory for the agent's workspace (created if missing).
@@ -827,7 +831,8 @@ ARGUMENTS
 
 FLAGS
   --name <name>           Agent's display name (default: the folder's basename,
-                          as-is). Its handle is the name in lowercase with dashes.
+                          as-is: the template id with --template and no <dir>).
+                          Its handle is the name in lowercase with dashes.
   --template <id>         Make the agent from an agent template: its charter
                           (ROLE.md), starter wiki notes and context layers.
                           Types: general, lead, developer, app-owner, designer,

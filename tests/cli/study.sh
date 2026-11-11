@@ -1037,21 +1037,20 @@ assert_contains "catalog --json: app-databases" "$("$K2" study --json)" '"id":"a
 echo "== k2 study agent-templates (prd-agent-templates-v1 T9, 0.46.13) =="
 at_out="$("$K2" study agent-templates)"
 for needle in "k2 agent template list" "k2 agent template show writer" "kessel and chief-of-staff" "canSave" \
-    'k2 agent hire --template writer --name "Max" --agent codex --dry-run' "Nothing starts" "--launch" "hello to its person on the Thread" \
+    'k2 agent hire --template writer --name "Max" --agent codex --dry-run' "nothing starts" "--launch" "it says hello" \
     "--param key=value" "--answer id=text" "SUGGESTED, NOT GRANTED" "never gets more than the hirer may give" \
     "k2 agent template save . --id my-writer" "Never taken" "secret_found" "secret is never printed" "v2," \
     "k2 agent template add" "k2 agent template remove my-writer --version 1" "k2 agent template upgrade . --dry-run" \
     "<file>.proposed" "K2:MANAGED" "Never changed: permissions" ".k2/agent/template.lock" \
     "unknown_template (4)" "template_conflict (3)" "folder_exists (3)" "id_reserved (1)" "id_taken (1)" \
     "too_large (1)" "bad_id (2)" "own_workspace_only (3)" "not_author (3)" "no_template (4)" "role_required (3)" \
-    "first create only" "sends no hello" "No override" "not a path" "\"Your notes\" part" "role_required
-  never applies" \
+    "Add --launch the first time" "the Thread is the person's chat" "No override" "not a path" "\"Your notes\" part" "role_required" \
     "would write · skip ·" "yours, kept" "(the same for k2 agent hire and k2 agent template)"; do
     assert_contains "agent-templates names $needle" "$at_out" "$needle"
 done
 assert_absent "agent-templates: no PRD path" "$at_out" ".k2/prds"
 at_lines="$(printf '%s\n' "$at_out" | wc -l | tr -d ' ')"
-if [ "$at_lines" -le 160 ]; then echo "  PASS: agent-templates is bounded ($at_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: agent-templates is $at_lines lines (max 160)" >&2; fail=$((fail + 1)); fi
+if [ "$at_lines" -le 175 ]; then echo "  PASS: agent-templates is bounded ($at_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: agent-templates is $at_lines lines (max 175)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: agent-templates row" "$("$K2" study)" "  agent-templates     Hire a type of agent"
 assert_contains "usage lists agent-templates" "$("$K2" study --help)" "  agent-templates"
 assert_contains "catalog --json: agent-templates" "$("$K2" study --json)" '"id":"agent-templates"'
@@ -1067,7 +1066,7 @@ assert_eq "agent template save --help is the same page" "$("$K2" agent template 
 hh="$("$K2" agent hire --help)"
 for needle in "k2 study agent-templates" "--template <id>" "--agent <preset>" "--param <key>=<value>" "--answer <id>=<text>" \
     "--dry-run" "--launch" "--take-app <app>" "--brief <file>" "suggested" "(the same for k2 agent hire and k2 agent template)" \
-    "folder_exists" "[--name <name>]" "would write · skip ·" "yours, kept" "sends no hello" "else Claude"; do
+    "folder_exists" "[--name <name>]" "would write · skip ·" "yours, kept" "previews: nothing is written or started" "else Claude"; do
     assert_contains "agent hire --help names $needle" "$hh" "$needle"
 done
 at_schema="$("$K2" --schema)"

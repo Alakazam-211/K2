@@ -144,6 +144,16 @@ describe('SetupChecklist', () => {
     expect(row.querySelector('[data-setup-note]')?.textContent).toBe(NEEDS_TUNNEL_NOTE)
   })
 
+  it('the hover wash and the brighter words hang off the same row group', async () => {
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-row-phone')
+    const li = document.querySelector('[data-setup-row="phone"]') as HTMLElement
+    expect(li.className).toContain('group/row')
+    expect(li.className).toContain('hover:bg-[var(--color-wash-2)]')
+    const words = [...li.querySelectorAll('span.type-hint:not([aria-hidden])'), screen.getByTestId('setup-skip-phone')]
+    for (const el of words) expect(el.className).toContain('group-hover/row:text-[var(--color-text-secondary)]')
+  })
+
   it("a row's note is no louder than its line", async () => {
     render(<SetupChecklist />)
     const row = await screen.findByTestId('setup-row-phone')

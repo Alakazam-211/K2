@@ -25,8 +25,10 @@
 // and gets a short line of its own when there isn't. Always shown; after the
 // row in keyboard order. A skipped row reads through its mark and its tag,
 // never by fading. Done rows drop their line and go muted. Under the pointer
-// the muted words step up to secondary, so they keep 4.5:1 on the hover
-// wash. Focus is an inset ring: nothing moves. Tokens only, so every Style
+// the muted words (and the marks) step up to secondary, so they keep 4.5:1
+// on the hover wash: the wash is the row's own :hover and the step-up is
+// `group-hover/row`, a named group on that same row (not any outer group),
+// so whenever the wash shows, so does the step-up. Focus is an inset ring: nothing moves. Tokens only, so every Style
 // and palette draws it.
 //
 // States: nothing until the first answer (the switch may be off, so there is
@@ -115,7 +117,7 @@ const QUIET_ACTION_CLASS =
  *  filled with a check when done, a dash when skipped. Round in Glass
  *  (`--radius-status`), cut in Terminal like the radios and checkboxes
  *  (`data-k2-chamfer="chip"`, `--chamfer-chip`). */
-function StepMark({ state, current = false }: { state: FirstRunRowState; current?: boolean }): React.JSX.Element {
+function StepMark({ state, current = false, lift = false }: { state: FirstRunRowState; current?: boolean; lift?: boolean }): React.JSX.Element {
   const base = 'mt-[3px] w-3 h-3 flex-shrink-0 flex items-center justify-center rounded-[var(--radius-status)]'
   if (state === 'done') {
     return (
@@ -134,7 +136,7 @@ function StepMark({ state, current = false }: { state: FirstRunRowState; current
   if (state === 'skipped') {
     return (
       <span aria-hidden="true" data-step-mark="skipped" data-k2-chamfer="chip" className={cx(base, 'border border-[var(--color-border-strong)]')}>
-        <span className="w-1.5 h-px bg-[var(--color-text-muted)]" />
+        <span className={cx('w-1.5 h-px bg-[var(--color-text-muted)]', lift && 'group-hover/row:bg-[var(--color-text-secondary)]')} />
       </span>
     )
   }
@@ -146,7 +148,7 @@ function StepMark({ state, current = false }: { state: FirstRunRowState; current
       className={cx(
         base,
         'border-[1.5px] [--k2-ch-bw:1.5px]',
-        current ? 'border-[var(--color-accent)]' : 'border-[var(--color-text-muted)]',
+        current ? 'border-[var(--color-accent)]' : cx('border-[var(--color-text-muted)]', lift && 'group-hover/row:border-[var(--color-text-secondary)]'),
       )}
     />
   )
@@ -181,11 +183,13 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
   const note = row.note !== null && todo ? SETUP_NOTE_COPY[row.note] : null
   // Muted words step up to secondary under the pointer, so they keep 4.5:1
   // on the hover wash.
-  const muted = cx('text-[var(--color-text-muted)]', opens && 'group-hover:text-[var(--color-text-secondary)]')
+  const muted = cx('text-[var(--color-text-muted)]', opens && 'group-hover/row:text-[var(--color-text-secondary)]')
   const end = todo || skipped ? <EndRoom skipped={skipped} /> : null
   return (
     <li
-      className={cx('group relative', opens && 'hover:bg-[var(--color-wash-2)] transition-colors')}
+      // The wash is this row's own :hover; the step-up is `group-hover/row`,
+      // i.e. the same row's :hover, so the two always show together.
+      className={cx('group/row relative', opens && 'hover:bg-[var(--color-wash-2)] transition-colors')}
       data-setup-row={row.id}
       data-state={row.state}
       data-current={current ? '' : undefined}
@@ -199,7 +203,7 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
         disabled={!opens}
         onClick={() => void openFirstRunTarget(row.opens)}
       >
-        <StepMark state={row.state} current={current} />
+        <StepMark state={row.state} current={current} lift={opens} />
         <span className="min-w-0 flex-1">
           <span
             className={cx(
@@ -233,7 +237,7 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
         <Tag
           tone="muted"
           aria-hidden="true"
-          className="absolute right-3.5 bottom-[calc(0.375rem+1px)] pointer-events-none group-hover:[--k2-tag-ink:var(--color-text-secondary)]!"
+          className="absolute right-3.5 bottom-[calc(0.375rem+1px)] pointer-events-none group-hover/row:[--k2-tag-ink:var(--color-text-secondary)]!"
           data-testid={`setup-skipped-${row.id}`}
         >
           {STATE_TEXT.skipped}
@@ -245,7 +249,7 @@ function ChecklistRow({ row, current }: { row: FirstRunRow; current: boolean }):
           data-k2-focus=""
           className={cx(
             'absolute right-2 bottom-1 no-drag px-1.5 py-0.5 type-hint leading-snug text-[var(--color-text-muted)] transition-colors cursor-pointer',
-            'group-hover:text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]!',
+            'group-hover/row:text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]!',
           )}
           aria-label={`Skip: ${copy.label}`}
           data-testid={`setup-skip-${row.id}`}

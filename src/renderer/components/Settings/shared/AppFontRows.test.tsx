@@ -73,22 +73,22 @@ describe('AppFontRows', () => {
     const code = screen.getByTestId('code')
     expect(within(general).getByText('Font family')).toBeTruthy()
     expect(within(general).getByText('Font size')).toBeTruthy()
-    expect(within(code).getByText('Font Family')).toBeTruthy()
-    expect(within(code).getByText('Font Size')).toBeTruthy()
+    expect(within(code).getByText('Font family')).toBeTruthy()
+    expect(within(code).getByText('Font size')).toBeTruthy()
     expect(within(general).getByRole('button', { name: 'Font size' }).textContent).toContain('13px')
-    expect(within(code).getByRole('button', { name: 'Font Size' }).textContent).toContain('13px')
+    expect(within(code).getByRole('button', { name: 'Font size' }).textContent).toContain('13px')
 
     await pick(general, 'Font size', '16px')
     expect(update).toHaveBeenCalledWith({ fontSize: 16 })
     expect(useSettingsStore.getState().editor.fontSize).toBe(16)
-    expect(within(code).getByRole('button', { name: 'Font Size' }).textContent).toContain('16px')
+    expect(within(code).getByRole('button', { name: 'Font size' }).textContent).toContain('16px')
 
-    await pick(code, 'Font Size', '11px')
+    await pick(code, 'Font size', '11px')
     expect(update).toHaveBeenLastCalledWith({ fontSize: 11 })
     expect(within(general).getByRole('button', { name: 'Font size' }).textContent).toContain('11px')
   })
 
-  it('search ids sit on the rows; General leaves the dividers to its card', () => {
+  it('search ids sit on the rows; both pages leave the dividers to their card', () => {
     render(<AppFontRows where="general" />)
     const family = document.querySelector('[data-settings-id="general.font-family"]') as HTMLElement
     const size = document.querySelector('[data-settings-id="general.font-size"]') as HTMLElement
@@ -98,8 +98,10 @@ describe('AppFontRows', () => {
     expect(within(family).getByRole('button', { name: 'Font family' }).closest('.w-60')).not.toBeNull()
     cleanup()
     render(<AppFontRows where="code-editor" />)
-    expect(document.querySelector('[data-settings-id="code-editor.font-family"]')).not.toBeNull()
-    expect((document.querySelector('[data-settings-id="code-editor.font-size"]') as HTMLElement).className).toContain('border-b')
+    const codeFamily = document.querySelector('[data-settings-id="code-editor.font-family"]') as HTMLElement
+    expect(codeFamily).not.toBeNull()
+    expect(within(codeFamily).getByRole('button', { name: 'Font family' }).closest('.w-60')).not.toBeNull()
+    expect(document.querySelector('[data-settings-id="code-editor.font-size"]')).not.toBeNull()
   })
 
   it('both pages have search entries, and General shows the rows below the app version', () => {

@@ -14,7 +14,7 @@ import { primaryScope } from '@/kessel/server-scope'
  *  write-on-default code paths, so no persist gate is needed). */
 let hasLoadedFromDaemon = false
 
-interface CustomTheme {
+export interface CustomTheme {
   id: string       // e.g. "custom:my-custom-theme"
   name: string     // Display name from JSON
   path: string     // Absolute file path
@@ -104,6 +104,8 @@ export const useCustomThemesStore = create<CustomThemesStore>((set, get) => ({
       set({ customThemes: get().customThemes.filter((t) => t.id !== id) })
     } catch (err) {
       console.error('[custom-themes] Failed to delete:', err)
+      // Settings → Code says it failed and keeps the theme listed.
+      throw err
     }
   },
 

@@ -20,28 +20,24 @@ const COPY = {
     sizeHint: 'For code, the message box, chats and tickets.',
   },
   'code-editor': {
-    family: 'Font Family',
-    familyHint: 'Monospace font for code editing',
-    size: 'Font Size',
-    sizeHint: 'Editor text size in pixels',
+    family: 'Font family',
+    familyHint: 'For code here and for text across K2: the same setting as in General.',
+    size: 'Font size',
+    sizeHint: 'For code, the message box, chats and tickets.',
   },
 } as const
 
 export function AppFontRows({
   where,
-  lastHasBorder = true,
 }: {
-  /** Which page: sets the search ids and the words. */
+  /** Which page: sets the search ids and the words. Both sit in a card. */
   where: 'general' | 'code-editor'
-  /** The size row's bottom border (off when it is the last row of a box).
-   *  Code only: General's rows sit in a card, which draws the dividers. */
-  lastHasBorder?: boolean
 }): React.JSX.Element {
   const fontFamily = useSettingsStore((s) => s.editor.fontFamily)
   const fontSize = useSettingsStore((s) => s.editor.fontSize)
   const updateEditorSettings = useSettingsStore((s) => s.updateEditorSettings)
   const copy = COPY[where]
-  // General's rows say when a change saved, or that it didn't. The store
+  // Each row says when a change saved, or that it didn't. The store
   // puts the old value back when the server refuses the write.
   const familySave = useSaveStatus()
   const sizeSave = useSaveStatus()
@@ -58,80 +54,48 @@ export function AppFontRows({
   }
   const familyOptions = EDITOR_FONTS.map((f) => ({ value: f.id, label: f.label }))
   const sizeOptions = APP_FONT_SIZES.map((n) => ({ value: String(n), label: `${n}px` }))
-  if (where === 'general') {
-    // Field rows of General's card: the dropdowns sit at the shared field
-    // width on the card's right edge, like every other Settings field.
-    return (
-      <>
-        <SettingRow
-          label={copy.family}
-          hint={
-            <>
-              {copy.familyHint} <SaveNote state={familySave.state} />
-              <SaveError state={familySave.state} />
-            </>
-          }
-          settingId="general.font-family"
-          field
-        >
-          <SettingDropdown
-            fullWidth
-            value={fontFamily}
-            ariaLabel={copy.family}
-            options={familyOptions}
-            onChange={(v) => saveEditor({ fontFamily: v }, familySave)}
-          />
-        </SettingRow>
-        <SettingRow
-          label={copy.size}
-          hint={
-            <>
-              {copy.sizeHint} <SaveNote state={sizeSave.state} />
-              <SaveError state={sizeSave.state} />
-            </>
-          }
-          settingId="general.font-size"
-          field
-        >
-          <SettingDropdown
-            fullWidth
-            value={String(fontSize)}
-            ariaLabel={copy.size}
-            options={sizeOptions}
-            onChange={(v) => saveEditor({ fontSize: Number(v) }, sizeSave)}
-          />
-        </SettingRow>
-      </>
-    )
-  }
-  const row = (border: boolean): string =>
-    `flex items-center justify-between px-3 py-2.5 ${border ? 'border-b border-[var(--color-border)]' : ''}`
+  // Field rows of a card: the dropdowns sit at the shared field width on the
+  // card's right edge, like every other Settings field.
   return (
     <>
-      <div className={row(true)} data-settings-id={`${where}.font-family`}>
-        <div>
-          <div className="type-row text-[var(--color-text-secondary)]">{copy.family}</div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{copy.familyHint}</div>
-        </div>
+      <SettingRow
+        label={copy.family}
+        hint={
+          <>
+            {copy.familyHint} <SaveNote state={familySave.state} />
+            <SaveError state={familySave.state} />
+          </>
+        }
+        settingId={`${where}.font-family`}
+        field
+      >
         <SettingDropdown
+          fullWidth
           value={fontFamily}
           ariaLabel={copy.family}
           options={familyOptions}
-          onChange={(v) => updateEditorSettings({ fontFamily: v })}
+          onChange={(v) => saveEditor({ fontFamily: v }, familySave)}
         />
-      </div>
-      <div className={row(lastHasBorder)} data-settings-id={`${where}.font-size`}>
-        <div>
-          <div className="type-row text-[var(--color-text-secondary)]">{copy.size}</div>
-          <div className="type-hint text-[var(--color-text-muted)] mt-0.5">{copy.sizeHint}</div>
-        </div>
+      </SettingRow>
+      <SettingRow
+        label={copy.size}
+        hint={
+          <>
+            {copy.sizeHint} <SaveNote state={sizeSave.state} />
+            <SaveError state={sizeSave.state} />
+          </>
+        }
+        settingId={`${where}.font-size`}
+        field
+      >
         <SettingDropdown
+          fullWidth
           value={String(fontSize)}
           ariaLabel={copy.size}
           options={sizeOptions}
-          onChange={(v) => updateEditorSettings({ fontSize: Number(v) })}
+          onChange={(v) => saveEditor({ fontSize: Number(v) }, sizeSave)}
         />
-      </div>
+      </SettingRow>
     </>
   )
 }

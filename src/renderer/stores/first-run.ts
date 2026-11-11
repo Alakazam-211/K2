@@ -28,13 +28,13 @@ export const FIRST_RUN_STATUS_PATH = 'first-run/status'
 export const FIRST_RUN_HIDE_PATH = 'first-run/hide'
 export const FIRST_RUN_SHOW_PATH = 'first-run/show'
 export const FIRST_RUN_SKIP_PATH = 'first-run/skip'
-/** K5 at first run (prd-setup-checklist-v1 §10, `k5-first-run-contract.md`). */
+/** Kessel at first run (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`). */
 export const FIRST_RUN_OFFER_DISMISS_PATH = 'first-run/offer/dismiss'
-export const FIRST_RUN_K5_PATH = 'first-run/k5'
+export const FIRST_RUN_KESSEL_PATH = 'first-run/kessel'
 export const FIRST_RUN_COS_START_PATH = 'first-run/chief-of-staff/start'
 
 /** Row ids this client knows, in the contract's order. `chief_of_staff`
- *  takes `first_agent`'s place while the server's K5 switch is on; the
+ *  takes `first_agent`'s place while the server's Kessel switch is on; the
  *  daemon sends one or the other. `dev_tools` comes first, and only while
  *  git doesn't run on the server. Unknown ids are dropped. */
 export const FIRST_RUN_ROW_IDS = [
@@ -57,27 +57,27 @@ export const FIRST_RUN_OPENS = [
   'tunnel',
   'phone',
   'owner_account_prompt',
-  'k5_sheet',
-  'k5_thread_cos',
+  'kessel_sheet',
+  'kessel_thread_cos',
 ] as const
 export type FirstRunOpens = (typeof FIRST_RUN_OPENS)[number]
 
 export type FirstRunRowState = 'done' | 'todo' | 'skipped'
-export const FIRST_RUN_NOTES = ['needs_tunnel', 'needs_k5', 'installing'] as const
+export const FIRST_RUN_NOTES = ['needs_tunnel', 'needs_kessel', 'installing'] as const
 export type FirstRunNote = (typeof FIRST_RUN_NOTES)[number]
 
 /** The offer the LLM sign-in sheet shows once a tool is signed in. */
-export type FirstRunOffer = 'meet_k5'
+export type FirstRunOffer = 'meet_kessel'
 
-/** The server's live K5 (the `orchestrator` seat). */
-export interface K5Seat {
+/** The server's live Kessel (the `orchestrator` seat). */
+export interface KesselSeat {
   workspaceId: string
   name: string
   path: string
 }
 
-/** What the K5 sheet starts from: name, handle and folder, all editable. */
-export interface K5Defaults {
+/** What the Kessel sheet starts from: name, handle and folder, all editable. */
+export interface KesselDefaults {
   name: string
   handle: string
   path: string
@@ -99,12 +99,12 @@ export interface FirstRunDoc {
   hidden: boolean
   finished: boolean
   rows: FirstRunRow[]
-  /** `meet_k5` while the daemon says to offer K5 to this person, else null. */
+  /** `meet_kessel` while the daemon says to offer Kessel to this person, else null. */
   offer: FirstRunOffer | null
-  /** Null when there's no live K5. */
-  k5: K5Seat | null
-  /** Present while the server's K5 switch is on. */
-  k5Defaults: K5Defaults | null
+  /** Null when there's no live Kessel. */
+  kessel: KesselSeat | null
+  /** Present while the server's Kessel switch is on. */
+  kesselDefaults: KesselDefaults | null
 }
 
 export interface FirstRunEntry {
@@ -120,15 +120,15 @@ function str(v: unknown): string | null {
   return typeof v === 'string' && v.trim() !== '' ? v : null
 }
 
-function parseK5Seat(raw: unknown): K5Seat | null {
+function parseKesselSeat(raw: unknown): KesselSeat | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>
   const workspaceId = str(o.workspaceId)
   if (!workspaceId) return null
-  return { workspaceId, name: str(o.name) ?? 'K5', path: str(o.path) ?? '' }
+  return { workspaceId, name: str(o.name) ?? 'Kessel', path: str(o.path) ?? '' }
 }
 
-function parseK5Defaults(raw: unknown): K5Defaults | null {
+function parseKesselDefaults(raw: unknown): KesselDefaults | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const o = raw as Record<string, unknown>
   const name = str(o.name)
@@ -169,9 +169,9 @@ export function parseFirstRunDoc(raw: unknown): FirstRunDoc {
     hidden: o.hidden === true,
     finished: o.finished === true,
     rows,
-    offer: o.offer === 'meet_k5' ? 'meet_k5' : null,
-    k5: parseK5Seat(o.k5),
-    k5Defaults: parseK5Defaults(o.k5Defaults),
+    offer: o.offer === 'meet_kessel' ? 'meet_kessel' : null,
+    kessel: parseKesselSeat(o.kessel),
+    kesselDefaults: parseKesselDefaults(o.kesselDefaults),
   }
 }
 
@@ -283,24 +283,24 @@ interface FirstRunStore {
   show: (scope?: ServerScope) => Promise<void>
   /** Skip one row for this person (`POST first-run/skip`). */
   skip: (row: FirstRunRowId, scope?: ServerScope) => Promise<void>
-  /** "Not now" on the K5 offer, kept per person
+  /** "Not now" on the Kessel offer, kept per person
    *  (`POST first-run/offer/dismiss`). */
   dismissOffer: (scope?: ServerScope) => Promise<void>
-  /** Make K5 (`POST first-run/k5`). Resolves to the new seat; throws the
+  /** Make Kessel (`POST first-run/kessel`). Resolves to the new seat; throws the
    *  daemon's refusal (the sheet shows it). The status is read again. */
-  createK5: (req: CreateK5Request, scope?: ServerScope) => Promise<K5Seat>
-  /** Post "Let's hire my Chief of Staff." into K5's Thread as this person
-   *  and wake K5 (`POST first-run/chief-of-staff/start`). Resolves to K5's
+  createKessel: (req: CreateKesselRequest, scope?: ServerScope) => Promise<KesselSeat>
+  /** Post "Let's hire my Chief of Staff." into Kessel's Thread as this person
+   *  and wake Kessel (`POST first-run/chief-of-staff/start`). Resolves to Kessel's
    *  workspace id; throws the daemon's refusal. */
   startChiefOfStaff: (scope?: ServerScope) => Promise<string>
 }
 
-export interface CreateK5Request {
+export interface CreateKesselRequest {
   /** `claude`, `codex` or `grok`: a tool signed in on this server. */
   tool: string
   name?: string
   handle?: string
-  /** The focus group K5 joins (its id); none when left out. */
+  /** The focus group Kessel joins (its id); none when left out. */
   focusGroup?: string
 }
 
@@ -358,24 +358,24 @@ export const useFirstRunStore = create<FirstRunStore>((set, get) => ({
   show: (scope = primaryScope()) => mutate(scope, FIRST_RUN_SHOW_PATH, {}),
   skip: (row, scope = primaryScope()) => mutate(scope, FIRST_RUN_SKIP_PATH, { row }),
   dismissOffer: (scope = primaryScope()) => mutate(scope, FIRST_RUN_OFFER_DISMISS_PATH, {}),
-  createK5: async (req, scope = primaryScope()) => {
+  createKessel: async (req, scope = primaryScope()) => {
     const body: Record<string, unknown> = { tool: req.tool }
     const name = req.name?.trim()
     const handle = req.handle?.trim()
     if (name) body.name = name
     if (handle) body.handle = handle
     if (req.focusGroup) body.focusGroup = req.focusGroup
-    const out = await daemonCliPost<unknown>(scope, FIRST_RUN_K5_PATH, body)
+    const out = await daemonCliPost<unknown>(scope, FIRST_RUN_KESSEL_PATH, body)
     void get().load(scope)
-    const seat = parseK5Seat(out)
-    if (!seat) throw new Error("The server didn't say where K5 is.")
+    const seat = parseKesselSeat(out)
+    if (!seat) throw new Error("The server didn't say where Kessel is.")
     return seat
   },
   startChiefOfStaff: async (scope = primaryScope()) => {
     const out = await daemonCliPost<unknown>(scope, FIRST_RUN_COS_START_PATH, {})
     void get().load(scope)
     const id = out && typeof out === 'object' ? str((out as Record<string, unknown>).workspaceId) : null
-    if (!id) throw new Error("The server didn't say where K5 is.")
+    if (!id) throw new Error("The server didn't say where Kessel is.")
     return id
   },
 }))

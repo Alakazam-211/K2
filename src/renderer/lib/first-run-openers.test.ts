@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   eligible: true,
   calls: [] as string[],
   openWorkspaceThread: vi.fn(async (_id: string) => true),
-  startChiefOfStaff: vi.fn(async () => 'ws-k5'),
+  startChiefOfStaff: vi.fn(async () => 'ws-kessel'),
   addToast: vi.fn(),
   daemonCliPost: vi.fn(),
   load: vi.fn(async () => {}),
@@ -39,7 +39,7 @@ import {
   startChiefOfStaffHire,
   startDevToolsInstall,
 } from './first-run-openers'
-import { useK5SheetStore } from '@/stores/k5-sheet'
+import { useKesselSheetStore } from '@/stores/kessel-sheet'
 import { useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
 import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-reopen'
@@ -51,7 +51,7 @@ beforeEach(() => {
   useLlmSignInRequestStore.setState({ pending: null })
   usePhonePairingFocusStore.setState({ requestSeq: 0, handledSeq: 0 })
   useOwnerAccountPromptReopenStore.setState({ forced: false })
-  useK5SheetStore.setState({ isOpen: false })
+  useKesselSheetStore.setState({ isOpen: false })
   h.calls = []
   h.openWorkspaceThread.mockReset()
   h.openWorkspaceThread.mockImplementation(async (id: string) => {
@@ -61,7 +61,7 @@ beforeEach(() => {
   h.startChiefOfStaff.mockReset()
   h.startChiefOfStaff.mockImplementation(async () => {
     h.calls.push('start')
-    return 'ws-k5'
+    return 'ws-kessel'
   })
   h.addToast.mockReset()
   h.daemonCliPost.mockReset()
@@ -129,27 +129,27 @@ describe('openFirstRunTarget', () => {
     expect(h.openSettings).toHaveBeenCalledWith('general')
   })
 
-  it('k5_sheet opens the K5 sheet', () => {
-    expect(openFirstRunTarget('k5_sheet')).toBe(true)
-    expect(useK5SheetStore.getState().isOpen).toBe(true)
+  it('kessel_sheet opens the Kessel sheet', () => {
+    expect(openFirstRunTarget('kessel_sheet')).toBe(true)
+    expect(useKesselSheetStore.getState().isOpen).toBe(true)
     expect(h.openSettings).not.toHaveBeenCalled()
   })
 
-  it("k5_thread_cos starts the hire, then opens K5's Thread", async () => {
-    expect(openFirstRunTarget('k5_thread_cos')).toBe(true)
-    await vi.waitFor(() => expect(h.openWorkspaceThread).toHaveBeenCalledWith('ws-k5'))
-    expect(h.calls).toEqual(['start', 'open:ws-k5'])
+  it("kessel_thread_cos starts the hire, then opens Kessel's Thread", async () => {
+    expect(openFirstRunTarget('kessel_thread_cos')).toBe(true)
+    await vi.waitFor(() => expect(h.openWorkspaceThread).toHaveBeenCalledWith('ws-kessel'))
+    expect(h.calls).toEqual(['start', 'open:ws-kessel'])
     expect(h.addToast).not.toHaveBeenCalled()
   })
 
-  it('k5_thread_cos: a refusal is a toast and opens nothing', async () => {
+  it('kessel_thread_cos: a refusal is a toast and opens nothing', async () => {
     h.startChiefOfStaff.mockRejectedValue(new Error('only an Owner or Admin can start this'))
     await startChiefOfStaffHire()
     expect(h.openWorkspaceThread).not.toHaveBeenCalled()
     expect(h.addToast).toHaveBeenCalledWith(`${COS_START_FAILED_TEXT}: only an Owner or Admin can start this`, 'error', 6000)
   })
 
-  it.each(['k5_chat', 'cli_settings', '', 'constructor', '__proto__', null, undefined])('ignores %s', (v) => {
+  it.each(['kessel_chat', 'cli_settings', '', 'constructor', '__proto__', null, undefined])('ignores %s', (v) => {
     expect(openFirstRunTarget(v as string | null | undefined)).toBe(false)
     expect(h.openSettings).not.toHaveBeenCalled()
     expect(h.startAddWorkspace).not.toHaveBeenCalled()

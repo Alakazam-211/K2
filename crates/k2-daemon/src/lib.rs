@@ -218,7 +218,7 @@ pub mod homes_routes;
 pub mod stash_routes;
 /// The setup checklist (prd-setup-checklist-v1 C1): `/cli/first-run/*`.
 pub mod first_run_routes;
-/// K5 at first run: granting the K5 and Chief of Staff starter sets.
+/// Kessel at first run: granting the Kessel and Chief of Staff starter sets.
 pub(crate) mod first_run_grants;
 /// post-idempotency-v1 (0.46.8): `clientMsgId` on Thread and project chat posts.
 pub mod client_msg_id;

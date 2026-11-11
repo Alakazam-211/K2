@@ -287,7 +287,7 @@ fn skip_refuses_a_row_the_caller_does_not_see() {
     let conn = db();
     let p = people();
     let f = Facts::default();
-    for bad in ["tunnel", "llm_sign_in", "own_sign_in", "meet_k5", "k2_cli", "nope", ""] {
+    for bad in ["tunnel", "llm_sign_in", "own_sign_in", "meet_kessel", "k2_cli", "nope", ""] {
         let e = apply_on(&conn, &p, "anna", Viewer::Login(Role::Member), &f, true, &Action::Skip(bad.into()), 1)
             .expect_err(bad);
         assert_eq!(e, Error::UnknownRow(bad.to_string()));
@@ -474,35 +474,35 @@ fn phones_are_each_logins_own_and_the_owners_are_every_linked_logins() {
     assert_eq!(f.phones, 0);
 }
 
-// ── K5 at first run (prd-setup-checklist-v1 §10, k5-first-run-contract) ──
+// ── Kessel at first run (prd-setup-checklist-v1 §10, kessel-first-run-contract) ──
 
-fn k5_live() -> crate::orchestrator::Live {
-    crate::orchestrator::Live { workspace_id: "w-k5".into(), name: "K5".into(), path: "/home/r/k2-agents/k5".into() }
+fn kessel_live() -> crate::orchestrator::Live {
+    crate::orchestrator::Live { workspace_id: "w-kessel".into(), name: "Kessel".into(), path: "/home/r/k2-agents/kessel".into() }
 }
 
-/// The flag on, a tool signed in, no K5: the offer's every condition.
+/// The flag on, a tool signed in, no Kessel: the offer's every condition.
 fn offer_facts() -> Facts {
-    Facts { k5_first_run: true, llm_signed_in: true, k5_default_path: "/home/r/k2-agents/k5".into(), ..Facts::default() }
+    Facts { kessel_first_run: true, llm_signed_in: true, kessel_default_path: "/home/r/k2-agents/kessel".into(), ..Facts::default() }
 }
 
 #[test]
-fn the_offer_shows_only_with_the_flag_a_tool_no_k5_and_an_admin_or_better() {
+fn the_offer_shows_only_with_the_flag_a_tool_no_kessel_and_an_admin_or_better() {
     let f = offer_facts();
     for v in [Viewer::OwnerToken, Viewer::Login(Role::Owner), Viewer::Login(Role::Admin)] {
-        assert_eq!(k5_status(v, &f, false).expect("on").offer, Some(OFFER_MEET_K5), "{v:?}");
+        assert_eq!(kessel_status(v, &f, false).expect("on").offer, Some(OFFER_MEET_KESSEL), "{v:?}");
     }
     for v in [Viewer::Login(Role::Member), Viewer::Login(Role::VoiceChat)] {
-        assert_eq!(k5_status(v, &f, false).expect("on").offer, None, "{v:?}");
+        assert_eq!(kessel_status(v, &f, false).expect("on").offer, None, "{v:?}");
     }
-    assert_eq!(k5_status(Viewer::OwnerToken, &Facts { k5_first_run: false, ..f.clone() }, false), None, "flag off: nothing");
-    assert_eq!(k5_status(Viewer::OwnerToken, &Facts { llm_signed_in: false, ..f.clone() }, false).expect("on").offer, None, "no tool");
-    let with_k5 = Facts { k5: Some(k5_live()), ..f.clone() };
-    let s = k5_status(Viewer::OwnerToken, &with_k5, false).expect("on");
-    assert_eq!(s.offer, None, "K5 is there");
-    assert_eq!(s.k5.expect("k5").workspace_id, "w-k5");
-    assert_eq!(k5_status(Viewer::OwnerToken, &f, true).expect("on").offer, None, "dismissed");
-    let d = k5_status(Viewer::OwnerToken, &f, false).expect("on").k5_defaults;
-    assert_eq!((d.name.as_str(), d.handle.as_str(), d.path.as_str()), ("K5", "k5", "/home/r/k2-agents/k5"));
+    assert_eq!(kessel_status(Viewer::OwnerToken, &Facts { kessel_first_run: false, ..f.clone() }, false), None, "flag off: nothing");
+    assert_eq!(kessel_status(Viewer::OwnerToken, &Facts { llm_signed_in: false, ..f.clone() }, false).expect("on").offer, None, "no tool");
+    let with_kessel = Facts { kessel: Some(kessel_live()), ..f.clone() };
+    let s = kessel_status(Viewer::OwnerToken, &with_kessel, false).expect("on");
+    assert_eq!(s.offer, None, "Kessel is there");
+    assert_eq!(s.kessel.expect("kessel").workspace_id, "w-kessel");
+    assert_eq!(kessel_status(Viewer::OwnerToken, &f, true).expect("on").offer, None, "dismissed");
+    let d = kessel_status(Viewer::OwnerToken, &f, false).expect("on").kessel_defaults;
+    assert_eq!((d.name.as_str(), d.handle.as_str(), d.path.as_str()), ("Kessel", "kessel", "/home/r/k2-agents/kessel"));
 }
 
 #[test]
@@ -512,14 +512,14 @@ fn dismissing_the_offer_is_per_person_and_show_keeps_it() {
     let f = offer_facts();
     let admin = Viewer::Login(Role::Admin);
     let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::DismissOffer, 5).expect("dismiss");
-    assert_eq!(s.k5.expect("on").offer, None, "julie said not now");
+    assert_eq!(s.kessel.expect("on").offer, None, "julie said not now");
     let o = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 6).expect("owner");
-    assert_eq!(o.k5.expect("on").offer, Some(OFFER_MEET_K5), "the owner still gets it");
+    assert_eq!(o.kessel.expect("on").offer, Some(OFFER_MEET_KESSEL), "the owner still gets it");
     // The owner token and a linked login are one person.
     apply_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, &Action::DismissOffer, 7).expect("dismiss");
-    assert_eq!(status_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, 8).expect("z3thon").k5.expect("on").offer, None);
+    assert_eq!(status_on(&conn, &p, OWNER, Viewer::Login(Role::Admin), &f, true, 8).expect("z3thon").kessel.expect("on").offer, None);
     let s = apply_on(&conn, &p, "julie", admin, &f, true, &Action::Show, 9).expect("show");
-    assert_eq!(s.k5.expect("on").offer, None, "show brings the list back, not the offer");
+    assert_eq!(s.kessel.expect("on").offer, None, "show brings the list back, not the offer");
     assert_eq!(load_record(&conn, "julie").expect("load").expect("row").offer_dismissed_at, Some(5));
 }
 
@@ -527,15 +527,15 @@ fn dismissing_the_offer_is_per_person_and_show_keeps_it() {
 fn the_chief_of_staff_row_replaces_first_agent_only_with_the_flag_on() {
     let off = rows(Viewer::OwnerToken, &Facts::default(), &none());
     assert_eq!(ids(&off), V1_ROWS.to_vec(), "flag off: first_agent as today");
-    let f = Facts { k5_first_run: true, has_agent: true, ..Facts::default() };
+    let f = Facts { kessel_first_run: true, has_agent: true, ..Facts::default() };
     let on = rows(Viewer::OwnerToken, &f, &none());
-    assert_eq!(ids(&on), K5_ROWS.to_vec(), "same position");
+    assert_eq!(ids(&on), KESSEL_ROWS.to_vec(), "same position");
     let cos = row(&on, "chief_of_staff");
-    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, Some("k5_sheet"), Some(NOTE_NEEDS_K5)), "no K5 yet");
-    let with_k5 = Facts { k5: Some(k5_live()), ..f.clone() };
-    let cos = row(&rows(Viewer::Login(Role::Admin), &with_k5, &none()), "chief_of_staff").clone();
-    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, Some("k5_thread_cos"), None));
-    let hired = Facts { chief_of_staff: true, ..with_k5 };
+    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, Some("kessel_sheet"), Some(NOTE_NEEDS_KESSEL)), "no Kessel yet");
+    let with_kessel = Facts { kessel: Some(kessel_live()), ..f.clone() };
+    let cos = row(&rows(Viewer::Login(Role::Admin), &with_kessel, &none()), "chief_of_staff").clone();
+    assert_eq!((cos.state, cos.opens, cos.note), (State::Todo, Some("kessel_thread_cos"), None));
+    let hired = Facts { chief_of_staff: true, ..with_kessel };
     assert_eq!(row(&rows(Viewer::OwnerToken, &hired, &none()), "chief_of_staff").state, State::Done);
     // A Member sees neither row.
     let m = rows(Viewer::Login(Role::Member), &f, &none());
@@ -548,47 +548,47 @@ fn the_chief_of_staff_row_replaces_first_agent_only_with_the_flag_on() {
 }
 
 #[test]
-fn the_k5_wire_shape_is_the_contracts_and_absent_with_the_flag_off() {
+fn the_kessel_wire_shape_is_the_contracts_and_absent_with_the_flag_off() {
     let conn = db();
     let p = people();
     let s = status_on(&conn, &p, OWNER, Viewer::OwnerToken, &Facts { has_agent: true, ..Facts::default() }, false, 1).expect("off");
     let v = serde_json::to_value(&s).expect("json");
-    for k in ["offer", "k5", "k5Defaults"] {
+    for k in ["offer", "kessel", "kesselDefaults"] {
         assert!(v.get(k).is_none(), "{k} is not sent with the flag off: {v}");
     }
     let f = Facts { has_agent: true, tunnel_done: true, ..offer_facts() };
     let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 2).expect("on")).expect("json");
-    assert_eq!(v["offer"], serde_json::json!("meet_k5"));
-    assert_eq!(v["k5"], serde_json::Value::Null);
-    assert_eq!(v["k5Defaults"], serde_json::json!({ "name": "K5", "handle": "k5", "path": "/home/r/k2-agents/k5" }));
-    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "k5_sheet", "note": "needs_k5" }));
-    let f = Facts { k5: Some(k5_live()), ..f };
+    assert_eq!(v["offer"], serde_json::json!("meet_kessel"));
+    assert_eq!(v["kessel"], serde_json::Value::Null);
+    assert_eq!(v["kesselDefaults"], serde_json::json!({ "name": "Kessel", "handle": "kessel", "path": "/home/r/k2-agents/kessel" }));
+    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "kessel_sheet", "note": "needs_kessel" }));
+    let f = Facts { kessel: Some(kessel_live()), ..f };
     let v = serde_json::to_value(status_on(&conn, &p, OWNER, Viewer::OwnerToken, &f, true, 3).expect("on")).expect("json");
     assert_eq!(v["offer"], serde_json::Value::Null);
-    assert_eq!(v["k5"], serde_json::json!({ "workspaceId": "w-k5", "name": "K5", "path": "/home/r/k2-agents/k5" }));
-    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "k5_thread_cos" }));
+    assert_eq!(v["kessel"], serde_json::json!({ "workspaceId": "w-kessel", "name": "Kessel", "path": "/home/r/k2-agents/kessel" }));
+    assert_eq!(v["rows"][1], serde_json::json!({ "id": "chief_of_staff", "state": "todo", "opens": "kessel_thread_cos" }));
 }
 
-/// The facts read the seat: K5 doesn't count as the person's first agent,
-/// a live Chief of Staff is, and a deleted K5 workspace empties the seat.
+/// The facts read the seat: Kessel doesn't count as the person's first agent,
+/// a live Chief of Staff is, and a deleted Kessel workspace empties the seat.
 #[test]
-fn load_facts_reads_the_seat_and_a_deleted_k5_clears_it() {
+fn load_facts_reads_the_seat_and_a_deleted_kessel_clears_it() {
     let _home = crate::test_env::TempHome::new();
     let conn = db();
     let p = People::load().expect("people");
     let mut settings = crate::app_settings::AppSettings::default();
-    settings.k5_first_run = true;
-    for (id, path) in [("w-k5", "/tmp/fr-k5"), ("w-cos", "/tmp/fr-cos")] {
+    settings.kessel_first_run = true;
+    for (id, path) in [("w-kessel", "/tmp/fr-kessel"), ("w-cos", "/tmp/fr-cos")] {
         conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?1, ?2)", rusqlite::params![id, path]).expect("project");
     }
     conn.execute("DELETE FROM projects WHERE id = 'w-cos'", []).expect("no cos yet");
-    crate::orchestrator::record_k5(&conn, "w-k5", "K5", "owner", 1).expect("seat");
+    crate::orchestrator::record_kessel(&conn, "w-kessel", "Kessel", "owner", 1).expect("seat");
     let f = load_facts(&conn, &p, &settings, OWNER).expect("facts");
-    assert!(f.k5_first_run);
-    assert_eq!(f.k5.as_ref().map(|l| l.workspace_id.as_str()), Some("w-k5"));
-    assert!(!f.has_agent, "K5 alone isn't the person's first agent");
+    assert!(f.kessel_first_run);
+    assert_eq!(f.kessel.as_ref().map(|l| l.workspace_id.as_str()), Some("w-kessel"));
+    assert!(!f.has_agent, "Kessel alone isn't the person's first agent");
     assert!(!f.chief_of_staff);
-    assert!(f.k5_default_path.ends_with("k2-agents/k5"), "{}", f.k5_default_path);
+    assert!(f.kessel_default_path.ends_with("k2-agents/kessel"), "{}", f.kessel_default_path);
 
     conn.execute("INSERT INTO projects (id, name, path) VALUES ('w-cos', 'w-cos', '/tmp/fr-cos')", []).expect("cos");
     crate::orchestrator::record_chief_of_staff(&conn, "w-cos").expect("record");
@@ -597,12 +597,12 @@ fn load_facts_reads_the_seat_and_a_deleted_k5_clears_it() {
     let rs = rows(Viewer::OwnerToken, &f, &none());
     assert_eq!(row(&rs, "chief_of_staff").state, State::Done);
 
-    conn.execute("DELETE FROM projects WHERE id = 'w-k5'", []).expect("delete K5");
+    conn.execute("DELETE FROM projects WHERE id = 'w-kessel'", []).expect("delete Kessel");
     let f = load_facts(&conn, &p, &settings, OWNER).expect("facts");
-    assert_eq!(f.k5, None, "a deleted K5 workspace clears the seat");
-    let s = k5_status(Viewer::OwnerToken, &Facts { llm_signed_in: true, ..f.clone() }, false).expect("on");
-    assert_eq!(s.offer, Some(OFFER_MEET_K5), "the offer comes back");
-    assert_eq!(row(&rows(Viewer::OwnerToken, &f, &none()), "chief_of_staff").opens, Some("k5_sheet"));
+    assert_eq!(f.kessel, None, "a deleted Kessel workspace clears the seat");
+    let s = kessel_status(Viewer::OwnerToken, &Facts { llm_signed_in: true, ..f.clone() }, false).expect("on");
+    assert_eq!(s.offer, Some(OFFER_MEET_KESSEL), "the offer comes back");
+    assert_eq!(row(&rows(Viewer::OwnerToken, &f, &none()), "chief_of_staff").opens, Some("kessel_sheet"));
 }
 
 #[test]
@@ -665,8 +665,8 @@ fn on_a_mac_the_dev_tools_row_is_first_todo_and_the_owner_tokens_only() {
     for role in [Role::Owner, Role::Admin, Role::Member] {
         assert!(!ids(&rows(Viewer::Login(role), &f, &none())).contains(&"dev_tools"), "{role:?}");
     }
-    // In contract order with the K5 rows too.
-    let on = rows(Viewer::OwnerToken, &Facts { k5_first_run: true, ..f.clone() }, &none());
+    // In contract order with the Kessel rows too.
+    let on = rows(Viewer::OwnerToken, &Facts { kessel_first_run: true, ..f.clone() }, &none());
     assert_eq!(ids(&on)[..2].to_vec(), vec!["dev_tools", "llm_sign_in"]);
     let order: Vec<usize> = on.iter().map(|r| ROW_IDS.iter().position(|id| *id == r.id).expect("known id")).collect();
     let mut sorted = order.clone();

@@ -1,6 +1,6 @@
 // Setup checklist: what each row's `opens` value opens. Every opener opens
 // the thing itself (Apple's installer, the sign-in sheet, the folder pick,
-// the pairing block, the account prompt, the K5 sheet, K5's Thread), never
+// the pairing block, the account prompt, the Kessel sheet, Kessel's Thread), never
 // a page to go looking on. A value this client doesn't know does nothing.
 
 import { useSettingsStore } from '@/stores/settings'
@@ -10,16 +10,16 @@ import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-
 import { promptEligible } from '@/components/OwnerAccountPrompt/OwnerAccountPrompt'
 import { startAddWorkspace } from '@/lib/start-add-workspace'
 import { useFirstRunStore, type FirstRunOpens } from '@/stores/first-run'
-import { openK5Sheet } from '@/stores/k5-sheet'
+import { openKesselSheet } from '@/stores/kessel-sheet'
 import { openWorkspaceThread } from '@/lib/open-workspace-thread'
 import { useToastStore } from '@/stores/toast'
 import { installGitTools } from '@/lib/git-tools'
 
-/** `k5_thread_cos` failed to start the hire; the daemon's reason follows. */
+/** `kessel_thread_cos` failed to start the hire; the daemon's reason follows. */
 export const COS_START_FAILED_TEXT = "Couldn't start hiring your Chief of Staff"
 
-/** Post "Let's hire my Chief of Staff." into K5's Thread as this person,
- *  then open K5's Chat tab in the Thread view. A refusal is a toast. */
+/** Post "Let's hire my Chief of Staff." into Kessel's Thread as this person,
+ *  then open Kessel's Chat tab in the Thread view. A refusal is a toast. */
 export async function startChiefOfStaffHire(): Promise<void> {
   try {
     const workspaceId = await useFirstRunStore.getState().startChiefOfStaff()
@@ -63,8 +63,8 @@ const OPENERS: Record<FirstRunOpens, () => void> = {
     if (promptEligible()) useOwnerAccountPromptReopenStore.getState().reopen()
     else useSettingsStore.getState().openSettings('general')
   },
-  k5_sheet: () => openK5Sheet(),
-  k5_thread_cos: () => void startChiefOfStaffHire(),
+  kessel_sheet: () => openKesselSheet(),
+  kessel_thread_cos: () => void startChiefOfStaffHire(),
 }
 
 function hasOpener(opens: string): opens is FirstRunOpens {

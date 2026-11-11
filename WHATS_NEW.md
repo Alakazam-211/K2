@@ -59,7 +59,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **It never overwrites the agent's own files.** Re-running a hire only fills in what's missing: an edited note, ROLE.md, layer, skill or heartbeat is kept. The agent records what it got in `.k2/agent/template.lock`, and an agent has one template.
 - **A template carries no authority.** It only suggests permissions; nothing is turned on by the hire. A person turns a switch on, or the agent asks on a card.
 - **The old types still work:** `--template worker` is General, `manager` is Lead, `qa` is Reviewer, and `researcher` is Researcher. Their old ROLE.md texts are gone; agents already made from them keep theirs. Any template id now works everywhere a hire takes one (`POST /v1/w`, `/v1/agents/hire` recipes).
-- **The "K2 Agent" context pack is now K5's pack** (`k5:pack`, "K5: K2's own agent"). `k2:pack` and its old names add the new pack; a workspace that already stacked the old one keeps its file.
+- **The "K2 Agent" context pack is now Kessel's pack** (`kessel:pack`, "Kessel: K2's own agent"). `k2:pack` and its old names add the new pack; a workspace that already stacked the old one keeps its file.
 - **A new Context Catalog pack, Browser and computer use** (`browser:pack`), tells agents about agent-browser and agent-desktop, where to get them, and the rules (give focus back, read form fields by name only, never type passwords, ask before irreversible clicks). It's off until you add it: `k2 agent context add browser:pack`, or Settings → Workspaces → <agent> → Context. A server that had it as its own pack with the same name now uses the built-in one, and a workspace that had added it keeps its copy.
 
 ### Chat / Voice Hosting
@@ -101,7 +101,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Each project has a default view** (Terminal, Thread or Chatter) that its tiles open in. Admins set it in the project's settings or with `k2 project view <project> <view>`.
 
 ### Getting started
-- **A Get started list** walks a new owner through: installing Apple's developer tools (only on a Mac that's missing them), signing in to an AI tool, meeting K5 (K2's own agent, which hires your Chief of Staff), linking your subdomain and connecting your phone. Hide it and it folds into a **Get started** button in your accent colour; the sidebar's collapse button and ⌘B wait until setup is done. `k2 setup` prints the same list and runs on a fresh Mac with nothing installed.
+- **A Get started list** walks a new owner through: installing Apple's developer tools (only on a Mac that's missing them), signing in to an AI tool, meeting Kessel (K2's own agent, which hires your Chief of Staff), linking your subdomain and connecting your phone. Hide it and it folds into a **Get started** button in your accent colour; the sidebar's collapse button and ⌘B wait until setup is done. `k2 setup` prints the same list and runs on a fresh Mac with nothing installed.
 
 ### Workspaces and sync
 - **The eye/pencil (watch or drive a session) is always on the terminal's bar,** not only when someone else is there.

@@ -1940,9 +1940,9 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // other lanes, 0291 maybe the App database door's. Renumber freely
         // on a slip (and edit the migration-order tests).
         ("0292_mail_drafts", include_str!("../../drizzle_sql/0292_mail_drafts.sql")),
-        // 0293 — K5 at first run (prd-setup-checklist-v1 §10, C7/C10): the
+        // 0293 — Kessel at first run (prd-setup-checklist-v1 §10, C7/C10): the
         // one-row `orchestrator` seat and the per-person dismissal of the
-        // "Meet K5" offer. 0291 is another branch's (reserved by K2,
+        // "Meet Kessel" offer. 0291 is another branch's (reserved by K2,
         // 11-10) and 0292 is 0.46.11's. Renumber freely on a slip (and edit the
         // migration-order tests).
         // The store is `crate::orchestrator`.
@@ -2887,7 +2887,7 @@ mod tests {
                 "0290_first_run",
                 // 0.46.11: drafted replies (the mail reader's drafts).
                 "0292_mail_drafts",
-                // K5 at first run: the seat.
+                // Kessel at first run: the seat.
                 "0293_orchestrator",
                 // 0.46.11: an App's database connections (k2 app db connect).
                 "0294_app_db_connections",
@@ -3073,7 +3073,7 @@ mod tests {
                 "0290_first_run",
                 // 0.46.11: drafted replies (the mail reader's drafts).
                 "0292_mail_drafts",
-                // K5 at first run: the seat.
+                // Kessel at first run: the seat.
                 "0293_orchestrator",
                 // 0.46.11: an App's database connections (k2 app db connect).
                 "0294_app_db_connections",
@@ -3349,7 +3349,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0294_app_db_connections", "0294 (0.46.11) runs last, after 0293 (the K5 seat)");
+        assert_eq!(top, "0294_app_db_connections", "0294 (0.46.11) runs last, after 0293 (the Kessel seat)");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -4274,7 +4274,7 @@ mod tests {
             // 0294 (an App's database connections, 0.46.11) is the newest:
             // its record goes (its table and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0294_app_db_connections'", []).unwrap();
-            // 0293 (the K5 seat) came before it: its record goes (its table
+            // 0293 (the Kessel seat) came before it: its record goes (its table
             // is IF NOT EXISTS; its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0293_orchestrator'", []).unwrap();
             // 0292 (drafted replies, 0.46.11) came before it: its record goes

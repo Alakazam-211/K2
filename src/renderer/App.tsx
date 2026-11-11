@@ -18,7 +18,7 @@ import CloneToDialog from './components/CloneToDialog/CloneToDialog'
 import CommandPalette from './components/CommandPalette/CommandPalette'
 import ContextMenu from './components/ContextMenu/ContextMenu'
 import ConfirmDialog from './components/ConfirmDialog/ConfirmDialog'
-import K5Sheet from './components/K5Sheet/K5Sheet'
+import KesselSheet from './components/KesselSheet/KesselSheet'
 import WhatsNewModal from './components/WhatsNewModal/WhatsNewModal'
 import OwnerAccountPrompt from './components/OwnerAccountPrompt/OwnerAccountPrompt'
 import { UnsavedChangesModalHost } from './components/UnsavedChangesModal/UnsavedChangesModal'
@@ -1151,8 +1151,8 @@ function AppRoot(): React.JSX.Element {
       <WhatsNewModal mode={settingsOpen ? 'button-only' : undefined} />
       {/* 0.46.0: ask the local owner once which login is theirs. */}
       <OwnerAccountPrompt />
-      {/* K5 at first run: opened by the sign-in offer or the setup checklist. */}
-      <K5Sheet />
+      {/* Kessel at first run: opened by the sign-in offer or the setup checklist. */}
+      <KesselSheet />
       <MemoryWatcher />
       <UnsavedChangesModalHost />
       <HeartbeatScheduleDialog />

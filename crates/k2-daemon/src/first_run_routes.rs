@@ -8,19 +8,19 @@
 //! | POST | `/cli/first-run/hide` | | the same body |
 //! | POST | `/cli/first-run/show` | | the same body (hidden, finished and skips cleared) |
 //! | POST | `/cli/first-run/skip` | `{"row": "<id>"}` | the same body |
-//! | POST | `/cli/first-run/offer/dismiss` | | the same body ("Not now" on Meet K5, per person) |
-//! | POST | `/cli/first-run/k5` | `{tool?, name?, handle?, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
+//! | POST | `/cli/first-run/offer/dismiss` | | the same body ("Not now" on Meet Kessel, per person) |
+//! | POST | `/cli/first-run/kessel` | `{tool?, name?, handle?, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
 //! | POST | `/cli/first-run/chief-of-staff/start` | | `{workspaceId}` |
 //! | POST | `/cli/first-run/chief-of-staff` | `{name, about, tool, focusGroup?}` | `{workspaceId, name, path, focusGroupId, …}` |
 //!
-//! **K5 at first run** (prd-setup-checklist-v1 §10, `k5-first-run-contract.md`):
-//! the last four answer 404 `k5_first_run_off` while the owner's
-//! `k5FirstRun` switch is off. `k5` and `chief-of-staff/start` are a
+//! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`):
+//! the last four answer 404 `kessel_first_run_off` while the owner's
+//! `kesselFirstRun` switch is off. `kessel` and `chief-of-staff/start` are a
 //! person's at the Admin floor (the owner token, an Owner or an Admin);
 //! `chief-of-staff` is the one agent-callable route here, honoured only for
-//! **K5's own pinned chat**: its passport's workspace is the seat's and its
+//! **Kessel's own pinned chat**: its passport's workspace is the seat's and its
 //! map key is the canonical one (the same check as `k2 agent refresh`), so
-//! another agent, K5's sidecar, a shell tab, a login, an API key and the
+//! another agent, Kessel's sidecar, a shell tab, a login, an API key and the
 //! owner token are refused ([`handle_chief_of_staff`]). The rest of the
 //! family stays on the passport denylist.
 //!
@@ -37,14 +37,14 @@
 //! agent in that group, the way `k2 agent hire --focus-group` and Add
 //! Workspace do (`db_ops::focus_groups_assign_project`). It is checked
 //! before anything is made: no such group is 400 `unknown_focus_group` and
-//! nothing is made. The Chief of Staff joins K5's group when it's left out.
+//! nothing is made. The Chief of Staff joins Kessel's group when it's left out.
 //!
 //! **Text.** `?format=text` on any of them: on a 200, the plain lines
 //! `k2 setup` prints (`k2_core::first_run_text`), so the CLI needs no
 //! python3; refusals stay JSON either way.
 //!
 //! **Frames.** `first_run_changed` to that person's sockets on hide, show,
-//! skip, dismiss and finish; to everyone when K5 or the Chief of Staff is
+//! skip, dismiss and finish; to everyone when Kessel or the Chief of Staff is
 //! made (with `projects_changed`).
 
 use k2_core::first_run::{self, Action, Viewer};
@@ -61,14 +61,14 @@ pub const HIDE_PATH: &str = "/cli/first-run/hide";
 pub const SHOW_PATH: &str = "/cli/first-run/show";
 pub const SKIP_PATH: &str = "/cli/first-run/skip";
 pub const OFFER_DISMISS_PATH: &str = "/cli/first-run/offer/dismiss";
-pub const K5_PATH: &str = "/cli/first-run/k5";
+pub const KESSEL_PATH: &str = "/cli/first-run/kessel";
 pub const COS_START_PATH: &str = "/cli/first-run/chief-of-staff/start";
 pub const COS_PATH: &str = "/cli/first-run/chief-of-staff";
 
-/// What `chief-of-staff/start` posts into K5's Thread, as the person.
+/// What `chief-of-staff/start` posts into Kessel's Thread, as the person.
 pub const COS_START_TEXT: &str = "Let's hire my Chief of Staff.";
 
-/// The longest name a K5 or Chief of Staff may get.
+/// The longest name a Kessel or Chief of Staff may get.
 pub const MAX_NAME: usize = 64;
 
 /// Body cap for the POSTs (`{"row": "<id>"}` at most).
@@ -77,17 +77,17 @@ pub const MAX_BODY: usize = 4 * 1024;
 pub fn is_route(path: &str) -> bool {
     matches!(
         path,
-        STATUS_PATH | HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | K5_PATH | COS_START_PATH | COS_PATH
+        STATUS_PATH | HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | KESSEL_PATH | COS_START_PATH | COS_PATH
     )
 }
 
 pub fn is_post_only(path: &str) -> bool {
-    matches!(path, HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | K5_PATH | COS_START_PATH | COS_PATH)
+    matches!(path, HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | KESSEL_PATH | COS_START_PATH | COS_PATH)
 }
 
-/// The K5 routes, which answer 404 while `k5FirstRun` is off.
-pub fn is_k5_route(path: &str) -> bool {
-    matches!(path, OFFER_DISMISS_PATH | K5_PATH | COS_START_PATH | COS_PATH)
+/// The Kessel routes, which answer 404 while `kesselFirstRun` is off.
+pub fn is_kessel_route(path: &str) -> bool {
+    matches!(path, OFFER_DISMISS_PATH | KESSEL_PATH | COS_START_PATH | COS_PATH)
 }
 
 fn error(status: &'static str, code: &str, hint: impl std::fmt::Display) -> CliResponse {
@@ -190,12 +190,12 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
     if is_post_only(path) != is_post {
         return CliResponse::method_not_allowed();
     }
-    if is_k5_route(path) && !k2_core::app_settings::load().k5_first_run {
-        return k5_off();
+    if is_kessel_route(path) && !k2_core::app_settings::load().kessel_first_run {
+        return kessel_off();
     }
     if path == COS_PATH {
         // A person (or the owner token) on the seat-only route.
-        return k5_session_only("this step is K5's: ask K5 on its Thread to hire your Chief of Staff (the setup list's row starts it)");
+        return kessel_session_only("this step is Kessel's: ask Kessel on its Thread to hire your Chief of Staff (the setup list's row starts it)");
     }
     let person = match person_for(actor) {
         Ok(p) => p,
@@ -205,11 +205,11 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
         Ok(v) => v,
         Err(r) => return r,
     };
-    if path == K5_PATH || path == COS_START_PATH {
+    if path == KESSEL_PATH || path == COS_START_PATH {
         if !matches!(viewer, Viewer::OwnerToken | Viewer::Login(k2_core::connect_users::Role::Admin | k2_core::connect_users::Role::Owner)) {
-            return error("403 Forbidden", "role_required", "making K5 needs the owner, an Owner or an Admin login");
+            return error("403 Forbidden", "role_required", "making Kessel needs the owner, an Owner or an Admin login");
         }
-        return if path == K5_PATH { handle_k5(body, actor, text) } else { handle_cos_start(actor) };
+        return if path == KESSEL_PATH { handle_kessel(body, actor, text) } else { handle_cos_start(actor) };
     }
     let action = match action_for(path, body) {
         Ok(a) => a,
@@ -258,19 +258,19 @@ pub fn handle_as(is_post: bool, path: &str, body: &[u8], actor: &Actor, text: bo
     }
 }
 
-// ── K5 at first run (prd-setup-checklist-v1 §10) ─────────────────────
+// ── Kessel at first run (prd-setup-checklist-v1 §10) ─────────────────────
 
-/// 404 while the owner's `k5FirstRun` switch is off.
-pub fn k5_off() -> CliResponse {
-    error("404 Not Found", "k5_first_run_off", "K5 at first run is off on this server (the owner turns on k5FirstRun)")
+/// 404 while the owner's `kesselFirstRun` switch is off.
+pub fn kessel_off() -> CliResponse {
+    error("404 Not Found", "kessel_first_run_off", "Kessel at first run is off on this server (the owner turns on kesselFirstRun)")
 }
 
-/// 403 on the seat-only route for anything but K5's own pinned chat.
-fn k5_session_only(hint: &str) -> CliResponse {
-    error("403 Forbidden", "k5_session_only", hint)
+/// 403 on the seat-only route for anything but Kessel's own pinned chat.
+fn kessel_session_only(hint: &str) -> CliResponse {
+    error("403 Forbidden", "kessel_session_only", hint)
 }
 
-/// One K5 or Chief of Staff made at a time, so the 409s hold.
+/// One Kessel or Chief of Staff made at a time, so the 409s hold.
 static MAKE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 fn hire_error(e: &k2_core::hire::HireError) -> CliResponse {
@@ -387,7 +387,7 @@ fn focus_group_for(asked: Option<String>) -> Result<Option<String>, CliResponse>
     }
 }
 
-/// K5's focus group, if it's in one: where its Chief of Staff goes by default.
+/// Kessel's focus group, if it's in one: where its Chief of Staff goes by default.
 fn focus_group_of(workspace_id: &str) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -407,17 +407,41 @@ fn join_focus_group(report: &k2_core::hire::template::ApplyReport, group: Option
     }
 }
 
-fn seat_k5() -> Result<Option<k2_core::orchestrator::Live>, CliResponse> {
+/// The handle seed for a new Kessel. One the person chose (anything but
+/// the default) is theirs as it is. Left out, `kessel` or the prefilled
+/// default: `kessel`, else `kessel5` while another workspace holds
+/// `kessel`; 409 `kessel_handle_taken` when both are held (nothing made).
+fn kessel_handle(asked: Option<String>) -> Result<String, CliResponse> {
+    use k2_core::orchestrator::{default_handle, is_default_handle, DEFAULT_HANDLE, FALLBACK_HANDLE};
     let db = k2_core::db::shared();
     let conn = db.lock();
-    k2_core::orchestrator::live_k5(&conn).map_err(|e| error("500 Internal Server Error", "store", e.to_string()))
+    if !is_default_handle(&conn, asked.as_deref()) {
+        return Ok(asked.unwrap_or_default());
+    }
+    match default_handle(&conn) {
+        Some(h) => Ok(h.to_string()),
+        None => Err(error(
+            "409 Conflict",
+            "kessel_handle_taken",
+            format!(
+                "the handles {DEFAULT_HANDLE} and {FALLBACK_HANDLE} are both taken by other agents: \
+                 pass another with --handle (k2 setup kessel --handle <h>), or free one of them"
+            ),
+        )),
+    }
+}
+
+fn seat_kessel() -> Result<Option<k2_core::orchestrator::Live>, CliResponse> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::orchestrator::live_kessel(&conn).map_err(|e| error("500 Internal Server Error", "store", e.to_string()))
 }
 
 fn handle_of(id: &str) -> String {
     k2_core::workspace_session_handles::workspace_address_name_shared(id).unwrap_or_else(|_| id.to_string())
 }
 
-/// The person K5 works for, by the seat's `created_by` (`owner` or
+/// The person Kessel works for, by the seat's `created_by` (`owner` or
 /// `login:<name>`): their display name, for `{{person}}`.
 fn seat_person() -> String {
     let created_by = {
@@ -538,11 +562,11 @@ fn made(
     CliResponse::ok_json(body.to_string())
 }
 
-/// `POST /cli/first-run/k5 {tool?, name?, handle?, focusGroup?}`: make K5
-/// from the `k5` template, seat it, put it in the focus group, set the
+/// `POST /cli/first-run/kessel {tool?, name?, handle?, focusGroup?}`: make Kessel
+/// from the `kessel` template, seat it, put it in the focus group, set the
 /// harness, pinned chat and cards switch, grant the starter set the creator
 /// can give, then launch it with its hello.
-fn handle_k5(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
+fn handle_kessel(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
     let v = match json_body(body) {
         Ok(v) => v,
         Err(r) => return r,
@@ -556,9 +580,9 @@ fn handle_k5(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
         Err(r) => return r,
     };
     let _made = MAKE_LOCK.lock();
-    match seat_k5() {
-        Ok(Some(k5)) => {
-            return error("409 Conflict", "k5_exists", format!("K5 is already here: {} ({})", k5.name, handle_of(&k5.workspace_id)))
+    match seat_kessel() {
+        Ok(Some(kessel)) => {
+            return error("409 Conflict", "kessel_exists", format!("Kessel is already here: {} ({})", kessel.name, handle_of(&kessel.workspace_id)))
         }
         Ok(None) => {}
         Err(r) => return r,
@@ -568,7 +592,10 @@ fn handle_k5(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
         Err(r) => return r,
     };
     let name = name.unwrap_or_else(|| k2_core::orchestrator::DEFAULT_NAME.to_string());
-    let handle_seed = handle.unwrap_or_else(|| k2_core::orchestrator::DEFAULT_HANDLE.to_string());
+    let handle_seed = match kessel_handle(handle) {
+        Ok(h) => h,
+        Err(r) => return r,
+    };
     let handle = match k2_core::workspace_session_handles::slugify_address_token(&handle_seed) {
         Ok(h) => h,
         Err(e) => return error("400 Bad Request", "usage", format!("handle: {e}")),
@@ -601,24 +628,24 @@ fn handle_k5(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
             actor.login.clone(),
         )
     };
-    let mut req = k2_core::hire::template::ApplyRequest::new("k5");
+    let mut req = k2_core::hire::template::ApplyRequest::new("kessel");
     req.name = Some(name.clone());
     req.handle = Some(handle);
     req.tool = Some(tool.clone());
-    // A folder the `k5` template made before (its lock names `k5`) is
-    // K5's again: a K5 whose workspace was deleted is made in place.
+    // A folder the `kessel` template made before (its lock names `kessel`) is
+    // Kessel's again: a Kessel whose workspace was deleted is made in place.
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
-        // `<hire root>/<handle>` is already there and isn't a K5 the
-        // template made: K5's folder is taken, so another handle.
+        // `<hire root>/<handle>` is already there and isn't a Kessel the
+        // template made: Kessel's folder is taken, so another handle.
         Err(e) => {
-            return apply_error(&e, format!("{path} is already there and isn't K5's: pick another handle (k2 setup k5 --handle <h>)"))
+            return apply_error(&e, format!("{path} is already there and isn't Kessel's: pick another handle (k2 setup kessel --handle <h>)"))
         }
     };
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        if let Err(e) = k2_core::orchestrator::record_k5(&conn, &report.workspace_id, &name, &created_by, chrono::Utc::now().timestamp()) {
+        if let Err(e) = k2_core::orchestrator::record_kessel(&conn, &report.workspace_id, &name, &created_by, chrono::Utc::now().timestamp()) {
             return error("500 Internal Server Error", "store", e.to_string());
         }
     }
@@ -626,12 +653,12 @@ fn handle_k5(body: &[u8], actor: &Actor, text: bool) -> CliResponse {
     let group = join_focus_group(&report, group.as_deref());
     after_make(&report);
     let cards = crate::first_run_grants::cards_on(&target, &grantor);
-    let granted = crate::first_run_grants::grant_set(&crate::first_run_grants::with_extras(k2_core::hire::starter_permissions::K5_STARTER_PERMISSIONS), &target, &grantor);
-    audit("first-run-k5", &created_by, format!("ok {} {tool} granted={}", report.handle, granted.granted.join(",")));
+    let granted = crate::first_run_grants::grant_set(&crate::first_run_grants::with_extras(k2_core::hire::starter_permissions::KESSEL_STARTER_PERMISSIONS), &target, &grantor);
+    audit("first-run-kessel", &created_by, format!("ok {} {tool} granted={}", report.handle, granted.granted.join(",")));
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
     launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
-    made(&report, group, &granted, &cards, text.then_some(k2_core::first_run_text::Made::K5))
+    made(&report, group, &granted, &cards, text.then_some(k2_core::first_run_text::Made::Kessel))
 }
 
 /// Pinned chat on, for any new agent the first-run routes make (the
@@ -645,19 +672,19 @@ fn after_make(report: &k2_core::hire::template::ApplyReport) {
 }
 
 /// `POST /cli/first-run/chief-of-staff/start`: "Let's hire my Chief of
-/// Staff." into K5's Thread as the caller (a compose post, so it reaches
-/// K5 like the person typed it), after making sure K5's chat is up.
+/// Staff." into Kessel's Thread as the caller (a compose post, so it reaches
+/// Kessel like the person typed it), after making sure Kessel's chat is up.
 fn handle_cos_start(actor: &Actor) -> CliResponse {
-    let k5 = match seat_k5() {
+    let kessel = match seat_kessel() {
         Ok(Some(k)) => k,
-        Ok(None) => return error("409 Conflict", "needs_k5", "there's no K5 yet: make K5 first (k2 setup k5)"),
+        Ok(None) => return error("409 Conflict", "needs_kessel", "there's no Kessel yet: make Kessel first (k2 setup kessel)"),
         Err(r) => return r,
     };
     #[cfg(not(test))]
-    if let Err(e) = crate::canonical_session::ensure_canonical_session(&k5.path) {
-        return error("500 Internal Server Error", "k5_not_started", format!("K5's chat didn't start: {e}"));
+    if let Err(e) = crate::canonical_session::ensure_canonical_session(&kessel.path) {
+        return error("500 Internal Server Error", "kessel_not_started", format!("Kessel's chat didn't start: {e}"));
     }
-    let addr = handle_of(&k5.workspace_id);
+    let addr = handle_of(&kessel.workspace_id);
     let params: std::collections::HashMap<String, String> =
         [("addr", addr.as_str()), ("text", COS_START_TEXT), ("via", "compose")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let author = if actor.owner_token { "owner" } else { actor.login.as_str() };
@@ -668,17 +695,17 @@ fn handle_cos_start(actor: &Actor) -> CliResponse {
     if let Ok(person) = person_for(actor) {
         emit_changed(Some(person));
     }
-    CliResponse::ok_json(json!({ "ok": true, "workspaceId": k5.workspace_id }).to_string())
+    CliResponse::ok_json(json!({ "ok": true, "workspaceId": kessel.workspace_id }).to_string())
 }
 
 /// `POST /cli/first-run/chief-of-staff {name, about, tool, focusGroup?}`:
-/// the one agent-callable route here. **Only K5's own pinned chat** may call it:
-/// the passport's workspace is the seat's K5 and its map key is the
+/// the one agent-callable route here. **Only Kessel's own pinned chat** may call it:
+/// the passport's workspace is the seat's Kessel and its map key is the
 /// canonical one (`map_key == project_id`, as `k2 agent refresh` checks;
 /// `K2_SESSION_ID` is never trusted). Then: the `chief-of-staff` template,
-/// the seat, pinned chat, cards, the starter set K5 holds, the connection
-/// to K5, the events and the launch with its hello. It joins `focusGroup`,
-/// or K5's own focus group when that's left out.
+/// the seat, pinned chat, cards, the starter set Kessel holds, the connection
+/// to Kessel, the events and the launch with its hello. It joins `focusGroup`,
+/// or Kessel's own focus group when that's left out.
 pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller) -> CliResponse {
     handle_chief_of_staff_as(body, caller, false)
 }
@@ -687,30 +714,30 @@ pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller
 /// when `text`.
 pub fn handle_chief_of_staff_as(body: &[u8], caller: &crate::sidecar_routes::Caller, text: bool) -> CliResponse {
     use crate::sidecar_routes::Caller;
-    if !k2_core::app_settings::load().k5_first_run {
-        return k5_off();
+    if !k2_core::app_settings::load().kessel_first_run {
+        return kessel_off();
     }
-    let k5 = match seat_k5() {
+    let kessel = match seat_kessel() {
         Ok(k) => k,
         Err(r) => return r,
     };
-    let only = "only K5's own pinned chat can hire the Chief of Staff (k2 setup chief-of-staff); ask K5 on its Thread";
-    let k5 = match (caller, k5) {
-        (Caller::Agent(a), Some(k5)) if a.project_id == k5.workspace_id => {
-            if a.map_key.as_deref() != Some(k5.workspace_id.as_str()) || a.sandboxed {
-                return k5_session_only(
-                    "a sidecar can't hire the Chief of Staff: ask K5's pinned chat (k2 msg <K5's handle>) to run k2 setup chief-of-staff",
+    let only = "only Kessel's own pinned chat can hire the Chief of Staff (k2 setup chief-of-staff); ask Kessel on its Thread";
+    let kessel = match (caller, kessel) {
+        (Caller::Agent(a), Some(kessel)) if a.project_id == kessel.workspace_id => {
+            if a.map_key.as_deref() != Some(kessel.workspace_id.as_str()) || a.sandboxed {
+                return kessel_session_only(
+                    "a sidecar can't hire the Chief of Staff: ask Kessel's pinned chat (k2 msg <Kessel's handle>) to run k2 setup chief-of-staff",
                 );
             }
-            k5
+            kessel
         }
-        (Caller::Agent(_), Some(_)) => return k5_session_only(only),
-        (Caller::Agent(_), None) => return k5_session_only("there's no K5 on this server, so no agent can hire the Chief of Staff"),
+        (Caller::Agent(_), Some(_)) => return kessel_session_only(only),
+        (Caller::Agent(_), None) => return kessel_session_only("there's no Kessel on this server, so no agent can hire the Chief of Staff"),
         (Caller::Shell { .. }, _) => {
-            return k5_session_only("a shell tab is a person: ask K5 on its Thread to hire your Chief of Staff")
+            return kessel_session_only("a shell tab is a person: ask Kessel on its Thread to hire your Chief of Staff")
         }
-        (Caller::Owner | Caller::Login { .. }, _) => return k5_session_only(only),
-        (Caller::WrongCredential | Caller::Invalid, _) => return k5_session_only(only),
+        (Caller::Owner | Caller::Login { .. }, _) => return kessel_session_only(only),
+        (Caller::WrongCredential | Caller::Invalid, _) => return kessel_session_only(only),
     };
     let v = match json_body(body) {
         Ok(v) => v,
@@ -760,16 +787,16 @@ pub fn handle_chief_of_staff_as(body: &[u8], caller: &crate::sidecar_routes::Cal
             Ok(g) => g,
             Err(r) => return r,
         },
-        None => focus_group_of(&k5.workspace_id),
+        None => focus_group_of(&kessel.workspace_id),
     };
-    let k5_handle = handle_of(&k5.workspace_id);
-    let caller = k2_core::hire::HireCaller::Agent { workspace_id: k5.workspace_id.clone() };
+    let kessel_handle = handle_of(&kessel.workspace_id);
+    let caller = k2_core::hire::HireCaller::Agent { workspace_id: kessel.workspace_id.clone() };
     let mut req = k2_core::hire::template::ApplyRequest::new("chief-of-staff");
     req.name = Some(name);
     req.handle = Some(handle);
     req.tool = Some(tool.clone());
     req.params.insert("about".into(), about);
-    req.params.insert("k5".into(), k5_handle.clone());
+    req.params.insert("kessel".into(), kessel_handle.clone());
     req.params.insert("person".into(), seat_person());
     let report = match k2_core::hire::template::apply(&req, &caller) {
         Ok(r) => r,
@@ -785,27 +812,27 @@ pub fn handle_chief_of_staff_as(body: &[u8], caller: &crate::sidecar_routes::Cal
     let group = join_focus_group(&report, group.as_deref());
     after_make(&report);
     let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
-    let grantor = crate::first_run_grants::Grantor::Agent { workspace_id: k5.workspace_id.clone() };
+    let grantor = crate::first_run_grants::Grantor::Agent { workspace_id: kessel.workspace_id.clone() };
     let cards = crate::first_run_grants::cards_on(&target, &grantor);
     let granted = crate::first_run_grants::grant_set(
         &crate::first_run_grants::with_extras(k2_core::hire::starter_permissions::CHIEF_OF_STAFF_STARTER_PERMISSIONS),
         &target,
         &grantor,
     );
-    // K5 and its hire can message each other: the seat route is the
+    // Kessel and its hire can message each other: the seat route is the
     // authority for this one connection (as a person's add would be).
-    let connected = k2_core::connections::connections_for_actor(&k5.path, "add", Some(&report.handle), None, true);
+    let connected = k2_core::connections::connections_for_actor(&kessel.path, "add", Some(&report.handle), None, true);
     if let Err(e) = &connected {
-        k2_core::log_debug!("[first-run] connect {k5_handle} → {}: {e}", report.handle);
+        k2_core::log_debug!("[first-run] connect {kessel_handle} → {}: {e}", report.handle);
     }
     audit(
         "first-run-chief-of-staff",
-        &format!("agent:{k5_handle}"),
+        &format!("agent:{kessel_handle}"),
         format!("ok {} {tool} granted={} connected={}", report.handle, granted.granted.join(","), connected.is_ok()),
     );
     emit_changed(None);
     crate::v1_hire::emit_hire_watches();
-    launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), k5_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
+    launch(report.path.clone(), report.handle.clone(), &tool, report.hello.clone(), kessel_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
     made(&report, group, &granted, &cards, text.then_some(k2_core::first_run_text::Made::ChiefOfStaff))
 }
 
@@ -1024,5 +1051,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "first_run_k5_tests.rs"]
-mod k5_tests;
+#[path = "first_run_kessel_tests.rs"]
+mod kessel_tests;

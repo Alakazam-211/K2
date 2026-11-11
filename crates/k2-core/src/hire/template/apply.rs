@@ -25,7 +25,7 @@ use super::render::render;
 /// `apply`'s input. [`ApplyRequest::new`] fills the defaults.
 #[derive(Debug, Clone, Default)]
 pub struct ApplyRequest {
-    /// Template id or alias (`writer`, `worker`, `k5`).
+    /// Template id or alias (`writer`, `worker`, `kessel`).
     pub template: String,
     /// Declared `[params]` (`about`); `person` overrides the hirer's name.
     pub params: BTreeMap<String, String>,
@@ -36,7 +36,7 @@ pub struct ApplyRequest {
     pub path: Option<String>,
     /// Display name; the handle seed when `handle` is unset.
     pub name: Option<String>,
-    /// Folder / handle seed (`k5`).
+    /// Folder / handle seed (`kessel`).
     pub handle: Option<String>,
     /// Preset id. `None`: the template's `[agent] tool` (when not `default`).
     pub tool: Option<String>,

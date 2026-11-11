@@ -502,8 +502,8 @@ mod tests {
             "manager:pack catalog listed"
         );
         assert!(
-            presets.iter().any(|p| p["id"] == "k5:pack"),
-            "k5:pack catalog listed (0.46.12: k2:pack is its alias)"
+            presets.iter().any(|p| p["id"] == "kessel:pack"),
+            "kessel:pack catalog listed (0.46.12: k2:pack is its alias)"
         );
         assert!(
             presets.iter().any(|p| p["id"] == "connections:roster"),

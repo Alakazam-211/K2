@@ -1,7 +1,7 @@
 schema = 1
-id = "k5"
+id = "kessel"
 version = 1
-name = "K5"
+name = "Kessel"
 summary = "K2's own agent: setup, settings and agent management."
 kind = "system"
 aliases = []
@@ -9,16 +9,16 @@ author = "K2"
 shared_block = true
 
 [agent]
-role = "k5"
+role = "kessel"
 tool = "default"
 model = ""
 
 [context]
-catalog = ["k5:pack", "users:roster", "heartbeats:roster"]
+catalog = ["kessel:pack", "users:roster", "heartbeats:roster"]
 
 [permissions]
 cards = true
-suggest = ["set:k5-starter"]
+suggest = ["set:kessel-starter"]
 
 [params]
 

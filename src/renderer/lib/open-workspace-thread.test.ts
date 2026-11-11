@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 //
-// Opening a workspace's Chat tab in the Thread view (K5): the Thread is asked
+// Opening a workspace's Chat tab in the Thread view (Kessel): the Thread is asked
 // for explicitly, Settings closes, the Agents page selects the workspace
 // (after a fresh read when it isn't listed yet), and the pinned Chat tab
 // becomes the active tab once the workspace's tabs show.
@@ -65,7 +65,7 @@ beforeEach(() => {
   h.closeSettings.mockReset()
   h.openOnAgentsPage.mockReset()
   h.fetchProjects.mockReset()
-  h.projects = [{ id: 'ws-k5', workspaces: [{ id: 'w1' }] }]
+  h.projects = [{ id: 'ws-kessel', workspaces: [{ id: 'w1' }] }]
   h.activeProjectId = null
   h.page = 'home'
   useSessionViewRequestStore.setState({ pending: null })
@@ -78,13 +78,13 @@ afterEach(() => {
 
 describe('openWorkspaceThread', () => {
   it('asks for the Thread, closes Settings, selects the workspace and makes its Chat tab active', async () => {
-    const p = openWorkspaceThread('ws-k5')
-    expect(useSessionViewRequestStore.getState().pending).toMatchObject({ projectId: 'ws-k5', view: 'thread' })
+    const p = openWorkspaceThread('ws-kessel')
+    expect(useSessionViewRequestStore.getState().pending).toMatchObject({ projectId: 'ws-kessel', view: 'thread' })
     expect(h.closeSettings).toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(0)
-    expect(h.openOnAgentsPage).toHaveBeenCalledWith('ws-k5', 'w1')
+    expect(h.openOnAgentsPage).toHaveBeenCalledWith('ws-kessel', 'w1')
     // The workspace's tabs land: Inbox active, Chat there.
-    tabs().setState({ activeWorkspaceKey: 'ws-k5:w1', tabs: [agentTab('chat-1', 'chat'), agentTab('inbox-1', 'inbox')], activeTabId: 'inbox-1' })
+    tabs().setState({ activeWorkspaceKey: 'ws-kessel:w1', tabs: [agentTab('chat-1', 'chat'), agentTab('inbox-1', 'inbox')], activeTabId: 'inbox-1' })
     await expect(p).resolves.toBe(true)
     expect(tabs().getState().activeTabId).toBe('chat-1')
   })
@@ -108,17 +108,17 @@ describe('openWorkspaceThread', () => {
   })
 
   it('stops waiting for the tabs after a while; the view ask stands', async () => {
-    const p = openWorkspaceThread('ws-k5')
+    const p = openWorkspaceThread('ws-kessel')
     await vi.advanceTimersByTimeAsync(CHAT_TAB_WAIT_MS + 1)
     await expect(p).resolves.toBe(true)
-    expect(useSessionViewRequestStore.getState().pending?.projectId).toBe('ws-k5')
+    expect(useSessionViewRequestStore.getState().pending?.projectId).toBe('ws-kessel')
   })
 
   it('does not select again when Agents already shows it', async () => {
     h.page = 'agents'
-    h.activeProjectId = 'ws-k5'
-    tabs().setState({ activeWorkspaceKey: 'ws-k5:w1', tabs: [agentTab('chat-1', 'chat')], activeTabId: 'other' })
-    await openWorkspaceThread('ws-k5')
+    h.activeProjectId = 'ws-kessel'
+    tabs().setState({ activeWorkspaceKey: 'ws-kessel:w1', tabs: [agentTab('chat-1', 'chat')], activeTabId: 'other' })
+    await openWorkspaceThread('ws-kessel')
     expect(h.openOnAgentsPage).not.toHaveBeenCalled()
     expect(tabs().getState().activeTabId).toBe('chat-1')
   })

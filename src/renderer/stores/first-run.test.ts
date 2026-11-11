@@ -171,31 +171,31 @@ describe('useFirstRunStore', () => {
     expect(entry()?.doc?.offer).toBeNull()
   })
 
-  it('createK5 posts the tool, name and handle, returns the seat and reads the status again', async () => {
-    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5', name: 'Kay', path: '/home/r/k2-agents/kay' })
-    const seat = await useFirstRunStore.getState().createK5({ tool: 'codex', name: ' Kay ', handle: 'kay' })
-    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'codex', name: 'Kay', handle: 'kay' })
-    expect(seat).toEqual({ workspaceId: 'ws-k5', name: 'Kay', path: '/home/r/k2-agents/kay' })
+  it('createKessel posts the tool, name and handle, returns the seat and reads the status again', async () => {
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-kessel', name: 'Kay', path: '/home/r/k2-agents/kay' })
+    const seat = await useFirstRunStore.getState().createKessel({ tool: 'codex', name: ' Kay ', handle: 'kay' })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/kessel', { tool: 'codex', name: 'Kay', handle: 'kay' })
+    expect(seat).toEqual({ workspaceId: 'ws-kessel', name: 'Kay', path: '/home/r/k2-agents/kay' })
     expect(h.daemonCliGet).toHaveBeenCalledWith('first-run/status')
   })
 
-  it('createK5 leaves out an empty name and handle, and throws the refusal', async () => {
-    h.daemonCliPost.mockRejectedValue(Object.assign(new Error('K5 already exists'), { code: 'k5_exists' }))
-    await expect(useFirstRunStore.getState().createK5({ tool: 'claude', name: '  ', handle: '' })).rejects.toThrow(
-      'K5 already exists',
+  it('createKessel leaves out an empty name and handle, and throws the refusal', async () => {
+    h.daemonCliPost.mockRejectedValue(Object.assign(new Error('Kessel already exists'), { code: 'kessel_exists' }))
+    await expect(useFirstRunStore.getState().createKessel({ tool: 'claude', name: '  ', handle: '' })).rejects.toThrow(
+      'Kessel already exists',
     )
-    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'claude' })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/kessel', { tool: 'claude' })
   })
 
-  it('createK5 sends the focus group when one is chosen', async () => {
-    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' })
-    await useFirstRunStore.getState().createK5({ tool: 'codex', focusGroup: 'fg-ops' })
-    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/k5', { tool: 'codex', focusGroup: 'fg-ops' })
+  it('createKessel sends the focus group when one is chosen', async () => {
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-kessel', name: 'Kessel', path: '/home/r/k2-agents/kessel' })
+    await useFirstRunStore.getState().createKessel({ tool: 'codex', focusGroup: 'fg-ops' })
+    expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/kessel', { tool: 'codex', focusGroup: 'fg-ops' })
   })
 
-  it('startChiefOfStaff posts the start and returns K5\'s workspace', async () => {
-    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-k5' })
-    await expect(useFirstRunStore.getState().startChiefOfStaff()).resolves.toBe('ws-k5')
+  it('startChiefOfStaff posts the start and returns Kessel\'s workspace', async () => {
+    h.daemonCliPost.mockResolvedValue({ workspaceId: 'ws-kessel' })
+    await expect(useFirstRunStore.getState().startChiefOfStaff()).resolves.toBe('ws-kessel')
     expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/chief-of-staff/start', {})
   })
 
@@ -215,7 +215,7 @@ describe('parseFirstRunDoc', () => {
     const doc = parseFirstRunDoc({
       enabled: true,
       rows: [
-        { id: 'meet_k5', state: 'todo', opens: 'k5_chat' },
+        { id: 'meet_kessel', state: 'todo', opens: 'kessel_chat' },
         { id: 'llm_sign_in', state: 'todo', opens: 'something_new' },
         // The k2 command row, dropped 11-10: an older daemon may still send it.
         { id: 'k2_cli', state: 'todo', opens: 'cli_settings' },
@@ -231,43 +231,43 @@ describe('parseFirstRunDoc', () => {
   })
 
   it('a malformed body is a switched-off checklist', () => {
-    const off = { enabled: false, hidden: false, finished: false, rows: [], offer: null, k5: null, k5Defaults: null }
+    const off = { enabled: false, hidden: false, finished: false, rows: [], offer: null, kessel: null, kesselDefaults: null }
     expect(parseFirstRunDoc(null)).toEqual(off)
-    expect(parseFirstRunDoc({ enabled: 'yes', rows: 'x', offer: 7, k5: 'x', k5Defaults: [] })).toEqual(off)
+    expect(parseFirstRunDoc({ enabled: 'yes', rows: 'x', offer: 7, kessel: 'x', kesselDefaults: [] })).toEqual(off)
   })
 
-  it('reads the K5 fields, the chief_of_staff row, its opens values and the needs_k5 note', () => {
+  it('reads the Kessel fields, the chief_of_staff row, its opens values and the needs_kessel note', () => {
     const doc = parseFirstRunDoc({
       enabled: true,
-      offer: 'meet_k5',
-      k5: { workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' },
-      k5Defaults: { name: 'K5', handle: 'k5', path: '/home/r/k2-agents/k5' },
+      offer: 'meet_kessel',
+      kessel: { workspaceId: 'ws-kessel', name: 'Kessel', path: '/home/r/k2-agents/kessel' },
+      kesselDefaults: { name: 'Kessel', handle: 'kessel', path: '/home/r/k2-agents/kessel' },
       rows: [
         { id: 'llm_sign_in', state: 'done', opens: 'llm_sign_in' },
-        { id: 'chief_of_staff', state: 'todo', opens: 'k5_sheet', note: 'needs_k5' },
+        { id: 'chief_of_staff', state: 'todo', opens: 'kessel_sheet', note: 'needs_kessel' },
         { id: 'tunnel', state: 'todo', opens: 'tunnel' },
       ],
     })
-    expect(doc.offer).toBe('meet_k5')
-    expect(doc.k5).toEqual({ workspaceId: 'ws-k5', name: 'K5', path: '/home/r/k2-agents/k5' })
-    expect(doc.k5Defaults).toEqual({ name: 'K5', handle: 'k5', path: '/home/r/k2-agents/k5' })
+    expect(doc.offer).toBe('meet_kessel')
+    expect(doc.kessel).toEqual({ workspaceId: 'ws-kessel', name: 'Kessel', path: '/home/r/k2-agents/kessel' })
+    expect(doc.kesselDefaults).toEqual({ name: 'Kessel', handle: 'kessel', path: '/home/r/k2-agents/kessel' })
     expect(doc.rows.map((r) => r.id)).toEqual(['llm_sign_in', 'chief_of_staff', 'tunnel'])
-    expect(doc.rows[1]).toEqual({ id: 'chief_of_staff', state: 'todo', opens: 'k5_sheet', note: 'needs_k5' })
-    const cos = parseFirstRunDoc({ enabled: true, rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'k5_thread_cos' }] })
-    expect(cos.rows[0].opens).toBe('k5_thread_cos')
+    expect(doc.rows[1]).toEqual({ id: 'chief_of_staff', state: 'todo', opens: 'kessel_sheet', note: 'needs_kessel' })
+    const cos = parseFirstRunDoc({ enabled: true, rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'kessel_thread_cos' }] })
+    expect(cos.rows[0].opens).toBe('kessel_thread_cos')
   })
 
   it('drops an unknown offer, a seat without an id and defaults without a name or handle', () => {
     const doc = parseFirstRunDoc({
       enabled: true,
       offer: 'meet_k6',
-      k5: { name: 'K5' },
-      k5Defaults: { name: 'K5', path: '/x' },
-      rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'k5_garden', note: 'needs_k6' }],
+      kessel: { name: 'Kessel' },
+      kesselDefaults: { name: 'Kessel', path: '/x' },
+      rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'kessel_garden', note: 'needs_k6' }],
     })
     expect(doc.offer).toBeNull()
-    expect(doc.k5).toBeNull()
-    expect(doc.k5Defaults).toBeNull()
+    expect(doc.kessel).toBeNull()
+    expect(doc.kesselDefaults).toBeNull()
     expect(doc.rows[0]).toEqual({ id: 'chief_of_staff', state: 'todo', opens: null, note: null })
   })
 

@@ -18,8 +18,8 @@
 // the whole stored `login.url`, never text read back from the page, and the
 // full link can be shown wrapped (no ellipsis, no max length).
 //
-// Signed in: when the daemon offers K5 (`offer: "meet_k5"`, prd-setup-checklist-v1
-// §10.1), the success state leads to it (`K5Offer`).
+// Signed in: when the daemon offers Kessel (`offer: "meet_kessel"`, prd-setup-checklist-v1
+// §10.1), the success state leads to it (`KesselOffer`).
 //
 // An API token is a password field with Show; it is sent once and cleared
 // from state right after. Afterwards the sheet shows at most its last four
@@ -50,7 +50,7 @@ import {
   type LoginMode,
   useLlmAccountsStore,
 } from '@/stores/llm-accounts'
-import { K5Offer } from '@/components/K5Sheet/K5Offer'
+import { KesselOffer } from '@/components/KesselSheet/KesselOffer'
 
 export type LoginSheetStart =
   /** Add a token: choose the provider here (or start on `tool`) and how. */
@@ -118,7 +118,7 @@ export function LlmLoginSheet({
   onDone?: (r: LoginSheetResult) => void
   /** Shown in the signed-in step, under the success note and above the
    *  server-default question: a follow-up the caller offers (for example
-   *  the K5 offer). Brings its own buttons. */
+   *  the Kessel offer). Brings its own buttons. */
   signedInExtra?: React.ReactNode
 }): React.JSX.Element {
   const doc = useLlmAccountsStore((s) => s.entries[scope.id]?.doc ?? null)
@@ -516,11 +516,11 @@ export function LlmLoginSheet({
             </Callout>
             {/* Follow-up offers mount here, under the success note and above
                 the server-default question, each bringing its own buttons:
-                K2 Onboarding's K5 offer (Meet K5 / Not now; the daemon says
+                K2 Onboarding's Kessel offer (Meet Kessel / Not now; the daemon says
                 when to offer it), then `signedInExtra` from the caller.
                 Nothing below says "Not now", so the two never sit side by
                 side. */}
-            <K5Offer scope={scope} onMeet={onClose} />
+            <KesselOffer scope={scope} onMeet={onClose} />
             {signedInExtra ? <div data-testid="llm-login-signed-in-extra">{signedInExtra}</div> : null}
             {login.offerMakeActive && canChangeDefault && madeActive === null ? (
               <div data-testid="llm-login-offer">

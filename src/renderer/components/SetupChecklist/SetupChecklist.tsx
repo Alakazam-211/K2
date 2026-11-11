@@ -72,7 +72,7 @@ import {
 export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: string }> = {
   dev_tools: { label: 'Install developer tools', line: 'Apple’s tools include git, which workspaces need.' },
   llm_sign_in: { label: 'Sign in to an AI tool', line: 'Claude, Codex or Grok. Your agents think with it.' },
-  chief_of_staff: { label: 'Hire your Chief of Staff', line: 'Your lead agent. K5 hires it with you.' },
+  chief_of_staff: { label: 'Hire your Chief of Staff', line: 'Your lead agent. Kessel hires it with you.' },
   first_agent: { label: 'Make your first agent', line: 'Each workspace is an agent with its own folder.' },
   tunnel: { label: 'Link your subdomain', line: 'Gives this server an address of its own at k2.dev, so your phone and other people can reach it.' },
   phone: { label: 'Connect your phone', line: 'Talk to your agents from your phone.' },
@@ -80,7 +80,7 @@ export const SETUP_CHECKLIST_COPY: Record<FirstRunRowId, { label: string; line: 
 }
 
 export const NEEDS_TUNNEL_NOTE = 'Away from home, your phone needs your subdomain first.'
-export const NEEDS_K5_NOTE = 'You’ll meet K5 first.'
+export const NEEDS_KESSEL_NOTE = 'You’ll meet Kessel first.'
 export const INSTALLING_NOTE = 'Apple’s installer is open. Follow it, and this step finishes by itself.'
 /** `dev_tools` on Linux (no installer to open; the note is the command). */
 export const DEV_TOOLS_LINUX_LINE = 'Workspaces need git.'
@@ -88,7 +88,7 @@ export const DEV_TOOLS_LINUX_LINE = 'Workspaces need git.'
 /** Each note's copy (a note this client doesn't know never reaches here). */
 export const SETUP_NOTE_COPY: Record<FirstRunNote, string> = {
   needs_tunnel: NEEDS_TUNNEL_NOTE,
-  needs_k5: NEEDS_K5_NOTE,
+  needs_kessel: NEEDS_KESSEL_NOTE,
   installing: INSTALLING_NOTE,
 }
 

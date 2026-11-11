@@ -5,7 +5,7 @@
 //! is for. The wording is the CLI's (byte for byte); both renderers are
 //! pure.
 
-use crate::first_run::{State, Status, NOTE_INSTALLING, NOTE_NEEDS_K5, NOTE_NEEDS_TUNNEL, OFFER_MEET_K5};
+use crate::first_run::{State, Status, NOTE_INSTALLING, NOTE_NEEDS_KESSEL, NOTE_NEEDS_TUNNEL, OFFER_MEET_KESSEL};
 
 /// A row's label; an id with none is printed as it is.
 pub fn label(id: &str) -> &str {
@@ -24,7 +24,7 @@ pub fn label(id: &str) -> &str {
 fn note_text(note: &str) -> Option<&'static str> {
     match note {
         NOTE_NEEDS_TUNNEL => Some("Away from home, your phone needs your subdomain first."),
-        NOTE_NEEDS_K5 => Some("You will meet K5 first."),
+        NOTE_NEEDS_KESSEL => Some("You will meet Kessel first."),
         NOTE_INSTALLING => Some("The Apple installer is open. Follow it, and this step finishes by itself."),
         _ => None,
     }
@@ -68,12 +68,12 @@ pub fn render_text(s: &Status) -> String {
     if !s.enabled {
         out.push("The app does not show setup lists on this server yet.".into());
     }
-    if let Some(k5) = &s.k5 {
-        if let Some(live) = &k5.k5 {
-            out.push(format!("K5: {} at {} (k2 thread <its handle> to talk to it)", live.name, live.path));
+    if let Some(kessel) = &s.kessel {
+        if let Some(live) = &kessel.kessel {
+            out.push(format!("Kessel: {} at {} (k2 thread <its handle> to talk to it)", live.name, live.path));
         }
-        if k5.offer == Some(OFFER_MEET_K5) {
-            out.push("Next: meet K5, the agent that runs K2: k2 setup k5".into());
+        if kessel.offer == Some(OFFER_MEET_KESSEL) {
+            out.push("Next: meet Kessel, the agent that runs K2: k2 setup kessel".into());
         }
     }
     let mut text = out.join("\n");
@@ -81,10 +81,10 @@ pub fn render_text(s: &Status) -> String {
     text
 }
 
-/// Which agent `k2 setup k5` or `k2 setup chief-of-staff` made.
+/// Which agent `k2 setup kessel` (or `kessel`) or `k2 setup chief-of-staff` made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Made {
-    K5,
+    Kessel,
     ChiefOfStaff,
 }
 
@@ -92,7 +92,7 @@ pub enum Made {
 /// permission left for a card, with why: `(action, reason)`.
 pub fn render_made_text(made: Made, name: &str, handle: &str, path: &str, granted: &[String], left: &[(String, String)]) -> String {
     let what = match made {
-        Made::K5 => "K5",
+        Made::Kessel => "Kessel",
         Made::ChiefOfStaff => "your Chief of Staff",
     };
     let mut out = vec![format!("Made {what}: {name} ({handle}) at {path}")];
@@ -104,7 +104,7 @@ pub fn render_made_text(made: Made, name: &str, handle: &str, path: &str, grante
         out.push(format!("It asks on a permission card for: {}", asks.join(", ")));
     }
     out.push(match made {
-        Made::K5 => format!("K5 is starting and will say hello on its Thread: k2 thread {handle}"),
+        Made::Kessel => format!("Kessel is starting and will say hello on its Thread: k2 thread {handle}"),
         Made::ChiefOfStaff => format!("Tell your person on your Thread, and point them to {name} (k2 msg {handle})."),
     });
     let mut text = out.join("\n");

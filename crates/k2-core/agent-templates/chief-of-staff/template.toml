@@ -22,7 +22,7 @@ suggest = ["set:chief-of-staff-starter"]
 
 [params]
 about = { label = "What do they do?", max = 500, required = false }
-k5 = { label = "K5's handle (K2 fills it in)", max = 64, required = false }
+kessel = { label = "Kessel's handle (K2 fills it in)", max = 64, required = false }
 
 [hello]
 brief = "This is your first start. Say hello to {{person}} on your Thread in a few lines: who you are and how you'll lead their agents. Ask what they'd like done first."

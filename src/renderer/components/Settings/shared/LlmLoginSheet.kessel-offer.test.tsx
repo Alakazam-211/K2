@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// K5 at first run: the sign-in sheet's success state shows the K5 offer only
-// when the daemon says `offer: "meet_k5"`. Meet K5 opens the K5 sheet and
+// Kessel at first run: the sign-in sheet's success state shows the Kessel offer only
+// when the daemon says `offer: "meet_kessel"`. Meet Kessel opens the Kessel sheet and
 // closes this one; Not now posts the dismissal and the offer goes. A sign-in
 // still under way, another offer value or another server shows nothing.
 
@@ -47,10 +47,10 @@ vi.mock('@/stores/session-events', () => {
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { act } from 'react'
 import { LlmLoginSheet } from './LlmLoginSheet'
-import { K5_OFFER_COPY } from '@/components/K5Sheet/K5Offer'
+import { KESSEL_OFFER_COPY } from '@/components/KesselSheet/KesselOffer'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { resetFirstRunForTests } from '@/stores/first-run'
-import { useK5SheetStore } from '@/stores/k5-sheet'
+import { useKesselSheetStore } from '@/stores/kessel-sheet'
 
 function login(state: string): Record<string, unknown> {
   return {
@@ -73,21 +73,21 @@ function login(state: string): Record<string, unknown> {
 }
 
 function status(offer: unknown): Record<string, unknown> {
-  return { enabled: true, hidden: false, finished: false, offer, k5: null, k5Defaults: { name: 'K5', handle: 'k5', path: '/h/k2-agents/k5' }, rows: [] }
+  return { enabled: true, hidden: false, finished: false, offer, kessel: null, kesselDefaults: { name: 'Kessel', handle: 'kessel', path: '/h/k2-agents/kessel' }, rows: [] }
 }
 
-let offer: unknown = 'meet_k5'
+let offer: unknown = 'meet_kessel'
 const onClose = vi.fn()
 
 beforeEach(() => {
   resetFirstRunForTests()
-  useK5SheetStore.setState({ isOpen: false })
+  useKesselSheetStore.setState({ isOpen: false })
   onClose.mockReset()
   h.addLogin.mockReset()
   h.loginStatus.mockReset()
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
-  offer = 'meet_k5'
+  offer = 'meet_kessel'
   h.daemonCliGet.mockImplementation(async (route: string) => {
     if (route === 'first-run/status') return status(offer)
     throw new Error(`unexpected GET ${route}`)
@@ -109,19 +109,21 @@ async function signIn(state: string, scope: ServerScope = primaryScope(), over: 
   await screen.findByTestId(state === 'signed_in' ? 'llm-login-done' : 'llm-login-state')
 }
 
-describe('the K5 offer after a sign-in', () => {
-  it('shows the offer for meet_k5 with the contract copy', async () => {
+describe('the Kessel offer after a sign-in', () => {
+  it('shows the offer for meet_kessel with the contract copy', async () => {
     await signIn('signed_in')
-    await screen.findByTestId('k5-offer')
-    expect(screen.getByText(K5_OFFER_COPY.title)).toBeTruthy()
-    expect(screen.getByText(K5_OFFER_COPY.line)).toBeTruthy()
-    expect(screen.getByTestId('k5-offer-meet').textContent).toBe('Meet K5')
-    expect(screen.getByTestId('k5-offer-dismiss').textContent).toBe('Not now')
+    await screen.findByTestId('kessel-offer')
+    expect(screen.getByText(KESSEL_OFFER_COPY.title)).toBeTruthy()
+    expect(KESSEL_OFFER_COPY.title).toBe('Meet Kessel, K2\u2019s own agent')
+    expect(KESSEL_OFFER_COPY.line.startsWith('Kessel helps you')).toBe(true)
+    expect(screen.getByText(KESSEL_OFFER_COPY.line)).toBeTruthy()
+    expect(screen.getByTestId('kessel-offer-meet').textContent).toBe('Meet Kessel')
+    expect(screen.getByTestId('kessel-offer-dismiss').textContent).toBe('Not now')
   })
 
   it('sits under the success note, above the server-default question, with the only Not now', async () => {
     await signIn('signed_in', primaryScope(), { offerMakeActive: true })
-    const offerBox = await screen.findByTestId('k5-offer')
+    const offerBox = await screen.findByTestId('kessel-offer')
     const done = screen.getByTestId('llm-login-done')
     const question = screen.getByTestId('llm-login-offer')
     expect(done.compareDocumentPosition(offerBox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -130,10 +132,10 @@ describe('the K5 offer after a sign-in', () => {
     expect(screen.getByRole('button', { name: 'Keep the current default' })).toBeTruthy()
   })
 
-  it('Meet K5 opens the K5 sheet and closes the sign-in sheet', async () => {
+  it('Meet Kessel opens the Kessel sheet and closes the sign-in sheet', async () => {
     await signIn('signed_in')
-    fireEvent.click(await screen.findByTestId('k5-offer-meet'))
-    expect(useK5SheetStore.getState().isOpen).toBe(true)
+    fireEvent.click(await screen.findByTestId('kessel-offer-meet'))
+    expect(useKesselSheetStore.getState().isOpen).toBe(true)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
@@ -141,34 +143,34 @@ describe('the K5 offer after a sign-in', () => {
     await signIn('signed_in')
     h.daemonCliPost.mockResolvedValue(status(null))
     await act(async () => {
-      fireEvent.click(await screen.findByTestId('k5-offer-dismiss'))
+      fireEvent.click(await screen.findByTestId('kessel-offer-dismiss'))
     })
     expect(h.daemonCliPost).toHaveBeenCalledWith('first-run/offer/dismiss', {})
-    await waitFor(() => expect(screen.queryByTestId('k5-offer')).toBeNull())
-    expect(useK5SheetStore.getState().isOpen).toBe(false)
+    await waitFor(() => expect(screen.queryByTestId('kessel-offer')).toBeNull())
+    expect(useKesselSheetStore.getState().isOpen).toBe(false)
   })
 
   it('the offer is a group named by its title, and waits while Not now is sent', async () => {
     await signIn('signed_in')
-    const offerBox = await screen.findByTestId('k5-offer')
-    expect(screen.getByRole('group', { name: K5_OFFER_COPY.title })).toBe(offerBox)
+    const offerBox = await screen.findByTestId('kessel-offer')
+    expect(screen.getByRole('group', { name: KESSEL_OFFER_COPY.title })).toBe(offerBox)
     let answer: (v: unknown) => void = () => {}
     h.daemonCliPost.mockImplementation(() => new Promise((r) => (answer = r)))
     await act(async () => {
-      fireEvent.click(screen.getByTestId('k5-offer-dismiss'))
+      fireEvent.click(screen.getByTestId('kessel-offer-dismiss'))
     })
-    expect((screen.getByTestId('k5-offer-dismiss') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByTestId('k5-offer-meet') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('kessel-offer-dismiss') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('kessel-offer-meet') as HTMLButtonElement).disabled).toBe(true)
     await act(async () => answer(status(null)))
-    await waitFor(() => expect(screen.queryByTestId('k5-offer')).toBeNull())
+    await waitFor(() => expect(screen.queryByTestId('kessel-offer')).toBeNull())
   })
 
-  it('no offer without meet_k5', async () => {
+  it('no offer without meet_kessel', async () => {
     offer = null
     await signIn('signed_in')
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('first-run/status'))
     await act(async () => {})
-    expect(screen.queryByTestId('k5-offer')).toBeNull()
+    expect(screen.queryByTestId('kessel-offer')).toBeNull()
   })
 
   it('an unknown offer value shows nothing', async () => {
@@ -176,13 +178,13 @@ describe('the K5 offer after a sign-in', () => {
     await signIn('signed_in')
     await waitFor(() => expect(h.daemonCliGet).toHaveBeenCalledWith('first-run/status'))
     await act(async () => {})
-    expect(screen.queryByTestId('k5-offer')).toBeNull()
+    expect(screen.queryByTestId('kessel-offer')).toBeNull()
   })
 
   it('no offer while the sign-in is still under way', async () => {
     await signIn('waiting_for_browser')
     await act(async () => {})
-    expect(screen.queryByTestId('k5-offer')).toBeNull()
+    expect(screen.queryByTestId('kessel-offer')).toBeNull()
     expect(h.daemonCliGet).not.toHaveBeenCalled()
   })
 })

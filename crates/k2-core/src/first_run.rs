@@ -6,14 +6,14 @@
 //! only things stored are per person: "hidden", the rows they skipped and
 //! "finished" (`first_run_person`, migration 0290).
 //!
-//! **Rows, in order** (`meet_k5` waits on K5, so it is never emitted yet):
+//! **Rows, in order** (`meet_kessel` waits on Kessel, so it is never emitted yet):
 //!
 //! | id | done when | shown to |
 //! |---|---|---|
 //! | `dev_tools` | git runs (macOS: only while Apple's Command Line Tools are missing, or once an install started here finished; Linux: only while git is missing) | macOS: the owner token; Linux: owner token, Owner, Admin |
 //! | `llm_sign_in` | a claude, codex or grok login is `signed_in`, or is an API key | owner token, Owner, Admin |
-//! | `first_agent` | a workspace exists besides the audit sentinels (and K5's) | everyone |
-//! | `chief_of_staff` | the seat names a live Chief of Staff | owner token, Owner, Admin; **in place of `first_agent` while `k5FirstRun` is on** |
+//! | `first_agent` | a workspace exists besides the audit sentinels (and Kessel's) | everyone |
+//! | `chief_of_staff` | the seat names a live Chief of Staff | owner token, Owner, Admin; **in place of `first_agent` while `kesselFirstRun` is on** |
 //! | `tunnel` | subdomain set, token held (file or vault), enabled ("running" is not asked) | owner token, Owner login; never in air-gap mode |
 //! | `phone` | this person's login has a live paired phone (as `/cli/auth/devices` counts) | everyone |
 //! | `own_sign_in` | never (the row goes once the owner links a login) | the owner token, while no login is linked |
@@ -34,13 +34,13 @@
 //! fresh install has no cutoff, so everyone starts unfinished. Making a row
 //! for such a person (hide, skip) keeps them finished.
 //!
-//! **K5 at first run** (prd-setup-checklist-v1 §10, `k5-first-run-contract.md`),
-//! all behind the owner's `k5FirstRun` switch, off by default. On, the
-//! status also carries `offer` ("meet_k5" while a tool is signed in, there is
-//! no live K5, the caller is the owner token, an Owner or an Admin, and this
-//! person hasn't said "Not now"), `k5` (the live K5 or null) and
-//! `k5Defaults`; and `chief_of_staff` takes `first_agent`'s place. It opens
-//! `k5_thread_cos` once K5 exists, else `k5_sheet` with `note: needs_k5`.
+//! **Kessel at first run** (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`),
+//! all behind the owner's `kesselFirstRun` switch, off by default. On, the
+//! status also carries `offer` ("meet_kessel" while a tool is signed in, there is
+//! no live Kessel, the caller is the owner token, an Owner or an Admin, and this
+//! person hasn't said "Not now"), `kessel` (the live Kessel or null) and
+//! `kesselDefaults`; and `chief_of_staff` takes `first_agent`'s place. It opens
+//! `kessel_thread_cos` once Kessel exists, else `kessel_sheet` with `note: needs_kessel`.
 //! The seat is `crate::orchestrator`. Off, none of it is sent.
 //!
 //! **Developer tools** (`dev_tools`, K2 0.46.12). Workspaces need git. On a
@@ -70,29 +70,29 @@ use crate::notify_prefs::{People, OWNER};
 /// Every row id, in the order shown. v1 emits only [`V1_ROWS`].
 /// `k2_cli` ("Try the k2 command") was dropped 11-10; a skip of it stored
 /// before then changes nothing.
-/// `meet_k5` became the offer (`offer: "meet_k5"`), never a row.
+/// `meet_kessel` became the offer (`offer: "meet_kessel"`), never a row.
 pub const ROW_IDS: &[&str] =
-    &["dev_tools", "llm_sign_in", "meet_k5", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
+    &["dev_tools", "llm_sign_in", "meet_kessel", "first_agent", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
 
-/// The rows this version computes with `k5FirstRun` off, when git runs.
+/// The rows this version computes with `kesselFirstRun` off, when git runs.
 /// While it doesn't, `dev_tools` comes before them ([`DevTools`]).
 pub const V1_ROWS: &[&str] = &["llm_sign_in", "first_agent", "tunnel", "phone", "own_sign_in"];
 
-/// The rows with `k5FirstRun` on: `chief_of_staff` in `first_agent`'s place
+/// The rows with `kesselFirstRun` on: `chief_of_staff` in `first_agent`'s place
 /// (and `dev_tools` first while git doesn't run).
-pub const K5_ROWS: &[&str] = &["llm_sign_in", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
+pub const KESSEL_ROWS: &[&str] = &["llm_sign_in", "chief_of_staff", "tunnel", "phone", "own_sign_in"];
 
 /// `phone.note` when the tunnel isn't on yet.
 pub const NOTE_NEEDS_TUNNEL: &str = "needs_tunnel";
 
-/// `chief_of_staff.note` while there is no K5 to hire it with.
-pub const NOTE_NEEDS_K5: &str = "needs_k5";
+/// `chief_of_staff.note` while there is no Kessel to hire it with.
+pub const NOTE_NEEDS_KESSEL: &str = "needs_kessel";
 
 /// `dev_tools.note` while Apple's installer is open.
 pub const NOTE_INSTALLING: &str = "installing";
 
 /// The offer the LLM sign-in sheet leads to.
-pub const OFFER_MEET_K5: &str = "meet_k5";
+pub const OFFER_MEET_KESSEL: &str = "meet_kessel";
 
 /// One row's state on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -115,8 +115,8 @@ pub struct Row {
     pub id: &'static str,
     pub state: State,
     /// What the row opens: `dev_tools` | `llm_sign_in` | `add_workspace` |
-    /// `tunnel` | `phone` | `owner_account_prompt` | `k5_sheet` |
-    /// `k5_thread_cos`. Null for a row with nothing to open (Linux's
+    /// `tunnel` | `phone` | `owner_account_prompt` | `kessel_sheet` |
+    /// `kessel_thread_cos`. Null for a row with nothing to open (Linux's
     /// `dev_tools`, whose note is the command to run).
     pub opens: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,37 +131,37 @@ pub struct Status {
     pub hidden: bool,
     pub finished: bool,
     pub rows: Vec<Row>,
-    /// `offer`, `k5` and `k5Defaults`, present only while `k5FirstRun` is on.
+    /// `offer`, `kessel` and `kesselDefaults`, present only while `kesselFirstRun` is on.
     #[serde(flatten)]
-    pub k5: Option<K5Status>,
+    pub kessel: Option<KesselStatus>,
     /// This call wrote `finished_at` (the route sends `first_run_changed`).
     #[serde(skip)]
     pub newly_finished: bool,
 }
 
-/// The K5 part of the status (`k5FirstRun` on).
+/// The Kessel part of the status (`kesselFirstRun` on).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct K5Status {
-    /// `"meet_k5"` or null.
+pub struct KesselStatus {
+    /// `"meet_kessel"` or null.
     pub offer: Option<&'static str>,
-    /// The live K5, or null.
-    pub k5: Option<K5View>,
-    pub k5_defaults: K5Defaults,
+    /// The live Kessel, or null.
+    pub kessel: Option<KesselView>,
+    pub kessel_defaults: KesselDefaults,
 }
 
-/// A live K5 on the wire.
+/// A live Kessel on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct K5View {
+pub struct KesselView {
     pub workspace_id: String,
     pub name: String,
     pub path: String,
 }
 
-/// What the K5 sheet starts from: "K5", `k5`, `<hire root>/k5`.
+/// What the Kessel sheet starts from: "Kessel", `kessel`, `<hire root>/kessel`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct K5Defaults {
+pub struct KesselDefaults {
     pub name: String,
     pub handle: String,
     pub path: String,
@@ -201,14 +201,14 @@ pub struct Facts {
     pub owner_linked: bool,
     /// Live paired phones for this person.
     pub phones: usize,
-    /// The owner's `k5FirstRun` switch.
-    pub k5_first_run: bool,
-    /// The seat's live K5.
-    pub k5: Option<crate::orchestrator::Live>,
+    /// The owner's `kesselFirstRun` switch.
+    pub kessel_first_run: bool,
+    /// The seat's live Kessel.
+    pub kessel: Option<crate::orchestrator::Live>,
     /// The seat names a live Chief of Staff.
     pub chief_of_staff: bool,
-    /// Where a new K5 goes by default (`<hire root>/k5`).
-    pub k5_default_path: String,
+    /// Where a new Kessel (Kessel) goes by default (`<hire root>/kessel`).
+    pub kessel_default_path: String,
     /// Git and Apple's installer ([`dev_tools_from`]).
     pub dev_tools: DevTools,
 }
@@ -310,7 +310,7 @@ pub struct PersonRecord {
     pub hidden_at: Option<i64>,
     pub finished_at: Option<i64>,
     pub skipped: BTreeSet<String>,
-    /// "Not now" on the "Meet K5" offer.
+    /// "Not now" on the "Meet Kessel" offer.
     pub offer_dismissed_at: Option<i64>,
 }
 
@@ -322,7 +322,7 @@ pub enum Action {
     /// again (otherwise the next read would finish the list at once).
     Show,
     Skip(String),
-    /// "Not now" on the "Meet K5" offer: stored for this person, kept by `show`.
+    /// "Not now" on the "Meet Kessel" offer: stored for this person, kept by `show`.
     DismissOffer,
 }
 
@@ -409,12 +409,12 @@ pub fn rows(viewer: Viewer, facts: &Facts, skipped: &BTreeSet<String>) -> Vec<Ro
     if viewer.at_least(Role::Admin) {
         out.push(Row { id: "llm_sign_in", state: state("llm_sign_in", facts.llm_signed_in), opens: Some("llm_sign_in"), note: None });
     }
-    if facts.k5_first_run {
-        // K5 at first run: the Chief of Staff in `first_agent`'s place, for
-        // the people who can make K5.
+    if facts.kessel_first_run {
+        // Kessel at first run: the Chief of Staff in `first_agent`'s place, for
+        // the people who can make Kessel.
         if viewer.at_least(Role::Admin) {
             let (opens, note) =
-                if facts.k5.is_some() { (Some("k5_thread_cos"), None) } else { (Some("k5_sheet"), Some(NOTE_NEEDS_K5)) };
+                if facts.kessel.is_some() { (Some("kessel_thread_cos"), None) } else { (Some("kessel_sheet"), Some(NOTE_NEEDS_KESSEL)) };
             out.push(Row { id: "chief_of_staff", state: state("chief_of_staff", facts.chief_of_staff), opens, note });
         }
     } else {
@@ -508,7 +508,7 @@ pub fn status_on(
         None => (false, treated_finished(cutoff(conn)?, people, person), BTreeSet::new()),
     };
     let dismissed = record.as_ref().is_some_and(|r| r.offer_dismissed_at.is_some());
-    let k5 = k5_status(viewer, facts, dismissed);
+    let kessel = kessel_status(viewer, facts, dismissed);
     let rows = rows(viewer, facts, &skipped);
     let mut newly_finished = false;
     if !finished && !rows.is_empty() && rows.iter().all(|r| r.state.complete()) {
@@ -520,23 +520,27 @@ pub fn status_on(
         finished = true;
         newly_finished = true;
     }
-    Ok(Status { enabled, hidden, finished, rows, k5, newly_finished })
+    Ok(Status { enabled, hidden, finished, rows, kessel, newly_finished })
 }
 
-/// The `offer`, `k5` and `k5Defaults` part, `None` while `k5FirstRun` is off.
-pub fn k5_status(viewer: Viewer, facts: &Facts, dismissed: bool) -> Option<K5Status> {
-    if !facts.k5_first_run {
+/// The `offer`, `kessel` and `kesselDefaults` part, `None` while `kesselFirstRun` is off.
+pub fn kessel_status(viewer: Viewer, facts: &Facts, dismissed: bool) -> Option<KesselStatus> {
+    if !facts.kessel_first_run {
         return None;
     }
-    let offer = (facts.llm_signed_in && facts.k5.is_none() && viewer.at_least(Role::Admin) && !dismissed)
-        .then_some(OFFER_MEET_K5);
-    Some(K5Status {
+    let offer = (facts.llm_signed_in && facts.kessel.is_none() && viewer.at_least(Role::Admin) && !dismissed)
+        .then_some(OFFER_MEET_KESSEL);
+    Some(KesselStatus {
         offer,
-        k5: facts.k5.as_ref().map(|l| K5View { workspace_id: l.workspace_id.clone(), name: l.name.clone(), path: l.path.clone() }),
-        k5_defaults: K5Defaults {
+        kessel: facts.kessel.as_ref().map(|l| KesselView { workspace_id: l.workspace_id.clone(), name: l.name.clone(), path: l.path.clone() }),
+        kessel_defaults: KesselDefaults {
             name: crate::orchestrator::DEFAULT_NAME.to_string(),
-            handle: crate::orchestrator::DEFAULT_HANDLE.to_string(),
-            path: facts.k5_default_path.clone(),
+            // The folder's name: `kessel5` while another workspace holds `kessel`.
+            handle: std::path::Path::new(&facts.kessel_default_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| crate::orchestrator::DEFAULT_HANDLE.to_string()),
+            path: facts.kessel_default_path.clone(),
         },
     })
 }
@@ -608,12 +612,12 @@ pub fn phones_for(people: &People, person: &str) -> Result<usize, String> {
 /// the same for everyone).
 pub fn load_facts(conn: &Connection, people: &People, settings: &crate::app_settings::AppSettings, person: &str) -> Result<Facts, String> {
     let entries = crate::llm_accounts::list(conn).map_err(|e| e.to_string())?;
-    let k5 = crate::orchestrator::live_k5(conn).map_err(|e| e.to_string())?;
+    let kessel = crate::orchestrator::live_kessel(conn).map_err(|e| e.to_string())?;
     let chief_of_staff = crate::orchestrator::live_chief_of_staff(conn).map_err(|e| e.to_string())?.is_some();
-    // K5 is K2's own agent, not the person's first: it doesn't count.
-    let k5_id = k5.as_ref().map(|l| l.workspace_id.as_str());
-    let has_agent = crate::projects_ops::projects_list_on(conn)?.iter().any(|p| Some(p.id.as_str()) != k5_id);
-    let k5_default_path = k5_default_path(conn);
+    // Kessel is K2's own agent, not the person's first: it doesn't count.
+    let kessel_id = kessel.as_ref().map(|l| l.workspace_id.as_str());
+    let has_agent = crate::projects_ops::projects_list_on(conn)?.iter().any(|p| Some(p.id.as_str()) != kessel_id);
+    let kessel_default_path = kessel_default_path(conn);
     let tunnel = crate::tunnel::config::load_without_token()?;
     let prompt = crate::owner_account_prompt::view(
         people,
@@ -629,21 +633,25 @@ pub fn load_facts(conn: &Connection, people: &People, settings: &crate::app_sett
         airgap: crate::airgap::enabled(),
         owner_linked: prompt.reason == crate::owner_account_prompt::Reason::Linked,
         phones: phones_for(people, person)?,
-        k5_first_run: settings.k5_first_run,
-        k5,
+        kessel_first_run: settings.kessel_first_run,
+        kessel,
         chief_of_staff,
-        k5_default_path,
+        kessel_default_path,
         dev_tools: dev_tools_now(),
     })
 }
 
-/// `<hire root>/k5`, from the stored root (else `~/k2-agents`).
-pub fn k5_default_path(conn: &Connection) -> String {
+/// `<hire root>/<handle>`, from the stored root (else `~/k2-agents`), for
+/// the handle a new Kessel would get ([`crate::orchestrator::default_handle`]:
+/// `kessel`, or `kessel5` while another workspace holds `kessel`; `kessel`
+/// again when both are held, and making it then says so).
+pub fn kessel_default_path(conn: &Connection) -> String {
     let root = match crate::hire::root::stored_root(conn) {
         Some(r) => std::path::PathBuf::from(r),
         None => crate::paths::home_dir().unwrap_or_default().join(crate::hire::root::DEFAULT_ROOT_DIR),
     };
-    root.join(crate::orchestrator::DEFAULT_HANDLE).to_string_lossy().into_owned()
+    let handle = crate::orchestrator::default_handle(conn).unwrap_or(crate::orchestrator::DEFAULT_HANDLE);
+    root.join(handle).to_string_lossy().into_owned()
 }
 
 /// The claude, codex and grok tools signed in (as [`llm_signed_in`] counts).

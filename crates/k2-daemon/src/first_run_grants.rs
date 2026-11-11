@@ -1,19 +1,19 @@
-//! Granting the K5 and Chief of Staff starter sets
+//! Granting the Kessel and Chief of Staff starter sets
 //! (`k2_core::hire::starter_permissions`; prd-setup-checklist-v1 §10.2).
 //!
 //! **Standing switches only**, each to its own workspace, once, when the
 //! agent is made. Two kinds of grantor:
-//! - **A person** (the owner token, an Owner or Admin login) making K5:
+//! - **A person** (the owner token, an Owner or Admin login) making Kessel:
 //!   each switch goes through **the Settings route's own entry** with that
 //!   person as the caller (`sidecar_routes::access_entry`,
 //!   `misc_routes::connections_switch_entry`), so the route's floor and its
 //!   `agent-access-set` audit line are exactly Settings'. An Owner-floor
-//!   switch (`organization.manage`) is left out for an Admin: K5 asks an
+//!   switch (`organization.manage`) is left out for an Admin: Kessel asks an
 //!   Owner on a card.
-//! - **K5** hiring the Chief of Staff (the seat-only route): it passes on
+//! - **Kessel** hiring the Chief of Staff (the seat-only route): it passes on
 //!   only the standing switches it holds itself, never an Owner-floor one.
 //!   `/cli/agent-access/set` is not an agent verb, so these are written
-//!   in-process through the same single writers, and audited with K5 as the
+//!   in-process through the same single writers, and audited with Kessel as the
 //!   actor.
 //!
 //! The permission-cards switch ("Let this agent ask for permission") is
@@ -28,7 +28,7 @@ use crate::permission::actions::Answerer;
 #[derive(Debug, Clone)]
 pub(crate) enum Grantor {
     Person(Answerer),
-    /// K5's workspace id (the seat's), hiring for its person.
+    /// Kessel's workspace id (the seat's), hiring for its person.
     Agent { workspace_id: String },
 }
 
@@ -204,8 +204,8 @@ pub(crate) fn grant_set(set: &[&str], t: &Target, by: &Grantor) -> Granted {
 }
 
 /// "Let this agent ask for permission" on for `t`. A person turns it on
-/// through Settings' entry; K5 turns it on for its hire (the seat-only
-/// route is that authority), whether or not K5's own is on.
+/// through Settings' entry; Kessel turns it on for its hire (the seat-only
+/// route is that authority), whether or not Kessel's own is on.
 pub(crate) fn cards_on(t: &Target, by: &Grantor) -> Result<(), String> {
     match by {
         Grantor::Person(_) => grant_switch(by, t, "permission_cards"),
@@ -220,7 +220,7 @@ pub(crate) fn cards_on(t: &Target, by: &Grantor) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use k2_core::hire::starter_permissions::{CHIEF_OF_STAFF_STARTER_PERMISSIONS, EXTRA_STANDING_TOGGLES, K5_STARTER_PERMISSIONS};
+    use k2_core::hire::starter_permissions::{CHIEF_OF_STAFF_STARTER_PERMISSIONS, EXTRA_STANDING_TOGGLES, KESSEL_STARTER_PERMISSIONS};
     use k2_core::permission::catalog::{Floor, Grant};
 
     /// Both starter lists are standing V1 actions in the real catalog
@@ -229,7 +229,7 @@ mod tests {
     /// whose standing twin is a toggle, granted beside the lists.
     #[test]
     fn the_starter_lists_are_standing_v1_actions_with_their_floors() {
-        for id in K5_STARTER_PERMISSIONS.iter().chain(CHIEF_OF_STAFF_STARTER_PERMISSIONS) {
+        for id in KESSEL_STARTER_PERMISSIONS.iter().chain(CHIEF_OF_STAFF_STARTER_PERMISSIONS) {
             assert!(crate::permission::walls::V1_ACTIONS.contains(id), "{id} is not a V1 action");
             let r = crate::permission::actions::find(id).unwrap_or_else(|| panic!("{id} is not registered"));
             assert_eq!(r.spec.grant, Grant::Standing, "{id} must be standing");
@@ -242,7 +242,7 @@ mod tests {
         for (action, toggle) in EXTRA_STANDING_TOGGLES {
             let r = crate::permission::actions::find(action).unwrap_or_else(|| panic!("{action}"));
             assert_eq!(r.spec.grant, Grant::OneTime, "{action} is one-time; its twin {toggle} is granted instead");
-            assert!(!K5_STARTER_PERMISSIONS.contains(action) && !CHIEF_OF_STAFF_STARTER_PERMISSIONS.contains(action));
+            assert!(!KESSEL_STARTER_PERMISSIONS.contains(action) && !CHIEF_OF_STAFF_STARTER_PERMISSIONS.contains(action));
         }
     }
 }

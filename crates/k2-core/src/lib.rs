@@ -265,7 +265,7 @@ pub mod feedback;
 pub mod first_run;
 // What `k2 setup` prints (`?format=text`), so the CLI needs no python3.
 pub mod first_run_text;
-// K5 at first run (prd-setup-checklist-v1 §10): the one-row seat naming
+// Kessel at first run (prd-setup-checklist-v1 §10): the one-row seat naming
 // K2's own agent and the person's Chief of Staff (0293).
 pub mod orchestrator;
 // Ticket HTML brief (prd-ticket-html-brief-v1): clean + store the

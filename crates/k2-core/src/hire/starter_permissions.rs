@@ -1,6 +1,6 @@
-//! The two starter permission sets: what K2 grants **K5** (K2's own agent)
-//! and the person's **Chief of Staff** (K5's first hire) when they are made
-//! (prd-setup-checklist-v1 §10.2; contract `k5-first-run-contract.md`).
+//! The two starter permission sets: what K2 grants **Kessel** (K2's own agent)
+//! and the person's **Chief of Staff** (Kessel's first hire) when they are made
+//! (prd-setup-checklist-v1 §10.2; contract `kessel-first-run-contract.md`).
 //!
 //! **Rosson-accepted 11-10; changing either list needs his OK.** Each list is
 //! one line to change, and each is granted only to its own workspace.
@@ -19,9 +19,9 @@
 //!   the first-run routes grant the toggle beside the list
 //!   ([`EXTRA_STANDING_TOGGLES`]), under the same rules.
 //! - **The creator's floor.** A creator grants only what they hold: an Admin
-//!   creating K5 leaves out `organization.manage` (Owner floor,
-//!   `walls.rs:818`), and K5 asks an Owner for it on a card.
-//! - **The hirer holds it.** An agent hirer (K5 hiring the Chief of Staff)
+//!   creating Kessel leaves out `organization.manage` (Owner floor,
+//!   `walls.rs:818`), and Kessel asks an Owner for it on a card.
+//! - **The hirer holds it.** An agent hirer (Kessel hiring the Chief of Staff)
 //!   passes on only the standing switches it holds itself, never an
 //!   Owner-floor one.
 //! - **No silent widening.** K2 never widens either list on upgrade: these
@@ -31,13 +31,13 @@
 //! `app.*`, `publish.*`, `sew.*`, `db.agent-access`, `docs.share`,
 //! `git.land`, `zen.sign*`, `agent.harness-switch`, `chat.account`,
 //! `chat.manage`, `sim.use`, every `garden.*` approval and every other
-//! `compute.*`) is asked for on a card: K5 reads untrusted input, so
+//! `compute.*`) is asked for on a card: Kessel reads untrusted input, so
 //! secrets, sending as the person, the network edge, Apps and users, money
 //! and deletion stay one click away.
 
-/// K5's starter set (granted by its creator: the owner token, an Owner or
+/// Kessel's starter set (granted by its creator: the owner token, an Owner or
 /// an Admin).
-pub const K5_STARTER_PERMISSIONS: &[&str] = &[
+pub const KESSEL_STARTER_PERMISSIONS: &[&str] = &[
     "agents.manage",
     "projects.manage",
     "connections.create",
@@ -46,8 +46,8 @@ pub const K5_STARTER_PERMISSIONS: &[&str] = &[
     "gardens.manage",
 ];
 
-/// The Chief of Staff's starter set (granted by K5 when it hires it, each
-/// only while K5 holds it).
+/// The Chief of Staff's starter set (granted by Kessel when it hires it, each
+/// only while Kessel holds it).
 pub const CHIEF_OF_STAFF_STARTER_PERMISSIONS: &[&str] = &[
     "agents.manage",
     "connections.create",
@@ -57,7 +57,7 @@ pub const CHIEF_OF_STAFF_STARTER_PERMISSIONS: &[&str] = &[
 
 /// Standing toggles in Rosson's sets that have no V1 action id, granted by
 /// the routes beside the lists: `(V1 one-time action it stands for, toggle)`.
-/// Both K5 and the Chief of Staff get it.
+/// Both Kessel and the Chief of Staff get it.
 pub const EXTRA_STANDING_TOGGLES: &[(&str, &str)] = &[("chat.refresh", "chat_refresh")];
 
 /// One-time actions the PRD's first lists named. They have no standing
@@ -95,21 +95,21 @@ mod tests {
 
     #[test]
     fn every_starter_id_has_a_standing_switch_and_no_card_ask_is_listed() {
-        for id in K5_STARTER_PERMISSIONS.iter().chain(CHIEF_OF_STAFF_STARTER_PERMISSIONS) {
+        for id in KESSEL_STARTER_PERMISSIONS.iter().chain(CHIEF_OF_STAFF_STARTER_PERMISSIONS) {
             assert!(standing_switch(id).is_some(), "{id} has no standing switch");
             assert!(!CARD_ASKS.contains(id), "{id} is one-time: a card ask, never in a list");
         }
         for (action, toggle) in EXTRA_STANDING_TOGGLES {
             assert_eq!(standing_switch(action), Some(*toggle));
         }
-        // The Chief of Staff's set is inside K5's, so K5 can pass all of it on.
+        // The Chief of Staff's set is inside Kessel's, so Kessel can pass all of it on.
         for id in CHIEF_OF_STAFF_STARTER_PERMISSIONS {
-            assert!(K5_STARTER_PERMISSIONS.contains(id), "{id}");
+            assert!(KESSEL_STARTER_PERMISSIONS.contains(id), "{id}");
             assert!(!owner_floor(id), "{id}: an agent hirer never passes an Owner-floor switch");
         }
-        // The templates name them as `set:k5-starter` / `set:chief-of-staff-starter`.
+        // The templates name them as `set:kessel-starter` / `set:chief-of-staff-starter`.
         use crate::hire::template::sets::named_set;
-        assert_eq!(named_set("k5-starter"), Some(K5_STARTER_PERMISSIONS));
+        assert_eq!(named_set("kessel-starter"), Some(KESSEL_STARTER_PERMISSIONS));
         assert_eq!(named_set("chief-of-staff-starter"), Some(CHIEF_OF_STAFF_STARTER_PERMISSIONS));
         assert_eq!(named_set("nope"), None);
     }

@@ -54,7 +54,7 @@ import {
   INSTALLING_NOTE,
   GET_STARTED_LABEL,
   GET_STARTED_TEXT,
-  NEEDS_K5_NOTE,
+  NEEDS_KESSEL_NOTE,
   NEEDS_TUNNEL_NOTE,
   SETUP_CHECKLIST_COPY,
   SET_UP_TEXT,
@@ -374,12 +374,12 @@ describe('SetupChecklist', () => {
     expect(bubble()).toBeNull()
   })
 
-  it('the K5 switch: chief_of_staff in first_agent\'s place, with its copy and the needs_k5 note', async () => {
+  it('the Kessel switch: chief_of_staff in first_agent\'s place, with its copy and the needs_kessel note', async () => {
     h.daemonCliGet.mockResolvedValue(
       body({
         rows: [
           { id: 'llm_sign_in', state: 'done', opens: 'llm_sign_in' },
-          { id: 'chief_of_staff', state: 'todo', opens: 'k5_sheet', note: 'needs_k5' },
+          { id: 'chief_of_staff', state: 'todo', opens: 'kessel_sheet', note: 'needs_kessel' },
           { id: 'tunnel', state: 'todo', opens: 'tunnel' },
         ],
       }),
@@ -390,36 +390,36 @@ describe('SetupChecklist', () => {
     expect(ids).toEqual(['llm_sign_in', 'chief_of_staff', 'tunnel'])
     expect(SETUP_CHECKLIST_COPY.chief_of_staff).toEqual({
       label: 'Hire your Chief of Staff',
-      line: 'Your lead agent. K5 hires it with you.',
+      line: 'Your lead agent. Kessel hires it with you.',
     })
-    expect(NEEDS_K5_NOTE).toBe('You’ll meet K5 first.')
+    expect(NEEDS_KESSEL_NOTE).toBe('You’ll meet Kessel first.')
     expect(row.textContent).toContain('Hire your Chief of Staff')
-    expect(row.textContent).toContain('Your lead agent. K5 hires it with you.')
-    expect(row.querySelector('[data-setup-note="needs_k5"]')?.textContent).toBe(NEEDS_K5_NOTE)
+    expect(row.textContent).toContain('Your lead agent. Kessel hires it with you.')
+    expect(row.querySelector('[data-setup-note="needs_kessel"]')?.textContent).toBe(NEEDS_KESSEL_NOTE)
     fireEvent.click(row)
-    expect(h.open).toHaveBeenCalledWith('k5_sheet')
+    expect(h.open).toHaveBeenCalledWith('kessel_sheet')
   })
 
-  it('once K5 exists the row has no note and opens K5\'s Thread with the hire started', async () => {
+  it('once Kessel exists the row has no note and opens Kessel\'s Thread with the hire started', async () => {
     h.daemonCliGet.mockResolvedValue(
-      body({ rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'k5_thread_cos' }] }),
+      body({ rows: [{ id: 'chief_of_staff', state: 'todo', opens: 'kessel_thread_cos' }] }),
     )
     render(<SetupChecklist />)
     const row = await screen.findByTestId('setup-row-chief_of_staff')
     expect(row.querySelector('[data-setup-note]')).toBeNull()
-    expect(row.textContent).not.toContain(NEEDS_K5_NOTE)
+    expect(row.textContent).not.toContain(NEEDS_KESSEL_NOTE)
     fireEvent.click(row)
-    expect(h.open).toHaveBeenCalledWith('k5_thread_cos')
+    expect(h.open).toHaveBeenCalledWith('kessel_thread_cos')
   })
 
   it('a done chief_of_staff row drops its line and its note', async () => {
     h.daemonCliGet.mockResolvedValue(
-      body({ rows: [{ id: 'chief_of_staff', state: 'done', opens: 'k5_thread_cos', note: 'needs_k5' }, { id: 'tunnel', state: 'todo', opens: 'tunnel' }] }),
+      body({ rows: [{ id: 'chief_of_staff', state: 'done', opens: 'kessel_thread_cos', note: 'needs_kessel' }, { id: 'tunnel', state: 'todo', opens: 'tunnel' }] }),
     )
     render(<SetupChecklist />)
     const row = await screen.findByTestId('setup-row-chief_of_staff')
     expect(row.textContent).toContain('Hire your Chief of Staff')
-    expect(row.textContent).not.toContain('K5 hires it with you.')
+    expect(row.textContent).not.toContain('Kessel hires it with you.')
     expect(row.querySelector('[data-setup-note]')).toBeNull()
   })
 
@@ -497,7 +497,7 @@ describe('SetupChecklist', () => {
     h.daemonCliGet.mockResolvedValue(
       body({
         rows: [
-          { id: 'meet_k5', state: 'todo', opens: 'k5_chat' },
+          { id: 'meet_kessel', state: 'todo', opens: 'kessel_chat' },
           { id: 'tunnel', state: 'todo', opens: 'something_new' },
           // An older daemon still sends the dropped k2 command row.
           { id: 'k2_cli', state: 'todo', opens: 'cli_settings' },

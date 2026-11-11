@@ -32,7 +32,7 @@ pub enum Kind {
     /// Shown in the picker.
     #[default]
     Agent,
-    /// `k5`, `chief-of-staff`: hired by id only, never by an API key.
+    /// `kessel`, `chief-of-staff`: hired by id only, never by an API key.
     System,
 }
 
@@ -62,7 +62,7 @@ pub struct AgentSection {
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ContextSection {
-    /// Context Catalog ids (`wiki:index`, `k5:pack`).
+    /// Context Catalog ids (`wiki:index`, `kessel:pack`).
     #[serde(default)]
     pub catalog: Vec<String>,
 }

@@ -470,7 +470,7 @@ fn every_picker_template_loads_with_its_questions() {
         assert!(hello.contains("{{open_questions}}"), "{id}: the hello names the open questions: {hello}");
     }
     // The system types are K2 Onboarding's: no questions here.
-    for id in ["k5", "chief-of-staff"] {
+    for id in ["kessel", "chief-of-staff"] {
         assert_eq!(questions_of(id).len(), 0, "{id}");
     }
 }

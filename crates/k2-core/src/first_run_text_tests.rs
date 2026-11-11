@@ -2,21 +2,21 @@
 //! wording, byte for byte.
 
 use super::*;
-use crate::first_run::{K5Defaults, K5Status, K5View, Row};
+use crate::first_run::{KesselDefaults, KesselStatus, KesselView, Row};
 
 fn row(id: &'static str, state: State, opens: Option<&'static str>, note: Option<&'static str>) -> Row {
     Row { id, state, opens, note }
 }
 
 fn status(rows: Vec<Row>) -> Status {
-    Status { enabled: true, hidden: false, finished: false, rows, k5: None, newly_finished: false }
+    Status { enabled: true, hidden: false, finished: false, rows, kessel: None, newly_finished: false }
 }
 
-fn k5(offer: bool, live: bool) -> Option<K5Status> {
-    Some(K5Status {
-        offer: offer.then_some(OFFER_MEET_K5),
-        k5: live.then(|| K5View { workspace_id: "ws-k5".into(), name: "K5".into(), path: "/Users/me/k2-agents/k5".into() }),
-        k5_defaults: K5Defaults { name: "K5".into(), handle: "k5".into(), path: "/Users/me/k2-agents/k5".into() },
+fn kessel(offer: bool, live: bool) -> Option<KesselStatus> {
+    Some(KesselStatus {
+        offer: offer.then_some(OFFER_MEET_KESSEL),
+        kessel: live.then(|| KesselView { workspace_id: "ws-kessel".into(), name: "Kessel".into(), path: "/Users/me/k2-agents/kessel".into() }),
+        kessel_defaults: KesselDefaults { name: "Kessel".into(), handle: "kessel".into(), path: "/Users/me/k2-agents/kessel".into() },
     })
 }
 
@@ -46,22 +46,22 @@ fn first_run_text_every_label_and_an_unknown_id() {
 #[test]
 fn first_run_text_notes_show_until_done() {
     let s = status(vec![
-        row("chief_of_staff", State::Todo, Some("k5_sheet"), Some(NOTE_NEEDS_K5)),
+        row("chief_of_staff", State::Todo, Some("kessel_sheet"), Some(NOTE_NEEDS_KESSEL)),
         row("phone", State::Todo, Some("phone"), Some(NOTE_NEEDS_TUNNEL)),
         row("own_sign_in", State::Skipped, Some("owner_account_prompt"), Some("some_new_note")),
     ]);
     assert_eq!(
         render_text(&s),
-        "Setup: 0 of 3 done\n  [ ] Hire your Chief of Staff (You will meet K5 first.)\n  [ ] Connect your phone (Away from home, your phone needs your subdomain first.)\n  [-] Make your own sign-in\n"
+        "Setup: 0 of 3 done\n  [ ] Hire your Chief of Staff (You will meet Kessel first.)\n  [ ] Connect your phone (Away from home, your phone needs your subdomain first.)\n  [-] Make your own sign-in\n"
     );
     // A done row prints no note; a skipped one still does.
     let s = status(vec![
         row("phone", State::Done, Some("phone"), Some(NOTE_NEEDS_TUNNEL)),
-        row("chief_of_staff", State::Skipped, Some("k5_sheet"), Some(NOTE_NEEDS_K5)),
+        row("chief_of_staff", State::Skipped, Some("kessel_sheet"), Some(NOTE_NEEDS_KESSEL)),
     ]);
     assert_eq!(
         render_text(&s),
-        "Setup: 1 of 2 done\n  [x] Connect your phone\n  [-] Hire your Chief of Staff (You will meet K5 first.)\n"
+        "Setup: 1 of 2 done\n  [x] Connect your phone\n  [-] Hire your Chief of Staff (You will meet Kessel first.)\n"
     );
 }
 
@@ -121,30 +121,30 @@ fn first_run_text_no_rows() {
 }
 
 #[test]
-fn first_run_text_k5_offer_and_live_k5() {
+fn first_run_text_kessel_offer_and_live_kessel() {
     let mut s = status(vec![row("llm_sign_in", State::Done, Some("llm_sign_in"), None)]);
-    s.k5 = k5(true, false);
+    s.kessel = kessel(true, false);
     assert_eq!(
         render_text(&s),
-        "Setup: 1 of 1 done\n  [x] Sign in to an AI tool\nNext: meet K5, the agent that runs K2: k2 setup k5\n"
+        "Setup: 1 of 1 done\n  [x] Sign in to an AI tool\nNext: meet Kessel, the agent that runs K2: k2 setup kessel\n"
     );
-    s.k5 = k5(false, true);
+    s.kessel = kessel(false, true);
     assert_eq!(
         render_text(&s),
-        "Setup: 1 of 1 done\n  [x] Sign in to an AI tool\nK5: K5 at /Users/me/k2-agents/k5 (k2 thread <its handle> to talk to it)\n"
+        "Setup: 1 of 1 done\n  [x] Sign in to an AI tool\nKessel: Kessel at /Users/me/k2-agents/kessel (k2 thread <its handle> to talk to it)\n"
     );
-    // k5FirstRun on, no K5 and no offer: nothing more.
-    s.k5 = k5(false, false);
+    // kesselFirstRun on, no Kessel and no offer: nothing more.
+    s.kessel = kessel(false, false);
     assert_eq!(render_text(&s), "Setup: 1 of 1 done\n  [x] Sign in to an AI tool\n");
 }
 
 #[test]
-fn first_run_text_made_k5_and_chief_of_staff() {
+fn first_run_text_made_kessel_and_chief_of_staff() {
     let granted = vec!["agents.hire".to_string(), "settings.read".to_string()];
     let left = vec![("organization.manage".to_string(), "owner_floor".to_string())];
     assert_eq!(
-        render_made_text(Made::K5, "K5", "k5", "/Users/me/k2-agents/k5", &granted, &left),
-        "Made K5: K5 (k5) at /Users/me/k2-agents/k5\nAllowed from the start: agents.hire, settings.read\nIt asks on a permission card for: organization.manage (owner_floor)\nK5 is starting and will say hello on its Thread: k2 thread k5\n"
+        render_made_text(Made::Kessel, "Kessel", "kessel", "/Users/me/k2-agents/kessel", &granted, &left),
+        "Made Kessel: Kessel (kessel) at /Users/me/k2-agents/kessel\nAllowed from the start: agents.hire, settings.read\nIt asks on a permission card for: organization.manage (owner_floor)\nKessel is starting and will say hello on its Thread: k2 thread kessel\n"
     );
     assert_eq!(
         render_made_text(Made::ChiefOfStaff, "Ada", "ada", "/Users/me/k2-agents/ada", &[], &[]),

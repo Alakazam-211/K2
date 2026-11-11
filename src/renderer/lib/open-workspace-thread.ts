@@ -1,6 +1,6 @@
 // Open a workspace's Chat tab in the Thread view, on the window's server:
-// K5 right after it's made, and K5 again when the person starts hiring
-// their Chief of Staff (prd-setup-checklist-v1 §10, `k5-first-run-contract.md`).
+// Kessel right after it's made, and Kessel again when the person starts hiring
+// their Chief of Staff (prd-setup-checklist-v1 §10, `kessel-first-run-contract.md`).
 //
 // The Thread is asked for explicitly (`stores/session-view-request.ts`), so
 // this client's "New agents open in" choice (`k2.newAgentView`) doesn't

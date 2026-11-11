@@ -57,7 +57,7 @@ pub const CLI_UNLINK: &str = "/cli/agent-teams/unlink";
 pub const CLI_LINKS: &str = "/cli/agent-teams/links";
 pub const CLI_MSG_WHO: &str = "/cli/msg/who";
 /// Agent templates (prd-agent-templates-v1 T1): the picker and one card.
-/// Member floor; agent passports read them too (K5 and leads hire).
+/// Member floor; agent passports read them too (Kessel and leads hire).
 pub const CLI_TEMPLATES: &str = "/cli/agent-templates";
 pub const CLI_TEMPLATES_SHOW: &str = "/cli/agent-templates/show";
 

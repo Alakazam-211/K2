@@ -756,8 +756,8 @@ mod unix_impl {
                 &crate::people_picture_routes::Caller::Agent,
                 params,
             )),
-            // K5 at first run: `k2 setup chief-of-staff` from this cell. The
-            // caller is the bound session (the handler admits only K5's own
+            // Kessel at first run: `k2 setup chief-of-staff` from this cell. The
+            // caller is the bound session (the handler admits only Kessel's own
             // pinned chat: the seat's workspace and the canonical map key).
             crate::first_run_routes::COS_PATH => {
                 if !is_post {

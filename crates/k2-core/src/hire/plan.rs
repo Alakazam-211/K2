@@ -241,7 +241,7 @@ pub fn plan(req: &HireRequest, members: Vec<MemberRecipe>, ctx: &PlanContext) ->
         (_, l) => l.clone(),
     };
     let base = super::root::base_dir(limits.as_ref().map(|l| l.folder.as_str()))?;
-    // Templates: an API key never hires a system one (k5, chief-of-staff).
+    // Templates: an API key never hires a system one (kessel, chief-of-staff).
     for (i, m) in members.iter().enumerate() {
         if let Some(t) = m.template.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             let tpl = super::template::resolve(t).map_err(|e| HireError { hint: format!("members[{i}].template: {}", e.hint), ..e })?;

@@ -606,7 +606,7 @@ fn template_list_and_show_routes() {
     let ids: Vec<&str> = v["templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
     assert_eq!(ids.first(), Some(&"general"), "General first: {ids:?}");
     assert_eq!(ids.len(), 10, "the ten built-ins: {ids:?}");
-    // An agent passport reads them too (K5 and leads hire).
+    // An agent passport reads them too (Kessel and leads hire).
     let agent = Who::Agent { project_id: "w".into(), session_id: "s".into() };
     let (st, v) = cli(CLI_TEMPLATES_SHOW, agent, false, json!({}), &[("id", "qa"), ("files", "1")]);
     assert_eq!(st, 200, "{v}");

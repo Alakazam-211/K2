@@ -10962,11 +10962,11 @@ async fn handle_one_request(
             use crate::first_run_routes::MAX_BODY;
             // `format=text`: `k2 setup`'s plain lines on a 200 (no python3).
             let as_text = crate::first_run_routes::wants_text(&query);
-            // K5 at first run: the one agent-callable route in the family
+            // Kessel at first run: the one agent-callable route in the family
             // (`k2 setup chief-of-staff`). The caller is classified from the
             // credential like `k2 agent refresh` (owner token, login, shell
             // tab, agent with its session's map key, wrong credential), and
-            // the handler admits only K5's own pinned chat.
+            // the handler admits only Kessel's own pinned chat.
             if p == crate::first_run_routes::COS_PATH {
                 if !is_post {
                     let r = crate::cli_response::CliResponse::method_not_allowed();

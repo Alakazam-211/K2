@@ -39,8 +39,8 @@ use super::{HireCaller, HireError};
 include!(concat!(env!("OUT_DIR"), "/agent_templates.rs"));
 
 /// Ids no library template may take: the built-ins K2 Onboarding ships
-/// (`k5`, `chief-of-staff`) even before they land here.
-const RESERVED_IDS: &[&str] = &["k5", "chief-of-staff", "k2", "system"];
+/// (`kessel`, `chief-of-staff`) even before they land here.
+const RESERVED_IDS: &[&str] = &["kessel", "chief-of-staff", "k2", "system"];
 
 // ── the action catalog seam ──────────────────────────────────────────
 
@@ -274,7 +274,7 @@ pub fn show_json(id: &str, with_files: bool) -> Result<serde_json::Value, HireEr
 
 // ── who may use which ────────────────────────────────────────────────
 
-/// An API key never hires a system template (`k5`, `chief-of-staff`).
+/// An API key never hires a system template (`kessel`, `chief-of-staff`).
 pub fn check_caller(t: &Template, caller: &HireCaller) -> Result<(), HireError> {
     if t.meta.kind == Kind::System && matches!(caller, HireCaller::ApiKey { .. }) {
         return Err(HireError::new(

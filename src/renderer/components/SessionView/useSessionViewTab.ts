@@ -106,7 +106,7 @@ export function useSessionViewTab(
     }
   }, [storageKey, splitKey])
 
-  // An opener asked for this workspace's Chat in a set view (K5 opens in
+  // An opener asked for this workspace's Chat in a set view (Kessel opens in
   // the Thread). Declared after the read above, so in the commit where the
   // conversation becomes known it lands last. Shown at once; taken and
   // remembered once there is a conversation to remember it for.

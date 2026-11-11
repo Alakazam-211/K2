@@ -66,10 +66,10 @@ LIST = ("Setup: 1 of 3 done\n"
         "  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)\n"
         "  [x] Sign in to an AI tool\n"
         "  [-] Link your subdomain\n"
-        "Next: meet K5, the agent that runs K2: k2 setup k5\n")
+        "Next: meet Kessel, the agent that runs K2: k2 setup kessel\n")
 STATUS = {"enabled": True, "hidden": False, "finished": False,
-          "rows": [{"id": "dev_tools", "state": "todo", "opens": "dev_tools"}], "offer": "meet_k5"}
-MADE = "Made K5: K5 (k5) at /home/me/k2-agents/k5\nK5 is starting and will say hello on its Thread: k2 thread k5\n"
+          "rows": [{"id": "dev_tools", "state": "todo", "opens": "dev_tools"}], "offer": "meet_kessel"}
+MADE = "Made Kessel: Kessel (kessel) at /home/me/k2-agents/kessel\nKessel is starting and will say hello on its Thread: k2 thread kessel\n"
 
 def refusal(code, hint):
     return json.dumps({"ok": False, "error": {"code": code, "hint": hint}}, separators=(",", ":"))
@@ -78,8 +78,9 @@ ERRORS = {
     "agent": (403, refusal("first_run_person_only", "the setup list belongs to a person: sign in with your own login (agents, app passes and API keys have none)"), "application/json"),
     "unknown": (400, refusal("unknown_row", '"nope" is not a row on your setup list (k2 setup shows them)'), "application/json"),
     "signed_out": (400, refusal("tool_not_signed_in", "grok isn't signed in on this server: sign in first"), "application/json"),
-    "off": (404, refusal("k5_first_run_off", "K5 at first run is off on this server (the owner turns on k5FirstRun)"), "application/json"),
-    "seat": (403, refusal("k5_session_only", "a shell tab is a person: ask K5 on its Thread to hire your Chief of Staff"), "application/json"),
+    "off": (404, refusal("kessel_first_run_off", "Kessel at first run is off on this server (the owner turns on kesselFirstRun)"), "application/json"),
+    "seat": (403, refusal("kessel_session_only", "a shell tab is a person: ask Kessel on its Thread to hire your Chief of Staff"), "application/json"),
+    "handle_taken": (409, refusal("kessel_handle_taken", "the handles kessel and kessel5 are both taken by other agents: pass another with --handle (k2 setup kessel --handle <h>), or free one of them"), "application/json"),
     "role": (403, json.dumps({"error": "role_required", "message": "This server gives you Voice & Chat only."}, separators=(",", ":")), "application/json"),
     "bad_token": (403, '{"error":"invalid or missing token"}', "application/json"),
     "no_group": (400, refusal("unknown_focus_group", 'no focus group is "Nope": nothing was made (Settings \u2192 Workspaces lists them)'), "application/json"),
@@ -109,7 +110,7 @@ class H(BaseHTTPRequestHandler):
             return self._send(*ERRORS[mode])
         if q.get("format") != ["text"]:
             return self._send(200, json.dumps(STATUS, separators=(",", ":")), "application/json")
-        if u.path in ("/cli/first-run/k5", "/cli/first-run/chief-of-staff"):
+        if u.path in ("/cli/first-run/kessel", "/cli/first-run/chief-of-staff"):
             return self._send(200, MADE, "text/plain; charset=utf-8")
         return self._send(200, LIST, "text/plain; charset=utf-8")
 
@@ -153,7 +154,7 @@ LIST="$(printf '%s\n' \
     "  [ ] Install developer tools (The Apple tools include git, which workspaces need: k2 git-tools install)" \
     "  [x] Sign in to an AI tool" \
     "  [-] Link your subdomain" \
-    "Next: meet K5, the agent that runs K2: k2 setup k5")"
+    "Next: meet Kessel, the agent that runs K2: k2 setup kessel")"
 
 echo "== the list =="
 run setup
@@ -166,7 +167,7 @@ echo "== --json =="
 run setup --json
 assert_eq "--json: exit 0" "$rc" "0"
 assert_eq "--json: no format=text" "$(last_request)" "GET /cli/first-run/status token=t.k%2F%2B%3D%20z "
-assert_eq "--json: the body as sent" "$out" '{"enabled":true,"hidden":false,"finished":false,"rows":[{"id":"dev_tools","state":"todo","opens":"dev_tools"}],"offer":"meet_k5"}'
+assert_eq "--json: the body as sent" "$out" '{"enabled":true,"hidden":false,"finished":false,"rows":[{"id":"dev_tools","state":"todo","opens":"dev_tools"}],"offer":"meet_kessel"}'
 
 echo "== verbs that print the list =="
 run setup skip dev_tools
@@ -185,25 +186,27 @@ run setup dismiss-offer
 assert_eq "dismiss-offer: exit 0" "$rc" "0"
 assert_eq "dismiss-offer: POST {}" "$(last_request)" "POST /cli/first-run/offer/dismiss $Q {}"
 
-echo "== k5 and chief-of-staff =="
-run setup k5
-assert_eq "k5: exit 0" "$rc" "0"
-assert_eq "k5: no flags, {}" "$(last_request)" "POST /cli/first-run/k5 $Q {}"
-assert_eq "k5: the daemon's lines" "$out" "$(printf 'Made K5: K5 (k5) at /home/me/k2-agents/k5\nK5 is starting and will say hello on its Thread: k2 thread k5')"
-run setup k5 --tool claude --name 'K "Five" \ 5' --handle k5
-assert_eq "k5: the fields, escaped" "$(last_request)" "POST /cli/first-run/k5 $Q {\"tool\": \"claude\", \"name\": \"K \\\"Five\\\" \\\\ 5\", \"handle\": \"k5\"}"
+echo "== kessel and chief-of-staff =="
+run setup kessel
+assert_eq "kessel: exit 0" "$rc" "0"
+assert_eq "kessel: no flags, {}" "$(last_request)" "POST /cli/first-run/kessel $Q {}"
+assert_eq "kessel: the daemon's lines" "$out" "$(printf 'Made Kessel: Kessel (kessel) at /home/me/k2-agents/kessel\nKessel is starting and will say hello on its Thread: k2 thread kessel')"
+run setup kessel --tool claude --name Kay --handle kay --focus-group Ops
+assert_eq "kessel: every flag" "$(last_request)" "POST /cli/first-run/kessel $Q {\"tool\": \"claude\", \"name\": \"Kay\", \"handle\": \"kay\", \"focusGroup\": \"Ops\"}"
+run setup kessel --tool claude --name 'K "Five" \ 5' --handle kessel
+assert_eq "kessel: the fields, escaped" "$(last_request)" "POST /cli/first-run/kessel $Q {\"tool\": \"claude\", \"name\": \"K \\\"Five\\\" \\\\ 5\", \"handle\": \"kessel\"}"
 run setup chief-of-staff --name Ada --about "$(printf 'runs "ops"\tand\nbooks')" --tool codex
 assert_eq "chief-of-staff: exit 0" "$rc" "0"
 assert_eq "chief-of-staff: about escaped" "$(tail -n 1 "$LOG_FILE")" "POST /cli/first-run/chief-of-staff $Q {\"tool\": \"codex\", \"name\": \"Ada\", \"about\": \"runs \\\"ops\\\"\\tand\\nbooks\"}"
 run setup chief-of-staff --name Ada --about "" --tool codex
 assert_eq "chief-of-staff: an empty about is sent" "$(last_request)" "POST /cli/first-run/chief-of-staff $Q {\"tool\": \"codex\", \"name\": \"Ada\", \"about\": \"\"}"
-run setup k5 --focus-group "Ann's Ops"
-assert_eq "k5 --focus-group: exit 0" "$rc" "0"
-assert_eq "k5 --focus-group: focusGroup sent" "$(last_request)" "POST /cli/first-run/k5 $Q {\"focusGroup\": \"Ann's Ops\"}"
-run setup k5 --tool claude --handle k5 --focus-group 'Bo"s \ crew'
-assert_eq "k5 --focus-group: last, escaped" "$(last_request)" "POST /cli/first-run/k5 $Q {\"tool\": \"claude\", \"handle\": \"k5\", \"focusGroup\": \"Bo\\\"s \\\\ crew\"}"
-run setup k5 --focus-group ""
-assert_eq "k5 --focus-group empty: left out" "$(last_request)" "POST /cli/first-run/k5 $Q {}"
+run setup kessel --focus-group "Ann's Ops"
+assert_eq "kessel --focus-group: exit 0" "$rc" "0"
+assert_eq "kessel --focus-group: focusGroup sent" "$(last_request)" "POST /cli/first-run/kessel $Q {\"focusGroup\": \"Ann's Ops\"}"
+run setup kessel --tool claude --handle kessel --focus-group 'Bo"s \ crew'
+assert_eq "kessel --focus-group: last, escaped" "$(last_request)" "POST /cli/first-run/kessel $Q {\"tool\": \"claude\", \"handle\": \"kessel\", \"focusGroup\": \"Bo\\\"s \\\\ crew\"}"
+run setup kessel --focus-group ""
+assert_eq "kessel --focus-group empty: left out" "$(last_request)" "POST /cli/first-run/kessel $Q {}"
 run setup chief-of-staff --name Ada --about "" --tool codex --focus-group 'fg_"1"'
 assert_eq "chief-of-staff --focus-group: exit 0" "$rc" "0"
 assert_eq "chief-of-staff --focus-group: after about, escaped" "$(last_request)" "POST /cli/first-run/chief-of-staff $Q {\"tool\": \"codex\", \"name\": \"Ada\", \"about\": \"\", \"focusGroup\": \"fg_\\\"1\\\"\"}"
@@ -215,11 +218,19 @@ assert_eq "skip without a row: exit 2" "$rc" "2"
 run setup chief-of-staff --name Ada
 assert_eq "chief-of-staff without --about/--tool: exit 2" "$rc" "2"
 run setup hide --tool claude
-assert_eq "--tool off k5: exit 2" "$rc" "2"
+assert_eq "--tool off kessel: exit 2" "$rc" "2"
 run setup skip dev_tools --focus-group Ops
-assert_eq "--focus-group off k5: exit 2" "$rc" "2"
+assert_eq "--focus-group off kessel: exit 2" "$rc" "2"
 run setup --bogus
 assert_eq "unknown flag: exit 2" "$rc" "2"
+run setup kessel --about x
+assert_eq "kessel --about: exit 2" "$rc" "2"
+assert_eq "kessel --about: says so" "$err" "k2 setup kessel: no --about"
+run setup --help
+case "$out" in *"k2 setup kessel [--tool claude|codex|grok] [--name N] [--handle H] [--focus-group G]"*) ok "help: k2 setup kessel" ;; *) bad "help: no k2 setup kessel" ;; esac
+case "$out" in *K5*|*k5*) bad "help: still names the old agent" ;; *) ok "help: says Kessel only" ;; esac
+run setup k5
+assert_eq "k5 is no verb: exit 2" "$rc" "2"
 assert_eq "usage: nothing sent" "$(cat "$LOG_FILE")" ""
 
 echo "== refusals =="
@@ -233,12 +244,13 @@ refused() { # mode, verb..., then: want rc, want stderr
 }
 refused agent 3 "Error: first_run_person_only: the setup list belongs to a person: sign in with your own login (agents, app passes and API keys have none)"
 refused unknown 2 'Error: unknown_row: "nope" is not a row on your setup list (k2 setup shows them)' skip nope
-refused signed_out 2 "Error: tool_not_signed_in: grok isn't signed in on this server: sign in first" k5 --tool grok
-refused off 1 "Error: k5_first_run_off: K5 at first run is off on this server (the owner turns on k5FirstRun)" k5
-refused seat 3 "Error: k5_session_only: a shell tab is a person: ask K5 on its Thread to hire your Chief of Staff" chief-of-staff --name A --about b --tool claude
+refused signed_out 2 "Error: tool_not_signed_in: grok isn't signed in on this server: sign in first" kessel --tool grok
+refused off 1 "Error: kessel_first_run_off: Kessel at first run is off on this server (the owner turns on kesselFirstRun)" kessel
+refused seat 3 "Error: kessel_session_only: a shell tab is a person: ask Kessel on its Thread to hire your Chief of Staff" chief-of-staff --name A --about b --tool claude
+refused handle_taken 1 "Error: kessel_handle_taken: the handles kessel and kessel5 are both taken by other agents: pass another with --handle (k2 setup kessel --handle <h>), or free one of them" kessel
 refused role 3 "Error: role_required"
 refused bad_token 3 "Error: invalid or missing token"
-refused no_group 4 'Error: unknown_focus_group: no focus group is "Nope": nothing was made (Settings → Workspaces lists them)' k5 --focus-group Nope
+refused no_group 4 'Error: unknown_focus_group: no focus group is "Nope": nothing was made (Settings → Workspaces lists them)' kessel --focus-group Nope
 refused two_groups 4 'Error: ambiguous_focus_group: more than one focus group is named "Ops": send its id' chief-of-staff --name A --about b --tool claude --focus-group Ops
 refused store 1 "$(printf 'Error: store: disk full\twhile saving \\ the list')"
 refused garbage 1 "Error: the daemon sent something k2 setup does not understand: <html>bad gateway</html>"

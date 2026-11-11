@@ -15,7 +15,7 @@
 /// The ids in starter set `name`, or `None` for a set K2 doesn't know.
 pub fn named_set(name: &str) -> Option<&'static [&'static str]> {
     const SETS: &[(&str, &[&str])] = &[
-        ("k5-starter", crate::hire::starter_permissions::K5_STARTER_PERMISSIONS),
+        ("kessel-starter", crate::hire::starter_permissions::KESSEL_STARTER_PERMISSIONS),
         ("chief-of-staff-starter", crate::hire::starter_permissions::CHIEF_OF_STAFF_STARTER_PERMISSIONS),
     ];
     SETS.iter().find(|(n, _)| *n == name).map(|(_, ids)| *ids)

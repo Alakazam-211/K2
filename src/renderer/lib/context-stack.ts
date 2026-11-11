@@ -430,19 +430,19 @@ export const DEFAULT_CATALOG_ENTRIES: ContextCatalogEntry[] = [
     tags: ['role', 'manager'],
   },
   {
-    // 0.46.12: the old K2 Agent pack (`k2:pack`) is K5's pack now; the
+    // 0.46.12: the old K2 Agent pack (`k2:pack`) is Kessel's pack now; the
     // daemon resolves the old id to this one.
-    id: 'k5:pack',
-    path: '.k2/context/catalog/k5.md',
-    label: "K5: K2's own agent",
-    source: 'catalog:k5',
+    id: 'kessel:pack',
+    path: '.k2/context/catalog/kessel.md',
+    label: "Kessel: K2's own agent",
+    source: 'catalog:kessel',
     kind: 'static',
     recommended: false,
     description:
-      'Lean always-on orders for K5, the agent that runs K2 for its person: setup, settings and agent management.',
+      'Lean always-on orders for Kessel, the agent that runs K2 for its person: setup, settings and agent management.',
     version: '1.0.0',
     author: 'K2',
-    tags: ['role', 'k5'],
+    tags: ['role', 'kessel'],
   },
   {
     id: 'connections:roster',

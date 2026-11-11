@@ -1,5 +1,5 @@
 // A one-shot "open this workspace's Chat tab in this view" ask, for an
-// opener that knows which view a person should land in (K5 at first run
+// opener that knows which view a person should land in (Kessel at first run
 // opens in the Thread, whatever this client's "New agents open in" says).
 //
 // The view memory is keyed by conversation, and a new agent's conversation

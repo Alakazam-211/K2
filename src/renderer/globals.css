@@ -1391,6 +1391,10 @@ html:not([data-style="terminal"]) :is(.k2-focus, .k2-checkbox, .k2-radio):focus-
    the element keeps its own shape and fill: in Terminal a 2px ring with the
    control's 45° cuts (the cut buttons' ring above), elsewhere a 2px ring
    rounded by --radius-selector. The accent as text, so 3:1 on every ground. */
+/* The ring needs a positioned box, or ::after attaches to the nearest
+   positioned ancestor and rings a whole card or pane. Zero specificity, so
+   an element's own absolute / fixed / sticky still wins. */
+:where([data-k2-focus]:not([data-zen-root] *, [data-k2-thread-zen] *)) { position: relative; }
 :where([data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)) { outline: none; }
 [data-k2-focus]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *)::after {
   content: '';

@@ -118,7 +118,7 @@ describe('Machines you can use', () => {
     render(<MachinesPart list={list([NODE])} onChanged={onChanged} />)
     expect(await screen.findByTestId('compute-oneclick-missing')).toHaveProperty(
       'textContent',
-      'Your k2.dev account needs an update for it. Until then, add a machine with an enroll code below.',
+      'Your k2.dev account needs an update for it. Until then, pair a machine with a pairing code below.',
     )
     const row = screen.getByTestId('compute-machine-mini-1')
     const sw = within(row).getByRole('switch', { name: 'Use compute from mini-1' })
@@ -181,8 +181,28 @@ describe('Machines you can use', () => {
     fireEvent.click(within(await screen.findByTestId('compute-machine-mini-1')).getByRole('switch'))
     await waitFor(() => expect(m.retireComputeNode).toHaveBeenCalledWith('mini-1'))
     expect(useConfirmDialogStore.getState().confirm).toHaveBeenCalled()
-    await screen.findByText("mini-1 finishes its jobs, then it's removed.")
+    const ask = vi.mocked(useConfirmDialogStore.getState().confirm).mock.calls[0][0] as { title: string; message: string; confirmLabel: string }
+    // Turning it off removes it, and the confirm says so (the same words as Remove).
+    expect(ask.title).toBe('Remove mini-1 from this server?')
+    expect(ask.confirmLabel).toBe('Remove')
+    expect(ask.message).toContain('To use it again, pair it again.')
+    await screen.findByText('mini-1 finishes its running jobs, then it’s removed. To use it again, pair it again.')
     expect(onChanged).toHaveBeenCalled()
+  })
+
+  it('a pending machine paired by code: the page shows its code and asks whether the machine shows the same', async () => {
+    render(<MachinesPart list={list([{ ...NODE, state: 'pending', sas: '482 913', offer: undefined }])} onChanged={onChanged} />)
+    const row = await screen.findByTestId('compute-machine-mini-1')
+    expect(row.textContent).toContain('Does mini-1 show 482 913?')
+    fireEvent.click(within(row).getByRole('button', { name: 'Yes, that’s it' }))
+    await waitFor(() => expect(m.confirmComputeNode).toHaveBeenCalledWith('mini-1', '482913'))
+  })
+
+  it('a paused machine says it is still paired but paused, so the on switch and the word agree', async () => {
+    render(<MachinesPart list={list([{ ...NODE, controllerPause: 'paused' }])} onChanged={onChanged} />)
+    const row = await screen.findByTestId('compute-machine-mini-1')
+    expect(within(row).getByTestId('compute-machine-status').textContent).toBe('Paused')
+    expect(within(row).getByTestId('compute-machine-paused').textContent).toContain('Still paired, but paused')
   })
 
   it('a retiring machine shows off; switching it back on resumes it', async () => {

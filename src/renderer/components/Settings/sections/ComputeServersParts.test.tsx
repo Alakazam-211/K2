@@ -246,7 +246,7 @@ describe('add (S3)', () => {
     expect((within(form).getByLabelText('Another person’s server') as HTMLInputElement).disabled).toBe(true)
     expect(form.textContent).toContain('its tenant wall isn’t on')
     fireEvent.change(within(form).getByLabelText('New server address'), { target: { value: 'https://x.k2.dev' } })
-    fireEvent.change(within(form).getByLabelText('Enroll code'), { target: { value: 'ABCDE-FGHJK.0123456789abcdef' } })
+    fireEvent.change(within(form).getByLabelText('Pairing code'), { target: { value: 'ABCDE-FGHJK.0123456789abcdef' } })
     fireEvent.change(within(form).getByLabelText('End date'), { target: { value: '30d' } })
     fireEvent.click(within(form).getByRole('button', { name: 'Add' }))
     await waitFor(() =>

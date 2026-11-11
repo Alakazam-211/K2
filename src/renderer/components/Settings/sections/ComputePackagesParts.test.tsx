@@ -176,7 +176,7 @@ describe('PackageRequestsPanel', () => {
     serve([row({ dry: { installs: ['sudo'], refusal: 'package_denied: sudo' } })])
     render(<PackageRequestsPanel />)
     const card = await screen.findByTestId('compute-pkg-batch-pb_1')
-    expect(card.textContent).toContain('The dry run would refuse this: package_denied: sudo')
+    expect(card.textContent).toContain('The test install would refuse this: package_denied: sudo')
   })
 
   it('Allow once sends approve without add, for the batch', async () => {

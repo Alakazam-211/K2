@@ -49,7 +49,9 @@ function isMissingRoute(e: unknown): boolean {
 
 // ── approvals ────────────────────────────────────────────────────────
 
-export function ApprovalsPanel({ onChanged }: { onChanged?: () => void }): React.JSX.Element | null {
+/** `onCount`: see PackageRequestsPanel; with it, nothing renders while no
+ *  request waits. */
+export function ApprovalsPanel({ onChanged, onCount }: { onChanged?: () => void; onCount?: (n: number) => void }): React.JSX.Element | null {
   const [rows, setRows] = useState<AdminRequest[] | null>(null)
   const [canApprove, setCanApprove] = useState(false)
   const [hidden, setHidden] = useState(false)
@@ -81,16 +83,21 @@ export function ApprovalsPanel({ onChanged }: { onChanged?: () => void }): React
     onChanged?.()
   }, [load, onChanged])
 
-  if (hidden) return null
   const pending = (rows ?? []).filter((r) => r.state === 'pending')
   const inFlight = (rows ?? []).filter((r) => r.state === 'approved' || r.state === 'sent')
+  const shown = hidden ? 0 : pending.length + inFlight.length + (error ? 1 : 0)
+  useEffect(() => {
+    onCount?.(shown)
+  }, [onCount, shown])
+  if (hidden) return null
+  if (onCount && shown === 0) return null
   return (
     <div className="space-y-2" data-testid="compute-approvals" data-settings-id="compute.approvals">
-      <div className="type-name text-[var(--color-text-primary)]">
+      <div className="type-row text-[var(--color-text-primary)]">
         Approvals{pending.length > 0 ? ` (${pending.length})` : ''}
       </div>
-      <p className={`type-hint ${muted}`}>
-        Agents can only ask. Root work on a node waits here until you approve it, with {touchIdOrPassword()}, each time.
+      <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]">
+        Agents can only ask. Changes that need admin rights on a machine wait here until you approve each one with {touchIdOrPassword()}.
       </p>
       {error ? <Callout tone="error">{error}</Callout> : null}
       {rows && pending.length === 0 && inFlight.length === 0 ? (
@@ -288,8 +295,8 @@ function RequestCard({
 
 // ── one node's admin view ────────────────────────────────────────────
 
-export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | null {
-  const [open, setOpen] = useState(false)
+export function NodeAdminPanel({ node, defaultOpen = false }: { node: string; defaultOpen?: boolean }): React.JSX.Element | null {
+  const [open, setOpen] = useState(defaultOpen)
   const [view, setView] = useState<NodeHealthView | null>(null)
   const [hidden, setHidden] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -352,9 +359,11 @@ export function NodeAdminPanel({ node }: { node: string }): React.JSX.Element | 
     <div className="space-y-1.5" data-testid={`compute-node-admin-${node}`}>
       <div className="flex items-center justify-between gap-6">
         <span className="type-row text-[var(--color-text-primary)]">Health and updates</span>
-        <Button variant="quiet" onClick={() => setOpen(false)}>
-          Hide
-        </Button>
+        {defaultOpen ? null : (
+          <Button variant="quiet" onClick={() => setOpen(false)}>
+            Hide
+          </Button>
+        )}
       </div>
       {!view && !error ? <p className={`type-hint ${secondary}`} role="status">Loading…</p> : null}
       {view ? (

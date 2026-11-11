@@ -32,12 +32,12 @@ import {
   SettingRow,
   SettingSwitchRow,
   SettingsLoadState,
-  SETTING_FIELD_WIDTH,
   SETTING_LIST_ROW_HOVER,
   SETTING_ROW_HINT,
   SETTING_ROW_LABEL,
 } from '../controls/SettingControls'
-import { BetaTag, Button, Input, Checkbox, Toggle, Slider } from '@/components/ui'
+import { BetaTag, Button, Input, Checkbox, OverflowMenu, Spinner, Surface, Toggle, Slider, type OverflowMenuItem } from '@/components/ui'
+import { AccessSheet, DIALOG_FIELD, DIALOG_LABEL, Field } from './AccessDialogs'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
 import { useSettingsStore } from '@/stores/settings'
 import { useProjectsStore } from '@/stores/projects'
@@ -72,8 +72,6 @@ import {
   setComputeGrant,
   setLocalPolicy,
   setLocalRemoteAdmin,
-  tierCountsLine,
-  tierTag,
   validNodeName,
   type ComputeEvent,
   type ComputeGrant,
@@ -98,17 +96,17 @@ import { NodeSharingPanel } from './ComputeServersParts'
 import { LocalPackagesSummary, NodePackagesSummary, PackageRequestsPanel } from './ComputePackagesParts'
 import { findLocalNode, onComputeSync } from './compute-packages-api'
 import { touchIdOrPassword } from '@/lib/desktop-words'
-import { ActionError, CopyBox, NodeStatus, SettingsLink, hardwareLine, osLine } from './ComputeBits'
+import { ActionError, CopyBox, NodeStatus, SettingsLink, failureFor, hardwareLine, osLine, tierWord, tierWords, type ActionFailure } from './ComputeBits'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
-  { id: 'compute.preview', section: 'compute', label: 'Use compute nodes', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
+  { id: 'compute.preview', section: 'compute', label: 'Let agents use your machines', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
   { id: 'compute.machines', section: 'compute', label: 'Machines', description: 'Your machines that offer compute; switch one on for this server', keywords: ['compute', 'machine', 'machines', 'use compute', 'cpu', 'ram', 'disk', 'one-click'] },
-  { id: 'compute.nodes', section: 'compute', label: 'Node settings', description: 'Machines that run jobs for this server', keywords: ['compute', 'node', 'pause', 'drain', 'resume', 'confirm', 'rename', 'remove'] },
-  { id: 'compute.add-node', section: 'compute', label: 'Add a machine', description: 'Make an enroll code for another machine', keywords: ['enroll', 'code', 'install', 'pair', 'add node'] },
-  { id: 'compute.grants', section: 'compute', label: 'Workspaces that may use a node', description: 'Which workspaces may use each node', keywords: ['grant', 'revoke', 'workspace', 'limits'] },
-  { id: 'compute.servers', section: 'compute', label: 'Servers on a node', description: 'Share a node with your other servers or other people’s; change its owner', keywords: ['servers', 'share', 'shared', 'tenant', 'owner', 'make owner', 'limits', 'queue', 'sas'] },
+  { id: 'compute.nodes', section: 'compute', label: 'Machine settings', description: 'Machines that run jobs for this server', keywords: ['compute', 'node', 'pause', 'drain', 'resume', 'confirm', 'rename', 'remove'] },
+  { id: 'compute.add-node', section: 'compute', label: 'Add a machine', description: 'Make a pairing code for another machine', keywords: ['enroll', 'pairing', 'code', 'install', 'pair', 'add node'] },
+  { id: 'compute.grants', section: 'compute', label: 'Workspaces that may use a machine', description: 'Which workspaces may use each machine', keywords: ['grant', 'revoke', 'workspace', 'limits'] },
+  { id: 'compute.servers', section: 'compute', label: 'Servers on a machine', description: 'Share a node with your other servers or other people’s; change its owner', keywords: ['servers', 'share', 'shared', 'tenant', 'owner', 'make owner', 'limits', 'queue', 'sas'] },
   { id: 'compute.jobs', section: 'compute', label: 'Recent compute jobs', description: 'Jobs and audit lines', keywords: ['jobs', 'events', 'audit', 'log'] },
-  { id: 'compute.this-computer', section: 'compute', label: 'Make this computer a compute node', description: 'Let agents on one of your servers run programs here', keywords: ['this computer', 'k2node', 'node', 'enable', 'policy', 'cpu', 'memory'] },
+  { id: 'compute.this-computer', section: 'compute', label: 'Let a server run jobs on this computer', description: 'Let agents on one of your servers run programs here', keywords: ['this computer', 'k2node', 'node', 'enable', 'policy', 'cpu', 'memory'] },
 ]
 
 const POLL_MS = 5000
@@ -118,7 +116,7 @@ type Tab = 'machines' | 'nodes' | 'jobs' | 'local'
 
 const TAB_LABEL: Record<Tab, string> = {
   machines: 'Machines',
-  nodes: 'Node settings',
+  nodes: 'Machine settings',
   jobs: 'Jobs',
   local: 'This computer',
 }
@@ -159,6 +157,7 @@ export function ComputeSection(): React.JSX.Element {
   const computePreview = useSettingsStore((s) => s.computePreview)
   const setComputePreview = useSettingsStore((s) => s.setComputePreview)
   const activeHost = useConnectHostStore((s) => s.activeHost)
+  const projects = useProjectsStore((s) => s.projects)
   const showLocal = webFeatures.computeLocal
 
   const [tab, setTab] = useState<Tab>('machines')
@@ -172,7 +171,8 @@ export function ComputeSection(): React.JSX.Element {
   const [local, setLocal] = useState<LocalStatus | null>(null)
   const [localState, setLocalState] = useState<LoadState>('loading')
   const [localError, setLocalError] = useState<string | null>(null)
-  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewFailure, setPreviewFailure] = useState<ActionFailure | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
 
   const mounted = useRef(true)
   const inflight = useRef(false)
@@ -272,11 +272,14 @@ export function ComputeSection(): React.JSX.Element {
   )
 
   const togglePreview = async (next: boolean): Promise<void> => {
-    setPreviewError(null)
+    setPreviewFailure(null)
+    setPreviewBusy(true)
     try {
       await setComputePreview(next)
     } catch (err) {
-      setPreviewError(reasonOf(err))
+      setPreviewFailure(failureFor('Couldn’t change this setting.', 'turn compute on or off', err))
+    } finally {
+      setPreviewBusy(false)
     }
     void refresh()
   }
@@ -287,13 +290,15 @@ export function ComputeSection(): React.JSX.Element {
     : ['machines', 'nodes', 'jobs', ...(showLocal ? (['local'] as Tab[]) : [])]
   const shown: Tab = tabs.includes(tab) ? tab : 'machines'
   const nodes = (nodesList?.nodes ?? []).filter((n) => n.state !== 'revoked')
+  const nodeName = (id: string | null | undefined): string | null => (id ? (nodesList?.nodes ?? []).find((n) => n.id === id)?.name ?? null : null)
+  const wsName = (id: string | null | undefined): string | null => (id ? projects.find((p) => p.id === id)?.name ?? null : null)
 
   /** The controller's load state, as the card that stands in for a list. */
   const controllerHold = (what: string): React.ReactNode =>
     controllerState === 'error' ? (
       <SettingsLoadState
         kind="error"
-        title="Couldn’t load your compute nodes"
+        title="Couldn’t load your machines"
         detail={controllerError}
         action={<Button onClick={() => void refresh()}>Try again</Button>}
         testId="compute-load-error"
@@ -303,6 +308,25 @@ export function ComputeSection(): React.JSX.Element {
     ) : !nodesList ? (
       <SettingsLoadState kind="loading" title={`Loading ${what}…`} testId="compute-loading" />
     ) : null
+
+  // The switch shows on or off only once the server has said which.
+  const known = controllerState === 'ready' || controllerState === 'disabled'
+  const switchControl = known ? (
+    <Toggle
+      checked={controllerState === 'ready'}
+      disabled={previewBusy}
+      onChange={(v) => void togglePreview(v)}
+      aria-label="Let agents use your machines"
+    />
+  ) : controllerState === 'loading' ? (
+    <span className="inline-flex items-center gap-2 type-hint text-[var(--color-text-secondary)]" role="status" data-testid="compute-switch-checking">
+      <Spinner /> Checking…
+    </span>
+  ) : (
+    <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-switch-unknown">
+      Unknown
+    </span>
+  )
 
   return (
     <div className="w-full max-w-[52rem] space-y-5 pb-6" data-testid="compute-section">
@@ -334,7 +358,7 @@ export function ComputeSection(): React.JSX.Element {
               }`}
             >
               {TAB_LABEL[t]}
-              {t === 'nodes' && nodes.length > 0 ? <span className="text-[var(--color-text-muted)]"> {nodes.length}</span> : null}
+              {t === 'nodes' && nodes.length > 0 ? <span className="text-[var(--color-text-secondary)]"> {nodes.length}</span> : null}
             </button>
           )
         })}
@@ -343,32 +367,25 @@ export function ComputeSection(): React.JSX.Element {
       <div className="pt-1 space-y-6">
         {shown === 'machines' ? (
           <>
-            <SettingsGroup card title="Compute nodes" settingId="compute.preview">
-              <SettingSwitchRow
-                control={
-                  <Toggle
-                    checked={computePreview || controllerState === 'ready'}
-                    onChange={(v) => void togglePreview(v)}
-                    aria-label="Use compute nodes"
-                  />
-                }
-              >
-                <div className={SETTING_ROW_LABEL}>Use compute nodes</div>
+            <SettingsGroup card title="Compute on this server" settingId="compute.preview">
+              <SettingSwitchRow control={switchControl}>
+                <div className={SETTING_ROW_LABEL}>Let agents use your machines</div>
                 <p className={SETTING_ROW_HINT}>
-                  This server can pair with your other machines, and agents you allow can run jobs on them. Only the
-                  server’s owner can change this.
+                  When on, this server can pair with your other machines, and agents you allow can run builds and tests on
+                  them. Only the server’s owner can change this.
                 </p>
-                {computePreview && disabled ? (
-                  <p className="type-hint text-[var(--color-status-warn-text)] mt-1" data-testid="compute-server-off">
-                    This server still has compute nodes off. Only its owner can turn them on.
-                  </p>
-                ) : null}
-                {previewError ? <ActionError what="Couldn’t change this setting." reason={previewError} /> : null}
+                <ActionError failure={previewFailure} />
               </SettingSwitchRow>
             </SettingsGroup>
 
-            {disabled ? null : nodesList ? (
-              <MachinesPart list={nodesList} onChanged={refresh} />
+            {disabled ? (
+              <SettingsLoadState kind="empty" title="Compute is off on this server" testId="compute-off">
+                {computePreview
+                  ? 'This window has it on, but the server still has it off. Only the server’s owner can turn it on.'
+                  : 'Turn on Let agents use your machines above to pair your other machines and send them builds and tests.'}
+              </SettingsLoadState>
+            ) : nodesList ? (
+              <MachinesPart list={nodesList} onChanged={refresh} onManage={() => setTab('nodes')} />
             ) : (
               <SettingsGroup card title="Machines" state={controllerHold('your machines')} testId="compute-machines" />
             )}
@@ -379,7 +396,7 @@ export function ComputeSection(): React.JSX.Element {
 
         {shown === 'nodes' ? (
           <ControllerPart
-            hold={controllerHold('your nodes')}
+            hold={controllerHold('your machines')}
             list={nodesList}
             nodes={nodes}
             grants={grants}
@@ -390,7 +407,16 @@ export function ComputeSection(): React.JSX.Element {
         ) : null}
 
         {shown === 'jobs' ? (
-          <JobsPart hold={controllerHold('recent jobs')} list={nodesList} jobs={jobs} events={events} sideErrors={sideErrors} onRetry={refresh} />
+          <JobsPart
+            hold={controllerHold('recent jobs')}
+            list={nodesList}
+            jobs={jobs}
+            events={events}
+            sideErrors={sideErrors}
+            nodeName={nodeName}
+            wsName={wsName}
+            onRetry={refresh}
+          />
         ) : null}
 
         {shown === 'local' && showLocal ? (
@@ -410,27 +436,25 @@ export function ComputeSection(): React.JSX.Element {
 
 // ── Shared bits ──────────────────────────────────────────────────────
 
-type ActionFailure = { what: string; reason: string }
-
 /** Run one gesture: busy flag, a plain error line, then re-read truth. */
 function useAction(onChanged: () => Promise<void>): {
   busy: boolean
   failure: ActionFailure | null
-  run: <T>(what: string, fn: () => Promise<T>) => Promise<T | undefined>
-  fail: (what: string, reason: string) => void
+  run: <T>(what: string, verb: string, fn: () => Promise<T>) => Promise<T | undefined>
+  fail: (f: ActionFailure) => void
   clear: () => void
 } {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<ActionFailure | null>(null)
   const run = useCallback(
-    async <T,>(what: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    async <T,>(what: string, verb: string, fn: () => Promise<T>): Promise<T | undefined> => {
       setBusy(true)
       setFailure(null)
       try {
         const out = await fn()
         return out
       } catch (err) {
-        setFailure({ what, reason: reasonOf(err) })
+        setFailure(failureFor(what, verb, err))
         return undefined
       } finally {
         setBusy(false)
@@ -439,31 +463,15 @@ function useAction(onChanged: () => Promise<void>): {
     },
     [onChanged],
   )
-  return {
-    busy,
-    failure,
-    run,
-    fail: (what, reason) => setFailure({ what, reason }),
-    clear: () => setFailure(null),
-  }
+  return { busy, failure, run, fail: setFailure, clear: () => setFailure(null) }
 }
 
-function Failure({ failure }: { failure: ActionFailure | null }): React.JSX.Element | null {
-  if (!failure) return null
-  return <ActionError what={failure.what} reason={failure.reason} />
+/** A plain refusal we made ourselves (a bad name), as a failure. */
+function own(what: string, next: string): ActionFailure {
+  return { what, next, reason: null }
 }
 
-/** A quiet line inside a card, for an empty list. */
-function QuietRow({ title, children, testId }: { title: string; children?: React.ReactNode; testId?: string }): React.JSX.Element {
-  return (
-    <div className="px-4 py-3" data-testid={testId}>
-      <p className={SETTING_ROW_LABEL}>{title}</p>
-      {children ? <p className={SETTING_ROW_HINT}>{children}</p> : null}
-    </div>
-  )
-}
-
-// ── Node settings ────────────────────────────────────────────────────
+// ── Machine settings ─────────────────────────────────────────────────
 
 function ControllerPart({
   hold,
@@ -482,38 +490,54 @@ function ControllerPart({
   onChanged: () => Promise<void>
   onAdd: () => void
 }): React.JSX.Element {
-  if (hold || !list) return <SettingsGroup card title="Node settings" state={hold} />
+  const [removed, setRemoved] = useState<string | null>(null)
+  const [approvals, setApprovals] = useState(0)
+  const [packages, setPackages] = useState(0)
+  if (hold || !list) return <SettingsGroup card title="Machine settings" state={hold} />
+  const removedNote = removed ? (
+    <p role="status" className="type-row text-[var(--color-status-ok-soft)]" data-testid="compute-removed-note">
+      {removed} is removed. To use it again, pair it again.
+    </p>
+  ) : null
   if (nodes.length === 0) {
     return (
-      <SettingsGroup
-        card
-        title="Node settings"
-        settingId="compute.nodes"
-        state={
-          <SettingsLoadState kind="empty" title="No nodes yet" action={<Button onClick={onAdd}>Add a machine</Button>} testId="compute-nodes-empty">
-            Add a machine with an enroll code, or turn on Make this computer a compute node on the other machine.
-          </SettingsLoadState>
-        }
-      />
+      <div className="space-y-4">
+        {removedNote}
+        <SettingsGroup
+          card
+          title="Machine settings"
+          settingId="compute.nodes"
+          state={
+            <SettingsLoadState kind="empty" title="No machines yet" action={<Button onClick={onAdd}>Add a machine</Button>} testId="compute-nodes-empty">
+              Pair a machine with a pairing code, or turn on Let a server run jobs on this computer on the other machine.
+            </SettingsLoadState>
+          }
+        />
+      </div>
     )
   }
   return (
     <div className="space-y-6" data-settings-id="compute.nodes">
-      <SettingsGroup card title="Requests" hint="What agents asked to change on your nodes. Nothing runs until you say yes.">
-        <div className="px-4 py-3">
-          <ApprovalsPanel onChanged={() => void onChanged()} />
-        </div>
-        <div className="px-4 py-3">
-          <PackageRequestsPanel onChanged={() => void onChanged()} />
-        </div>
-      </SettingsGroup>
+      {removedNote}
+      {/* Mounted either way, so each reads its list; shown only when one of
+          them has something waiting. */}
+      <div hidden={approvals + packages === 0} data-testid="compute-requests">
+        <SettingsGroup card title="Waiting for you" hint="What agents asked to change on your machines. Nothing happens until you say yes.">
+          <div className="px-4 py-3 empty:hidden">
+            <ApprovalsPanel onChanged={() => void onChanged()} onCount={setApprovals} />
+          </div>
+          <div className="px-4 py-3 empty:hidden">
+            <PackageRequestsPanel onChanged={() => void onChanged()} onCount={setPackages} />
+          </div>
+        </SettingsGroup>
+      </div>
       {sideErrors.grants ? (
-        <SettingsLoadState kind="error" title="Couldn’t load which workspaces may use each node" detail={sideErrors.grants} action={<Button onClick={() => void onChanged()}>Try again</Button>}>
-          The nodes below are fine; only the workspace lists didn’t load.
+        <SettingsLoadState kind="error" title="Couldn’t load which workspaces may use each machine" detail={sideErrors.grants} action={<Button onClick={() => void onChanged()}>Try again</Button>}>
+          The machines below are fine; only the workspace lists didn’t load.
         </SettingsLoadState>
       ) : null}
       {nodes.map((n) => (
-        <NodeCard key={n.id} node={n} grants={grants.filter((g) => g.nodeId === n.id)} onChanged={onChanged} />
+        <NodeCard key={n.id} node={n} grants={grants.filter((g) => g.nodeId === n.id)} onChanged={onChanged} onRemoved={setRemoved} />
       ))}
     </div>
   )
@@ -538,27 +562,50 @@ function jobNeeds(needs: unknown): string {
   return String(needs)
 }
 
-/** An audit line's detail in words: "node mini-1 · job b912". */
-function eventDetail(d: unknown): string {
-  if (d === null || d === undefined) return ''
-  if (typeof d === 'string') return d
-  if (typeof d === 'object' && !Array.isArray(d)) {
-    return Object.entries(d as Record<string, unknown>)
-      .filter(([, v]) => v !== null && v !== undefined && v !== '')
-      .map(([k, v]) => `${k.replace(/_/g, ' ')} ${typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' ? String(v) : JSON.stringify(v)}`)
-      .join(' · ')
-  }
-  try {
-    return JSON.stringify(d)
-  } catch {
-    return ''
-  }
+function str(v: unknown): string | null {
+  return typeof v === 'string' && v !== '' ? v : typeof v === 'number' ? String(v) : null
 }
 
-/** "node.confirmed" → "Node confirmed". */
-function eventWords(kind: string): string {
-  const t = kind.replace(/[._]+/g, ' ').trim()
-  return t ? t[0].toUpperCase() + t.slice(1) : kind
+/** One audit line as a sentence: "alex paused studio-mac." */
+function eventSentence(e: ComputeEvent, nodeName: (id: string | null | undefined) => string | null, wsName: (id: string | null | undefined) => string | null): string {
+  const d = (e.detail && typeof e.detail === 'object' ? e.detail : {}) as Record<string, unknown>
+  const node = str(d.name) ?? nodeName(e.nodeId) ?? 'a machine'
+  const ws = wsName(e.workspaceId) ?? 'a workspace'
+  const who = e.actor === 'node' ? node : e.actor
+  switch (e.kind) {
+    case 'confirm':
+      return `${who} added ${node}.`
+    case 'remove': {
+      const n = typeof d.jobsCancelled === 'number' ? d.jobsCancelled : 0
+      return `${who} removed ${node}${n > 0 ? `; ${n} ${n === 1 ? 'job was' : 'jobs were'} cancelled` : ''}.`
+    }
+    case 'rename':
+      return `${who} renamed ${str(d.from) ?? 'a machine'} to ${str(d.to) ?? 'a new name'}.`
+    case 'controller_pause': {
+      const a = str(d.action)
+      return a === 'resume' ? `${who} resumed ${node}.` : a === 'drain' ? `${who} let ${node} finish its jobs, then stop.` : `${who} paused ${node}.`
+    }
+    case 'enroll_code':
+      return `${who} made a pairing code for ${node}.`
+    case 'grant':
+      return `${who} let ${ws} use ${node}.`
+    case 'grant_revoke':
+    case 'revoke':
+      return `${who} stopped ${ws} using ${node}.`
+    case 'job_start':
+      return `A job for ${ws} started on ${node}.`
+    case 'job_lost':
+      return `A job for ${ws} was lost on ${node}.`
+    case 'job_retry':
+    case 'job_requeue':
+      return `A job for ${ws} was sent again.`
+    case 'confirm_refused':
+      return `${who} typed a code that didn’t match ${node}.`
+    default: {
+      const t = e.kind.replace(/[._]+/g, ' ').trim()
+      return `${t ? t[0].toUpperCase() + t.slice(1) : e.kind}, by ${e.actor}.`
+    }
+  }
 }
 
 const JOB_TONE: Record<string, HealthTone> = {
@@ -578,198 +625,207 @@ function NodeCard({
   node,
   grants,
   onChanged,
+  onRemoved,
 }: {
   node: ComputeNode
   grants: ComputeGrant[]
   onChanged: () => Promise<void>
+  onRemoved: (name: string) => void
 }): React.JSX.Element {
-  const { busy, failure, run } = useAction(onChanged)
-  const [typedSas, setTypedSas] = useState('')
+  const { busy, failure, run, fail } = useAction(onChanged)
   const [renaming, setRenaming] = useState(false)
   const [newName, setNewName] = useState(node.name)
+  const [more, setMore] = useState(false)
+  const [typedSas, setTypedSas] = useState('')
   const dot = nodeDot(node)
   const offer = node.offer
   const tools = offer?.tools ? Object.entries(offer.tools) : []
   const features = Array.isArray(offer?.features) ? offer.features : []
-  const tiers = tierCountsLine(node.queueTiers)
-  const describe = osLine(node.os, node.arch)
+  const tiers = tierWords(node.queueTiers)
+  const pending = node.state === 'pending'
+  const paused = node.controllerPause !== null && node.controllerPause !== undefined
 
   const remove = async (): Promise<void> => {
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: `Remove ${node.name}?`,
+      title: `Remove ${node.name} from this server?`,
       message:
-        'It stops taking jobs from this server, and its queued and running jobs are cancelled. To use it again it has to enroll again.',
+        node.running > 0
+          ? `Its ${node.running} running ${node.running === 1 ? 'job stops' : 'jobs stop'} now and queued jobs are cancelled. To use it again, pair it again.`
+          : 'Its queued jobs are cancelled. To use it again, pair it again.',
       confirmLabel: 'Remove',
       destructive: true,
     })
     if (!ok) return
-    await run(`Couldn’t remove ${node.name}.`, () => removeComputeNode(node.name))
+    const out = await run(`Couldn’t remove ${node.name}.`, 'remove a machine', () => removeComputeNode(node.name))
+    if (out) onRemoved(node.name)
   }
 
   const saveRename = async (): Promise<void> => {
     const name = newName.trim()
-    const out = await run(`Couldn’t rename ${node.name}.`, async () => {
-      if (!validNodeName(name)) throw new Error(NAME_RULE)
-      return renameComputeNode(node.name, name)
-    })
+    if (!validNodeName(name)) {
+      fail(own('That name won’t work.', NAME_RULE))
+      return
+    }
+    const out = await run(`Couldn’t rename ${node.name}.`, 'rename a machine', () => renameComputeNode(node.name, name))
     if (out) setRenaming(false)
   }
 
+  const menu: OverflowMenuItem[] = [
+    ...(pending
+      ? []
+      : [
+          {
+            id: 'drain',
+            label: 'Finish jobs, then stop',
+            hint: 'Running jobs finish; it takes no new ones until you resume it.',
+            disabled: busy || node.controllerPause === 'draining',
+            onSelect: () => void run(`Couldn’t stop ${node.name} after its jobs.`, 'pause a machine', () => pauseComputeNode(node.name, 'drain')),
+          },
+          {
+            id: 'rename',
+            label: 'Rename…',
+            onSelect: () => {
+              setNewName(node.name)
+              setRenaming(true)
+            },
+          },
+        ]),
+    { id: 'remove', label: 'Remove from this server…', danger: true, group: !pending, disabled: busy, onSelect: () => void remove() },
+  ]
+
   return (
-    <SettingsGroup card title={node.name} badge={<NodeStatus dot={dot} />} hint={describe || undefined} testId={`compute-node-${node.name}`}>
-      {node.state === 'pending' ? (
-        <SettingRow
-          label="Confirm this machine"
-          hint={
-            <>
-              Type the 6-digit code {node.name} shows.
-              {node.sas ? (
-                <>
-                  {' '}It should match <span className="font-mono text-[var(--color-text-primary)]">{displaySas(node.sas)}</span>.
-                </>
-              ) : null}
-            </>
-          }
-        >
-          <Input
-            value={typedSas}
-            onChange={(e) => setTypedSas(e.target.value)}
-            placeholder="123 456"
-            aria-label={`Code shown on ${node.name}`}
-            className="w-32 font-mono"
-          />
-          <Button
-            variant="accent"
-            disabled={busy || typedSas.trim().length === 0}
-            onClick={() => void run(`Couldn’t confirm ${node.name}.`, () => confirmComputeNode(node.name, typedSas.trim()))}
-          >
-            Confirm
-          </Button>
-        </SettingRow>
-      ) : (
-        <>
-          <SettingRow
-            label="Jobs"
-            hint={
-              <>
+    <section data-testid={`compute-node-${node.name}`} aria-label={node.name}>
+      <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
+        <div className="px-4 py-3 flex items-start justify-between gap-6">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <h3 className="type-heading text-[var(--color-text-primary)]">{node.name}</h3>
+              <NodeStatus dot={dot} />
+            </div>
+            <p className={SETTING_ROW_HINT}>
+              {[osLine(node.os, node.arch), offer ? hardwareLine(formatCores(offer.caps.cpu_millis), offer.caps.mem_bytes, offer.free.disk_free_bytes) : null]
+                .filter(Boolean)
+                .join(' · ')}
+            </p>
+            {pending ? null : (
+              <p className={SETTING_ROW_HINT}>
                 {node.running} running · {node.queued} queued
                 {tiers ? (
                   <>
-                    {' · '}
-                    <span data-testid="compute-node-tiers">queued: {tiers}</span>
+                    {' '}
+                    (<span data-testid="compute-node-tiers">{tiers}</span>)
                   </>
                 ) : null}
                 {' · '}last seen {formatRelativeTime(node.lastSeen, nowSec())}
-                {node.controllerPause ? (
-                  <span className="block">
-                    {node.controllerPause === 'paused' ? 'Paused' : 'Finishing its jobs'} here: this server sends it no new jobs.
-                  </span>
-                ) : null}
-                {offer && !offer.available && offer.unavailable.length > 0 ? (
-                  <span className="block text-[var(--color-status-warn-text)]">Not taking jobs: {offer.unavailable.join(', ')}</span>
-                ) : null}
-              </>
-            }
-          >
-            <Button
-              disabled={busy || node.controllerPause === 'paused'}
-              title="Send it no new jobs; running ones keep going"
-              onClick={() => void run(`Couldn’t pause ${node.name}.`, () => pauseComputeNode(node.name, 'pause'))}
-            >
-              Pause
-            </Button>
-            <Button
-              disabled={busy || node.controllerPause === 'draining'}
-              title="Let running jobs finish, then take no more"
-              onClick={() => void run(`Couldn’t drain ${node.name}.`, () => pauseComputeNode(node.name, 'drain'))}
-            >
-              Drain
-            </Button>
-            <Button
-              disabled={busy || node.controllerPause === null}
-              onClick={() => void run(`Couldn’t resume ${node.name}.`, () => pauseComputeNode(node.name, 'resume'))}
-            >
-              Resume
-            </Button>
-          </SettingRow>
-          {offer || tools.length > 0 || features.length > 0 || node.host || node.packages || node.rebootPending ? (
+              </p>
+            )}
+            {paused ? (
+              <p className={SETTING_ROW_HINT}>
+                {node.controllerPause === 'paused' ? 'Paused' : 'Finishing its jobs'}: this server sends it no new jobs until you resume it.
+              </p>
+            ) : null}
+            {offer && !offer.available && offer.unavailable.length > 0 ? (
+              <p className="type-hint text-[var(--color-status-warn-text)] mt-0.5">Not taking jobs right now: {offer.unavailable.join(', ')}.</p>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {pending ? null : paused ? (
+              <Button variant="accent" disabled={busy} onClick={() => void run(`Couldn’t resume ${node.name}.`, 'resume a machine', () => pauseComputeNode(node.name, 'resume'))}>
+                Resume
+              </Button>
+            ) : (
+              <Button disabled={busy} onClick={() => void run(`Couldn’t pause ${node.name}.`, 'pause a machine', () => pauseComputeNode(node.name, 'pause'))}>
+                Pause
+              </Button>
+            )}
+            <OverflowMenu items={menu} label={`More actions for ${node.name}`} />
+          </div>
+        </div>
+
+        {pending ? (
+          node.sas ? (
             <SettingRow
-              label="What it offers"
-              below={<NodePackagesSummary node={node} />}
-              hint={
+              label={
                 <>
-                  {offer ? (
-                    <span className="block">
-                      {hardwareLine(formatCores(offer.caps.cpu_millis), offer.caps.mem_bytes, offer.free.disk_free_bytes)}
-                      {offer.caps.hard ? '' : ' · limits not enforced'}
-                    </span>
-                  ) : null}
-                  {tools.length > 0 ? (
-                    <span className="block">
-                      {tools.map(([name, ver]) => `${name} ${ver}`).join(' · ')}
-                    </span>
-                  ) : null}
-                  {features.length > 0 ? (
-                    <span className="block" data-testid="compute-node-features">
-                      [{features.join(', ')}]
-                    </span>
-                  ) : null}
+                  Does {node.name} show <span className="tabular-nums text-[var(--color-text-primary)]">{displaySas(node.sas)}</span>?
                 </>
               }
+              hint="Compare it with the code on the machine’s screen. If they differ, don’t confirm: remove it instead."
             >
-              {null}
+              <Button
+                variant="accent"
+                disabled={busy}
+                onClick={() => void run(`Couldn’t confirm ${node.name}.`, 'confirm a machine', () => confirmComputeNode(node.name, (node.sas ?? '').replace(/\s+/g, '')))}
+              >
+                Yes, that’s it
+              </Button>
             </SettingRow>
-          ) : null}
+          ) : (
+            <SettingRow label="Confirm this machine" hint={`Type the 6-digit code ${node.name} shows.`}>
+              <Input value={typedSas} onChange={(e) => setTypedSas(e.target.value)} placeholder="123 456" aria-label={`Code shown on ${node.name}`} className="w-32" />
+              <Button
+                variant="accent"
+                disabled={busy || typedSas.trim().length === 0}
+                onClick={() => void run(`Couldn’t confirm ${node.name}.`, 'confirm a machine', () => confirmComputeNode(node.name, typedSas.replace(/\s+/g, '')))}
+              >
+                Confirm
+              </Button>
+            </SettingRow>
+          )
+        ) : null}
+
+        {renaming ? (
+          <SettingRow label="New name" hint="Agents use this name to choose the machine.">
+            <Input value={newName} onChange={(e) => setNewName(e.target.value)} aria-label={`New name for ${node.name}`} className="w-44" />
+            <Button variant="accent" disabled={busy} onClick={() => void saveRename()}>
+              Save
+            </Button>
+            <Button variant="ghost" onClick={() => setRenaming(false)}>
+              Cancel
+            </Button>
+          </SettingRow>
+        ) : null}
+
+        {pending ? null : <GrantsBlock node={node} grants={grants} onChanged={onChanged} />}
+
+        {pending ? null : (
           <SettingRow
-            label="Name"
-            hint="Agents use this name to choose the machine."
+            label="Tools, sharing and health"
+            hint="What it has installed, other servers that use it, and its updates."
             below={
-              renaming ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input value={newName} onChange={(e) => setNewName(e.target.value)} aria-label={`New name for ${node.name}`} className={SETTING_FIELD_WIDTH} />
-                  <Button variant="accent" disabled={busy} onClick={() => void saveRename()}>
-                    Save
-                  </Button>
-                  <Button variant="ghost" onClick={() => setRenaming(false)}>
-                    Cancel
-                  </Button>
+              more ? (
+                <div className="space-y-3" data-testid={`compute-node-more-${node.name}`}>
+                  {tools.length > 0 || features.length > 0 ? (
+                    <p className="type-hint text-[var(--color-text-secondary)]">
+                      {tools.map(([name, ver]) => `${name} ${ver}`).join(' · ')}
+                      {features.length > 0 ? (
+                        <span className="block" data-testid="compute-node-features">
+                          [{features.join(', ')}]
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
+                  <NodePackagesSummary node={node} />
+                  <NodeSharingPanel node={node} />
+                  {/* Another server owns a tenant node: its admin is that server's (V52). */}
+                  {node.role === 'tenant' ? null : <NodeAdminPanel node={node.name} defaultOpen />}
                 </div>
               ) : undefined
             }
           >
-            {renaming ? null : (
-              <Button
-                onClick={() => {
-                  setNewName(node.name)
-                  setRenaming(true)
-                }}
-              >
-                Rename
-              </Button>
-            )}
+            <Button variant="quiet" aria-expanded={more} onClick={() => setMore((v) => !v)}>
+              {more ? 'Hide' : 'Show'}
+            </Button>
           </SettingRow>
-          <GrantsBlock node={node} grants={grants} onChanged={onChanged} />
-          <div className="px-4 py-3 empty:hidden">
-            <NodeSharingPanel node={node} />
+        )}
+
+        {failure ? (
+          <div className="px-4 py-3">
+            <ActionError failure={failure} />
           </div>
-          {/* Another server owns a tenant node: its admin is that server's (V52). */}
-          {node.role === 'tenant' ? null : (
-            <div className="px-4 py-3 empty:hidden">
-              <NodeAdminPanel node={node.name} />
-            </div>
-          )}
-        </>
-      )}
-      <SettingRow
-        label="Remove from this server"
-        hint="Its queued and running jobs are cancelled. To use it again it has to enroll again."
-        below={failure ? <Failure failure={failure} /> : undefined}
-      >
-        <Button variant="danger-quiet" disabled={busy} onClick={() => void remove()}>
-          Remove…
-        </Button>
-      </SettingRow>
-    </SettingsGroup>
+        ) : null}
+      </Surface>
+    </section>
   )
 }
 
@@ -784,19 +840,14 @@ function GrantsBlock({
 }): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   const { busy, failure, run } = useAction(onChanged)
-  const [pick, setPick] = useState('')
-  const [limits, setLimits] = useState<Record<keyof GrantLimits, string>>({
-    maxJobSecs: '',
-    maxDiskGb: '',
-    maxParallel: '',
-    maxQueued: '',
-  })
+  const [adding, setAdding] = useState(false)
   const [note, setNote] = useState<string | null>(null)
 
   /** One gesture: the grant as it is, with `allowCi` changed (grants/set
    *  resets any limit left out, so the current ones go along). */
   const setAllowCi = async (g: ComputeGrant, allowCi: boolean): Promise<void> => {
-    await run(`Couldn’t change CI jobs for ${g.workspace}.`, () =>
+    setNote(null)
+    await run(`Couldn’t change CI jobs for ${g.workspace}.`, 'allow CI jobs', () =>
       setComputeGrant(node.name, g.workspaceId, {
         maxJobSecs: g.maxJobSecs,
         maxDiskGb: g.maxDiskGb,
@@ -807,36 +858,22 @@ function GrantsBlock({
     )
   }
 
-  const grantedIds = new Set(grants.map((g) => g.workspaceId))
-  const options = projects
-    .filter((p) => !grantedIds.has(p.id))
-    .map((p) => ({ value: p.id, label: p.name }))
-
-  const grant = async (): Promise<void> => {
-    if (!pick) return
-    const body: GrantLimits = {}
-    for (const k of Object.keys(limits) as (keyof GrantLimits)[]) {
-      const raw = limits[k].trim()
-      if (raw) body[k] = Number(raw)
-    }
-    const out = await run(`Couldn’t let that workspace use ${node.name}.`, () => setComputeGrant(node.name, pick, body))
-    if (out) {
-      setNote(out.note ?? `Done: it may use ${node.name} now.`)
-      setPick('')
-    }
-  }
-
   return (
     <div className="px-4 py-3 space-y-2" data-settings-id="compute.grants">
-      <div>
-        <div className={SETTING_ROW_LABEL}>Workspaces that may use it</div>
-        <p className={SETTING_ROW_HINT}>
-          Each one runs jobs here within these limits. Whether its agent may use compute at all is set on its Agent tab.
-        </p>
+      <div className="flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <div className={SETTING_ROW_LABEL}>Workspaces that may use it</div>
+          <p className={SETTING_ROW_HINT}>
+            {grants.length === 0
+              ? 'None yet: no workspace may send jobs here.'
+              : 'Each one sends jobs here within its limits. Whether its agent may use compute at all is set on its Agent tab.'}
+          </p>
+        </div>
+        <Button onClick={() => setAdding(true)} className="flex-shrink-0">
+          Add a workspace…
+        </Button>
       </div>
-      {grants.length === 0 ? (
-        <p className="type-hint text-[var(--color-text-secondary)]">None yet: no workspace may use this node.</p>
-      ) : (
+      {grants.length > 0 ? (
         <div className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
           {grants.map((g) => {
             const project = projects.find((p) => p.id === g.workspaceId)
@@ -848,7 +885,7 @@ function GrantsBlock({
                 <div className="min-w-0">
                   <div className="type-name text-[var(--color-text-primary)]">{name}</div>
                   <div className="type-hint text-[var(--color-text-secondary)]">
-                    Up to {Math.round(g.maxJobSecs / 60)} min a job · {g.maxDiskGb} GB disk · {g.maxParallel} at once · {g.maxQueued} queued
+                    Up to {Math.round(g.maxJobSecs / 60)} min a job · {g.maxDiskGb} GB disk · {g.maxParallel} at once · {g.maxQueued} waiting
                   </div>
                   {/* Read-only: the switch lives on the Agent tab (Rosson 2026-10-11). */}
                   <div className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-grant-switch">
@@ -865,7 +902,16 @@ function GrantsBlock({
                       <Toggle checked={g.allowCi} disabled={busy} onChange={(v) => void setAllowCi(g, v)} aria-label={`Allow CI jobs: ${name}`} />
                     </span>
                   )}
-                  <Button variant="quiet" disabled={busy} onClick={() => void run(`Couldn’t remove ${name} from ${node.name}.`, () => revokeComputeGrant(node.name, g.workspaceId))}>
+                  <Button
+                    variant="quiet"
+                    disabled={busy}
+                    onClick={() => {
+                      setNote(null)
+                      void run(`Couldn’t stop ${name} using ${node.name}.`, 'change who may use a machine', () => revokeComputeGrant(node.name, g.workspaceId)).then((out) => {
+                        if (out) setNote(`${name} may no longer use ${node.name}.`)
+                      })
+                    }}
+                  >
                     Revoke
                   </Button>
                 </div>
@@ -873,54 +919,140 @@ function GrantsBlock({
             )
           })}
         </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <SettingDropdown
-          value={pick}
-          options={options}
-          onChange={(v) => setPick(v)}
-          placeholder="Add a workspace"
-          menuAlign="left"
-          ariaLabel={`Workspace to grant ${node.name}`}
-        />
-        {(
-          [
-            ['maxJobSecs', 'Seconds a job'],
-            ['maxDiskGb', 'Disk GB'],
-            ['maxParallel', 'At once'],
-            ['maxQueued', 'Queued'],
-          ] as [keyof GrantLimits, string][]
-        ).map(([k, ph]) => (
-          <Input
-            key={k}
-            value={limits[k]}
-            onChange={(e) => setLimits((l) => ({ ...l, [k]: e.target.value.replace(/[^0-9]/g, '') }))}
-            placeholder={ph}
-            title={`${ph} (blank keeps the default)`}
-            aria-label={`${ph} for the grant`}
-            className="w-28"
-          />
-        ))}
-        <Button variant="accent" disabled={busy || !pick} onClick={() => void grant()}>
-          Grant
-        </Button>
-      </div>
+      ) : null}
       {grants.some((g) => g.allowCi !== undefined) ? (
         <p className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-grant-ci-help">
           CI jobs go ahead of every queue. Give them to CI and release workspaces, not to agents doing normal work.
         </p>
       ) : null}
       {note ? (
-        <p role="status" className="type-hint text-[var(--color-text-secondary)]">
+        <p role="status" className="type-hint text-[var(--color-status-ok-soft)]">
           {note}
         </p>
       ) : null}
-      <Failure failure={failure} />
+      <ActionError failure={failure} />
+      {adding ? (
+        <GrantDialog
+          node={node}
+          taken={new Set(grants.map((g) => g.workspaceId))}
+          onClose={() => setAdding(false)}
+          onDone={(n) => {
+            setAdding(false)
+            setNote(n)
+            void onChanged()
+          }}
+        />
+      ) : null}
     </div>
   )
 }
 
-// ── Machines: add one with an enroll code ────────────────────────────
+const LIMIT_FIELDS: { key: keyof GrantLimits; label: string; hint: string; toWire: (n: number) => number }[] = [
+  { key: 'maxJobSecs', label: 'Longest job (minutes)', hint: 'A job running longer is stopped.', toWire: (n) => n * 60 },
+  { key: 'maxDiskGb', label: 'Disk space (GB)', hint: 'Room for each job’s files.', toWire: (n) => n },
+  { key: 'maxParallel', label: 'Jobs at once', hint: 'How many of its jobs may run together.', toWire: (n) => n },
+  { key: 'maxQueued', label: 'Jobs waiting', hint: 'More than this and new jobs are refused.', toWire: (n) => n },
+]
+
+/** Let a workspace use a machine, with its limits (blank keeps the
+ *  server's default). */
+function GrantDialog({
+  node,
+  taken,
+  onClose,
+  onDone,
+}: {
+  node: ComputeNode
+  taken: Set<string>
+  onClose: () => void
+  onDone: (note: string) => void
+}): React.JSX.Element {
+  const projects = useProjectsStore((s) => s.projects)
+  const [pick, setPick] = useState('')
+  const [vals, setVals] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<ActionFailure | null>(null)
+  const options = projects.filter((p) => !taken.has(p.id)).map((p) => ({ value: p.id, label: p.name }))
+  const formId = `compute-grant-${node.name}`
+
+  const submit = async (): Promise<void> => {
+    if (!pick) return
+    const body: GrantLimits = {}
+    for (const f of LIMIT_FIELDS) {
+      const raw = (vals[f.key] ?? '').trim()
+      if (raw) body[f.key] = f.toWire(Number(raw))
+    }
+    setBusy(true)
+    setFailure(null)
+    try {
+      const out = await setComputeGrant(node.name, pick, body)
+      const name = projects.find((p) => p.id === pick)?.name ?? 'It'
+      onDone(out?.note ?? `${name} may use ${node.name} now.`)
+    } catch (err) {
+      setFailure(failureFor(`Couldn’t let that workspace use ${node.name}.`, 'choose who may use a machine', err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AccessSheet
+      title={`Let a workspace use ${node.name}`}
+      intro="It can send jobs here within these limits. Leave a limit blank to use the server’s default."
+      onClose={onClose}
+      busy={busy}
+      testId="compute-grant-dialog"
+      footer={
+        <>
+          <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="accent" size="md" type="submit" form={formId} disabled={busy || !pick}>
+            {busy ? 'Saving…' : 'Let it use this machine'}
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
+        <div>
+          <span className={DIALOG_LABEL}>Workspace</span>
+          <SettingDropdown
+            value={pick}
+            options={options}
+            onChange={(v) => setPick(v)}
+            placeholder={options.length === 0 ? 'Every workspace already may' : 'Choose a workspace'}
+            menuAlign="left"
+            ariaLabel={`Workspace to grant ${node.name}`}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          {LIMIT_FIELDS.map((f) => (
+            <Field key={f.key} label={f.label} hint={f.hint} htmlFor={`${formId}-${f.key}`}>
+              <Input
+                id={`${formId}-${f.key}`}
+                value={vals[f.key] ?? ''}
+                inputMode="numeric"
+                placeholder="Default"
+                onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value.replace(/[^0-9]/g, '') }))}
+                className={DIALOG_FIELD}
+              />
+            </Field>
+          ))}
+        </div>
+        <ActionError failure={failure} />
+      </form>
+    </AccessSheet>
+  )
+}
+
+// ── Machines: add one with a pairing code ────────────────────────────
 
 function AddNodeForm({
   list,
@@ -931,19 +1063,18 @@ function AddNodeForm({
   onChanged: () => Promise<void>
   onManage: () => void
 }): React.JSX.Element {
-  const { busy, failure, run } = useAction(onChanged)
+  const { busy, failure, run, fail, clear } = useAction(onChanged)
   const [name, setName] = useState('')
   const [code, setCode] = useState<EnrollCode | null>(null)
-  const [nameError, setNameError] = useState<string | null>(null)
 
   const make = async (): Promise<void> => {
     const n = name.trim()
     if (!validNodeName(n)) {
-      setNameError(NAME_RULE)
+      fail(own('That name won’t work.', NAME_RULE))
       return
     }
-    setNameError(null)
-    const out = await run('Couldn’t make an enroll code.', () => mintEnrollCode(n))
+    clear()
+    const out = await run('Couldn’t make a pairing code.', 'add a machine', () => mintEnrollCode(n))
     if (out) setCode(out)
   }
 
@@ -960,15 +1091,11 @@ function AddNodeForm({
     <SettingsGroup
       card
       title="Add a machine"
-      hint="Name it and make a code. Run the install command on that machine, then confirm the code it shows."
+      hint="Name it and make a pairing code. Run the install command on that machine, then confirm the code it shows."
       settingId="compute.add-node"
     >
       {!code ? (
-        <SettingRow
-          label="Machine name"
-          hint={nameError ? <span className="text-[var(--color-status-error-soft)]">{nameError}</span> : 'Lowercase letters, numbers and dashes. Agents see this name.'}
-          below={<Failure failure={failure} />}
-        >
+        <SettingRow label="Machine name" hint="Lowercase letters, numbers and dashes. Agents see this name." below={failure ? <ActionError failure={failure} /> : undefined}>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -976,39 +1103,38 @@ function AddNodeForm({
               if (e.key === 'Enter' && name.trim()) void make()
             }}
             placeholder="mini-1"
-            aria-label="New node name"
+            aria-label="Machine name"
+            aria-invalid={failure ? true : undefined}
             className="w-44"
           />
           <Button variant="accent" disabled={busy || !name.trim()} onClick={() => void make()}>
-            Make enroll code
+            Make pairing code
           </Button>
         </SettingRow>
       ) : joined && joined.state === 'active' ? (
         <div className="px-4 py-3 flex items-center justify-between gap-6" role="status" data-testid="compute-enroll-done">
           <div className="min-w-0">
             <p className="type-row text-[var(--color-status-ok-soft)]">{joined.name} is added</p>
-            <p className={SETTING_ROW_HINT}>It takes jobs from this server now. Choose which workspaces may use it in Node settings.</p>
+            <p className={SETTING_ROW_HINT}>It takes jobs from this server now. Choose which workspaces may use it in Machine settings.</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            <Button onClick={onManage}>Node settings</Button>
+            <Button onClick={onManage}>Machine settings</Button>
             <Button variant="quiet" onClick={reset}>
               Add another
             </Button>
           </div>
         </div>
       ) : joined ? (
-        <div className="px-4 py-3 flex items-center justify-between gap-6" role="status" data-testid="compute-enroll-joined">
-          <div className="min-w-0">
-            <p className={SETTING_ROW_LABEL}>{joined.name} checked in</p>
-            <p className={SETTING_ROW_HINT}>Confirm the code it shows in its row under Machines above.</p>
-          </div>
+        <div className="px-4 py-3" role="status" data-testid="compute-enroll-joined">
+          <p className={SETTING_ROW_LABEL}>{joined.name} checked in</p>
+          <p className={SETTING_ROW_HINT}>Check its code in its row under Machines above.</p>
         </div>
       ) : (
         <div className="px-4 py-3 space-y-3" data-testid="compute-enroll-code">
           <div className="flex items-start justify-between gap-6">
             <div className="min-w-0">
               <p className={SETTING_ROW_LABEL}>
-                Code for <span className="font-medium">{code.name}</span>
+                Pairing code for <span className="font-medium">{code.name}</span>
               </p>
               <p className={SETTING_ROW_HINT}>
                 Run one of these on {code.name}; the code {inFuture(code.expiresAt)}. When it starts it shows a 6-digit code and
@@ -1021,14 +1147,14 @@ function AddNodeForm({
           </div>
           <CopyBox label="Install on Linux" text={code.install.linux} />
           <CopyBox label="Install on macOS" text={code.install.macos} />
-          <CopyBox label="Already installed: enroll only" text={code.install.enrollOnly} />
-          <CopyBox label="Enroll code" text={code.enroll} />
+          <CopyBox label="Already installed: pair only" text={code.install.enrollOnly} />
+          <CopyBox label="Pairing code" text={code.enroll} />
         </div>
       )}
       {waiting.map((c) => (
         <div key={c.name} className="px-4 py-3" data-testid={`compute-waiting-${c.name}`}>
           <p className={SETTING_ROW_LABEL}>Waiting for {c.name} to join</p>
-          <p className={SETTING_ROW_HINT}>Its enroll code {inFuture(c.expiresAt)}.</p>
+          <p className={SETTING_ROW_HINT}>Its pairing code {inFuture(c.expiresAt)}.</p>
         </div>
       ))}
     </SettingsGroup>
@@ -1043,6 +1169,8 @@ function JobsPart({
   jobs,
   events,
   sideErrors,
+  nodeName,
+  wsName,
   onRetry,
 }: {
   hold: React.ReactNode
@@ -1050,6 +1178,8 @@ function JobsPart({
   jobs: ComputeJob[]
   events: ComputeEvent[]
   sideErrors: { grants?: string; jobs?: string; events?: string }
+  nodeName: (id: string | null | undefined) => string | null
+  wsName: (id: string | null | undefined) => string | null
   onRetry: () => Promise<void>
 }): React.JSX.Element {
   if (hold || !list) return <SettingsGroup card title="Recent jobs" state={hold} />
@@ -1078,13 +1208,13 @@ function JobsPart({
             <p className={SETTING_ROW_LABEL}>
               {c.submitter} has Priority: {c.jobs} {c.jobs === 1 ? 'job' : 'jobs'}
             </p>
-            <p className={SETTING_ROW_HINT}>Priority jobs go ahead of normal work on every node.</p>
+            <p className={SETTING_ROW_HINT}>Priority jobs go ahead of normal work on every machine.</p>
           </div>
         ))}
         {jobs.map((j) => (
           <div key={j.id} className={`px-4 py-3 flex items-start justify-between gap-6 ${SETTING_LIST_ROW_HOVER}`} data-testid={`compute-job-${j.short}`}>
             <div className="min-w-0">
-              <div className="type-row font-mono text-[var(--color-text-primary)] truncate">{j.argv.join(' ')}</div>
+              <div className="type-row text-[var(--color-text-primary)] truncate">{j.argv.join(' ')}</div>
               <div className={SETTING_ROW_HINT}>
                 {j.node ? `On ${j.node}` : 'Not placed yet'} · for {j.workspace} · {formatRelativeTime(j.createdAt, nowSec())}
                 {j.endedAt ? `, ended ${formatRelativeTime(j.endedAt, nowSec())}` : ''}
@@ -1097,10 +1227,10 @@ function JobsPart({
                 </div>
               ) : null}
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
-              {tierTag(j.tier) ? (
-                <span className="type-hint font-medium text-[var(--color-text-primary)]" data-testid="compute-job-tier" title={j.tierAsked ? `Asked for ${j.tierAsked}` : undefined}>
-                  {tierTag(j.tier)}
+            <div className="flex items-center gap-3 flex-shrink-0">
+              {tierWord(j.tier) ? (
+                <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-job-tier" title={j.tierAsked ? `Asked for ${j.tierAsked}` : undefined}>
+                  {tierWord(j.tier)}
                 </span>
               ) : j.tierAsked ? (
                 <span className="type-hint text-[var(--color-text-secondary)]" data-testid="compute-job-tier" title={`Asked for ${j.tierAsked}`}>
@@ -1119,7 +1249,7 @@ function JobsPart({
       <SettingsGroup
         card
         title="Audit"
-        hint="Who changed what on your compute nodes."
+        hint="Who changed what on your machines."
         state={
           sideErrors.events ? (
             <SettingsLoadState kind="error" title="Couldn’t load the audit lines" detail={sideErrors.events} action={retry}>
@@ -1134,12 +1264,7 @@ function JobsPart({
       >
         {events.map((e) => (
           <div key={e.id} className={`px-4 py-3 flex items-start justify-between gap-6 ${SETTING_LIST_ROW_HOVER}`}>
-            <div className="min-w-0">
-              <div className={SETTING_ROW_LABEL}>
-                {eventWords(e.kind)} <span className="text-[var(--color-text-secondary)]">by {e.actor}</span>
-              </div>
-              {eventDetail(e.detail) ? <div className={`${SETTING_ROW_HINT} break-words`}>{eventDetail(e.detail)}</div> : null}
-            </div>
+            <p className={`${SETTING_ROW_LABEL} min-w-0`}>{eventSentence(e, nodeName, wsName)}</p>
             <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap flex-shrink-0">{formatRelativeTime(e.at, nowSec())}</span>
           </div>
         ))}
@@ -1202,8 +1327,8 @@ function ThisComputerPart({
     state === 'loading' && !status ? (
       <SettingsLoadState kind="loading" title="Checking this computer…" />
     ) : state === 'disabled' ? (
-      <SettingsLoadState kind="empty" title="Compute nodes are off on this computer">
-        This computer’s own K2 has them off. Switch this window to This computer, then turn on Use compute nodes on the
+      <SettingsLoadState kind="empty" title="Compute is off on this computer">
+        This computer’s own K2 has compute off. Switch this window to This computer, then turn on Let agents use your machines on the
         Machines tab.
       </SettingsLoadState>
     ) : state === 'error' && !status ? (
@@ -1222,8 +1347,8 @@ function ThisComputerPart({
       >
         {status && (!isOn || flowActive) ? (
           <>
-            <SettingSwitchRow control={<Toggle checked={sheetOpen} onChange={setSheetOpen} aria-label="Make this computer a compute node" />}>
-              <div className={SETTING_ROW_LABEL}>Make this computer a compute node</div>
+            <SettingSwitchRow control={<Toggle checked={sheetOpen} onChange={setSheetOpen} aria-label="Let a server run jobs on this computer" />}>
+              <div className={SETTING_ROW_LABEL}>Let a server run jobs on this computer</div>
               <p className={SETTING_ROW_HINT}>
                 Jobs run as a separate, limited user. They can’t read your files unless your files are readable by everyone.
               </p>
@@ -1286,11 +1411,11 @@ export function RemoteAdminToggles({
   return (
     <div className="divide-y divide-[var(--color-border)]" data-testid="compute-remote-admin">
       <SettingSwitchRow
-        control={<Toggle checked={keepUpdated} disabled={disabled} onChange={onKeepUpdated} aria-label="Let K2 keep this node updated and healthy" />}
+        control={<Toggle checked={keepUpdated} disabled={disabled} onChange={onKeepUpdated} aria-label="Let K2 keep this computer updated and healthy" />}
       >
-        <div className={SETTING_ROW_LABEL}>Let K2 keep this node updated and healthy</div>
+        <div className={SETTING_ROW_LABEL}>Let K2 keep this computer updated and healthy</div>
         <p className={SETTING_ROW_HINT}>
-          K2 installs signed node updates, rolls back a bad one, and can pause jobs or lower limits. Raising a limit waits for you.
+          K2 installs signed updates to its job runner, rolls back a bad one, and can pause jobs or lower limits. Raising a limit waits for you.
         </p>
       </SettingSwitchRow>
       {keepUpdated ? (
@@ -1306,9 +1431,9 @@ export function RemoteAdminToggles({
 }
 
 const LEVEL_WORD: Record<RemoteAdminLevel, string> = {
-  off: 'K2 can’t update this node',
-  policy: 'K2 keeps this node updated and healthy',
-  full: 'K2 keeps this node updated and may run admin scripts you approve',
+  off: 'K2 can’t update this computer',
+  policy: 'K2 keeps this computer updated and healthy',
+  full: 'K2 keeps this computer updated and may run admin scripts you approve',
 }
 
 /** The switches once the node is on: they show the node's level and change
@@ -1320,7 +1445,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
   const keepUpdated = level === 'policy' || level === 'full'
   const change = async (to: RemoteAdminLevel): Promise<void> => {
     if (to === level) return
-    const out = await run('Couldn’t change what K2 may do on this node.', () => setLocalRemoteAdmin(to))
+    const out = await run('Couldn’t change what K2 may do on this computer.', 'change it', () => setLocalRemoteAdmin(to))
     if (out) setResult(out)
   }
   return (
@@ -1339,7 +1464,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
         {!keepUpdated ? (
           <div className="space-y-2" data-testid="compute-cant-update">
             <p className="type-hint text-[var(--color-status-warn-text)]">
-              K2 can’t update this node. Turn the first switch on, or run this once in a terminal as an admin:
+              K2 can’t update this computer. Turn the first switch on, or run this once in a terminal as an admin:
             </p>
             {status.remoteAdminCommand ? <CopyBox label="Admin command" text={status.remoteAdminCommand} /> : null}
           </div>
@@ -1350,7 +1475,7 @@ function RemoteAdminPart({ status, onChanged }: { status: LocalStatus; onChanged
             {result.message}
           </p>
         ) : null}
-        <Failure failure={failure} />
+        <ActionError failure={failure} />
       </div>
     </div>
   )
@@ -1370,7 +1495,7 @@ function EnableResultBox({ result }: { result: LocalEnableResult }): React.JSX.E
       {result.message ? <p className="type-hint text-[var(--color-text-secondary)]">{result.message}</p> : null}
       {result.sas ? (
         <p className="type-hint text-[var(--color-text-secondary)]">
-          Code: <span className="font-mono text-[var(--color-text-primary)]">{displaySas(result.sas)}</span>
+          Code: <span className="tabular-nums text-[var(--color-text-primary)]">{displaySas(result.sas)}</span>
         </p>
       ) : null}
     </div>
@@ -1383,7 +1508,7 @@ function EnrollProgress({ status }: { status: LocalStatus }): React.JSX.Element 
   if (status.enrollRequestPending) {
     return (
       <div className="px-4 py-3" data-testid="compute-enroll-pending" role="status">
-        <p className="type-hint text-[var(--color-text-secondary)]">Waiting for the node to answer the enroll request…</p>
+        <p className="type-hint text-[var(--color-text-secondary)]">Waiting for the server to answer…</p>
       </div>
     )
   }
@@ -1391,10 +1516,10 @@ function EnrollProgress({ status }: { status: LocalStatus }): React.JSX.Element 
     return (
       <div className="px-4 py-3" data-testid="compute-enroll-failed" role="alert">
         <p className="type-hint text-[var(--color-status-error-soft)]">
-          Joining{r.name ? ` as ${r.name}` : ''} didn’t work ({formatRelativeTime(r.at, nowSec())}). Check the server address and
-          code, then try again.
+          Pairing{r.name ? ` as ${r.name}` : ''} didn’t work ({formatRelativeTime(r.at, nowSec())}). Check the server address and
+          pairing code, then try again.
         </p>
-        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">The node said: {r.message ?? 'no reason given'}.</p>
+        <p className="type-hint text-[var(--color-text-muted)] mt-0.5">The server said: {r.message ?? 'no reason given'}.</p>
       </div>
     )
   }
@@ -1441,15 +1566,15 @@ function EnableSheet({
   const finishing = useRef(false)
 
   const nodeFp = status.node?.node_fp ?? null
-  const JOIN_FAILED = 'Couldn’t make this computer a node.'
+  const JOIN_FAILED = 'Couldn’t pair this computer.'
 
   const submitCode = async (): Promise<void> => {
-    const out = await run(JOIN_FAILED, async () => {
+    const out = await run(JOIN_FAILED, 'pair it', async () => {
       const c = controller.trim()
       const e = enroll.trim()
       const n = name.trim()
       if (!/^https?:\/\//.test(c)) throw new Error('The server address starts with https://, like https://alex.k2.dev')
-      if (!e) throw new Error('Paste the enroll code from the server’s Compute page (Add a machine)')
+      if (!e) throw new Error('Paste the pairing code from the server’s Compute page (Add a machine)')
       if (!validNodeName(n)) throw new Error(NAME_RULE)
       return enableLocalNode({ controller: c, enroll: e, name: n, privateHome, remoteAdmin })
     })
@@ -1470,7 +1595,7 @@ function EnableSheet({
       const rows = await listAccountServers(token)
       setPhase({ kind: 'list', servers: rows.map((r) => r.label) })
     } catch (err) {
-      fail('Couldn’t read your servers.', reasonOf(err))
+      fail(failureFor('Couldn’t read your servers.', 'pair it', err))
       setPhase({ kind: 'idle' })
       setMode('code')
     }
@@ -1499,12 +1624,12 @@ function EnableSheet({
         if (!ticket.ok) {
           if (ticket.unavailable) fallBackToCode(sub, ticket.message)
           else {
-            fail(`Couldn’t pair with ${sub}.k2.dev.`, ticket.message)
+            fail({ what: `Couldn’t pair with ${sub}.k2.dev.`, next: 'Try again, or use a pairing code.', reason: ticket.message })
             setPhase({ kind: 'list', servers: [sub] })
           }
           return
         }
-        const out = await run(JOIN_FAILED, () =>
+        const out = await run(JOIN_FAILED, 'pair it', () =>
           enableLocalNode({ controller: `https://${sub}.k2.dev`, ticket: ticket.ticket, name: n, privateHome, remoteAdmin }),
         )
         if (out) onResult(out)
@@ -1519,7 +1644,7 @@ function EnableSheet({
   const pickServer = async (sub: string): Promise<void> => {
     const n = name.trim()
     if (!validNodeName(n)) {
-      fail('Name this computer first.', NAME_RULE)
+      fail(own('Name this computer first.', NAME_RULE))
       return
     }
     clear()
@@ -1532,7 +1657,7 @@ function EnableSheet({
     // after `needs_root` the polled status brings it once the admin ran the
     // command.
     setPhase({ kind: 'installing', sub })
-    const out = await run(JOIN_FAILED, () => enableLocalNode({ name: n, privateHome, remoteAdmin }))
+    const out = await run(JOIN_FAILED, 'pair it', () => enableLocalNode({ name: n, privateHome, remoteAdmin }))
     if (!out) {
       setPhase({ kind: 'idle' })
       return
@@ -1557,26 +1682,26 @@ function EnableSheet({
   return (
     <div className="divide-y divide-[var(--color-border)]" data-testid="compute-enable-sheet">
       <SettingRow label="Name for this computer" hint="Agents see this name when they pick a machine." field>
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="mini-1" aria-label="Node name" className="w-full" />
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="mini-1" aria-label="Name for this computer" className="w-full" />
       </SettingRow>
       <SettingRow
         stack
         label="Which server may use it?"
-        hint={mode === 'code' ? 'Paste the server’s address and the enroll code from its Compute page.' : 'Pick one of the servers on your k2.dev account.'}
+        hint={mode === 'code' ? 'Paste the server’s address and the pairing code from its Compute page (Add a machine).' : 'Pick one of the servers on your k2.dev account.'}
         below={
           <div className="space-y-2">
             {notice ? <p className="type-hint text-[var(--color-text-secondary)]">{notice}</p> : null}
             {mode === 'code' ? (
               <div className="flex flex-col gap-2">
                 <Input value={controller} onChange={(e) => setController(e.target.value)} placeholder="https://alex.k2.dev" aria-label="Server address" className="w-80 max-w-full" />
-                <Input value={enroll} onChange={(e) => setEnroll(e.target.value)} placeholder="Enroll code" aria-label="Enroll code" className="w-80 max-w-full font-mono" />
+                <Input value={enroll} onChange={(e) => setEnroll(e.target.value)} placeholder="Pairing code" aria-label="Pairing code" className="w-80 max-w-full" />
               </div>
             ) : (
               <div className="space-y-1">
                 {phase.kind === 'loading' ? <p className="type-hint text-[var(--color-text-secondary)]">Reading your servers…</p> : null}
                 {phase.kind === 'signed_out' ? (
                   <p className="type-hint text-[var(--color-text-secondary)]">
-                    Sign in to your k2.dev account first, or use an enroll code. <SettingsLink to="k2-connect">Open Tunnel</SettingsLink>
+                    Sign in to your k2.dev account first, or use a pairing code. <SettingsLink to="k2-connect">Open Tunnel</SettingsLink>
                   </p>
                 ) : null}
                 {phase.kind === 'list' ? (
@@ -1593,7 +1718,7 @@ function EnableSheet({
                   )
                 ) : null}
                 {phase.kind === 'installing' ? (
-                  <p className="type-hint text-[var(--color-text-secondary)]" role="status">Installing the node service, then pairing with {phase.sub}.k2.dev…</p>
+                  <p className="type-hint text-[var(--color-text-secondary)]" role="status">Installing the job runner, then pairing with {phase.sub}.k2.dev…</p>
                 ) : null}
                 {phase.kind === 'working' ? <p className="type-hint text-[var(--color-text-secondary)]" role="status">Pairing with {phase.sub}.k2.dev…</p> : null}
               </div>
@@ -1602,7 +1727,7 @@ function EnableSheet({
         }
       >
         <Button variant={mode === 'code' ? 'accent' : 'quiet'} aria-pressed={mode === 'code'} onClick={() => setMode('code')}>
-          Enter an enroll code
+          Enter a pairing code
         </Button>
         {oneClickAllowed ? (
           <Button variant={mode === 'account' ? 'accent' : 'quiet'} aria-pressed={mode === 'account'} onClick={() => void openAccount()}>
@@ -1619,7 +1744,7 @@ function EnableSheet({
               {homeCheck.readable.length > 0 ? (
                 <span className="block">
                   Readable by everyone, so jobs could read them:
-                  <span className="block font-mono" data-testid="compute-home-readable">
+                  <span className="block" data-testid="compute-home-readable">
                     {homeCheck.readable.map((p) => (
                       <span key={p} className="block">
                         {p}
@@ -1644,11 +1769,11 @@ function EnableSheet({
           {mode === 'code' ? (
             <div className="flex justify-end">
               <Button variant="accent" disabled={busy} onClick={() => void submitCode()}>
-                Make this computer a node
+                Pair this computer
               </Button>
             </div>
           ) : null}
-          <Failure failure={failure} />
+          <ActionError failure={failure} />
         </div>
       ) : null}
     </div>
@@ -1672,7 +1797,7 @@ const CONTROL_WORD: Record<string, string> = {
   active: 'Taking jobs',
   paused: 'Paused',
   stopped: 'Paused',
-  draining: 'Finishing its jobs, then pausing',
+  draining: 'Finishing its jobs, then stopping',
 }
 
 function LocalNodePanel({
@@ -1707,17 +1832,17 @@ function LocalNodePanel({
   const stop = async (): Promise<void> => {
     const running = node?.running ?? []
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Stop being a compute node?',
+      title: 'Stop running jobs on this computer?',
       message:
         running.length > 0
           ? `${running.length === 1 ? 'This job' : `These ${running.length} jobs`} running here stop now: ${running.join(', ')}. ` +
-            'This computer stops taking jobs, and the node service, its user and its files are removed.'
-          : 'No jobs are running here. This computer stops taking jobs, and the node service, its user and its files are removed.',
+            'This computer stops taking jobs, and the job runner, its user and its files are removed. To run jobs again, pair it again.'
+          : 'No jobs are running here. This computer stops taking jobs, and the job runner, its user and its files are removed. To run jobs again, pair it again.',
       confirmLabel: 'Stop',
       destructive: true,
     })
     if (!ok) return
-    const out = await run('Couldn’t stop this computer being a node.', () => disableLocalNode())
+    const out = await run('Couldn’t stop running jobs on this computer.', 'change it', () => disableLocalNode())
     if (out) setDisableResult(out)
   }
 
@@ -1725,10 +1850,10 @@ function LocalNodePanel({
     <div className="divide-y divide-[var(--color-border)]" data-testid="compute-local-node">
       <div className="px-4 py-3 flex items-start justify-between gap-6">
         <div className="min-w-0">
-          <div className="type-name text-[var(--color-text-primary)]">{node?.name ?? 'Node service installed'}</div>
+          <div className="type-name text-[var(--color-text-primary)]">{node?.name ?? 'Job runner installed'}</div>
           <div className={SETTING_ROW_HINT}>
             {node?.controller ? `Runs jobs for ${controllerHost(node.controller) || node.controller}` : 'Not paired with a server yet'}
-            {node?.route ? ` · connected ${node.route === 'relay' ? 'through the relay' : `by ${node.route}`}` : ''}
+            {node?.route ? (node.route === 'relay' ? ', reached through K2’s relay.' : `, reached directly (${node.route}).`) : '.'}
           </div>
           {node?.last_error ? <p className="type-hint text-[var(--color-status-warn-text)] mt-1">{node.last_error}</p> : null}
           {node?.unavailable && node.unavailable.length > 0 ? (
@@ -1744,7 +1869,7 @@ function LocalNodePanel({
           testId="compute-local-sas"
           hint={
             <span>
-              Code <span className="font-mono text-[var(--color-text-primary)]">{displaySas(node.sas)}</span>: confirm it on{' '}
+              Code <span className="tabular-nums text-[var(--color-text-primary)]">{displaySas(node.sas)}</span>: confirm it on{' '}
               {node.controller ?? 'the server'}.
             </span>
           }
@@ -1753,7 +1878,7 @@ function LocalNodePanel({
             <Button
               variant="accent"
               disabled={busy}
-              onClick={() => void run('Couldn’t confirm this computer.', () => confirmComputeNode(node.name as string, node.sas as string))}
+              onClick={() => void run('Couldn’t confirm this computer.', 'confirm a machine', () => confirmComputeNode(node.name as string, node.sas as string))}
             >
               Confirm
             </Button>
@@ -1762,29 +1887,27 @@ function LocalNodePanel({
       ) : null}
 
       <SettingRow
-        label="Running here"
+        label="Jobs running here"
         hint={
-          node?.running && node.running.length > 0 ? (
-            <span className="font-mono">{node.running.join(', ')}</span>
-          ) : (
-            'No jobs are running on this computer.'
-          )
+          node?.running && node.running.length > 0
+            ? `${node.running.length === 1 ? 'One job is' : `${node.running.length} jobs are`} running on this computer now (${node.running.join(', ')}).`
+            : 'No jobs are running on this computer now.'
         }
       >
         {null}
       </SettingRow>
 
-      <SettingRow label="Your say" hint={`Now: ${CONTROL_WORD[control] ?? control}. Pausing never loses a job; it waits until you resume.`}>
-        <Button disabled={busy} onClick={() => void run('Couldn’t pause this computer.', () => pauseLocalNode(false))}>
+      <SettingRow label="Taking jobs" hint={`Now: ${CONTROL_WORD[control] ?? control}. Pausing never loses a job; it waits until you resume.`}>
+        <Button disabled={busy} onClick={() => void run('Couldn’t pause this computer.', 'pause it', () => pauseLocalNode(false))}>
           Pause after current jobs
         </Button>
-        <Button disabled={busy} onClick={() => void run('Couldn’t pause this computer.', () => pauseLocalNode(true))}>
+        <Button disabled={busy} onClick={() => void run('Couldn’t pause this computer.', 'pause it', () => pauseLocalNode(true))}>
           Pause now
         </Button>
-        <Button disabled={busy} onClick={() => void run('Couldn’t drain this computer.', () => drainLocalNode())}>
-          Drain
+        <Button disabled={busy} onClick={() => void run('Couldn’t stop this computer after its jobs.', 'pause it', () => drainLocalNode())}>
+          Finish jobs, then stop
         </Button>
-        <Button disabled={busy || control === 'active'} onClick={() => void run('Couldn’t resume this computer.', () => resumeLocalNode())}>
+        <Button disabled={busy || control === 'active'} onClick={() => void run('Couldn’t resume this computer.', 'resume it', () => resumeLocalNode())}>
           Resume
         </Button>
       </SettingRow>
@@ -1799,22 +1922,24 @@ function LocalNodePanel({
           hint={
             <>
               {status.packages.approved.length > 0 ? (
-                <span className="block font-mono">{status.packages.approved.join(', ')}</span>
+                <span className="block">{status.packages.approved.join(', ')}</span>
               ) : (
                 <span className="block">None yet.</span>
               )}
-              <span className="block">
-                Approve one at this computer with <span className="font-mono">sudo k2-node packages allow &lt;name&gt;</span>.
-              </span>
+              <span className="block">Agents can ask for more; you approve each one at this computer, in a terminal, with the command below.</span>
               {status.packages.installer === false && status.platform !== 'macos' ? (
                 <span className="block">
-                  This node has no package installer yet (run <span className="font-mono">sudo k2-node setup</span> again), so approved
-                  packages aren’t installed for jobs.
+                  This computer can’t install approved packages for jobs yet. Run the setup again in a terminal to add it.
                 </span>
               ) : null}
             </>
           }
-          below={listedNode ? <LocalPackagesSummary node={listedNode} /> : undefined}
+          below={
+            <div className="space-y-2">
+              <CopyBox label="Approve a package (replace NAME)" text="sudo k2-node packages allow NAME" />
+              {listedNode ? <LocalPackagesSummary node={listedNode} /> : null}
+            </div>
+          }
         >
           {null}
         </SettingRow>
@@ -1825,8 +1950,8 @@ function LocalNodePanel({
       ) : null}
 
       <SettingRow
-        label="Stop being a compute node"
-        hint="Stops taking jobs and removes the node service, its user and its files from this computer."
+        label="Stop running jobs here"
+        hint="Removes the job runner, its user and its files from this computer. To run jobs again, pair it again."
         below={
           <>
             {disableResult ? (
@@ -1837,16 +1962,16 @@ function LocalNodePanel({
                 </div>
               ) : (
                 <p role="status" className="type-hint text-[var(--color-status-ok-soft)]">
-                  {disableResult.message ?? 'Done: this computer is no longer a compute node.'}
+                  {disableResult.message ?? 'Done: this computer no longer runs jobs. To run jobs again, pair it again.'}
                 </p>
               )
             ) : null}
-            <Failure failure={failure} />
+            <ActionError failure={failure} />
           </>
         }
       >
         <Button variant="danger-quiet" disabled={busy} onClick={() => void stop()}>
-          Stop being a compute node
+          Stop running jobs…
         </Button>
       </SettingRow>
     </div>
@@ -1904,7 +2029,7 @@ function PolicyEditor({
       setEdits({})
       return
     }
-    const out = await run('Couldn’t save the limits.', () => setLocalPolicy(set))
+    const out = await run('Couldn’t save the limits.', 'change its limits', () => setLocalPolicy(set))
     if (out) {
       setEdits({})
       setSaved(true)
@@ -1968,7 +2093,7 @@ function PolicyEditor({
             Save limits
           </Button>
         </div>
-        <Failure failure={failure} />
+        <ActionError failure={failure} />
       </div>
     </div>
   )

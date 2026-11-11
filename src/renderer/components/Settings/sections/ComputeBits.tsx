@@ -6,7 +6,7 @@ import React, { useState } from 'react'
 import { Button } from '@/components/ui'
 import { useSettingsStore } from '@/stores/settings'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
-import { formatBytes, type NodeDot } from './compute-api'
+import { computeErrorInfo, formatBytes, type NodeDot, type TierCounts } from './compute-api'
 
 /** A node's state in words, with the tone of its dot. */
 export const NODE_WORD: Record<NodeDot, { word: string; tone: HealthTone }> = {
@@ -14,7 +14,7 @@ export const NODE_WORD: Record<NodeDot, { word: string; tone: HealthTone }> = {
   offline: { word: 'Offline', tone: 'neutral' },
   pending: { word: 'Waiting for your OK', tone: 'warn' },
   paused: { word: 'Paused', tone: 'warn' },
-  draining: { word: 'Finishing its jobs', tone: 'warn' },
+  draining: { word: 'Finishing its jobs, then stopping', tone: 'warn' },
 }
 
 /** Dot plus word; the word carries the state, so it never relies on colour. */
@@ -66,7 +66,7 @@ export function CopyBox({ text, label, testId }: { text: string; label?: string;
     <div className="space-y-1" data-testid={testId}>
       {label ? <div className="type-hint text-[var(--color-text-secondary)]">{label}</div> : null}
       <div className="flex items-start gap-2">
-        <code className="flex-1 min-w-0 break-all type-hint font-mono text-[var(--color-text-primary)] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[var(--radius-field)] px-2 py-1.5 select-all">
+        <code className="flex-1 min-w-0 break-all type-hint text-[var(--color-text-secondary)] [font-family:inherit] bg-[var(--color-bg)] border border-[var(--color-border)] rounded-[var(--radius-field)] px-2 py-1.5 select-all">
           {text}
         </code>
         <Button onClick={() => void copy()} aria-label={label ? `Copy ${label}` : 'Copy'}>
@@ -100,15 +100,72 @@ export function SettingsLink({
   )
 }
 
-/** A plain error line for an action that failed: what failed, then the
- *  server's own reason quietly, then that it is safe to try again. */
-export function ActionError({ what, reason }: { what: string; reason: string | null }): React.JSX.Element | null {
-  if (!reason) return null
-  const r = reason.trim().replace(/[.\s]+$/, '')
+/** What a failed action says: what failed, the next step that fits the
+ *  server's refusal, and (only when the refusal isn't one we can explain)
+ *  the server's own reason, quietly. */
+export interface ActionFailure {
+  what: string
+  next: string
+  reason: string | null
+}
+
+/** Map the server's refusal code to a plain line and its next step. `verb`
+ *  finishes "Only the server’s owner can …" ("pause a machine"). */
+export function failureFor(what: string, verb: string, err: unknown): ActionFailure {
+  const { code, hint } = computeErrorInfo(err)
+  switch (code) {
+    case 'owner_only':
+    case 'not_owner':
+    case 'forbidden':
+    case 'owner_required':
+      return { what: `Only the server’s owner can ${verb}.`, next: 'Ask the owner to do it, or sign in as the owner.', reason: null }
+    case 'sas_mismatch':
+      return { what: 'The codes don’t match.', next: 'Don’t confirm it: remove the machine and pair it again.', reason: null }
+    case 'not_found':
+    case 'unknown_node':
+      return { what: 'That machine isn’t on this server any more.', next: 'The list is up to date now.', reason: null }
+    case 'compute_disabled':
+      return { what: 'Compute is off on this server.', next: 'Turn it on at the top of the Machines tab first.', reason: null }
+    case 'node_offline':
+    case 'offline':
+      return { what: `${what} The machine is offline.`, next: 'Try again once it’s back online.', reason: null }
+    default: {
+      const raw = hint || (code ? code.replace(/_/g, ' ') : err instanceof Error ? err.message : String(err))
+      return { what, next: 'Nothing changed. Try again in a moment.', reason: raw.trim() || null }
+    }
+  }
+}
+
+/** A failed action: the plain line, its next step, then the server's reason
+ *  quietly when there is one we couldn't put in words. */
+export function ActionError({ failure }: { failure: ActionFailure | null }): React.JSX.Element | null {
+  if (!failure) return null
+  const r = failure.reason?.trim().replace(/[.\s]+$/, '')
   return (
     <div role="alert" data-testid="compute-action-error" className="mt-2">
-      <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">{what} Nothing changed; try again.</p>
-      <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed max-w-[75ch] break-words">The server said: {r}.</p>
+      <p className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+        {failure.what} <span className="text-[var(--color-text-secondary)]">{failure.next}</span>
+      </p>
+      {r ? <p className="type-hint text-[var(--color-text-muted)] mt-0.5 leading-relaxed max-w-[75ch] break-words">The server said: {r}.</p> : null}
     </div>
   )
+}
+
+/** "1 CI, 3 normal" for a node's queued jobs by tier ("" when none). */
+export function tierWords(c: TierCounts | null | undefined): string {
+  if (!c) return ''
+  const parts: string[] = []
+  if (c.ci) parts.push(`${c.ci} CI`)
+  if (c.priority) parts.push(`${c.priority} priority`)
+  if (c.normal) parts.push(`${c.normal} normal`)
+  if ((c as { batch?: number }).batch) parts.push(`${(c as { batch?: number }).batch} batch`)
+  return parts.join(', ')
+}
+
+/** A job's tier as a word: CI, Priority, Batch; nothing for Normal. */
+export function tierWord(tier: string | null | undefined): string {
+  if (tier === 'ci') return 'CI'
+  if (tier === 'priority') return 'Priority'
+  if (tier === 'batch') return 'Batch'
+  return ''
 }

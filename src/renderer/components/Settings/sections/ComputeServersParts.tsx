@@ -342,7 +342,7 @@ function ServerRow({
       ) : null}
       {r.sas && r.state === 'pending' ? (
         <div className={`type-hint ${primary}`} data-testid="compute-server-sas">
-          Its code is <span className="font-mono">{r.sas}</span>: read it to {r.label}&rsquo;s owner so they can check it.
+          Its code is <span className="tabular-nums">{r.sas}</span>: read it to {r.label}&rsquo;s owner so they can check it.
         </div>
       ) : null}
       {r.refusal && r.state === 'refused' ? (
@@ -634,7 +634,7 @@ function AddServerForm({
       </label>
       <label className={`type-hint ${secondary} flex items-center gap-2`}>
         <span className="w-24">Code</span>
-        <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="ABCDE-FGHJK.0123456789abcdef" aria-label="Enroll code" className="flex-1 font-mono" />
+        <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Pairing code" aria-label="Pairing code" className="flex-1" />
       </label>
       <div className={`type-hint ${secondary} flex items-center gap-3`}>
         <label className="flex items-center gap-1">

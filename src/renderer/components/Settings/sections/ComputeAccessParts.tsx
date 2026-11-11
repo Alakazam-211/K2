@@ -19,11 +19,10 @@ import { SettingsGroup, SETTING_LIST_ROW_HOVER, SETTING_ROW_HINT, SETTING_ROW_LA
 import { Button, Input, Spinner, Toggle } from '@/components/ui'
 import { useSettingsStore } from '@/stores/settings'
 import { StatusDot, type HealthTone } from './ConnectionsParts'
-import { ActionError, SettingsLink, hardwareLine, osLine } from './ComputeBits'
+import { ActionError, SettingsLink, failureFor, hardwareLine, osLine, type ActionFailure } from './ComputeBits'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { isAirgap } from '@/lib/airgap'
 import {
-  computeErrorInfo,
   confirmComputeNode,
   pauseComputeNode,
   retireComputeNode,
@@ -58,14 +57,17 @@ function displaySas(s: string | null | undefined): string {
 export function MachinesPart({
   list,
   onChanged,
+  onManage,
 }: {
   list: ComputeNodesList | null
   onChanged: () => Promise<void>
+  /** Opens Machine settings (pause, resume, remove live there). */
+  onManage?: () => void
 }): React.JSX.Element {
   const [account, setAccount] = useState<AccountState>({ kind: 'loading' })
   const [requested, setRequested] = useState<Record<string, number>>({})
   const [busyKey, setBusyKey] = useState<string | null>(null)
-  const [error, setError] = useState<{ what: string; reason: string } | null>(null)
+  const [error, setError] = useState<ActionFailure | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [offerUnavailable, setOfferUnavailable] = useState(false)
   const mounted = useRef(true)
@@ -122,15 +124,14 @@ export function MachinesPart({
   const oneClickMissing =
     account.kind === 'unavailable' || offerUnavailable || (account.kind === 'ready' && (!sub || list?.ticketSupported === false))
 
-  const act = async (key: string, what: string, fn: () => Promise<void>): Promise<void> => {
+  const act = async (key: string, what: string, verb: string, fn: () => Promise<void>): Promise<void> => {
     setBusyKey(key)
     setError(null)
     setNotice(null)
     try {
       await fn()
     } catch (err) {
-      const { hint, code } = computeErrorInfo(err)
-      setError({ what, reason: hint || code || (err instanceof Error ? err.message : String(err)) })
+      setError(failureFor(what, verb, err))
     } finally {
       setBusyKey(null)
       void onChanged()
@@ -140,7 +141,7 @@ export function MachinesPart({
   const switchOn = async (row: MachineRow): Promise<void> => {
     if (row.status === 'retiring' && row.node) {
       const name = row.node.name
-      await act(row.key, `Couldn’t keep ${name}.`, async () => {
+      await act(row.key, `Couldn’t keep ${name}.`, 'resume a machine', async () => {
         await pauseComputeNode(name, 'resume')
         setNotice(`${name} stays: it takes jobs again.`)
       })
@@ -148,7 +149,7 @@ export function MachinesPart({
     }
     const m = row.machine
     if (!m || !sub) return
-    await act(row.key, `Couldn’t ask ${row.name} to join.`, async () => {
+    await act(row.key, `Couldn’t ask ${row.name} to join.`, 'add a machine', async () => {
       const t = await token()
       if (!t) {
         setAccount({ kind: 'signed_out' })
@@ -157,7 +158,7 @@ export function MachinesPart({
       const out = await requestEnrollOffer(t, { controllerSub: sub, nodeSub: m.sub, nodeFp: m.node_fp, nodeName: nodeNameFor(m) })
       if (!out.ok) {
         if (out.unavailable) setOfferUnavailable(true)
-        else setError({ what: `Couldn’t ask ${row.name} to join.`, reason: out.message })
+        else setError({ what: `Couldn’t ask ${row.name} to join.`, next: 'Try again, or pair it with a pairing code below.', reason: out.message })
         return
       }
       setRequested((r) => ({ ...r, [m.sub]: Date.now() }))
@@ -168,19 +169,20 @@ export function MachinesPart({
   const switchOff = async (row: MachineRow): Promise<void> => {
     const n = row.node
     if (!n) return
+    const again = row.machine ? 'To use it again, switch it back on.' : 'To use it again, pair it again.'
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: `Stop using ${n.name}?`,
+      title: `Remove ${n.name} from this server?`,
       message:
         n.running > 0
-          ? `Its ${n.running} running job${n.running === 1 ? '' : 's'} finish first; queued jobs are cancelled. Then it's removed from this server. Switch it on again any time.`
-          : "It's removed from this server; queued jobs are cancelled. Switch it on again any time.",
-      confirmLabel: 'Stop using it',
+          ? `Its ${n.running} running ${n.running === 1 ? 'job finishes' : 'jobs finish'} first and queued jobs are cancelled; then it’s removed. ${again}`
+          : `Its queued jobs are cancelled and it’s removed. ${again}`,
+      confirmLabel: 'Remove',
       destructive: true,
     })
     if (!ok) return
-    await act(row.key, `Couldn’t stop using ${n.name}.`, async () => {
+    await act(row.key, `Couldn’t remove ${n.name}.`, 'remove a machine', async () => {
       const out = await retireComputeNode(n.name)
-      setNotice(out.state === 'draining' ? `${n.name} finishes its jobs, then it's removed.` : `${n.name} removed.`)
+      setNotice(out.state === 'draining' ? `${n.name} finishes its running jobs, then it’s removed. ${again}` : `${n.name} is removed. ${again}`)
     })
   }
 
@@ -208,8 +210,8 @@ export function MachinesPart({
         <div className="px-4 py-3" data-testid="compute-machines-empty">
           <p className={SETTING_ROW_LABEL}>No machines yet</p>
           <p className={SETTING_ROW_HINT}>
-            Add one with an enroll code below, or on the other computer open Compute and turn on Make this computer a compute
-            node.
+            Pair one with a pairing code below, or on the other computer open Compute and turn on Let a server run jobs on this
+            computer.
           </p>
         </div>
       ) : null}
@@ -221,9 +223,10 @@ export function MachinesPart({
           canOneClick={!oneClickMissing && !!sub && account.kind === 'ready'}
           onOn={() => void switchOn(row)}
           onOff={() => void switchOff(row)}
+          onManage={onManage}
           onConfirm={(sas) => {
             const n = row.node
-            if (n) void act(row.key, `Couldn’t confirm ${n.name}.`, async () => void (await confirmComputeNode(n.name, sas)))
+            if (n) void act(row.key, `Couldn’t confirm ${n.name}.`, 'confirm a machine', async () => void (await confirmComputeNode(n.name, sas)))
           }}
         />
       ))}
@@ -233,12 +236,12 @@ export function MachinesPart({
             {account.kind === 'signed_out' ? (
               <>
                 <p className={SETTING_ROW_LABEL}>Sign in to your k2.dev account to see all your machines</p>
-                <p className={SETTING_ROW_HINT}>Machines added with an enroll code show here either way.</p>
+                <p className={SETTING_ROW_HINT}>Machines paired with a pairing code show here either way.</p>
               </>
             ) : account.kind === 'error' ? (
               <>
                 <p className={SETTING_ROW_LABEL}>Couldn’t list the machines on your k2.dev account</p>
-                <p className={SETTING_ROW_HINT}>Machines added with an enroll code still show. K2 tries again every 30 seconds.</p>
+                <p className={SETTING_ROW_HINT}>Machines paired with a pairing code still show. K2 tries again every 30 seconds.</p>
                 <p className={SETTING_SERVER_REASON}>The server said: {account.message.replace(/[.\s]+$/, '')}.</p>
               </>
             ) : (
@@ -247,7 +250,7 @@ export function MachinesPart({
                 <p className={SETTING_ROW_HINT} data-testid="compute-oneclick-missing">
                   {account.kind === 'unavailable' && account.message !== ONE_CLICK_NEEDS_UPDATE
                     ? account.message
-                    : 'Your k2.dev account needs an update for it. Until then, add a machine with an enroll code below.'}
+                    : 'Your k2.dev account needs an update for it. Until then, pair a machine with a pairing code below.'}
                 </p>
               </>
             )}
@@ -266,7 +269,7 @@ export function MachinesPart({
               {notice}
             </p>
           ) : null}
-          {error ? <ActionError what={error.what} reason={error.reason} /> : null}
+          <ActionError failure={error} />
         </div>
       ) : null}
     </SettingsGroup>
@@ -298,6 +301,7 @@ function MachineLine({
   onOn,
   onOff,
   onConfirm,
+  onManage,
 }: {
   row: MachineRow
   busy: boolean
@@ -305,6 +309,7 @@ function MachineLine({
   onOn: () => void
   onOff: () => void
   onConfirm: (sas: string) => void
+  onManage?: () => void
 }): React.JSX.Element {
   const [typed, setTyped] = useState('')
   const checked = row.status === 'on' || row.status === 'pending' || row.status === 'requested'
@@ -344,6 +349,16 @@ function MachineLine({
             {desc ? `${desc} · ` : ''}
             <span data-testid="compute-machine-hw">{hardwareLine(cores(row.cpuCores), row.memBytes, row.diskFreeBytes)}</span>
           </div>
+          {row.status === 'on' && pause ? (
+            <p className={SETTING_ROW_HINT} data-testid="compute-machine-paused">
+              Still paired, but paused: it gets no new jobs until you resume it.{' '}
+              {onManage ? (
+                <button type="button" data-k2-focus="" onClick={onManage} className="relative px-0.5 -mx-0.5 type-hint text-[var(--color-accent-text)] underline underline-offset-2 no-drag cursor-pointer">
+                  Resume in Machine settings
+                </button>
+              ) : null}
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <Toggle
@@ -359,8 +374,8 @@ function MachineLine({
           {row.machine?.sas ? (
             <>
               <span>
-                This server’s code <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span> · {row.name}{' '}
-                shows <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.machine.sas)}</span>
+                This server’s code <span className="tabular-nums text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span> · {row.name}{' '}
+                shows <span className="tabular-nums text-[var(--color-text-primary)]">{displaySas(row.machine.sas)}</span>
               </span>
               {agree ? (
                 <Button variant="accent" disabled={busy} onClick={() => onConfirm((row.machine?.sas ?? '').replace(/\s+/g, ''))}>
@@ -370,24 +385,20 @@ function MachineLine({
                 <span className="text-[var(--color-status-warn-text)]">The codes differ: don’t confirm. Switch it off and on again.</span>
               )}
             </>
+          ) : row.node.sas ? (
+            <>
+              <span className="type-row text-[var(--color-text-primary)]">
+                Does {row.name} show <span className="tabular-nums">{displaySas(row.node.sas)}</span>?
+              </span>
+              <Button variant="accent" disabled={busy} onClick={() => onConfirm((row.node?.sas ?? '').replace(/\s+/g, ''))}>
+                Yes, that’s it
+              </Button>
+              <span className="basis-full">If the machine shows a different code, don’t confirm: switch it off to remove it.</span>
+            </>
           ) : (
             <>
-              <span>
-                Type the 6-digit code {row.name} shows
-                {row.node.sas ? (
-                  <>
-                    ; it should match <span className="font-mono text-[var(--color-text-primary)]">{displaySas(row.node.sas)}</span>
-                  </>
-                ) : null}
-                .
-              </span>
-              <Input
-                value={typed}
-                onChange={(e) => setTyped(e.target.value)}
-                placeholder="123 456"
-                aria-label={`Code ${row.name} shows`}
-                className="w-28 font-mono"
-              />
+              <span>Type the 6-digit code {row.name} shows.</span>
+              <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="123 456" aria-label={`Code ${row.name} shows`} className="w-28" />
               <Button variant="accent" disabled={busy || typed.trim().length === 0} onClick={() => onConfirm(typed.replace(/\s+/g, ''))}>
                 Confirm
               </Button>

@@ -200,7 +200,7 @@ afterEach(() => {
   cleanup()
 })
 
-/** The page is tabs (Machines, Node settings, Jobs, This computer). */
+/** The page is tabs (Machines, Machine settings, Jobs, This computer). */
 async function openTab(name: string): Promise<void> {
   fireEvent.click(await screen.findByRole('tab', { name: new RegExp(`^${name}`) }))
 }
@@ -223,11 +223,12 @@ describe('preview off', () => {
     useSettingsStore.setState({ computePreview: false } as never)
     m.fetchComputeNodes.mockRejectedValue(DISABLED)
     render(<ComputeSection />)
-    const sw = await screen.findByRole('switch', { name: 'Use compute nodes' })
+    const sw = await screen.findByRole('switch', { name: 'Let agents use your machines' })
     await waitFor(() => expect(m.fetchComputeNodes).toHaveBeenCalled())
     await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('false'))
     expect(screen.queryByText('Add a machine')).toBeNull()
-    expect(screen.queryByRole('tab', { name: /^Node settings/ })).toBeNull()
+    expect(screen.queryByRole('tab', { name: /^Machine settings/ })).toBeNull()
+    expect(await screen.findByTestId('compute-off')).toBeTruthy()
     expect(screen.queryByTestId('compute-node-mini-2')).toBeNull()
     expect(m.fetchComputeGrants).not.toHaveBeenCalled()
     fireEvent.click(sw)
@@ -236,45 +237,47 @@ describe('preview off', () => {
 })
 
 describe('nodes of this server', () => {
-  it('a pending node: the owner types the node code to confirm', async () => {
+  it('a pending node: the page shows its code and the owner says yes when the machine shows the same', async () => {
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const card = await screen.findByTestId('compute-node-mini-1')
     expect(within(card).getByTestId('node-dot').textContent).toBe('Waiting for your OK')
-    expect(card.textContent).toContain('123 456')
-    const confirm = within(card).getByRole('button', { name: 'Confirm' }) as HTMLButtonElement
-    expect(confirm.disabled).toBe(true)
-    const field = within(card).getByLabelText('Code shown on mini-1') as HTMLInputElement
-    expect(field.value).toBe('')
-    fireEvent.change(field, { target: { value: '123456' } })
-    fireEvent.click(confirm)
+    expect(card.textContent).toContain('Does mini-1 show 123 456?')
+    fireEvent.click(within(card).getByRole('button', { name: 'Yes, that’s it' }))
     await waitFor(() => expect(m.confirmComputeNode).toHaveBeenCalledWith('mini-1', '123456'))
-    expect(within(card).getByRole('button', { name: 'Remove…' })).toBeTruthy()
+    // Remove lives in the machine's menu.
+    fireEvent.click(within(card).getByRole('button', { name: 'More actions for mini-1' }))
+    expect(await screen.findByRole('menuitem', { name: /Remove from this server/ })).toBeTruthy()
   })
 
-  it('an online node: details, pause / drain / resume / remove', async () => {
+  it('an online node: details, pause, finish jobs then stop, and remove from its menu', async () => {
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const card = await screen.findByTestId('compute-node-mini-2')
     expect(within(card).getByTestId('node-dot').textContent).toBe('Online')
     expect(card.textContent).toContain('8 cores')
     expect(card.textContent).toContain('16 GB RAM')
     expect(card.textContent).toContain('50 GB free')
     expect(card.textContent).toContain('1 running · 2 queued')
+    // Tools sit behind Show, as quiet text.
+    expect(card.textContent).not.toContain('cargo 1.95.0')
+    fireEvent.click(within(card).getByRole('button', { name: 'Show' }))
     expect(card.textContent).toContain('cargo 1.95.0')
 
+    // Not paused: Pause, and no Resume.
+    expect(within(card).queryByRole('button', { name: 'Resume' })).toBeNull()
     fireEvent.click(within(card).getByRole('button', { name: 'Pause' }))
     await waitFor(() => expect(m.pauseComputeNode).toHaveBeenCalledWith('mini-2', 'pause'))
-    await waitFor(() => expect((within(card).getByRole('button', { name: 'Drain' }) as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(within(card).getByRole('button', { name: 'Drain' }))
-    await waitFor(() => expect(m.pauseComputeNode).toHaveBeenCalledWith('mini-2', 'drain'))
-    // Not paused, so there is nothing to resume.
-    expect((within(card).getByRole('button', { name: 'Resume' }) as HTMLButtonElement).disabled).toBe(true)
 
-    await waitFor(() => expect((within(card).getByRole('button', { name: 'Remove…' }) as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(within(card).getByRole('button', { name: 'Remove…' }))
+    fireEvent.click(within(card).getByRole('button', { name: 'More actions for mini-2' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Finish jobs, then stop/ }))
+    await waitFor(() => expect(m.pauseComputeNode).toHaveBeenCalledWith('mini-2', 'drain'))
+
+    fireEvent.click(within(card).getByRole('button', { name: 'More actions for mini-2' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Remove from this server/ }))
     await waitFor(() => expect(m.removeComputeNode).toHaveBeenCalledWith('mini-2'))
     expect(useConfirmDialogStore.getState().confirm).toHaveBeenCalledTimes(1)
+    expect((await screen.findByTestId('compute-removed-note')).textContent).toBe('mini-2 is removed. To use it again, pair it again.')
   })
 
   it('a paused node can be resumed', async () => {
@@ -284,7 +287,7 @@ describe('nodes of this server', () => {
       controller: 'rosson.k2.dev',
     })
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const card = await screen.findByTestId('compute-node-mini-2')
     expect(within(card).getByTestId('node-dot').textContent).toBe('Paused')
     fireEvent.click(within(card).getByRole('button', { name: 'Resume' }))
@@ -293,7 +296,7 @@ describe('nodes of this server', () => {
 
   it('a grant: revoke; the workspace switch is read-only here (Agent tab owns it)', async () => {
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const row = await screen.findByTestId('compute-grant-sales')
     expect(row.textContent).toContain('sales')
     expect(within(row).queryByRole('switch')).toBeNull()
@@ -327,7 +330,8 @@ describe('nodes of this server', () => {
       { id: 'job-2', short: 'j2', node: 'mini-2', workspace: 'sales', argv: ['ls'], state: 'done', reason: null, exitCode: 0, createdAt: 1 },
     ])
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
+    fireEvent.click(within(await screen.findByTestId('compute-node-mini-2')).getByRole('button', { name: 'Show' }))
     const features = await screen.findByTestId('compute-node-features')
     expect(features.textContent).toBe('[needs, system-packages]')
     await openTab('Jobs')
@@ -341,10 +345,10 @@ describe('nodes of this server', () => {
       new Error(JSON.stringify({ error: { code: 'owner_only', hint: 'only the owner' } })),
     )
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const card = await screen.findByTestId('compute-node-mini-2')
     fireEvent.click(within(card).getByRole('button', { name: 'Pause' }))
-    await waitFor(() => expect(card.textContent).toContain('only the owner'))
+    await waitFor(() => expect(card.textContent).toContain('Only the server’s owner can pause a machine.'))
   })
 
   it('add a node shows the enroll code and install commands', async () => {
@@ -359,9 +363,9 @@ describe('nodes of this server', () => {
       confirm: 'k2 compute node confirm mini-3 <code>',
     })
     render(<ComputeSection />)
-    const name = await screen.findByLabelText('New node name')
+    const name = await screen.findByLabelText('Machine name')
     fireEvent.change(name, { target: { value: 'mini-3' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Make enroll code' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Make pairing code' }))
     const box = await screen.findByTestId('compute-enroll-code')
     expect(m.mintEnrollCode).toHaveBeenCalledWith('mini-3')
     expect(box.textContent).toContain('ABCDE-FGHJK.0123456789abcdef')
@@ -373,15 +377,15 @@ describe('nodes of this server', () => {
 
 describe('this computer', () => {
   async function openSheet(): Promise<HTMLElement> {
-    const sw = await screen.findByRole('switch', { name: 'Make this computer a compute node' })
+    const sw = await screen.findByRole('switch', { name: 'Let a server run jobs on this computer' })
     fireEvent.click(sw)
     return screen.findByTestId('compute-enable-sheet')
   }
 
   function fillCodeForm(sheet: HTMLElement): void {
-    fireEvent.change(within(sheet).getByLabelText('Node name'), { target: { value: 'mac-1' } })
+    fireEvent.change(within(sheet).getByLabelText('Name for this computer'), { target: { value: 'mac-1' } })
     fireEvent.change(within(sheet).getByLabelText('Server address'), { target: { value: 'https://rosson.k2.dev' } })
-    fireEvent.change(within(sheet).getByLabelText('Enroll code'), { target: { value: 'ABCDE-FGHJK.0123456789abcdef' } })
+    fireEvent.change(within(sheet).getByLabelText('Pairing code'), { target: { value: 'ABCDE-FGHJK.0123456789abcdef' } })
   }
 
   it('off state: the home check and the private-home choice is sent explicitly', async () => {
@@ -397,7 +401,7 @@ describe('this computer', () => {
     const box = within(sheet).getByLabelText('Make my home folder private (chmod 700)') as HTMLInputElement
     expect(box.checked).toBe(true)
     fillCodeForm(sheet)
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     await waitFor(() =>
       expect(m.enableLocalNode).toHaveBeenCalledWith({
         controller: 'https://rosson.k2.dev',
@@ -421,7 +425,7 @@ describe('this computer', () => {
     const box = within(sheet).getByLabelText('Make my home folder private (chmod 700)') as HTMLInputElement
     expect(box.checked).toBe(false)
     fillCodeForm(sheet)
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
     expect(m.enableLocalNode.mock.calls[0][0]).toMatchObject({ privateHome: false })
     expect(Object.prototype.hasOwnProperty.call(m.enableLocalNode.mock.calls[0][0], 'privateHome')).toBe(true)
@@ -439,7 +443,7 @@ describe('this computer', () => {
     await openTab('This computer')
     const sheet = await openSheet()
     fillCodeForm(sheet)
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     const result = await screen.findByTestId('compute-enable-result')
     expect(result.textContent).toContain('sudo /Applications/K2.app/k2-node-install --enroll X')
     expect(result.textContent).toContain('run this once as an admin')
@@ -493,7 +497,7 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const sheet = await openSheet()
-    fireEvent.change(within(sheet).getByLabelText('Node name'), { target: { value: 'mac-1' } })
+    fireEvent.change(within(sheet).getByLabelText('Name for this computer'), { target: { value: 'mac-1' } })
     fireEvent.click(within(sheet).getByRole('button', { name: 'Pick one of your servers' }))
     fireEvent.click(await within(sheet).findByRole('button', { name: 'rosson.k2.dev' }))
     await waitFor(() =>
@@ -520,7 +524,7 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const sheet = await openSheet()
-    fireEvent.change(within(sheet).getByLabelText('Node name'), { target: { value: 'mac-1' } })
+    fireEvent.change(within(sheet).getByLabelText('Name for this computer'), { target: { value: 'mac-1' } })
     fireEvent.click(within(sheet).getByRole('button', { name: 'Pick one of your servers' }))
     fireEvent.click(await within(sheet).findByRole('button', { name: 'rosson.k2.dev' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(2))
@@ -544,20 +548,20 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const part = await screen.findByTestId('compute-this-computer')
-    const policy = await within(part).findByRole('switch', { name: 'Let K2 keep this node updated and healthy' })
+    const policy = await within(part).findByRole('switch', { name: 'Let K2 keep this computer updated and healthy' })
     expect(policy.getAttribute('aria-checked')).toBe('true')
     const full = within(part).getByRole('switch', { name: 'Also let K2 run admin scripts as root' })
     expect(full.getAttribute('aria-checked')).toBe('false')
     // Below the main switch, in that order.
     const switches = within(part).getAllByRole('switch').map((s) => s.getAttribute('aria-label'))
     expect(switches.slice(0, 3)).toEqual([
-      'Make this computer a compute node',
-      'Let K2 keep this node updated and healthy',
+      'Let a server run jobs on this computer',
+      'Let K2 keep this computer updated and healthy',
       'Also let K2 run admin scripts as root',
     ])
     const sheet = await openSheet()
     fillCodeForm(sheet)
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
     expect(m.enableLocalNode.mock.calls[0][0].remoteAdmin).toBe('policy')
   })
@@ -570,15 +574,15 @@ describe('this computer', () => {
     const sheet = await openSheet()
     fillCodeForm(sheet)
     fireEvent.click(within(part).getByRole('switch', { name: 'Also let K2 run admin scripts as root' }))
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
     expect(m.enableLocalNode.mock.calls[0][0].remoteAdmin).toBe('full')
 
-    const policy = within(part).getByRole('switch', { name: 'Let K2 keep this node updated and healthy' })
+    const policy = within(part).getByRole('switch', { name: 'Let K2 keep this computer updated and healthy' })
     fireEvent.click(policy)
     expect(within(part).queryByRole('switch', { name: 'Also let K2 run admin scripts as root' })).toBeNull()
-    await waitFor(() => expect((within(sheet).getByRole('button', { name: 'Make this computer a node' }) as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    await waitFor(() => expect((within(sheet).getByRole('button', { name: 'Pair this computer' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(2))
     expect(m.enableLocalNode.mock.calls[1][0].remoteAdmin).toBe('off')
 
@@ -594,11 +598,11 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const part = await screen.findByTestId('compute-this-computer')
-    const policy = await within(part).findByRole('switch', { name: 'Let K2 keep this node updated and healthy' })
+    const policy = await within(part).findByRole('switch', { name: 'Let K2 keep this computer updated and healthy' })
     await waitFor(() => expect(policy.getAttribute('aria-checked')).toBe('false'))
     const sheet = await openSheet()
     fillCodeForm(sheet)
-    fireEvent.click(within(sheet).getByRole('button', { name: 'Make this computer a node' }))
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Pair this computer' }))
     await waitFor(() => expect(m.enableLocalNode).toHaveBeenCalledTimes(1))
     expect(m.enableLocalNode.mock.calls[0][0].remoteAdmin).toBe('off')
   })
@@ -615,7 +619,7 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const panel = await screen.findByTestId('compute-local-node')
-    fireEvent.click(within(panel).getByRole('button', { name: 'Stop being a compute node' }))
+    fireEvent.click(within(panel).getByRole('button', { name: 'Stop running jobs…' }))
     await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1))
     const arg = (confirm.mock.calls[0] as unknown as [{ message: string }])[0]
     expect(arg.message).toContain('job-a, job-b')
@@ -635,10 +639,10 @@ describe('this computer', () => {
     await openTab('This computer')
     const ra = await screen.findByTestId('compute-local-remote-admin')
     const warn = within(ra).getByTestId('compute-cant-update')
-    expect(warn.textContent).toContain("K2 can’t update this node")
+    expect(warn.textContent).toContain("K2 can’t update this computer")
     expect(warn.textContent).toContain('admin level policy')
     expect(within(ra).queryByRole('switch', { name: 'Also let K2 run admin scripts as root' })).toBeNull()
-    fireEvent.click(within(ra).getByRole('switch', { name: 'Let K2 keep this node updated and healthy' }))
+    fireEvent.click(within(ra).getByRole('switch', { name: 'Let K2 keep this computer updated and healthy' }))
     await waitFor(() => expect(m.setLocalRemoteAdmin).toHaveBeenCalledWith('policy'))
     expect(await within(ra).findByText('K2 keeps this node updated and healthy (remote admin: policy).')).toBeTruthy()
   })
@@ -655,7 +659,7 @@ describe('this computer', () => {
     await openTab('This computer')
     const ra = await screen.findByTestId('compute-local-remote-admin')
     expect(within(ra).queryByTestId('compute-cant-update')).toBeNull()
-    expect(within(ra).getByRole('switch', { name: 'Let K2 keep this node updated and healthy' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(ra).getByRole('switch', { name: 'Let K2 keep this computer updated and healthy' }).getAttribute('aria-checked')).toBe('true')
     fireEvent.click(within(ra).getByRole('switch', { name: 'Also let K2 run admin scripts as root' }))
     await waitFor(() => expect(m.setLocalRemoteAdmin).toHaveBeenCalledWith('full'))
     expect((await within(ra).findByText('sudo /usr/local/libexec/k2-node admin level full')).textContent).toContain('admin level full')
@@ -670,7 +674,7 @@ describe('this computer', () => {
     })
     const { unmount } = render(<ComputeSection />)
     await openTab('This computer')
-    expect((await screen.findByTestId('compute-enroll-pending')).textContent).toContain('Waiting for the node')
+    expect((await screen.findByTestId('compute-enroll-pending')).textContent).toContain('Waiting for the server to answer')
     unmount()
     render(<ComputeSection />)
     await openTab('This computer')
@@ -704,7 +708,7 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const panel = await screen.findByTestId('compute-local-node')
-    fireEvent.click(within(panel).getByRole('button', { name: 'Stop being a compute node' }))
+    fireEvent.click(within(panel).getByRole('button', { name: 'Stop running jobs…' }))
     await waitFor(() => expect(m.disableLocalNode).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(panel.textContent).toContain('sudo k2-node uninstall'))
   })
@@ -727,7 +731,7 @@ describe('this computer', () => {
     render(<ComputeSection />)
     await openTab('This computer')
     const sheet = await openSheet()
-    fireEvent.change(within(sheet).getByLabelText('Node name'), { target: { value: 'mac-1' } })
+    fireEvent.change(within(sheet).getByLabelText('Name for this computer'), { target: { value: 'mac-1' } })
     fireEvent.click(within(sheet).getByRole('button', { name: 'Pick one of your servers' }))
     fireEvent.click(await within(sheet).findByRole('button', { name: 'rosson.k2.dev' }))
     await waitFor(() => expect(sheet.textContent).toContain("One-click isn't available on this account yet; use an enroll code"))
@@ -738,10 +742,10 @@ describe('this computer', () => {
   it('the web build hides This computer and never reads the local daemon', async () => {
     features.computeLocal = false
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     await screen.findByTestId('compute-node-mini-2')
     expect(screen.queryByTestId('compute-this-computer')).toBeNull()
-    expect(screen.queryByRole('switch', { name: 'Make this computer a compute node' })).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Let a server run jobs on this computer' })).toBeNull()
     expect(m.fetchLocalStatus).not.toHaveBeenCalled()
   })
 })
@@ -771,7 +775,7 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
     render(<ComputeSection />)
     await openTab('Jobs')
     const tags = await screen.findAllByTestId('compute-job-tier')
-    expect(tags.map((t) => t.textContent)).toEqual(['CI', 'P', 'asked priority'])
+    expect(tags.map((t) => t.textContent)).toEqual(['CI', 'Priority', 'asked priority'])
     expect(tags[2].getAttribute('title')).toBe('Asked for priority')
     expect(tags[0].getAttribute('title')).toBeNull()
   })
@@ -802,9 +806,9 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
       controller: 'rosson.k2.dev',
     })
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const tiers = await screen.findByTestId('compute-node-tiers')
-    expect(tiers.textContent).toBe('queued: CI 1 · P 0 · N 3')
+    expect(tiers.textContent).toBe('1 CI, 3 normal')
     cleanup()
     m.fetchComputeNodes.mockResolvedValue({
       nodes: [{ ...ONLINE, queueTiers: { ci: 0, priority: 0, normal: 0 } }],
@@ -812,7 +816,7 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
       controller: 'rosson.k2.dev',
     })
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     await screen.findByTestId('compute-node-mini-2')
     expect(screen.queryByTestId('compute-node-tiers')).toBeNull()
   })
@@ -820,7 +824,7 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
   it('Allow CI jobs: shows the grant’s allowCi and sends one grants/set with the current limits', async () => {
     m.fetchComputeGrants.mockResolvedValue([{ ...GRANT, allowCi: false }])
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const row = await screen.findByTestId('compute-grant-sales')
     const sw = within(row).getByRole('switch', { name: 'Allow CI jobs: sales' })
     expect(sw.getAttribute('aria-checked')).toBe('false')
@@ -841,7 +845,7 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
   it('Allow CI jobs on shows on; turning it off sends allowCi false', async () => {
     m.fetchComputeGrants.mockResolvedValue([{ ...GRANT, allowCi: true }])
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const row = await screen.findByTestId('compute-grant-sales')
     const sw = within(row).getByRole('switch', { name: 'Allow CI jobs: sales' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
@@ -856,16 +860,16 @@ describe('job tiers (prd-compute-job-tiers-v1, 0.46.5)', () => {
       new Error(JSON.stringify({ error: { code: 'owner_only', hint: 'only the owner or an Admin allows CI jobs' } })),
     )
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const row = await screen.findByTestId('compute-grant-sales')
     fireEvent.click(within(row).getByRole('switch', { name: 'Allow CI jobs: sales' }))
     const card = screen.getByTestId('compute-node-mini-2')
-    await waitFor(() => expect(card.textContent).toContain('only the owner or an Admin allows CI jobs'))
+    await waitFor(() => expect(card.textContent).toContain('Only the server’s owner can allow CI jobs.'))
   })
 
   it('an older daemon (no allowCi on the grant): no CI switch and no help line', async () => {
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const row = await screen.findByTestId('compute-grant-sales')
     expect(within(row).queryByRole('switch')).toBeNull()
     expect(screen.queryByTestId('compute-grant-ci-help')).toBeNull()
@@ -880,17 +884,21 @@ describe('package requests and host facts (prd-compute-self-serve-environments-v
     packages: { manager: 'apt', policy: 'official, ≤ 2048 MB per request', openRequests: 1 },
   }
 
-  it('each node shows its host line, manager, policy, open requests and the reboot badge; Package requests sit under Approvals', async () => {
+  it('each node shows its host line, manager, policy, open requests and the reboot badge behind Show; an empty requests card stays hidden', async () => {
     m.fetchComputeNodes.mockResolvedValue({ nodes: [HOSTED], waitingCodes: [], controller: 'rosson.k2.dev' })
     render(<ComputeSection />)
-    await openTab('Node settings')
+    await openTab('Machine settings')
     const card = await screen.findByTestId('compute-node-mini-2')
+    fireEvent.click(within(card).getByRole('button', { name: 'Show' }))
     const pkg = within(card).getByTestId('compute-node-packages-mini-2')
     expect(pkg.textContent).toContain('Ubuntu 24.04.1 LTS · apt · x86_64')
     expect(pkg.textContent).toContain('policy official, ≤ 2048 MB per request')
     expect(within(card).getByTestId('compute-node-reboot').textContent).toBe('reboot pending')
     expect(within(card).getByTestId('compute-node-open-requests').textContent).toBe('1 open request')
-    expect(await screen.findByTestId('compute-pkg-requests')).toBeTruthy()
+    // Nothing waits: the Waiting for you card stays hidden, never an empty
+    // "Nothing is waiting" line.
+    expect((screen.getByTestId('compute-requests') as HTMLElement).hidden).toBe(true)
+    expect(screen.queryByTestId('compute-pkg-requests')).toBeNull()
   })
 
   it('this machine, when it is one of the listed nodes, shows its policy and open requests beside the approved list', async () => {

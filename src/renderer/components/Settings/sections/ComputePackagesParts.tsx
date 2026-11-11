@@ -48,7 +48,10 @@ function isMissingRoute(e: unknown): boolean {
 
 // ── Package requests (under Approvals) ─────────────────────────────────
 
-export function PackageRequestsPanel({ onChanged }: { onChanged?: () => void }): React.JSX.Element | null {
+/** `onCount`: tell the page how many batches wait (or that a load failed,
+ *  as 1), and render nothing while none does, so an empty panel never shows
+ *  its own "Nothing is waiting" line. */
+export function PackageRequestsPanel({ onChanged, onCount }: { onChanged?: () => void; onCount?: (n: number) => void }): React.JSX.Element | null {
   const [pending, setPending] = useState<PkgRequestRow[] | null>(null)
   const [recent, setRecent] = useState<PkgRequestRow[]>([])
   const [canDecide, setCanDecide] = useState(false)
@@ -91,15 +94,20 @@ export function PackageRequestsPanel({ onChanged }: { onChanged?: () => void }):
     onChanged?.()
   }, [load, onChanged])
 
-  if (hidden) return null
   const batches = groupPkgBatches(pending ?? [])
+  const shown = hidden ? 0 : batches.length + (error ? 1 : 0)
+  useEffect(() => {
+    onCount?.(shown)
+  }, [onCount, shown])
+  if (hidden) return null
+  if (onCount && shown === 0) return null
   return (
     <div className="space-y-2" data-testid="compute-pkg-requests" data-settings-id="compute.packages">
-      <div className="type-name text-[var(--color-text-primary)]">
+      <div className="type-row text-[var(--color-text-primary)]">
         Package requests{batches.length > 0 ? ` (${batches.length})` : ''}
       </div>
-      <p className={`type-hint ${muted}`}>
-        Agents ask for system packages a job needs. The node checks each one with a dry run before it installs.
+      <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 leading-relaxed max-w-[75ch]">
+        Agents ask for system packages a job needs. The machine does a test install first, then waits for you.
       </p>
       {error ? <Callout tone="error">{error}</Callout> : null}
       {pending && batches.length === 0 ? <p className={`type-hint ${muted}`}>Nothing is waiting.</p> : null}
@@ -120,7 +128,7 @@ export function PackageRequestsPanel({ onChanged }: { onChanged?: () => void }):
                 data-testid={`compute-pkg-recent-${r.id}`}
               >
                 <span className="text-[var(--color-text-primary)]">{r.state}</span>
-                <span className="font-mono text-[var(--color-text-secondary)]">{r.names.join(', ')}</span>
+                <span className="text-[var(--color-text-secondary)]">{r.names.join(', ')}</span>
                 <span className={muted}>
                   on {r.node} for {pkgAskerLabel(r)}
                 </span>
@@ -171,7 +179,7 @@ export function PkgBatchCard({
   return (
     <div className="border border-[var(--color-border)] p-3 space-y-2" data-testid={`compute-pkg-batch-${b.batchId}`}>
       <div className="type-row text-[var(--color-text-primary)]">
-        Install <span className="font-mono">{b.names.join(', ')}</span>
+        Install <span className="font-medium">{b.names.join(', ')}</span>
       </div>
       <div className={`type-hint ${secondary} space-y-0.5`}>
         {b.nodes.map((n) => (
@@ -194,7 +202,7 @@ export function PkgBatchCard({
       ) : null}
       {b.refusals.map((r) => (
         <Callout key={r} tone="warn">
-          The dry run would refuse this: {r}
+          The test install would refuse this: {r}
         </Callout>
       ))}
       {canDecide ? (
@@ -306,7 +314,7 @@ export function LocalPackagesSummary({ node }: { node: ComputeNode }): React.JSX
         <ul className={`type-hint ${secondary}`}>
           {open.map((r) => (
             <li key={r.id} data-testid={`compute-local-pkg-${r.id}`}>
-              <span className="font-mono">{r.names.join(', ')}</span> for {pkgAskerLabel(r)}
+              <span className="font-medium">{r.names.join(', ')}</span> for {pkgAskerLabel(r)}
               {r.why ? <span className={muted}> ({r.why})</span> : null}
             </li>
           ))}

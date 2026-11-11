@@ -23,4 +23,4 @@ suggest = ["set:k5-starter"]
 [params]
 
 [hello]
-brief = "This is your first start. Say hello to {{person}} on your Thread in a few lines: who you are and what you're for. Then offer to hire their Chief of Staff, their own lead agent."
+brief = "This is your first start. Do what \"Your first start\" in your ROLE says."

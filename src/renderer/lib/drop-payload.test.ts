@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BRACKETED_PASTE_END,
   BRACKETED_PASTE_START,
+  CMD_PERCENT_REFUSAL,
   CONTROL_CHAR_REFUSAL,
   bracketPaste,
   buildComposeDropPayload,
@@ -196,6 +197,19 @@ describe('Windows paths', () => {
     expect(text(buildTerminalDropPayload(['C:\\Users\\a b\\R&D (1).txt'], 'cmd'))).toBe(
       '"C:\\Users\\a b\\R&D (1).txt" ',
     )
+  })
+
+  it('cmd: a name with a % sign is refused (cmd expands %VAR% even in quotes)', () => {
+    const refused: DropText = { ok: false, refusal: CMD_PERCENT_REFUSAL }
+    expect(CMD_PERCENT_REFUSAL).toBe("Can't drop a file whose name has a % sign into this terminal.")
+    expect(buildTerminalDropPayload(['C:\\tmp\\100%PATH%.txt'], 'cmd')).toEqual(refused)
+    expect(buildTerminalDropPayload(['C:\\tmp\\ok.txt', 'C:\\tmp\\50%.png'], 'cmd')).toEqual(refused)
+  })
+
+  it('a % sign passes in PowerShell and in a POSIX shell', () => {
+    expect(text(buildTerminalDropPayload(['C:\\tmp\\100%PATH%.txt'], 'powershell'))).toBe("'C:\\tmp\\100%PATH%.txt' ")
+    expect(text(buildTerminalDropPayload(['/tmp/100%PATH%.txt'], 'cmd'))).toBe('/tmp/100%PATH%.txt ')
+    expect(text(buildTerminalDropPayload(['/tmp/100%.txt']))).toBe('/tmp/100%.txt ')
   })
 
   it('an image keeps the bracketed paste, quoted the Windows way (Claude Code strips quotes)', () => {

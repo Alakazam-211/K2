@@ -38,7 +38,7 @@ vi.mock('./TerminalComposeBar', () => ({ TerminalComposeBar: () => null }))
 import { AlacrittyTerminalView } from './AlacrittyTerminalView'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useToastStore } from '@/stores/toast'
-import { CONTROL_CHAR_REFUSAL } from '@/lib/drop-payload'
+import { CMD_PERCENT_REFUSAL, CONTROL_CHAR_REFUSAL } from '@/lib/drop-payload'
 
 const room = testRoom({ tabs: {} })
 
@@ -115,5 +115,19 @@ describe('AlacrittyTerminalView: files dropped or pasted', () => {
     await pasteFinderPaths(el, ['/tmp/x\ny.txt'])
     expect(h.writes).toEqual([{ id: 'term-1', data: '/tmp/a\\ b.txt ' }])
     expect(toasts()).toEqual([[CONTROL_CHAR_REFUSAL, 'warning']])
+  })
+
+  it('a Windows name with a % sign: a toast, and nothing written (cmd expands %VAR%)', async () => {
+    const el = await view()
+    dropFiles(el, ['C:\\Users\\a\\100%PATH%.txt'])
+    expect(h.writes).toEqual([])
+    expect(toasts()).toEqual([[CMD_PERCENT_REFUSAL, 'warning']])
+  })
+
+  it('Finder paste of a Windows name with a % sign: refused the same way', async () => {
+    const el = await view()
+    await pasteFinderPaths(el, ['C:\\Users\\a\\50%.txt'])
+    expect(h.writes).toEqual([])
+    expect(toasts()).toEqual([[CMD_PERCENT_REFUSAL, 'warning']])
   })
 })

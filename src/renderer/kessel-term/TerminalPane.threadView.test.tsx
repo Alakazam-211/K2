@@ -581,6 +581,13 @@ describe('files dropped or pasted on the terminal', () => {
     expect(sends('input').map((m) => m.text)).toEqual(["'C:\\Users\\a\\my notes.txt' "])
   })
 
+  it('a Windows name with a % sign is typed as is (PowerShell does not expand it in single quotes)', async () => {
+    const el = await terminalPane()
+    dropFiles(el, ['C:\\Users\\a\\100%PATH%.txt'])
+    expect(sends('input').map((m) => m.text)).toEqual(["'C:\\Users\\a\\100%PATH%.txt' "])
+    expect(toasts()).toEqual([])
+  })
+
   it('Finder paths pasted: the same text as a drop; a line break is refused', async () => {
     await terminalPane()
     await pasteFinderPaths(['/tmp/a b.txt'])

@@ -12,6 +12,8 @@
 //     when no program is given): single quotes, a quote inside doubled.
 //   - cmd (the legacy terminal on Windows opens %COMSPEC%, usually
 //     cmd.exe): double quotes. Windows names can't hold a double quote.
+//     cmd expands %VAR% even inside quotes, with no escape at the prompt,
+//     so a name with a % sign is refused there.
 // A Windows host's paths start with a drive (`C:\`) or `\\`, so the paths
 // themselves say which family applies; a caller only says which Windows
 // shell its terminal runs.
@@ -77,6 +79,9 @@ export function hasControlChar(p: string): boolean {
   return CONTROL_CHAR.test(p)
 }
 
+/** The toast for a name with a % sign, in a cmd terminal only. */
+export const CMD_PERCENT_REFUSAL = "Can't drop a file whose name has a % sign into this terminal."
+
 export type DropText = { ok: true; text: string } | { ok: false; refusal: string }
 
 // ── Quoting ──────────────────────────────────────────────────────────
@@ -128,6 +133,7 @@ export function formatDropPaths(paths: string[], opts: DropTextOptions = {}): Dr
   if (paths.some(hasControlChar)) return { ok: false, refusal: CONTROL_CHAR_REFUSAL }
   if (paths.length === 0) return { ok: true, text: '' }
   const shell = dropShellFor(paths, opts.windowsShell)
+  if (shell === 'cmd' && paths.some((p) => p.includes('%'))) return { ok: false, refusal: CMD_PERCENT_REFUSAL }
   const text = paths.map((p) => quoteDropPath(p, shell)).join(' ')
   return { ok: true, text: opts.trailingSpace === false ? text : text + ' ' }
 }

@@ -4387,6 +4387,101 @@ mod tests {
         }
     }
 
+    /// Settings → User Access: one part of the users list that can't load
+    /// (here the login locks table is gone) doesn't take the list down. The
+    /// users come back with every other part's fields, the failed part's
+    /// field is left off, and `errors.locks` says why.
+    #[test]
+    fn users_list_part_that_fails_leaves_the_rest_with_its_error() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        skin::add_principal("bea").expect("bea");
+        skin::add_principal("cal").expect("cal");
+        let r = handle_users_get();
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert!(v.get("errors").is_none(), "nothing failed yet: {v}");
+
+        let store = rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db")).expect("skin store");
+        store.execute_batch("DROP TABLE login_lockouts").expect("drop the locks table");
+        drop(store);
+
+        let r = handle_users_get();
+        assert_eq!(r.status, "200 OK", "one failed part is not a failed list: {}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        let errors = v["errors"].as_object().unwrap_or_else(|| panic!("errors names the failed part: {v}"));
+        assert_eq!(errors.keys().map(String::as_str).collect::<Vec<_>>(), vec!["locks"], "{v}");
+        let why = errors["locks"].as_str().unwrap_or_else(|| panic!("a reason: {v}"));
+        assert!(why.contains("login_lockouts"), "{why}");
+        let users = v["users"].as_array().unwrap_or_else(|| panic!("users: {v}"));
+        let names: Vec<&str> = users.iter().map(|u| u["username"].as_str().expect("username")).collect();
+        assert_eq!(names, vec!["bea", "cal"], "{v}");
+        for u in users {
+            assert!(u.get("lockedUntil").is_none(), "the failed part's field is left off: {u}");
+            assert_eq!(u["boxLogin"], serde_json::json!(true), "{u}");
+            assert!(u["passwordMustChange"].is_boolean(), "{u}");
+            assert!(u["appGrants"].is_array(), "{u}");
+            assert!(u["nameSetBySelf"].is_boolean(), "{u}");
+            assert!(u.get("pendingReset").is_some() && u.get("storedEmailRefused").is_some(), "{u}");
+        }
+    }
+
+    /// The users list reads the daemon DB's App ids and room handles in
+    /// one go, not once per App grant or test guest: with 1 and with 6 App
+    /// users (each a test guest, all on one room), the list reads `apps`
+    /// and `projects` the same number of times.
+    #[test]
+    fn users_list_reads_app_names_once_however_many_grants_and_guests() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use std::sync::{Arc, Mutex};
+        let _home = crate::test_support::TempHome::new();
+        let db = k2_core::db::scoped_for_test();
+        let (app, room) = ("svc-roster-batch", "room-roster-batch");
+        let add = |name: &str| {
+            let p = skin::add_principal_for_app(name, None, app, None, "test").expect("guest");
+            skin::set_app_grant_rooms(name, app, &[room.to_string()], false, "test").expect("rooms");
+            skin::test_guests::record(&p.id, app, "ws-roster-batch", "agent:x", 4_102_444_800).expect("test guest");
+        };
+        // Reads of (`apps`, `projects`) by one users list, from the daemon
+        // DB's authorizer (asked once per column per prepared statement).
+        let reads = || -> (usize, usize) {
+            let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+            let s2 = seen.clone();
+            {
+                let handle = db.handle();
+                let conn = handle.lock();
+                conn.flush_prepared_statement_cache();
+                conn.authorizer(Some(move |ctx: AuthContext<'_>| {
+                    if let AuthAction::Read { table_name, .. } = ctx.action {
+                        s2.lock().expect("seen").push(table_name.to_string());
+                    }
+                    Authorization::Allow
+                }));
+            }
+            let r = handle_users_get();
+            {
+                let handle = db.handle();
+                let conn = handle.lock();
+                conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+            }
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert!(v.get("errors").is_none(), "{v}");
+            let tests = v["users"].as_array().expect("users").iter().filter(|u| u["test"]["appServiceId"] == app).count();
+            assert!(tests >= 1, "the test guests are listed: {v}");
+            let seen = seen.lock().expect("seen");
+            (seen.iter().filter(|t| *t == "apps").count(), seen.iter().filter(|t| *t == "projects").count())
+        };
+        add("tg0");
+        let one = reads();
+        assert!(one.0 > 0 && one.1 > 0, "the list looks up App ids and room handles: {one:?}");
+        for i in 1..6 {
+            add(&format!("tg{i}"));
+        }
+        let six = reads();
+        assert_eq!(six, one, "(apps, projects) reads with 6 App users vs 1: the lookups must not run per grant or per guest");
+    }
+
     /// 0.46.6: `generate: true` on a password set and on a user add — the
     /// daemon makes the password, returns it once, and it signs in. Never
     /// with a typed

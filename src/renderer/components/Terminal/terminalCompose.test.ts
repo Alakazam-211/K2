@@ -21,6 +21,7 @@ import {
   composeTextareaHeight,
   composeTextareaOverflowY,
   composeMessagePlaceholder,
+  fitComposePlaceholder,
   composeAgentNameFromProjects,
   extractImagePathsFromDraft,
   removePathFromDraft,
@@ -763,6 +764,24 @@ describe('composeMessagePlaceholder', () => {
     expect(composeMessagePlaceholder('   ')).toBe('Message the agent')
     expect(composeMessagePlaceholder(null)).toBe('Message the agent')
     expect(composeMessagePlaceholder(undefined)).toBe('Message the agent')
+  })
+})
+
+describe('fitComposePlaceholder', () => {
+  // 10px a character.
+  const m = (t: string): number => t.length * 10
+
+  it('keeps a placeholder that fits, or one not measured yet', () => {
+    expect(fitComposePlaceholder('Message Atlas', 200, m)).toBe('Message Atlas')
+    expect(fitComposePlaceholder('Message Design System', 0, m)).toBe('Message Design System')
+  })
+
+  it('cuts a long one to one line with an ellipsis, never a trailing space', () => {
+    // 120px: 12 characters with the ellipsis.
+    expect(fitComposePlaceholder('Message Design System', 120, m)).toBe('Message Des…')
+    expect(m(fitComposePlaceholder('Message Design System', 120, m))).toBeLessThanOrEqual(120)
+    expect(fitComposePlaceholder('Message Design System', 90, m)).toBe('Message…')
+    expect(fitComposePlaceholder('Message Design System', 5, m)).toBe('…')
   })
 })
 

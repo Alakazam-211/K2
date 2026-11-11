@@ -355,6 +355,23 @@ export function composeMessagePlaceholder(agentName: string | undefined | null):
   return name ? `Message ${name}` : 'Message the agent'
 }
 
+/** The placeholder cut to one line of `width` px with an ellipsis, by
+ *  `measure` (the box's own font). A textarea's placeholder can't take
+ *  `text-overflow` (it wraps, or clips mid-letter), so the words are cut
+ *  here. Unmeasured (width 0: hidden, or no layout) it stays whole. */
+export function fitComposePlaceholder(text: string, width: number, measure: (s: string) => number): string {
+  if (!(width > 0) || measure(text) <= width) return text
+  const ell = '…'
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    if (measure(text.slice(0, mid).trimEnd() + ell) <= width) lo = mid
+    else hi = mid - 1
+  }
+  return lo > 0 ? text.slice(0, lo).trimEnd() + ell : ell
+}
+
 /** A Thread send made before the Thread has its address waits, and its
  *  Send says so. */
 export function composeWaitingLabel(name: string | null | undefined): string {

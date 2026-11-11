@@ -61,6 +61,7 @@ import {
   consumeComposeSlashToken,
   composeAgentNameFromProjects,
   composeMessagePlaceholder,
+  fitComposePlaceholder,
   composeWaitingLabel,
   composeThreadUnreachableText,
   composerPermitted,
@@ -156,6 +157,17 @@ interface TerminalComposeBarProps {
    * the bar keys by `sessionId` (a bar with no agent behind it).
    */
   draftId?: string
+}
+
+/** One canvas for measuring placeholders (lazily; none without layout). */
+let placeholderCanvas: HTMLCanvasElement | null = null
+function placeholderMeasureContext(): CanvasRenderingContext2D | null {
+  try {
+    placeholderCanvas ??= document.createElement('canvas')
+    return placeholderCanvas.getContext('2d')
+  } catch {
+    return null
+  }
 }
 
 /** Insert `chunk` into draft at caret (or append). Adds a separating space when needed. */
@@ -464,10 +476,41 @@ export function TerminalComposeBar({
     autoGrow()
   }, [draft, autoGrow])
 
+  // The empty box is one line: a placeholder longer than the box ("Message
+  // Design System" in a 230px tile) is cut to fit with an ellipsis rather
+  // than wrapping to a second line the box hides. Written on the element
+  // (no re-render); the full words stay as its aria-placeholder.
+  const fitPlaceholder = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    let shown = messagePlaceholder
+    if (!isEffectivelyHidden(el) && typeof getComputedStyle === 'function') {
+      const cs = getComputedStyle(el)
+      const width = el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)
+      const ctx = width > 0 ? placeholderMeasureContext() : null
+      if (ctx) {
+        ctx.font = cs.font || `${cs.fontSize} ${cs.fontFamily}`
+        shown = fitComposePlaceholder(messagePlaceholder, width - 1, (t) => ctx.measureText(t).width)
+      }
+    }
+    if (el.placeholder !== shown) el.placeholder = shown
+    if (shown === messagePlaceholder) el.removeAttribute('aria-placeholder')
+    else el.setAttribute('aria-placeholder', messagePlaceholder)
+  }, [messagePlaceholder])
+
+  const fitPlaceholderRef = useRef(fitPlaceholder)
+  fitPlaceholderRef.current = fitPlaceholder
+  useLayoutEffect(() => {
+    fitPlaceholder()
+  }, [fitPlaceholder])
+
   useEffect(() => {
     const el = textareaRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => autoGrow())
+    const ro = new ResizeObserver(() => {
+      autoGrow()
+      fitPlaceholderRef.current()
+    })
     ro.observe(el)
     return () => ro.disconnect()
   }, [autoGrow])
@@ -1589,10 +1632,9 @@ export function TerminalComposeBar({
       placeholder={messagePlaceholder}
       title={`Enter to send, Shift+Enter for newline. ${stashChord} stashes the draft. Drop files for paths.`}
       data-zen-compose-input={zenLook ? '' : undefined}
-      // The empty box is one line tall: a long placeholder in a narrow
-      // box ("Message Design System" in a 230px tile) ends in an ellipsis
-      // rather than wrapping to a second line the box cuts off.
-      className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] placeholder:whitespace-nowrap placeholder:overflow-hidden placeholder:text-ellipsis focus:outline-none"
+      // The placeholder never wraps (`fitPlaceholder` cuts it to fit, and
+      // nowrap holds it to one line while a resize is measured).
+      className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] placeholder:whitespace-nowrap focus:outline-none"
       style={{
         display: 'block',
         width: '100%',

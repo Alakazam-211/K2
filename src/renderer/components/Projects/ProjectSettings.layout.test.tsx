@@ -53,7 +53,7 @@ vi.mock('./projects-api', async () => {
 })
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import ProjectSettings, { HALVES_MIN_WIDTH } from './ProjectSettings'
+import ProjectSettings, { HALVES_MIN_WIDTH, shortFolder } from './ProjectSettings'
 import * as projectsApi from './projects-api'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
@@ -180,7 +180,9 @@ describe('edit rights follow the role, not the window mode', () => {
     // Still editable for a member.
     expect((screen.getByLabelText('Project name') as HTMLInputElement).readOnly).toBe(false)
     expect((screen.getByRole('switch', { name: 'Show in Pinned' }) as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.getByRole('button', { name: 'Make point of contact' })).toBeTruthy()
+    // Make point of contact is in the agent's … menu.
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Scout' }))
+    expect(screen.getByRole('menuitem', { name: /Make point of contact/ })).toBeTruthy()
     expect(screen.getByLabelText('Search agents to add')).toBeTruthy()
   })
 })
@@ -315,5 +317,45 @@ describe('dead ends', () => {
     expect(text).not.toMatch(/inject/i)
     expect(text).not.toMatch(/\brev \d/)
     expect(text).toContain('Point of contact')
+  })
+})
+
+describe('quiet destructive actions, steady paths, search follows', () => {
+  it('Delete project is a neutral button; deleting a dashboard and removing an agent live in … menus', async () => {
+    await renderReady()
+    const del = screen.getByRole('button', { name: 'Delete project' })
+    expect(del.className).not.toMatch(/status-error|danger/)
+    expect(screen.queryByRole('button', { name: 'Delete dashboard' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for the dashboard Main' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete dashboard/ }))
+    expect(screen.getByTestId('delete-dashboard-confirm')).toBeTruthy()
+  })
+
+  it('the point of contact can’t be removed from its menu, and says why', async () => {
+    await renderReady()
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Cortana' }))
+    const remove = screen.getByRole('menuitem', { name: /Remove from project/ })
+    expect(remove.getAttribute('aria-disabled')).toBe('true')
+    expect(remove.textContent).toContain('Make another agent the point of contact first.')
+    expect(screen.queryByRole('menuitem', { name: /Make point of contact/ })).toBeNull()
+  })
+
+  it('folders show from the home folder, the full path as the title', () => {
+    expect(shortFolder('/Users/alex/Projects/web-app')).toBe('~/Projects/web-app')
+    expect(shortFolder('/home/alex/code')).toBe('~/code')
+    expect(shortFolder('/Users/alex')).toBe('~')
+    expect(shortFolder('/srv/agents/ops')).toBe('/srv/agents/ops')
+  })
+
+  it('a search that hides the open project opens the first match; no match shows Pick a project', async () => {
+    useProjectGroupsStore.setState({ groups: [GROUP, { ...GROUP, id: 'g2', name: 'Billing' }] })
+    await renderReady()
+    const search = screen.getByLabelText('Search projects')
+    fireEvent.change(search, { target: { value: 'bill' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Show settings for Billing' }).getAttribute('aria-current')).toBe('true'))
+    fireEvent.change(search, { target: { value: 'zebra' } })
+    expect(await screen.findByTestId('project-settings-pick')).toBeTruthy()
+    expect(screen.queryByTestId('project-settings-detail')).toBeNull()
   })
 })

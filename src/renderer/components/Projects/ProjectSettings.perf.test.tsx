@@ -428,12 +428,13 @@ describe('Settings → Projects optimistic edits', () => {
   })
 })
 
-/** The "Make point of contact" button on an agent's row. */
+/** "Make point of contact" in an agent row's … menu (opens the menu). */
 function makePocButton(agent: string): HTMLElement {
   const row = screen
     .getAllByTestId('project-agent-row')
     .find((r) => r.textContent?.includes(agent))
-  return must(row?.querySelector('button') ?? null)
+  fireEvent.click(must(row?.querySelector('button') ?? null))
+  return screen.getByRole('menuitem', { name: /Make point of contact/ })
 }
 
 function must(el: Element | null): HTMLElement {

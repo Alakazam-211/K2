@@ -119,6 +119,7 @@ import {
   AVATAR_ROUND,
   SETTING_FIELD_WIDTH,
   SETTING_ROW_HINT,
+  SETTING_ROW_LABEL,
   SaveError,
   SaveNote,
   SettingDropdown,
@@ -129,33 +130,56 @@ import {
   type SaveState,
 } from '@/components/Settings/controls/SettingControls'
 import { AccessSheet, ConfirmSheet, DIALOG_FIELD, FailedNote, Field } from '@/components/Settings/sections/AccessDialogs'
-import { Button, Callout, Input, SearchField, Segmented, Surface, Tag, Toggle, cx } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, SearchField, Segmented, Surface, Tag, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
 
 /** Below this width (px) of the detail body the two halves stack. */
 export const HALVES_MIN_WIDTH = 720
 
-/** The server's reason for a refusal, in its own words (no prefix). */
+/** What a role refusal (the server's `forbidden`) says: who can do it. */
+const ROLE_REFUSED = 'only the owner or an admin of this server can change this'
+
+/** The server's reason for a refusal, in its own words (no prefix). A role
+ *  refusal is always the same plain words, whatever the server adds. */
 function errorMessage(err: unknown): string {
   const { code, hint } = daemonErrorInfo(err)
-  if (hint) return hint
   const raw = err instanceof Error ? err.message : String(err)
-  // The role floor's bare code reads as words, not as "forbidden".
-  if ((err instanceof DaemonHttpError && err.code === 'forbidden') || code === 'forbidden' || raw.trim() === 'forbidden') {
-    return 'only the owner or an admin can change this'
+  if ((err instanceof DaemonHttpError && (err.code === 'forbidden' || (err.status === 403 && !err.code))) || code === 'forbidden' || raw.trim() === 'forbidden') {
+    return ROLE_REFUSED
   }
-  return raw
+  return hint || raw
 }
 
 /** A failed write that isn't a plain save (delete, add, move): what failed,
- *  that nothing changed, and the server's reason, quietly. */
+ *  that nothing changed, and the server's reason, quietly. A role refusal
+ *  says who can do it instead of "try again". */
 function ActionError({ what, reason }: { what: string; reason: string }): React.JSX.Element {
+  if (reason === ROLE_REFUSED) {
+    return (
+      <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+        {what} Only the owner or an admin of this server can do this, so nothing changed.
+      </p>
+    )
+  }
   return (
     <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
       {what} Nothing changed; try again. The server said: {reason.trim().replace(/[.\s]+$/, '')}.
     </p>
   )
+}
+
+/** SaveError, except a role refusal: that says who can change it, and no
+ *  "try again" (trying again won't help). */
+function RowSaveError({ state }: { state: SaveState }): React.JSX.Element | null {
+  if (typeof state === 'object' && state.error === ROLE_REFUSED) {
+    return (
+      <p role="alert" data-save-error="" className="type-hint text-[var(--color-status-error-soft)] mt-1 leading-relaxed max-w-[75ch]">
+        Couldn&rsquo;t save: only the owner or an admin of this server can change this. Nothing changed.
+      </p>
+    )
+  }
+  return <SaveError state={state} />
 }
 
 /** "Saving…" beside a control while a write is in flight. */
@@ -273,7 +297,7 @@ function belowFor(state: SaveState, extra?: React.ReactNode): React.ReactNode {
   if (typeof state !== 'object' && !extra) return undefined
   return (
     <>
-      <SaveError state={state} />
+      <RowSaveError state={state} />
       {extra}
     </>
   )
@@ -589,11 +613,27 @@ function DashboardsSection({
               </Button>
             </>
           )}
+          {!readOnly && active && (
+            <OverflowMenu
+              label={`More actions for the dashboard ${active.name}`}
+              items={[
+                {
+                  id: 'delete',
+                  label: 'Delete dashboard…',
+                  danger: true,
+                  disabled: lastOne,
+                  hint: lastOne ? 'A project keeps at least one dashboard.' : 'Removes this tab only. Files stay.',
+                  onSelect: () => setConfirmDelete(active),
+                },
+              ]}
+            />
+          )}
         </div>
-        {(done?.where === 'move' || failure?.where === 'move') && (
+        {(done?.where === 'move' || failure?.where === 'move' || failure?.where === 'delete') && (
           <div>
             {doneNote('move')}
             {failureFor('move')}
+            {failureFor('delete')}
           </div>
         )}
       </div>
@@ -613,25 +653,6 @@ function DashboardsSection({
                   await renameProjectGroupDashboard(primaryScope(), detail.id, active.id, name)
                 }}
               />
-              {!readOnly && (
-                <SettingRow
-                  label="Delete dashboard"
-                  hint={
-                    lastOne
-                      ? 'A project keeps at least one dashboard, so this one stays.'
-                      : 'Removes this tab only. Files stay.'
-                  }
-                  below={failureFor('delete')}
-                >
-                  <Button
-                    variant="danger-quiet"
-                    disabled={lastOne}
-                    onClick={() => setConfirmDelete(active)}
-                  >
-                    Delete dashboard
-                  </Button>
-                </SettingRow>
-              )}
             </SettingsGroup>
 
             <SettingsGroup
@@ -689,6 +710,28 @@ function DashboardsSection({
 }
 
 // ── Agents (right half) ──────────────────────────────────────────────────
+
+/** A folder, short and steady: the home folder as `~`, so every row starts
+ *  the same way (`~/Projects/web-app`). The full path is the title. */
+export function shortFolder(path: string): string {
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
+}
+
+/** An agent's folder on its row's second line: short, cut at the end if it
+ *  must be, the full path on hover. */
+function FolderLine({ path }: { path: string }): React.JSX.Element {
+  return (
+    <span className="block truncate" title={path}>
+      {shortFolder(path)}
+    </span>
+  )
+}
+
+const PLUS = (
+  <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" className="w-3 h-3 flex-shrink-0">
+    <path d="M8 3.5v9M3.5 8h9" />
+  </svg>
+)
 
 function AgentsSection({
   detail,
@@ -771,8 +814,6 @@ function AgentsSection({
     [detail.id, edit],
   )
 
-  const pocBlocksRemove = detail.pocWorkspaceId !== null && detail.members.length > 1 && !readOnly
-
   return (
     <section aria-label="Agents" className="space-y-6" data-settings-id="project-groups.agents">
       {confirmRemove && (
@@ -789,11 +830,7 @@ function AgentsSection({
       <SettingsGroup
         card
         title="Agents"
-        hint={
-          pocBlocksRemove
-            ? 'The point of contact gets every message posted in the project’s chat. To remove it, make another agent the point of contact first.'
-            : 'The point of contact gets every message posted in the project’s chat.'
-        }
+        hint="The point of contact gets every message posted in the project’s chat."
         state={
           detail.members.length === 0 ? (
             <SettingsLoadState kind="empty" title="No agents yet">
@@ -815,35 +852,36 @@ function AgentsSection({
                     {isPoc && <Tag tone="accent" data-case="as-written" className="flex-shrink-0">Point of contact</Tag>}
                   </span>
                 }
-                hint={
-                  m.path ? (
-                    <span className="block truncate [direction:rtl] text-left" title={m.path}>
-                      <bdi>{m.path}</bdi>
-                    </span>
-                  ) : (
-                    'Not on this server any more'
-                  )
-                }
+                hint={m.path ? <FolderLine path={m.path} /> : 'Not on this server any more'}
                 below={failure?.id === m.workspaceId ? <ActionError what={failure.what} reason={failure.reason} /> : undefined}
               >
-                {!readOnly && !isPoc && (
-                  <Button
-                    variant="quiet"
-                    disabled={memberBusy === m.workspaceId}
-                    onClick={() => void setPoc(m.workspaceId, display)}
-                  >
-                    Make point of contact
-                  </Button>
-                )}
-                {!readOnly && blocked === null && (
-                  <Button
-                    variant="danger-quiet"
-                    disabled={memberBusy === m.workspaceId}
-                    title="Remove from this project (the agent itself is not touched)"
-                    onClick={() => setConfirmRemove({ id: m.workspaceId, name: display })}
-                  >
-                    Remove
-                  </Button>
+                {memberBusy === m.workspaceId ? <SavingNote on /> : null}
+                {!readOnly && (
+                  <OverflowMenu
+                    label={`More actions for ${display}`}
+                    items={[
+                      ...(isPoc
+                        ? []
+                        : [
+                            {
+                              id: 'poc',
+                              label: 'Make point of contact',
+                              hint: 'It gets every message in the project’s chat.',
+                              disabled: memberBusy === m.workspaceId,
+                              onSelect: () => void setPoc(m.workspaceId, display),
+                            },
+                          ]),
+                      {
+                        id: 'remove',
+                        label: 'Remove from project…',
+                        danger: true,
+                        group: !isPoc,
+                        disabled: blocked !== null || memberBusy === m.workspaceId,
+                        hint: blocked ?? 'The agent and its folder stay.',
+                        onSelect: () => setConfirmRemove({ id: m.workspaceId, name: display }),
+                      },
+                    ]}
+                  />
                 )}
               </SettingRow>
             </div>
@@ -886,31 +924,45 @@ function AgentsSection({
             )}
           </div>
           <ul className="max-h-80 overflow-y-auto divide-y divide-[var(--color-border)]" aria-label="Agents you can add">
+            {/* Each row is one quiet button: the agent first, "Add" in the
+                hint colour until the row is hovered, focused or picked by
+                the arrows, so the project's own agents above read first. */}
             {candidates.map((w, i) => (
-              <li
-                key={w.id}
-                data-highlighted={i === highlight || undefined}
-                onMouseEnter={() => setHighlight(i)}
-                className={cx(
-                  'flex items-center gap-4 px-4 py-2.5 transition-colors',
-                  i === highlight && 'bg-[var(--color-wash-1)]',
-                )}
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="type-name text-[var(--color-text-primary)] truncate">{w.name}</div>
-                  <div className="type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={w.path}>
-                    <bdi>{w.path}</bdi>
-                  </div>
-                </div>
-                <Button
-                  variant="quiet"
+              <li key={w.id} data-highlighted={i === highlight || undefined} onMouseEnter={() => setHighlight(i)}>
+                <button
+                  type="button"
+                  data-k2-focus=""
                   aria-label={`Add ${w.name}`}
+                  title={w.path}
                   disabled={memberBusy === w.id}
                   onClick={() => void addMember(w.id, w.name)}
-                  className="flex-shrink-0"
+                  className={cx(
+                    'group relative w-full flex items-center gap-4 px-4 py-2.5 text-left no-drag cursor-pointer outline-none transition-colors disabled:cursor-wait',
+                    i === highlight ? 'bg-[var(--color-wash-1)]' : 'hover:bg-[var(--color-wash-1)]',
+                  )}
                 >
-                  {memberBusy === w.id ? 'Adding…' : 'Add'}
-                </Button>
+                  <span className="flex-1 min-w-0">
+                    <span className="block type-name text-[var(--color-text-primary)] truncate">{w.name}</span>
+                    <span className="block type-hint text-[var(--color-text-secondary)] truncate">{shortFolder(w.path)}</span>
+                  </span>
+                  <span
+                    className={cx(
+                      'flex-shrink-0 inline-flex items-center gap-1 type-control transition-colors',
+                      i === highlight
+                        ? 'text-[var(--color-text-primary)]'
+                        : 'text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)] group-focus-visible:text-[var(--color-text-primary)]',
+                    )}
+                  >
+                    {memberBusy === w.id ? (
+                      'Adding…'
+                    ) : (
+                      <>
+                        {PLUS}
+                        Add
+                      </>
+                    )}
+                  </span>
+                </button>
               </li>
             ))}
             {candidates.length === 0 && (
@@ -940,6 +992,10 @@ const DEFAULT_VIEW_OPTIONS: { value: ProjectDefaultView; label: string }[] = [
   { value: 'chatter', label: 'Chatter' },
 ]
 
+/** What the three views are, once, and that this is only where they start. */
+const DEFAULT_VIEW_HINT =
+  'Terminal is the agent’s shell, Thread its chat with you, Chatter its messages with other agents. Anyone can still switch their own.'
+
 /** Why a save was refused, in words for this row. */
 function defaultViewErrorMessage(err: unknown): string {
   // A refusal arrives as a DaemonHttpError carrying the code; the older
@@ -960,10 +1016,14 @@ function DefaultViewRow({
   detail,
   caps,
   edit,
+  narrow = false,
 }: {
   detail: ProjectGroupShow
   caps: ProjectSettingsCaps
   edit: GroupEdit
+  /** In the narrow General column the choices go under the label, so the
+   *  hint keeps its width instead of wrapping beside them. */
+  narrow?: boolean
 }): React.JSX.Element {
   const value = projectDefaultView(detail)
   const lockReason = defaultViewLockReason(caps, detail.defaultView !== undefined)
@@ -999,37 +1059,61 @@ function DefaultViewRow({
       })
   }
 
+  const below =
+    error ? (
+      <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
+        {error}
+      </p>
+    ) : lockReason ? (
+      <p className={cx(SETTING_ROW_HINT, '!mt-0')} data-testid="project-default-view-locked">
+        {lockReason}
+      </p>
+    ) : undefined
+  const control = (
+    <Segmented
+      aria-label="Agents open in"
+      value={value}
+      options={DEFAULT_VIEW_OPTIONS}
+      activation="manual"
+      disabled={lockReason !== null}
+      onChange={change}
+    />
+  )
+  const notes = (
+    <>
+      <SavingNote on={saving} />
+      <SaveNote state={saving ? 'idle' : save.state} />
+    </>
+  )
+
+  // Narrow: label and hint, then the choices under them (with "Saving…" /
+  // "Saved" beside them), then a lock reason or an error.
+  if (narrow) {
+    return (
+      <div className="px-4 py-3" data-settings-id="project-groups.default-view" data-testid="project-default-view-row">
+        <div className={SETTING_ROW_LABEL}>Agents open in</div>
+        <div className={SETTING_ROW_HINT}>{DEFAULT_VIEW_HINT}</div>
+        <div className="mt-2 flex items-center gap-2">
+          {control}
+          {notes}
+        </div>
+        {below && <div className="mt-2">{below}</div>}
+      </div>
+    )
+  }
   // A card row: label and hint left, the control on the shared right
   // edge with "Saving…" / "Saved" beside it; a lock reason or an error
   // takes its own line under the row.
   return (
     <SettingRow
       label="Agents open in"
-      hint="Anyone can still switch their own."
+      hint={DEFAULT_VIEW_HINT}
       settingId="project-groups.default-view"
       testId="project-default-view-row"
-      below={
-        error ? (
-          <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
-            {error}
-          </p>
-        ) : lockReason ? (
-          <p className={cx(SETTING_ROW_HINT, '!mt-0')} data-testid="project-default-view-locked">
-            {lockReason}
-          </p>
-        ) : undefined
-      }
+      below={below}
     >
-      <SavingNote on={saving} />
-      <SaveNote state={saving ? 'idle' : save.state} />
-      <Segmented
-        aria-label="Agents open in"
-        value={value}
-        options={DEFAULT_VIEW_OPTIONS}
-        activation="manual"
-        disabled={lockReason !== null}
-        onChange={change}
-      />
+      {notes}
+      {control}
     </SettingRow>
   )
 }
@@ -1040,7 +1124,9 @@ function DefaultViewRow({
  *  answer, or roll back and rethrow. */
 type GroupEdit = (patch: Partial<ProjectGroup>, run: () => Promise<ProjectGroup | void>) => Promise<void>
 
-/** One colour chip of the Color row (24px, cut in Terminal, round in Glass). */
+/** One colour chip of the Color row: a 24px chip (cut in Terminal, round in
+ *  Glass) inside a 28px button, so the keyboard ring sits 2px clear of the
+ *  colour in every look instead of on it. */
 function Swatch({
   color,
   label,
@@ -1064,16 +1150,21 @@ function Swatch({
       title={title ?? label}
       onClick={onClick}
       data-k2-chamfer="chip"
-      className="k2-focus no-drag cursor-pointer w-6 h-6 flex-shrink-0 flex items-center justify-center rounded-[var(--radius-pill)] type-badge text-[var(--color-on-accent)]"
-      style={{ backgroundColor: color }}
+      className="k2-focus no-drag cursor-pointer w-7 h-7 p-0.5 flex-shrink-0 rounded-[var(--radius-pill)] bg-transparent border-transparent"
     >
-      {selected ? (
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--color-on-accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M3 8.5l3.2 3.2L13 5" />
-        </svg>
-      ) : (
-        children
-      )}
+      <span
+        data-k2-chamfer="chip"
+        className="w-6 h-6 flex items-center justify-center rounded-[var(--radius-pill)] border-transparent type-badge text-[var(--color-on-accent)]"
+        style={{ backgroundColor: color }}
+      >
+        {selected ? (
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--color-on-accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M3 8.5l3.2 3.2L13 5" />
+          </svg>
+        ) : (
+          children
+        )}
+      </span>
     </button>
   )
 }
@@ -1227,7 +1318,7 @@ function ProjectSettingsDetail({
       <SettingsGroup card title="General">
         <NameField
           label="Project"
-          hint="Shown in the nav."
+          hint="In the sidebar."
           value={detail.name}
           readOnly={!caps.canEdit}
           settingId="project-groups.name"
@@ -1235,7 +1326,7 @@ function ProjectSettingsDetail({
         />
         <SettingRow
           label="Picture"
-          hint={caps.canEditLooks ? 'Shown in the nav. Square images work best.' : 'Shown in the nav.'}
+          hint={caps.canEditLooks ? 'Shown in the sidebar. Square images work best.' : 'Shown in the sidebar.'}
           settingId="project-groups.picture"
           below={belowFor(pictureSave.state)}
         >
@@ -1293,7 +1384,7 @@ function ProjectSettingsDetail({
           below={
             caps.canEditLooks ? (
               <div className="space-y-1.5">
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex flex-wrap items-center gap-0.5 -ml-0.5">
                   <Swatch
                     color={groupAvatarColor(detail.id)}
                     label="Automatic color"
@@ -1331,7 +1422,7 @@ function ProjectSettingsDetail({
                     onBlur={() => commitCustomHex()}
                     placeholder={detail.color ?? '#rrggbb'}
                     spellCheck={false}
-                    className={cx('w-24 type-control font-mono ml-1', hexError && '!border-[var(--color-status-error-soft)]')}
+                    className={cx('w-24 type-control font-mono ml-auto', hexError && '!border-[var(--color-status-error-soft)]')}
                   />
                 </div>
                 {hexError && (
@@ -1339,7 +1430,7 @@ function ProjectSettingsDetail({
                     That isn’t a color. Type six hex digits, or an rgb() value.
                   </p>
                 )}
-                <SaveError state={colorSave.state} />
+                <RowSaveError state={colorSave.state} />
               </div>
             ) : undefined
           }
@@ -1357,10 +1448,10 @@ function ProjectSettingsDetail({
             </span>
           )}
         </SettingRow>
-        <DefaultViewRow detail={detail} caps={caps} edit={edit} />
+        <DefaultViewRow detail={detail} caps={caps} edit={edit} narrow={!stacked} />
         <SettingRow
           label="Show in Pinned"
-          hint="Pins it at the top of the Projects list for everyone on this server."
+          hint="Keeps it at the top of the list for everyone."
           settingId="project-groups.pinned"
           below={belowFor(pinSave.state)}
         >
@@ -1393,7 +1484,7 @@ function ProjectSettingsDetail({
           }
         >
           <Button
-            variant="danger-quiet"
+            variant="quiet"
             disabled={!caps.canDelete || deleting}
             title={caps.canDelete ? undefined : 'Only the owner or an admin can delete a project'}
             onClick={() => setConfirmDelete(true)}
@@ -1815,6 +1906,14 @@ export default function ProjectSettings(): React.JSX.Element {
   useEffect(() => {
     setKeyboardIndex(-1)
   }, [searchQuery])
+  // While a search is showing, the right side follows it: the selected
+  // project if it matches, else the first match (none: a "Pick a project"
+  // panel, below).
+  const searchActive = searchQuery.trim().length > 0
+  useEffect(() => {
+    if (!searchActive || visibleGroups.length === 0) return
+    if (!visibleGroups.some((g) => g.id === selectedId)) setSelectedId(visibleGroups[0].id)
+  }, [searchActive, visibleGroups, selectedId])
   useEffect(() => {
     if (!hasList) return
     requestAnimationFrame(() => searchInputRef.current?.focus())
@@ -1972,7 +2071,7 @@ export default function ProjectSettings(): React.JSX.Element {
                 </Button>
               }
             >
-              Make one to give a few agents a shared chat and dashboards. You can also make one from the Projects page.
+              Make one to give a few agents a shared chat and dashboards.
             </SettingsLoadState>
           )}
         </div>
@@ -1980,7 +2079,7 @@ export default function ProjectSettings(): React.JSX.Element {
     )
   }
 
-  const searching = searchQuery.trim().length > 0
+  const searching = searchActive
   const shownNotice = notice && shown && (notice.forId === null || notice.forId === shown.id) ? notice.text : null
 
   return (
@@ -2047,7 +2146,13 @@ export default function ProjectSettings(): React.JSX.Element {
 
       {/* ── Right: the selected project ── */}
       <div className="flex-1 min-h-0 min-w-0">
-        {selectedId === null ? (
+        {searching && visibleGroups.length === 0 ? (
+          <div className="p-6">
+            <SettingsLoadState kind="empty" title="Pick a project" testId="project-settings-pick">
+              No project matches the search. Clear it to pick one.
+            </SettingsLoadState>
+          </div>
+        ) : selectedId === null ? (
           <div className="p-6">
             <SettingsLoadState kind="loading" title="Loading the project…" />
           </div>

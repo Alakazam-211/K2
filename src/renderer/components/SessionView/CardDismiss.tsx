@@ -10,16 +10,27 @@
 //
 // K2 Design owns the look: Thread card tokens only.
 
-import { useState, type JSX } from 'react'
+import { useState, type JSX, type ReactNode } from 'react'
 import { daemonErrorText } from '@/lib/daemon-error'
+import { CARD_DANGER, CARD_INPUT_CLASS, CARD_MUTED, CARD_TEXT, CardButton } from './cardControls'
 
 /** The daemon's limit on a dismiss reason (`CLOSE_REASON_MAX_CHARS`). */
 export const CARD_DISMISS_REASON_MAX = 200
 
-const muted = 'text-[var(--thread-card-muted,var(--color-text-muted))]'
-const border = 'border-[var(--thread-card-border,var(--color-border))]'
-
-export function CardDismiss({ onDismiss }: { onDismiss: (reason?: string) => unknown }): JSX.Element {
+/** The card's last row: its own muted line on the left (the time frame),
+ *  Dismiss on the right, its text on the card's content edge. Pressed, the
+ *  row becomes the card's inline step, with the same field and buttons as
+ *  a permission card's Deny: the reason on its own line, then "Dismiss
+ *  card" and "Keep" (shared card controls, sized to the card). Put it
+ *  inside the card, last. */
+export function CardDismiss({
+  onDismiss,
+  aside,
+}: {
+  onDismiss: (reason?: string) => unknown
+  /** The card's own footer line (its time frame), kept beside Dismiss. */
+  aside?: ReactNode
+}): JSX.Element {
   const [open, setOpen] = useState(false)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
@@ -45,12 +56,13 @@ export function CardDismiss({ onDismiss }: { onDismiss: (reason?: string) => unk
   }
   if (!open) {
     return (
-      <div className="flex justify-end">
+      <div className="flex min-h-5 items-center gap-2">
+        <div className="min-w-0 flex-1">{aside}</div>
         <button
           type="button"
           data-testid="thread-card-dismiss"
           onClick={() => setOpen(true)}
-          className={`cursor-pointer bg-transparent px-1 text-[10px] ${muted} hover:text-[var(--thread-card-text,var(--color-text-primary))]`}
+          className="-mr-1 flex-shrink-0 cursor-pointer bg-transparent px-1 py-0.5 text-[10px] font-medium text-[var(--thread-card-muted,var(--color-text-muted))] underline-offset-2 transition-colors hover:text-[var(--thread-card-text,var(--color-text-primary))] hover:underline"
           title="Close this card without answering it"
         >
           Dismiss
@@ -60,50 +72,38 @@ export function CardDismiss({ onDismiss }: { onDismiss: (reason?: string) => unk
   }
   return (
     <div data-testid="thread-card-dismiss-form" className="flex flex-col gap-1">
-      <div className="flex gap-1.5">
-        <input
-          autoFocus
-          data-testid="thread-card-dismiss-reason"
-          value={reason}
-          maxLength={CARD_DISMISS_REASON_MAX}
-          disabled={busy}
-          onChange={(e) => setReason(e.target.value.replace(/[\r\n]+/g, ' '))}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              e.stopPropagation()
-              keep()
-            } else if (e.key === 'Enter') {
-              e.preventDefault()
-              void send()
-            }
-          }}
-          placeholder="Why? (optional)"
-          aria-label="Why you are dismissing this card (optional)"
-          className={`min-w-0 flex-1 bg-transparent text-[11px] text-[var(--thread-card-text,var(--color-text-primary))] outline-none border ${border} px-2 py-1`}
-        />
-        <button
-          type="button"
-          data-testid="thread-card-dismiss-confirm"
-          disabled={busy}
-          onClick={() => void send()}
-          className={`cursor-pointer px-2 py-1 text-[11px] border ${border} text-[var(--thread-card-text,var(--color-text-primary))] disabled:cursor-not-allowed disabled:opacity-60`}
-        >
-          Dismiss card
-        </button>
-        <button
-          type="button"
-          data-testid="thread-card-dismiss-keep"
-          disabled={busy}
-          onClick={keep}
-          className={`cursor-pointer bg-transparent px-1 text-[11px] ${muted}`}
-        >
-          Keep
-        </button>
+      {aside}
+      <input
+        autoFocus
+        data-testid="thread-card-dismiss-reason"
+        value={reason}
+        maxLength={CARD_DISMISS_REASON_MAX}
+        disabled={busy}
+        onChange={(e) => setReason(e.target.value.replace(/[\r\n]+/g, ' '))}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            keep()
+          } else if (e.key === 'Enter') {
+            e.preventDefault()
+            void send()
+          }
+        }}
+        placeholder="Why? (optional)"
+        aria-label="Why you are dismissing this card (optional)"
+        className={CARD_INPUT_CLASS}
+        style={{ color: CARD_TEXT }}
+      />
+      <div className="flex items-center gap-1.5">
+        <CardButton label={busy ? 'Dismissing…' : 'Dismiss card'} testId="thread-card-dismiss-confirm" disabled={busy} onClick={() => void send()} />
+        <CardButton label="Keep" testId="thread-card-dismiss-keep" disabled={busy} onClick={keep} />
       </div>
-      <div className={`text-[10px] ${muted}`}>Closes the card without answering. The agent is told; nothing is decided.</div>
+      <div className="text-[10px] leading-relaxed" style={{ color: CARD_MUTED }}>
+        Closes the card without answering. The agent is told; nothing is decided.
+      </div>
       {error ? (
-        <div data-testid="thread-card-dismiss-error" role="alert" className="text-[10px] text-[var(--color-danger)] leading-relaxed">
+        <div data-testid="thread-card-dismiss-error" role="alert" className="text-[10px] leading-relaxed" style={{ color: CARD_DANGER }}>
           {error}
         </div>
       ) : null}

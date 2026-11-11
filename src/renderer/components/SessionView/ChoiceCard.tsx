@@ -35,9 +35,13 @@ export function ChoiceCard(props: ChoiceCardProps): JSX.Element {
   if (p) {
     const actions = props.permissionActions ?? null
     const from = props.from ?? ''
+    // Dismiss (0.46.11): for a person who may answer it, while it waits. A
+    // dismiss applies nothing and is not a denial (the daemon's rule). It
+    // sits in the card's last row, beside its time frame.
+    const onDismiss = props.status === 'pending' && actions && p.view.viewer.canAnswer ? props.onDismiss : undefined
     const card =
       p.view.kind === 'batch' ? (
-        <PermissionBatchCard view={p.view} from={from} actions={actions} nowSec={props.nowSec} />
+        <PermissionBatchCard view={p.view} from={from} actions={actions} nowSec={props.nowSec} onDismiss={onDismiss} />
       ) : (
         <PermissionCard
           view={p.view}
@@ -46,18 +50,10 @@ export function ChoiceCard(props: ChoiceCardProps): JSX.Element {
           actions={actions}
           options={props.options}
           nowSec={props.nowSec}
+          onDismiss={onDismiss}
         />
       )
-    // Dismiss (0.46.11): for a person who may answer it, while it waits. A
-    // dismiss applies nothing and is not a denial (the daemon's rule).
-    const dismissable = props.status === 'pending' && !!props.onDismiss && !!actions && p.view.viewer.canAnswer
-    if (!dismissable || !props.onDismiss) return card
-    return (
-      <div className="flex flex-col gap-1">
-        {card}
-        <CardDismiss onDismiss={props.onDismiss} />
-      </div>
-    )
+    return card
   }
   return <PlainChoiceCard {...props} />
 }
@@ -121,7 +117,9 @@ function PlainChoiceCard({
   from,
 }: ChoiceCardProps): JSX.Element {
   const pending = status === 'pending'
-  const closedLine = status === 'voided' && closedAs ? closedCardLine(closedAs, answeredBy ?? null, from ?? '', closeReason) : null
+  // "Dismissed by You" / "Withdrawn by sales", then ": why" when given.
+  const closedHead = status === 'voided' && closedAs ? closedCardLine(closedAs, answeredBy ?? null, from ?? '') : null
+  const closedWhy = closeReason?.trim() || null
   const [pinClosed, setPinClosed] = useState(false)
   const expiry =
     status === 'expired'
@@ -130,6 +128,11 @@ function PlainChoiceCard({
         ? cardExpiryLabel(expiresAt, nowSec ?? Math.floor(Date.now() / 1000))
         : null
   const [custom, setCustom] = useState('')
+  const expiryLine = expiry ? (
+    <div data-testid="thread-choice-expiry" className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]">
+      {expiry}
+    </div>
+  ) : null
   return (
     <div
       data-testid="thread-choice-card"
@@ -196,14 +199,6 @@ function PlainChoiceCard({
       {openPinForm && pinScope && !pinClosed && (
         <SitePinForm scope={pinScope} label={openPinForm} onDone={() => setPinClosed(true)} onCancel={() => setPinClosed(true)} />
       )}
-      {expiry && (
-        <div
-          data-testid="thread-choice-expiry"
-          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
-        >
-          {expiry}
-        </div>
-      )}
       {error ? (
         <div
           data-testid="thread-choice-error"
@@ -213,13 +208,17 @@ function PlainChoiceCard({
           {error}
         </div>
       ) : null}
-      {closedLine && (
+      {closedHead && (
+        // Closed, not waiting: the question and options are dimmed, and
+        // this muted line sits under a hairline, who closed it set apart
+        // by weight.
         <div
           data-testid="thread-choice-closed"
-          data-closed-as={closedAs ?? undefined}
-          className="text-[10px] text-[var(--thread-card-muted,var(--color-text-muted))]"
+          data-closed-as={closedAs}
+          className="border-t border-[var(--thread-card-border,var(--color-border))] pt-1.5 text-[10px] leading-relaxed text-[var(--thread-card-muted,var(--color-text-muted))]"
         >
-          {closedLine}
+          <span className="font-medium">{closedHead}</span>
+          {closedWhy ? `: ${closedWhy}` : null}
         </div>
       )}
       {status === 'answered' && answeredBy && (
@@ -250,7 +249,11 @@ function PlainChoiceCard({
           </button>
         </div>
       )}
-      {pending && onDismiss && <CardDismiss onDismiss={onDismiss} />}
+      {pending && onDismiss ? (
+        <CardDismiss onDismiss={onDismiss} aside={expiryLine} />
+      ) : (
+        expiryLine
+      )}
     </div>
   )
 }

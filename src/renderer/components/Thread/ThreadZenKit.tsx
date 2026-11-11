@@ -404,6 +404,9 @@ export interface ThreadBubbleSecret {
 /** The bubble's body text style: the bubble's own colour and size. One
  *  object, so the memoized body (and its Markdown parse) skips re-renders. */
 const BUBBLE_BODY_STYLE: CSSProperties = { color: 'inherit', fontSize: 'inherit' }
+/** A dismissed or withdrawn card's question: muted with its card, so the
+ *  closed card never reads as still waiting. */
+const BUBBLE_BODY_CLOSED_STYLE: CSSProperties = { ...BUBBLE_BODY_STYLE, opacity: 0.6 }
 
 export interface ThreadBubbleProps {
   item: OverlayThreadItem
@@ -667,6 +670,7 @@ export const ThreadBubble = memo(function ThreadBubble({
     [menuArgs],
   )
   const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)
+  const cardClosed = kind === 'choice' && item.doc.choice?.status === 'voided' && !!item.doc.choice.closedAs
   const maxWidth = threadBubbleMaxWidth(narrow)
   const column = threadSenderRootProps(mine ? null : sender, maxWidth, narrow)
   // Runs (the phone's layout): which details this bubble carries.
@@ -707,7 +711,7 @@ export const ThreadBubble = memo(function ThreadBubble({
       }}
     >
       {reply && <ThreadReplyQuote reply={reply} />}
-      {bodyText && <ChatMessageBody text={bodyText} style={BUBBLE_BODY_STYLE} />}
+      {bodyText && <ChatMessageBody text={bodyText} style={cardClosed ? BUBBLE_BODY_CLOSED_STYLE : BUBBLE_BODY_STYLE} />}
       {kind === 'choice' && item.doc.choice && (
         <ChoiceCard
           options={item.doc.choice.options}

@@ -411,14 +411,16 @@ export function SecretCard({
   if (!pending) {
     // 0.46.11: a dismissed or withdrawn card says who and why
     // (prd-popup-close-and-card-dismiss-v1 B8).
-    const closed =
+    // "not given" on the first line, then who closed it and why on its own
+    // muted line ("Dismissed by You: …"), as a closed choice card says it.
+    const closedHead =
       secret.status === 'voided' && (secret.closedAs === 'dismissed' || secret.closedAs === 'withdrawn')
-        ? closedCardLine(secret.closedAs, answeredBy ?? null, agent, secret.closeReason).replace(/^./, (c) => c.toLowerCase())
+        ? closedCardLine(secret.closedAs, answeredBy ?? null, agent)
         : null
-    const done =
-      secret.status === 'set' ? 'saved' : secret.status === 'expired' ? 'request expired' : closed ? `not given: ${closed}` : 'not given'
+    const closedWhy = secret.closeReason?.trim() || null
+    const done = secret.status === 'set' ? 'saved' : secret.status === 'expired' ? 'request expired' : 'not given'
     return (
-      <div data-testid="thread-secret-card" data-status={secret.status} className="mt-1">
+      <div data-testid="thread-secret-card" data-status={secret.status} data-closed-as={closedHead ? secret.closedAs : undefined} className="mt-1 flex flex-col gap-0.5">
         <div className={`text-[11px] ${muted}`} data-testid="thread-secret-set">
           <span className="font-mono">{secret.name}</span> {done}
           {secret.status === 'set' && answeredBy ? <span data-testid="thread-secret-answered-by"> by {answeredBy}</span> : null}
@@ -429,6 +431,12 @@ export function SecretCard({
             </>
           ) : null}
         </div>
+        {closedHead && (
+          <div className={`text-[10px] leading-relaxed ${muted}`} data-testid="thread-secret-closed">
+            <span className="font-medium">{closedHead}</span>
+            {closedWhy ? `: ${closedWhy}` : null}
+          </div>
+        )}
       </div>
     )
   }

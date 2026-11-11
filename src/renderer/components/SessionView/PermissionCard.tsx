@@ -22,9 +22,22 @@ import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
 import { GitAccessSetupForm } from './GitAccessSetupForm'
 import { useCallback, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
-import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
+import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel } from './overlayThread'
 import { PermissionReveal } from './PermissionReveal'
+import { CardDismiss } from './CardDismiss'
+import {
+  CARD_ACCENT,
+  CARD_DANGER,
+  CARD_EDGE,
+  CARD_FILL,
+  CARD_INPUT_CLASS,
+  CARD_MUTED,
+  CARD_RADIUS,
+  CARD_TEXT,
+  CARD_TEXT2,
+  CardButton,
+} from './cardControls'
 import {
   APP_USERS_SWITCH_COVERS,
   approverWord,
@@ -48,16 +61,16 @@ import {
   type RevealMode,
 } from './permissionCardView'
 
-const EDGE = 'var(--thread-card-border,var(--color-border))'
-const ACCENT = 'var(--thread-card-accent,var(--color-accent))'
-const FILL = 'var(--thread-card-bg,var(--color-bg))'
-const TEXT = 'var(--thread-card-text,var(--color-text-primary))'
-const TEXT2 = 'var(--thread-card-text-secondary,var(--color-text-secondary))'
-const MUTED = 'var(--thread-card-muted,var(--color-text-muted))'
+const EDGE = CARD_EDGE
+const ACCENT = CARD_ACCENT
+const FILL = CARD_FILL
+const TEXT = CARD_TEXT
+const TEXT2 = CARD_TEXT2
+const MUTED = CARD_MUTED
 const AMBER = 'var(--zen-needs-you,var(--color-status-needs-you,#e0a43a))'
 const OK = 'var(--zen-ok,var(--color-status-ok,#5cc08a))'
-const DANGER = 'var(--zen-danger,var(--color-status-error,#f07167))'
-const RADIUS = 'rounded-[var(--thread-card-radius,0px)]'
+const DANGER = CARD_DANGER
+const RADIUS = CARD_RADIUS
 
 const TONE: Record<'ok' | 'danger' | 'muted', string> = { ok: OK, danger: DANGER, muted: MUTED }
 
@@ -78,46 +91,18 @@ function CardFrame({ testId, children, attrs }: { testId: string; children: Reac
   )
 }
 
-/** A card button: ChoiceCard's chip, side by side. `primary` is filled. */
-function CardButton({
-  label,
-  testId,
-  onClick,
-  primary = false,
-  danger = false,
-  disabled = false,
-}: {
-  label: string
-  testId: string
-  onClick: () => void
-  primary?: boolean
-  danger?: boolean
-  disabled?: boolean
-}): JSX.Element {
-  const edge = primary ? ACCENT : danger ? `color-mix(in srgb, ${DANGER} 60%, ${EDGE})` : EDGE
-  const fill = primary ? `color-mix(in srgb, ${ACCENT} 18%, transparent)` : 'transparent'
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      data-label={label}
-      data-chamfer=""
-      disabled={disabled}
-      onClick={onClick}
-      style={{ ...chamferVars({ cut: chamferCutFor(24), fill, edge, border: 1 }), borderColor: edge, background: fill, color: primary ? TEXT : TEXT2 }}
-      className={`${RADIUS} border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer hover:text-[var(--thread-card-text,var(--color-text-primary))] disabled:cursor-not-allowed disabled:opacity-50`}
-    >
-      {label}
-    </button>
-  )
-}
-
 function Muted({ children, testId, style }: { children: ReactNode; testId?: string; style?: CSSProperties }): JSX.Element {
   return (
     <div data-testid={testId} className="text-[10px]" style={{ color: MUTED, ...style }}>
       {children}
     </div>
   )
+}
+
+/** The card's last row: its time frame, and Dismiss beside it when given. */
+function CardFooter({ expiry, onDismiss }: { expiry: string | null; onDismiss?: (reason?: string) => unknown }): JSX.Element | null {
+  const line = expiry ? <Muted testId="permission-expiry">{expiry}</Muted> : null
+  return onDismiss ? <CardDismiss onDismiss={onDismiss} aside={line} /> : line
 }
 
 /** "Loosens access" (amber) or "Tightens access". */
@@ -206,7 +191,7 @@ function ErrorLine({ text }: { text: string | null }): JSX.Element | null {
   )
 }
 
-const inputClass = `w-full box-border bg-transparent px-2 py-1 text-[11px] outline-none border border-[var(--thread-card-border,var(--color-border))] ${RADIUS}`
+const inputClass = CARD_INPUT_CLASS
 
 /** The note box for people below the floor (§4.3, §17.5). */
 export function PermissionNoteBox({
@@ -682,10 +667,13 @@ export interface PermissionCardProps {
    *  Empty (a wait viewer, "applying"): no buttons, whatever the view says. */
   options?: { label: string }[]
   nowSec?: number
+  /** 0.46.11: the card's Dismiss (ChoiceCard gives it to a person who may
+   *  answer, while the card waits); drawn in the card's last row. */
+  onDismiss?: (reason?: string) => unknown
 }
 
 /** One permission request (`action.id = "permission"`). */
-export function PermissionCard({ view, resultMessage, from, actions, options, nowSec }: PermissionCardProps): JSX.Element {
+export function PermissionCard({ view, resultMessage, from, actions, options, nowSec, onDismiss }: PermissionCardProps): JSX.Element {
   // The daemon draws the options per viewer; no label offered, no button.
   const offered = options === undefined || options.length > 0
   const now = nowSec ?? Math.floor(Date.now() / 1000)
@@ -734,8 +722,8 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         onReveal={view.reveal ? setRevealed : undefined}
       />
       {revealed && <PermissionReveal secret={revealed} onGone={forget} />}
-      {expiry && <Muted testId="permission-expiry">{expiry}</Muted>}
       {approver && <SettingsLink item={view} actions={actions} />}
+      <CardFooter expiry={expiry} onDismiss={onDismiss} />
     </CardFrame>
   )
 }
@@ -745,10 +733,13 @@ export interface PermissionBatchCardProps {
   from: string
   actions: PermissionCardActions | null
   nowSec?: number
+  /** 0.46.11: the card's Dismiss (ChoiceCard gives it to a person who may
+   *  answer, while the card waits); drawn in the card's last row. */
+  onDismiss?: (reason?: string) => unknown
 }
 
 /** Several requests from one agent at once (`permission.batch`, §4.5). */
-export function PermissionBatchCard({ view, from, actions, nowSec }: PermissionBatchCardProps): JSX.Element {
+export function PermissionBatchCard({ view, from, actions, nowSec, onDismiss }: PermissionBatchCardProps): JSX.Element {
   const now = nowSec ?? Math.floor(Date.now() / 1000)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -825,7 +816,7 @@ export function PermissionBatchCard({ view, from, actions, nowSec }: PermissionB
         ))}
       </div>
       {!approver && <Muted testId="permission-approvers">Who can answer: {view.approvers.label}</Muted>}
-      {expiry && <Muted testId="permission-expiry">{expiry}</Muted>}
+      <CardFooter expiry={expiry} onDismiss={onDismiss} />
     </CardFrame>
   )
 }

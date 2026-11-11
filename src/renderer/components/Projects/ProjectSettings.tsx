@@ -9,7 +9,11 @@
 //
 // Master-detail: left column = the selectable PROJECT list (search +
 // ArrowUp/ArrowDown/Enter + scroll-into-view, Pinned first like the
-// nav); right = the selected project.
+// nav); right = the selected project. The list column, its rows and the
+// detail's header are the Workspaces / Agents ones (ProjectsSection), and
+// every setting is a row of a `SettingsGroup card`, so the page reads like
+// the rest of Settings. With no projects yet (or while the list loads or
+// after it failed) the page is one column: a title and one state card.
 //
 // 0.46.1 LAYOUT (Rosson, 2026-10-18; eval-project-settings-v1.md): no
 // tabs and no long single scroll with a nested tab strip. A fixed
@@ -39,13 +43,19 @@
 //   - Switching never blanks: a project seen before paints at once from
 //     the store's show cache and revalidates; an unseen one keeps the
 //     previous project on screen (dimmed, inert) until its show lands.
-//   - Name / pin / point of contact are optimistic: applied at once to
-//     this view and the store's list, confirmed from the daemon's answer,
-//     rolled back with an error when it refuses.
+//   - Name / pin / color / point of contact are optimistic: applied at
+//     once to this view and the store's list, confirmed from the daemon's
+//     answer, rolled back with an error when it refuses.
 //   - The picture comes from the shared icon cache (`useGroupIcon`), keyed
 //     by the daemon's `iconKey`, and is requested in parallel with show.
+//
+// Saves say so: a quiet "Saved" by the control after a write lands, and
+// "Couldn't save: … Nothing changed; try again." under the row when the
+// daemon refuses (SettingControls' SaveNote / SaveError). Deleting a
+// project, a dashboard or an agent from the project asks first, in the
+// same centred dialog as the rest of Settings (ConfirmSheet).
 
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import {
   getCachedShow,
@@ -55,13 +65,13 @@ import {
 } from '@/stores/project-groups'
 import { activeHostKey, useConnectHostStore } from '@/stores/connect-host'
 import { useSettingsStore } from '@/stores/settings'
-import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
 import { usePageViewStore } from '@/stores/page-view'
 import {
   addDashboardPane,
   addProjectGroupMember,
   createErrorMessage,
+  createProjectGroup,
   createProjectGroupDashboard,
   daemonErrorInfo,
   deleteProjectGroup,
@@ -105,51 +115,57 @@ import {
   type ProjectSettingsCaps,
 } from './project-settings'
 import { moveDashboardId, orderedDashboards } from './project-tabs'
-import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
-import { Button, Callout, Input, Segmented, Toggle, cx } from '@/components/ui'
+import {
+  AVATAR_ROUND,
+  SETTING_FIELD_WIDTH,
+  SETTING_ROW_HINT,
+  SaveError,
+  SaveNote,
+  SettingDropdown,
+  SettingRow,
+  SettingsGroup,
+  SettingsLoadState,
+  useSaveStatus,
+  type SaveState,
+} from '@/components/Settings/controls/SettingControls'
+import { AccessSheet, ConfirmSheet, DIALOG_FIELD, FailedNote, Field } from '@/components/Settings/sections/AccessDialogs'
+import { Button, Callout, Input, SearchField, Segmented, Surface, Tag, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
 
 /** Below this width (px) of the detail body the two halves stack. */
 export const HALVES_MIN_WIDTH = 720
 
-/** Uniform section header (the ProjectsSection h3 idiom). */
-function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <h3 className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
-      {children}
-    </h3>
-  )
-}
-
-/** One labelled row: label column + control (wraps at narrow widths). */
-function Row({
-  label,
-  settingId,
-  testId,
-  children,
-}: {
-  label: string
-  settingId?: string
-  testId?: string
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <div
-      className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2 border-b border-[var(--color-border)] last:border-b-0"
-      data-settings-id={settingId}
-      data-testid={testId}
-    >
-      <span className="w-24 flex-shrink-0 text-xs text-[var(--color-text-secondary)]">{label}</span>
-      <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">{children}</div>
-    </div>
-  )
-}
-
+/** The server's reason for a refusal, in its own words (no prefix). */
 function errorMessage(err: unknown): string {
-  const { hint } = daemonErrorInfo(err)
+  const { code, hint } = daemonErrorInfo(err)
   if (hint) return hint
-  return err instanceof Error ? err.message : String(err)
+  const raw = err instanceof Error ? err.message : String(err)
+  // The role floor's bare code reads as words, not as "forbidden".
+  if ((err instanceof DaemonHttpError && err.code === 'forbidden') || code === 'forbidden' || raw.trim() === 'forbidden') {
+    return 'only the owner or an admin can change this'
+  }
+  return raw
+}
+
+/** A failed write that isn't a plain save (delete, add, move): what failed,
+ *  that nothing changed, and the server's reason, quietly. */
+function ActionError({ what, reason }: { what: string; reason: string }): React.JSX.Element {
+  return (
+    <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+      {what} Nothing changed; try again. The server said: {reason.trim().replace(/[.\s]+$/, '')}.
+    </p>
+  )
+}
+
+/** "Saving…" beside a control while a write is in flight. */
+function SavingNote({ on }: { on: boolean }): React.JSX.Element | null {
+  if (!on) return null
+  return (
+    <span className="type-hint text-[var(--color-text-secondary)] whitespace-nowrap" aria-live="polite">
+      Saving…
+    </span>
+  )
 }
 
 /** Width of an element, live (ResizeObserver). `fallback` until the
@@ -177,20 +193,22 @@ function useElementWidth(fallback: number): [React.RefObject<HTMLDivElement | nu
 function NameField({
   value,
   label,
+  hint,
   readOnly,
   settingId,
   onSave,
 }: {
   value: string
   label: string
+  hint: string
   readOnly: boolean
   settingId?: string
   onSave: (name: string) => Promise<void>
 }): React.JSX.Element {
   const [draft, setDraft] = useState(value)
   const [focused, setFocused] = useState(false)
-  const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
-  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const save = useSaveStatus()
 
   useEffect(() => {
     // A rename elsewhere wins over an unfocused field; a field being
@@ -202,28 +220,29 @@ function NameField({
     const name = draft.trim()
     if (!name || name === value) {
       setDraft(value)
-      setError(null)
       return
     }
-    setStatus('saving')
+    setSaving(true)
     try {
       await onSave(name)
-      setError(null)
-      setStatus('saved')
+      save.saved()
     } catch (err) {
-      setError(createErrorMessage(err))
-      setStatus('idle')
+      save.failed(new Error(createErrorMessage(err)))
+    } finally {
+      setSaving(false)
     }
   }
 
   return (
-    <Row label="Name" settingId={settingId}>
+    <SettingRow label="Name" hint={hint} settingId={settingId} below={belowFor(save.state)}>
+      <SavingNote on={saving} />
+      <SaveNote state={save.state} />
       <Input
         type="text"
         aria-label={`${label} name`}
         value={draft}
         readOnly={readOnly}
-        disabled={status === 'saving'}
+        disabled={saving}
         onFocus={() => setFocused(true)}
         onBlur={() => {
           setFocused(false)
@@ -231,7 +250,7 @@ function NameField({
         }}
         onChange={(e) => {
           setDraft(e.target.value)
-          setStatus('idle')
+          if (save.state !== 'idle') save.reset()
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -239,33 +258,43 @@ function NameField({
             // Local Esc: revert WITHOUT closing Settings.
             e.stopPropagation()
             setDraft(value)
-            setError(null)
+            save.reset()
           }
         }}
-        className="flex-1 min-w-[8rem] text-xs"
+        className={cx(SETTING_FIELD_WIDTH, 'type-control')}
       />
-      <span className="w-12 text-[10px] text-[var(--color-text-muted)]" aria-live="polite">
-        {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ''}
-      </span>
-      {error && <p className="basis-full text-[10px] text-[var(--color-status-error-soft)]">{error}</p>}
-    </Row>
+    </SettingRow>
+  )
+}
+
+/** A SaveError that is empty when there's nothing to say (SettingRow's
+ *  `below` takes a node; null keeps the row tight). */
+function belowFor(state: SaveState, extra?: React.ReactNode): React.ReactNode {
+  if (typeof state !== 'object' && !extra) return undefined
+  return (
+    <>
+      <SaveError state={state} />
+      {extra}
+    </>
   )
 }
 
 // ── Dashboards (left half; a sticky selector, no tab strip) ──────────────
 
-/** "New dashboard": a button that becomes a name field in place. */
-function NewDashboardControl({
+/** "New dashboard": the button and its dialog (name, then Add). */
+function NewDashboardDialog({
   groupId,
   onCreated,
+  onClose,
 }: {
   groupId: string
   onCreated: (dashboard: ProjectGroupDashboard) => void
+  onClose: () => void
 }): React.JSX.Element {
-  const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const fieldId = useId()
 
   const submit = async (): Promise<void> => {
     const trimmed = name.trim()
@@ -273,52 +302,59 @@ function NewDashboardControl({
     setBusy(true)
     try {
       const dashboard = await createProjectGroupDashboard(primaryScope(), groupId, trimmed)
-      setEditing(false)
-      setName('')
-      setError(null)
       onCreated(dashboard)
     } catch (err) {
       setError(createErrorMessage(err))
-    } finally {
       setBusy(false)
     }
   }
 
-  if (!editing) {
-    return (
-      <Button variant="quiet" onClick={() => setEditing(true)}>
-        New dashboard
-      </Button>
-    )
-  }
   return (
-    <span className="flex items-center gap-1.5" title={error ?? undefined}>
-      <Input
-        autoFocus
-        type="text"
-        aria-label="New dashboard name"
-        value={name}
-        disabled={busy}
-        onChange={(e) => {
-          setName(e.target.value)
-          setError(null)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') void submit()
-          else if (e.key === 'Escape') {
-            e.stopPropagation()
-            setEditing(false)
-            setName('')
+    <AccessSheet
+      title="New dashboard"
+      intro="It opens as a new tab on the project’s page. Add files to it here once it exists."
+      onClose={onClose}
+      busy={busy}
+      testId="new-dashboard-dialog"
+    >
+      <Field label="Name" htmlFor={fieldId}>
+        <Input
+          id={fieldId}
+          autoFocus
+          type="text"
+          value={name}
+          disabled={busy}
+          onChange={(e) => {
+            setName(e.target.value)
             setError(null)
-          }
-        }}
-        placeholder="Dashboard name"
-        className={cx('w-32', error && 'border-[var(--color-status-error-soft)]')}
-      />
-      <Button variant="accent" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
-        {busy ? 'Adding…' : 'Add'}
-      </Button>
-    </span>
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void submit()
+          }}
+          placeholder="Release status"
+          className={DIALOG_FIELD}
+        />
+      </Field>
+      {error && (
+        <FailedNote what="Couldn’t add the dashboard." next="Nothing was added. Change the name and try again." detail={error} />
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+          Cancel
+        </Button>
+        <Button variant="accent" size="md" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
+          {busy ? 'Adding…' : 'Add dashboard'}
+        </Button>
+      </div>
+    </AccessSheet>
+  )
+}
+
+function ChevronIcon({ dir }: { dir: 'left' | 'right' }): React.JSX.Element {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+      <path d={dir === 'left' ? 'M10 3.5 5.5 8l4.5 4.5' : 'M6 3.5 10.5 8 6 12.5'} />
+    </svg>
   )
 }
 
@@ -327,11 +363,13 @@ function DashboardsSection({
   caps,
   docs,
   docsError,
+  onReloadDocs,
 }: {
   detail: ProjectGroupShow
   caps: ProjectSettingsCaps
   docs: ProjectGroupHtmlDoc[] | null
   docsError: string | null
+  onReloadDocs: () => void
 }): React.JSX.Element {
   const readOnly = !caps.canEditDashboards
   const dashboards = useMemo(() => orderedDashboards(detail.dashboards), [detail.dashboards])
@@ -355,16 +393,33 @@ function DashboardsSection({
 
   const [busy, setBusy] = useState(false)
   const [docBusy, setDocBusy] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<ProjectGroupDashboard | null>(null)
+  /** The last failed dashboard write, shown under the row it came from. */
+  const [failure, setFailure] = useState<{ where: 'move' | 'delete' | string; what: string; reason: string } | null>(null)
+  /** What the last write did, for a moment ("Added to Main"). */
+  const [done, setDone] = useState<{ where: string; text: string } | null>(null)
+  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (doneTimer.current) clearTimeout(doneTimer.current)
+  }, [])
+  const flash = (where: string, text: string): void => {
+    if (doneTimer.current) clearTimeout(doneTimer.current)
+    setDone({ where, text })
+    doneTimer.current = setTimeout(() => setDone(null), 2500)
+  }
 
   const reorder = useCallback(
     async (dashboardId: string, direction: -1 | 1): Promise<void> => {
       const order = moveDashboardId(orderedIds, dashboardId, direction)
       if (order === null || busy) return
       setBusy(true)
+      setFailure(null)
       try {
         await reorderProjectGroupDashboards(primaryScope(), detail.id, order)
+        flash('move', direction < 0 ? 'Moved earlier' : 'Moved later')
       } catch (err) {
-        useToastStore.getState().addToast(`Couldn't move the dashboard: ${errorMessage(err)}`, 'error')
+        setFailure({ where: 'move', what: 'Couldn’t move the dashboard.', reason: errorMessage(err) })
       } finally {
         setBusy(false)
       }
@@ -374,26 +429,19 @@ function DashboardsSection({
 
   const deleteDashboard = useCallback(
     async (dashboard: ProjectGroupDashboard): Promise<void> => {
-      const confirmed = await useConfirmDialogStore.getState().confirm({
-        title: `Delete dashboard "${dashboard.name}"?`,
-        message: 'This removes the dashboard and how it is laid out. Agents and files are not touched.',
-        confirmLabel: 'Delete dashboard',
-        destructive: true,
-      })
-      if (!confirmed) return
+      setConfirmDelete(null)
+      setFailure(null)
       try {
         await deleteProjectGroupDashboard(primaryScope(), detail.id, dashboard.id)
         setSelectedId(null)
+        useToastStore.getState().addToast(`Deleted the dashboard “${dashboard.name}”.`, 'success')
       } catch (err) {
         const { code } = daemonErrorInfo(err)
-        useToastStore
-          .getState()
-          .addToast(
-            code === 'last_dashboard'
-              ? 'A project keeps at least one dashboard.'
-              : `Couldn't delete the dashboard: ${errorMessage(err)}`,
-            'error',
-          )
+        setFailure({
+          where: 'delete',
+          what: 'Couldn’t delete the dashboard.',
+          reason: code === 'last_dashboard' ? 'a project keeps at least one dashboard' : errorMessage(err),
+        })
       }
     },
     [detail.id],
@@ -403,19 +451,20 @@ function DashboardsSection({
     async (doc: ProjectGroupHtmlDoc, dashboard: ProjectGroupDashboard, shown: boolean): Promise<void> => {
       const key = `${doc.workspaceId}:${doc.filePath}`
       setDocBusy(key)
+      setFailure(null)
       const pane = { kind: 'htmlDoc' as const, workspaceId: doc.workspaceId, filePath: doc.filePath }
       try {
         const result = shown
           ? await removeDashboardPane(primaryScope(), detail.id, dashboard.id, pane)
           : await addDashboardPane(primaryScope(), detail.id, dashboard.id, pane)
         setSeen((s) => ({ ...s, [result.id]: result }))
+        flash(key, shown ? `Removed from ${dashboard.name}` : `Added to ${dashboard.name}`)
       } catch (err) {
-        useToastStore
-          .getState()
-          .addToast(
-            `Couldn't ${shown ? 'remove' : 'add'} ${doc.fileName}: ${errorMessage(err)}`,
-            'error',
-          )
+        setFailure({
+          where: key,
+          what: `Couldn’t ${shown ? 'remove' : 'add'} ${doc.fileName}.`,
+          reason: errorMessage(err),
+        })
       } finally {
         setDocBusy(null)
       }
@@ -423,8 +472,62 @@ function DashboardsSection({
     [detail.id],
   )
 
+  const doneNote = (where: string): React.JSX.Element | null =>
+    done?.where === where ? (
+      <span role="status" className="inline-flex items-center gap-1 type-hint text-[var(--color-status-ok-soft)] whitespace-nowrap">
+        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+          <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+        </svg>
+        {done.text}
+      </span>
+    ) : null
+
+  const failureFor = (where: string): React.ReactNode =>
+    failure?.where === where ? <ActionError what={failure.what} reason={failure.reason} /> : undefined
+
+  const filesState: React.ReactNode =
+    docsError && docs === null ? (
+      <SettingsLoadState
+        kind="error"
+        title="Couldn’t load this project’s files"
+        detail={docsError}
+        action={<Button variant="quiet" onClick={onReloadDocs}>Try again</Button>}
+      >
+        The files its agents shared can’t be listed right now.
+      </SettingsLoadState>
+    ) : docs === null ? (
+      <SettingsLoadState kind="loading" title="Loading files…" />
+    ) : docs.length === 0 ? (
+      <SettingsLoadState kind="empty" title="No files yet">
+        Files an agent in this project adds to its Files list show up here, ready to put on a dashboard.
+      </SettingsLoadState>
+    ) : undefined
+
   return (
     <>
+      {creating && (
+        <NewDashboardDialog
+          groupId={detail.id}
+          onClose={() => setCreating(false)}
+          onCreated={(d) => {
+            setCreating(false)
+            setSelectedId(d.id)
+            useToastStore.getState().addToast(`Added the dashboard “${d.name}”.`, 'success')
+          }}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmSheet
+          testId="delete-dashboard-confirm"
+          title={`Delete the dashboard “${confirmDelete.name}”?`}
+          message="Its tab and how it’s laid out go away. The agents and their files stay as they are."
+          confirmLabel="Delete dashboard"
+          destructive
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => void deleteDashboard(confirmDelete)}
+        />
+      )}
+
       {/* The selector bar: a DIRECT child of the left half, sticky at its
           top AND bottom, so it stays in view however far the half is
           scrolled (above it General, below it the dashboard). */}
@@ -433,134 +536,152 @@ function DashboardsSection({
         role="group"
         aria-label="Dashboard picker"
         data-settings-id="project-groups.dashboards"
-        className="sticky top-0 bottom-0 z-10 bg-[var(--color-bg)] border-y border-[var(--color-border)] py-2 flex flex-wrap items-center gap-2"
+        className="sticky top-0 bottom-0 z-10 bg-[var(--color-bg)] pt-3 pb-2 space-y-2"
       >
-        <SectionTitle>Dashboards</SectionTitle>
-        <div className="flex-1 min-w-[9rem]">
-          <SettingDropdown
-            fullWidth
-            menuAlign="left"
-            ariaLabel="Dashboard"
-            value={active?.id ?? ''}
-            disabled={dashboards.length === 0}
-            onChange={(value) => setSelectedId(value)}
-            options={
-              dashboards.length === 0
-                ? [{ value: '', label: 'No dashboards' }]
-                : dashboards.map((d) => ({ value: d.id, label: d.name }))
-            }
-          />
+        <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
+          <h3 className="type-heading text-[var(--color-text-primary)]">Dashboards</h3>
+          {!readOnly && (
+            <Button variant="quiet" onClick={() => setCreating(true)}>
+              New dashboard
+            </Button>
+          )}
         </div>
-        {!readOnly && dashboards.length > 1 && active && (
-          <span className="flex items-center gap-1">
-            <Button
-              variant="quiet"
-              aria-label="Move dashboard earlier"
-              title="Move earlier"
-              disabled={busy || activeIndex <= 0}
-              onClick={() => void reorder(active.id, -1)}
-            >
-              ‹
-            </Button>
-            <Button
-              variant="quiet"
-              aria-label="Move dashboard later"
-              title="Move later"
-              disabled={busy || activeIndex >= dashboards.length - 1}
-              onClick={() => void reorder(active.id, 1)}
-            >
-              ›
-            </Button>
-          </span>
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <SettingDropdown
+              fullWidth
+              menuAlign="left"
+              ariaLabel="Dashboard"
+              value={active?.id ?? ''}
+              disabled={dashboards.length === 0}
+              onChange={(value) => {
+                setSelectedId(value)
+                setFailure(null)
+              }}
+              options={
+                dashboards.length === 0
+                  ? [{ value: '', label: 'No dashboards' }]
+                  : dashboards.map((d) => ({ value: d.id, label: d.name }))
+              }
+            />
+          </div>
+          {!readOnly && dashboards.length > 1 && active && (
+            <>
+              <Button
+                variant="quiet"
+                aria-label="Move dashboard earlier"
+                title="Move this tab earlier"
+                disabled={busy || activeIndex <= 0}
+                onClick={() => void reorder(active.id, -1)}
+                className="h-full"
+              >
+                <ChevronIcon dir="left" />
+              </Button>
+              <Button
+                variant="quiet"
+                aria-label="Move dashboard later"
+                title="Move this tab later"
+                disabled={busy || activeIndex >= dashboards.length - 1}
+                onClick={() => void reorder(active.id, 1)}
+                className="h-full"
+              >
+                <ChevronIcon dir="right" />
+              </Button>
+            </>
+          )}
+        </div>
+        {(done?.where === 'move' || failure?.where === 'move') && (
+          <div>
+            {doneNote('move')}
+            {failureFor('move')}
+          </div>
         )}
-        {!readOnly && <NewDashboardControl groupId={detail.id} onCreated={(d) => setSelectedId(d.id)} />}
       </div>
 
-      <section aria-label="Dashboards">
+      <section aria-label="Dashboards" className="space-y-6 pt-2">
         {active && (
-          <div className="space-y-1">
-            <NameField
-              key={active.id}
-              label="Dashboard"
-              value={active.name}
-              readOnly={readOnly}
-              settingId="project-groups.dashboard-name"
-              onSave={async (name) => {
-                await renameProjectGroupDashboard(primaryScope(), detail.id, active.id, name)
-              }}
-            />
-
-            <div className="pt-1 space-y-1.5" data-settings-id="project-groups.dashboard-files">
-              <p className="text-xs text-[var(--color-text-secondary)]">Files</p>
-              {docsError ? (
-                <p className="text-[11px] text-[var(--color-status-error-soft)]">
-                  Couldn&apos;t load this project&apos;s files: {docsError}
-                </p>
-              ) : docs === null ? (
-                <p className="text-[11px] text-[var(--color-text-muted)]">Loading files…</p>
-              ) : docs.length === 0 ? (
-                <p className="text-[11px] text-[var(--color-text-muted)]">
-                  No files yet. Add files from an agent&apos;s Files tree.
-                </p>
-              ) : (
-                <ul className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
-                  {docs.map((doc) => {
-                    const key = `${doc.workspaceId}:${doc.filePath}`
-                    const html = /\.html?$/i.test(doc.filePath)
-                    const shown = html && dashboardShowsDoc(layoutOf(active), detail.pocWorkspaceId, doc)
-                    return (
-                      <li key={key} className="flex items-center gap-2 py-1.5 min-w-0">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs text-[var(--color-text-primary)] truncate">
-                            {doc.fileName}
-                            <span className="ml-2 text-[10px] text-[var(--color-text-muted)]">
-                              {doc.agentName ?? doc.workspaceName ?? ''}
-                            </span>
-                            {doc.missing ? (
-                              <span className="ml-2 text-[10px] text-[var(--color-status-warn-soft)]">missing</span>
-                            ) : null}
-                          </p>
-                          <p className="text-[10px] text-[var(--color-text-muted)] truncate" title={doc.filePath}>
-                            {html ? doc.filePath : 'Only HTML files can show on a dashboard for now'}
-                          </p>
-                        </div>
-                        {html && !readOnly && (
-                          <Button
-                            variant={shown ? 'quiet' : 'default'}
-                            disabled={docBusy === key}
-                            onClick={() => void toggleDoc(doc, active, shown)}
-                          >
-                            {shown ? `Remove from ${active.name}` : `Add to ${active.name}`}
-                          </Button>
-                        )}
-                        {html && readOnly && shown && (
-                          <span className="text-[10px] text-[var(--color-text-muted)]">On {active.name}</span>
-                        )}
-                      </li>
-                    )
-                  })}
-                </ul>
-              )}
-            </div>
-
-            {!readOnly && (
-              <div className="flex items-center gap-3 pt-2">
-                <p className="flex-1 text-[10px] text-[var(--color-text-muted)]">
-                  {lastOne
-                    ? 'A project keeps at least one dashboard.'
-                    : 'Deleting removes this dashboard only. Agents and files are not touched.'}
-                </p>
-                <Button
-                  variant="quiet"
-                  disabled={lastOne}
-                  onClick={() => void deleteDashboard(active)}
-                  className="text-[var(--color-status-error-soft)]"
+          <>
+            <SettingsGroup card>
+              <NameField
+                key={active.id}
+                label="Dashboard"
+                hint="The name on its tab."
+                value={active.name}
+                readOnly={readOnly}
+                settingId="project-groups.dashboard-name"
+                onSave={async (name) => {
+                  await renameProjectGroupDashboard(primaryScope(), detail.id, active.id, name)
+                }}
+              />
+              {!readOnly && (
+                <SettingRow
+                  label="Delete dashboard"
+                  hint={
+                    lastOne
+                      ? 'A project keeps at least one dashboard, so this one stays.'
+                      : 'Removes this tab only. Files stay.'
+                  }
+                  below={failureFor('delete')}
                 >
-                  Delete dashboard
-                </Button>
-              </div>
-            )}
-          </div>
+                  <Button
+                    variant="danger-quiet"
+                    disabled={lastOne}
+                    onClick={() => setConfirmDelete(active)}
+                  >
+                    Delete dashboard
+                  </Button>
+                </SettingRow>
+              )}
+            </SettingsGroup>
+
+            <SettingsGroup
+              card
+              title="Files"
+              hint={`HTML files your agents shared. Put one on ${active.name} to see it there.`}
+              settingId="project-groups.dashboard-files"
+              state={filesState}
+            >
+              {docs?.map((doc) => {
+                const key = `${doc.workspaceId}:${doc.filePath}`
+                const html = /\.html?$/i.test(doc.filePath)
+                const shown = html && dashboardShowsDoc(layoutOf(active), detail.pocWorkspaceId, doc)
+                const owner = doc.agentName ?? doc.workspaceName ?? ''
+                return (
+                  <SettingRow
+                    key={key}
+                    label={
+                      <span className="flex items-center gap-2 min-w-0">
+                        <span className="type-name truncate">{doc.fileName}</span>
+                        {doc.missing ? <Tag tone="warn" data-case="as-written">Missing</Tag> : null}
+                      </span>
+                    }
+                    hint={
+                      html ? (
+                        <span className="block truncate" title={doc.filePath}>
+                          {owner ? `From ${owner}` : doc.filePath}
+                        </span>
+                      ) : (
+                        'Only HTML files can show on a dashboard for now'
+                      )
+                    }
+                    below={failureFor(key)}
+                  >
+                    {doneNote(key)}
+                    {html && !readOnly && (
+                      <Button
+                        variant="quiet"
+                        disabled={docBusy === key}
+                        onClick={() => void toggleDoc(doc, active, shown)}
+                      >
+                        {docBusy === key ? 'Saving…' : shown ? `Remove from ${active.name}` : `Add to ${active.name}`}
+                      </Button>
+                    )}
+                    {html && readOnly && shown && <Tag tone="neutral" data-case="as-written">On {active.name}</Tag>}
+                  </SettingRow>
+                )
+              })}
+            </SettingsGroup>
+          </>
         )}
       </section>
     </>
@@ -581,49 +702,56 @@ function AgentsSection({
   const readOnly = !caps.canEdit
   const registered = useProjectsStore((s) => s.projects)
   const [query, setQuery] = useState('')
-  const [highlight, setHighlight] = useState(0)
+  // -1 = no row picked yet: a row lights up once you type or use the arrows.
+  const [highlight, setHighlight] = useState(-1)
   const [memberBusy, setMemberBusy] = useState<string | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<{ id: string; name: string } | null>(null)
+  const [failure, setFailure] = useState<{ id: string; what: string; reason: string } | null>(null)
   const memberIds = useMemo(() => detail.members.map((m) => m.workspaceId), [detail.members])
   const candidates = useMemo(
     () => addableWorkspaces(registered, memberIds, query),
     [registered, memberIds, query],
   )
-  useEffect(() => setHighlight(0), [query])
+  useEffect(() => setHighlight(query.trim() ? 0 : -1), [query])
 
   const addMember = useCallback(
-    async (workspaceId: string): Promise<void> => {
+    async (workspaceId: string, displayName: string): Promise<void> => {
       setMemberBusy(workspaceId)
+      setFailure(null)
       try {
         await addProjectGroupMember(primaryScope(), detail.id, workspaceId)
         setQuery('')
+        useToastStore.getState().addToast(`Added ${displayName} to ${detail.name}.`, 'success')
       } catch (err) {
-        useToastStore.getState().addToast(`Couldn't add the agent: ${errorMessage(err)}`, 'error')
+        setFailure({ id: 'add', what: `Couldn’t add ${displayName}.`, reason: errorMessage(err) })
       } finally {
         setMemberBusy(null)
       }
     },
-    [detail.id],
+    [detail.id, detail.name],
   )
 
   const removeMember = useCallback(
     async (workspaceId: string, displayName: string): Promise<void> => {
+      setConfirmRemove(null)
       setMemberBusy(workspaceId)
+      setFailure(null)
       try {
         await removeProjectGroupMember(primaryScope(), detail.id, workspaceId)
+        useToastStore.getState().addToast(`Removed ${displayName} from ${detail.name}.`, 'success')
       } catch (err) {
-        useToastStore
-          .getState()
-          .addToast(`Couldn't remove ${displayName}: ${errorMessage(err)}`, 'error')
+        setFailure({ id: workspaceId, what: `Couldn’t remove ${displayName}.`, reason: errorMessage(err) })
       } finally {
         setMemberBusy(null)
       }
     },
-    [detail.id],
+    [detail.id, detail.name],
   )
 
   const setPoc = useCallback(
     async (workspaceId: string, displayName: string): Promise<void> => {
       setMemberBusy(workspaceId)
+      setFailure(null)
       try {
         await edit({ pocWorkspaceId: workspaceId }, () =>
           setProjectGroupPoc(primaryScope(), detail.id, workspaceId),
@@ -635,6 +763,7 @@ function AgentsSection({
         useToastStore
           .getState()
           .addToast(`Couldn't change the point of contact: ${errorMessage(err)}`, 'error')
+        setFailure({ id: workspaceId, what: 'Couldn’t change the point of contact.', reason: errorMessage(err) })
       } finally {
         setMemberBusy(null)
       }
@@ -642,129 +771,162 @@ function AgentsSection({
     [detail.id, edit],
   )
 
+  const pocBlocksRemove = detail.pocWorkspaceId !== null && detail.members.length > 1 && !readOnly
+
   return (
-    <section aria-label="Agents" className="space-y-3" data-settings-id="project-groups.agents">
-      <div className="space-y-1">
-        <SectionTitle>Agents</SectionTitle>
-        <p className="text-[10px] text-[var(--color-text-muted)]">
-          The point of contact gets every message posted in this project&apos;s chat.
-        </p>
-      </div>
-      <ul className="divide-y divide-[var(--color-border)] border-y border-[var(--color-border)]">
+    <section aria-label="Agents" className="space-y-6" data-settings-id="project-groups.agents">
+      {confirmRemove && (
+        <ConfirmSheet
+          testId="remove-agent-confirm"
+          title={`Remove ${confirmRemove.name} from ${detail.name}?`}
+          message="It stops getting this project’s chat and leaves its dashboards. The agent and its folder stay as they are, and you can add it back any time."
+          confirmLabel="Remove from project"
+          destructive
+          onCancel={() => setConfirmRemove(null)}
+          onConfirm={() => void removeMember(confirmRemove.id, confirmRemove.name)}
+        />
+      )}
+      <SettingsGroup
+        card
+        title="Agents"
+        hint={
+          pocBlocksRemove
+            ? 'The point of contact gets every message posted in the project’s chat. To remove it, make another agent the point of contact first.'
+            : 'The point of contact gets every message posted in the project’s chat.'
+        }
+        state={
+          detail.members.length === 0 ? (
+            <SettingsLoadState kind="empty" title="No agents yet">
+              The first agent you add becomes the point of contact.
+            </SettingsLoadState>
+          ) : undefined
+        }
+      >
         {detail.members.map((m) => {
           const isPoc = m.workspaceId === detail.pocWorkspaceId
           const blocked = removeMemberBlockedReason(m.workspaceId, detail.pocWorkspaceId)
           const display = m.agentName ?? m.name ?? m.workspaceId.slice(0, 8)
           return (
-            <li key={m.workspaceId} className="flex flex-wrap items-center gap-2 py-2 min-w-0" data-testid="project-agent-row">
-              <div className="flex-1 min-w-[8rem]">
-                <p className="flex items-center gap-2 min-w-0">
-                  <span className="text-xs text-[var(--color-text-primary)] truncate">{display}</span>
-                  {isPoc && (
-                    <span className="text-[9px] font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-accent)_15%,transparent)] text-[var(--color-accent)] flex-shrink-0">
-                      Point of contact
+            <div key={m.workspaceId} data-testid="project-agent-row">
+              <SettingRow
+                label={
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="type-name truncate">{display}</span>
+                    {isPoc && <Tag tone="accent" data-case="as-written" className="flex-shrink-0">Point of contact</Tag>}
+                  </span>
+                }
+                hint={
+                  m.path ? (
+                    <span className="block truncate [direction:rtl] text-left" title={m.path}>
+                      <bdi>{m.path}</bdi>
                     </span>
-                  )}
-                </p>
-                {m.path && (
-                  <p className="text-[10px] text-[var(--color-text-muted)] truncate" title={m.path}>
-                    {m.path}
-                  </p>
+                  ) : (
+                    'Not on this server any more'
+                  )
+                }
+                below={failure?.id === m.workspaceId ? <ActionError what={failure.what} reason={failure.reason} /> : undefined}
+              >
+                {!readOnly && !isPoc && (
+                  <Button
+                    variant="quiet"
+                    disabled={memberBusy === m.workspaceId}
+                    onClick={() => void setPoc(m.workspaceId, display)}
+                  >
+                    Make point of contact
+                  </Button>
                 )}
-              </div>
-              {!readOnly && !isPoc && (
-                <Button
-                  variant="quiet"
-                  disabled={memberBusy === m.workspaceId}
-                  onClick={() => void setPoc(m.workspaceId, display)}
-                >
-                  Make point of contact
-                </Button>
-              )}
-              {!readOnly && (
-                <Button
-                  variant="quiet"
-                  disabled={blocked !== null || memberBusy === m.workspaceId}
-                  title={blocked ?? 'Remove from this project (the agent itself is not touched)'}
-                  onClick={() => void removeMember(m.workspaceId, display)}
-                  className={blocked === null ? 'text-[var(--color-status-error-soft)]' : undefined}
-                >
-                  Remove
-                </Button>
-              )}
-            </li>
+                {!readOnly && blocked === null && (
+                  <Button
+                    variant="danger-quiet"
+                    disabled={memberBusy === m.workspaceId}
+                    title="Remove from this project (the agent itself is not touched)"
+                    onClick={() => setConfirmRemove({ id: m.workspaceId, name: display })}
+                  >
+                    Remove
+                  </Button>
+                )}
+              </SettingRow>
+            </div>
           )
         })}
-        {detail.members.length === 0 && (
-          <li className="py-2 text-[11px] text-[var(--color-text-muted)]">
-            No agents yet. The first one you add becomes the point of contact.
-          </li>
-        )}
-      </ul>
-      {detail.pocWorkspaceId !== null && detail.members.length > 1 && !readOnly && (
-        <p className="text-[10px] text-[var(--color-text-muted)]">
-          To remove the point of contact, make another agent the point of contact first.
-        </p>
-      )}
+      </SettingsGroup>
 
       {!readOnly && (
-        <div className="space-y-1.5" data-settings-id="project-groups.add-agent">
-          <p className="text-xs text-[var(--color-text-secondary)]">Add agent</p>
-          <Input
-            type="text"
-            aria-label="Search agents to add"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') {
-                e.preventDefault()
-                setHighlight((h) => Math.min(h + 1, candidates.length - 1))
-              } else if (e.key === 'ArrowUp') {
-                e.preventDefault()
-                setHighlight((h) => Math.max(h - 1, 0))
-              } else if (e.key === 'Enter' && candidates[highlight]) {
-                e.preventDefault()
-                void addMember(candidates[highlight].id)
-              } else if (e.key === 'Escape' && query) {
-                e.stopPropagation()
-                setQuery('')
-              }
-            }}
-            placeholder="Search agents…"
-            className="w-full text-xs"
-          />
-          <ul className="max-h-56 overflow-y-auto border border-[var(--color-border)]" aria-label="Agents you can add">
+        <SettingsGroup
+          card
+          title="Add an agent"
+          hint="Pick an agent on this server to join the project and its chat."
+          settingId="project-groups.add-agent"
+        >
+          <div className="px-4 py-3">
+            <SearchField
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onClear={() => setQuery('')}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setHighlight((h) => Math.min(h + 1, candidates.length - 1))
+                } else if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setHighlight((h) => Math.max(h - 1, 0))
+                } else if (e.key === 'Enter' && candidates[highlight]) {
+                  e.preventDefault()
+                  void addMember(candidates[highlight].id, candidates[highlight].name)
+                }
+              }}
+              aria-label="Search agents to add"
+              placeholder="Search agents"
+              className="w-full"
+            />
+            {failure?.id === 'add' && (
+              <div className="mt-2">
+                <ActionError what={failure.what} reason={failure.reason} />
+              </div>
+            )}
+          </div>
+          <ul className="max-h-80 overflow-y-auto divide-y divide-[var(--color-border)]" aria-label="Agents you can add">
             {candidates.map((w, i) => (
-              <li key={w.id} data-highlighted={i === highlight || undefined}>
-                <button
-                  type="button"
+              <li
+                key={w.id}
+                data-highlighted={i === highlight || undefined}
+                onMouseEnter={() => setHighlight(i)}
+                className={cx(
+                  'flex items-center gap-4 px-4 py-2.5 transition-colors',
+                  i === highlight && 'bg-[var(--color-wash-1)]',
+                )}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="type-name text-[var(--color-text-primary)] truncate">{w.name}</div>
+                  <div className="type-hint text-[var(--color-text-secondary)] truncate [direction:rtl] text-left" title={w.path}>
+                    <bdi>{w.path}</bdi>
+                  </div>
+                </div>
+                <Button
+                  variant="quiet"
+                  aria-label={`Add ${w.name}`}
                   disabled={memberBusy === w.id}
-                  onMouseEnter={() => setHighlight(i)}
-                  onClick={() => void addMember(w.id)}
-                  className={cx(
-                    'w-full flex items-center gap-2 px-2 py-1.5 text-left transition-colors no-drag cursor-pointer disabled:opacity-50',
-                    i === highlight
-                      ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
-                      : 'text-[var(--color-text-secondary)]',
-                  )}
+                  onClick={() => void addMember(w.id, w.name)}
+                  className="flex-shrink-0"
                 >
-                  <span className="text-xs truncate">{w.name}</span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] truncate flex-1">{w.path}</span>
-                  <span className="text-[10px] text-[var(--color-accent)] flex-shrink-0">
-                    {memberBusy === w.id ? 'Adding…' : 'Add'}
-                  </span>
-                </button>
+                  {memberBusy === w.id ? 'Adding…' : 'Add'}
+                </Button>
               </li>
             ))}
             {candidates.length === 0 && (
-              <li className="px-2 py-2 text-[11px] text-[var(--color-text-muted)]">
-                {registered.length === memberIds.length
-                  ? 'Every agent on this server is already in this project.'
-                  : 'No agents match.'}
+              <li className="px-4 py-3">
+                <div className="type-row text-[var(--color-text-primary)]">
+                  {registered.length === memberIds.length ? 'Every agent is already here' : 'No agents match'}
+                </div>
+                <div className={SETTING_ROW_HINT}>
+                  {registered.length === memberIds.length
+                    ? 'Every agent on this server is already in this project.'
+                    : 'Try another name, or clear the search to see them all.'}
+                </div>
               </li>
             )}
           </ul>
-        </div>
+        </SettingsGroup>
       )}
     </section>
   )
@@ -807,6 +969,7 @@ function DefaultViewRow({
   const lockReason = defaultViewLockReason(caps, detail.defaultView !== undefined)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const save = useSaveStatus()
   const groupId = detail.id
   const shownId = useRef(groupId)
   shownId.current = groupId
@@ -821,9 +984,13 @@ function DefaultViewRow({
   const change = (next: ProjectDefaultView): void => {
     if (next === value || lockReason) return
     setError(null)
+    save.reset()
     setSaving(true)
     edit({ defaultView: next }, () => setProjectGroupDefaultView(primaryScope(), groupId, next))
-      .then(() => useProjectGroupsStore.getState().dropStaleTileViews(groupId, next))
+      .then(() => {
+        useProjectGroupsStore.getState().dropStaleTileViews(groupId, next)
+        if (shownId.current === groupId) save.saved()
+      })
       .catch((err) => {
         if (shownId.current === groupId) setError(defaultViewErrorMessage(err))
       })
@@ -832,11 +999,29 @@ function DefaultViewRow({
       })
   }
 
-  // The page's own row (grey label column, value column), like Show in
-  // Pinned: the control, then the muted note and "Saving…" beside it; a
-  // lock reason or an error takes its own line under them.
+  // A card row: label and hint left, the control on the shared right
+  // edge with "Saving…" / "Saved" beside it; a lock reason or an error
+  // takes its own line under the row.
   return (
-    <Row label="Agents open in" settingId="project-groups.default-view" testId="project-default-view-row">
+    <SettingRow
+      label="Agents open in"
+      hint="Anyone can still switch their own."
+      settingId="project-groups.default-view"
+      testId="project-default-view-row"
+      below={
+        error ? (
+          <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed">
+            {error}
+          </p>
+        ) : lockReason ? (
+          <p className={cx(SETTING_ROW_HINT, '!mt-0')} data-testid="project-default-view-locked">
+            {lockReason}
+          </p>
+        ) : undefined
+      }
+    >
+      <SavingNote on={saving} />
+      <SaveNote state={saving ? 'idle' : save.state} />
       <Segmented
         aria-label="Agents open in"
         value={value}
@@ -845,22 +1030,7 @@ function DefaultViewRow({
         disabled={lockReason !== null}
         onChange={change}
       />
-      <span className="text-[10px] text-[var(--color-text-muted)]">
-        Each agent opens in this view; anyone can switch one for themselves.
-      </span>
-      <span className="text-[10px] text-[var(--color-text-muted)] empty:hidden" aria-live="polite">
-        {saving ? 'Saving…' : ''}
-      </span>
-      {error ? (
-        <p role="alert" className="basis-full text-[10px] text-[var(--color-status-error-soft)]">
-          {error}
-        </p>
-      ) : lockReason ? (
-        <p className="basis-full text-[10px] text-[var(--color-text-muted)]" data-testid="project-default-view-locked">
-          {lockReason}
-        </p>
-      ) : null}
-    </Row>
+    </SettingRow>
   )
 }
 
@@ -870,6 +1040,44 @@ function DefaultViewRow({
  *  answer, or roll back and rethrow. */
 type GroupEdit = (patch: Partial<ProjectGroup>, run: () => Promise<ProjectGroup | void>) => Promise<void>
 
+/** One colour chip of the Color row (24px, cut in Terminal, round in Glass). */
+function Swatch({
+  color,
+  label,
+  selected,
+  title,
+  onClick,
+  children,
+}: {
+  color: string
+  label: string
+  selected: boolean
+  title?: string
+  onClick: () => void
+  children?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={selected}
+      title={title ?? label}
+      onClick={onClick}
+      data-k2-chamfer="chip"
+      className="k2-focus no-drag cursor-pointer w-6 h-6 flex-shrink-0 flex items-center justify-center rounded-[var(--radius-pill)] type-badge text-[var(--color-on-accent)]"
+      style={{ backgroundColor: color }}
+    >
+      {selected ? (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="var(--color-on-accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 8.5l3.2 3.2L13 5" />
+        </svg>
+      ) : (
+        children
+      )}
+    </button>
+  )
+}
+
 function ProjectSettingsDetail({
   detail,
   role,
@@ -877,15 +1085,20 @@ function ProjectSettingsDetail({
   edit,
   docs,
   docsError,
+  onReloadDocs,
+  notice,
 }: {
   detail: ProjectGroupShow
   role: ProjectRole | null
-  onDeleted: () => void
+  onDeleted: (name: string) => void
   edit: GroupEdit
   /** Workspace Resources (the dashboard "Files" list) — fetched by the
    *  page alongside show (0.46.1); null = not loaded yet. */
   docs: ProjectGroupHtmlDoc[] | null
   docsError: string | null
+  onReloadDocs: () => void
+  /** What the page just did (a project created or deleted), once. */
+  notice: string | null
 }): React.JSX.Element {
   const caps = projectSettingsCaps(role)
   const banner = readOnlyBannerText(role)
@@ -901,6 +1114,9 @@ function ProjectSettingsDetail({
   const [iconBusy, setIconBusy] = useState(false)
   const [cropImage, setCropImage] = useState<string | null>(null)
   const iconInputRef = useRef<HTMLInputElement>(null)
+  const pictureSave = useSaveStatus()
+  const colorSave = useSaveStatus()
+  const pinSave = useSaveStatus()
 
   const handleIconFileSelected = (e: React.ChangeEvent<HTMLInputElement>): void => {
     const file = e.target.files?.[0]
@@ -925,36 +1141,46 @@ function ProjectSettingsDetail({
           iconKey: dataUrl === null ? null : res.iconKey,
         })
         setIconSaves((n) => n + 1)
+        pictureSave.saved()
       } catch (err) {
-        useToastStore.getState().addToast(`Couldn't save the picture: ${errorMessage(err)}`, 'error')
+        pictureSave.failed(new Error(errorMessage(err)))
       } finally {
         setIconBusy(false)
       }
     },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [detail.id, hostKey],
   )
 
-  // Custom-hex color input (§6.7.7 — the palette + a free `#rrggbb`
-  // field; Enter applies, invalid shows inline).
+  // Custom color field (§6.7.7 — the palette + a free `#rrggbb` / rgb()
+  // field; Enter or leaving it applies, a value that isn't a color says so).
   const [customHex, setCustomHex] = useState('')
   const [hexError, setHexError] = useState(false)
 
   const saveColor = useCallback(
     async (color: string | null): Promise<void> => {
+      if (color === detail.color) return
       try {
-        await setProjectGroupColor(primaryScope(), detail.id, color)
-        // groups-changed refetches the list + show with the new color.
+        // Optimistic: the swatch, the avatars and the list move at once;
+        // a refusal puts the old color back and says why.
+        await edit({ color }, () => setProjectGroupColor(primaryScope(), detail.id, color))
+        colorSave.saved()
       } catch (err) {
-        useToastStore.getState().addToast(`Couldn't change the color: ${errorMessage(err)}`, 'error')
+        colorSave.failed(new Error(errorMessage(err)))
       }
     },
-    [detail.id],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [detail.id, detail.color, edit],
   )
 
   const commitCustomHex = useCallback((): void => {
+    if (!customHex.trim()) {
+      setHexError(false)
+      return
+    }
     const normalized = normalizeHexColor(customHex)
     if (normalized === null) {
-      setHexError(customHex.trim().length > 0)
+      setHexError(true)
       return
     }
     setHexError(false)
@@ -962,21 +1188,19 @@ function ProjectSettingsDetail({
     void saveColor(normalized)
   }, [customHex, saveColor])
 
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const deleteProject = useCallback(async (): Promise<void> => {
-    const confirmed = await useConfirmDialogStore.getState().confirm({
-      title: `Delete project "${detail.name}"?`,
-      message:
-        'This removes the project, its dashboards and its whole chat. ' +
-        'The agents and their folders are not touched.',
-      confirmLabel: 'Delete project',
-      destructive: true,
-    })
-    if (!confirmed) return
+    setConfirmDelete(false)
+    setDeleting(true)
+    setDeleteError(null)
     try {
       await deleteProjectGroup(primaryScope(), detail.id)
-      onDeleted()
+      onDeleted(detail.name)
     } catch (err) {
-      useToastStore.getState().addToast(`Couldn't delete the project: ${errorMessage(err)}`, 'error')
+      setDeleteError(errorMessage(err))
+      setDeleting(false)
     }
   }, [detail.id, detail.name, onDeleted])
 
@@ -994,150 +1218,190 @@ function ProjectSettingsDetail({
   // The group's effective avatar color — canonical when set, else the
   // stable hashed pick (what the nav renders without an override).
   const effectiveColor = detail.color ?? groupAvatarColor(detail.id)
-  const swatchClass = (selected: boolean): string =>
-    cx(
-      'w-5 h-5 flex-shrink-0 no-drag cursor-pointer transition-transform',
-      selected
-        ? 'outline outline-2 outline-offset-2 outline-[var(--color-accent)]'
-        : 'hover:scale-110',
-    )
 
   const [bodyRef, bodyWidth] = useElementWidth(HALVES_MIN_WIDTH)
   const stacked = bodyWidth < HALVES_MIN_WIDTH
 
   const general = (
-    <section aria-label="General" className="space-y-1">
-      <SectionTitle>General</SectionTitle>
-      <NameField
-        label="Project"
-        value={detail.name}
-        readOnly={!caps.canEdit}
-        settingId="project-groups.name"
-        onSave={(name) => edit({ name }, () => renameProjectGroup(primaryScope(), detail.id, name))}
-      />
-      <Row label="Picture" settingId="project-groups.picture">
-        <ProjectGroupAvatar
-          name={detail.name}
-          groupId={detail.id}
-          size={48}
-          color={detail.color}
-          iconUrl={icon?.dataUrl ?? null}
+    <section aria-label="General">
+      <SettingsGroup card title="General">
+        <NameField
+          label="Project"
+          hint="Shown in the nav."
+          value={detail.name}
+          readOnly={!caps.canEdit}
+          settingId="project-groups.name"
+          onSave={(name) => edit({ name }, () => renameProjectGroup(primaryScope(), detail.id, name))}
         />
-        {caps.canEditLooks && (
-          <>
-            <Button
-              variant="quiet"
-              onClick={() =>
-                // Host-aware: on a remote host the native input would
-                // browse THIS machine's disk — use the remote picker.
-                void pickIconImage({
-                  clickNativeInput: () => iconInputRef.current?.click(),
-                  setCropImage,
-                })
-              }
-              disabled={iconBusy}
-            >
-              {iconBusy ? 'Working…' : 'Upload'}
-            </Button>
-            <input
-              ref={iconInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
-              className="hidden"
-              onChange={handleIconFileSelected}
-            />
-            <Button
-              variant="quiet"
-              onClick={() => void saveIcon(null)}
-              disabled={iconBusy || !icon?.dataUrl}
-              title={icon?.dataUrl ? 'Remove the picture' : 'No picture yet'}
-            >
-              Remove
-            </Button>
-          </>
-        )}
-      </Row>
-      <Row label="Color" settingId="project-groups.color">
-        {caps.canEditLooks ? (
-          <>
-            <button
-              type="button"
-              aria-label="Automatic color"
-              aria-pressed={detail.color === null}
-              onClick={() => void saveColor(null)}
-              title="Automatic: a steady color picked for this project"
-              className={cx(swatchClass(detail.color === null), 'text-[9px] font-bold leading-none text-[var(--color-on-accent)]')}
-              style={{ backgroundColor: groupAvatarColor(detail.id) }}
-            >
-              A
-            </button>
-            {GROUP_AVATAR_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                aria-label={`Color ${color}`}
-                aria-pressed={detail.color === color}
-                onClick={() => void saveColor(color)}
-                className={swatchClass(detail.color === color)}
-                style={{ backgroundColor: color }}
-              />
-            ))}
-            <Input
-              type="text"
-              aria-label="Custom color"
-              value={customHex}
-              onChange={(e) => {
-                setCustomHex(e.target.value)
-                setHexError(false)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitCustomHex()
-                else if (e.key === 'Escape') {
-                  e.stopPropagation()
-                  setCustomHex('')
-                  setHexError(false)
-                }
-              }}
-              onBlur={() => commitCustomHex()}
-              placeholder="#rrggbb"
-              title={hexError ? 'Use #rrggbb' : undefined}
-              className={cx('w-20 font-mono', hexError && 'border-[var(--color-status-error-soft)]')}
-            />
-          </>
-        ) : (
-          <span className="flex items-center gap-2 text-xs text-[var(--color-text-primary)]">
-            <span className="w-5 h-5 flex-shrink-0 inline-block" style={{ backgroundColor: effectiveColor }} />
-            {detail.color ?? 'Automatic'}
-          </span>
-        )}
-      </Row>
-      <DefaultViewRow detail={detail} caps={caps} edit={edit} />
-      <Row label="Show in Pinned" settingId="project-groups.pinned">
-        <Toggle
-          aria-label="Show in Pinned"
-          checked={detail.pinned}
-          disabled={!caps.canEdit}
-          onChange={(next) => {
-            void edit({ pinned: next }, () => pinProjectGroup(primaryScope(), detail.id, next)).catch((err) =>
-              useToastStore.getState().addToast(`Couldn't change Pinned: ${errorMessage(err)}`, 'error'),
-            )
-          }}
-        />
-        <span className="text-[10px] text-[var(--color-text-muted)]">Everyone on this server sees it pinned.</span>
-      </Row>
-      <Row label="Delete" settingId="project-groups.delete">
-        <span className="flex-1 min-w-[10rem] text-[10px] text-[var(--color-text-muted)]">
-          Removes the project, its dashboards and its chat. The agents and their folders stay.
-        </span>
-        <Button
-          variant="danger"
-          disabled={!caps.canDelete}
-          title={caps.canDelete ? undefined : 'Only the owner or an admin can delete a project'}
-          onClick={() => void deleteProject()}
+        <SettingRow
+          label="Picture"
+          hint={caps.canEditLooks ? 'Shown in the nav. Square images work best.' : 'Shown in the nav.'}
+          settingId="project-groups.picture"
+          below={belowFor(pictureSave.state)}
         >
-          Delete project
-        </Button>
-      </Row>
+          <SavingNote on={iconBusy} />
+          <SaveNote state={iconBusy ? 'idle' : pictureSave.state} />
+          <span className={AVATAR_ROUND}>
+            <ProjectGroupAvatar
+              name={detail.name}
+              groupId={detail.id}
+              size={32}
+              color={detail.color}
+              iconUrl={icon?.dataUrl ?? null}
+            />
+          </span>
+          {caps.canEditLooks && (
+            <>
+              <Button
+                variant="quiet"
+                onClick={() =>
+                  // Host-aware: on a remote host the native input would
+                  // browse THIS machine's disk — use the remote picker.
+                  void pickIconImage({
+                    clickNativeInput: () => iconInputRef.current?.click(),
+                    setCropImage,
+                  })
+                }
+                disabled={iconBusy}
+              >
+                Upload
+              </Button>
+              <input
+                ref={iconInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/svg+xml,image/x-icon"
+                className="hidden"
+                onChange={handleIconFileSelected}
+              />
+              {icon?.dataUrl && (
+                <Button
+                  variant="quiet"
+                  onClick={() => void saveIcon(null)}
+                  disabled={iconBusy}
+                  title="Remove the picture"
+                >
+                  Remove
+                </Button>
+              )}
+            </>
+          )}
+        </SettingRow>
+        <SettingRow
+          label="Color"
+          hint="Behind the project’s initial when it has no picture, and around the picture when it has one."
+          settingId="project-groups.color"
+          below={
+            caps.canEditLooks ? (
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Swatch
+                    color={groupAvatarColor(detail.id)}
+                    label="Automatic color"
+                    title="Automatic: a steady color K2 picks for this project"
+                    selected={detail.color === null}
+                    onClick={() => void saveColor(null)}
+                  >
+                    A
+                  </Swatch>
+                  {GROUP_AVATAR_COLORS.map((color) => (
+                    <Swatch
+                      key={color}
+                      color={color}
+                      label={`Color ${color}`}
+                      selected={detail.color === color}
+                      onClick={() => void saveColor(color)}
+                    />
+                  ))}
+                  <Input
+                    type="text"
+                    aria-label="Custom color"
+                    value={customHex}
+                    onChange={(e) => {
+                      setCustomHex(e.target.value)
+                      setHexError(false)
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitCustomHex()
+                      else if (e.key === 'Escape') {
+                        e.stopPropagation()
+                        setCustomHex('')
+                        setHexError(false)
+                      }
+                    }}
+                    onBlur={() => commitCustomHex()}
+                    placeholder={detail.color ?? '#rrggbb'}
+                    spellCheck={false}
+                    className={cx('w-24 type-control font-mono ml-1', hexError && '!border-[var(--color-status-error-soft)]')}
+                  />
+                </div>
+                {hexError && (
+                  <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">
+                    That isn’t a color. Type six hex digits, or an rgb() value.
+                  </p>
+                )}
+                <SaveError state={colorSave.state} />
+              </div>
+            ) : undefined
+          }
+        >
+          {caps.canEditLooks ? (
+            <SaveNote state={colorSave.state} />
+          ) : (
+            <span className="flex items-center gap-2 type-row text-[var(--color-text-primary)]">
+              <span
+                data-k2-chamfer="chip"
+                className="w-5 h-5 flex-shrink-0 inline-block rounded-[var(--radius-pill)]"
+                style={{ backgroundColor: effectiveColor }}
+              />
+              {detail.color ?? 'Automatic'}
+            </span>
+          )}
+        </SettingRow>
+        <DefaultViewRow detail={detail} caps={caps} edit={edit} />
+        <SettingRow
+          label="Show in Pinned"
+          hint="Pins it at the top of the Projects list for everyone on this server."
+          settingId="project-groups.pinned"
+          below={belowFor(pinSave.state)}
+        >
+          <SaveNote state={pinSave.state} />
+          <Toggle
+            aria-label="Show in Pinned"
+            checked={detail.pinned}
+            disabled={!caps.canEdit}
+            onChange={(next) => {
+              pinSave.reset()
+              void edit({ pinned: next }, () => pinProjectGroup(primaryScope(), detail.id, next))
+                .then(() => pinSave.saved())
+                .catch((err) => {
+                  pinSave.failed(new Error(errorMessage(err)))
+                  useToastStore.getState().addToast(`Couldn't change Pinned: ${errorMessage(err)}`, 'error')
+                })
+            }}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Delete project"
+          hint={
+            caps.canDelete
+              ? 'Its dashboards and chat go too. Its agents stay.'
+              : 'Only the owner or an admin can delete a project.'
+          }
+          settingId="project-groups.delete"
+          below={
+            deleteError ? <ActionError what="Couldn’t delete the project." reason={deleteError} /> : undefined
+          }
+        >
+          <Button
+            variant="danger-quiet"
+            disabled={!caps.canDelete || deleting}
+            title={caps.canDelete ? undefined : 'Only the owner or an admin can delete a project'}
+            onClick={() => setConfirmDelete(true)}
+          >
+            {deleting ? 'Deleting…' : 'Delete project'}
+          </Button>
+        </SettingRow>
+      </SettingsGroup>
     </section>
   )
 
@@ -1153,32 +1417,50 @@ function ProjectSettingsDetail({
           onCancel={() => setCropImage(null)}
         />
       )}
+      {confirmDelete && (
+        <ConfirmSheet
+          testId="delete-project-confirm"
+          title={`Delete the project “${detail.name}”?`}
+          message="Its dashboards and its whole chat go away for everyone on this server. The agents and their folders stay as they are. This can’t be undone."
+          confirmLabel="Delete project"
+          destructive
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => void deleteProject()}
+        />
+      )}
       <div className="flex flex-col h-full min-h-0" data-testid="project-settings-detail">
         {/* ── Header (fixed; never scrolls away) ── */}
-        <div className="flex-shrink-0 px-6 pt-5 pb-3 space-y-3 border-b border-[var(--color-border)]">
+        <div className="flex-shrink-0 px-6 pt-6 pb-4 space-y-4 border-b border-[var(--color-border)]">
           <div className="flex items-center gap-3 min-w-0">
-            <ProjectGroupAvatar
-              name={detail.name}
-              groupId={detail.id}
-              size={40}
-              color={detail.color}
-              iconUrl={icon?.dataUrl ?? null}
-            />
+            <span className={AVATAR_ROUND}>
+              <ProjectGroupAvatar
+                name={detail.name}
+                groupId={detail.id}
+                size={36}
+                color={detail.color}
+                iconUrl={icon?.dataUrl ?? null}
+              />
+            </span>
             <div className="flex-1 min-w-0">
-              <h2 className="text-base font-medium text-[var(--color-text-primary)] truncate">{detail.name}</h2>
-              <p className="text-[11px] text-[var(--color-text-muted)] truncate">
+              <h2 className="type-title text-[var(--color-text-primary)] truncate">{detail.name}</h2>
+              <p className="type-hint text-[var(--color-text-secondary)] mt-0.5 truncate">
                 {detail.memberCount} {detail.memberCount === 1 ? 'agent' : 'agents'}
                 {detail.pocWorkspaceId
                   ? ` · Point of contact: ${memberLabel(detail.pocWorkspaceId)}`
                   : ' · No point of contact yet'}
               </p>
             </div>
-            <Button variant="default" onClick={openProject}>
+            <Button variant="quiet" onClick={openProject}>
               Open project
             </Button>
           </div>
+          {notice && (
+            <Callout tone="ok" role="status" className="type-hint" data-testid="project-settings-notice">
+              {notice}
+            </Callout>
+          )}
           {banner && (
-            <Callout tone="info" data-testid="project-settings-readonly-banner">
+            <Callout tone="info" className="type-hint" data-testid="project-settings-readonly-banner">
               {banner}
             </Callout>
           )}
@@ -1196,15 +1478,21 @@ function ProjectSettingsDetail({
         >
           <div
             data-testid="project-settings-left"
-            className={cx('px-6 pb-6 space-y-6', stacked ? '' : 'overflow-y-auto min-h-0')}
+            className={cx('px-6 pb-8 [scrollbar-gutter:stable]', stacked ? '' : 'overflow-y-auto min-h-0')}
           >
-            <div className="pt-4">{general}</div>
-            <DashboardsSection detail={detail} caps={caps} docs={docs} docsError={docsError} />
+            <div className="pt-5 pb-3">{general}</div>
+            <DashboardsSection
+              detail={detail}
+              caps={caps}
+              docs={docs}
+              docsError={docsError}
+              onReloadDocs={onReloadDocs}
+            />
           </div>
           <div
             data-testid="project-settings-right"
             className={cx(
-              'px-6 pb-6 pt-4',
+              'px-6 pb-8 pt-5 [scrollbar-gutter:stable]',
               stacked ? 'border-t border-[var(--color-border)]' : 'overflow-y-auto min-h-0',
             )}
           >
@@ -1213,6 +1501,74 @@ function ProjectSettingsDetail({
         </div>
       </div>
     </>
+  )
+}
+
+// ── New project (the list's footer and the empty page) ───────────────────
+
+function NewProjectDialog({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void
+  onCreated: (group: ProjectGroup) => void
+}): React.JSX.Element {
+  const [name, setName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const fieldId = useId()
+
+  const submit = async (): Promise<void> => {
+    const trimmed = name.trim()
+    if (!trimmed || busy) return
+    setBusy(true)
+    try {
+      const group = await createProjectGroup(primaryScope(), trimmed)
+      onCreated(group)
+    } catch (err) {
+      setError(createErrorMessage(err))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <AccessSheet
+      title="New project"
+      intro="A project puts agents together with one shared chat and its own dashboards. Add its agents once it exists."
+      onClose={onClose}
+      busy={busy}
+      testId="new-project-dialog"
+    >
+      <Field label="Name" htmlFor={fieldId}>
+        <Input
+          id={fieldId}
+          autoFocus
+          type="text"
+          value={name}
+          disabled={busy}
+          onChange={(e) => {
+            setName(e.target.value)
+            setError(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void submit()
+          }}
+          placeholder="Spring launch"
+          className={DIALOG_FIELD}
+        />
+      </Field>
+      {error && (
+        <FailedNote what="Couldn’t create the project." next="Nothing was created. Change the name and try again." detail={error} />
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="ghost" size="md" onClick={onClose} disabled={busy}>
+          Cancel
+        </Button>
+        <Button variant="accent" size="md" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
+          {busy ? 'Creating…' : 'Create project'}
+        </Button>
+      </div>
+    </AccessSheet>
   )
 }
 
@@ -1237,6 +1593,11 @@ function withPending(show: ProjectGroupShow, pending: PendingEdits): ProjectGrou
   const out: Record<string, unknown> = { ...show }
   for (const [k, v] of fields) out[k] = v.value
   return out as unknown as ProjectGroupShow
+}
+
+/** A list section's heading (the Workspaces list's). */
+function ListHeading({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="flex items-center h-7 mb-1 type-heading text-[var(--color-text-primary)]">{children}</div>
 }
 
 export default function ProjectSettings(): React.JSX.Element {
@@ -1279,6 +1640,10 @@ export default function ProjectSettings(): React.JSX.Element {
     error: string | null
   } | null>(null)
   const [reloadNonce, setReloadNonce] = useState(0)
+  const [docsNonce, setDocsNonce] = useState(0)
+  const [creating, setCreating] = useState(false)
+  /** What the page just did, shown once above the next project. */
+  const [notice, setNotice] = useState<{ forId: string | null; text: string } | null>(null)
 
   // A new deep-link while Settings is already open (right-click another
   // project) re-targets the selection (the ProjectsSection
@@ -1322,7 +1687,7 @@ export default function ProjectSettings(): React.JSX.Element {
       })
       .catch((e) => {
         if (cancelled) return
-        setDetailError({ id: selectedId, message: e instanceof Error ? e.message : String(e) })
+        setDetailError({ id: selectedId, message: errorMessage(e) })
       })
     const row = useProjectGroupsStore.getState().groups?.find((g) => g.id === selectedId)
     void loadGroupIcon(activeHostKey(useConnectHostStore.getState().activeHost), selectedId, row?.iconKey)
@@ -1358,7 +1723,7 @@ export default function ProjectSettings(): React.JSX.Element {
       cancelled = true
       off()
     }
-  }, [selectedId, revision, reloadNonce])
+  }, [selectedId, revision, reloadNonce, docsNonce])
 
   // What the panel shows: the selected project's show view; else its
   // cached one (painted at once, revalidating); else the PREVIOUS
@@ -1383,8 +1748,8 @@ export default function ProjectSettings(): React.JSX.Element {
   const shownRef = useRef(shown)
   shownRef.current = shown
 
-  // Optimistic edit (rename / pin / point of contact): apply now to this
-  // view, the show cache and the store's list row; take the daemon's
+  // Optimistic edit (rename / pin / color / point of contact): apply now to
+  // this view, the show cache and the store's list row; take the daemon's
   // answer; on refusal roll the fields back and rethrow for the caller's
   // error. Fields keep winning over refetches until their edit settles.
   const edit = useCallback(
@@ -1446,11 +1811,18 @@ export default function ProjectSettings(): React.JSX.Element {
     [groups, searchQuery],
   )
   const visibleGroups = useMemo(() => [...pinnedGroups, ...otherGroups], [pinnedGroups, otherGroups])
+  const hasList = groups !== null && groups.length > 0
   useEffect(() => {
     setKeyboardIndex(-1)
   }, [searchQuery])
   useEffect(() => {
+    if (!hasList) return
     requestAnimationFrame(() => searchInputRef.current?.focus())
+  }, [hasList])
+
+  const select = useCallback((id: string): void => {
+    setSelectedId(id)
+    setNotice((n) => (n && n.forId !== id ? null : n))
   }, [])
 
   const handleSearchKeyDown = useCallback(
@@ -1463,10 +1835,10 @@ export default function ProjectSettings(): React.JSX.Element {
         setKeyboardIndex((prev) => Math.max(prev - 1, 0))
       } else if (e.key === 'Enter' && keyboardIndex >= 0 && keyboardIndex < visibleGroups.length) {
         e.preventDefault()
-        setSelectedId(visibleGroups[keyboardIndex].id)
+        select(visibleGroups[keyboardIndex].id)
       }
     },
-    [visibleGroups, keyboardIndex],
+    [visibleGroups, keyboardIndex, select],
   )
 
   // Scroll the keyboard-highlighted row into view (ProjectsSection).
@@ -1479,101 +1851,224 @@ export default function ProjectSettings(): React.JSX.Element {
     }
   }, [keyboardIndex, visibleGroups])
 
+  /** Arrow keys on a focused row move to the next or previous row. */
+  const moveFromRow = (id: string, step: 1 | -1): void => {
+    const i = visibleGroups.findIndex((g) => g.id === id)
+    const next = visibleGroups[i + step]
+    if (!next) return
+    document.querySelector<HTMLElement>(`[data-settings-group-id="${next.id}"]`)?.focus()
+  }
+
   const retryList = (): void => {
+    void useProjectGroupsStore.getState().fetchGroups()
+  }
+
+  const onCreated = (group: ProjectGroup): void => {
+    setCreating(false)
+    setSearchQuery('')
+    setNotice({ forId: group.id, text: `Created “${group.name}”. Add its agents on the right.` })
+    setSelectedId(group.id)
     void useProjectGroupsStore.getState().fetchGroups()
   }
 
   const groupRow = (g: (typeof visibleGroups)[number]): React.JSX.Element => {
     const isSelected = selectedId === g.id
-    const isKeyboardHighlighted = visibleGroups.indexOf(g) === keyboardIndex
+    const isKeyboardHighlighted = !isSelected && visibleGroups.indexOf(g) === keyboardIndex
     return (
       <div
         key={g.id}
         data-settings-group-id={g.id}
-        onClick={() => setSelectedId(g.id)}
+        data-selected={isSelected ? '' : undefined}
+        role="button"
+        tabIndex={0}
+        data-k2-focus=""
+        aria-label={`Show settings for ${g.name}`}
+        aria-current={isSelected ? 'true' : undefined}
+        onClick={() => select(g.id)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            select(g.id)
+          } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            moveFromRow(g.id, e.key === 'ArrowDown' ? 1 : -1)
+          }
+        }}
         className={cx(
-          'flex items-center gap-2 px-2 py-1.5 transition-colors no-drag cursor-pointer select-none',
+          'relative flex items-center gap-3 px-3 py-2 transition-colors no-drag cursor-pointer select-none outline-none',
           isSelected
-            ? 'bg-[color-mix(in_oklab,var(--color-accent)_15%,transparent)] text-[var(--color-text-primary)]'
+            ? 'bg-[var(--color-accent)]/15'
             : isKeyboardHighlighted
-              ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
-              : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-elevated)] hover:text-[var(--color-text-primary)]',
+              ? 'bg-[var(--color-wash-1)]'
+              : 'hover:bg-[var(--color-wash-1)]',
         )}
       >
-        <ProjectGroupAvatar name={g.name} groupId={g.id} size={20} color={g.color} />
-        <span className="text-xs truncate flex-1">{g.name}</span>
-        <span className="text-[10px] text-[var(--color-text-muted)] tabular-nums flex-shrink-0">{g.memberCount}</span>
+        {isSelected && (
+          <span aria-hidden="true" className="absolute left-0 top-0 bottom-0 w-[3px] bg-[var(--color-accent)]" />
+        )}
+        <span className={AVATAR_ROUND}>
+          <ProjectGroupAvatar name={g.name} groupId={g.id} size={24} color={g.color} />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block type-name text-[var(--color-text-primary)] truncate">{g.name}</span>
+          <span className="block type-hint text-[var(--color-text-secondary)] truncate">
+            {g.memberCount} {g.memberCount === 1 ? 'agent' : 'agents'}
+          </span>
+        </span>
       </div>
     )
   }
 
-  const listHeading = (label: string): React.JSX.Element => (
-    <p className="px-2 pt-2 pb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
-      {label}
-    </p>
+  const zone = (rows: typeof visibleGroups): React.JSX.Element => (
+    // overflow-hidden: a selected or hovered row keeps to the card's corners.
+    <Surface chamfer material="tile" className="overflow-hidden">
+      <div className="divide-y divide-[var(--color-border)]">{rows.map(groupRow)}</div>
+    </Surface>
   )
 
-  return (
-    <div className="flex h-full min-h-0">
-      {/* ── Left: the project list ── */}
-      <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col">
-        <div className="px-2 py-1.5">
-          <Input
-            ref={searchInputRef}
-            type="text"
-            aria-label="Search projects"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Search projects…"
-            className="w-full text-xs py-1.5"
-          />
-        </div>
-        <div className="flex-1 overflow-y-auto px-1 py-1">
-          {pinnedGroups.length > 0 && (
-            <>
-              {listHeading('Pinned')}
-              {pinnedGroups.map(groupRow)}
-              {otherGroups.length > 0 && listHeading('All projects')}
-            </>
-          )}
-          {otherGroups.map(groupRow)}
-          {groups !== null && visibleGroups.length === 0 && (
-            <div className="px-2 py-6 text-center">
-              <span className="text-xs text-[var(--color-text-muted)]">
-                {searchQuery.trim() ? 'No projects match' : 'No projects'}
-              </span>
+  const newProjectDialog = creating ? (
+    <NewProjectDialog onClose={() => setCreating(false)} onCreated={onCreated} />
+  ) : null
+
+  // ── One page (no list yet): loading, failed, or no projects ──────────
+  if (!hasList) {
+    return (
+      <div className="h-full min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+        {newProjectDialog}
+        <div className="w-full max-w-[52rem] space-y-6 pb-6">
+          <header className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="type-title text-[var(--color-text-primary)]">Projects</h2>
+              <p className="type-hint text-[var(--color-text-secondary)] mt-1">
+                A project puts agents together with one shared chat and its own dashboards.
+              </p>
             </div>
+          </header>
+          {notice && (
+            <Callout tone="ok" role="status" className="type-hint" data-testid="project-settings-notice">
+              {notice.text}
+            </Callout>
+          )}
+          {groups === null && groupsError ? (
+            <SettingsLoadState
+              kind="error"
+              title="Couldn’t load your projects"
+              detail={groupsError}
+              testId="project-settings-list-error"
+              action={<Button variant="quiet" onClick={retryList}>Try again</Button>}
+            >
+              K2 couldn’t read the project list from this server, so nothing is shown here.
+            </SettingsLoadState>
+          ) : groups === null ? (
+            <SettingsLoadState kind="loading" title="Loading your projects…" testId="project-settings-loading" />
+          ) : (
+            <SettingsLoadState
+              kind="empty"
+              title="No projects yet"
+              testId="project-settings-empty"
+              action={
+                <Button variant="accent" onClick={() => setCreating(true)}>
+                  New project
+                </Button>
+              }
+            >
+              Make one to give a few agents a shared chat and dashboards. You can also make one from the Projects page.
+            </SettingsLoadState>
           )}
         </div>
       </div>
+    )
+  }
+
+  const searching = searchQuery.trim().length > 0
+  const shownNotice = notice && shown && (notice.forId === null || notice.forId === shown.id) ? notice.text : null
+
+  return (
+    <div className="flex h-full min-h-0">
+      {newProjectDialog}
+      {/* ── Left: the project list ── */}
+      <aside
+        aria-label="Projects"
+        className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
+      >
+        <div className="flex-shrink-0 px-4 pt-6 pb-4">
+          <SearchField
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onClear={() => setSearchQuery('')}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search projects"
+            aria-label="Search projects"
+            className="w-full min-w-0"
+          />
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-5 [scrollbar-gutter:stable]">
+          {searching && visibleGroups.length === 0 && (
+            <Surface chamfer material="tile">
+              <div className="px-4 py-4 flex flex-col items-start gap-3" data-testid="projects-no-match">
+                <div className="min-w-0">
+                  <div className="type-row text-[var(--color-text-primary)] break-words">
+                    No projects match &ldquo;{searchQuery.trim()}&rdquo;
+                  </div>
+                  <div className={SETTING_ROW_HINT}>Check the spelling, or clear the search to see them all.</div>
+                </div>
+                <Button variant="quiet" onClick={() => setSearchQuery('')}>
+                  Clear search
+                </Button>
+              </div>
+            </Surface>
+          )}
+          {pinnedGroups.length > 0 && (
+            <section>
+              <ListHeading>Pinned</ListHeading>
+              {zone(pinnedGroups)}
+            </section>
+          )}
+          {otherGroups.length > 0 && (
+            <section>
+              <ListHeading>{pinnedGroups.length > 0 ? 'All projects' : 'Projects'}</ListHeading>
+              {zone(otherGroups)}
+            </section>
+          )}
+        </div>
+        {/* Solid, above the list, so rows scroll under it. */}
+        <div className="relative z-[1] flex-shrink-0 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-bg)] flex items-center gap-2">
+          <Button
+            variant="quiet"
+            aria-label="New project"
+            className="flex-1 min-w-0 text-center"
+            onClick={() => setCreating(true)}
+          >
+            + Project
+          </Button>
+        </div>
+      </aside>
 
       {/* ── Right: the selected project ── */}
       <div className="flex-1 min-h-0 min-w-0">
-        {groups === null && groupsError ? (
-          <div className="p-6 space-y-2" data-testid="project-settings-list-error">
-            <Callout tone="error">Couldn&apos;t load projects: {groupsError}</Callout>
-            <Button variant="default" onClick={retryList}>
-              Retry
-            </Button>
+        {selectedId === null ? (
+          <div className="p-6">
+            <SettingsLoadState kind="loading" title="Loading the project…" />
           </div>
-        ) : groups !== null && groups.length === 0 ? (
-          <p className="p-6 text-xs text-[var(--color-text-muted)]">
-            No projects yet. Create one on the Projects page.
-          </p>
-        ) : selectedId === null || groups === null ? (
-          <p className="p-6 text-xs text-[var(--color-text-muted)]">Loading…</p>
         ) : detailError && detailError.id === selectedId ? (
-          <div className="p-6 space-y-2" data-testid="project-settings-detail-error">
-            <Callout tone="error">Couldn&apos;t load this project: {detailError.message}</Callout>
-            <Button variant="default" onClick={() => setReloadNonce((n) => n + 1)}>
-              Retry
-            </Button>
+          <div className="p-6">
+            <SettingsLoadState
+              kind="error"
+              title="Couldn’t load this project"
+              detail={detailError.message}
+              testId="project-settings-detail-error"
+              action={<Button variant="quiet" onClick={() => setReloadNonce((n) => n + 1)}>Try again</Button>}
+            >
+              Its settings can’t be shown right now. The project itself is fine.
+            </SettingsLoadState>
           </div>
         ) : shown === null ? (
           /* First load only — after that a switch keeps the previous
              project on screen (below) instead of blanking. */
-          <p className="p-6 text-xs text-[var(--color-text-muted)]">Loading…</p>
+          <div className="p-6">
+            <SettingsLoadState kind="loading" title="Loading the project…" testId="project-settings-detail-loading" />
+          </div>
         ) : (
           /* While switching to a project not seen yet, the PREVIOUS one
              stays (dimmed, inert, aria-busy) so the panel never collapses
@@ -1589,14 +2084,18 @@ export default function ProjectSettings(): React.JSX.Element {
               edit={(patch, run) => edit(shown.id, patch, run)}
               docs={shownDocs}
               docsError={shownDocsError}
-              onDeleted={() => {
+              onReloadDocs={() => setDocsNonce((n) => n + 1)}
+              notice={shownNotice}
+              onDeleted={(name) => {
                 // Select the first surviving sibling (null when none —
                 // the empty state); refetch NOW so the stale row never
                 // gets re-selected by the fallback effect.
                 const remaining = (useProjectGroupsStore.getState().groups ?? []).filter(
                   (g) => g.id !== selectedId,
                 )
-                setSelectedId(remaining[0]?.id ?? null)
+                const next = remaining[0]?.id ?? null
+                setNotice({ forId: next, text: `Deleted “${name}”. Its agents and their folders are still on this server.` })
+                setSelectedId(next)
                 void useProjectGroupsStore.getState().fetchGroups()
               }}
             />

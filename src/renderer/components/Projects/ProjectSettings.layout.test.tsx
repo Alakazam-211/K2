@@ -282,7 +282,7 @@ describe('dead ends', () => {
     expect(box.textContent).toContain('daemon unreachable')
     expect(screen.queryByText('Loading…')).toBeNull()
     fetchGroups.mockClear()
-    fireEvent.click(within(box).getByRole('button', { name: 'Retry' }))
+    fireEvent.click(within(box).getByRole('button', { name: 'Try again' }))
     expect(fetchGroups).toHaveBeenCalledTimes(1)
   })
 
@@ -292,7 +292,7 @@ describe('dead ends', () => {
     const box = await screen.findByTestId('project-settings-detail-error')
     expect(box.textContent).toContain('boom')
     api.showError = null
-    fireEvent.click(within(box).getByRole('button', { name: 'Retry' }))
+    fireEvent.click(within(box).getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(screen.getByTestId('project-settings-detail')).toBeTruthy())
   })
 

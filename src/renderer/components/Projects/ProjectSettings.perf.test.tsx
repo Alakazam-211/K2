@@ -394,7 +394,7 @@ describe('Settings → Projects optimistic edits', () => {
     expect(heading()).toBe('Beta')
     await advance(1000)
     expect(heading()).toBe('Alpha')
-    expect(screen.getByText('name taken')).toBeTruthy()
+    expect(screen.getByRole('alert').textContent).toBe("Couldn’t save: name taken. Nothing changed; try again.")
   })
 
   it('pin flips at once; a refused pin flips back with a toast', async () => {

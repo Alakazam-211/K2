@@ -267,7 +267,9 @@ export function SettingsGroup({
   settingId,
   testId,
 }: {
-  title: string
+  /** Card groups may leave it out: a card that continues the group above
+   *  it (no heading, no hint, no action) starts straight with its rows. */
+  title?: string
   /** Optional inline badge rendered next to the title — used for
    *  `beta` / status tags. Stays opt-in so existing callers
    *  (Workspace, Worktrees, Chat Migrations) render unchanged. */
@@ -290,6 +292,7 @@ export function SettingsGroup({
   if (card) {
     return (
       <section data-settings-id={settingId} data-testid={testId}>
+        {(title !== undefined || hint || action) && (
         <div className="mb-2">
           <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
             <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
@@ -300,6 +303,7 @@ export function SettingsGroup({
           </div>
           {hint && <p className={SETTING_ROW_HINT}>{hint}</p>}
         </div>
+        )}
         {state ?? (
           <Surface chamfer material="tile" className="divide-y divide-[var(--color-border)]">
             <SettingsCardContext.Provider value={true}>{children}</SettingsCardContext.Provider>

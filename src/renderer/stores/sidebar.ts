@@ -5,7 +5,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH
 } from '../../shared/constants'
-import { isSetupChecklistShowing, useSetupChecklistShowing } from '@/stores/first-run'
+import { isSetupChecklistShowing, isSetupNotFinished, useSetupChecklistShowing } from '@/stores/first-run'
 import { settingsGet } from '@/lib/daemon-settings'
 import {
   getWindowLabel,
@@ -78,11 +78,13 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   isCollapsed: bootChrome?.sidebarCollapsed ?? false,
   width: SIDEBAR_DEFAULT_WIDTH,
 
-  // While the setup checklist shows, the nav doesn't collapse (⌘B, the
-  // button, any caller); opening a collapsed one still works.
+  // Until setup is finished (every step done or skipped), the nav doesn't
+  // collapse (⌘B, the button, any caller), whether the list is open or
+  // hidden as its Get started button. Opening a collapsed one still works,
+  // and a nav already collapsed stays so.
   toggle: () => {
     const next = !get().isCollapsed
-    if (next && isSetupChecklistShowing()) return
+    if (next && isSetupNotFinished()) return
     set({ isCollapsed: next })
     persistCollapsed(next)
   },
@@ -91,7 +93,7 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
     set({ width: nextSavedSidebarWidth(get().width, width, isSetupChecklistShowing()) }),
 
   collapse: () => {
-    if (isSetupChecklistShowing()) return
+    if (isSetupNotFinished()) return
     set({ isCollapsed: true })
     persistCollapsed(true)
   },

@@ -498,7 +498,7 @@ export default function HomeSidebar(): React.JSX.Element {
             aria-expanded={pickerOpen}
             aria-haspopup="dialog"
           />
-          <SidebarCollapseButton reserveSlot />
+          <SidebarCollapseButton footer />
         </div>
       </div>
     </div>

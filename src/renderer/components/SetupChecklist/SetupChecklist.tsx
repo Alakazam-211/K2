@@ -7,10 +7,13 @@
 // Shown in the Agents sidebar and the Home sidebar; the collapsed rails get
 // `SetupChecklistRailButton`, a count of the rows left that opens the nav.
 // Nothing renders while the server's switch is off, or once it's finished.
-// Hidden, it sits as a small "Get started" bubble in the same place; the
-// bubble brings the list back (`POST first-run/show`, as `k2 setup show`).
-// The bubble isn't the list: the sidebar's floor, its collapse button and
-// the ⌘B guard (`isSetupChecklistShowing`) only hold for the full list.
+// Hidden, it sits as a full-width "Get started" button in the same place;
+// the button brings the list back (`POST first-run/show`, as `k2 setup
+// show`). Hide folds the list down into the button and Show opens it back
+// up out of it (`GetStartedSlot`; instant under reduced motion). The
+// sidebar's 260 floor holds for the open list only
+// (`isSetupChecklistShowing`); the nav's collapse button and ⌘B wait for
+// setup to finish either way (`setupNotFinished`).
 //
 // Look (K2 Design): the nav's own section language. The header is the
 // shared `NavSectionLabel` with the count left and a quiet Hide; a thin
@@ -39,13 +42,14 @@
 // last list and says so quietly, with Try again; when the person finishes
 // with the list open, "You're set up" shows for a moment, then nothing.
 
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Button, Tag, cx } from '@/components/ui'
 import { ChecklistIcon } from '@/components/icons/K2Icons'
 import { NavSectionLabel } from '@/components/Sidebar/NavSection'
 import { primaryScope } from '@/kessel/server-scope'
 import { openFirstRunTarget } from '@/lib/first-run-openers'
 import { useSidebarStore } from '@/stores/sidebar'
+import { useReducedMotion } from '@/hooks/useReducedMotion'
 import {
   rowsLeft,
   showsCollapsed,
@@ -111,6 +115,9 @@ export function useSetupChecklistRows(): {
   collapsed: boolean
   /** Steps still to do while hidden (the bubble's count). */
   collapsedLeft: number
+  /** Every row the daemon sent, hidden or not (the folded list draws them
+   *  while it folds into the button). */
+  allRows: FirstRunRow[] | null
 } {
   const scope = primaryScope()
   useEffect(() => watchFirstRun(scope), [scope])
@@ -122,6 +129,7 @@ export function useSetupChecklistRows(): {
     finished: !!doc && doc.enabled && !doc.hidden && doc.finished,
     collapsed: showsCollapsed(doc),
     collapsedLeft: doc && showsCollapsed(doc) ? rowsLeft(doc.rows) : 0,
+    allRows: doc?.rows ?? null,
   }
 }
 
@@ -290,7 +298,7 @@ function useSetUpMoment(rows: FirstRunRow[] | null, finished: boolean): boolean 
 
 /** The checklist, for a sidebar. Renders nothing when there's nothing to do. */
 export function SetupChecklist({ className }: { className?: string }): React.JSX.Element | null {
-  const { rows, error, finished, collapsed, collapsedLeft } = useSetupChecklistRows()
+  const { rows, error, finished, collapsed, collapsedLeft, allRows } = useSetupChecklistRows()
   const setUpMoment = useSetUpMoment(rows, finished)
   if (setUpMoment) {
     return (
@@ -305,14 +313,240 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
       </section>
     )
   }
-  if (collapsed) return <GetStartedBubble left={collapsedLeft} error={error} className={className} />
-  if (!rows) return null
+  const drawn = rows ?? (collapsed ? allRows : null)
+  if (!drawn) return null
+  return <GetStartedSlot open={!collapsed} rows={drawn} left={collapsedLeft} error={error} className={className} />
+}
+
+/** Which part the slot draws: the list, the button, or both while one
+ *  folds into the other. */
+type SlotParts = 'list' | 'button' | 'both'
+
+/** The fold's length and curve: the Style's slow motion tokens (300ms
+ *  linear in Terminal, 320ms with Glass's soft ease-out). */
+function foldTiming(): { duration: number; easing: string } {
+  const css = getComputedStyle(document.documentElement)
+  const duration = cssTimeMs(css.getPropertyValue('--motion-duration-slow')) ?? FOLD_FALLBACK_MS
+  const easing = css.getPropertyValue('--motion-ease-standard').trim() || 'ease-out'
+  return { duration, easing }
+}
+
+const FOLD_FALLBACK_MS = 300
+
+/** A CSS time (`320ms`, `0.3s`) in ms; null when it isn't one. */
+function cssTimeMs(raw: string): number | null {
+  const m = /^\s*([\d.]+)\s*(ms|s)\s*$/.exec(raw)
+  if (!m) return null
+  const n = Number(m[1])
+  if (!Number.isFinite(n)) return null
+  return m[2] === 's' ? n * 1000 : n
+}
+
+/** The setup list or its Get started button, in the list's place.
+ *
+ *  Hide folds the list down into the button: the list's height closes to
+ *  nothing (its head riding down with its top edge, the rows going under
+ *  the button) and fades out late, while the button's room opens under it
+ *  and the button fades in. The total height moves smoothly from the list's
+ *  to the button's, so nothing above jumps. Show is the same fold run back:
+ *  the list opens up out of the button and the button fades away. Both on
+ *  the Style's slow motion tokens; instant under reduced motion (and where
+ *  the Web Animations API isn't there). A fold reversed midway starts from
+ *  where it is.
+ *
+ *  Focus follows the gesture: after Hide, the Get started button; after
+ *  Show, the current step's row (else the first row that opens something,
+ *  else Hide). Only when focus was in the part going away, or the person
+ *  pressed Hide or Get started (WebKit doesn't focus a clicked button), so a
+ *  hide from elsewhere (`k2 setup hide`) never pulls focus. */
+function GetStartedSlot({
+  open,
+  rows,
+  left,
+  error,
+  className,
+}: {
+  open: boolean
+  rows: FirstRunRow[]
+  left: number
+  error: string | null
+  className?: string
+}): React.JSX.Element {
+  const reduced = useReducedMotion()
+  const [parts, setParts] = useState<SlotParts>(open ? 'list' : 'button')
+  const listRef = useRef<HTMLElement>(null)
+  const buttonSlotRef = useRef<HTMLElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const prevOpen = useRef(open)
+  const anims = useRef<Animation[]>([])
+  /** A fold waiting for both parts to mount: the heights it starts from. */
+  const pendingFold = useRef<{ list: number; button: number } | null>(null)
+  /** The person asked (Hide, Get started): move focus with the fold. */
+  const focusAsked = useRef(false)
+  const pendingFocus = useRef(false)
+  const openRef = useRef(open)
+  openRef.current = open
+
+  /** Focus the part the fold goes to, once it's drawn; false until then. */
+  const focusIncoming = (): boolean => {
+    const list = listRef.current
+    const target = openRef.current
+      ? (list?.querySelector<HTMLElement>('[aria-current="step"]') ??
+        list?.querySelector<HTMLElement>('[data-setup-row] > button:not(:disabled)') ??
+        list?.querySelector<HTMLElement>('[data-testid="setup-hide"]'))
+      : buttonRef.current
+    if (!target) return false
+    target.focus({ preventScroll: true })
+    return true
+  }
+  const focusIfAsked = (): void => {
+    if (pendingFocus.current && focusIncoming()) pendingFocus.current = false
+  }
+
+  const stopFold = (): void => {
+    for (const a of anims.current) a.cancel()
+    anims.current = []
+    for (const el of [listRef.current, buttonSlotRef.current]) if (el) el.style.overflow = ''
+  }
+
+  const runFold = (from: { list: number; button: number }): void => {
+    const list = listRef.current
+    const slot = buttonSlotRef.current
+    if (!list || !slot) return
+    stopFold()
+    const showing = openRef.current
+    // The parts' own heights, read with no fold on them.
+    const listTo = showing ? list.offsetHeight : 0
+    const buttonTo = showing ? 0 : slot.offsetHeight
+    const { duration, easing } = foldTiming()
+    const timing: KeyframeAnimationOptions = { duration, easing, fill: 'forwards' }
+    list.style.overflow = 'hidden'
+    slot.style.overflow = 'hidden'
+    const px = (n: number): string => `${n}px`
+    let listAnim: Animation
+    let buttonAnim: Animation
+    try {
+      listAnim = list.animate(
+        showing
+          ? [{ height: px(from.list), opacity: 0 }, { opacity: 1, offset: 0.65 }, { height: px(listTo), opacity: 1 }]
+          : [{ height: px(from.list), opacity: 1 }, { opacity: 1, offset: 0.3 }, { height: px(listTo), opacity: 0 }],
+        timing,
+      )
+      buttonAnim = slot.animate(
+        showing
+          ? [{ height: px(from.button), opacity: 1 }, { opacity: 1, offset: 0.35 }, { height: px(buttonTo), opacity: 0 }]
+          : [{ height: px(from.button), opacity: 0 }, { opacity: 1, offset: 0.5 }, { height: px(buttonTo), opacity: 1 }],
+        timing,
+      )
+    } catch {
+      stopFold()
+      setParts(showing ? 'list' : 'button')
+      return
+    }
+    anims.current = [listAnim, buttonAnim]
+    const mine = anims.current
+    void Promise.all(mine.map((a) => a.finished)).then(
+      () => {
+        if (anims.current === mine) setParts(openRef.current ? 'list' : 'button')
+      },
+      () => {},
+    )
+  }
+
+  // The list opened or closed: fold, or swap at once.
+  useLayoutEffect(() => {
+    if (prevOpen.current === open) return
+    prevOpen.current = open
+    const going = open ? buttonSlotRef.current : listRef.current
+    pendingFocus.current = focusAsked.current || (!!going && going.contains(document.activeElement))
+    focusAsked.current = false
+    const canFold = !reduced && typeof HTMLElement.prototype.animate === 'function'
+    if (!canFold) {
+      stopFold()
+      setParts(open ? 'list' : 'button')
+      return
+    }
+    // Start from where things are now (mid-fold too).
+    const h = (el: HTMLElement | null): number => (el ? parseFloat(getComputedStyle(el).height) || el.offsetHeight : 0)
+    const from = { list: listRef.current ? h(listRef.current) : 0, button: buttonSlotRef.current ? h(buttonSlotRef.current) : 0 }
+    if (parts === 'both') {
+      focusIfAsked()
+      runFold(from)
+      return
+    }
+    pendingFold.current = from
+    setParts('both')
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // After each commit: start a fold once both parts are in, move focus once
+  // the part it goes to is in, and drop the fold once it's over.
+  useLayoutEffect(() => {
+    if (parts === 'both' && pendingFold.current) {
+      const from = pendingFold.current
+      pendingFold.current = null
+      focusIfAsked()
+      runFold(from)
+      return
+    }
+    if (parts !== 'both') {
+      if (anims.current.length) stopFold()
+      focusIfAsked()
+    }
+  })
+
+  useEffect(() => () => {
+    for (const a of anims.current) a.cancel()
+  }, [])
+
+  const leftNow = rowsLeft(rows)
+  return (
+    <>
+      {parts !== 'button' && (
+        <ChecklistList
+          ref={listRef}
+          rows={rows}
+          error={error}
+          className={className}
+          onHide={() => {
+            focusAsked.current = true
+            void useFirstRunStore.getState().hide()
+          }}
+          folding={parts === 'both'}
+        />
+      )}
+      {parts !== 'list' && (
+        <GetStartedBubble
+          ref={buttonSlotRef}
+          buttonRef={buttonRef}
+          left={open ? leftNow : left}
+          error={error}
+          className={className}
+          folding={parts === 'both'}
+          onShow={() => {
+            focusAsked.current = true
+            void useFirstRunStore.getState().show()
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+/** The open list: its head (Get started, the count, Hide), the progress
+ *  bar, a failed gesture's note, and the rows. The separator above it is
+ *  the list's own; the folded button has none. */
+const ChecklistList = forwardRef<
+  HTMLElement,
+  { rows: FirstRunRow[]; error: string | null; className?: string; onHide: () => void; folding: boolean }
+>(function ChecklistList({ rows, error, className, onHide, folding }, ref) {
   const left = rowsLeft(rows)
   const current = currentRowId(rows)
   const progress = rows.length === 0 ? 0 : (rows.length - left) / rows.length
   return (
     <section
+      ref={ref}
       data-setup-checklist=""
+      data-setup-folding={folding ? '' : undefined}
       aria-labelledby="setup-checklist-title"
       className={cx('flex flex-col min-h-0 flex-shrink max-h-[45%] border-t border-[var(--color-border)]', className)}
     >
@@ -330,7 +564,7 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
           className={QUIET_ACTION_CLASS}
           aria-label="Hide the setup list"
           data-testid="setup-hide"
-          onClick={() => void useFirstRunStore.getState().hide()}
+          onClick={onHide}
         >
           Hide
         </button>
@@ -366,52 +600,77 @@ export function SetupChecklist({ className }: { className?: string }): React.JSX
       </ul>
     </section>
   )
-}
+})
 
-/** The hidden list, as a small bubble where the list sits. Clicking it
- *  brings the list back (`POST first-run/show`); a failed show keeps the
- *  bubble and says so quietly.
+/** The hidden list, as a Get started button where the list sits. Clicking
+ *  it brings the list back (`POST first-run/show`); a failed show keeps the
+ *  button and says so quietly.
  *
  *  Look (K2 Design): it reads as the theme's colour. The shared accent
  *  Button (the accent fill, the on-accent label and icon, the primary's
  *  hover and focus ring), in the theme's control shape: cut in Terminal,
- *  the field radius (a pill) in Glass. Compact, at the sidebar's content
- *  edge in the list's slot, so it sits in the nav's flow, not over it.
+ *  the field radius (a pill) in Glass. The full width of the nav's content,
+ *  its edges on the footer buttons' (both `px-3`), and their height (30px)
+ *  with a larger label (13px). No separator above it: the list's line goes
+ *  with the list.
  *
  *  With steps left it says how many ("Get started · 4 left") where the slot
- *  is wide enough (a container query: from 11.5rem, a sidebar of about
- *  210px); the accessible name always carries the count. */
-function GetStartedBubble({ left, error, className }: { left: number; error: string | null; className?: string }): React.JSX.Element {
+ *  is wide enough (a container query on the button's width: from 13.25rem,
+ *  a sidebar of about 237px, where Terminal's mono label needs 209px);
+ *  the accessible name always carries the count. */
+const GetStartedBubble = forwardRef<
+  HTMLElement,
+  {
+    left: number
+    error: string | null
+    className?: string
+    folding: boolean
+    onShow: () => void
+    buttonRef: React.Ref<HTMLButtonElement>
+  }
+>(function GetStartedBubble({ left, error, className, folding, onShow, buttonRef }, ref) {
   return (
     <section
+      ref={ref}
       data-setup-checklist-collapsed=""
-      className={cx('@container flex flex-col gap-1 px-3 py-2 border-t border-[var(--color-border)] flex-shrink-0', className)}
+      data-setup-folding={folding ? '' : undefined}
+      // `relative`: the button paints over the list's rows as they fold
+      // under it. The padding is on the inner box, so the fold can close
+      // the section to nothing; the inner box is the container the count
+      // asks about.
+      className={cx('relative flex flex-col justify-end flex-shrink-0', className)}
     >
-      <Button
-        variant="accent"
-        data-testid="setup-get-started"
-        aria-label={left > 0 ? `${GET_STARTED_LABEL}, ${leftText(left)}` : GET_STARTED_LABEL}
-        className="self-start flex-shrink-0 inline-flex items-center gap-1.5 font-medium [--k2-ch-bw:1px]"
-        onClick={() => void useFirstRunStore.getState().show()}
-      >
-        <span aria-hidden="true" className="flex">
-          <ChecklistIcon size={12} />
-        </span>
-        {GET_STARTED_TEXT}
-        {left > 0 && (
-          <span aria-hidden="true" className="hidden @min-[11.5rem]:inline font-normal tabular-nums" data-testid="setup-get-started-left">
-            · {leftText(left)}
+      <div className="@container flex flex-col gap-1 px-3 py-2">
+        <Button
+          ref={buttonRef}
+          variant="accent"
+          size="md"
+          data-testid="setup-get-started"
+          aria-label={left > 0 ? `${GET_STARTED_LABEL}, ${leftText(left)}` : GET_STARTED_LABEL}
+          className="w-full h-[30px] flex-shrink-0 inline-flex items-center justify-center gap-2 text-[13px] font-medium [--k2-ch-bw:1px]"
+          onClick={onShow}
+        >
+          <span aria-hidden="true" className="flex flex-shrink-0">
+            <ChecklistIcon size={14} />
           </span>
+          <span className="min-w-0 truncate">
+            {GET_STARTED_TEXT}
+            {left > 0 && (
+              <span aria-hidden="true" className="hidden @min-[13.25rem]:inline font-normal tabular-nums" data-testid="setup-get-started-left">
+                {' '}· {leftText(left)}
+              </span>
+            )}
+          </span>
+        </Button>
+        {error && (
+          <p role="alert" className="m-0 type-hint text-[var(--color-text-secondary)]" title={error} data-testid="setup-error">
+            {CHECKLIST_ERROR_TEXT}
+          </p>
         )}
-      </Button>
-      {error && (
-        <p role="alert" className="m-0 type-hint text-[var(--color-text-secondary)]" title={error} data-testid="setup-error">
-          {CHECKLIST_ERROR_TEXT}
-        </p>
-      )}
+      </div>
     </section>
   )
-}
+})
 
 /** The collapsed rail's counterpart: the checklist icon with a badge of the
  *  rows left; opens the nav, where the checklist is. Nothing when none are

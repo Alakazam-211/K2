@@ -246,8 +246,8 @@ describe('SetupChecklist', () => {
     const btn = await screen.findByTestId('setup-get-started')
     // "Get started", then the count left (shown where the slot is wide
     // enough; the accessible name always has it).
-    expect(btn.textContent).toBe(`${GET_STARTED_TEXT}· 4 left`)
-    expect(screen.getByTestId('setup-get-started-left').className).toContain('@min-[11.5rem]:inline')
+    expect(btn.textContent).toBe(`${GET_STARTED_TEXT} · 4 left`)
+    expect(screen.getByTestId('setup-get-started-left').className).toContain('@min-[13.25rem]:inline')
     expect(screen.getByRole('button', { name: `${GET_STARTED_LABEL}, 4 left` })).toBe(btn)
     expect(btn.querySelector('[data-k2-icon="checklist"]')).toBeTruthy()
     expect(checklist()).toBeNull()
@@ -296,7 +296,7 @@ describe('SetupChecklist', () => {
     )
     render(<SetupChecklist />)
     const btn = await screen.findByTestId('setup-get-started')
-    expect(screen.getByTestId('setup-get-started-left').textContent).toBe('· 1 left')
+    expect(screen.getByTestId('setup-get-started-left').textContent).toBe(' · 1 left')
     expect(btn.getAttribute('aria-label')).toBe(`${GET_STARTED_LABEL}, 1 left`)
   })
 
@@ -476,6 +476,224 @@ describe('SetupChecklist states', () => {
     render(<SetupChecklist />)
     await screen.findByTestId('setup-row-tunnel')
     expect(screen.getByTestId('setup-left').textContent).toBe(ALL_DONE_TEXT)
+  })
+})
+
+describe('the Get started button', () => {
+  it('spans the nav content, at the footer buttons\' height with a larger label, and has no separator above it', async () => {
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    const btn = await screen.findByTestId('setup-get-started')
+    expect(btn.className).toContain('w-full')
+    expect(btn.className).toContain('h-[30px]')
+    expect(btn.className).toContain('text-[13px]')
+    const slot = btn.closest('[data-setup-checklist-collapsed]')!
+    // Its edges on the footer buttons' (the footer is p-3), padded inside so
+    // the fold can close the slot to nothing.
+    expect(btn.parentElement!.className).toContain('px-3')
+    expect(slot.className).not.toMatch(/\b(p|px|py|pt|pb)-/)
+    expect(slot.className).not.toContain('border-t')
+  })
+
+  it('the open list keeps its separator', async () => {
+    render(<SetupChecklist />)
+    await screen.findByTestId('setup-row-tunnel')
+    expect(checklist()!.className).toContain('border-t')
+  })
+})
+
+/** `prefers-reduced-motion` for `useReducedMotion` (jsdom has no matchMedia). */
+function mockReducedMotion(reduce: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: reduce && query.includes('prefers-reduced-motion'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }),
+  })
+}
+
+type MadeAnimation = {
+  el: HTMLElement
+  keyframes: Keyframe[]
+  opts: KeyframeAnimationOptions
+  finish: () => void
+  cancel: ReturnType<typeof vi.fn>
+}
+
+/** Web Animations, which jsdom lacks: records each animation and lets the
+ *  test finish it. */
+function mockAnimate(): MadeAnimation[] {
+  const made: MadeAnimation[] = []
+  ;(HTMLElement.prototype as { animate?: unknown }).animate = function (
+    this: HTMLElement,
+    keyframes: Keyframe[],
+    opts: KeyframeAnimationOptions,
+  ) {
+    let done: (a: unknown) => void = () => {}
+    const finished = new Promise((r) => (done = r))
+    const a = { finished, cancel: vi.fn() }
+    made.push({ el: this, keyframes, opts, finish: () => done(a), cancel: a.cancel })
+    return a
+  }
+  return made
+}
+
+describe('the fold between the list and the Get started button', () => {
+  afterEach(() => {
+    delete (HTMLElement.prototype as { animate?: unknown }).animate
+    delete (window as { matchMedia?: unknown }).matchMedia
+    document.documentElement.style.removeProperty('--motion-duration-slow')
+    document.documentElement.style.removeProperty('--motion-ease-standard')
+  })
+
+  const finishAll = async (made: MadeAnimation[]): Promise<void> => {
+    await act(async () => {
+      made.forEach((m) => m.finish())
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+  }
+
+  it('Hide folds the list down into the button on the slow motion tokens, then drops the list', async () => {
+    mockReducedMotion(false)
+    const made = mockAnimate()
+    document.documentElement.style.setProperty('--motion-duration-slow', '320ms')
+    document.documentElement.style.setProperty('--motion-ease-standard', 'cubic-bezier(0.22, 1, 0.36, 1)')
+    h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-hide'))
+    await waitFor(() => expect(made.length).toBe(2))
+    // Mid-fold: both parts are drawn.
+    expect(checklist()).not.toBeNull()
+    expect(bubble()).not.toBeNull()
+    const list = made.find((m) => m.el === checklist())!
+    const button = made.find((m) => m.el.hasAttribute('data-setup-checklist-collapsed'))!
+    // The list closes to nothing and fades out late; the button's room opens
+    // and it fades in.
+    expect(list.keyframes.at(-1)).toMatchObject({ height: '0px', opacity: 0 })
+    expect(list.keyframes[1]).toMatchObject({ opacity: 1 })
+    expect(button.keyframes[0]).toMatchObject({ height: '0px', opacity: 0 })
+    expect(button.keyframes.at(-1)).toMatchObject({ opacity: 1 })
+    for (const m of made) {
+      expect(m.opts.duration).toBe(320)
+      expect(m.opts.easing).toBe('cubic-bezier(0.22, 1, 0.36, 1)')
+    }
+    expect(checklist()!.style.overflow).toBe('hidden')
+    await finishAll(made)
+    expect(checklist()).toBeNull()
+    expect(bubble()).not.toBeNull()
+    // The fold lets go of the button once it's over.
+    expect(button.cancel).toHaveBeenCalled()
+    expect((bubble()!.closest('[data-setup-checklist-collapsed]') as HTMLElement).style.overflow).toBe('')
+  })
+
+  it('Show opens the list up out of the button, then drops the button', async () => {
+    mockReducedMotion(false)
+    const made = mockAnimate()
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    h.daemonCliPost.mockResolvedValue(body())
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-get-started'))
+    await waitFor(() => expect(made.length).toBe(2))
+    expect(checklist()).not.toBeNull()
+    expect(bubble()).not.toBeNull()
+    const list = made.find((m) => m.el === checklist())!
+    const button = made.find((m) => m.el.hasAttribute('data-setup-checklist-collapsed'))!
+    expect(list.keyframes[0]).toMatchObject({ height: '0px', opacity: 0 })
+    expect(list.keyframes.at(-1)).toMatchObject({ opacity: 1 })
+    expect(button.keyframes.at(-1)).toMatchObject({ height: '0px', opacity: 0 })
+    // Without the Style's tokens, the fallback length.
+    expect(list.opts.duration).toBe(300)
+    await finishAll(made)
+    expect(bubble()).toBeNull()
+    expect(screen.getByTestId('setup-row-tunnel')).toBeTruthy()
+  })
+
+  it('under reduced motion Hide and Show are instant', async () => {
+    mockReducedMotion(true)
+    const made = mockAnimate()
+    h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-hide'))
+    await waitFor(() => expect(checklist()).toBeNull())
+    expect(bubble()).not.toBeNull()
+    h.daemonCliPost.mockResolvedValue(body())
+    fireEvent.click(bubble()!)
+    await screen.findByTestId('setup-row-tunnel')
+    expect(bubble()).toBeNull()
+    expect(made).toEqual([])
+  })
+
+  it('after Hide focus goes to the Get started button; after Show to the current step', async () => {
+    mockReducedMotion(false)
+    const made = mockAnimate()
+    h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    const hide = await screen.findByTestId('setup-hide')
+    hide.focus()
+    fireEvent.click(hide)
+    await waitFor(() => expect(document.activeElement).toBe(bubble()))
+    await finishAll(made)
+    expect(document.activeElement).toBe(bubble())
+
+    made.length = 0
+    h.daemonCliPost.mockResolvedValue(body())
+    // WebKit doesn't focus a clicked button: the click alone moves focus.
+    ;(document.activeElement as HTMLElement).blur()
+    fireEvent.click(bubble()!)
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('setup-row-llm_sign_in')))
+    expect(document.activeElement!.getAttribute('aria-current')).toBe('step')
+    await finishAll(made)
+    expect(document.activeElement).toBe(screen.getByTestId('setup-row-llm_sign_in'))
+  })
+
+  it('moves focus under reduced motion too', async () => {
+    mockReducedMotion(true)
+    h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-hide'))
+    await waitFor(() => expect(document.activeElement).toBe(bubble()))
+  })
+
+  it('a hide from elsewhere (k2 setup hide) folds without pulling focus', async () => {
+    mockReducedMotion(true)
+    render(
+      <>
+        <input data-testid="elsewhere" />
+        <SetupChecklist />
+      </>,
+    )
+    await screen.findByTestId('setup-row-tunnel')
+    const elsewhere = screen.getByTestId('elsewhere')
+    elsewhere.focus()
+    h.daemonCliGet.mockResolvedValue(body({ hidden: true }))
+    act(() => h.handlers.get('first_run_changed')?.forEach((fn) => fn()))
+    await waitFor(() => expect(bubble()).not.toBeNull())
+    expect(document.activeElement).toBe(elsewhere)
+  })
+
+  it('a fold reversed midway runs back from where it is', async () => {
+    mockReducedMotion(false)
+    const made = mockAnimate()
+    h.daemonCliPost.mockResolvedValue(body({ hidden: true }))
+    render(<SetupChecklist />)
+    fireEvent.click(await screen.findByTestId('setup-hide'))
+    await waitFor(() => expect(made.length).toBe(2))
+    const first = [...made]
+    h.daemonCliGet.mockResolvedValue(body())
+    act(() => h.handlers.get('first_run_changed')?.forEach((fn) => fn()))
+    await waitFor(() => expect(made.length).toBe(4))
+    for (const m of first) expect(m.cancel).toHaveBeenCalled()
+    // The first fold finishing late changes nothing.
+    await finishAll(first)
+    expect(bubble()).not.toBeNull()
+    await finishAll(made.slice(2))
+    expect(bubble()).toBeNull()
+    expect(checklist()).not.toBeNull()
   })
 })
 

@@ -18,8 +18,10 @@ import { forwardRef } from 'react'
 import { Button, cx, type ButtonProps } from '@/components/ui'
 
 /** The footer row: the main action, then the collapse button. A container,
- *  so the action can drop its label when the nav is narrow. */
-export const NAV_FOOTER_ROW_CLASS = '@container flex gap-2'
+ *  so the action can drop its label when the nav is narrow. No gap of its
+ *  own: «'s slot carries the gap, so while « is gone (setup not finished)
+ *  the action takes the full width. */
+export const NAV_FOOTER_ROW_CLASS = '@container flex'
 
 export interface NavFooterButtonProps extends Omit<ButtonProps, 'children' | 'variant' | 'size'> {
   label: string

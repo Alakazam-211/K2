@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 //
-// While the setup checklist shows, the sidebar isn't drawn narrower than
-// SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH and its collapse button is hidden. A
-// narrower saved width is drawn at the floor and kept, so it comes back once
-// the checklist goes. ⌘B (the store's toggle) doesn't collapse the nav either.
+// While the setup list is open, the sidebar isn't drawn narrower than
+// SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH. A narrower saved width is drawn at the
+// floor and kept, so it comes back once the list goes. Until setup is
+// finished (open or hidden as Get started), the collapse button is gone, the
+// footer's main action takes the full row, and ⌘B (the store's toggle)
+// doesn't collapse the nav; when setup finishes « slides back in.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -28,8 +30,10 @@ import {
 import { primaryScope } from '@/kessel/server-scope'
 import {
   isSetupChecklistShowing,
+  isSetupNotFinished,
   parseFirstRunDoc,
   resetFirstRunForTests,
+  setupNotFinished,
   showsCollapsed,
   useFirstRunStore,
   useSetupChecklistShowing,
@@ -55,6 +59,21 @@ function setDoc(over: Record<string, unknown>): void {
 
 const showChecklist = (): void => setDoc({})
 const hideChecklist = (): void => setDoc({ hidden: true })
+const finishSetup = (): void => setDoc({ finished: true })
+
+/** `prefers-reduced-motion` for `useReducedMotion` (jsdom has no matchMedia). */
+function mockReducedMotion(reduce: boolean): void {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      matches: reduce && query.includes('prefers-reduced-motion'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }),
+  })
+}
 
 function drag(dx: number): void {
   const edge = document.querySelector('[data-resize-edge]') as HTMLElement
@@ -68,7 +87,10 @@ beforeEach(() => {
   useSidebarStore.setState({ isCollapsed: false, width: SIDEBAR_DEFAULT_WIDTH })
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  delete (window as { matchMedia?: unknown }).matchMedia
+})
 
 describe('setup checklist showing', () => {
   it('is true only while the rows render', () => {
@@ -86,20 +108,44 @@ describe('setup checklist showing', () => {
   })
 })
 
-describe("the hidden list's Get started bubble", () => {
-  it('counts as dismissed: no floor, the collapse button is back and ⌘B collapses', () => {
+describe("the hidden list's Get started button", () => {
+  it('drops the floor but not the collapse lock: no «, ⌘B blocked, until setup is finished', () => {
     useSidebarStore.setState({ width: 200 })
     const { result } = renderHook(() => useSidebarDisplayWidth())
     showChecklist()
     expect(result.current).toBe(SETUP_CHECKLIST_MIN_SIDEBAR_WIDTH)
     hideChecklist()
     expect(showsCollapsed(useFirstRunStore.getState().entries[primaryScope().id]?.doc)).toBe(true)
+    // The floor is the open list's only.
     expect(isSetupChecklistShowing()).toBe(false)
     expect(result.current).toBe(200)
+    // Hiding isn't finishing: « stays gone and ⌘B stays blocked.
+    expect(isSetupNotFinished()).toBe(true)
     render(<SidebarCollapseButton />)
-    expect(screen.queryByRole('button', { name: 'Collapse workspaces sidebar' })).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Collapse workspaces sidebar' })).toBeNull()
     useSidebarStore.getState().toggle()
+    expect(useSidebarStore.getState().isCollapsed).toBe(false)
+    useSidebarStore.getState().collapse()
+    expect(useSidebarStore.getState().isCollapsed).toBe(false)
+    // Finished: both come back.
+    finishSetup()
+    expect(isSetupNotFinished()).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Collapse workspaces sidebar' })).not.toBeNull()
+    act(() => useSidebarStore.getState().toggle())
     expect(useSidebarStore.getState().isCollapsed).toBe(true)
+  })
+})
+
+describe('setup not finished', () => {
+  it('is the switch on and the list not finished, open or hidden', () => {
+    const doc = (over: Record<string, unknown>) =>
+      parseFirstRunDoc({ enabled: true, hidden: false, finished: false, rows: ROWS, ...over })
+    expect(setupNotFinished(null)).toBe(false)
+    expect(setupNotFinished(doc({}))).toBe(true)
+    expect(setupNotFinished(doc({ hidden: true }))).toBe(true)
+    expect(setupNotFinished(doc({ finished: true }))).toBe(false)
+    expect(setupNotFinished(doc({ hidden: true, finished: true }))).toBe(false)
+    expect(setupNotFinished(doc({ enabled: false }))).toBe(false)
   })
 })
 
@@ -173,45 +219,121 @@ describe('sidebar width clamp', () => {
 describe('sidebar collapse button', () => {
   const collapse = (): HTMLElement | null => screen.queryByRole('button', { name: 'Collapse workspaces sidebar' })
 
-  it('is hidden while the checklist shows and back after', () => {
+  it('is hidden until setup is finished, with the list open or hidden, and back after', () => {
     render(<SidebarCollapseButton />)
     expect(collapse()).not.toBeNull()
     showChecklist()
     expect(collapse()).toBeNull()
     hideChecklist()
+    expect(collapse()).toBeNull()
+    showChecklist()
+    expect(collapse()).toBeNull()
+    finishSetup()
     expect(collapse()).not.toBeNull()
   })
 
-  it("leaves an already collapsed nav's open button on the rail", () => {
+  it("leaves an already collapsed nav collapsed, with the rail's open button", () => {
     useSidebarStore.setState({ isCollapsed: true })
     showChecklist()
     render(<SidebarCollapseButton />)
     expect(screen.queryByRole('button', { name: 'Open workspaces sidebar' })).not.toBeNull()
     expect(useSidebarStore.getState().isCollapsed).toBe(true)
+    hideChecklist()
+    expect(useSidebarStore.getState().isCollapsed).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Open workspaces sidebar' })).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Open workspaces sidebar' }))
+    expect(useSidebarStore.getState().isCollapsed).toBe(false)
   })
 
-  it('in the nav footer it keeps its slot while hidden: invisible, out of the tab order and the tree, and inert', () => {
-    render(<SidebarCollapseButton reserveSlot />)
-    const slot = (): HTMLElement => document.querySelector('[data-nav-collapse]') as HTMLElement
-    // The footer's button: the shared quiet Button (cut corners in Terminal).
-    expect(slot().getAttribute('data-k2-chamfer')).toBe('control')
-    expect(slot().className).toContain('border-[var(--color-control-edge)]')
-    // Not Frost: its rim is under 3:1 on the nav, the control edge isn't.
-    expect(slot().hasAttribute('data-material')).toBe(false)
-    expect(collapse()).toBe(slot())
-    showChecklist()
-    // Still drawn (so Add Workspace keeps its width), but not there for anyone.
-    expect(slot()).not.toBeNull()
-    expect(slot().className).toContain('invisible')
-    expect(slot().getAttribute('aria-hidden')).toBe('true')
-    expect(slot().tabIndex).toBe(-1)
-    expect(collapse()).toBeNull()
-    fireEvent.click(slot())
-    expect(useSidebarStore.getState().isCollapsed).toBe(false)
-    hideChecklist()
-    expect(slot().className).not.toContain('invisible')
-    expect(slot().getAttribute('aria-hidden')).toBeNull()
-    expect(collapse()).toBe(slot())
+  describe('in the nav footer', () => {
+    const slot = (): HTMLElement => document.querySelector('[data-nav-collapse-slot]') as HTMLElement
+    const btn = (): HTMLElement => document.querySelector('[data-nav-collapse]') as HTMLElement
+    let widthSpy: { mockRestore: () => void } | null = null
+    beforeEach(() => {
+      // jsdom lays nothing out: give « its Terminal width.
+      widthSpy = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.hasAttribute('data-nav-collapse') ? 32 : 0
+      })
+    })
+    afterEach(() => widthSpy?.mockRestore())
+
+    function footer(): void {
+      render(
+        <div className={NAV_FOOTER_ROW_CLASS}>
+          <NavFooterButton label="Add Workspace" icon={<NavFooterPlus />} />
+          <SidebarCollapseButton footer />
+        </div>,
+      )
+    }
+
+    it('is the shared quiet Button, not Frost', () => {
+      footer()
+      expect(btn().getAttribute('data-k2-chamfer')).toBe('control')
+      expect(btn().className).toContain('border-[var(--color-control-edge)]')
+      expect(btn().hasAttribute('data-material')).toBe(false)
+      expect(collapse()).toBe(btn())
+    })
+
+    it('closes to nothing while setup is not finished, so the add button takes the full row', () => {
+      footer()
+      // Open: « and the row's gap (8px) beside the add button.
+      expect(slot().getAttribute('data-nav-collapse-slot')).toBe('open')
+      expect(slot().style.width).toBe('40px')
+      // The row has no gap of its own; the slot carries it.
+      expect(NAV_FOOTER_ROW_CLASS).not.toMatch(/\bgap-/)
+      expect(screen.getByRole('button', { name: 'Add Workspace' }).className).toContain('flex-1')
+      for (const step of [showChecklist, hideChecklist]) {
+        step()
+        expect(slot().getAttribute('data-nav-collapse-slot')).toBe('closed')
+        expect(slot().style.width).toBe('0px')
+        expect(slot().className).toContain('overflow-hidden')
+        // Closing is instant (a list loading in never animates « away).
+        expect(slot().style.transition).toBe('none')
+        // Not there for anyone, and inert.
+        expect(btn().getAttribute('aria-hidden')).toBe('true')
+        expect(btn().tabIndex).toBe(-1)
+        expect(btn().hasAttribute('inert')).toBe(true)
+        expect(collapse()).toBeNull()
+        fireEvent.click(btn())
+        expect(useSidebarStore.getState().isCollapsed).toBe(false)
+      }
+    })
+
+    it('slides « back in when setup finishes: the add button shrinks as the slot opens', () => {
+      mockReducedMotion(false)
+      vi.useFakeTimers()
+      try {
+        showChecklist()
+        footer()
+        expect(slot().style.width).toBe('0px')
+        finishSetup()
+        expect(slot().getAttribute('data-nav-collapse-slot')).toBe('open')
+        expect(slot().style.width).toBe('40px')
+        expect(slot().style.transition).toBe('width var(--motion-duration-slow) var(--motion-ease-standard)')
+        // Clipped while it slides, then it lets go (so the focus ring shows).
+        expect(slot().className).toContain('overflow-hidden')
+        act(() => {
+          vi.advanceTimersByTime(400)
+        })
+        expect(slot().className).not.toContain('overflow-hidden')
+        expect(btn().getAttribute('aria-hidden')).toBeNull()
+        expect(btn().hasAttribute('inert')).toBe(false)
+        expect(collapse()).toBe(btn())
+        fireEvent.click(btn())
+        expect(useSidebarStore.getState().isCollapsed).toBe(true)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('under reduced motion « comes back at once', () => {
+      mockReducedMotion(true)
+      showChecklist()
+      footer()
+      finishSetup()
+      expect(slot().style.width).toBe('40px')
+      expect(slot().style.transition).toBe('none')
+    })
   })
 })
 
@@ -240,7 +362,7 @@ describe('nav footer action', () => {
 describe('sidebar toggle (⌘B)', () => {
   const collapsed = (): boolean => useSidebarStore.getState().isCollapsed
 
-  it("doesn't collapse an open nav while the checklist shows", () => {
+  it("doesn't collapse an open nav while the list shows", () => {
     showChecklist()
     useSidebarStore.getState().toggle()
     expect(collapsed()).toBe(false)
@@ -248,23 +370,38 @@ describe('sidebar toggle (⌘B)', () => {
     expect(collapsed()).toBe(false)
   })
 
-  it('still opens a collapsed nav while the checklist shows', () => {
-    useSidebarStore.setState({ isCollapsed: true })
+  it("doesn't collapse an open nav while the list is hidden but setup isn't finished", () => {
     showChecklist()
+    hideChecklist()
+    useSidebarStore.getState().toggle()
+    expect(collapsed()).toBe(false)
+    useSidebarStore.getState().collapse()
+    expect(collapsed()).toBe(false)
+  })
+
+  it('still opens a collapsed nav before setup is finished', () => {
+    useSidebarStore.setState({ isCollapsed: true })
+    hideChecklist()
     useSidebarStore.getState().toggle()
     expect(collapsed()).toBe(false)
     useSidebarStore.getState().toggle()
     expect(collapsed()).toBe(false)
   })
 
-  it('collapses as before once the checklist stops showing', () => {
+  it('collapses as before once setup is finished', () => {
     showChecklist()
-    hideChecklist()
+    finishSetup()
     useSidebarStore.getState().toggle()
     expect(collapsed()).toBe(true)
     useSidebarStore.getState().toggle()
     expect(collapsed()).toBe(false)
     useSidebarStore.getState().collapse()
+    expect(collapsed()).toBe(true)
+  })
+
+  it('collapses with the switch off', () => {
+    setDoc({ enabled: false })
+    useSidebarStore.getState().toggle()
     expect(collapsed()).toBe(true)
   })
 })

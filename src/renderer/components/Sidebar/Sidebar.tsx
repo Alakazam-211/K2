@@ -811,7 +811,7 @@ export default function Sidebar(): React.JSX.Element {
             onClick={!focusGroupsEnabled && projects.length >= 15 ? undefined : handleAddProject}
             disabled={!focusGroupsEnabled && projects.length >= 15}
           />
-          <SidebarCollapseButton reserveSlot />
+          <SidebarCollapseButton footer />
         </div>
       </div>
 

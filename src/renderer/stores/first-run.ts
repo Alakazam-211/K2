@@ -164,7 +164,8 @@ export function visibleRows(doc: FirstRunDoc | null | undefined): FirstRunRow[] 
 /** Whether the hidden list sits as its "Get started" bubble: the switch is
  *  on, the person hid it, it isn't finished, and a row is left to show. The
  *  bubble isn't the list, so `isSetupChecklistShowing` stays false for it
- *  (the sidebar keeps its normal range). */
+ *  (the sidebar keeps its normal range; the nav still doesn't collapse,
+ *  see `setupNotFinished`). */
 export function showsCollapsed(doc: FirstRunDoc | null | undefined): boolean {
   return !!doc && doc.enabled && doc.hidden && !doc.finished && doc.rows.length > 0
 }
@@ -174,7 +175,9 @@ function checklistShowingIn(entries: Record<string, FirstRunEntry>): boolean {
 }
 
 /** Whether the setup checklist is drawn for the window's server right now
- *  (its rows, not the "You're set up" moment). For stores and handlers. */
+ *  (its rows, not the "You're set up" moment). For stores and handlers.
+ *  It holds the sidebar's 260 floor only; collapsing waits for
+ *  `isSetupNotFinished`. */
 export function isSetupChecklistShowing(): boolean {
   return checklistShowingIn(useFirstRunStore.getState().entries)
 }
@@ -183,6 +186,28 @@ export function isSetupChecklistShowing(): boolean {
  *  checklist and its rail button are what watch the server. */
 export function useSetupChecklistShowing(): boolean {
   return useFirstRunStore((s) => checklistShowingIn(s.entries))
+}
+
+/** Setup isn't finished: the switch is on and the daemon hasn't marked the
+ *  list finished (every step done or skipped), whether the list is open or
+ *  hidden as its "Get started" button. Until then the nav doesn't collapse:
+ *  no « in the footer, no ⌘B. Hiding the list doesn't change it. */
+export function setupNotFinished(doc: FirstRunDoc | null | undefined): boolean {
+  return !!doc && doc.enabled && !doc.finished
+}
+
+function setupNotFinishedIn(entries: Record<string, FirstRunEntry>): boolean {
+  return setupNotFinished(entries[primaryScope().id]?.doc)
+}
+
+/** `setupNotFinished` for the window's server. For stores and handlers. */
+export function isSetupNotFinished(): boolean {
+  return setupNotFinishedIn(useFirstRunStore.getState().entries)
+}
+
+/** `isSetupNotFinished`, as a hook. */
+export function useSetupNotFinished(): boolean {
+  return useFirstRunStore((s) => setupNotFinishedIn(s.entries))
 }
 
 /** Rows still to do (not done, not skipped). */

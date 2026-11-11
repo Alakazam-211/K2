@@ -679,8 +679,8 @@ describe('Home — the Agents page shell', () => {
     render(<Shell />)
     const bar = screen.getByText('Add Agent').closest('div')
     if (!bar) throw new Error('no bottom bar')
-    // The bar: Add Agent + the collapse button, like Add Workspace.
-    expect(Array.from(bar.querySelectorAll(':scope > button')).map((b) => b.textContent?.trim() || b.getAttribute('aria-label'))).toEqual([
+    // The bar: Add Agent + the collapse button (in its slot), like Add Workspace.
+    expect(Array.from(bar.querySelectorAll(':scope > button, :scope > [data-nav-collapse-slot] > button')).map((b) => b.textContent?.trim() || b.getAttribute('aria-label'))).toEqual([
       'Add Agent',
       'Collapse workspaces sidebar',
     ])

@@ -152,6 +152,27 @@ describe('WakeSchedulerSection', () => {
     expect(screen.queryByText('Edit wakeup')).toBeNull()
   })
 
+  it('a row is two lines: the switch beside the text, the other controls under it', async () => {
+    h.invokes.k2so_heartbeat_list_all = [ROW]
+    h.invokes.k2so_heartbeat_fires_list_all = []
+    h.routes['heartbeat/scheduler-status'] = STATUS
+    render(<WakeSchedulerSection />)
+    await screen.findByRole('button', { name: 'Edit the instructions for nightly-build' })
+    const row = screen.getByTestId('heartbeat-row-hb1')
+    const main = row.querySelector('[data-heartbeat-main]') as HTMLElement
+    const actions = row.querySelector('[data-heartbeat-actions]') as HTMLElement
+    expect(main.querySelector('[role="switch"]')).toBeTruthy()
+    expect(main.querySelectorAll('button:not([role="switch"])').length).toBe(0)
+    expect(actions.querySelector('[role="switch"]')).toBeNull()
+    // The Runs in picker leads line 2.
+    expect(actions.children.length).toBe(3)
+    expect(actions.firstElementChild?.textContent).not.toMatch(/Open chat|Edit instructions/)
+    expect(actions.textContent).toContain('Open chat')
+    expect(actions.textContent).toContain('Edit instructions')
+    // Line 2 comes after line 1 in the row.
+    expect(main.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('an empty list says how to add one', async () => {
     h.invokes.k2so_heartbeat_list_all = []
     h.invokes.k2so_heartbeat_fires_list_all = []

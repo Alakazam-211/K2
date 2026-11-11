@@ -873,35 +873,7 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <HeartbeatSessionPicker
-                  variant="field"
-                  prefix="Runs in"
-                  ariaLabel={`Where ${row.name} runs`}
-                  projectPath={row.projectPath}
-                  projectId={row.projectId}
-                  value={target}
-                  onSelect={(next) => {
-                    void handleSetDelivery(row, next)
-                  }}
-                />
-                <Button
-                  variant="quiet"
-                  onClick={() => {
-                    void openHeartbeatTarget(useTabsStore, row.projectPath, row.name, target.mode)
-                  }}
-                  title={target.mode === 'pinned' ? 'Open the workspace’s pinned chat' : 'Open this heartbeat’s chat'}
-                  aria-label={`Open the chat ${row.name} runs in`}
-                >
-                  Open chat
-                </Button>
-                <Button
-                  onClick={() => setEditingHeartbeat(row)}
-                  title="Edit what it tells the agent each time it runs"
-                  aria-label={`Edit the instructions for ${row.name}`}
-                >
-                  Edit instructions
-                </Button>
+              <div className="flex items-center gap-2 flex-shrink-0" data-heartbeat-main="">
                 {rowNote && (
                   <span
                     role={rowNote.kind === 'saved' ? 'status' : undefined}
@@ -919,6 +891,40 @@ export function WakeSchedulerSection(): React.JSX.Element {
                   title={row.enabled ? 'On: turn off to pause it' : 'Paused: turn on to resume it'}
                 />
               </div>
+            </div>
+            {/* Line 2: where it runs and the ways into it, left under the
+                text and quiet, so the switch stays the row's one main
+                control and the text keeps the row's width. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2" data-heartbeat-actions="">
+              <HeartbeatSessionPicker
+                variant="field"
+                prefix="Runs in"
+                ariaLabel={`Where ${row.name} runs`}
+                projectPath={row.projectPath}
+                projectId={row.projectId}
+                value={target}
+                onSelect={(next) => {
+                  void handleSetDelivery(row, next)
+                }}
+              />
+              <Button
+                variant="quiet"
+                onClick={() => {
+                  void openHeartbeatTarget(useTabsStore, row.projectPath, row.name, target.mode)
+                }}
+                title={target.mode === 'pinned' ? 'Open the workspace’s pinned chat' : 'Open this heartbeat’s chat'}
+                aria-label={`Open the chat ${row.name} runs in`}
+              >
+                Open chat
+              </Button>
+              <Button
+                variant="quiet"
+                onClick={() => setEditingHeartbeat(row)}
+                title="Edit what it tells the agent each time it runs"
+                aria-label={`Edit the instructions for ${row.name}`}
+              >
+                Edit instructions
+              </Button>
             </div>
           </div>
         )

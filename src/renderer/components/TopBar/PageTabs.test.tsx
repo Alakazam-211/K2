@@ -68,7 +68,8 @@ vi.mock('@/components/Mail/mail-tab', () => ({
   useMailTabShown: () => h.mail.shown,
 }))
 
-import PageTabs, { ORG_CHART_TAB, PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, settingsTabTitle } from './PageTabs'
+import PageTabs, { ORG_CHART_TAB, PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, PageTabsFootprint, pageTabsInOrder, settingsTabTitle } from './PageTabs'
+import { DEFAULT_PAGE_TABS_SHAPE, lastPageTabsShape } from './page-tabs-shape'
 import { currentShortcutOs } from '@/lib/shortcut-label'
 import { usePageViewStore, isRoomPage, type AppPage } from '@/stores/page-view'
 
@@ -412,5 +413,60 @@ describe('PageTabs — Org Chart tab', () => {
     expect(usePageViewStore.getState().page).toBe('orgChart')
     rerender(<PageTabs />)
     expect(screen.getByRole('button', { name: 'Org Chart' }).getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+// The connecting screen (GateChrome) holds the page tabs' room with a hidden
+// footprint, so the server switcher does not move when the app arrives.
+describe('PageTabsFootprint — the page tabs\' room on the connecting screen', () => {
+  const SHAPES = [
+    { mail: false, orgChart: false },
+    { mail: true, orgChart: false },
+    { mail: false, orgChart: true },
+    { mail: true, orgChart: true },
+  ]
+
+  it.each(SHAPES)('has the same capsule and tabs, in order, as the bar (shape %o)', (shape) => {
+    h.mail.shown = shape.mail
+    h.settings.orgChart = shape.orgChart
+    const bar = render(<PageTabs />).container.querySelector('[data-page-tabs]') as HTMLElement
+    const foot = render(<PageTabsFootprint shape={shape} />).container.querySelector('[data-page-tabs-footprint]') as HTMLElement
+    const labels = (el: HTMLElement): (string | null)[] => tabs(el).map((b) => b.getAttribute('aria-label'))
+    expect(labels(foot)).toEqual(labels(bar))
+    expect(labels(foot)).toEqual(pageTabsInOrder(shape))
+    expect(foot.className).toBe(bar.className)
+    for (const a of ['data-material', 'data-frost-shape', 'data-page-tabs']) {
+      expect(foot.getAttribute(a)).toBe(bar.getAttribute(a))
+    }
+    tabs(foot).forEach((b, i) => {
+      const twin = tabs(bar)[i]
+      // Same box: only the colour classes (selected / hover) may differ.
+      const box = (el: HTMLElement): string[] => el.className.split(/\s+/).filter((c) => !/^(enabled:hover:)?(text|bg|shadow)-/.test(c))
+      expect(box(b)).toEqual(box(twin))
+      expect(b.querySelectorAll('svg')).toHaveLength(1)
+      expect(b.querySelector('svg')?.getAttribute('width')).toBe(String(PAGE_TAB_ICON_PX))
+    })
+  })
+
+  it('is hidden, inert and out of the tab order', () => {
+    const foot = render(<PageTabsFootprint shape={DEFAULT_PAGE_TABS_SHAPE} />).container.querySelector(
+      '[data-page-tabs-footprint]',
+    ) as HTMLElement
+    expect(foot.style.visibility).toBe('hidden')
+    expect(foot.getAttribute('aria-hidden')).toBe('true')
+    expect(foot.hasAttribute('inert')).toBe(true)
+    for (const b of tabs(foot)) expect(b.tabIndex).toBe(-1)
+  })
+
+  it('the bar remembers its shape for the next connecting screen', () => {
+    localStorage.removeItem('k2.pageTabs.shape')
+    expect(lastPageTabsShape()).toEqual(DEFAULT_PAGE_TABS_SHAPE)
+    h.mail.shown = false
+    h.settings.orgChart = true
+    render(<PageTabs />)
+    expect(lastPageTabsShape()).toEqual({ mail: false, orgChart: true })
+    localStorage.setItem('k2.pageTabs.shape', '{"mail":"yes"}')
+    expect(lastPageTabsShape()).toEqual(DEFAULT_PAGE_TABS_SHAPE)
+    localStorage.removeItem('k2.pageTabs.shape')
   })
 })

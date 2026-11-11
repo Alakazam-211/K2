@@ -295,6 +295,15 @@ describe('top bars share the Agents bar, not Focus', () => {
     expect(focus).not.toContain('PageTabs')
     expect(gate).toContain('<K2MarkButton />')
     expect(gate).toContain('<DesktopChromeLeft />')
+    // The connected bar's layout, so the switcher does not move when the app
+    // arrives: Layout's window inset around the bar, and the page tabs' room
+    // (a hidden footprint) right before the switcher.
+    for (const side of ['marginTop', 'marginLeft', 'marginRight']) {
+      expect(gate).toContain(`${side}: 'var(--inset-window)'`)
+    }
+    expect(read('src/renderer/components/Layout/Layout.tsx')).toContain('p-[var(--inset-window)]')
+    expect(gate.indexOf('<K2MarkButton />')).toBeLessThan(gate.indexOf('<PageTabsFootprint'))
+    expect(gate.indexOf('<PageTabsFootprint')).toBeLessThan(gate.indexOf('<ServerSwitcher />'))
     expect(gate).not.toContain('TopBarUtilities')
     expect(gate).not.toContain('PresenceRoster')
     expect(gate).not.toContain('UsageButton')

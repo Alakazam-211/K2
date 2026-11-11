@@ -25,6 +25,7 @@ import { isMacPlatform, type DesktopOs } from '@/lib/desktop-chrome'
 import { HomesSyncBadge } from '@/components/Home/HomesSyncBadge'
 import { useMailTabShown } from '@/components/Mail/mail-tab'
 import { PageTab } from './PageTab'
+import { rememberPageTabsShape, type PageTabsShape } from './page-tabs-shape'
 
 // The tab itself is its own light module, so Thread view's drawer selector
 // can use it without this file's stores.
@@ -114,6 +115,52 @@ export function settingsTabTitle(keybindings: Record<string, string>, os: Deskto
   return chords.length > 0 ? `Settings (${chords.join(', ')})` : 'Settings'
 }
 
+/** The capsule's own classes, shared with `PageTabsFootprint`. */
+const PAGE_TABS_CAPSULE_CLASS = 'no-drag flex items-center gap-0.5'
+
+/** The tabs a bar with this shape shows, in order: the page items (Mail
+ *  only when shown), Org Chart when on, then the cog. */
+export function pageTabsInOrder(shape: PageTabsShape): string[] {
+  return [
+    ...PAGE_TAB_ITEMS.filter(({ page: p }) => p !== 'mail' || shape.mail).map(({ page: p }) => PAGE_TAB_LABELS[p].name),
+    ...(shape.orgChart ? [ORG_CHART_TAB.name] : []),
+    'Settings',
+  ]
+}
+
+/**
+ * The page tabs' room with nothing drawn: the same capsule and tabs, hidden
+ * and inert. The connecting screen's bar (GateChrome) holds it so the server
+ * switcher after it sits exactly where the connected bar puts it. No stores,
+ * no events: it is only geometry.
+ */
+export function PageTabsFootprint({ shape }: { shape: PageTabsShape }): React.JSX.Element {
+  const icons = [
+    ...PAGE_TAB_ITEMS.filter(({ page: p }) => p !== 'mail' || shape.mail).map(({ Icon }) => Icon),
+    ...(shape.orgChart ? [FEATURE_ICONS.orgChart] : []),
+    FEATURE_ICONS.settings,
+  ]
+  const names = pageTabsInOrder(shape)
+  return (
+    <div
+      data-material="frost"
+      data-frost-shape="pill"
+      data-page-tabs=""
+      data-page-tabs-footprint=""
+      aria-hidden
+      inert
+      className={PAGE_TABS_CAPSULE_CLASS}
+      style={{ visibility: 'hidden' }}
+    >
+      {icons.map((Icon, i) => (
+        <PageTab key={names[i]} selected={false} onSelect={() => {}} title="" ariaLabel={names[i]} tabIndex={-1}>
+          <Icon size={PAGE_TAB_ICON_PX} />
+        </PageTab>
+      ))}
+    </div>
+  )
+}
+
 export default function PageTabs(): React.JSX.Element {
   const page = usePageViewStore((s) => s.page)
   const setPage = usePageViewStore((s) => s.setPage)
@@ -132,6 +179,11 @@ export default function PageTabs(): React.JSX.Element {
   // Defensive: a malformed store value must not take the top bar down.
   const projectIdsKey = (Array.isArray(projects) ? projects : []).map((p) => p?.id ?? '').join('\0')
   const mailShown = useMailTabShown()
+
+  // The connecting screen reserves this many tabs (PageTabsFootprint).
+  useEffect(() => {
+    rememberPageTabsShape({ mail: mailShown, orgChart: orgChartOn })
+  }, [mailShown, orgChartOn])
 
   // Moved verbatim from the absorbed FeedbackTopBarButton: wire the
   // feedback:created/answered listeners once (idempotent) and (re)count
@@ -170,7 +222,7 @@ export default function PageTabs(): React.JSX.Element {
   }
 
   return (
-    <div data-material="frost" data-frost-shape="pill" data-page-tabs="" className="no-drag flex items-center gap-0.5">
+    <div data-material="frost" data-frost-shape="pill" data-page-tabs="" className={PAGE_TABS_CAPSULE_CLASS}>
       {PAGE_TAB_ITEMS.filter(({ page: p }) => p !== 'mail' || mailShown).map(({ page: p, Icon }) => {
         const badge =
           p === 'projects'

@@ -14,7 +14,6 @@
 import React, { useCallback, useEffect, useId, useState } from 'react'
 import { Button, Input, Segmented, Toggle } from '@/components/ui'
 import { SettingRow, SettingsGroup, SettingsLoadState } from '../controls/SettingControls'
-import { FailedNote } from './AccessDialogs'
 import { httpCodeOf, httpDetailsOf } from '@/lib/daemon-http-error'
 import {
   fetchAppRecording,
@@ -30,7 +29,7 @@ import {
   type SewConfirmAction,
   type SewRecordingPolicies,
 } from './sew-api'
-import { usePersonConfirm } from './sew-ui'
+import { SewFailed, usePersonConfirm } from './sew-ui'
 
 export const RECORDING_UNAVAILABLE = "This server's chat can't record in Apps yet"
 
@@ -40,10 +39,26 @@ const LEVEL_LABEL: Record<Level, string> = { none: 'Nobody', admin: 'Admins', mo
 
 const CONFIRM_CODES = new Set(['vault_confirm_required', 'owner_confirm_required'])
 
-function policyValue(v: unknown): string {
-  if (v === null || v === undefined) return '–'
+/** The server-wide recording rules, in plain words (unknown keys are
+ *  worded from the key itself, never shown raw). */
+const POLICY_LABEL: Record<string, string> = {
+  'recording.enabled': 'Recording in App calls',
+  'recording.audio_max_days': 'Longest time audio is kept',
+  'recording.transcripts': 'Transcripts',
+  'recording.required_allowed': 'Apps may record every call',
+}
+
+function policyLabel(key: string): string {
+  if (POLICY_LABEL[key]) return POLICY_LABEL[key]
+  const words = key.replace(/^recording\./, '').replace(/[._-]+/g, ' ').trim()
+  return words ? words[0].toUpperCase() + words.slice(1) : 'A recording rule'
+}
+
+function policyValue(key: string, v: unknown): string {
+  if (v === null || v === undefined) return 'Not set'
   if (v === true) return 'On'
   if (v === false) return 'Off'
+  if (typeof v === 'number' && /days/.test(key)) return `${v} day${v === 1 ? '' : 's'}`
   return String(v)
 }
 
@@ -60,7 +75,8 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [notBuilt, setNotBuilt] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  /** Which change is in flight (its button says so). */
+  const [pending, setPending] = useState<string | null>(null)
   const [days, setDays] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
@@ -98,8 +114,9 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
     send: (token?: string) => Promise<unknown>,
     fallback: { action: SewConfirmAction; secretId: string },
     label: string,
+    key: string,
   ): Promise<void> => {
-    setBusy(true)
+    setPending(key)
     setError(null)
     try {
       try {
@@ -117,33 +134,34 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
     } catch (e) {
       setError(sewErrorMessage(e))
     } finally {
-      setBusy(false)
+      setPending(null)
     }
   }
 
-  const change = (a: AppRecordingView, c: AppRecordingChange, owner: boolean): Promise<void> =>
+  const change = (a: AppRecordingView, c: AppRecordingChange, owner: boolean, key = `${a.app.serviceId}:${Object.keys(c)[0] ?? ''}`): Promise<void> =>
     withConfirm(
       (token) => setAppRecording(a.app.serviceId, c, token),
       { action: owner ? 'app-recording-owner' : 'app-recording', secretId: a.app.serviceId },
       `recording settings for ${a.app.name}`,
+      key,
     )
 
   const lock = (spaceId: string, on: boolean): Promise<void> =>
-    withConfirm((token) => setSpaceRecordingLock(spaceId, on, token), { action: 'recording-lock', secretId: spaceId }, `recording lock for Space ${spaceId}`)
+    withConfirm((token) => setSpaceRecordingLock(spaceId, on, token), { action: 'recording-lock', secretId: spaceId }, `recording lock for Space ${spaceId}`, `lock:${spaceId}`)
 
   const unavailable = sample || (policies !== null && !policies.flags.appRecording)
 
   return (
     <div className="space-y-6" data-settings-id="sew.recording">
       {ui}
-      {error ? <FailedNote what="Couldn’t change the recording settings." detail={error} next="Nothing changed. Try again in a moment." /> : null}
+      {error ? <SewFailed what="Couldn’t change the recording settings." detail={error} next="Nothing changed. Try again in a moment." /> : null}
       {notBuilt ? (
         <SettingsLoadState kind="empty" title="This server doesn’t report recording settings yet">
-          Update Sew from the Overview tab to set recording in Apps here.
+          Update chat from the Overview tab to set recording in Apps here.
         </SettingsLoadState>
       ) : unavailable ? (
         <SettingsLoadState kind="empty" title={RECORDING_UNAVAILABLE} testId="sew-recording-unavailable">
-          Recording in App calls needs Sew 0.9.0 or newer. Update Sew from the Overview tab.
+          Recording in App calls needs chat version 0.9.0 or newer. Update chat from the Overview tab.
         </SettingsLoadState>
       ) : policies === null && !error ? (
         <SettingsLoadState kind="loading" title="Loading recording settings…" />
@@ -160,11 +178,9 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
               <div key={p.key} data-testid="sew-recording-policy">
                 <SettingRow
                   label={policyLabel(p.key)}
-                  hint={<span className="font-mono text-[var(--color-text-muted)]">{p.key}</span>}
+                  hint={p.want === null ? 'Chat’s own setting.' : p.delivered ? undefined : 'Saved here. Chat picks it up in a moment.'}
                 >
-                  <span className="type-hint text-[var(--color-text-secondary)] text-right">
-                    {p.want === null ? `Chat shows ${policyValue(p.seen)}` : `Set to ${policyValue(p.want)} · ${p.delivered ? 'Delivered' : 'Sending to chat…'}`}
-                  </span>
+                  <span className="type-row text-[var(--color-text-primary)]">{policyValue(p.key, p.want === null ? p.seen : p.want)}</span>
                 </SettingRow>
               </div>
             ))}
@@ -183,10 +199,12 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
           {Object.entries(rowErrors).map(([id, msg]) => (
             <SettingsGroup
               key={id}
-              title={id}
+              title={`The ${id} App`}
               card
               state={
-                <SettingsLoadState kind="error" title={`Couldn’t load ${id}’s recording settings`} detail={msg} action={<Button onClick={() => void load()}>Try again</Button>} />
+                <SettingsLoadState kind="error" title="Couldn’t load this App’s recording settings" detail={msg} action={<Button onClick={() => void load()}>Try again</Button>}>
+                  Its calls keep their current settings. Try again in a moment.
+                </SettingsLoadState>
               }
             />
           ))}
@@ -194,7 +212,7 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
             <AppRow
               key={a.app.serviceId}
               a={a}
-              busy={busy}
+              pending={pending}
               canMutate={canMutate}
               isOwner={isOwner}
               days={days[a.app.serviceId] ?? ''}
@@ -209,16 +227,9 @@ export function RecordingPanel({ sample, canMutate, isOwner }: RecordingPanelPro
   )
 }
 
-/** `recording.audio_max_days` → "Audio max days". */
-function policyLabel(key: string): string {
-  const last = key.split('.').pop() ?? key
-  const words = last.replace(/[_-]+/g, ' ').trim()
-  return words ? words[0].toUpperCase() + words.slice(1) : key
-}
-
 function AppRow({
   a,
-  busy,
+  pending,
   canMutate,
   isOwner,
   days,
@@ -227,35 +238,36 @@ function AppRow({
   lock,
 }: {
   a: AppRecordingView
-  busy: boolean
+  pending: string | null
   canMutate: boolean
   isOwner: boolean
   days: string
   setDays: (v: string) => void
-  change: (a: AppRecordingView, c: AppRecordingChange, owner: boolean) => Promise<void>
+  change: (a: AppRecordingView, c: AppRecordingChange, owner: boolean, key?: string) => Promise<void>
   lock: (spaceId: string, on: boolean) => Promise<void>
 }): React.JSX.Element {
   const kept = a.audioMaxDays !== null ? `${a.audioMaxDays} days` : a.orgAudioMaxDays !== null ? `The server’s limit (${a.orgAudioMaxDays} days)` : 'The server’s limit'
   const daysN = Number(days)
   const daysOk = /^\d+$/.test(days) && daysN >= 1 && daysN <= 3650 && (a.orgAudioMaxDays === null || daysN <= a.orgAudioMaxDays)
   const daysId = useId()
+  const busy = pending !== null
+  const id = a.app.serviceId
   return (
     <div data-testid="sew-recording-app">
       <SettingsGroup
-        title={a.app.name}
+        title={a.homeClient ? 'The main chat app' : a.app.name}
         card
-        hint={a.homeClient ? undefined : a.app.serviceId !== a.app.name ? `App ${a.app.serviceId}` : undefined}
         action={
           a.homeClient ? undefined : (
             <span className="type-hint text-[var(--color-text-secondary)]" data-testid="sew-recording-delivered">
-              {a.delivered ? 'Delivered' : 'Sending to Sew'}
+              {a.delivered ? 'Up to date in chat' : 'Sending to chat…'}
             </span>
           )
         }
         state={
           a.homeClient ? (
-            <SettingsLoadState kind="empty" title="Not for the home client">
-              It sees every Space a person is in, so it takes no recording settings.
+            <SettingsLoadState kind="empty" title="No recording settings here">
+              The main chat app shows every Space a person is in, so recording is set for each App instead.
             </SettingsLoadState>
           ) : undefined
         }
@@ -310,11 +322,11 @@ function AppRow({
                   className="w-24"
                 />
                 <Button type="submit" disabled={busy || !daysOk}>
-                  Save
+                  {pending === `${id}:audioMaxDays` && days ? 'Saving…' : 'Save'}
                 </Button>
                 {a.audioMaxDays !== null ? (
-                  <Button variant="quiet" disabled={busy} onClick={() => void change(a, { audioMaxDays: null }, false)}>
-                    Use the server&apos;s limit
+                  <Button variant="quiet" disabled={busy} onClick={() => void change(a, { audioMaxDays: null }, false, `${id}:reset`)}>
+                    {pending === `${id}:reset` ? 'Saving…' : 'Use the server’s limit'}
                   </Button>
                 ) : null}
               </form>
@@ -323,19 +335,25 @@ function AppRow({
         >
           <span />
         </SettingRow>
-        {a.spaces.map((s) => (
+        {a.spaces.map((s, i) => (
           <div key={s.spaceId} data-testid="sew-recording-space">
             <SettingRow
-              label={`Space ${s.spaceId}`}
+              label={a.spaces.length === 1 ? `${a.app.name}’s Space` : `${a.app.name}’s Space ${i + 1}`}
               hint={
-                s.locked
-                  ? 'Locked: no recording (controlled information)'
-                  : `Starts: ${s.startLevel ? LEVEL_LABEL[s.startLevel as Level] ?? s.startLevel : 'the App’s rule'} · Every call: ${s.required === null ? 'the App’s rule' : s.required ? 'on' : 'off'}`
+                <>
+                  {s.locked
+                    ? 'Locked: never recorded, because it holds controlled information.'
+                    : `Who may start a recording: ${s.startLevel ? LEVEL_LABEL[s.startLevel as Level] ?? s.startLevel : 'as the App says'}. Every call recorded: ${s.required === null ? 'as the App says' : s.required ? 'yes' : 'no'}.`}
+                  <span className="block text-[var(--color-text-muted)]">
+                    <span className="sr-only">Space ID </span>
+                    <span className="font-mono break-all">{s.spaceId}</span>
+                  </span>
+                </>
               }
             >
               {isOwner && canMutate ? (
                 <Button variant={s.locked ? 'default' : 'quiet'} disabled={busy} onClick={() => void lock(s.spaceId, !s.locked)}>
-                  {s.locked ? 'Lift the lock' : 'Lock against recording'}
+                  {pending === `lock:${s.spaceId}` ? (s.locked ? 'Lifting…' : 'Locking…') : s.locked ? 'Lift the lock' : 'Lock against recording'}
                 </Button>
               ) : null}
             </SettingRow>

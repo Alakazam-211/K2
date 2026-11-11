@@ -249,14 +249,14 @@ export function isNotBuilt(e: unknown): boolean {
 export const SEW_ENABLE_STEPS: { id: string; label: string }[] = [
   { id: 'postgres', label: 'Install the database' },
   { id: 'master-key', label: 'Create the encryption key' },
-  { id: 'stage', label: 'Download Sew' },
-  { id: 'install-bin', label: 'Install the Sew program' },
-  { id: 'install', label: 'Set up Sew' },
+  { id: 'stage', label: 'Download the chat server' },
+  { id: 'install-bin', label: 'Install the chat program' },
+  { id: 'install', label: 'Set up the chat server' },
   { id: 'enable-units', label: 'Turn on its services' },
   { id: 'db', label: 'Start the database' },
   { id: 'migrate', label: 'Prepare the database' },
-  { id: 'start', label: 'Start Sew' },
-  { id: 'token', label: 'Connect K2 to Sew' },
+  { id: 'start', label: 'Start chat' },
+  { id: 'token', label: 'Connect K2 to chat' },
   { id: 'health', label: 'Check that it answers' },
   { id: 'link', label: 'Finish linking to K2' },
 ]
@@ -267,12 +267,12 @@ export const SEW_PREFLIGHT_LABELS: Record<string, string> = {
   systemd: 'Service manager',
   postgres: 'Database (PostgreSQL)',
   helper: 'K2’s system helper',
-  pin: 'Sew release',
-  source: 'Where Sew comes from',
+  pin: 'Chat release',
+  source: 'Where the chat server comes from',
   ram: 'Memory',
   disk: 'Disk space',
-  port: 'Sew’s network port',
-  binary: 'Sew program',
+  port: 'Chat’s network port',
+  binary: 'Chat program',
   existing_data: 'Chat data already on this server',
   daemon_port: 'K2’s network port',
   vault: 'K2 vault',
@@ -285,13 +285,13 @@ export const SEW_FIXABLE_CHECKS = ['source', 'existing_data']
 /** "12.3 of 24.7 MB" / "from K2's cache" beside the download step. */
 export function downloadNote(d: SewDownload | null | undefined): string | null {
   if (!d) return null
-  if (d.source === 'cache') return `${d.label ?? 'Sew'} from K2's download cache`
-  if (d.source === 'tarball') return `${d.label ?? 'Sew'} from the file you named`
+  if (d.source === 'cache') return `${d.label ?? 'The chat server'} from K2's download cache`
+  if (d.source === 'tarball') return `${d.label ?? 'The chat server'} from the file you named`
   if (d.source !== 'download' || typeof d.bytes !== 'number') return null
   const mb = (n: number): string => (n / 1e6).toFixed(1)
   return typeof d.total === 'number' && d.total > 0
-    ? `${d.label ?? 'Sew'}: ${mb(d.bytes)} of ${mb(d.total)} MB`
-    : `${d.label ?? 'Sew'}: ${mb(d.bytes)} MB`
+    ? `${d.label ?? 'The chat server'}: ${mb(d.bytes)} of ${mb(d.total)} MB`
+    : `${d.label ?? 'The chat server'}: ${mb(d.bytes)} MB`
 }
 
 export type SewAlarmAction = 'backup' | 'offbox' | 'recovery-key' | 'public-url'
@@ -307,18 +307,18 @@ export interface SewAlarmInfo {
 }
 
 const cli = (verb: string): string => `${SEW_CLI} ${verb}`
-const DOCTOR = 'An admin can run the chat health check on the server; it says what to do.'
+const DOCTOR = 'An admin runs the chat health check on the server; it says what to do next.'
 
 /** Every alarm Sew and K2 report (S29 §8.3 table, `supervisor::k2_alarms`,
  *  `voice::status`, `sew_wire::BACKUP_ALARMS`). Unknown alarms render
  *  verbatim via {@link alarmInfo}. */
 export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
-  db_down: { severity: 'error', title: 'Chat’s database is down', fix: 'Sew can’t reach its database, so chat can’t load or save messages. Restart the server’s chat database.' },
-  jobs_dead: { severity: 'warn', title: 'Some background jobs failed', fix: `Sew gave up on some background work. ${DOCTOR}`, command: cli('doctor') },
-  keys_provider_down: { severity: 'error', title: 'Sew can’t read its encryption key', fix: `Sew can’t open any message until it can. ${DOCTOR}`, command: cli('doctor') },
+  db_down: { severity: 'error', title: 'Chat’s database is down', fix: 'The chat server can’t reach its database, so it can’t load or save messages. Restart the server’s chat database.' },
+  jobs_dead: { severity: 'warn', title: 'Some background jobs failed', fix: `Chat gave up on some background work. ${DOCTOR}`, command: cli('doctor') },
+  keys_provider_down: { severity: 'error', title: 'Chat can’t read its encryption key', fix: `Chat can’t open any message until it can. ${DOCTOR}`, command: cli('doctor') },
   keys_current_month_missing: { severity: 'error', title: 'This month’s encryption key is missing', fix: `New messages can’t be saved. ${DOCTOR}`, command: cli('doctor') },
   keys_mirror_stale: { severity: 'warn', title: 'Keys aren’t copied off this server', fix: 'Choose where the keys go under Backups and keys.', action: 'offbox' },
-  keys_shred_pending: { severity: 'warn', title: 'A key is still being deleted', fix: 'Sew finishes this on its own. Nothing to do unless it stays.' },
+  keys_shred_pending: { severity: 'warn', title: 'A key is still being deleted', fix: 'Chat finishes this on its own. Nothing to do unless it stays.' },
   keys_resurrected: { severity: 'error', title: 'A deleted key came back', fix: `A restored copy of the keys holds a key that was deleted. ${DOCTOR}`, command: cli('doctor') },
   keys_rewrap_stalled: { severity: 'warn', title: 'Changing the encryption key stalled', fix: 'An admin starts the key change again on the server, then runs the chat health check.', command: cli('rotate-master') },
   search_lagging: { severity: 'warn', title: 'Search is behind', fix: 'New messages may not show up in search yet. It catches up on its own.' },
@@ -326,12 +326,12 @@ export const SEW_ALARMS: Record<string, SewAlarmInfo> = {
   backup_failed: { severity: 'error', title: 'The last backup failed', fix: 'Back up now to see what went wrong.', action: 'backup' },
   drill_failed: { severity: 'error', title: 'The last restore test failed', fix: `A backup couldn’t be restored in the test. ${DOCTOR}`, command: cli('doctor') },
   drill_stale: { severity: 'warn', title: 'No restore test in 8 days', fix: 'The server tests a backup every day. Check that its restore-test timer runs.' },
-  k2_mgmt_unreachable: { severity: 'error', title: 'K2 can’t reach Sew', fix: `Sew’s services run, but K2 can’t talk to them. ${DOCTOR}`, command: cli('doctor') },
+  k2_mgmt_unreachable: { severity: 'error', title: 'K2 can’t reach the chat server', fix: `Chat’s services run, but K2 can’t talk to them. ${DOCTOR}`, command: cli('doctor') },
   k2_recovery_key_not_saved: { severity: 'warn', title: 'Recovery key isn’t in the vault yet', fix: 'K2 copies it into the vault on its own, at start or when you show it. If this stays, check that the vault is open.', action: 'recovery-key' },
   k2_master_key_due: { severity: 'warn', title: 'Time to change the encryption key', fix: 'An admin changes it from a terminal on the server.', command: cli('rotate-master') },
-  k2_vault_key_mismatch: { severity: 'error', title: 'K2’s key doesn’t match Sew’s', fix: `Don’t change anything yet. ${DOCTOR}`, command: cli('doctor') },
-  k2_helper_pin_mismatch: { severity: 'warn', title: 'K2’s system helper is out of date', fix: 'Update K2 on this server, then update Sew.' },
-  k2_jwks_url_drift: { severity: 'error', title: 'Sew can’t check K2 sign-ins', fix: `K2’s network port changed. ${DOCTOR}`, command: cli('doctor') },
+  k2_vault_key_mismatch: { severity: 'error', title: 'K2’s key doesn’t match chat’s', fix: `Don’t change anything yet. ${DOCTOR}`, command: cli('doctor') },
+  k2_helper_pin_mismatch: { severity: 'warn', title: 'K2’s system helper is out of date', fix: 'Update K2 on this server, then update chat.' },
+  k2_jwks_url_drift: { severity: 'error', title: 'Chat can’t check K2 sign-ins', fix: `K2’s network port changed. ${DOCTOR}`, command: cli('doctor') },
   k2_owner_blocked: { severity: 'warn', title: 'Setting you up as owner failed', fix: 'Try again from User Access, where it syncs people to chat.' },
   k2_backup_offbox_none: { severity: 'warn', title: 'Backups stay on this server', fix: 'Choose where backups go under Backups and keys, so a disk loss doesn’t take them too.', action: 'offbox' },
   k2_backup_not_shipped: { severity: 'warn', title: 'The last backup wasn’t copied off', fix: 'Check where backups go under Backups and keys.', action: 'offbox' },
@@ -366,7 +366,7 @@ export function sewStateChip(state: string): { label: string; color: string } {
     case 'error':
       return { label: 'Error', color: 'var(--color-status-error-soft)' }
     case 'disabled':
-      return { label: 'Disabled', color: 'var(--color-text-muted)' }
+      return { label: 'Turned off', color: 'var(--color-text-muted)' }
     case 'upgrading':
       return { label: 'Updating…', color: 'var(--color-status-working)' }
     case 'removed':

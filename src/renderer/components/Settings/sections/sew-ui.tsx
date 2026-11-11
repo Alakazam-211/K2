@@ -5,12 +5,63 @@
 // (AccessDialogs), so this page asks the way the rest of Settings does.
 
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { Button, Input, Surface } from '@/components/ui'
+import { Button, Callout, Input, Surface } from '@/components/ui'
 import { AccessSheet, ConfirmSheet, CopyLine, DIALOG_FIELD, DIALOG_LABEL, DIALOG_MUTED } from './AccessDialogs'
 import { finishSewConfirm, sewStateChip, startSewConfirm, type SewConfirmAction } from './sew-api'
 
 export const muted = 'text-[var(--color-text-muted)]'
 export const secondary = 'text-[var(--color-text-secondary)]'
+
+/** Copy a quiet technical value (an id, a command), with its own result. */
+export function CopyButton({ value, label }: { value: string; label: string }): React.JSX.Element {
+  const [state, setState] = useState<'idle' | 'done' | 'failed'>('idle')
+  return (
+    <Button
+      variant="quiet"
+      aria-label={label}
+      onClick={() => {
+        const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+        if (!clip) return setState('failed')
+        clip.writeText(value).then(
+          () => setState('done'),
+          () => setState('failed'),
+        )
+      }}
+    >
+      {state === 'done' ? 'Copied' : state === 'failed' ? 'Select it to copy' : 'Copy'}
+    </Button>
+  )
+}
+
+/** A command a server admin runs: a plain lead-in, the command quiet in
+ *  monospace, and Copy. Never the primary line. */
+export function CommandLine({ command, lead = 'An admin runs this on the server:' }: { command: string; lead?: string }): React.JSX.Element {
+  return (
+    <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[var(--color-text-muted)]" data-testid="sew-command">
+      <span>{lead}</span>
+      <code className="font-mono break-all">{command}</code>
+      <CopyButton value={command} label={`Copy the command ${command}`} />
+    </span>
+  )
+}
+
+/** A failed action: what failed in plain words, what to do now, then the
+ *  server's own reason, quieter. */
+export function SewFailed({ what, detail, next }: { what: string; detail: string; next: string }): React.JSX.Element {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [detail])
+  return (
+    <div ref={ref}>
+      <Callout tone="error" role="alert" className="type-hint space-y-0.5 leading-relaxed" data-testid="dialog-error">
+        <p className="font-medium">{what}</p>
+        <p>{next}</p>
+        <p className="text-[var(--color-text-secondary)]">The server said: {detail.trim().replace(/[.\s]+$/, '')}.</p>
+      </Callout>
+    </div>
+  )
+}
 
 /** A round status dot (dots and badges are the only round marks in Terminal). */
 export function StatusDot({ color, className = '' }: { color: string; className?: string }): React.JSX.Element {

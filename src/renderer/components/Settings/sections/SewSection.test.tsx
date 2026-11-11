@@ -119,7 +119,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const CHIPS = new Set(['Running', 'Degraded', 'Setting up…', 'Error'])
+const CHIPS = new Set(['Running', 'Degraded', 'Setting up…', 'Error', 'Turned off', 'Uninstalled, data kept'])
 
 /** Wait until the preflight answered and setup is live. */
 async function enableReady(): Promise<HTMLButtonElement> {
@@ -244,7 +244,7 @@ describe('setup', () => {
     await screen.findByTestId('sew-check-source')
     expect((screen.getByRole('button', { name: 'Set up chat and voice' }) as HTMLButtonElement).disabled).toBe(false)
     // The source check failing opens the release file field.
-    expect(screen.getByLabelText('Sew release file')).toBeTruthy()
+    expect(screen.getByLabelText('Chat release file')).toBeTruthy()
   })
 
   it('sends identity always, voice and paths only when set', async () => {
@@ -263,11 +263,11 @@ describe('setup', () => {
     posts({ 'sew/server/enable': { ok: true, state: 'installing' } })
     await renderReady('Set up chat and voice')
     await enableReady()
-    fireEvent.click(screen.getByLabelText('Sew’s own accounts'))
+    fireEvent.click(screen.getByLabelText('Chat’s own accounts'))
     fireEvent.click(screen.getByRole('switch', { name: 'Also set up voice calls' }))
     fireEvent.change(screen.getByLabelText('Voice address'), { target: { value: 'wss://hearth.box.k2.dev' } })
     fireEvent.click(screen.getByRole('button', { name: 'Show' }))
-    fireEvent.change(screen.getByLabelText('Sew release file'), { target: { value: '/tmp/sew.tar.gz' } })
+    fireEvent.change(screen.getByLabelText('Chat release file'), { target: { value: '/tmp/sew.tar.gz' } })
     fireEvent.click(screen.getByRole('button', { name: 'Set up chat and voice' }))
     await waitFor(() =>
       expect(postBodies('sew/server/enable')).toEqual([
@@ -299,13 +299,13 @@ describe('setup', () => {
     posts({ 'sew/server/enable': { ok: true, state: 'installing' } })
     await renderReady('Set up chat and voice')
     await waitFor(() => expect(screen.getByTestId('sew-check-source').dataset.status).toBe('fail'))
-    fireEvent.change(screen.getByLabelText('Sew release file'), { target: { value: '/home/k2/sew-0.5.0.tar.gz' } })
+    fireEvent.change(screen.getByLabelText('Chat release file'), { target: { value: '/home/k2/sew-0.5.0.tar.gz' } })
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     await waitFor(() => expect(screen.getByTestId('sew-check-source').dataset.status).toBe('ok'))
     expect(preflightParams).toEqual([undefined, { tarballPath: '/home/k2/sew-0.5.0.tar.gz' }])
     // "Install from files" was never opened; the typed path stays in view.
     expect(screen.getByRole('button', { name: 'Show' }).getAttribute('aria-expanded')).toBe('false')
-    expect((screen.getByLabelText('Sew release file') as HTMLInputElement).value).toBe('/home/k2/sew-0.5.0.tar.gz')
+    expect((screen.getByLabelText('Chat release file') as HTMLInputElement).value).toBe('/home/k2/sew-0.5.0.tar.gz')
     fireEvent.click(await enableReady())
     await waitFor(() =>
       expect(postBodies('sew/server/enable')).toEqual([{ identity: 'k2', tarballPath: '/home/k2/sew-0.5.0.tar.gz' }]),
@@ -410,7 +410,7 @@ describe('recovery key (person-only)', () => {
     expect((await screen.findByTestId('sew-once-secret-value')).textContent).toBe(SECRET)
     expect(postBodies('vault/confirm/start')).toEqual([{ action: 'sew-recovery-key', secretId: 'ins_1' }])
     expect(postBodies('vault/confirm/finish')).toEqual([
-      { action: 'sew-recovery-key', secretId: 'ins_1', method: 'vault-password', label: 'reveal the Sew recovery key', password: 'hunter2' },
+      { action: 'sew-recovery-key', secretId: 'ins_1', method: 'vault-password', label: 'show the chat recovery key', password: 'hunter2' },
     ])
     expect(postBodies('sew/server/recovery-key')).toEqual([{ confirmToken: 'k2vc_tok' }])
     const done = screen.getByRole('button', { name: 'Done' }) as HTMLButtonElement
@@ -530,7 +530,7 @@ describe('turn off or uninstall', () => {
     gets({ 'sew/status': running({ upgradeAvailable: true, pinnedVersion: '0.4.0', you: { ...YOU_OWNER, canManage: false } }), 'sew/backups': { backups: [] } })
     await renderReady('Running')
     expect(screen.getByTestId('sew-read-only')).toBeTruthy()
-    for (const name of ['Turn off…', 'Uninstall…', 'Upgrade to 0.4.0']) {
+    for (const name of ['Turn off…', 'Uninstall…', 'Update to 0.4.0']) {
       expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, name).toBe(true)
     }
     for (const b of screen.getAllByRole('button', { name: 'Edit' })) expect((b as HTMLButtonElement).disabled).toBe(true)
@@ -539,20 +539,42 @@ describe('turn off or uninstall', () => {
   })
 })
 
+describe('services follow the state', () => {
+  it('a turned-off or uninstalled server never reads as running', async () => {
+    gets({ 'sew/status': running({ state: 'disabled' }) })
+    await renderReady('Turned off')
+    expect(screen.getByTestId('sew-services').textContent).toBe('Turned off')
+    cleanup()
+    gets({ 'sew/status': running({ state: 'removed' }) })
+    await renderReady('Uninstalled, data kept')
+    expect(screen.getByTestId('sew-services').textContent).toBe('Removed')
+    expect(document.body.textContent).not.toContain('Database and chat running')
+  })
+
+  it('the install ID is a quiet line with Copy, not a row', async () => {
+    gets({ 'sew/status': running() })
+    await renderReady('Running')
+    expect(screen.getByTestId('sew-install-id').textContent).toContain('ins_1')
+    expect(within(screen.getByTestId('sew-status')).queryByText('ins_1')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Copy the install ID' })).toBeTruthy()
+  })
+})
+
 describe('updates', () => {
   it('only when available, after a confirm', async () => {
     gets({ 'sew/status': running({ upgradeAvailable: true, pinnedVersion: '0.4.0', onDiskVersion: '0.3.0' }) })
     posts({ 'sew/server/upgrade': { ok: true, state: 'upgrading' } })
     await renderReady('Running')
-    fireEvent.click(screen.getByRole('button', { name: 'Upgrade to 0.4.0' }))
-    await answer('Update Sew to 0.4.0?', 'Update')
+    fireEvent.click(screen.getByRole('button', { name: 'Update to 0.4.0' }))
+    await answer('Update chat to 0.4.0?', 'Update')
     await waitFor(() => expect(postBodies('sew/server/upgrade')).toEqual([{}]))
   })
 
   it('a rolled-back update shows its callout', async () => {
     gets({ 'sew/status': running({ upgradeProgress: { result: 'rolled_back' }, lastError: 'migrate failed' }) })
     await renderReady('Running')
-    expect(screen.getByText(/The update rolled back: migrate failed/)).toBeTruthy()
+    expect(screen.getByText(/The last update didn’t finish, so chat went back/)).toBeTruthy()
+    expect(screen.getByText('The server said: migrate failed.')).toBeTruthy()
   })
 })
 
@@ -640,7 +662,10 @@ describe('panels', () => {
     tab('Backups and keys')
     expect(await screen.findByText('No backups yet')).toBeTruthy()
     fireEvent.click(await screen.findByRole('button', { name: 'Back up now' }))
-    expect(await screen.findByText('20261020T000000Z')).toBeTruthy()
+    expect(await screen.findByText(/Made by hand/)).toBeTruthy()
+    expect(screen.getByTestId('sew-backup-row').dataset.backup).toBe('20261020T000000Z')
+    // Raw backup stamps never show; the row reads as a local date.
+    expect(screen.queryByText('20261020T000000Z')).toBeNull()
     expect(postBodies('sew/server/backup')).toEqual([{}])
     expect(screen.getByTestId('sew-notice').textContent).toContain('Backup done.')
   })
@@ -718,10 +743,11 @@ describe('panels', () => {
     posts({ 'sew/server/ship': { ok: true } })
     await renderReady('Degraded')
     tab('Backups and keys')
-    expect(screen.getByTestId('sew-ship-box-backup').textContent).toBe(`This server’s own backup: ${reason}`)
+    expect(screen.getByTestId('sew-ship-box-backup').textContent).toBe('With this server’s own backup, not confirmed yet')
+    expect(document.body.textContent).toContain(`The server said: ${reason}.`)
     const radio = screen.getByLabelText("Backups: with this server's own backup") as HTMLInputElement
     expect(radio.checked).toBe(true)
-    expect(screen.getByText(`K2 can’t see it yet: ${reason}`)).toBeTruthy()
+    expect(screen.getByText(/K2 can’t see the server’s backup take them off yet\. Check/)).toBeTruthy()
     expect(screen.queryByLabelText("Keys: with this server's own backup")).toBeNull()
     const save = screen.getAllByRole('button', { name: 'Save' })[0] as HTMLButtonElement
     expect(save.disabled).toBe(true)
@@ -759,7 +785,7 @@ describe('panels', () => {
     fireEvent.change(screen.getByLabelText('Space id'), { target: { value: 'spc_2' } })
     fireEvent.click(within(screen.getByTestId('sew-bind-dialog')).getByRole('button', { name: 'Bind' }))
     await waitFor(() => expect(postBodies('sew/app-spaces/bind')).toEqual([{ app: 'meet', spaceId: 'spc_2' }]))
-    expect(await screen.findByText('Space spc_2')).toBeTruthy()
+    expect(await screen.findByText('spc_2')).toBeTruthy()
     // S32 Q3: unbinding is a choice; the default keeps everyone.
     fireEvent.click(screen.getByRole('button', { name: /^Unbind hearth/ }))
     expect(postBodies('sew/app-spaces/unbind')).toEqual([])
@@ -836,17 +862,19 @@ describe('panels', () => {
     tab('Recording')
     await waitFor(() => expect(screen.getAllByTestId('sew-recording-app')).toHaveLength(2))
     expect(screen.queryByTestId('sew-recording-unavailable')).toBeNull()
-    expect(screen.getByTestId('sew-recording-policy').textContent).toContain('recording.enabled')
+    expect(screen.getByTestId('sew-recording-policy').textContent).toContain('Recording in App calls')
+    expect(screen.getByTestId('sew-recording-policies').textContent).not.toContain('recording.enabled')
     const [jobs, hearth] = screen.getAllByTestId('sew-recording-app')
     expect(jobs.textContent).toContain('jobs')
-    expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Sending to Sew')
-    expect(hearth.textContent).toContain('Not for the home client')
+    expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Sending to chat…')
+    expect(hearth.textContent).toContain('No recording settings here')
+    expect(hearth.textContent).not.toContain('hearth')
     cleanup()
 
     recGets({ 'app/recording': (p?: Json) => recView(String(p?.app), p?.app === 'hearth' ? { homeClient: true } : {}) })
     await renderReady('Running')
     tab('Recording')
-    await waitFor(() => expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Delivered'))
+    await waitFor(() => expect(screen.getByTestId('sew-recording-delivered').textContent).toBe('Up to date in chat'))
   })
 
   it('Recording: an Admin sees required and server reads read-only; the owner turns server reads on with a confirm', async () => {

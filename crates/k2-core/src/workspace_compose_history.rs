@@ -147,6 +147,23 @@ pub fn record_compose_send(
     Ok(Some(id))
 }
 
+/// thread-message-delete-v1 (0.46.11): a person deleted a Thread post, so
+/// its text leaves this workspace's send history too (stored redacted, as
+/// [`record_compose_send`] keeps it). Returns how many rows went.
+pub fn forget_compose_send(project_id: &str, body: &str) -> Result<usize, String> {
+    let redacted = crate::redaction::redact(body.trim());
+    if project_id.is_empty() || redacted.is_empty() {
+        return Ok(0);
+    }
+    let db = db::shared();
+    let conn = db.lock();
+    conn.execute(
+        "DELETE FROM workspace_compose_send_history WHERE project_id = ?1 AND body = ?2",
+        params![project_id, redacted],
+    )
+    .map_err(|e| format!("forget compose send: {e}"))
+}
+
 /// Resolve `cwd` with longest `projects.path` prefix, then record.
 /// Unknown path: skip insert (`Ok(None)`).
 pub fn record_compose_send_for_cwd(
@@ -251,6 +268,21 @@ mod tests {
 
     fn unique(label: &str) -> String {
         format!("csh-{label}-{}-{}", std::process::id(), Uuid::new_v4())
+    }
+
+    /// thread-message-delete-v1: a deleted post's text leaves the history;
+    /// other sends stay.
+    #[test]
+    fn forget_removes_only_that_text() {
+        db::init_for_tests();
+        let id = unique("forget");
+        ensure_project(&id, &format!("/tmp/{id}"), &id);
+        record_compose_send(&id, "  my password is hunter2  ", "ada").expect("record");
+        record_compose_send(&id, "ship it", "ada").expect("record");
+        assert_eq!(forget_compose_send(&id, "my password is hunter2").expect("forget"), 1);
+        let left: Vec<String> = list_compose_send_history(&id).expect("list").into_iter().map(|e| e.body).collect();
+        assert_eq!(left, vec!["ship it".to_string()]);
+        delete_project(&id);
     }
 
     #[test]

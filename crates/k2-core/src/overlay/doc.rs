@@ -533,6 +533,18 @@ pub struct OverlayDoc {
     /// goes to every reader. None on posts sent without one.
     #[serde(default, rename = "clientMsgId", skip_serializing_if = "Option::is_none")]
     pub client_msg_id: Option<String>,
+    /// thread-message-delete-v1 (0.46.11): the person who sent this post
+    /// deleted it (or the server owner did). The doc is a tombstone: no
+    /// body, attachments, summary, context or options; the id and seq stay,
+    /// so ordering and read cursors still work. False on every other doc.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deleted: bool,
+    /// When (seconds since the epoch). Set with `deleted`.
+    #[serde(default, rename = "deletedAt", skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<i64>,
+    /// Who deleted it, from the credential. Set with `deleted`.
+    #[serde(default, rename = "deletedBy", skip_serializing_if = "Option::is_none")]
+    pub deleted_by: Option<PostAuthor>,
 }
 
 /// A mail notice (0.46.11): plain fields a renderer draws as text, never as
@@ -773,6 +785,9 @@ impl OverlayDoc {
             summary: None,
             summary_source: None,
             client_msg_id: None,
+            deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             changes: None,
             notice: None,
         }
@@ -824,6 +839,9 @@ impl OverlayDoc {
             summary: None,
             summary_source: None,
             client_msg_id: None,
+            deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             changes: None,
             notice: None,
         }
@@ -878,6 +896,9 @@ impl OverlayDoc {
             summary: None,
             summary_source: None,
             client_msg_id: None,
+            deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             changes: None,
             notice: None,
         }
@@ -914,6 +935,9 @@ impl OverlayDoc {
             summary: None,
             summary_source: None,
             client_msg_id: None,
+            deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             changes: None,
             notice: None,
         }
@@ -960,6 +984,9 @@ impl OverlayDoc {
             summary: None,
             summary_source: None,
             client_msg_id: None,
+            deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             changes: None,
             notice: None,
         }
@@ -995,6 +1022,43 @@ impl OverlayDoc {
                 .secret
                 .as_ref()
                 .is_some_and(|s| s.status == "pending")
+    }
+
+    /// thread-message-delete-v1: this doc as a tombstone. Everything the
+    /// person wrote or attached goes (body, inject, attachments, context,
+    /// summary, options, the widget and design origins); what places it
+    /// stays (id, kind, from, to, created_at, via, author), so the Thread
+    /// keeps its order and a viewer can still say whose message it was.
+    pub fn tombstone(&self, at: i64, by: PostAuthor) -> Self {
+        Self {
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            from: self.from.clone(),
+            to: self.to.clone(),
+            created_at: self.created_at,
+            body: None,
+            via: self.via.clone(),
+            inject: None,
+            choice: None,
+            secret: None,
+            widget: None,
+            design: None,
+            context: None,
+            author: self.author.clone(),
+            external: None,
+            imported: None,
+            delivery_id: None,
+            handoff: None,
+            attachments: Vec::new(),
+            summary: None,
+            summary_source: None,
+            changes: None,
+            notice: None,
+            client_msg_id: self.client_msg_id.clone(),
+            deleted: true,
+            deleted_at: Some(at),
+            deleted_by: Some(by),
+        }
     }
 }
 

@@ -895,6 +895,9 @@ impl Rewrite<'_> {
             summary: None,
             summary_source: None,
             client_msg_id: None,
+            deleted: false,
+            deleted_at: None,
+            deleted_by: None,
             changes: None,
             notice: None,
         };

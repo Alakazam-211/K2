@@ -20,6 +20,7 @@ use crate::workspace_msg::{self, MsgTarget};
 
 /// `POST /cli/thread/catchup` (inbox-catchup-v1, 0.46.3).
 pub(crate) mod catchup;
+pub(crate) mod message_delete;
 
 thread_local! {
     static REQUEST_SKIN: RefCell<Option<SkinPass>> = const { RefCell::new(None) };
@@ -1106,6 +1107,11 @@ pub const THREAD_PREVIEW_CHARS: usize = 140;
 /// secret" (the value never lives in the Thread, T28). Whitespace is
 /// collapsed; the result is at most [`THREAD_PREVIEW_CHARS`] chars.
 pub fn thread_preview(doc: &k2_core::overlay::OverlayDoc) -> String {
+    // thread-message-delete-v1: a deleted post previews as that, never
+    // as what it said.
+    if doc.deleted {
+        return message_delete::PREVIEW.to_string();
+    }
     let raw = match doc.kind.as_str() {
         "choice" => {
             let prompt = doc
@@ -4696,6 +4702,12 @@ struct ThreadDeliveryJob {
     /// only conversation (`vc:`) is delivered to its agent's own session.
     #[serde(default)]
     target: Option<String>,
+    /// The Thread doc this line carries (a person's post), kept through
+    /// the retry: when the person deletes that post before the line is
+    /// typed in (thread-message-delete-v1), it is never typed in, retried
+    /// or quoted in a notice.
+    #[serde(default)]
+    source_id: Option<String>,
 }
 
 impl ThreadDeliveryJob {
@@ -4715,6 +4727,7 @@ impl ThreadDeliveryJob {
             guest: false,
             via: via.to_string(),
             command: command.to_string(),
+            source_id: turn.as_ref().map(|t| t.turn_id.to_string()),
             turn: turn.map(|t| QueuedTurn {
                 conversation_id: t.conversation_id.to_string(),
                 turn_id: t.turn_id.to_string(),
@@ -4724,6 +4737,13 @@ impl ThreadDeliveryJob {
             retry: false,
             target: None,
         }
+    }
+
+    /// thread-message-delete-v1: the post this line carries was deleted.
+    fn source_deleted(&self) -> bool {
+        self.source_id
+            .as_deref()
+            .is_some_and(|id| matches!(overlay::get_doc(id), Ok(Some(d)) if d.deleted))
     }
 
     /// The one retry of a line the agent never read in: no Thread turn of
@@ -4741,6 +4761,10 @@ impl ThreadDeliveryJob {
     }
 
     fn run(self) -> ThreadDelivery {
+        if self.source_deleted() {
+            k2_core::log_debug!("[thread-delivery] the person deleted this post before it was typed in; not sent addr={}", self.addr);
+            return ThreadDelivery::default();
+        }
         let since = chrono::Utc::now().timestamp_millis();
         let turn = self.turn.as_ref().map(|t| ThreadTurn {
             conversation_id: &t.conversation_id,
@@ -4922,6 +4946,10 @@ fn not_taken_text(agent: &str, quote: &str, why: NotTaken) -> String {
 
 /// A notice in the job's Thread (no inject, no wake, no push).
 fn post_not_taken_notice(job: &ThreadDeliveryJob, why: NotTaken) {
+    // A deleted post is never quoted back into the Thread.
+    if job.source_deleted() {
+        return;
+    }
     let text = not_taken_text(&job.addr, &notice_quote(&job.payload), why);
     match post_workspace_notice(&job.addr, &job.addr, &text) {
         Ok(id) => k2_core::log_debug!("[thread-delivery] told the Thread ({why:?}) addr={} doc={id}", job.addr),
@@ -5512,7 +5540,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/chatter" => handle_get_chatter(params),
         "/cli/chatterlog" => handle_get_chatterlog(params),
         "/cli/thread/post" | "/cli/thread/ask" | "/cli/thread/secret" | "/cli/thread/answer"
-        | "/cli/thread/void" | catchup::ROUTE => CliResponse::method_not_allowed(),
+        | "/cli/thread/void" | catchup::ROUTE | message_delete::ROUTE => CliResponse::method_not_allowed(),
         _ => return None,
     };
     Some(resp)
@@ -5594,6 +5622,7 @@ pub fn dispatch_post_as(
         "/cli/thread/secret" => handle_secret(&params),
         "/cli/thread/answer" => handle_answer(&params, session_author),
         "/cli/thread/void" => handle_void(&params, session_author),
+        message_delete::ROUTE => message_delete::handle(&params, session_author),
         crate::transfer_routes::ROUTE_ATTACHMENT_TOKEN => handle_attachment_token(&params),
         k2_core::permission::NOTE_ROUTE | k2_core::permission::UNDO_ROUTE => {
             handle_permission_card_route(path, &params, session_author)
@@ -9945,4 +9974,8 @@ mod tests {
     // 0.46.11: dismissed and withdrawn cards (prd-popup-close-and-card-dismiss-v1).
     #[path = "card_dismiss_tests.rs"]
     mod card_dismiss;
+
+    // 0.46.11: Delete message (thread-message-delete-v1).
+    #[path = "message_delete_tests.rs"]
+    mod message_delete_route;
 }

@@ -1182,6 +1182,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_THREAD_ATTACHMENTS);
     out.push(FEATURE_THREAD_IMAGES);
     out.push(FEATURE_THREAD_DELTA);
+    // thread-message-delete-v1 (0.46.11): `POST /cli/thread/message/delete`
+    // and the `deleted` tombstone on Thread docs.
+    out.push(crate::overlay_routes::message_delete::FEATURE);
     out.push(FEATURE_PROJECT_CHAT_PAGING);
     out.push(FEATURE_APP_PROJECT_CHAT);
     out.push(FEATURE_APP_MOBILE_ACCESS);

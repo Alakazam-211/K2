@@ -2316,6 +2316,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/thread/imports", Member),
     // Zen Z41: latest Thread item per addr, for previews. GET only.
     get("/cli/thread/latest", Member),
+    // thread-message-delete-v1 (0.46.11): a person deletes their own post
+    // (the owner anyone's); the handler checks the author and refuses
+    // every passport.
+    post("/cli/thread/message/delete", Member),
     // thread-read-v1 (0.46.1): a person's own read state. Every login
     // reads and changes only its own person's cursors and mutes.
     post("/cli/thread/mute", Member),

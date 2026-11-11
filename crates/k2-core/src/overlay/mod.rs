@@ -1130,6 +1130,84 @@ fn thread_item(conversation_id: &str, card_id: &str) -> Result<OverlayItem, Stri
         .ok_or_else(|| format!("card not found: {card_id}"))
 }
 
+/// thread-message-delete-v1: which message a delete names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessageRef {
+    Id(String),
+    Seq(i64),
+}
+
+/// Refusals [`delete_thread_message`] returns (the daemon maps them).
+pub const DELETE_NOT_FOUND: &str = "message not found";
+/// Only a person's own post (`author` set, kind `text`) can be deleted:
+/// an agent's post, a card, a notice or a collected line can't.
+pub const DELETE_NOT_A_PERSONS_MESSAGE: &str = "not a person's message";
+
+/// A message after [`delete_thread_message`]: the stored tombstone, and
+/// (on the first delete only) the doc as it was, so the daemon can clean
+/// what lived outside the store (uploaded files, thumbnails, compose
+/// history) and tell the agent when it was sent. `before` is None when the
+/// message was already deleted (a delete is idempotent).
+#[derive(Debug, Clone)]
+pub struct DeletedMessage {
+    pub conversation_id: String,
+    pub seq: i64,
+    pub doc: OverlayDoc,
+    pub before: Option<OverlayDoc>,
+}
+
+/// Find a Thread message in `conversation_id` by id or seq.
+pub fn find_thread_message(conversation_id: &str, which: &MessageRef) -> Result<Option<OverlayItem>, String> {
+    let (id, seq) = match which {
+        MessageRef::Id(id) => match store::thread_seq_of(conversation_id, id)? {
+            Some(seq) => (id.clone(), seq),
+            None => return Ok(None),
+        },
+        MessageRef::Seq(seq) => match store::thread_id_at(conversation_id, *seq)? {
+            Some(id) => (id, *seq),
+            None => return Ok(None),
+        },
+    };
+    Ok(store::get_doc(&id)?.map(|doc| OverlayItem {
+        collection: "thread".to_string(),
+        seq,
+        id,
+        doc,
+        conversation_id: Some(conversation_id.to_string()),
+    }))
+}
+
+/// thread-message-delete-v1 (0.46.11, Rosson: "If a user enters something
+/// sensitive into the threads, we need to give them a way to delete the
+/// sensitive message."): replace a person's post with a tombstone
+/// ([`OverlayDoc::tombstone`]) in one write that also notes the change for
+/// delta readers. The one `docs/{id}` body is what every collection points
+/// at, so a Chatter or ChatterLog pointer to it reads the tombstone too.
+/// The seq stays. `may` is the caller's author check, run on the stored doc
+/// under the write lock. Deleting a deleted message changes nothing.
+pub fn delete_thread_message(
+    conversation_id: &str,
+    which: &MessageRef,
+    by: PostAuthor,
+    may: impl FnOnce(&OverlayDoc) -> Result<(), String>,
+) -> Result<DeletedMessage, String> {
+    let _guard = WRITE.lock();
+    let item = find_thread_message(conversation_id, which)?.ok_or_else(|| DELETE_NOT_FOUND.to_string())?;
+    if item.doc.imported.is_some() {
+        return Err(IMPORTED_READ_ONLY.to_string());
+    }
+    if item.doc.author.is_none() || item.doc.kind != "text" || item.doc.external.is_some() {
+        return Err(DELETE_NOT_A_PERSONS_MESSAGE.to_string());
+    }
+    may(&item.doc)?;
+    if item.doc.deleted {
+        return Ok(DeletedMessage { conversation_id: conversation_id.to_string(), seq: item.seq, doc: item.doc, before: None });
+    }
+    let doc = item.doc.tombstone(doc::now_secs(), by);
+    store::put_card_doc(conversation_id, item.seq, &doc)?;
+    Ok(DeletedMessage { conversation_id: conversation_id.to_string(), seq: item.seq, doc, before: Some(item.doc) })
+}
+
 /// Snapshot JSON must never contain these secret bytes.
 pub fn snapshot_contains_secret(items: &[OverlayItem], secret: &str) -> bool {
     let blob = serde_json::to_string(items).unwrap_or_default();
@@ -2385,5 +2463,121 @@ mod tests {
         assert!(client_msg_lookup(&young.key).expect("lookup").is_some(), "the younger key stays");
         assert!(matches!(post_keyed(&c, &conv, &project_id, "a", &old), ThreadPost::Posted(..)), "a swept key posts again");
         assert_eq!(read_thread(&conv, 0).expect("read").len(), 3);
+    }
+}
+
+/// thread-message-delete-v1 (0.46.11): a person deletes a sensitive post.
+#[cfg(test)]
+mod delete_tests {
+    use super::*;
+
+    fn conn() -> std::sync::Arc<parking_lot::ReentrantMutex<Connection>> {
+        crate::db::init_for_tests()
+    }
+
+    fn seed(handle: &str) -> (String, String) {
+        let dbh = conn();
+        let c = dbh.lock();
+        let id = uuid::Uuid::new_v4().to_string();
+        c.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            rusqlite::params![id, handle, format!("/tmp/overlay-del-{handle}-{id}")],
+        )
+        .expect("seed project");
+        (id, uuid::Uuid::new_v4().to_string())
+    }
+
+    fn person_post(project_id: &str, conv: &str, body: &str, author: PostAuthor) -> OverlayItem {
+        let dbh = conn();
+        let c = dbh.lock();
+        let att = ThreadAttachment {
+            kind: attachments::KIND_FILE.into(),
+            path: ".k2/downloads/ledger-keys.txt".into(),
+            name: "ledger-keys.txt".into(),
+            size: 12,
+            mime: "text/plain".into(),
+            modified_at: 1,
+            sha256: None,
+            line: None,
+            line_end: None,
+        };
+        let (item, _) = post_thread_with_attachments(&c, conv, project_id, "ada", "ledger", body, "compose", None, Some(author), vec![att], None)
+            .expect("post");
+        item
+    }
+
+    /// The author deletes: the body and attachments are gone from the store
+    /// (no doc holds the text), the seq and id stay, the delta read reports
+    /// the change, and a second delete is a no-op.
+    #[test]
+    fn a_persons_delete_leaves_a_tombstone_and_no_text_in_the_store() {
+        let (project_id, conv) = seed("ovl-del");
+        let secret = format!("hunter2-{}", uuid::Uuid::new_v4());
+        let item = person_post(&project_id, &conv, &format!("my password is {secret}"), PostAuthor::user("ada"));
+        assert!(store::debug_docs_contain(&secret).expect("scan"), "the post is stored before the delete");
+        let later = {
+            let dbh = conn();
+            let c = dbh.lock();
+            post_thread(&c, &conv, &project_id, "ledger", "ada", "noted", "thread").expect("agent reply").0
+        };
+
+        let d = delete_thread_message(&conv, &MessageRef::Seq(item.seq), PostAuthor::user("ada"), |_| Ok(())).expect("delete");
+        assert!(d.before.is_some(), "the first delete returns the doc as it was");
+        assert_eq!((d.seq, d.doc.id.as_str()), (item.seq, item.id.as_str()));
+        assert!(!store::debug_docs_contain(&secret).expect("scan"), "no doc holds the deleted text");
+        let att_marker = format!("\"id\":\"{}\"", item.id);
+        let stored = serde_json::to_string(&get_doc(&item.id).expect("get").expect("doc")).expect("json");
+        assert!(stored.contains(&att_marker) && !stored.contains("ledger-keys.txt"), "the tombstone holds no attachment: {stored}");
+
+        let items = read_thread(&conv, 0).expect("read");
+        assert_eq!(items.iter().map(|i| i.seq).collect::<Vec<_>>(), vec![item.seq, later.seq], "the order stays");
+        let t = &items[0].doc;
+        assert!(t.deleted, "{t:?}");
+        assert_eq!(t.body, None);
+        assert!(t.attachments.is_empty());
+        assert_eq!(t.deleted_by, Some(PostAuthor::user("ada")));
+        assert!(t.deleted_at.is_some());
+        assert_eq!(t.author, Some(PostAuthor::user("ada")), "whose message it was stays");
+        let wire = serde_json::to_value(t).expect("json");
+        assert_eq!(wire["deleted"], true, "{wire}");
+        assert!(wire["deletedAt"].is_i64() && wire["deletedBy"]["login"] == "ada", "{wire}");
+        assert!(wire.get("body").is_none() && wire.get("attachments").is_none(), "{wire}");
+
+        let delta = read_thread_delta(&conv, later.seq, 50).expect("delta");
+        assert!(delta.changed.iter().any(|i| i.id == item.id && i.doc.deleted), "a reader after it gets the tombstone: {:?}", delta.changed);
+
+        let again = delete_thread_message(&conv, &MessageRef::Id(item.id.clone()), PostAuthor::user("ada"), |_| Ok(())).expect("again");
+        assert!(again.before.is_none() && again.doc.deleted, "deleting twice is fine and changes nothing");
+    }
+
+    /// Only a person's own text post: an agent's post is refused, the
+    /// caller's author check runs on the stored doc and its refusal changes
+    /// nothing, and a seq or id that isn't there is not found.
+    #[test]
+    fn agent_posts_refusals_and_unknown_messages_change_nothing() {
+        let (project_id, conv) = seed("ovl-del2");
+        let item = person_post(&project_id, &conv, "keep this", PostAuthor::owner());
+        let agent = {
+            let dbh = conn();
+            let c = dbh.lock();
+            post_thread(&c, &conv, &project_id, "ledger", "ada", "agent words", "thread").expect("agent").0
+        };
+        let e = delete_thread_message(&conv, &MessageRef::Id(agent.id.clone()), PostAuthor::owner(), |_| Ok(())).expect_err("agent post");
+        assert_eq!(e, DELETE_NOT_A_PERSONS_MESSAGE);
+        let e = delete_thread_message(&conv, &MessageRef::Seq(item.seq), PostAuthor::user("eve"), |d| {
+            assert_eq!(d.body.as_deref(), Some("keep this"), "the check sees the stored doc");
+            Err("only the person who sent it can delete it".to_string())
+        })
+        .expect_err("not the author");
+        assert_eq!(e, "only the person who sent it can delete it");
+        assert_eq!(get_doc(&item.id).expect("get").expect("doc").body.as_deref(), Some("keep this"), "a refusal changes nothing");
+        assert_eq!(delete_thread_message(&conv, &MessageRef::Seq(99), PostAuthor::owner(), |_| Ok(())).expect_err("seq"), DELETE_NOT_FOUND);
+        assert_eq!(delete_thread_message(&conv, &MessageRef::Id("nope".into()), PostAuthor::owner(), |_| Ok(())).expect_err("id"), DELETE_NOT_FOUND);
+        let other = uuid::Uuid::new_v4().to_string();
+        assert_eq!(
+            delete_thread_message(&other, &MessageRef::Id(item.id.clone()), PostAuthor::owner(), |_| Ok(())).expect_err("other conversation"),
+            DELETE_NOT_FOUND,
+            "an id from another Thread is not found here"
+        );
     }
 }

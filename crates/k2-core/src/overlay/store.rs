@@ -738,6 +738,24 @@ pub fn thread_seq_of(conversation_id: &str, doc_id: &str) -> Result<Option<i64>,
     Ok(None)
 }
 
+/// The doc id at Thread `seq` in `conversation_id`, or `None` (a point
+/// read of the pointer table; thread-message-delete-v1 takes a seq).
+pub fn thread_id_at(conversation_id: &str, seq: i64) -> Result<Option<String>, String> {
+    if seq < 1 {
+        return Ok(None);
+    }
+    let db = db()?;
+    let txn = db.begin_read().map_err(|e| format!("overlay redb read: {e}"))?;
+    let table = match txn.open_table(THREAD) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+        Err(e) => return Err(format!("overlay open thread: {e}")),
+    };
+    let key = conv_key(conversation_id, seq);
+    let id = table.get(key.as_str()).map_err(|e| format!("overlay thread get: {e}"))?.map(|v| v.value().to_string());
+    Ok(id)
+}
+
 pub fn link_thread(conversation_id: &str, seq: i64, doc_id: &str) -> Result<(), String> {
     link_conv(THREAD, conversation_id, seq, doc_id)
 }

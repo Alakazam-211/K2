@@ -9635,7 +9635,7 @@ async fn handle_one_request(
             let mut bound_skin = None;
             let skin_thread_write = matches!(
                 p,
-                "/cli/thread/post" | "/cli/thread/answer" | "/cli/thread/void"
+                "/cli/thread/post" | "/cli/thread/answer" | "/cli/thread/void" | "/cli/thread/message/delete"
             );
             let (auth_ok, scoped_principal, skin_author) = if skin_presented {
                 match skin_pass {

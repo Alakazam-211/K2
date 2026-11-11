@@ -135,7 +135,7 @@ export async function fetchHostFeedback(): Promise<FeedbackListRow[]> {
     'feedback/list-all',
     { all: 1 },
   )
-  if (!Array.isArray(res.items)) throw new Error('feedback/list-all: response has no items')
+  if (!Array.isArray(res.items)) throw new Error('the reply had no ticket list')
   return sortNewestFirst(
     res.items.map((item) => ({
       ...item,

@@ -226,7 +226,7 @@ describe('Projects chat drawer toggle', () => {
       useProjectGroupsStore.setState({ chatCollapsed: false })
       await renderPage()
       const hide = await waitFor(() => must(screen.queryByRole('button', { name: 'Hide chat' }), 'hide toggle'))
-      await waitFor(() => expect(screen.getByText(/Viewers can read project chat/)).toBeTruthy())
+      await waitFor(() => expect(screen.getByText(/View only: you can read this chat but not post in it/)).toBeTruthy())
       expect(hide.parentElement!.firstElementChild).toBe(hide)
       expect(screen.queryByText('Send')).toBeNull()
     } finally {

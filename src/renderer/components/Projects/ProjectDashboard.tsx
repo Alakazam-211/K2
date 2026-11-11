@@ -71,13 +71,14 @@ import {
   DashboardAgentTile,
   PHASE_CHECKING,
   PHASE_DORMANT,
-  PaneBody,
   TilePicture,
   TileViewPicker,
   useAgentTileAddr,
   useTileView,
   type TermPhase,
 } from './DashboardAgentTile'
+import { TileState, TryAgain } from './TileState'
+import { emptyDashboardHint } from './ProjectStates'
 import { PaneChrome } from './PaneChrome'
 import {
   FileViewerPane,
@@ -222,7 +223,7 @@ function AgentTileFrame({
 type DocPhase =
   | { kind: 'loading' }
   | { kind: 'ready'; content: string }
-  | { kind: 'missing' }
+  | { kind: 'missing'; reason: string | null }
 
 function HtmlDocPane({
   filePath,
@@ -248,6 +249,9 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null)
   const [phase, setPhase] = useState<DocPhase>({ kind: 'loading' })
   const fileName = filePath.split('/').pop() || filePath
+  // Bumped by Try again: restart the read (the poll stops on a
+  // connection-level failure).
+  const [attempt, setAttempt] = useState(0)
 
   // Initial host-aware read + the FileViewerPane 2s poll, guarded by
   // hasSelectionWithin so a copy-in-progress never collapses. Focused
@@ -271,8 +275,9 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
             : { kind: 'ready', content },
         )
       },
-      onError: () => {
-        if (!cancelled) setPhase((prev) => (prev.kind === 'ready' ? prev : { kind: 'missing' }))
+      onError: (err) => {
+        const reason = err instanceof Error ? err.message : err ? String(err) : null
+        if (!cancelled) setPhase((prev) => (prev.kind === 'ready' ? prev : { kind: 'missing', reason }))
       },
       shouldSkip: () => hasSelectionWithin(rootRef.current),
     })
@@ -280,17 +285,27 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
       cancelled = true
       stop()
     }
-  }, [filePath])
+  }, [filePath, attempt])
 
-  if (phase.kind === 'loading') return <PaneBody>Loading document…</PaneBody>
+  if (phase.kind === 'loading') return <TileState busy title={`Opening ${fileName}…`} />
   if (phase.kind === 'missing') {
     return (
-      <PaneBody>
-        <p className="text-xs font-semibold text-[var(--color-text-primary)]">Document unavailable</p>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[40ch] font-mono break-all">
-          {filePath}
-        </p>
-      </PaneBody>
+      <TileState
+        error
+        title={`Couldn’t open ${fileName}.`}
+        detail={phase.reason}
+        testId="doc-tile-error"
+        action={
+          <TryAgain
+            onClick={() => {
+              setPhase({ kind: 'loading' })
+              setAttempt((n) => n + 1)
+            }}
+          />
+        }
+      >
+        It may have moved, or this server can’t read it right now.
+      </TileState>
     )
   }
 
@@ -775,7 +790,6 @@ export default function ProjectDashboard({
   }, [dropZone, geometry])
 
   const stale = freshness.staleRevision !== null
-  const poc = membersById.get(show.pocWorkspaceId ?? '')
 
   // While ANY drag/resize is live, panes go pointer-events:none so the
   // htmlDoc <iframe>s can't swallow the document mousemove/mouseup
@@ -815,14 +829,10 @@ export default function ProjectDashboard({
               : 'border-[var(--color-border)]'
           }`}
         >
-          <div>
-            <p className="text-sm text-[var(--color-text-secondary)]">No panes</p>
-            <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-              {show.members.length === 0
-                ? 'Add a member to this project — its agent becomes the Point of Contact and the first pane.'
-                : readOnly
-                  ? 'This dashboard is empty.'
-                  : `Click or drag a member from the drawer${poc ? ` — start with ${poc.agentName ?? poc.name ?? 'the PoC'}` : ''}.`}
+          <div data-testid="dashboard-empty" role="status">
+            <p className="type-row text-[var(--color-text-primary)]">Nothing on this dashboard yet</p>
+            <p className="type-hint text-[var(--color-text-secondary)] mt-1 max-w-[48ch]">
+              {emptyDashboardHint(show.members.length, readOnly)}
             </p>
           </div>
         </div>
@@ -896,11 +906,9 @@ export default function ProjectDashboard({
                     ) : (
                       /* §6.3 forward-compat: inert placeholder; the
                          pane object round-trips untouched on save. */
-                      <PaneBody>
-                        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-                          This pane was made by a newer K2 and renders after an update.
-                        </p>
-                      </PaneBody>
+                      <TileState title="This tile needs a newer K2.">
+                        It was made by a newer K2 and shows here after an update.
+                      </TileState>
                     )}
                   </PaneChrome>
                 )}

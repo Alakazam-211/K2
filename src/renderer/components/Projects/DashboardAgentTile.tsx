@@ -28,7 +28,7 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useSettingsStore } from '@/stores/settings'
 import { usePageLive } from '@/contexts/TabVisibilityContext'
 import { useRoom, useRoomProjects } from '@/components/Room/RoomContext'
-import { Button, usePressSpring } from '@/components/ui'
+import { Button } from '@/components/ui'
 import { PinnedSessionBody } from '@/components/SessionView/AgentSessionChrome'
 import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColumn'
 import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
@@ -55,6 +55,7 @@ import {
 } from './wake-member-session'
 import { resolveTileView, tileViewKey, type TileView } from './tile-view'
 import { projectDefaultView, type ProjectDefaultView, type ProjectGroupMemberInfo } from './projects-api'
+import { TileState, TryAgain } from './TileState'
 
 const AgentAvatar = lazy(() =>
   import('@/components/Thread/ThreadSenderAvatars').then((m) => ({ default: m.AgentAvatar })),
@@ -212,6 +213,9 @@ export function DashboardAgentTile({
   const projectPath = member?.path ?? null
   const name = member?.agentName ?? member?.name ?? workspaceId.slice(0, 8)
   const [phase, setPhase] = useState<TermPhase>(initialPhase)
+  // What a failure was about: reaching the session (the liveness read) or
+  // waking it. The error phase carries only the server's reason.
+  const [failedWake, setFailedWake] = useState(false)
   const pageLive = usePageLive()
   const textCap = useSettingsStore((s) => threadTextCapPx(s.threadTextWidth))
 
@@ -240,6 +244,7 @@ export function DashboardAgentTile({
   const wake = useCallback(async (): Promise<void> => {
     if (!projectPath) return
     setPhase({ kind: 'waking' })
+    setFailedWake(false)
     try {
       await wakeCanonicalMemberSession(workspaceId, projectPath, {
         activateProject,
@@ -247,22 +252,22 @@ export function DashboardAgentTile({
       })
       setPhase({ kind: 'live' })
     } catch (e) {
+      setFailedWake(true)
       setPhase({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
     }
   }, [projectPath, workspaceId, scope])
 
   const retry = useCallback(async (): Promise<void> => {
+    setFailedWake(false)
     setPhase({ kind: 'checking' })
     setPhase(await resolveMemberSession(scope, workspaceId))
   }, [workspaceId, scope])
 
   if (!member || !projectPath) {
     return (
-      <PaneBody>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-          This workspace is no longer available — it left the project or was removed from the server.
-        </p>
-      </PaneBody>
+      <TileState title="This agent isn’t here any more.">
+        It left the project or was removed from this server.
+      </TileState>
     )
   }
 
@@ -310,10 +315,13 @@ export function DashboardAgentTile({
 
   if (phase.kind === 'error') {
     return (
-      <PaneBody>
-        <p className="text-[11px] text-[var(--color-status-error-soft)] max-w-[36ch]">{phase.message}</p>
-        <PaneActionButton onClick={() => void retry()}>Retry</PaneActionButton>
-      </PaneBody>
+      <TileState
+        error
+        title={failedWake ? `Couldn’t wake ${name}.` : `Couldn’t reach ${name}’s session.`}
+        detail={phase.message}
+        testId="tile-error"
+        action={<TryAgain onClick={() => void (failedWake ? wake() : retry())} />}
+      />
     )
   }
 
@@ -321,18 +329,19 @@ export function DashboardAgentTile({
   // a session; the Thread shows its history at once (from the view cache).
   if (view === 'heartbeats') return <TileHost view={view}>{heartbeats}</TileHost>
   if (view === 'terminal' || !addr) {
-    if (phase.kind === 'checking') return <PaneBody>Checking session…</PaneBody>
-    if (phase.kind === 'waking') return <PaneBody>Waking session…</PaneBody>
+    if (phase.kind === 'checking') return <TileState busy title={`Checking ${name}’s session…`} />
+    if (phase.kind === 'waking') return <TileState busy title={`Waking ${name}…`} />
     return (
-      <PaneBody>
-        <p className="text-xs font-semibold text-[var(--color-text-primary)]">{name} is asleep</p>
-        <p className="text-[11px] text-[var(--color-text-muted)] max-w-[36ch]">
-          Its session isn&apos;t running right now.
-        </p>
-        <PaneActionButton accent onClick={() => void wake()}>
-          Wake
-        </PaneActionButton>
-      </PaneBody>
+      <TileState
+        title={`${name} is asleep.`}
+        action={
+          <Button variant="accent" onClick={() => void wake()}>
+            Wake
+          </Button>
+        }
+      >
+        Its session isn&apos;t running right now.
+      </TileState>
     )
   }
   if (view === 'chatter') {
@@ -342,6 +351,13 @@ export function DashboardAgentTile({
         <div className="flex-1 min-h-0 min-w-0" data-testid="agent-session-chatter">
           <ChatterOverlayPane addr={addr} conversationId={null} active={pageLive} textCapPx={textCap} />
         </div>
+        {/* Asleep: the Thread view's Wake bar, under the mailbox (Chatter
+            reads without a session, so nothing else says it is asleep). */}
+        {phase.kind === 'dormant' ? (
+          <TileWakeBar name={name} onWake={() => void wake()} />
+        ) : phase.kind === 'waking' ? (
+          <TileWakeBar name={name} waking />
+        ) : null}
       </TileHost>
     )
   }
@@ -400,7 +416,7 @@ export function TileWakeBar({
         data-testid="tile-wake-bar"
         data-tile-wake=""
         data-k2-chamfer="control"
-        className="flex items-center gap-3 min-h-9 pl-3.5 pr-1.5 py-1 border border-dashed border-[var(--color-border)] bg-[var(--color-bg-elevated)] rounded-[var(--radius-field)] text-xs text-[var(--color-text-secondary)]"
+        className="flex items-center gap-3 min-h-9 pl-3.5 pr-1.5 py-1 border border-dashed border-[var(--color-border)] bg-[var(--color-bg-elevated)] rounded-[var(--radius-field)] type-control text-[var(--color-text-secondary)]"
       >
         <span className="min-w-0 flex-1 truncate" role="status">
           {waking ? `Waking ${name}…` : `${name} is asleep.`}
@@ -418,42 +434,4 @@ export function TileWakeBar({
 /** The agent tile's Thread address, for the bar's picture and the body. */
 export function useAgentTileAddr(workspaceId: string, member: ProjectGroupMemberInfo | null): string {
   return useTileThreadAddr(workspaceId, member?.path ?? null)
-}
-
-export function PaneBody({ children }: { children: ReactNode }): JSX.Element {
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-2 px-4 text-center text-[11px] text-[var(--color-text-muted)]">
-      {children}
-    </div>
-  )
-}
-
-/** A tile body's action (asleep Wake, Retry). Terminal keeps its quiet wash;
- *  Glass gives it the shared Button's pill, edge and accent fill through
- *  `data-pane-action` (styles/glass/overrides.css), and the press spring. */
-export function PaneActionButton({
-  onClick,
-  accent,
-  children,
-}: {
-  onClick: () => void
-  accent?: boolean
-  children: ReactNode
-}): JSX.Element {
-  const press = usePressSpring<HTMLButtonElement>()
-  return (
-    <button
-      ref={press}
-      type="button"
-      data-pane-action={accent ? 'accent' : 'default'}
-      onClick={onClick}
-      className={`px-3 py-1.5 text-[11px] font-medium transition-colors cursor-pointer ${
-        accent
-          ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25'
-          : 'bg-[var(--color-wash-1)] text-[var(--color-text-primary)] hover:bg-[var(--color-wash-2)]'
-      }`}
-    >
-      {children}
-    </button>
-  )
 }

@@ -13,6 +13,8 @@ import { useFeedbackStore } from '@/stores/feedback'
 import type { ProjectGroupMemberInfo } from '@/components/Projects/projects-api'
 import { fetchAllFeedback, type FeedbackListRow, type FeedbackProjectRef } from './feedback-api'
 import { TicketBoard } from './TicketBoard'
+import { SettingsLoadState } from '@/components/Settings/controls/SettingControls'
+import { TryAgain } from '@/components/Projects/TileState'
 
 /** Pure scoping helper (unit-tested): the fan-out refs for a project's
  *  member list. Members whose workspace has been unregistered since
@@ -48,6 +50,7 @@ export function ProjectFeedbackTab({
 
   const [rows, setRows] = useState<FeedbackListRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [retrying, setRetrying] = useState(false)
 
   const refs = useMemo(() => memberFeedbackRefs(members), [members])
   // Stable membership key: `show` refetches rebuild the members array on
@@ -73,10 +76,35 @@ export function ProjectFeedbackTab({
     void loadList()
   }, [revision, refsKey, loadList])
 
+  const retry = useCallback((): void => {
+    setRetrying(true)
+    void loadList().finally(() => setRetrying(false))
+  }, [loadList])
+
   const onMutated = useCallback((): void => {
     void loadList()
     void useFeedbackStore.getState().refreshWaitingCount()
   }, [loadList])
+
+  // Nothing loaded and the read failed: one state card in place of the
+  // board (a refetch failing under loaded tickets keeps the board's line).
+  if (error && !retrying && (rows === null || rows.length === 0)) {
+    return (
+      <div className="flex-1 min-h-0 flex items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <SettingsLoadState
+            kind="error"
+            title="Couldn’t load this project’s tickets"
+            detail={error}
+            testId="project-feedback-error"
+            action={<TryAgain onClick={retry} />}
+          >
+            K2 couldn’t read the tickets from this server.
+          </SettingsLoadState>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <TicketBoard
@@ -84,7 +112,7 @@ export function ProjectFeedbackTab({
       error={error}
       revision={revision}
       onMutated={onMutated}
-      emptyHint="Member agents file asks with `k2 tickets ask` — new items appear here live."
+      emptyHint="When an agent in this project asks you something, it shows up here."
     />
   )
 }

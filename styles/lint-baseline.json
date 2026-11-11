@@ -46,7 +46,6 @@
     "src/renderer/components/Projects/DashboardPresetsMenu.tsx": 1,
     "src/renderer/components/Projects/ProjectDashboard.tsx": 2,
     "src/renderer/components/Projects/ProjectNav.tsx": 18,
-    "src/renderer/components/Projects/ProjectsPage.tsx": 2,
     "src/renderer/components/RemoveWorkspaceDialog/RemoveWorkspaceDialog.tsx": 3,
     "src/renderer/components/RunningAgentsPanel/RunningAgentsPanel.tsx": 4,
     "src/renderer/components/SessionView/ChangesCard.tsx": 2,

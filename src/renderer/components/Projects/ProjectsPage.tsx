@@ -24,7 +24,7 @@
 // and apply-on-open staleness (§6.2/§6.3). P7 fills the Feedback tab:
 // ProjectFeedbackTab, the member-scoped feedback board (§6.6).
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePageViewStore } from '@/stores/page-view'
 import { useZenShown, zenShownNow } from '@/lib/zen/zen-view'
 import { PageLiveContext } from '@/contexts/TabVisibilityContext'
@@ -39,11 +39,12 @@ import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import AnimatedDrawer from '@/components/Layout/AnimatedDrawer'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
-import { Button, Surface } from '@/components/ui'
-import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
+import { Surface } from '@/components/ui'
+import ProjectNav, { ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import DashboardPresetsMenu from './DashboardPresetsMenu'
 import ProjectChatPanel from './ProjectChatPanel'
+import { NoDashboardState, ProjectListLoadState, ProjectLoadState, ProjectsEmptyState } from './ProjectStates'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
 import { fetchProjectGroupShow, partitionPinned, type ProjectGroupShow } from './projects-api'
 import {
@@ -65,9 +66,12 @@ const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
 function SelectedProjectView({
   show,
   error,
+  onReload,
 }: {
   show: ProjectGroupShow | null
   error: string | null
+  /** Read the project again (Try again; after creating its dashboard). */
+  onReload: () => void
 }): React.JSX.Element {
   // §6.7.6 — the active tab: a dashboard id or the Feedback sentinel.
   // Selection switches arrive as a fresh mount (the page keys this view
@@ -80,7 +84,11 @@ function SelectedProjectView({
   const dashboardIdsRef = useRef(dashboardIds)
   dashboardIdsRef.current = dashboardIds
 
-  const activeTab = resolveActiveTab(tab, dashboardIds)
+  // No dashboard at all: the canvas says so (and offers one) until the
+  // person picks Feedback; resolveActiveTab alone would land on Feedback,
+  // so the no-dashboard state never showed.
+  const activeTab: string | null =
+    dashboardIds.length === 0 && tab !== FEEDBACK_TAB ? null : resolveActiveTab(tab, dashboardIds)
 
   // §6.7.3 — the chat side panel renders across ALL dashboard tabs
   // (per-project, never per-dashboard); open/closed is the persisted
@@ -103,20 +111,7 @@ function SelectedProjectView({
     )
   }, [paneRequestNonce])
 
-  if (error) {
-    return (
-      <div className="flex-1 flex items-center justify-center px-8">
-        <p className="text-[11px] text-[var(--color-status-error-soft)]">Failed to load project: {error}</p>
-      </div>
-    )
-  }
-  if (!show) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-[var(--color-text-muted)]">Loading project…</p>
-      </div>
-    )
-  }
+  if (error || !show) return <ProjectLoadState error={error} onRetry={onReload} />
 
   const activeDashboard = dashboards.find((d) => d.id === activeTab) ?? null
 
@@ -210,11 +205,7 @@ function SelectedProjectView({
             />
           </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center border border-dashed border-[var(--color-border)] m-3 text-center px-8">
-            <p className="text-xs text-[var(--color-text-muted)]">
-              This project has no dashboard yet.
-            </p>
-          </div>
+          <NoDashboardState groupId={show.id} onCreated={onReload} />
         )}
       </div>
 
@@ -237,15 +228,17 @@ export default function ProjectsPage(): React.JSX.Element | null {
   // prd-zen-gardens-v1 G4/G49: under Zen the page's terminals park.
   const zenShown = useZenShown()
   const groups = useProjectGroupsStore((s) => s.groups)
-  const groupsError = useProjectGroupsStore((s) => s.groupsError)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const revision = useProjectGroupsStore((s) => s.revision)
   // §6.7.1 / §6.7.3 — the two per-client persisted toggles.
   const navCollapsed = useProjectGroupsStore((s) => s.navCollapsed)
 
   const [show, setShow] = useState<ProjectGroupShow | null>(null)
-  const [showError, setShowError] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
+  // The last show read's failure, for the project it was about (a switch
+  // never shows the previous project's error).
+  const [showError, setShowError] = useState<{ id: string; message: string } | null>(null)
+  // Bumped by Try again / a created dashboard: read the project again.
+  const [showNonce, setShowNonce] = useState(0)
   // Stay mounted after the first visit so a remote dashboard does not
   // re-pay spawn + grid handshake on every Agents ↔ Projects switch.
   const [everOpened, setEverOpened] = useState(false)
@@ -288,12 +281,18 @@ export default function ProjectsPage(): React.JSX.Element | null {
       })
       .catch((e) => {
         if (cancelled) return
-        setShowError(e instanceof Error ? e.message : String(e))
+        setShowError({ id: selectedGroupId, message: e instanceof Error ? e.message : String(e) })
       })
     return () => {
       cancelled = true
     }
-  }, [isOpen, selectedGroupId, revision])
+  }, [isOpen, selectedGroupId, revision, showNonce])
+
+  // Try again: clear the failure (the loading card shows) and read again.
+  const reloadShow = useCallback((): void => {
+    setShowError(null)
+    setShowNonce((n) => n + 1)
+  }, [])
 
   // §6.7.4 — NO page-level Esc-to-Agents here: on the Projects page Esc
   // focuses the open dashboard's last-used terminal pane instead (the
@@ -321,13 +320,6 @@ export default function ProjectsPage(): React.JSX.Element | null {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [isOpen])
-
-  // Reset transient view state when the page closes (selection is
-  // store-level and deliberately survives — reopening lands where the
-  // user left off).
-  useEffect(() => {
-    if (!isOpen) setCreating(false)
   }, [isOpen])
 
   const selectedGroup = useMemo(
@@ -390,57 +382,15 @@ export default function ProjectsPage(): React.JSX.Element | null {
         )}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          {groups === null && groupsError ? (
-            /* The list fetch failed before any list arrived: say so with
-               Try again, never an endless "Loading projects…". */
-            <div className="flex-1 flex items-center justify-center px-8">
-              <div role="alert" className="w-full max-w-sm text-center" data-projects-list-error>
-                <p className="type-heading text-[var(--color-text-primary)]">Couldn't load your projects</p>
-                <p className="type-row text-[var(--color-text-secondary)] mt-1">
-                  K2 couldn't get the project list from the server. Your agents are fine.
-                </p>
-                <p className="type-hint text-[var(--color-text-muted)] mt-2 break-words">{groupsError}</p>
-                <Button
-                  className="mt-4"
-                  onClick={() => void useProjectGroupsStore.getState().fetchGroups()}
-                >
-                  Try again
-                </Button>
-              </div>
-            </div>
-          ) : groups === null ? (
-            <div className="flex-1 flex items-center justify-center">
-              <p className="text-sm text-[var(--color-text-muted)]">Loading projects…</p>
-            </div>
+          {groups === null ? (
+            /* Loading, or the list read failed (Try again). */
+            <ProjectListLoadState />
           ) : groups.length === 0 ? (
-            /* Empty state — no projects exist yet (create CTA). */
-            <div className="flex-1 flex items-center justify-center px-8">
-              <div className="w-full max-w-sm text-center">
-                <p className="text-sm text-[var(--color-text-secondary)]">No projects yet</p>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-70">
-                  A project groups agents into one effort — a shared dashboard, one chat, one
-                  Point of Contact.
-                </p>
-                <div className="mt-4 text-left">
-                  {creating ? (
-                    <CreateProjectForm onDone={() => setCreating(false)} />
-                  ) : (
-                    <button
-                      className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs bg-white/[0.04] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-white/[0.08] transition-colors"
-                      onClick={() => setCreating(true)}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                      </svg>
-                      Create your first project
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
+            /* No projects yet: what a project is, and New project. */
+            <ProjectsEmptyState />
           ) : !selectedGroup ? (
-            <div className="flex-1 flex items-center justify-center m-4 border border-dashed border-[var(--color-border)] text-xs text-[var(--color-text-muted)] text-center px-6">
-              Select a project to open its dashboard.
+            <div className="flex-1 flex items-center justify-center px-6">
+              <p className="type-hint text-[var(--color-text-secondary)]">Pick a project on the left to open it.</p>
             </div>
           ) : (
             /* Same staleness guard as the nav's member drawer: while a
@@ -450,7 +400,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
             <SelectedProjectView
               key={selectedGroup.id}
               show={show?.id === selectedGroup.id ? show : null}
-              error={showError}
+              error={showError?.id === selectedGroup.id ? showError.message : null}
+              onReload={reloadShow}
             />
           )}
         </div>

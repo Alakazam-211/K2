@@ -40,6 +40,8 @@ import { useProjectGroupsStore } from '@/stores/project-groups'
 import { usePageViewStore } from '@/stores/page-view'
 import { useAutoMarkRead } from '@/stores/unread'
 import { MuteToggleButton } from '@/components/common/UnreadBadge'
+import { SettingsLoadState } from '@/components/Settings/controls/SettingControls'
+import { TryAgain } from './TileState'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import {
@@ -146,6 +148,8 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   const [truncated, setTruncated] = useState(false)
   const [limit, setLimit] = useState(MESSAGES_DEFAULT_LIMIT)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Try again in flight (the loading card shows meanwhile).
+  const [retrying, setRetrying] = useState(false)
   const [loadingEarlier, setLoadingEarlier] = useState(false)
 
   // Composer drafts survive panel unmount (leave project / switch pages).
@@ -197,6 +201,11 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     },
     [show.id],
   )
+
+  const retryLoad = useCallback((): void => {
+    setRetrying(true)
+    void load(limitRef.current).finally(() => setRetrying(false))
+  }, [load])
 
   // Mount → fetch the recent tail. (The panel only mounts while open —
   // §6.7.3: a closed chat stays lean; the store's unread bookkeeping
@@ -460,13 +469,15 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-[var(--color-text-muted)] flex-shrink-0">
           <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
         </svg>
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
-          Project chat
-        </span>
+        <span className="type-name text-[var(--color-text-primary)] whitespace-nowrap">Project chat</span>
         <span className="flex-1" />
         {poc && (
-          <span className="text-[9px] text-[var(--color-text-muted)] truncate">
-            PoC: {poc}
+          <span
+            className="type-hint text-[var(--color-text-secondary)] truncate min-w-0"
+            title={`Point of contact: ${poc}. Each message here also goes to ${poc}.`}
+            data-project-chat-poc=""
+          >
+            Point of contact: {poc}
           </span>
         )}
         <MuteToggleButton kind="project" id={show.id} noun="project chat" />
@@ -498,13 +509,31 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             win.onScroll()
           }}
         >
-          {loadError ? (
-            <ThreadChatNote error>Failed to load chat: {loadError}</ThreadChatNote>
+          {loadError && !retrying ? (
+            <ChatStateSlot>
+              <SettingsLoadState
+                kind="error"
+                stack
+                title="Couldn’t load the chat"
+                detail={loadError}
+                testId="project-chat-error"
+                action={<TryAgain onClick={retryLoad} />}
+              >
+                K2 couldn’t read this project’s messages from the server.
+              </SettingsLoadState>
+            </ChatStateSlot>
           ) : messages === null ? (
-            <ThreadChatEmpty>Loading chat…</ThreadChatEmpty>
+            <ChatStateSlot>
+              <SettingsLoadState kind="loading" stack title="Loading the chat…" testId="project-chat-loading" />
+            </ChatStateSlot>
           ) : messages.length === 0 ? (
             <ThreadChatEmpty testId="project-chat-empty">
-              No messages yet — everything posted here also lands in the PoC&rsquo;s session.
+              <p className="type-row" style={{ color: 'var(--zen-text)' }}>No messages yet</p>
+              <p className="type-hint mt-1">
+                {poc
+                  ? `Messages here go to everyone in the project. ${poc}, the point of contact, gets each one.`
+                  : 'Messages here go to everyone in the project.'}
+              </p>
             </ThreadChatEmpty>
           ) : (
             <ThreadMessageColumn gap={THREAD_LIST_GAP} testId="project-chat-column">
@@ -562,8 +591,17 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             <ZenActivityDrawer turn={pocTurn} attached={false} />
             <div className="flex items-center gap-2" data-project-chat-actions="">
               <HideChatButton />
-              <div style={{ fontSize: '0.8em', color: 'var(--zen-text-muted)' }}>
-                Viewers can read project chat but can&rsquo;t post.
+              <div
+                role="note"
+                data-testid="project-chat-readonly"
+                data-k2-chamfer="control"
+                className="flex-1 min-w-0 flex items-center gap-2 min-h-9 px-3 py-1.5 border border-dashed border-[var(--color-border)] bg-[var(--color-bg-elevated)] rounded-[var(--radius-field)] type-control text-[var(--color-text-secondary)]"
+              >
+                <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 text-[var(--color-text-muted)]">
+                  <rect x="4" y="11" width="16" height="10" rx="2" />
+                  <path d="M8 11V7a4 4 0 018 0v4" />
+                </svg>
+                <span className="min-w-0">View only: you can read this chat but not post in it.</span>
               </div>
             </div>
           </div>
@@ -640,6 +678,11 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
       </WorkspaceFileLinks>
     </div>
   )
+}
+
+/** Holds a state card in the chat column, a little in from its edges. */
+function ChatStateSlot({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return <div className="h-full flex items-center justify-center px-1">{children ? <div className="w-full">{children}</div> : null}</div>
 }
 
 /** Close the project chat: the drawer's » toggle, at the bottom left of the

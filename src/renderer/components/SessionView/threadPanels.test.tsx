@@ -352,7 +352,9 @@ describe('Heartbeats panel', () => {
     ])
     expect(rows[1].textContent).toContain('Failed · boom')
     expect(rows[1].getAttribute('data-kind')).toBe('heartbeat')
-    expect(screen.getByTestId('thread-drawer-coming').textContent).toMatch(/Reminders and mail from your VIP senders/)
+    // Only what exists now: no line promising reminders or mail (0.46.12).
+    expect(screen.queryByTestId('thread-drawer-coming')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/VIP senders|once K2 has them/)
   })
 
   it('loading, then the empty state with what will appear', async () => {
@@ -362,7 +364,7 @@ describe('Heartbeats panel', () => {
     expect(screen.getByTestId('thread-drawer-loading').textContent).toMatch(/Loading heartbeats/)
     await act(async () => answer([]))
     expect(screen.getByTestId('thread-drawer-empty').textContent).toMatch(/No heartbeats have run yet/)
-    expect(screen.getByTestId('thread-drawer-coming')).toBeTruthy()
+    expect(screen.queryByTestId('thread-drawer-coming')).toBeNull()
   })
 
   it('an error offers a retry', async () => {

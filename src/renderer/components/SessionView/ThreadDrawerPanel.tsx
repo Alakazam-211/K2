@@ -360,12 +360,6 @@ export function InputsList({ cwd, active }: { cwd: string; active: boolean }): J
       >
         {body}
       </div>
-      <p
-        data-testid="thread-drawer-coming"
-        className="flex-shrink-0 px-3 py-2.5 type-hint text-[var(--color-text-muted)] border-t border-[var(--color-border)]"
-      >
-        Reminders and mail from your VIP senders will show here too, once K2 has them.
-      </p>
     </div>
   )
 }

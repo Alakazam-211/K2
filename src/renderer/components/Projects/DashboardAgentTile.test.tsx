@@ -223,25 +223,70 @@ describe('an asleep tile', () => {
   it('Terminal view offers Wake too; Heartbeats reads without a session', () => {
     renderInRoom(room, <Tile phase={DORMANT} />)
     pick('terminal')
-    expect(screen.getByText('sales is asleep')).toBeTruthy()
+    expect(screen.getByText('sales is asleep.')).toBeTruthy()
     expect(screen.getByText('Wake')).toBeTruthy()
     pick('heartbeats')
     expect(screen.getByTestId('heartbeats-list')).toBeTruthy()
     expect(screen.queryByTestId('mock-terminal')).toBeNull()
   })
 
-  it("both Wake buttons take Glass's button look", () => {
+  it('both Wake buttons are the shared accent Button', () => {
     renderInRoom(room, <Tile phase={DORMANT} />)
     // The Wake bar's Wake is the shared accent Button (pill, edge, fill).
     const barWake = screen.getByTestId('tile-wake')
     expect(barWake.getAttribute('data-k2-chamfer')).toBe('control')
     expect(barWake.className).toContain('bg-[var(--color-accent-fill)]')
     expect(barWake.className).toContain('[box-shadow:var(--ring-field)]')
-    // Terminal view's Wake keeps Terminal's wash; Glass styles it by its hook.
+    // Terminal view's Wake is the same Button (0.46.12: one button look in every tile state).
     pick('terminal')
     const termWake = screen.getByRole('button', { name: 'Wake' })
-    expect(termWake.getAttribute('data-pane-action')).toBe('accent')
-    expect(termWake.className).toContain('bg-[var(--color-accent)]/15')
+    expect(termWake.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(termWake.className).toContain('bg-[var(--color-accent-fill)]')
+  })
+})
+
+describe('tile states', () => {
+  it('Chatter view of an asleep agent shows the Wake bar under the mailbox, and Wake wakes it', async () => {
+    renderInRoom(room, <Tile phase={DORMANT} />)
+    pick('chatter')
+    expect(screen.getByTestId('chatter-pane')).toBeTruthy()
+    expect(screen.getByTestId('tile-wake-bar').textContent).toContain('sales is asleep.')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('tile-wake'))
+    })
+    expect(wake.calls).toEqual(['ws-sales'])
+  })
+
+  it('Chatter view of a live agent has no Wake bar', () => {
+    renderInRoom(room, <Tile phase={LIVE} />)
+    pick('chatter')
+    expect(screen.queryByTestId('tile-wake-bar')).toBeNull()
+  })
+
+  it("a failed session read says whose session, the reason quietly, and Try again checks again", async () => {
+    const { resolveAllMemberSessions } = await import('./wake-member-session')
+    vi.mocked(resolveAllMemberSessions).mockResolvedValueOnce({ 'ws-sales': { kind: 'dormant' } } as never)
+    renderInRoom(room, <Tile phase={{ kind: 'error', message: 'session registry is not answering' }} />)
+    const state = screen.getByTestId('tile-error')
+    expect(state.getAttribute('role')).toBe('alert')
+    expect(state.textContent).toContain('Couldn’t reach sales’s session.')
+    expect(state.textContent).toContain('The server said: session registry is not answering.')
+    const again = screen.getByRole('button', { name: 'Try again' })
+    expect(again.getAttribute('data-k2-chamfer')).toBe('control')
+    await act(async () => {
+      fireEvent.click(again)
+    })
+    expect(resolveAllMemberSessions).toHaveBeenCalledWith(['ws-sales'], expect.any(Function))
+    expect(screen.queryByTestId('tile-error')).toBeNull()
+  })
+
+  it('checking and waking are quiet status lines with the name, in type roles', () => {
+    renderInRoom(room, <Tile phase={{ kind: 'checking' }} />)
+    pick('terminal')
+    const line = screen.getByText('Checking sales’s session…')
+    expect(line.closest('[data-tile-state]')?.getAttribute('data-tile-state')).toBe('busy')
+    expect(line.closest('p')?.className).toContain('type-row')
+    expect(line.closest('p')?.className).not.toMatch(/text-\[\d+px\]|text-xs/)
   })
 })
 

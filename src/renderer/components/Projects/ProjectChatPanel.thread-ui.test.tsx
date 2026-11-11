@@ -289,7 +289,7 @@ describe('project chat in the Thread look', () => {
     await mount()
     await flush()
     expect(screen.queryByTestId('project-chat-compose')).toBeNull()
-    expect(screen.getByText(/Viewers can read project chat/)).toBeTruthy()
+    expect(screen.getByText(/View only: you can read this chat but not post in it/)).toBeTruthy()
     const drawer = document.querySelector('[data-zen-drawer]') as HTMLElement | null
     if (!drawer) throw new Error('no free strip')
     expect(drawer.getAttribute('data-zen-drawer-attached')).toBe('false')
@@ -329,5 +329,45 @@ describe('the stash in project chat (Rosson 2026-10-30)', () => {
     fireEvent.click(drawer.querySelector('[data-stash-row]') as HTMLElement)
     await waitFor(() => expect(input.value).toBe('saved for the project'))
     await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
+  })
+})
+
+describe('project chat states and header', () => {
+  it('a failed read shows the state card with the reason, and Try again loads the chat', async () => {
+    let fail = true
+    cli.get.mockImplementation(async (path: string) => {
+      if (path !== 'project-group/messages') return {}
+      if (fail) throw new Error('database is locked')
+      return { ok: true, messages: MESSAGES, truncated: false }
+    })
+    const view = render(<ProjectChatPanel show={show()} />)
+    const card = await screen.findByTestId('project-chat-error')
+    expect(card.getAttribute('role')).toBe('alert')
+    expect(card.textContent).toContain('Couldn’t load the chat')
+    expect(card.textContent).toContain('The server said: database is locked.')
+    expect(card.textContent).not.toContain('Failed to load chat')
+    fail = false
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(view.container.querySelectorAll('[data-zen-message]').length).toBe(MESSAGES.length))
+    expect(screen.queryByTestId('project-chat-error')).toBeNull()
+  })
+
+  it('an empty chat says who gets each message, in plain words', async () => {
+    cli.get.mockImplementation(async (path: string) =>
+      path === 'project-group/messages' ? { ok: true, messages: [], truncated: false } : {},
+    )
+    render(<ProjectChatPanel show={show()} />)
+    const empty = await screen.findByTestId('project-chat-empty')
+    expect(empty.textContent).toContain('No messages yet')
+    expect(empty.textContent).toContain('Ada, the point of contact, gets each one.')
+    expect(empty.textContent).not.toContain('PoC')
+  })
+
+  it('the header reads "Project chat" and names the point of contact in full', async () => {
+    await mount()
+    expect(screen.getByText('Project chat').className).not.toContain('uppercase')
+    const poc = document.querySelector('[data-project-chat-poc]') as HTMLElement
+    expect(poc.textContent).toBe('Point of contact: Ada')
+    expect(poc.getAttribute('title')).toContain('Point of contact: Ada')
   })
 })

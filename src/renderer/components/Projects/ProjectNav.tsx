@@ -22,6 +22,7 @@ import { KeyCombo } from '@/components/KeySymbol'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { DoubleChevron } from '@/components/Sidebar/SidebarCollapseButton'
 import { NAV_TOGGLE_BOX } from '@/components/Layout/drawer-toggles'
+import { Button, Input } from '@/components/ui'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
 import { completeDashDrag, useDashboardDndStore } from './dashboard-dnd'
 import {
@@ -708,12 +709,14 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <input
+    <div className="flex flex-col gap-2">
+      <Input
         autoFocus
         type="text"
+        aria-label="Project name"
         value={name}
         disabled={busy}
+        aria-invalid={error ? true : undefined}
         onChange={(e) => {
           setName(e.target.value)
           setError(null)
@@ -727,25 +730,21 @@ export function CreateProjectForm({ onDone }: { onDone: () => void }): React.JSX
             onDone()
           }
         }}
-        placeholder="Project name…"
-        className="w-full px-2.5 py-1.5 text-[11px] bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] border border-[var(--color-border)] outline-none focus:border-[var(--color-accent)] placeholder:text-[var(--color-text-muted)] disabled:opacity-50"
+        placeholder="Project name"
+        className="w-full disabled:opacity-50"
       />
-      {error && <p className="text-[10px] text-[var(--color-status-error-soft)] leading-snug">{error}</p>}
-      <div className="flex items-center gap-1.5">
-        <button
-          className="flex-1 px-2 py-1 text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/25 transition-colors disabled:opacity-50"
-          disabled={busy || name.trim().length === 0}
-          onClick={() => void submit()}
-        >
-          Create
-        </button>
-        <button
-          className="px-2 py-1 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
-          disabled={busy}
-          onClick={onDone}
-        >
+      {error && (
+        <p role="alert" className="type-hint text-[var(--color-status-error-text)] leading-snug">
+          {error}
+        </p>
+      )}
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="quiet" disabled={busy} onClick={onDone}>
           Cancel
-        </button>
+        </Button>
+        <Button variant="accent" disabled={busy || name.trim().length === 0} onClick={() => void submit()}>
+          Create
+        </Button>
       </div>
     </div>
   )
@@ -1269,7 +1268,6 @@ export default function ProjectNav({
   pocWorkspaceId: string | null
 }): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
-  const groupsError = useProjectGroupsStore((s) => s.groupsError)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
 
@@ -1363,22 +1361,8 @@ export default function ProjectNav({
             {idx < unpinned.length - 1 && <div className="border-b border-[var(--color-border)]" />}
           </React.Fragment>
         ))}
-
-        {groups !== null && groups.length === 0 && (
-          <div className="px-3 py-6 text-center">
-            <p className="text-xs text-[var(--color-text-muted)]">No projects yet</p>
-            <p className="text-xs text-[var(--color-text-muted)] mt-1 opacity-60">
-              Create one to group agents into an effort
-            </p>
-          </div>
-        )}
-        {groups === null && (
-          <div className="px-3 py-6 text-center">
-            <p className="type-row text-[var(--color-text-muted)]">
-              {groupsError ? "Couldn't load projects" : 'Loading projects…'}
-            </p>
-          </div>
-        )}
+        {/* Loading, failed or empty: the canvas says so (one state card,
+            ProjectStates.tsx); the nav keeps just its header and New Project. */}
       </div>
 
       {/* Bottom drawers (ActiveBar's position): Resources (pinned HTML)

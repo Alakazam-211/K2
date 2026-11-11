@@ -194,6 +194,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // The setup checklist (prd-setup-checklist-v1): shown in the app only
     // once the owner turns it on. Off by default until it is polished.
     "setupChecklist",
+    // K5 at first run (prd-setup-checklist-v1 §10): the offer, the Chief of
+    // Staff row and the K5 routes. Off by default until it is polished.
+    "k5FirstRun",
     // 0.46.6: the K2 Connect account server address. It decides where
     // k2.dev account passwords and refresh tokens are sent.
     "connectDbUrl",
@@ -577,7 +580,7 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
     let agent_hooks_touched = partial.get("agentHooks").is_some();
     let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
     let voice_touched = ["voiceRoomsPreview", "voiceRoomsCount"].iter().any(|k| partial.get(*k).is_some());
-    let checklist_touched = partial.get("setupChecklist").is_some();
+    let checklist_touched = partial.get("setupChecklist").is_some() || partial.get("k5FirstRun").is_some();
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
             // Sync the federation master switch into the running process so the
@@ -630,7 +633,8 @@ pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) ->
             // audit names `by`, and every client hears of it. The answer
             // waits for all of it.
             let cores_report = crate::docs::cores::sync_multiplayer_cores(&merged.multiplayer_cores, by);
-            // The setup checklist's `enabled` changed for everyone.
+            // The setup checklist's `enabled` (or its K5 part) changed for
+            // everyone.
             if checklist_touched {
                 crate::first_run_routes::emit_changed(None);
             }

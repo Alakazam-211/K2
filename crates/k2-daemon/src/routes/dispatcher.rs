@@ -10932,6 +10932,46 @@ async fn handle_one_request(
         // (`get_refused`).
         p if crate::first_run_routes::is_route(p) => {
             use crate::first_run_routes::MAX_BODY;
+            // K5 at first run: the one agent-callable route in the family
+            // (`k2 setup chief-of-staff`). The caller is classified from the
+            // credential like `k2 agent refresh` (owner token, login, shell
+            // tab, agent with its session's map key, wrong credential), and
+            // the handler admits only K5's own pinned chat.
+            if p == crate::first_run_routes::COS_PATH {
+                if !is_post {
+                    let r = crate::cli_response::CliResponse::method_not_allowed();
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+                let caller = crate::sidecar_routes::caller_from_tcp(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                );
+                let body_bytes = match super::http::read_post_body_capped(&mut *stream, &mut buf, MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        super::http::refuse_body_too_large(
+                            &mut *stream,
+                            &refused,
+                            "413 Payload Too Large",
+                            "application/json",
+                            r#"{"ok":false,"error":{"code":"body_too_large","hint":"send {\"name\", \"about\", \"tool\"} only"}}"#,
+                        )
+                        .await;
+                        return DispatchOutcome::Done;
+                    }
+                };
+                let result = tokio::task::spawn_blocking(move || {
+                    crate::first_run_routes::handle_chief_of_staff(&body_bytes, &caller)
+                })
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+                super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                    .await;
+                return DispatchOutcome::Done;
+            }
             let actor = if super::http::token_is_owner(&query, state.token.as_str()) {
                 Some(crate::notify_routes::Actor::owner_token())
             } else {

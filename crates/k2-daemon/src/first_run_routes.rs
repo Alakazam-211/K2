@@ -8,6 +8,21 @@
 //! | POST | `/cli/first-run/hide` | | the same body |
 //! | POST | `/cli/first-run/show` | | the same body (hidden, finished and skips cleared) |
 //! | POST | `/cli/first-run/skip` | `{"row": "<id>"}` | the same body |
+//! | POST | `/cli/first-run/offer/dismiss` | | the same body ("Not now" on Meet K5, per person) |
+//! | POST | `/cli/first-run/k5` | `{tool?, name?, handle?}` | `{workspaceId, name, path, …}` |
+//! | POST | `/cli/first-run/chief-of-staff/start` | | `{workspaceId}` |
+//! | POST | `/cli/first-run/chief-of-staff` | `{name, about, tool}` | `{workspaceId, name, path, …}` |
+//!
+//! **K5 at first run** (prd-setup-checklist-v1 §10, `k5-first-run-contract.md`):
+//! the last four answer 404 `k5_first_run_off` while the owner's
+//! `k5FirstRun` switch is off. `k5` and `chief-of-staff/start` are a
+//! person's at the Admin floor (the owner token, an Owner or an Admin);
+//! `chief-of-staff` is the one agent-callable route here, honoured only for
+//! **K5's own pinned chat**: its passport's workspace is the seat's and its
+//! map key is the canonical one (the same check as `k2 agent refresh`), so
+//! another agent, K5's sidecar, a shell tab, a login, an API key and the
+//! owner token are refused ([`handle_chief_of_staff`]). The rest of the
+//! family stays on the passport denylist.
 //!
 //! **Who.** A person only: the owner token or a Connect login at the
 //! Member floor (`route_policy`), resolved to the person key from the
@@ -19,7 +34,8 @@
 //! Member floor. The GET chain (an agent's cell socket) refuses as a belt.
 //!
 //! **Frames.** `first_run_changed` to that person's sockets on hide, show,
-//! skip and finish.
+//! skip, dismiss and finish; to everyone when K5 or the Chief of Staff is
+//! made (with `projects_changed`).
 
 use k2_core::first_run::{self, Action, Viewer};
 use k2_core::notify_prefs::People;
@@ -34,16 +50,34 @@ pub const STATUS_PATH: &str = "/cli/first-run/status";
 pub const HIDE_PATH: &str = "/cli/first-run/hide";
 pub const SHOW_PATH: &str = "/cli/first-run/show";
 pub const SKIP_PATH: &str = "/cli/first-run/skip";
+pub const OFFER_DISMISS_PATH: &str = "/cli/first-run/offer/dismiss";
+pub const K5_PATH: &str = "/cli/first-run/k5";
+pub const COS_START_PATH: &str = "/cli/first-run/chief-of-staff/start";
+pub const COS_PATH: &str = "/cli/first-run/chief-of-staff";
+
+/// What `chief-of-staff/start` posts into K5's Thread, as the person.
+pub const COS_START_TEXT: &str = "Let's hire my Chief of Staff.";
+
+/// The longest name a K5 or Chief of Staff may get.
+pub const MAX_NAME: usize = 64;
 
 /// Body cap for the POSTs (`{"row": "<id>"}` at most).
 pub const MAX_BODY: usize = 4 * 1024;
 
 pub fn is_route(path: &str) -> bool {
-    matches!(path, STATUS_PATH | HIDE_PATH | SHOW_PATH | SKIP_PATH)
+    matches!(
+        path,
+        STATUS_PATH | HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | K5_PATH | COS_START_PATH | COS_PATH
+    )
 }
 
 pub fn is_post_only(path: &str) -> bool {
-    matches!(path, HIDE_PATH | SHOW_PATH | SKIP_PATH)
+    matches!(path, HIDE_PATH | SHOW_PATH | SKIP_PATH | OFFER_DISMISS_PATH | K5_PATH | COS_START_PATH | COS_PATH)
+}
+
+/// The K5 routes, which answer 404 while `k5FirstRun` is off.
+pub fn is_k5_route(path: &str) -> bool {
+    matches!(path, OFFER_DISMISS_PATH | K5_PATH | COS_START_PATH | COS_PATH)
 }
 
 fn error(status: &'static str, code: &str, hint: impl std::fmt::Display) -> CliResponse {
@@ -111,6 +145,7 @@ fn action_for(path: &str, body: &[u8]) -> Result<Option<Action>, CliResponse> {
         STATUS_PATH => None,
         HIDE_PATH => Some(Action::Hide),
         SHOW_PATH => Some(Action::Show),
+        OFFER_DISMISS_PATH => Some(Action::DismissOffer),
         SKIP_PATH => {
             let v: Value = serde_json::from_slice(body)
                 .map_err(|e| error("400 Bad Request", "usage", format!("send {{\"row\": \"<id>\"}}: {e}")))?;
@@ -135,6 +170,13 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
     if is_post_only(path) != is_post {
         return CliResponse::method_not_allowed();
     }
+    if is_k5_route(path) && !k2_core::app_settings::load().k5_first_run {
+        return k5_off();
+    }
+    if path == COS_PATH {
+        // A person (or the owner token) on the seat-only route.
+        return k5_session_only("this step is K5's: ask K5 on its Thread to hire your Chief of Staff (the setup list's row starts it)");
+    }
     let person = match person_for(actor) {
         Ok(p) => p,
         Err(r) => return r,
@@ -143,6 +185,12 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
         Ok(v) => v,
         Err(r) => return r,
     };
+    if path == K5_PATH || path == COS_START_PATH {
+        if !matches!(viewer, Viewer::OwnerToken | Viewer::Login(k2_core::connect_users::Role::Admin | k2_core::connect_users::Role::Owner)) {
+            return error("403 Forbidden", "role_required", "making K5 needs the owner, an Owner or an Admin login");
+        }
+        return if path == K5_PATH { handle_k5(body, actor) } else { handle_cos_start(actor) };
+    }
     let action = match action_for(path, body) {
         Ok(a) => a,
         Err(r) => return r,
@@ -185,6 +233,421 @@ pub fn handle(is_post: bool, path: &str, body: &[u8], actor: &Actor) -> CliRespo
         Ok(body) => CliResponse::ok_json(body),
         Err(e) => error("500 Internal Server Error", "serialize", e),
     }
+}
+
+// ── K5 at first run (prd-setup-checklist-v1 §10) ─────────────────────
+
+/// 404 while the owner's `k5FirstRun` switch is off.
+pub fn k5_off() -> CliResponse {
+    error("404 Not Found", "k5_first_run_off", "K5 at first run is off on this server (the owner turns on k5FirstRun)")
+}
+
+/// 403 on the seat-only route for anything but K5's own pinned chat.
+fn k5_session_only(hint: &str) -> CliResponse {
+    error("403 Forbidden", "k5_session_only", hint)
+}
+
+/// One K5 or Chief of Staff made at a time, so the 409s hold.
+static MAKE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+fn hire_error(e: &k2_core::hire::HireError) -> CliResponse {
+    crate::hire_routes::hire_error_response(e)
+}
+
+fn json_body(body: &[u8]) -> Result<Value, CliResponse> {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return Ok(json!({}));
+    }
+    let v: Value = serde_json::from_slice(body).map_err(|e| error("400 Bad Request", "usage", format!("send a JSON object: {e}")))?;
+    if !v.is_object() {
+        return Err(error("400 Bad Request", "usage", "send a JSON object"));
+    }
+    Ok(v)
+}
+
+/// A string field, trimmed; `Err` when it is there but not a string or too long.
+fn str_field(v: &Value, key: &str, max: usize) -> Result<Option<String>, CliResponse> {
+    match v.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.chars().count() > max {
+                return Err(error("400 Bad Request", "usage", format!("{key} is at most {max} characters")));
+            }
+            Ok((!t.is_empty()).then(|| t.to_string()))
+        }
+        Some(_) => Err(error("400 Bad Request", "usage", format!("{key} must be a string"))),
+    }
+}
+
+/// The tool, which must be one of claude, codex or grok and signed in.
+/// `None` asked: the server default (`defaultAgent`).
+fn signed_in_tool(asked: Option<String>) -> Result<String, CliResponse> {
+    let entries = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::llm_accounts::list(&conn).map_err(|e| error("500 Internal Server Error", "store", e.to_string()))?
+    };
+    let signed = first_run::signed_in_tools(&entries);
+    let tool = match asked {
+        Some(t) => t.to_ascii_lowercase(),
+        None => {
+            let d = k2_core::app_settings::load().default_agent.trim().to_ascii_lowercase();
+            if signed.contains(&d.as_str()) {
+                d
+            } else if let Some(first) = signed.first() {
+                first.to_string()
+            } else {
+                d
+            }
+        }
+    };
+    if !matches!(tool.as_str(), "claude" | "codex" | "grok") {
+        return Err(error("400 Bad Request", "usage", format!("tool must be claude, codex or grok (got {tool:?})")));
+    }
+    if !signed.contains(&tool.as_str()) {
+        return Err(error(
+            "400 Bad Request",
+            "tool_not_signed_in",
+            format!("{tool} isn't signed in on this server: sign in first (Settings → LLM tokens, or k2 llm tokens add {tool} <label>)"),
+        ));
+    }
+    Ok(tool)
+}
+
+/// 409 when `path` is already some workspace's folder (a new agent needs
+/// its own).
+fn folder_free(path: &str) -> Result<(), CliResponse> {
+    let expanded = k2_core::hire::converge::expand_hire_path(path).map_err(|e| hire_error(&e))?;
+    if let Some((p, row)) = k2_core::hire::converge::lookup_project_row(&expanded) {
+        return Err(error(
+            "409 Conflict",
+            "folder_in_use",
+            format!("{p} is already the workspace {}; pick another name or handle", row.handle.unwrap_or(row.name)),
+        ));
+    }
+    Ok(())
+}
+
+fn seat_k5() -> Result<Option<k2_core::orchestrator::Live>, CliResponse> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::orchestrator::live_k5(&conn).map_err(|e| error("500 Internal Server Error", "store", e.to_string()))
+}
+
+fn handle_of(id: &str) -> String {
+    k2_core::workspace_session_handles::workspace_address_name_shared(id).unwrap_or_else(|_| id.to_string())
+}
+
+/// The person K5 works for, by the seat's `created_by` (`owner` or
+/// `login:<name>`): their display name, for `{{person}}`.
+fn seat_person() -> String {
+    let created_by = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::orchestrator::load(&conn).ok().flatten().and_then(|s| s.created_by)
+    };
+    let login = created_by.as_deref().and_then(|c| c.strip_prefix("login:")).unwrap_or(k2_core::notify_prefs::OWNER);
+    let people = People::load().unwrap_or(People { users: Vec::new(), linked: Vec::new() });
+    k2_core::person_name::effective(login, &people).display_name
+}
+
+/// The launches this test binary asked for: `(handle, hello)`.
+#[cfg(test)]
+pub(crate) static TEST_LAUNCHES: parking_lot::Mutex<Vec<(String, Option<String>)>> = parking_lot::Mutex::new(Vec::new());
+
+/// Start the new agent's pinned chat and deliver its first-start `hello`,
+/// off the request thread (`hire_routes`' launch pattern). The agent stands
+/// whether or not this works.
+fn launch(path: String, handle: String, hello: Option<String>, from: String, sender: crate::hire_routes::Sender) {
+    #[cfg(test)]
+    {
+        let _ = (path, from, sender);
+        TEST_LAUNCHES.lock().push((handle, hello));
+    }
+    #[cfg(not(test))]
+    {
+        let spawned = crate::rt::spawn("first-run-launch", move || {
+            if let Err(e) = crate::canonical_session::ensure_canonical_session(&path) {
+                k2_core::log_debug!("[first-run] launch {handle}: {e}");
+                return;
+            }
+            if let Some(brief) = hello {
+                let (r, _) = crate::hire_routes::deliver_recorded(
+                    &handle,
+                    &brief,
+                    &from,
+                    "",
+                    true,
+                    crate::workspace_msg::DEFAULT_WAKE_TIMEOUT,
+                    "first-run",
+                    &sender,
+                );
+                if !r.success {
+                    k2_core::log_debug!("[first-run] hello {handle}: {}", r.reason.unwrap_or_default());
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            k2_core::log_debug!("[first-run] launch not started: {e}");
+        }
+    }
+}
+
+fn audit(event: &str, actor: &str, outcome: String) {
+    k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(event, actor, outcome, "first-run", "-", "cli"));
+}
+
+/// The answer both making routes send.
+fn made(report: &k2_core::hire::template::ApplyReport, granted: &crate::first_run_grants::Granted, cards: &Result<(), String>) -> CliResponse {
+    let body = json!({
+        "ok": true,
+        "workspaceId": report.workspace_id,
+        "name": report.name,
+        "path": report.path,
+        "handle": report.handle,
+        "permissions": {
+            "granted": granted.granted,
+            "left": granted.left,
+            "cards": cards.is_ok(),
+        },
+    });
+    CliResponse::ok_json(body.to_string())
+}
+
+/// `POST /cli/first-run/k5 {tool?, name?, handle?}`: make K5 from the `k5`
+/// template, seat it, set the harness, pinned chat and cards switch, grant
+/// the starter set the creator can give, then launch it with its hello.
+fn handle_k5(body: &[u8], actor: &Actor) -> CliResponse {
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let (tool, name, handle) = match (str_field(&v, "tool", 32), str_field(&v, "name", MAX_NAME), str_field(&v, "handle", MAX_NAME)) {
+        (Ok(t), Ok(n), Ok(h)) => (t, n, h),
+        (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r,
+    };
+    let _made = MAKE_LOCK.lock();
+    match seat_k5() {
+        Ok(Some(k5)) => {
+            return error("409 Conflict", "k5_exists", format!("K5 is already here: {} ({})", k5.name, handle_of(&k5.workspace_id)))
+        }
+        Ok(None) => {}
+        Err(r) => return r,
+    }
+    let tool = match signed_in_tool(tool) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let name = name.unwrap_or_else(|| k2_core::orchestrator::DEFAULT_NAME.to_string());
+    let handle_seed = handle.unwrap_or_else(|| k2_core::orchestrator::DEFAULT_HANDLE.to_string());
+    let handle = match k2_core::workspace_session_handles::slugify_address_token(&handle_seed) {
+        Ok(h) => h,
+        Err(e) => return error("400 Bad Request", "usage", format!("handle: {e}")),
+    };
+    let root = match k2_core::hire::root::hire_root() {
+        Ok(r) => r,
+        Err(e) => return hire_error(&e),
+    };
+    let path = root.join(&handle).to_string_lossy().into_owned();
+    if let Err(r) = folder_free(&path) {
+        return r;
+    }
+    let (caller, grantor, created_by, from) = if actor.owner_token {
+        (
+            k2_core::hire::HireCaller::Owner,
+            crate::first_run_grants::Grantor::Person(crate::permission::actions::Answerer::OwnerToken),
+            "owner".to_string(),
+            k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
+        )
+    } else {
+        let role = k2_core::connect_users::role_for_user(&actor.login).map(|r| r.as_wire().to_string()).unwrap_or_default();
+        (
+            k2_core::hire::HireCaller::Login { username: actor.login.clone() },
+            crate::first_run_grants::Grantor::Person(crate::permission::actions::Answerer::Login { user: actor.login.clone(), role }),
+            format!("login:{}", actor.login),
+            actor.login.clone(),
+        )
+    };
+    let mut req = k2_core::hire::template::ApplyRequest::new("k5");
+    req.name = Some(name.clone());
+    req.handle = Some(handle);
+    req.path = Some(path);
+    req.tool = Some(tool.clone());
+    let report = match k2_core::hire::template::apply(&req, &caller) {
+        Ok(r) => r,
+        Err(e) => return hire_error(&e),
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = k2_core::orchestrator::record_k5(&conn, &report.workspace_id, &name, &created_by, chrono::Utc::now().timestamp()) {
+            return error("500 Internal Server Error", "store", e.to_string());
+        }
+    }
+    let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
+    after_make(&report);
+    let cards = crate::first_run_grants::cards_on(&target, &grantor);
+    let granted = crate::first_run_grants::grant_set(k2_core::hire::starter_permissions::K5_STARTER_PERMISSIONS, &target, &grantor);
+    audit("first-run-k5", &created_by, format!("ok {} {tool} granted={}", report.handle, granted.granted.join(",")));
+    emit_changed(None);
+    crate::v1_hire::emit_hire_watches();
+    launch(report.path.clone(), report.handle.clone(), report.hello.clone(), from, crate::hire_routes::Sender::from_hire_caller(&caller, None));
+    made(&report, &granted, &cards)
+}
+
+/// Pinned chat on, for any new agent the first-run routes make (the
+/// template already set the harness: `default_agent`, on create).
+fn after_make(report: &k2_core::hire::template::ApplyReport) {
+    // Pinned chat on: the workspace is an agent with a pinned Chat
+    // (agent_mode custom keeps agent_enabled on).
+    if let Err(e) = k2_core::workspace::settings::update_project_setting(&report.path, "agent_mode", "custom") {
+        k2_core::log_debug!("[first-run] pinned chat for {}: {e}", report.handle);
+    }
+}
+
+/// `POST /cli/first-run/chief-of-staff/start`: "Let's hire my Chief of
+/// Staff." into K5's Thread as the caller (a compose post, so it reaches
+/// K5 like the person typed it), after making sure K5's chat is up.
+fn handle_cos_start(actor: &Actor) -> CliResponse {
+    let k5 = match seat_k5() {
+        Ok(Some(k)) => k,
+        Ok(None) => return error("409 Conflict", "needs_k5", "there's no K5 yet: make K5 first (k2 setup k5)"),
+        Err(r) => return r,
+    };
+    #[cfg(not(test))]
+    if let Err(e) = crate::canonical_session::ensure_canonical_session(&k5.path) {
+        return error("500 Internal Server Error", "k5_not_started", format!("K5's chat didn't start: {e}"));
+    }
+    let addr = handle_of(&k5.workspace_id);
+    let params: std::collections::HashMap<String, String> =
+        [("addr", addr.as_str()), ("text", COS_START_TEXT), ("via", "compose")].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let author = if actor.owner_token { "owner" } else { actor.login.as_str() };
+    let r = crate::overlay_routes::dispatch_post_as("/cli/thread/post", &params, b"", author);
+    if !r.status.starts_with('2') {
+        return r;
+    }
+    if let Ok(person) = person_for(actor) {
+        emit_changed(Some(person));
+    }
+    CliResponse::ok_json(json!({ "ok": true, "workspaceId": k5.workspace_id }).to_string())
+}
+
+/// `POST /cli/first-run/chief-of-staff {name, about, tool}`: the one
+/// agent-callable route here. **Only K5's own pinned chat** may call it:
+/// the passport's workspace is the seat's K5 and its map key is the
+/// canonical one (`map_key == project_id`, as `k2 agent refresh` checks;
+/// `K2_SESSION_ID` is never trusted). Then: the `chief-of-staff` template,
+/// the seat, pinned chat, cards, the starter set K5 holds, the connection
+/// to K5, the events and the launch with its hello.
+pub fn handle_chief_of_staff(body: &[u8], caller: &crate::sidecar_routes::Caller) -> CliResponse {
+    use crate::sidecar_routes::Caller;
+    if !k2_core::app_settings::load().k5_first_run {
+        return k5_off();
+    }
+    let k5 = match seat_k5() {
+        Ok(k) => k,
+        Err(r) => return r,
+    };
+    let only = "only K5's own pinned chat can hire the Chief of Staff (k2 setup chief-of-staff); ask K5 on its Thread";
+    let k5 = match (caller, k5) {
+        (Caller::Agent(a), Some(k5)) if a.project_id == k5.workspace_id => {
+            if a.map_key.as_deref() != Some(k5.workspace_id.as_str()) || a.sandboxed {
+                return k5_session_only(
+                    "a sidecar can't hire the Chief of Staff: ask K5's pinned chat (k2 msg <K5's handle>) to run k2 setup chief-of-staff",
+                );
+            }
+            k5
+        }
+        (Caller::Agent(_), Some(_)) => return k5_session_only(only),
+        (Caller::Agent(_), None) => return k5_session_only("there's no K5 on this server, so no agent can hire the Chief of Staff"),
+        (Caller::Shell { .. }, _) => {
+            return k5_session_only("a shell tab is a person: ask K5 on its Thread to hire your Chief of Staff")
+        }
+        (Caller::Owner | Caller::Login { .. }, _) => return k5_session_only(only),
+        (Caller::WrongCredential | Caller::Invalid, _) => return k5_session_only(only),
+    };
+    let v = match json_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let (name, about, tool) = match (str_field(&v, "name", MAX_NAME), str_field(&v, "about", 500), str_field(&v, "tool", 32)) {
+        (Ok(n), Ok(a), Ok(t)) => (n, a, t),
+        (Err(r), _, _) | (_, Err(r), _) | (_, _, Err(r)) => return r,
+    };
+    let (Some(name), Some(about), Some(tool)) = (name, about, tool) else {
+        return error("400 Bad Request", "usage", "send {\"name\", \"about\", \"tool\"}: ask your person all three first");
+    };
+    let _made = MAKE_LOCK.lock();
+    let existing = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::orchestrator::live_chief_of_staff(&conn) {
+            Ok(c) => c,
+            Err(e) => return error("500 Internal Server Error", "store", e.to_string()),
+        }
+    };
+    if let Some(c) = existing {
+        return error("409 Conflict", "chief_of_staff_exists", format!("the Chief of Staff is already here: {} ({})", c.name, handle_of(&c.workspace_id)));
+    }
+    let tool = match signed_in_tool(Some(tool)) {
+        Ok(t) => t,
+        Err(r) => return r,
+    };
+    let handle = match k2_core::workspace_session_handles::slugify_address_token(&name) {
+        Ok(h) => h,
+        Err(e) => return error("400 Bad Request", "usage", format!("name: {e}")),
+    };
+    let root = match k2_core::hire::root::hire_root() {
+        Ok(r) => r,
+        Err(e) => return hire_error(&e),
+    };
+    let path = root.join(&handle).to_string_lossy().into_owned();
+    if let Err(r) = folder_free(&path) {
+        return r;
+    }
+    let k5_handle = handle_of(&k5.workspace_id);
+    let caller = k2_core::hire::HireCaller::Agent { workspace_id: k5.workspace_id.clone() };
+    let mut req = k2_core::hire::template::ApplyRequest::new("chief-of-staff");
+    req.name = Some(name);
+    req.handle = Some(handle);
+    req.path = Some(path);
+    req.tool = Some(tool.clone());
+    req.params.insert("about".into(), about);
+    req.params.insert("k5".into(), k5_handle.clone());
+    req.params.insert("person".into(), seat_person());
+    let report = match k2_core::hire::template::apply(&req, &caller) {
+        Ok(r) => r,
+        Err(e) => return hire_error(&e),
+    };
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = k2_core::orchestrator::record_chief_of_staff(&conn, &report.workspace_id) {
+            return error("500 Internal Server Error", "store", e.to_string());
+        }
+    }
+    after_make(&report);
+    let target = crate::first_run_grants::Target { id: report.workspace_id.clone(), path: report.path.clone(), handle: report.handle.clone() };
+    let grantor = crate::first_run_grants::Grantor::Agent { workspace_id: k5.workspace_id.clone() };
+    let cards = crate::first_run_grants::cards_on(&target, &grantor);
+    let granted =
+        crate::first_run_grants::grant_set(k2_core::hire::starter_permissions::CHIEF_OF_STAFF_STARTER_PERMISSIONS, &target, &grantor);
+    // K5 and its hire can message each other: the seat route is the
+    // authority for this one connection (as a person's add would be).
+    let connected = k2_core::connections::connections_for_actor(&k5.path, "add", Some(&report.handle), None, true);
+    if let Err(e) = &connected {
+        k2_core::log_debug!("[first-run] connect {k5_handle} → {}: {e}", report.handle);
+    }
+    audit(
+        "first-run-chief-of-staff",
+        &format!("agent:{k5_handle}"),
+        format!("ok {} {tool} granted={} connected={}", report.handle, granted.granted.join(","), connected.is_ok()),
+    );
+    emit_changed(None);
+    crate::v1_hire::emit_hire_watches();
+    launch(report.path.clone(), report.handle.clone(), report.hello.clone(), k5_handle, crate::hire_routes::Sender::from_hire_caller(&caller, None));
+    made(&report, &granted, &cards)
 }
 
 #[cfg(test)]

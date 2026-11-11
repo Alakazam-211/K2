@@ -613,6 +613,13 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/folder-trust/reset",
         "/cli/folder-trust/forget",
     ];
+    // K5 at first run (prd-setup-checklist-v1 §10.3): the ONE exception
+    // under `/cli/first-run/`, exact path only. `k2 setup chief-of-staff`
+    // from K5's own pinned chat; the handler admits that one session (the
+    // seat's workspace, the canonical map key) and refuses every other.
+    if path == crate::first_run_routes::COS_PATH {
+        return true;
+    }
     if DENY_PREFIXES.iter().any(|p| path.starts_with(p)) {
         return false;
     }

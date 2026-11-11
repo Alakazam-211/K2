@@ -1041,7 +1041,16 @@ pub const ROUTES: &[Route] = &[
     // bound to the credential (owner token or a login). Member floor, so a
     // Voice & Chat only login is refused; agent passports are on the
     // `session_token` denylist (`/cli/first-run/`).
+    // K5 at first run (prd-setup-checklist-v1 §10): the seat-only route
+    // takes no login (K5's own pinned-chat passport only, checked in the
+    // handler; the owner token is refused there too), the one exception to
+    // the passport denylist. Making K5 and starting the Chief of Staff
+    // task are Admin's; dismissing the offer is the person's own.
+    post("/cli/first-run/chief-of-staff", NoLogin),
+    post("/cli/first-run/chief-of-staff/start", Admin),
     post("/cli/first-run/hide", Member),
+    post("/cli/first-run/k5", Admin),
+    post("/cli/first-run/offer/dismiss", Member),
     post("/cli/first-run/show", Member),
     post("/cli/first-run/skip", Member),
     get("/cli/first-run/status", Member),
@@ -3997,6 +4006,7 @@ mod tests {
         }
         // Prefix: a future /cli/first-run/ route is denied to agents too.
         assert!(!crate::session_token::is_agent_verb("/cli/first-run/anything-new"));
+        assert!(!crate::session_token::is_agent_verb("/cli/first-run/chief-of-staff/anything"));
         crate::test_support::with_temp_home(|| {
             let vc = session("rp_fr_voice", Role::VoiceChat);
             let member = session("rp_fr_member", Role::Member);
@@ -4010,6 +4020,45 @@ mod tests {
                 let got = role_gate(method, p, &format!("token={OWNER}"), OWNER);
                 assert_eq!(status(&got), "pass", "the owner token on {method} {p}");
             }
+        });
+    }
+
+    /// K5 at first run (prd-setup-checklist-v1 §10): the floors, the one
+    /// agent verb in the family, and who the role gate lets through.
+    #[test]
+    fn the_k5_routes_have_their_floors_and_one_seat_only_agent_verb() {
+        let rows = [
+            ("/cli/first-run/offer/dismiss", Floor::Member),
+            ("/cli/first-run/k5", Floor::Admin),
+            ("/cli/first-run/chief-of-staff/start", Floor::Admin),
+            ("/cli/first-run/chief-of-staff", Floor::NoLogin),
+        ];
+        for (p, floor) in rows {
+            let row = lookup(p).unwrap_or_else(|| panic!("{p} is not classified"));
+            assert_eq!((row.get, row.post), (None, Some(floor)), "{p}");
+            assert!(get_refused(p, ""), "{p}: a GET is refused");
+            assert!(
+                !VOICE_CHAT_ALLOWLIST.iter().any(|(_, a)| *a == p),
+                "{p} must not be on the Voice & Chat allowlist"
+            );
+            assert!(crate::first_run_routes::is_route(p) && crate::first_run_routes::is_post_only(p), "{p}");
+            let seat_only = p == crate::first_run_routes::COS_PATH;
+            assert_eq!(crate::session_token::is_agent_verb(p), seat_only, "{p}: only the seat-only route is an agent verb");
+        }
+        crate::test_support::with_temp_home(|| {
+            let member = session("rp_k5_member", Role::Member);
+            let admin = session("rp_k5_admin", Role::Admin);
+            let owner = session("rp_k5_owner", Role::Owner);
+            let gate = |tok: &str, p: &str| status(&role_gate("POST", p, &format!("token={tok}"), OWNER));
+            assert_eq!(gate(&member, "/cli/first-run/offer/dismiss"), "pass");
+            for p in ["/cli/first-run/k5", "/cli/first-run/chief-of-staff/start"] {
+                assert_eq!(gate(&member, p), "403 Forbidden", "a Member on {p}");
+                assert_eq!(gate(&admin, p), "pass", "an Admin on {p}");
+            }
+            for tok in [&member, &admin, &owner] {
+                assert_eq!(gate(tok, "/cli/first-run/chief-of-staff"), "403 Forbidden", "no login on the seat-only route");
+            }
+            assert_eq!(gate(OWNER, "/cli/first-run/chief-of-staff"), "pass", "the owner token: the handler refuses it");
         });
     }
 

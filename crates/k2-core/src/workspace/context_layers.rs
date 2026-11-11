@@ -2900,8 +2900,8 @@ mod tests {
         let catalog = list_catalog();
         assert_eq!(
             catalog.len(),
-            12,
-            "twelve builtins only in an empty host catalog; got {:?}",
+            13,
+            "thirteen builtins only in an empty host catalog; got {:?}",
             catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
         );
         assert!(catalog.iter().any(|p| p.id == "wiki:index"));
@@ -3722,7 +3722,7 @@ mod tests {
             assert!(!hit.recommended);
             assert_eq!(hit.source, "catalog:user:on-call");
             assert_eq!(hit.tags, vec!["ops".to_string()]);
-            assert_eq!(catalog.iter().filter(|p| p.id.starts_with("wiki:") || p.id.ends_with(":roster") || p.id.ends_with(":pack")).count(), 11);
+            assert_eq!(catalog.iter().filter(|p| p.id.starts_with("wiki:") || p.id.ends_with(":roster") || p.id.ends_with(":pack")).count(), 12);
         });
     }
 
@@ -3898,6 +3898,219 @@ mod tests {
                 after.is_empty(),
                 "create must not stack on any project; got {after:?}"
             );
+            cleanup_project(path, &pid);
+        });
+    }
+
+    // ── 0.46.11: Browser and computer use, built in ──────────────────
+    // Literals on purpose: these run red on a K2 without the built-in pack.
+
+    /// sha256 of the pack text as it shipped as a user pack on rosson.k2.dev
+    /// (`~/.k2/context/catalog/packs/browser-and-computer-use/layer.md`,
+    /// 2406 bytes). The built-in copies it byte for byte.
+    const BROWSER_PACK_SHA256: &str =
+        "299199fe6cc1177061929fdab19e89687c427ea76ac3038ca121ef9772afcb4e";
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    fn assert_browser_pack_text(body: &str) {
+        assert_eq!(body.len(), 2406, "browser pack length; got:\n{body}");
+        assert_eq!(
+            sha256_hex(body.as_bytes()),
+            BROWSER_PACK_SHA256,
+            "browser pack text must match the user pack it replaces; got:\n{body}"
+        );
+        for needle in [
+            "## Browser and computer use",
+            "https://github.com/vercel-labs/agent-browser",
+            "https://github.com/vercel-labs/agent-desktop",
+            "npm install -g agent-browser",
+            "brew install agent-desktop",
+            "agent-browser skills get core --full",
+            "agent-desktop skills get desktop",
+            "--auto-connect",
+            "give it back to the window that had it before, in the same step",
+            "never their values",
+            "**Passwords:** never type them.",
+            "ask your person before any irreversible",
+            "agent-browser close",
+        ] {
+            assert!(body.contains(needle), "browser pack must say {needle:?}");
+        }
+    }
+
+    #[test]
+    fn browser_pack_is_a_builtin_opt_in_static_pack() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let catalog = list_catalog();
+            let hits: Vec<_> = catalog.iter().filter(|p| p.id == "browser:pack").collect();
+            assert_eq!(
+                hits.len(),
+                1,
+                "browser:pack listed once; got {:?}",
+                catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
+            );
+            let b = hits[0];
+            assert_eq!(b.path, ".k2/context/catalog/browser-and-computer-use.md");
+            assert_eq!(b.source, "catalog:browser");
+            assert_eq!(b.label, "Browser and computer use");
+            assert_eq!(b.kind, "static");
+            assert_eq!(b.version.as_deref(), Some("1.0.0"));
+            assert_eq!(b.author.as_deref(), Some("K2"));
+            assert!(b.dir.is_none(), "a built-in has no host pack dir");
+            assert!(!b.recommended, "browser:pack is opt-in");
+
+            // Not on by default: a fresh workspace's stack has no browser layer.
+            let root = unique_root("browser-default");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+            let stack = list_stack(path).expect("list_stack");
+            assert!(
+                stack.layers.iter().all(|l| !l.path.contains("browser")),
+                "browser pack must not stack by itself: {:?}",
+                stack.layers
+            );
+            assert!(!show_composed(path).unwrap().contains("agent-browser"));
+            cleanup_project(path, &pid);
+        });
+    }
+
+    #[test]
+    fn browser_pack_adds_by_every_alias_and_writes_its_text() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            for alias in [
+                "browser:pack",
+                "browser",
+                "browser-and-computer-use",
+                "catalog:browser",
+                "user:browser-and-computer-use",
+                "catalog:user:browser-and-computer-use",
+            ] {
+                let e = resolve_catalog_id(alias).unwrap_or_else(|err| panic!("{alias}: {err}"));
+                assert_eq!(e.id, "browser:pack", "{alias}");
+
+                let root = unique_root("browser-alias");
+                let path = root.to_str().unwrap();
+                let pid = register_project(path);
+                let file = root.join(".k2/context/catalog/browser-and-computer-use.md");
+                assert!(!file.exists());
+
+                let layer = add_layer(path, None, Some(alias), None)
+                    .unwrap_or_else(|err| panic!("add {alias}: {err}"));
+                assert_eq!(layer.source, "catalog:browser", "{alias}");
+                assert_eq!(layer.path, ".k2/context/catalog/browser-and-computer-use.md", "{alias}");
+                assert_eq!(layer.label.as_deref(), Some("Browser and computer use"), "{alias}");
+                assert!(layer.enabled && layer.exists, "{alias}");
+                assert!(file.is_file(), "{alias} must write the pack file");
+                assert_browser_pack_text(&fs::read_to_string(&file).unwrap());
+
+                let composed = show_composed(path).expect("compose");
+                assert!(
+                    composed.contains("agent-browser skills get core --full"),
+                    "{alias}: composed AGENTS.md carries the pack"
+                );
+
+                let err = add_layer(path, None, Some("browser:pack"), None).expect_err("twice");
+                assert_eq!(err.code(), "duplicate_layer", "{alias}");
+                cleanup_project(path, &pid);
+            }
+        });
+    }
+
+    /// A server that had "Browser and computer use" as a user pack, with a
+    /// workspace that stacked it, keeps working after the update.
+    #[test]
+    fn browser_user_pack_with_the_same_slug_yields_to_the_builtin() {
+        crate::tunnel::test_support::with_temp_home(|| {
+            let old_dir = host_catalog_packs_dir().join("browser-and-computer-use");
+            fs::create_dir_all(&old_dir).unwrap();
+            fs::write(
+                old_dir.join("pack.toml"),
+                "id = \"user:browser-and-computer-use\"\nname = \"Browser and computer use\"\n\
+                 description = \"old\"\nversion = \"1.0.0\"\nkind = \"static\"\n\
+                 license = \"MIT\"\nauthor = \"K2\"\ntags = [\"browser\"]\n",
+            )
+            .unwrap();
+            fs::write(old_dir.join("layer.md"), "## Browser and computer use\n\nOLD USER PACK\n")
+                .unwrap();
+
+            // The catalog lists the built-in once and skips the user pack.
+            let catalog = list_catalog();
+            assert!(
+                catalog.iter().all(|p| p.id != "user:browser-and-computer-use"),
+                "the old user pack must be skipped: {:?}",
+                catalog.iter().map(|p| p.id.as_str()).collect::<Vec<_>>()
+            );
+            assert_eq!(catalog.iter().filter(|p| p.id == "browser:pack").count(), 1);
+            assert_eq!(
+                catalog
+                    .iter()
+                    .filter(|p| p.path == ".k2/context/catalog/browser-and-computer-use.md")
+                    .count(),
+                1,
+                "one catalog row for the path"
+            );
+            // The old id now names the built-in.
+            assert_eq!(resolve_catalog_id("user:browser-and-computer-use").unwrap().id, "browser:pack");
+
+            // A workspace that stacked the user pack before the update.
+            let root = unique_root("browser-old-row");
+            let path = root.to_str().unwrap();
+            let pid = register_project(path);
+            let ws_file = root.join(".k2/context/catalog/browser-and-computer-use.md");
+            fs::create_dir_all(ws_file.parent().unwrap()).unwrap();
+            fs::write(&ws_file, "## Browser and computer use\n\nMY EDITED COPY\n").unwrap();
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                conn.execute(
+                    "INSERT INTO project_context_layers \
+                     (id, project_id, path, enabled, position, source, label, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, 1, 0, ?4, ?5, ?6, ?6)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        pid,
+                        ".k2/context/catalog/browser-and-computer-use.md",
+                        "catalog:user:browser-and-computer-use",
+                        "Browser and computer use",
+                        "2026-11-01T00:00:00Z"
+                    ],
+                )
+                .unwrap();
+            }
+
+            let layers = list_layers(path).expect("list");
+            assert_eq!(layers.len(), 1);
+            assert_eq!(layers[0].source, "catalog:browser", "the old row moves to the built-in");
+            assert_eq!(layers[0].path, ".k2/context/catalog/browser-and-computer-use.md");
+            assert!(layers[0].enabled && layers[0].exists);
+            let composed = show_composed(path).expect("compose");
+            assert!(composed.contains("MY EDITED COPY"), "the workspace's own copy still composes");
+            assert_eq!(
+                fs::read_to_string(&ws_file).unwrap(),
+                "## Browser and computer use\n\nMY EDITED COPY\n",
+                "the workspace copy is never rewritten"
+            );
+            let err = add_layer(path, None, Some("browser:pack"), None).expect_err("already stacked");
+            assert_eq!(err.code(), "duplicate_layer");
+            assert_eq!(list_layers(path).unwrap().len(), 1);
+            // Turning it off by its path still works.
+            set_enabled(path, ".k2/context/catalog/browser-and-computer-use.md", false).expect("off");
+            assert!(!show_composed(path).unwrap().contains("MY EDITED COPY"));
+
+            // The slug can't be made again, but the leftover folder can go.
+            let err = create_user_pack("user:browser-and-computer-use", None, &[]).expect_err("reserved");
+            assert_eq!(err.code(), "bad_usage");
+            delete_user_pack("user:browser-and-computer-use").expect("delete the leftover user pack");
+            assert!(!old_dir.exists());
+            assert!(fs::read_to_string(&ws_file).unwrap().contains("MY EDITED COPY"));
+
             cleanup_project(path, &pid);
         });
     }

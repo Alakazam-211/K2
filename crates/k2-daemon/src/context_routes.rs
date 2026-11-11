@@ -517,6 +517,12 @@ mod tests {
             presets.iter().any(|p| p["id"] == "subagents:pack"),
             "subagents:pack catalog listed"
         );
+        let browser = presets
+            .iter()
+            .find(|p| p["id"] == "browser:pack")
+            .expect("browser:pack catalog listed (0.46.11)");
+        assert_eq!(browser["source"], "catalog:browser");
+        assert_eq!(browser["recommended"], false, "browser:pack is opt-in");
         assert!(
             presets.iter().any(|p| p["id"] == "heartbeats:roster"),
             "heartbeats:roster catalog listed"

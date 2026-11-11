@@ -1194,8 +1194,8 @@ html[data-os]:not([data-os="mac"]) select optgroup {
    children outside the box still paint). `::before` adds the missing 1px
    diagonal: a thick transparent-sided box whose `border-color: inherit` follows
    the element's border through every state, clipped to the four corner bands.
-   `<input>` has no pseudo-elements, so it paints the same bands as gradients
-   coloured by `--k2-ch-edge`. Keyboard focus draws an inset ring that follows
+   `<input>` and `<textarea>` have no pseudo-elements, so they paint the same
+   bands as gradients coloured by `--k2-ch-edge`. Keyboard focus draws an inset ring that follows
    the cut, because a square outline around a chamfer looks accidental.
    Don't put `overflow: auto` on a chamfered box: the band would scroll with
    the content. Scroll a child instead (see SettingDropdown's menu). */
@@ -1220,7 +1220,7 @@ html[data-style="terminal"] :where([data-k2-chamfer]:not([data-zen-root] *, [dat
 }
 html[data-style="terminal"] :where([data-k2-chamfer="surface"]:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-cut: var(--chamfer-surface); }
 html[data-style="terminal"] :where([data-k2-chamfer="chip"]:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-cut: var(--chamfer-chip); }
-html[data-style="terminal"] :where([data-k2-chamfer]:not(input):not([data-zen-root] *, [data-k2-thread-zen] *))::before {
+html[data-style="terminal"] :where([data-k2-chamfer]:not(input, textarea):not([data-zen-root] *, [data-k2-thread-zen] *))::before {
   content: '';
   position: absolute;
   inset: calc(-1 * var(--k2-ch-w));
@@ -1236,6 +1236,7 @@ html[data-style="terminal"] :where([data-k2-chamfer]:not(input):not([data-zen-ro
     50% 50%, var(--k2-ch-o) calc(100% - var(--k2-ch-w)), var(--k2-ch-i) calc(100% - var(--k2-ch-w)), var(--k2-ch-w) calc(100% - var(--k2-ch-i)), var(--k2-ch-w) calc(100% - var(--k2-ch-o)), var(--k2-ch-o) calc(100% - var(--k2-ch-w)),
     50% 50%);
 }
+html[data-style="terminal"] :where(textarea[data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)),
 html[data-style="terminal"] :where(input[data-k2-chamfer]:not([data-zen-root] *, [data-k2-thread-zen] *)) {
   --k2-ch-edge: var(--color-control-edge);
   --k2-ch-s: calc(var(--k2-ch-cut) + 2 * var(--k2-ch-w));
@@ -1250,12 +1251,15 @@ html[data-style="terminal"] :where(input[data-k2-chamfer]:not([data-zen-root] *,
   background-repeat: no-repeat;
   background-origin: border-box;
 }
+html[data-style="terminal"] :where(textarea[data-k2-chamfer]:focus:not([data-zen-root] *, [data-k2-thread-zen] *)),
 html[data-style="terminal"] :where(input[data-k2-chamfer]:focus:not([data-zen-root] *, [data-k2-thread-zen] *)) { --k2-ch-edge: var(--color-accent); }
-/* Keyboard focus on a text field (<Input>, <SearchField>, any cut text input):
-   the 2px accent ring the cut buttons draw, following the cut. An <input> has
-   no pseudo-elements, so the ring is its own 1px border plus a 1px inset shadow
-   along the sides, and a 2px band on each cut (--k2-ch-bw widens the corner
-   gradients above). The accent as text, so it reads at 3:1 on every ground. */
+/* Keyboard focus on a text field (<Input>, <SearchField>, <Textarea>, any cut
+   text input or text box): the 2px accent ring the cut buttons draw, following
+   the cut. An <input> or <textarea> has no pseudo-elements, so the ring is its
+   own 1px border plus a 1px inset shadow along the sides, and a 2px band on
+   each cut (--k2-ch-bw widens the corner gradients above). The accent as text,
+   so it reads at 3:1 on every ground. */
+html[data-style="terminal"] textarea[data-k2-chamfer]:focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *),
 html[data-style="terminal"] input[data-k2-chamfer]:not([type="checkbox"], [type="radio"], [type="range"]):focus-visible:not([data-zen-root] *, [data-k2-thread-zen] *) {
   --k2-ch-bw: 2px;
   --k2-ch-edge: var(--color-accent-text);

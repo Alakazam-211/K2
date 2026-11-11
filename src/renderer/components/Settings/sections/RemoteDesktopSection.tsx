@@ -10,7 +10,7 @@
 // only.
 
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Input, Toggle } from '@/components/ui'
+import { Button, Input, Toggle, Textarea } from '@/components/ui'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { onDesktopState } from '@/stores/session-events'
 import { useToastStore } from '@/stores/toast'
@@ -173,8 +173,8 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
               <p className="type-hint text-[var(--color-text-muted)] mb-2">
                 Their windows never show in the picture (macOS). One bundle id a line.
               </p>
-              <textarea
-                className="w-full rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-[var(--color-bg)] p-2 font-mono text-xs text-[var(--color-text-primary)]"
+              <Textarea
+                className="font-mono"
                 rows={4}
                 aria-label="Hidden apps"
                 data-testid="remote-desktop-hide-apps"

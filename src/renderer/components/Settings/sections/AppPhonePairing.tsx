@@ -7,7 +7,7 @@
 // on its own page, for its own users.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button } from '@/components/ui'
+import { Button, Input, Textarea } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import { SettingsGroup } from '../controls/SettingControls'
 import { vaultApi } from './vault-api'
@@ -28,8 +28,7 @@ import { confirmWays } from '@/lib/desktop-words'
 
 const muted = 'type-hint text-[var(--color-text-muted)]'
 const secondary = 'type-hint text-[var(--color-text-secondary)]'
-const field =
-  'w-full px-2 py-1 type-control bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)] font-mono'
+const field = 'w-full type-control font-mono'
 
 const NO_CONFIRM_HINT =
   'No vault password and no Owner Connect login on this box: setting the phone apps needs one (k2 vault password set).'
@@ -227,27 +226,27 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
               <div className="space-y-1" aria-label="Phone pairing setup">
                 <label className={secondary}>
                   iOS app ids (TEAMID.com.you.app), one per line
-                  <textarea aria-label="iOS app ids" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={2} value={ios} onChange={(e) => setIos(e.target.value)} />
+                  <Textarea aria-label="iOS app ids" className={field} rows={2} value={ios} onChange={(e) => setIos(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   Android apps: package then SHA-256 fingerprints, one app per line
-                  <textarea aria-label="Android apps" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={2} value={android} onChange={(e) => setAndroid(e.target.value)} />
+                  <Textarea aria-label="Android apps" className={field} rows={2} value={android} onChange={(e) => setAndroid(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   Webview origins (tauri://localhost, capacitor://localhost), if any
-                  <textarea aria-label="Webview origins" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={1} value={origins} onChange={(e) => setOrigins(e.target.value)} />
+                  <Textarea aria-label="Webview origins" className={field} rows={1} value={origins} onChange={(e) => setOrigins(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   The App&apos;s other universal-link paths (/jobs/*), if any
-                  <textarea aria-label="Link paths" className={`${field} rounded-[var(--radius-field-multiline)]`} rows={1} value={paths} onChange={(e) => setPaths(e.target.value)} />
+                  <Textarea aria-label="Link paths" className={field} rows={1} value={paths} onChange={(e) => setPaths(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   App Store link
-                  <input aria-label="App Store link" className={field} value={storeIos} onChange={(e) => setStoreIos(e.target.value)} />
+                  <Input aria-label="App Store link" className={field} value={storeIos} onChange={(e) => setStoreIos(e.target.value)} />
                 </label>
                 <label className={secondary}>
                   Google Play link
-                  <input aria-label="Google Play link" className={field} value={storeAndroid} onChange={(e) => setStoreAndroid(e.target.value)} />
+                  <Input aria-label="Google Play link" className={field} value={storeAndroid} onChange={(e) => setStoreAndroid(e.target.value)} />
                 </label>
                 <p className={muted}>
                   While pairing is on, K2 answers this App&apos;s iOS and Android link files on its hosts. In your app, list
@@ -255,7 +254,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
                 </p>
                 {confirm.step === 'password' ? (
                   <div className="flex gap-2 items-center">
-                    <input
+                    <Input
                       ref={pwRef}
                       type="password"
                       aria-label={confirm.method === 'vault-password' ? 'Vault password' : 'Your password'}

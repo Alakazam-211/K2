@@ -19,7 +19,7 @@
 // With only the window's server it looks exactly as before.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Callout, Tag } from '@/components/ui'
+import { Button, Callout, Tag, Input, Textarea } from '@/components/ui'
 import { formatRelativeTime } from '@/lib/format-relative-time'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { SettingEntry } from '../searchManifest'
@@ -363,13 +363,13 @@ function RequestCard({
         >
           <label className={`type-hint ${muted}`}>
             {confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <input
+            <Input
               ref={pwRef}
               type="password"
               autoComplete="current-password"
               data-testid="app-approve-password"
               onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control"
+              className="mt-1 w-full type-control"
             />
           </label>
           <div className="flex gap-1.5">
@@ -386,7 +386,7 @@ function RequestCard({
       {confirm.step === 'idle' ? (
         denying ? (
           <div className="flex flex-col gap-1.5 max-w-md">
-            <textarea
+            <Textarea
               value={note}
               maxLength={DENY_MAX}
               rows={2}
@@ -394,7 +394,6 @@ function RequestCard({
               placeholder="Why (optional; the requester reads this)"
               aria-label="Why deny"
               data-testid={`app-deny-note-${r.id}`}
-              className="w-full rounded-[var(--radius-field-multiline)] border border-[var(--color-border)] bg-transparent px-2 py-1 type-control text-[var(--color-text-primary)]"
             />
             <div className="flex items-center gap-2">
               <Button disabled={busy} onClick={() => void deny()} data-testid={`app-deny-send-${r.id}`}>

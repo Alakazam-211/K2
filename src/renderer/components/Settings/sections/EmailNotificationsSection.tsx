@@ -8,6 +8,7 @@
 // Adding senders and relays stays on the CLI for now
 // (`k2 notifications email --help`).
 
+import { Input } from '@/components/ui'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import { SearchField } from '@/components/ui/SearchField'
@@ -87,10 +88,10 @@ function SenderRow({ s, api, onResumed }: { s: NotifySender; api: EmailNotifyApi
           <span>Paused {fmt(s.paused.pausedAt)}: {pauseText(s.paused)}. Its sends answer email_paused until you resume it.</span>
           <div className="flex items-center gap-2 mt-1">
             {askPassword && (
-              <input
+              <Input
                 type="password"
                 aria-label="Vault password"
-                className="type-control px-2 py-1 bg-transparent border border-[var(--color-border)]"
+                className="type-control"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Vault password"

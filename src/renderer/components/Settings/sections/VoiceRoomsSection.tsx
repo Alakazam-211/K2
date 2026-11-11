@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { Button, Callout, Checkbox, Toggle } from '@/components/ui'
+import { Button, Callout, Checkbox, Toggle, Input } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { errorMessage } from '@/lib/daemon-http-error'
 import { fetchVoiceRooms, fetchVoiceStatus, renameVoiceRoom, setVoiceRecordingRequired, setVoiceRoomCount } from '@/lib/voice/voice-api'
@@ -255,9 +255,9 @@ export function VoiceRoomsSection(): React.JSX.Element {
             <li key={r.id} data-testid="voice-rooms-row" className="flex items-center gap-2 type-row">
               {manage ? (
                 <>
-                  <input
+                  <Input
                     aria-label={`Name of ${r.name}`}
-                    className="w-[200px] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] px-2 py-0.5 type-control"
+                    className="w-[200px] type-control"
                     value={names[r.id] ?? r.name}
                     maxLength={64}
                     onChange={(e) => {

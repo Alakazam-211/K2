@@ -6,7 +6,7 @@
 // and sends the person's clicks to the server it is given.
 
 import React, { useCallback, useEffect, useState } from 'react'
-import { Toggle } from '@/components/ui'
+import { Toggle, Input } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import {
@@ -117,14 +117,14 @@ export function EmailNoticePrefs({ scope, workspaces }: { scope: ServerScope; wo
               void add()
             }}
           >
-            <input
+            <Input
               type="email"
               value={draft}
               disabled={busy}
               onChange={(e) => setDraft(e.target.value)}
               placeholder={mine.address ? 'Use another address…' : 'you@example.com'}
               aria-label="Your address for email notices"
-              className="flex-1 min-w-0 px-2 py-1 type-control bg-transparent border border-[var(--color-border)] text-[var(--color-text-primary)]"
+              className="flex-1 min-w-0 type-control"
             />
             <button
               type="submit"

@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import { Checkbox, Toggle, Tag } from '@/components/ui'
+import { Checkbox, Toggle, Tag, Input } from '@/components/ui'
 import { SettingDropdown, SettingRow, SettingsGroup } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import { primaryScope } from '@/kessel/server-scope'
@@ -318,8 +318,7 @@ export const DEFAULT_HYDRA: SkinHydra = {
 const CONNECT_URL_STUB = 'https://skin.<sub>.k2.dev'
 const DIRECT_LISTEN_STUB = 'Caddy :443 (or LAN port) → 127.0.0.1:daemon'
 
-const INPUT_CLS =
-  'w-full px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)] no-drag'
+const INPUT_CLS = 'w-full type-control'
 
 function asRecord(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
@@ -1195,7 +1194,7 @@ export function SkinAccessSection(): React.JSX.Element {
                 void createRole()
               }}
             >
-              <input
+              <Input
                 className={INPUT_CLS}
                 placeholder="name (dentist)"
                 autoCapitalize="none"
@@ -1660,7 +1659,7 @@ export function SkinAccessSection(): React.JSX.Element {
               grant list. Do not mint for this user.
             </p>
             <div className="space-y-2">
-              <input
+              <Input
                 className={INPUT_CLS}
                 placeholder="name (vercel)"
                 autoCapitalize="none"

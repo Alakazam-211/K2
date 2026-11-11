@@ -11,7 +11,7 @@
 // sends the owner's gestures.
 
 import React, { useRef, useState } from 'react'
-import { Button, Callout, Checkbox } from '@/components/ui'
+import { Button, Callout, Checkbox, Input } from '@/components/ui'
 import { daemonErrorText } from '@/lib/daemon-error'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { fetchHandoverPlan, requestHandover, type HandoverOptions, type HandoverPlan } from './app-access-api'
@@ -185,11 +185,11 @@ export function AppHandoverSheet({
       {step.kind === 'confirming' ? <p className={`type-hint ${muted}`}>Confirm it’s you…</p> : null}
       {step.kind === 'password' ? (
         <div className="flex items-center gap-2">
-          <input
+          <Input
             ref={pwRef}
             type="password"
             aria-label="Password to confirm"
-            className="px-2 py-1 type-control bg-[var(--color-bg-surface)] border border-[var(--color-border)]"
+            className="type-control"
           />
           <Button onClick={() => void submitPassword(step.request, step.method)}>Confirm</Button>
         </div>

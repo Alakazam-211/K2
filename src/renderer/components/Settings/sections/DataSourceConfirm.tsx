@@ -8,6 +8,7 @@
 // batch hash), works once, within 60 seconds. The password lives in the
 // field until submit, then it's gone.
 
+import { Input } from '@/components/ui'
 import React, { useEffect, useRef, useState } from 'react'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -120,7 +121,7 @@ export function ConfirmStep({ scope, action, secretId, label, onToken, onCancel 
         >
           <label className={`type-hint ${muted}`}>
             {state.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <input
+            <Input
               ref={pwRef}
               type="password"
               autoComplete="current-password"

@@ -11,7 +11,7 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
 const FIELD = cx(
   'k2-focus no-drag border border-[var(--color-control-edge)] text-[var(--color-text-primary)]',
   'placeholder:text-[var(--color-text-muted)]',
-  'text-[11px] px-2 py-1 outline-none',
+  'type-control px-2 py-1 outline-none',
   'rounded-[var(--radius-field)] [box-shadow:var(--ring-field)]',
   '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
   'focus:border-[var(--color-accent)]',
@@ -19,7 +19,8 @@ const FIELD = cx(
 
 const DATE_TYPES = new Set(['date', 'time', 'datetime-local', 'month', 'week'])
 
-/** Terminal's text-field idiom: app-bg well, 1px border, accent focus border. */
+/** Terminal's text-field idiom: app-bg well, 1px border, accent focus border,
+ *  text at the control size (type-control, like SettingDropdown's trigger). */
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { className, variant = 'default', ...rest },
   ref
@@ -37,4 +38,23 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       {...rest}
     />
   )
+})
+
+const TEXT_BOX = cx(
+  'k2-focus no-drag w-full border border-[var(--color-control-edge)] text-[var(--color-text-primary)]',
+  'placeholder:text-[var(--color-text-muted)]',
+  'type-control px-2 py-1 outline-none',
+  'rounded-[var(--radius-field-multiline)] [box-shadow:var(--ring-field)]',
+  'focus:border-[var(--color-accent)]',
+)
+
+/** The multi-line field: <Input>'s well, edge and focus (in Terminal the cut
+ *  and the 2px cut ring on keyboard focus; elsewhere the multi-line radius and
+ *  the shared focus ring). Full width by default; `className` adds layout
+ *  (rows go on the element, e.g. `rows={3}`). */
+export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea(
+  { className, ...rest },
+  ref
+) {
+  return <textarea ref={ref} data-k2-chamfer="control" className={cx(TEXT_BOX, 'bg-[var(--color-bg)]', className)} {...rest} />
 })

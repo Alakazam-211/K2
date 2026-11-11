@@ -234,13 +234,13 @@ function RequestCard({
         >
           <label className={`type-hint ${muted}`}>
             {confirm.method === 'connect-password' ? 'Your K2 Connect password' : 'Your vault password'}
-            <input
+            <Input
               ref={pwRef}
               type="password"
               autoComplete="current-password"
               data-testid="compute-approve-password"
               onChange={(e) => setHasPw(e.currentTarget.value !== '')}
-              className="mt-1 w-full border border-[var(--color-border)] bg-transparent px-2 py-1 type-control"
+              className="mt-1 w-full type-control"
             />
           </label>
           <div className="flex gap-1.5">

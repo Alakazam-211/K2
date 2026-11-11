@@ -12,8 +12,8 @@ export const btn =
   'px-2 py-1 type-control border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
 export const btnPrimary =
   'px-3 py-1.5 type-control bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] hover:bg-[var(--color-accent)]/25 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
-export const input =
-  'w-full px-2 py-1 type-control bg-[var(--color-bg-elevated)] border border-[var(--color-border)] text-[var(--color-text-primary)]'
+/** Layout for the shared <Input> in these forms (it brings the field's look). */
+export const input = 'w-full type-control'
 export const muted = 'text-[var(--color-text-muted)]'
 export const danger = 'text-[var(--color-danger,#e5484d)]'
 

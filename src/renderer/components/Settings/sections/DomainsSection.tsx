@@ -26,7 +26,7 @@ import {
   useSaveStatus,
   SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
-import { Button, Callout, Input, OverflowMenu, Surface, Tag, Toggle, type TagTone } from '@/components/ui'
+import { Button, Callout, Input, OverflowMenu, Textarea, Surface, Tag, Toggle, type TagTone } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
 import { onDomainsChanged } from '@/stores/session-events'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
@@ -45,8 +45,6 @@ import {
 export type { AppNameStatus, DomainRow, FirewallPort, FirewallStatus } from './domains-parse'
 
 const CONTENT_WIDTH = 'max-w-[52rem]'
-const TEXTAREA =
-  'k2-focus no-drag w-full border border-[var(--color-control-edge)] rounded-[var(--radius-field-multiline)] [box-shadow:var(--ring-field)] bg-[var(--color-bg)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] type-control font-mono px-2 py-1 outline-none focus:border-[var(--color-accent)]'
 
 // ── Talking to the daemon ───────────────────────────────────────────
 
@@ -1152,25 +1150,23 @@ function UploadForm({ names, onDone }: { names: string[]; onDone(ok: boolean): v
           <SettingDropdown fullWidth ariaLabel="Name for the certificate" value={host} options={names.map((n) => ({ value: n, label: n }))} onChange={setHost} />
         </div>
       </div>
-      <textarea
-        data-k2-chamfer="control"
+      <Textarea
         aria-label="Certificate"
         value={cert}
         rows={3}
         spellCheck={false}
         placeholder="Paste the certificate, BEGIN and END lines included"
         onChange={(e) => setCert(e.target.value)}
-        className={TEXTAREA}
+        className="font-mono"
       />
-      <textarea
-        data-k2-chamfer="control"
+      <Textarea
         aria-label="Private key"
         value={key}
         rows={3}
         spellCheck={false}
         placeholder="Paste its private key, BEGIN and END lines included"
         onChange={(e) => setKey(e.target.value)}
-        className={TEXTAREA}
+        className="font-mono"
       />
       {error && (
         <Callout tone="error" role="alert">

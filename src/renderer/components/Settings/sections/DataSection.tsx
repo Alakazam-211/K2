@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProjectsStore } from '@/stores/projects'
 import { useWindowModeStore } from '@/stores/window-mode'
-import { Toggle } from '@/components/ui'
+import { Toggle, Input } from '@/components/ui'
 import { SettingDropdown } from '../controls/SettingControls'
 import type { SettingEntry } from '../searchManifest'
 import {
@@ -345,13 +345,13 @@ function BindPanel({
         <span className="font-mono">ws_&lt;id&gt;_agent</span>. Does not mint RLS at spawn.
       </p>
       <div className="flex items-center gap-2">
-        <input
+        <Input
           type="text"
           value={draft}
           disabled={!canMutate || busy}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="ws_<workspace>_agent"
-          className="flex-1 min-w-0 px-2 py-1.5 type-control font-mono bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-accent)] no-drag disabled:opacity-50"
+          className="flex-1 min-w-0 type-control font-mono disabled:opacity-50"
         />
         <button
           type="button"

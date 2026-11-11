@@ -7,6 +7,7 @@
 // and the last fires and suppressions. Re-reads come from the section
 // (`sources_changed` bumps on every fire).
 
+import { Input } from '@/components/ui'
 import React, { useCallback, useEffect, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { FireRow, TriggerOn, TriggerView } from '@/lib/sources/sources-types'
@@ -131,7 +132,7 @@ function TriggerForm({
       {f.kind === 'stale_for' && (
         <label className={`block type-hint ${muted}`}>
           Minutes with no good check (5 or more)
-          <input
+          <Input
             type="number"
             min={5}
             max={10080}
@@ -157,7 +158,7 @@ function TriggerForm({
       </div>
       <label className={`block type-hint ${muted}`}>
         Your note to the agent (optional, plain text)
-        <input
+        <Input
           className={`${input} mt-0.5`}
           maxLength={500}
           value={f.note}
@@ -169,7 +170,7 @@ function TriggerForm({
       <div className="flex gap-2">
         <label className={`block type-hint ${muted}`}>
           At most once every (minutes)
-          <input
+          <Input
             type="number"
             min={5}
             max={1440}
@@ -180,7 +181,7 @@ function TriggerForm({
         </label>
         <label className={`block type-hint ${muted}`}>
           At most per day
-          <input
+          <Input
             type="number"
             min={1}
             max={48}

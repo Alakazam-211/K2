@@ -10,6 +10,9 @@
 // The sign-in link is never cut (0.46.3 S1): Open and Copy link always use
 // the whole stored `login.url`, never text read back from the page, and the
 // full link can be shown wrapped (no ellipsis, no max length).
+//
+// Signed in: when the daemon offers K5 (`offer: "meet_k5"`, prd-setup-checklist-v1
+// §10.1), the success state leads to it (`K5Offer`).
 
 import React from 'react'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -31,6 +34,7 @@ import {
   type LoginMode,
   useLlmAccountsStore,
 } from '@/stores/llm-accounts'
+import { K5Offer } from '@/components/K5Sheet/K5Offer'
 
 export type LoginSheetStart =
   | { kind: 'add'; tool: string; toolLabel: string }
@@ -395,6 +399,8 @@ export function LlmLoginSheet({
               {madeActive === 'active' && (
                 <div className="type-hint text-[var(--color-text-secondary)]">The new subscription is now the server default.</div>
               )}
+              {/* K5 at first run: the daemon says when to offer it. */}
+              {login.state === 'signed_in' && <K5Offer scope={scope} onMeet={onClose} />}
               {login.error && <div className="type-hint text-red-400">{login.error}</div>}
 
               <div>

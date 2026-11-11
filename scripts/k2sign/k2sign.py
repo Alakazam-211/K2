@@ -1205,7 +1205,10 @@ COMPUTE_PLAN_ENV = ("BUILD_COMMIT", "BUILD_TREE")
 PLAN_KEYS = {"job_id", "node_id", "workspace_id", "workspace_label", "requested_by", "argv", "env", "cwd", "limits",
              "src", "exclusive", "created_at", "needs", "artifacts", "stall_secs", "class", "session_id", "est_secs",
              "est_p90_secs", "ws_max_running", "secret_env", "tier", "cache", "src_path", "with", "submitter",
-             "submitter_max_running", "packages", "git_access", "receipt_v", "gpu", "gpu_mem"}
+             "submitter_max_running", "packages", "git_access", "receipt_v", "gpu", "gpu_mem", "cache_commit",
+             "cache_ref", "setup", "cpus_burst"}
+# Plan fields the S3b path never accepts set (each refused by name in check_plan; a GPU has its own refusal).
+PLAN_KEYS_REFUSED = ("cache_commit", "cache_ref", "setup", "cpus_burst")
 TOOLCHAIN_CHANNEL_RE = re.compile(r'^\s*channel\s*=\s*"([0-9A-Za-z][0-9A-Za-z.-]{0,63})"\s*$', re.M)
 # The DER header of a P-256 SubjectPublicKeyInfo (k2-node-proto crypto.rs).
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
@@ -1413,6 +1416,10 @@ def check_plan(label, plan, rc, pol, argv, want_needs):
         raise Refused("%s: the plan runs in another folder (cwd %r)" % (label, plan["cwd"]))
     if plan.get("cache") is not None:
         raise Refused("%s: the plan mounts a --cache (%r)" % (label, plan["cache"]))
+    for k in PLAN_KEYS_REFUSED:
+        if plan.get(k) not in (None, []):
+            raise Refused("%s: the plan sets %s: a cache generation, a setup snapshot or idle cores are not "
+                          "part of a release build on this signer" % (label, k))
     if plan.get("receipt_v") is not None:
         raise Refused("%s: the plan asks for receipt v%r: this signer checks v1 receipts only (the S3b path; "
                       "receipt v2 is k2-signer's, docs/ci-formats-v1.md)" % (label, plan["receipt_v"]))

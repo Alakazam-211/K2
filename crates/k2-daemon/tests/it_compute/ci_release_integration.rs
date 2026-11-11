@@ -417,6 +417,8 @@ fn node_ran(n: &Node, job: &str, commit: &str, tree: &str, files: &[(&str, &str)
             roster_seq_seen: None,
             lane: Some(LANE.into()),
         }),
+        kind: None,
+        cache: None,
     };
     let signed = SignedReceipt::sign(&n.key, &rc).unwrap();
     compute_ws::test_frame(n.id, Frame::Receipt(ReceiptFrame { job_id: job.into(), generation: r.generation as u32, receipt: signed, statement: Some(st) }));

@@ -455,6 +455,33 @@ fn what_ran_rules() {
     l1(&mut s).receipt.v = 1;
     l1(&mut s).receipt.run = None;
     refuses(&w, &r, s, "k2-signer checks receipt v2");
+    // prd-compute-blacksmith-class-v1 §10 (B0): a forked build's `gen`
+    // warmth under today's (private) rule, a receipt v3, a box command's
+    // receipt, and a plan that forks a cache or reuses a setup snapshot
+    // are refused, each by name.
+    let mut s = w.spec();
+    l1(&mut s).receipt.src.as_mut().unwrap().warmth = Some("gen".into());
+    refuses(&w, &r, s, "built in a shared target dir (warmth Some(\"gen\"))");
+    let mut s = w.spec();
+    l1(&mut s).receipt.v = 3;
+    l1(&mut s).receipt.kind = Some(k2_node_proto::ci::ReceiptKind::Job);
+    l1(&mut s).receipt.cache = Some(None);
+    refuses(&w, &r, s, "receipt v3: this k2-signer checks receipt v2 only");
+    let mut s = w.spec();
+    l1(&mut s).receipt.v = 3;
+    l1(&mut s).receipt.kind = Some(k2_node_proto::ci::ReceiptKind::Box);
+    l1(&mut s).receipt.cache = Some(None);
+    refuses(&w, &r, s, "kind box");
+    let mut s = w.spec();
+    l1(&mut s).receipt.kind = Some(k2_node_proto::ci::ReceiptKind::Job);
+    refuses(&w, &r, s, "carries v3 fields");
+    let mut s = w.spec();
+    l1(&mut s).plan["cache_commit"] = serde_json::json!("release");
+    l1(&mut s).plan["cache_ref"] = serde_json::json!("linux-x86_64");
+    refuses(&w, &r, s, "forks or saves a cache generation");
+    let mut s = w.spec();
+    l1(&mut s).plan["setup"] = serde_json::json!([{"name": "node", "key": "b".repeat(64), "argv": ["bun", "install"], "paths": ["node_modules"]}]);
+    refuses(&w, &r, s, "reuses setup snapshots (node)");
     // A build the policy doesn't have.
     let mut s = w.spec();
     l1(&mut s).build = "other-build".into();

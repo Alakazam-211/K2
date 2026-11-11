@@ -236,6 +236,8 @@ impl World {
                 roster_seq_seen: Some(1),
                 lane: Some("ci-standard".into()),
             }),
+            kind: None,
+            cache: None,
         };
         let plan = json!({
             "argv": ARGV, "artifacts": ["dist/*"], "created_at": NOW - 1900, "cwd": null,

@@ -462,3 +462,141 @@ How to use them:
 
 The receipt v1 vector (`receipt-vector.json`) is unchanged and still
 passes in Rust and in k2sign.
+
+## 11. Cache generations, boxes, test history (protocol 10 contracts)
+
+prd-compute-blacksmith-class-v1 §6, slice B0. These formats exist in
+`k2-node-proto` (`gens`, `boxes`, `ci::CacheFacts`, `frames::Receipt`
+v3, `ci_config` version 2, `lanes::LaneTemplate.release_cache`,
+`signer_policy::BuildRule.warm`). **Nothing sends them yet**: no node
+offers a protocol-10 feature, and `frames::PROTOCOL` stays 9 until the
+k2-node release that does (one bump for every node part, like protocol 9).
+
+### Plan and result fields: features, not a protocol bump (BK-19)
+
+Each is absent when unset (old plans, digests and results are
+byte-identical) and is sent only to a node offering its feature
+(`gens::plan_features`, `gens::missing_feature`):
+
+| Field | Feature | Meaning |
+|---|---|---|
+| `Plan.cache_commit` | `cache-gens` | `trusted`, `scratch`, `release` or `none`: what the node does with the job's fork |
+| `Plan.cache_ref` | `cache-gens` | the scratch ref (`main`, `wt:<worktree>`) or the release build name; none for `trusted`/`none` |
+| `Plan.setup[]` | `setup-snapshots` | `{name, key, argv, paths}` per `[setup.*]` step |
+| `Plan.cpus_burst` | `cpu-burst` | the CPU ceiling in thousandths of a core, above `limits.cpu_millis` |
+| `Plan.receipt_v: 3` | `receipt-v3` | ask for receipt v3 |
+| `Outputs.stats` | `job-stats` | the 5 s series (≤ 720 points, ≤ 64 KB), throttle and OOM counters |
+| `Outputs.cache` | `cache-gens` | the forked lineage/seq/commit, `fork_ms`, `committed`, `commit_lineage`, `why` |
+| `Outputs.setup[]` | `setup-snapshots` | `{name, key, hit, ms}` |
+| `HostFacts.cache_fs` | `cache-gens` | `{fs, clone: subvolume\|reflink\|clonefile\|copy, volume}` |
+
+The sixth feature, `box`, gates the box frames below. A node offers all six
+only to a server that said protocol ≥ 10 (`frames::PROTOCOL_GENS`).
+
+### Protocol 10 frames
+
+- Controller → node: `box_up` (`{assign, idle_secs, max_secs, from_job}`;
+  the assign's plan has an empty `argv` and its `job_id` is the box id),
+  `box_run` (`{box_id, generation, n, sync: {commit, digest, dirty},
+  argv, env, cwd, max_secs, stall_secs}`; the command's job id is
+  `<box>-c<n>`), `box_down` (`{box_id, generation, reason}`).
+- Node → controller: `box_state` (`{box_id, generation, phase:
+  preparing|held|running|ended, reason, at, idle_until, max_until, runs,
+  sync_digest}`; `reason: "idle_soon"` is the idle notice) and
+  `lineage_status` (`{at, lineages: [{key, name, lineage, head_seq,
+  head_commit, bytes, last_used, forks}], truncated}`, at most 16 scratch
+  lineages per project, newest first).
+- Lineage names: `trusted`, `scratch/<ref>`, `release/<build>`,
+  `setup/<64 hex>` (`gens::parse_lineage`). A ref is a branch name or
+  `wt:<worktree>`; on disk it is `r-<32 hex of its SHA-256>`.
+
+### Receipt v3 (`frames::Receipt`, `v: 3`, BK-5)
+
+v3 = v2 plus two keys, **always present**: `kind` (`job` or `box`) and
+`cache` (`null` when the job built cold). `Receipt::check_version` refuses
+a v3 without `run`, `kind` or the `cache` key, refuses `kind`/`cache` on
+v1 or v2, and ties `cache` to the warmth: a generation means `warmth:
+gen`, and `gen` means a generation. v1 and v2 bodies are unchanged.
+
+`cache` (`ci::CacheFacts`, every key present, unknown keys refused):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `lineage` | text | as above |
+| `seq` | u64 ≥ 1 | the generation's place in its lineage |
+| `gen_digest` | digest | provenance digest, below |
+| `parent_digest` | digest \| null | null for a chain's first (cold) generation |
+| `producer` | object | `{job_id, attempt, receipt_digest, commit}`: the job whose fork became the generation; `receipt_digest` is `sha256:` + the signer's receipt id (SHA-256 of the signed body) |
+| `ref_checked` | `node` \| `controller` \| null | set exactly for `trusted` |
+
+`gen_digest = "sha256:" + hex(SHA-256(canonical JSON of {lineage,
+parent_digest, producer_receipt_digest, seq}))`. It is not a hash of the
+cache's bytes. Vectors (Rust `ci::tests::gen_digest_golden`, computed with
+Python's `hashlib`):
+
+- `trusted`, seq 41, parent `sha256:f…f`, producer `sha256:e…e` →
+  `sha256:d2004a08caa54f8433ab2b293c9a0b480a74e04004a78de88a552ec3d2b095a6`;
+- `trusted`, seq 1, parent `null`, producer `sha256:e…e` →
+  `sha256:58c923c7b71374b674ad35d3f13c49f6acafe2d5cdec57f5e3d9eb64692c6238`.
+
+Today's signers refuse v3: an older one by its version check, this one by
+name until B3 walks the chain ("receipt v3: this k2-signer checks receipt
+v2 only"), and always `kind: box`. Both signers refuse a plan that sets
+`cache_commit`, `cache_ref` or `setup`; `k2sign.py` also refuses `gpu`,
+`gpu_mem` and `cpus_burst` (its `PLAN_KEYS` lists every `Plan` field
+again, so the drift test in `k2sign-s3b.sh` passes).
+
+### Signer policy: `warm`
+
+`[build.<name>]` gains `warm = "private"` (the default, never written) or
+`"signed-chain"`, and `warm_max_chain` (1–50, default 10, only with
+`signed-chain`). An older signer refuses a policy that sets either
+(unknown key).
+
+### Lanes: `release_cache`
+
+`LaneTemplate.release_cache` (absent = false, and absent from the file
+unless set). Turning it on is a widening, so it is the owner's, in person.
+A release fork is kept on the node only when this **and** the client's
+`ci.toml` `[release.builds.X] warm = true` say so (BK-7).
+
+### `.k2/ci.toml` version 2 (BK-9)
+
+`version = 2` allows the new keys; `version = 1` parses exactly as before
+and refuses each new key by name (`checks.unit.mem_auto needs version =
+2`). `k2 ci init` still writes version 1. An older daemon refuses a
+version 2 file (its strict parse names the key, or says "version 2 (this
+build knows 1)"), so the daemon ships before any repo uses the keys.
+
+| Key | Rule |
+|---|---|
+| `[setup.<name>]` | `argv` (non-empty), `inputs` (repo files that key it, at least one), `paths` (repo-relative or `$CARGO_HOME/…`, at least one), `needs` |
+| `checks.<c>.setup` | `[setup.*]` names; an unknown one is `setup_not_found` |
+| `checks.<c>.mem_auto` | bool; `mem_gb` is the fallback |
+| `checks.<c>.cpus_burst` | above `cpus`, which it needs |
+| `checks.<c>.tests_failed_exit` | 1–255 (nextest: 100) |
+| `[[quarantine]]` | `check` (a `[checks.*]`), `test` (1–500 bytes), `why` (1–300), `until` (`YYYY-MM-DD`, at most 30 days ahead at verdict time); a bad entry is `ci_quarantine_invalid` |
+| `statuses.pr_comment` | bool; `true` needs `pr_comment_token_secret` (its own token, never `token_secret`) and a `[watch]` |
+| `release.builds.<b>.warm` | bool (one of BK-7's two opt-ins) |
+
+There is no key for trusted branches: they are server state
+(`ci_workspaces`), so a PR can't name its own branch trusted. The default
+is the first `[watch]` branch without a glob, else `main`
+(`CiConfig::default_trusted_branch`). A bare `*` stays refused.
+
+### Migrations (reserved)
+
+| Number | Name | Slice |
+|---|---|---|
+| 0295 | `ci_test_history` | T1 |
+| 0296 | `compute_job_stats` | O2 |
+| 0297 | `ci_monitors` (+ `ci_workspaces.trusted_branches_json`) | O1, B2 |
+| 0298 | `compute_boxes` | X1 |
+
+### Refusal codes
+
+`gens::codes`: `cache_trust_needs_person`, `cache_gens_needs_wall`,
+`warm_cache_unproven`, `mem_auto_no_history`, `setup_not_found`,
+`ci_quarantine_invalid`. `boxes::codes`: `box_limit`, `box_no_secrets`,
+`box_needs_node_update`, `hold_needs_no_secrets`, `box_ended`,
+`node_lost`.

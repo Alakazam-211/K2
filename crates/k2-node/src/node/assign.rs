@@ -488,6 +488,8 @@ impl Node {
             secret_env: Vec::new(),
             tools_used: Default::default(),
             run,
+            kind: None,
+            cache: None,
         };
         SignedReceipt::sign(&self.key, &receipt)
     }

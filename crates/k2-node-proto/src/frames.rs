@@ -97,7 +97,22 @@ use crate::crypto::{self, SigningKey};
 /// `node_statement` frame and `ReceiptFrame.statement` only to a server
 /// that said protocol ≥ 9; a server writes `Plan.receipt_v` only for a node
 /// offering `receipt-v2`. A protocol-8 peer sees exactly 0.46.9's frames.
+///
+/// 10 = cache generations and boxes (prd-compute-blacksmith-class-v1 §6,
+/// BK-19; [`crate::gens`], [`crate::boxes`]). Defined as [`PROTOCOL_GENS`];
+/// `PROTOCOL` itself moves to 10 in the commit that makes k2-node offer the
+/// first of [`crate::gens::FEATURES`] (one node release carries them all).
+/// Until then the formats exist and nothing sends them, so protocol 9 is
+/// exactly today's. Protocol 10 is for the new frames only (`box_up`,
+/// `box_run`, `box_down`, `box_state`, `lineage_status`); the new plan and
+/// result fields need their feature, not the bump.
 pub const PROTOCOL: u32 = 9;
+
+/// The first protocol with the box and lineage-status frames. Additive: a
+/// node offers a [`crate::gens::FEATURES`] entry only to a server that said
+/// protocol ≥ 10, and a server writes a protocol-10 plan field or frame
+/// only to a node offering its feature.
+pub const PROTOCOL_GENS: u32 = 10;
 
 /// The first protocol with the CI formats ([`crate::ci`]). Additive like
 /// every bump before it: a node offers a [`crate::ci::FEATURES`] entry only
@@ -442,6 +457,12 @@ pub enum Frame {
     ArtifactAck(ArtifactAck),
     /// GH#80 (`artifact-flow`): stop sending this pull.
     ArtifactCancel(ArtifactCancel),
+    /// Protocol 10 ([`crate::boxes`]): hold a job dir as a box, run one
+    /// command in it, end it. Only to nodes offering
+    /// [`crate::gens::FEATURE_BOX`] (older parsers reject unknown variants).
+    BoxUp(crate::boxes::BoxUp),
+    BoxRun(crate::boxes::BoxRun),
+    BoxDown(crate::boxes::BoxDown),
     // node → controller
     Offer(Offer),
     JobsSnapshot(JobsSnapshot),
@@ -480,6 +501,13 @@ pub enum Frame {
     /// receiving server's **own** seat statements, relayed by the node
     /// (feature `node-roster`). Only to a server that said protocol ≥ 9.
     NodeRoster(crate::lanes::NodeRosterDoc),
+    /// Protocol 10: a box's phase changed, or its idle end is near. Only to
+    /// a server that said protocol ≥ 10.
+    BoxState(crate::boxes::BoxState),
+    /// Protocol 10 (`cache-gens`): this server's lineages on the node, on
+    /// session start and whenever a head moves. Only to a server that said
+    /// protocol ≥ 10.
+    LineageStatus(crate::gens::LineageStatus),
 }
 
 impl Frame {
@@ -507,7 +535,10 @@ impl Frame {
             | Frame::GitCredRefused(_)
             | Frame::ArtifactDelete(_)
             | Frame::ArtifactAck(_)
-            | Frame::ArtifactCancel(_) => Direction::ControllerToNode,
+            | Frame::ArtifactCancel(_)
+            | Frame::BoxUp(_)
+            | Frame::BoxRun(_)
+            | Frame::BoxDown(_) => Direction::ControllerToNode,
             Frame::Offer(_)
             | Frame::JobsSnapshot(_)
             | Frame::Need(_)
@@ -527,7 +558,9 @@ impl Frame {
             | Frame::PkgRequestDone(_)
             | Frame::GitCredNeed(_)
             | Frame::NodeStatement(_)
-            | Frame::NodeRoster(_) => Direction::NodeToController,
+            | Frame::NodeRoster(_)
+            | Frame::BoxState(_)
+            | Frame::LineageStatus(_) => Direction::NodeToController,
         }
     }
 
@@ -576,6 +609,11 @@ impl Frame {
             Frame::ArtifactDelete(_) => "artifact_delete",
             Frame::ArtifactAck(_) => "artifact_ack",
             Frame::ArtifactCancel(_) => "artifact_cancel",
+            Frame::BoxUp(_) => "box_up",
+            Frame::BoxRun(_) => "box_run",
+            Frame::BoxDown(_) => "box_down",
+            Frame::BoxState(_) => "box_state",
+            Frame::LineageStatus(_) => "lineage_status",
         }
     }
 }
@@ -797,6 +835,29 @@ pub struct Plan {
     /// compute another digest and refuse the assign).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu_mem: Option<u64>,
+    /// Cache generations (prd-compute-blacksmith-class-v1 §4.1.4): what the
+    /// node does with this job's fork when it ends. Only the daemon's CI
+    /// engine sets `trusted`. Absent = today's warm slots and `--cache`, so
+    /// every older plan and digest is unchanged; sent only to nodes
+    /// offering [`crate::gens::FEATURE_CACHE_GENS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_commit: Option<crate::gens::CacheCommit>,
+    /// The scratch ref (`main`, `wt:<worktree>`) for `cache_commit:
+    /// scratch`, or the release build name for `release`
+    /// ([`crate::gens::check_plan_cache`]). Same feature, same rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_ref: Option<String>,
+    /// Setup snapshots (§4.7): the `[setup.*]` steps to fork or run before
+    /// the command. Absent when empty; sent only to nodes offering
+    /// [`crate::gens::FEATURE_SETUP_SNAPSHOTS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<crate::gens::SetupStep>,
+    /// Idle cores (§4.4.4, BK-13): the CPU ceiling in thousandths of a core
+    /// (`--cpus 4+8` → `limits.cpu_millis` 4000, this 8000); admission counts
+    /// only the guarantee. Absent unless asked; sent only to nodes offering
+    /// [`crate::gens::FEATURE_CPU_BURST`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpus_burst: Option<u64>,
 }
 
 impl Plan {
@@ -1583,6 +1644,27 @@ pub struct Receipt {
     /// it to `v`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<crate::ci::RunFacts>,
+    /// Receipt v3 only (`Plan.receipt_v = 3`, prd-compute-blacksmith-class-v1
+    /// §4.1.7, BK-5): a job or one command of a box. Always present in v3,
+    /// absent before, so v1 and v2 stay byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::ci::ReceiptKind>,
+    /// Receipt v3 only: the cache generation the job forked
+    /// ([`crate::ci::CacheFacts`]). Always present in v3, `null` when the
+    /// job built cold, so the outer `Option` is "is the key there" and the
+    /// inner one its value.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_or_null")]
+    pub cache: Option<Option<crate::ci::CacheFacts>>,
+}
+
+/// A key that is there (`Some`), its value possibly `null` (`Some(None)`);
+/// `#[serde(default)]` makes a missing key `None`.
+fn present_or_null<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
 }
 
 /// Receipt v1: every receipt before protocol 9, and every receipt whose plan
@@ -1590,18 +1672,49 @@ pub struct Receipt {
 pub const RECEIPT_V1: u32 = 1;
 /// Receipt v2: `run` is present. Sent only when the plan asks for it.
 pub const RECEIPT_V2: u32 = 2;
+/// Receipt v3: v2 plus `kind` and `cache`, every key present (BK-5). Sent
+/// only when the plan asks for it, to nodes offering
+/// [`crate::gens::FEATURE_RECEIPT_V3`].
+pub const RECEIPT_V3: u32 = 3;
 
 impl Receipt {
     /// `v` and the v2 facts agree: v1 has no `run`, v2 has one (and its
     /// facts are well formed). Anything else is refused by name: a verifier
     /// never guesses which schema a signed body meant.
     pub fn check_version(&self) -> Result<(), String> {
+        if self.v != RECEIPT_V3 && (self.kind.is_some() || self.cache.is_some()) {
+            return Err(format!("receipt v{} carries v3 fields (kind, cache)", self.v));
+        }
         match (self.v, &self.run) {
             (RECEIPT_V1, None) => Ok(()),
             (RECEIPT_V1, Some(_)) => Err("receipt v1 carries v2 run facts".into()),
             (RECEIPT_V2, Some(run)) => run.check(),
             (RECEIPT_V2, None) => Err("receipt v2 without its run facts".into()),
-            (v, _) => Err(format!("receipt version {v} is not 1 or 2")),
+            (RECEIPT_V3, Some(run)) => {
+                run.check()?;
+                if self.kind.is_none() {
+                    return Err("receipt v3 without its kind".into());
+                }
+                let Some(cache) = &self.cache else {
+                    return Err("receipt v3 without its cache key (null when cold)".into());
+                };
+                let warmth = self.src.as_ref().and_then(|s| s.warmth.as_deref());
+                match cache {
+                    Some(c) => {
+                        c.check()?;
+                        if warmth != Some(crate::gens::WARMTH_GEN) {
+                            return Err(format!("receipt v3 names a cache generation but its warmth is {warmth:?}, not gen"));
+                        }
+                    }
+                    None if warmth == Some(crate::gens::WARMTH_GEN) => {
+                        return Err("receipt v3 says warmth gen but names no cache generation".into());
+                    }
+                    None => {}
+                }
+                Ok(())
+            }
+            (RECEIPT_V3, None) => Err("receipt v3 without its run facts".into()),
+            (v, _) => Err(format!("receipt version {v} is not 1, 2 or 3")),
         }
     }
 
@@ -1737,6 +1850,10 @@ mod tests {
             receipt_v: None,
             gpu: None,
             gpu_mem: None,
+            cache_commit: None,
+            cache_ref: None,
+            setup: Vec::new(),
+            cpus_burst: None,
         }
     }
 
@@ -1978,6 +2095,8 @@ mod tests {
             secret_env: Vec::new(),
             tools_used: BTreeMap::new(),
             run: None,
+            kind: None,
+            cache: None,
         };
         // Without secrets: byte-identical to a 0.46.3 receipt (SE29).
         assert!(!crate::canonical::to_string(&r).unwrap().contains("secret_env"));
@@ -2341,6 +2460,8 @@ mod tests {
             secret_env: Vec::new(),
             tools_used: BTreeMap::new(),
             run: Some(run.clone()),
+            kind: None,
+            cache: None,
         };
         r.check_version().unwrap();
         assert_eq!(r.check_statement(&st).unwrap(), doc(0));
@@ -2358,5 +2479,126 @@ mod tests {
         assert!(r3.check_statement(&st).unwrap_err().contains("epoch"));
         let v1 = Receipt { v: RECEIPT_V1, run: None, ..r };
         assert!(v1.check_statement(&st).is_err());
+    }
+
+    /// prd-compute-blacksmith-class-v1 §10 (BK-5): receipt v3 is v2 plus
+    /// `kind` and `cache`, every key present; v1 and v2 keep their bytes.
+    #[test]
+    fn receipt_v3_needs_kind_and_cache_and_keeps_v1_v2_bytes() {
+        use crate::ci::{CacheFacts, CacheProducer, Isolation, ReceiptKind, RefChecked, RunFacts, Wall};
+        let run = RunFacts {
+            isolation: Isolation::JobUid,
+            uid_index: Some(0),
+            wall: Wall::JobUser,
+            tenant_slot: 0,
+            k2node_version: "0.46.11".into(),
+            k2node_commit: None,
+            key_epoch: 0,
+            statement_digest: format!("sha256:{}", "a".repeat(64)),
+            roster_seq_seen: None,
+            lane: None,
+        };
+        let src = |w: &str| SrcRan { commit: "c".repeat(40), tree: "d".repeat(40), dirty_sha256: None, slot: None, warmth: Some(w.into()) };
+        let v2 = Receipt {
+            v: RECEIPT_V2,
+            job_id: "j".into(),
+            attempt: 1,
+            generation: 1,
+            plan_digest: "sha256:x".into(),
+            node_fp: "n".into(),
+            controller_fp: "c".into(),
+            workspace_id: "w".into(),
+            argv_sha256: argv_sha256(&["true".into()]),
+            env_names: vec![],
+            src: Some(src("private")),
+            tools: BTreeMap::new(),
+            boot_id: "b".into(),
+            started_at: Some(1),
+            ended_at: 2,
+            state: JobState::Done,
+            exit: None,
+            log: ReceiptLog { sha256: "s".into(), bytes: 0, truncated: false },
+            artifacts: Vec::new(),
+            secret_env: Vec::new(),
+            tools_used: BTreeMap::new(),
+            run: Some(run),
+            kind: None,
+            cache: None,
+        };
+        v2.check_version().unwrap();
+        let v2_text = crate::canonical::to_string(&v2).unwrap();
+        assert!(!v2_text.contains("\"kind\"") && !v2_text.contains("\"cache\""), "v2 bytes unchanged: {v2_text}");
+        // A v2 body parses back to no v3 fields, and re-serializes the same.
+        let back: Receipt = serde_json::from_str(&v2_text).unwrap();
+        assert_eq!((back.kind, back.cache.clone()), (None, None));
+        assert_eq!(crate::canonical::to_string(&back).unwrap(), v2_text);
+
+        // v3 cold: `cache` is there and null.
+        let cold = Receipt { v: RECEIPT_V3, kind: Some(ReceiptKind::Job), cache: Some(None), ..v2.clone() };
+        cold.check_version().unwrap();
+        let text = crate::canonical::to_string(&cold).unwrap();
+        assert!(text.contains("\"cache\":null") && text.contains("\"kind\":\"job\""), "{text}");
+        let back: Receipt = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, cold, "null and absent stay apart");
+        assert_eq!(crate::canonical::to_string(&back).unwrap(), text);
+
+        // v3 without kind, without the cache key, or without run: refused.
+        assert!(Receipt { kind: None, ..cold.clone() }.check_version().unwrap_err().contains("kind"));
+        assert!(Receipt { cache: None, ..cold.clone() }.check_version().unwrap_err().contains("cache"));
+        assert!(Receipt { run: None, ..cold.clone() }.check_version().is_err());
+        let missing = text.replace(",\"cache\":null", "").replace("\"cache\":null,", "");
+        let parsed: Receipt = serde_json::from_str(&missing).unwrap();
+        assert!(parsed.check_version().unwrap_err().contains("cache key"), "a v3 body without the cache key is refused");
+        // v3 fields on a v1 or v2 receipt: refused by name.
+        assert!(Receipt { kind: Some(ReceiptKind::Job), ..v2.clone() }.check_version().unwrap_err().contains("v3 fields"));
+        assert!(Receipt { cache: Some(None), ..v2.clone() }.check_version().unwrap_err().contains("v3 fields"));
+        assert!(Receipt { v: 4, ..cold.clone() }.check_version().unwrap_err().contains("not 1, 2 or 3"));
+
+        // v3 forked: warmth gen and a well-formed cache; they must agree.
+        let producer_rc = format!("sha256:{}", "e".repeat(64));
+        let facts = CacheFacts {
+            lineage: "trusted".into(),
+            seq: 41,
+            gen_digest: crate::ci::gen_digest("trusted", 41, Some(&format!("sha256:{}", "f".repeat(64))), &producer_rc).unwrap(),
+            parent_digest: Some(format!("sha256:{}", "f".repeat(64))),
+            producer: CacheProducer { job_id: "p".into(), attempt: 1, receipt_digest: producer_rc, commit: "c".repeat(40) },
+            ref_checked: Some(RefChecked::Node),
+        };
+        let gen = Receipt { src: Some(src(crate::gens::WARMTH_GEN)), cache: Some(Some(facts.clone())), ..cold.clone() };
+        gen.check_version().unwrap();
+        assert!(Receipt { src: Some(src("warm")), ..gen.clone() }.check_version().unwrap_err().contains("not gen"));
+        assert!(Receipt { src: Some(src(crate::gens::WARMTH_GEN)), ..cold.clone() }.check_version().unwrap_err().contains("names no cache"));
+        let bad = CacheFacts { gen_digest: format!("sha256:{}", "0".repeat(64)), ..facts };
+        assert!(Receipt { cache: Some(Some(bad)), ..gen.clone() }.check_version().unwrap_err().contains("gen_digest"));
+        let boxed = Receipt { kind: Some(ReceiptKind::Box), ..gen };
+        boxed.check_version().unwrap();
+        assert!(crate::canonical::to_string(&boxed).unwrap().contains("\"kind\":\"box\""));
+    }
+
+    /// BK-19: the new plan fields are absent when unset (old digests hold)
+    /// and each names the feature a node must offer.
+    #[test]
+    fn blacksmith_plan_fields_are_feature_gated_and_keep_old_digests() {
+        let p = plan();
+        let text = crate::canonical::to_string(&p).unwrap();
+        for k in ["cache_commit", "cache_ref", "setup", "cpus_burst"] {
+            assert!(!text.contains(k), "{k} absent when unset: {text}");
+        }
+        assert!(crate::gens::plan_features(&p).is_empty());
+        let mut q = p.clone();
+        q.cache_commit = Some(crate::gens::CacheCommit::Scratch);
+        q.cache_ref = Some("wt:a".into());
+        q.cpus_burst = Some(8000);
+        q.receipt_v = Some(RECEIPT_V3);
+        q.setup = vec![crate::gens::SetupStep { name: "node".into(), key: "b".repeat(64), argv: vec!["bun".into()], paths: vec!["node_modules".into()] }];
+        assert_ne!(q.digest().unwrap(), p.digest().unwrap());
+        assert_eq!(crate::gens::plan_features(&q), vec!["cache-gens", "cpu-burst", "receipt-v3", "setup-snapshots"]);
+        let offered: Vec<String> = ["cache-gens", "cpu-burst", "receipt-v3"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(crate::gens::missing_feature(&q, &offered), Some("setup-snapshots"));
+        let back: Plan = serde_json::from_str(&serde_json::to_string(&q).unwrap()).unwrap();
+        assert_eq!(back, q);
+        // Protocol 10 is defined, not in force: today's nodes and servers
+        // still say 9 (the bump rides the k2-node release that offers it).
+        const { assert!(PROTOCOL == PROTOCOL_CI && PROTOCOL_GENS == PROTOCOL + 1) };
     }
 }

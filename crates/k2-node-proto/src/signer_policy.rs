@@ -118,6 +118,48 @@ pub struct BuildRule {
     /// (catches a swapped vault value).
     #[serde(default)]
     pub secret_sha256: BTreeMap<String, String>,
+    /// prd-compute-blacksmith-class-v1 §4.2.3: may a build start from a
+    /// cache? `private` (the default: today's rule, every build empty) or
+    /// `signed-chain` (a `warmth: gen` receipt v3 passes only when its
+    /// cache chain walks back through this signer's own stored evidence).
+    /// Absent when `private`, so every older policy keeps its bytes; an
+    /// older signer refuses a policy that sets it (unknown key).
+    #[serde(default, skip_serializing_if = "WarmPolicy::is_private")]
+    pub warm: WarmPolicy,
+    /// With `signed-chain` only: the deepest chain since a cold build
+    /// (default [`WARM_MAX_CHAIN_DEFAULT`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warm_max_chain: Option<u32>,
+}
+
+/// A build's cache rule at the signer (§4.2.3).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarmPolicy {
+    /// Only `warmth: private` receipts (today's rule).
+    #[default]
+    #[serde(rename = "private")]
+    Private,
+    /// `warmth: gen` too, when the chain is proven from stored evidence.
+    #[serde(rename = "signed-chain")]
+    SignedChain,
+}
+
+impl WarmPolicy {
+    pub fn is_private(&self) -> bool {
+        *self == WarmPolicy::Private
+    }
+}
+
+/// `warm_max_chain` when unset.
+pub const WARM_MAX_CHAIN_DEFAULT: u32 = 10;
+/// The largest `warm_max_chain` a policy may set.
+pub const WARM_MAX_CHAIN_MAX: u32 = 50;
+
+impl BuildRule {
+    /// The chain depth this build accepts (`warm = "signed-chain"`).
+    pub fn warm_max_chain(&self) -> u32 {
+        self.warm_max_chain.unwrap_or(WARM_MAX_CHAIN_DEFAULT)
+    }
 }
 
 fn default_walls() -> Vec<Wall> {
@@ -295,6 +337,13 @@ impl BuildRule {
             }
             ci::check_fp(&format!("build.{name}.secret_sha256.{k}"), v)?;
         }
+        match (self.warm, self.warm_max_chain) {
+            (WarmPolicy::Private, Some(_)) => return Err(format!("build.{name}.warm_max_chain: only with warm = \"signed-chain\"")),
+            (WarmPolicy::SignedChain, Some(n)) if !(1..=WARM_MAX_CHAIN_MAX).contains(&n) => {
+                return Err(format!("build.{name}.warm_max_chain: 1-{WARM_MAX_CHAIN_MAX}"));
+            }
+            _ => {}
+        }
         Ok(())
     }
 }
@@ -369,5 +418,27 @@ public = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
         assert!(SignerPolicy::parse(&k2env).is_err());
         let inner = MIN.replace("check = \"artifact\"", "check = \"inner_binary\"\ninner = \"usr/bin/acme\"");
         assert!(SignerPolicy::parse(&inner).unwrap_err().contains("dual"));
+    }
+
+    /// prd-compute-blacksmith-class-v1 §4.2.3: `warm` defaults to private
+    /// and stays out of the file; `signed-chain` and its depth parse.
+    #[test]
+    fn warm_policy_defaults_private_and_keeps_old_bytes() {
+        let p = SignerPolicy::parse(MIN).unwrap();
+        let b = &p.build["linux-x86_64"];
+        assert_eq!(b.warm, WarmPolicy::Private);
+        assert_eq!(b.warm_max_chain(), WARM_MAX_CHAIN_DEFAULT);
+        let text = p.to_toml().unwrap();
+        assert!(!text.contains("warm"), "{text}");
+        let warm = MIN.replace("isolation = [\"job_uid\", \"exclusive\"]", "isolation = [\"job_uid\", \"exclusive\"]\nwarm = \"signed-chain\"\nwarm_max_chain = 4");
+        let w = SignerPolicy::parse(&warm).unwrap();
+        assert_eq!(w.build["linux-x86_64"].warm, WarmPolicy::SignedChain);
+        assert_eq!(w.build["linux-x86_64"].warm_max_chain(), 4);
+        assert_eq!(SignerPolicy::parse(&w.to_toml().unwrap()).unwrap(), w);
+        assert!(SignerPolicy::parse(&warm.replace("signed-chain", "signed_chain")).is_err());
+        assert!(SignerPolicy::parse(&warm.replace("signed-chain", "shared")).is_err());
+        assert!(SignerPolicy::parse(&warm.replace("warm_max_chain = 4", "warm_max_chain = 0")).unwrap_err().contains("1-50"));
+        let lone = MIN.replace("isolation = [\"job_uid\", \"exclusive\"]", "isolation = [\"job_uid\", \"exclusive\"]\nwarm_max_chain = 4");
+        assert!(SignerPolicy::parse(&lone).unwrap_err().contains("only with warm"));
     }
 }

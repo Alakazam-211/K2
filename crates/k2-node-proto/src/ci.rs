@@ -378,6 +378,105 @@ impl RunFacts {
     }
 }
 
+// ── receipt v3 (prd-compute-blacksmith-class-v1 §4.1.7, BK-5) ───────
+
+/// Receipt v3's `kind`: a job, or one command of a box (`<box>-c<n>`).
+/// The signer refuses `box`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptKind {
+    Job,
+    Box,
+}
+
+/// How the producer's commit was shown to be on a trusted branch
+/// (§4.1.4 rule 5): the node fetched the branch itself and checked the
+/// ancestry, or it took the controller's verified word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefChecked {
+    Node,
+    Controller,
+}
+
+/// The job whose fork became a generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheProducer {
+    pub job_id: String,
+    pub attempt: u32,
+    /// `sha256:` + the producer receipt's id (SHA-256 of its signed body,
+    /// the signer's receipt id).
+    pub receipt_digest: String,
+    /// The producer's commit (40 hex).
+    pub commit: String,
+}
+
+/// Receipt v3's `cache` (`null` when the job built cold): the generation
+/// the job forked. Every key always present.
+///
+/// `gen_digest` is a **provenance** digest ([`gen_digest`]), not a hash of
+/// the bytes: hashing a 30 GB target per job costs minutes and proves
+/// nothing root couldn't fake. The signer walks `producer.receipt_digest`
+/// through its own stored evidence (§4.2.3, BK-6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheFacts {
+    /// `trusted`, `scratch/<ref>`, `release/<build>` or `setup/<key>`.
+    pub lineage: String,
+    /// The generation's place in its lineage (1 = the first, built cold).
+    pub seq: u64,
+    pub gen_digest: String,
+    /// The generation it was forked from; `null` for a chain's first
+    /// (built cold) generation.
+    pub parent_digest: Option<String>,
+    pub producer: CacheProducer,
+    /// How the producer's commit was checked: present for `trusted`,
+    /// `null` for every other lineage.
+    pub ref_checked: Option<RefChecked>,
+}
+
+/// `sha256:<hex>` of the canonical JSON of `{lineage, parent_digest,
+/// producer_receipt_digest, seq}` (`parent_digest` is `null` for a chain's
+/// first generation).
+pub fn gen_digest(lineage: &str, seq: u64, parent_digest: Option<&str>, producer_receipt_digest: &str) -> Result<String, String> {
+    let v = serde_json::json!({
+        "lineage": lineage,
+        "seq": seq,
+        "parent_digest": parent_digest,
+        "producer_receipt_digest": producer_receipt_digest,
+    });
+    Ok(format!("sha256:{}", crypto::sha256_hex(&crate::canonical::to_vec(&v)?)))
+}
+
+impl CacheFacts {
+    pub fn check(&self) -> Result<(), String> {
+        let (kind, _) = crate::gens::parse_lineage(&self.lineage).map_err(|e| format!("cache: {e}"))?;
+        if self.seq == 0 {
+            return Err("cache.seq starts at 1".into());
+        }
+        if let Some(p) = &self.parent_digest {
+            check_digest("cache.parent_digest", p)?;
+        }
+        let p = &self.producer;
+        if !crate::frames::valid_job_id(&p.job_id) {
+            return Err("cache.producer.job_id is not a job id".into());
+        }
+        check_digest("cache.producer.receipt_digest", &p.receipt_digest)?;
+        check_commit("cache.producer.commit", &p.commit)?;
+        match (kind, self.ref_checked) {
+            (crate::gens::LineageKind::Trusted, None) => return Err("cache: a trusted generation says how its ref was checked".into()),
+            (crate::gens::LineageKind::Trusted, Some(_)) | (_, None) => {}
+            (_, Some(_)) => return Err("cache: ref_checked is for the trusted lineage only".into()),
+        }
+        let want = gen_digest(&self.lineage, self.seq, self.parent_digest.as_deref(), &p.receipt_digest)?;
+        if want != self.gen_digest {
+            return Err("cache.gen_digest is not the digest of its lineage, seq, parent and producer".into());
+        }
+        Ok(())
+    }
+}
+
 // ── shared field checks ──────────────────────────────────────────────
 
 /// 64 lowercase hex (a key fingerprint).
@@ -574,5 +673,44 @@ mod tests {
         for bad in ["", "-a", "A", "a b", "a/b", &"a".repeat(64)] {
             assert!(!is_name(bad), "{bad:?}");
         }
+    }
+
+    /// Golden vectors for the receipt v3 provenance digest, computed outside
+    /// Rust (Python `hashlib` over `json.dumps(sort_keys, (',', ':'))`).
+    #[test]
+    fn gen_digest_golden() {
+        let e = format!("sha256:{}", "e".repeat(64));
+        let f = format!("sha256:{}", "f".repeat(64));
+        assert_eq!(
+            gen_digest("trusted", 41, Some(&f), &e).unwrap(),
+            "sha256:d2004a08caa54f8433ab2b293c9a0b480a74e04004a78de88a552ec3d2b095a6"
+        );
+        assert_eq!(
+            gen_digest("trusted", 1, None, &e).unwrap(),
+            "sha256:58c923c7b71374b674ad35d3f13c49f6acafe2d5cdec57f5e3d9eb64692c6238"
+        );
+    }
+
+    #[test]
+    fn cache_facts_rules() {
+        let rc = format!("sha256:{}", "e".repeat(64));
+        let c = CacheFacts {
+            lineage: "scratch/feat/x".into(),
+            seq: 1,
+            gen_digest: gen_digest("scratch/feat/x", 1, None, &rc).unwrap(),
+            parent_digest: None,
+            producer: CacheProducer { job_id: "j1".into(), attempt: 1, receipt_digest: rc.clone(), commit: "a".repeat(40) },
+            ref_checked: None,
+        };
+        c.check().unwrap();
+        let body = crate::canonical::to_string(&c).unwrap();
+        assert!(body.contains("\"parent_digest\":null") && body.contains("\"ref_checked\":null"), "every key present: {body}");
+        assert!(serde_json::from_str::<CacheFacts>(&body.replace("\"seq\":1", "\"seq\":1,\"x\":1")).is_err(), "unknown keys refused");
+        assert!(CacheFacts { ref_checked: Some(RefChecked::Node), ..c.clone() }.check().unwrap_err().contains("trusted lineage only"));
+        assert!(CacheFacts { seq: 2, ..c.clone() }.check().unwrap_err().contains("gen_digest"), "the digest binds the seq");
+        assert!(CacheFacts { lineage: "release/Linux".into(), ..c.clone() }.check().is_err());
+        let t = CacheFacts { lineage: "trusted".into(), gen_digest: gen_digest("trusted", 1, None, &rc).unwrap(), ..c.clone() };
+        assert!(t.check().unwrap_err().contains("how its ref was checked"));
+        CacheFacts { ref_checked: Some(RefChecked::Controller), ..t }.check().unwrap();
     }
 }

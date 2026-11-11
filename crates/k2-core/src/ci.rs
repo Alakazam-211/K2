@@ -169,6 +169,7 @@ impl Watch {
             statuses: None,
             checks: Default::default(),
             release: None,
+            ..Default::default()
         };
         as_cfg.check()?;
         if !valid_remote(&self.remote) {
@@ -705,6 +706,7 @@ impl Starter {
                 timeout_secs: self.timeout_secs,
                 cpus: self.cpus,
                 mem_gb: self.mem_gb,
+                ..Default::default()
             },
         );
         let cfg = CiConfig {
@@ -718,9 +720,11 @@ impl Starter {
                 token_secret: t.clone(),
                 env_name: crate::compute::proto::ci_config::DEFAULT_STATUSES_ENV.to_string(),
                 context: "k2-ci".to_string(),
+                ..Default::default()
             }),
             checks,
             release: None,
+            ..Default::default()
         };
         cfg.check()?;
         Ok(cfg)
@@ -843,6 +847,7 @@ mod tests {
             timeout_secs: Some(3600),
             cpus: Some(4),
             mem_gb: Some(8),
+            ..Default::default()
         };
         let sha = "a".repeat(40);
         let v = job_body("r1", 0, "unit", &c, &sha, Some("main"), "ci");
@@ -878,7 +883,7 @@ mod tests {
 
     #[test]
     fn status_targets() {
-        let s = StatusesConfig { token_secret: "K2_CI_STATUSES_TOKEN".into(), env_name: "CI_STATUSES_TOKEN".into(), context: "k2-ci".into() };
+        let s = StatusesConfig { token_secret: "K2_CI_STATUSES_TOKEN".into(), env_name: "CI_STATUSES_TOKEN".into(), context: "k2-ci".into(), ..Default::default() };
         assert_eq!(status_target(None, Some("a/b")).unwrap(), None);
         let t = status_target(Some(&s), Some("acme/app")).unwrap().unwrap();
         assert_eq!((t.slug.as_str(), t.context.as_str(), t.token_secret.as_str()), ("acme/app", "k2-ci", "K2_CI_STATUSES_TOKEN"));

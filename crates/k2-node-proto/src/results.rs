@@ -164,6 +164,17 @@ pub struct Outputs {
     /// CE-19: the node's load at the job's start and end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<HostStamps>,
+    /// prd-compute-blacksmith-class-v1 §4.5.1 (`job-stats`): the job's CPU,
+    /// memory, IO and load series. Absent from an older node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<crate::gens::JobStats>,
+    /// §4.1.9 (`cache-gens`): the generation the job forked and whether its
+    /// fork committed. Absent without generations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<crate::gens::CacheResult>,
+    /// §4.7.2 (`setup-snapshots`): each setup step's hit or run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup: Vec<crate::gens::SetupResult>,
 }
 
 /// CE-14: what one job used, all processes together.
@@ -340,6 +351,11 @@ impl Outputs {
         for n in &mut self.notes {
             *n = clip(n, 300);
         }
+        self.stats = self.stats.take().map(crate::gens::JobStats::downsampled);
+        if let Some(c) = &mut self.cache {
+            c.why = clip(&c.why, 300);
+        }
+        self.setup.truncate(crate::gens::MAX_SETUP_STEPS);
         if let Some(t) = &mut self.tests {
             if t.failing.len() > MAX_FAILING {
                 t.failing.truncate(MAX_FAILING);

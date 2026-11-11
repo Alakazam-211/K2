@@ -228,6 +228,8 @@ fn receipt(key: &SigningKey, r: &store::JobRow, run: Option<RunFacts>) -> Receip
         secret_env: vec![],
         tools_used: Default::default(),
         run,
+        kind: None,
+        cache: None,
     }
 }
 

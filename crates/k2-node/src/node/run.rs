@@ -2327,6 +2327,8 @@ impl Node {
             secret_env: a.plan.secret_env.clone(),
             tools_used: outputs.as_ref().map(|o| o.tools_used.clone()).unwrap_or_default(),
             run,
+            kind: None,
+            cache: None,
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         if let Err(e) = &signed {

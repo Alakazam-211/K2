@@ -76,6 +76,11 @@ pub struct HostFacts {
     /// server's view) is unchanged; an older node sends none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gpus: Vec<crate::gpu::GpuFact>,
+    /// prd-compute-blacksmith-class-v1 §4.1.3: what the node's probe of its
+    /// cache root found (filesystem, clone method). Absent from an older
+    /// node, and from a node that hasn't probed (no `cache-gens`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_fs: Option<crate::gens::CacheFs>,
 }
 
 impl HostFacts {
@@ -245,6 +250,7 @@ mod tests {
             gpu: None,
             reboot_required: false,
             gpus: Vec::new(),
+            cache_fs: None,
         }
     }
 

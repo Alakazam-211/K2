@@ -46,8 +46,12 @@
 //! - [`signer_policy`]: the signer's per-project policy file (TOML).
 //! - [`ci_config`]: `.k2/ci.toml`, the `k2 ci` config (TOML).
 //! - [`gpu`]: GPU jobs (0.46.11): the ask, the facts, the codes.
+//! - [`gens`]: cache generations, setup snapshots, idle cores, job stats
+//!   (protocol 10 contracts, prd-compute-blacksmith-class-v1).
+//! - [`boxes`]: warm boxes for agents (protocol 10 frames).
 
 pub mod admin;
+pub mod boxes;
 pub mod cache;
 pub mod canonical;
 pub mod ci;
@@ -56,6 +60,7 @@ pub mod crypto;
 pub mod env;
 pub mod evidence;
 pub mod frames;
+pub mod gens;
 pub mod gitcred;
 pub mod gpu;
 pub mod health;

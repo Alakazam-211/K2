@@ -98,6 +98,14 @@ pub struct LaneTemplate {
     /// Engine's and Sew's long jobs share these nodes).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub other_tenants_max_job_secs: Option<u32>,
+    /// prd-compute-blacksmith-class-v1 §4.2.2 (BK-7): the owner lets this
+    /// lane's release builds keep their release cache on the node between
+    /// releases (secret-derived bytes, readable by root and the node user
+    /// only). One of two opt-ins: the client's `ci.toml` must say
+    /// `warm = true` too. **Absent = false**, so every older file and
+    /// template is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_cache: Option<bool>,
 }
 
 impl LaneTemplate {
@@ -119,7 +127,13 @@ impl LaneTemplate {
                 .collect(),
             network: true,
             other_tenants_max_job_secs: None,
+            release_cache: None,
         }
+    }
+
+    /// `release_cache`, absent = false.
+    pub fn release_cache_on(&self) -> bool {
+        self.release_cache == Some(true)
     }
 
     /// A shipped template by name.
@@ -175,6 +189,8 @@ impl LaneTemplate {
             // A cap on others is a widening for this lane's clients and a
             // narrowing for everyone else: always the owner's.
             || to.other_tenants_max_job_secs != self.other_tenants_max_job_secs
+            // Keeping release caches on the node is the owner's, in person.
+            || (to.release_cache_on() && !self.release_cache_on())
     }
 
     /// One line for people.
@@ -190,7 +206,7 @@ impl LaneTemplate {
             })
             .collect();
         format!(
-            "CI tier {}, secrets {}{}, {} CI jobs at once, {} h per job, packages {}, network {}, exclusive {} min/day, others capped {}",
+            "CI tier {}, secrets {}{}, {} CI jobs at once, {} h per job, packages {}, network {}, exclusive {} min/day, others capped {}{}",
             if self.tier_ci { "on" } else { "off" },
             if self.secrets { "on" } else { "off" },
             if self.secrets { format!(" ({})", iso.join(" or ")) } else { String::new() },
@@ -200,6 +216,7 @@ impl LaneTemplate {
             if self.network { "on" } else { "off" },
             self.exclusive_minutes_day,
             self.other_tenants_max_job_secs.map(|s| format!("at {} min", s / 60)).unwrap_or_else(|| "off".into()),
+            if self.release_cache_on() { ", release caches kept on the node" } else { "" },
         )
     }
 }
@@ -426,6 +443,27 @@ mod tests {
         assert!(narrower.widened_by(&t));
         assert!(t.widened_by(&LaneTemplate { other_tenants_max_job_secs: Some(1800), ..t.clone() }));
         assert!(!t.widened_by(&t));
+        // BK-7: keeping release caches is a widening; dropping it isn't.
+        let rc = LaneTemplate { release_cache: Some(true), ..t.clone() };
+        assert!(t.widened_by(&rc));
+        assert!(!rc.widened_by(&t));
+        assert!(!t.widened_by(&LaneTemplate { release_cache: Some(false), ..t.clone() }), "false = absent");
+    }
+
+    /// prd-compute-blacksmith-class-v1 §6: `release_cache` is absent unless
+    /// set, so every older lanes file and template keeps its bytes.
+    #[test]
+    fn release_cache_is_absent_when_unset() {
+        let t = LaneTemplate::ci_standard();
+        assert!(!t.release_cache_on());
+        let text = toml::to_string(&t).unwrap();
+        assert!(!text.contains("release_cache"), "{text}");
+        let on = LaneTemplate { release_cache: Some(true), ..t.clone() };
+        let text = toml::to_string(&on).unwrap();
+        assert!(text.contains("release_cache = true"), "{text}");
+        let back: LaneTemplate = toml::from_str(&text).unwrap();
+        assert!(back.release_cache_on());
+        assert!(serde_json::to_string(&t).unwrap().find("release_cache").is_none());
     }
 
     #[test]

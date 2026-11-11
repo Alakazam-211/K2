@@ -447,6 +447,16 @@ pub fn check(inp: &Input) -> R<Summary> {
             return refused(format!("{label}: the receipt body is not its canonical form (unknown or reordered fields)"));
         }
         rc.check_version().map_err(|e| Fail::Refused(format!("{label}: {e}")))?;
+        if rc.kind == Some(k2_node_proto::ci::ReceiptKind::Box) {
+            return refused(format!("{label}: a box command's receipt (kind box) is never a release build"));
+        }
+        if rc.v == k2_node_proto::frames::RECEIPT_V3 {
+            // prd-compute-blacksmith-class-v1 B3 walks the cache chain
+            // through the stored evidence; until then v3 is refused.
+            return refused(format!(
+                "{label}: receipt v3: this k2-signer checks receipt v2 only (cache chains, warm = \"signed-chain\", are not checked yet); rebuild with k2 ci release --cold"
+            ));
+        }
         if rc.v != RECEIPT_V2 {
             return refused(format!(
                 "{label}: receipt v{}: k2-signer checks receipt v2 (a v1 receipt is k2sign's S3b path)",
@@ -948,6 +958,17 @@ fn check_plan(label: &str, er: &EvidenceReceipt, rc: &Receipt, rule: &BuildRule,
     }
     if plan.receipt_v != Some(RECEIPT_V2) {
         return refused(format!("{label}: the plan did not ask for receipt v2"));
+    }
+    // prd-compute-blacksmith-class-v1: a cache lineage or a setup snapshot
+    // lays bytes into the build that this signer can't vouch for yet (B3).
+    if plan.cache_commit.is_some() || plan.cache_ref.is_some() {
+        return refused(format!("{label}: the plan forks or saves a cache generation (cache_commit {:?})", plan.cache_commit.map(|c| c.as_str())));
+    }
+    if !plan.setup.is_empty() {
+        return refused(format!(
+            "{label}: the plan reuses setup snapshots ({})",
+            plan.setup.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")
+        ));
     }
     let src_commit = rc.src.as_ref().map(|s| s.commit.as_str()).unwrap_or_default();
     let src_tree = rc.src.as_ref().map(|s| s.tree.as_str()).unwrap_or_default();

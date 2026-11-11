@@ -9,8 +9,8 @@
 //    workspace asks that server, never the window's);
 //  - an older daemon (no remote-desktop-v1) is never asked and says to
 //    update K2 there;
-//  - ready shows the toolbar with the machine's name and the placeholder;
-//    the stream buttons are disabled with the later-build title;
+//  - ready shows the toolbar with the machine's name and the picture's
+//    stage; the stream buttons are disabled until the stream opens;
 //  - a `desktop_state` event re-reads status.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -48,6 +48,8 @@ vi.mock('@/lib/daemon-cli', async () => {
       throw new Error(`unexpected GET ${route}`)
     }),
     daemonCliPost: vi.fn(async (scope: { hostKey: string }, route: string, body: unknown) => {
+      // The stream's ticket: this suite has no socket (DesktopPane.stream.test.tsx has).
+      if (route === 'desktop/ticket') throw new Error('no stream in this suite')
       daemon.posts.push({ scope: scope.hostKey, route, body })
       if (route === 'desktop/enable') return { enabled: true, state: 'ready', card: 'CARD FROM DAEMON' }
       throw new Error(`unexpected POST ${route}`)
@@ -55,7 +57,7 @@ vi.mock('@/lib/daemon-cli', async () => {
   }
 })
 
-import { DesktopPane, DESKTOP_READY_PLACEHOLDER } from './DesktopPane'
+import { DesktopPane } from './DesktopPane'
 import { NEEDS_STREAM_TITLE } from './DesktopToolbar'
 import { DesktopStateCard } from './DesktopStateCard'
 import { DESKTOP_ENABLE_CARD, STATE_CARDS, type DesktopStatus, type TabState } from './desktop-state'
@@ -147,7 +149,7 @@ describe('DesktopPane states', () => {
     })
     await act(async () => {})
     expect(daemon.posts).toEqual([{ scope: 'b.k2.dev', route: 'desktop/enable', body: {} }])
-    expect(document.querySelector('[data-desktop-placeholder]')?.textContent).toBe(DESKTOP_READY_PLACEHOLDER)
+    expect(document.querySelector('[data-desktop-picture]')).not.toBeNull()
   })
 
   it('Retry re-reads status; a desktop_state event does too', async () => {
@@ -183,10 +185,10 @@ describe('DesktopPane server and version', () => {
     expect(daemon.gets).toEqual([])
   })
 
-  it('ready: the toolbar names the machine, the stream buttons wait for a later build', async () => {
+  it('ready: the toolbar names the machine, the stream buttons wait for the live picture', async () => {
     await render()
     expect(document.querySelector('[data-desktop-machine]')?.textContent).toBe('office-mini')
-    expect(document.querySelector('[data-desktop-placeholder]')?.textContent).toBe(DESKTOP_READY_PLACEHOLDER)
+    expect(document.querySelector('[data-desktop-picture]')).not.toBeNull()
     for (const sel of ['data-desktop-keys-menu', 'data-desktop-clip-send', 'data-desktop-clip-copy', 'data-desktop-take-control']) {
       const b = document.querySelector<HTMLButtonElement>(`[${sel}]`)!
       expect(b.disabled, sel).toBe(true)

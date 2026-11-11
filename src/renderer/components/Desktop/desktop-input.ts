@@ -217,6 +217,55 @@ export function mapPointer(p: PointerMapInput): { x: number; y: number } | null 
   return { x, y }
 }
 
+/** Where the picture sits in the canvas's CSS box: display point (x, y)
+ *  is at CSS (ox + x·scale, oy + y·scale). Fit: scaled to fit and centred
+ *  (the canvas is `object-contain`); 1:1: `cssPerPt` per point from the top
+ *  left (the canvas is its own size inside a scrolled frame). */
+export interface PictureLayout {
+  scale: number
+  ox: number
+  oy: number
+}
+
+export function pictureLayout(p: { canvasW: number; canvasH: number; widthPt: number; heightPt: number; fit: Fit; cssPerPt?: number }): PictureLayout | null {
+  if (p.widthPt <= 0 || p.heightPt <= 0 || p.canvasW <= 0 || p.canvasH <= 0) return null
+  if (p.fit === '1:1') return { scale: p.cssPerPt && p.cssPerPt > 0 ? p.cssPerPt : 1, ox: 0, oy: 0 }
+  const s = Math.min(p.canvasW / p.widthPt, p.canvasH / p.heightPt)
+  return { scale: s, ox: (p.canvasW - p.widthPt * s) / 2, oy: (p.canvasH - p.heightPt * s) / 2 }
+}
+
+/** CSS pixels per display point at 1:1: one display pixel per device pixel
+ *  (`widthPx / widthPt` pixels per point, over the viewer's DPR). */
+export function oneToOneCssPerPt(widthPx: number, widthPt: number, dpr: number): number {
+  if (widthPx <= 0 || widthPt <= 0) return 1
+  const d = Number.isFinite(dpr) && dpr > 0 ? dpr : 1
+  return widthPx / widthPt / d
+}
+
+/** A wheel event's mode on the wire (`WheelEvent.deltaMode`: 0 = pixels;
+ *  lines and pages go as lines). */
+export function wheelMode(deltaMode: number): 'pixel' | 'line' {
+  return deltaMode === 0 ? 'pixel' : 'line'
+}
+
+/** `PointerEvent.button` → the wire's button, or null. */
+export function pointerButton(b: number): Button | null {
+  switch (b) {
+    case 0:
+      return 'left'
+    case 1:
+      return 'middle'
+    case 2:
+      return 'right'
+    case 3:
+      return 'back'
+    case 4:
+      return 'forward'
+    default:
+      return null
+  }
+}
+
 /** Mac ↔ PC modifiers: ⌘ and Ctrl trade places (the daemon's
  *  `keymap::flip_modifier`). */
 export function flipModifier(code: string): string {

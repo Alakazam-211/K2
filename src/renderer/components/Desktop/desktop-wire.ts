@@ -26,6 +26,16 @@ export const CLOSE_REASON = {
   auditUnavailable: 'audit_unavailable',
   desktopOff: 'desktop_off',
   deskdEnded: 'deskd_ended',
+  /** 4403: no input and no pane shown for 30 min (S8). */
+  idle: 'idle',
+  /** 4403: someone clicked Disconnect on the banner at the screen. */
+  disconnectedAtScreen: 'disconnected_at_screen',
+  /** 4403: the 8 h limit of one viewing (S8). */
+  sessionLimit: 'session_limit',
+  /** 4410: K2 Screen couldn't run the picture and had nothing to fall back
+   *  to (a Mac's K2 Screen sends H.264 only). A `state` message with why
+   *  comes just before. */
+  pictureFailed: 'picture_failed',
 } as const
 
 export type Codec = 'jpeg' | 'h264' | 'vp8'
@@ -79,11 +89,22 @@ export type ServerMsg =
   | { t: 'viewers'; viewers: ViewerName[] }
   | { t: 'cursor'; id: number; hotX: number; hotY: number; png: string }
   | { t: 'cursor-pos'; x: number; y: number; visible: boolean }
-  | { t: 'displays'; displays: Display[] }
+  | { t: 'displays'; displays: Display[]; /** The display shown now. */ display?: string }
   | { t: 'clipboard'; text: string | null; reason?: string }
   | { t: 'fps'; fps: number }
-  | { t: 'codec'; codec: Codec }
+  | { t: 'codec'; codec: Codec; message?: string }
   | { t: 'error'; code: string; message: string }
+  | { t: 'stats'; stats: StreamStats }
+
+/** The engine's `stats` readout (`stats=1`, the sim's shape): the daemon's
+ *  stage times over the last second. */
+export interface StreamStats {
+  frames: number
+  stages: { stage: string; n: number; p50: number; p95: number; max: number }[]
+  inputs: { id: number; recvMs: number; laneMs: number }[]
+  hubCpuMs: number
+  encoderCpuMs: number
+}
 
 /** Viewer → daemon. */
 export type ViewerMsg =
@@ -103,7 +124,7 @@ export type ViewerMsg =
   | { t: 'view'; on: boolean }
 
 const SERVER_TAGS: ReadonlySet<string> = new Set([
-  'hello', 'state', 'control', 'viewers', 'cursor', 'cursor-pos', 'displays', 'clipboard', 'fps', 'codec', 'error',
+  'hello', 'state', 'control', 'viewers', 'cursor', 'cursor-pos', 'displays', 'clipboard', 'fps', 'codec', 'error', 'stats',
 ])
 const VIEWER_TAGS: ReadonlySet<string> = new Set([
   'ack', 'fps', 'keyframe', 'pointer', 'button', 'wheel', 'key', 'text', 'clipboard-set', 'clipboard-get',
@@ -174,14 +195,59 @@ export function closeReasonText(code: number, reason: string): string {
         return "You're on this computer."
       case CLOSE_REASON.auditUnavailable:
         return "K2 couldn't write the access log, so it didn't connect you."
+      case CLOSE_REASON.idle:
+        return 'Closed after 30 minutes with no input and the tab hidden.'
+      case CLOSE_REASON.disconnectedAtScreen:
+        return 'Someone at the screen disconnected you.'
+      case CLOSE_REASON.sessionLimit:
+        return 'Closed after 8 hours. Reconnect to keep watching.'
       default:
         return "You don't have access to this computer's screen."
     }
   }
   if (code === CLOSE_DESKTOP_OFF) {
+    if (reason === CLOSE_REASON.pictureFailed) return 'The picture stopped. Try again.'
     return reason === CLOSE_REASON.deskdEnded
       ? 'K2 Screen stopped on this computer.'
       : 'Remote desktop was turned off on this computer.'
   }
   return 'The connection to this computer closed.'
+}
+
+/** What a viewer offers and asks for when it dials (`/cli/desktop/stream`). */
+export interface DesktopStreamQuery {
+  /** The single-use ticket from `POST /cli/desktop/ticket` (vs-live R20). */
+  ticket: string
+  /** What this viewer decodes, in preference order (JPEG by feature check). */
+  codecs: readonly Codec[]
+  window: number
+  display?: string | null
+  fps?: number | null
+  view?: boolean
+  stats?: boolean
+  /** The pane's width in device pixels. */
+  pw?: number
+}
+
+/** The stream URL. Only the ticket authorizes it: no `token=` ever rides
+ *  this URL (vs-live R20: URLs end up in relay and proxy logs). */
+export function desktopStreamUrl(wsBase: string, q: DesktopStreamQuery): string {
+  const p = new URLSearchParams({ ticket: q.ticket })
+  p.set('codecs', (q.codecs.length > 0 ? q.codecs : ['jpeg']).join(','))
+  p.set('win', String(Math.max(1, Math.round(q.window))))
+  if (q.display) p.set('display', q.display)
+  if (q.fps && q.fps > 0) p.set('fps', String(Math.round(q.fps)))
+  if (q.view) p.set('view', '1')
+  if (q.stats) p.set('stats', '1')
+  const pw = Math.round(q.pw ?? 0)
+  if (pw > 0) p.set('pw', String(pw))
+  return `${wsBase}/cli/desktop/stream?${p.toString()}`
+}
+
+/** Dial again on its own after this close? Only after a drop (the network,
+ *  the daemon restarting): never after 4401 or 4403 (access is gone or was
+ *  refused: asking again would only be refused again), and never after 4410
+ *  (the desktop is off; its card says so). */
+export function reconnectsAfter(code: number): boolean {
+  return code !== CLOSE_AUTH_REVOKED && code !== CLOSE_FORBIDDEN && code !== CLOSE_DESKTOP_OFF && code !== 1000
 }

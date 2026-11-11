@@ -9,6 +9,10 @@ const h = vi.hoisted(() => ({
   openSettings: vi.fn(),
   startAddWorkspace: vi.fn(async () => {}),
   eligible: true,
+  calls: [] as string[],
+  openWorkspaceThread: vi.fn(async (_id: string) => true),
+  startChiefOfStaff: vi.fn(async () => 'ws-k5'),
+  addToast: vi.fn(),
 }))
 
 vi.mock('@/stores/settings', () => ({
@@ -16,8 +20,14 @@ vi.mock('@/stores/settings', () => ({
 }))
 vi.mock('@/lib/start-add-workspace', () => ({ startAddWorkspace: h.startAddWorkspace }))
 vi.mock('@/components/OwnerAccountPrompt/OwnerAccountPrompt', () => ({ promptEligible: () => h.eligible }))
+vi.mock('@/lib/open-workspace-thread', () => ({ openWorkspaceThread: (id: string) => h.openWorkspaceThread(id) }))
+vi.mock('@/stores/toast', () => ({ useToastStore: { getState: () => ({ addToast: h.addToast }) } }))
+vi.mock('@/stores/first-run', () => ({
+  useFirstRunStore: { getState: () => ({ startChiefOfStaff: h.startChiefOfStaff }) },
+}))
 
-import { openFirstRunTarget } from './first-run-openers'
+import { COS_START_FAILED_TEXT, openFirstRunTarget, startChiefOfStaffHire } from './first-run-openers'
+import { useK5SheetStore } from '@/stores/k5-sheet'
 import { useLlmSignInRequestStore } from '@/stores/llm-sign-in-request'
 import { usePhonePairingFocusStore } from '@/stores/phone-pairing-focus'
 import { useOwnerAccountPromptReopenStore } from '@/stores/owner-account-prompt-reopen'
@@ -29,6 +39,19 @@ beforeEach(() => {
   useLlmSignInRequestStore.setState({ pending: null })
   usePhonePairingFocusStore.setState({ requestSeq: 0, handledSeq: 0 })
   useOwnerAccountPromptReopenStore.setState({ forced: false })
+  useK5SheetStore.setState({ isOpen: false })
+  h.calls = []
+  h.openWorkspaceThread.mockReset()
+  h.openWorkspaceThread.mockImplementation(async (id: string) => {
+    h.calls.push(`open:${id}`)
+    return true
+  })
+  h.startChiefOfStaff.mockReset()
+  h.startChiefOfStaff.mockImplementation(async () => {
+    h.calls.push('start')
+    return 'ws-k5'
+  })
+  h.addToast.mockReset()
 })
 
 describe('openFirstRunTarget', () => {
@@ -69,6 +92,26 @@ describe('openFirstRunTarget', () => {
     expect(openFirstRunTarget('owner_account_prompt')).toBe(true)
     expect(useOwnerAccountPromptReopenStore.getState().forced).toBe(false)
     expect(h.openSettings).toHaveBeenCalledWith('general')
+  })
+
+  it('k5_sheet opens the K5 sheet', () => {
+    expect(openFirstRunTarget('k5_sheet')).toBe(true)
+    expect(useK5SheetStore.getState().isOpen).toBe(true)
+    expect(h.openSettings).not.toHaveBeenCalled()
+  })
+
+  it("k5_thread_cos starts the hire, then opens K5's Thread", async () => {
+    expect(openFirstRunTarget('k5_thread_cos')).toBe(true)
+    await vi.waitFor(() => expect(h.openWorkspaceThread).toHaveBeenCalledWith('ws-k5'))
+    expect(h.calls).toEqual(['start', 'open:ws-k5'])
+    expect(h.addToast).not.toHaveBeenCalled()
+  })
+
+  it('k5_thread_cos: a refusal is a toast and opens nothing', async () => {
+    h.startChiefOfStaff.mockRejectedValue(new Error('only an Owner or Admin can start this'))
+    await startChiefOfStaffHire()
+    expect(h.openWorkspaceThread).not.toHaveBeenCalled()
+    expect(h.addToast).toHaveBeenCalledWith(`${COS_START_FAILED_TEXT}: only an Owner or Admin can start this`, 'error', 6000)
   })
 
   it.each(['k5_chat', 'cli_settings', '', 'constructor', '__proto__', null, undefined])('ignores %s', (v) => {

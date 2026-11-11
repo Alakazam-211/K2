@@ -12,6 +12,20 @@ description = "K2 Screen: the remote desktop helper. The one K2 process that hol
 # Linux only: the Xvfb integration tests (tests/xvfb.rs). They need a
 # running X server in DISPLAY; scripts/test/deskd-checks.sh starts one.
 xvfb-tests = []
+# macOS only: the live encode test (tests/mac_live_encode.rs): VideoToolbox
+# on this Mac, no GUI session or Screen Recording needed (a compute job).
+mac-live = []
+
+[[test]]
+name = "mac_live_encode"
+path = "tests/mac_live_encode.rs"
+required-features = ["mac-live"]
+
+# macOS only: the ScreenCaptureKit half of the live test, run as an app in
+# a logged-in session that has Screen Recording (see the file).
+[[example]]
+name = "sck_live"
+path = "examples/sck_live.rs"
 
 [lib]
 path = "src/lib.rs"

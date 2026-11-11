@@ -100,6 +100,14 @@ case "$mode" in
         step "check deskd crates" cargo check -p k2-deskd-proto -p k2-deskd --all-targets
         step "test deskd crates" test_env cargo test -p k2-deskd-proto -p k2-deskd --no-fail-fast
         ;;
+    mac-live)
+        # D5's live encode test: VideoToolbox through deskd's capture engine,
+        # units on a real pipe, decoded again. No GUI session or Screen
+        # Recording needed. The ScreenCaptureKit half is
+        # scripts/test/deskd-sck-live.sh (a logged-in session).
+        step "live encode (k2-deskd --features mac-live)" \
+            test_env cargo test --release -p k2-deskd --features mac-live --test mac_live_encode -- --nocapture --test-threads=1
+        ;;
     macos-daemon)
         # A daemon test link needs more than an 8 GB mini has: check the
         # macOS cfg branches here; the module's tests run in linux mode.

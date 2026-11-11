@@ -34,6 +34,7 @@ import { ThreadOverlayColumn } from '@/components/SessionView/ThreadOverlayColum
 import { ThreadEarlyCompose } from '@/components/SessionView/ThreadEarlyCompose'
 import { ChatterOverlayPane } from '@/components/SessionView/ChatterOverlayPane'
 import { InputsList } from '@/components/SessionView/ThreadDrawerPanel'
+import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
 import { ThreadFloatBell } from '@/components/SessionView/ThreadFloatBell'
 import { ThreadFloatSearch } from '@/components/SessionView/ThreadFloatSearch'
 import {
@@ -133,6 +134,12 @@ function useTileThreadAddr(workspaceId: string, path: string | null): string {
  *  own `display:none`), and no message box mounts unseen. */
 export function tileSessionViewTab(view: TileView): SessionViewTab {
   return view === 'heartbeats' ? 'chatter' : view
+}
+
+/** The tile's view picker: the drawer capsule in `switch` mode, a size
+ *  smaller than elsewhere (`sm`) so it sits lightly in the bar's centre. */
+export function TileViewPicker({ view, onView }: { view: TileView; onView: (next: TileView) => void }): JSX.Element {
+  return <ThreadDrawerSelector mode="switch" size="sm" view={view} onView={onView} />
 }
 
 // ── The bar's picture ────────────────────────────────────────────────────

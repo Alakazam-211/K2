@@ -73,18 +73,17 @@ import {
   PHASE_DORMANT,
   PaneBody,
   TilePicture,
+  TileViewPicker,
   useAgentTileAddr,
   useTileView,
   type TermPhase,
 } from './DashboardAgentTile'
-import type { TileView } from './tile-view'
-import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
+import { PaneChrome } from './PaneChrome'
 import {
   FileViewerPane,
   getFileCategory,
   hasSelectionWithin,
 } from '@/components/FileViewerPane/FileViewerPane'
-import { Surface } from '@/components/ui'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import {
   EDGE_BAND_PX,
@@ -140,106 +139,6 @@ const DRAG_THRESHOLD_Y = 5
 
 // Divider hit-area thickness (px), centered on the boundary line.
 const DIVIDER_HIT_PX = 7
-
-// ── Pane chrome (title + close + drag-to-move header) ────────────────────
-
-function PaneChrome({
-  title,
-  hint,
-  shortcutNum,
-  readOnly,
-  focused,
-  onClose,
-  onHeaderMouseDown,
-  lead,
-  picker,
-  tileView,
-  children,
-}: {
-  title: string
-  hint?: string
-  /** Before the title: an agent tile's 16px picture. */
-  lead?: React.ReactNode
-  /** An agent tile's view picker, right of the title (prd-projects-threads-v1
-   *  §3.1). Its segments are buttons, so pressing one never starts a drag. */
-  picker?: React.ReactNode
-  /** An agent tile's view: `data-tile-view` on the tile, read by focus
-   *  (⌘1–9, Esc) and Ctrl+`. */
-  tileView?: TileView
-  /** ⌘N badge — reading-order pane number (first 9 panes only). */
-  shortcutNum?: number
-  readOnly: boolean
-  focused: boolean
-  onClose: () => void
-  onHeaderMouseDown?: (e: React.MouseEvent) => void
-  children: React.ReactNode
-}): React.JSX.Element {
-  return (
-    <Surface
-      role2="surface" material="tile"
-      bordered={false}
-      data-tile-view={tileView}
-      className={`flex flex-col h-full min-w-0 min-h-0 border transition-colors ${
-        focused ? 'border-[var(--color-accent)]' : 'border-[var(--color-border)]'
-      }`}
-    >
-      {/* The tile's bar, 32px: it holds the picker's 24px cells. */}
-      <div
-        data-tile-bar=""
-        className={`flex items-center gap-2 h-8 pl-2 pr-1.5 border-b border-[var(--color-border)] flex-shrink-0 select-none ${
-          readOnly ? '' : 'cursor-grab'
-        }`}
-        onMouseDown={readOnly ? undefined : onHeaderMouseDown}
-        title={readOnly ? undefined : 'Drag to move'}
-      >
-        {lead}
-        <span className="min-w-0 text-[11px] font-semibold text-[var(--color-text-secondary)] truncate" data-tile-title="">
-          {title}
-        </span>
-        {hint && (
-          <span className="text-[9px] text-[var(--color-text-muted)] truncate opacity-70">
-            {hint}
-          </span>
-        )}
-        <span className="flex-1" data-tile-spacer="" />
-        {picker ? (
-          // The capsule's own padding is not a button: keep it off the drag.
-          <span className="flex-shrink-0 flex cursor-default" data-tile-picker="" onMouseDown={(e) => e.stopPropagation()}>
-            {picker}
-          </span>
-        ) : null}
-        {/* ⌘N pane-switch badge (the ActiveBar shortcutNum look),
-            immediately left of the close button. */}
-        {shortcutNum !== undefined && (
-          <span
-            className="text-[10px] font-mono text-[var(--color-text-muted)] tabular-nums flex-shrink-0"
-            data-tile-shortcut=""
-            title={`⌘${shortcutNum} focuses this pane`}
-          >
-            <span className="key-symbol">⌘</span>
-            {shortcutNum}
-          </span>
-        )}
-        {!readOnly && (
-          <button
-            type="button"
-            onClick={onClose}
-            onMouseDown={(e) => e.stopPropagation()}
-            className="flex items-center justify-center w-4 h-4 flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-status-error-soft)] transition-colors cursor-pointer"
-            title="Close pane"
-            aria-label="Close pane"
-          >
-            <svg width="8" height="8" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <line x1="2" y1="2" x2="10" y2="10" />
-              <line x1="10" y1="2" x2="2" y2="10" />
-            </svg>
-          </button>
-        )}
-      </div>
-      <div className="flex-1 min-h-0 min-w-0">{children}</div>
-    </Surface>
-  )
-}
 
 /** Terminal workspace ids currently in the layout tree (deduped). */
 function terminalWorkspaceIdsInLayout(root: LayoutNode | null): string[] {
@@ -303,7 +202,7 @@ function AgentTileFrame({
       onClose={onClose}
       onHeaderMouseDown={onHeaderMouseDown}
       lead={<TilePicture name={title} addr={addr} />}
-      picker={<ThreadDrawerSelector mode="switch" view={view} onView={setView} />}
+      picker={<TileViewPicker view={view} onView={setView} />}
       tileView={view}
     >
       <DashboardAgentTile

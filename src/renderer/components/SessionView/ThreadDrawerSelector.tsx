@@ -63,6 +63,9 @@ export interface ThreadDrawerSelectorSwitchProps {
   mode: 'switch'
   view: TileView
   onView: (next: TileView) => void
+  /** `sm`: about 90% of the capsule, its cells and icons (an agent tile's
+   *  bar, Rosson 2026-11-11). Default: the page tabs' size. */
+  size?: 'md' | 'sm'
 }
 
 export type ThreadDrawerSelectorProps = ThreadDrawerSelectorDrawersProps | ThreadDrawerSelectorSwitchProps
@@ -197,7 +200,13 @@ export function ThreadDrawerSelector(props: ThreadDrawerSelectorProps): JSX.Elem
   // A bar's capsule (the top bar's page tabs, PageTabs.tsx) in switch mode;
   // a floating object over the Thread in drawers mode.
   const form = switching
-    ? { 'data-material': 'frost', 'data-frost-shape': 'pill', 'data-tab-mode': 'switch' }
+    ? {
+        'data-material': 'frost',
+        'data-frost-shape': 'pill',
+        'data-tab-mode': 'switch',
+        // globals.css scales the capsule from `--k2-tab-scale`.
+        'data-tab-size': props.mode === 'switch' && props.size === 'sm' ? 'sm' : undefined,
+      }
     : floatProps(true, 'capsule')
 
   return (

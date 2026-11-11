@@ -64,8 +64,7 @@ import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope } from '@/kessel/server-scope'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { useProjectGroupsStore } from '@/stores/project-groups'
-import { ThreadDrawerSelector } from '@/components/SessionView/ThreadDrawerSelector'
-import { DashboardAgentTile, tileSessionViewTab, useTileView, type TermPhase } from './DashboardAgentTile'
+import { DashboardAgentTile, TileViewPicker, tileSessionViewTab, useTileView, type TermPhase } from './DashboardAgentTile'
 import type { ProjectDefaultView, ProjectGroupMemberInfo } from './projects-api'
 
 const room = testRoom({
@@ -88,7 +87,7 @@ function Tile({ defaultView, phase = LIVE }: { defaultView?: ProjectDefaultView;
   const [view, setView] = useTileView('g1', 'ws-sales', defaultView)
   return (
     <div data-tile-view={view} data-testid="tile">
-      <ThreadDrawerSelector mode="switch" view={view} onView={setView} />
+      <TileViewPicker view={view} onView={setView} />
       <DashboardAgentTile workspaceId="ws-sales" member={member} dashboardId="d1" initialPhase={phase} view={view} addr="sales" />
     </div>
   )
@@ -106,6 +105,13 @@ beforeEach(() => {
   useProjectGroupsStore.setState({ tileViews: {} })
 })
 afterEach(() => cleanup())
+
+describe("the tile's view picker", () => {
+  it('is the small capsule (size="sm")', () => {
+    renderInRoom(room, <Tile />)
+    expect(screen.getByTestId('tile-view-picker').getAttribute('data-tab-size')).toBe('sm')
+  })
+})
 
 describe('the default view', () => {
   it("comes from the project's defaultView", () => {

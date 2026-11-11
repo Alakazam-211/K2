@@ -396,6 +396,19 @@ describe('ThreadDrawerSelector in switch mode', () => {
     expect(checked()).toEqual(['heartbeats'])
   })
 
+  it('is the page tabs\' size by default; size="sm" (an agent tile) marks the capsule for the 90% rules', () => {
+    renderInRoom(room, <Picker />)
+    expect(screen.getByRole('radiogroup', { name: 'View' }).hasAttribute('data-tab-size')).toBe(false)
+    cleanup()
+    renderInRoom(room, <ThreadDrawerSelector mode="switch" size="sm" view="thread" onView={() => {}} />)
+    expect(screen.getByRole('radiogroup', { name: 'View' }).getAttribute('data-tab-size')).toBe('sm')
+  })
+
+  it('drawers mode never takes the small size', () => {
+    renderInRoom(room, <Selector />)
+    expect(screen.getByRole('toolbar', { name: 'Side panels' }).hasAttribute('data-tab-size')).toBe(false)
+  })
+
   it('leaves drawers mode as it was (toolbar of aria-pressed toggles)', () => {
     renderInRoom(room, <Selector />)
     expect(screen.queryByRole('radiogroup')).toBeNull()

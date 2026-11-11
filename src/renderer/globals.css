@@ -2252,20 +2252,46 @@ html:is([data-style="glass"], [data-style="glass-classic"]) button[data-k2-float
 [data-page-tabs][data-tab-mode="switch"] > [data-page-tab]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] { gap: 0; border: 1px solid var(--color-border); }
 html:not([data-style="glass"]) [data-page-tabs][data-tab-mode="switch"] > [data-page-tab] + [data-page-tab] { border-left: 1px solid var(--color-border); }
-/* A narrow agent tile (Projects): the bar wraps and the picker takes its own
-   row, centred and tighter, so all four views stay reachable; the ⌘N badge
-   steps aside. The asleep bar puts Wake under its line. */
+/* An agent tile's picker is a size smaller (ThreadDrawerSelector size="sm",
+   Rosson 2026-11-11): the cells, icons, Glass capsule padding and gap at
+   90% of the page tabs'. Each theme keeps its shape (Glass pill, Terminal
+   chamfer and hairline). A cell's hit area still reaches 24px tall. */
+[data-page-tabs][data-tab-mode="switch"][data-tab-size="sm"] { --k2-tab-scale: 0.9; }
+html [data-page-tabs][data-tab-mode="switch"][data-tab-size="sm"] > [data-page-tab] {
+  width: calc(24px * var(--k2-tab-scale));
+  height: calc(24px * var(--k2-tab-scale));
+}
+[data-tab-size="sm"] > [data-page-tab] > svg {
+  width: calc(14px * var(--k2-tab-scale));
+  height: calc(14px * var(--k2-tab-scale));
+}
+[data-tab-size="sm"] > [data-page-tab]::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block: calc(24px * (var(--k2-tab-scale) - 1) / 2);
+}
+html[data-style="glass"] [data-page-tabs][data-tab-mode="switch"][data-tab-size="sm"] {
+  padding: calc(3px * var(--k2-tab-scale));
+  gap: calc(var(--k2-capsule-gap) * var(--k2-tab-scale));
+}
+/* A narrow agent tile (Projects): the picker takes its own row, centred and
+   tighter, so all four views stay reachable; the name and the close button
+   share the first row and the ⌘N badge steps aside. 240px is where the
+   centred row would leave the name no room. The asleep bar puts Wake under
+   its line. */
 [data-tile-view] { container: agent-tile / inline-size; }
-@container agent-tile (max-width: 200px) {
-  [data-tile-bar] { flex-wrap: wrap; height: auto; row-gap: 4px; padding-block: 4px; }
-  [data-tile-bar] > :is([data-tile-shortcut], [data-tile-spacer]) { display: none; }
-  [data-tile-bar] > [data-tile-title] { flex: 1 1 0; }
-  [data-tile-bar] > [data-tile-picker] { order: 1; flex-basis: 100%; justify-content: center; }
+@container agent-tile (max-width: 240px) {
+  [data-tile-bar][data-tile-centred] { grid-template-columns: minmax(0, 1fr) max-content; height: auto; row-gap: 4px; padding-block: 4px; }
+  [data-tile-bar] > [data-tile-start] { grid-column: 1; grid-row: 1; }
+  [data-tile-bar] > [data-tile-end] { grid-column: 2; grid-row: 1; }
+  [data-tile-bar] > [data-tile-picker] { grid-column: 1 / -1; grid-row: 2; }
+  [data-tile-bar] [data-tile-shortcut] { display: none; }
   html[data-style="glass"] [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { gap: 2px; }
 }
 /* Narrower still, the four views sit two by two. */
 @container agent-tile (max-width: 128px) {
-  html [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { display: grid; grid-template-columns: repeat(2, 24px); }
+  html [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { display: grid; grid-template-columns: repeat(2, max-content); }
   html[data-style="glass"] [data-tile-bar] [data-page-tabs][data-tab-mode="switch"] { border-radius: 14px; }
   html:not([data-style="glass"]) [data-tile-bar] [data-tab-mode="switch"] > [data-page-tab]:nth-child(3) { border-left: 0; }
   html:not([data-style="glass"]) [data-tile-bar] [data-tab-mode="switch"] > [data-page-tab]:nth-child(n+3) { border-top: 1px solid var(--color-border); }

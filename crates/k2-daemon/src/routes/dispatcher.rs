@@ -9634,9 +9634,13 @@ async fn handle_one_request(
                 None
             };
             let mut bound_skin = None;
+            // `/cli/thread/message/delete` is not a pass route yet: it has no
+            // catalog row, so an App pass is refused here the same way the
+            // A′ fence refuses it (fence on or off, one answer). Guests
+            // deleting their own posts over HTTP comes with its catalog row.
             let skin_thread_write = matches!(
                 p,
-                "/cli/thread/post" | "/cli/thread/answer" | "/cli/thread/void" | "/cli/thread/message/delete"
+                "/cli/thread/post" | "/cli/thread/answer" | "/cli/thread/void"
             );
             let (auth_ok, scoped_principal, skin_author) = if skin_presented {
                 match skin_pass {

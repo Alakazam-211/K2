@@ -655,11 +655,36 @@ impl Node {
         // Sync.
         let mut src_ran: Option<SrcRan> = None;
         let mut lease: Option<Lease> = None;
+        // Cache generations (B1): this job's fork, when its plan asks and
+        // the node keeps generations; it replaces the warm slot.
+        let mut gens_fork: Option<crate::gens::Fork> = None;
         let mut cwd = dirs.root.clone();
         // The main checkout (`src/`, or `src/<src_path>` with `--with`).
         let mut main_checkout = dirs.src.clone();
         if let Some(src) = &a.plan.src {
-            match self.sync_src(&t, &a, &dirs, &mut journal, &mut stop).await {
+            let synced = self.sync_src(&t, &a, &dirs, &mut journal, &mut stop).await;
+            let synced = match synced {
+                Ok((ran, main_dir)) => {
+                    let own_uid_secret = secret_job && unit_mode && uid_share == UidShare::Own;
+                    match self.gens_fork(&t, &a, &dirs.root, own_uid_secret).await {
+                        Some(Ok(f)) => {
+                            sys(&mut journal, &f.line());
+                            gens_fork = Some(f);
+                        }
+                        Some(Err(e)) => sys(&mut journal, &format!("cache generations: no fork ({e}); this job builds as it would without them")),
+                        None => {}
+                    }
+                    Ok((ran, main_dir))
+                }
+                Err(e) => Err(e),
+            };
+            match synced {
+                Ok((ran, main_dir)) if gens_fork.is_some() => {
+                    main_checkout = main_dir.clone();
+                    cwd = main_dir;
+                    let warmth = if gens_fork.as_ref().is_some_and(|f| f.from.is_some()) { k2_node_proto::gens::WARMTH_GEN } else { "cold" };
+                    src_ran = Some(SrcRan { slot: None, warmth: Some(warmth.into()), ..ran });
+                }
                 Ok((ran, main_dir)) if private_build => {
                     // No warm slot: the build's outputs may hold the value.
                     main_checkout = main_dir.clone();
@@ -722,12 +747,17 @@ impl Node {
                 return;
             }
         };
-        let target = lease.as_ref().map(|l| l.dir.clone()).unwrap_or_else(|| dirs.private_target.clone());
+        let target = match &gens_fork {
+            Some(f) => f.target(),
+            None => lease.as_ref().map(|l| l.dir.clone()).unwrap_or_else(|| dirs.private_target.clone()),
+        };
         let _ = std::fs::create_dir_all(&target);
         // Warm caches by the project key (the controller's hash of its own
         // workspace id and remote; never a name the submitter picks), or
         // the job's own dir when there's no code.
         let cache_dir = match &a.plan.src {
+            // A forked job's cargo home and sccache dir are its fork's.
+            Some(_) if gens_fork.is_some() => gens_fork.as_ref().map(|f| f.cache_dir()).unwrap_or_else(|| dirs.private_cache()),
             // A secret job's (and a release build's) cargo home and sccache
             // dir are its own.
             Some(_) if private_build => dirs.private_cache(),
@@ -748,7 +778,10 @@ impl Node {
         }
         // A secret job's sccache server is its own (in its own tmp, killed
         // with its unit), never the slot's shared one.
-        let sccache_socket = if private_build { dirs.tmp.join("sccache.sock") } else { t.paths.sccache_socket() };
+        // A forked job's too (BK-11): a server keeps the dir it started
+        // with, so each fork starts its own on its fork's SCCACHE_DIR.
+        let own_sccache = private_build || gens_fork.is_some();
+        let sccache_socket = if own_sccache { dirs.tmp.join("sccache.sock") } else { t.paths.sccache_socket() };
         // `--cache NAME` (protocol 6): the workspace's folder that outlives
         // the job. Never for a secret job (it keeps nothing between runs);
         // the server refuses that too. The hold goes back in `finish_job`.
@@ -802,7 +835,7 @@ impl Node {
             extra: &a.plan.env,
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
-            sccache_socket: (private_build || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
+            sccache_socket: (own_sccache || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
             src_dir: a.plan.src.is_some().then_some(main_checkout.as_path()),
             job_cache: job_cache_dir.as_deref(),
         }) {
@@ -1510,7 +1543,12 @@ impl Node {
         Ok(match &self.wall {
             Wall::Seatbelt => {
                 let (dirs, sockets) = self.seatbelt_deny();
-                let who = crate::wall::SeatbeltTenant { slot: t.slot, home: self.layout().home.clone(), tenants_root: self.layout().tenants_root() };
+                let who = crate::wall::SeatbeltTenant {
+                    slot: t.slot,
+                    home: self.layout().home.clone(),
+                    tenants_root: self.layout().tenants_root(),
+                    own_fork: self.fork_dir_of(t, &a.fence.job_id, a.fence.generation),
+                };
                 crate::wall::seatbelt_argv(&crate::wall::seatbelt_tenant_profile(&dirs, &sockets, network_none, &who), &a.plan.argv)
             }
             _ => a.plan.argv.clone(),
@@ -2334,6 +2372,20 @@ impl Node {
         if let Err(e) = &signed {
             crate::nlog!("receipt for {job}: {e}");
         }
+        // Cache generations (B1): the fork is saved or dropped now that the
+        // job's processes are gone and its receipt names it (§4.1.4).
+        let tests_failed = outputs.as_ref().and_then(|o| o.tests.as_ref()).map(|t| t.failed + t.errors).unwrap_or(0);
+        let cache = self.gens_finish(t, a, state, reason, exit.as_ref(), tests_failed, signed.as_ref().ok()).await;
+        if let Some(c) = &cache {
+            crate::nlog!("job {job} gen {gen}: cache {}", c.why);
+        }
+        let outputs = match (outputs, cache) {
+            (Some(mut o), Some(c)) => {
+                o.cache = Some(c);
+                Some(o)
+            }
+            (o, _) => o,
+        };
         let record = || self.record_finish(t, job, gen, state, reason, detail, exit.as_ref(), log_seq, now, src.as_ref(), outputs.as_ref(), signed.as_ref().ok());
         let mut recorded = record();
         let gone = || {

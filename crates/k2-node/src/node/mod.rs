@@ -49,6 +49,7 @@ pub mod adopt;
 mod assign;
 pub mod ci;
 mod disk;
+pub mod gens_run;
 pub mod git_access;
 mod gpu;
 pub mod job_cache;
@@ -483,6 +484,12 @@ pub struct Node {
     /// Receipt v2's start-time facts of running attempts, by (slot, job,
     /// gen): what `finish_job` signs when the plan asked for v2.
     ci_runs: Mutex<HashMap<(Slot, String, u32), k2_node_proto::ci::RunFacts>>,
+    /// Cache generations (prd-compute-blacksmith-class-v1 §4.1): `None`
+    /// unless the owner's switch is on, the wall holds and the probe
+    /// passed at start (module `gens_run`).
+    pub gens: Option<Arc<crate::gens::Gens>>,
+    /// The fork each running attempt holds, by (slot, job, gen).
+    gens_forks: Mutex<HashMap<(Slot, String, u32), crate::gens::Fork>>,
 }
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
@@ -597,6 +604,8 @@ impl Node {
         if opts.cache_gens.is_none() {
             opts.cache_gens = Some(crate::gens::read_switch(&opts.layout.config));
         }
+        let gens_exempt = dev_test_exemption(opts.dev, &layout.config) && matches!(wall, Wall::None { .. });
+        let gens = gens_run::open_gens(opts.cache_gens.as_ref().unwrap_or(&Default::default()), &wall, exec_gens_wall, &layout.home, gens_exempt);
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -647,6 +656,8 @@ impl Node {
             statement: Mutex::new(Default::default()),
             root_taint: Mutex::new(root_taint),
             ci_runs: Mutex::new(HashMap::new()),
+            gens,
+            gens_forks: Mutex::new(HashMap::new()),
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);

@@ -162,6 +162,9 @@ pub struct SeatbeltTenant {
     pub home: PathBuf,
     /// `<home>-t` (every tenant's root is under it).
     pub tenants_root: PathBuf,
+    /// Cache generations: the job's own fork, the only one under its
+    /// root's `cache/forks/` it may write (one uid runs every job on a Mac).
+    pub own_fork: Option<PathBuf>,
 }
 
 /// The Seatbelt profile around one server's job (macOS): today's denies
@@ -227,6 +230,13 @@ pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], 
     // After every allow above (Seatbelt takes the last match), so a
     // tenant's allow of its own root never reopens its `gens/`. The same
     // uid runs the node, so this deny is the whole wall on a Mac (BK-22).
+    // Forks: a job writes only its own (another job of the same server,
+    // the same uid, never plants into a trusted check's fork).
+    let own_root = if t.slot == k2_node_proto::share::OWNER_SLOT { real_path(&t.home) } else { troot.join(t.slot.to_string()) };
+    p.push_str(&format!("(deny file-write* (subpath {}))\n", sb_str(&crate::gens::forks_root(&own_root))));
+    if let Some(f) = &t.own_fork {
+        p.push_str(&format!("(allow file-write* (subpath {}))\n", sb_str(&real_path(f))));
+    }
     let mut gens = vec![crate::gens::gens_root(&real_path(&t.home))];
     if t.slot != k2_node_proto::share::OWNER_SLOT {
         gens.push(crate::gens::gens_root(&troot.join(t.slot.to_string())));
@@ -1210,7 +1220,7 @@ mod tests {
     fn tenant_profile(slot: u8, home: &str) -> String {
         let home = PathBuf::from(home);
         let tenants_root = PathBuf::from(format!("{}-t", home.display()));
-        seatbelt_tenant_profile(&[], &[], false, &SeatbeltTenant { slot, home, tenants_root })
+        seatbelt_tenant_profile(&[], &[], false, &SeatbeltTenant { slot, home, tenants_root, own_fork: None })
     }
 
     fn at(p: &str, line: &str) -> usize {

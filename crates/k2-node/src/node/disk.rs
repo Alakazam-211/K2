@@ -715,6 +715,7 @@ impl Node {
                 let Some(n) = node.upgrade() else { return };
                 n.reap_orphans();
                 n.disk_guard_pass().await;
+                n.gens_sweep().await;
             }
         });
     }

@@ -82,6 +82,8 @@ impl Node {
         if let Some(h) = host.as_mut() {
             // GPU jobs (0.46.11): which GPUs this server may use here.
             self.mark_gpu_jobs(t, &mut h.gpus);
+            // Cache generations: only to a server that gets the feature.
+            h.cache_fs = self.gens_for(t).map(|g| g.fs.clone());
             // Host facts win over any owner label of the same name.
             labels.extend(h.labels());
             if h.gpus.iter().any(|g| g.jobs) {
@@ -251,6 +253,11 @@ impl Node {
         // its seat, the roster and its consent before sealing (V25).
         if self.offers_lane_secrets(t) && !f.iter().any(|x| x == k2_node_proto::ci::FEATURE_LANE_SECRETS) {
             f.push(k2_node_proto::ci::FEATURE_LANE_SECRETS.to_string());
+        }
+        // Cache generations (B1): a protocol-10 server, a node with the
+        // owner's switch on, its wall, and a closed, probed gens root.
+        if self.gens_for(t).is_some() && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_CACHE_GENS) {
+            f.push(k2_node_proto::gens::FEATURE_CACHE_GENS.to_string());
         }
         // GPU jobs (0.46.11): only to a server the machine's owner named in
         // `gpu.toml` (the owner's always), behind the Linux job wall, whose

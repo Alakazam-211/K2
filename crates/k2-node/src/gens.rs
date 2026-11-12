@@ -337,7 +337,7 @@ fn clonefile(src: &Path, dst: &Path) -> Result<(), String> {
 /// and the best clone method that works there, tried for real in a
 /// scratch folder that is removed again.
 pub fn probe(gens: &Path) -> Result<k2_node_proto::gens::CacheFs, String> {
-    use k2_node_proto::gens::{CacheFs, CloneMethod};
+    use k2_node_proto::gens::CacheFs;
     is_closed(gens)?;
     let fs = fs_name(gens)?;
     let dir = gens.join(PROBE_DIR);
@@ -499,6 +499,11 @@ impl SetId {
         };
         Ok(self.dir().join(folder))
     }
+}
+
+/// A full commit id: 40 lowercase hex.
+pub fn is_commit(c: &str) -> bool {
+    c.len() == 40 && c.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn gen_dir(lineage_dir: &Path, seq: u64) -> PathBuf {
@@ -815,7 +820,7 @@ impl Gens {
         } else if end.cancelled {
             return discard(res, "not saved: cancelled".into());
         }
-        if k2_node_proto::ci::check_commit("commit", &end.commit).is_err() {
+        if !is_commit(&end.commit) {
             return discard(res, "not saved: the job has no commit".into());
         }
         let Ok(ldir) = fork.set.lineage_dir(&lineage) else {

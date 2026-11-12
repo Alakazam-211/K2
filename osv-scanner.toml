@@ -5,6 +5,9 @@
 # Each entry: the advisory id, ignoreUntil = the review-by date (at most 90 days out), and why it
 # is not reachable or can't be fixed yet. After ignoreUntil, osv-scanner reports it again and
 # scripts/ci/audit-ignores.py fails, so the part goes red until someone re-checks it.
+# One entry per advisory: when it has a RUSTSEC id and a GHSA alias, list the RUSTSEC id
+# (cargo audit needs it; osv-scanner matches it through the alias). A second entry for the
+# twin is reported as an unused ignore.
 #
 # Review dates: 2026-12-05 where a lockfile-only bump fixes it (do the bump, delete the entry);
 # 2027-01-15 where it needs a major bump (the dependency-majors PRD, 0.46.5+) or upstream.
@@ -65,12 +68,6 @@ id = "RUSTSEC-2025-0141"
 ignoreUntil = 2026-12-05T00:00:00Z
 reason = "Unmaintained (no known vulnerability). One use: k2-core's ptyd saved-screen file (terminal/ptyd/snapshot.rs, 0.46.5 S4), K2's own file (0600 in a 0700 dir under <K2 home>/run), written and read by the same daemon user. Decode is bounded: magic + FORMAT header, a file of at most 64 MiB, gzip inflate capped at 256 MiB, bincode with_limit, then a trial restore under catch_unwind; anything else is removed and the session replays from the ring. Fix: 0.46.6 replaces the codec (postcard as FORMAT 2, keeping a read-only FORMAT 1 reader for one release), then drop bincode."
 
-# block-buffer 0.10.4
-[[IgnoredVulns]]
-id = "GHSA-qwgh-2vcv-g2f7"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "The advisory is the inline cursor of block-buffer 0.11+/0.12 (EagerBuffer's position in the block's last byte, ReadBuffer::write_block). 0.10.4 keeps the cursor in its own pos: u8 field and has no ReadBuffer: a compress that panics leaves pos at its old, in-bounds value. It also needs the hash's own compress to panic and a caller to catch it and keep hashing; RustCrypto's compress functions don't panic. Comes through digest 0.10 (sha2, hmac, rsa, ed25519...). Fix: the RustCrypto digest 0.11 generation (a major bump)."
-
 # browserslist 4.28.1
 [[IgnoredVulns]]
 id = "GHSA-73wf-gq98-2v4g"
@@ -101,18 +98,6 @@ id = "GHSA-67mh-4wv8-2f99"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Dev server only (vite's esbuild, 0.19/0.21); never ships, localhost only. Fix with the vite/vitest upgrade."
 
-# event-listener 5.4.1
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0221"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "Unsound Send bound on tags; reached through zbus/async-* on Linux desktop only, which pass no !Send tags. Fix: event-listener 5.4.2 (lockfile bump)."
-
-# git2 0.19.0
-[[IgnoredVulns]]
-id = "GHSA-j39j-6gw9-jw6h"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unsound Buf deref / Remote::list / blame_buffer Signature; K2 calls none of these (grep: git_changes.rs uses status/diff only). Fix: git2 0.20+/0.21 (dependency-majors PRD)."
-
 # git2 0.19.0
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0008"
@@ -130,12 +115,6 @@ reason = "Unsound Buf deref / Remote::list / blame_buffer Signature; K2 calls no
 id = "RUSTSEC-2026-0184"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Unsound Buf deref / Remote::list / blame_buffer Signature; K2 calls none of these (grep: git_changes.rs uses status/diff only). Fix: git2 0.20+/0.21 (dependency-majors PRD)."
-
-# glib 0.18.5
-[[IgnoredVulns]]
-id = "GHSA-wrw7-89jp-8q8g"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unsound VariantStrIter impls in glib 0.18, Linux GTK stack of the Tauri app only; K2 code never iterates glib Variants. Fix comes with Tauri's move off gtk-rs 0.18."
 
 # glib 0.18.5
 [[IgnoredVulns]]
@@ -178,12 +157,6 @@ reason = "postcss's internal id helper at build time; never ships, no attacker-c
 id = "GHSA-xwg4-73v4-xw9w"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "postcss's internal id helper at build time; never ships, no attacker-controlled size argument. Fix with postcss."
-
-# pin-utils 0.1.0 (added 2026-11-05)
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0441"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained (no known vulnerability). pin-utils is a small pin_mut! macro crate. Only path: k2-core -> portable-pty 0.8.1 -> nix 0.25.1 (its aio feature, on by default there); K2's own nix is 0.29, which has no pin-utils. Nothing to fix in place and no newer pin-utils. Fix: portable-pty 0.9 (nix 0.28+), a minor-version bump with API changes, with the dependency PRD."
 
 # picomatch 4.0.3
 [[IgnoredVulns]]
@@ -247,12 +220,6 @@ reason = "Quadratic attribute check / NsReader allocation DoS. 0.38: k2-core thu
 
 # quinn-proto 0.11.14
 [[IgnoredVulns]]
-id = "GHSA-4w2j-m93h-cj5j"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
-
-# quinn-proto 0.11.14
-[[IgnoredVulns]]
 id = "RUSTSEC-2026-0185"
 ignoreUntil = 2026-12-05T00:00:00Z
 reason = "In Cargo.lock only: cargo tree -i quinn-proto prints nothing for any target (reqwest's http3 is off), so it is never compiled into K2. Fix: refresh the lock (0.11.18)."
@@ -313,30 +280,6 @@ reason = "Unmaintained (functionality moved into rustls-pki-types); used to read
 
 # rustls-webpki 0.102.8
 [[IgnoredVulns]]
-id = "GHSA-82j2-j2ch-gfr8"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "GHSA-965h-392x-2mh5"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "GHSA-pwjx-qhcg-rvj4"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
-id = "GHSA-xgp8-3hg3-c2mh"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
-
-# rustls-webpki 0.102.8
-[[IgnoredVulns]]
 id = "RUSTSEC-2026-0049"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots via native-certs). K2 parses no CRLs; name-constraint and distrusted-intermediate issues matter only with a hostile CA. Fix: move imap off rustls-connector 0.19."
@@ -370,12 +313,6 @@ reason = "0.102.8 only via imap -> rustls-connector 0.19 (IMAP client, OS roots 
 id = "GHSA-7gcf-g7xr-8hxj"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "KeyValueMap serialization panic on empty input; serde_with is used only inside tauri-utils (config parsing at build time), never by K2 code. Fix comes with a tauri-utils update."
-
-# serial 0.4.0
-[[IgnoredVulns]]
-id = "RUSTSEC-2017-0008"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "Unmaintained (no known vulnerability); compiled in through portable-pty's serial support, which K2 never opens. Revisit with portable-pty."
 
 # smallstr 0.3.1
 [[IgnoredVulns]]

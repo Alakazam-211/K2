@@ -3,7 +3,8 @@
 
 import { Surface } from '@/components/ui'
 import { caretOn, others, type LiveWorkbookState } from '@/lib/live-view/reducer'
-import { letters, viewportA1, viewportRect, type Book, type Grid } from '@/lib/live-view/workbook'
+import { colLetters } from '@k2/mpc-client'
+import { viewportA1, viewportRect, type Book, type Grid } from '@/lib/live-view/workbook'
 
 const W = 150
 const H = 92
@@ -36,7 +37,7 @@ export function Minimap({ state, book, g, seen, onGo }: { state: LiveWorkbookSta
         <b className="truncate text-[var(--color-text-primary)]">{g.title}</b>
         <span className="flex-1" />
         <span className="lv-num">
-          {Rm} × {letters(Cm)}
+          {Rm} × {colLetters(Cm)}
         </span>
       </div>
       <button

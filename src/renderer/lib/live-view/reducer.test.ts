@@ -9,11 +9,11 @@ import { fold, play, stateAtRev } from './test-helpers'
 import { GOLDEN, stripAnnotations } from './samples/goldens'
 import { EMPTY_LOCAL, formulaTarget, isFollowing, stageSheet } from './view-model'
 import { a1Of } from './workbook'
-import type { XlsxOpsChangeFrame } from './xlsx-provisional'
+import type { OpsChangeFrame } from '@k2/mpc-client'
 
 const welcome: LiveWorkbookFrame = { type: 'welcome', client: 90071, self: 'person:ada', rights: 'read' }
 const loaded = () => fold([welcome, ...sampleSnapshotFrames(), sampleRosterSnapshot()])
-const frame21 = (seq: number): LiveWorkbookFrame => ({ ...(stripAnnotations(GOLDEN.turn.frames[0]) as XlsxOpsChangeFrame), type: 'ops_change', seq })
+const frame21 = (seq: number): LiveWorkbookFrame => ({ ...(stripAnnotations(GOLDEN.turn.frames[0]) as OpsChangeFrame), type: 'ops_change', seq })
 
 describe('liveWorkbookReducer: the keyed watch', () => {
   it('builds the book page by page, reporting progress, and is live once every page is in', () => {
@@ -39,7 +39,7 @@ describe('liveWorkbookReducer: the keyed watch', () => {
 
   it("a frame that doesn't fit (a delete of an absent entry) asks again; it never guesses", () => {
     const s0 = loaded()
-    const bad: LiveWorkbookFrame = { ...(frame21(s0.seq + 1) as XlsxOpsChangeFrame & { type: 'ops_change' }), ops: [{ root: 'cells', kind: 'map', op: 'delete', key: 'nope', field: 'c1' }] }
+    const bad: LiveWorkbookFrame = { ...(frame21(s0.seq + 1) as OpsChangeFrame), ops: [{ root: 'cells', kind: 'map', op: 'delete', key: 'nope', field: 'c1' }] }
     const s1 = liveWorkbookReducer(s0, bad)
     expect(s1.resync?.why).toBe('inconsistent')
     expect(s1.book).toBe(s0.book)
@@ -47,7 +47,7 @@ describe('liveWorkbookReducer: the keyed watch', () => {
 
   it('a change at or before the book’s rev is a misfit', () => {
     const s0 = loaded()
-    const old: LiveWorkbookFrame = { ...(frame21(s0.seq + 1) as XlsxOpsChangeFrame & { type: 'ops_change' }), rev: 20 }
+    const old: LiveWorkbookFrame = { ...(frame21(s0.seq + 1) as OpsChangeFrame), rev: 20 }
     expect(liveWorkbookReducer(s0, old).resync?.why).toBe('inconsistent')
   })
 

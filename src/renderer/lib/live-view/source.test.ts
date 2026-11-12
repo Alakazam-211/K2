@@ -10,13 +10,13 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { keyedStateJson, type ClientFrame, type ServerFrame, type Transport } from './kit'
+import { keyedStateJson, type ClientFrame, type OpsChangeFrame, type ServerFrame, type Transport } from '@k2/mpc-client'
 import { initialLiveState, liveWorkbookReducer, type LiveWorkbookFrame } from './reducer'
 import { sampleRosterSnapshot, sampleSnapshotFrames } from './sample-source'
 import { GOLDEN, stripAnnotations } from './samples/goldens'
 import { CHANGES_KEPT, KeyedWatchWorkbookSource, listsKeyedWatch, type LiveWorkbookSourceEvent } from './source'
 import { play } from './test-helpers'
-import type { XlsxOpsChangeFrame, XlsxWelcome } from './xlsx-provisional'
+import type { XlsxWelcome } from './not-in-kit'
 
 const GOLDENS = join(dirname(fileURLToPath(import.meta.url)), '../../../../vendor/k2-mpc-base/client/test/golden')
 type ViewGolden = { frames: ServerFrame[]; final_json: string; units: Record<string, unknown[]> }
@@ -118,7 +118,7 @@ describe('KeyedWatchWorkbookSource: the workbook view', () => {
   const xlsxFrames = (): LiveWorkbookFrame[] => {
     const snap = sampleSnapshotFrames()
     const last = (snap[snap.length - 1] as { seq: number }).seq
-    const changes = GOLDEN.turn.frames.map((f, i): LiveWorkbookFrame => ({ ...(stripAnnotations(f) as XlsxOpsChangeFrame), type: 'ops_change', seq: last + 1 + i }))
+    const changes = GOLDEN.turn.frames.map((f, i): LiveWorkbookFrame => ({ ...(stripAnnotations(f) as OpsChangeFrame), type: 'ops_change', seq: last + 1 + i }))
     return [...snap, sampleRosterSnapshot(), ...changes]
   }
 

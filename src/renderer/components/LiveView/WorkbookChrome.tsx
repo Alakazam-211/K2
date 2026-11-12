@@ -5,7 +5,8 @@
 import { Button, OverflowMenu, Segmented, Tag } from '@/components/ui'
 import { IconLock } from '@/components/icons/IconLock'
 import { modeOf, others, type LiveWorkbookState } from '@/lib/live-view/reducer'
-import { cellShown, formatNumber, gridOf, letters, sheetsOf, styleOf, titleOf, type Book } from '@/lib/live-view/workbook'
+import { colLetters } from '@k2/mpc-client'
+import { cellShown, formatNumber, gridOf, sheetsOf, styleOf, titleOf, type Book } from '@/lib/live-view/workbook'
 import { actorFrom, type Actor } from '@/lib/live-view/wording'
 import { Avatar, EyeOffGlyph, FollowGlyph, InfoGlyph, SheetGlyph } from './parts'
 
@@ -112,7 +113,7 @@ export function FormulaBar({
   const g = book && sheet ? gridOf(book, sheet) : null
   const cell = g && target ? g.cellAt(target.r, target.c) : undefined
   const shown = cell ? cellShown(cell) : null
-  const name = target ? `${letters(target.c)}${target.r}` : ''
+  const name = target ? `${colLetters(target.c)}${target.r}` : ''
   let value: React.ReactNode
   let chip: React.ReactNode = null
   if (!book) value = <span className="text-[var(--color-text-muted)]">{state.tier === 'none' ? 'No workbook' : 'Loading…'}</span>
@@ -133,7 +134,7 @@ export function FormulaBar({
   else value = <span className="text-[var(--color-text-muted)]">Empty cell</span>
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-3 py-1" data-testid="lv-formula-bar">
-      <span className="lv-num inline-flex h-6 min-w-[56px] items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-inset)] px-2 type-hint" data-k2-chamfer="chip" title={target ? `Row ${target.r}, column ${letters(target.c)}` : undefined} data-testid="lv-namebox">
+      <span className="lv-num inline-flex h-6 min-w-[56px] items-center justify-center border border-[var(--color-border)] bg-[var(--color-bg-inset)] px-2 type-hint" data-k2-chamfer="chip" title={target ? `Row ${target.r}, column ${colLetters(target.c)}` : undefined} data-testid="lv-namebox">
         {name || '—'}
       </span>
       <span className="font-[family-name:var(--font-code)] italic text-[var(--color-text-muted)]">fx</span>

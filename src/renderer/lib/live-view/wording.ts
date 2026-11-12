@@ -3,9 +3,8 @@
 // A1 at the change's rev, worked out when the frame lands; the history keeps
 // that text while the outline follows the keys.
 
-import type { WatchOp } from './kit'
-import { cornerPlace, gridOf, letters, rectA1, sheetOfRow, titleOf, colAddress, type Book, type Rect4 } from './workbook'
-import type { Band, XlsxOpsChangeFrame } from './xlsx-provisional'
+import { colLetters, colOfCellField, type Band, type OpsChangeFrame, type WatchOp } from '@k2/mpc-client'
+import { a1Text, cornerPlace, gridOf, rectA1, sheetOfRow, titleOf, type Book, type Rect4 } from './workbook'
 
 /** Who a change or claim is by, as the view shows them. */
 export interface Actor {
@@ -65,7 +64,8 @@ function cellPoints(book: Book, ops: readonly Extract<WatchOp, { kind: 'map' }>[
   const pts: { r: number; c: number }[] = []
   for (const o of ops) {
     const r = g.rowByKey.get(o.key)
-    const c = g.colByKey.get(colAddress(book.schema.grid.col_of_cell_field, sheet, o.field as string))
+    const address = colOfCellField(book.schema.grid, sheet, o.field as string)
+    const c = address === null ? undefined : g.colByKey.get(address)
     if (r && c) pts.push({ r: r.n, c: c.n })
   }
   return pts.length ? { sheet, pts } : null
@@ -80,7 +80,7 @@ const box = (pts: { r: number; c: number }[]): Rect4 => ({
 
 function bandWords(b: Band, title: string, blank: boolean): { text: string; place: string } {
   const one = b.from === b.to
-  const at = (n: number): string => (b.axis === 'rows' ? String(n) : letters(n))
+  const at = (n: number): string => (b.axis === 'rows' ? String(n) : colLetters(n))
   const noun = b.axis === 'rows' ? (one ? 'row' : 'rows') : one ? 'column' : 'columns'
   const span = one ? at(b.from) : `${at(b.from)}–${at(b.to)}`
   if (b.op === 'insert') return { text: one ? `inserted a ${noun} at ${span} on ${title}` : `inserted ${b.to - b.from + 1} ${noun} at ${span} on ${title}`, place: at(b.from) }
@@ -88,7 +88,7 @@ function bandWords(b: Band, title: string, blank: boolean): { text: string; plac
 }
 
 /** One frame in words, from the books before and after it. */
-export function framePhrase(f: XlsxOpsChangeFrame, B0: Book, B1: Book): Phrase {
+export function framePhrase(f: OpsChangeFrame, B0: Book, B1: Book): Phrase {
   const file = f.actor.kind === 'file'
   const who = file ? null : actorFrom(f.actor).name
   const lead = file ? 'was saved outside K2: ' : ''
@@ -165,8 +165,8 @@ export function framePhrase(f: XlsxOpsChangeFrame, B0: Book, B1: Book): Phrase {
     const target: PhraseTarget = { sheet: at.sheet, r: R.r0, c: R.c0 }
     if (cops.length === 1) {
       const o = cops[0]
-      const fa = B1.a1[o.key]?.[o.field as string]
-      const fb = B0.a1[o.key]?.[o.field as string]
+      const fa = a1Text(B1, o.key, o.field as string)
+      const fb = a1Text(B0, o.key, o.field as string)
       if (fa != null && fb != null && fa !== fb) return out(`changed the formula in ${place} on ${title}`, place, at.sheet, target)
       if (fa != null && fb == null) return out(`wrote a formula in ${place} on ${title}`, place, at.sheet, target)
       if (fa == null && fb != null) return out(`replaced the formula in ${place} on ${title}`, place, at.sheet, target)
@@ -184,15 +184,15 @@ export function framePhrase(f: XlsxOpsChangeFrame, B0: Book, B1: Book): Phrase {
 
 /** An outside save: the cells someone typed, by A1, and how many cached results came back with them. */
 function outsideSave(
-  f: XlsxOpsChangeFrame,
+  f: OpsChangeFrame,
   B1: Book,
   cops: Extract<WatchOp, { kind: 'map' }>[],
   out: (text: string, place: string | number, sheet: string | null, target?: PhraseTarget | null) => Phrase,
 ): Phrase {
-  const values = cops.filter((o) => B1.a1[o.key]?.[o.field as string] == null)
+  const values = cops.filter((o) => a1Text(B1, o.key, o.field as string) == null)
   const results = cops.length - values.length
   const at = cellPoints(B1, values.length ? values : cops)
-  const places = at ? at.pts.map((p) => letters(p.c) + p.r) : []
+  const places = at ? at.pts.map((p) => colLetters(p.c) + p.r) : []
   const named = values.length === 0 ? '' : values.length <= 3 ? places.join(', ') : `${values.length} cells`
   const res = results ? `${results} result${results === 1 ? '' : 's'}` : ''
   const text = `${[named, res].filter(Boolean).join(' and ')} changed`

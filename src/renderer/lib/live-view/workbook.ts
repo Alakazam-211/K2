@@ -1,87 +1,73 @@
 // A live workbook as the view reads it: the keyed state (kept as KeyedWatch
 // keeps it) plus the pack's derived values (A1 text, merges, style tables),
-// and the pure derivations a grid needs: sheets, row numbers and column
-// letters by the grid slot's rule (kit item VG), cells with their shown form,
-// corners and A1. No React, no DOM.
+// and the derivations a grid needs: sheets, and the grid of a sheet, numbered
+// and placed by the kit's grid helpers (`gridNumbers`, `cornerNumbers`,
+// `colOfCellField`...), with cells in their shown form. No React, no DOM.
 
-import { mapKey, type KeyedState, type KeyedValue } from './kit'
+import {
+  colLetters,
+  colOfCellField,
+  cornerNumbers,
+  cornerProblem,
+  gridNumbers,
+  mapKey,
+  rangeA1 as kitRangeA1,
+  type CellRange,
+  type ContainerDerived,
+  type Corner,
+  type FrameDerived,
+  type GridNumbers,
+  type KeyedState,
+  type KeyedValue,
+  type OpsChangeFrame,
+  type StyleHint,
+} from '@k2/mpc-client'
+import { A1, cellDerived, NO_CELL_DERIVED, withFrameDerived, withUnitsDerived, type CellDerivedValues } from './cell-derived'
 import { foldOps } from './keyed-fold'
-import type {
-  CellRange,
-  ContainerDerived,
-  Corner,
-  SheetState,
-  StyleHint,
-  StyleTable,
-  XlsxFrameDerived,
-  XlsxOpsChangeFrame,
-  XlsxViewSchema,
-  XlsxViewSnapshot,
-  XlsxViewUnit,
-} from './xlsx-provisional'
+import type { SheetState, XlsxViewSchema, XlsxViewSnapshot, XlsxViewUnit } from './not-in-kit'
 
 /** One version of the workbook. Immutable: a frame makes a new one. */
 export interface Book {
   rev: number
   state: KeyedState
   schema: XlsxViewSchema
-  /** `derived.a1` by row key, then cell field. */
-  a1: Readonly<Record<string, Readonly<Record<string, string>>>>
+  /** The derived values kept by cell field (`a1`); read with `cellDerived(book, name, unit, field)`. */
+  cellDerived: CellDerivedValues
   /** `Container.derived` by sheet key (merges, styles). */
   containers: Readonly<Record<string, ContainerDerived>>
 }
 
-/** A book from a whole snapshot: the keyed state, the view's containers and its units' `derived.a1`. */
+/** A book from a whole snapshot: the keyed state, the view's containers, and the cell-derived values (the rows pages', then the units'). */
 export function bookFromSnapshot(
   state: KeyedState,
   view: XlsxViewSnapshot,
   units: ReadonlyMap<string, readonly XlsxViewUnit[]>,
   rev: number,
-  pageA1: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
+  fromPages: CellDerivedValues = NO_CELL_DERIVED,
 ): Book {
   // r1.1: the A1 text rides on the cells pages too, so a formula never reads as its number while the units stream.
-  const a1: Record<string, Record<string, string>> = {}
-  for (const [k, row] of Object.entries(pageA1)) a1[k] = { ...row }
-  for (const list of units.values()) {
-    for (const u of list) {
-      const m = u.derived?.a1
-      if (!m) continue
-      const row: Record<string, string> = { ...(a1[u.key] ?? {}) }
-      for (const [f, t] of Object.entries(m)) if (t != null) row[f] = t
-      a1[u.key] = row
-    }
-  }
+  const derived = withUnitsDerived(fromPages, units.values(), view.schema.grid)
   const containers: Record<string, ContainerDerived> = {}
   for (const c of view.containers) if (c.derived) containers[c.key] = { merges: c.derived.merges ?? [], styles: c.derived.styles ?? {} }
-  return { rev, state, schema: view.schema, a1, containers }
+  return { rev, state, schema: view.schema, cellDerived: derived, containers }
 }
 
 /** A frame onto a book: its ops (the kit's KeyedWatch, keyed-fold.ts), then the pack's derived values. Throws `KeyedMisfit` when it doesn't fit. */
-export function applyFrameToBook(book: Book, f: XlsxOpsChangeFrame): Book {
+export function applyFrameToBook(book: Book, f: OpsChangeFrame): Book {
   const state = foldOps(book.state, book.rev, f)
-  const d: XlsxFrameDerived = f.derived ?? {}
-  let a1 = book.a1
-  if (d.units) {
-    const next: Record<string, Record<string, string>> = { ...book.a1 }
-    for (const [k, u] of Object.entries(d.units)) {
-      if (!u?.a1) continue
-      const row: Record<string, string> = { ...(next[k] ?? {}) }
-      for (const [fld, t] of Object.entries(u.a1)) {
-        if (t === null) delete row[fld]
-        else row[fld] = t
-      }
-      next[k] = row
-    }
-    a1 = next
-  }
+  const d: FrameDerived = f.derived ?? {}
+  const derived = withFrameDerived(book.cellDerived, d, book.schema.grid)
   let containers = book.containers
   if (d.containers) {
     const next: Record<string, ContainerDerived> = { ...book.containers }
     for (const [k, c] of Object.entries(d.containers)) next[k] = { ...(next[k] ?? {}), ...c }
     containers = next
   }
-  return { rev: f.rev, state, schema: book.schema, a1, containers }
+  return { rev: f.rev, state, schema: book.schema, cellDerived: derived, containers }
 }
+
+/** A cell's A1 text (`derived.a1`, a formula's text as people read it), `null` when it isn't a formula. */
+export const a1Text = (book: Book, row: string, field: string): string | null => cellDerived(book, A1, row, field)
 
 // ---------- reading roots ----------
 
@@ -98,26 +84,6 @@ function listKeys(state: KeyedState, root: string): string[] {
 /** Which map holds a list's fields (`composite`: sheets → sheet_props). */
 function propsRoot(state: KeyedState, list: string): string | null {
   return state.schema.composite?.find((c) => c.list === list)?.map ?? null
-}
-
-// ---------- letters ----------
-
-/** 1 → A, 26 → Z, 27 → AA, 16,384 → XFD (`col_label: letters`). */
-export function letters(n: number): string {
-  let s = ''
-  let x = n
-  while (x > 0) {
-    const m = (x - 1) % 26
-    s = String.fromCharCode(65 + m) + s
-    x = Math.floor((x - 1) / 26)
-  }
-  return s
-}
-
-export function lettersToN(s: string): number {
-  let n = 0
-  for (const ch of s) n = n * 26 + (ch.charCodeAt(0) - 64)
-  return n
 }
 
 // ---------- sheets ----------
@@ -216,7 +182,9 @@ export interface Grid {
   cells: GridCell[]
   cellAt(r: number, c: number): GridCell | undefined
   merges: CellRange[]
-  styles: StyleTable
+  styles: Readonly<Record<string, StyleHint>>
+  /** The kit's numbering of this sheet (`gridNumbers`): what its corner helpers read. */
+  numbers: GridNumbers
   lastRow: number
   lastCol: number
 }
@@ -244,18 +212,6 @@ function rowFields(book: Book): Map<string, [string, string][]> {
   return out
 }
 
-/** VG's rule: within one container, in list order, number = previous + gap + 1 (a missing gap is 0). */
-function numbered(book: Book, list: string, propsMap: string, contField: string, gapField: string, first: number, sid: string): { key: string; n: number }[] {
-  const out: { key: string; n: number }[] = []
-  let n = first - 1
-  for (const k of listKeys(book.state, list)) {
-    if (mapGet(book.state, propsMap, k, contField) !== sid) continue
-    n = n + Number(mapGet(book.state, propsMap, k, gapField) ?? 0) + 1
-    out.push({ key: k, n })
-  }
-  return out
-}
-
 const GRID_CACHE = new WeakMap<Book, Map<string, Grid | null>>()
 
 /** The grid of one sheet at this book's rev; `null` when the sheet isn't there. Cached per book. */
@@ -269,14 +225,14 @@ export function gridOf(book: Book, sheetKey: string): Grid | null {
     return null
   }
   const gs = book.schema.grid
-  const ucf = book.schema.unit_container_field
-  const rows: GridRow[] = numbered(book, gs.rows, gs.cells, ucf, gs.numbering.rows.gap_field, gs.numbering.rows.first, sh.sid).map((r, i) => {
-    const ht = mapGet(book.state, gs.cells, r.key, gs.row_fields.height)
-    return { key: r.key, n: r.n, i, hidden: mapGet(book.state, gs.cells, r.key, gs.row_fields.hidden) === '1', heightPt: ht != null ? Number(ht) : null }
+  const numbers = gridNumbers(book.state, book.schema, sheetKey)
+  const rows: GridRow[] = numbers.rows.map((r, i) => {
+    const ht = mapGet(book.state, gs.cells, r.address, gs.row_fields.height)
+    return { key: r.address, n: r.number, i, hidden: mapGet(book.state, gs.cells, r.address, gs.row_fields.hidden) === '1', heightPt: ht != null ? Number(ht) : null }
   })
-  const cols: GridCol[] = numbered(book, gs.cols, gs.col_fields, gs.col_container_field, gs.numbering.cols.gap_field, gs.numbering.cols.first, sh.sid).map((c, i) => {
-    const w = mapGet(book.state, gs.col_fields, c.key, gs.col_field_names.width)
-    return { key: c.key, n: c.n, i, letter: letters(c.n), hidden: mapGet(book.state, gs.col_fields, c.key, gs.col_field_names.hidden) === '1', widthChars: w != null ? Number(w) : null }
+  const cols: GridCol[] = numbers.cols.map((c, i) => {
+    const w = mapGet(book.state, gs.col_fields, c.address, gs.col_field_names.width)
+    return { key: c.address, n: c.number, i, letter: colLetters(c.number), hidden: mapGet(book.state, gs.col_fields, c.address, gs.col_field_names.hidden) === '1', widthChars: w != null ? Number(w) : null }
   })
   const rowByKey = new Map(rows.map((r) => [r.key, r]))
   const colByKey = new Map(cols.map((c) => [c.key, c]))
@@ -285,8 +241,8 @@ export function gridOf(book: Book, sheetKey: string): Grid | null {
   const fieldsByRow = rowFields(book)
   for (const r of rows) {
     for (const [fld, raw] of fieldsByRow.get(r.key) ?? []) {
-      if (fld.startsWith(gs.row_fields_start)) continue
-      const col = colByKey.get(colAddress(gs.col_of_cell_field, sheetKey, fld))
+      const address = colOfCellField(gs, sheetKey, fld)
+      const col = address === null ? undefined : colByKey.get(address)
       if (!col) continue
       let reg: Record<string, unknown>
       try {
@@ -305,7 +261,7 @@ export function gridOf(book: Book, sheetKey: string): Grid | null {
         t: typeof t === 'string' ? t : null,
         v: v == null ? null : String(v),
         s: typeof s === 'number' ? s : Number(s ?? 0) || 0,
-        a1: book.a1[r.key]?.[fld] ?? null,
+        a1: a1Text(book, r.key, fld),
         raw,
       }
       cells.push(cell)
@@ -328,14 +284,10 @@ export function gridOf(book: Book, sheetKey: string): Grid | null {
     styles: derived.styles ?? {},
     lastRow: rows.length ? rows[rows.length - 1].n : 0,
     lastCol: cols.length ? cols[cols.length - 1].n : 0,
+    numbers,
   }
   byC.set(sheetKey, g)
   return g
-}
-
-/** `col_of_cell_field`: a cell field (`c4`) to its column's address (`@sheet:1/col:c4`). */
-export function colAddress(template: string, container: string, field: string): string {
-  return template.replace('{container}', container).replace('{field}', field)
 }
 
 /** The sheet a row belongs to (its `@sheet` matched to a sheet's `sid`). */
@@ -395,7 +347,7 @@ export function formatNumber(v: string, numfmt: string): { text: string; applied
   }
 }
 
-// ---------- corners (kit item VC) ----------
+// ---------- corners (the kit's grid helpers) ----------
 
 export interface RC {
   r: number
@@ -409,48 +361,18 @@ export interface Rect4 {
   c1: number
 }
 
-function axisNum<T extends { n: number }>(byKey: ReadonlyMap<string, T>, key: string | null, off: number): number | null {
-  if (key == null) return off
-  const x = byKey.get(key)
-  return x ? x.n + off : null
-}
-
-/** A corner to its row and column numbers (`null` parts when its row or column isn't on this grid). */
-export function cornerRC(g: Grid, c: Corner): { r: number | null; c: number | null } {
-  return { r: axisNum(g.rowByKey, c.row, c.row_off), c: axisNum(g.colByKey, c.col, c.col_off) }
-}
-
-/** A corner that places: both parts on this grid. */
+/** A corner's row and column numbers on this grid (the kit's `cornerNumbers`), `null` when it isn't one of this sheet's in normal form and in bounds. */
 export function cornerPlace(g: Grid, c: Corner): RC | null {
-  const p = cornerRC(g, c)
-  return p.r == null || p.c == null ? null : { r: p.r, c: p.c }
+  const at = cornerNumbers(g.numbers, c)
+  return at ? { r: at.row, c: at.col } : null
 }
 
-function axisOk<T extends { n: number; i: number }>(list: readonly T[], byKey: ReadonlyMap<string, T>, key: string | null, off: number, max: number): boolean {
-  if (key != null && !byKey.has(key)) return false
-  const base = key == null ? 0 : (byKey.get(key) as T).n
-  const at = base + off
-  if (off < 0 || at < 1 || at > max) return false
-  // Normal form: no keyed row (column) strictly between the key and the cell.
-  const next = key == null ? list[0] : list[(byKey.get(key) as T).i + 1]
-  return !next || next.n > at
+/** The corner is live, on this sheet, in normal form and within the sheet's bounds (the kit's `cornerProblem` finds nothing). */
+export function cornerOk(g: Grid, c: Corner): boolean {
+  return cornerProblem(g.numbers, c) === null
 }
 
-/** The corner is live, on this sheet, in normal form and within the sheet's bounds. */
-export function cornerOk(g: Grid, c: Corner, max: { rows: number; cols: number }): boolean {
-  return axisOk(g.rows, g.rowByKey, c.row, c.row_off, max.rows) && axisOk(g.cols, g.colByKey, c.col, c.col_off, max.cols)
-}
-
-/** A cell's corner in normal form: the last keyed row (column) at or before it, plus an offset. */
-export function cornerAt(g: Grid, r: number, c: number): Corner {
-  let lr: GridRow | null = null
-  for (const x of g.rows) if (x.n <= r) lr = x
-  let lc: GridCol | null = null
-  for (const x of g.cols) if (x.n <= c) lc = x
-  return { row: lr ? lr.key : null, row_off: lr ? r - lr.n : r, col: lc ? lc.key : null, col_off: lc ? c - lc.n : c }
-}
-
-export const a1Of = (rc: RC): string => letters(rc.c) + rc.r
+export const a1Of = (rc: RC): string => colLetters(rc.c) + rc.r
 
 /** A range to its rectangle (normalised), or null when a corner doesn't place. */
 export function rangeRect(g: Grid, r: CellRange): Rect4 | null {
@@ -460,16 +382,12 @@ export function rangeRect(g: Grid, r: CellRange): Rect4 | null {
   return { r0: Math.min(s.r, e.r), r1: Math.max(s.r, e.r), c0: Math.min(s.c, e.c), c1: Math.max(s.c, e.c) }
 }
 
-/** A range as A1 text, start then end, as the person made it (`C4:D15`); a one-cell range is still `D5:D5`. */
-export function rangeA1(g: Grid, r: CellRange): string | null {
-  const s = cornerPlace(g, r.start)
-  const e = cornerPlace(g, r.end)
-  return s && e ? `${a1Of(s)}:${a1Of(e)}` : null
-}
+/** A range as A1 text, start then end, as the person made it (`C4:D15`; a one-cell range is still `D5:D5`): the kit's `rangeA1` on this sheet's numbers. */
+export const rangeA1 = (g: Grid, r: CellRange): string | null => kitRangeA1(g.numbers, r)
 
 /** A rectangle as A1 for wording: one cell as `F6`, else `D5:D7`. */
 export function rectA1(R: Rect4): string {
-  return R.r0 === R.r1 && R.c0 === R.c1 ? letters(R.c0) + R.r0 : `${letters(R.c0)}${R.r0}:${letters(R.c1)}${R.r1}`
+  return R.r0 === R.r1 && R.c0 === R.c1 ? colLetters(R.c0) + R.r0 : `${colLetters(R.c0)}${R.r0}:${colLetters(R.c1)}${R.r1}`
 }
 
 export const inRect = (rc: RC, R: Rect4): boolean => rc.r >= R.r0 && rc.r <= R.r1 && rc.c >= R.c0 && rc.c <= R.c1
@@ -482,7 +400,7 @@ export function viewportRect(v: { x: number; y: number; w: number; h: number }):
 
 export function viewportA1(v: { x: number; y: number; w: number; h: number }): string {
   const R = viewportRect(v)
-  return `${letters(R.c0)}${R.r0}:${letters(R.c1)}${R.r1}`
+  return `${colLetters(R.c0)}${R.r0}:${colLetters(R.c1)}${R.r1}`
 }
 
 // ---------- units (r1 ruling 8) ----------

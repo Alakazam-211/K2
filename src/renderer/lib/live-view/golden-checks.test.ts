@@ -20,9 +20,8 @@ import {
   cornerOk,
   cornerPlace,
   gridOf,
+  a1Text,
   isDefaultStyle,
-  letters,
-  lettersToN,
   rangeA1,
   rangeRect,
   rowHeightPx,
@@ -31,14 +30,14 @@ import {
   viewportA1,
   type Book,
 } from './workbook'
-import type { CellsValue, XlsxOpsChangeFrame, XlsxRosterEvent } from './xlsx-provisional'
+import { colLetters, colNumber, type Cells, type OpsChangeFrame, type RosterEvent } from '@k2/mpc-client'
 
 const P = play('turn')
 const B = P.books
 const S1 = '@sheet:1'
 const S2 = '@sheet:2'
 const FRAMES = GOLDEN.turn.frames
-const frame = (rev: number): XlsxOpsChangeFrame => stripAnnotations(FRAMES.find((f) => f.rev === rev) as XlsxOpsChangeFrame)
+const frame = (rev: number): OpsChangeFrame => stripAnnotations(FRAMES.find((f) => f.rev === rev) as OpsChangeFrame)
 const grid = (rev: number, sheet = S1) => {
   const g = gridOf(B[rev], sheet)
   if (!g) throw new Error(`no grid ${sheet} at rev ${rev}`)
@@ -58,7 +57,7 @@ function expectedForm(book: Book, sheet: string): GoldenGridSheet {
     const form: Record<string, unknown> = shown.kind === 'formula' ? { formula: shown.formula, result: shown.result, result_state: shown.resultState } : { value: shown.text }
     if (!isDefaultStyle(st)) form.style = st
     const row = byRow.get(c.row) ?? {}
-    row[letters(c.c)] = form
+    row[colLetters(c.c)] = form
     byRow.set(c.row, row)
   }
   const keyed = new Set(g.rows.map((r) => r.n))
@@ -83,8 +82,8 @@ describe('Numbering (kit item VG)', () => {
   })
   it('column letters: 1 → A, 26 → Z, 27 → AA, 16,384 → XFD, and back', () => {
     for (const [n, l] of [[1, 'A'], [26, 'Z'], [27, 'AA'], [MAX.cols, 'XFD']] as const) {
-      expect(letters(n)).toBe(l)
-      expect(lettersToN(l)).toBe(n)
+      expect(colLetters(n)).toBe(l)
+      expect(colNumber(l)).toBe(n)
     }
   })
 })
@@ -131,7 +130,7 @@ describe('Frames (turn-frames.json)', () => {
         else if (e.type === 'ops_change') {
           const B1 = B[e.rev]
           const mine = claims.filter((c) => c.actor.id === e.actor.id)
-          const rows = e.ops.flatMap((o) => (o.kind !== 'text' && (o.root === 'rows' || o.root === 'cells') ? [o.key] : []))
+          const rows = e.ops.filter((o) => o.root === 'rows' || o.root === 'cells').flatMap((o) => (o.kind === 'text' ? [] : [o.key]))
           const hit = mine.find((c) => {
             const CR = claimRect(B1, c)
             const g = gridOf(B1, c.container)
@@ -158,7 +157,7 @@ describe("An agent's cells after each kind of verb (r1 rulings 1 and 2, AG1–AG
   const flushAfter = (rev: number) => {
     const ev = GOLDEN.turn.timeline.find((e) => e.event === 'roster_flush' && e.after_rev === rev)
     const cells = ev?.roster_events?.find((r) => r.kind === 'cells')
-    return cells && cells.kind === 'cells' ? (stripAnnotations(cells.cells) as CellsValue) : null
+    return cells && cells.kind === 'cells' ? (stripAnnotations(cells.cells) as Cells) : null
   }
   it("AG1: a verb that writes cells: the frame's written ranges, active at the first range's start (revs 21, 22, 24, 25)", () => {
     for (const rev of [21, 22, 24, 25]) {
@@ -169,12 +168,12 @@ describe("An agent's cells after each kind of verb (r1 rulings 1 and 2, AG1–AG
     }
   })
   it('AG2: an insert: the inserted row as a whole band, A10:XFD10', () => {
-    const c = flushAfter(23) as CellsValue
+    const c = flushAfter(23) as Cells
     expect(rangeA1(grid(23), c.ranges[0])).toBe('A10:XFD10')
     expect(c.ranges).toEqual(frame(23).derived?.written?.ranges)
   })
   it('AG3: a delete: a caret on the first VISIBLE cell after the band (A18: row 17 is the hidden fx row), no ranges (r1.1)', () => {
-    const c = flushAfter(28) as CellsValue
+    const c = flushAfter(28) as Cells
     const g = grid(28)
     expect(c.ranges).toEqual([])
     expect(a1Of(cornerPlace(g, c.active!)!)).toBe('A18')
@@ -182,8 +181,8 @@ describe("An agent's cells after each kind of verb (r1 rulings 1 and 2, AG1–AG
     expect(goldenCase('AG3').example).toContain('A18')
   })
   it('AG4: a rename or add focuses that sheet; cells become a caret at A1 of it (FX rates; empty Notes as {null, 1, null, 1})', () => {
-    const c26 = flushAfter(26) as CellsValue
-    const c27 = flushAfter(27) as CellsValue
+    const c26 = flushAfter(26) as Cells
+    const c27 = flushAfter(27) as Cells
     expect([c26.container, a1Of(cornerPlace(grid(26, S2), c26.active!)!)]).toEqual([S2, 'A1'])
     expect(c27.active).toEqual({ row: null, row_off: 1, col: null, col_off: 1 })
     expect(a1Of(cornerPlace(grid(27, '@sheet:5'), c27.active!)!)).toBe('A1')
@@ -207,8 +206,8 @@ describe('Wording (K2 writes it)', () => {
     const f = frame(25)
     const o = f.ops[0]
     if (o.kind !== 'map') throw new Error('rev 25 is a map op')
-    const was = B[24].a1[o.key][o.field as string]
-    const now = B[25].a1[o.key][o.field as string]
+    const was = a1Text(B[24], o.key, o.field as string)
+    const now = a1Text(B[25], o.key, o.field as string)
     expect(FRAMES.find((x) => x.rev === 25)?._view).toContain(was)
     expect(FRAMES.find((x) => x.rev === 25)?._view).toContain(now)
     expect((JSON.parse(o.after as string) as { v?: string }).v).toBeUndefined()
@@ -268,7 +267,7 @@ describe('Visible range (VR)', () => {
   it("VR4: one flush focus → cells → viewport (the flush order); Ada's caret on Budget dropped; her range read on Rates", () => {
     const c = goldenCase('VR4')
     const base = fold([{ type: 'welcome', client: 77001, self: 'person:sam', rights: 'read' }, ...sampleSnapshotFrames(), sampleRosterSnapshot()])
-    const events = (c.roster_events_one_flush as XlsxRosterEvent[]).map((ev): LiveWorkbookFrame => ({ type: 'roster_event', event: ev }))
+    const events = (c.roster_events_one_flush as RosterEvent[]).map((ev): LiveWorkbookFrame => ({ type: 'roster_event', event: ev }))
     const s = fold(events, base)
     const ada = s.peers['person:ada']
     const order = (c.roster_events_one_flush as { kind: string }[]).map((e) => e.kind)
@@ -318,7 +317,7 @@ describe('Caret and ranges (CS)', () => {
     const c = goldenCase('CS6')
     const got = a1Of(cornerPlace(grid(20), c.active)!)
     expect(c._a1.startsWith(`${got} `)).toBe(true)
-    expect(cornerOk(grid(20), c.active, MAX)).toBe(true)
+    expect(cornerOk(grid(20), c.active)).toBe(true)
   })
   it('CS7: C4:D15 at rev 22 → C4:D16 at rev 23, same corners, no event', () => {
     const c = goldenCase('CS7')
@@ -328,17 +327,17 @@ describe('Caret and ranges (CS)', () => {
   })
   it("CS8: Brook deletes row 14 (a real frame on a branch from rev 20): Sam's range is dropped, his caret kept; Brook's caret on A14", () => {
     const c = goldenCase('CS8')
-    const after = applyFrameToBook(B[20], stripAnnotations(c.frame) as XlsxOpsChangeFrame)
-    const flush = stripAnnotations(c.roster_flush) as { kind: string; who: string; cells?: CellsValue }[]
+    const after = applyFrameToBook(B[20], stripAnnotations(c.frame) as OpsChangeFrame)
+    const flush = stripAnnotations(c.roster_flush) as { kind: string; who: string; cells?: Cells }[]
     const sam = flush.find((e) => e.kind === 'cells' && e.who === 'person:sam')
     expect(dropBroken(after, stripAnnotations(c.before.cells))).toEqual(sam?.cells)
-    const brook = flush.find((e) => e.kind === 'cells' && e.who === 'agent:brook')?.cells as CellsValue
+    const brook = flush.find((e) => e.kind === 'cells' && e.who === 'agent:brook')?.cells as Cells
     expect(a1Of(cornerPlace(gridOf(after, S1)!, brook.active!)!)).toBe('A14')
   })
   it("CS9: Brook inserts a row in Ada's blank stretch (a real frame): her corner {r14, 1} now names a keyed row, so the kit drops it all: cells null", () => {
     const c = goldenCase('CS9')
-    const after = applyFrameToBook(B[20], stripAnnotations(c.frame) as XlsxOpsChangeFrame)
-    const ada = (stripAnnotations(c.roster_flush) as { kind: string; who: string; cells?: CellsValue | null }[]).find((e) => e.kind === 'cells' && e.who === 'person:ada')
+    const after = applyFrameToBook(B[20], stripAnnotations(c.frame) as OpsChangeFrame)
+    const ada = (stripAnnotations(c.roster_flush) as { kind: string; who: string; cells?: Cells | null }[]).find((e) => e.kind === 'cells' && e.who === 'person:ada')
     expect(ada?.cells).toBeNull()
     expect(dropBroken(after, stripAnnotations(c.before.cells))).toBeNull()
   })
@@ -350,7 +349,7 @@ describe('Caret and ranges (CS)', () => {
     expect(s.peers['person:ada'].focus?.key).toBe(S2)
   })
   it("CS11: cells refused (the kit's frames and ErrorReports): 17 ranges unsent, a corner not live, on another sheet, not in form, past the last row, active outside, a watcher", () => {
-    const rows = goldenCase('CS11').rows as { why: string; from?: string; client_frame?: { cells: CellsValue }; client_frame_not_sent?: { cells: CellsValue }; reply?: { error: { id: string; message: string } } }[]
+    const rows = goldenCase('CS11').rows as { why: string; from?: string; client_frame?: { cells: Cells }; client_frame_not_sent?: { cells: Cells }; reply?: { error: { id: string; message: string } } }[]
     const got = rows.map((r) => checkCells(B[20], (r.client_frame ?? r.client_frame_not_sent)!.cells, { watcher: !!r.from }))
     // The unsent one never reaches the host: the client's own limit (MPC-E310).
     expect(got).toEqual(rows.map((r) => r.reply?.error.id ?? 'MPC-E310'))
@@ -363,7 +362,7 @@ describe('Claims on ranges (CC)', () => {
     const s = stateAtRev(P, 20)
     const atlas = s.peers['agent:atlas']
     const c = goldenCase('CC1')
-    const flush = stripAnnotations(c.roster_events_one_flush) as { kind: string; cells?: CellsValue }[]
+    const flush = stripAnnotations(c.roster_events_one_flush) as { kind: string; cells?: Cells }[]
     expect(atlas.focus?.key).toBe(S1)
     expect(atlas.cells).toEqual(flush.find((e) => e.kind === 'cells')?.cells)
     expect(a1Of(cornerPlace(grid(20), atlas.cells!.active!)!)).toBe('C4')
@@ -380,7 +379,7 @@ describe('Claims on ranges (CC)', () => {
     const c = goldenCase('CC2')
     const cl = stateAtRev(P, 20).claims[0]
     const kinds: Record<string, string> = { 'agent:brook': 'agent', 'agent:atlas': 'agent', 'person:ada': 'person' }
-    const rows = c.rows as { who: string; verb: string; result: string; error?: { id: string }; frame?: XlsxOpsChangeFrame | null }[]
+    const rows = c.rows as { who: string; verb: string; result: string; error?: { id: string }; frame?: OpsChangeFrame | null }[]
     for (const r of rows) {
       const v = claimVerdict(B[20], cl, { who: r.who, whoKind: kinds[r.who], verb: r.verb })
       expect(v.startsWith('refused'), r.verb).toBe(r.result.startsWith('refused'))

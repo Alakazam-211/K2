@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { extentOf, geometryOf, GUTTER_PX, HEADER_PX, rectPx, type GridGeometry } from '@/lib/live-view/geometry'
 import { caretOn, claimRect, others, type LiveWorkbookState, type Peer } from '@/lib/live-view/reducer'
-import { cellShown, colAddress, formatNumber, gridOf, letters, rangeA1, rangeRect, styleOf, viewportA1, viewportRect, type Book, type Grid, type GridCell } from '@/lib/live-view/workbook'
+import { colLabel, colLetters, colOfCellField } from '@k2/mpc-client'
+import { a1Text, cellShown, formatNumber, gridOf, rangeA1, rangeRect, styleOf, viewportA1, viewportRect, type Book, type Grid, type GridCell } from '@/lib/live-view/workbook'
 import { actorFrom } from '@/lib/live-view/wording'
 import { IconLock } from '@/components/icons/IconLock'
 import { ArrowGlyph, Avatar } from './parts'
@@ -84,7 +85,7 @@ function show(g: Grid, cell: GridCell, formulas: boolean): Shown {
   const s = cellShown(cell)
   const st = styleOf(g, cell)
   if (s.kind === 'formula') {
-    const title = `${letters(cell.c)}${cell.r}: ${s.formula}${s.resultState === 'not_calculated' ? ', not calculated' : ', as last calculated'}`
+    const title = `${colLetters(cell.c)}${cell.r}: ${s.formula}${s.resultState === 'not_calculated' ? ', not calculated' : ', as last calculated'}`
     if (formulas) return { text: s.formula, num: false, kind: 'fml', title }
     if (s.result == null) return { text: 'not calc.', num: true, kind: 'nc', title }
     const f = formatNumber(s.result, st.numfmt)
@@ -112,7 +113,7 @@ function CellBox({ g, cell, x, w, h, formulas, merged }: { g: Grid; cell: GridCe
       data-err={sh.kind === 'err' ? '' : undefined}
       data-bold={st.bold ? '' : undefined}
       data-merge={merged ? '' : undefined}
-      data-testid={`lv-cell-${letters(cell.c)}${cell.r}`}
+      data-testid={`lv-cell-${colLetters(cell.c)}${cell.r}`}
       title={sh.title}
       style={{ left: x, width: w, ...(h != null ? { height: h, bottom: 'auto' } : {}), ...(st.fill ? { background: st.fill, ['--lv-fill' as string]: st.fill } : {}) }}
     >
@@ -274,7 +275,7 @@ export function WorkbookGrid(props: WorkbookGridProps): React.JSX.Element {
     if (w === 0) continue
     letterEls.push(
       <div key={c} className="lv-letter" data-cur={current?.c === c ? '' : undefined} style={{ left: G.cols.start(c), width: w }}>
-        {letters(c)}
+        {colLabel(book.schema.grid, c)}
       </div>,
     )
     vlines.push(<div key={c} className="lv-vline" style={{ left: G.cols.end(c) - 1 }} />)
@@ -340,13 +341,13 @@ export function WorkbookGrid(props: WorkbookGridProps): React.JSX.Element {
                 <>
                   <IconLock className="h-3 w-3" />
                   {p.name}: {mc.label}
-                  {mc.hold ? ' · held' : ''} · {letters(rc.c)}
+                  {mc.hold ? ' · held' : ''} · {colLetters(rc.c)}
                   {rc.r}
                 </>
               ) : (
                 <>
                   {p.name} {held ? 'editing ' : ''}
-                  {letters(rc.c)}
+                  {colLetters(rc.c)}
                   {rc.r}
                 </>
               )}
@@ -384,7 +385,8 @@ export function WorkbookGrid(props: WorkbookGridProps): React.JSX.Element {
       for (const o of r.frame.ops) {
         if (o.kind !== 'map' || o.root !== book.schema.grid.cells || o.field == null || o.field.startsWith(book.schema.grid.row_fields_start)) continue
         const row = after.rowByKey.get(o.key)
-        const cc = after.colByKey.get(colAddress(book.schema.grid.col_of_cell_field, sheet, o.field))
+        const address = colOfCellField(book.schema.grid, sheet, o.field)
+        const cc = address === null ? undefined : after.colByKey.get(address)
         const b = row && cc && !row.hidden ? rectPx(G, row.n, row.n, cc.n, cc.n) : null
         if (!row || !cc || !b) continue
         const reg = (s: string | null | undefined): string | null => {
@@ -396,8 +398,8 @@ export function WorkbookGrid(props: WorkbookGridProps): React.JSX.Element {
             return s
           }
         }
-        const fb = r.before.a1[o.key]?.[o.field]
-        const fa = r.after.a1[o.key]?.[o.field]
+        const fb = a1Text(r.before, o.key, o.field)
+        const fa = a1Text(r.after, o.key, o.field)
         const was = fb ?? reg(o.before)
         const now = fa ?? reg(o.after)
         const who = actorFrom(r.frame.actor)
@@ -487,14 +489,14 @@ export function WorkbookGrid(props: WorkbookGridProps): React.JSX.Element {
             ['--c' as string]: e.who.colour,
             ...(e.dir === 'up' ? { top: HEADER_PX + 6, left: GUTTER_PX + 8 } : e.dir === 'down' ? { bottom: 10, left: GUTTER_PX + 8 } : e.dir === 'right' ? { right: 12, top: HEADER_PX + 8 } : { left: GUTTER_PX + 8, top: HEADER_PX + 8 }),
           }}
-          title={`Scroll to ${e.who.name} at ${letters(e.c)}${e.r}`}
+          title={`Scroll to ${e.who.name} at ${colLetters(e.c)}${e.r}`}
           onClick={() => {
             onUserMove()
             scrollToCell(e.r, e.c, !reduced)
           }}
         >
           <Avatar actor={{ name: e.who.name, kind: e.who.kind, colour: e.who.colour }} size={14} />
-          {e.who.name} · {letters(e.c)}
+          {e.who.name} · {colLetters(e.c)}
           {e.r}
           <ArrowGlyph dir={e.dir} size={12} />
         </button>

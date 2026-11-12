@@ -29,7 +29,7 @@ import {
   type Transport,
   type ViewUnit,
   type Welcome,
-} from './kit'
+} from '@k2/mpc-client'
 
 /** A frame didn't fit the state: the watch would ask for a fresh snapshot. */
 export class KeyedMisfit extends Error {}

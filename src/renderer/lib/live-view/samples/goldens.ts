@@ -3,8 +3,8 @@
 // starting with `_` are annotations, never on the wire; the sample source
 // strips them, and only the checks read them.
 
-import type { ClaimActor, KeyedValue, Rect } from '../kit'
-import type { CellRange, CellsValue, XlsxOpsChangeFrame, XlsxRosterEvent, XlsxViewContainer, XlsxViewSchema, XlsxViewUnit, XlsxWelcome } from '../xlsx-provisional'
+import type { CellRange, Cells, ClaimActor, GridSlot, KeyedValue, OpsChangeFrame, Rect, RosterEvent, StyleHint } from '@k2/mpc-client'
+import type { XlsxViewContainer, XlsxViewSchema, XlsxViewUnit, XlsxWelcome } from '../not-in-kit'
 import schemaJson from './view-schema.json'
 import stateJson from './keyed-state-rev20.json'
 import indexJson from './index-rev20.json'
@@ -12,6 +12,20 @@ import turnJson from './turn-frames.json'
 import presenceJson from './presence-and-claims.json'
 import casesJson from './cases-presence.json'
 import gridJson from './expected-grid.json'
+
+/**
+ * The goldens' grid slot (r1.1), from before the kit typed it: `cell_derived`
+ * as `{names}` and `style_hint` in prose. The kit's v0.17.0 `GridSlot` has
+ * `cell_derived: string[]` and `style_hint: {field, default, table, parts}`;
+ * `kitViewSchema` (golden-schema.ts) gives the sample the kit's form.
+ */
+export type GoldenGridSlot = Omit<GridSlot, 'cell_derived' | 'style_hint'> & {
+  cell_derived?: { names: string[] } | string[]
+  style_hint?: { from: string; table: string; parts: Record<string, string>; default: StyleHint; missing?: string }
+}
+
+/** The goldens' view schema: the xlsx one with the goldens' grid slot. */
+export type GoldenViewSchema = Omit<XlsxViewSchema, 'grid'> & { grid: GoldenGridSlot }
 
 export interface GoldenKeyedRoot {
   name: string
@@ -26,7 +40,7 @@ export interface GoldenTimelineEvent {
   at_ms: number
   event: 'welcome' | 'keyed_snapshot' | 'roster_flush' | 'ops_change' | 'turn_end' | 'turn_ended_by_idle'
   frame?: (XlsxWelcome & { type: 'welcome' }) | { type: 'turn_end'; turn: string; actor: ClaimActor; at_ms: number }
-  roster_events?: XlsxRosterEvent[]
+  roster_events?: RosterEvent[]
   rev?: number
   after_rev?: number
 }
@@ -39,7 +53,7 @@ export interface GoldenPeer {
   away: boolean
   focus: { root: string; key: string } | null
   selection: { root: string; keys: string[] } | null
-  cells: (CellsValue & { _active_a1?: string; ranges: (CellRange & { _a1?: string })[] }) | null
+  cells: (Cells & { _active_a1?: string; ranges: (CellRange & { _a1?: string })[] }) | null
   pointer: { x: number; y: number } | null
   viewport: Rect | null
   _viewport_a1?: string
@@ -70,10 +84,10 @@ export interface GoldenGridSheet {
 export type GoldenCase = { id: string } & Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
 
 export const GOLDEN = {
-  schema: schemaJson as unknown as XlsxViewSchema,
+  schema: schemaJson as unknown as GoldenViewSchema,
   state: stateJson as unknown as { upto: number; roots: GoldenKeyedRoot[] },
   index: indexJson as unknown as { tier: string; rev: number; version: number | null; page: null; fonts: unknown[]; layouts: unknown[]; containers: XlsxViewContainer[]; units: (XlsxViewUnit & { _row_number?: number })[] },
-  turn: turnJson as unknown as { actors: Record<string, ClaimActor & { colour: string | null }>; timeline: GoldenTimelineEvent[]; frames: (XlsxOpsChangeFrame & { _view: string })[] },
+  turn: turnJson as unknown as { actors: Record<string, ClaimActor & { colour: string | null }>; timeline: GoldenTimelineEvent[]; frames: (OpsChangeFrame & { _view: string })[] },
   presence: presenceJson as unknown as { points: GoldenPoint[] },
   cases: (casesJson as unknown as { cases: GoldenCase[] }).cases,
   grid: gridJson as unknown as Record<'rev20' | 'rev28' | 'rev29', GoldenGridSheet[]>,

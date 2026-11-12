@@ -6,15 +6,17 @@
 // the file the person opened: the view shows a banner saying so.
 //
 // Constructed, not in the goldens (marked where built): the roster snapshot
-// (the goldens give people only at point P1), and the frames' `seq` (the
+// (the goldens give people only at point P1), the frames' `seq` (the
 // goldens assume the snapshot took seq 1-10; here it takes what its pages
-// need, and the changes follow on).
+// need, and the changes follow on), and the view schema's grid slot in the
+// kit's form (samples/golden-schema.ts).
 
-import type { KeyedSchema } from './kit'
+import type { KeyedPageFrame, KeyedSchema, RosterEntry } from '@k2/mpc-client'
+import type { XlsxViewSnapshot } from './not-in-kit'
 import type { LiveTier, LiveWorkbookFrame } from './reducer'
 import type { LiveWorkbookSource, LiveWorkbookSourceEvent } from './source'
-import type { XlsxKeyedPageFrame, XlsxRosterEntry, XlsxViewSnapshot } from './xlsx-provisional'
 import { GOLDEN, stripAnnotations } from './samples/goldens'
+import { kitViewSchema } from './samples/golden-schema'
 
 /** What the sample shows: the agent's turn (live), a workbook too large to watch live (blob), or one K2 can't open (none). */
 export type SampleScenario = 'turn' | 'blob' | 'none'
@@ -66,7 +68,7 @@ export function sampleSnapshotFrames(firstSeq = 1): LiveWorkbookFrame[] {
     composite: roots.filter((r) => r.composite_of).map((r) => ({ map: r.name, list: r.composite_of as string })),
   }
   const idx = stripAnnotations(GOLDEN.index)
-  const view: XlsxViewSnapshot = { schema: stripAnnotations(GOLDEN.schema), tier: idx.tier, rev: idx.rev, version: idx.version, page: null, fonts: idx.fonts, layouts: idx.layouts, containers: idx.containers }
+  const view: XlsxViewSnapshot = { schema: kitViewSchema(stripAnnotations(GOLDEN.schema)), tier: idx.tier, rev: idx.rev, version: idx.version, page: null, fonts: idx.fonts, layouts: idx.layouts, containers: idx.containers }
   const containers = idx.containers.map((c) => c.key)
   const pages = roots.length + containers.length
   const upto = st.upto
@@ -74,7 +76,7 @@ export function sampleSnapshotFrames(firstSeq = 1): LiveWorkbookFrame[] {
   let page = 0
   for (const r of roots) {
     page++
-    const f: XlsxKeyedPageFrame = { type: 'keyed_page', seq: firstSeq + page, upto, page, pages, root: r.name }
+    const f: KeyedPageFrame = { type: 'keyed_page', seq: firstSeq + page, upto, page, pages, root: r.name }
     if (r.kind === 'list') f.live = (r.live ?? []).map(([k, v]) => [k, v])
     else f.entries = (r.entries ?? []).map(([k, fld, v]) => [k, fld, v])
     // r1.1: the cells page carries the A1 text of the formula cells in it (the kit takes it from Unit.derived.a1).
@@ -103,7 +105,7 @@ export function sampleSnapshotFrames(firstSeq = 1): LiveWorkbookFrame[] {
 /** Constructed: the roster at the start. People as point P1 has them; the agent with no presence yet (it gets it from its claim). */
 export function sampleRosterSnapshot(): Extract<LiveWorkbookFrame, { type: 'roster_event' }> {
   const p1 = stripAnnotations(GOLDEN.presence.points[0])
-  const members: XlsxRosterEntry[] = p1.peers.map((q) =>
+  const members: RosterEntry[] = p1.peers.map((q) =>
     q.kind === 'agent'
       ? { handle: q.handle, name: q.name, colour: q.colour, kind: q.kind, role: 'member', away: false }
       : { handle: q.handle, name: q.name, colour: q.colour, kind: q.kind, role: 'member', away: q.away, focus: q.focus, selection: q.selection, cells: q.cells, viewport: q.viewport, pointer: q.pointer },

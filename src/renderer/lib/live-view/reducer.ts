@@ -4,23 +4,39 @@
 // claim events, and the host's `turn_end`. Plus the client's own gestures
 // (follow on or off). No React, no DOM: the view renders `LiveWorkbookState`.
 
-import type { ClaimActor, ElemFocus, ElemSelection, KeyedPageFrame, KeyedSchema, KeyedSnapshotFrame, Point, Rect } from './kit'
+import type {
+  CellRange,
+  Cells,
+  ClaimActor,
+  ElemFocus,
+  ElemSelection,
+  ErrorReport,
+  KeyedPageFrame,
+  KeyedSchema,
+  KeyedSnapshotFrame,
+  OpsChangeFrame,
+  Point,
+  Rect,
+  RosterEntry,
+  RosterEvent,
+} from '@k2/mpc-client'
+import { NO_CELL_DERIVED, withPageDerived, type CellDerivedValues } from './cell-derived'
 import { checkPage, foldSnapshot, KeyedMisfit } from './keyed-fold'
+import type { ClockFrame, TurnEndFrame, XlsxViewSnapshot, XlsxViewUnit, XlsxWelcome } from './not-in-kit'
 import { actorFrom, framePhrase, type Actor, type LogEntry } from './wording'
 import { applyFrameToBook, bookFromSnapshot, cornerPlace, gridOf, overlaps, rangeA1, rangeRect, sheetOfRow, type Book, type Rect4 } from './workbook'
-import type { CellRange, CellsValue, ClockFrame, TurnEndFrame, XlsxKeyedPageFrame, XlsxOpsChangeFrame, XlsxRosterEntry, XlsxRosterEvent, XlsxViewSnapshot, XlsxViewUnit, XlsxWelcome } from './xlsx-provisional'
 
-/** What a source sends: kit frames (mirrored in kit.ts / xlsx-provisional.ts) plus the host's tier. */
+/** What a source sends: the kit's frames (`@k2/mpc-client`), the host's own (not-in-kit.ts) and its tier. */
 export type LiveWorkbookFrame =
   | ({ type: 'welcome' } & XlsxWelcome)
   | (Omit<KeyedSnapshotFrame, 'view'> & { view: XlsxViewSnapshot | null })
-  | XlsxKeyedPageFrame
-  | ({ type: 'ops_change' } & XlsxOpsChangeFrame)
-  | { type: 'roster_event'; event: XlsxRosterEvent }
+  | KeyedPageFrame
+  | OpsChangeFrame
+  | { type: 'roster_event'; event: RosterEvent }
   | TurnEndFrame
   /** The host's word on the doc's tier: live, the blob tier (too large to watch live; read-only), or no doc (32 MiB and up). */
   | { type: 'tier'; tier: LiveTier }
-  | { type: 'watch_refused'; error: { id: string; message?: string } }
+  | { type: 'watch_refused'; error: ErrorReport }
   | ClockFrame
 
 export type LiveTier = 'live' | 'blob' | 'none'
@@ -41,12 +57,17 @@ export interface Peer {
   sameUser: boolean
   focus: ElemFocus | null
   selection: ElemSelection | null
-  cells: CellsValue | null
+  cells: Cells | null
   viewport: Rect | null
   pointer: Point | null
 }
 
-/** A live claim (RC Item 4's record, with r1's cells scope). */
+/**
+ * A live claim (RC Item 4's record, with r1's cells scope). A claim on cells
+ * has exactly one range, as the kit's (`claim_started_cells`, `ClaimView.cells`,
+ * `PresenceChannel.claimCells`): `ranges` keeps the kit's list form, and the
+ * view reads only `ranges[0]` (`claimRect`, the claim's log line, `claimVerdict`).
+ */
 export interface ClaimRecord {
   id: string
   actor: ClaimActor
@@ -71,7 +92,7 @@ export interface EndedClaim {
 
 /** A change still on screen: its books before and after, for outlines and "was / now". Age 0 is the latest. */
 export interface RecentChange {
-  frame: XlsxOpsChangeFrame
+  frame: OpsChangeFrame
   before: Book
   after: Book
   age: number
@@ -80,7 +101,7 @@ export interface RecentChange {
 /** The snapshot being built, page by page: its head and the pages so far (each checked as it came), folded when whole. */
 export interface Building {
   head: KeyedSnapshotFrame
-  pagesIn: readonly XlsxKeyedPageFrame[]
+  pagesIn: readonly KeyedPageFrame[]
   schema: KeyedSchema
   view: XlsxViewSnapshot | null
   got: number
@@ -88,8 +109,8 @@ export interface Building {
   upto: number
   /** The roots whose pages are in, in order. */
   rootsIn: string[]
-  /** r1.1: A1 text from the cells pages (row address, then cell field). */
-  a1: Readonly<Record<string, Readonly<Record<string, string>>>>
+  /** r1.1: the cell-derived values (A1 text) the rows pages carried, kept as KeyedWatch keeps them. */
+  cellDerived: CellDerivedValues
 }
 
 export interface LiveWorkbookState {
@@ -113,7 +134,7 @@ export interface LiveWorkbookState {
   turnEnds: Readonly<Record<string, number>>
   /** Why the watch last asked for a fresh snapshot. */
   resync: { why: string; detail: string } | null
-  refused: { id: string; message?: string } | null
+  refused: ErrorReport | null
   /** Counts every input that changed the state: a key for the view's animations. */
   tick: number
   /** The log's running number. */
@@ -156,7 +177,7 @@ function blankPeer(handle: string, a: { name: string; kind: string; colour: stri
   return { handle, name: actor.name, kind: actor.kind, colour: actor.colour, away: false, isSelf: handle === self, sameUser: false, focus: null, selection: null, cells: null, viewport: null, pointer: null }
 }
 
-function peerFromEntry(e: XlsxRosterEntry, self: string | null): Peer {
+function peerFromEntry(e: RosterEntry, self: string | null): Peer {
   return {
     ...blankPeer(e.handle, { name: e.name, kind: e.kind, colour: e.colour }, self),
     away: !!e.away,
@@ -207,12 +228,12 @@ function asked(s: LiveWorkbookState, why: string, detail: string): LiveWorkbookS
 const kitHead = (f: Extract<LiveWorkbookFrame, { type: 'keyed_snapshot' }>): KeyedSnapshotFrame => f as KeyedSnapshotFrame
 
 function onHead(s: LiveWorkbookState, f: Extract<LiveWorkbookFrame, { type: 'keyed_snapshot' }>): LiveWorkbookState {
-  const building: Building = { head: kitHead(f), pagesIn: [], schema: f.schema, view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto, rootsIn: [], a1: {} }
+  const building: Building = { head: kitHead(f), pagesIn: [], schema: f.schema, view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto, rootsIn: [], cellDerived: NO_CELL_DERIVED }
   const next: LiveWorkbookState = { ...s, awaiting: false, seq: f.seq, building, refused: null }
   return f.pages === 0 ? finish(next) : next
 }
 
-function onPage(s: LiveWorkbookState, f: XlsxKeyedPageFrame): LiveWorkbookState {
+function onPage(s: LiveWorkbookState, f: KeyedPageFrame): LiveWorkbookState {
   if (s.awaiting) return s
   if (f.seq !== s.seq + 1) return asked(s, 'gap', `page seq ${f.seq} after ${s.seq}`)
   const b = s.building
@@ -220,14 +241,14 @@ function onPage(s: LiveWorkbookState, f: XlsxKeyedPageFrame): LiveWorkbookState 
   if (f.page !== b.got + 1 || f.pages !== b.pages || f.upto !== b.upto) return asked(s, 'inconsistent', `page ${f.page} of ${f.pages} out of order`)
   // The page is checked by the kit's watch now; the snapshot is folded once it is whole.
   try {
-    checkPage(b.head, b.pagesIn as readonly KeyedPageFrame[], f)
+    checkPage(b.head, b.pagesIn, f)
   } catch (e) {
     if (e instanceof KeyedMisfit) return asked(s, 'inconsistent', e.message)
     throw e
   }
   const rootsIn = f.units || b.rootsIn.includes(f.root) ? b.rootsIn : [...b.rootsIn, f.root]
-  const a1 = f.derived?.a1 ? { ...b.a1, ...f.derived.a1 } : b.a1
-  const nb: Building = { ...b, pagesIn: [...b.pagesIn, f], got: b.got + 1, rootsIn, a1 }
+  const cellDerived = withPageDerived(b.cellDerived, f, b.view?.schema.grid)
+  const nb: Building = { ...b, pagesIn: [...b.pagesIn, f], got: b.got + 1, rootsIn, cellDerived }
   const next: LiveWorkbookState = { ...s, seq: f.seq, building: nb }
   return nb.got === nb.pages ? finish(next) : next
 }
@@ -236,7 +257,7 @@ function onPage(s: LiveWorkbookState, f: XlsxKeyedPageFrame): LiveWorkbookState 
 function foldBuilding(b: Building): Book | null {
   if (!b.view) return null
   const { state, units } = foldSnapshot(b.head, b.pagesIn)
-  return bookFromSnapshot(state, b.view, units as Map<string, XlsxViewUnit[]>, b.upto, b.a1)
+  return bookFromSnapshot(state, b.view, units as Map<string, XlsxViewUnit[]>, b.upto, b.cellDerived)
 }
 
 function finish(s: LiveWorkbookState): LiveWorkbookState {
@@ -252,7 +273,7 @@ function finish(s: LiveWorkbookState): LiveWorkbookState {
   return followSync({ ...s, building: null, book, recent: [] })
 }
 
-function onOps(s: LiveWorkbookState, f: XlsxOpsChangeFrame): LiveWorkbookState {
+function onOps(s: LiveWorkbookState, f: OpsChangeFrame): LiveWorkbookState {
   if (s.awaiting) return s
   if (f.seq !== s.seq + 1) return asked(s, 'gap', `change seq ${f.seq} after ${s.seq}`)
   if (s.building || !s.book) return asked(s, 'inconsistent', `a change with no whole snapshot (seq ${f.seq})`)
@@ -287,7 +308,7 @@ function setPeer(s: LiveWorkbookState, who: string, patch: (p: Peer) => Peer): L
   return { ...s, peers: { ...s.peers, [who]: patch(p) } }
 }
 
-function onRoster(s: LiveWorkbookState, e: XlsxRosterEvent): LiveWorkbookState {
+function onRoster(s: LiveWorkbookState, e: RosterEvent): LiveWorkbookState {
   const self = selfHandle(s)
   switch (e.kind) {
     case 'snapshot': {

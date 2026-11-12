@@ -15,9 +15,9 @@
 // LiveWorkbookEntry.tsx) still always picks the sample. The daemon serves
 // the keyed watch for live decks; a workbook isn't a live doc on it yet.
 
-import { KEYED_WATCH_FEATURE, KeyedWatch, type ServerFrame, type Transport } from './kit'
+import { KEYED_WATCH_FEATURE, KeyedWatch, type ServerFrame, type Transport } from '@k2/mpc-client'
+import type { XlsxWelcome } from './not-in-kit'
 import type { LiveWorkbookFrame } from './reducer'
-import type { XlsxWelcome } from './xlsx-provisional'
 
 /** What a source sends: the doc's frames, or "start over" (a sample's loop; a new doc on the same view). */
 export type LiveWorkbookSourceEvent = LiveWorkbookFrame | { type: 'reset' }

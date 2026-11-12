@@ -3,6 +3,8 @@
 //! The daemon passes the session's `DISPLAY`, `XAUTHORITY`,
 //! `WAYLAND_DISPLAY` and `DBUS_SESSION_BUS_ADDRESS`. No TCC.
 //!
+//! The clipboard (L7) is the X11 CLIPBOARD selection, text only.
+//!
 //! On X11 (D8b) deskd captures and encodes: kessel-video's X11 source into
 //! software VP8, and JPEG for viewers that decode no video
 //! ([`capture::VP8_JPEG`], listed in `hello.codecs`). Wayland waits for
@@ -49,6 +51,8 @@ impl Poster for NoInput {
 pub struct LinuxHost {
     backend: &'static str,
     x: Option<X11>,
+    /// Text through the CLIPBOARD selection (L7); `None` without X11.
+    clip: Option<crate::x11::clipboard::X11Clipboard>,
     banner: Arc<NotifyBanner>,
 }
 
@@ -76,6 +80,15 @@ impl Host for LinuxHost {
     }
     fn banner(&self, text: Option<String>) {
         self.banner.set(text);
+    }
+    fn clipboard_get(&self) -> crate::clipboard::ClipRead {
+        self.clip.as_ref().map_or(crate::clipboard::ClipRead::Unsupported, |c| c.read())
+    }
+    fn clipboard_set(&self, text: &str) -> Result<(), (&'static str, String)> {
+        match &self.clip {
+            Some(c) => c.write(text),
+            None => Err((codes::UNSUPPORTED, format!("no X11 clipboard (backend {})", self.backend))),
+        }
     }
 }
 
@@ -136,7 +149,13 @@ pub fn run() -> ! {
             d.banner_disconnect();
         }
     }));
-    let host = Arc::new(LinuxHost { backend, x, banner });
+    // The clipboard has its own connection (it waits on selection events).
+    let clip = if x.is_some() {
+        crate::x11::clipboard::X11Clipboard::connect().map_err(|e| eprintln!("k2-deskd: no clipboard: {e}")).ok()
+    } else {
+        None
+    };
+    let host = Arc::new(LinuxHost { backend, x, clip, banner });
     let deskd = Arc::new(Deskd::new(host, injector, hold));
     let _ = cell.set(Arc::clone(&deskd));
     // D8b: X11 capture into VP8 and JPEG, before hello (it lists them).

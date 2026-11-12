@@ -1,12 +1,13 @@
 //! Linux X11: XTEST input, XInput2 local-input detection, XScreenSaver
-//! idle, the root window as display 0, and its capture (kessel-video's X11
-//! source, `capture`).
+//! idle, the root window as display 0, its capture (kessel-video's X11
+//! source, `capture`) and the CLIPBOARD selection (`clipboard`, L7).
 //!
 //! Honest limit (§3.2): on X11 any process with the session cookie can
 //! already read and drive the display, so deskd is a tidy code path here,
 //! not a boundary.
 
 pub mod capture;
+pub mod clipboard;
 pub mod inject;
 pub mod watch;
 

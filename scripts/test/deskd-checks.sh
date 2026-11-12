@@ -11,7 +11,9 @@
 #           module; then the Xvfb integration tests if Xvfb is there
 #   macos   check + test k2-deskd-proto and k2-deskd (no TCC, no capture:
 #           nothing here prompts), and check the daemon's desktop module
-#   xvfb    only the Xvfb integration tests (Linux)
+#   xvfb    only the Xvfb integration tests (Linux): input and the clipboard
+#   vdesktop cargo check -D warnings, the daemon's virtual desktops against a real Xvfb, then
+#           the xvfb tests
 #   x11     kessel-video's X11 capture against Xvfb (each test starts its
 #           own; xrandr for the size change) and the crate's other lib
 #           tests, Linux virtual desktop L1
@@ -75,7 +77,14 @@ lock_versions() {
     awk '/^name = /{gsub(/"/,"",$3); n=$3} /^version = /{gsub(/"/,"",$3); if (n!="") print n, $3; n=""}' Cargo.lock | sort
 }
 
+# Xvfb run as a normal user won't make /tmp/.X11-unix, and a compute job
+# has its own /tmp (L0 11-11): make it, world-writable with the sticky bit.
+x11_socket_dir() {
+    [ -d /tmp/.X11-unix ] || mkdir -p -m 1777 /tmp/.X11-unix
+}
+
 xvfb_tests() {
+    x11_socket_dir
     if ! command -v Xvfb >/dev/null 2>&1; then
         echo "Xvfb not installed: skipping the X11 integration tests (FAIL: they are required on Linux)"
         fail=1
@@ -86,7 +95,7 @@ xvfb_tests() {
     local xpid=$!
     sleep 1
     step "Xvfb integration (k2-deskd --features xvfb-tests)" \
-        test_env DISPLAY="$disp" XAUTHORITY= cargo nextest run -p k2-deskd --features xvfb-tests --test xvfb --no-fail-fast -j 1
+        test_env DISPLAY="$disp" XAUTHORITY= cargo nextest run -p k2-deskd --features xvfb-tests --test xvfb --test xvfb_clipboard --no-fail-fast -j 1
     kill "$xpid" 2>/dev/null
     wait "$xpid" 2>/dev/null
 }
@@ -124,6 +133,17 @@ case "$mode" in
         step "check daemon lib + tests (macos)" cargo check -p k2-daemon --lib --tests
         ;;
     xvfb)
+        xvfb_tests
+        ;;
+    vdesktop)
+        # The daemon's virtual desktops against a real Xvfb (L3, L8): each
+        # test starts its own desktop. Then deskd's Xvfb tests (input, L7's
+        # clipboard).
+        x11_socket_dir
+        step "check deskd + daemon (xvfb-tests, -D warnings, as checks.sh)" \
+            env RUSTFLAGS="-D warnings" cargo check -p k2-deskd -p k2-daemon --all-targets --features k2-daemon/xvfb-tests,k2-deskd/xvfb-tests
+        step "virtual desktops with Xvfb (k2-daemon --features xvfb-tests)" \
+            test_env cargo nextest run -p k2-daemon --lib --features xvfb-tests --no-fail-fast -E 'test(/virtual_desktop::tests::xvfb::/) | test(/desktop::env_routes/)'
         xvfb_tests
         ;;
     x11)
@@ -173,7 +193,7 @@ case "$mode" in
         diff <(echo "$before") <(echo "$after")
         ;;
     *)
-        echo "usage: $0 linux|linux-unit|macos|macos-daemon|xvfb|x11|live|deny|lock" >&2
+        echo "usage: $0 linux|linux-unit|macos|macos-daemon|xvfb|vdesktop|x11|live|deny|lock" >&2
         exit 2
         ;;
 esac

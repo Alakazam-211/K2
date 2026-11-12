@@ -2,14 +2,40 @@
 // doesn't ship yet (rendering-data contract, xlsx addendum r1). Named exactly
 // as the addendum names them. Each one is replaced by the kit's own type when
 // the kit ships it (kit items VG, VC, VK, V1, and the pack's derived values);
-// until then the view reads them through these declarations only.
+// until then the view reads them through these declarations only. Kit v0.17
+// shipped the grid's derived values and corners: those names are the kit's
+// own now, re-exported below under the names this file gave them.
 
-import type { ClaimActor, Handle, KeyedPageFrame, LineSpan, OpsChangeFrame, RosterEntry, RosterEvent, ViewContainer, ViewSchemaJson, ViewSnapshotJson, ViewUnit, Welcome } from './kit'
+import type {
+  Band,
+  CellRange,
+  ClaimActor,
+  ContainerDerived,
+  Corner,
+  FrameDerived,
+  Handle,
+  KeyedPageFrame,
+  LineSpan,
+  OpsChangeFrame,
+  RosterEntry,
+  RosterEvent,
+  StyleHint,
+  UnitDerived,
+  ViewContainer,
+  ViewSchemaJson,
+  ViewSnapshotJson,
+  ViewUnit,
+  Welcome,
+  Written,
+} from './kit'
+
+export type { Band, CellRange, ContainerDerived, Corner, StyleHint, UnitDerived, Written }
 
 /** provisional: replaced when the kit ships it. A sheet's `state` (addendum r1 Item 1, `Container.state`). */
 export type SheetState = 'visible' | 'hidden' | 'very_hidden'
 
-/** provisional: replaced when the kit ships it. The grid slot of the view schema (kit item VG, addendum §1.3). */
+/** provisional: the grid slot of the view schema as the hand-made sample gives it (kit item VG, addendum §1.3). The kit's
+ *  `GridSlot` (v0.17) differs in `style_hint`, so the xlsx schema keeps this one in place of the kit's `grid`. */
 export interface GridSlot {
   rows: string
   cols: string
@@ -28,33 +54,19 @@ export interface GridSlot {
   row_fields: { hidden: string; height: string; height_unit: 'pt' }
   col_field_names: { hidden: string; width: string; width_unit: string }
   viewport: 'cells'
-  /** r1.1: the per-cell derived values the kit puts on each `cells` page (`["a1"]`, or `{names: ["a1"]}`). */
-  cell_derived?: string[] | { names: string[] }
+  /** r1.1: the per-cell derived values the kit puts on each `cells` page (`["a1"]`; the kit's client reads this list). */
+  cell_derived?: string[]
   /** A missing table, or an index the table lacks, means `default` (r1.1). */
   style_hint?: { from: string; table: string; default?: StyleHint }
 }
 
 /** provisional: replaced when the kit ships it. The xlsx view schema: the kit's plus `grid`, `root_order` and the `state` slot (r1). */
-export interface XlsxViewSchema extends Omit<ViewSchemaJson, 'container_fields' | 'derived'> {
+export interface XlsxViewSchema extends Omit<ViewSchemaJson, 'container_fields' | 'derived' | 'grid'> {
   pack?: string
   root_order?: string[]
   container_fields: ViewSchemaJson['container_fields'] & { state?: { field: string; values: Record<string, string> } }
   derived: { containers: string[]; units: string[]; frames_only?: string[] }
   grid: GridSlot
-}
-
-/** provisional: replaced when the kit ships it. A corner (Item 3.4): the last keyed row (column) at or before the cell, plus offsets. */
-export interface Corner {
-  row: string | null
-  row_off: number
-  col: string | null
-  col_off: number
-}
-
-/** provisional: replaced when the kit ships it. A range by two corners; `start` where it began, `end` where it is now. */
-export interface CellRange {
-  start: Corner
-  end: Corner
 }
 
 /** provisional: replaced when the kit ships it. The `cells` presence value (kit item VC): a caret plus up to 16 ranges on one sheet. */
@@ -64,50 +76,11 @@ export interface CellsValue {
   ranges: CellRange[]
 }
 
-/** provisional: replaced when the kit ships it. The style hint (r1 ruling 10, Item 5). */
-export interface StyleHint {
-  bold: boolean
-  fill: string | null
-  numfmt: string
-}
-
 /** provisional: replaced when the kit ships it. A sheet's style table, keyed by style index (`Container.derived.styles`). */
 export type StyleTable = Record<string, StyleHint>
 
-/** provisional: replaced when the kit ships it. `Container.derived` for xlsx: `merges` and `styles`. */
-export interface ContainerDerived {
-  merges?: CellRange[]
-  styles?: StyleTable
-}
-
-/** provisional: replaced when the kit ships it. `Unit.derived` for xlsx: A1 text per formula field (`null`: no longer a formula). */
-export interface UnitDerived {
-  a1?: Record<string, string | null> | null
-}
-
-/** provisional: replaced when the kit ships it. A frame's `written` (r1 ruling 1): what a verb wrote, by corners at the frame's rev. */
-export interface Written {
-  container: string
-  ranges: CellRange[]
-}
-
-/** provisional: replaced when the kit ships it. One of a frame's `bands` (r1 ruling 4): a delete's numbers are before the change, an insert's after. */
-export interface Band {
-  container: string
-  axis: 'rows' | 'cols'
-  op: 'insert' | 'delete'
-  from: number
-  to: number
-  numbers: 'before' | 'after'
-}
-
-/** provisional: replaced when the kit ships it. An xlsx frame's `derived` (Item 2). */
-export interface XlsxFrameDerived {
-  units?: Record<string, UnitDerived>
-  containers?: Record<string, ContainerDerived>
-  written?: Written
-  bands?: Band[]
-}
+/** An xlsx frame's `derived` (Item 2): the kit's `FrameDerived` since v0.17 (`units`, `containers`, `written`, `bands`). */
+export type XlsxFrameDerived = FrameDerived
 
 /** provisional: replaced when the kit ships it. The index's container with r1's `state` and `derived`. */
 export interface XlsxViewContainer extends ViewContainer {
@@ -177,13 +150,12 @@ export interface TurnEndFrame {
   at_ms: number
 }
 
-/** provisional: replaced when the kit ships it. The ops_change frame with xlsx's derived. */
-export type XlsxOpsChangeFrame = Omit<OpsChangeFrame, 'derived'> & { derived: XlsxFrameDerived | null }
+/** The ops_change frame with xlsx's derived: the kit's own since v0.17. */
+export type XlsxOpsChangeFrame = OpsChangeFrame
 
-/** provisional: replaced when the kit ships it. A keyed page with r1.1's per-cell derived values: a `cells` page carries the A1 text of the formula cells in that page (row address, then cell field). */
-export interface XlsxKeyedPageFrame extends KeyedPageFrame {
-  derived?: { a1?: Record<string, Record<string, string>> } | null
-}
+/** A keyed page with r1.1's per-cell derived values (a `cells` page carries the A1 text of the formula cells in that page, row
+ *  address, then cell field): the kit's own since v0.17. */
+export type XlsxKeyedPageFrame = KeyedPageFrame
 
 /** Not a wire frame: the client's clock, in the host's time. The view ends a turn by idling with it (`turn_idle_ms`, r1.1). */
 export interface ClockFrame {

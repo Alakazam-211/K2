@@ -17,8 +17,10 @@
 /// them. The one place to change a name.
 pub const DESKTOP_PACKAGES: &[(&str, &[&str])] = &[
     // Ubuntu 24.04 / Debian. On Ubuntu `xvfb` pulls `x11-xkb-utils`
-    // (xkbcomp) and `xserver-common`; `dbus-run-session` comes with
-    // `dbus`, which every systemd box has.
+    // (xkbcomp) and `xserver-common`, and IceWM's imlib2 pulls the
+    // Ghostscript libraries; `dbus-run-session` comes with `dbus-daemon`,
+    // which every systemd box has. xauth is only recommended: K2 writes
+    // the cookie file itself.
     ("apt", &["xvfb", "icewm", "fonts-dejavu-core"]),
     // Arch and Omarchy.
     ("pacman", &["xorg-server-xvfb", "icewm", "ttf-dejavu"]),
@@ -86,7 +88,7 @@ pub fn manual_command(pm: Option<&str>) -> String {
     };
     let names = list.join(" ");
     match pm {
-        "apt" => format!("sudo apt-get install --no-install-recommends {names}"),
+        "apt" => format!("sudo apt-get update && sudo apt-get install --no-install-recommends {names}"),
         "pacman" => format!("sudo pacman -S --needed {names}"),
         "dnf" => format!("sudo dnf install --setopt=install_weak_deps=False {names}"),
         _ => unreachable!("every DESKTOP_PACKAGES entry has a command"),
@@ -116,7 +118,7 @@ mod tests {
     fn the_manual_command_names_the_listed_packages_and_nothing_else() {
         assert_eq!(
             manual_command(Some("apt")),
-            "sudo apt-get install --no-install-recommends xvfb icewm fonts-dejavu-core"
+            "sudo apt-get update && sudo apt-get install --no-install-recommends xvfb icewm fonts-dejavu-core"
         );
         assert_eq!(manual_command(Some("pacman")), "sudo pacman -S --needed xorg-server-xvfb icewm ttf-dejavu");
         assert_eq!(

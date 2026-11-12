@@ -10,6 +10,11 @@ import { desktopOsFromNavigator } from './lib/desktop-chrome'
 import { bootWebHostIfNeeded } from './web/boot-host'
 import { installRendererHeartbeat } from './lib/renderer-heartbeat'
 import { bootZenPausedStart, noteZenWidgetsHeartbeat, noteZenWidgetsVisibility } from './lib/zen/zen-widgets-running'
+import { bootStores } from './boot-stores'
+
+// The stores' first loads (boot-stores.ts). First on purpose: these ran
+// while the imports above were evaluated, before anything below.
+bootStores()
 
 // Hosted web over plain HTTP (LAN IP / remote vite:dev:web) is not a
 // secure context — crypto.randomUUID is missing and toast/tabs/transfer

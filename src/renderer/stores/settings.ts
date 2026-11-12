@@ -1161,13 +1161,17 @@ export function isMigratingSettingsError(e: unknown): boolean {
   return msg.includes('503') && msg.includes('migrating')
 }
 
-// Initialize on import
-useSettingsStore.getState().fetchSettings()
+/** The first settings load, and its retry when the daemon (re)connects.
+ *  `bootStores()` (boot-stores.ts) calls this once at app start. It does
+ *  not run at import: a test that imports this store fires no fetch. */
+export function bootSettings(): void {
+  useSettingsStore.getState().fetchSettings()
 
-onDaemonConnected(() => {
-  if (useSettingsStore.getState().loaded) return
-  void useSettingsStore.getState().fetchSettings()
-})
+  onDaemonConnected(() => {
+    if (useSettingsStore.getState().loaded) return
+    void useSettingsStore.getState().fetchSettings()
+  })
+}
 
 // #625 — on a real active-host CHANGE, re-fetch ALL app settings from the
 // NEW host's daemon. `fetchSettings()` does its own host-aware

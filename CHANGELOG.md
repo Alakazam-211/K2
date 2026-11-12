@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.9 (2026-11-12)
+
+Pairs with kit v0.15.1 (`e31ed4d9`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's changes are speed on keyed docs that aren't tables and the pack contract's carrier row for a pack that keeps a carrier; no kit API, wire or error id changed, and the bridge keeps no carrier.
+
 ## v0.1.8 (2026-11-11)
 
 Pairs with kit v0.15.0 (`07a2fa63`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's additions are additive or provided methods with defaults (turns, the pack verb on a change, focus and range, `Pack::container_of`, the carrier hook, host cache keys), and the bridge uses none of them.

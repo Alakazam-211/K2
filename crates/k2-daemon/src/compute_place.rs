@@ -2561,6 +2561,26 @@ mod tests {
         c
     }
 
+    /// B2 (§4.1.6, BK-17): a node whose trusted cache head is this commit
+    /// is as warm as a slot that built it, and outranks a cold node; a
+    /// head of another project, or one the workspace's repo can't place
+    /// (here: no such workspace), counts as cold.
+    #[test]
+    fn a_trusted_head_at_the_commit_is_warm() {
+        let c1 = "c".repeat(40);
+        let mut held = cand("held", 32, 32, 0, 2);
+        held.gen_heads = vec![("pk".into(), c1.clone())];
+        let cold = cand("cold", 32, 32, 0, 2);
+        assert_eq!(warmth(&held, Some("pk"), Some(&c1)), 2);
+        assert_eq!(warmth(&cold, Some("pk"), Some(&c1)), 0);
+        assert_eq!(warmth(&held, Some("other"), Some(&c1)), 0, "another project's head");
+        assert_eq!(gen_warmth(&held, Some("pk"), Some(&"d".repeat(40))), 0, "a head the repo can't place is cold");
+        let w = want(1);
+        let cands = vec![cold, held];
+        let (c, _) = choose_by(V2, &cands, &w, &[], Some("pk"), Some(&c1)).expect("a pick");
+        assert_eq!(c.node.id, "held", "the warm head wins a tie");
+    }
+
     fn want(mem_gb: u64) -> Want {
         Want {
             ws_id: ME.into(),

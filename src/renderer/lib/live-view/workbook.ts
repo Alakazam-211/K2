@@ -31,13 +31,21 @@ export interface Book {
 }
 
 /** A book from a whole snapshot: the keyed state, the view's containers and its units' `derived.a1`. */
-export function bookFromSnapshot(state: KeyedState, view: XlsxViewSnapshot, units: ReadonlyMap<string, readonly XlsxViewUnit[]>, rev: number): Book {
+export function bookFromSnapshot(
+  state: KeyedState,
+  view: XlsxViewSnapshot,
+  units: ReadonlyMap<string, readonly XlsxViewUnit[]>,
+  rev: number,
+  pageA1: Readonly<Record<string, Readonly<Record<string, string>>>> = {},
+): Book {
+  // r1.1: the A1 text rides on the cells pages too, so a formula never reads as its number while the units stream.
   const a1: Record<string, Record<string, string>> = {}
+  for (const [k, row] of Object.entries(pageA1)) a1[k] = { ...row }
   for (const list of units.values()) {
     for (const u of list) {
       const m = u.derived?.a1
       if (!m) continue
-      const row: Record<string, string> = {}
+      const row: Record<string, string> = { ...(a1[u.key] ?? {}) }
       for (const [f, t] of Object.entries(m)) if (t != null) row[f] = t
       a1[u.key] = row
     }
@@ -345,7 +353,7 @@ export function cellShown(cell: GridCell): CellShown {
 
 export const DEFAULT_STYLE: StyleHint = { bold: false, fill: null, numfmt: 'General' }
 
-/** A cell's style hint: its register's `s` in its sheet's table (r1 ruling 10). */
+/** A cell's style hint: its register's `s` in its sheet's table (r1 ruling 10). A missing table or index is the default (r1.1), never another sheet's. */
 export function styleOf(g: Grid, cell: GridCell): StyleHint {
   return g.styles[String(cell.s)] ?? DEFAULT_STYLE
 }

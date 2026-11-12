@@ -2,12 +2,13 @@
   "_golden": {
     "hand_made": true,
     "not_kit_output": true,
-    "revision": "r1",
+    "revision": "r1.1",
     "written_with": "a scratch script applying the contract's rules by hand; no kit or pack code ran",
     "from": "rendering-data-contract-xlsx-r0.md (r1), Items 2-4; the frame shape is the kit's ops_change (client/WIRE.md at 44c3c9ff)",
-    "type": "the xlsx timeline: the welcome, the agent turn (revs 21-28) with every claim, presence and turn event between the frames, and an outside save (rev 29)",
+    "type": "the xlsx timeline: the welcome, the agent turn (revs 21-28) with every claim, presence and turn event between the frames, an outside save (rev 29), and a turn that ends by idling (rev 30)",
     "notes": [
-      "the snapshot is assumed to have taken seq 1-10, so the frames are seq 11-19",
+      "the snapshot is assumed to have taken seq 1-10, so the frames are seq 11-20",
+      "r1.1: rev 30 is a second Atlas turn that ends by idling: turn_ended_by_idle at 260000 is worked out by the client, with no event",
       "turn = 't:' + 16 hex + '.' + turn_seq, computed by the daemon; the hash part is made up",
       "colours are placeholders for the hex colour K2 stamps at join; at_ms is a fake clock",
       "every op is the kit's existing form. 'derived' is the pack's opaque slot (Pack::watch_extras), filled as this addendum defines: units.<row>.a1, containers.<sheet> (merges, styles: the whole value when it changed), written (r1), bands (r1)",
@@ -60,7 +61,7 @@
       "at_ms": 199050,
       "event": "keyed_snapshot",
       "seq": "1-10",
-      "_note": "the snapshot of keyed-state-rev20.json and index-rev20.json: head, the roots' pages in schema order (sheets, sheet_props, cols, col_props, rows, cells, book), then the units pages"
+      "_note": "the snapshot of keyed-state-rev20.json and index-rev20.json: head, the roots' pages in schema order (sheets, sheet_props, cols, col_props, rows, cells, book), then the units pages. r1.1: each cells page carries the a1 of its formula cells"
     },
     {
       "at_ms": 200000,
@@ -641,7 +642,7 @@
           "cells": {
             "container": "@sheet:1",
             "active": {
-              "row": "@sheet:1/row:r15",
+              "row": "@sheet:1/row:r16",
               "row_off": 0,
               "col": "@sheet:1/col:c1",
               "col_off": 0
@@ -651,7 +652,7 @@
           "client": 4711
         }
       ],
-      "_note": "a delete leaves a caret on the first cell after the deleted band: A17 (the hidden fx row, now row 17). The row selection is the kit's verb rule: the row whose field the verb wrote"
+      "_note": "r1.1: a delete leaves a caret on the first VISIBLE cell after the deleted band. Row 17 is now the hidden fx row, so the caret skips it to A18 (the Total row, @sheet:1/row:r16). The row selection is the kit's verb rule: the row whose field the verb wrote"
     },
     {
       "at_ms": 216500,
@@ -676,6 +677,86 @@
       "seq": 19,
       "verb": null,
       "_see": "frames[8]"
+    },
+    {
+      "at_ms": 240000,
+      "event": "ops_change",
+      "rev": 30,
+      "seq": 20,
+      "verb": "cell set",
+      "_see": "frames[9]"
+    },
+    {
+      "at_ms": 240000,
+      "event": "roster_flush",
+      "after_rev": 30,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r6"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r6",
+              "row_off": 0,
+              "col": "@sheet:1/col:c6",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r6",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r6",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "the agent's presence after the verb, in one flush: focus, then selection, then cells (Item 3)"
+    },
+    {
+      "at_ms": 260000,
+      "event": "turn_ended_by_idle",
+      "turn": "t:5e0a9d31c7b2f846.8",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "derived_by": "the client; nothing is sent",
+      "rule": "the turn's agent made no change and took or ended no claim for turn_idle_ms (20000, from the welcome) after its last change at 240000",
+      "_note": "r1.1 golden: the view closes turn t:5e0a9d31c7b2f846.8 at 260000 with no turn_end. A turn_end arriving later for it changes nothing shown. Presence events alone (focus, cells) don't keep a turn open"
     }
   ],
   "frames": [
@@ -1429,6 +1510,59 @@
       },
       "render_hashes": null,
       "_view": "An outside save: the file is the actor (kind file, id kit:external, colour null: K2 picks its own). Someone changed C4 in a desktop app, which recalculated on load (the kit's write sets fullCalcOnLoad), so every formula whose result changed arrives with a cached value: E10 and E20 lose 'not calculated'. The app also merged A20:F20: merges live in the carrier, so the change arrives as the sheet's derived merges, with no op. Assumes the kit wrote the file at rev 28 and the app opened that file, so there is nothing to keep both of."
+    },
+    {
+      "type": "ops_change",
+      "seq": 20,
+      "rev": 30,
+      "at_ms": 240000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.8",
+      "verb": "cell set",
+      "claim": null,
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r6",
+          "field": "c6",
+          "after": "{\"t\":\"s\",\"v\":\"check against FX rates\"}"
+        }
+      ],
+      "derived": {
+        "written": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r6",
+                "row_off": 0,
+                "col": "@sheet:1/col:c6",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r6",
+                "row_off": 0,
+                "col": "@sheet:1/col:c6",
+                "col_off": 0
+              },
+              "_a1": "F7"
+            }
+          ]
+        }
+      },
+      "render_hashes": null,
+      "_view": "A second Atlas turn (turn_seq 8): one note in F7. No turn_end follows: the agent goes quiet."
     }
   ]
 }

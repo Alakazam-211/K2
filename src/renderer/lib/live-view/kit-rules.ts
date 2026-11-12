@@ -46,7 +46,8 @@ export function dropBroken(book: Book, cells: CellsValue | null): CellsValue | n
   const ranges = cells.ranges.filter((r) => cornerOk(g, r.start, max) && cornerOk(g, r.end, max))
   const active = cells.active && cornerOk(g, cells.active, max) ? cells.active : null
   if (ranges.length === cells.ranges.length && active === cells.active) return undefined
-  return { container: cells.container, active, ranges }
+  // Nothing left: the value goes (CS9, r1.1).
+  return active == null && ranges.length === 0 ? null : { container: cells.container, active, ranges }
 }
 
 /** CC2: what a cells claim holds off, for agents only (`ClaimPolicy::Respect`), given a verb line as the goldens write it. */

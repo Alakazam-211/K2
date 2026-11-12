@@ -2,7 +2,7 @@
   "_golden": {
     "hand_made": true,
     "not_kit_output": true,
-    "revision": "r1",
+    "revision": "r1.1",
     "written_with": "a scratch script applying the contract's rules by hand; no kit or pack code ran",
     "from": "rendering-data-contract-xlsx-r0.md (r1), section 1 and Item 1",
     "type": "the keyed state at rev 20, in the keyed watch's page form",
@@ -16,7 +16,8 @@
       "col_props w: column width in characters of the default font's maximum digit width, as stored in the file. cells @ht: row height in points",
       "cols carry a 'sheet' field (NEW pack field, Q-X13)",
       "r1: two hidden sheets: Lists (state hidden) and Setup (state veryHidden); both have hidden = 1",
-      "the book's mark/sheet is HYPOTHESIS: the plan names marks for rows and columns only"
+      "the book's mark/sheet is HYPOTHESIS: the plan names marks for rows and columns only",
+      "r1.1: the cells root carries 'derived.a1' (formula text) beside its entries: on the wire, per page"
     ]
   },
   "upto": 20,
@@ -1072,7 +1073,59 @@
           "c2",
           "{\"t\":\"n\",\"v\":\"3\"}"
         ]
-      ]
+      ],
+      "derived": {
+        "a1": {
+          "@sheet:1/row:r3": {
+            "c5": "=C4+D4"
+          },
+          "@sheet:1/row:r4": {
+            "c5": "=C5+D5"
+          },
+          "@sheet:1/row:r5": {
+            "c5": "=C6+D6"
+          },
+          "@sheet:1/row:r6": {
+            "c5": "=C7+D7"
+          },
+          "@sheet:1/row:r7": {
+            "c5": "=C8+D8"
+          },
+          "@sheet:1/row:r8": {
+            "c5": "=C9+D9"
+          },
+          "@sheet:1/row:r9": {
+            "c5": "=C10+D10"
+          },
+          "@sheet:1/row:r10": {
+            "c5": "=C11+D11"
+          },
+          "@sheet:1/row:r11": {
+            "c5": "=C12+D12"
+          },
+          "@sheet:1/row:r12": {
+            "c5": "=C13+D13"
+          },
+          "@sheet:1/row:r13": {
+            "c5": "=C14+D14"
+          },
+          "@sheet:1/row:r14": {
+            "c5": "=C15+D15"
+          },
+          "@sheet:1/row:r15": {
+            "c3": "=Rates!B3"
+          },
+          "@sheet:1/row:r16": {
+            "c3": "=SUM(C4:C15)",
+            "c4": "=SUM(D4:D15)",
+            "c5": "=SUM(E4:E15)"
+          },
+          "@sheet:1/row:r17": {
+            "c5": "=E18*C17"
+          }
+        }
+      },
+      "_derived_note": "r1.1, NEW (kit): each keyed_page of 'cells' carries the a1 of the formula cells whose entries are in that page, so a formula never shows as a plain number while the snapshot loads. Here it is whole, for reference; wire_page_example shows one page"
     },
     {
       "name": "book",
@@ -1136,5 +1189,58 @@
         ]
       ]
     }
-  ]
+  ],
+  "wire_page_example": {
+    "type": "keyed_page",
+    "seq": 7,
+    "upto": 20,
+    "page": 6,
+    "pages": 9,
+    "root": "cells",
+    "entries": [
+      [
+        "@sheet:1/row:r3",
+        "@sheet",
+        "1"
+      ],
+      [
+        "@sheet:1/row:r3",
+        "c1",
+        "{\"t\":\"s\",\"v\":\"Laptops\"}"
+      ],
+      [
+        "@sheet:1/row:r3",
+        "c2",
+        "{\"t\":\"s\",\"v\":\"Eng\"}"
+      ],
+      [
+        "@sheet:1/row:r3",
+        "c3",
+        "{\"t\":\"n\",\"v\":\"12000\",\"s\":3}"
+      ],
+      [
+        "@sheet:1/row:r3",
+        "c4",
+        "{\"t\":\"n\",\"v\":\"8000\",\"s\":3}"
+      ],
+      [
+        "@sheet:1/row:r3",
+        "c5",
+        "{\"t\":\"n\",\"v\":\"20000\",\"f\":\"{s1-r3|c3}+{s1-r3|c4}\",\"s\":3}"
+      ],
+      [
+        "@sheet:1/row:r3",
+        "c6",
+        "{\"t\":\"s\",\"v\":\"replacement cycle\"}"
+      ]
+    ],
+    "derived": {
+      "a1": {
+        "@sheet:1/row:r3": {
+          "c5": "=C4+D4"
+        }
+      }
+    },
+    "_note": "seq and page numbers are illustrative. 'derived' is NEW: only the a1 of formula cells in THIS page's entries, keyed like the entries (row address, then cell field)"
+  }
 }

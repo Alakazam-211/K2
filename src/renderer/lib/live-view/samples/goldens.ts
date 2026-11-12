@@ -24,7 +24,7 @@ export interface GoldenKeyedRoot {
 
 export interface GoldenTimelineEvent {
   at_ms: number
-  event: 'welcome' | 'keyed_snapshot' | 'roster_flush' | 'ops_change' | 'turn_end'
+  event: 'welcome' | 'keyed_snapshot' | 'roster_flush' | 'ops_change' | 'turn_end' | 'turn_ended_by_idle'
   frame?: (XlsxWelcome & { type: 'welcome' }) | { type: 'turn_end'; turn: string; actor: ClaimActor; at_ms: number }
   roster_events?: XlsxRosterEvent[]
   rev?: number

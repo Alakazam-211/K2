@@ -4,7 +4,7 @@
 // the kit ships it (kit items VG, VC, VK, V1, and the pack's derived values);
 // until then the view reads them through these declarations only.
 
-import type { ClaimActor, Handle, LineSpan, OpsChangeFrame, RosterEntry, RosterEvent, ViewContainer, ViewSchemaJson, ViewSnapshotJson, ViewUnit, Welcome } from './kit'
+import type { ClaimActor, Handle, KeyedPageFrame, LineSpan, OpsChangeFrame, RosterEntry, RosterEvent, ViewContainer, ViewSchemaJson, ViewSnapshotJson, ViewUnit, Welcome } from './kit'
 
 /** provisional: replaced when the kit ships it. A sheet's `state` (addendum r1 Item 1, `Container.state`). */
 export type SheetState = 'visible' | 'hidden' | 'very_hidden'
@@ -28,7 +28,10 @@ export interface GridSlot {
   row_fields: { hidden: string; height: string; height_unit: 'pt' }
   col_field_names: { hidden: string; width: string; width_unit: string }
   viewport: 'cells'
-  style_hint?: { from: string; table: string }
+  /** r1.1: the per-cell derived values the kit puts on each `cells` page (`["a1"]`, or `{names: ["a1"]}`). */
+  cell_derived?: string[] | { names: string[] }
+  /** A missing table, or an index the table lacks, means `default` (r1.1). */
+  style_hint?: { from: string; table: string; default?: StyleHint }
 }
 
 /** provisional: replaced when the kit ships it. The xlsx view schema: the kit's plus `grid`, `root_order` and the `state` slot (r1). */
@@ -173,3 +176,14 @@ export interface TurnEndFrame {
 
 /** provisional: replaced when the kit ships it. The ops_change frame with xlsx's derived. */
 export type XlsxOpsChangeFrame = Omit<OpsChangeFrame, 'derived'> & { derived: XlsxFrameDerived | null }
+
+/** provisional: replaced when the kit ships it. A keyed page with r1.1's per-cell derived values: a `cells` page carries the A1 text of the formula cells in that page (row address, then cell field). */
+export interface XlsxKeyedPageFrame extends KeyedPageFrame {
+  derived?: { a1?: Record<string, Record<string, string>> } | null
+}
+
+/** Not a wire frame: the client's clock, in the host's time. The view ends a turn by idling with it (`turn_idle_ms`, r1.1). */
+export interface ClockFrame {
+  type: 'clock'
+  at_ms: number
+}

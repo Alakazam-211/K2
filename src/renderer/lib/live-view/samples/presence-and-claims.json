@@ -4,7 +4,7 @@
     "not_kit_output": true,
     "from": "rendering-data-contract-xlsx-r0.md, Items 3 and 4",
     "type": "presence (peers) and claims at three points of the turn in turn-frames.json",
-    "revision": "r1",
+    "revision": "r1.1",
     "notes": [
       "r1: every presence and claim event between P1 and P3 (the agent's focus, selection and cells after each verb; claim start and end with the actor) is in turn-frames.json's timeline. P3's agent cells follow ruling 2",
       "the view is Ada's client (person:ada). isSelf and sameUser are worked out by the client; they are not sent",
@@ -30,15 +30,33 @@
           "kind": "agent",
           "colour": "#6d5bd0",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
           "selection": null,
           "cells": {
             "container": "@sheet:1",
-            "active": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+            "active": {
+              "row": "@sheet:1/row:r3",
+              "row_off": 0,
+              "col": "@sheet:1/col:c3",
+              "col_off": 0
+            },
             "ranges": [
               {
-                "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
-                "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+                "start": {
+                  "row": "@sheet:1/row:r3",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c3",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r14",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                },
                 "_a1": "C4:D15"
               }
             ],
@@ -57,16 +75,29 @@
           "kind": "person",
           "colour": "#d9822b",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
           "selection": null,
           "cells": {
             "container": "@sheet:1",
-            "active": { "row": "@sheet:1/row:r16", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+            "active": {
+              "row": "@sheet:1/row:r16",
+              "row_off": 0,
+              "col": "@sheet:1/col:c5",
+              "col_off": 0
+            },
             "ranges": [],
             "_active_a1": "E18"
           },
           "pointer": null,
-          "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 },
+          "viewport": {
+            "x": 1,
+            "y": 1,
+            "w": 8,
+            "h": 30
+          },
           "_viewport_a1": "A1:H30",
           "mode_derived": "viewing",
           "isSelf": true,
@@ -79,22 +110,45 @@
           "kind": "person",
           "colour": "#2b9bd9",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
           "selection": null,
           "cells": {
             "container": "@sheet:2",
-            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "active": {
+              "row": "@sheet:2/row:r1",
+              "row_off": 0,
+              "col": "@sheet:2/col:c1",
+              "col_off": 0
+            },
             "ranges": [
               {
-                "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
-                "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 },
+                "start": {
+                  "row": "@sheet:2/row:r1",
+                  "row_off": 0,
+                  "col": "@sheet:2/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:2/row:r4",
+                  "row_off": 0,
+                  "col": "@sheet:2/col:c2",
+                  "col_off": 0
+                },
                 "_a1": "A1:B4"
               }
             ],
             "_active_a1": "A1"
           },
           "pointer": null,
-          "viewport": { "x": 1, "y": 1, "w": 6, "h": 25 },
+          "viewport": {
+            "x": 1,
+            "y": 1,
+            "w": 6,
+            "h": 25
+          },
           "_viewport_a1": "A1:F25 on Rates",
           "mode_derived": "selecting",
           "isSelf": false,
@@ -105,14 +159,29 @@
       "claims_active": [
         {
           "id": "claim-31",
-          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          },
           "scope": "cells",
           "container": "@sheet:1",
           "keys": null,
           "ranges": [
             {
-              "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
-              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+              "start": {
+                "row": "@sheet:1/row:r3",
+                "row_off": 0,
+                "col": "@sheet:1/col:c3",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r14",
+                "row_off": 0,
+                "col": "@sheet:1/col:c4",
+                "col_off": 0
+              },
               "_a1": "C4:D15"
             }
           ],
@@ -135,15 +204,38 @@
           "kind": "agent",
           "colour": "#6d5bd0",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:1" },
-          "selection": { "root": "rows", "keys": ["@sheet:1/row:r19"] },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r19"
+            ]
+          },
           "cells": {
             "container": "@sheet:1",
-            "active": { "row": "@sheet:1/row:r19", "row_off": 0, "col": "@sheet:1/col:c1", "col_off": 0 },
+            "active": {
+              "row": "@sheet:1/row:r19",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
             "ranges": [
               {
-                "start": { "row": "@sheet:1/row:r19", "row_off": 0, "col": "@sheet:1/col:c1", "col_off": 0 },
-                "end": { "row": "@sheet:1/row:r19", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+                "start": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                },
                 "_a1": "A10:E10"
               }
             ],
@@ -162,16 +254,29 @@
           "kind": "person",
           "colour": "#d9822b",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
           "selection": null,
           "cells": {
             "container": "@sheet:1",
-            "active": { "row": "@sheet:1/row:r16", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+            "active": {
+              "row": "@sheet:1/row:r16",
+              "row_off": 0,
+              "col": "@sheet:1/col:c5",
+              "col_off": 0
+            },
             "ranges": [],
             "_active_a1": "E19"
           },
           "pointer": null,
-          "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 },
+          "viewport": {
+            "x": 1,
+            "y": 1,
+            "w": 8,
+            "h": 30
+          },
           "_viewport_a1": "A1:H30",
           "mode_derived": "viewing",
           "isSelf": true,
@@ -184,22 +289,45 @@
           "kind": "person",
           "colour": "#2b9bd9",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
           "selection": null,
           "cells": {
             "container": "@sheet:2",
-            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "active": {
+              "row": "@sheet:2/row:r1",
+              "row_off": 0,
+              "col": "@sheet:2/col:c1",
+              "col_off": 0
+            },
             "ranges": [
               {
-                "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
-                "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 },
+                "start": {
+                  "row": "@sheet:2/row:r1",
+                  "row_off": 0,
+                  "col": "@sheet:2/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:2/row:r4",
+                  "row_off": 0,
+                  "col": "@sheet:2/col:c2",
+                  "col_off": 0
+                },
                 "_a1": "A1:B4"
               }
             ],
             "_active_a1": "A1"
           },
           "pointer": null,
-          "viewport": { "x": 1, "y": 1, "w": 6, "h": 25 },
+          "viewport": {
+            "x": 1,
+            "y": 1,
+            "w": 6,
+            "h": 25
+          },
           "mode_derived": "selecting",
           "isSelf": false,
           "sameUser": false
@@ -208,14 +336,29 @@
       "claims_active": [
         {
           "id": "claim-31",
-          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          },
           "scope": "cells",
           "container": "@sheet:1",
           "keys": null,
           "ranges": [
             {
-              "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
-              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+              "start": {
+                "row": "@sheet:1/row:r3",
+                "row_off": 0,
+                "col": "@sheet:1/col:c3",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r14",
+                "row_off": 0,
+                "col": "@sheet:1/col:c4",
+                "col_off": 0
+              },
               "_a1": "C4:D16"
             }
           ],
@@ -239,11 +382,24 @@
           "kind": "agent",
           "colour": "#6d5bd0",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:2" },
-          "selection": { "root": "sheets", "keys": ["@sheet:2"] },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
+          "selection": {
+            "root": "sheets",
+            "keys": [
+              "@sheet:2"
+            ]
+          },
           "cells": {
             "container": "@sheet:2",
-            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "active": {
+              "row": "@sheet:2/row:r1",
+              "row_off": 0,
+              "col": "@sheet:2/col:c1",
+              "col_off": 0
+            },
             "ranges": [],
             "_active_a1": "A1"
           },
@@ -260,11 +416,19 @@
           "kind": "person",
           "colour": "#d9822b",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
           "selection": null,
           "cells": null,
           "pointer": null,
-          "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 },
+          "viewport": {
+            "x": 1,
+            "y": 1,
+            "w": 8,
+            "h": 30
+          },
           "_viewport_a1": "A1:H30 on FX rates",
           "mode_derived": "viewing",
           "isSelf": true,
@@ -277,22 +441,45 @@
           "kind": "person",
           "colour": "#2b9bd9",
           "away": false,
-          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
           "selection": null,
           "cells": {
             "container": "@sheet:2",
-            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "active": {
+              "row": "@sheet:2/row:r1",
+              "row_off": 0,
+              "col": "@sheet:2/col:c1",
+              "col_off": 0
+            },
             "ranges": [
               {
-                "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
-                "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 },
+                "start": {
+                  "row": "@sheet:2/row:r1",
+                  "row_off": 0,
+                  "col": "@sheet:2/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:2/row:r4",
+                  "row_off": 0,
+                  "col": "@sheet:2/col:c2",
+                  "col_off": 0
+                },
                 "_a1": "A1:B4"
               }
             ],
             "_active_a1": "A1"
           },
           "pointer": null,
-          "viewport": { "x": 1, "y": 1, "w": 6, "h": 25 },
+          "viewport": {
+            "x": 1,
+            "y": 1,
+            "w": 6,
+            "h": 25
+          },
           "mode_derived": "selecting",
           "isSelf": false,
           "sameUser": false,
@@ -303,7 +490,12 @@
       "claims_ended": [
         {
           "id": "claim-31",
-          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          },
           "how": "released",
           "at_ms": 209500,
           "at_rev": null

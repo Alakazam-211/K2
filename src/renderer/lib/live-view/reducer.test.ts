@@ -64,7 +64,7 @@ describe('liveWorkbookReducer: the keyed watch', () => {
         s = a
       }
     }
-    expect(s.book?.rev).toBe(29)
+    expect(s.book?.rev).toBe(30)
   })
 })
 

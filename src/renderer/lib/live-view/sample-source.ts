@@ -10,10 +10,10 @@
 // goldens assume the snapshot took seq 1-10; here it takes what its pages
 // need, and the changes follow on).
 
-import type { KeyedPageFrame, KeyedSchema } from './kit'
+import type { KeyedSchema } from './kit'
 import type { LiveTier, LiveWorkbookFrame } from './reducer'
 import type { LiveWorkbookSource, LiveWorkbookSourceEvent } from './source'
-import type { XlsxRosterEntry, XlsxViewSnapshot } from './xlsx-provisional'
+import type { XlsxKeyedPageFrame, XlsxRosterEntry, XlsxViewSnapshot } from './xlsx-provisional'
 import { GOLDEN, stripAnnotations } from './samples/goldens'
 
 /** What the sample shows: the agent's turn (live), a workbook too large to watch live (blob), or one K2 can't open (none). */
@@ -74,9 +74,22 @@ export function sampleSnapshotFrames(firstSeq = 1): LiveWorkbookFrame[] {
   let page = 0
   for (const r of roots) {
     page++
-    const f: KeyedPageFrame = { type: 'keyed_page', seq: firstSeq + page, upto, page, pages, root: r.name }
+    const f: XlsxKeyedPageFrame = { type: 'keyed_page', seq: firstSeq + page, upto, page, pages, root: r.name }
     if (r.kind === 'list') f.live = (r.live ?? []).map(([k, v]) => [k, v])
     else f.entries = (r.entries ?? []).map(([k, fld, v]) => [k, fld, v])
+    // r1.1: the cells page carries the A1 text of the formula cells in it (the kit takes it from Unit.derived.a1).
+    if (r.name === GOLDEN.schema.grid.cells) {
+      const rowsHere = new Set((f.entries ?? []).map((e) => e[0]))
+      const a1: Record<string, Record<string, string>> = {}
+      for (const u of idx.units) {
+        const m = u.derived?.a1
+        if (!m || !rowsHere.has(u.key)) continue
+        const row: Record<string, string> = {}
+        for (const [fld, t] of Object.entries(m)) if (t != null) row[fld] = t
+        a1[u.key] = row
+      }
+      f.derived = { a1 }
+    }
     out.push(f)
   }
   for (const c of containers) {
@@ -110,7 +123,8 @@ export function sampleSteps(scenario: SampleScenario = 'turn', maxGapMs = 2500):
   snap.forEach((f, i) => steps.push({ label: f.type === 'keyed_snapshot' ? 'snapshot' : `page ${i}`, atMs: null, delayMs: i === 0 ? 250 : PAGE_GAP_MS, events: [f] }))
   if (scenario === 'blob') return steps
   steps.push({ label: 'roster', atMs: null, delayMs: 300, events: [sampleRosterSnapshot()] })
-  let seq = snap[snap.length - 1].type === 'keyed_page' ? (snap[snap.length - 1] as KeyedPageFrame).seq : 1
+  const lastSnap = snap[snap.length - 1]
+  let seq = lastSnap.type === 'keyed_page' || lastSnap.type === 'keyed_snapshot' ? lastSnap.seq : 1
   let prevAt: number | null = null
   for (const e of tl) {
     if (e.event === 'welcome' || e.event === 'keyed_snapshot') continue
@@ -129,6 +143,9 @@ export function sampleSteps(scenario: SampleScenario = 'turn', maxGapMs = 2500):
       steps.push({ label: `rev ${f.rev}`, atMs: e.at_ms, delayMs: gap, events: [{ ...stripAnnotations(f), type: 'ops_change', seq }] })
     } else if (e.event === 'turn_end' && e.frame?.type === 'turn_end') {
       steps.push({ label: 'turn_end', atMs: e.at_ms, delayMs: gap, events: [stripAnnotations(e.frame)] })
+    } else if (e.event === 'turn_ended_by_idle') {
+      // Nothing is sent: the client's clock reaches turn_idle_ms after the agent's last change (r1.1).
+      steps.push({ label: 'idle', atMs: e.at_ms, delayMs: gap, events: [{ type: 'clock', at_ms: e.at_ms }] })
     }
   }
   return steps

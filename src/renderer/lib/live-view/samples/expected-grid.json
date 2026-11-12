@@ -2,7 +2,7 @@
   "_golden": {
     "hand_made": true,
     "not_kit_output": true,
-    "revision": "r1",
+    "revision": "r1.1",
     "written_with": "a scratch script applying the contract's rules by hand; no kit or pack code ran",
     "from": "rendering-data-contract-xlsx-r0.md (r1), section 3",
     "type": "what the grid shows at rev 20, rev 28 and rev 29: the check values for a mock",

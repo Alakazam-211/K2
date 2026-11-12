@@ -213,13 +213,25 @@ export interface TurnGroup {
   actor: Actor
   items: LogEntry[]
   endedAt: number | null
-  /** Ended by `turn_end`, or a change with no turn (an outside save). */
+  /** Ended by `turn_end`, by idling past `turn_idle_ms`, or a change with no turn (an outside save). */
   ended: boolean
+  endedBy: 'turn_end' | 'idle' | 'no turn' | null
   pendingOnly: boolean
 }
 
-/** History, grouped by turn: claims and claim ends join their actor's open turn; `turn_end` closes it. */
-export function turnGroups(log: readonly LogEntry[]): TurnGroup[] {
+export interface IdleRule {
+  /** The welcome's `turn_idle_ms`. */
+  idleMs: number | null
+  /** The client's clock, in the host's time. */
+  now: number | null
+}
+
+/**
+ * History, grouped by turn: claims and claim ends join their actor's open turn; `turn_end` closes it.
+ * With no `turn_end`, a turn ends `turn_idle_ms` after its last activity: a change, or a claim taken
+ * or ended (presence alone doesn't keep it open). A `turn_end` after that changes nothing shown (r1.1).
+ */
+export function turnGroups(log: readonly LogEntry[], idle: IdleRule = { idleMs: null, now: null }): TurnGroup[] {
   const groups: TurnGroup[] = []
   const byTurn = new Map<string, TurnGroup>()
   let pending: LogEntry[] = []
@@ -228,7 +240,7 @@ export function turnGroups(log: readonly LogEntry[]): TurnGroup[] {
       const t = e.turn ?? `solo:${e.actor.id}:${e.rev}`
       let g = byTurn.get(t)
       if (!g) {
-        g = { turn: e.turn, actor: e.actor, items: [], endedAt: null, ended: false, pendingOnly: false }
+        g = { turn: e.turn, actor: e.actor, items: [], endedAt: null, ended: false, endedBy: null, pendingOnly: false }
         byTurn.set(t, g)
         groups.push(g)
       }
@@ -253,8 +265,18 @@ export function turnGroups(log: readonly LogEntry[]): TurnGroup[] {
       else pending.push(e)
     }
   }
-  if (pending.length) groups.push({ turn: null, actor: pending[0].actor, items: pending, endedAt: null, ended: false, pendingOnly: true })
-  for (const g of groups) g.ended = g.endedAt != null || (!g.turn && !g.pendingOnly)
+  if (pending.length) groups.push({ turn: null, actor: pending[0].actor, items: pending, endedAt: null, ended: false, endedBy: null, pendingOnly: true })
+  for (const g of groups) {
+    const last = g.items.filter((x) => x.kind !== 'turn_end' && x.at != null).reduce((m, x) => Math.max(m, x.at as number), -Infinity)
+    const idleAt = g.turn && idle.idleMs != null && Number.isFinite(last) ? last + idle.idleMs : null
+    const idled = idleAt != null && idle.now != null && idle.now >= idleAt && (g.endedAt == null || g.endedAt > idleAt)
+    if (idled) {
+      g.endedAt = idleAt
+      g.endedBy = 'idle'
+    } else if (g.endedAt != null) g.endedBy = 'turn_end'
+    else if (!g.turn && !g.pendingOnly) g.endedBy = 'no turn'
+    g.ended = g.endedBy != null
+  }
   return groups
 }
 
@@ -267,6 +289,7 @@ export interface ActivityLine {
   more: number
   frames: number
   done: boolean
+  endedBy: TurnGroup['endedBy']
   turn: string | null
   endedAt: number | null
   latestAt: number | null
@@ -274,10 +297,10 @@ export interface ActivityLine {
   working: boolean
 }
 
-export function activityLine(log: readonly LogEntry[], claims: readonly { actor: Actor; label: string | null }[]): ActivityLine {
-  const groups = turnGroups(log)
+export function activityLine(log: readonly LogEntry[], claims: readonly { actor: Actor; label: string | null }[], idle?: IdleRule): ActivityLine {
+  const groups = turnGroups(log, idle)
   const g = groups[groups.length - 1]
-  if (!g) return { actor: null, claimLabel: null, latest: null, more: 0, frames: 0, done: false, turn: null, endedAt: null, latestAt: null, working: false }
+  if (!g) return { actor: null, claimLabel: null, latest: null, more: 0, frames: 0, done: false, endedBy: null, turn: null, endedAt: null, latestAt: null, working: false }
   const frames = g.items.filter((e): e is Extract<LogEntry, { kind: 'frame' }> => e.kind === 'frame')
   const last = frames[frames.length - 1]
   const mine = claims.filter((c) => c.actor.id === g.actor.id)
@@ -289,6 +312,7 @@ export function activityLine(log: readonly LogEntry[], claims: readonly { actor:
     more: Math.max(0, frames.length - 1),
     frames: frames.length,
     done: g.ended && !!g.turn,
+    endedBy: g.endedBy,
     turn: g.turn,
     endedAt: g.endedAt,
     latestAt: last?.at ?? null,

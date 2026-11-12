@@ -12,13 +12,17 @@ describe('sampleSteps', () => {
     expect(types[0]).toBe('welcome')
     expect(types.filter((t) => t === 'keyed_page').length).toBe(11)
     const revs = steps.flatMap((s) => s.events.flatMap((e) => (e.type === 'ops_change' ? [e.rev] : [])))
-    expect(revs).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29])
+    expect(revs).toEqual([21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
     // Each change carries the next seq after the snapshot's pages, with no gap.
     const seqs = steps.flatMap((s) => s.events.flatMap((e) => (e.type === 'keyed_snapshot' || e.type === 'keyed_page' || e.type === 'ops_change' ? [e.seq] : [])))
     expect(seqs).toEqual(seqs.map((_, i) => i + 1))
     // The flush after rev 21 lands in the same step as its frame.
     const s21 = steps.find((s) => s.label === 'rev 21')
     expect(s21?.events.map((e) => (e.type === 'roster_event' ? e.event.kind : e.type))).toEqual(['ops_change', 'focus', 'selection', 'cells'])
+    // r1.1: the cells page carries the formula cells' A1 text; the idle end is the client's clock, nothing sent.
+    const cellsPage = steps.flatMap((s) => s.events).find((e) => e.type === 'keyed_page' && e.root === 'cells')
+    expect(cellsPage?.type === 'keyed_page' ? cellsPage.derived?.a1?.['@sheet:1/row:r3'] : null).toEqual({ c5: '=C4+D4' })
+    expect(steps[steps.length - 1]).toMatchObject({ label: 'idle', events: [{ type: 'clock', at_ms: 260000 }] })
   })
   it('too large: the welcome, the blob tier, the snapshot; no roster, no changes', () => {
     const types = sampleSteps('blob').flatMap((s) => s.events.map((e) => (e.type === 'tier' ? `tier:${e.tier}` : e.type)))
@@ -49,7 +53,7 @@ describe('SampleWorkbookSource', () => {
     const src = new SampleWorkbookSource({ loop: false })
     const got = collect(src)
     vi.advanceTimersByTime(120_000)
-    expect(got.filter((e) => e.type === 'ops_change').length).toBe(9)
+    expect(got.filter((e) => e.type === 'ops_change').length).toBe(10)
     expect(src.status()).toMatchObject({ playing: false, ended: true })
     expect(src.snapshot().length).toBe(got.length)
     src.close()

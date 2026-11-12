@@ -4,22 +4,23 @@
 // claim events, and the host's `turn_end`. Plus the client's own gestures
 // (follow on or off). No React, no DOM: the view renders `LiveWorkbookState`.
 
-import { applyKeyedPage, emptyKeyedState, KeyedMisfit, type ClaimActor, type ElemFocus, type ElemSelection, type KeyedPageFrame, type KeyedRootState, type KeyedSnapshotFrame, type KeyedState, type Point, type Rect, type ViewUnit } from './kit'
+import { applyKeyedPage, emptyKeyedState, KeyedMisfit, type ClaimActor, type ElemFocus, type ElemSelection, type KeyedRootState, type KeyedSnapshotFrame, type KeyedState, type Point, type Rect, type ViewUnit } from './kit'
 import { actorFrom, framePhrase, type Actor, type LogEntry } from './wording'
 import { applyFrameToBook, bookFromSnapshot, cornerPlace, gridOf, overlaps, rangeA1, rangeRect, sheetOfRow, type Book, type Rect4 } from './workbook'
-import type { CellRange, CellsValue, TurnEndFrame, XlsxOpsChangeFrame, XlsxRosterEntry, XlsxRosterEvent, XlsxViewSnapshot, XlsxWelcome } from './xlsx-provisional'
+import type { CellRange, CellsValue, ClockFrame, TurnEndFrame, XlsxKeyedPageFrame, XlsxOpsChangeFrame, XlsxRosterEntry, XlsxRosterEvent, XlsxViewSnapshot, XlsxWelcome } from './xlsx-provisional'
 
 /** What a source sends: kit frames (mirrored in kit.ts / xlsx-provisional.ts) plus the host's tier. */
 export type LiveWorkbookFrame =
   | ({ type: 'welcome' } & XlsxWelcome)
   | (Omit<KeyedSnapshotFrame, 'view'> & { view: XlsxViewSnapshot | null })
-  | KeyedPageFrame
+  | XlsxKeyedPageFrame
   | ({ type: 'ops_change' } & XlsxOpsChangeFrame)
   | { type: 'roster_event'; event: XlsxRosterEvent }
   | TurnEndFrame
   /** The host's word on the doc's tier: live, the blob tier (too large to watch live; read-only), or no doc (32 MiB and up). */
   | { type: 'tier'; tier: LiveTier }
   | { type: 'watch_refused'; error: { id: string; message?: string } }
+  | ClockFrame
 
 export type LiveTier = 'live' | 'blob' | 'none'
 
@@ -85,6 +86,8 @@ export interface Building {
   upto: number
   /** The roots whose pages are in, in order. */
   rootsIn: string[]
+  /** r1.1: A1 text from the cells pages (row address, then cell field). */
+  a1: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
 export interface LiveWorkbookState {
@@ -113,6 +116,8 @@ export interface LiveWorkbookState {
   tick: number
   /** The log's running number. */
   logSeq: number
+  /** The latest time seen, on the host's clock (frames, claims, turn_end, the client's clock): ends idle turns. */
+  now: number | null
 }
 
 /** The history keeps this many entries (the oldest go first). */
@@ -138,6 +143,7 @@ export function initialLiveState(): LiveWorkbookState {
     refused: null,
     tick: 0,
     logSeq: 0,
+    now: null,
   }
 }
 
@@ -200,12 +206,12 @@ function asked(s: LiveWorkbookState, why: string, detail: string): LiveWorkbookS
 // ---------- the keyed watch (KeyedWatch's rules) ----------
 
 function onHead(s: LiveWorkbookState, f: Extract<LiveWorkbookFrame, { type: 'keyed_snapshot' }>): LiveWorkbookState {
-  const building: Building = { state: emptyKeyedState(f.schema), units: new Map(), view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto, rootsIn: [] }
+  const building: Building = { state: emptyKeyedState(f.schema), units: new Map(), view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto, rootsIn: [], a1: {} }
   const next: LiveWorkbookState = { ...s, awaiting: false, seq: f.seq, building, refused: null }
   return f.pages === 0 ? finish(next) : next
 }
 
-function onPage(s: LiveWorkbookState, f: KeyedPageFrame): LiveWorkbookState {
+function onPage(s: LiveWorkbookState, f: XlsxKeyedPageFrame): LiveWorkbookState {
   if (s.awaiting) return s
   if (f.seq !== s.seq + 1) return asked(s, 'gap', `page seq ${f.seq} after ${s.seq}`)
   const b = s.building
@@ -224,7 +230,8 @@ function onPage(s: LiveWorkbookState, f: KeyedPageFrame): LiveWorkbookState {
     throw e
   }
   const rootsIn = f.units || b.rootsIn.includes(f.root) ? b.rootsIn : [...b.rootsIn, f.root]
-  const nb: Building = { ...b, state, units, got: b.got + 1, rootsIn }
+  const a1 = f.derived?.a1 ? { ...b.a1, ...f.derived.a1 } : b.a1
+  const nb: Building = { ...b, state, units, got: b.got + 1, rootsIn, a1 }
   const next: LiveWorkbookState = { ...s, seq: f.seq, building: nb }
   return nb.got === nb.pages ? finish(next) : next
 }
@@ -232,7 +239,7 @@ function onPage(s: LiveWorkbookState, f: KeyedPageFrame): LiveWorkbookState {
 function finish(s: LiveWorkbookState): LiveWorkbookState {
   const b = s.building as Building
   if (!b.view) return { ...s, building: null, book: null, resync: { why: 'inconsistent', detail: 'the snapshot has no view index' } }
-  const book = bookFromSnapshot(b.state, b.view, b.units, b.upto)
+  const book = bookFromSnapshot(b.state, b.view, b.units, b.upto, b.a1)
   return followSync({ ...s, building: null, book, recent: [] })
 }
 
@@ -335,8 +342,16 @@ export function liveWorkbookReducer(s: LiveWorkbookState, a: LiveWorkbookAction)
   return next === s ? s : { ...next, tick: s.tick + 1 }
 }
 
-function step(s: LiveWorkbookState, a: LiveWorkbookAction): LiveWorkbookState {
+const later = (now: number | null, at: number | null | undefined): number | null => (at == null ? now : now == null ? at : Math.max(now, at))
+
+function step(s0: LiveWorkbookState, a: LiveWorkbookAction): LiveWorkbookState {
+  // The host's clock moves forward with every timed input.
+  const at = a.type === 'ops_change' || a.type === 'turn_end' || a.type === 'clock' ? a.at_ms : a.type === 'roster_event' && (a.event.kind === 'claim_started_cells' || a.event.kind === 'claim_started_elems') ? a.event.started_ms : a.type === 'roster_event' && a.event.kind === 'claim_ended' ? a.event.at_ms : null
+  const now = later(s0.now, at)
+  const s = now === s0.now ? s0 : { ...s0, now }
   switch (a.type) {
+    case 'clock':
+      return s
     case 'reset':
       return initialLiveState()
     case 'local_follow':
@@ -418,3 +433,17 @@ export function loadingOf(s: LiveWorkbookState): { phase: 'connect' | 'pages' | 
   if (!b) return { phase: 'connect', done: 0, total: 1, rootsIn: [], roots: [] }
   return { phase: 'pages', done: b.got, total: b.pages, rootsIn: b.rootsIn, roots: b.state.schema.roots.map((r) => r.name) }
 }
+
+/**
+ * The book so far while the snapshot streams: once the cells page is in
+ * (columns come before cells in r1's root order), the grid can draw with
+ * the A1 text the cells pages carried (r1.1). Null before that.
+ */
+export function buildingBook(s: LiveWorkbookState): Book | null {
+  const b = s.building
+  if (!b?.view || !b.rootsIn.includes(b.view.schema.grid.cells)) return null
+  return bookFromSnapshot(b.state, b.view, b.units, b.upto, b.a1)
+}
+
+/** The welcome's idle time after which a turn shows as ended with no `turn_end` (r1.1). */
+export const idleOf = (s: LiveWorkbookState): { idleMs: number | null; now: number | null } => ({ idleMs: s.welcome?.turn_idle_ms ?? null, now: s.now })

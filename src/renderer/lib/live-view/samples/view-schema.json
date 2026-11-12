@@ -14,9 +14,11 @@
       "r1: derived.containers gains 'styles': per style index, bold, fill colour and number-format code, pack-derived from the carrier (ruling 10). Full styles stay LATER, for K2 Render",
       "r1: the grid slot names the units: column width in characters of the default font's maximum digit width, as stored; row height in points (ruling 8)",
       "r1: root_order is the pack schema's root order, which the snapshot's pages follow: columns and their props before cells (ruling 3)",
-      "r1: change frames' derived also carries 'written' and 'bands' (rulings 1 and 4); they are frame-only, so they aren't index fields"
+      "r1: change frames' derived also carries 'written' and 'bands' (rulings 1 and 4); they are frame-only, so they aren't index fields",
+      "r1.1: grid.cell_derived names the per-cell derived values (a1) that ride on each keyed_page of 'cells' beside the entries they belong to",
+      "r1.1: a missing style table, or a style index the table lacks, means the default style (grid.style_hint.default)"
     ],
-    "revision": "r1"
+    "revision": "r1.1"
   },
   "pack": "xlsx",
   "root_order": [
@@ -146,7 +148,20 @@
         "bold": "bool",
         "fill": "#RRGGBB or null",
         "numfmt": "the number-format code as stored ('General', '#,##0', 'yyyy-mm-dd'...)"
-      }
+      },
+      "default": {
+        "bold": false,
+        "fill": null,
+        "numfmt": "General"
+      },
+      "missing": "no table on the sheet, or the index not in it: the default (r1.1)"
+    },
+    "cell_derived": {
+      "_mark": "NEW (r1.1, kit)",
+      "names": [
+        "a1"
+      ],
+      "rule": "Unit.derived.<name> is a map by cell field; the kit puts each such entry on the keyed_page of 'cells' that holds that cell's entry, as page.derived.<name>.<row address>.<field>"
     }
   },
   "address": {

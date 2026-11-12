@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { GOLDEN, goldenCase, stripAnnotations, type GoldenGridSheet } from './samples/goldens'
 import { fold, play, stateAtRev } from './test-helpers'
-import { claimRect, modeOf, type ClaimRecord, type LiveWorkbookFrame } from './reducer'
+import { claimRect, idleOf, modeOf, type ClaimRecord, type LiveWorkbookFrame } from './reducer'
 import { checkCells, checkViewport, claimVerdict, dropBroken } from './kit-rules'
 import { activityLine, framePhrase, phraseLine, turnGroups } from './wording'
 import { EMPTY_LOCAL, stageSheet } from './view-model'
@@ -173,10 +173,13 @@ describe("An agent's cells after each kind of verb (r1 rulings 1 and 2, AG1–AG
     expect(rangeA1(grid(23), c.ranges[0])).toBe('A10:XFD10')
     expect(c.ranges).toEqual(frame(23).derived?.written?.ranges)
   })
-  it('AG3: a delete: a caret on the first cell after the band, A17, no ranges', () => {
+  it('AG3: a delete: a caret on the first VISIBLE cell after the band (A18: row 17 is the hidden fx row), no ranges (r1.1)', () => {
     const c = flushAfter(28) as CellsValue
+    const g = grid(28)
     expect(c.ranges).toEqual([])
-    expect(a1Of(cornerPlace(grid(28), c.active!)!)).toBe('A17')
+    expect(a1Of(cornerPlace(g, c.active!)!)).toBe('A18')
+    expect(g.rowByNumber.get(17)?.hidden).toBe(true)
+    expect(goldenCase('AG3').example).toContain('A18')
   })
   it('AG4: a rename or add focuses that sheet; cells become a caret at A1 of it (FX rates; empty Notes as {null, 1, null, 1})', () => {
     const c26 = flushAfter(26) as CellsValue
@@ -188,7 +191,7 @@ describe("An agent's cells after each kind of verb (r1 rulings 1 and 2, AG1–AG
 })
 
 describe('Wording (K2 writes it)', () => {
-  for (const f of FRAMES.filter((x) => x.rev <= 28)) {
+  for (const f of FRAMES.filter((x) => x.actor.kind === 'agent')) {
     it(`rev ${f.rev}: the place the view works out at the change's rev is in the golden's own words`, () => {
       const ph = framePhrase(frame(f.rev), B[f.rev - 1], B[f.rev])
       expect(f._view.split('. ')[0]).toContain(ph.place)
@@ -323,23 +326,21 @@ describe('Caret and ranges (CS)', () => {
     expect(rangeA1(grid(23), c.range)).toBe(c._a1_rev23)
     expect(c.event).toBeNull()
   })
-  it("CS8: a corner's row deleted (constructed op): the range is dropped, the caret kept", () => {
+  it("CS8: Brook deletes row 14 (a real frame on a branch from rev 20): Sam's range is dropped, his caret kept; Brook's caret on A14", () => {
     const c = goldenCase('CS8')
-    const rows = B[20].state.roots.get('rows')
-    const at = rows?.kind === 'list' ? rows.live.findIndex(([k]) => k === '@sheet:1/row:r14') : -1
-    const del: XlsxOpsChangeFrame = { ...frame(22), rev: 21, verb: 'rows delete', claim: null, derived: null, ops: [{ root: 'rows', kind: 'list', op: 'delete', key: '@sheet:1/row:r14', index_before: at, index_after: null, before: 'row', effect: 'visible' }] }
-    const after = applyFrameToBook(B[20], del)
-    expect(dropBroken(after, c.before.cells)).toEqual(c.roster_event.cells)
-    expect(a1Of(cornerPlace(gridOf(after, S1)!, c.roster_event.cells.active)!)).toBe('C10')
+    const after = applyFrameToBook(B[20], stripAnnotations(c.frame) as XlsxOpsChangeFrame)
+    const flush = stripAnnotations(c.roster_flush) as { kind: string; who: string; cells?: CellsValue }[]
+    const sam = flush.find((e) => e.kind === 'cells' && e.who === 'person:sam')
+    expect(dropBroken(after, stripAnnotations(c.before.cells))).toEqual(sam?.cells)
+    const brook = flush.find((e) => e.kind === 'cells' && e.who === 'agent:brook')?.cells as CellsValue
+    expect(a1Of(cornerPlace(gridOf(after, S1)!, brook.active!)!)).toBe('A14')
   })
-  it("CS9: an insert at 16 (constructed op) breaks the corner {r14, 1}'s form: dropped, not moved", () => {
+  it("CS9: Brook inserts a row in Ada's blank stretch (a real frame): her corner {r14, 1} now names a keyed row, so the kit drops it all: cells null", () => {
     const c = goldenCase('CS9')
-    const rows = B[20].state.roots.get('rows')
-    const at = rows?.kind === 'list' ? rows.live.findIndex(([k]) => k === '@sheet:1/row:r14') + 1 : -1
-    const key = '@sheet:1/row:r99'
-    const ins: XlsxOpsChangeFrame = { ...frame(22), rev: 21, verb: 'rows insert', claim: null, derived: null, ops: [{ root: 'rows', kind: 'list', op: 'insert', key, index_before: null, index_after: at, after: 'row', effect: 'visible' }, { root: 'cells', kind: 'map', op: 'set', key, field: '@sheet', after: '1' }] }
-    const before: CellsValue = { container: S1, active: c.before.range.start, ranges: [c.before.range] }
-    expect(dropBroken(applyFrameToBook(B[20], ins), before)).toEqual({ container: S1, active: null, ranges: [] })
+    const after = applyFrameToBook(B[20], stripAnnotations(c.frame) as XlsxOpsChangeFrame)
+    const ada = (stripAnnotations(c.roster_flush) as { kind: string; who: string; cells?: CellsValue | null }[]).find((e) => e.kind === 'cells' && e.who === 'person:ada')
+    expect(ada?.cells).toBeNull()
+    expect(dropBroken(after, stripAnnotations(c.before.cells))).toBeNull()
   })
   it('CS10: a focus move to Rates drops the cells value', () => {
     const base = fold([{ type: 'welcome', client: 77001, self: 'person:sam', rights: 'read' }, ...sampleSnapshotFrames(), sampleRosterSnapshot()])
@@ -348,21 +349,12 @@ describe('Caret and ranges (CS)', () => {
     expect(s.peers['person:ada'].cells).toBeNull()
     expect(s.peers['person:ada'].focus?.key).toBe(S2)
   })
-  it('CS11: cells refused: 17 ranges, a corner not live, not in form, out of bounds, active outside, a watcher', () => {
-    const c = goldenCase('CS11')
-    const k = (r: number, col: number) => ({ row: `@sheet:1/row:r${r}`, row_off: 0, col: `@sheet:1/col:c${col}`, col_off: 0 })
-    const one = { start: k(3, 3), end: k(3, 3) }
-    // Constructed from each row's text: the goldens give only the form example concretely.
-    const payloads: CellsValue[] = [
-      { container: S1, active: k(3, 3), ranges: Array.from({ length: 17 }, () => one) },
-      { container: S1, active: { row: '@sheet:2/row:r1', row_off: 0, col: '@sheet:1/col:c1', col_off: 0 }, ranges: [] },
-      { container: S1, active: { row: '@sheet:1/row:r1', row_off: 2, col: '@sheet:1/col:c1', col_off: 0 }, ranges: [] },
-      { container: S1, active: { row: '@sheet:1/row:r18', row_off: MAX.rows, col: '@sheet:1/col:c1', col_off: 0 }, ranges: [] },
-      { container: S1, active: k(16, 5), ranges: [{ start: k(3, 3), end: k(14, 4) }] },
-      { container: S1, active: k(3, 3), ranges: [] },
-    ]
-    const rows = c.rows as { why: string; error: string }[]
-    expect(payloads.map((p, i) => checkCells(B[20], p, { watcher: rows[i].why === 'a watcher' }))).toEqual(rows.map((r) => r.error))
+  it("CS11: cells refused (the kit's frames and ErrorReports): 17 ranges unsent, a corner not live, on another sheet, not in form, past the last row, active outside, a watcher", () => {
+    const rows = goldenCase('CS11').rows as { why: string; from?: string; client_frame?: { cells: CellsValue }; client_frame_not_sent?: { cells: CellsValue }; reply?: { error: { id: string; message: string } } }[]
+    const got = rows.map((r) => checkCells(B[20], (r.client_frame ?? r.client_frame_not_sent)!.cells, { watcher: !!r.from }))
+    // The unsent one never reaches the host: the client's own limit (MPC-E310).
+    expect(got).toEqual(rows.map((r) => r.reply?.error.id ?? 'MPC-E310'))
+    for (const r of rows) if (r.reply) expect(r.reply.error.message.length).toBeGreaterThan(0)
   })
 })
 
@@ -384,12 +376,19 @@ describe('Claims on ranges (CC)', () => {
     expect([R.r0, R.r1]).toEqual([c.end.lines.first, c.end.lines.last])
     expect(stateAtRev(P, 25).ended[0].lines).toEqual({ first: 4, last: 16 })
   })
-  it('CC2: what a range claim holds off: refused for other agents inside, applied otherwise', () => {
+  it('CC2: what a range claim holds off: refused for other agents inside (MPC-E301, no frame), applied otherwise, and its own write carries the claim', () => {
     const c = goldenCase('CC2')
     const cl = stateAtRev(P, 20).claims[0]
     const kinds: Record<string, string> = { 'agent:brook': 'agent', 'agent:atlas': 'agent', 'person:ada': 'person' }
-    const rows = c.rows as { who: string; verb: string; result: string }[]
-    expect(rows.map((r) => claimVerdict(B[20], cl, { who: r.who, whoKind: kinds[r.who], verb: r.verb }))).toEqual(rows.map((r) => r.result))
+    const rows = c.rows as { who: string; verb: string; result: string; error?: { id: string }; frame?: XlsxOpsChangeFrame | null }[]
+    for (const r of rows) {
+      const v = claimVerdict(B[20], cl, { who: r.who, whoKind: kinds[r.who], verb: r.verb })
+      expect(v.startsWith('refused'), r.verb).toBe(r.result.startsWith('refused'))
+      if (r.error) expect(v).toBe(`refused ${r.error.id}`)
+      if (r.result.includes('claim-31')) expect(v).toContain('claim-31')
+      // An applied agent write is a real frame that fits the book, with no claim.
+      if (r.frame) expect(applyFrameToBook(B[20], stripAnnotations(r.frame)).rev).toBe(r.frame.rev)
+    }
   })
   it("CC3: a rows claim's keys r3, r4 are rows 4 and 5: “rows 4-5”", () => {
     const c = goldenCase('CC3')
@@ -413,19 +412,42 @@ describe('Sheets and units (r1)', () => {
   })
 })
 
+describe('Styles and idle turns (r1.1)', () => {
+  it('ST1: a sheet with no style table (Notes, added at rev 27) and an index a table lacks both take the default style', () => {
+    const notes = grid(27, '@sheet:5')
+    expect(notes.styles).toEqual({})
+    const fake = { row: 'x', field: 'c1', r: 1, c: 1, t: 's', v: 'a', s: 3, a1: null, raw: '' }
+    expect(styleOf(notes, fake)).toEqual(goldenCase('ST1').default)
+    expect(styleOf(grid(27), { ...fake, s: 99 })).toEqual(goldenCase('ST1').default)
+  })
+  it("a turn with no turn_end ends turn_idle_ms after the agent's last change (rev 30 at 240000 → 260000); presence alone doesn't keep it open", () => {
+    const i = P.steps.findIndex((s) => s.label === 'idle')
+    const before = P.states[i - 1]
+    const after = P.states[i]
+    const open = turnGroups(before.log, idleOf(before))
+    expect(open[open.length - 1]).toMatchObject({ turn: 't:5e0a9d31c7b2f846.8', ended: false })
+    const shut = turnGroups(after.log, idleOf(after))
+    expect(shut[shut.length - 1]).toMatchObject({ turn: 't:5e0a9d31c7b2f846.8', ended: true, endedBy: 'idle', endedAt: 260000 })
+    // A turn_end arriving later for it changes nothing shown.
+    const late = fold([{ type: 'turn_end', turn: 't:5e0a9d31c7b2f846.8', actor: GOLDEN.turn.actors['agent:atlas'] as never, at_ms: 270000 }], after)
+    expect(turnGroups(late.log, idleOf(late)).at(-1)).toMatchObject({ endedBy: 'idle', endedAt: 260000 })
+  })
+})
+
 describe('End of the turn', () => {
-  it('one history group for the turn: revs 21–28, claim-31 started and released inside it, ended by turn_end; the outside save after it on its own', () => {
+  it('one history group for the turn: revs 21–28, claim-31 started and released inside it, ended by turn_end; then the outside save on its own, then the idle-ended turn', () => {
     const last = P.states[P.states.length - 1]
     const groups = turnGroups(last.log)
     const tEnd = GOLDEN.turn.timeline.find((e) => e.event === 'turn_end')?.frame
     const g = groups[0]
     const frames = g.items.filter((e) => e.kind === 'frame')
-    expect(groups.length).toBe(2)
+    expect(groups.length).toBe(3)
     expect(g.turn).toBe(tEnd?.type === 'turn_end' ? tEnd.turn : null)
     expect(frames.map((e) => (e.kind === 'frame' ? e.rev : 0))).toEqual([21, 22, 23, 24, 25, 26, 27, 28])
     expect(g.endedAt).toBe(216500)
     expect([...new Set(g.items.filter((e) => e.kind === 'claim').map((e) => (e.kind === 'claim' ? e.id : '')))]).toEqual(['claim-31'])
-    expect(groups[1]).toMatchObject({ turn: null, ended: true, actor: { kind: 'file' } })
+    expect(groups[1]).toMatchObject({ turn: null, ended: true, endedBy: 'no turn', actor: { kind: 'file' } })
+    expect(groups[0].endedBy).toBe('turn_end')
   })
   it('the line after turn_end: “Atlas is done · deleted row 17 on Budget, a blank row, +7 more”', () => {
     const i = P.steps.findIndex((s) => s.label === 'turn_end')

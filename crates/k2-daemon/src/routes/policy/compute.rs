@@ -136,6 +136,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/seats/request", Admin),
     post("/cli/compute/seats/resume", Admin),
     post("/cli/compute/seats/suspend", Admin),
+    // prd-compute-blacksmith-class-v1 O2: a reader of one of the caller's jobs.
+    get("/cli/compute/stats", Member),
     post("/cli/compute/trust/approve", Admin),
     post("/cli/compute/trust/deny", Admin),
     get("/cli/compute/trust/requests", Admin),

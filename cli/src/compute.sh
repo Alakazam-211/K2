@@ -319,6 +319,8 @@ Agents:
                    k2 compute rightsize -- cargo nextest run -p k2-core
                  Or let K2 pick each time: --mem auto (below)
                  (preview: k2 settings set ciPreview true)
+  k2 compute stats <job> [--json]   one job's CPU, memory, IO and load over its run (every 5 s),
+                 held time at its --cpus, OOM kills (k2 study compute: STATS; preview: ciPreview)
   k2 compute cancel <job> [--force]
                  a queued job is cancelled at once; one that already started
                  (or was just assigned) needs --force (else job_started, exit 3).
@@ -2334,6 +2336,15 @@ fs = json.load(sys.stdin)
 if not fs: print("(no artifacts kept for this job)")
 for f in fs: print("%s  %d bytes  sha256 %s…" % (f["path"], f["bytes"], f["sha256"][:12]))'
     fi
+}
+
+# k2 compute stats <job> [--json] (Blacksmith O2): one job's 5 s series; the daemon writes the lines.
+cmd_compute_stats() {
+    local job="" as_json=0 usage="usage: k2 compute stats <job> [--json]  (a job id or its first 8 characters)"
+    for a in "$@"; do case "$a" in --json) as_json=1 ;; -*) echo "$usage" >&2; exit 2 ;; *) [ -z "$job" ] || { echo "$usage" >&2; exit 2; }; job="$a" ;; esac; done
+    [[ "$job" =~ ^[A-Za-z0-9_-]{4,64}$ ]] || { echo "$usage" >&2; exit 2; }
+    _compute_call GET /cli/compute/stats "job=$job"
+    _compute_text "$as_json"
 }
 
 # k2 compute rightsize [--check C | --tag T | -- <command…>] [--days 14] [--json]
@@ -4882,6 +4893,7 @@ cmd_compute() {
         logs) cmd_compute_logs "$@" ;;
         # prd-compute-blacksmith-class-v1 R1: --mem / --cpus from history.
         rightsize) cmd_compute_rightsize "$@" ;;
+        stats) cmd_compute_stats "$@" ;;
         wait) cmd_compute_wait "$@" ;;
         cancel)
             # 0.46.1: a job that already left the queue is stopped only with

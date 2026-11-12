@@ -21,6 +21,8 @@ pub mod allow;
 pub mod advertise;
 pub mod enroll;
 pub mod git;
+/// prd-compute-blacksmith-class-v1 O2: job stats series, `k2 compute stats`.
+pub mod job_stats;
 pub mod lane_secrets;
 pub mod local;
 pub mod logs;

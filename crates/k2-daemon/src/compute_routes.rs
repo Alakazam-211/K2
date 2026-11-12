@@ -138,6 +138,8 @@ pub const ROUTES: &[&str] = &[
     // prd-compute-blacksmith-class-v1 R1: `k2 compute rightsize` (a reader).
     crate::compute_rightsize::PATH,
     "/cli/compute/run",
+    // prd-compute-blacksmith-class-v1 O2: `k2 compute stats` (a reader).
+    crate::compute_jobstats::PATH,
     "/cli/compute/usage",
 ];
 
@@ -707,6 +709,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/run" => run(&who, body),
         // R1 (prd-compute-blacksmith-class-v1 §4.4.2): what a command used.
         crate::compute_rightsize::PATH => crate::compute_rightsize::handle(&who, params),
+        // O2 (prd-compute-blacksmith-class-v1 §4.5.1): one job's series.
+        crate::compute_jobstats::PATH => crate::compute_jobstats::handle(&who, params),
         // `k2 compute prewarm` (CE-18): tools onto matching granted nodes.
         "/cli/compute/prewarm" => prewarm(&who, body),
         "/cli/compute/jobs" => views::jobs_list(&who, params),

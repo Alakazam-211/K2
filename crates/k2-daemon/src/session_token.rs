@@ -921,6 +921,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/compute/queue",
         // prd-compute-blacksmith-class-v1 R1: its own workspace's run sizes.
         "/cli/compute/rightsize",
+        // prd-compute-blacksmith-class-v1 O2: one of its own jobs' series.
+        "/cli/compute/stats",
         // Node admin (prd-k2-node-admin-v1 §13.1): propose / list own /
         // withdraw own, policy show/set (widening becomes a held request),
         // health, update/rollback. The handler needs the Agent switch

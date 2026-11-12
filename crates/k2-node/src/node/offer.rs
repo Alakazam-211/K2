@@ -276,6 +276,10 @@ impl Node {
         if self.offers_cpu_burst(t) && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_CPU_BURST) {
             f.push(k2_node_proto::gens::FEATURE_CPU_BURST.to_string());
         }
+        // O2 (protocol 10): `Outputs.stats`, the job's 5 s series.
+        if t.speaks_gens() && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_JOB_STATS) {
+            f.push(k2_node_proto::gens::FEATURE_JOB_STATS.to_string());
+        }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.
         if t.speaks_easy() {
@@ -435,11 +439,14 @@ mod secret_env_tests {
         let n = Node::open(o).await.unwrap();
         let owner = n.owner();
         let has = |n: &Node, t: &crate::node::tenant::Tenant| n.session_features(t).iter().any(|f| f == k2_node_proto::gens::FEATURE_CPU_BURST);
+        let stats = |n: &Node, t: &crate::node::tenant::Tenant| n.session_features(t).iter().any(|f| f == k2_node_proto::gens::FEATURE_JOB_STATS);
         owner.protocol.store(k2_node_proto::frames::PROTOCOL_CI, Ordering::SeqCst);
         assert!(!has(&n, &owner), "a protocol-9 server never sees it");
+        assert!(!stats(&n, &owner), "nor job-stats (O2)");
         owner.protocol.store(k2_node_proto::frames::PROTOCOL_GENS, Ordering::SeqCst);
-        assert!(has(&n, &owner));
+        assert!(has(&n, &owner) && stats(&n, &owner));
         n.local.lock().unwrap().policy.cpu_burst = false;
         assert!(!has(&n, &owner), "the owner turned idle cores off");
+        assert!(stats(&n, &owner), "job stats don't depend on it");
     }
 }

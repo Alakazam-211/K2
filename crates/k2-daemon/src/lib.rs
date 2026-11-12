@@ -370,6 +370,8 @@ pub mod compute_place;
 pub mod compute_rightsize;
 // `k2 compute logs --search` (prd-compute-blacksmith-class-v1 O1).
 pub mod compute_logsearch;
+// `k2 compute stats` (prd-compute-blacksmith-class-v1 O2).
+pub mod compute_jobstats;
 // `.k2/compute.toml` defaults and presets (prd-compute-easy-mode-0467 CE-3).
 pub mod compute_preset;
 pub mod compute_secrets;

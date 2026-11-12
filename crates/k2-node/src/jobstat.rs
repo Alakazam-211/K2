@@ -9,6 +9,14 @@
 //!   ([`silent_and_idle`]), here with the job's own CPU.
 //! - **CE-19** the host stamp: load, CPUs, steal and other jobs at the
 //!   job's start and end.
+//! - **O2** (prd-compute-blacksmith-class-v1 §4.5.1, `job-stats`): a
+//!   series, one point every [`STATS_EVERY_SECS`]: the job's CPU over the
+//!   interval, its memory, its cumulative IO (`io.stat`), and the node's
+//!   load; plus the cgroup's throttle counters (`cpu.stat`
+//!   `nr_throttled` / `throttled_usec`) and OOM kills (`memory.events`).
+//!   macOS (no cgroup): RSS and CPU from the process group, no IO, no
+//!   throttle (no CPU limit there). No per-job network numbers: a cgroup
+//!   doesn't give them cheaply.
 //!
 //! Readings are taken off the async runtime (`spawn_blocking`); the
 //! [`ResWatch`] that folds them in is plain data, so it is tested without
@@ -18,6 +26,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use k2_node_proto::gens::{JobStats, StatPoint, STATS_EVERY_SECS, STATS_MAX_POINTS};
 use k2_node_proto::results::{cpu_source, mem_source, HostSample, JobResources};
 
 /// Where a job's usage is read.
@@ -51,11 +60,40 @@ pub struct Reading {
     /// The group's processes (CPU per pid), when `ps` gave them.
     pub procs: Option<Vec<ProcUse>>,
     pub cgroup: bool,
+    /// O2: `io.stat` read and written bytes, every device summed.
+    pub io: Option<(u64, u64)>,
+    /// O2: `cpu.stat` `nr_throttled` and `throttled_usec`.
+    pub throttle: Option<(u64, u64)>,
+    /// O2: `memory.events` `oom_kill`.
+    pub oom_kills: Option<u64>,
+    /// O2: the node's 1-minute load ×1000 when it was read.
+    pub load1_milli: Option<u64>,
 }
 
 /// `cpu.stat` text → `usage_usec`.
 pub fn parse_cpu_stat(text: &str) -> Option<u64> {
     text.lines().find_map(|l| l.strip_prefix("usage_usec ")).and_then(|v| v.trim().parse().ok())
+}
+
+/// `cpu.stat` text → (`nr_throttled`, `throttled_usec`), when both are
+/// there (no CPU controller: none).
+pub fn parse_cpu_throttle(text: &str) -> Option<(u64, u64)> {
+    let get = |k: &str| text.lines().find_map(|l| l.strip_prefix(k)).and_then(|v| v.trim().parse::<u64>().ok());
+    Some((get("nr_throttled ")?, get("throttled_usec ")?))
+}
+
+/// `io.stat` text → (read bytes, written bytes), every device summed. An
+/// empty file (no IO yet) is (0, 0).
+pub fn parse_io_stat(text: &str) -> (u64, u64) {
+    let (mut r, mut w) = (0u64, 0u64);
+    for kv in text.split_whitespace() {
+        if let Some(v) = kv.strip_prefix("rbytes=").and_then(|v| v.parse::<u64>().ok()) {
+            r = r.saturating_add(v);
+        } else if let Some(v) = kv.strip_prefix("wbytes=").and_then(|v| v.parse::<u64>().ok()) {
+            w = w.saturating_add(v);
+        }
+    }
+    (r, w)
 }
 
 fn read_u64(p: &Path) -> Option<u64> {
@@ -64,12 +102,17 @@ fn read_u64(p: &Path) -> Option<u64> {
 
 /// Read a cgroup dir (blocking, a few small sysfs files).
 pub fn read_cgroup(dir: &Path) -> Reading {
+    let cpu_stat = std::fs::read_to_string(dir.join("cpu.stat")).ok();
     Reading {
         mem_peak: read_u64(&dir.join("memory.peak")),
         mem_now: read_u64(&dir.join("memory.current")),
-        cpu_usec: std::fs::read_to_string(dir.join("cpu.stat")).ok().and_then(|t| parse_cpu_stat(&t)),
+        cpu_usec: cpu_stat.as_deref().and_then(parse_cpu_stat),
         procs: None,
         cgroup: true,
+        io: std::fs::read_to_string(dir.join("io.stat")).ok().map(|t| parse_io_stat(&t)),
+        throttle: cpu_stat.as_deref().and_then(parse_cpu_throttle),
+        oom_kills: std::fs::read_to_string(dir.join("memory.events")).ok().map(|t| crate::admin::jobs::parse_oom_kills(&t)),
+        load1_milli: None,
     }
 }
 
@@ -204,14 +247,15 @@ pub fn ps_group(pgid: i32) -> Option<Vec<ProcUse>> {
 /// One reading of `src` (blocking): a cgroup's files, or the group's
 /// processes from the sampler (its summed RSS when it can't list them).
 pub fn read_usage(src: &Source, sampler: &dyn crate::runner::RssSampler) -> Reading {
-    match src {
+    let r = match src {
         Source::Cgroup(d) => read_cgroup(d),
         Source::Group(pgid) => match sampler.group_procs(*pgid) {
             Some(p) => Reading { procs: Some(p), ..Default::default() },
             None => Reading { mem_now: sampler.group_rss(*pgid), ..Default::default() },
         },
-        Source::None => Reading::default(),
-    }
+        Source::None => return Reading::default(),
+    };
+    Reading { load1_milli: Some(load1_milli()), ..r }
 }
 
 /// Silent and idle for the whole window: the one stuck/stall rule (the
@@ -240,7 +284,20 @@ pub struct ResWatch {
     pub last_rate_permille: u64,
     /// Two CPU readings arrived: the stall rule may use CPU.
     pub cpu_known: bool,
+    /// O2: the job's series (one point per `series_every` seconds).
+    series: Vec<StatPoint>,
+    series_every: u32,
+    /// The CPU total and time of the series' last point (µs, ms).
+    series_prev: Option<(u64, u64)>,
+    /// The latest cumulative counters (they only grow).
+    throttle: Option<(u64, u64)>,
+    oom_kills: Option<u64>,
 }
+
+/// The series is halved (every other point, twice the spacing) once it
+/// holds this many, so a week-long job's memory stays small; the result's
+/// own cap ([`JobStats::downsampled`]) is applied at the end.
+pub const SERIES_KEEP: usize = 2 * STATS_MAX_POINTS;
 
 impl ResWatch {
     pub fn new(source: Source) -> Self {
@@ -255,6 +312,11 @@ impl ResWatch {
             last_busy_ms: 0,
             last_rate_permille: 0,
             cpu_known: false,
+            series: Vec::new(),
+            series_every: STATS_EVERY_SECS,
+            series_prev: None,
+            throttle: None,
+            oom_kills: None,
         }
     }
 
@@ -302,7 +364,65 @@ impl ResWatch {
             }
             self.prev = Some((total, at_ms));
         }
+        if r.throttle.is_some() {
+            self.throttle = r.throttle;
+        }
+        if r.oom_kills.is_some() {
+            self.oom_kills = r.oom_kills;
+        }
+        self.series_point(at_ms, now, r);
         now
+    }
+
+    /// O2: a point when the series' spacing has passed since the last one
+    /// (the first reading only sets the CPU baseline).
+    fn series_point(&mut self, at_ms: u64, mem: Option<u64>, r: &Reading) {
+        let total = self.cpu_total_usec();
+        let due = match self.series_prev {
+            None => {
+                self.series_prev = Some((total.unwrap_or(0), at_ms));
+                return;
+            }
+            Some((_, prev_ms)) => at_ms >= prev_ms + u64::from(self.series_every) * 1000,
+        };
+        if !due {
+            return;
+        }
+        let (prev_total, prev_ms) = self.series_prev.unwrap_or_default();
+        let wall_ms = at_ms.saturating_sub(prev_ms).max(1);
+        // µs of CPU per ms of wall = thousandths of a core.
+        let cpu_milli = total.map(|t| t.saturating_sub(prev_total) / wall_ms).unwrap_or(0);
+        self.series.push(StatPoint {
+            t: (at_ms / 1000).min(u64::from(u32::MAX)) as u32,
+            cpu_milli: cpu_milli.min(u64::from(u32::MAX)) as u32,
+            mem_bytes: mem.unwrap_or(0),
+            io_read: r.io.map(|(rd, _)| rd),
+            io_write: r.io.map(|(_, wr)| wr),
+            load1_milli: r.load1_milli.unwrap_or(0).min(u64::from(u32::MAX)) as u32,
+        });
+        self.series_prev = Some((total.unwrap_or(prev_total), at_ms));
+        if self.series.len() >= SERIES_KEEP {
+            self.series = self.series.iter().step_by(2).cloned().collect();
+            self.series_every = self.series_every.saturating_mul(2);
+        }
+    }
+
+    /// O2: the job's series and counters for `Outputs.stats` (within the
+    /// result's caps), or `None` when nothing was read.
+    pub fn stats(&self) -> Option<JobStats> {
+        if self.series.is_empty() && self.throttle.is_none() && self.oom_kills.is_none() {
+            return None;
+        }
+        Some(
+            JobStats {
+                every_secs: self.series_every,
+                points: self.series.clone(),
+                nr_throttled: self.throttle.map(|t| t.0),
+                throttled_usec: self.throttle.map(|t| t.1),
+                oom_events: self.oom_kills,
+            }
+            .downsampled(),
+        )
     }
 
     /// Stalled: silent for `stall_ms` and (when CPU is known) idle as long.
@@ -613,7 +733,68 @@ mod tests {
     }
 
     fn cg(at_cpu_usec: u64, mem: u64, peak: Option<u64>) -> Reading {
-        Reading { mem_peak: peak, mem_now: Some(mem), cpu_usec: Some(at_cpu_usec), procs: None, cgroup: true }
+        Reading { mem_peak: peak, mem_now: Some(mem), cpu_usec: Some(at_cpu_usec), procs: None, cgroup: true, ..Default::default() }
+    }
+
+    /// O2: the counters' file formats.
+    #[test]
+    fn io_and_throttle_counters_parse() {
+        let io = "8:0 rbytes=1048576 wbytes=4096 rios=10 wios=1 dbytes=0 dios=0\n259:0 rbytes=1024 wbytes=2048 rios=1 wios=1 dbytes=0 dios=0\n";
+        assert_eq!(parse_io_stat(io), (1_049_600, 6_144));
+        assert_eq!(parse_io_stat(""), (0, 0), "no IO yet");
+        let cpu = "usage_usec 9000000\nuser_usec 8000000\nsystem_usec 1000000\nnr_periods 500\nnr_throttled 170\nthrottled_usec 4250000\n";
+        assert_eq!(parse_cpu_throttle(cpu), Some((170, 4_250_000)));
+        assert_eq!(parse_cpu_throttle("usage_usec 1\n"), None, "no CPU controller: no counters");
+        // A cgroup dir on disk, read the way the sampler does.
+        let d = crate::util::temp_dir("cg-o2");
+        std::fs::write(d.join("cpu.stat"), cpu).unwrap();
+        std::fs::write(d.join("io.stat"), io).unwrap();
+        std::fs::write(d.join("memory.current"), "1048576\n").unwrap();
+        std::fs::write(d.join("memory.events"), "low 0\nhigh 0\nmax 2\noom 1\noom_kill 1\n").unwrap();
+        let r = read_cgroup(&d);
+        assert_eq!((r.cpu_usec, r.io, r.throttle, r.oom_kills, r.mem_now), (Some(9_000_000), Some((1_049_600, 6_144)), Some((170, 4_250_000)), Some(1), Some(1 << 20)));
+    }
+
+    /// O2 (§4.5.1): one point every 5 s (CPU over the interval in
+    /// thousandths of a core, memory, cumulative IO, load), the counters'
+    /// latest values, and the caps.
+    #[test]
+    fn the_series_keeps_a_point_every_five_seconds() {
+        let mut w = ResWatch::new(Source::Cgroup("/x".into()));
+        let rd = |cpu: u64, mem: u64, io: u64, thr: u64| Reading {
+            io: Some((io, io / 2)),
+            throttle: Some((thr, thr * 100_000)),
+            oom_kills: Some(0),
+            load1_milli: Some(2_500),
+            ..cg(cpu, mem, None)
+        };
+        // A reading every second for 12 s, using 2 cores.
+        for s in 0..=12u64 {
+            w.fold(s * 1000, &rd(s * 2_000_000, (s + 1) << 20, s << 20, s));
+        }
+        let st = w.stats().expect("a series");
+        assert_eq!(st.every_secs, 5);
+        assert_eq!(st.points.iter().map(|p| p.t).collect::<Vec<_>>(), vec![5, 10], "the first reading is the baseline");
+        let p = &st.points[0];
+        assert_eq!((p.cpu_milli, p.mem_bytes, p.io_read, p.io_write, p.load1_milli), (2000, 6 << 20, Some(5 << 20), Some(5 << 19), 2500));
+        assert_eq!((st.nr_throttled, st.throttled_usec, st.oom_events), (Some(12), Some(1_200_000), Some(0)), "the latest counters");
+        // macOS: a process group, no IO, no counters.
+        let mut g = ResWatch::new(Source::Group(10));
+        for s in 0..=5u64 {
+            g.fold(s * 1000, &Reading { procs: Some(vec![ProcUse { pid: 10, rss_bytes: 4096, cpu_ms: s * 500 }]), load1_milli: Some(1000), ..Default::default() });
+        }
+        let gs = g.stats().expect("a series");
+        assert_eq!((gs.points.len(), gs.points[0].cpu_milli, gs.points[0].io_read, gs.nr_throttled, gs.oom_events), (1, 500, None, None, None));
+        assert_eq!(ResWatch::new(Source::None).stats(), None, "nothing read: no stats");
+        // A long job: the series halves itself, then the result fits its caps.
+        let mut long = ResWatch::new(Source::Cgroup("/x".into()));
+        for s in 0..=(5 * 3000u64) {
+            long.fold(s * 1000, &cg(s * 1_000_000, 1 << 20, None));
+        }
+        assert!(long.series.len() < SERIES_KEEP);
+        let ls = long.stats().unwrap();
+        assert!(ls.points.len() <= STATS_MAX_POINTS && ls.every_secs >= 10, "{} points every {} s", ls.points.len(), ls.every_secs);
+        assert!(serde_json::to_vec(&ls).unwrap().len() <= k2_node_proto::gens::STATS_MAX_BYTES);
     }
 
     /// D4: silent and busy is not stalled; silent and idle is; unknown

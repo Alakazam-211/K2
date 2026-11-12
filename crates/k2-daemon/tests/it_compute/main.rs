@@ -23,6 +23,7 @@ mod compute_admin_integration;
 mod compute_admin_node_e2e;
 mod compute_git_integration;
 mod compute_idle_cores_integration;
+mod compute_job_stats_integration;
 #[cfg(unix)]
 mod compute_integration;
 mod compute_lane_secrets_integration;

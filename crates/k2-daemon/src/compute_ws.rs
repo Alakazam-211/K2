@@ -1680,12 +1680,19 @@ fn test_sink(session: &str, text: &str) -> bool {
 /// Keep a terminal attempt's outputs (artifacts + tests). Only for this
 /// node and the attempt's own generation; capped so a node can't flood
 /// the row.
-fn store_outputs(node_id: &str, job_id: &str, generation: u32, o: Outputs) {
+fn store_outputs(node_id: &str, job_id: &str, generation: u32, mut o: Outputs) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let Some(job) = store::job_by_id(&conn, job_id) else { return };
     if job.node_id != node_id || job.generation != generation as i64 {
         return;
+    }
+    // O2 (prd-compute-blacksmith-class-v1 §4.5.1, `job-stats`): the series
+    // goes to its own table (`k2 compute stats`); the summary stays small.
+    if let Some(s) = o.stats.take() {
+        if let Err(e) = k2_core::compute::job_stats::put(&conn, job_id, generation as i64, &job.workspace_id, node_id, &s, compute::now()) {
+            log_debug!("[compute] job {job_id}: stats not kept: {e}");
+        }
     }
     if let Ok(text) = serde_json::to_string(&o.capped()) {
         store::set_job_outputs(&conn, job_id, generation as i64, &text);

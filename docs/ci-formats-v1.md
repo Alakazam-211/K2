@@ -468,9 +468,20 @@ passes in Rust and in k2sign.
 prd-compute-blacksmith-class-v1 §6, slice B0. These formats exist in
 `k2-node-proto` (`gens`, `boxes`, `ci::CacheFacts`, `frames::Receipt`
 v3, `ci_config` version 2, `lanes::LaneTemplate.release_cache`,
-`signer_policy::BuildRule.warm`). **Nothing sends them yet**: no node
-offers a protocol-10 feature, and `frames::PROTOCOL` stays 9 until the
-k2-node release that does (one bump for every node part, like protocol 9).
+`signer_policy::BuildRule.warm`). `frames::PROTOCOL` is 10 since slice R2:
+k2-node offers `cpu-burst` (while its owner's `cpu_burst` policy is on) and
+`job-stats` to a server that said protocol ≥ 10; the other features follow
+in the same k2-node release as their slices land (one bump for every node
+part, like protocol 9). A protocol-9 peer sees exactly 0.46.12's frames.
+
+R2 (`cpu-burst`): the node's unit gets `CPUQuota` at `cpus_burst` and a
+`CPUWeight` of 100 per guaranteed core, never the tier, so every job
+always gets its `--cpus` on a full node and spare cores are shared by
+guarantee (root's executor says `cpu_weight` in `Ready`, else no unit
+bursts); the job's env gets `K2_JOB_CPUS_MAX` (the burst, or
+`K2_JOB_CPUS` without one). O2 (`job-stats`): `Outputs.stats` is kept by
+the controller in `compute_job_stats` (migration 0296), not in the job's
+summary.
 
 ### Plan and result fields: features, not a protocol bump (BK-19)
 

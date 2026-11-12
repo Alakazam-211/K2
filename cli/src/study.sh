@@ -7195,6 +7195,13 @@ RIGHTSIZE (what a command really needs; preview: ciPreview)
   mem = "auto:8G"; a .k2/ci.toml check takes mem_auto = true with mem_gb
   as the fallback (needs version = 2 in that file; k2 study ci-stats).
 
+STATS (one job's run, every 5 s; preview: ciPreview)
+  k2 compute stats <job> [--json]: CPU, memory, IO and the node's load as
+  sparklines with peaks; time held at its --cpus ("held to its --cpus 34%
+  of the time: try --cpus 4+8"); OOM kills. macOS: CPU and memory only. No
+  network numbers. Sent with the job's end by a protocol-10 k2-node (else
+  stats says why); kept 30 days. Across many runs: k2 compute rightsize.
+
 IDLE CORES (--cpus N+M; preview: ciPreview)
   k2 compute run --cpus 4+8 --mem 16G -- sh -c 'cargo build -j $K2_JOB_CPUS_MAX'
   Placed and started on 4; uses up to 8 while the node's cores are idle.

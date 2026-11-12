@@ -1494,6 +1494,10 @@ impl Node {
             o.tools_used = tools_used;
             o.resources = Some(used.clone());
             o.host = Some(k2_node_proto::results::HostStamps { start: host_start, end: host_end });
+            // O2 (`job-stats`, protocol 10): the series and counters.
+            if t.speaks_gens() {
+                o.stats = usage.stats();
+            }
             Some(o.capped())
         } else {
             collected

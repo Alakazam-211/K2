@@ -157,6 +157,22 @@ class H(BaseHTTPRequestHandler):
                                         "  or: --mem auto   (it would ask 24G now: auto (p95 10G of 5 runs; at least 1.5 × the 16G peak of a mem_cap end))",
                                         "cpus: used 3.9 on average (p95 4.0) of --cpus 4 · held at its limit in 5 of 5 runs",
                                         "  suggest: --cpus 8   (speed: it was held at its --cpus 4 in 5 of 5 runs; a bigger --cpus may finish sooner)"]})
+        if path == "/cli/compute/stats":
+            g = 1 << 30
+            if q.get("job") == "old00000":
+                return self.reply({"id": "old00000", "short": "old00000", "state": "done", "node": "k2n4", "generation": 1, "wallSecs": 30, "cpus": {"guaranteed": None, "burst": None},
+                                   "memLimitBytes": g, "stats": None, "why": "no series for it: its node's k2-node is older than protocol 10 (k2 compute node update k2n4), or it ended more than 30 days ago",
+                                   "text": ["stats · job old00000 · done · k2n4 · ran 30s · attempt 1", "  no series: no series for it: its node's k2-node is older than protocol 10 (k2 compute node update k2n4), or it ended more than 30 days ago"]})
+            pts = [{"t": i * 5, "cpuMilli": 3900, "memBytes": i * g // 8, "ioReadBytes": i * g // 72, "ioWriteBytes": i * 2 * g // 72, "load1Milli": 6000} for i in range(1, 73)]
+            return self.reply({"id": "ab12cd34ffff", "short": "ab12cd34", "state": "done", "node": "k2n7", "generation": 1, "wallSecs": 360, "cpus": {"guaranteed": 4.0, "burst": None}, "memLimitBytes": 16 * g,
+                               "stats": {"everySecs": 5, "points": pts, "peaks": {"cpus": 3.9, "memBytes": 9 * g, "load1": 6.0}, "io": {"readBytes": g, "writeBytes": 2 * g},
+                                         "throttle": {"periods": 1200, "usec": 110000000, "heldPct": 33, "ceilingCpus": 4.0, "hint": "held to its --cpus 4 33% of the time: try --cpus 4+8"},
+                                         "oomEvents": 0, "notes": ["no per-job network numbers (a cgroup doesn't give them cheaply)"]},
+                               # The daemon writes the lines (job_stats::render, tested there).
+                               "text": ["stats · job ab12cd34 · done · k2n7 · ran 6m00s · attempt 1", "  every 5s, 72 points",
+                                        "  cpu     peak 3.9    of --cpus 4  ████", "  memory  peak 9.0G   of 16G  ▁▂▂", "  io      read 1.0G · written 2.0G  ████",
+                                        "  load    peak 6      ████", "  held at its CPU limit about 33% of the run (1200 throttled periods)",
+                                        "  held to its --cpus 4 33% of the time: try --cpus 4+8", "  oom kills: 0", "  (no per-job network numbers (a cgroup doesn't give them cheaply))"]})
         if path == "/cli/compute/jobs/logs":
             if q.get("cursor") == "0":
                 return self.reply({"cursor": 1, "chunks": [{"data": base64.b64encode(b"hello from unit\n").decode()}]})
@@ -440,6 +456,33 @@ b="$(last /cli/compute/run)"
 eq "burst: fractions" "$(field "$b" cpus) $(field "$b" cpusBurst)" "0.5 1.5"
 rc "a plain --cpus" 0 compute run --plan --cpus 4 -- true
 eq "plain: no burst" "$(field "$(last /cli/compute/run)" cpusBurst)" "null"
+
+echo "== k2 compute stats (compute Blacksmith class O2) =="
+has "help: stats" "$("$K2" compute --help)" "k2 compute stats <job> [--json]"
+has "study compute: STATS" "$("$K2" study compute)" "STATS (one job's run, every 5 s; preview: ciPreview)"
+before="$(wc -l <"$REQ_LOG")"
+rc "stats with no job" 2 compute stats
+rc "stats with two jobs" 2 compute stats ab12cd34 ef56ab78
+rc "stats with a bad id" 2 compute stats '../x'
+rc "stats with an unknown flag" 2 compute stats ab12cd34 --days 3
+eq "stats usage errors sent nothing" "$(wc -l <"$REQ_LOG")" "$before"
+rc "stats" 0 compute stats ab12cd34
+has "stats: the job" "$(last /cli/compute/stats)" "job=ab12cd34"
+out="$(cat "$WORK/out")"
+has "stats: header" "$out" "stats · job ab12cd34 · done · k2n7 · ran 6m00s · attempt 1"
+has "stats: spacing" "$out" "every 5s, 72 points"
+has "stats: cpu line" "$out" "cpu     peak 3.9    of --cpus 4"
+has "stats: memory line" "$out" "memory  peak 9.0G   of 16G"
+has "stats: io line" "$out" "io      read 1.0G · written 2.0G"
+has "stats: a sparkline" "$out" "▁▂▂"
+has "stats: held" "$out" "held at its CPU limit about 33% of the run (1200 throttled periods)"
+has "stats: the hint" "$out" "held to its --cpus 4 33% of the time: try --cpus 4+8"
+has "stats: oom" "$out" "oom kills: 0"
+has "stats: no network" "$out" "(no per-job network numbers"
+rc "stats of an old node's job" 0 compute stats old00000
+has "stats: no series, why" "$(cat "$WORK/out")" "no series: no series for it: its node's k2-node is older than protocol 10"
+rc "stats --json" 0 compute stats ab12cd34 --json
+has "stats --json is the daemon's" "$(cat "$WORK/out")" "\"heldPct\": 33"
 
 echo "== stats, monitors, log search (compute Blacksmith class O1) =="
 help="$("$K2" ci --help)"

@@ -366,6 +366,8 @@ pub mod compute_move;
 // Package requests through nodes (0.46.9, self-serve environments).
 pub mod compute_pkg;
 pub mod compute_place;
+/// B2: cache generations on the controller (plan fields, scratch refs, lineages).
+pub mod compute_gens;
 // `k2 compute rightsize` and `--mem auto` (prd-compute-blacksmith-class-v1 R1).
 pub mod compute_rightsize;
 // `k2 compute logs --search` (prd-compute-blacksmith-class-v1 O1).

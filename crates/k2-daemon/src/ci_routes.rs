@@ -31,6 +31,10 @@ use crate::ci_engine::{self as engine, Start};
 use crate::compute_manage::Manager;
 use crate::compute_routes::{audit, b, grant_target_ws, json_body, n, need_admin, need_credential, no, passport_gate, s, target_ws, Who, Ws, R};
 
+/// prd-compute-blacksmith-class-v1 B2 (§4.1.5): `k2 ci cache trust`
+/// (GET) and its change (POST).
+pub const CACHE_TRUST: &str = "/cli/ci/cache/trust";
+pub const CACHE_TRUST_SET: &str = "/cli/ci/cache/trust/set";
 pub const EVIDENCE: &str = "/cli/ci/evidence";
 pub const FREEZE: &str = "/cli/ci/freeze";
 pub const INIT: &str = "/cli/ci/init";
@@ -47,7 +51,7 @@ pub const STATUS: &str = "/cli/ci/status";
 pub const TESTS: &str = "/cli/ci/tests";
 pub const WATCH: &str = "/cli/ci/watch";
 
-pub const ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, RELEASE, RUN, STATS, STATUS, TESTS, WATCH];
+pub const ROUTES: &[&str] = &[CACHE_TRUST, CACHE_TRUST_SET, EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, RELEASE, RUN, STATS, STATUS, TESTS, WATCH];
 pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, RELEASE, RUN, WATCH];
 
 /// Longest freeze (`k2 ci freeze --until`).
@@ -66,6 +70,9 @@ pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, S
         MONITORS => monitors(who, params),
         MONITOR => monitor(who, body, mgr),
         RUN => run(who, body),
+        // B2: the trusted branches of the workspace's CI cache.
+        CACHE_TRUST => cache_trust(who, params),
+        CACHE_TRUST_SET => cache_trust_set(who, body),
         // 0.46.11 (C5/C6b, `ci_release`): a release set and its evidence.
         RELEASE => crate::ci_release::release(who, body),
         EVIDENCE => crate::ci_release::evidence(who, body),
@@ -229,6 +236,81 @@ fn status(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
         "inflight": ci::inflight_count(&conn, &ws.id),
         "runs": runs,
     }))
+}
+
+// ── /cli/ci/cache/trust (B2, §4.1.5) ─────────────────────────────────
+
+fn trust_view(ws: &Ws, t: &ci::Trusted) -> serde_json::Value {
+    serde_json::json!({
+        "workspace": ws.handle,
+        "branches": t.branches,
+        "default": t.default,
+        "by": t.by,
+        "at": t.at,
+        "note": "only CI checks of these branches, run by the CI engine from a pushed commit, save the shared (trusted) cache; every other job saves only its own scratch copy",
+    })
+}
+
+/// `k2 ci cache trust`: the branches whose CI checks may save the shared
+/// cache. A reader verb.
+fn cache_trust(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    let ws = reader(who, params.get("workspace").map(String::as_str))?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    Ok(trust_view(&ws, &ci::trusted(&conn, &ws.id)))
+}
+
+/// `k2 ci cache trust --add B | --set a,b | --remove B`. Narrowing is
+/// anyone's who may change the workspace's CI (an agent for its own);
+/// adding a branch is a person's (the owner or an Admin, from a terminal
+/// outside K2): `cache_trust_needs_person`, exit 3. Never read from
+/// `.k2/ci.toml` (a PR could name its own branch there).
+fn cache_trust_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+    let v = json_body(body)?;
+    let ws = changer(who, s(&v, "workspace"), None)?;
+    let (set, add, remove) = (v.get("set").map(|_| list(&v, "set")).transpose()?, list(&v, "add")?, list(&v, "remove")?);
+    let asks = [set.is_some(), !add.is_empty(), !remove.is_empty()].iter().filter(|x| **x).count();
+    if asks != 1 {
+        return Err(no("bad_request", 400, "say one of: --add BRANCH, --set a,b (the whole list), --remove BRANCH"));
+    }
+    let now_list = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ci::trusted(&conn, &ws.id).branches
+    };
+    let next: Vec<String> = match (&set, add.is_empty()) {
+        (Some(s), _) => s.clone(),
+        (None, false) => now_list.iter().cloned().chain(add.iter().cloned()).collect(),
+        (None, true) => now_list.iter().filter(|b| !remove.contains(b)).cloned().collect(),
+    };
+    if ci::trust_widens(&now_list, &next) && !who.is_admin() {
+        let added: Vec<String> = next.iter().filter(|b| !now_list.contains(b)).cloned().collect();
+        let mut r = no(
+            ci::CACHE_TRUST_NEEDS_PERSON,
+            403,
+            format!(
+                "adding {} to workspace {}'s trusted branches lets CI checks of that branch save the build cache every job here starts from, \
+                 so only a person does it: the owner or an Admin, from a terminal outside K2 (k2 ci cache trust --add {} --workspace {}). \
+                 An agent may only remove branches",
+                added.join(", "),
+                ws.handle,
+                added.join(","),
+                ws.handle
+            ),
+        );
+        r = r.with("workspace", serde_json::json!(ws.handle)).with("branches", serde_json::json!(added.join(",")));
+        return Err(r);
+    }
+    let by = who.label();
+    let stored = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ci::set_trusted(&conn, &ws.id, &next, &by, now()).map_err(|e| no("bad_request", 400, e))?
+    };
+    audit(who, "ci.cache.trust", None, Some(&ws.id), None, serde_json::json!({ "from": now_list, "to": stored }));
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    Ok(trust_view(&ws, &ci::trusted(&conn, &ws.id)))
 }
 
 // ── GET /cli/ci/tests ────────────────────────────────────────────────

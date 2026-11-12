@@ -44,6 +44,9 @@ pub const MAX_BODY: usize = 1 << 20;
 /// Every compute route (the two sockets included).
 pub const ROUTES: &[&str] = &[
     // `k2 ci` (0.46.10, C6a, `ci_routes`): CI on compute, same callers.
+    // B2: the trusted branches of the CI cache (a reader verb, then its POST).
+    crate::ci_routes::CACHE_TRUST,
+    crate::ci_routes::CACHE_TRUST_SET,
     crate::ci_routes::EVIDENCE,
     crate::ci_routes::FREEZE,
     crate::ci_routes::INIT,
@@ -145,6 +148,7 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (`require_post` → 405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    crate::ci_routes::CACHE_TRUST_SET,
     crate::ci_routes::EVIDENCE,
     crate::ci_routes::FREEZE,
     crate::ci_routes::INIT,

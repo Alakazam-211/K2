@@ -803,6 +803,98 @@ impl Starter {
     }
 }
 
+// ── trusted branches (prd-compute-blacksmith-class-v1 §4.1.5, B2) ────
+
+/// Most trusted branches a workspace keeps.
+pub const MAX_TRUSTED_BRANCHES: usize = 16;
+/// The refusal when an agent widens the trusted branches (exit 3, a card).
+pub const CACHE_TRUST_NEEDS_PERSON: &str = crate::compute::proto::gens::codes::CACHE_TRUST_NEEDS_PERSON;
+
+/// The branches whose CI checks may save the workspace's shared
+/// ("trusted") build cache.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Trusted {
+    pub branches: Vec<String>,
+    /// Nobody set the list: it is the default (the first plain branch of a
+    /// watch a person set, else `main`).
+    pub default: bool,
+    pub by: Option<String>,
+    pub at: Option<i64>,
+}
+
+/// A trusted branch: a plain branch name (no glob, no `wt:`).
+pub fn valid_trusted_branch(b: &str) -> bool {
+    crate::compute::proto::gens::valid_ref(b) && !b.starts_with(crate::compute::proto::gens::WORKTREE_REF_PREFIX) && !b.contains('*')
+}
+
+/// Is this caller label a person (the owner token or a login), never an
+/// agent or a K2 shell tab?
+pub fn is_person_label(label: &str) -> bool {
+    label == "owner" || label.starts_with("login:")
+}
+
+/// The workspace's trusted branches. Set: that list (a malformed stored
+/// list trusts nothing). Unset: the first plain branch of the watch, but
+/// only when a person set the watch (an agent may set a watch, and must
+/// not widen the trusted branches through it), else `main`.
+pub fn trusted(conn: &Connection, ws: &str) -> Trusted {
+    type Row = (Option<String>, Option<String>, Option<i64>, String, String, i64);
+    let row: Option<Row> = conn
+        .query_row(
+            "SELECT trusted_branches_json, trusted_by, trusted_at, branches_json, watch_by, watch_at FROM ci_workspaces WHERE workspace_id = ?1",
+            params![ws],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    let fallback = || Trusted { branches: vec![crate::compute::proto::ci_config::DEFAULT_TRUSTED_BRANCH.to_string()], default: true, by: None, at: None };
+    let Some((json, by, at, watch, watch_by, watch_at)) = row else { return fallback() };
+    if let Some(j) = json {
+        let branches: Vec<String> = serde_json::from_str::<Vec<String>>(&j).map(|v| v.into_iter().filter(|b| valid_trusted_branch(b)).collect()).unwrap_or_default();
+        return Trusted { branches, default: false, by, at };
+    }
+    if watch_at > 0 && is_person_label(&watch_by) {
+        let w: Vec<String> = serde_json::from_str(&watch).unwrap_or_default();
+        if let Some(b) = w.into_iter().find(|b| valid_trusted_branch(b)) {
+            return Trusted { branches: vec![b], default: true, by: None, at: None };
+        }
+    }
+    fallback()
+}
+
+/// Does `next` add a branch `now` doesn't have (a person's step)?
+pub fn trust_widens(now: &[String], next: &[String]) -> bool {
+    next.iter().any(|b| !now.contains(b))
+}
+
+/// Store the trusted branches (a row is made if the workspace has none,
+/// watch off). Checked: plain branch names, at most
+/// [`MAX_TRUSTED_BRANCHES`], duplicates dropped. The caller decides who may.
+pub fn set_trusted(conn: &Connection, ws: &str, branches: &[String], by: &str, at: i64) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for b in branches {
+        if !valid_trusted_branch(b) {
+            return Err(format!("{b:?} is not a branch name (no globs, no wt:)"));
+        }
+        if !out.contains(b) {
+            out.push(b.clone());
+        }
+    }
+    if out.len() > MAX_TRUSTED_BRANCHES {
+        return Err(format!("at most {MAX_TRUSTED_BRANCHES} trusted branches"));
+    }
+    let json = serde_json::to_string(&out).map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO ci_workspaces (workspace_id, trusted_branches_json, trusted_by, trusted_at) VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(workspace_id) DO UPDATE SET trusted_branches_json = ?2, trusted_by = ?3, trusted_at = ?4",
+        params![ws, json, by, at],
+    )
+    .map_err(|e| format!("ci trusted branches: {e}"))?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,11 +902,42 @@ mod tests {
     fn conn() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch(include_str!("../drizzle_sql/0273_ci.sql")).unwrap();
+        for stmt in include_str!("../drizzle_sql/0300_ci_trusted_branches.sql").split("--> statement-breakpoint") {
+            c.execute_batch(stmt).unwrap();
+        }
         c.execute_batch("CREATE TABLE app_update_releases (id TEXT PRIMARY KEY);").unwrap();
         for stmt in include_str!("../drizzle_sql/0287_ci_release.sql").split("--> statement-breakpoint") {
             c.execute_batch(stmt).unwrap();
         }
         c
+    }
+
+    /// §4.1.5: unset = main, or the first plain branch of a watch a person
+    /// set (never an agent's watch); a stored list wins; bad names refused.
+    #[test]
+    fn trusted_branches_default_and_set() {
+        let c = conn();
+        assert_eq!(trusted(&c, "ws").branches, vec!["main"], "no row: main");
+        let w = Watch { remote: "origin".into(), branches: vec!["rel/*".into(), "trunk".into()], poll_secs: 60, tier: "ci".into(), max_inflight: 2 };
+        set_watch(&c, "ws", &w, "agent:ws", 1).unwrap();
+        assert_eq!(trusted(&c, "ws"), Trusted { branches: vec!["main".into()], default: true, by: None, at: None }, "an agent's watch never widens");
+        set_watch(&c, "ws", &w, "login:rosson", 2).unwrap();
+        assert_eq!(trusted(&c, "ws").branches, vec!["trunk"], "a person's watch: its first plain branch");
+        let set = set_trusted(&c, "ws", &["main".into(), "rel/1".into(), "main".into()], "owner", 3).unwrap();
+        assert_eq!(set, vec!["main", "rel/1"]);
+        let t = trusted(&c, "ws");
+        assert_eq!((t.branches, t.default, t.by.as_deref(), t.at), (vec!["main".to_string(), "rel/1".to_string()], false, Some("owner"), Some(3)));
+        for bad in ["rel/*", "wt:x", "", "a..b"] {
+            assert!(set_trusted(&c, "ws", &[bad.into()], "owner", 4).is_err(), "{bad:?}");
+        }
+        set_trusted(&c, "other", &[], "agent:other", 5).unwrap();
+        assert!(trusted(&c, "other").branches.is_empty(), "an empty list trusts nothing (a new row, watch off)");
+        assert!(workspace(&c, "other").is_some_and(|r| !r.watch_on));
+        c.execute("UPDATE ci_workspaces SET trusted_branches_json = 'garbage' WHERE workspace_id = 'ws'", []).unwrap();
+        assert!(trusted(&c, "ws").branches.is_empty(), "a malformed list trusts nothing");
+        assert!(trust_widens(&["main".into()], &["main".into(), "x".into()]));
+        assert!(!trust_widens(&["main".into(), "x".into()], &["x".into()]));
+        assert!(is_person_label("owner") && is_person_label("login:a") && !is_person_label("agent:a") && !is_person_label("shell:a"));
     }
 
     fn pats(p: &[&str]) -> Vec<String> {

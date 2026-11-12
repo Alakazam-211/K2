@@ -1203,7 +1203,7 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + K2 Daemon.app + k2-ptyd + k2-export + K2 Screen.app + frpc + bundle) with entitlements."
+echo "  Signed (main + K2 Daemon.app + k2-ptyd + k2-export + k2-deckrender + K2 Screen.app + frpc + bundle) with entitlements."
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
 # K2 Screen: identifier, runtime, team, no forbidden entitlement, and the
@@ -1309,6 +1309,8 @@ echo "  App notarized and stapled."
 k2_daemon_helper_verify_shipped_ptyd "K2.app"
 # The export worker (vs-live §3.1): signed and nested the same way.
 k2_daemon_helper_verify_shipped_export "K2.app"
+# The .pptx slide renderer: signed and nested the same way.
+k2_daemon_helper_verify_shipped_deckrender "K2.app"
 # K2 Screen (remote desktop): signed, nested and notarized with the app.
 k2_screen_helper_verify_shipped "K2.app"
 # The background standalone daemon build (Step 3.6): stop now if it failed.
@@ -1324,6 +1326,7 @@ COPYFILE_DISABLE=1 tar -czf "target/release/bundle/macos/K2.app.tar.gz" \
 # PTY host, or agents would stop surviving after the update.
 k2_daemon_helper_verify_tarball_ptyd "target/release/bundle/macos/K2.app.tar.gz"
 k2_daemon_helper_verify_tarball_export "target/release/bundle/macos/K2.app.tar.gz"
+k2_daemon_helper_verify_tarball_deckrender "target/release/bundle/macos/K2.app.tar.gz"
 k2_screen_helper_verify_tarball "target/release/bundle/macos/K2.app.tar.gz"
 
 # Sign the update bundle with the update key. The Tauri app updater reads

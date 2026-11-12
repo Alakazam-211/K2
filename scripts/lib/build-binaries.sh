@@ -155,16 +155,16 @@ k2_build_mac_binaries() {
         bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }
         [ -d "$app" ] || { echo "FATAL: $app missing after tauri build" >&2; return 1; }
 
-        echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-node, k2-menubar, k2-deskd (one cargo call)..."
+        echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-deckrender, k2-node, k2-menubar, k2-deskd (one cargo call)..."
         _k2_mac_sidecar_cargo \
-            || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-node, k2-menubar, k2-deskd) failed" >&2; return 1; }
+            || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-deckrender, k2-node, k2-menubar, k2-deskd) failed" >&2; return 1; }
     else
         local tdir="${K2_MAC_TAURI_TARGET_DIR:-$PWD/target/tauri}" tpid trc=0 src=0 t0
         case "$tdir" in /*) ;; *) tdir="$PWD/$tdir" ;; esac
         k2_mac_build_jobs
         t0="$(date +%s)"
         echo ""; echo "  Builds 1+2 at once: tauri build (frontend + k2 + bundle; ${K2_MAC_TAURI_JOBS} jobs, target $tdir) and"
-        echo "  k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-node, k2-menubar, k2-deskd (one cargo call, ${K2_MAC_SIDECAR_JOBS} jobs)..."
+        echo "  k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-deckrender, k2-node, k2-menubar, k2-deskd (one cargo call, ${K2_MAC_SIDECAR_JOBS} jobs)..."
         rm -rf "$tdir/release/bundle"
         _k2_tauri_build_bg "$tdir" &
         tpid=$!
@@ -172,7 +172,7 @@ k2_build_mac_binaries() {
         if [ "$src" != 0 ]; then
             k2_kill_tree "$tpid"
             wait "$tpid" 2>/dev/null || true
-            echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-node, k2-menubar, k2-deskd) failed (the tauri build was stopped)" >&2
+            echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-deckrender, k2-node, k2-menubar, k2-deskd) failed (the tauri build was stopped)" >&2
             return 1
         fi
         echo "  sidecars built ($(( $(date +%s) - t0 ))s); waiting for the tauri build..."
@@ -189,15 +189,16 @@ k2_build_mac_binaries() {
     fi
 
     local bin
-    for bin in k2-daemon k2-power-helper k2-ptyd k2-export k2-node k2-menubar k2-deskd; do
+    for bin in k2-daemon k2-power-helper k2-ptyd k2-export k2-deckrender k2-node k2-menubar k2-deskd; do
         [ -x "$out/$bin" ] || { echo "FATAL: $bin missing at $out/$bin after cargo build" >&2; return 1; }
     done
     assert_daemon_oauth_not_placeholder "$out/k2-daemon" || return 1
 
     echo ""; echo "  Bundling sidecars into $app..."
     # k2-daemon lives in a nested background-only helper app so Activity
-    # Monitor shows the K2 icon + "K2 Daemon"; k2-ptyd and k2-export sit beside it.
-    k2_daemon_helper_assemble "$app" "$out/k2-daemon" "$out/k2-ptyd" "$out/k2-export" || return 1
+    # Monitor shows the K2 icon + "K2 Daemon"; k2-ptyd, k2-export and
+    # k2-deckrender sit beside it.
+    k2_daemon_helper_assemble "$app" "$out/k2-daemon" "$out/k2-ptyd" "$out/k2-export" "$out/k2-deckrender" || return 1
     k2_daemon_helper_verify "$app" || return 1
     # Remote desktop (prd-remote-desktop-tab-v1 D3): K2 Screen.app, the one
     # K2 process that holds Screen Recording and Accessibility, beside it.

@@ -218,6 +218,17 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
         "K2_MAC_SIDECAR_CARGO_ARGS no longer builds k2-export: {array:?}"
     );
     assert!(call.contains("\"$out/k2-export\""), "{SHARED_FN} assembles without k2-export: {call}");
+    // The .pptx slide renderer rides the same way: built in the one sidecar
+    // call and nested beside the daemon (k2_deckrender::proto::BINARY_NAME).
+    assert!(
+        helper.contains("K2_DAEMON_HELPER_DECKRENDER=\"k2-deckrender\""),
+        "scripts/macos-daemon-helper-app.sh deckrender name drifted"
+    );
+    assert!(
+        array.iter().any(|t| *t == "-p k2-deckrender --bin k2-deckrender"),
+        "K2_MAC_SIDECAR_CARGO_ARGS no longer builds k2-deckrender: {array:?}"
+    );
+    assert!(call.contains("\"$out/k2-deckrender\""), "{SHARED_FN} assembles without k2-deckrender: {call}");
 
     // The three callers source the shared file and call the function.
     for script in ["scripts/release.sh", "scripts/build-app.sh", "scripts/dev-build.sh"] {
@@ -244,6 +255,8 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
     assert!(call.contains("target/release/k2-ptyd") || call.contains("$PTYD_SRC"), "{script} assembles without k2-ptyd: {call}");
     assert!(body.contains("cargo build --release -p k2-export --bin k2-export"), "{script} does not build k2-export");
     assert!(call.contains("$EXPORT_SRC"), "{script} assembles without k2-export: {call}");
+    assert!(body.contains("cargo build --release -p k2-deckrender --bin k2-deckrender"), "{script} does not build k2-deckrender");
+    assert!(call.contains("$DECKRENDER_SRC"), "{script} assembles without k2-deckrender: {call}");
 }
 
 /// Remote desktop (prd-remote-desktop-tab-v1 D3): K2 Screen.app is built in

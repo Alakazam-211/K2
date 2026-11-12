@@ -260,8 +260,11 @@ async fn job_env_is_scrubbed_and_home_is_the_job_home() {
         assert!(!env.contains_key(*v), "{v} leaked into the job");
     }
     let k2: Vec<&String> = env.keys().filter(|k| k.starts_with("K2") && !k.starts_with("K2_NODE_")).collect();
-    // 0.46.7: the job's CPUs and its own port range (node-set, never --env).
-    assert_eq!(k2, vec!["K2_COMPUTE_JOB", "K2_JOB_CPUS", "K2_JOB_PORT_BASE", "K2_JOB_PORT_COUNT"]);
+    // 0.46.7: the job's CPUs and its own port range (node-set, never --env);
+    // R2 (protocol 10, this fake server's): the most CPUs it may use, the
+    // same as its guarantee without a burst.
+    assert_eq!(k2, vec!["K2_COMPUTE_JOB", "K2_JOB_CPUS", "K2_JOB_CPUS_MAX", "K2_JOB_PORT_BASE", "K2_JOB_PORT_COUNT"]);
+    assert_eq!(env["K2_JOB_CPUS_MAX"], env["K2_JOB_CPUS"], "no --cpus N+M: the ceiling is the guarantee");
     // Protocol 7 (§4.5): what the node is.
     assert_eq!(env["K2_NODE_OS"], k2_node::sysinfo::os_label());
     assert!(!env["K2_NODE_DISTRO"].is_empty() && !env["K2_NODE_DISTRO_VERSION"].is_empty(), "{env:?}");

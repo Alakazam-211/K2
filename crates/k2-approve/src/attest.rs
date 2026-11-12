@@ -69,7 +69,8 @@ fn bad<T>(d: impl Into<String>) -> Result<T, String> {
 
 #[derive(Debug)]
 enum Cbor {
-    Uint(u64),
+    /// A number (the attestation never needs one's value).
+    Uint,
     Bytes(Vec<u8>),
     Text(String),
     Array(Vec<Cbor>),
@@ -100,7 +101,7 @@ fn cbor(b: &[u8], i: &mut usize, depth: usize) -> Result<Cbor, String> {
         Ok(v)
     };
     match mt {
-        0 => Ok(Cbor::Uint(n)),
+        0 => Ok(Cbor::Uint),
         2 => Ok(Cbor::Bytes(take(i, n)?)),
         3 => Ok(Cbor::Text(String::from_utf8(take(i, n)?).map_err(|_| "attestation: CBOR text is not UTF-8")?)),
         4 => {
@@ -370,8 +371,11 @@ pub fn verify_app_attest(attestation: &[u8], client_data: &[u8], key_id_b64: &st
     Ok(Attested { environment, verified_at: now, leaf_not_after: leaf.not_after })
 }
 
-/// Split the enrolment client data: (challenge, SPKI(biometric), SPKI(passcode)).
-pub fn parse_enrol_client_data(cd: &[u8]) -> Result<([u8; 32], Vec<u8>, Vec<u8>), String> {
+/// The enrolment client data's parts: (challenge, SPKI(biometric), SPKI(passcode)).
+pub type EnrolParts = ([u8; 32], Vec<u8>, Vec<u8>);
+
+/// Split the enrolment client data.
+pub fn parse_enrol_client_data(cd: &[u8]) -> Result<EnrolParts, String> {
     let Some(rest) = cd.strip_prefix(ENROL_PREFIX) else {
         return bad("enrolment data does not start with K2-APPROVER-ENROL-1 and a zero byte");
     };

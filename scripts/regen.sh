@@ -12,6 +12,8 @@
 # generated file by hand.
 #
 # The steps:
+#   0. build-cli.sh            cli/src/*.sh -> cli/k2, once cli/k2 is built
+#                              from parts (there is a cli/src/ORDER)
 #   1. contract-gen            catalog.json -> the fenced blocks in cli/k2,
 #                              app_surface.rs, sdk/generated/*, the server
 #                              SDK's verbs.ts, the renderer's verb tables
@@ -62,6 +64,10 @@ run() {
 }
 flag() { if [ "$CHECK" = 1 ]; then echo "--check"; fi; }
 
+if [ -f cli/src/ORDER ]; then
+    # shellcheck disable=SC2046  # the flag is one word or nothing
+    run "cli/k2 from its parts" bash scripts/build-cli.sh $(flag)
+fi
 if [ "$CARGO" = 1 ]; then
     if [ "$CHECK" = 1 ]; then
         run "contract-gen" cargo run --locked -q -p k2-core --bin contract-gen -- --check

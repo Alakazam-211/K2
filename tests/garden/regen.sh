@@ -83,6 +83,24 @@ node scripts/gen-cli-explorer-catalog.mjs
 node scripts/build-styles.mjs
 goldens bless=1"
 
+# Once cli/k2 is built from parts, that build is the first step.
+mkdir -p "$T/root/cli/src" "$T/root/scripts"
+: > "$T/root/cli/src/ORDER"
+cat > "$T/root/scripts/build-cli.sh" <<STUB
+echo "build-cli \$*" >> "$T/calls"
+case " \${FAIL:-} " in *" build-cli "*) exit 1 ;; esac
+exit 0
+STUB
+run 0 "regen: done; everything generated is current."
+calls "build-cli 
+cargo run --locked -q -p k2-core --bin contract-gen
+node scripts/sdk-server-dist.mjs
+node scripts/gen-cli-explorer-catalog.mjs
+node scripts/build-styles.mjs
+goldens bless=0"
+FAIL="build-cli" run 1 "regen: STALE: cli/k2 from its parts. Run scripts/regen.sh and commit what it changes." --check
+rm -rf "$T/root/cli" "$T/root/scripts"
+
 # --no-cargo skips step 1 and says so at the end.
 run 0 "regen: done, but skipped: contract-gen (--no-cargo)." --no-cargo
 calls "node scripts/sdk-server-dist.mjs

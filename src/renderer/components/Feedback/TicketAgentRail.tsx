@@ -274,7 +274,7 @@ export function TicketAgentRail({
     <aside
       data-testid="ticket-agent-rail"
       className="flex flex-col min-h-0 border-l border-[var(--color-border)] flex-shrink-0 bg-[var(--color-bg)]"
-      style={{ width: 'min(640px, 48vw)' }}
+      style={{ width: 'min(640px, calc(var(--k2-vw)*0.48))' }}
     >
       {terminal && (
         <div role="tablist" className="flex items-center gap-1 px-3 border-b border-[var(--color-border)] flex-shrink-0">

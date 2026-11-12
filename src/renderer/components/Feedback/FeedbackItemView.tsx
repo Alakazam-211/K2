@@ -76,7 +76,7 @@ interface FeedbackItemViewProps {
 export const briefCache = new Map<string, FeedbackBrief>()
 
 /** The brief box fills the detail pane (the brief takes the stage). */
-const BRIEF_HEIGHT_CLASS = 'h-[max(320px,calc(100vh-300px))]'
+const BRIEF_HEIGHT_CLASS = 'h-[max(320px,calc(var(--k2-vh)-300px))]'
 
 /** Quick answers stay live until the ticket is closed. */
 export function quickAnswersLive(status: FeedbackStatus): boolean {

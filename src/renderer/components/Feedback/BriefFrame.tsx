@@ -10,7 +10,7 @@
 // never the in-app Browser tab. The list is compact: as tall as its rows,
 // capped small with its own scroll, and absent when there are no links.
 //
-// Size: a fixed `min(60vh, 560px)` box with its own scrollbar and a drag
+// Size: a fixed `min(60 % of the window, 560px)` box with its own scrollbar and a drag
 // handle; no auto-size (the parent can't read an inert frame's height).
 // Expand shows the same document as a full-page overlay. Its header is a
 // title bar like every page's top bar: the window inset, the bar height, px-3,
@@ -37,6 +37,7 @@ import { registerZenK2Overlay } from '@/lib/zen/zen-controls'
 import type { FeedbackBrief } from './feedback-api'
 import { buildBriefSrcDoc, readBriefTokens, type BriefLink } from './brief-srcdoc'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
+import { clientToCssPx, cssViewport } from '@/lib/app-zoom'
 
 const THEME_ATTRS = ['data-scheme', 'data-palette', 'data-style']
 
@@ -57,9 +58,9 @@ export function useBriefThemeKey(): string {
   return useSyncExternalStore(subscribeTheme, themeSnapshot, themeSnapshot)
 }
 
-/** Default frame height `min(60vh, 560px)` (H18): a class until the user
+/** Default frame height `min(60 % of the window, 560px)` (H18): a class until the user
  *  drags the handle, then an inline px height. */
-const DEFAULT_HEIGHT_CLASS = 'h-[min(60vh,560px)]'
+const DEFAULT_HEIGHT_CLASS = 'h-[min(calc(var(--k2-vh)*0.6),560px)]'
 const MIN_HEIGHT = 120
 const KEY_STEP = 32
 
@@ -148,17 +149,19 @@ export function BriefFrame({
   )
   const boxRef = useRef<HTMLDivElement>(null)
 
+  // Heights are CSS px; the pointer and measured heights are window px,
+  // which the app zoom scales (lib/app-zoom).
   const clamp = (h: number): number =>
-    Math.max(MIN_HEIGHT, Math.min(h, Math.round(window.innerHeight * 0.9)))
+    Math.max(MIN_HEIGHT, Math.min(h, Math.round(cssViewport().height * 0.9)))
 
   const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     e.preventDefault()
     const box = boxRef.current
     if (!box) return
     const startY = e.clientY
-    const startH = box.getBoundingClientRect().height
+    const startH = clientToCssPx(box.getBoundingClientRect().height)
     setDragging(true)
-    const move = (ev: PointerEvent): void => setHeight(clamp(startH + ev.clientY - startY))
+    const move = (ev: PointerEvent): void => setHeight(clamp(startH + clientToCssPx(ev.clientY - startY)))
     const up = (): void => {
       setDragging(false)
       window.removeEventListener('pointermove', move)
@@ -171,7 +174,8 @@ export function BriefFrame({
   const onHandleKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
     if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
     e.preventDefault()
-    const current = boxRef.current?.getBoundingClientRect().height ?? 400
+    const measured = boxRef.current?.getBoundingClientRect().height
+    const current = measured === undefined ? 400 : clientToCssPx(measured)
     setHeight(clamp(current + (e.key === 'ArrowDown' ? KEY_STEP : -KEY_STEP)))
   }
 

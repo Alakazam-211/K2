@@ -11,6 +11,7 @@ import { BriefFrame, BRIEF_LINKS_MAX_HEIGHT_CLASS, briefOverlayStoplightInset } 
 import { desktopChromeFor, TRAFFIC_LIGHT_CLUSTER_RIGHT_PX } from '@/lib/desktop-chrome'
 import { buildBriefSrcDoc, briefStylesheet, fallbackBriefTokens } from './brief-srcdoc'
 import type { FeedbackBrief } from './feedback-api'
+import { applyAppZoomForTest, resetAppZoomForTest, setScreenRect, setWindowSize } from '@/test-utils/app-zoom'
 
 const opener = vi.hoisted(() => ({ openUrl: vi.fn(async () => {}) }))
 vi.mock('@tauri-apps/plugin-opener', () => opener)
@@ -134,7 +135,7 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
     expect(doc!).toContain('<body class="k2-brief">')
     // Fixed default height with its own box; no auto-size.
     const box = screen.getByTestId('brief-box')
-    expect(box.className).toContain('h-[min(60vh,560px)]')
+    expect(box.className).toContain('h-[min(calc(var(--k2-vh)*0.6),560px)]')
     expect(box.style.height).toBe('')
   })
 
@@ -197,6 +198,29 @@ describe('BriefFrame — rendered (T10, H13, H18)', () => {
     const handle = screen.getByTestId('brief-resize')
     fireEvent.keyDown(handle, { key: 'ArrowDown' })
     expect(screen.getByTestId('brief-box').style.height).toMatch(/^\d+px$/)
+  })
+
+  // The app zoom: the pointer and the box's measured height are window px,
+  // the inline height is CSS px. At 150 % the frame grew 1.5× faster than
+  // the pointer and could grow past the window.
+  it('at 150 %, dragging the handle 60 px on screen grows the frame 60 px on screen, capped at 90 % of the window', () => {
+    const Z = 1.5
+    setWindowSize(1024, 768)
+    applyAppZoomForTest(Z)
+    try {
+      render(<BriefFrame brief={brief} title="t" />)
+      const box = screen.getByTestId('brief-box')
+      setScreenRect(box, { left: 0, top: 100, width: 600 * Z, height: 300 * Z })
+      const handle = screen.getByTestId('brief-resize')
+      fireEvent.pointerDown(handle, { clientY: 500 })
+      fireEvent.pointerMove(window, { clientY: 560 })
+      expect(Number.parseFloat(box.style.height) * Z).toBeCloseTo(300 * Z + 60, 5)
+      fireEvent.pointerMove(window, { clientY: 500 + 2000 })
+      expect(box.style.height).toBe(`${Math.round((768 / Z) * 0.9)}px`)
+      fireEvent.pointerUp(window)
+    } finally {
+      resetAppZoomForTest()
+    }
   })
 
   it('Expand opens the same document full-page; Close and Escape dismiss it', () => {

@@ -113,6 +113,7 @@ import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stas
 import { saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
 import { planStashRestore } from '@/lib/prompt-stash/restore'
 import { stashRestoreDeps } from '@/lib/prompt-stash/sync'
+import { composeSlashMenuSpot } from './compose-slash-placement'
 import {
   STASH_DRAWER_OUT_MS,
   StashDrawer,
@@ -1025,14 +1026,9 @@ export function TerminalComposeBar({
   })
 
   const placeSlashMenu = useCallback(() => {
-    const rect = slashBtnRef.current?.getBoundingClientRect()
-    if (!rect) return
-    const width = 200
-    const left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4))
-    setSlashMenuPos({
-      left,
-      bottom: window.innerHeight - rect.top + 4,
-    })
+    const measured = slashBtnRef.current?.getBoundingClientRect()
+    if (!measured) return
+    setSlashMenuPos(composeSlashMenuSpot(measured))
   }, [])
 
   const closeSlashMenu = useCallback(() => {

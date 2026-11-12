@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.11 (2026-11-12)
+
+Pairs with kit v0.17.0 (`0a78505a`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's changes are text → tier 0 (`demote_text_file`), the carrier's pairing (K1b, opt-in), the live grid (additive) and an outside save on unwritten changes keeping both on a keyed doc that isn't a table; the bridge keeps no carrier, pairs nothing and declares no grid, and a live board's outside save on unwritten changes now keeps both (the kit's rule). One new error id (`MPC-E521`, for a pack that pairs); wire still 3.
+
 ## v0.1.10 (2026-11-12)
 
 Pairs with kit v0.16.0 (`d2245444`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's changes are additive (the view schema, addresses and view index, the keyed watch behind the feature `keyed_watch` with view deltas, roster addresses, the structure index's row format 2); the pack hooks it adds are provided methods with defaults, and the bridge uses none of them. No new error id; wire still 3.

@@ -339,9 +339,16 @@ pub fn pid_started_near(pid: i64, started_at: i64) -> bool {
     }
 }
 
-/// When process `pid` started (unix seconds), from `ps -o etime=`
-/// (`[[dd-]hh:]mm:ss`, on Linux and macOS).
+/// When process `pid` started (unix seconds). macOS asks the kernel
+/// first; otherwise, and on Linux, `ps -o etime=` (`[[dd-]hh:]mm:ss`).
+/// `ps` is setuid on macOS, so it fails under a sandbox.
 pub fn process_start_unix(pid: i64) -> Option<i64> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(info) = i32::try_from(pid).ok().and_then(k2_core::mac_proc::bsd_info) {
+            return i64::try_from(info.start_sec).ok();
+        }
+    }
     let out = k2_core::bg_proc::command("ps").args(["-o", "etime=", "-p", &pid.to_string()]).output().ok()?;
     if !out.status.success() {
         return None;

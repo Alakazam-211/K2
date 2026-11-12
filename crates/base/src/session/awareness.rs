@@ -245,6 +245,10 @@ pub struct ClaimInfo {
     pub for_edit: bool,
     /// Pids waiting for it, first in line first ([`super::Session::register_waiter`]).
     pub waiters: Vec<String>,
+    /// An element claim's elements ([`ClaimSpan::Elems`]) by address
+    /// ([`super::Pack::address_of`]), in the span's order: what the wire carries as the claim's
+    /// `keys`. The kit fills them on the roster's claims; empty for every other span.
+    pub addresses: Vec<String>,
 }
 
 /// [`super::Session::register_waiter`]: the claim waited on, and the caller's place in line
@@ -1247,6 +1251,7 @@ impl Claim {
             hold: self.hold,
             for_edit: self.for_edit,
             waiters: self.waiters.iter().map(|(_, p)| p.clone()).collect(),
+            addresses: Vec::new(),
         }
     }
 }

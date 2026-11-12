@@ -408,7 +408,14 @@ export type ClientFrame =
   /** The client holds nothing unsent and is done with its writer (kit v0.14.0, a host with
    * writer leases; `LiveText.bye`): the host releases the connection (`Session::release`) and
    * closes it. No reply. */
-  | { type: "bye" };
+  | { type: "bye" }
+  /** Start the keyed watch, or start it again after a gap (`KeyedWatch`): the host answers
+   * with a fresh snapshot (`keyed_snapshot`, then its pages). Sent only when the host lists
+   * `"keyed_watch"`. */
+  | { type: "watch" }
+  /** The last numbered keyed frame this client applied (`seq`), never a presence frame's. Sent
+   * only when the host lists `"keyed_watch"`. No reply. */
+  | { type: "report"; seq: number };
 
 /** Frames the host sends. */
 export type ServerFrame =
@@ -443,6 +450,12 @@ export type ServerFrame =
   | { type: "roster_event"; event: RosterEvent }
   /** A problem with a frame that has no `op` to answer (a frame over the cap, unreadable JSON). */
   | { type: "error"; error: ErrorReport }
+  /** The keyed watch's numbered frames (WIRE.md, The keyed watch; `KeyedWatch`). */
+  | KeyedSnapshotFrame
+  | KeyedPageFrame
+  | OpsChangeFrame
+  /** The host can't serve the keyed watch (`MPC-E401`: an entry over the frame cap). Unnumbered. */
+  | { type: "watch_refused"; error: ErrorReport }
   /** The last frame on a connection; the host then closes the socket. */
   | {
       type: "closed";
@@ -544,4 +557,216 @@ export interface LiveTransport extends Transport {
 /** Whether a close reason allows a reconnect. */
 export function canRetry(reason: CloseReason): boolean {
   return reason === "network" || reason === "cut_off";
+}
+
+// ---------- the keyed watch (WIRE.md, "The keyed watch") ----------
+
+/** A value in a keyed doc: a string register, or none. */
+export type KeyedValue = string | null;
+
+/** A keyed doc's root kinds as the watch names them. */
+export type KeyedRootKind = "text" | "list" | "map";
+
+/** The doc's model, in the snapshot's head: its roots in order, and `composite` (kit after
+ * v0.15.1, additive): the map roots whose keys are a list's elements' fields
+ * (`<element>\x1f<field>`), as `{map, list}`. Absent from an older kit. */
+export interface KeyedSchema {
+  name: string;
+  roots: { name: string; kind: string }[];
+  composite?: { map: string; list: string }[];
+}
+
+/** Where a view field's value comes from (the view schema's `Src`): `null` (not carried), a
+ * field's name, the element's own list value, the pack's derived value, or a field whose raw
+ * values stand for words. */
+export type ViewSrc = null | string | { list_value: true } | { derived: string } | { field: string; values: Record<string, string> };
+
+/** The pack's view schema, as the snapshot's view carries it (the rendering-data contract's
+ * §1.2). */
+export interface ViewSchemaJson {
+  containers: string;
+  units: string;
+  unit_container_field: string;
+  container_id_field: string | null;
+  native_unit: string;
+  page: { root: string; w: string; h: string } | null;
+  container_fields: { title: ViewSrc; hidden: ViewSrc; layout: ViewSrc };
+  unit_fields: { kind: ViewSrc; name: ViewSrc; alt: ViewSrc; text: ViewSrc; hidden: ViewSrc; editable_text: ViewSrc; placeholder: ViewSrc };
+  geometry: { field: string; parts: string[]; rot_unit: string } | null;
+  field_class: Record<string, string>;
+  derived: { containers: string[]; units: string[] };
+}
+
+/** One container of the view index (a slide), by address; `position` from 1. */
+export interface ViewContainer {
+  key: string;
+  position: number;
+  title: string | null;
+  hidden: boolean;
+  layout: string | null;
+  render_hash: string | null;
+  fonts: number[];
+  has_fields: string[];
+  unit_count: number;
+}
+
+/** One unit of the view index (a shape), by address, in native units. */
+export interface ViewUnit {
+  key: string;
+  container: string;
+  parent: string | null;
+  live: boolean;
+  kind: string;
+  name: string;
+  name_is_generic: boolean | null;
+  alt: string | null;
+  z: number;
+  bbox: { x: number; y: number; w: number; h: number } | null;
+  bbox_inherited: boolean;
+  rot: number;
+  flip: { h: boolean; v: boolean };
+  approx_box: boolean;
+  text: { summary: string; truncated: boolean } | null;
+  fields: string[];
+  hidden: boolean;
+  placeholder: { type: string; idx: string | null } | null;
+  editable_text: "plain" | "formatted" | "never" | null;
+}
+
+/** The view index's snapshot, as a snapshot's head carries it: everything but the units. */
+export interface ViewSnapshotJson {
+  schema: ViewSchemaJson;
+  tier: string;
+  rev: number | null;
+  version: number | null;
+  page: { w: number; h: number; unit: string } | null;
+  fonts: unknown[];
+  layouts: unknown[];
+  containers: ViewContainer[];
+}
+
+/** What a change did to one unit of the view (the rendering-data contract's `UnitDelta`):
+ * its address and its container's (before a `delete`, after anything else), the kinds of
+ * change, the geometry field's value before and after when the change moved it (`null`
+ * otherwise, and for an empty one), the fields that changed (names only), whether it is hidden
+ * now (with `hide_show`), and its placeholder type. */
+export interface UnitDelta {
+  key: string;
+  container: string | null;
+  ops: ("add" | "delete" | "restore" | "reorder" | "move_resize" | "rotate" | "flip" | "text" | "style" | "hide_show" | "props")[];
+  geom_before: string | null;
+  geom_after: string | null;
+  fields: string[];
+  hidden_after: boolean | null;
+  placeholder_type: string | null;
+}
+
+/** What a change did to one container (`ContainerDelta`): a list op with its positions (from
+ * 1) before and after, or its fields (`hide_show` with `hidden_after`, `props`), by name. */
+export interface ContainerDelta {
+  key: string;
+  op: "add" | "delete" | "restore" | "reorder" | "hide_show" | "props";
+  position_before: number | null;
+  position_after: number | null;
+  hidden_after: boolean | null;
+  fields: string[];
+}
+
+/** The head of a snapshot: the doc's keyed state at version `upto` follows in `pages` pages.
+ * `view`: the view index's snapshot at `upto` (its view schema, page, fonts, layouts and
+ * containers: the rendering-data contract's Item 1), opaque here, or `null` when the doc's pack
+ * declares no view schema; its units follow in `units` pages. */
+export interface KeyedSnapshotFrame {
+  type: "keyed_snapshot";
+  seq: number;
+  upto: number;
+  schema: KeyedSchema;
+  view?: ViewSnapshotJson | null;
+  pages: number;
+}
+
+/** One page of a container's units of the view index (`container` is its address): units
+ * `from` on, back to front; `next` where the next page starts (`null`: the last); `total` the
+ * container's units. Each unit is opaque here (the contract's `Unit`). */
+export interface KeyedUnitsPage {
+  container: string;
+  from: number;
+  units: ViewUnit[];
+  next: number | null;
+  total: number;
+}
+
+/** One page of a snapshot (`page` from 1): one root's run, exactly one of `live` (elements by
+ * address, in order, appended), `hidden` (deleted elements), `entries` (map entries: key or
+ * element address, field, value), `text` (appended) and `units` (the view index's units of one
+ * container; `root` is the units root). */
+export interface KeyedPageFrame {
+  type: "keyed_page";
+  seq: number;
+  upto: number;
+  page: number;
+  pages: number;
+  root: string;
+  live?: [string, KeyedValue][];
+  hidden?: [string, KeyedValue][];
+  entries?: [string, string | null, KeyedValue][];
+  text?: string;
+  units?: KeyedUnitsPage;
+}
+
+/** Who made a change: `kind` is `person`, `agent`, `app` or `file` (an outside save; no
+ * `colour`, the host's to choose). */
+export interface WatchActor {
+  id: Handle;
+  name: string;
+  kind: string;
+  colour: string | null;
+}
+
+/** One op of a change. `before` / `after` are absent when there is none (before an insert, after
+ * a map delete). A list op's indexes are positions in the live order just before and just after
+ * it (`null`: not shown); `effect: "hidden"` wrote to a deleted element. A map op on a composite
+ * root has the element in `key` and the rest in `field` (`<key>\x1f<field>`); else `field` is
+ * `null`. */
+export type WatchOp =
+  | { root: string; kind: "text"; hunks: Hunk[] }
+  | {
+      root: string;
+      kind: "list";
+      op: "insert" | "move" | "delete" | "restore" | "set" | "drop";
+      key: string;
+      index_before: number | null;
+      index_after: number | null;
+      before?: KeyedValue;
+      after?: KeyedValue;
+      effect: "visible" | "hidden";
+    }
+  | { root: string; kind: "map"; op: "set" | "delete"; key: string; field: string | null; before?: KeyedValue; after?: KeyedValue };
+
+/** One committed change (the doc's version `rev`), numbered `seq`. `change_kind` is the kit's
+ * `ChangeKind` (`edit`, `undo`, `redo`, `revert`, `restore`, `external`, `import`). */
+export interface OpsChangeFrame {
+  type: "ops_change";
+  seq: number;
+  rev: number;
+  at_ms: number;
+  change_kind: string;
+  actor: WatchActor;
+  client: number;
+  via: string;
+  on_behalf_of: string | null;
+  turn: string | null;
+  verb: string | null;
+  claim: string | null;
+  ops: WatchOp[];
+  /** What the change did to the view, for a doc whose pack has a view schema (kit after v0.15.1;
+   * absent otherwise, and from an older kit): its units, its containers, and the render hint
+   * (every container a delta names, then those whose render hash changed). */
+  units?: UnitDelta[];
+  containers_changed?: ContainerDelta[];
+  containers?: string[];
+  /** The pack's derived values (`null`: none), opaque here. */
+  derived: unknown;
+  /** The containers whose render hash changed (`null`: none). */
+  render_hashes: Record<string, string> | null;
 }

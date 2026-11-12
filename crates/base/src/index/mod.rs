@@ -20,6 +20,17 @@
 //! and carries forward by alignment (kind + name + parent path, then position; a tie never
 //! pairs). They live per doc beside the content-keyed row, because a row is a pure function
 //! of the bytes and a minted key depends on the version before it.
+//!
+//! **The view items** (row format 2, [`INDEX_ROW_FORMAT`]). What a view of a version draws that
+//! the plain fields don't say, read by the pack's reader with the rest (so the bytes are parsed
+//! where the reader runs, a host's sandboxed worker, never in the session): per node a
+//! [`NodeView`] (its box on the page, the field kinds its text holds, the text a view shows,
+//! whether an agent can set it, the fonts it uses) and a render digest, keyed like every hash;
+//! per doc the fonts ([`IndexDraft::fonts`]). A row with none of them is stored as format 1,
+//! byte for byte what a kit before them stored, and a row of format 1 reads with them absent.
+//! A pack hands them only from a format it bumped to for them, naming the older one
+//! ([`IndexSpec::with_older_format`]): an older kit, asking under the older format, never meets
+//! a row of format 2.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -40,6 +51,10 @@ pub use read::{
 };
 
 pub(crate) use align::mint_keys;
+
+use crate::store::enc::{R, W};
+use crate::store::StoreError;
+use crate::view_index::{Bbox, EditableText, Flip, FontUse};
 pub(crate) use draft::DraftFault;
 pub(crate) use row::{
     build_row, dec_keys_row, dec_struct_row, enc_keys_row, enc_struct_row, keys_row_is_for,
@@ -70,6 +85,12 @@ pub const INDEX_ATTR_VALUE_MAX: usize = 4096;
 pub const INDEX_WHY_MAX: usize = 256;
 /// A pending index: how long a verb says to wait before retrying (`details.retry_after_ms`).
 pub const INDEX_RETRY_AFTER_MS: u64 = 1_000;
+/// The newest stored row format: 1 holds the nodes; 2 adds the view items ([`NodeView`], a
+/// node's render digest, [`IndexDraft::fonts`]). A row with no view item is written as 1.
+pub const INDEX_ROW_FORMAT: u8 = 2;
+/// Most fonts a draft lists ([`IndexDraft::fonts`]), and most a node names
+/// ([`NodeView::fonts`]).
+pub const INDEX_FONTS_MAX: usize = 1024;
 
 /// What a verb family is called for a file type; the kit registers them under the rights and
 /// exits it defines ([`crate::parity::Registry::for_blob_pack`]), and
@@ -112,9 +133,14 @@ impl IndexVerbs {
 pub struct IndexSpec {
     /// Part of the row's key, so two packs can index the same bytes.
     pub pack: &'static str,
-    /// Bump when the reader's output changes: older rows are ignored and recomputed.
+    /// Bump when the reader's output changes: older rows are ignored and recomputed (but a
+    /// row of [`IndexSpec::older_format`]).
     pub format: u32,
     pub verbs: &'static IndexVerbs,
+    /// An older format of this pack whose rows read as this one's with the view items absent:
+    /// the same nodes, keys and fields ([`IndexSpec::with_older_format`]). `None`: only rows of
+    /// `format` are read.
+    pub older_format: Option<u32>,
 }
 
 impl IndexSpec {
@@ -123,7 +149,26 @@ impl IndexSpec {
             pack,
             format,
             verbs,
+            older_format: None,
         }
+    }
+
+    /// This format's rows are format `older`'s plus the view items ([`NodeView`]), and a pack
+    /// hands those only with this declared (`older` below `format`; a job refuses them
+    /// otherwise, `MPC-E714`). A version whose only row is of format `older` reads from it,
+    /// `Ready`, the items absent, with that format's minted keys, and
+    /// [`crate::session::BlobSession::index_job`] offers a job that indexes it again (optional:
+    /// until then it shows fewer details). An older kit, which reads only format `older`, never
+    /// meets a row of format 2: it finds a version indexed only here pending, indexes it under
+    /// `older`, and its commit removes this format's row.
+    pub const fn with_older_format(mut self, older: u32) -> Self {
+        self.older_format = Some(older);
+        self
+    }
+
+    /// [`IndexSpec::older_format`] when it is below `format`.
+    pub(crate) fn older(&self) -> Option<u32> {
+        self.older_format.filter(|o| *o < self.format)
     }
 }
 
@@ -214,6 +259,50 @@ pub struct NodeRect {
     pub top: i64,
     pub right: i64,
     pub bottom: i64,
+}
+
+/// A node's box on the page, as a view draws it ([`NodeView::geom`]): composed through its
+/// parents' transforms (a group's child), or the box it takes from elsewhere (`inherited`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ViewGeom {
+    /// In the file's own coordinates, page space: the transform box, never the ink.
+    pub bbox: Bbox,
+    /// Clockwise about the box centre, in the view schema's `rot_unit`.
+    pub rot: i64,
+    pub flip: Flip,
+    /// The box is taken from elsewhere (a placeholder's layout), not the node's own.
+    pub inherited: bool,
+    /// The box is approximate (a rotated group scaled unevenly).
+    pub approx: bool,
+}
+
+/// What a view draws of one node that its plain fields don't say: an item of row format 2
+/// ([`INDEX_ROW_FORMAT`]), `None` on a row of format 1 and on a node the pack gives none. On a
+/// node that has one, the view takes these over what it reads from the plain fields
+/// ([`crate::view_index::ViewIndex::blob`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct NodeView {
+    /// Its box on the page; `None`: it has none.
+    pub geom: Option<ViewGeom>,
+    /// Whether an agent can set its text, and at what cost.
+    pub editable_text: Option<EditableText>,
+    /// The field kinds its text holds (`slidenum`); on a container, its units'. Words.
+    pub fields: Vec<String>,
+    /// The text a view shows (a table's rows, a slide number at its slide's position), at most
+    /// [`IndexLimits::max_text_bytes`]; `text_truncated` when the pack cut it.
+    pub text: Option<String>,
+    pub text_truncated: bool,
+    /// The fonts its text uses (a container's: its units'), as indexes into
+    /// [`IndexDraft::fonts`].
+    pub fonts: Vec<u32>,
+}
+
+impl NodeView {
+    /// Nothing set: a pack fills the fields it has.
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 /// A raw digest a pack computed: SHA-256 of a node's record or content. The kit keys it
@@ -388,6 +477,11 @@ pub struct IndexNode {
     /// Keyed; the content data as stored. Never the data.
     pub content_hash: Option<NodeHash>,
     pub fingerprint: Fingerprint,
+    /// The view items (row format 2); `None` on a row of format 1.
+    pub view: Option<NodeView>,
+    /// Keyed; what draws it (a container's render closure), from the pack's render digest
+    /// (row format 2).
+    pub render_hash: Option<NodeHash>,
 }
 
 /// A version's index ([`crate::session::BlobSession::index_view`]).
@@ -401,6 +495,9 @@ pub struct IndexView {
     pub attrs: BTreeMap<String, String>,
     /// In reading order: a parent comes before its children.
     pub nodes: Vec<IndexNode>,
+    /// The fonts the doc's text uses ([`IndexDraft::fonts`]; row format 2): empty on a row of
+    /// format 1.
+    pub fonts: Vec<crate::view_index::FontUse>,
 }
 
 /// Where a version's index stands ([`crate::session::BlobSession::index_status`]).
@@ -476,6 +573,154 @@ impl fmt::Display for NotIndexedWhy {
             Self::Unsupported => f.write_str("this type can't index this file"),
             Self::Purged => f.write_str("the version was purged"),
         }
+    }
+}
+
+// ----- the view items' encoding, shared by the wire and the stored row -----
+
+const GEOM_FLIP_H: u8 = 1;
+const GEOM_FLIP_V: u8 = 2;
+const GEOM_INHERITED: u8 = 4;
+const GEOM_APPROX: u8 = 8;
+
+fn editable_code(e: Option<EditableText>) -> u8 {
+    match e {
+        None => 0,
+        Some(EditableText::Plain) => 1,
+        Some(EditableText::Formatted) => 2,
+        Some(EditableText::Never) => 3,
+    }
+}
+
+/// A node's view items, `None` as one zero byte.
+pub(crate) fn put_view(w: &mut W, v: Option<&NodeView>) {
+    let Some(v) = v else {
+        w.u8(0);
+        return;
+    };
+    w.u8(1);
+    match &v.geom {
+        None => {
+            w.u8(0);
+        }
+        Some(g) => {
+            let bit = |on: bool, b: u8| if on { b } else { 0 };
+            let flags = bit(g.flip.h, GEOM_FLIP_H)
+                | bit(g.flip.v, GEOM_FLIP_V)
+                | bit(g.inherited, GEOM_INHERITED)
+                | bit(g.approx, GEOM_APPROX);
+            w.u8(1)
+                .u64(g.bbox.x as u64)
+                .u64(g.bbox.y as u64)
+                .u64(g.bbox.w as u64)
+                .u64(g.bbox.h as u64)
+                .u64(g.rot as u64)
+                .u8(flags);
+        }
+    }
+    w.u8(editable_code(v.editable_text));
+    w.strs(&v.fields);
+    w.opt_str(v.text.as_deref()).u8(u8::from(v.text_truncated));
+    w.u32(v.fonts.len() as u32);
+    for f in &v.fonts {
+        w.u32(*f);
+    }
+}
+
+/// [`put_view`]'s bytes back: every count bounded, a text at most `text_max` bytes, a string's
+/// and an entry's cost reported to `cost` as it is read. Anything else is `Corrupt`.
+pub(crate) fn get_view_with(
+    r: &mut R<'_>,
+    text_max: usize,
+    cost: &mut dyn FnMut(u64),
+) -> Result<Option<NodeView>, StoreError> {
+    const WHAT: &str = "index view items";
+    let bad = || StoreError::Corrupt(WHAT);
+    match r.u8()? {
+        0 => return Ok(None),
+        1 => {}
+        _ => return Err(bad()),
+    }
+    let geom = match r.u8()? {
+        0 => None,
+        1 => {
+            let (x, y, w, h, rot) = (
+                r.u64()? as i64,
+                r.u64()? as i64,
+                r.u64()? as i64,
+                r.u64()? as i64,
+                r.u64()? as i64,
+            );
+            let flags = r.u8()?;
+            if flags & !(GEOM_FLIP_H | GEOM_FLIP_V | GEOM_INHERITED | GEOM_APPROX) != 0 {
+                return Err(bad());
+            }
+            Some(ViewGeom {
+                bbox: Bbox { x, y, w, h },
+                rot,
+                flip: Flip {
+                    h: flags & GEOM_FLIP_H != 0,
+                    v: flags & GEOM_FLIP_V != 0,
+                },
+                inherited: flags & GEOM_INHERITED != 0,
+                approx: flags & GEOM_APPROX != 0,
+            })
+        }
+        _ => return Err(bad()),
+    };
+    let editable_text = match r.u8()? {
+        0 => None,
+        1 => Some(EditableText::Plain),
+        2 => Some(EditableText::Formatted),
+        3 => Some(EditableText::Never),
+        _ => return Err(bad()),
+    };
+    let n = r.u32()? as usize;
+    if n > INDEX_ATTRS_MAX {
+        return Err(bad());
+    }
+    let mut fields = Vec::with_capacity(n);
+    for _ in 0..n {
+        let f = r.str_max(INDEX_ATTR_KEY_MAX)?;
+        cost(f.len() as u64 + 96);
+        fields.push(f);
+    }
+    let text = r.opt_str_max(text_max)?;
+    if let Some(t) = &text {
+        cost(t.len() as u64 + 32);
+    }
+    let text_truncated = match r.u8()? {
+        0 => false,
+        1 => true,
+        _ => return Err(bad()),
+    };
+    let n = r.u32()? as usize;
+    if n > INDEX_FONTS_MAX {
+        return Err(bad());
+    }
+    let mut fonts = Vec::with_capacity(n);
+    for _ in 0..n {
+        fonts.push(r.u32()?);
+    }
+    cost(n as u64 * 4 + 128);
+    Ok(Some(NodeView {
+        geom,
+        editable_text,
+        fields,
+        text,
+        text_truncated,
+        fonts,
+    }))
+}
+
+/// The doc's fonts.
+pub(crate) fn put_fonts(w: &mut W, fonts: &[FontUse]) {
+    w.u32(fonts.len() as u32);
+    for f in fonts {
+        w.str(&f.family)
+            .str(&f.script)
+            .str(&f.from)
+            .u8(u8::from(f.embedded));
     }
 }
 

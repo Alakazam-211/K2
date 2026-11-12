@@ -30,6 +30,8 @@ mod next_change_tests;
 mod purge;
 mod removed;
 mod tier0_history;
+mod view_index;
+mod watch;
 mod writers;
 
 pub use at_base::{CursorAtVersion, CursorDrop, EditAtBase};
@@ -42,6 +44,11 @@ pub use grid::{
 };
 pub use history::{DiffOutput, LogItem, LogQuery};
 pub use purge::{NotReached, PurgeOutcome, PurgeRequest, PurgeScope};
+pub use watch::{
+    keyed_state_json, watch_state_json, KeyedWatch, WatchActor, WatchChange, WatchExtras,
+    WatchFrame, WatchOp, WatchOptions, WatchPage, WatchPart, WatchSnapshot, KEYED_WATCH_FEATURE,
+    WATCH_FRAME_MAX, WATCH_PAGE_BYTES, WATCH_PAGE_BYTES_MIN,
+};
 
 use super::awareness::{self, ActivityEntry, ActivityKind, Aware, ClaimPolicy, Notes};
 use super::carry::RevertIndex;
@@ -943,6 +950,8 @@ struct State {
     /// Change subscribers: the connection, an App viewer's pid (its events go through its
     /// handles), the queue.
     subs: Vec<(ConnId, Option<String>, SyncSender<ChangeEvent>)>,
+    /// Keyed watches (`live/watch.rs`) and the events of the change being committed.
+    watch: watch::WatchHub,
     /// Every App viewer's handles in this doc (K5).
     handles: Handles,
     /// Roster subscribers and what they were last told ([`Session::subscribe_roster`]).
@@ -970,6 +979,13 @@ struct State {
     /// The carrier (K1, `live/carrier.rs`): the bytes the kit last read from the file or wrote
     /// to it, for a pack that opts in. `None` until the store's is loaded or the file is read.
     carrier: Option<Arc<[u8]>>,
+    /// The carrier as the view index's derive hook reads it, with the pack's decode of it
+    /// (`crate::view_index::ViewCarrier`, decoded once per carrier): replaced when the carrier
+    /// changes (`live/view_index.rs`).
+    view_carrier: Option<Arc<crate::view_index::ViewCarrier>>,
+    /// The doc's view index as last built, by (carrier id, rev): reused until either changes
+    /// (`live/view_index.rs`); dropped with the live view.
+    view_cache: Option<view_index::ViewCache>,
     /// The last rendering of the live doc as its file that failed, with the version it was
     /// at (the pack's error), cleared by one that succeeds: a read that renders nothing reports
     /// it while the doc is still at that version.
@@ -1556,6 +1572,7 @@ impl Session {
                 authors,
                 outside_saves: 0,
                 subs: Vec::new(),
+                watch: watch::WatchHub::default(),
                 settings_subs: Vec::new(),
                 handles: Handles::default(),
                 roster: RosterHub::default(),
@@ -1568,6 +1585,8 @@ impl Session {
                 last_copy_cleanup_ms: None,
                 copies_edited: HashMap::new(),
                 carrier: None,
+                view_carrier: None,
+                view_cache: None,
                 render_failed: std::cell::RefCell::new(None),
                 grid_now: std::cell::RefCell::new(None),
                 no_stack: false,
@@ -1899,6 +1918,7 @@ impl Session {
     ) {
         let m = st.members.remove(i);
         st.subs.retain(|(c, _, _)| *c != m.conn);
+        st.watch.drop_conn(m.conn);
         st.roster.drop_conn(m.conn);
         st.settings_subs.retain(|(c, _)| *c != m.conn);
         self.conn_gone(st, m.pres.conn);
@@ -2464,6 +2484,7 @@ impl Session {
         }
         for (conns, entry, _) in &mut rows {
             elem_presence::fold(conns, entry);
+            elem_presence::address_entry(&*self.pack, entry);
         }
         let rows = rows
             .into_iter()
@@ -2535,7 +2556,7 @@ impl Session {
                 .filter(|c| c.pid == entry.participant.pid)
                 .filter_map(|c| {
                     if c.elems.is_some() {
-                        return Some(Self::elem_claim_info(st, c, now));
+                        return Some(self.elem_claim_info(st, c, now));
                     }
                     Some(c.info(text(&c.root)?, now))
                 })
@@ -4276,6 +4297,10 @@ impl Session {
             let texts: Vec<&str> = text_roots.iter().map(String::as_str).collect();
             self.view_after(st, version_before, st.version, &streams, &texts);
         }
+        {
+            prof!("commit.watch");
+            self.flush_watch(st);
+        }
         Self::mark_dirty(st, now);
         {
             prof!("commit.grid_presence");
@@ -4816,6 +4841,9 @@ impl Session {
 
     /// Send an event to every subscriber; one that is full or gone is cut off.
     fn broadcast(st: &mut State, ev: &ChangeEvent) {
+        if st.watch.active() {
+            st.watch.hold(ev);
+        }
         let handles = &mut st.handles;
         st.subs.retain(|(_, app, tx)| {
             let ev = match app {
@@ -5018,6 +5046,7 @@ impl Session {
                 )));
                 st.store = None;
                 st.subs.clear();
+                st.watch.clear();
                 st.roster.close();
             }
         }
@@ -5396,6 +5425,7 @@ impl Session {
         st.closed = Some(SessionError::Deleted);
         st.store = None;
         st.subs.clear();
+        st.watch.clear();
         st.roster.close();
         st.members.clear();
     }
@@ -5444,6 +5474,7 @@ impl Session {
         st.closed = Some(reason);
         st.store = None;
         st.subs.clear();
+        st.watch.clear();
         st.roster.close();
         st.members.clear();
         waiting
@@ -6808,6 +6839,8 @@ impl Session {
         st.last_change_ms = now;
         st.texts = after;
         st.version = seq;
+        // a keyed doc's text roots merged from the file: the keyed watch's frame for it
+        self.flush_watch(st);
         if self.keeps_view() {
             // (a text merge keeps no stream: a keyed doc's live view is read afresh)
             Self::drop_live_view(st);

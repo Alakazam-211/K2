@@ -99,7 +99,7 @@ pub(super) fn landed_elems(
     out
 }
 
-fn is_touched(t: &Touched, s: &ElemSpan) -> bool {
+pub(super) fn is_touched(t: &Touched, s: &ElemSpan) -> bool {
     t.get(s.root.as_str())
         .is_some_and(|k| !k.is_disjoint(&s.keys))
 }
@@ -293,7 +293,7 @@ impl Session {
             grid: None,
             elems: Some(span),
         };
-        let info = Self::elem_claim_info(st, &claim, now);
+        let info = self.elem_claim_info(st, &claim, now);
         let actor = claim.actor();
         st.aware.claims.push(claim);
         st.roster.record(
@@ -305,6 +305,7 @@ impl Session {
                     awareness::ClaimSpan::Elems { keys, .. } => keys.clone(),
                     _ => unreachable!("an element claim's span"),
                 },
+                addresses: info.addresses.clone(),
                 note: info.note.clone(),
                 hold,
                 expires_ms: info.expires_ms,
@@ -396,11 +397,14 @@ impl Session {
         }
     }
 
-    pub(super) fn elem_claim_info(st: &State, c: &Claim, now: u64) -> ClaimInfo {
+    pub(super) fn elem_claim_info(&self, st: &State, c: &Claim, now: u64) -> ClaimInfo {
         let span = c.elems.as_ref().expect("an element claim");
         let mut info = c.info("", now);
         info.lines = Self::elem_lines(st, span);
         info.span = span.span();
+        if let awareness::ClaimSpan::Elems { root, keys } = &info.span {
+            info.addresses = elem_presence::addresses(&*self.pack, root, keys);
+        }
         info.start = 0;
         info.end = 0;
         info

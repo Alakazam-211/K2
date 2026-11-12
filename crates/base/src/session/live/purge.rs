@@ -723,6 +723,8 @@ impl Session {
         Self::drop_live_view(st);
         st.synced_digest = None;
         st.hash_key = key;
+        // the view index's carrier is named and its hashes keyed under the doc's key
+        st.view_carrier = None;
         st.reverts = None;
         // the re-encoded doc keeps every live element's ID; rebuilt on next need anyway
         st.prov = None;

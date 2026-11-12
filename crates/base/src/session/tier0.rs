@@ -144,6 +144,25 @@ pub trait BlobPack: Send + Sync {
         crate::anchor::candidate_by_default(was, node)
     }
 
+    /// The pack's view schema (rendering-data contract §1.2, gap 1), with its
+    /// [`crate::view_index::BlobView`]: how a version's structure index maps to the view index
+    /// ([`crate::view_index::ViewIndex::blob`], [`BlobSession::view_index`]). The same schema
+    /// as the pack's live side ([`super::Pack::view_schema`]), so both tiers give one shape.
+    /// Default `None`.
+    fn view_schema(&self) -> Option<crate::view_index::ViewSchema> {
+        None
+    }
+
+    /// As [`super::Pack::view_derive`], on the blob tier: `source` is the version's index
+    /// ([`crate::view_index::ViewSource::Blob`]; no carrier: the blob tier reads no file bytes).
+    fn view_derive(
+        &self,
+        source: crate::view_index::ViewSource<'_>,
+        index: &mut crate::view_index::ViewIndex,
+    ) {
+        let _ = (source, index);
+    }
+
     /// Whether an agent may `write` this type. Default [`AgentWrites::Allowed`]. A pack that
     /// never takes agent-written bytes returns [`AgentWrites::Refused`]: `write` and
     /// `expect_save` by a [`ParticipantKind::Agent`] are then refused (`MPC-E715`); a restore

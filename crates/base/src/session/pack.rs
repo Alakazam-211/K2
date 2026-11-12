@@ -266,15 +266,68 @@ pub trait Pack: Send + Sync {
 
     /// The container element `key` of the list root `root` sits in, as `(list root, key)`
     /// (rendering-data contract Item 3: `focus` is the container in view). The kit asks it when
-    /// a text range is set ([`super::Session::set_range`]: the range's element's container) and
-    /// when an agent takes a claim on elements ([`super::Session::claim_elems`]: the first
-    /// container in document order). It reads no doc: a container is named by the element's key
-    /// alone (a deck's shape `s256-7` is on slide `s256`). Default: every element is its own
-    /// container. `None`: the element is in no container, and focus is left as it was.
+    /// a text range is set ([`super::Session::set_range`]: the range's element's container), when
+    /// an agent takes a claim on elements ([`super::Session::claim_elems`]: the first container
+    /// in document order) and when an agent's verb touches elements.
     ///
-    /// TODO(contract gap 1): the view schema's `unit_container_field` supplies this.
+    /// **A pack with a view schema doesn't need it** ([`Pack::view_schema`], contract gap 1):
+    /// for its units the kit reads the unit's container field
+    /// ([`crate::view_index::ViewSchema::unit_container_field`]), and a container is its own;
+    /// this is asked for the other roots only. It reads no doc: a container is named by the
+    /// element's key alone (a shape `s256-7` on slide `s256`). Default: every element is its own
+    /// container. `None`: the element is in no container, and focus is left as it was.
     fn container_of(&self, root: &str, key: &Key) -> Option<(String, Key)> {
         Some((root.to_owned(), key.clone()))
+    }
+
+    /// The pack's view schema (rendering-data contract §1.2, gap 1): which list roots hold the
+    /// containers and the units, and where each view field is. The kit builds the view index
+    /// from it ([`crate::view_index::ViewIndex::live`], [`super::Session::view_index`]), and finds
+    /// a unit's container through it. Default `None`: the pack has no view index (a text pack
+    /// is viewed by its lines and carets).
+    fn view_schema(&self) -> Option<crate::view_index::ViewSchema> {
+        None
+    }
+
+    /// The view fields only the pack can work out (the schema's `derived`: a deck's slide
+    /// titles, inherited boxes, fonts, a group's children), set on `index` after the kit built
+    /// it from the schema; `source` is what the kit built it from. The kit then puts the units
+    /// in their containers' order (stable: a nested unit the hook adds goes right after its
+    /// parent in its container's run) and counts them. Bounded, no I/O. Default: nothing.
+    ///
+    /// **The carrier** (K1): on the live tier, for a pack that keeps one
+    /// ([`Pack::wants_carrier`]), `source` also holds the doc's carrier when the kit holds it
+    /// ([`crate::view_index::ViewSource::Live`], [`crate::view_index::ViewCarrier`]), for what
+    /// only the file's bytes hold. The rule: **the live store wins**, and the carrier supplies
+    /// only what the store doesn't model (a field the store holds is never read from the
+    /// carrier; an element the carrier holds and the store changed is derived from the store's
+    /// value, as a group's children from the group's live box). The pack decodes the carrier
+    /// through [`crate::view_index::ViewCarrier::decoded`], once per carrier, never per call:
+    /// the kit keeps the index by (carrier id, rev), so the hook runs once per change.
+    fn view_derive(
+        &self,
+        source: crate::view_index::ViewSource<'_>,
+        index: &mut crate::view_index::ViewIndex,
+    ) {
+        let _ = (source, index);
+    }
+
+    /// The address of element `key` of the MovableList root `root` (contract gap 2): how the
+    /// view index, the presence and claim setters by address and the frames name it on the
+    /// wire (a deck's `s256-7` is `@sld:256/sp:7`). One to one: [`Pack::key_of`] gives `key`
+    /// back, and no element of another root has the same address. Default: the key itself.
+    fn address_of(&self, root: &str, key: &Key) -> String {
+        let _ = root;
+        key.as_str().to_owned()
+    }
+
+    /// The inverse of [`Pack::address_of`]: the key of the element of `root` that `address`
+    /// names, or `None` when it can't name one of `root`'s (the kit then tries the other roots,
+    /// [`crate::view_index::key_candidates`]). It reads no doc: whether the element exists is
+    /// the kit's to check. Default: the address as a key.
+    fn key_of(&self, root: &str, address: &str) -> Option<Key> {
+        let _ = root;
+        Key::new(address).ok()
     }
 
     /// The list and map roots whose values may name a blob ([`crate::blob::BlobId::parse_ref`]:
@@ -285,6 +338,29 @@ pub trait Pack: Send + Sync {
     /// text, whatever it spells. Default: none.
     fn blob_ref_roots(&self) -> &'static [&'static str] {
         &[]
+    }
+
+    /// What a keyed watch's change frame carries from the pack beyond the change's ops
+    /// (`client/WIRE.md`, "The keyed watch"): its `derived` values (a slide's title, an inherited
+    /// box: what a view needs without running pack code) and the `render_hashes` of the
+    /// containers whose hash changed. `ops` is the change, root by root; `state` the doc's keyed
+    /// state after the commit that made it (for one of several changes made by one call, an
+    /// undo of a group, the state after the last); `view`, for a pack with a view schema, the
+    /// view index after it and the one kept before it
+    /// ([`crate::view_index::ViewChange`]), built through the index the kit keeps by (carrier
+    /// id, rev) ([`super::Session::view_index`]), so what the derive hook read from the
+    /// carrier is there with no second build. Called once per change, only while a watch is
+    /// open. When the pack gives no `render_hashes`, the kit's are the containers whose render
+    /// hash changed in `view` ([`crate::view_index::ViewChange::render_hashes`]). Default: none
+    /// (`null` on the wire, but the kit's render hashes).
+    fn watch_extras(
+        &self,
+        ops: &[crate::elem::Applied],
+        state: &crate::elem::KeyedState,
+        view: Option<crate::view_index::ViewChange<'_>>,
+    ) -> super::WatchExtras {
+        let _ = (ops, state, view);
+        super::WatchExtras::default()
     }
 
     /// A file has no keys (A8): its new bytes (an outside save, a text edit verb's result,

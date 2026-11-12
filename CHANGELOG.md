@@ -1,5 +1,259 @@
 # Changelog
 
+## v0.16.0 (2026-11-12)
+
+A host release on v0.15.1. The crate version is `0.16.0`; the client's is `0.16.0`. A minor
+version: new API (the view schema, addresses and `ViewIndex`; the keyed watch; view deltas;
+roster addresses; the structure index's row format 2) and a new wire surface behind a feature
+name. The live wire stays version 3 (every addition optional). No new error id. The store format
+is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7, `STORE_FORMAT_BASE` 5) and no store needs
+a migration; the structure index gains a row format (2) without a store format bump (below).
+Pairs with the markdown, text, board, csv and psd pack tags of this release, and with the pptx
+pack's v0.1.3 (beside `k2-mpc-ooxml` v0.1.1).
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.15.1 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it).
+
+### What changes for K2
+
+- **The keyed watch replaces the welcome's previews and the bare change frames** for a live
+  keyed doc that isn't a table (a deck, a board). Today a host builds a preview of the doc for
+  the welcome and forwards change events with no state to apply them to. With this kit:
+  - list `"keyed_watch"` (`KEYED_WATCH_FEATURE`) in `welcome.features` for a doc whose
+    `Session::keyed_watchable()` is true (never a text doc or a table);
+  - on the client's `watch` frame, open the watch once per connection,
+    `Session::watch_keyed(conn, &WatchOptions::new(&features))` (needs read), and send
+    `Session::watch_snapshot`'s frames: one `keyed_snapshot` (the schema, the view index's
+    snapshot when the pack declares a view schema, the page count) and its `keyed_page`s (the
+    keyed state, then the view's units by container);
+  - then forward each `KeyedWatch::try_frames` / `recv_frames` frame (`ops_change`, one per
+    change, numbered by `seq`), and send a fresh snapshot whenever `needs_snapshot()` says so
+    (none sent yet, the watch fell behind, a frame that would pass the frame cap). A refused
+    snapshot (`MPC-E401`) goes out as `watch_refused`; the client's `report` may be ignored;
+  - every frame is `WatchFrame::to_json()`, byte for byte. The client side is `KeyedWatch`
+    (`client/src/keyed.ts`): it builds the state and the view from the frames, so the editor
+    needs no preview of its own.
+
+  `client/WIRE.md`: "The keyed watch" (the gate, the frames, numbering, pages, a change frame's
+  fields) and "View deltas" (`units`, `containers_changed`, `containers` on `ops_change`), and
+  "Wire versions" for N−1. Goldens `client/test/golden/keyed_snapshot.json` and
+  `keyed_frames.json`.
+- **Presence speaks addresses:** every selection, focus, range and element claim the kit hands
+  out (the roster, its events, the setters' replies, `ClaimInfo`) carries its elements'
+  addresses beside the keys (`ElemSelection::addresses`, `ElemFocus::address`,
+  `ElemRange::address`, `ClaimInfo::addresses`, `RosterEvent::ClaimStartedElems::addresses`).
+  Send them as the wire's `keys` / `key`: a host doesn't call `Session::address_of` per frame
+  any more. Setters by address: `Session::set_focus_at`, `set_selection_at`, `set_range_at`,
+  `claim_elems_at`, and `Session::resolve_address`. For a pack that maps no addresses they are
+  the keys, so nothing on the wire changes there.
+- **The structure index's row format 2:** a pack that bumps its index format for view items
+  (the pptx pack's 2) writes new rows; versions indexed before read from their old rows,
+  `Ready`, with fewer details in the blob tier's view (no fonts, render hashes, inherited or
+  composed boxes...), never wrong ones. Re-indexing them is optional:
+  `BlobSession::index_job(Some(version))` offers a job for such a version. An older kit never
+  reads a format-2 row (it re-indexes under its own format).
+- **Packs:** `Pack::view_schema`, `view_derive`, `address_of` / `key_of` and `watch_extras` are
+  new provided methods with defaults, so a pack built against v0.15.1 builds as is. Against the
+  kit's main between v0.15.1 and this tag, `watch_extras` gained a last argument
+  (`Option<ViewChange>`) and `ViewSource::Live` a carrier (`ViewCarrier`): a pack that
+  implements them must add those (the pptx pack's v0.1.3 does).
+- **A structured verb sees the doc's sync point** (`VerbCtx::synced()`, for packs; no host-facing
+  change).
+- **No store migration, no new error id, wire still 3.** N−1 is checked both ways against
+  v0.15.1 and v0.14.0: stores, the wire, carriers and the index rows.
+
+### The structure index's view items (row format 2)
+
+The blob tier's view index can now show what the live tier reads from the file's bytes (a
+deck's fonts and render hashes, field kinds, inherited boxes, a group's children on the page,
+flips, `editable_text`, a table's text): the pack's index reader works them out where it parses
+the file (the host's index worker), and the kit stores them in the version's index. **Row
+format 2**, additive: no store format change, no new table, no new error id; the worker's wire
+gains a version 2 for a draft that carries them (one with none is still version 1). A pack that
+hands none sees nothing change: its rows are written as format 1, byte for byte as before.
+
+- **Types** (`k2_mpc_base::index`): `NodeView` (a node's `geom: Option<ViewGeom>`, `fields`,
+  `text` and `text_truncated`, `editable_text`, `fonts`), `ViewGeom` (box, rotation, flips,
+  `inherited`, `approx`), `DraftNode::view` and `DraftNode::render` (a raw digest, keyed by the
+  kit like every digest), `IndexDraft::fonts` and `IndexDraft::has_view_items`; read back as
+  `IndexNode::view`, `IndexNode::render_hash` and `IndexView::fonts`. `INDEX_ROW_FORMAT` (2) and
+  `INDEX_FONTS_MAX`. The draft's check bounds them (`MPC-E714` when malformed).
+- **`ViewIndex::blob`** takes them over the plain fields: the doc's fonts, a container's render
+  hash, fonts and `has_fields`, a unit's box (none when its view gives none), rotation, flips,
+  `bbox_inherited`, `approx_box`, field kinds, and its text and `editable_text` when given.
+- **`IndexSpec::with_older_format(older)`**: a pack hands view items only from a format it bumped
+  to for them, naming the format before (`IndexSpec::older_format`); a draft with items from a
+  spec that names none is refused (`MPC-E714`). A version whose only row is of the older format
+  reads from it, `Ready`, the items absent, and `BlobSession::index_job` offers a job that
+  indexes it again (optional).
+- **A row of format 1 still reads**, with every item absent: the view shows what it showed
+  before.
+- **Older kits (N−1):** a kit before row format 2 never reads one: it asks only for the older
+  format, so a version indexed only under the new one reads as pending there; it indexes it
+  under its own format, and its commit removes the newer row; back on this kit the version reads
+  from that row, items absent, until indexed again. `tools/n1/n1.sh layout-index` /
+  `node-index` checks both ways (`n1_index_producer`, `n1_index_after`, `tools/n1/consumer-index`).
+- Rows: `tests/blob_index_v2.rs` (the items through the job, the row and the blob view; a format-1
+  row read with them absent; items from a pack that names no older format refused; a pack before
+  the bump never reading a format-2 row), the row and wire round trips in `index::row` and
+  `index::draft`, and the plant `index-v2-field-dropped` (`IndexMutant::IndexV2FieldDropped`: a
+  stored row drops a node's view geometry), which they catch.
+- **What changes for K2:** nothing to do to keep working. Re-indexing old versions is optional:
+  `index_job(Some(version))` now offers a job for a version read from an older format's row, and
+  until it runs, old versions show fewer details in the blob tier's view (no fonts, render
+  hashes, inherited or composed boxes...), never wrong ones. A pack that bumps its format (the
+  pptx pack's 2) makes its versions' new rows; a host rolled back to an older kit re-indexes the
+  versions it opens under the older format, as for any format bump.
+
+### The view index, addresses, the keyed watch and view deltas
+
+The rendering-data contract's view index (gaps 1, 2 and 3). Additive: no store format change
+(nothing is stored), no wire change (still version 3), no new error id. A pack that doesn't
+declare a view schema sees nothing change.
+
+- **The view schema** (gap 1): `Pack::view_schema()` (default `None`: no view index) declares
+  once the list root of the containers (a deck's slides) and of the units (its shapes), the
+  unit field that names a unit's container (and the container field it matches), the page size
+  and native unit, where each view field is (kind, name, alt, text, hidden, editable text,
+  placeholder; a container's title, hidden and layout), the one geometry field and its parts,
+  each field's class, and how a version's structure index maps to the same view (`BlobView`).
+  `BlobPack::view_schema()` gives it to the blob tier. Types in the new module
+  `k2_mpc_base::view_index`; a pack writes its schema as a `const` from `ViewSchema::NONE`.
+- **Focus follows the schema:** with a view schema, a unit's container (for a range's focus,
+  an agent's claim and its verbs) is the one its container field names, so a pack needs no
+  `Pack::container_of` for its units; `container_of` is asked for the other roots, as before.
+- **Addresses** (gap 2): `Pack::address_of(root, key)` and its inverse `Pack::key_of(root,
+  address)` (default: the address is the key). The kit's edge: `Session::address_of`,
+  `Session::resolve_address(conn, address)` (needs read; `MPC-E114` when no element, or
+  elements of two roots, have it), `view_index::key_candidates`, and the presence setters and
+  claims by address: `Session::set_focus_at`, `set_selection_at`, `set_range_at` and
+  `claim_elems_at`, each returning what it set by address. A mapping that isn't one to one is
+  refused as the pack's bug (`SessionError::Pack`).
+- **`ViewIndex`** (gap 3): one shape from either source. `Session::view_index(conn)` builds it
+  from the live doc's keyed state (`tier` live, `rev`), `BlobSession::view_index(conn,
+  version)` from a version's structure index (`tier` blob, `version`), both through the
+  schema, then the pack's `view_derive` hook (what only the pack works out), then the kit
+  (units in their containers' order, `unit_count`). Pure builders for a host: `ViewIndex::live`
+  and `ViewIndex::blob`. Containers in order, units by container back to front, every key an
+  address; text, names, titles and alt cut to `VIEW_TEXT_MAX` (1,024 bytes); a container's
+  `render_hash` is a keyed hash only. `to_value()` gives the contract's JSON.
+- **The paged form** for a watch: `ViewIndex::snapshot()` (everything but the units;
+  `ViewSnapshot::to_value(&schema)` adds the schema) and `ViewIndex::units_page(container,
+  from, budget)` (a container's units in pages of at most `budget` bytes of their compact JSON,
+  at least `VIEW_PAGE_MIN`, and at least one unit; `next` for the following page).
+- **The derive hook reads the carrier** (K1; gaps 4, 5 and 6 on the live tier): for a pack that
+  keeps one, `ViewSource::Live` now carries the doc's carrier with the keyed state
+  (`ViewSource::Live(state, Option<&ViewCarrier>)`, a change to the hook's match), for what
+  only the file's bytes hold (fonts, render hashes, field kinds, a group's children, boxes
+  inherited from a layout). The rule: the live store wins, and the carrier supplies only what
+  the store doesn't model. `ViewCarrier::decoded` runs the pack's decode once per carrier and
+  keeps the result with it; `ViewCarrier::render_hash` keys a raw digest under the doc's key;
+  `ViewCarrier::id` is the keyed hash of its bytes. `ViewIndex::live_carried` is the builder
+  with a carrier (`ViewIndex::live` passes none). The blob tier is unchanged (no file bytes).
+- **`Session::view_index` keeps the index by (carrier id, rev)** and gives it back until either
+  changes: N reads of an unchanged doc build nothing and decode the carrier zero times; a
+  change of the doc builds it again from the kept decode; only a new carrier (the kit's write,
+  an outside save, a reload, a purge's new doc key) is decoded again. The kept index goes with
+  the live view. `encode_from` is unchanged.
+- **The keyed watch reads the same kept index:** `Session::watch_state` (a snapshot's view
+  index) goes through it, and each change frame reads the index before and after the change
+  (`view_index::ViewChange`, the last argument of `Pack::watch_extras`), so a pack's `derived` values can carry what its derive hook read from the
+  carrier with no second build. When the pack gives no `render_hashes`, the kit's are the
+  containers whose render hash changed (`ViewChange::render_hashes`). While a watch is open, a
+  view-schema doc's index is built once per change for the frame; the next read gets it kept.
+- Test-only: `differential::ViewMutant` (`SchemaFieldIgnored`, `AddressNotInverse`,
+  `DeriveIgnoresCarrier`, `DeriveCacheStale`, `FrameMissesRenderHash`), caught by
+  `tests/view_index.rs`, and
+  `differential::take_carrier_decodes` (the carrier decodes a view index read ran). The rows:
+  the derive reads the carrier, N reads of an unchanged doc decode it zero times (one decode per
+  carrier), a change reaches what is derived from it (a nested unit placed from its parent's
+  new live box), and a change frame carries the re-rendered page's new render hash.
+
+- **The keyed watch** (`client/WIRE.md`, "The keyed watch"; `session/live/watch.rs`): what a
+  person watching a live keyed doc that isn't a table (a deck, a board) needs, as numbered frames.
+  Additive within wire 3 (`WIRE_VERSION` stays 3): new frame types behind a new feature name.
+  - `Session::keyed_watchable`, `Session::watch_keyed(conn, &WatchOptions)` (needs read; `None`
+    unless the host lists `KEYED_WATCH_FEATURE`, `"keyed_watch"`, in the connection's
+    `welcome.features`, and for a text doc or a table) and `Session::watch_snapshot`. A
+    `KeyedWatch` numbers its frames (`seq`, from 1 per watch) and drains them
+    (`try_frames`, `recv_frames`); `needs_snapshot` says when the host must send a fresh
+    snapshot (none sent yet; the watch fell behind its `Config::subscriber_queue`; a change whose
+    frame would pass the frame cap).
+  - `WatchFrame`: `keyed_snapshot` (the schema, the view index's snapshot when the pack declares
+    a view schema, and the page count, at version `upto`), `keyed_page` (one root's run of the
+    keyed state, under `WatchOptions::page_bytes`, 1 MiB by default; an entry whose page would
+    pass `WatchOptions::frame_max` refuses the snapshot, `MPC-E401`; then each container's units
+    of the view index, `ViewIndex::units_page`, `WatchPart::Units`), and
+    `ops_change`, one per change: `rev`, `at_ms`, `change_kind`, the actor (id, name, kind, colour;
+    an outside save is kind `file`), `client`, `via`, `on_behalf_of`, `turn`, `verb`, the actor's
+    own `claim` on what it touched, and the ops by root, key and field with their values
+    (`WatchOp`). Every element is named by its address (`Pack::address_of`), in the snapshot
+    and the ops. `WatchFrame::to_json` is the wire's JSON. A change already in a snapshot never
+    goes out after it.
+  - `Pack::watch_extras` (default: none): a pack's `derived` values and `render_hashes` on each
+    change frame (`WatchExtras`).
+  - The snapshot reads the doc in one place (`Session::watch_state`): the live view's keyed state
+    and the view index built from it (as `Session::view_index` builds it), at one version.
+  - `watch_state_json(pack, state)`: a keyed state as canonical JSON by address, what a watcher's
+    state is compared by (`keyed_state_json`: the same by the live store's keys).
+  - A catch-up from a version is not built: every `watch` gets a snapshot.
+  - Planted fault `WatchMutant::SnapshotOffByOne` (`differential`), caught by
+    `tests/keyed_watch.rs`.
+  - Client: `KeyedWatch` (`src/keyed.ts`) and `keyedStateJson`; the client's changelog has them.
+  - Goldens `client/test/golden/keyed_snapshot.json` and `keyed_frames.json`; seeded traces in
+    `client/test/vectors/keyed_watch.json`, which the client replays to the kit's own state,
+    byte for byte.
+  - No store change: no format bump, no new table, no new error id.
+
+- **View deltas in the change frames** (the rendering-data contract's Item 2;
+  `k2_mpc_base::view_delta`; `client/WIRE.md`, "View deltas"): for a pack with a view schema,
+  each `ops_change` carries what the change did to the view, worked out by the kit from the
+  change's ops and the schema, generically, so a watcher keeps its view without running pack
+  code.
+  - `units`: one `UnitDelta` per unit whose place in the view changed (`key`, `container`,
+    `ops` from `add`, `delete`, `restore`, `reorder`, `move_resize`, `rotate`, `flip`, `text`,
+    `style`, `hide_show`, `props`; `geom_before` and `geom_after` as the geometry field's own
+    string; `fields` by name; `hidden_after`; `placeholder_type`). A unit is shown when it is
+    live and its container is; one that comes or goes with its container gets `restore` or
+    `delete`.
+  - `containers_changed`: one `ContainerDelta` per op on the containers' list (`add`, `delete`,
+    `restore`, `reorder`, `props`) with its 1-based positions before and after, in apply order,
+    then one per container whose fields changed (`hide_show` with `hidden_after`, or `props`).
+  - `containers`: the render hint (every container a delta names, then `render_hashes`').
+  - `WatchChange::deltas`; the pure functions `view_deltas` and `view_deltas_run` (a run of
+    changes committed together, each read against the doc right after it).
+  - A pack without a view schema gets none of the three fields: its frames are as before, byte
+    for byte.
+  - The snapshot's `schema` gains `composite` (`[{map, list}]`, `Pack::composite`), so a client
+    reads an element's fields by address.
+  - Rows `tests/view_deltas.rs`: the contract's scripted turn and cases C, E and F on a deck with
+    the contract's view schema, against the contract's hand-made deltas
+    (`tests/golden/view_turn.json`); seeded traces on both container namings with every list
+    and field op, undo and redo, each change's deltas checked against the view index before and
+    after it; no schema, no deltas. Planted fault `WatchMutant::DeltaGeomStale`, caught by both.
+  - Vectors `client/test/vectors/view_deltas.json` (the traces' frames and the view index at
+    checkpoints): the client's view equals the kit's at each.
+- **Roster events speak addresses:** every selection, focus, range and element claim the kit
+  hands out (`Session::roster` rows and devices, the roster's `Snapshot`, the `Selection`,
+  `Focus`, `Range` and `ClaimStartedElems` events, the setters' replies, `ClaimInfo`) carries its
+  elements' addresses (`Pack::address_of`) beside the keys: `ElemSelection::addresses`,
+  `ElemFocus::address`, `ElemRange::address`, `ClaimInfo::addresses`,
+  `RosterEvent::ClaimStartedElems::addresses`. A host sends them as the wire's `keys` / `key`
+  and converts nothing. For a pack whose addresses are its keys (the default) they are the same
+  strings, so the wire is unchanged there (the wire goldens didn't move). The three presence
+  values compare by their keys, as before. Row `roster_events_speak_addresses`
+  (`tests/keyed_watch.rs`), planted fault `ViewMutant::RosterKeysLeak`.
+- **N-1:** additive within wire 3, no store change. A client before the view deltas ignores
+  the new fields; this client on an older kit keeps the snapshot's view and says it isn't
+  current (`KeyedWatch.viewCurrent`). Roster addresses are the keys for a pack that maps none.
+- **A structured verb sees the doc's sync point:** `VerbCtx::synced()`, the version the
+  doc's file last held (the kit's last read of the file or write to it); `None` for a doc with
+  no file. A change after it isn't in the file yet. Needs no history right. A pack's verb that
+  must tell written changes from unwritten ones reads it (a spreadsheet pack refuses a row
+  delete on a sheet with unwritten row inserts, and the reverse, until the doc is flushed).
+  Additive: no store, wire or error-id change. Rows `tests/verb_sync_point.rs`: at the open,
+  after unwritten edits, after a flush, in a read verb and an edit verb; none with no file.
+
 ## v0.15.1 (2026-11-12)
 
 A host release on v0.15.0. The crate version is `0.15.1`; the client's stays `0.15.0` (its code

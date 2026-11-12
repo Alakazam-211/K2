@@ -294,10 +294,10 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
         .claims
         .iter()
         .filter_map(|c| match &c.span {
-            ClaimSpan::Elems { root, keys } => Some(Value::obj([
+            ClaimSpan::Elems { root, .. } => Some(Value::obj([
                 ("claim", Value::from(st.claim(c.id.get()))),
                 ("root", Value::from(root.as_str())),
-                ("keys", keys_value(keys)),
+                ("keys", addresses_value(&c.addresses)),
                 ("note", c.note.as_deref().map_or(Value::Null, Value::from)),
                 ("hold", Value::from(c.hold)),
                 ("expires_ms", Value::from(c.expires_ms)),
@@ -322,8 +322,9 @@ fn actor(w: &Who, a: &k2_mpc_base::session::ClaimActor) -> Value {
     ])
 }
 
-fn keys_value(keys: &[k2_mpc_base::Key]) -> Value {
-    Value::List(keys.iter().map(|k| Value::from(k.as_str())).collect())
+/// Elements by address, as the wire's `keys` (the kit fills them, `Pack::address_of`).
+fn addresses_value(addresses: &[String]) -> Value {
+    Value::List(addresses.iter().map(|a| Value::from(a.as_str())).collect())
 }
 
 /// A coordinate: the scenarios use whole numbers, which `errors::Value` encodes as they are.
@@ -335,9 +336,15 @@ fn coord(v: f64) -> Value {
 fn selection(s: &ElemSelection) -> Value {
     Value::obj([
         ("root", Value::from(s.root.as_str())),
+        // the elements by address (WIRE.md: the kit fills them, the host sends them as keys)
         (
             "keys",
-            Value::List(s.keys.iter().map(|k| Value::from(k.as_str())).collect()),
+            Value::List(
+                s.addresses
+                    .iter()
+                    .map(|a| Value::from(a.as_str()))
+                    .collect(),
+            ),
         ),
     ])
 }
@@ -358,14 +365,14 @@ fn rect(r: &Rect) -> Value {
 fn focus(f: &ElemFocus) -> Value {
     Value::obj([
         ("root", Value::from(f.root.as_str())),
-        ("key", Value::from(f.key.as_str())),
+        ("key", Value::from(f.address.as_str())),
     ])
 }
 
 fn range(r: &ElemRange) -> Value {
     Value::obj([
         ("root", Value::from(r.root.as_str())),
-        ("key", Value::from(r.key.as_str())),
+        ("key", Value::from(r.address.as_str())),
         ("field", Value::from(r.field.as_str())),
         ("anchor", Value::from(r.anchor)),
         ("head", Value::from(r.head)),
@@ -649,7 +656,7 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             who: w,
             claim,
             root,
-            keys,
+            addresses,
             note,
             hold,
             expires_ms,
@@ -662,7 +669,7 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             ("who", who(w)),
             ("claim", Value::from(st.claim(claim.get()))),
             ("root", Value::from(root.as_str())),
-            ("keys", keys_value(keys)),
+            ("keys", addresses_value(addresses)),
             ("note", note.as_deref().map_or(Value::Null, Value::from)),
             ("hold", Value::from(*hold)),
             ("expires_ms", Value::from(*expires_ms)),

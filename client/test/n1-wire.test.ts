@@ -18,6 +18,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { KeyedWatch } from "../src/keyed";
 import { LiveText } from "../src/live";
 import { PresenceChannel } from "../src/presence";
 import type { ChangeEvent, ClientFrame, RosterEntry, RosterEvent, ServerFrame, Transport, Welcome } from "../src/wire";
@@ -146,6 +147,30 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
       if (prevWire >= 3) expect(typeof c.startedMs).toBe("number");
       else expect(c.startedMs).toBeNull();
     }
+  });
+
+  it("the previous client ignores the keyed watch's frames (kit after v0.15.1, still wire 3)", async () => {
+    const prev = await previous();
+    const g = load<{ frames: ServerFrame[] }>(OURS, "keyed_frames.json");
+    expect(g.frames.length).toBeGreaterThan(5);
+    const w = wire();
+    const l = new prev.LiveText({ text: "x", version: 3 }, w.t, { root: "source" });
+    const welcome: Welcome = { root: "source", version: 3, client: 1, self: "ada", rights: "read", features: ["presence", "claims", "keyed_watch"] };
+    const p = new prev.PresenceChannel(w.t, welcome, now);
+    for (const f of g.frames) w.deliver(f);
+    expect(l.text).toBe("x");
+    expect(l.version).toBe(3);
+    expect(p.peers()).toEqual([]);
+    expect(w.sent).toEqual([]);
+  });
+
+  it("this client's keyed watch on the previous release's host (no `keyed_watch`) sends nothing", () => {
+    const w = wire();
+    const k = new KeyedWatch(w.t, { root: "shapes", version: 1, client: 7, self: "ada", rights: "read", features: ["presence", "claims", "focus", "range"], wire: prevWire });
+    k.resync();
+    for (const f of load<{ frames: ServerFrame[] }>(OURS, "keyed_frames.json").frames) w.deliver(f);
+    expect(w.sent).toEqual([]);
+    expect(k.stateJson()).toBeNull();
   });
 
   it("this client on a wire-2 welcome (no `wire`, the previous features) sends no focus or range", () => {

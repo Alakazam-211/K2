@@ -59,6 +59,23 @@ impl BlobSession {
         self.load_view(&t[0], &spec)
     }
 
+    /// The view index of a version (`None`: the current one), from its structure index through
+    /// the pack's view schema ([`crate::view_index::ViewIndex::blob`], rendering-data contract
+    /// gap 3): `tier` blob, `version` set. Rights and refusals as [`BlobSession::index_list`]
+    /// (read, and history for a version that isn't current; pending, not indexed). `Ok(None)`,
+    /// with nothing read, when the pack has no view schema or the schema no blob mapping.
+    pub fn view_index(
+        &self,
+        conn: ConnId,
+        version: Option<VersionId>,
+    ) -> Result<Option<crate::view_index::ViewIndex>> {
+        if self.pack.view_schema().and_then(|s| s.blob).is_none() {
+            return Ok(None);
+        }
+        let view = self.read_view(conn, version)?;
+        Ok(crate::view_index::ViewIndex::blob(&*self.pack, &view))
+    }
+
     /// **The outline** of a version (K-READ-1's `outline`): every node the query keeps, in
     /// outline order, each with its `#N`, key, kind, name and place, without text,
     /// attributes or hashes. `under` keeps the nodes below one node, by any address: one that

@@ -617,6 +617,8 @@ mod tests {
                 content: None,
                 weak: BTreeMap::new(),
             },
+            view: None,
+            render_hash: None,
         }
     }
 

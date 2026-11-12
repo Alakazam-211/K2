@@ -315,6 +315,15 @@ impl IndexJob {
                     IndexStatus::NotIndexed { version, why },
                 )
             }
+            // the view items only from a pack that bumped its format for them: an older kit,
+            // asking under the older format, never meets a row that carries them
+            IndexOutcome::Draft(d) if d.has_view_items() && self.spec.older().is_none() => {
+                return Err(IndexJobError::BadResult(
+                    "view items from a pack whose index spec names no older format \
+                     (IndexSpec::with_older_format)"
+                        .to_owned(),
+                ))
+            }
             IndexOutcome::Draft(d) => match d.shape(&self.limits) {
                 Err(DraftFault::Malformed(m)) => return Err(IndexJobError::BadResult(m)),
                 Err(DraftFault::Over(why)) => (
@@ -406,9 +415,16 @@ impl BlobSession {
     }
 
     pub(super) fn status_of(&self, t: &Target, spec: &IndexSpec) -> Result<IndexStatus> {
+        Ok(self.status_at(t, spec)?.0)
+    }
+
+    /// [`BlobSession::status_of`], and the format of the row it read: `spec.format`'s, else
+    /// (none there, and the spec names an older format) a ready row of that older format,
+    /// which reads with the view items absent ([`IndexSpec::with_older_format`]).
+    fn status_at(&self, t: &Target, spec: &IndexSpec) -> Result<(IndexStatus, u32)> {
         let version = t.version;
         let cap = self.config.blob_index_max_bytes;
-        let not_indexed = |why| Ok(IndexStatus::NotIndexed { version, why });
+        let not_indexed = |why| Ok((IndexStatus::NotIndexed { version, why }, spec.format));
         if t.ver.redacted {
             return not_indexed(NotIndexedWhy::Purged);
         }
@@ -424,19 +440,33 @@ impl BlobSession {
         if t.store.blob_row(sp.no, &t.ver.blob)?.is_none() {
             return not_indexed(NotIndexedWhy::Purged);
         }
-        Ok(
-            match t
-                .store
-                .blob_struct_status(sp.no, &t.ver.blob, spec.pack, spec.format)?
-            {
-                Some(RowStatus::Ready { nodes }) => IndexStatus::Ready { version, nodes },
-                Some(RowStatus::NotIndexed(why)) => IndexStatus::NotIndexed { version, why },
-                None => IndexStatus::Pending {
-                    version,
-                    running: self.index_flight.contains(&t.ver.blob),
-                },
-            },
-        )
+        let status = |f| t.store.blob_struct_status(sp.no, &t.ver.blob, spec.pack, f);
+        Ok(match status(spec.format)? {
+            Some(RowStatus::Ready { nodes }) => {
+                (IndexStatus::Ready { version, nodes }, spec.format)
+            }
+            Some(RowStatus::NotIndexed(why)) => {
+                (IndexStatus::NotIndexed { version, why }, spec.format)
+            }
+            None => {
+                let older = match spec.older() {
+                    Some(o) => status(o)?.map(|s| (s, o)),
+                    None => None,
+                };
+                match older {
+                    Some((RowStatus::Ready { nodes }, o)) => {
+                        (IndexStatus::Ready { version, nodes }, o)
+                    }
+                    _ => (
+                        IndexStatus::Pending {
+                            version,
+                            running: self.index_flight.contains(&t.ver.blob),
+                        },
+                        spec.format,
+                    ),
+                }
+            }
+        })
     }
 
     /// Where version `version`'s index stands (`None`: the current one). Host-internal, like
@@ -452,16 +482,21 @@ impl BlobSession {
     /// A job to index version `version` (`None`: the current one), or `None` when there is
     /// nothing to run: the pack has no index, the row exists (or is a recorded refusal), a job
     /// for these bytes is already out, or the version can't be read (over the cap, or purged;
-    /// [`BlobSession::index_status`] says which). The host runs it on its own worker.
+    /// [`BlobSession::index_status`] says which). The host runs it on its own worker. A
+    /// version read from a row of the spec's older format ([`IndexSpec::with_older_format`]:
+    /// `Ready`, the view items absent) gets a job too, which indexes it again under this
+    /// format; running it is optional.
     pub fn index_job(&self, version: Option<VersionId>) -> Result<Option<IndexJob>> {
         let Some(spec) = self.pack.index_spec() else {
             return Ok(None);
         };
         let t = self.index_target(version)?;
-        if !matches!(
-            self.status_of(&t, &spec)?,
-            IndexStatus::Pending { running: false, .. }
-        ) {
+        let due = match self.status_at(&t, &spec)? {
+            (IndexStatus::Pending { running, .. }, _) => !running,
+            (IndexStatus::Ready { .. }, f) => f != spec.format,
+            _ => false,
+        };
+        if !due {
             return Ok(None);
         }
         let Some(slot) = self.index_flight.claim(t.ver.blob) else {
@@ -507,8 +542,10 @@ impl BlobSession {
             self.state.try_lock(),
             Err(std::sync::TryLockError::WouldBlock)
         ));
-        let spec = *spec;
-        match self.status_of(t, &spec)? {
+        let (status, format) = self.status_at(t, spec)?;
+        // the row read: this format's, or the older one's (its items absent, its keys its own)
+        let spec = IndexSpec { format, ..*spec };
+        match status {
             IndexStatus::Ready { .. } => {}
             IndexStatus::Pending { version, .. } => {
                 return Err(SessionError::IndexPending {

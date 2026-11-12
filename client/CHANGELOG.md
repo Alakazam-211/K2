@@ -3,6 +3,38 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.16.0 (kit tag v0.16.0)
+
+The client for kit v0.16.0. Still wire 3 (`WIRE_VERSION` 3): the keyed watch is behind its
+feature name (`keyed_watch`), and with a host that doesn't list it the client behaves exactly
+as 0.15.0.
+
+- **`KeyedWatch`** (`src/keyed.ts`; WIRE.md, "The keyed watch"): a watcher's copy of a live keyed
+  doc (a deck, a board), no DOM. It asks for a snapshot (`watch`), builds the state from its
+  pages, then applies each `ops_change` in `seq` order; a skipped `seq`, or a frame that doesn't
+  fit, makes it ask again and drop everything until a snapshot (`onResync`, with why). It sends
+  `watch` and `report` only when the host lists `"keyed_watch"` (`KEYED_WATCH_FEATURE`);
+  presence, roster and claim frames are never numbered and never counted. `stateJson()` and
+  `keyedStateJson(state)` print the state as the kit's `watch_state_json`, byte for byte.
+  Elements are named by address, as the frames name them. `view` and `units(container)`: the
+  view index's snapshot and units as the last snapshot carried them.
+- `wire.ts`: the frames `keyed_snapshot`, `keyed_page`, `ops_change`, `watch_refused` (host) and
+  `watch`, `report` (client), with `KeyedSchema`, `KeyedValue`, `KeyedUnitsPage`, `WatchActor`
+  and `WatchOp`.
+  Additive within wire 3: `WIRE_VERSION` stays 3.
+- **View deltas** (WIRE.md, "View deltas"): `KeyedWatch` keeps its view index from each change's
+  `units` and `containers_changed` (`KeyedView`, `src/view.ts`): `view` (now typed,
+  `ViewSnapshotJson`) and `units(container)` (`ViewUnit[]`) follow every change and equal a fresh
+  snapshot's (the kit's vectors, `test/vectors/view_deltas.json`, in
+  `test/view-deltas.test.ts`). A field the pack derives keeps the snapshot's value. A delta that
+  doesn't fit asks for a snapshot, as an op that doesn't. `viewCurrent`: `false` after a change
+  from a kit that sends no deltas (N-1), until the next snapshot. Plant `ClientViewDrift`
+  (`withContainerDeltaSkipped`). Types `UnitDelta`, `ContainerDelta`, `ViewSchemaJson`,
+  `ViewSrc`, `ViewContainer`, `ViewUnit`, `ViewSnapshotJson`; `KeyedSchema.composite`;
+  `VIEW_TEXT_MAX`.
+- PRESENCE.md: every `key` / `keys` is an address, filled by the kit; the strings are the keys
+  for a pack that maps none, so nothing changes there.
+
 ## 0.15.0 (kit tag v0.15.0)
 
 The client for kit v0.15.0's wire 3 (`WIRE_VERSION` 3). Every addition is optional: with a

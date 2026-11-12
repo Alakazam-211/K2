@@ -263,6 +263,8 @@ impl Session {
     /// older than now.
     pub(super) fn drop_live_view(st: &mut State) {
         st.live_view = None;
+        // the view index built from it goes with it (values may be erased)
+        st.view_cache = None;
         st.undo_journal.clear();
         st.journal_bytes = 0;
         let now = st.version;

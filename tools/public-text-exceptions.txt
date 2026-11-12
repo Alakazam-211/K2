@@ -5,6 +5,5 @@
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the spec-undo test that checks the enumerator ends a run at its own assertion-stop pseudo-rule; not an engine defect
-# v0.15.1: "crash" a process ending without its write-back (the open that renders to compare)
-crates/base/src/session/live.rs: // changes the file never got (a crash before write-back): write them soon. Rendered to
-docs/SESSIONS.md: synced bytes at the doc's version, nothing renders; otherwise (an outside save, a crash
+# v0.16.0: "no longer" a client view that has stopped being current (a change frame with no deltas)
+client/src/view.ts: * leaves the view as it was and no longer current. */

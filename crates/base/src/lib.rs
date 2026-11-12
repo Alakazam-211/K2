@@ -47,6 +47,12 @@
 //!   ([`session::Pack::ids`]); the ID-churn judge for packs' tests (feature `test-support`).
 //! - [`timers`]: production timers (v0.10.1): per-path counts, times and p50/p95/p99, off
 //!   by default, in every build (`docs/SESSIONS.md`, "Timers").
+//! - [`view_index`]: the view index of the rendering-data contract (gaps 1–3): a pack's view
+//!   schema, element addresses, and one index shape from a live doc's keyed state or a
+//!   version's structure index, paged by container for a watch.
+//! - [`view_delta`]: what each change did to that view (the contract's Item 2), per container
+//!   and unit, worked out from the change's ops and the view schema, so a watcher keeps its
+//!   view without running pack code.
 //! - [`parity`]: the agent-parity framework: person actions, the verb registry, and the
 //!   harness that runs each action the person's way and the agent's way and compares.
 //!
@@ -131,6 +137,8 @@ pub mod text;
 pub mod timers;
 pub mod tools;
 pub mod turn;
+pub mod view_delta;
+pub mod view_index;
 
 #[cfg(test)]
 mod key_debug_tests;

@@ -227,6 +227,9 @@ pub enum RosterEvent {
         root: String,
         /// In key order.
         keys: Vec<Key>,
+        /// The same elements by address ([`super::Pack::address_of`]), in the same order: what
+        /// the wire carries as the event's `keys` (contract gap 2).
+        addresses: Vec<String>,
         note: Option<String>,
         hold: bool,
         expires_ms: u64,

@@ -6,12 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 use super::{
-    Digest, IndexJobError, IndexLimits, NodeKey, NodeRect, NotIndexedWhy, INDEX_ATTRS_MAX,
-    INDEX_ATTR_KEY_MAX, INDEX_ATTR_VALUE_MAX, INDEX_KEY_MAX, INDEX_KIND_MAX, INDEX_NAME_MAX,
-    INDEX_SOURCE_MAX, INDEX_WHY_MAX,
+    get_view_with, put_fonts, put_view, Digest, IndexJobError, IndexLimits, NodeKey, NodeRect,
+    NodeView, NotIndexedWhy, INDEX_ATTRS_MAX, INDEX_ATTR_KEY_MAX, INDEX_ATTR_VALUE_MAX,
+    INDEX_FONTS_MAX, INDEX_KEY_MAX, INDEX_KIND_MAX, INDEX_NAME_MAX, INDEX_SOURCE_MAX,
+    INDEX_WHY_MAX,
 };
 use crate::session::BlobPack;
 use crate::store::enc::{R, W};
+use crate::view_index::FontUse;
 
 #[cfg(any(test, feature = "differential"))]
 fn mutant(m: crate::differential::IndexMutant) -> bool {
@@ -45,6 +47,11 @@ pub struct DraftNode {
     pub content: Option<Digest>,
     /// Weak IDs for anchors, beside kind, name and bounds.
     pub weak: BTreeMap<String, String>,
+    /// What a view draws of it that the fields above don't say (row format 2); `None`: nothing.
+    pub view: Option<NodeView>,
+    /// The raw digest of what draws it (a container's render closure; row format 2). Keyed
+    /// before it is stored, as every digest.
+    pub render: Option<Digest>,
 }
 
 impl DraftNode {
@@ -63,6 +70,8 @@ impl DraftNode {
             record,
             content: None,
             weak: BTreeMap::new(),
+            view: None,
+            render: None,
         }
     }
 }
@@ -76,6 +85,9 @@ pub struct IndexDraft {
     pub attrs: BTreeMap<String, String>,
     /// A parent before its children; siblings in reading order (top to bottom).
     pub nodes: Vec<DraftNode>,
+    /// The fonts the doc's text uses, in the pack's order, each once (row format 2): what a
+    /// node's [`NodeView::fonts`] index. Family names, never font bytes.
+    pub fonts: Vec<FontUse>,
 }
 
 impl IndexDraft {
@@ -84,6 +96,16 @@ impl IndexDraft {
             source: source.into(),
             ..Self::default()
         }
+    }
+
+    /// Whether the draft carries any view item (row format 2): fonts, a node's view or its
+    /// render digest.
+    pub fn has_view_items(&self) -> bool {
+        !self.fonts.is_empty()
+            || self
+                .nodes
+                .iter()
+                .any(|n| n.view.is_some() || n.render.is_some())
     }
 }
 
@@ -213,6 +235,7 @@ impl IndexDraft {
             order: Vec::with_capacity(n),
             tree_visible: Vec::with_capacity(n),
         };
+        check_fonts(&self.fonts)?;
         let mut next_child = vec![0u32; n];
         let mut next_root = 0u32;
         let bad = |i: usize, what: &str| DraftFault::Malformed(format!("node {i}: {what}"));
@@ -235,6 +258,9 @@ impl IndexDraft {
             }
             check_map("a node's attributes", &node.attrs)?;
             check_map("a node's weak IDs", &node.weak)?;
+            if let Some(v) = &node.view {
+                check_view(v, self.fonts.len(), limits).map_err(|w| bad(i, w))?;
+            }
             if node.flags.len() > INDEX_ATTRS_MAX
                 || !node.flags.iter().all(|f| word_ok(f, INDEX_ATTR_KEY_MAX))
             {
@@ -275,6 +301,46 @@ impl IndexDraft {
     }
 }
 
+/// The doc's fonts: at most [`INDEX_FONTS_MAX`], a family within [`INDEX_NAME_MAX`] bytes, the
+/// script and source words.
+fn check_fonts(fonts: &[FontUse]) -> Result<(), DraftFault> {
+    if fonts.len() > INDEX_FONTS_MAX {
+        return Err(DraftFault::Malformed(format!(
+            "{} fonts, the limit is {INDEX_FONTS_MAX}",
+            fonts.len()
+        )));
+    }
+    for f in fonts {
+        if f.family.is_empty()
+            || f.family.len() > INDEX_NAME_MAX
+            || !word_ok(&f.script, INDEX_ATTR_KEY_MAX)
+            || !word_ok(&f.from, INDEX_ATTR_KEY_MAX)
+        {
+            return Err(DraftFault::Malformed("a bad font".to_owned()));
+        }
+    }
+    Ok(())
+}
+
+/// A node's view items: field kinds are words, at most [`INDEX_ATTRS_MAX`]; its text within
+/// the text limit; its fonts name fonts the draft lists, at most [`INDEX_FONTS_MAX`].
+fn check_view(v: &NodeView, fonts: usize, limits: &IndexLimits) -> Result<(), &'static str> {
+    if v.fields.len() > INDEX_ATTRS_MAX || !v.fields.iter().all(|f| word_ok(f, INDEX_ATTR_KEY_MAX))
+    {
+        return Err("bad field kinds");
+    }
+    if v.text
+        .as_ref()
+        .is_some_and(|t| t.len() > limits.max_text_bytes as usize)
+    {
+        return Err("view text over the limit");
+    }
+    if v.fonts.len() > INDEX_FONTS_MAX || v.fonts.iter().any(|f| *f as usize >= fonts) {
+        return Err("a font the draft doesn't list");
+    }
+    Ok(())
+}
+
 /// `text` cut to at most `max` bytes at a character boundary, and whether it was cut: what a
 /// pack does before it sets the `text_truncated` flag.
 pub fn cut_text(text: &str, max: u32) -> (&str, bool) {
@@ -296,7 +362,10 @@ fn floor_char_boundary(s: &str, max: usize) -> usize {
 // ----- the wire -----
 
 const WIRE_MAGIC: [u8; 4] = *b"K2IX";
+/// The wire's version: 1 carries the nodes, 2 the view items too. A draft with none goes as 1,
+/// the bytes a worker before them sent.
 const WIRE_VERSION: u8 = 1;
+const WIRE_VERSION_VIEW: u8 = 2;
 const TAG_DRAFT: u8 = 0;
 const TAG_REFUSED: u8 = 1;
 const R_UNSUPPORTED: u8 = 0;
@@ -377,7 +446,7 @@ fn get_map(r: &mut R<'_>, budget: &mut Budget) -> Result<BTreeMap<String, String
     Ok(out)
 }
 
-fn put_node(w: &mut W, n: &DraftNode) {
+fn put_node(w: &mut W, n: &DraftNode, items: bool) {
     w.opt_str(n.key.as_deref())
         .str(&n.kind)
         .str(&n.name)
@@ -404,6 +473,10 @@ fn put_node(w: &mut W, n: &DraftNode) {
     w.bytes(n.record.as_bytes());
     w.opt_bytes(n.content.as_ref().map(|d| d.as_bytes().as_slice()));
     put_map(w, &n.weak);
+    if items {
+        put_view(w, n.view.as_ref());
+        w.opt_bytes(n.render.as_ref().map(|d| d.as_bytes().as_slice()));
+    }
 }
 
 fn get_digest(b: Vec<u8>) -> Result<Digest, IndexJobError> {
@@ -413,7 +486,12 @@ fn get_digest(b: Vec<u8>) -> Result<Digest, IndexJobError> {
     Ok(Digest::from_raw(b))
 }
 
-fn get_node(r: &mut R<'_>, limits: &IndexLimits, budget: &mut Budget) -> Result<DraftNode, Stop> {
+fn get_node(
+    r: &mut R<'_>,
+    limits: &IndexLimits,
+    budget: &mut Budget,
+    items: bool,
+) -> Result<DraftNode, Stop> {
     let key = wf(r.opt_str_max(INDEX_KEY_MAX))?;
     let kind = wf(r.str_max(INDEX_KIND_MAX))?;
     let name = wf(r.str_max(INDEX_NAME_MAX))?;
@@ -461,6 +539,17 @@ fn get_node(r: &mut R<'_>, limits: &IndexLimits, budget: &mut Budget) -> Result<
     let record = get_digest(wf(r.bytes())?)?;
     let content = wf(r.opt_bytes())?.map(get_digest).transpose()?;
     let weak = get_map(r, budget)?;
+    let (view, render) = if items {
+        let mut cost = 0u64;
+        let view = wf(get_view_with(r, limits.max_text_bytes as usize, &mut |n| {
+            cost += n
+        }))?;
+        budget.charge(cost)?;
+        let render = wf(r.opt_bytes())?.map(get_digest).transpose()?;
+        (view, render)
+    } else {
+        (None, None)
+    };
     Ok(DraftNode {
         key,
         kind,
@@ -474,6 +563,8 @@ fn get_node(r: &mut R<'_>, limits: &IndexLimits, budget: &mut Budget) -> Result<
         record,
         content,
         weak,
+        view,
+        render,
     })
 }
 
@@ -491,14 +582,23 @@ impl IndexOutcome {
             Err(DraftFault::Malformed(m)) => return Err(IndexJobError::BadResult(m)),
             Err(DraftFault::Over(w)) => return encode_refused(&refused_of(&w)),
         }
+        let items = draft.has_view_items();
         let mut w = W::default();
         w.0.extend_from_slice(&WIRE_MAGIC);
-        w.u8(WIRE_VERSION).u8(TAG_DRAFT);
+        w.u8(if items {
+            WIRE_VERSION_VIEW
+        } else {
+            WIRE_VERSION
+        })
+        .u8(TAG_DRAFT);
         w.str(&draft.source);
         put_map(&mut w, &draft.attrs);
+        if items {
+            put_fonts(&mut w, &draft.fonts);
+        }
         w.u32(draft.nodes.len() as u32);
         for n in &draft.nodes {
-            put_node(&mut w, n);
+            put_node(&mut w, n, items);
         }
         if w.0.len() > limits.wire_max() {
             return encode_refused(&IndexRefused::TooBig {
@@ -526,16 +626,20 @@ impl IndexOutcome {
                 return Err(IndexJobError::BadResult("not an indexer result".to_owned()));
             }
         }
-        if wf(r.u8())? != WIRE_VERSION {
-            return Err(IndexJobError::BadResult(
-                "an indexer result of another version".to_owned(),
-            ));
-        }
+        let items = match wf(r.u8())? {
+            WIRE_VERSION => false,
+            WIRE_VERSION_VIEW => true,
+            _ => {
+                return Err(IndexJobError::BadResult(
+                    "an indexer result of another version".to_owned(),
+                ))
+            }
+        };
         let outcome = match wf(r.u8())? {
-            TAG_REFUSED => IndexOutcome::Refused(decode_refused(&mut r)?),
+            TAG_REFUSED if !items => IndexOutcome::Refused(decode_refused(&mut r)?),
             TAG_DRAFT => {
                 let mut budget = Budget(decode_budget(limits));
-                match decode_draft(&mut r, limits, b.len(), &mut budget) {
+                match decode_draft(&mut r, limits, b.len(), &mut budget, items) {
                     // a node count over the cap stops the read: nothing else is looked at
                     Ok(out @ IndexOutcome::Refused(_)) => return Ok(out),
                     Ok(out) => out,
@@ -576,10 +680,16 @@ fn decode_draft(
     limits: &IndexLimits,
     wire_len: usize,
     budget: &mut Budget,
+    items: bool,
 ) -> Result<IndexOutcome, Stop> {
     let source = wf(r.str_max(INDEX_SOURCE_MAX))?;
     budget.string(&source)?;
     let attrs = get_map(r, budget)?;
+    let fonts = if items {
+        get_fonts(r, budget)?
+    } else {
+        Vec::new()
+    };
     let count = wf(r.u32())?;
     #[cfg(any(test, feature = "differential"))]
     let no_node_cap = mutant(crate::differential::IndexMutant::NoNodeCap);
@@ -593,13 +703,44 @@ fn decode_draft(
     }
     let mut nodes = Vec::with_capacity((count as usize).min(wire_len / MIN_WIRE_NODE));
     for _ in 0..count {
-        nodes.push(get_node(r, limits, budget)?);
+        nodes.push(get_node(r, limits, budget, items)?);
     }
     Ok(IndexOutcome::Draft(IndexDraft {
         source,
         attrs,
         nodes,
+        fonts,
     }))
+}
+
+/// The doc's fonts on the wire: at most [`INDEX_FONTS_MAX`], each string bounded.
+fn get_fonts(r: &mut R<'_>, budget: &mut Budget) -> Result<Vec<FontUse>, Stop> {
+    let n = wf(r.u32())? as usize;
+    if n > INDEX_FONTS_MAX {
+        return Err(IndexJobError::BadResult("too many fonts".to_owned()).into());
+    }
+    let mut out = Vec::new();
+    for _ in 0..n {
+        let family = wf(r.str_max(INDEX_NAME_MAX))?;
+        let script = wf(r.str_max(INDEX_ATTR_KEY_MAX))?;
+        let from = wf(r.str_max(INDEX_ATTR_KEY_MAX))?;
+        let embedded = match wf(r.u8())? {
+            0 => false,
+            1 => true,
+            _ => return Err(IndexJobError::BadResult("a bad font flag".to_owned()).into()),
+        };
+        budget.string(&family)?;
+        budget.string(&script)?;
+        budget.string(&from)?;
+        budget.charge(COST_ENTRY)?;
+        out.push(FontUse {
+            family,
+            script,
+            from,
+            embedded,
+        });
+    }
+    Ok(out)
 }
 
 fn refused_of(w: &NotIndexedWhy) -> IndexRefused {
@@ -720,7 +861,7 @@ mod tests {
         put_map(&mut w, &d.attrs);
         w.u32(count);
         for n in &d.nodes {
-            put_node(&mut w, n);
+            put_node(&mut w, n, false);
         }
         w.0
     }
@@ -762,6 +903,69 @@ mod tests {
             IndexOutcome::Draft(back) => assert_eq!(back, d),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The view items (wire 2) round-trip; a draft without them goes as wire 1, the bytes a
+    /// worker before them sent.
+    #[test]
+    fn a_draft_s_view_items_round_trip_on_the_wire() {
+        use crate::index::ViewGeom;
+        use crate::view_index::{Bbox, EditableText, Flip};
+        let plain = IndexOutcome::Draft({
+            let mut d = IndexDraft::new("f");
+            d.nodes.push(node(None));
+            d
+        })
+        .to_wire(&limits())
+        .unwrap();
+        assert_eq!(plain[4], WIRE_VERSION, "no view item: wire 1");
+        let mut d = IndexDraft::new("fmt-2");
+        d.fonts.push(FontUse {
+            family: "Aptos".into(),
+            script: "latin".into(),
+            from: "theme-minor".into(),
+            embedded: false,
+        });
+        let mut n = node(None);
+        let mut v = NodeView::new();
+        v.fields.push("slidenum".into());
+        v.fonts.push(0);
+        n.view = Some(v);
+        n.render = Some(Digest::of(b"draws"));
+        d.nodes.push(n);
+        let mut k = node(Some(0));
+        let mut v = NodeView::new();
+        v.geom = Some(ViewGeom {
+            bbox: Bbox {
+                x: -5,
+                y: 6,
+                w: 7,
+                h: 8,
+            },
+            rot: 5_400_000,
+            flip: Flip { h: true, v: false },
+            inherited: true,
+            approx: true,
+        });
+        v.editable_text = Some(EditableText::Formatted);
+        v.text = Some("a\tb".into());
+        v.text_truncated = true;
+        k.view = Some(v);
+        d.nodes.push(k);
+        let wire = IndexOutcome::Draft(d.clone()).to_wire(&limits()).unwrap();
+        assert_eq!(wire[4], WIRE_VERSION_VIEW, "view items: wire 2");
+        match IndexOutcome::from_wire(&wire, &limits()).unwrap() {
+            IndexOutcome::Draft(back) => assert_eq!(back, d),
+            other => panic!("{other:?}"),
+        }
+        // a node naming a font the draft doesn't list is malformed
+        let mut bad = d.clone();
+        bad.fonts.clear();
+        bad.nodes[1].view = None;
+        assert!(matches!(
+            bad.shape(&limits()),
+            Err(DraftFault::Malformed(_))
+        ));
     }
 
     #[test]

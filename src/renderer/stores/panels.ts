@@ -364,21 +364,26 @@ export const usePanelsStore = create<PanelsState>((set, get) => ({
   }
 }))
 
-// Initialize on import
-usePanelsStore.getState().initFromSettings()
-
-// Phase 2.5 fix (finding #547): if the initial fetch above raced
-// the daemon's HTTP listener and lost (heavy first-boot migrations
-// can keep the daemon busy for 5+ seconds), the reconnect-bus fires
-// `daemon:connected` once the WS handshakes. Re-running
-// `initFromSettings` is cheap (one HTTP GET) and idempotent (sets
-// the same state again on success). The gate stays false until a
-// successful load, so any user interaction in the meantime stays
-// ephemeral instead of persisting defaults.
-onDaemonConnected(() => {
-  if (hasLoadedFromDaemon) return
+/** The first load, and its retry when the daemon (re)connects.
+ *  `bootAppStores()` (boot-app-stores.ts) calls this once at
+ *  app start. It does not run at import: a test that imports this store
+ *  fires no fetch. */
+export function bootPanels(): void {
   usePanelsStore.getState().initFromSettings()
-})
+
+  // Phase 2.5 fix (finding #547): if the initial fetch above raced
+  // the daemon's HTTP listener and lost (heavy first-boot migrations
+  // can keep the daemon busy for 5+ seconds), the reconnect-bus fires
+  // `daemon:connected` once the WS handshakes. Re-running
+  // `initFromSettings` is cheap (one HTTP GET) and idempotent (sets
+  // the same state again on success). The gate stays false until a
+  // successful load, so any user interaction in the meantime stays
+  // ephemeral instead of persisting defaults.
+  onDaemonConnected(() => {
+    if (hasLoadedFromDaemon) return
+    usePanelsStore.getState().initFromSettings()
+  })
+}
 
 // #625 — on a real active-host CHANGE, drop tab persist gates and
 // re-init tab lists from the NEW host's daemon. `initFromSettings()`

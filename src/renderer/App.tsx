@@ -103,6 +103,11 @@ import { SETTINGS_OVERLAY_Z } from '@/lib/overlay-layers'
 import { SendFeedbackHost } from './components/SendFeedback/SendFeedbackButton'
 import { openSendFeedback } from '@/stores/send-feedback'
 import { installBothShifts } from '@/lib/both-shifts'
+import { bootAppStores } from './boot-app-stores'
+
+// The first loads of the stores that come in with the app
+// (boot-app-stores.ts). They ran while the imports above were evaluated.
+bootAppStores()
 // TODO(0.39.x): rename src/renderer/kessel/ to a non-Kessel name.
 // Only daemon-ws.ts + config-context.tsx + config.ts remain after the
 // Kessel renderer deletion; these are shared terminal infrastructure

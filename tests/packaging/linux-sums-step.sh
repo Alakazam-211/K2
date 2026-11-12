@@ -116,14 +116,15 @@ run_step() {
         set -euo pipefail
         # shellcheck source=../../scripts/lib/linux-sums-step.sh
         source "$STEP"
-        k2_linux_sums_step "$V" "$1"
-        printf 'LINUX=%s\nARCH=%s\nURL=%s\n' "$LINUX_SUMS_FAILED" "$ARCH_PKG_FAILED" "$ARCH_PKG_RUN_URL" > "$flags"
+        k2_linux_sums_step "$V" "$1" ${2:+"$2"}
+        printf 'LINUX=%s\nARCH=%s\nURL=%s\nPENDING=%s\n' "$LINUX_SUMS_FAILED" "$ARCH_PKG_FAILED" "$ARCH_PKG_RUN_URL" "$ARCH_PKG_PENDING" > "$flags"
     ) >"$out" 2>&1 || rc=$?
     O="$(cat "$out")"
     [ "$rc" = 0 ] || { fail "step exits 0 (it never stops the script)" "rc=$rc: $O"; LINUX=x; ARCH=x; URL=x; return 0; }
     LINUX="$(sed -n 's/^LINUX=//p' "$flags")"
     ARCH="$(sed -n 's/^ARCH=//p' "$flags")"
     URL="$(sed -n 's/^URL=//p' "$flags")"
+    PENDING="$(sed -n 's/^PENDING=//p' "$flags")"
 }
 
 check() { # check <name> <expected LINUX> <expected ARCH>
@@ -272,6 +273,40 @@ export STUB_API_FAILS=1
 run_step 0
 check "release listing down: others not counted as checked" "1" "1"
 never_says "does not claim the others passed" "deb, rpm and AppImage match"
+
+echo "== compute mode (arch-later): one check, the Arch package not waited for =="
+fresh later-pending
+put "$REL" "${APP[@]}"
+export STUB_ARCH_RUN="$RUNNING_RUN"
+t0=$(date +%s)
+run_step 60 arch-later
+took=$(( $(date +%s) - t0 ))
+check "deb, rpm, AppImage up, Arch still building: no failure" "" ""
+[ "$PENDING" = 1 ] && pass "ARCH_PKG_PENDING=1 for the final summary" || fail "pending flag" "PENDING='$PENDING'"
+[ "$took" -lt 30 ] && pass "no wait for the Arch package (${took}s of a 60 min cap)" || fail "arch-later waited" "took ${took}s"
+says "says it is not waited for" "is not waited for"
+says "gives the later check" "bash scripts/linux-sums.sh check ${V} --wait-min 60"
+fresh later-complete
+put "$REL" "${APP[@]}" "$PKG"
+run_step 0 arch-later
+check "everything up: passes" "" ""
+[ -z "$PENDING" ] && pass "…and nothing pending" || fail "pending when complete" "PENDING='$PENDING'"
+fresh later-missing
+put "$REL" "${APP[0]}"
+export STUB_ARCH_RUN="$RUNNING_RUN"
+run_step 0 arch-later
+check "a missing rpm/AppImage is still a failure" "1" ""
+[ -z "$PENDING" ] && pass "…not 'Arch pending'" || fail "pending with others missing" "PENDING='$PENDING'"
+fresh later-wrong
+put "$REL" "${APP[@]}"
+printf 'sha256:%s\n' "$(printf 'a%.0s' $(seq 1 64))" > "$STUB_REL/.digest-override/K2_${V}_amd64.deb"
+run_step 0 arch-later
+check "a wrong line is still a failure" "1" ""
+fresh later-failed
+put "$REL" "${APP[@]}"
+export STUB_ARCH_RUN="$FAILED_RUN"
+run_step 0 arch-later
+check "a failed Arch build is still reported as failed" "" "1"
 
 echo "== release.sh wiring =="
 bash -n "$RS" && pass "release.sh parses" || fail "release.sh parses" "bash -n"

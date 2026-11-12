@@ -212,15 +212,27 @@ vitest, the web build) still runs on z3mbpZ itself, the release Mac.
 
 ## Linux release builds (release.sh)
 
-`K2_LINUX_BUILDS` picks who builds the Linux x86 files. The repo variable
-`LINUX_BUILDS` must agree with it; the pre-flight refuses a mismatch
-either way.
+`K2_LINUX_BUILDS` picks who builds the Linux files; `K2_COMPUTE_ARM`
+(default `compute`) whether aarch64 is among them. release.sh sets the repo
+variable `LINUX_BUILDS` itself, right before the tag push, to what the run
+really did (it needs repo admin on the release Mac's `gh`; the pre-flight
+checks that, or that the variable already has the right value).
 
-| `K2_LINUX_BUILDS` | Repo variable `LINUX_BUILDS` | What happens |
+| `K2_LINUX_BUILDS` | Repo variable `LINUX_BUILDS` (set by release.sh) | What happens |
 |---|---|---|
-| `github` (default) | unset or `github` | Pushing the tag starts `daemon-binaries.yml` and `app-linux.yml`. |
-| `shadow` | unset or `github` | As `github`, plus release.sh builds the x86 set on K2 Compute before the tag, checks it, and compares it with what GitHub built (Step 10.7). Publishes nothing from compute; a compute problem only warns. |
-| `compute` | `compute` | The compute-built x86 files are the release. release.sh publishes them, and signs the daemon on z3mbpZ at Step 10.5 after checking it against the compute verdicts. On the tag, GitHub builds only aarch64 (`daemon-binaries.yml`) and skips `app-linux.yml`. Arch still builds on k2-arch. Needs a signer that accepts compute builds (see "Signing" below). |
+| `compute` (default since 0.46.12) | `compute-all` | The compute-built x86_64 AND aarch64 files are the release. release.sh publishes them and signs both daemons on z3mbpZ at Step 10.5. On the tag, `daemon-binaries.yml` builds nothing (only the installer job runs) and `app-linux.yml` skips. No release step waits on GitHub; Arch still builds on k2-arch and isn't waited for. Needs a signer that accepts compute builds (see "Signing" below). |
+| `compute`, aarch64 fell back (or `K2_COMPUTE_ARM=github`) | `compute` | x86_64 from compute; GitHub builds only aarch64, and Step 10.5 waits for it. |
+| `github` | `github` | Pushing the tag starts `daemon-binaries.yml` and `app-linux.yml`. |
+| `shadow` | `github` | As `github`, plus release.sh builds the Linux set on K2 Compute before the tag, checks it, and compares it with what GitHub built (Step 10.7). Publishes nothing from compute; a compute problem only warns. |
+
+**Fallback, never silent.** In compute mode, whatever stops compute before
+the tag (the pre-flight finds the signer's pins or the OAuth mode not
+ready, a job fails or doesn't verify, the jobs aren't done in
+`K2_COMPUTE_WAIT_MIN`, the tree check) sends that part to GitHub: an
+x86_64 problem all of Linux, an aarch64 problem only aarch64. release.sh
+prints a banner with the reason when it happens and repeats it in the
+final summary; open jobs are cancelled and staged files removed.
+`K2_COMPUTE_FALLBACK=0` stops the release instead (before the tag).
 
 **The jobs** (Step 1.6c, at the release commit C, `--tier ci`, the pinned
 Rust). L is a Linux build, V the verify build:
@@ -230,12 +242,16 @@ Rust). L is a Linux build, V the verify build:
 | L1 | k2n7-vin | `scripts/ci/build-linux-bins.sh x86_64`: the daemon, k2-node, the root helper and the App engine (`--mem 20G`) |
 | L3 | k2n8-vin | `scripts/ci/build-linux-app.sh`: deb, rpm and AppImage. The app links the native voice stack (on by default since 0.46.9), so the job asks for `sys:libasound2-dev` and `--mem 24G` (a release link needs at least 20G) |
 | V1 | k2n9-vin | the same as L1, a second time on another node (never L1's: submit refuses it in every mode) |
-| L2 | — | aarch64. Waits for the ARM Linux VM node (`K2_COMPUTE_ARM_NODE`); until then GitHub builds it. |
+| L2 | k2n10-vin | `scripts/ci/build-linux-bins.sh aarch64`: the aarch64 set, cross-compiled on the x86_64 node with zig (`cargo zigbuild`, glibc 2.28 floor). zig and cargo-zigbuild come from `--needs` at the versions in `scripts/ci/cross-pins.sh`; no `rust@` need, so the node installs `rust-toolchain.toml`'s channel and its `aarch64-unknown-linux-gnu` target (a job can't add a target itself) |
+| V2 | k2n11-vin | the same as L2 on another node; must equal L2 byte for byte (never L2's node) |
 
 `K2_COMPUTE_X86_NODE`, `K2_COMPUTE_APP_NODE` and `K2_COMPUTE_VERIFY_NODE`
 change the nodes (`K2_COMPUTE_NODE` moves L1 and L3 together; never onto
 V1's node, so `K2_COMPUTE_NODE=k2n9-vin` needs another
-`K2_COMPUTE_VERIFY_NODE`). L1, V1 (and L2) are `--exclusive`: each runs
+`K2_COMPUTE_VERIFY_NODE`). `K2_COMPUTE_ARM_NODE` and
+`K2_COMPUTE_ARM_VERIFY_NODE` move L2 and V2. Every job asks for 8 CPUs
+(`K2_COMPUTE_CPUS`; the Ryzens' default of 4 roughly doubles a build). L1,
+V1, L2 and V2 are `--exclusive`: each runs
 alone on its node, so no other job, its own workspace's included, shares
 its uid while the OAuth values are in its env. That needs the node
 owner's share for the release server to allow `exclusive` (see the
@@ -272,29 +288,32 @@ boxes, and the daemon is the file the signing user signs from compute
 
 **Running a compute release.** Before the first one:
 - the release checkout's workspace on z3mbpZ (`pod-leader`) needs grants
-  with `--ci` on k2n7-vin, k2n8-vin and k2n9-vin (`--ci` also allows
+  with `--ci` on k2n7-vin to k2n11-vin (`--ci` also allows
   `--exclusive`; on a node z3mbpZ shares, its share needs `exclusive`);
 - each release node has `kernel.yama.ptrace_scope >= 1`;
-- the OAuth vault grants below exist;
-- the repo variable is set:
-  `gh variable set LINUX_BUILDS -b compute --repo Alakazam-211/K2`;
+- the OAuth vault grants below exist (L1, V1, L2 and V2's nodes);
+- the release Mac's `gh` is a repo admin (release.sh sets `LINUX_BUILDS`);
 - a signer that accepts compute builds (below).
 
-Then run `K2_LINUX_BUILDS=compute ./scripts/release.sh <version>`.
+Then run `./scripts/release.sh <version>` (compute is the default).
 
-Every problem up to Step 9 stops the release before anything is pushed
-or tagged, and prints how to fall back. Then:
+Every compute problem up to Step 9 sends that part to GitHub before
+anything is pushed or tagged (see "Fallback" above). Then:
 - **Step 8.5** stages the verified files in `daemon-dist` (an earlier
   run's staged files are removed first, in every mode).
 - **Before Step 8.9 pushes**, the release commit's tree must equal C's.
-- **Step 9** publishes every staged x86 file but the daemon in the one
+- **Step 9** publishes every staged file but the two daemons in the one
   `gh release create`.
 - **Step 10.5** runs `scripts/sign-daemon.sh <v> --from-dir <daemon-dist>
-  --compute-verdict <audit dir>`: the x86 daemon is signed (U1 and U2)
-  only if an ok verdict lists its exact bytes for the tag's tree. Then
-  it, its signatures and the `linux-x86_64` manifest keys go up; aarch64
-  still comes from GitHub's attested build. The root helper, node and
-  engine are signed with the root-helper key, as before.
+  --compute-verdict <audit dir>`: each daemon is signed (U1 and U2) only
+  if an ok verdict lists its exact bytes for the tag's tree. Then they,
+  their signatures and the `linux-*` manifest keys go up (aarch64 from
+  GitHub's attested build only when it fell back). The root helper, node
+  and engine, already on the release, are signed with the root-helper key,
+  as before.
+- **Step 10.6** checks deb, rpm and AppImage against
+  `SHA256SUMS-linux-x86_64.txt` once; the Arch package isn't waited for
+  (the summary says when it's still building).
 
 A `K2_RELEASE_RESUME` run submits the jobs again at Step 7.9c.
 
@@ -302,10 +321,12 @@ A `K2_RELEASE_RESUME` run submits the jobs again at Step 7.9c.
 (`K2_SIGNER=k2sign`, `scripts/k2sign/`). Compute verdicts are written by
 the release user and trust the controller, so they are no evidence for
 it (prd-signing-user-v1 A4). Instead (S3b), Step 10.5 hands the signer
-L1's and V1's **node-signed receipts** and the commit object L1 built
-(`compute_release.py evidence-bundle`, `k2sign compute-evidence`). The
-signer signs the compute-built x86 daemon only when all of these hold,
-each checked by the signer itself:
+L1's and V1's **node-signed receipts** (and L2's and V2's when aarch64
+came from compute: `--arches x86_64,aarch64`) and the commit object L1
+built (`compute_release.py evidence-bundle`, `k2sign compute-evidence`).
+The signer signs a compute-built daemon only when all of these hold, each
+checked by the signer itself (aarch64: the `_aarch64` policy lines, with
+L2 and V2 in place of L1 and V1):
 - each receipt's signature verifies with a node key pinned in
   `/usr/local/etc/k2sign/compute-pins` (root, `k2sign-admin
   pin-compute-node`), never a key the caller sends;
@@ -318,7 +339,9 @@ each checked by the signer itself:
   know, and ships nothing that changes the build: no `--with`, no
   `src_path`, no `cwd`, no `--cache`; needs exactly
   `rust@<pin> cmake@3 sys:pkg-config sys:zlib1g-dev` (the pin read from
-  `rust-toolchain.toml` at the tag, on GitHub) and no other packages; env
+  `rust-toolchain.toml` at the tag, on GitHub; aarch64: `cmake@3
+  sys:pkg-config sys:zlib1g-dev zig@<v> cargo:cargo-zigbuild@<v>`, no
+  `rust@`) and no other packages; env
   exactly `BUILD_COMMIT`/`BUILD_TREE` set to what it built; artifacts
   `dist/*`;
 - each job was a **secret job** (the Gmail id and secret from the vault,
@@ -347,18 +370,21 @@ same bundle again is checked and kept, another one is refused, until root
 runs `k2sign-admin clear-compute-evidence <version>` (audited), for new
 evidence or the GitHub fallback. `k2sign compute-rehearse` runs every
 check but the tag on a shadow run's receipts against the real pins
-(read-only), for the ceremony and before a release. aarch64 still needs GitHub's
-attestation. The pre-flight (`k2_compute_signer_check`) refuses compute
-mode before any build unless the signer has the controller and both
-release nodes pinned and a V1 node is set. Pinning is in
+(read-only), for the ceremony and before a release. An aarch64 daemon
+signs from compute only when the registered evidence has L2 and V2;
+otherwise it needs GitHub's attestation. The pre-flight
+(`k2_compute_signer_check`) sends Linux (or only aarch64) to GitHub before
+any build unless the signer has the controller and the release nodes
+pinned and the verify nodes are set. Pinning is in
 `docs/release/updater-key-ceremony.md`, "K2 Compute builds (S3b)".
 `shadow` needs none of this (nothing from compute is signed).
 
-**Fallback:**
-1. `gh variable set LINUX_BUILDS -b github --repo Alakazam-211/K2`
-2. `K2_LINUX_BUILDS=github ./scripts/release.sh <v>`. If the Mac build
-   and notarization already finished, add `K2_RELEASE_RESUME=8`
-   (publish only; release.sh prints the right line).
+**GitHub on purpose:** `K2_LINUX_BUILDS=github ./scripts/release.sh <v>`
+(release.sh sets the repo variable back to `github` before the tag). With
+`K2_COMPUTE_FALLBACK=0` a compute problem stops the release; then re-run
+with `K2_LINUX_BUILDS=github`, adding `K2_RELEASE_RESUME=8` if the Mac
+build and notarization already finished (release.sh prints the right
+line).
 
 **OAuth** (`K2_COMPUTE_OAUTH`):
 - **`secret`** (the default): the Gmail client id and secret, plus the

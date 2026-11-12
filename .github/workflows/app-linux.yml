@@ -45,11 +45,12 @@ env:
 jobs:
   build-linux-app:
     name: Build K2 app bundles (x86_64 deb/rpm/AppImage)
-    # With the repo variable LINUX_BUILDS=compute a tag push builds nothing
-    # here: release.sh published the bundles from K2 Compute before the tag
-    # (prd-ci-release-on-compute-stage1-v1 §7). The sums job needs this one,
-    # so it skips too. A manual dispatch always builds (the fallback).
-    if: github.event_name != 'push' || vars.LINUX_BUILDS != 'compute'
+    # With the repo variable LINUX_BUILDS=compute or compute-all a tag push
+    # builds nothing here: release.sh published the bundles from K2 Compute
+    # before the tag (prd-ci-release-on-compute-stage1-v1 §7). The sums job
+    # needs this one, so it skips too. A manual dispatch always builds (the
+    # fallback).
+    if: github.event_name != 'push' || (vars.LINUX_BUILDS != 'compute' && vars.LINUX_BUILDS != 'compute-all')
     runs-on: [self-hosted, linux, k2-linux]
     outputs:
       sums_b64: ${{ steps.collect.outputs.sums_b64 }}

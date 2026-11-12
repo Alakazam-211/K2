@@ -5,7 +5,12 @@
 # on the release, each on its own runner. By now the release is live, so
 # nothing here can stop it; this tells the person running it what happened.
 #
-#   k2_linux_sums_step <version> <wait-min>
+#   k2_linux_sums_step <version> <wait-min> [arch-later]
+#
+# arch-later (release.sh compute mode: deb/rpm/AppImage and their lines are
+# on the release before this runs): when only the Arch package is missing,
+# that is fine now (it builds on k2-arch on its own), ARCH_PKG_PENDING=1 and
+# no wait. Anything else missing or wrong fails as usual.
 #
 # Runs `scripts/linux-sums.sh check` once per poll until it passes, a line
 # is wrong, or <wait-min> runs out. When the tag's arch-package.yml run has
@@ -19,6 +24,8 @@
 #   ARCH_PKG_FAILED    1 when the Arch build failed and its package is
 #                      still not complete on the release
 #   ARCH_PKG_RUN_URL   that run's page
+#   ARCH_PKG_PENDING   1 (arch-later only) when the Arch package was still
+#                      missing and not waited for
 #
 # Environment: K2_RELEASE_REPO (default Alakazam-211/K2),
 #              K2_SUMS_POLL_SECS (default 30; tests set 0).
@@ -58,7 +65,7 @@ _k2_arch_failed_report() {
 }
 
 k2_linux_sums_step() {
-    local version="$1" wait_min="${2:-120}"
+    local version="$1" wait_min="${2:-120}" arch_mode="${3:-}"
     local tag="v${version}" pkg="k2-${version}-x86_64.pkg.tar.zst"
     local poll="${K2_SUMS_POLL_SECS:-30}"
     local sums="$_K2_SUMS_STEP_DIR/../linux-sums.sh"
@@ -67,6 +74,7 @@ k2_linux_sums_step() {
     LINUX_SUMS_FAILED=""
     ARCH_PKG_FAILED=""
     ARCH_PKG_RUN_URL=""
+    ARCH_PKG_PENDING=""
     while :; do
         rc=0
         out="$(bash "$sums" check "$version" 2>&1)" || rc=$?
@@ -115,6 +123,14 @@ EOF
         if [ -n "$ARCH_PKG_FAILED" ] && [ -z "$others" ] && printf '%s\n' "$out" | grep -qF "$pkg"; then
             k2_wait_done
             echo "  ✓ deb, rpm and AppImage match SHA256SUMS-linux-x86_64.txt. Only the Arch package is missing." >&2
+            return 0
+        fi
+        if [ "$arch_mode" = arch-later ] && [ -z "$others" ] && printf '%s\n' "$out" | grep -qF "$pkg"; then
+            k2_wait_done
+            ARCH_PKG_PENDING=1
+            echo "  ✓ deb, rpm and AppImage match SHA256SUMS-linux-x86_64.txt. The Arch package (${pkg}) is still" >&2
+            echo "    building on k2-arch (arch-package.yml) and is not waited for. Check it later:" >&2
+            echo "      bash scripts/linux-sums.sh check ${version} --wait-min 60" >&2
             return 0
         fi
 

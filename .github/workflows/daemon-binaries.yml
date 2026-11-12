@@ -98,6 +98,11 @@ env:
 jobs:
   build-linux-daemon:
     name: Build k2-daemon (${{ matrix.target }})
+    # LINUX_BUILDS=compute-all: release.sh built, signed and published BOTH
+    # arches from K2 Compute before the tag, so a tag push builds nothing
+    # here (the installer job below still runs). A manual dispatch always
+    # builds (the fallback).
+    if: github.event_name != 'push' || vars.LINUX_BUILDS != 'compute-all'
     runs-on: [self-hosted, linux, k2-linux]
     # id-token + attestations: the build-provenance attestation that
     # sign-daemon.sh requires before z3mbpZ signs a daemon (security review
@@ -112,7 +117,8 @@ jobs:
         # Who builds x86_64 (prd-ci-release-on-compute-stage1-v1 §7): on a
         # tag push with the repo variable LINUX_BUILDS=compute, release.sh
         # built, signed and published x86_64 from K2 Compute before the tag,
-        # so only aarch64 builds here (no ARM node yet). Any other tag push,
+        # so only aarch64 builds here (release.sh's aarch64 fallback,
+        # K2_COMPUTE_ARM=github). compute-all skips the job (above). Any other tag push,
         # and every manual dispatch (the fallback), builds both. release.sh
         # refuses to run when its K2_LINUX_BUILDS disagrees with the
         # variable. (A job-level if: can't read matrix, and exclude can't

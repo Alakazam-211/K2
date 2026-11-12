@@ -79,61 +79,67 @@
 #
 # Linux builds on K2 Compute (plan-ci-release-on-k2-compute-v1), switch
 #   K2_LINUX_BUILDS:
-#     github (default)  today's path: the tag starts the GitHub workflows.
-#     shadow            stage 0. Also builds the Linux x86 set on K2 Compute
-#                       BEFORE the tag (Step 1.6c, beside the Mac build),
-#                       fetches it and checks each job's signed receipt
-#                       against the release commit (Step 7.9c), then
-#                       compares the files with the GitHub-built assets
-#                       (Step 10.7, the shadow report). Publishes and signs
-#                       nothing from compute; a compute problem only warns.
-#                       Step 7.9c waits K2_COMPUTE_WAIT_MIN (default 60);
-#                       jobs still running then are left alone and
-#                       collected at Step 10.7 (up to K2_COMPUTE_LATE_WAIT_MIN
-#                       more, default 60), so a slow node never holds the
-#                       release up longer than the first wait.
-#                       Needs this Mac's K2 as a server on the nodes with a
-#                       grant (k2 compute nodes). Settings and node names:
-#                       scripts/lib/compute-release.sh. Audit:
-#                       ~/k2-release-audit/<v>/compute/.
-#     compute           stage 1 (prd-ci-release-on-compute-stage1-v1 §7):
-#                       the compute-built x86 Linux files ARE the release.
-#                       - 1.6c: submit L1 (the binaries), L3 (deb/rpm/
-#                         AppImage) and V1 (the binaries again on another
-#                         node, never L1's), --tier ci, OAuth as vault
-#                         secrets; L1 and V1 --exclusive.
-#                       - 7.9c: wait, fetch, verify. V1 must reproduce the
+#     compute (default) the compute-built Linux files ARE the release, and no
+#                       release step waits on GitHub
+#                       (prd-ci-release-on-compute-stage1-v1 §7):
+#                       - 1.6c: submit, beside the Mac build, --tier ci:
+#                         L1 (x86_64 binaries), V1 (the same again on
+#                         another node), L3 (deb/rpm/AppImage), L2 (aarch64
+#                         binaries, cross-compiled with zig on an x86_64
+#                         node) and V2 (L2 again on another node). The
+#                         binaries jobs get the OAuth values as vault
+#                         secrets and run --exclusive.
+#                       - 7.9c: wait, fetch, verify. V1 must reproduce L1's
 #                         daemon, root helper, k2-node and engine byte for
-#                         byte, on another node (node_fp) than L1.
+#                         byte on another node (node_fp), V2 the same for L2.
 #                       - 8.5: stage the verified files in daemon-dist.
 #                       - 8.9: the release commit's tree must be the tree
-#                         compute built, before anything is pushed.
-#                       - 9: every staged x86 file but the daemon in the
+#                         compute built; then the repo variable LINUX_BUILDS
+#                         is set to what this run did (compute-all: GitHub
+#                         builds no Linux binaries; compute: GitHub builds
+#                         aarch64), right before the tag push.
+#                       - 9: every staged file but the two daemons in the
 #                         one gh release create.
 #                       - 10.5: scripts/sign-daemon.sh <v> --from-dir
-#                         <daemon-dist> --compute-verdict <audit dir>
-#                         checks the daemon against the verdicts, signs
-#                         it (U1 + U2), uploads it and lists it in
-#                         daemon-latest.json; the sign-* scripts sign
-#                         the root helper, node and engine as before.
-#                       Any problem before 10.5 stops the release before
-#                       the tag. Needs the repo variable LINUX_BUILDS=
-#                       compute (then daemon-binaries.yml builds only
-#                       aarch64 and app-linux.yml skips; the pre-flight
-#                       refuses a mismatch either way), K2_COMPUTE_OAUTH=
-#                       secret (the default) with the vault grants.
-#                       Under the signing user (K2_SIGNER=k2sign, S3b),
-#                       10.5 hands the signer L1's and V1's node-signed
-#                       receipts and the built commit; it checks them
-#                       against node keys and the controller it pinned
-#                       (k2sign-admin pin-compute-*), so the pre-flight
-#                       needs both release nodes and the controller pinned
-#                       and a V1 node (k2_compute_signer_check).
-#                       Fallback: gh variable set LINUX_BUILDS -b github,
-#                       then K2_LINUX_BUILDS=github (add K2_RELEASE_RESUME=8
-#                       to reuse a finished Mac build).
-#   aarch64 stays on GitHub until the ARM Linux VM node exists
-#   (K2_COMPUTE_ARM_NODE, plan G10).
+#                         <daemon-dist> --compute-verdict <audit dir> signs
+#                         both daemons from the stage (the signing user
+#                         checks the node-signed receipts itself, S3b) and
+#                         uploads them; the sign-* scripts sign the root
+#                         helper, node and engine, already on the release.
+#                       - 10.6: deb/rpm/AppImage vs SHA256SUMS, checked once.
+#                         The Arch package (arch-package.yml on k2-arch)
+#                         follows on its own and is not waited for.
+#                       FALLBACK (K2_COMPUTE_FALLBACK=1, the default): when
+#                       compute can't do it (not ready at the pre-flight, a
+#                       job that fails or doesn't verify, the tree check),
+#                       always before the tag, release.sh says so in a
+#                       banner and in the final summary and GitHub builds
+#                       instead: all of Linux for an x86_64 problem, only
+#                       aarch64 for an aarch64 one (Steps 10.5/10.6 then
+#                       wait for GitHub, as in github mode).
+#                       K2_COMPUTE_FALLBACK=0 stops the release instead.
+#                       Under the signing user (K2_SIGNER=k2sign) the
+#                       pre-flight needs the controller and every release
+#                       node pinned (k2sign-admin pin-compute-*;
+#                       k2_compute_signer_check) and the policy's aarch64
+#                       lines (scripts/k2sign/install.sh from this commit).
+#                       The repo variable is set by release.sh, which needs
+#                       repo admin on this gh.
+#     github            the GitHub workflows build Linux after the tag
+#                       (the old path; the switch to use it on purpose).
+#     shadow            also builds the Linux set on K2 Compute BEFORE the
+#                       tag (Step 1.6c), fetches it and checks each job's
+#                       signed receipt (Step 7.9c), then compares the files
+#                       with the GitHub-built assets (Step 10.7, the shadow
+#                       report). Publishes and signs nothing from compute; a
+#                       compute problem only warns. Step 7.9c waits
+#                       K2_COMPUTE_WAIT_MIN (default 60); jobs still running
+#                       then are collected at Step 10.7 (up to
+#                       K2_COMPUTE_LATE_WAIT_MIN more, default 60).
+#   K2_COMPUTE_ARM=github keeps aarch64 on GitHub in compute mode.
+#   Settings and node names: scripts/lib/compute-release.sh. Needs this
+#   Mac's K2 as a server on the nodes with a grant (k2 compute nodes).
+#   Audit: ~/k2-release-audit/<v>/compute/.
 #
 # Pre-flight gates (Step 0.5 + the Linux gate of 0.6), switch K2_RELEASE_GATES:
 #   compute (default)  every gate is its own K2 Compute job at HEAD (plus
@@ -373,36 +379,56 @@ k2_release_preview_commit() {
 }
 
 # ── Linux builds on K2 Compute (see the header; K2_LINUX_BUILDS) ──
-K2_LINUX_BUILDS="${K2_LINUX_BUILDS:-github}"
+K2_LINUX_BUILDS="${K2_LINUX_BUILDS:-compute}"
 export K2_LINUX_BUILDS
 case "$K2_LINUX_BUILDS" in
     github|shadow|compute) ;;
     *)
-        echo "ERROR: K2_LINUX_BUILDS must be github, shadow or compute (got ${K2_LINUX_BUILDS})" >&2
+        echo "ERROR: K2_LINUX_BUILDS must be compute, github or shadow (got ${K2_LINUX_BUILDS})" >&2
         exit 1
         ;;
+esac
+K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-compute}"
+export K2_COMPUTE_ARM
+case "$K2_COMPUTE_ARM" in
+    compute|github) ;;
+    *)
+        echo "ERROR: K2_COMPUTE_ARM must be compute or github (got ${K2_COMPUTE_ARM})" >&2
+        exit 1
+        ;;
+esac
+case "${K2_COMPUTE_FALLBACK:-1}" in
+    0|1) ;;
+    *) echo "ERROR: K2_COMPUTE_FALLBACK must be 1 or 0 (got ${K2_COMPUTE_FALLBACK})" >&2; exit 1 ;;
 esac
 K2_SHADOW_STATE=""
 K2_SHADOW_NOTE=""
 K2_SHADOW_LATE=0
+# What fell back to GitHub and why ("" = nothing did). Said loudly when it
+# happens and again in the final summary.
+K2_COMPUTE_FELL_BACK=""
 
 # Compute mode under the signing user (K2_SIGNER=k2sign, prd-signing-user-v1
-# S3b): at Step 10.5 the signer takes L1's and V1's node-signed receipts and
-# checks them against the node keys and controller IT pinned. Both release
-# nodes and the controller must be pinned there, and V1 must run on its own
-# node: the signer requires the dual build. Read-only (k2sign compute-pins).
+# S3b): at Step 10.5 the signer takes the node-signed receipts (L1 and V1,
+# plus L2 and V2 for aarch64) and checks them against the node keys and
+# controller IT pinned. Those nodes and the controller must be pinned there,
+# and each verify job must run on its own node: the signer requires the dual
+# build. Read-only (k2sign compute-pins). <arch>: x86_64 or aarch64.
 k2_compute_signer_check() {
-    local l1 v1 pins
-    l1="$(k2cr_x86_node)"
-    v1="$(k2cr_verify_node)"
+    local arch="${1:-x86_64}" l1 v1 lab vlab pins
+    if [ "$arch" = aarch64 ]; then
+        l1="$(k2cr_arm_node)" v1="$(k2cr_arm_verify_node)" lab=L2 vlab=V2
+    else
+        l1="$(k2cr_x86_node)" v1="$(k2cr_verify_node)" lab=L1 vlab=V1
+    fi
     if [ "${K2_COMPUTE_OAUTH:-secret}" != secret ]; then
         echo "ERROR: K2_COMPUTE_OAUTH=${K2_COMPUTE_OAUTH}, but the signing user signs a compute-built daemon only from" >&2
         echo "  secret jobs (the OAuth values from the vault): a job with them in --env may share the node's caches." >&2
         return 1
     fi
     if [ -z "$v1" ]; then
-        echo "ERROR: K2_COMPUTE_VERIFY_NODE=none, but the signing user (K2_SIGNER=k2sign) signs a compute-built" >&2
-        echo "  daemon only with the V1 dual build on a second node. Name a verify node, or use K2_LINUX_BUILDS=shadow." >&2
+        echo "ERROR: no $vlab node, but the signing user (K2_SIGNER=k2sign) signs a compute-built" >&2
+        echo "  daemon only with the dual build on a second node. Name a verify node, or use K2_LINUX_BUILDS=shadow." >&2
         return 1
     fi
     if ! pins="$(k2u_compute_pins)"; then
@@ -410,16 +436,16 @@ k2_compute_signer_check() {
         echo "  scripts/k2sign/install.sh from this commit (S3b), then pin the nodes (docs/release/updater-key-ceremony.md)." >&2
         return 1
     fi
-    python3 -I - "$pins" "$l1" "$v1" <<'PY'
+    python3 -I - "$pins" "$l1" "$v1" "$lab" "$vlab" <<'PY'
 import json, os, sys
-p, l1, v1 = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+p, l1, v1, lab, vlab = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 names = {n["name"] for n in p.get("nodes") or []}
 bad = []
 if not p.get("controller"):
     bad.append("no controller pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <controller_fp read on a node> /Users/%s/.k2/tunnel-key.pem" % os.environ.get("USER", "<you>"))
 if l1 == v1:
-    bad.append("L1 and V1 are both %s: the dual build needs two nodes" % l1)
-for role, n in (("L1", l1), ("V1", v1)):
+    bad.append("%s and %s are both %s: the dual build needs two nodes" % (lab, vlab, l1))
+for role, n in ((lab, l1), (vlab, v1)):
     if n not in names:
         bad.append("%s's node %s is not pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node %s /abs/path/%s.pem <its node_fp, read on the node>" % (role, n, n, n))
 if bad:
@@ -427,83 +453,212 @@ if bad:
     for b in bad:
         print("  - " + b, file=sys.stderr)
     sys.exit(1)
-print("  Signing user: compute builds from L1 %s and V1 %s for controller %s… (prd-signing-user-v1 S3b)." % (l1, v1, p["controller"][:16]))
+print("  Signing user: compute builds from %s %s and %s %s for controller %s… (prd-signing-user-v1 S3b)." % (lab, l1, vlab, v1, p["controller"][:16]))
 PY
 }
 
 # The repo variable LINUX_BUILDS tells the tag-push workflows who builds
-# x86 Linux: "compute" = daemon-binaries.yml builds only aarch64 and
-# app-linux.yml skips. It must agree with this run, or GitHub would build
-# nothing for x86 (github/shadow here, compute there) or overwrite the
-# compute-built files (compute here, not there).
-k2_linux_builds_preflight() {
-    local var
-    var="$(gh variable get LINUX_BUILDS --repo "$RELEASE_REPO" 2>/dev/null || true)"
-    if [ "$K2_LINUX_BUILDS" = "compute" ]; then
-        if [ "$var" != "compute" ]; then
-            echo "ERROR: K2_LINUX_BUILDS=compute, but the repo variable LINUX_BUILDS is '${var:-unset}'." >&2
-            echo "  GitHub would also build x86 Linux after the tag and overwrite the compute-built files." >&2
-            echo "  Set it first: gh variable set LINUX_BUILDS -b compute --repo $RELEASE_REPO" >&2
-            exit 1
-        fi
+# Linux: "compute-all" = daemon-binaries.yml builds nothing and app-linux.yml
+# skips (this run built x86_64 AND aarch64 on compute); "compute" = only
+# aarch64 builds on GitHub (x86_64 on compute); anything else or unset =
+# GitHub builds both. release.sh sets it itself, right before the tag push
+# (k2_linux_builds_set_var), to what this run really did, so a fallback can't
+# leave GitHub building nothing.
+k2_linux_builds_want_var() {
+    if [ "$K2_LINUX_BUILDS" = compute ]; then
+        if [ "$K2_COMPUTE_ARM" = compute ]; then printf 'compute-all'; else printf 'compute'; fi
+    else
+        printf 'github'
+    fi
+}
+k2_linux_builds_get_var() { gh variable get LINUX_BUILDS --repo "$RELEASE_REPO" 2>/dev/null || true; }
+# 0 = the variable already says <want> (unset counts as github).
+k2_linux_builds_var_is() {
+    local cur
+    cur="$(k2_linux_builds_get_var)"
+    [ "$cur" = "$1" ] || { [ -z "$cur" ] && [ "$1" = github ]; }
+}
+# 0 = this gh may set repo variables (repo admin).
+k2_linux_builds_can_set_var() {
+    [ "$(gh api "repos/$RELEASE_REPO" --jq .permissions.admin 2>/dev/null || true)" = "true" ]
+}
+
+# Every check compute mode needs before any build, for one arch. Non-zero,
+# with the reasons on stderr, when that arch can't come from compute.
+k2_compute_ready() {
+    local arch="$1"
+    if [ "$arch" = x86_64 ]; then
         case "${K2_COMPUTE_OAUTH:-secret}" in
             secret|env) ;;
             *)
                 echo "ERROR: K2_LINUX_BUILDS=compute needs K2_COMPUTE_OAUTH=secret (got ${K2_COMPUTE_OAUTH}):" >&2
                 echo "  a daemon built without the Gmail OAuth values must never ship." >&2
-                exit 1
+                return 1
                 ;;
         esac
-        # The signing user signs the compute-built x86 daemon only on the
-        # node-signed receipts it checks itself (prd-signing-user-v1 S3b).
-        # Stop now, not at Step 10.5 after the release is live, if it can't.
         # V1 on L1's node is no second build, whoever signs (Step 1.6c
         # refuses it too, in every mode).
-        k2cr_check_dual_nodes || exit 1
+        local l1 v1
+        l1="$(k2cr_x86_node)" v1="$(k2cr_verify_node)"
+        if [ -n "$v1" ] && [ "$l1" = "$v1" ]; then
+            echo "  ✗ L1 and V1 are both on $l1: the dual build needs two nodes. Set K2_COMPUTE_VERIFY_NODE to another node." >&2
+            return 1
+        fi
         if [ "${K2_COMPUTE_EXCLUSIVE:-1}" != 1 ]; then
             echo "ERROR: K2_LINUX_BUILDS=compute needs the release builds --exclusive (K2_COMPUTE_EXCLUSIVE=${K2_COMPUTE_EXCLUSIVE}):" >&2
             echo "  the signing user refuses a build that other jobs could have run beside." >&2
-            exit 1
+            return 1
         fi
-        if [ "$K2_SIGNER" = "k2sign" ]; then
-            k2_compute_signer_check || exit 1
-        fi
-        if [ -z "$(k2cr_verify_node)" ]; then
-            echo "  ⚠⚠ K2_COMPUTE_VERIFY_NODE=none: NO dual build. The daemon, the root helper, k2-node and the App engine" >&2
-            echo "  ⚠⚠ ship from ONE node's word (plan §6). Use it only when a release node is down." >&2
-        fi
-        echo "  Linux x86: K2 Compute (stage 1); aarch64 and Arch: GitHub. Repo variable LINUX_BUILDS=compute."
-    elif [ "$var" = "compute" ]; then
-        echo "ERROR: the repo variable LINUX_BUILDS is 'compute', so GitHub will NOT build x86 Linux after the tag," >&2
-        echo "  but this run is K2_LINUX_BUILDS=${K2_LINUX_BUILDS}. Either run with K2_LINUX_BUILDS=compute, or:" >&2
-        echo "  gh variable set LINUX_BUILDS -b github --repo $RELEASE_REPO" >&2
-        exit 1
+    else
+        k2cr_check_arm_nodes || return 1
+    fi
+    # The signing user signs a compute-built daemon only on the node-signed
+    # receipts it checks itself (prd-signing-user-v1 S3b). Find out now, not
+    # at Step 10.5 after the release is live.
+    if [ "$K2_SIGNER" = "k2sign" ]; then
+        k2_compute_signer_check "$arch" || return 1
     fi
 }
+
+# Say it plainly, once: what goes to GitHub instead and why. <scope>: all
+# (x86_64 and aarch64) or arm (aarch64 only). Only ever before the tag.
+# K2_COMPUTE_FALLBACK=0: stop the release instead (nothing pushed yet).
+k2_compute_fallback() {
+    local scope="$1"
+    shift
+    if [ "${K2_COMPUTE_FALLBACK:-1}" != 1 ]; then
+        k2_compute_fatal "$*"
+    fi
+    local what="Linux x86_64 AND aarch64"
+    [ "$scope" = arm ] && what="Linux aarch64"
+    {
+        echo ""
+        echo "  ════════════════════════════════════════════════════════════════════"
+        echo "  ⚠⚠ K2 COMPUTE FAILED: ${what} FALL BACK TO GITHUB FOR THIS RELEASE ⚠⚠"
+        echo "  why: $*"
+        [ -n "$K2_SHADOW_STATE" ] && echo "  audit: ${K2_SHADOW_STATE}/summary.txt"
+        echo "  GitHub's workflows build ${what} after the tag, and Steps 10.5/10.6 wait"
+        echo "  for them (about 60-120 min more). Nothing was pushed or tagged yet."
+        echo "  To stop instead next time: K2_COMPUTE_FALLBACK=0."
+        echo "  ════════════════════════════════════════════════════════════════════"
+        echo ""
+    } >&2
+    K2_COMPUTE_FELL_BACK="${K2_COMPUTE_FELL_BACK:+$K2_COMPUTE_FELL_BACK; }${what}: $*"
+    if [ "$scope" = arm ]; then
+        k2cr_cancel_arm || true
+        K2_COMPUTE_ARM=github
+    else
+        k2cr_cancel_open || true
+        K2_LINUX_BUILDS=github
+        K2_COMPUTE_ARM=github
+        k2_compute_unstage
+    fi
+}
+
+# Pre-flight (before any build): can this run build Linux on compute, and
+# can it tell GitHub so? Compute mode falls back to GitHub (loudly) when it
+# can't; K2_COMPUTE_FALLBACK=0 stops instead.
+k2_linux_builds_preflight() {
+    local err="${TMPDIR:-/tmp}/k2-compute-ready.$$"
+    if [ "$K2_LINUX_BUILDS" = "compute" ]; then
+        if ! k2_compute_ready x86_64 2>"$err"; then
+            cat "$err" >&2
+            k2_compute_fallback all "not ready for compute builds: $(grep -m1 -E 'ERROR|✗|- ' "$err" | sed 's/^ *//')"
+        elif [ "$K2_COMPUTE_ARM" = compute ] && k2cr_arm_on && ! k2_compute_ready aarch64 2>"$err"; then
+            cat "$err" >&2
+            k2_compute_fallback arm "not ready for the aarch64 compute builds: $(grep -m1 -E 'ERROR|✗|- ' "$err" | sed 's/^ *//')"
+        elif ! k2cr_arm_on; then
+            K2_COMPUTE_ARM=github
+        fi
+        rm -f "$err"
+    fi
+    if [ "$K2_LINUX_BUILDS" = "compute" ] && [ -z "$(k2cr_verify_node)" ]; then
+        echo "  ⚠⚠ K2_COMPUTE_VERIFY_NODE=none: NO dual build. The daemon, the root helper, k2-node and the App engine" >&2
+        echo "  ⚠⚠ ship from ONE node's word (plan §6). Use it only when a release node is down." >&2
+    fi
+    # The repo variable is set right before the tag push. Make sure this gh
+    # can set it, or that it already says what this run will need.
+    local want
+    want="$(k2_linux_builds_want_var)"
+    if ! k2_linux_builds_var_is "$want" && ! k2_linux_builds_can_set_var; then
+        if [ "$K2_LINUX_BUILDS" = compute ] && k2_linux_builds_var_is github; then
+            k2_compute_fallback all "this gh can't set the repo variable LINUX_BUILDS to ${want} (needs repo admin): gh variable set LINUX_BUILDS -b ${want} --repo $RELEASE_REPO"
+        else
+            echo "ERROR: the repo variable LINUX_BUILDS is '$(k2_linux_builds_get_var)', this run needs '${want}', and this gh can't set it" >&2
+            echo "  (needs repo admin). Set it, then run again: gh variable set LINUX_BUILDS -b ${want} --repo $RELEASE_REPO" >&2
+            exit 1
+        fi
+    fi
+    case "$K2_LINUX_BUILDS" in
+        compute)
+            if [ "$K2_COMPUTE_ARM" = compute ]; then
+                echo "  Linux x86_64 and aarch64: K2 Compute ($(k2cr_x86_node)+$(k2cr_verify_node), $(k2cr_arm_node)+$(k2cr_arm_verify_node); L3 ${K2_COMPUTE_APP_NODE:-${K2_COMPUTE_NODE:-k2n8-vin}}). Arch: GitHub (k2-arch), not waited for."
+            else
+                echo "  Linux x86_64: K2 Compute; aarch64 and Arch: GitHub (K2_COMPUTE_ARM=github)."
+            fi
+            ;;
+        shadow) echo "  Linux: GitHub (shadow builds on K2 Compute, compared at Step 10.7)." ;;
+        github) echo "  Linux: GitHub (K2_LINUX_BUILDS=github)." ;;
+    esac
+}
 k2_linux_builds_preflight
+
+# Right before the tag push (from k2_shadow_tree_check): the repo variable
+# says what this run really did, so GitHub builds exactly the rest.
+k2_linux_builds_set_var() {
+    local want got
+    want="$(k2_linux_builds_want_var)"
+    if k2_linux_builds_var_is "$want"; then
+        echo "  repo variable LINUX_BUILDS: ${want} (GitHub builds $(k2_linux_builds_github_part "$want"))."
+        return 0
+    fi
+    if ! gh variable set LINUX_BUILDS -b "$want" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+        echo "FATAL: could not set the repo variable LINUX_BUILDS to ${want}; nothing was pushed or tagged." >&2
+        echo "  Set it by hand, then re-run: gh variable set LINUX_BUILDS -b ${want} --repo $RELEASE_REPO" >&2
+        exit 1
+    fi
+    got="$(k2_linux_builds_get_var)"
+    if [ "$got" != "$want" ]; then
+        echo "FATAL: the repo variable LINUX_BUILDS reads '${got}' after setting it to ${want}; nothing was pushed or tagged." >&2
+        exit 1
+    fi
+    echo "  repo variable LINUX_BUILDS set to ${want} (GitHub builds $(k2_linux_builds_github_part "$want"))."
+}
+k2_linux_builds_github_part() {
+    case "$1" in
+        compute-all) printf 'no Linux binaries; Arch on k2-arch' ;;
+        compute) printf 'Linux aarch64 and Arch' ;;
+        *) printf 'every Linux file' ;;
+    esac
+}
 
 k2_shadow_warn() {
     echo "  ⚠ shadow (K2 Compute): $*" >&2
     K2_SHADOW_NOTE="${K2_SHADOW_NOTE:+$K2_SHADOW_NOTE; }$*"
 }
 
-# A K2 Compute problem: a warning in shadow mode, the end of the release in
-# compute mode (always before the tag: nothing committed, tagged or
-# published).
+# The end of the release (K2_COMPUTE_FALLBACK=0 only): always before the
+# tag, so nothing committed, tagged or published.
+k2_compute_fatal() {
+    echo "" >&2
+    echo "  FATAL (K2 Compute, stage 1): $*" >&2
+    [ -n "$K2_SHADOW_STATE" ] && echo "  FATAL: audit: ${K2_SHADOW_STATE}/summary.txt" >&2
+    echo "  FATAL: nothing was pushed, tagged or published (K2_COMPUTE_FALLBACK=0). Fix it and re-run, or let GitHub build Linux:" >&2
+    if [ -f "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" ]; then
+        # The Mac build and notarization are done: reuse them.
+        echo "  FATAL:   K2_LINUX_BUILDS=github K2_RELEASE_RESUME=8 ./scripts/release.sh ${VERSION}   (8 = publish only; keeps this Mac build)" >&2
+    else
+        echo "  FATAL:   K2_LINUX_BUILDS=github ./scripts/release.sh ${VERSION}" >&2
+    fi
+    exit 1
+}
+
+# A K2 Compute problem with the x86_64 builds: GitHub builds all of Linux
+# instead (compute mode; k2_compute_fallback), a warning in shadow mode.
 k2_compute_problem() {
     if [ "$K2_LINUX_BUILDS" = "compute" ]; then
-        echo "" >&2
-        echo "  FATAL (K2 Compute, stage 1): $*" >&2
-        [ -n "$K2_SHADOW_STATE" ] && echo "  FATAL: audit: ${K2_SHADOW_STATE}/summary.txt" >&2
-        echo "  FATAL: nothing was pushed, tagged or published. Fix it and re-run, or fall back to GitHub's Linux builds:" >&2
-        echo "  FATAL:   gh variable set LINUX_BUILDS -b github --repo $RELEASE_REPO" >&2
-        if [ -f "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" ]; then
-            # The Mac build and notarization are done: reuse them.
-            echo "  FATAL:   K2_LINUX_BUILDS=github K2_RELEASE_RESUME=8 ./scripts/release.sh ${VERSION}   (8 = publish only; keeps this Mac build)" >&2
-        else
-            echo "  FATAL:   K2_LINUX_BUILDS=github ./scripts/release.sh ${VERSION}" >&2
-        fi
-        exit 1
+        k2_compute_fallback all "$*"
+        return 0
     fi
     k2_shadow_warn "$*"
 }
@@ -512,18 +667,19 @@ k2_compute_on() { [ "$K2_LINUX_BUILDS" = "shadow" ] || [ "$K2_LINUX_BUILDS" = "c
 
 # Step 1.6c. The release commit's tree must be final now, so the lock
 # file gets the bumped workspace versions here (Step 2 would write the
-# same lines). Shadow: never fatal. Compute: any problem stops the release
-# here, before the Mac build.
+# same lines). Shadow: never fatal. Compute: a problem sends Linux to
+# GitHub (k2_compute_problem), before the Mac build.
 k2_shadow_start() {
     k2_compute_on || return 0
     echo ""
     if [ "$K2_LINUX_BUILDS" = "compute" ]; then
-        echo "Step 1.6c: Linux x86 builds on K2 Compute (COMPUTE: these files are the release)..."
+        echo "Step 1.6c: Linux builds on K2 Compute (COMPUTE: these files are the release)..."
     else
         echo "Step 1.6c: Linux builds on K2 Compute (SHADOW: GitHub stays the source of truth)..."
     fi
     if ! cargo update --workspace --offline >/dev/null 2>"/tmp/k2-shadow-lock-${VERSION}.err"; then
         k2_compute_problem "cargo update --workspace --offline failed ($(head -c 200 "/tmp/k2-shadow-lock-${VERSION}.err")); the tagged tree may differ"
+        k2_compute_on || return 0
     fi
     local commit
     if ! commit="$(k2_release_preview_commit)"; then
@@ -538,11 +694,18 @@ k2_shadow_start() {
         return 0
     fi
     echo "  Release commit ${commit:0:12} (tree ${K2CR_TREE:0:12}); audit ${K2_SHADOW_STATE}"
-    k2cr_submit_release_set || k2_compute_problem "not every compute job was submitted"
+    if ! k2cr_submit_release_set; then
+        k2_compute_problem "not every compute job was submitted"
+        k2_compute_on || return 0
+    fi
+    if [ "$K2_LINUX_BUILDS" = compute ] && [ "$K2_COMPUTE_ARM" = compute ] && [ "${K2CR_ARM_SUBMIT_OK:-}" != 1 ]; then
+        k2_compute_fallback arm "the aarch64 jobs (L2, V2) were not submitted"
+    fi
 }
 
-# Step 7.9c: wait, fetch, verify. Shadow: never fatal. Compute: fatal, and
-# a K2_RELEASE_RESUME run (no jobs: the first run's exit cancelled them)
+# Step 7.9c: wait, fetch, verify. Shadow: never fatal. Compute: an x86_64
+# problem sends all of Linux to GitHub, an aarch64 one only aarch64; a
+# K2_RELEASE_RESUME run (no jobs: the first run's exit cancelled them)
 # submits them now and waits.
 k2_shadow_collect() {
     k2_compute_on || return 0
@@ -552,6 +715,7 @@ k2_shadow_collect() {
         if [ "$K2_LINUX_BUILDS" = "compute" ]; then
             echo "  No compute jobs from this run (a K2_RELEASE_RESUME run): submitting them now."
             k2_shadow_start
+            k2_compute_on || return 0
         else
             k2_shadow_warn "no compute jobs to collect (not submitted, or a K2_RELEASE_RESUME run)"
             return 0
@@ -569,54 +733,83 @@ k2_shadow_collect() {
         fi
         k2cr_collect || k2_shadow_warn "not every compute build verified (see ${K2_SHADOW_STATE}/summary.txt)"
     else
-        # Compute: these files are the release, so every problem stops it
-        # here, before the tag.
-        k2cr_wait "${K2_COMPUTE_WAIT_MIN:-60}" || k2_compute_problem "jobs not done in ${K2_COMPUTE_WAIT_MIN:-60} min"
-        k2cr_collect || k2_compute_problem "not every compute build verified (see ${K2_SHADOW_STATE}/summary.txt)"
+        # Compute: these files are the release, so a problem sends them to
+        # GitHub here, before the tag.
+        if ! k2cr_wait "${K2_COMPUTE_WAIT_MIN:-60}"; then
+            k2_compute_problem "jobs not done in ${K2_COMPUTE_WAIT_MIN:-60} min"
+            return 0
+        fi
+        k2cr_collect || true
+        if [ "${K2CR_X86_OK:-}" != 1 ]; then
+            k2_compute_problem "the x86_64 builds did not all verify (see ${K2_SHADOW_STATE}/summary.txt)"
+            return 0
+        fi
         if [ ! -s "$K2_SHADOW_STATE/V1.verdict.json" ] && [ -n "$(k2cr_verify_node)" ]; then
             k2_compute_problem "no V1 verdict: the dual build didn't run"
+            return 0
+        fi
+        if [ "$K2_COMPUTE_ARM" = compute ] && [ "${K2CR_ARM_OK:-}" != 1 ]; then
+            k2_compute_fallback arm "the aarch64 builds (L2, V2) did not all verify (see ${K2_SHADOW_STATE}/summary.txt)"
         fi
     fi
     echo "  waited $(( ($(date +%s) - t0) / 60 )) min after the Mac build."
 }
 
-# Before Step 8.9 pushes: the commit about to be tagged must have the tree
-# compute built. Compute: fatal (nothing pushed yet). Shadow: a warning.
+# Before Step 8.9 pushes: the repo variable says what this run did, and the
+# commit about to be tagged must have the tree compute built. Compute: a
+# tree mismatch sends Linux to GitHub (nothing pushed yet). Shadow: a warning.
 k2_shadow_tree_check() {
-    k2_compute_on && [ -n "$K2_SHADOW_STATE" ] || return 0
-    local tagged
-    tagged="$(git rev-parse 'HEAD^{tree}')"
-    if [ "$tagged" = "$K2CR_TREE" ]; then
-        echo "  ✓ the release commit's tree is the tree K2 Compute built (${tagged:0:12})." | tee -a "$K2_SHADOW_STATE/summary.txt"
-    else
-        echo "  ✗ release tree ${tagged:0:12} != compute-built tree ${K2CR_TREE:0:12}" | tee -a "$K2_SHADOW_STATE/summary.txt"
-        k2_compute_problem "the release commit's tree differs from the one compute built"
+    if k2_compute_on && [ -n "$K2_SHADOW_STATE" ]; then
+        local tagged
+        tagged="$(git rev-parse 'HEAD^{tree}')"
+        if [ "$tagged" = "$K2CR_TREE" ]; then
+            echo "  ✓ the release commit's tree is the tree K2 Compute built (${tagged:0:12})." | tee -a "$K2_SHADOW_STATE/summary.txt"
+        else
+            echo "  ✗ release tree ${tagged:0:12} != compute-built tree ${K2CR_TREE:0:12}" | tee -a "$K2_SHADOW_STATE/summary.txt"
+            k2_compute_problem "the release commit's tree differs from the one compute built"
+        fi
     fi
+    k2_linux_builds_set_var
 }
 
-# Step 8.5 (compute): the verified x86 files go into DIST_DIR, where the
-# manifest, signing and Step 9 pick them up. Files a previous compute run
-# staged are removed first in every mode, so an old build never rides
-# along with a later release.
-k2_compute_stage() {
+# Files an earlier compute run staged in DIST_DIR go (only those, never
+# outside DIST_DIR), so an old build never rides along with a later release.
+k2_compute_unstage() {
+    # DIST_DIR is set at Step 8.5; before it nothing was staged this run.
+    [ -n "${DIST_DIR:-}" ] || return 0
     local marker="$DIST_DIR/.compute-staged" f
-    if [ -f "$marker" ]; then
-        while IFS= read -r f; do
-            case "$f" in ""|*/*) continue ;; esac
-            rm -f "$DIST_DIR/$f" "$DIST_DIR/$f.sig"
-        done < "$marker"
-        rm -f "$marker"
-    fi
+    [ -f "$marker" ] || return 0
+    while IFS= read -r f; do
+        case "$f" in ""|*/*) continue ;; esac
+        rm -f "$DIST_DIR/$f" "$DIST_DIR/$f.sig"
+    done < "$marker"
+    rm -f "$marker"
+}
+
+# Step 8.5 (compute): the verified Linux files go into DIST_DIR, where the
+# manifest, signing and Step 9 pick them up (x86_64, and aarch64 unless it
+# fell back). Files a previous compute run staged are removed first in every
+# mode.
+k2_compute_stage() {
+    k2_compute_unstage
     [ "$K2_LINUX_BUILDS" = "compute" ] || return 0
-    k2cr_stage "$DIST_DIR" || k2_compute_problem "staging the compute-built files failed"
-    cp "$K2_SHADOW_STATE/staged.txt" "$marker"
+    if ! k2cr_stage "$DIST_DIR"; then
+        k2_compute_problem "staging the compute-built files failed"
+        return 0
+    fi
+    cp "$K2_SHADOW_STATE/staged.txt" "$DIST_DIR/.compute-staged"
 }
 
 # Step 10.7: compare with the GitHub-built assets (they exist after 10.5/10.6).
 k2_shadow_report() {
     if [ "$K2_LINUX_BUILDS" = "compute" ]; then
         echo ""
-        echo "  Linux x86 came from K2 Compute; audit: ${K2_SHADOW_STATE} (summary.txt, verdicts, receipts)."
+        if [ "$K2_COMPUTE_ARM" = compute ]; then
+            echo "  Linux x86_64 and aarch64 came from K2 Compute; audit: ${K2_SHADOW_STATE} (summary.txt, verdicts, receipts)."
+        else
+            echo "  Linux x86_64 came from K2 Compute, aarch64 from GitHub; audit: ${K2_SHADOW_STATE} (summary.txt, verdicts, receipts)."
+        fi
+        [ -n "${K2CR_STATE:-}" ] && k2cr_job_times
         return 0
     fi
     [ "$K2_LINUX_BUILDS" = "shadow" ] || return 0
@@ -1341,16 +1534,16 @@ ASSETS+=(
     "$DIST_DIR/${MAC_ASSET}.sig2"
     "$DIST_DIR/daemon-latest.json"
 )
-# Compute mode: every staged x86 file (node, root helper and engine with
-# their .sha256, deb/rpm/AppImage, SHA256SUMS-linux-x86_64.txt) but the
-# daemon: sign-daemon.sh uploads the daemon at Step 10.5, after it has
-# checked and signed it. The root-helper-key .sig files come at Step 10.5 as
+# Compute mode: every staged file (node, root helper and engine with their
+# .sha256, x86_64 and, unless it fell back, aarch64; deb/rpm/AppImage,
+# SHA256SUMS-linux-x86_64.txt) but the daemons: sign-daemon.sh uploads
+# each daemon at Step 10.5, after it has checked and signed it. The root-helper-key .sig files come at Step 10.5 as
 # for GitHub's uploads; the Arch package's SUMS line is merged in by
 # arch-package.yml after the tag.
 if [ "$K2_LINUX_BUILDS" = "compute" ]; then
     while IFS= read -r f; do
         case "$f" in
-            ""|*/*|k2-daemon-linux-x86_64|k2-daemon-linux-x86_64.sha256) continue ;;
+            ""|*/*|k2-daemon-linux-x86_64|k2-daemon-linux-x86_64.sha256|k2-daemon-linux-aarch64|k2-daemon-linux-aarch64.sha256) continue ;;
         esac
         [ -s "$DIST_DIR/$f" ] || { echo "ERROR: staged compute file $f is missing" >&2; exit 1; }
         ASSETS+=("$DIST_DIR/$f")
@@ -1606,8 +1799,8 @@ k2_verify_published_u2 || U2_VERIFY_FAILED=1
 # see no update for their platform (harmless). Re-run by hand:
 #   bash scripts/sign-daemon.sh ${VERSION}
 # Compute mode: the x86 daemon comes from Step 8.5's staged copy, checked
-# against the compute verdicts (--from-dir/--compute-verdict); aarch64
-# still waits for daemon-binaries.yml.
+# against the compute verdicts (--from-dir/--compute-verdict), and aarch64
+# too unless it fell back to GitHub (then it waits for daemon-binaries.yml).
 # Escape (Linux daemons stay on the previous version): K2_SKIP_DAEMON_SIGN=1.
 DAEMON_SIGN_FAILED=""
 DAEMON_SIGN_ARGS=("${VERSION}")
@@ -1620,7 +1813,11 @@ if [ "${K2_SKIP_DAEMON_SIGN:-0}" = "1" ]; then
     echo "  Linux daemons can't update to ${VERSION} until: bash scripts/sign-daemon.sh ${DAEMON_SIGN_ARGS[*]}" >&2
 else
     echo ""
-    echo "Step 10.5: Signing the Linux k2-daemon builds (waits for daemon-binaries.yml)..."
+    if [ "$K2_LINUX_BUILDS" = compute ] && [ "$K2_COMPUTE_ARM" = compute ]; then
+        echo "Step 10.5: Signing the Linux k2-daemon builds (from K2 Compute; no GitHub wait)..."
+    else
+        echo "Step 10.5: Signing the Linux k2-daemon builds (waits for daemon-binaries.yml)..."
+    fi
     if ! bash "$PROJECT_DIR/scripts/sign-daemon.sh" "${DAEMON_SIGN_ARGS[@]}"; then
         DAEMON_SIGN_FAILED=1
         echo "  ✗ Linux daemons NOT signed — re-run: bash scripts/sign-daemon.sh ${DAEMON_SIGN_ARGS[*]}" >&2
@@ -1682,8 +1879,15 @@ if [ "${K2_SKIP_LINUX_SUMS_CHECK:-0}" = "1" ]; then
     echo "  ⚠⚠ LINUX SHA256SUMS CHECK SKIPPED (K2_SKIP_LINUX_SUMS_CHECK=1) ⚠⚠"
 else
     echo ""
-    echo "Step 10.6: Linux packages vs SHA256SUMS-linux-x86_64.txt (waits for app-linux + arch-package; a failed Arch build is reported, not waited for)..."
-    k2_linux_sums_step "${VERSION}" "${K2_LINUX_SUMS_WAIT_MIN:-120}"
+    if [ "$K2_LINUX_BUILDS" = compute ]; then
+        # deb/rpm/AppImage and their lines went up at Step 9: one check,
+        # no wait. The Arch package follows on k2-arch on its own.
+        echo "Step 10.6: Linux packages vs SHA256SUMS-linux-x86_64.txt (compute: checked once; the Arch package is not waited for)..."
+        k2_linux_sums_step "${VERSION}" 0 arch-later
+    else
+        echo "Step 10.6: Linux packages vs SHA256SUMS-linux-x86_64.txt (waits for app-linux + arch-package; a failed Arch build is reported, not waited for)..."
+        k2_linux_sums_step "${VERSION}" "${K2_LINUX_SUMS_WAIT_MIN:-120}"
+    fi
     if [ -n "$LINUX_SUMS_FAILED" ]; then
         echo "  ✗ Linux SHA256SUMS incomplete or wrong — re-run: bash scripts/linux-sums.sh check ${VERSION} --wait-min 60" >&2
     fi
@@ -1704,5 +1908,7 @@ echo "  https://github.com/${RELEASE_REPO}/releases/tag/${TAG}"
 [ -n "$APP_ENGINE_SIGN_FAILED" ] && echo "  ⚠  K2-APP-ENGINE NOT SIGNED — bash scripts/sign-app-engine.sh ${VERSION}"
 [ -n "$LINUX_SUMS_FAILED" ] && echo "  ⚠  LINUX SHA256SUMS INCOMPLETE — bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
 [ -n "$ARCH_PKG_FAILED" ] && echo "  ⚠  ARCH PACKAGE NOT PUBLISHED, THE ARCH BUILD FAILED (the release itself is live; Step 10.6 above has the re-run) — ${ARCH_PKG_RUN_URL}"
+[ -n "${ARCH_PKG_PENDING:-}" ] && echo "  …  Arch package still building on k2-arch (not waited for): bash scripts/linux-sums.sh check ${VERSION} --wait-min 60"
+[ -n "$K2_COMPUTE_FELL_BACK" ] && echo "  ⚠  K2 COMPUTE FELL BACK TO GITHUB — ${K2_COMPUTE_FELL_BACK}"
 echo "═══════════════════════════════════════════════════"
 [ -z "$WIN_PATCH_FAILED" ] && [ -z "$U2_VERIFY_FAILED" ] && [ -z "$DAEMON_SIGN_FAILED" ] && [ -z "$ROOT_HELPER_SIGN_FAILED" ] && [ -z "$K2_NODE_SIGN_FAILED" ] && [ -z "$APP_ENGINE_SIGN_FAILED" ] && [ -z "$LINUX_SUMS_FAILED" ] && [ -z "$ARCH_PKG_FAILED" ] || exit 1

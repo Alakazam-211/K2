@@ -132,7 +132,7 @@ done
     && "$(runs ok cargo-linux)" == *"RUSTFLAGS='-D warnings' cargo check --workspace --all-targets"* \
     && "$(runs ok cargo-linux)" == *"--avoid k2-arch"* ]] && pass "cargo-linux: a Linux x86 node, the pinned Rust, -D warnings, never k2-arch" || fail "cargo-linux" "$(runs ok cargo-linux)"
 [[ "$(runs ok cargo-macos)" == *"--needs rust@1.98.7,cmake@3"* && "$(runs ok cargo-macos)" == *"RUSTFLAGS='-D warnings' cargo check --workspace --all-targets"* \
-    && "$(runs ok cargo-macos)" == *"k2_mac_build_env"* ]] && pass "cargo-macos: the pinned Rust, the mac build env, -D warnings" || fail "cargo-macos" "$(runs ok cargo-macos)"
+    && "$(runs ok cargo-macos)" == *"k2_mac_build_env"* && "$(runs ok cargo-macos)" == *"--mem 8G --env CARGO_BUILD_JOBS=1 "* ]] && pass "cargo-macos: the pinned Rust, the mac build env, -D warnings, one crate at a time in 8 GB" || fail "cargo-macos" "$(runs ok cargo-macos)"
 printf '%s\n' "$out" | grep -q "Tests  12255 passed | 2 skipped (12257)" && pass "vitest's line shows its test result" || fail "vitest result" "$out"
 printf '%s\n' "$out" | grep -qE "Gates: 5 passed in [0-9]+m[0-9]{2}s wall-clock" && pass "a wall-clock summary" || fail "summary" "$out"
 grep -qE "^k2 (compute run|compute nodes|compute get|compute logs|compute wait|compute --help)" "$tmp/calls-ok" && ! grep -qE "^k2 (msg|thread|release)" "$tmp/calls-ok" \

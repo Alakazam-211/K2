@@ -114,6 +114,12 @@ if [ "$(printf '%s' "$st" | k2sa_status_field session.assets)" = "$names_sorted"
     && [ "$(printf '%s' "$st" | k2sa_status_field session.windows)" = true ] \
     && [ "$(printf '%s' "$st" | k2sa_status_field session.valid)" = true ]; then
     say "using the Windows session already approved for ${VERSION} (a re-run)"
+elif [ -n "$(printf '%s' "$st" | k2sa_status_field approvers.sa1)" ]; then
+    # The phone approves releases (prd-signed-approvals-v1): ask it (and the
+    # Mac too when the signer's policy still takes it); the first wins.
+    k2sa_open_signed "$VERSION" "$BASE" "$(printf '%s' "$st" | k2sa_status_field approvers.legacy)" 1 1 "" "" "${WIN_NAMES[@]}" \
+        || die "no approval; nothing was signed or uploaded"
+    say "Windows signing session open for ${VERSION}"
 else
     work="$(mktemp -d "${TMPDIR:-/tmp}/k2-win-approve.XXXXXX")"
     trap 'rm -rf "$work"' EXIT

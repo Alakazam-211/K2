@@ -118,7 +118,7 @@ over = json.loads(over)
 arch = over.pop("arch", "x86_64")
 ARGV = ["bash", "scripts/ci/build-linux-bins.sh", arch]
 NEEDS = (["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"] if arch == "x86_64"
-         else ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev", "zig@0.15.2", "cargo:cargo-zigbuild@0.23.4"])
+         else ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"])
 der = subprocess.run(["/usr/bin/openssl", "ec", "-in", key, "-pubout", "-outform", "DER"],
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True).stdout
 def canonical(v):
@@ -547,7 +547,9 @@ register "V2 did not build the aarch64 k2-node: refused" 3 "V2 match missing: V2
 bundle_arm armargv "$S7" "{\"argv_sha256\": \"$(printf '0%.0s' $(seq 64))\"}"
 register "L2 ran another command: refused" 3 "L2: the job did not run the release build command (bash scripts/ci/build-linux-bins.sh aarch64)" 0.47.7 armargv
 bundle_arm armneeds "$S7" '{"plan.needs": ["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]}'
-register "L2's plan has the x86_64 needs (no zig): refused" 3 "the release build needs cmake@3 sys:pkg-config sys:zlib1g-dev zig@0.15.2 cargo:cargo-zigbuild@0.23.4" 0.47.7 armneeds
+register "L2's plan has the x86_64 needs (an explicit rust@): refused" 3 "the release build needs cmake@3 sys:pkg-config sys:zlib1g-dev" 0.47.7 armneeds
+bundle_arm armzigneed "$S7" '{"plan.needs": ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev", "zig@0.15.2"]}'
+register "L2's plan installs zig from --needs (not the hash-pinned tarball): refused" 3 "the plan needs cmake@3 sys:pkg-config sys:zlib1g-dev zig@0.15.2" 0.47.7 armzigneed
 bundle_arm armrustc "$S7" '{"tools_used": {"rustc": "1.98.0"}}'
 register "L2's rustc is not the tag's pin (no rust@ need, still checked): refused" 3 "L2: the job's rustc was 1.98.0, the tag pins 1.99.1" 0.47.7 armrustc
 bundle_arm armrogue "$S7" '{}' '{}' rogue
@@ -733,9 +735,9 @@ for label in ("L1", "V1"):
 for label in ("L2", "V2"):
     m = re.search(r'k2cr_submit %s .*? -- (bash scripts/ci/build-linux-bins\.sh aarch64)' % label, s)
     assert m and m.group(1) == pol["compute_argv_aarch64"], label
-arm = re.search(r'printf \'%s\' "(cmake@3,[^"]+)"', s).group(1)
-arm = arm.replace("$zig", pins["K2_CROSS_ZIG"]).replace("$zb", pins["K2_CROSS_ZIGBUILD"]).split(",")
+arm = re.search(r'printf \'%s\' "(cmake@3,[^"]+)"', s).group(1).split(",")
 assert arm == pol["compute_needs_aarch64"].split(), (arm, pol["compute_needs_aarch64"])
+assert not any("zig" in n for n in arm), "zig and cargo-zigbuild come hash-pinned from the build, never from --needs"
 assert not any(n.startswith("rust@") for n in arm), "an explicit rust@ need drops rust-toolchain.toml's aarch64 target"
 needs = re.search(r'local bins_needs="\$rust,([^"]+)"', s).group(1).split(",")
 assert ["rust@{rust_pin}"] + needs == pol["compute_needs"].split(), (needs, pol["compute_needs"])

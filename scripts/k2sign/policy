@@ -51,9 +51,9 @@ compute_needs = rust@{rust_pin} cmake@3 sys:pkg-config sys:zlib1g-dev
 # aarch64: no rust@ need (an explicit one would drop rust-toolchain.toml's
 # aarch64 target, which a job can't add itself); the node installs the
 # file's channel and targets, and the receipt's rustc must still be the pin.
-# zig and cargo-zigbuild are scripts/ci/cross-pins.sh's versions (a test
-# keeps the two equal; build-linux-bins.sh refuses any other).
-compute_needs_aarch64 = cmake@3 sys:pkg-config sys:zlib1g-dev zig@0.15.2 cargo:cargo-zigbuild@0.23.4
+# zig and cargo-zigbuild are not needs: build-linux-bins.sh fetches them
+# itself and refuses any bytes but scripts/ci/cross-pins.sh's hashes.
+compute_needs_aarch64 = cmake@3 sys:pkg-config sys:zlib1g-dev
 # The artifact globs the plan collects (compute-release.sh --artifact).
 compute_artifacts = dist/*
 # The OAuth values come only from the vault, as these names (secret mode).

@@ -242,7 +242,7 @@ Rust). L is a Linux build, V the verify build:
 | L1 | k2n7-vin | `scripts/ci/build-linux-bins.sh x86_64`: the daemon, k2-node, the root helper and the App engine (`--mem 20G`) |
 | L3 | k2n8-vin | `scripts/ci/build-linux-app.sh`: deb, rpm and AppImage. The app links the native voice stack (on by default since 0.46.9), so the job asks for `sys:libasound2-dev` and `--mem 24G` (a release link needs at least 20G) |
 | V1 | k2n9-vin | the same as L1, a second time on another node (never L1's: submit refuses it in every mode) |
-| L2 | k2n10-vin | `scripts/ci/build-linux-bins.sh aarch64`: the aarch64 set, cross-compiled on the x86_64 node with zig (`cargo zigbuild`, glibc 2.28 floor). zig and cargo-zigbuild come from `--needs` at the versions in `scripts/ci/cross-pins.sh`; no `rust@` need, so the node installs `rust-toolchain.toml`'s channel and its `aarch64-unknown-linux-gnu` target (a job can't add a target itself) |
+| L2 | k2n10-vin | `scripts/ci/build-linux-bins.sh aarch64`: the aarch64 set, cross-compiled on the x86_64 node with zig (`cargo zigbuild`, glibc 2.28 floor). zig (its release tarball) and cargo-zigbuild (its crates.io source, built `--locked`) are fetched by the build and refused unless their sha256 is the one `scripts/ci/cross-pins.sh` pins; `build-info.json` records both hashes. No `rust@` need, so the node installs `rust-toolchain.toml`'s channel and its `aarch64-unknown-linux-gnu` target (a job can't add a target itself) |
 | V2 | k2n11-vin | the same as L2 on another node; must equal L2 byte for byte (never L2's node) |
 
 `K2_COMPUTE_X86_NODE`, `K2_COMPUTE_APP_NODE` and `K2_COMPUTE_VERIFY_NODE`
@@ -340,8 +340,8 @@ L2 and V2 in place of L1 and V1):
   `src_path`, no `cwd`, no `--cache`; needs exactly
   `rust@<pin> cmake@3 sys:pkg-config sys:zlib1g-dev` (the pin read from
   `rust-toolchain.toml` at the tag, on GitHub; aarch64: `cmake@3
-  sys:pkg-config sys:zlib1g-dev zig@<v> cargo:cargo-zigbuild@<v>`, no
-  `rust@`) and no other packages; env
+  sys:pkg-config sys:zlib1g-dev`, no `rust@`, no zig) and no other
+  packages; env
   exactly `BUILD_COMMIT`/`BUILD_TREE` set to what it built; artifacts
   `dist/*`;
 - each job was a **secret job** (the Gmail id and secret from the vault,

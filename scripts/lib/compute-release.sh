@@ -298,19 +298,22 @@ k2cr_check_arm_nodes() {
     fi
 }
 
-# The aarch64 jobs' needs, from scripts/ci/cross-pins.sh AT THE RELEASE
-# COMMIT (what build-linux-bins.sh there will check). No rust@: an explicit
-# one makes the node ignore rust-toolchain.toml, whose `targets` line is the
-# only way the job gets the aarch64 standard library; the channel still
-# comes from that file (and the signing user checks the receipt's rustc).
+# The aarch64 jobs' needs. No rust@: an explicit one makes the node ignore
+# rust-toolchain.toml, whose `targets` line is the only way the job gets
+# the aarch64 standard library; the channel still comes from that file
+# (and the signing user checks the receipt's rustc). No zig or
+# cargo-zigbuild either: build-linux-bins.sh fetches both itself and checks
+# them against scripts/ci/cross-pins.sh's hashes, which must be at the
+# release commit.
 k2cr_arm_needs() {
-    local pins zig zb
+    local pins k
     pins="$(git show "${K2CR_COMMIT}:scripts/ci/cross-pins.sh" 2>/dev/null)" \
         || { echo "  ✗ no scripts/ci/cross-pins.sh at ${K2CR_COMMIT:0:12}" >&2; return 1; }
-    zig="$(printf '%s\n' "$pins" | sed -n 's/^K2_CROSS_ZIG="\([0-9.]*\)"$/\1/p')"
-    zb="$(printf '%s\n' "$pins" | sed -n 's/^K2_CROSS_ZIGBUILD="\([0-9.]*\)"$/\1/p')"
-    [ -n "$zig" ] && [ -n "$zb" ] || { echo "  ✗ scripts/ci/cross-pins.sh at ${K2CR_COMMIT:0:12} names no zig / cargo-zigbuild version" >&2; return 1; }
-    printf '%s' "cmake@3,sys:pkg-config,sys:zlib1g-dev,zig@$zig,cargo:cargo-zigbuild@$zb"
+    for k in K2_CROSS_ZIG_SHA256_X86_64 K2_CROSS_ZIGBUILD_CRATE_SHA256; do
+        printf '%s\n' "$pins" | grep -Eq "^$k=\"[0-9a-f]{64}\"\$" \
+            || { echo "  ✗ scripts/ci/cross-pins.sh at ${K2CR_COMMIT:0:12} has no $k (the hash-pinned cross toolchain)" >&2; return 1; }
+    done
+    printf '%s' "cmake@3,sys:pkg-config,sys:zlib1g-dev"
 }
 
 k2cr_submit_release_set() {

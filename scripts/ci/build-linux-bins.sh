@@ -21,12 +21,14 @@
 # x86_64 builds natively. aarch64 builds natively on an aarch64 machine,
 # or cross-compiled on an x86_64 node with zig as the C compiler and
 # linker (cargo-zigbuild): we have no ARM Linux node, and zig needs no
-# root. The versions and the glibc floor are pinned in
-# scripts/ci/cross-pins.sh (K2 Compute installs both from --needs,
-# scripts/lib/compute-release.sh); the build refuses any other version.
-# zig ships its own libc headers and stubs, so nothing comes from the
-# node's distro and every x86_64 node builds the same bytes. Any other
-# host/target pair is refused.
+# root. Both are hash-pinned in scripts/ci/cross-pins.sh (with the glibc
+# floor): scripts/ci/cross-toolchain.sh downloads zig's release tarball and
+# cargo-zigbuild's crates.io source, refuses any other bytes, and builds
+# cargo-zigbuild with --locked; build-info.json records both hashes, and
+# the signing user refuses an aarch64 daemon whose build-info lacks the
+# pinned ones. zig ships its own libc headers and stubs, so nothing comes
+# from the node's distro and every x86_64 node builds the same bytes. Any
+# other host/target pair is refused.
 #
 # Job inputs are plain env names: K2 Compute refuses any K2_* name in
 # --env (env_k2_reserved), so a node job passes BUILD_* and this script
@@ -102,6 +104,8 @@ fi
 TRIPLE="${ARCH}-unknown-linux-gnu"
 # shellcheck source=scripts/ci/cross-pins.sh
 source "$ROOT/scripts/ci/cross-pins.sh"
+# shellcheck source=scripts/ci/cross-toolchain.sh
+source "$ROOT/scripts/ci/cross-toolchain.sh"
 CROSS_GLIBC="$K2_CROSS_GLIBC"
 ZIG_V="" ZIGBUILD_V=""
 
@@ -131,6 +135,13 @@ else
     require_mail_oauth_build_env
 fi
 
+# aarch64 from x86_64: the hash-pinned zig and cargo-zigbuild, before
+# anything is built (and before the path maps, so cargo-zigbuild's own
+# build gets none of them).
+if [ "$CROSS" = 1 ]; then
+    k2_cross_toolchain "$HOST_ARCH" "$(mktemp -d "${TMPDIR:-/tmp}/k2-cross.XXXXXX")" || exit 1
+fi
+
 k2_repro_build_env "$ROOT"
 
 # aarch64 from x86_64: every `cargo build` (here and in the embed helpers)
@@ -138,11 +149,9 @@ k2_repro_build_env "$ROOT"
 # and links. cargo-zigbuild still writes to target/<triple>/release. The
 # C path maps go in CFLAGS_<triple> (cargo-zigbuild names its compiler by
 # full path, which the repro wrappers don't wrap). zig and cargo-zigbuild
-# must be cross-pins.sh's versions: two nodes build the same bytes only
-# with the same toolchain.
+# are cross-toolchain.sh's (first on PATH): two nodes build the same bytes
+# only with the same toolchain.
 if [ "$CROSS" = 1 ]; then
-    command -v zig >/dev/null 2>&1 || { echo "FATAL: the aarch64 cross build needs zig (--needs zig@<version>)" >&2; exit 1; }
-    command -v cargo-zigbuild >/dev/null 2>&1 || { echo "FATAL: the aarch64 cross build needs cargo-zigbuild (--needs cargo:cargo-zigbuild@<version>)" >&2; exit 1; }
     ZIG_V="$(zig version)"
     ZIGBUILD_V="$(cargo-zigbuild --version | awk '{print $2}')"
     if [ "$ZIG_V" != "$K2_CROSS_ZIG" ]; then
@@ -258,6 +267,8 @@ K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
 K2_BI_GLIBC="$(if [ "$CROSS" = 1 ]; then echo "cross: glibc $CROSS_GLIBC (zig $ZIG_V, cargo-zigbuild $ZIGBUILD_V)"; else ldd --version 2>/dev/null | head -1 || echo unknown; fi)" \
 K2_BI_PTYD="$PTYD_SHA" K2_BI_EXPORT="$EXPORT_SHA" K2_BI_DESKD="$DESKD_SHA" \
+K2_BI_CROSS="$CROSS" K2_BI_HOST="$HOST_ARCH" K2_BI_ZIG_V="$ZIG_V" K2_BI_ZIGBUILD_V="$ZIGBUILD_V" \
+K2_BI_ZIG_SHA="${K2_CROSS_ZIG_TARBALL_SHA256:-}" K2_BI_ZIGBUILD_SHA="${K2_CROSS_ZIGBUILD_CRATE_SHA256:-}" \
 K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE" \
 python3 - <<'PY'
 import hashlib, json, os
@@ -283,6 +294,21 @@ info = {
     "glibc": os.environ["K2_BI_GLIBC"],
     "files": files,
 }
+# The cross toolchain's pinned hashes (the signing user checks them for an
+# aarch64 daemon from compute); null for a native build.
+info["cross"] = None
+if os.environ["K2_BI_CROSS"] == "1":
+    info["cross"] = {
+        "host": os.environ["K2_BI_HOST"],
+        "glibc": os.environ["K2_BI_GLIBC"].split()[2] if os.environ["K2_BI_GLIBC"].startswith("cross: glibc ") else None,
+        "zig_version": os.environ["K2_BI_ZIG_V"],
+        "zig_tarball_sha256": os.environ["K2_BI_ZIG_SHA"],
+        "cargo_zigbuild_version": os.environ["K2_BI_ZIGBUILD_V"],
+        "cargo_zigbuild_crate_sha256": os.environ["K2_BI_ZIGBUILD_SHA"],
+    }
+    for k, v in info["cross"].items():
+        if not v:
+            raise SystemExit("FATAL: build-info: cross %s is empty" % k)
 json.dump(info, open(os.path.join(out, "build-info.json"), "w"), indent=2, sort_keys=True)
 print(json.dumps({k: info[k] for k in ("version", "arch", "commit", "oauth")}))
 PY

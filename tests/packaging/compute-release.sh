@@ -415,12 +415,14 @@ out="$(run_arm arm)"
     && pass "L2 on k2n10-vin, V2 on k2n11-vin (the defaults)" || fail "arm jobs.tsv" "$(cat "$tmp/arm/jobs.tsv")"
 for lab_node in k2n10-vin k2n11-vin; do
     line="$(grep -m1 "k2 compute run $lab_node " "$tmp/calls-arm" || true)"
-    for want in "--needs cmake@3,sys:pkg-config,sys:zlib1g-dev,zig@$ZIG,cargo:cargo-zigbuild@$ZB " "--exclusive --why " \
+    for want in "--needs cmake@3,sys:pkg-config,sys:zlib1g-dev " "--exclusive --why " \
         "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--env BUILD_COMMIT=$COMMIT_ARM" "--cpus 8 " "-- bash scripts/ci/build-linux-bins.sh aarch64"; do
         [[ "$line" == *"$want"* ]] && pass "$lab_node aarch64 submit has $want" || fail "$lab_node aarch64 submit lacks $want" "$line"
     done
     [[ "$line" != *"rust@"* ]] && pass "$lab_node: no rust@ need (the node installs rust-toolchain.toml's channel AND its aarch64 target)" \
         || fail "$lab_node rust need" "$line"
+    [[ "$line" != *"zig@"* ]] && [[ "$line" != *"cargo-zigbuild@"* ]] \
+        && pass "$lab_node: zig and cargo-zigbuild don't come from --needs (the build fetches them hash-pinned)" || fail "$lab_node unpinned tools" "$line"
 done
 grep -q 'L2 on k2n10-vin and V2 on k2n11-vin: two nodes' "$tmp/arm.collect" && grep -q 'identical in both builds: .*k2-daemon-linux-aarch64' "$tmp/arm.collect" \
     && pass "collect: V2 came from another node key and matches L2's daemon, root helper, node and engine" || fail "arm dual" "$(cat "$tmp/arm.collect")"
@@ -760,26 +762,49 @@ if [ "$(uname -s)" != "Linux" ]; then
 elif [ "$(uname -m)" = aarch64 ]; then
     out="$(bash "$ROOT/scripts/ci/build-linux-bins.sh" x86_64 2>&1 || true)"
     [[ "$out" == *"Build x86_64 natively"* ]] && pass "build-linux-bins refuses x86_64 on an aarch64 host" || fail "cross check" "$out"
-else
-    # aarch64 on x86_64 is the zig cross build: it refuses a zig or
-    # cargo-zigbuild that isn't cross-pins.sh's, before any cargo runs.
-    fake="$tmp/fakezig"; mkdir -p "$fake"
-    printf '#!/bin/sh\necho 0.0.1\n' > "$fake/zig"
-    printf '#!/bin/sh\necho "cargo-zigbuild 0.0.1"\n' > "$fake/cargo-zigbuild"
-    chmod +x "$fake/zig" "$fake/cargo-zigbuild"
-    out="$(env -u K2_GMAIL_CLIENT_ID -u K2_GMAIL_CLIENT_SECRET -u K2_MICROSOFT_CLIENT_ID PATH="$fake:$PATH" BUILD_OAUTH=placeholder \
-        bash "$ROOT/scripts/ci/build-linux-bins.sh" aarch64 --out "$tmp/xout" 2>&1 || true)"
-    [[ "$out" == *"zig is 0.0.1; scripts/ci/cross-pins.sh pins"* ]] && [[ "$out" != *Compiling* ]] \
-        && pass "build-linux-bins: the aarch64 cross build refuses an unpinned zig before any cargo" || fail "cross pin check" "$out"
 fi
-python3 - "$ROOT/scripts/ci/build-linux-bins.sh" <<'PY2' && pass "build-linux-bins: cross mode only for aarch64 on x86_64; cargo build → cargo zigbuild <triple>.<glibc>; C path maps in CFLAGS_<triple>" || fail "cross wiring" ""
+python3 - "$ROOT/scripts/ci/build-linux-bins.sh" <<'PY2' && pass "build-linux-bins: cross mode only for aarch64 on x86_64; the hash-pinned toolchain first; cargo build → cargo zigbuild <triple>.<glibc>; C path maps in CFLAGS_<triple>" || fail "cross wiring" ""
 import sys
 s = open(sys.argv[1]).read()
 assert 'if [ "$HOST_ARCH" = "x86_64" ] && [ "$ARCH" = "aarch64" ]; then\n        CROSS=1' in s
-assert 'source "$ROOT/scripts/ci/cross-pins.sh"' in s
+assert 'source "$ROOT/scripts/ci/cross-pins.sh"' in s and 'source "$ROOT/scripts/ci/cross-toolchain.sh"' in s
 assert 'a+=(--target "$TRIPLE.$CROSS_GLIBC")' in s and 'command cargo zigbuild "${a[@]}"' in s
 assert '$K2_REPRO_CFLAGS' in s
-assert s.index('k2_repro_build_env "$ROOT"') < s.index('if [ "$CROSS" = 1 ]; then') < s.index('k2_ptyd_build_for_embed "$TRIPLE"')
+i_tc = s.index('k2_cross_toolchain "$HOST_ARCH"')
+assert i_tc < s.index('k2_repro_build_env "$ROOT"') < s.index('cflags_var="CFLAGS_') < s.index('k2_ptyd_build_for_embed "$TRIPLE"')
+assert "command -v zig" not in s, "zig comes only from the pinned tarball"
+for k in ('"zig_tarball_sha256"', '"cargo_zigbuild_crate_sha256"', '"zig_version"', '"cargo_zigbuild_version"'):
+    assert k in s, k
+PY2
+
+echo "the hash-pinned cross toolchain (Steward 11-11):"
+python3 - "$ROOT/scripts/ci/cross-pins.sh" <<'PY2' && pass "cross-pins.sh pins zig's tarball for x86_64 and aarch64 hosts and cargo-zigbuild's crate, by sha256" || fail "pins" ""
+import re, sys
+s = open(sys.argv[1]).read()
+for k in ("K2_CROSS_ZIG_SHA256_X86_64", "K2_CROSS_ZIG_SHA256_AARCH64", "K2_CROSS_ZIGBUILD_CRATE_SHA256"):
+    assert re.search(r'^%s="[0-9a-f]{64}"$' % k, s, re.M), k
+assert re.search(r'^K2_CROSS_ZIG="[0-9.]+"$', s, re.M) and re.search(r'^K2_CROSS_ZIGBUILD="[0-9.]+"$', s, re.M)
+PY2
+mkdir -p "$tmp/xt"
+printf 'pinned bytes\n' > "$tmp/xt/blob"
+good="$(if command -v sha256sum >/dev/null 2>&1; then sha256sum "$tmp/xt/blob"; else shasum -a 256 "$tmp/xt/blob"; fi | awk '{print $1}')"
+out="$(bash -c 'source "$1"; k2_cross_fetch "file://$2/blob" "$3" "$2/got"' _ "$ROOT/scripts/ci/cross-toolchain.sh" "$tmp/xt" "$good" 2>&1)" \
+    && [ -f "$tmp/xt/got" ] && [[ "$out" == *"verified got: sha256 $good (pinned)"* ]] \
+    && pass "k2_cross_fetch keeps a download whose sha256 is the pin" || fail "fetch good" "$out"
+bad="$(printf '0%.0s' $(seq 64))"
+rc=0; out="$(bash -c 'source "$1"; k2_cross_fetch "file://$2/blob" "$3" "$2/got2"' _ "$ROOT/scripts/ci/cross-toolchain.sh" "$tmp/xt" "$bad" 2>&1)" || rc=$?
+[ "$rc" != 0 ] && [ ! -e "$tmp/xt/got2" ] && [[ "$out" == *"pins $bad: not used"* ]] \
+    && pass "k2_cross_fetch refuses (and deletes) other bytes than the pin" || fail "fetch bad" "rc=$rc $out"
+rc=0; out="$(bash -c 'source "$1"; k2_cross_fetch "file://$2/blob" "" "$2/got3"' _ "$ROOT/scripts/ci/cross-toolchain.sh" "$tmp/xt" 2>&1)" || rc=$?
+[ "$rc" != 0 ] && [ ! -e "$tmp/xt/got3" ] && [[ "$out" == *"no pinned sha256"* ]] && pass "k2_cross_fetch refuses a download with no pin" || fail "fetch no pin" "rc=$rc $out"
+rc=0; out="$(bash -c 'source "$1"; k2_cross_toolchain sparc "$2/tc"' _ "$ROOT/scripts/ci/cross-toolchain.sh" "$tmp/xt" 2>&1)" || rc=$?
+[ "$rc" != 0 ] && [[ "$out" == *"no zig pin for a sparc host"* ]] && pass "k2_cross_toolchain: no pin for the host, no toolchain" || fail "toolchain host" "rc=$rc $out"
+python3 - "$ROOT/scripts/ci/cross-toolchain.sh" <<'PY2' && pass "cargo-zigbuild is built from its crates.io source with --locked (no binstall, no prebuilt)" || fail "zigbuild source build" ""
+import sys
+s = open(sys.argv[1]).read()
+assert "cargo install --path \"$src\" --locked" in s
+assert "binstall" not in s.replace("No prebuilt binary, no binstall", "")
+assert "https://static.crates.io/crates/cargo-zigbuild/" in s and "https://ziglang.org/download/" in s
 PY2
 
 echo ""

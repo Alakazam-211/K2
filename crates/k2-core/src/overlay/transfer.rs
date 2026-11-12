@@ -900,6 +900,7 @@ impl Rewrite<'_> {
             deleted_by: None,
             changes: None,
             notice: None,
+            approval: None,
         };
         let key = import_key(
             project_id,

@@ -324,6 +324,9 @@ pub mod ci_monitors;
 pub mod ci_release;
 pub mod ci_stats;
 pub mod ci_tests;
+// Signed approvals S1 (prd-signed-approvals-v1; 0303): the requests the
+// daemon carries, the `approve.request` permission, who an agent may ask.
+pub mod approve_requests;
 // Agent hire through the v1 API: one core for every door (0.45.6).
 pub mod hire;
 /// Home avatar cache: `~/.k2/cache/agent-avatars/` (prd-home-picker-and-remote-avatars-v1 S3).

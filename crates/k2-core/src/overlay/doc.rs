@@ -527,6 +527,10 @@ pub struct OverlayDoc {
     /// other doc.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<ThreadNotice>,
+    /// Kind `approval` only (prd-signed-approvals-v1 S1): a signed approval an
+    /// agent asked a person for. Ids and state only, never the payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<super::approval::ApprovalCardBody>,
     /// post-idempotency-v1 (0.46.8): the id the sender's client gave this
     /// post (1–64 of `[A-Za-z0-9_-]`), echoed so its outbox can settle.
     /// Opaque, and only meaningful under the sender's own namespace, so it
@@ -757,8 +761,9 @@ impl OverlayDoc {
     /// A settings (action) card: a choice card carrying `choice.action`
     /// (keep-as-mine today; permission cards later). An owner/admin ask: App
     /// guests never see one, neither as a card nor as any fallback text.
+    /// A signed-approval card (`approval`) counts too: it is for one person.
     pub fn is_action_card(&self) -> bool {
-        self.choice.as_ref().is_some_and(|c| c.action.is_some())
+        self.choice.as_ref().is_some_and(|c| c.action.is_some()) || self.kind == super::approval::KIND
     }
 
     pub fn text(id: String, from: String, to: String, body: String, via: &str) -> Self {
@@ -790,6 +795,7 @@ impl OverlayDoc {
             deleted_by: None,
             changes: None,
             notice: None,
+            approval: None,
         }
     }
 
@@ -844,6 +850,7 @@ impl OverlayDoc {
             deleted_by: None,
             changes: None,
             notice: None,
+            approval: None,
         }
     }
 
@@ -901,6 +908,7 @@ impl OverlayDoc {
             deleted_by: None,
             changes: None,
             notice: None,
+            approval: None,
         }
     }
 
@@ -940,6 +948,7 @@ impl OverlayDoc {
             deleted_by: None,
             changes: None,
             notice: None,
+            approval: None,
         }
     }
 
@@ -989,6 +998,7 @@ impl OverlayDoc {
             deleted_by: None,
             changes: None,
             notice: None,
+            approval: None,
         }
     }
 
@@ -1054,6 +1064,7 @@ impl OverlayDoc {
             summary_source: None,
             changes: None,
             notice: None,
+            approval: None,
             client_msg_id: self.client_msg_id.clone(),
             deleted: true,
             deleted_at: Some(at),

@@ -432,6 +432,26 @@ pub enum ThreadBudget {
         /// The Settings label (`view.setting`): the body.
         setting: String,
     },
+    /// A signed-approval card (prd-signed-approvals-v1 S1), to the asked
+    /// person only, from the same per-person bucket as permission cards.
+    /// Title "K2", body [`APPROVAL_PUSH_BODY`] (SA-15: generic, nothing
+    /// the daemon could mislead with; the words come from the payload on
+    /// the person's device). `data` gains `requestId` and `approval:"1"`.
+    Approval {
+        /// `data.requestId`: `ap_…`.
+        request_id: String,
+    },
+}
+
+/// The body of a signed-approval push (SA-15).
+pub const APPROVAL_PUSH_BODY: &str = "Approval requested: open K2 to read it";
+
+impl ThreadBudget {
+    /// A targeted card push (permission or approval): never coalesced, drawn
+    /// from the per-person card bucket.
+    pub fn is_card(&self) -> bool {
+        !matches!(self, ThreadBudget::Thread)
+    }
 }
 
 /// The latest Thread post a push covers (sealed alerts only).
@@ -582,6 +602,7 @@ impl PushEvent {
             Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { .. }, agent_name, .. }) => {
                 format!("{agent_name} asks for a permission")
             }
+            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Approval { .. }, .. }) => "K2".to_string(),
             // §7: the agent's display name; name-only.
             Self::ThreadPost(t) => t.agent_name.clone(),
         }
@@ -604,6 +625,7 @@ impl PushEvent {
             // The Settings label, whatever the previews switches say: it is
             // K2's own words, never the agent's or a note (§17.7).
             Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { setting, .. }, .. }) => setting.clone(),
+            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Approval { .. }, .. }) => APPROVAL_PUSH_BODY.to_string(),
             Self::ThreadPost(t) => thread_body(t.msg_kind, t.count, t.shown_preview()),
             Self::ChatApprovalRequested { agent_name, .. } => {
                 format!("{agent_name} has a chat post waiting for your approval")
@@ -720,7 +742,9 @@ impl PushEvent {
     /// The local budget a send of this event draws from (TP2).
     pub fn budget_class(&self) -> budget::BudgetClass {
         match self {
-            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { .. }, .. }) => budget::BudgetClass::Permission,
+            Self::ThreadPost(ThreadPush { budget: ThreadBudget::Permission { .. } | ThreadBudget::Approval { .. }, .. }) => {
+                budget::BudgetClass::Permission
+            }
             Self::ThreadPost(_) => budget::BudgetClass::Thread,
             Self::Badge(_) => budget::BudgetClass::Badge,
             _ => budget::BudgetClass::Other,
@@ -784,6 +808,10 @@ impl PushEvent {
                 if let ThreadBudget::Permission { request_id, .. } = &t.budget {
                     d.insert("requestId", request_id.clone());
                     d.insert("permission", "1");
+                }
+                if let ThreadBudget::Approval { request_id } = &t.budget {
+                    d.insert("requestId", request_id.clone());
+                    d.insert("approval", "1");
                 }
                 d
             }

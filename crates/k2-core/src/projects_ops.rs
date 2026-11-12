@@ -437,6 +437,11 @@ pub struct ProjectWithWorkspaces {
     /// [`project_icon_rev`] of this row: the same value a Thread push
     /// for this workspace carries as `data.avatarRev`; `""` = no icon.
     pub icon_rev: String,
+    /// The workspace agent's display name
+    /// ([`crate::workspace::display::agent_display_name`] of the row's
+    /// path): the same string `GET /cli/workspace/agent-display-name`
+    /// gives, so a client listing folders needs no call per folder.
+    pub agent_display_name: String,
 }
 
 /// Same sentinel filter as [`projects_list`], plus a nested `workspaces`
@@ -463,7 +468,10 @@ pub fn projects_list_with_workspaces() -> Result<Vec<ProjectWithWorkspaces>, Str
         .into_iter()
         .map(|(project, workspaces)| {
             let icon_rev = project_icon_rev(project.icon_url.as_deref(), &project.path);
-            ProjectWithWorkspaces { project, workspaces, icon_rev }
+            // Mtime-cached; its fallback reads the DB, so it runs here,
+            // after the lock above is released.
+            let agent_display_name = crate::workspace::display::agent_display_name(&project.path);
+            ProjectWithWorkspaces { project, workspaces, icon_rev, agent_display_name }
         })
         .collect())
 }
@@ -1451,6 +1459,52 @@ mod tests {
         delete_workspace("embed-w1");
         delete_project("embed-ws-proj");
         delete_project("embed-empty-proj");
+    }
+
+    /// Every `projects/list` row carries `agentDisplayName`: the same name
+    /// `GET /cli/workspace/agent-display-name` gives for its path (the
+    /// persona's `display_name:`, else the folder's registry name), so a
+    /// picker needs no call per folder.
+    #[test]
+    fn projects_list_rows_carry_the_agent_display_name() {
+        let _scoped_db = db::scoped_for_test();
+        let dir = std::env::temp_dir().join(format!("k2-list-agent-name-{}", uuid::Uuid::new_v4()));
+        let agent_dir = crate::workspace::agent_identity::workspace_agent_path(dir.to_str().expect("utf8"));
+        std::fs::create_dir_all(&agent_dir).expect("agent dir");
+        std::fs::write(
+            agent_dir.join("ROLE.md"),
+            "---\nname: ada-tech\ndisplay_name: Ada Lovelace\n---\n\nPersona.\n",
+        )
+        .expect("persona");
+        let named_path = dir.to_str().expect("utf8").to_string();
+        ensure_project("list-name-persona", &named_path, "ada-folder");
+        ensure_project("list-name-plain", "/tmp/k2-list-name-plain-nonexistent", "plain-folder");
+
+        let listed = projects_list_with_workspaces().expect("list ok");
+        let json = serde_json::to_value(&listed).expect("serialize");
+        let row = |id: &str| {
+            json.as_array()
+                .expect("array")
+                .iter()
+                .find(|r| r["id"] == id)
+                .unwrap_or_else(|| panic!("{id} listed"))
+                .clone()
+        };
+        assert_eq!(row("list-name-persona")["agentDisplayName"], "Ada Lovelace", "persona display_name wins");
+        assert_eq!(row("list-name-plain")["agentDisplayName"], "plain-folder", "no persona: the folder's name");
+        assert_eq!(
+            row("list-name-persona")["agentDisplayName"],
+            crate::workspace::display::agent_display_name(&named_path).as_str(),
+            "the same name the per-folder route gives"
+        );
+        for r in json.as_array().expect("array") {
+            assert!(r["agentDisplayName"].is_string(), "every row has a name: {r}");
+            assert!(r.get("agent_display_name").is_none(), "camelCase only: {r}");
+        }
+
+        delete_project("list-name-persona");
+        delete_project("list-name-plain");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     /// 0063 stamp-on-create: a project row CREATED through the public

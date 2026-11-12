@@ -8,12 +8,11 @@
 //! plant [`CadExtensionLive`], the routing before these extensions were not-text (each of them
 //! opened as live text of unknown type). The plant turns each CAD row red by name.
 //!
-//! A doc already live as text when the routing changes keeps all its content: the host closes
-//! it (a pending write-back is written first), moves the text doc with its whole history to a
-//! key no file has (`SessionManager::rekey`), and opens the file at tier 0, whose first version
-//! is the file as the text doc last wrote it. The kit has no text-to-tier-0 path of its own
-//! (`open_blob_file` on a stored text doc is `PackMismatch`, nothing changed), so the row runs
-//! that rule with the kit's calls, as a host would.
+//! A doc already live as text when the routing changes keeps all its content: the host demotes
+//! it (`SessionManager::demote_text_file`), once, and opens the file at tier 0 as usual. The
+//! same key becomes a tier-0 doc with every text version, the last live state current and
+//! written to the file (an outside save since the last sync keeps both), and the change log
+//! readable (`BlobSession::live_log`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,10 +23,11 @@ use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::session::{
-    AnyFile, AuditEvent, BlobSession, Config, ConnId, Host, LogItem, LogQuery, Pack, Participant,
-    ParticipantKind, Rights, Session, SessionError, SessionManager, Stay, WriteOutcome,
+    AnyFile, AuditEvent, BlobSession, Config, ConnId, Demotion, Host, LogItem, LogQuery, Pack,
+    Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
+    WriteOutcome, DEMOTED,
 };
-use k2_mpc_base::store::{DocKey, DocStore, BLOB_DOC_PACK};
+use k2_mpc_base::store::{DocKey, DocStore, VersionId, BLOB_DOC_PACK};
 use k2_mpc_text::{TextPack, PACK, ROOT};
 
 // ---------- the routing ----------
@@ -166,15 +166,6 @@ fn key(p: &str) -> DocKey {
     }
 }
 
-/// Where a retired text doc's history goes: a space no workspace file is in (the host's
-/// choice; a key no file can have).
-fn history_key(p: &str) -> DocKey {
-    DocKey {
-        space: "retired-text".into(),
-        path: p.into(),
-    }
-}
-
 impl Fx {
     fn path(&self, name: &str) -> PathBuf {
         self.ws.join(name)
@@ -196,10 +187,6 @@ impl Fx {
     fn join_blob(&self, s: &BlobSession, pid: &str) -> ConnId {
         s.join(self.who(pid), Stay::Held).unwrap().conn
     }
-}
-
-fn text(s: &Session, c: ConnId) -> String {
-    s.read(c).unwrap().text_by_root.remove(0).1
 }
 
 /// An agent's whole-file write from the version it read, which must apply.
@@ -287,6 +274,8 @@ const WALL_2: &str = "#2=IFCWALL('2O2Fr$t4X7Zf8NOew3FLOH',$,'Wall A',$,$,$,$,$,$
 const WALL_3: &str = "#3=IFCWALL('1hOSvn6df7F8_7GcBWlRGQ',$,'Wall B',$,$,$,$,$,$);";
 const DOOR_4: &str = "#4=IFCDOOR('3cUkl32yn9qRSPvBJVyWYp',$,'Door 1',$,$,$,$,$,$);";
 
+const WINDOW_4: &str = "#4=IFCWINDOW('0dWcU0d4LBqhgsE5zUPF0X',$,'Window 1',$,$,$,$,$,$);";
+
 /// How the text doc was left when the routing changed.
 #[derive(Clone, Copy, Debug)]
 enum Left {
@@ -297,21 +286,67 @@ enum Left {
     /// Closed, with a change the file never got (the doc changed without its file: a crash
     /// before write-back leaves the same).
     ClosedWithChangeTheFileNeverGot,
+    /// Open with a change not yet written back, and another program saved the file since.
+    OpenWithOutsideSave,
 }
 
-/// The host's rule for a text doc whose name the pack now calls not-text: close it (a
-/// pending write-back is written first), move it with its whole history to `history`, then
-/// open the file at tier 0 (imported from the file as it now is: its first version).
-fn retire_to_tier0(f: &Fx, name: &str, history: &DocKey) -> Result<Arc<BlobSession>, SessionError> {
-    f.mgr.close(&key(name), "not_text")?;
-    f.mgr.rekey(&key(name), history.clone())?;
-    f.mgr
-        .open_blob_file(Arc::new(AnyFile), &key(name), &f.path(name), &f.ws)
+impl Left {
+    /// The demotion writes the live state to the file: the file doesn't hold it yet and no
+    /// other program saved the file since.
+    fn writes(self) -> bool {
+        matches!(
+            self,
+            Left::OpenWithUnwrittenChange | Left::ClosedWithChangeTheFileNeverGot
+        )
+    }
 }
 
-/// A `model.ifc` live as text when the routing changes keeps every change: the file and the
-/// tier-0 doc's first version hold the last state the file was written with, the moved text
-/// doc holds the last live state and its whole history, and the next open stays tier 0.
+/// Every text version and the bytes its `file_at` gives, oldest first.
+fn text_files(s: &Session, c: ConnId) -> Vec<(VersionId, Vec<u8>)> {
+    s.versions(c)
+        .unwrap()
+        .into_iter()
+        .map(|v| (v.id, s.file_at(c, v.id).unwrap().bytes))
+        .collect()
+}
+
+fn blob_at(b: &BlobSession, c: ConnId, v: VersionId) -> Vec<u8> {
+    let mut out = Vec::new();
+    b.read_version(c, v)
+        .unwrap()
+        .reader
+        .read_to_end(&mut out)
+        .unwrap();
+    out
+}
+
+fn blob_current(b: &BlobSession, c: ConnId) -> Vec<u8> {
+    let mut out = Vec::new();
+    b.read(c).unwrap().reader.read_to_end(&mut out).unwrap();
+    out
+}
+
+fn show(b: &[u8]) -> String {
+    String::from_utf8_lossy(b).into_owned()
+}
+
+/// The host's rule for a text doc whose name the pack now calls not-text: the kit's demote,
+/// once, with the pack the doc is stored under (`stored` of the `PackMismatch`, here `text`).
+fn demote(f: &Fx, name: &str) -> Result<(Arc<BlobSession>, Demotion), SessionError> {
+    f.mgr.demote_text_file(
+        Arc::new(PACK),
+        Arc::new(AnyFile),
+        &key(name),
+        &f.path(name),
+        &f.ws,
+    )
+}
+
+/// A `model.ifc` live as text when the routing changes keeps every change: the host demotes
+/// it, and the same key is a tier-0 doc with every text version, the last live state current
+/// and in the file (or, after an outside save, the save current and the live state a version
+/// and a conflict copy), and the change log readable. The old handle is closed, a second
+/// demote is a no-op, and later opens stay tier 0.
 fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
     const ROW: &str = "a_cad_doc_already_live_as_text_keeps_all_its_content";
     let name = "model.ifc";
@@ -332,9 +367,10 @@ fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
         "agent a's wall is written"
     );
     let with_4 = ifc_plus(&with_3, &format!("{WALL_3}\n"), DOOR_4);
-    // what the file must hold once the doc is retired, and what the text doc last held
-    let (file_after, live_last) = match left {
-        Left::OpenWithUnwrittenChange => {
+    let with_window = ifc_plus(&with_3, &format!("{WALL_3}\n"), WINDOW_4);
+    // the text doc's handle the demotion closes, and one of its connections
+    let (old, old_conn) = match left {
+        Left::OpenWithUnwrittenChange | Left::OpenWithOutsideSave => {
             let b = f.join(&s, "agent-b");
             write(&s, b, &with_4);
             assert_eq!(
@@ -342,7 +378,13 @@ fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
                 with_3.as_bytes(),
                 "b's door isn't written yet"
             );
-            (with_4.clone(), with_4.clone())
+            if matches!(left, Left::OpenWithOutsideSave) {
+                f.host.now.fetch_add(2_000, Ordering::SeqCst);
+                let tmp = f.path(".app-save.tmp");
+                fs::write(&tmp, &with_window).unwrap();
+                fs::rename(&tmp, f.path(name)).unwrap();
+            }
+            (s, a)
         }
         Left::Closed => {
             let b = f.join(&s, "agent-b");
@@ -350,7 +392,9 @@ fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
             drop(s);
             assert!(f.mgr.close(&key(name), "shutdown").unwrap());
             assert_eq!(f.bytes(name), with_4.as_bytes(), "the close wrote the door");
-            (with_4.clone(), with_4.clone())
+            let t = f.mgr.open(Arc::new(PACK), &key(name), None).unwrap();
+            let c = f.join(&t, "reader");
+            (t, c)
         }
         Left::ClosedWithChangeTheFileNeverGot => {
             drop(s);
@@ -365,8 +409,22 @@ fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
                 with_3.as_bytes(),
                 "the file never got the door"
             );
-            (with_3.clone(), with_4.clone())
+            let t = f.mgr.open(Arc::new(PACK), &key(name), None).unwrap();
+            let c = f.join(&t, "reader");
+            (t, c)
         }
+    };
+    let before = text_files(&old, old_conn);
+    let changes = old
+        .log(old_conn, &LogQuery::default())
+        .unwrap()
+        .into_iter()
+        .filter(|i| matches!(i, LogItem::Change { .. }))
+        .count() as u64;
+    // what the file must hold after the demotion
+    let file_after = match left {
+        Left::OpenWithOutsideSave => &with_window,
+        _ => &with_4,
     };
 
     // after this change: the next open
@@ -383,44 +441,90 @@ fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
         }
         other => panic!("{left:?}: tier 0 over a stored text doc: {:?}", other.err()),
     }
-    // the rule
-    let history = history_key(name);
-    let blob = retire_to_tier0(&f, name, &history).map_err(|e| format!("{ROW}: {left:?}: {e}"))?;
-    need(f.bytes(name) == file_after.as_bytes(), ROW, || {
-        format!(
-            "{left:?}: the file isn't the last written state:\n{}",
-            String::from_utf8_lossy(&f.bytes(name))
-        )
+    // the rule: demote once
+    let (blob, d) = demote(&f, name).map_err(|e| format!("{ROW}: {left:?}: {e}"))?;
+    need(!d.already && d.key == key(name), ROW, || {
+        format!("{left:?}: a first demote: {d:?}")
     })?;
     let c = f.join_blob(&blob, "reader");
-    let mut cur = Vec::new();
-    blob.read(c).unwrap().reader.read_to_end(&mut cur).unwrap();
-    need(cur == file_after.as_bytes(), ROW, || {
-        format!("{left:?}: the tier-0 doc isn't the file")
+    // every text version is a tier-0 version with the bytes its file_at gave
+    need(d.versions.len() == before.len(), ROW, || {
+        format!(
+            "{left:?}: {} text versions became {:?}",
+            before.len(),
+            d.versions
+        )
     })?;
-    let n = blob.versions(c).unwrap().len();
-    need(n == 1, ROW, || {
-        format!("{left:?}: the tier-0 doc has {n} versions")
-    })?;
-    // the text doc, moved, holds the last live state and its history
-    let h = f.mgr.open(Arc::new(PACK), &history, None).unwrap();
-    let hc = f.join(&h, "reader");
-    let last = text(&h, hc);
-    need(last == live_last, ROW, || {
-        format!("{left:?}: the moved text doc isn't the last live state:\n{last}")
-    })?;
-    let shown: Vec<String> = h
-        .versions(hc)
+    for ((tv, bytes), (from, to)) in before.iter().zip(&d.versions) {
+        need(tv == from, ROW, || {
+            format!("{left:?}: version {tv} mapped as {from}")
+        })?;
+        let got = blob_at(&blob, c, *to);
+        need(got == *bytes, ROW, || {
+            format!(
+                "{left:?}: version {tv} (now {to}) isn't its file_at:\n{}",
+                show(&got)
+            )
+        })?;
+    }
+    let held: Vec<Vec<u8>> = blob
+        .versions(c)
         .unwrap()
-        .iter()
-        .map(|v| h.show(hc, v.id).unwrap()[0].1.clone())
+        .into_iter()
+        .map(|(v, _)| blob_at(&blob, c, v))
         .collect();
-    need(shown.iter().any(|v| v == IFC), ROW, || {
-        format!("{left:?}: no version of the moved text doc holds the import")
+    need(held.iter().any(|v| v == IFC.as_bytes()), ROW, || {
+        format!("{left:?}: no tier-0 version holds the import")
     })?;
-    // every change, by its author (versions are cut by time, not per change)
-    let authors: Vec<String> = h
-        .log(hc, &LogQuery::default())
+    // the last live state is kept: current, or (after an outside save) a version and a copy
+    need(blob_at(&blob, c, d.live) == with_4.as_bytes(), ROW, || {
+        format!(
+            "{left:?}: the live version isn't the last live state:\n{}",
+            show(&blob_at(&blob, c, d.live))
+        )
+    })?;
+    need(f.bytes(name) == file_after.as_bytes(), ROW, || {
+        format!("{left:?}: the file is\n{}", show(&f.bytes(name)))
+    })?;
+    need(blob_current(&blob, c) == file_after.as_bytes(), ROW, || {
+        format!(
+            "{left:?}: the current version is\n{}",
+            show(&blob_current(&blob, c))
+        )
+    })?;
+    need(d.written == left.writes(), ROW, || {
+        format!("{left:?}: written is {}: {d:?}", d.written)
+    })?;
+    match left {
+        Left::OpenWithOutsideSave => {
+            need(d.kept_both && d.current != d.live, ROW, || {
+                format!("{left:?}: not kept both: {d:?}")
+            })?;
+            let copy = d
+                .conflict_copy
+                .clone()
+                .ok_or(format!("{ROW}: {left:?}: no conflict copy"))?;
+            need(
+                fs::read(&copy).ok().as_deref() == Some(with_4.as_bytes()),
+                ROW,
+                || format!("{left:?}: the conflict copy isn't the last live state"),
+            )?;
+            for t in &held {
+                let t = show(t);
+                need(
+                    !(t.contains("IFCDOOR") && t.contains("IFCWINDOW")),
+                    ROW,
+                    || format!("{left:?}: a version merges the save by lines:\n{t}"),
+                )?;
+            }
+        }
+        _ => need(!d.kept_both && d.current == d.live, ROW, || {
+            format!("{left:?}: {d:?}")
+        })?,
+    }
+    // the change log stays readable, every change by its author
+    let authors: Vec<String> = blob
+        .live_log(c)
         .unwrap()
         .into_iter()
         .filter_map(|i| match i {
@@ -428,35 +532,65 @@ fn already_live_row(route: &dyn Route, left: Left) -> Result<(), String> {
             _ => None,
         })
         .collect();
+    need(
+        d.changes == changes && authors.len() as u64 == changes,
+        ROW,
+        || {
+            format!(
+                "{left:?}: {changes} changes, {} kept, live log {authors:?}",
+                d.changes
+            )
+        },
+    )?;
     for pid in ["agent-a", "agent-b"] {
         need(authors.iter().any(|a| a == pid), ROW, || {
-            format!("{left:?}: the moved text doc's log has no change by {pid}: {authors:?}")
+            format!("{left:?}: the live log has no change by {pid}: {authors:?}")
         })?;
     }
-    // the next open stays tier 0: the same blob doc
+    // the old handle is closed
+    need(
+        matches!(old.read(old_conn), Err(SessionError::Closed { reason }) if reason == DEMOTED),
+        ROW,
+        || format!("{left:?}: the text session isn't closed as demoted"),
+    )?;
+    // a second demote is a no-op
+    let (again, d2) = demote(&f, name).map_err(|e| format!("{ROW}: {left:?}: again: {e}"))?;
+    need(d2.already && d2.versions.is_empty(), ROW, || {
+        format!("{left:?}: a second demote: {d2:?}")
+    })?;
+    need(Arc::ptr_eq(&again, &blob), ROW, || {
+        format!("{left:?}: a second demote isn't the tier-0 doc")
+    })?;
+    // later opens stay tier 0: the same blob doc
     let again = f
         .mgr
         .open_blob_file(Arc::new(AnyFile), &key(name), &f.path(name), &f.ws)
-        .unwrap();
+        .map_err(|e| format!("{ROW}: {left:?}: tier-0 open: {e}"))?;
     need(Arc::ptr_eq(&again, &blob), ROW, || {
         format!("{left:?}: the next open isn't the tier-0 doc")
     })?;
+    need(
+        blob_current(&again, c) == file_after.as_bytes(),
+        ROW,
+        || format!("{left:?}: the tier-0 open moved the current version"),
+    )?;
     match f
         .mgr
         .open_file(Arc::new(PACK), &key(name), &f.path(name), &f.ws)
     {
         Err(SessionError::PackMismatch { stored, .. }) if stored == BLOB_DOC_PACK => Ok(()),
         other => Err(format!(
-            "{ROW}: {left:?}: a text open after the rule: {:?}",
+            "{ROW}: {left:?}: a text open after the demote: {:?}",
             other.err()
         )),
     }
 }
 
-const LEFT: [Left; 3] = [
+const LEFT: [Left; 4] = [
     Left::OpenWithUnwrittenChange,
     Left::Closed,
     Left::ClosedWithChangeTheFileNeverGot,
+    Left::OpenWithOutsideSave,
 ];
 
 #[test]

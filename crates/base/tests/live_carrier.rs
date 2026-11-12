@@ -4,8 +4,8 @@
 //! `Pack::encode_from`, which splices the doc's content into them.
 //!
 //! - `encode_from` gets exactly the bytes last read or written: after the open, after each kit
-//!   write, after an outside save; a conflict copy of the kit's version is rendered from the
-//!   carrier, byte for byte.
+//!   write, after an outside save (from the save on, before anything renders the doc that took
+//!   it); a conflict copy of the kit's version is rendered from the carrier, byte for byte.
 //! - The carrier survives a reload (from the store, without the file; and across an app's save
 //!   while the doc wasn't loaded).
 //! - A history purge and a participant erasure reach the carrier blob: a byte scan of the store
@@ -15,8 +15,10 @@
 //! - F5: an untouched live doc writes back byte for byte.
 //! - A pack that doesn't opt in sees no change: no hook call, no blob.
 //!
-//! Plants (`KeyedMutant`): "carrier stale" (a kit write doesn't become the carrier) and "purge
-//! keeps carrier" (a replaced carrier is left for GC), each caught by its rows, by name.
+//! Plants (`KeyedMutant`): "carrier stale" (a kit write doesn't become the carrier), "purge
+//! keeps carrier" (a replaced carrier is left for GC) and "settle before carrier" (an outside
+//! save becomes the carrier only after the doc that took it was rendered), each caught by its
+//! rows, by name.
 //!
 //! The test pack, `deck-carrier`: `deck-lite`'s file (one line per shape: its key, then
 //! `\t<field>=<value>` per field) with **opaque lines**, any line starting with `#`, which it
@@ -39,9 +41,9 @@ use k2_mpc_base::parity::PersonAction;
 use k2_mpc_base::schema::{Kind, Schema};
 use k2_mpc_base::session::test_support::{carrier_judge, CarrierVerdict};
 use k2_mpc_base::session::{
-    AuditEvent, Config, ConnId, Declined, DiskCheck, EditOptions, Host, Pack, PackContent,
-    PackError, Participant, ParticipantKind, PurgeRequest, PurgeScope, Reconciled, Rights, Session,
-    SessionManager, Stay, View,
+    AuditEvent, Config, ConnId, Declined, DiskCheck, DiskState, EditOptions, Host, Pack,
+    PackContent, PackError, Participant, ParticipantKind, PurgeRequest, PurgeScope, Reconciled,
+    Rights, Session, SessionManager, Stay, View,
 };
 use k2_mpc_base::store::{scan_file, DocKey, DocStore};
 use k2_mpc_base::tools::{PackVerb, StructEdit, StructOutput, ToolError};
@@ -477,6 +479,13 @@ impl Fx {
             .last()
             .map(|b| String::from_utf8(b).expect("UTF-8"))
     }
+    /// The carriers `encode_from` was handed from its `n`-th call on.
+    fn handed_since(&self, n: usize) -> Vec<String> {
+        self.pack.seen.lock().unwrap()[n..]
+            .iter()
+            .map(|b| String::from_utf8(b.clone()).expect("UTF-8"))
+            .collect()
+    }
     /// Findings of `needle` in every file under the blob folder.
     fn blob_findings(&self, needle: &str) -> usize {
         files_under(&self.dir.0.join("blobs"))
@@ -668,6 +677,61 @@ fn the_planted_carrier_stale_is_caught_by_name() {
             .expect_err(&format!("planted, {name} must fail"));
         assert!(e.starts_with(&format!("{name}: ")), "{e}");
         assert!(e.contains("after the kit's first write"), "{e}");
+    });
+}
+
+// ---------- an outside save is the carrier before anything renders ----------
+
+/// An app's save (a header of its own, s1's title changed) on a doc with no unwritten change is
+/// the carrier before the kit renders the doc that took it: every rendering from the save on is
+/// handed the save, never the bytes before it; the doc is clean, the file read is the save, and
+/// nothing is written.
+fn row_an_outside_save_is_the_carrier_before_any_rendering() -> Result<(), String> {
+    const ROW: &str = "row_an_outside_save_is_the_carrier_before_any_rendering";
+    let f = fx("save-first", true);
+    f.write(F0);
+    let s = f.open();
+    let bot = f.agent(&s);
+    f.advance(1_000);
+    const SAVE: &str =
+        "# the app's header\ns1\ttitle=Person\n# speaker note for s1\ns2\tz=9\ttitle=B\n# end\n";
+    app_save(&f.path(), SAVE);
+    let from = f.pack.calls();
+    let out = s.file_changed().map_err(|e| format!("{ROW}: {e}"))?;
+    need(matches!(out, DiskCheck::Ingested { .. }), ROW, || {
+        format!("control: the save is taken in: {out:?}")
+    })?;
+    let handed = f.handed_since(from);
+    need(handed.iter().all(|c| c == SAVE), ROW, || {
+        format!("a rendering after the save was handed another carrier: {handed:?}")
+    })?;
+    let disk = s.status().map(|x| x.disk);
+    need(disk == Ok(Some(DiskState::Clean)), ROW, || {
+        format!("the doc holds the save, clean: {disk:?}")
+    })?;
+    let got = text(&s, bot);
+    need(got == SAVE, ROW, || {
+        format!("the file read after the save is the save: {got:?}")
+    })?;
+    need(matches!(s.flush(bot), Ok(o) if !o.written), ROW, || {
+        "nothing to write after the save".into()
+    })
+}
+
+#[test]
+fn an_outside_save_is_the_carrier_before_any_rendering() {
+    row_an_outside_save_is_the_carrier_before_any_rendering().unwrap();
+}
+
+/// The planted fault "settle before carrier": the row goes red, by name.
+#[test]
+fn the_planted_settle_before_carrier_is_caught_by_name() {
+    differential::with_keyed_mutant(KeyedMutant::SettleBeforeCarrier, || {
+        let name = "row_an_outside_save_is_the_carrier_before_any_rendering";
+        let e = row_an_outside_save_is_the_carrier_before_any_rendering()
+            .expect_err(&format!("planted, {name} must fail"));
+        assert!(e.starts_with(&format!("{name}: ")), "{e}");
+        assert!(e.contains("handed another carrier"), "{e}");
     });
 }
 

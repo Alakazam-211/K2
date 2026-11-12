@@ -702,9 +702,9 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 ### MPC-E310 `selection_too_large`
 
-- **Message:** `selection too large: {len} keys (the most is {max})`
-- **Next:** A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).
-- **Next step:** `select` with `--clear`. A selection holds at most 256 elements; clear it, then select fewer.
+- **Message:** `selection too large: {len} elements or cell ranges (the most is {max})`
+- **Next:** A selection holds at most 256 elements, and a grid's cells at most 16 ranges; nothing changed. Select fewer (details.max).
+- **Next step:** `select` with `--clear`. A selection holds at most 256 elements and a grid's cells at most 16 ranges; clear it, then select fewer.
 - **Rule:** K-PRES-6
 - **Exit:** 2
 
@@ -862,6 +862,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E518` | `quarantined` | 3 | K-SEC-5 | `*` | live |
 | `MPC-E519` | `closed` | 1 | K-OFF-2 | `*` | live |
 | `MPC-E520` | `engine_mismatch` | 6 | K-FMT-2, K-FMT-4 | `*` | live |
+| `MPC-E521` | `pairing_mismatch` | 1 | K1b (carrier pairing) | `*` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -1021,6 +1022,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** K-FMT-2, K-FMT-4
 - **Exit:** 6
 - **Reached by:** a doc stored by a build on another engine
+
+### MPC-E521 `pairing_mismatch`
+
+- **Message:** `the file's pairing doesn't fit it: {reason} (pairing_mismatch)`
+- **Next:** The file type writes the doc back by splicing into the file's own bytes, pairing each unit of the file with a key the kit kept for it. The keys kept don't fit the file, so the file type can't tell which unit is which and wrote nothing rather than guess. The file is as it was and the doc keeps every change. Report it; an app's next save of the file sets the pairing again.
+- **Rule:** K1b (carrier pairing)
+- **Exit:** 1
+- **Reached by:** a file type's pairing that doesn't fit its file
 
 ## 6xx: erasure
 

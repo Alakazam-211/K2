@@ -98,6 +98,41 @@ rebuilding it from the doc:
   kit is a worked example with a toy pack, and runs the judge on it). `docs/SESSIONS.md`, "The
   carrier (K1)", has the kit's side.
 
+### A carrier pack that mints its keys: the pairing (K1b)
+
+A deck's keys are the file's own ids, so `decode(carrier)` gives the live keys back. A pack whose
+units have no id in the file (spreadsheet rows, timeline items, scene objects) **mints** its keys:
+after a live insert or an app's save moved the units, decoding the carrier mints other keys than
+the live doc holds, and the pack can't tell which unit of the file a live key is. Such a pack
+opts in to the **pairing** as well:
+
+- `Pack::wants_pairing()` returns `true` (with `wants_carrier()`). The kit then makes a pairing
+  at every sync point (a kit write, an outside save taken in, a change that moved no byte, an
+  open whose stored pairing doesn't name the sync point), keeps it with every carrier, live and
+  per version, and calls `Pack::encode_from_paired(carrier, pairing, content, codec)` instead of
+  `encode_from`.
+- `Pack::pairing(content, codec)` gives each root's keys in the order the pack's own `decode`
+  yields the units of the file `content` renders to. The default, `list_pairing`, is each list
+  root's keys in list order; override it when the decode order differs (units across several
+  lists, a nested order). **Keys only**: a key must hold no user content (the kit stores it
+  beside the carrier and a purge doesn't reach it).
+- `encode_from_paired` decodes the carrier, takes **every value from the carrier**, and puts the
+  pairing's keys on its units in order. A pairing that doesn't fit (another number of units in a
+  root, a root it lacks) returns `SpliceError::PairingMismatch`, and nothing is spliced: **never
+  pair by guess** (by position after a change, by value, by the keys `decode` mints). Then it
+  diffs that keyed carrier against `content` by key and splices only the diff; `encode_from`'s
+  rules stand (untouched is byte for byte, the result decodes to the content).
+- Mint the keys an outside save's new units get (`Pack::reconcile`) in a namespace of their own
+  (a prefix live inserts never use), so they can't collide with a live insert's key.
+- `carrier_judge` checks the paired hook for such a pack (`encode_from_paired` with the pairing of
+  `decode(file)`). The kit's `tests/live_paired.rs` is a worked example: a toy pack with rows
+  that have no ids, written back after a live insert, an app's save, a restart and a purge, a
+  version's file, and a pairing that doesn't fit, refused (`MPC-E521`).
+- An outside save on a keyed doc that isn't a table keeps both whenever the doc holds changes
+  the file doesn't (or the kit wrote since the last outside save): the save becomes the live doc
+  exactly and is never merged by key with unwritten changes, so the pack's rules (no overlap, no
+  duplicate names) can't be broken by a merge the pack never saw.
+
 ## Rules every pack follows (checked)
 
 - **Engine-free.** A pack never depends on or imports a CRDT engine, in Rust or JS (`yrs`, `yjs`,

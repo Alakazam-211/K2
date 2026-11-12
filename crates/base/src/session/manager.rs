@@ -12,7 +12,9 @@ use super::config::Config;
 use super::disk::{self, DiskCheck, Probe, ReadFile};
 use super::error::{Result, SessionError};
 use super::host::{AuditEvent, Host};
-use super::live::{probe_error, RightsChange, Session};
+use super::live::{
+    planted_merges_by_line, probe_error, DemoteFile, Demotion, RightsChange, Session,
+};
 use super::pack::{Declined, Pack};
 use super::participant::ConnId;
 use super::roster::RosterEvent;
@@ -612,6 +614,153 @@ impl SessionManager {
         {
             pool.blob_sessions.remove(key);
         }
+        Ok(done)
+    }
+
+    /// **Text → tier 0**: the live text doc at `key`, whose file the host now opens at tier 0
+    /// (its pack moved the name to not-text, say), becomes a blob doc with the **same key and
+    /// doc id**, keeping its history (`docs/SESSIONS.md`, "Text → tier 0"). The mirror of
+    /// [`SessionManager::promote_blob_file`]. The host calls it when `open_blob_file` says
+    /// [`SessionError::PackMismatch`] with `stored` a text pack; rights are the host's to check
+    /// first (as for [`SessionManager::delete_doc`]). `pack` is the text doc's pack (to load it
+    /// when it isn't loaded), `to` the blob pack the tier-0 doc opens with.
+    ///
+    /// Path rules as [`SessionManager::open_blob_file`]. The text doc is never taken through
+    /// its own disk path, so an outside save is never merged by lines on the way out:
+    ///
+    /// - every text version becomes a tier-0 version holding exactly what its `file_at` gave,
+    ///   and the live doc's final state becomes the current version (a change the file never
+    ///   got, unwritten or left by a crash, included), written to the file by the tier-0
+    ///   session (`Demotion::written`; retried on `tick` when the file can't be written);
+    /// - when the file was saved from outside since the last sync, tier 0's keep-both rule:
+    ///   its bytes are current, the live state a version and a conflict copy;
+    /// - the change log is kept as the live log ([`BlobSession::live_log`]); the text doc's
+    ///   other rows go, in the same store transaction (a crash before it leaves the text doc
+    ///   as it was);
+    /// - the text session closes ([`AuditEvent::Demoted`] names its connections, reason
+    ///   [`super::DEMOTED`]), and the blob session opens on the file. Later opens are tier 0.
+    ///
+    /// A doc already tier 0 is a no-op ([`Demotion::already`]). Errors (nothing changed):
+    /// [`SessionError::NotFound`]; [`SessionError::PackMismatch`] when the doc's pack isn't
+    /// `pack`; [`SessionError::Declined`] `not_text` for a structured doc or a pack with a
+    /// carrier, `too_large` for a file over the blob limit; [`SessionError::NoBlobStore`]; a
+    /// disk or store error.
+    pub fn demote_text_file(
+        &self,
+        pack: Arc<dyn Pack>,
+        to: Arc<dyn BlobPack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+    ) -> Result<(Arc<BlobSession>, Demotion)> {
+        // K7: an error's paths, as the host may show them (inside the root, relative)
+        self.demote_text_file_in(pack, to, key, path, root)
+            .map_err(|e| e.redacted(root))
+    }
+
+    fn demote_text_file_in(
+        &self,
+        pack: Arc<dyn Pack>,
+        to: Arc<dyn BlobPack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+    ) -> Result<(Arc<BlobSession>, Demotion)> {
+        let blobs = self.blobs()?;
+        if self.tier0_already(key)? {
+            let s = self.open_blob_file_in(to, key, path, root)?;
+            return Ok((s, Demotion::already(key.clone())));
+        }
+        let root_c = std::fs::canonicalize(root)
+            .ok()
+            .filter(|r| r.is_dir())
+            .ok_or_else(|| {
+                SessionError::BadPath(format!("root {} is not a folder", root.display()))
+            })?;
+        let probed = disk::probe(path, &root_c)
+            .map_err(|e| SessionError::Disk(format!("{}: {e}", path.display())))?;
+        if matches!(probed, Probe::NotFile | Probe::Outside(_)) {
+            return Err(probe_error(path, &probed));
+        }
+        hard_linked(&probed)?;
+        let real = match &probed {
+            Probe::File { real, .. } => Some(real.clone()),
+            _ => None,
+        };
+        // the planted fault "demote merges by line": the file is taken in through the text
+        // doc's own disk path first (an outside save merged by lines), then demoted
+        let text = if planted_merges_by_line() {
+            let s = self.open_file(pack, key, path, root)?;
+            let _ = s.file_changed();
+            s
+        } else {
+            self.open(pack, key, None)?
+        };
+        let mut done = self.demote_loaded(key, &text, &blobs, &*to, Some(&DemoteFile { real }))?;
+        drop(text);
+        let blob = self.open_blob_file_in(to, key, path, root)?;
+        // the live state, when the file doesn't hold it yet (a failure is the session's disk
+        // error; its tick retries)
+        done.written = blob.write_back_now().unwrap_or(false);
+        Ok((blob, done))
+    }
+
+    /// [`SessionManager::demote_text_file`] for a text doc without a file (one that lives in
+    /// a file is refused, [`SessionError::BadPath`]: demote it with its file).
+    pub fn demote_text(
+        &self,
+        pack: Arc<dyn Pack>,
+        to: Arc<dyn BlobPack>,
+        key: &DocKey,
+    ) -> Result<(Arc<BlobSession>, Demotion)> {
+        let blobs = self.blobs()?;
+        if self.tier0_already(key)? {
+            return Ok((
+                self.open_blob(to, key, None)?,
+                Demotion::already(key.clone()),
+            ));
+        }
+        let text = self.open(pack, key, None)?;
+        let done = self.demote_loaded(key, &text, &blobs, &*to, None)?;
+        drop(text);
+        Ok((self.open_blob(to, key, None)?, done))
+    }
+
+    /// Whether the doc at `key` is tier 0 already (loaded or stored); `NotFound` without one.
+    fn tier0_already(&self, key: &DocKey) -> Result<bool> {
+        let pool = self.pool()?;
+        if pool.blob_sessions.contains_key(key) {
+            return Ok(true);
+        }
+        if pool.sessions.contains_key(key) {
+            return Ok(false);
+        }
+        let store = pool.store.clone().ok_or(SessionError::Released)?;
+        drop(pool);
+        let id = store
+            .find(key)?
+            .ok_or_else(|| SessionError::NotFound(key.clone()))?;
+        Ok(store.meta(id)?.pack == BLOB_DOC_PACK)
+    }
+
+    /// Demote the loaded text session `text` and take it out of the pool. Holds the pool lock
+    /// throughout (pool, then session: the lock order), so no `open` hands out the closing
+    /// session meanwhile.
+    fn demote_loaded(
+        &self,
+        key: &DocKey,
+        text: &Arc<Session>,
+        blobs: &BlobStore,
+        to: &dyn BlobPack,
+        file: Option<&DemoteFile>,
+    ) -> Result<Demotion> {
+        let mut pool = self.pool()?;
+        let done = text.demote(blobs, to, file)?;
+        if pool.sessions.get(key).is_some_and(|s| Arc::ptr_eq(s, text)) {
+            pool.sessions.remove(key);
+        }
+        // a text doc's waiting outside-save notes mean nothing at tier 0
+        pool.parked.remove(key);
         Ok(done)
     }
 

@@ -140,6 +140,13 @@ pub enum ClaimSpan {
     /// [`CLAIM_KEYS_MAX`] ([`super::BlobSession::claim_nodes`]). Keys carry across versions;
     /// the claim never grows.
     Nodes { keys: Vec<crate::index::NodeKey> },
+    /// One range of a grid's cells on one container, by corners
+    /// ([`super::Session::claim_cells`], [`crate::grid`]): the cells inside, rows and columns
+    /// inserted inside it included (its corners follow their keys).
+    CellRange {
+        container: Key,
+        range: crate::grid::CellRange,
+    },
 }
 
 /// The most elements one claim names ([`ClaimSpan::Elems`]).
@@ -201,6 +208,7 @@ impl fmt::Display for ClaimSpan {
             }
             ClaimSpan::Elems { root, keys } => f.write_str(&elems_text(root, keys)),
             ClaimSpan::Nodes { keys } => f.write_str(&nodes_text(keys)),
+            ClaimSpan::CellRange { container, .. } => write!(f, "cells on {container}"),
         }
     }
 }
@@ -1135,6 +1143,24 @@ pub(crate) struct Claim {
     pub grid: Option<GridSpan>,
     /// An element claim: its list root's keys (`root` is that list, `s`/`e` unused).
     pub elems: Option<ElemSpan>,
+    /// A claim on one range of a grid's cells (`root` is the grid's rows, `s`/`e` unused).
+    pub cells: Option<CellsSpan>,
+}
+
+/// A cells claim's container and range, by key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CellsSpan {
+    pub container: Key,
+    pub range: crate::grid::CellRange,
+}
+
+impl CellsSpan {
+    pub fn span(&self) -> ClaimSpan {
+        ClaimSpan::CellRange {
+            container: self.container.clone(),
+            range: self.range.clone(),
+        }
+    }
 }
 
 /// An element claim's keys in one list root. A key stays when its element is deleted: a restore
@@ -1168,7 +1194,10 @@ pub(crate) struct GridSpan {
 impl GridSpan {
     pub fn of(span: &ClaimSpan) -> Option<Self> {
         Some(match span {
-            ClaimSpan::Lines(_) | ClaimSpan::Elems { .. } | ClaimSpan::Nodes { .. } => return None,
+            ClaimSpan::Lines(_)
+            | ClaimSpan::Elems { .. }
+            | ClaimSpan::Nodes { .. }
+            | ClaimSpan::CellRange { .. } => return None,
             ClaimSpan::Rows { first, last } => GridSpan {
                 rows: Some((first.clone(), last.clone())),
                 cols: None,

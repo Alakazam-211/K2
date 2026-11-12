@@ -51,6 +51,23 @@ const VALUES = [
   "transform",
   "utf8Len",
   "VIEW_TEXT_MAX",
+  // the live grid (WIRE.md, "The live grid")
+  "CELLS_FEATURE",
+  "CELLS_RANGES_MAX",
+  "CELL_CLAIMS_FEATURE",
+  "blankNumbers",
+  "cellsA1",
+  "colLabel",
+  "colLetters",
+  "colNumber",
+  "colOfCellField",
+  "cornerA1",
+  "cornerAt",
+  "cornerNumbers",
+  "cornerProblem",
+  "fieldClass",
+  "gridNumbers",
+  "rangeA1",
 ] as const satisfies readonly (keyof typeof lib)[];
 
 /** Types a host imports from the package root: each must resolve (a compile error if not). */
@@ -92,6 +109,23 @@ export type HostTypes = [
   Lib.ContainerDelta,
   Lib.ViewSnapshotJson,
   Lib.ViewUnit,
+  // the live grid (WIRE.md, "The live grid")
+  Lib.Corner,
+  Lib.CellRange,
+  Lib.Cells,
+  Lib.CellClaim,
+  Lib.GridSlot,
+  Lib.GridNumbering,
+  Lib.FieldClass,
+  Lib.FrameDerived,
+  Lib.UnitDerived,
+  Lib.ContainerDerived,
+  Lib.StyleHint,
+  Lib.Written,
+  Lib.Band,
+  Lib.GridLine,
+  Lib.GridNumbers,
+  Lib.CornerProblem,
 ];
 
 /** Test helpers a host imports (from `k2-mpc-client/test`, or each module by path). */
@@ -168,6 +202,10 @@ describe("what a host builds against", () => {
     expect(missingValues(lib, VALUES)).toEqual([]);
     expect(missingValues(core, VALUES)).toEqual([]);
     expect(lib.setDefaultLiveTimers).toBe(setDefaultLiveTimers);
+  });
+
+  it("the live grid's names hold the wire's values", () => {
+    expect([lib.CELLS_FEATURE, lib.CELL_CLAIMS_FEATURE, lib.CELLS_RANGES_MAX]).toEqual(["cells", "cell_claims", 16]);
   });
 
   it("the test helpers: from the test entry point, and the same objects at their own paths", () => {

@@ -5,7 +5,8 @@
 // - The previous client (wire 2) on this kit's goldens (wire 3): change events with `turn` and
 //   `verb` replay to the kit's text, and every roster stream (focus, range, claim events with
 //   actor and times) folds without error to the kit's final roster, as the previous client knows
-//   it.
+//   it. The live grid's stream (`cells`, `claim_started_cells`; still wire 3) folds on it without
+//   error: its roster events are kinds it doesn't know.
 // - This client (wire 3) on the previous release's goldens (wire 2): the same, with no `turn`, no
 //   focus or range, and claims attributed from the roster.
 // - This client on a wire-2 welcome sends no frame a wire-2 host doesn't take.
@@ -47,7 +48,10 @@ function wire() {
 }
 
 const load = <T>(dir: string, name: string): T => JSON.parse(readFileSync(join(dir, name), "utf8")) as T;
-const rosterFiles = (dir: string) => readdirSync(dir).filter((n) => n.startsWith("roster_events") && n.endsWith(".json") && !/rollup|closed|grid/.test(n));
+/** The `{events, final}` roster goldens. `roster_events_cells.json` is left out here: it is a
+ * stream in flushes (`{self, client, flushes}`) with no final snapshot, and its own row below
+ * folds it on the previous client. */
+const rosterFiles = (dir: string) => readdirSync(dir).filter((n) => n.startsWith("roster_events") && n.endsWith(".json") && !/rollup|closed|grid|cells/.test(n));
 /** The streams a `PresenceChannel` folds (element presence and claims), where both have them. */
 const PRESENCE_FILES = ["roster_events_elem_presence.json", "roster_events_claims_elems.json", "roster_events_focus_range.json"];
 const handlesOf = (e: RosterEvent) => (e.kind === "snapshot" ? (e.members as RosterEntry[]).map((m) => m.handle).sort() : []);
@@ -161,6 +165,23 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
     expect(l.text).toBe("x");
     expect(l.version).toBe(3);
     expect(p.peers()).toEqual([]);
+    expect(w.sent).toEqual([]);
+  });
+
+  it("the previous client folds the live grid's roster stream (`cells`, `claim_started_cells`) without error and sends nothing", async () => {
+    const prev = await previous();
+    const name = "roster_events_cells.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const g = load<{ self: string; client: number; flushes: { rev: number; events: RosterEvent[] }[] }>(OURS, name);
+    const kinds = new Set(g.flushes.flatMap((f) => f.events.map((e) => e.kind)));
+    expect(kinds.has("cells") && kinds.has("claim_started_cells")).toBe(true);
+    const w = wire();
+    const l = new prev.LiveText({ text: "", version: 0 }, w.t, { self: g.self });
+    const welcome: Welcome = { root: "source", version: 0, client: g.client, self: g.self, rights: "edit" };
+    const p = new prev.PresenceChannel(w.t, welcome, now);
+    for (const f of g.flushes) for (const event of f.events) w.deliver({ type: "roster_event", event });
+    expect(l.roster.some((m) => m.handle === "agent:atlas")).toBe(true);
+    expect(p.peers().some((x) => x.handle === "agent:atlas")).toBe(true);
     expect(w.sent).toEqual([]);
   });
 

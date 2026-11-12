@@ -56,7 +56,7 @@ pub(super) fn create_tables(w: &WriteTransaction) -> Result<(), StoreError> {
 
 /// Record a version and, when an agent wrote it on someone's behalf, its `Pending` approval,
 /// in `w` (the caller's transaction: both or neither).
-fn put_version(
+pub(super) fn put_version(
     w: &WriteTransaction,
     id: DocId,
     vid: VersionId,
@@ -355,7 +355,7 @@ pub(crate) struct BlobSync {
     pub stat: Option<Vec<u8>>,
 }
 
-fn enc_sync(s: &BlobSync) -> Vec<u8> {
+pub(super) fn enc_sync(s: &BlobSync) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1)
         .bytes(s.blob.as_bytes())

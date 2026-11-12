@@ -97,16 +97,16 @@ pub use live::{
     GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
 };
 pub use live::{
-    Blame, BlameLine, ChangeEvent, CursorAtVersion, CursorDrop, DeviceKey, DiffOutput, EditAtBase,
-    EditOptions, EditResult, FileBytes, FileCodec, FileCopy, HistoryOptions, JoinOptions, Joined,
-    LogItem, LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult,
-    RightsChange, Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome, UndoRequest,
-    WriteOptions, WriteOutcome, WriteReport, WriterLease, DEVICE_KEY_MAX,
+    Blame, BlameLine, ChangeEvent, CursorAtVersion, CursorDrop, Demotion, DeviceKey, DiffOutput,
+    EditAtBase, EditOptions, EditResult, FileBytes, FileCodec, FileCopy, HistoryOptions,
+    JoinOptions, Joined, LogItem, LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope,
+    ReadResult, RightsChange, Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome,
+    UndoRequest, WriteOptions, WriteOutcome, WriteReport, WriterLease, DEMOTED, DEVICE_KEY_MAX,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{
-    default_reconcile, elem_of_map_key, Declined, Pack, PackContent, PackError, Reconciled,
-    TextFilePack,
+    default_reconcile, elem_of_map_key, list_pairing, Declined, Pack, PackContent, PackError,
+    Pairing, Reconciled, SpliceError, TextFilePack,
 };
 pub use participant::{
     CellCursor, ConnId, CursorAt, Device, ElemFocus, ElemRange, ElemSelection, Participant,

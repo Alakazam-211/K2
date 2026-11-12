@@ -1434,6 +1434,10 @@ fn every_table_is_listed_once() {
         // a live doc's carrier and its versions' (K1), with the first
         "live_carriers".to_owned(),
         "version_carriers".to_owned(),
+        // a carrier's pairing (K1b), with the first carrier of a pack that pairs
+        "carrier_pairings".to_owned(),
+        // a demoted doc's live log, with the first demotion
+        "demoted_changes".to_owned(),
     ];
     let eager: Vec<String> = listed
         .iter()

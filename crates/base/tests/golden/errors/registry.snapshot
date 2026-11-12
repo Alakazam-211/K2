@@ -110,6 +110,7 @@ MPC-E517 pack_error exit=1 live
 MPC-E518 quarantined exit=3 live
 MPC-E519 closed exit=1 live
 MPC-E520 engine_mismatch exit=6 live
+MPC-E521 pairing_mismatch exit=1 live
 MPC-E601 purge_current_version exit=2 live
 MPC-E602 purged_version exit=4 live
 MPC-E603 cache_key_destroyed exit=4 live

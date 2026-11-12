@@ -1,8 +1,8 @@
 MPC-E310 selection_too_large (presence and claims)
 exit:     2
-message:  selection too large: {len} keys (the most is {max})
-next:     A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).
-step:     select; args: --clear; why: A selection holds at most 256 elements; clear it, then select fewer.
+message:  selection too large: {len} elements or cell ranges (the most is {max})
+next:     A selection holds at most 256 elements, and a grid's cells at most 16 ranges; nothing changed. Select fewer (details.max).
+step:     select; args: --clear; why: A selection holds at most 256 elements and a grid's cells at most 16 ranges; clear it, then select fewer.
 rule:     K-PRES-6
 verbs:    select
 status:   live
@@ -12,12 +12,12 @@ status:   live
   "name": "selection_too_large",
   "area": "presence and claims",
   "exit": 2,
-  "message": "selection too large: {len} keys (the most is {max})",
-  "next": "A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).",
+  "message": "selection too large: {len} elements or cell ranges (the most is {max})",
+  "next": "A selection holds at most 256 elements, and a grid's cells at most 16 ranges; nothing changed. Select fewer (details.max).",
   "next_step": {
     "verb": "select",
     "args": ["--clear"],
-    "why": "A selection holds at most 256 elements; clear it, then select fewer."
+    "why": "A selection holds at most 256 elements and a grid's cells at most 16 ranges; clear it, then select fewer."
   },
   "rule": "K-PRES-6",
   "verbs": ["select"],

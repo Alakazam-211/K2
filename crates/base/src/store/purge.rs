@@ -440,7 +440,7 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
         st.insert(id, enc_stats(&stats).as_slice())?;
     }
     redact_authored(w, id, p)?;
-    if let Some((pid, _)) = er {
+    if let Some((pid, ps)) = er {
         // the turns of the erased participant's changes (and of those made on their behalf)
         // go: a turn links changes into one agent run. Their verbs go with them, on the same
         // terms. Found before the summaries are renamed
@@ -448,6 +448,8 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
         super::turns::erase_in(w, super::turns::CHANGE_TURNS, id, &theirs)?;
         super::turns::remove_in(w, super::verbs::CHANGE_VERBS, id, &theirs)?;
         c.attributions += rename_rows(w, id, er)?;
+        // the live log of an earlier demotion (a doc demoted, then promoted again)
+        c.attributions += super::demoted::erase_in(w, id, pid, ps)?;
     }
     // comment threads a promoted doc kept from tier 0 (v0.9.2 keeps the doc id): bodies and
     // anchor copies the needles match, the erasure, and a whole-history purge's anchor copies

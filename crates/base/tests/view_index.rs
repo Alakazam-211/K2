@@ -109,6 +109,8 @@ const VIEW: ViewSchema = ViewSchema {
         ("hidden", FieldClass::Visibility),
         ("name", FieldClass::Meta),
     ],
+    field_class_prefix: &[],
+    grid: None,
     derived: Derived {
         containers: &[],
         units: &["name_is_generic"],

@@ -8,7 +8,8 @@
 import type { OpId, Presence } from "./live";
 import { byteToIndex, indexToByte, utf8Len } from "./hunk";
 import { ERR } from "./wire";
-import type { ClaimActor, ClientFrame, ElemFocus, ElemRange, ElemSelection, ErrorReport, Handle, Point, Rect, RosterEntry, RosterEvent, ServerFrame, Transport, Welcome } from "./wire";
+import type { CellRange, Cells, ClaimActor, ClientFrame, Corner, ElemFocus, ElemRange, ElemSelection, ErrorReport, Handle, Point, Rect, RosterEntry, RosterEvent, ServerFrame, Transport, Welcome } from "./wire";
+import { CELLS_FEATURE, CELLS_RANGES_MAX, CELL_CLAIMS_FEATURE } from "./grid";
 
 /**
  * A participant's kind, stable for a host to switch on. The roster's `kind` (the kit's
@@ -142,12 +143,16 @@ export interface PresencePeer {
   /** A caret or selection inside one element's text field (wire 3), in **UTF-8 bytes** of the
    * field's text as the host sent it (`rangeToUtf16` converts), or `null`. */
   range: ElemRange | null;
+  /** Its cells in a live grid (feature `cells`), or `null`. */
+  cells: Cells | null;
   away: boolean;
 }
 
 /**
- * A live claim on elements, as `PresenceChannel.claims()` folds the roster (rendering-data
- * contract Item 4): from a snapshot's `elem_claims`, `claim_started_elems` and `claim_ended`.
+ * A live claim on elements, or on a block of cells, as `PresenceChannel.claims()` folds the roster
+ * (rendering-data contract Item 4): from a snapshot's `elem_claims` and `cell_claims`,
+ * `claim_started_elems`, `claim_started_cells` and `claim_ended`. A claim on cells has `cells`,
+ * with `root` `""` and no `keys`.
  */
 export interface ClaimView {
   /** `claim-N`. */
@@ -161,6 +166,8 @@ export interface ClaimView {
   /** When it was taken (host clock); `null` from a wire-2 host. */
   startedMs: number | null;
   expiresMs: number;
+  /** A claim on cells: its container and its one range. Absent on a claim on elements. */
+  cells?: Pick<Cells, "container" | "ranges">;
 }
 
 /** A presence frame the host refused, by the `req` the channel sent it with. */
@@ -171,7 +178,7 @@ export interface PresenceRefusal {
 }
 
 /** The frames a `PresenceChannel` sends, each refusable. */
-export type PresenceFrameType = "select" | "pointer" | "viewport" | "focus" | "range" | "claim" | "release";
+export type PresenceFrameType = "select" | "pointer" | "viewport" | "focus" | "range" | "cells" | "claim" | "release";
 
 /** The name a host lists in `welcome.features` when it takes the presence frames. */
 export const PRESENCE_FEATURE = "presence";
@@ -300,15 +307,31 @@ interface Values {
   viewport: Rect | null;
   focus: ElemFocus | null;
   range: ElemRange | null;
+  cells: Cells | null;
 }
 
-const noValues = (): Values => ({ selection: null, pointer: null, viewport: null, focus: null, range: null });
-const hasValue = (v: Values) => v.selection !== null || v.pointer !== null || v.viewport !== null || v.focus !== null || v.range !== null;
+const noValues = (): Values => ({ selection: null, pointer: null, viewport: null, focus: null, range: null, cells: null });
+const hasValue = (v: Values) => v.selection !== null || v.pointer !== null || v.viewport !== null || v.focus !== null || v.range !== null || v.cells !== null;
+
+const copyCorner = (c: Corner): Corner => ({ row: c.row, row_off: c.row_off, col: c.col, col_off: c.col_off });
+const copyRange = (r: CellRange): CellRange => ({ start: copyCorner(r.start), end: copyCorner(r.end) });
+const copyCells = (c: Cells): Cells => ({ container: c.container, active: c.active && copyCorner(c.active), ranges: c.ranges.map(copyRange) });
 
 /** What the host would refuse (`MPC-E304`) about a claim, in its words. */
 function claimProblem(keys: readonly string[], opts: ClaimOptions): string | null {
   if (keys.length === 0) return "a claim on elements names at least one";
   if (keys.length > CLAIM_KEYS_MAX) return `${keys.length} elements in one claim; at most ${CLAIM_KEYS_MAX}`;
+  return claimOptionsProblem(opts);
+}
+
+/** What the host would refuse (`MPC-E304`) about a claim on cells, in its words. */
+function cellsClaimProblem(cells: Pick<Cells, "container" | "ranges">, opts: ClaimOptions): string | null {
+  if (cells.ranges.length !== 1) return `a claim on cells names one range, not ${cells.ranges.length}`;
+  return claimOptionsProblem(opts);
+}
+
+/** What the host would refuse (`MPC-E304`) about a claim's options. */
+function claimOptionsProblem(opts: ClaimOptions): string | null {
   if (opts.note !== undefined) {
     const n = utf8Len(opts.note);
     if (n > CLAIM_NOTE_MAX) return `a note of ${n} bytes; at most ${CLAIM_NOTE_MAX}`;
@@ -348,6 +371,7 @@ export class PresenceChannel {
   private viewport: Rect | null = null;
   private focus: ElemFocus | null = null;
   private range: ElemRange | null = null;
+  private cells: Cells | null = null;
   /** What is waiting for the next batch. */
   private pointerDue = false;
   private viewportDue = false;
@@ -397,6 +421,20 @@ export class PresenceChannel {
     return Array.isArray(f) && f.includes(RANGE_FEATURE);
   }
 
+  /** The connection's `welcome.features` lists `"cells"`. While false, `setCells` only records
+   * the value. */
+  get cellsSupported(): boolean {
+    const f = this.welcome.features;
+    return Array.isArray(f) && f.includes(CELLS_FEATURE);
+  }
+
+  /** The connection's `welcome.features` lists `"cell_claims"`. While false, `claimCells` sends
+   * nothing and rejects with `unsupported`. */
+  get cellClaimsSupported(): boolean {
+    const f = this.welcome.features;
+    return Array.isArray(f) && f.includes(CELL_CLAIMS_FEATURE);
+  }
+
   /** The wire version of this connection's host (`welcome.wire`; absent: 2). */
   get wire(): number {
     return typeof this.welcome.wire === "number" ? this.welcome.wire : 2;
@@ -404,9 +442,11 @@ export class PresenceChannel {
 
   /** Set the container in view (wire 3; `Session::set_focus`), or clear it with `null`. Goes at
    * once when the host lists `"focus"`; else recorded and sent on a later connection that does.
-   * The host refuses a key that isn't live (`MPC-E114`) and a watcher (`MPC-E305`). */
+   * The host refuses a key that isn't live (`MPC-E114`) and a watcher (`MPC-E305`). A focus on
+   * another container (or none) clears this connection's cells here, as the host drops them. */
   setFocus(focus: ElemFocus | null): void {
     const next = focus && { root: focus.root, key: focus.key };
+    if (this.cells && next?.key !== this.cells.container) this.cells = null;
     if (JSON.stringify(next) === JSON.stringify(this.focus)) return;
     this.focus = next;
     this.sendFocus();
@@ -431,6 +471,56 @@ export class PresenceChannel {
     if (JSON.stringify(next) === JSON.stringify(this.range)) return;
     this.range = next;
     this.sendRange();
+  }
+
+  /**
+   * Set this connection's cells in a live grid, or clear them with `null`: the active cell and at
+   * most `CELLS_RANGES_MAX` ranges of one container, by corner (`cornerAt` makes one from numbers).
+   * Goes at once when the host lists `"cells"`; else recorded and sent on a later connection that
+   * does. The host also moves this connection's focus to the container, so the channel sets its
+   * own focus there too (in `root`, the containers' list root; without it, the current focus's
+   * root, and none is set when there is no focus), and sends no `focus` frame for it. More than
+   * `CELLS_RANGES_MAX` ranges are refused here (`onRefused`, `MPC-E310`), unsent, and the cells
+   * stay as they were. The host refuses a corner that isn't live, in normal form or in bounds, an
+   * active cell outside the ranges, and another container's corner (`MPC-E114`), and a watcher
+   * (`MPC-E305`).
+   */
+  setCells(cells: Cells | null, root?: string): void {
+    if (cells && cells.ranges.length > CELLS_RANGES_MAX) {
+      const message = `selection too large: ${cells.ranges.length} cell ranges (the most is ${CELLS_RANGES_MAX})`;
+      return this.refuse("cells", { id: ERR.SELECTION_TOO_LARGE, message });
+    }
+    const next = cells && copyCells(cells);
+    const r = root ?? this.focus?.root;
+    if (next && r !== undefined) this.focus = { root: r, key: next.container };
+    if (JSON.stringify(next) === JSON.stringify(this.cells)) return;
+    this.cells = next;
+    this.sendCells();
+  }
+
+  /**
+   * Claim one block of cells of a live grid (`{container, ranges: [range]}`): resolves to the
+   * claim's id, `claim-N`, as `claim` does. Sent only when the host lists `"cell_claims"`. Rejects
+   * as `claim`, and here, unsent, with `MPC-E304` for other than one range (and the options
+   * `claim` checks).
+   */
+  claimCells(cells: Pick<Cells, "container" | "ranges">, opts: ClaimOptions = {}): Promise<string> {
+    const held = this.unavailable(true);
+    if (held) return Promise.reject(held);
+    const bad = cellsClaimProblem(cells, opts);
+    if (bad) {
+      const error: ErrorReport = { id: ERR.BAD_CLAIM, message: `bad claim: ${bad}` };
+      this.refuse("claim", error);
+      return Promise.reject(new ClaimRejected("refused", error.message, error));
+    }
+    return this.ask<string>("claim", (req) => ({
+      type: "claim",
+      req,
+      cells: { container: cells.container, ranges: cells.ranges.map(copyRange) },
+      ...(opts.ttlMs === undefined ? {} : { ttl_ms: opts.ttlMs }),
+      ...(opts.note === undefined ? {} : { note: opts.note }),
+      ...(opts.hold === undefined ? {} : { hold: opts.hold }),
+    }));
   }
 
   /**
@@ -536,6 +626,7 @@ export class PresenceChannel {
           viewport: v.viewport,
           focus: v.focus,
           range: v.range,
+          cells: v.cells,
           away: f.away,
         };
       };
@@ -553,7 +644,12 @@ export class PresenceChannel {
   /** The live claims on elements, in the order they were taken (oldest first), each with its
    * actor and times: who holds what, for a view's claim marks and its activity line. */
   claims(): readonly ClaimView[] {
-    return this.claimed.map((c) => ({ ...c, actor: { ...c.actor }, keys: [...c.keys] }));
+    return this.claimed.map((c) => ({
+      ...c,
+      actor: { ...c.actor },
+      keys: [...c.keys],
+      ...(c.cells ? { cells: { container: c.cells.container, ranges: c.cells.ranges.map(copyRange) } } : {}),
+    }));
   }
 
   /** `claims()` changed (a claim started or ended, or a snapshot came). Returns an unsubscribe. */
@@ -601,8 +697,9 @@ export class PresenceChannel {
     );
     this.folded = [];
     this.emitChange();
-    // the focus before the range: a range moves the focus to its container on the host
+    // the focus before the cells and the range: each moves the focus to its container on the host
     if (this.focus) this.sendFocus();
+    if (this.cells) this.sendCells();
     if (this.range) this.sendRange();
     if (this.selection) this.sendSelection();
     if (this.pointer) this.pointerDue = true;
@@ -617,10 +714,11 @@ export class PresenceChannel {
     this.rejectAsked("closed", "the channel closed before the host answered, so this request's fate is unknown.");
   }
 
-  /** Why nothing can be asked now, if so. */
-  private unavailable(): ClaimRejected | null {
+  /** Why nothing can be asked now, if so (`cells`: a claim on cells). */
+  private unavailable(cells = false): ClaimRejected | null {
     if (this.closed) return new ClaimRejected("closed", "the channel is closed");
-    if (!this.claimsSupported) return new ClaimRejected("unsupported", "this connection's host doesn't take claim frames (no \"claims\" in welcome.features)");
+    if (cells && !this.cellClaimsSupported) return new ClaimRejected("unsupported", "this connection's host doesn't take claims on cells (no \"cell_claims\" in welcome.features)");
+    if (!cells && !this.claimsSupported) return new ClaimRejected("unsupported", "this connection's host doesn't take claim frames (no \"claims\" in welcome.features)");
     return null;
   }
 
@@ -680,6 +778,11 @@ export class PresenceChannel {
     this.t.send({ type: "range", req: this.number("range"), range: this.range });
   }
 
+  private sendCells(): void {
+    if (this.closed || !this.cellsSupported) return;
+    this.t.send({ type: "cells", req: this.number("cells"), cells: this.cells });
+  }
+
   private send(kind: PresenceFrameType, frame: (req: number) => ClientFrame): void {
     if (this.closed || !this.supported) return;
     this.t.send(frame(this.number(kind)));
@@ -719,6 +822,7 @@ export class PresenceChannel {
         if (kind === "viewport" && this.latest.viewport === f.req) this.viewport = null;
         if (kind === "focus" && this.latest.focus === f.req) this.focus = null;
         if (kind === "range" && this.latest.range === f.req) this.range = null;
+        if (kind === "cells" && this.latest.cells === f.req) this.cells = null;
         return this.refuse(kind, f.error);
       }
       case "roster":
@@ -784,6 +888,8 @@ export class PresenceChannel {
         return set(e.who, e.client, { focus: e.focus });
       case "range":
         return set(e.who, e.client, { range: e.range });
+      case "cells":
+        return set(e.who, e.client, { cells: e.cells && copyCells(e.cells) });
       default:
         return false;
     }
@@ -819,6 +925,21 @@ export class PresenceChannel {
         });
         return true;
       }
+      case "claim_started_cells": {
+        this.claimed = this.claimed.filter((c) => c.claim !== e.claim);
+        this.claimed.push({
+          claim: e.claim,
+          actor: this.cellsClaimActor(e),
+          root: "",
+          keys: [],
+          note: e.note,
+          hold: e.hold,
+          startedMs: typeof e.started_ms === "number" ? e.started_ms : null,
+          expiresMs: e.expires_ms,
+          cells: { container: e.container, ranges: e.ranges.map(copyRange) },
+        });
+        return true;
+      }
       case "claim_ended": {
         const before = this.claimed.length;
         this.claimed = this.claimed.filter((c) => c.claim !== e.claim);
@@ -827,6 +948,11 @@ export class PresenceChannel {
       default:
         return false;
     }
+  }
+
+  /** A claim on cells' actor: the event's own, so a view needs no roster row. */
+  private cellsClaimActor(e: Extract<RosterEvent, { kind: "claim_started_cells" }>): ClaimActor {
+    return { id: e.actor.id, name: e.actor.name, kind: e.actor.kind, colour: e.actor.colour };
   }
 
   private emitClaims(): void {
@@ -842,8 +968,26 @@ export class PresenceChannel {
   }
 }
 
-/** A roster entry's live claims on elements, its own row giving the actor. */
+/** A roster entry's live claims on elements, then on cells, its own row giving the actor. */
 function claimsOf(m: RosterEntry): ClaimView[] {
+  const cells = (m.cell_claims ?? []).map(
+    (c): ClaimView => ({
+      claim: c.claim,
+      actor: { id: m.handle, name: m.name, kind: m.kind, colour: m.colour },
+      root: "",
+      keys: [],
+      note: c.note,
+      hold: c.hold,
+      startedMs: typeof c.started_ms === "number" ? c.started_ms : null,
+      expiresMs: c.expires_ms,
+      cells: { container: c.container, ranges: c.ranges.map(copyRange) },
+    }),
+  );
+  return [...elemClaimsOf(m), ...cells];
+}
+
+/** A roster entry's live claims on elements. */
+function elemClaimsOf(m: RosterEntry): ClaimView[] {
   return (m.elem_claims ?? []).map((c) => ({
     claim: c.claim,
     actor: { id: m.handle, name: m.name, kind: m.kind, colour: m.colour },
@@ -865,6 +1009,7 @@ function foldEntry(m: RosterEntry): Folded {
       viewport: d.viewport ?? null,
       focus: d.focus ?? null,
       range: d.range ?? null,
+      cells: d.cells ?? null,
     });
   }
   return {
@@ -873,7 +1018,7 @@ function foldEntry(m: RosterEntry): Folded {
     colour: m.colour,
     rawKind: m.kind,
     away: m.away,
-    top: { selection: m.selection ?? null, pointer: m.pointer ?? null, viewport: m.viewport ?? null, focus: m.focus ?? null, range: m.range ?? null },
+    top: { selection: m.selection ?? null, pointer: m.pointer ?? null, viewport: m.viewport ?? null, focus: m.focus ?? null, range: m.range ?? null, cells: m.cells ?? null },
     conns,
     perConn: conns.size > 0,
   };

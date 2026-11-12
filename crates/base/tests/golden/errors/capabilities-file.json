@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1284,6 +1284,12 @@
       "id": "MPC-E520",
       "name": "engine_mismatch",
       "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E521",
+      "name": "pairing_mismatch",
+      "exit": 1,
       "status": "live"
     },
     {

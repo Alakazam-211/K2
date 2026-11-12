@@ -454,6 +454,10 @@ pub struct StructOutput {
     /// The refusal a kit grid verb's "no" is, when it has its own id (`MPC-E806`, `MPC-E807`); the
     /// others are told apart by exit ([`ToolOutput::refusal`](super::ToolOutput)).
     pub(crate) refusal: Option<&'static crate::errors::ErrorEntry>,
+    /// An edit verb on a grid: the cells it wrote ([`crate::grid::CellsReport`]). The kit
+    /// moves the acting agent's cells presence to them after the change applied, so an
+    /// agent's place shows with no watch open.
+    pub cells: Option<crate::grid::CellsReport>,
 }
 
 impl StructOutput {
@@ -464,7 +468,14 @@ impl StructOutput {
             exit,
             shown: None,
             refusal: None,
+            cells: None,
         }
+    }
+
+    /// Set [`StructOutput::cells`].
+    pub fn writing(mut self, cells: crate::grid::CellsReport) -> Self {
+        self.cells = Some(cells);
+        self
     }
 
     /// Set [`StructOutput::shown`].

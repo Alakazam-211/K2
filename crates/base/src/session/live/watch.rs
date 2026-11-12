@@ -149,6 +149,14 @@ impl WatchExtras {
         self
     }
 
+    /// A grid pack's derived values, typed ([`crate::grid::FrameDerived`]): `derived` becomes
+    /// its JSON (`units.<row>.a1`, `containers.<sheet>.merges` and `.styles`, `written`,
+    /// `bands`), or `null` when it has nothing.
+    pub fn grid(mut self, d: &crate::grid::FrameDerived) -> Self {
+        self.derived = d.to_value();
+        self
+    }
+
     pub fn render_hash(mut self, container: impl Into<String>, hash: impl Into<String>) -> Self {
         self.render_hashes.push((container.into(), hash.into()));
         self
@@ -263,6 +271,9 @@ pub struct WatchPage {
     pub pages: u32,
     pub root: String,
     pub part: WatchPart,
+    /// On a page of the units' fields: the pack's derived values of the fields in this page
+    /// ([`Pack::page_derived`]), `<name> -> <unit address> -> <field> -> value`; empty: none.
+    pub derived: PageExtra,
 }
 
 /// A frame of the keyed watch, as the host sends it ([`WatchFrame::to_json`]).
@@ -318,6 +329,9 @@ impl WatchFrame {
                 };
                 if let Json::Obj(m) = &mut v {
                     m.push((name.to_owned(), body));
+                    if !p.derived.is_empty() {
+                        m.push(("derived".to_owned(), page_derived_json(&p.derived)));
+                    }
                 }
                 v
             }
@@ -506,6 +520,42 @@ fn schema_json(s: &Schema, composite: &[(String, String)]) -> Json {
             ),
         ),
     ])
+}
+
+/// A page's derived values as `{<name>: {<unit>: {<field>: value}}}`, in the order given.
+fn page_derived_json(d: &PageExtra) -> Json {
+    // per name, per unit, the unit's fields
+    type Units = Vec<(String, Vec<(String, Json)>)>;
+    let mut names: Vec<(String, Units)> = Vec::new();
+    for (name, unit, field, value) in d {
+        let n = match names.iter().position(|(x, _)| x == name) {
+            Some(i) => i,
+            None => {
+                names.push(((*name).to_owned(), Vec::new()));
+                names.len() - 1
+            }
+        };
+        let units = &mut names[n].1;
+        let u = match units.iter().position(|(x, _)| x == unit) {
+            Some(i) => i,
+            None => {
+                units.push((unit.clone(), Vec::new()));
+                units.len() - 1
+            }
+        };
+        units[u].1.push((field.clone(), Json::from(value.as_str())));
+    }
+    Json::Obj(
+        names
+            .into_iter()
+            .map(|(n, us)| {
+                (
+                    n,
+                    Json::Obj(us.into_iter().map(|(u, fs)| (u, Json::Obj(fs))).collect()),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn page_head(seq: u64, upto: Seq, page: u32, pages: u32, root: &str) -> Json {
@@ -777,7 +827,38 @@ fn snapshot_frames(
         }
         v.to_json().len()
     };
-    let mut parts: Vec<(String, WatchPart)> = Vec::new();
+    let mut parts: Vec<Part> = Vec::new();
+    // the units' fields map: the pack's per-unit derived values ride on its pages
+    let units_map = view.and_then(|(vs, _)| {
+        composites
+            .iter()
+            .find(|(_, l)| *l == vs.units)
+            .map(|(m, _)| (*m, vs.units))
+    });
+    let mut unit_derived: UnitDerived = HashMap::new();
+    if let Some((map, list)) = units_map {
+        if let Some(KeyedRoot::Map(m)) = state.roots.iter().find(|(r, _)| r == map).map(|(_, r)| r)
+        {
+            let mut units: Vec<Key> = Vec::new();
+            for k in m.keys() {
+                if let Some((l, e)) = elem_of_map_key(composites, map, k) {
+                    if l == list && units.last() != Some(&e) && !units.contains(&e) {
+                        units.push(e);
+                    }
+                }
+            }
+            if !units.is_empty() {
+                for d in pack.page_derived(state, &units) {
+                    for (field, value) in d.values {
+                        unit_derived
+                            .entry((d.unit.clone(), field))
+                            .or_default()
+                            .push((d.name, value));
+                    }
+                }
+            }
+        }
+    }
     let too_large = |root: &str, bytes: usize| {
         SessionError::Declined(Declined {
             code: "too_large",
@@ -795,7 +876,7 @@ fn snapshot_frames(
                 }
                 let room = page_bytes.saturating_sub(overhead(root, "text")).max(64);
                 for run in text_runs(t, room) {
-                    parts.push((root.clone(), WatchPart::Text(run)));
+                    parts.push((root.clone(), WatchPart::Text(run), Vec::new()));
                 }
             }
             KeyedRoot::List { live, hidden, .. } => {
@@ -811,7 +892,7 @@ fn snapshot_frames(
                 for run in
                     runs(items, base, page_bytes, frame_max).map_err(|n| too_large(root, n))?
                 {
-                    parts.push((root.clone(), WatchPart::Live(run)));
+                    parts.push((root.clone(), WatchPart::Live(run), Vec::new()));
                 }
                 let items = hidden
                     .iter()
@@ -825,23 +906,54 @@ fn snapshot_frames(
                 for run in
                     runs(items, base, page_bytes, frame_max).map_err(|n| too_large(root, n))?
                 {
-                    parts.push((root.clone(), WatchPart::Hidden(run)));
+                    parts.push((root.clone(), WatchPart::Hidden(run), Vec::new()));
                 }
             }
             KeyedRoot::Map(m) => {
+                let ours = units_map.is_some_and(|(map, _)| map == root);
                 let items = m
                     .iter()
                     .map(|(k, v)| {
                         let (key, field) = split_map_key(pack, composites, root, k);
-                        let n = item_len(&entry_triple(&key, field.as_deref(), v));
-                        ((key, field, v.clone()), n)
+                        let mut n = item_len(&entry_triple(&key, field.as_deref(), v));
+                        // the entry's derived values, counted with it (their names, the unit's
+                        // address and the field again, at most)
+                        let mut extra: PageExtra = Vec::new();
+                        if ours {
+                            if let (Some((_, e)), Some(f)) =
+                                (elem_of_map_key(composites, root, k), field.as_ref())
+                            {
+                                for (name, value) in
+                                    unit_derived.get(&(e, f.clone())).into_iter().flatten()
+                                {
+                                    n += Json::obj([(
+                                        *name,
+                                        Json::obj([(
+                                            key.as_str(),
+                                            Json::obj([(f.as_str(), Json::from(value.as_str()))]),
+                                        )]),
+                                    )])
+                                    .to_json()
+                                    .len()
+                                        + 1;
+                                    extra.push((*name, key.clone(), f.clone(), value.clone()));
+                                }
+                            }
+                        }
+                        (((key, field, v.clone()), extra), n)
                     })
                     .collect();
-                let base = overhead(root, "entries");
+                // the derived field's own name, once a page
+                let base = overhead(root, "entries") + if ours { 12 } else { 0 };
                 for run in
                     runs(items, base, page_bytes, frame_max).map_err(|n| too_large(root, n))?
                 {
-                    parts.push((root.clone(), WatchPart::Entries(run)));
+                    let (entries, extras): (Vec<_>, Vec<PageExtra>) = run.into_iter().unzip();
+                    parts.push((
+                        root.clone(),
+                        WatchPart::Entries(entries),
+                        extras.into_iter().flatten().collect(),
+                    ));
                 }
             }
         }
@@ -871,7 +983,7 @@ fn snapshot_frames(
                     return Err(too_large(vs.units, n));
                 }
                 let next = page.next;
-                parts.push((vs.units.to_owned(), WatchPart::Units(page)));
+                parts.push((vs.units.to_owned(), WatchPart::Units(page), Vec::new()));
                 match next {
                     Some(f) => from = f,
                     None => break,
@@ -904,7 +1016,7 @@ fn snapshot_frames(
         }));
     }
     out.push(head);
-    for (n, (root, part)) in parts.into_iter().enumerate() {
+    for (n, (root, part, derived)) in parts.into_iter().enumerate() {
         out.push(WatchFrame::Page(WatchPage {
             seq: seq0 + 1 + n as u64,
             upto,
@@ -912,10 +1024,21 @@ fn snapshot_frames(
             pages,
             root,
             part,
+            derived,
         }));
     }
     Ok(out)
 }
+
+/// A snapshot page's derived values ([`WatchPage::derived`]): `(name, unit address, field,
+/// value)`.
+pub type PageExtra = Vec<(&'static str, String, String, String)>;
+
+/// One page of a snapshot before it is numbered: its root, its content, its derived values.
+type Part = (String, WatchPart, PageExtra);
+
+/// The pack's per-unit derived values by `(unit, field)`: `(name, value)` each.
+type UnitDerived = HashMap<(Key, String), Vec<(&'static str, String)>>;
 
 /// A map key as a watcher gets it: `(the element's address, Some(field))` on a composite root
 /// when the key names an element, else `(the whole key, None)`.

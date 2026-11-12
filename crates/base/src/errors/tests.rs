@@ -175,6 +175,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::RevertTooOld { seq: 3 },
         S::NoSuchChange(3),
         S::VersionNoCarrier { version: 3 },
+        S::PairingMismatch { reason: x.into() },
         S::Disk(x.into()),
         S::SaveMismatch {
             size: 3,

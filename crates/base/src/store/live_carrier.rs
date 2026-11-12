@@ -21,6 +21,16 @@
 //!   carriers of the versions it erased, and removes their blobs at once), a doc delete.
 //!   Rows whose version is gone (an older kit's retention) are swept at the next load.
 //!
+//! **The carrier's pairing** (K1b, a third additive table, `carrier_pairings`, created lazily):
+//! for a pack that mints its keys (`Pack::wants_pairing`), the carrier's keys in the order the
+//! pack's decode yields its units, beside each carrier row: `(doc, slot)` → the carrier blob it
+//! pairs, the sync seq it was made at, and the pack's keys (`Pairing::to_bytes`). The live slot
+//! is [`LIVE_SLOT`]; a version's slot is its id. **Keys only, no values**: a purge has nothing in
+//! it to erase. A row follows its carrier row: set with the live carrier (and with the versions
+//! at its seq), copied to a version when the version takes the live carrier, dropped with a
+//! version's carrier. A row naming another blob than its carrier row (an older kit's write) is
+//! read as none.
+//!
 //! An older kit reads and writes a store with these tables as before: its blob GC keeps every
 //! carrier; its own writes leave the live row naming bytes the file no longer holds (this kit
 //! checks the live carrier against the sync point when it loads it and drops a stale one); its
@@ -44,6 +54,69 @@ pub(super) const LIVE_CARRIERS: TableDefinition<u64, &[u8]> = TableDefinition::n
 /// `(doc, version)` → [`CarrierRow`] and the version's seq (record version 1).
 pub(super) const VERSION_CARRIERS: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("version_carriers");
+
+/// `(doc, slot)` → [`PairingRow`] (record version 1): the carrier's pairing (K1b).
+pub(super) const CARRIER_PAIRINGS: TableDefinition<(u64, u64), &[u8]> =
+    TableDefinition::new("carrier_pairings");
+
+/// The slot of the live carrier's pairing in [`CARRIER_PAIRINGS`]; a version's is its id.
+pub(crate) const LIVE_SLOT: u64 = u64::MAX;
+
+/// A carrier's pairing as stored: the blob it pairs, the sync seq it was made at, and the pack's
+/// keys (`Pairing::to_bytes`, opaque here).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairingRow {
+    pub blob: BlobId,
+    pub seq: Seq,
+    pub keys: Vec<u8>,
+}
+
+fn enc_prow(r: &PairingRow) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1).bytes(r.blob.as_bytes()).u64(r.seq).bytes(&r.keys);
+    w.0
+}
+
+/// `None` for a record this kit can't read: read as no pairing.
+fn dec_prow(b: &[u8]) -> Option<PairingRow> {
+    let mut r = R::new(b, "carrier pairing");
+    if r.u8().ok()? != 1 {
+        return None;
+    }
+    let row = PairingRow {
+        blob: BlobId::from_slice(&r.bytes().ok()?)?,
+        seq: r.u64().ok()?,
+        keys: r.bytes().ok()?,
+    };
+    r.end().ok()?;
+    Some(row)
+}
+
+fn prow_in(w: &WriteTransaction, id: DocId, slot: u64) -> Result<Option<PairingRow>, StoreError> {
+    if !has_table(w, CARRIER_PAIRINGS.name())? {
+        return Ok(None);
+    }
+    let t = w.open_table(CARRIER_PAIRINGS)?;
+    let v = t.get((id, slot))?;
+    Ok(v.and_then(|v| dec_prow(v.value())))
+}
+
+/// Write `row` at `slot`, and at every version of `id` at `row.seq` whose carrier is
+/// `row.blob` (the file then is that version's file, so its keys are these), in `w`.
+fn put_pairing_in(w: &WriteTransaction, id: DocId, row: &PairingRow) -> Result<(), StoreError> {
+    let versions: Vec<VersionId> = vrows_in(w, id)?
+        .into_iter()
+        .filter(|(_, r, at)| *at == row.seq && r.id == row.blob)
+        .map(|(vid, _, _)| vid)
+        .collect();
+    let b = enc_prow(row);
+    let mut t = w.open_table(CARRIER_PAIRINGS)?;
+    t.insert((id, LIVE_SLOT), b.as_slice())?;
+    for vid in versions {
+        t.insert((id, vid), b.as_slice())?;
+    }
+    Ok(())
+}
 
 /// A carrier's blob, by its space's key number (a doc can move to another space; the count stays
 /// where it was taken).
@@ -180,10 +253,27 @@ pub(super) fn carry_new_versions(
     let Some(live) = row_in(w, id)? else {
         return Ok(());
     };
-    let mut t = w.open_table(VERSION_CARRIERS)?;
-    for (vid, seq) in new {
-        adjust_ref(w, live.no, &live.id, 1, 0)?;
-        t.insert((id, *vid), enc_vrow(&live, *seq).as_slice())?;
+    {
+        let mut t = w.open_table(VERSION_CARRIERS)?;
+        for (vid, seq) in new {
+            adjust_ref(w, live.no, &live.id, 1, 0)?;
+            t.insert((id, *vid), enc_vrow(&live, *seq).as_slice())?;
+        }
+    }
+    // and the live carrier's pairing (K1b): the version's carrier is the live one, from the last
+    // sync point, so its keys are that point's
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::PairingMissingOnVersion)
+    {
+        return Ok(());
+    }
+    if let Some(p) = prow_in(w, id, LIVE_SLOT)?.filter(|p| p.blob == live.id) {
+        let b = enc_prow(&p);
+        let mut t = w.open_table(CARRIER_PAIRINGS)?;
+        for (vid, _) in new {
+            t.insert((id, *vid), b.as_slice())?;
+        }
     }
     Ok(())
 }
@@ -196,7 +286,16 @@ pub(super) fn drop_versions_in(
     vids: &[VersionId],
     now: Option<u64>,
 ) -> Result<Vec<CarrierRow>, StoreError> {
-    if vids.is_empty() || !has_table(w, VERSION_CARRIERS.name())? {
+    if vids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if !has_table(w, VERSION_CARRIERS.name())? {
+        if has_table(w, CARRIER_PAIRINGS.name())? {
+            let mut t = w.open_table(CARRIER_PAIRINGS)?;
+            for vid in vids {
+                t.remove((id, *vid))?;
+            }
+        }
         return Ok(Vec::new());
     }
     let mut gone = Vec::new();
@@ -212,6 +311,12 @@ pub(super) fn drop_versions_in(
             gone.push(row);
         }
         w.open_table(VERSION_CARRIERS)?.remove((id, *vid))?;
+    }
+    if has_table(w, CARRIER_PAIRINGS.name())? {
+        let mut t = w.open_table(CARRIER_PAIRINGS)?;
+        for vid in vids {
+            t.remove((id, *vid))?;
+        }
     }
     Ok(gone)
 }
@@ -305,14 +410,17 @@ impl DocStore {
     /// `seq` (`None`: it has none), in one durable transaction: the live row takes a count on the
     /// new blob and gives the old one's back at `now`; every version at `seq` takes the new blob
     /// too (the file then is that version's file), and on the doc's first carrier so do the
-    /// versions at `seq` that have none. Returns the blobs that now have no reference, for the
-    /// caller to remove at once ([`crate::blob::BlobStore`]'s removal).
+    /// versions at `seq` that have none. With `pairing` (K1b: the pack's keys for these bytes,
+    /// `Pairing::to_bytes`), the live pairing row and those versions' take it in the same
+    /// transaction; dropping the carrier drops the live pairing. Returns the blobs that now have
+    /// no reference, for the caller to remove at once ([`crate::blob::BlobStore`]'s removal).
     pub(crate) fn set_live_carrier(
         &self,
         doc: DocId,
         new: Option<(&str, BlobId, u64)>,
         seq: Seq,
         now: u64,
+        pairing: Option<&[u8]>,
     ) -> Result<Vec<Released>, StoreError> {
         let w = self.begin_write()?;
         let old = row_in(&w, doc)?;
@@ -378,9 +486,67 @@ impl DocStore {
                 }
             }
         }
+        match (&new, pairing) {
+            (Some(n), Some(keys)) => put_pairing_in(
+                &w,
+                doc,
+                &PairingRow {
+                    blob: n.id,
+                    seq,
+                    keys: keys.to_vec(),
+                },
+            )?,
+            (None, _) if has_table(&w, CARRIER_PAIRINGS.name())? => {
+                w.open_table(CARRIER_PAIRINGS)?.remove((doc, LIVE_SLOT))?;
+            }
+            _ => {}
+        }
         let gone = unreferenced(&w, released)?;
         w.commit()?;
         Ok(gone)
+    }
+
+    /// The pairing at `slot` of doc `id` ([`LIVE_SLOT`] or a version id), if it has one this kit
+    /// can read (K1b).
+    pub(crate) fn carrier_pairing(
+        &self,
+        id: DocId,
+        slot: u64,
+    ) -> Result<Option<PairingRow>, StoreError> {
+        let r = self.begin_read()?;
+        let t = match r.open_table(CARRIER_PAIRINGS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let v = t.get((id, slot))?;
+        Ok(v.and_then(|v| dec_prow(v.value())))
+    }
+
+    /// The live carrier's bytes are unchanged, but its pairing is new: made at sync point `seq`
+    /// (a change that moved no byte, an open with no pairing stored). The live row and every
+    /// version at `seq` with the live carrier take `keys`, in one durable transaction. Nothing
+    /// when the doc has no live carrier.
+    pub(crate) fn set_carrier_pairing(
+        &self,
+        doc: DocId,
+        seq: Seq,
+        keys: &[u8],
+    ) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        if let Some(live) = row_in(&w, doc)? {
+            put_pairing_in(
+                &w,
+                doc,
+                &PairingRow {
+                    blob: live.id,
+                    seq,
+                    keys: keys.to_vec(),
+                },
+            )?;
+        }
+        w.commit()?;
+        Ok(())
     }
 
     /// Drop the carriers of doc `doc`'s versions `vids` (a purge erased them), in one durable
@@ -419,6 +585,15 @@ impl DocStore {
                     out.push(vid);
                 }
             }
+            // and the pairings of versions that are gone (K1b; the live slot isn't a version)
+            if let Ok(p) = r.open_table(CARRIER_PAIRINGS) {
+                for kv in p.range((doc, 0)..(doc, LIVE_SLOT))? {
+                    let vid = kv?.0.value().1;
+                    if versions.get((doc, vid))?.is_none() && !out.contains(&vid) {
+                        out.push(vid);
+                    }
+                }
+            }
             out
         };
         if orphans.is_empty() {
@@ -455,5 +630,21 @@ mod tests {
         let mut long = enc_vrow(&row, 9);
         long.push(0);
         assert_eq!(dec_vrow(&long), None);
+    }
+
+    #[test]
+    fn a_pairing_row_round_trips_and_another_version_is_unread() {
+        let row = PairingRow {
+            blob: BlobId::from_slice(&[5u8; 32]).unwrap(),
+            seq: 41,
+            keys: vec![1, 2, 3],
+        };
+        assert_eq!(dec_prow(&enc_prow(&row)), Some(row.clone()));
+        let mut other = enc_prow(&row);
+        other[0] = 2;
+        assert_eq!(dec_prow(&other), None);
+        let mut long = enc_prow(&row);
+        long.push(0);
+        assert_eq!(dec_prow(&long), None, "a longer record is another layout");
     }
 }

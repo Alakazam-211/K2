@@ -1,0 +1,531 @@
+{
+  "self": "person:ada",
+  "client": 90071,
+  "flushes": [
+    {
+      "rev": 20,
+      "events": [
+        {
+          "kind": "snapshot",
+          "version": 1,
+          "members": [
+            {
+              "handle": "person:ada",
+              "name": "Ada",
+              "colour": "#7c3aed",
+              "kind": "person",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 90071,
+                  "cursor": null
+                }
+              ]
+            },
+            {
+              "handle": "agent:atlas",
+              "name": "Atlas",
+              "colour": "#6d5bd0",
+              "kind": "agent",
+              "role": "viewer",
+              "away": false,
+              "cursor": null,
+              "rights": "edit",
+              "devices": [
+                {
+                  "client": 4711,
+                  "cursor": null
+                }
+              ]
+            }
+          ],
+          "watching": 0
+        }
+      ]
+    },
+    {
+      "rev": 20,
+      "events": [
+        {
+          "kind": "claim_started_cells",
+          "who": "agent:atlas",
+          "claim": "claim-1",
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r3",
+                "row_off": 0,
+                "col": "@sheet:1/col:c3",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r14",
+                "row_off": 0,
+                "col": "@sheet:1/col:c4",
+                "col_off": 0
+              }
+            }
+          ],
+          "note": "updating Q2 figures",
+          "hold": true,
+          "expires_ms": 260500,
+          "version": 1,
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          },
+          "started_ms": 200500
+        },
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r3",
+              "row_off": 0,
+              "col": "@sheet:1/col:c3",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r3",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c3",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r14",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 21,
+      "events": [
+        {
+          "kind": "role",
+          "who": "agent:atlas",
+          "role": "editor"
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": ["@sheet:1/row:r4", "@sheet:1/row:r5", "@sheet:1/row:r6"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r4",
+              "row_off": 0,
+              "col": "@sheet:1/col:c4",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r4",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r6",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 22,
+      "events": [
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": ["@sheet:1/row:r5"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r5",
+              "row_off": 0,
+              "col": "@sheet:1/col:c6",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r5",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r5",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 23,
+      "events": [
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": ["@sheet:1/row:r19"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r19",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 16378
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 24,
+      "events": [
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r19",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 25,
+      "events": [
+        {
+          "kind": "claim_ended",
+          "who": "agent:atlas",
+          "claim": "claim-1",
+          "how": "released",
+          "lines": {
+            "root": "rows",
+            "first": 4,
+            "last": 16
+          },
+          "version": 6,
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          },
+          "at_ms": 203000,
+          "at_rev": null
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": ["@sheet:1/row:r17"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r17",
+              "row_off": 0,
+              "col": "@sheet:1/col:c5",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r17",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r17",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 26,
+      "events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "sheets",
+            "keys": ["@sheet:2"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:2",
+            "active": {
+              "row": "@sheet:2/row:r1",
+              "row_off": 0,
+              "col": "@sheet:2/col:c1",
+              "col_off": 0
+            },
+            "ranges": []
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 27,
+      "events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:5"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "sheets",
+            "keys": ["@sheet:5"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:5",
+            "active": {
+              "row": null,
+              "row_off": 1,
+              "col": null,
+              "col_off": 1
+            },
+            "ranges": []
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 28,
+      "events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": ["@sheet:1/row:r15"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r16",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "ranges": []
+          },
+          "client": 4711
+        }
+      ]
+    },
+    {
+      "rev": 29,
+      "events": [
+        {
+          "kind": "role",
+          "who": "person:ada",
+          "role": "editor"
+        }
+      ]
+    },
+    {
+      "rev": 30,
+      "events": [
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": ["@sheet:1/row:r6"]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r6",
+              "row_off": 0,
+              "col": "@sheet:1/col:c6",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r6",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r6",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ]
+    }
+  ]
+}

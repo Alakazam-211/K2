@@ -501,7 +501,7 @@ impl Session {
             let o = f(&ctx)?;
             report = Some((o.stdout, o.exit));
             own = o.refusal;
-            Ok::<_, ToolError>(o.edits)
+            Ok::<_, ToolError>((o.edits, o.cells))
         });
         let (changed, notes) = match res {
             Ok(r) => r,
@@ -578,10 +578,10 @@ impl Session {
             report = Some(o);
             let Some(new) = new else {
                 applied = false;
-                return Ok(Vec::new());
+                return Ok((Vec::new(), None));
             };
             if new == text {
-                return Ok(Vec::new());
+                return Ok((Vec::new(), None));
             }
             let rec = pack.reconcile(view, new.as_bytes(), &codec).map_err(|d| {
                 let way_forward = if d.code == "mixed_line_endings" {
@@ -594,7 +594,7 @@ impl Session {
                     d.message, d.code
                 ))
             })?;
-            Ok::<_, ToolError>(rec.edits)
+            Ok::<_, ToolError>((rec.edits, None))
         });
         let (changed, notes) = match res {
             Ok(r) => r,

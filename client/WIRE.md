@@ -26,7 +26,7 @@ says which it speaks in `welcome.wire`; a welcome without it is wire 2.
 | Wire | Kits | What it added |
 |---|---|---|
 | 2 | v0.9.8 to v0.14.0 | the frames below without the wire-3 items (K2 pins its frames to this one) |
-| 3 | after v0.14.0 | every addition is a field, a roster event kind, a client frame behind a feature name, or a welcome field: a change's `turn` and `verb`; the roster's `focus` and `range` (event kinds, and fields on entries and devices); the claim events' `actor` and times (`started_ms`; `at_ms` and `at_rev` on `claim_ended`); the client frames `focus` and `range` (features `focus` and `range`); `welcome.wire`; and, after v0.15.1, [the keyed watch](#the-keyed-watch) (feature `keyed_watch`: the client frames `watch` and `report`, the host frames `keyed_snapshot`, `keyed_page`, `ops_change` and `watch_refused`), with its [view deltas](#view-deltas) (`units`, `containers_changed` and `containers` on `ops_change`; `composite` in the snapshot's `schema`); and the roster's elements [by address](#presence-frames), filled by the kit |
+| 3 | after v0.14.0 | every addition is a field, a roster event kind, a client frame behind a feature name, or a welcome field: a change's `turn` and `verb`; the roster's `focus` and `range` (event kinds, and fields on entries and devices); the claim events' `actor` and times (`started_ms`; `at_ms` and `at_rev` on `claim_ended`); the client frames `focus` and `range` (features `focus` and `range`); `welcome.wire`; and, after v0.15.1, [the keyed watch](#the-keyed-watch) (feature `keyed_watch`: the client frames `watch` and `report`, the host frames `keyed_snapshot`, `keyed_page`, `ops_change` and `watch_refused`), with its [view deltas](#view-deltas) (`units`, `containers_changed` and `containers` on `ops_change`; `composite` in the snapshot's `schema`); and the roster's elements [by address](#presence-frames), filled by the kit; and [the live grid](#the-live-grid) (features `cells` and `cell_claims`: the client frame `cells` and the claim frame's `cells`; the roster's `cells` and `claim_started_cells`, and `cells` and `cell_claims` on entries and devices; `grid` and `field_class_prefix` in the view schema, the class and unit-delta op `cell`, a rows page's `derived`, and `derived` typed) |
 
 **N−1, both ways.** Nothing in wire 3 changes or removes a wire-2 field, frame or meaning:
 
@@ -51,6 +51,14 @@ says which it speaks in `welcome.wire`; a welcome without it is wire 2.
   that maps them (a deck's `s256-7` is `@sld:256/sp:7`), a client always got addresses where a
   host converted them; a host on a kit before this converted them itself
   (`Session::address_of`), and on this kit sends the kit's.
+- **The live grid** (after v0.15.1) is additive within wire 3 too. **A client before it** never
+  sends `cells` or a claim with `cells` (it knows neither feature), ignores the roster's `cells`
+  and `claim_started_cells` (kinds it doesn't know) and their fields on entries and devices, and
+  ends nothing it never started on `claim_ended`; it reads `grid`, `field_class_prefix`, a page's
+  `derived` and a unit delta's `cell` op as fields it doesn't know, or as an op with no view
+  change. **A client with it on an older host** (no `cells` or `cell_claims` in
+  `welcome.features`, no `grid` in the view schema) sends neither, shows no cells, and its grid
+  helpers have no grid to read.
 - **A wire-3 client on a wire-2 host** (no `welcome.wire`, no `focus` or `range` in
   `welcome.features`): it sends no `focus` or `range` frame (the setters record the value, and
   send it on a later connection whose host lists the feature, as for `presence`); a change event
@@ -188,6 +196,7 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `viewport` | `req`, `rect`: `{x, y, w, h}` or `null` | only when refused |
 | `focus` (wire 3) | `req`, `focus`: `{root, key}` or `null` | only when refused |
 | `range` (wire 3) | `req`, `range`: `{root, key, field, anchor, head}` or `null` | only when refused |
+| `cells` (live grid) | `req`, `cells`: `{container, active, ranges}` or `null` ([The live grid](#the-live-grid)) | only when refused |
 
 | Frame | Session call |
 |---|---|
@@ -207,6 +216,13 @@ They sit outside the doc's numbering: none of them takes or moves a version.
   the focus** to its element's container (the pack's `container_of`). A range is **never
   moved**: when its field changes (anyone's change) or its element stops being live, the kit
   drops it (`range: null` on the roster), and the client sends a new one.
+- **`cells`**: a connection's cells in a live grid, by corner ([The live grid](#the-live-grid)).
+  **Setting cells sets the focus** to their container (the kit sends the `focus` event too; the
+  client sets its own focus there, sending no `focus` frame). A connection's focus moving to
+  another container drops its cells (`cells: null` in the same flush); the client clears its own
+  when it sets that focus. Refusals: `MPC-E114` (a corner not live, not in normal form or out of
+  bounds, an active cell outside the ranges, another container's corner), `MPC-E310` (more than
+  16 ranges: the client refuses it itself, unsent), `MPC-E305` (a watcher).
 - **Elements by address.** On the wire an element is named by its address (`@sld:256`,
   `@sld:256/sp:4`), the pack's `Pack::address_of` of its key (by default the key itself, so a
   pack that maps nothing sees no change). The host converts at the kit's edge: the setters by
@@ -273,6 +289,8 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `focus` (wire 3) | `focus` |
 | `range` (wire 3) | `range` |
 | `keyed_watch` (wire 3, after v0.15.1) | `watch`, `report` ([The keyed watch](#the-keyed-watch)) |
+| `cells` (wire 3, after v0.15.1) | `cells` ([The live grid](#the-live-grid)) |
+| `cell_claims` (wire 3, after v0.15.1) | `claim` with `cells` ([Claim frames](#claim-frames)) |
 
 ## Claim frames
 
@@ -306,6 +324,14 @@ this spec, no socket.
   route by frame type.
 - **Sending:** a client sends these frames only on a connection whose `welcome.features` lists
   `"claims"` ([Feature names](#feature-names)), so an older host sees none of them.
+- **A claim on cells** (a live grid; feature `cell_claims`, sent only when listed): the same
+  `claim` frame with `cells: {container, ranges: [range]}` in place of `root` and `keys` (and
+  `note`, `hold`, `ttl_ms` as above). One range: more is `MPC-E304`, which the client refuses
+  itself, unsent. The reply is `claimed {req, claim}`; `release` releases it as any claim. Everyone
+  sees it by the roster's `claim_started_cells` and `claim_ended`, a later subscriber by a
+  snapshot entry's `cell_claims` ([The roster](#the-roster)). Under the host's Respect policy it
+  holds off other **agents** (`MPC-E301`): a write to a cell inside it, a delete of a row or
+  column inside it. An insert inside it grows it.
 
 
 ## Host → client
@@ -611,9 +637,12 @@ a frame over it, and the host refuses one cleanly:
   `selection {who, selection, client?}`, `pointer {who, pointer, client?}`, `viewport {who,
   viewport, client?}`, `focus {who, focus, client?}` and `range {who, range, client?}` (wire 3)
   ([below](#selection-pointer-and-viewport-in-the-roster)),
+  `cells {who, cells, client?}` (a live grid, [below](#the-live-grid)),
   `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version, actor,
   started_ms}`, `claim_started_elems {who, claim, root, keys, note, hold, expires_ms, version,
-  actor, started_ms}`, `claim_ended {who, claim, how, lines, version, actor, at_ms, at_rev}`
+  actor, started_ms}`, `claim_started_cells {who, claim, container, ranges, note, hold,
+  expires_ms, version, actor, started_ms}` (a live grid), `claim_ended {who, claim, how, lines,
+  version, actor, at_ms, at_rev}`
   (`actor`, `started_ms`, `at_ms` and `at_rev`: wire 3, [below](#claim-events-wire-3)),
   `note {to, from, note, lines, claim}`,
   `overwritten` ([below](#the-overwritten-event)), `watching {count}`, `closed {reason}` (the
@@ -665,13 +694,18 @@ even after the claimant left:
   go out as addresses, as every element on the wire: the kit fills them
   (`RosterEvent::ClaimStartedElems::addresses`, a snapshot's `ClaimInfo::addresses`) and the host
   sends them as `keys` ([Presence frames](#presence-frames)).
+- **A claim on cells** (`claim_started_cells`) always carries `actor` and `started_ms`. It ends
+  with `claim_ended`, whose `lines` is `{root, first, last}`: the rows root and the range's first
+  and last row **numbers** at that version. A snapshot entry lists its live ones in `cell_claims:
+  [{claim, container, ranges, note, hold, expires_ms, started_ms}]`, present only when there are
+  some.
 
 ### Selection, pointer and viewport in the roster
 
 - A roster entry and a `devices` element gain `selection`, `pointer` and `viewport`, and (wire 3)
-  `focus` and `range`, each left out when there is none. The entry's are the most active
-  connection's that has one; a `devices` element's are that connection's own.
-- Within a flush, a participant's `focus` comes before their `selection`, then `range`,
+  `focus`, `range` and, in a live grid, `cells`, each left out when there is none. The entry's
+  are the most active connection's that has one; a `devices` element's are that connection's own.
+- Within a flush, a participant's `focus` comes before their `selection`, then `cells`, `range`,
   `pointer` and `viewport`: a view moves to the container before it draws what is selected there.
 - A `range` is `null` after its field changed or its element went: the kit dropped it. A `focus`
   is `null` after its element went.
@@ -856,7 +890,7 @@ Nothing is guessed.
 | `type` | Fields | What |
 |---|---|---|
 | `keyed_snapshot` | `seq`, `upto`, `schema {name, roots: [{name, kind}], composite: [{map, list}]}`, `view`, `pages` | the doc at version `upto` follows in `pages` pages; `kind` is `text`, `list` or `map`; `composite` the map roots whose keys are a list's elements' fields (`Pack::composite`; after v0.15.1). `view`: the view index's snapshot at `upto` when the pack declares a view schema (`ViewSnapshot::to_value`: the view schema, `tier`, `rev`, `page`, `fonts`, `layouts`, `containers`), else `null`. Always taken, whatever came before: it replaces the client's state |
-| `keyed_page` | `seq`, `upto`, `page` (from 1), `pages`, `root`, and one of `live`, `hidden`, `entries`, `text`, `units` | the keyed state's runs, one root each, in schema order: `live` `[[address, value], ...]` (elements in order, appended), `hidden` (deleted elements), `entries` `[[key, field, value], ...]` (map entries, split as ops are), `text` (appended); then the view index's units, container by container: `units` `{container, from, units, next, total}` (`ViewIndex::units_page`; `root` is the units root) |
+| `keyed_page` | `seq`, `upto`, `page` (from 1), `pages`, `root`, and one of `live`, `hidden`, `entries`, `text`, `units`; `derived?` | the keyed state's runs, one root each, in schema order: `live` `[[address, value], ...]` (elements in order, appended), `hidden` (deleted elements), `entries` `[[key, field, value], ...]` (map entries, split as ops are), `text` (appended); then the view index's units, container by container: `units` `{container, from, units, next, total}` (`ViewIndex::units_page`; `root` is the units root). `derived`: on a page of a live grid's rows map, the pack's values kept by cell field for that page's entries ([The live grid](#the-live-grid)); absent when there are none |
 | `ops_change` | `seq`, `rev`, `at_ms`, `change_kind`, `actor {id, name, kind, colour}`, `client`, `via`, `on_behalf_of`, `turn`, `verb`, `claim`, `ops`, then for a pack with a view schema `units`, `containers_changed` and `containers` ([View deltas](#view-deltas)), then `derived`, `render_hashes` | one committed change, now at version `rev` |
 | `watch_refused` | `error` | unnumbered: the host can't serve the watch (`MPC-E401`, below) |
 
@@ -910,8 +944,9 @@ Nothing is guessed.
     (`<key>\x1f<field>`); otherwise `key` is the whole map key and `field` is `null`.
   - `before` and `after` are values (a string, or `null` for none) and are left out when the op has
     none (before an insert, after a map delete).
-- `derived` and `render_hashes`: the pack's (`Pack::watch_extras`): its derived values, opaque, and
-  `{container: hash}` for the containers whose render hash changed; `null` when it gives none.
+- `derived` and `render_hashes`: the pack's (`Pack::watch_extras`): its derived values (`null`
+  when empty; typed below) and `{container: hash}` for the containers whose render hash changed
+  (`null` when none).
   For a pack with a view schema, both are read from the view index before and after the change
   (`ViewChange`), built through the index the kit keeps for reads; when the pack gives no
   `render_hashes`, the kit's are the containers whose index render hash changed.
@@ -958,7 +993,10 @@ of the three fields (the frame is as before, byte for byte).
   order: `reorder` (moved in the units' list), `move_resize`, `rotate` and `flip` (the geometry
   field compared part by part: `x`, `y`, `w`, `h`; `rot`; `fh`, `fv`), `text`, `style`,
   `hide_show` (with `hidden_after`), `props` (a meta field, a new list value, or a new
-  container). `fields`: the fields that changed (on an `add` or a `restore`, every field the
+  container), `cell` (a field of class `cell`: a row's cell value in a live grid). A field's class
+  is its `field_class` entry, else the class of the first `field_class_prefix` rule it starts
+  with, else `visibility` for the hidden field and `meta` otherwise (the geometry field is always
+  the geometry; `fieldClass` in `src/grid.ts`). `fields`: the fields that changed (on an `add` or a `restore`, every field the
   change set). `container`: its container's address (before a `delete`, after anything else).
   `geom_before` / `geom_after`: the geometry field's own string, `null` when the geometry wasn't
   touched, before an add, after a delete, and for an empty one (a box from a layout).
@@ -979,6 +1017,125 @@ units again in the units' list order (`z` from 0). A view field the pack derives
 units, which `test/view-deltas.test.ts` checks against the kit's vectors
 (`test/vectors/view_deltas.json`, written by `crates/base/tests/view_deltas.rs`, which also
 checks every change's deltas against the view index before and after it).
+
+### Derived values
+
+A change frame's `derived` is the pack's, `null` when empty, in parts the kit gives packs
+builders for (`FrameDerived` in `src/wire.ts`); a pack may add other keys, which a client
+passes over:
+
+```ts
+interface FrameDerived { units?: Record<string, UnitDerived>; containers?: Record<string, ContainerDerived>;
+  written?: Written; bands?: Band[]; [k: string]: unknown }
+interface UnitDerived { a1?: Record<string, string | null>; [k: string]: unknown }      // by unit address, then field
+interface ContainerDerived { merges?: CellRange[]; styles?: Record<string, StyleHint>; [k: string]: unknown }
+interface StyleHint { bold: boolean; fill: string | null; numfmt: string }               // by style id
+interface Written { container: string; ranges: CellRange[] }                             // the cells a verb wrote
+interface Band { container: string; axis: "rows" | "cols"; op: "insert" | "delete";
+  from: number; to: number; numbers: "before" | "after" }
+```
+
+- `units.<unit>.a1.<field>`: a field's value as people read it in A1 terms (a formula's text,
+  `=C4+D4`); `null` when it has none any more.
+- `bands`: an insert's `from`..`to` are row (column) numbers after the change (`numbers:
+  "after"`), a delete's are numbers before it (`"before"`).
+- **Kept by cell field.** The names a grid lists in `cell_derived` (`["a1"]`) are kept by the
+  client per row and field: a snapshot's rows pages carry them for their entries (`derived: {a1:
+  {<row address>: {<field>: <text>}}}`), and each change's `units.<row>.<name>` updates them, a
+  `null` removing one. `KeyedWatch.cellDerived(name, row, field)` reads them; a fresh snapshot
+  replaces them all.
+
+## The live grid
+
+A spreadsheet's sheets, rows and cells as a keyed doc whose units are a grid's rows. Everything is
+by address on the wire; numbers and A1 are worked out by each side from the keyed state, never
+sent for a corner and never read out of an address. Additive within wire 3: `WIRE_VERSION` stays 3.
+
+**The view schema's `grid`** (`null`, or absent from an older kit, when the pack has none;
+`GridSlot`):
+
+```json
+{"rows":"rows","cols":"cols","cells":"cells","col_fields":"col_props",
+ "col_container_field":"sheet","row_fields_start":"@",
+ "col_of_cell_field":"{container}/col:{field}",
+ "numbering":{"rows":{"gap_field":"@gap","first":1},"cols":{"gap_field":"gap","first":1}},
+ "col_label":"letters","max":{"rows":1048576,"cols":16384},
+ "cell":{"encoding":"json","type":"t","value":"v","formula":"f","formula_kind":"fk","style":"s",
+         "types":{"n":"number","s":"text","b":"bool","e":"error","d":"date"}},
+ "row_fields":{"hidden":"@hidden","height":"@ht","height_unit":"pt"},
+ "col_field_names":{"hidden":"hidden","width":"w","width_unit":"max digit widths"},
+ "viewport":"cells",
+ "style_hint":{"field":"s","default":"0","table":"styles","parts":["bold","fill","numfmt"]},
+ "cell_derived":["a1"]}
+```
+
+- `rows` is the schema's `units` root. A row's container is found as a unit's is: its
+  `unit_container_field` value matched against the container's `container_id_field` (or the
+  container's own address when that is `null`). A column's: its `col_container_field` value in
+  `col_fields`, matched the same way.
+- `cells` is the rows' composite map, keyed `<row address>\x1f<field>`. A field starting with
+  `row_fields_start` is a row field; any other is a cell, whose column address is
+  `col_of_cell_field` with `{container}` the container's address and `{field}` the field
+  (`colOfCellField`).
+- **Numbering** (`gridNumbers`): within one container, in the list order of `rows` (`cols`), each
+  live element's number is the previous one's plus its gap plus 1; the first one's is its gap plus
+  `first`. The gap is the element's `gap_field` value in its composite map read as a whole number
+  at least 0; missing or not a number, 0. Deleted elements don't count.
+- `col_label`: `letters` (1 = A, 26 = Z, 27 = AA, 16384 = XFD) or `numbers`, for a view's column
+  headers. A1 always uses letters.
+- `max.rows`, `max.cols`: the highest row and column numbers.
+- `viewport: "cells"`: a peer's `viewport` `{x, y, w, h}` is in cells of its focus container: `x`
+  the first column's number, `y` the first row's, `w` columns, `h` rows; the rows it shows are
+  `floor(y)` to `ceil(y + h) - 1`, the columns the same. It is positional: the kit never moves it.
+- **`field_class_prefix`** in the view schema: `[["c", "cell"]]`, ordered `[prefix, class]`
+  rules ([View deltas](#view-deltas)); class `cell` is a cell's value.
+
+**Corners, ranges, cells.**
+
+- A **corner** `{row, row_off, col, col_off}`: `row` is the address of the last keyed row of the
+  container at or before the cell (`null` when there is none), `row_off` how many rows past it
+  (with `row: null`, `row_off` is the row number itself, so at least 1); `col` and `col_off` the
+  same for columns.
+- **Normal form**, required: no keyed row (column) of the container lies strictly between `row`
+  and the cell; that is, with `row`'s number n and the next keyed row's gap g, `row_off <= g`
+  (no next row: unbounded); with `row: null`, `row_off` is from 1 to the first row's gap (no
+  rows: unbounded). The cell's number, n + `row_off` (or `row_off`), is at most `max.rows`; the same for
+  columns. `cornerProblem` says why a corner isn't one; `cornerAt` gives the corner for a cell's
+  numbers; `cornerNumbers` the other way.
+- A **range** `{start, end}`: two corners, either above or left of the other.
+- **Cells** `{container, active, ranges}`: the active cell (`null`: none) and 0 to 16 ranges
+  (`CELLS_RANGES_MAX`); `active` lies inside a range when there are ranges.
+- **A1**: `<letters><number>` (`cornerA1`); a range `A1:B4`, the start's then the end's as given,
+  never swapped (`rangeA1`); a whole column runs to the most rows (`D1:D1048576`), a whole row to
+  the most columns (`A9:XFD9`). `cellsA1` gives the active cell's and each range's.
+
+**Cells presence** (feature `cells`): the client frame `{type: "cells", req, cells}` ([Presence
+frames](#presence-frames)) and the roster event `{kind: "cells", who, cells, client?}`, `cells`
+`null` when gone; `cells` on a roster entry and a `devices` element.
+
+- **Kept by keys:** an insert inside a range grows it, with no event. **Dropped, never moved:** a
+  range whose corner's row or column stops being live, or whose corner's form breaks, is removed
+  (an `active` likewise, on its own); the kit sends a `cells` event with what is left (`null` when
+  nothing is).
+- **An agent's cells move with its work** (the kit's; a person's are never moved): after an
+  agent's verb or claim on cells, in the same flush:
+  - a verb that wrote cells: its written ranges, `active` the first range's start;
+  - an insert: the inserted band as whole rows (columns 1 to the most) or whole columns (rows 1
+    to the most), `active` the band's start;
+  - a delete: a caret on the first visible cell after the band (in the first column, or the
+    first row), no ranges;
+  - a sheet added or renamed: its focus to that container; its cells kept if they are on it, else
+    a caret at A1 there;
+  - a claim on cells: the claimed range, `active` at its start.
+
+**Claims on cells** (feature `cell_claims`): [Claim frames](#claim-frames) and [Claim
+events](#claim-events-wire-3).
+
+**Rows.** `test/vectors/grid_view.tsv` (shared with the kit's rows) replays in
+`test/grid-view.test.ts`: numbers, letters, blank rows, A1 and refused corners at each rev it
+names. The kit's roster golden `test/golden/roster_events_cells.json` (`{self, client, flushes:
+[{rev, events}]}`) folds in `test/grid-presence.test.ts` to the vector's agent cells after each
+rev and its claim.
 
 ## What the client guarantees
 

@@ -40,6 +40,9 @@ use crate::tools::VerbHistory;
 
 /// A structured undo, redo or revert: per `(root, key, facet)`, the write it puts back (U23,
 /// spec v1.10 S2).
+/// What a structured verb computed: its edits and, for a grid verb, the cells it wrote.
+pub(crate) type VerbEdits = (Vec<Edit>, Option<crate::grid::CellsReport>);
+
 pub(crate) type ElemRestores = HashMap<(String, String, ElemFacet), (Seq, Option<WriteId>)>;
 
 /// The write a holder counts as (spec v1.10 S2): the one it restores, if it put one back.
@@ -754,11 +757,22 @@ fn keyed_save_applied_silently() -> bool {
     false
 }
 
-/// The planted fault [`crate::differential::KeyedMutant::MergeWriteNotRecorded`].
-fn merge_write_not_recorded() -> bool {
+/// The planted fault [`crate::differential::KeyedMutant::DirtySaveMergedByKey`].
+fn dirty_save_merged_by_key() -> bool {
     #[cfg(any(test, feature = "differential"))]
     if crate::differential::keyed_mutant()
-        == Some(crate::differential::KeyedMutant::MergeWriteNotRecorded)
+        == Some(crate::differential::KeyedMutant::DirtySaveMergedByKey)
+    {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::KeyedMutant::HoldsFileCallsPack`].
+fn holds_file_calls_pack() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::HoldsFileCallsPack)
     {
         return true;
     }
@@ -1279,6 +1293,8 @@ impl Session {
             self.mark_grid_claims(st, i, &named);
         }
         self.planted_early_elem_marks(st, i, &edits);
+        // its own cells claims it writes inside, judged in the numbering before it
+        let own_cells = self.own_cell_claims_touched(st, i, &edits);
         let befores = {
             prof!("apply.befores");
             befores_of(&st.doc, &edits)?
@@ -1330,6 +1346,7 @@ impl Session {
         // grid claim and an element claim are never the same claim, and a table takes no element
         // claims
         self.mark_elem_claims(st, i, &landed);
+        self.mark_cell_claims(st, &own_cells);
         Ok(Some(applied))
     }
 
@@ -2002,7 +2019,7 @@ impl Session {
         opts: &EditOptions,
         f: impl FnOnce(&View) -> std::result::Result<Vec<Edit>, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_ops_impl(conn, opts, None, false, |v, _, _| f(v))
+        self.edit_ops_impl(conn, opts, None, false, |v, _, _| f(v).map(|e| (e, None)))
             .map(|(r, _)| r)
     }
 
@@ -2011,14 +2028,16 @@ impl Session {
     /// (others' claims, carets, views, recent edits there) come back with it. `at_base`: the
     /// verb names positions (`#N`, `LN`), which count in the `--base` version (K-ADDR-3,
     /// R-1): `f` also gets that version's doc when it isn't the live one (the live doc, a
-    /// recent read or a stored version; none of them: [`SessionError::BaseExpired`]).
+    /// recent read or a stored version; none of them: [`SessionError::BaseExpired`]). `f` also
+    /// returns what a grid verb wrote ([`crate::grid::CellsReport`]): the acting agent's cells
+    /// move to it once the change applied.
     pub(crate) fn edit_ops_verb<E>(
         &self,
         conn: ConnId,
         opts: &EditOptions,
         verb: &str,
         at_base: bool,
-        f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<Vec<Edit>, E>,
+        f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<VerbEdits, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         self.edit_ops_impl(conn, opts, Some(verb), at_base, f)
     }
@@ -2029,7 +2048,7 @@ impl Session {
         opts: &EditOptions,
         verb: Option<&str>,
         at_base: bool,
-        f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<Vec<Edit>, E>,
+        f: impl FnOnce(&View, Option<&View>, &dyn VerbHistory) -> std::result::Result<VerbEdits, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         let now = self.now();
         let mut guard = self.lock()?;
@@ -2067,7 +2086,7 @@ impl Session {
         // view in step, which would otherwise copy it
         drop(view);
         drop(at);
-        let edits = edits.map_err(EditWithError::Compute)?;
+        let (edits, cells) = edits.map_err(EditWithError::Compute)?;
         let edits = {
             prof!("edit.normalize");
             self.normalize(edits)?
@@ -2091,6 +2110,7 @@ impl Session {
         }
         st.next_turn = opts.turn;
         st.next_verb = opts.verb;
+        st.next_cells = cells;
         let v = st.version;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         let notes = {
@@ -3681,6 +3701,17 @@ impl Session {
         // the save on the synced grid (for the replica) and the merge on the live grid (for
         // the doc)
         let file_edits = self.normalize(rec.edits)?;
+        // a keyed doc that isn't a table (K1b): the content the save holds, keyed (the synced
+        // state with the save's edits, on a throwaway copy of the replica: nothing renders), and
+        // whether the save lands on changes the file doesn't have, which keeps both below
+        let target = match is_table {
+            true => None,
+            false => Some(self.synced_with(st, &file_edits)?),
+        };
+        let dirty_save = !is_table
+            && !file_edits.is_empty()
+            && st.disk.as_ref().is_some_and(|d| d.synced_seq != st.version)
+            && !dirty_save_merged_by_key();
         let mut row_marks: Vec<Key> = Vec::new();
         let mut col_remap = false;
         let mut moved_then_deleted: Vec<Key> = Vec::new();
@@ -3704,12 +3735,19 @@ impl Session {
                 );
                 (self.normalize(m.edits)?, m.conflicts)
             }
+            // on unwritten changes the save becomes the live doc exactly, by identity (the
+            // kit's version is kept below): never merged with them
+            _ if dirty_save => {
+                let target = target.as_deref().expect("a keyed doc that isn't a table");
+                let to = restore_edits(&st.doc.keyed_state()?, target, false);
+                (self.normalize(to)?, Vec::new())
+            }
             _ => (file_edits.clone(), Vec::new()),
         };
         if edits.is_empty() {
             // the same content in other bytes, or a save the doc already holds: adopt the
             // file's format; the doc doesn't change
-            let held = self.holds_file(st, bytes, &rec.codec)?;
+            let held = self.holds_save(st, bytes, &rec.codec, target.as_deref())?;
             let state = match self.grid_replica_to_file(st, held, &file_edits) {
                 Ok(s) => s,
                 Err(e) => {
@@ -3802,7 +3840,7 @@ impl Session {
                     },
                 );
             }
-            self.settle_saved(st, now)?;
+            self.settle_saved(st, bytes, now)?;
             return Ok(DiskCheck::Unchanged);
         }
         if self.check_limits(st, &edits).is_err() {
@@ -3834,8 +3872,12 @@ impl Session {
         // of its own, so the save keeps both: it becomes the live doc as below, and the kit's
         // version (the live doc now) is kept as a version (cut below unless one holds it) and
         // as a conflict copy, with one `BlobConflict`. Decided from the store until this
-        // session synced the file (`kit_wrote_file`): a restart changes nothing
-        let over_kit = !is_table && !keyed_save_applied_silently() && self.kit_wrote_file(st)?;
+        // session synced the file (`kit_wrote_file`): a restart changes nothing. The same when
+        // the save lands on changes the file doesn't have (K1b): one rule, so a save is never
+        // merged by key with unwritten changes
+        let over_kit = !is_table
+            && !keyed_save_applied_silently()
+            && (dirty_save || self.kit_wrote_file(st)?);
         let kept_copy = match over_kit {
             true => Some(self.keep_kit_version(st, now)?),
             false => None,
@@ -3859,7 +3901,7 @@ impl Session {
         };
         // from here to the store commit the doc holds a save the store hasn't got: every failure
         // reloads it, so the save stays in the file for the next check
-        let held = self.holds_file(st, bytes, &rec.codec);
+        let held = self.holds_save(st, bytes, &rec.codec, target.as_deref());
         let held = self.reload_on_failure(st, held)?;
         let replica_state = match self.grid_replica_to_file(st, held, &file_edits) {
             Ok(s) => s,
@@ -3939,7 +3981,7 @@ impl Session {
         // its merges). `kit_wrote_file` reads it from the store after a restart: the next save
         // over that write keeps both
         let mut authors = vec![EXTERNAL_PID.to_owned()];
-        if !is_table && !held && !merge_write_not_recorded() {
+        if !is_table && !held {
             authors.push(crate::session::MERGE_PID.to_owned());
         }
         versions.push(Version {
@@ -4089,7 +4131,7 @@ impl Session {
             }
             None => DiskCheck::Ingested { version: seq },
         };
-        self.settle_saved(st, now)?;
+        self.settle_saved(st, bytes, now)?;
         self.maybe_compact(st);
         Ok(out)
     }
@@ -4215,9 +4257,48 @@ impl Session {
         Ok((rec, path))
     }
 
+    /// Whether the live doc holds an outside save. For a keyed doc that isn't a table (`target`:
+    /// the save's content, keyed, from the synced state and the save's edits) it is a keyed
+    /// comparison, key for key, with no pack call (K1b): rendering the doc into the save's bytes
+    /// would pair it with keys the replica doesn't hold yet. A table renders and compares
+    /// ([`Session::holds_file`]).
+    fn holds_save(
+        &self,
+        st: &State,
+        bytes: &[u8],
+        codec: &[u8],
+        target: Option<&[(String, Neutral)]>,
+    ) -> Result<bool> {
+        match target {
+            Some(t) if !holds_file_calls_pack() => Ok(self.content(st)? == t),
+            _ => self.holds_file(st, bytes, codec),
+        }
+    }
+
+    /// The doc as the file holds it (the disk replica's content) with `edits` applied, on a
+    /// throwaway copy: the content an outside save holds, keyed, before anything takes it.
+    fn synced_with(&self, st: &mut State, edits: &[Edit]) -> Result<Vec<(String, Neutral)>> {
+        let d = st.disk.as_mut().expect("has disk");
+        let replica = d.replica.get()?;
+        if edits.is_empty() {
+            return self.content_of(replica);
+        }
+        let mut copy = Doc::load(self.schema, &replica.encode_state()?)?;
+        let own = loop {
+            let c = mint_client_id();
+            if copy.clock_of(c) == 0 {
+                break c;
+            }
+        };
+        copy.edit_applied(own, edits)?;
+        self.content_of(&copy)
+    }
+
     /// Whether the live doc, rendered with `codec`, is the file's `bytes` (for a pack that keeps
     /// a carrier, spliced into those bytes, which become it: K1).
     fn holds_file(&self, st: &State, bytes: &[u8], codec: &[u8]) -> Result<bool> {
+        #[cfg(any(test, feature = "differential"))]
+        crate::differential::count_held_render();
         self.renders_as(&self.content(st)?, bytes, codec)
     }
 

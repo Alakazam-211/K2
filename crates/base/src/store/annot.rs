@@ -470,6 +470,9 @@ fn erase_in(
 /// Whether `pid` is a participant's in `doc`'s records (an author of a version or approval,
 /// or of a thread, comment or history row).
 fn pid_in_doc(w: &WriteTransaction, doc: DocId, pid: &str) -> Result<bool, StoreError> {
+    if super::demoted::names(w, doc, pid)? {
+        return Ok(true);
+    }
     if history::has_table(w, BLOB_VERSIONS.name())? {
         let t = w.open_table(BLOB_VERSIONS)?;
         for kv in t.range((doc, 0)..=(doc, u64::MAX))? {
@@ -1029,6 +1032,8 @@ impl DocStore {
             )));
         }
         let mut c = erase_in(&w, doc, pid, ps)?;
+        // the live log a demotion from text kept
+        c.attributions += super::demoted::erase_in(&w, doc, pid, ps)?;
         {
             let mut t = w.open_table(BLOB_VERSIONS)?;
             let mut rows: Vec<(u64, Vec<u8>)> = Vec::new();

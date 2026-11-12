@@ -120,6 +120,12 @@ pub enum SessionError {
     /// rebuilt exactly, so none is given. Exit 4 (`MPC-E208`).
     #[error("version {version} has no copy of its file's own bytes (version_no_carrier)")]
     VersionNoCarrier { version: u64 },
+    /// The live carrier's pairing doesn't fit it (K1b, [`super::SpliceError::PairingMismatch`]):
+    /// the file type can't tell which unit of the file a key is, so nothing was spliced or
+    /// written; the file is as it was and the doc keeps its changes. A pack bug or a damaged
+    /// store. Exit 1 (`MPC-E521`).
+    #[error("the file's pairing doesn't fit it: {reason} (pairing_mismatch)")]
+    PairingMismatch { reason: String },
     /// A cell write ([`super::Session::edit_ops`]) under a row or a column the table doesn't
     /// know: dropped by `rows drop-deleted` (`dropped`: the drop's change and who ran it, while
     /// the store still holds its record), or never in it. Its cell could never be seen,
@@ -210,8 +216,9 @@ pub enum SessionError {
     /// too many claims, several claims and no id, a note that is too long. Exit 2.
     #[error("bad claim: {0}")]
     BadClaim(String),
-    /// An element selection with more keys than [`super::ELEM_SELECTION_MAX`]. Exit 2.
-    #[error("selection too large: {len} keys (the most is {max})")]
+    /// An element selection with more keys than [`super::ELEM_SELECTION_MAX`], or a grid's
+    /// cells with more ranges than [`crate::grid::CELLS_RANGES_MAX`]. Exit 2.
+    #[error("selection too large: {len} elements or cell ranges (the most is {max})")]
     SelectionTooLarge { len: usize, max: usize },
     /// Tier 0: the blob store failed (or a blob is damaged; it is never served).
     #[error(transparent)]
@@ -415,12 +422,26 @@ impl SessionError {
                 ..d
             }),
             SessionError::Pack(p) => SessionError::Pack(PackError(r(&p.0, root))),
+            SessionError::PairingMismatch { reason } => SessionError::PairingMismatch {
+                reason: r(&reason, root),
+            },
             SessionError::Store(e) => SessionError::Store(store(e)),
             SessionError::Blob(BlobError::Io(m)) => SessionError::Blob(BlobError::Io(r(&m, root))),
             SessionError::Blob(BlobError::Store(e)) => {
                 SessionError::Blob(BlobError::Store(store(e)))
             }
             other => other,
+        }
+    }
+}
+
+impl From<super::pack::SpliceError> for SessionError {
+    fn from(e: super::pack::SpliceError) -> Self {
+        match e {
+            super::pack::SpliceError::PairingMismatch(reason) => {
+                SessionError::PairingMismatch { reason }
+            }
+            super::pack::SpliceError::Pack(p) => SessionError::Pack(p),
         }
     }
 }

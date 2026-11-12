@@ -487,6 +487,42 @@ pub fn with_tier0_mutant<R>(mutant: Tier0Mutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A fault planted in the text → tier 0 demotion
+/// ([`crate::session::SessionManager::demote_text_file`]), so the rows that should catch it
+/// (`tests/demote.rs`) can show they do. Installed per thread by [`with_demote_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DemoteMutant {
+    /// "demote drops unwritten": the live doc's final state isn't kept; the tier-0 doc starts
+    /// from what the file holds (or, without one, the last version), so a change the file
+    /// never got is gone.
+    DropsUnwritten,
+    /// "demote merges by line": an outside save since the last sync is merged into the live
+    /// text by lines first (as a text doc takes one in), then demoted, instead of keeping both.
+    MergesByLine,
+}
+
+thread_local! {
+    static DEMOTE_MUTANT: std::cell::Cell<Option<DemoteMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The demotion's fault planted on this thread, if any.
+pub fn demote_mutant() -> Option<DemoteMutant> {
+    DEMOTE_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_demote_mutant<R>(mutant: DemoteMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<DemoteMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            DEMOTE_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(DEMOTE_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// A fault planted in a keyed doc that isn't a table (a deck, a board) on the live path, so the
 /// rows that should catch it (`tests/keyed_live.rs`) can show they do, by name. Installed per
 /// thread by [`with_keyed_mutant`].
@@ -499,10 +535,6 @@ pub enum KeyedMutant {
     /// the last outside save is applied straight onto the live doc, the old way: no conflict
     /// copy, no version kept on purpose, no event.
     OutsideSaveAppliedSilently,
-    /// "merge write not recorded": an outside save taken in while the doc held changes the
-    /// file didn't (the kit then writes the merge) leaves no mark on its version, so after a
-    /// restart the next stale save over that write is applied plainly, the old way.
-    MergeWriteNotRecorded,
     /// "purge skips live copies": a purge of a live doc leaves its recorded conflict copies
     /// on disk and in `live_copies`, unreported, whatever they hold.
     PurgeSkipsLiveCopies,
@@ -536,6 +568,27 @@ pub enum KeyedMutant {
     /// "list rereads root": a list op's change reads the whole list root afresh from the engine
     /// into the live view, as before, instead of replaying the op on it.
     ListReReadsRoot,
+    /// "synced content stale" (K1b): a kit write keeps the carrier's pairing from the sync
+    /// point before, so `Pack::encode_from_paired` is handed keys that don't fit the bytes.
+    SyncedContentStale,
+    /// "splice without match" (K1b): when the pack refuses a pairing that doesn't fit, the kit
+    /// falls back to the carrier-only hook (`Pack::encode_from`), which splices by guess.
+    SpliceWithoutMatch,
+    /// "pairing missing on version" (K1b): a version cut takes the live carrier but not its
+    /// pairing, so its file can't be paired (`file_at` is refused).
+    PairingMissingOnVersion,
+    /// "holds file calls pack" (K1b): whether a keyed doc holds an outside save is decided by
+    /// splicing the live content into the save's bytes, before the replica has taken the save,
+    /// as before, instead of comparing keyed content.
+    HoldsFileCallsPack,
+    /// "dirty save merged by key" (K1b): an outside save on a keyed doc that isn't a table,
+    /// landing while the doc holds changes the file doesn't, is merged by key onto them, as
+    /// before, instead of keeping both.
+    DirtySaveMergedByKey,
+    /// "settle before carrier" (K1, K1b): an outside save becomes the carrier only after the
+    /// settle has rendered the doc that took it, as before, so that rendering splices into the
+    /// bytes, and pairs with the keys, of the sync point before the save.
+    SettleBeforeCarrier,
 }
 
 thread_local! {
@@ -852,6 +905,36 @@ pub(crate) fn count_carrier_decode() {
 /// read ran the pack's decode of a carrier ([`crate::view_index::ViewCarrier::decoded`]).
 pub fn take_carrier_decodes() -> u64 {
     CARRIER_DECODES.with(|c| c.replace(0))
+}
+
+thread_local! {
+    /// The carrier pairings the kit made on this thread (K1b, `Pack::pairing`). A count, never
+    /// a timing.
+    static PAIRINGS_MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The renderings an outside save's held check made on this thread (K1b). A count.
+    static HELD_RENDERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One pairing made by the kit (K1b).
+pub(crate) fn count_pairing_made() {
+    PAIRINGS_MADE.with(|c| c.set(c.get() + 1));
+}
+
+/// This thread's pairings made since the last take, reset to 0 (K1b): how many times the kit
+/// asked a pack for a carrier's pairing.
+pub fn take_pairings_made() -> u64 {
+    PAIRINGS_MADE.with(|c| c.replace(0))
+}
+
+/// One rendering made by an outside save's held check (K1b).
+pub(crate) fn count_held_render() {
+    HELD_RENDERS.with(|c| c.set(c.get() + 1));
+}
+
+/// This thread's held-check renderings since the last take, reset to 0 (K1b): a keyed doc that
+/// isn't a table makes none.
+pub fn take_held_renders() -> u64 {
+    HELD_RENDERS.with(|c| c.replace(0))
 }
 
 thread_local! {
@@ -1938,4 +2021,42 @@ pub(crate) fn set_d1_extra(v: Vec<(usize, usize)>) {
 /// Take them (the change consumes them).
 pub(crate) fn take_d1_extra() -> Vec<(usize, usize)> {
     D1_EXTRA.with(|c| std::mem::take(&mut *c.borrow_mut()))
+}
+
+/// A live grid's planted fault (`grid.rs`, the session's cells presence and claims), installed
+/// per thread by [`with_grid_mutant`], so the grid's rows show they catch it
+/// (`tests/grid_view.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum GridMutant {
+    /// Numbering ignores the gap field: every keyed row and column counts as the next one, so
+    /// blank rows vanish from the numbers.
+    GapIgnored,
+    /// A corner whose form a change broke is moved to the nearest cell in normal form instead
+    /// of dropped.
+    CornersMoveNotDrop,
+    /// A cells claim's start event carries an empty actor, so a view can't word it without the
+    /// roster.
+    ClaimCellsActorMissing,
+}
+
+thread_local! {
+    static GRID_MUTANT: std::cell::Cell<Option<GridMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The live grid fault planted on this thread, if any.
+pub fn grid_mutant() -> Option<GridMutant> {
+    GRID_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_grid_mutant<R>(mutant: GridMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<GridMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            GRID_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(GRID_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
 }

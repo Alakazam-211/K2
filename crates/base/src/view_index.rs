@@ -94,6 +94,8 @@ pub enum FieldClass {
     Style,
     Visibility,
     Meta,
+    /// A grid cell's value (a field a [`ViewSchema::field_class_prefix`] rule names).
+    Cell,
 }
 
 impl FieldClass {
@@ -104,6 +106,7 @@ impl FieldClass {
             FieldClass::Style => "style",
             FieldClass::Visibility => "visibility",
             FieldClass::Meta => "meta",
+            FieldClass::Cell => "cell",
         }
     }
 }
@@ -289,11 +292,18 @@ pub struct ViewSchema {
     pub container_fields: ContainerFields,
     pub unit_fields: UnitFields,
     pub geometry: Option<Geometry>,
-    /// What each field holds (the change frames' op kinds).
+    /// What each field holds (the change frames' op kinds), by exact name.
     pub field_class: &'static [(&'static str, FieldClass)],
+    /// What fields hold by the start of their name, in order: a field with no exact
+    /// [`ViewSchema::field_class`] entry takes the class of the first rule whose prefix it starts
+    /// with (a grid's cells are named by their column key: `c1`, `c2`... are cells).
+    pub field_class_prefix: &'static [(&'static str, FieldClass)],
     pub derived: Derived,
     /// How a version's structure index maps to the view. `None`: no view index on the blob tier.
     pub blob: Option<BlobView>,
+    /// A sparse grid's rows, columns, cells and numbering ([`crate::grid::GridSlot`]). `None`:
+    /// not a grid.
+    pub grid: Option<crate::grid::GridSlot>,
 }
 
 impl ViewSchema {
@@ -309,8 +319,10 @@ impl ViewSchema {
         unit_fields: UnitFields::NONE,
         geometry: None,
         field_class: &[],
+        field_class_prefix: &[],
         derived: Derived::NONE,
         blob: None,
+        grid: None,
     };
 
     /// Why this schema doesn't fit the doc's `schema` and `composites`
@@ -364,10 +376,56 @@ impl ViewSchema {
                 return Err("the geometry has no field or no parts".into());
             }
         }
+        if let Some(g) = &self.grid {
+            let map_of = |m: &str, l: &str| {
+                schema.kind_of(m) == Some(Kind::Map) && composites.contains(&(m, l))
+            };
+            if g.rows != self.units || !list(g.cols) || g.cols == g.rows {
+                return Err(format!(
+                    "the grid's rows {:?} must be the units and its columns {:?} another list root",
+                    g.rows, g.cols
+                ));
+            }
+            if !map_of(g.cells, g.rows) || !map_of(g.col_fields, g.cols) {
+                return Err(format!(
+                    "the grid's cells {:?} and column fields {:?} must be the composite maps of its \
+                     rows and columns",
+                    g.cells, g.col_fields
+                ));
+            }
+            if g.col_container_field.is_empty()
+                || g.row_numbering.gap_field.is_empty()
+                || g.col_numbering.gap_field.is_empty()
+                || !g.col_of_cell_field.contains("{field}")
+            {
+                return Err(
+                    "the grid needs a column container field, both gap fields and a cell field's \
+                     column template naming {field}"
+                        .into(),
+                );
+            }
+            if g.max_rows == 0 || g.max_cols == 0 {
+                return Err("the grid's last row and column must be at least 1".into());
+            }
+        }
         Ok(())
     }
 
-    /// The schema as the watch snapshot carries it (contract §1.2; GOLD `view-schema.json`).
+    /// What `field` holds: its exact [`ViewSchema::field_class`] entry, else the first
+    /// [`ViewSchema::field_class_prefix`] rule it starts with; `None` when neither names it.
+    pub fn class_of_field(&self, field: &str) -> Option<FieldClass> {
+        if let Some((_, c)) = self.field_class.iter().find(|(f, _)| *f == field) {
+            return Some(*c);
+        }
+        self.field_class_prefix
+            .iter()
+            .find(|(p, _)| !p.is_empty() && field.starts_with(p))
+            .map(|(_, c)| *c)
+    }
+
+    /// The schema as the watch snapshot carries it (contract §1.2). `field_class_prefix` and
+    /// `grid` are there only when the pack declares them, so a schema without them encodes as
+    /// before.
     pub fn to_value(&self) -> Json {
         let src = |s: Src| -> Json {
             match s {
@@ -386,7 +444,7 @@ impl ViewSchema {
         };
         let c = self.container_fields;
         let u = self.unit_fields;
-        Json::obj([
+        let out = Json::obj([
             ("containers", Json::from(self.containers)),
             ("units", Json::from(self.units)),
             (
@@ -453,7 +511,25 @@ impl ViewSchema {
                     ("units", Json::list(self.derived.units.iter().copied())),
                 ]),
             ),
-        ])
+        ]);
+        let Json::Obj(mut out) = out else {
+            unreachable!("an object")
+        };
+        if !self.field_class_prefix.is_empty() {
+            out.push((
+                "field_class_prefix".into(),
+                Json::List(
+                    self.field_class_prefix
+                        .iter()
+                        .map(|(p, c)| Json::list([*p, c.as_str()]))
+                        .collect(),
+                ),
+            ));
+        }
+        if let Some(g) = &self.grid {
+            out.push(("grid".into(), g.to_value()));
+        }
+        Json::Obj(out)
     }
 }
 

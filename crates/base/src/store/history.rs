@@ -194,7 +194,7 @@ impl ChangeKind {
         }
     }
 
-    fn to_u8(self) -> u8 {
+    pub(super) fn to_u8(self) -> u8 {
         match self {
             Self::Edit => 1,
             Self::Undo => 2,
@@ -205,7 +205,7 @@ impl ChangeKind {
             Self::Import => 7,
         }
     }
-    fn from_u8(v: u8) -> Result<Self, StoreError> {
+    pub(super) fn from_u8(v: u8) -> Result<Self, StoreError> {
         Ok(match v {
             1 => Self::Edit,
             2 => Self::Undo,

@@ -2271,3 +2271,7 @@ mod pg_major_tests;
 // The `creds` namespace (protocol 10, `k2 vault systemd-cred`), same fakes.
 #[path = "creds_tests.rs"]
 mod creds_tests;
+
+// The `desktop` namespace (protocol 16, the virtual desktop's packages), same fakes.
+#[path = "desktop_tests.rs"]
+mod desktop_tests;

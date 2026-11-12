@@ -847,6 +847,13 @@ pub enum Verb {
     /// `apps podman uninstall` (protocol 8): remove the bundle and its
     /// k2app-only config; refused while Apps run.
     AppsPodmanUninstall,
+    // desktop (protocol 16, 0.46.12; see `crate::desktop`)
+    /// `desktop packages install` (daemon): the Linux virtual desktop's
+    /// distro packages (Xvfb, IceWM, a DejaVu font) from the closed list
+    /// for the box's package manager ([`crate::desktop::DESKTOP_PACKAGES`]),
+    /// on an Owner's yes. Never a package name from argv; the install is
+    /// simulated first and refused if it would remove anything.
+    DesktopPackagesInstall,
     // front (protocol 8, 0.46.1 front443; see `crate::templates::front_socket_unit`)
     /// `front status` (open, read-only): whether the fixed
     /// `k2-front-443.socket` unit and each system daemon's `k2-front.conf`
@@ -1406,6 +1413,7 @@ impl Verb {
             ["engine", "sew", rest @ ..] => Verb::Sew(SewVerb::parse(rest).ok_or(REFUSED)?),
             ["apps", "podman", "install"] => Verb::AppsPodmanInstall,
             ["apps", "podman", "uninstall"] => Verb::AppsPodmanUninstall,
+            ["desktop", "packages", "install"] => Verb::DesktopPackagesInstall,
             ["front", "status"] => Verb::FrontStatus,
             ["front", "install"] => Verb::FrontInstall,
             ["front", "remove"] => Verb::FrontRemove,
@@ -1657,6 +1665,7 @@ impl Verb {
             }
             Verb::AppsPodmanInstall => s(&["apps", "podman", "install"]),
             Verb::AppsPodmanUninstall => s(&["apps", "podman", "uninstall"]),
+            Verb::DesktopPackagesInstall => s(&["desktop", "packages", "install"]),
             Verb::FrontStatus => s(&["front", "status"]),
             Verb::FrontInstall => s(&["front", "install"]),
             Verb::FrontRemove => s(&["front", "remove"]),
@@ -1799,6 +1808,10 @@ impl Verb {
             // Takes Apps' container stack away.
             | Verb::AppsPodmanUninstall => Daemon,
             Verb::Sew(v) => v.class(),
+            // Installs distro packages for the virtual desktop: only on an
+            // Owner's yes, which the daemon checks (PRD §2.6), so only the
+            // daemon may ask.
+            Verb::DesktopPackagesInstall => Daemon,
             Verb::FrontStatus | Verb::FrontHttpStatus => Open,
             // Moves who owns the box's :443 onto the daemon's own unit (and
             // back): only the daemon itself may ask.
@@ -1940,6 +1953,7 @@ impl Verb {
             "engine" => "sew",
             "front" => "front",
             "creds" => "creds",
+            "desktop" => "desktop",
             _ => "keep",
         }
     }
@@ -2134,6 +2148,7 @@ pub fn catalog() -> Vec<Verb> {
         Verb::AppsUnprep,
         Verb::AppsPodmanInstall,
         Verb::AppsPodmanUninstall,
+        Verb::DesktopPackagesInstall,
     ];
     v.extend(SewVerb::catalog().into_iter().map(Verb::Sew));
     v.extend([Verb::FrontStatus, Verb::FrontInstall, Verb::FrontRemove]);
@@ -2267,6 +2282,9 @@ mod tests {
             &["creds", "restart", "k2-watch.service"],
             &["creds", "remove", "ingest_key"],
             &["creds", "status"],
+            // Distro packages for the virtual desktop, on an Owner's yes
+            // (protocol 16).
+            &["desktop", "packages", "install"],
         ];
         let open: &[&[&str]] = &[
             &["front", "status"],
@@ -2314,6 +2332,14 @@ mod tests {
             &["helper", "cli-refresh", "/usr/local/bin/k2"],
             &["helper", "cli-refresh", "0.40.148"],
             &["helper", "cli-refresh", ""],
+            // desktop packages install takes no package name, path or flag.
+            &["desktop"],
+            &["desktop", "packages"],
+            &["desktop", "packages", "install", "xterm"],
+            &["desktop", "packages", "install", "xvfb"],
+            &["desktop", "packages", "install", "--yes"],
+            &["desktop", "packages", "remove"],
+            &["desktop", "packages", "install-youki"],
             &["helper", "cli-refresh", "--", "x"],
             &["helper", "cli_refresh"],
             &["cli", "refresh"],

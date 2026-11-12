@@ -55,6 +55,7 @@ pub mod box_backup;
 pub mod caller;
 pub mod cli;
 pub mod creds;
+pub mod desktop;
 pub mod engine;
 pub mod k2_db;
 pub mod keys;

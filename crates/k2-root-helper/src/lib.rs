@@ -24,6 +24,7 @@ pub mod core;
 pub mod creds;
 pub mod ctx;
 pub mod daemon_unit;
+pub mod desktop;
 pub mod front;
 pub mod fsx;
 pub mod keep;
@@ -52,14 +53,14 @@ use ctx::{Ctx, Fail, HResult};
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=15 arch=x86_64;"
+    " proto=16 arch=x86_64;"
 );
 #[cfg(target_arch = "aarch64")]
 #[used]
 pub static BUILD_MARKER: &str = concat!(
     "K2_ROOT_HELPER_BUILD v=",
     env!("K2_PRODUCT_VERSION"),
-    " proto=15 arch=aarch64;"
+    " proto=16 arch=aarch64;"
 );
 
 /// Present only in a `test-keys` build; release signing refuses it.
@@ -258,6 +259,8 @@ fn dispatch(
         Verb::AppsPodmanInstall => Some(podman::install(ctx, stdin)?),
         Verb::AppsPodmanUninstall => Some(podman::uninstall(ctx)?),
 
+        Verb::DesktopPackagesInstall => Some(desktop::packages_install(ctx)?),
+
         Verb::FrontStatus => Some(front::status(ctx)?),
         Verb::FrontInstall => Some(front::install(ctx, who)?),
         Verb::FrontRemove => Some(front::remove(ctx, who)?),
@@ -331,6 +334,12 @@ fn audit(
         // upgrade / rollback: what `systemctl reset-failed` did first.
         if let Some(r) = x.pointer("/resetFailed/result") {
             line["resetFailed"] = r.clone();
+        }
+    }
+    // The virtual desktop's packages: which fixed names were asked for.
+    if let (Some(Verb::DesktopPackagesInstall), Some(x)) = (verb, extra) {
+        if let Some(p) = x.get("requested") {
+            line["packages"] = p.clone();
         }
     }
     // K2's Podman bundle: which build went in (or what came out).

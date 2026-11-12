@@ -126,6 +126,17 @@
 //!   a 14 helper refuses it as unknown).
 //!   Another 0.46.11 lane that needs a helper change joins 15 here with its
 //!   own namespace flag; never 16 before 15 ships.
+//! - 16 = every root-helper change 0.46.12 makes, in one bump, shared by
+//!   every lane (the ONE place to add to it; 15 shipped in 0.46.11): the
+//!   Linux virtual desktop's `desktop packages install`
+//!   (`prd-linux-virtual-desktop-v1` L5, LD-13; [`crate::desktop`]): Xvfb,
+//!   IceWM and a DejaVu font from the closed list for the box's package
+//!   manager, simulated first, never a removal, daemon-only. Under
+//!   `namespaces.desktop`, [`DESKTOP_MIN_PROTOCOL`]; a 15 helper refuses
+//!   the argv, so the daemon prints the manual command
+//!   ([`crate::desktop::manual_command`]) instead. Another 0.46.12 lane
+//!   that needs a helper change joins 16 here with its own namespace flag;
+//!   never 17 before 16 ships.
 //!
 //! The first `k2-root-helper` build ships 3 and 4 together and answers 4.
 //! Protocols are additive: a newer helper serves an older daemon.
@@ -134,7 +145,7 @@ use std::cmp::Ordering;
 use std::fmt;
 
 /// What this build of the helper speaks.
-pub const PROTOCOL: u32 = 15;
+pub const PROTOCOL: u32 = 16;
 
 /// `k2 hostmail upgrade` through the root helper. 4, not 2: the daemon's
 /// table moves from 0.16.20 OR 0.16.10 (pin 0.16.25), so `install-bin`
@@ -178,6 +189,10 @@ pub const SEW_TUNNEL_CLEAR_MIN_PROTOCOL: u32 = 14;
 /// true`: a 14 helper refuses `<M>/<name>`, `per-app` and `--db` on argv,
 /// so the daemon asks for the update before it sends any of them.
 pub const PGNAMED_MIN_PROTOCOL: u32 = 15;
+/// The virtual desktop's `desktop packages install` (0.46.12, L5). Gated on
+/// this AND `namespaces.desktop == true`: below it the daemon prints
+/// [`crate::desktop::manual_command`] and installs nothing.
+pub const DESKTOP_MIN_PROTOCOL: u32 = 16;
 /// Sew's recorder install (`engine sew recording …`, 0.46.11 K-a). Gated on
 /// this AND `namespaces.sewrecording == true`: a 14 helper refuses the argv.
 pub const SEW_RECORDING_MIN_PROTOCOL: u32 = 15;
@@ -367,7 +382,12 @@ mod tests {
         assert_eq!(HANDOFF_MIN_PROTOCOL, 5);
         assert_eq!(APPS_MIN_PROTOCOL, 6);
         assert_eq!(SEW_MIN_PROTOCOL, 7);
-        assert_eq!(PROTOCOL, 15, "protocol 15 = 0.46.11's one bump (named clusters, per-App db ports); 14 = 0.46.10's (the tunnel move's clears)");
+        assert_eq!(PROTOCOL, 16, "protocol 16 = 0.46.12's one bump (the virtual desktop's packages); 15 = 0.46.11's (named clusters, per-App db ports)");
+        assert_eq!(DESKTOP_MIN_PROTOCOL, 16, "the desktop packages join 0.46.12's one bump");
+        assert!(
+            crate::verbs::catalog().iter().any(|v| v.argv() == ["desktop", "packages", "install"]),
+            "protocol 16 carries desktop packages install"
+        );
         assert_eq!(PGNAMED_MIN_PROTOCOL, 15, "named clusters join 0.46.11's one bump");
         assert_eq!(SEW_RECORDING_MIN_PROTOCOL, 15, "the recorder install joins 0.46.11's one bump");
         for tail in ["stage", "install", "status", "plan", "upgrade", "uninstall"] {

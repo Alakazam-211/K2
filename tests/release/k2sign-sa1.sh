@@ -168,14 +168,14 @@ for k in sys.argv[2].split("."): v = v[k]
 print(json.dumps(v) if not isinstance(v, str) else v)' "$1" "$2"; }
 
 check "status: only the Mac can approve (no signed-approval key yet)" 0 '"approvers": {"legacy": true, "require": "biometric device", "require_attest": "none", "sa1": []}' "$K" status 0.46.20
-check "challenge --format sa1 with no key that meets require" 3 "no enrolled approver key meets the policy (require = biometric device)" \
+check "challenge --format sa1 with no key that meets require" 3 "no enrolled approver key meets the policy (require = biometric device, require_attest = none)" \
     "$K" challenge 0.46.20 "$B1" "${ASSETS[@]}" --format sa1
 check "challenge --format takes sa1 only" 2 "--format takes sa1" "$K" challenge 0.46.20 "$B1" "${ASSETS[@]}" --format cbor
 
 echo "-- mac-legacy until the phone is enrolled --"
 "$K" challenge 0.46.20 "$B1" "${ASSETS[@]}" > "$tmp/l.json" 2>"$tmp/e" || fail "legacy challenge" "$(cat "$tmp/e")"
 approve_with "$tmp/keys/approver.key" "$tmp/l.json" "$tmp/l.der"
-check_in "a legacy challenge takes no --record" "$tmp/l.der" 3 "takes its DER signature" "$K" approve "$(nonce_of "$tmp/l.json")" --record
+check_in "a legacy challenge takes no --record" "$tmp/l.der" 3 "send its DER signature (no --record)" "$K" approve "$(nonce_of "$tmp/l.json")" --record
 check_in "the Mac's Touch ID approval opens the session" "$tmp/l.der" 0 "approved until" "$K" approve "$(nonce_of "$tmp/l.json")"
 check "the session says mac-legacy, credential, host" 0 '"by": "mac-legacy:credential:host"' "$K" status 0.46.20
 grep -qF "by mac-legacy:credential:host" "$AUDIT/0.46.20/signatures.tsv" && pass "the audit log names mac-legacy" || fail "audit by" "$(cat "$AUDIT/0.46.20/signatures.tsv")"

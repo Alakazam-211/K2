@@ -1,4 +1,4 @@
-// k2:board-file@1 on a real .k5board against a sandbox k2-daemon. Needs K2_BOARD_DAEMON_BIN (fails without it).
+// k2:board-file@2 on a real .k5board against a sandbox k2-daemon. Needs K2_BOARD_DAEMON_BIN (fails without it).
 //   K2_BOARD_DAEMON_BIN=target/debug/k2-daemon npx playwright test --config tests/board-file/real/playwright.config.ts
 import { defineConfig } from '@playwright/test'
 import * as path from 'path'

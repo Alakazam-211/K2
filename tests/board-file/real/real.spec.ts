@@ -1,4 +1,4 @@
-// k2:board-file@1 on a REAL .k5board, in WebKit and Chromium: the real daemon (sandbox HOME, built from this commit),
+// k2:board-file@2 on a REAL .k5board, in WebKit and Chromium: the real daemon (sandbox HOME, built from this commit),
 // the format's codec, the real session and the real widget. Only the frame's `k2` is the stand-in in fake-k2.js, with
 // `k2.boardFile` wired to the session, as the tab's layer wires it. The page's API calls go to the daemon through
 // Playwright's router, which adds the owner token as the desktop app's own requests do.
@@ -13,7 +13,7 @@ import { extname, join, resolve } from 'node:path'
 import { createSandbox, type Sandbox } from './daemon'
 
 const ROOT = resolve(__dirname, '../../..')
-const DIR = resolve(ROOT, 'crates/k2-core/src/zen/builtin_widgets/board-file-1')
+const DIR = resolve(ROOT, 'crates/k2-core/src/zen/builtin_widgets/board-file-2')
 const FAKE = readFileSync(resolve(ROOT, 'tests/board/fake-k2.js'), 'utf8')
 const K2PNG = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-png@1.0.1/k2-png.js'), 'utf8')
 const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' }
@@ -80,7 +80,7 @@ async function openTab(page: Page, path: string): Promise<void> {
     const s = w.BF.createBoardFileSession({ api, path, setTimer: (f: () => void, ms: number) => setTimeout(f, ms), clearTimer: (t: number) => clearTimeout(t), now: () => Date.now(), visible: () => true })
     const join = w.BF.createBoardFilePartJoiner()
     const fake = w.makeFakeK2({ caps: ['blobs.put', 'blobs.get', 'downloads.save', 'uploads.pick', 'links.open'] })
-    fake.k2.widget = { id: 'k2:board-file@1', name: 'Board', garden: 'board-file' }
+    fake.k2.widget = { id: 'k2:board-file@2', name: 'Board', garden: 'board-file' }
     fake.k2.connected = s.start()
     fake.k2.boardFile = {
       open: async () => JSON.parse(JSON.stringify(s.open())),
@@ -111,7 +111,7 @@ test('the + menu’s door makes Untitled.k5board, a whole file, and the bundle r
   expect(statSync(file).size).toBeGreaterThan(0)
   const b = await sb.post('board/file/create', { dir: ws })
   expect(b.body.name).toBe('Untitled-2.k5board')
-  const bundle = await sb.get('zen/widget/bundle', { widget: 'k2:board-file@1' })
+  const bundle = await sb.get('zen/widget/bundle', { widget: 'k2:board-file@2' })
   expect(bundle.status).toBe(200)
   expect(String(bundle.body.html)).toContain('<title>Board</title>')
   expect(String(bundle.body.html)).toContain('k2.boardFile.submit(')

@@ -1,4 +1,4 @@
-// k2:board-file@1 from a real pointer to the body of a save. See harness.ts.
+// k2:board-file@2 from a real pointer to the body of a save. See harness.ts.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { expect, test } from '@playwright/test'
 import { collector, openBoardFile, sticky } from './harness'
@@ -252,4 +252,22 @@ test('voting’s clear-all says so, and a reaction carries its token', async ({ 
   await page.evaluate(() => BoardApp.model.apply([{ op: 'set', id: 's-a', f: { votes: {} } }], { byAll: true }))
   await page.waitForFunction(() => __d.writes.some((w: any) => w.route === 'board/file/save'))
   expect(await page.evaluate(() => __d.writes.at(-1).body.groups[0].byAll)).toBe(true)
+})
+
+test('a tab’s bars sit 12px down; K2’s name over the corner hides the board’s own and moves the bar right', async ({ page }) => {
+  await openBoardFile(page, { objects: [sticky('s-a', 100, 100)] })
+  const box = async (sel: string) => {
+    const r = await page.locator(sel).first().boundingBox()
+    const o = await page.locator('#app').boundingBox()
+    return r && o ? { x: r.x - o.x, y: r.y - o.y, right: o.x + o.width - (r.x + r.width) } : null
+  }
+  expect(await box('#topleft')).toMatchObject({ x: 12, y: 12 })
+  expect((await box('.topright'))?.y).toBe(12)
+  expect((await box('.topright'))?.right).toBe(12)
+  // An older K2 sets neither variable: the board shows its own name.
+  await expect(page.locator('.boardname .name')).toBeVisible()
+  await page.evaluate(() => { const s = document.documentElement.style; s.setProperty('--zen-board-name-host', 'none'); s.setProperty('--zen-board-name-w', '180px') })
+  await expect(page.locator('.boardname .name')).toBeHidden()
+  await expect(page.locator('.boardname .logo')).toBeHidden()
+  expect(await box('#topleft')).toMatchObject({ x: 192, y: 12 })
 })

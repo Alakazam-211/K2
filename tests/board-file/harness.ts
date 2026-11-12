@@ -1,4 +1,4 @@
-// k2:board-file@1 in real browsers. The widget's folder is served as a static site by Playwright's router, with the
+// k2:board-file@2 in real browsers. The widget's folder is served as a static site by Playwright's router, with the
 // shared stand-in `k2` (tests/board/fake-k2.js) for what a frame gets from K2, and `k2.boardFile` wired to the REAL
 // session (src/renderer/lib/board-file) over a fake daemon that follows board-tab-b3-interface.md. So everything from a
 // pointer in WebKit to the body of a save is the shipped code; only the daemon is a stand-in.
@@ -8,7 +8,7 @@ import { extname, resolve } from 'node:path'
 import type { Page } from '@playwright/test'
 
 const ROOT = resolve(__dirname, '../..')
-export const DIR = resolve(ROOT, 'crates/k2-core/src/zen/builtin_widgets/board-file-1')
+export const DIR = resolve(ROOT, 'crates/k2-core/src/zen/builtin_widgets/board-file-2')
 const FAKE = readFileSync(resolve(ROOT, 'tests/board/fake-k2.js'), 'utf8')
 const K2PNG = readFileSync(resolve(ROOT, 'src/renderer/zen-lib/k2-png@1.0.1/k2-png.js'), 'utf8')
 const TYPES: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' }
@@ -51,7 +51,7 @@ export async function openBoardFile(page: Page, file: Opts = {}, opts: { viewpor
     const join = w.BF.createBoardFilePartJoiner()
     const fake = w.makeFakeK2({ caps: ['blobs.put', 'blobs.get', 'downloads.save', 'uploads.pick', 'links.open', 'boardFile.open'] })
     const log = { keys: [] as unknown[], parts: 0, largestPart: 0, holds: [] as boolean[], submits: [] as unknown[] }
-    fake.k2.widget = { id: 'k2:board-file@1', name: 'Board', garden: 'board-file' }
+    fake.k2.widget = { id: 'k2:board-file@2', name: 'Board', garden: 'board-file' }
     fake.k2.connected = s.start()
     fake.k2.boardFile = {
       open: async () => JSON.parse(JSON.stringify(s.open())),

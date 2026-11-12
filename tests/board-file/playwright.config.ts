@@ -1,4 +1,4 @@
-// k2:board-file@1 in Chromium and WebKit (a K2 tab's frame is a WKWebView on macOS).
+// k2:board-file@2 in Chromium and WebKit (a K2 tab's frame is a WKWebView on macOS).
 // Run:      npx playwright test --config tests/board-file/playwright.config.ts
 import { defineConfig } from '@playwright/test'
 import * as path from 'path'

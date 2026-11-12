@@ -818,12 +818,19 @@ fn purge_existing_acme_txt(binding: &DomainBinding, hostname: &str) {
     let Ok(resp) = proxy_request("GET", &path, Some("k2-acme"), None) else {
         return;
     };
-    for id in acme_txt_record_ids(&resp.body, &rel) {
+    for id in acme_txt_record_ids(&resp.body, &rel, &binding.apex) {
         let _ = delete_txt(&id);
     }
 }
 
-fn acme_txt_record_ids(body: &str, rel: &str) -> Vec<String> {
+fn is_acme_challenge_name(name: &str, rel: &str, apex: &str) -> bool {
+    let _ = apex;
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    let rel_l = rel.to_ascii_lowercase();
+    name == rel_l || name.starts_with(&format!("{rel_l}.")) || name.ends_with(&rel_l)
+}
+
+fn acme_txt_record_ids(body: &str, rel: &str, apex: &str) -> Vec<String> {
     let v: serde_json::Value = serde_json::from_str(body).unwrap_or(serde_json::json!({}));
     let mut ids = Vec::new();
     let mut arrays: Vec<&Vec<serde_json::Value>> = Vec::new();
@@ -836,7 +843,6 @@ fn acme_txt_record_ids(body: &str, rel: &str) -> Vec<String> {
     if let Some(a) = v.as_array() {
         arrays.push(a);
     }
-    let rel_l = rel.to_ascii_lowercase();
     for arr in arrays {
         for rec in arr {
             let ty = rec
@@ -847,13 +853,8 @@ fn acme_txt_record_ids(body: &str, rel: &str) -> Vec<String> {
             if !ty.eq_ignore_ascii_case("TXT") {
                 continue;
             }
-            let name = rec
-                .get("name")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .trim_end_matches('.')
-                .to_ascii_lowercase();
-            if name == rel_l || name.starts_with(&format!("{rel_l}.")) || name.ends_with(&rel_l) {
+            let name = rec.get("name").and_then(|x| x.as_str()).unwrap_or("");
+            if is_acme_challenge_name(name, rel, apex) {
                 if let Some(id) = rec.get("id").and_then(|x| x.as_str()) {
                     ids.push(id.to_string());
                 }
@@ -1006,8 +1007,224 @@ mod tests {
             {"id":"c","type":"TXT","name":"_acme-challenge.other"}
         ]}"#;
         assert_eq!(
-            acme_txt_record_ids(body, "_acme-challenge.scratch-le2"),
+            acme_txt_record_ids(body, "_acme-challenge.scratch-le2", "example.com"),
             vec!["b".to_string()]
+        );
+    }
+
+    /// A zone listing as the records API returns it (relative, lowercase
+    /// names), plus a few other spellings of the same owner names (FQDN,
+    /// trailing dot, capitals) and names that only look alike.
+    fn challenge_zone_body() -> &'static str {
+        r#"{"records":[
+            {"id":"apex","type":"TXT","name":"_acme-challenge"},
+            {"id":"apex-fqdn","type":"TXT","name":"_ACME-Challenge.Example.com."},
+            {"id":"mail","type":"TXT","name":"_acme-challenge.mail"},
+            {"id":"mail-fqdn","type":"TXT","name":"_acme-challenge.mail.example.com"},
+            {"id":"acv","type":"TXT","name":"_acme-challenge.acv"},
+            {"id":"deep","type":"TXT","name":"_acme-challenge.mail.other"},
+            {"id":"glued","type":"TXT","name":"x_acme-challenge"},
+            {"id":"glued-sub","type":"TXT","name":"x_acme-challenge.mail"},
+            {"id":"nested","type":"TXT","name":"a._acme-challenge.mail"},
+            {"id":"apex-cname","type":"CNAME","name":"_acme-challenge"}
+        ]}"#
+    }
+
+    #[test]
+    fn apex_challenge_purge_touches_only_the_apex_name() {
+        let ids = acme_txt_record_ids(challenge_zone_body(), "_acme-challenge", "example.com");
+        assert_eq!(ids, vec!["apex".to_string(), "apex-fqdn".to_string()]);
+    }
+
+    #[test]
+    fn subdomain_challenge_purge_leaves_the_apex_and_siblings() {
+        let ids =
+            acme_txt_record_ids(challenge_zone_body(), "_acme-challenge.mail", "example.com");
+        assert_eq!(ids, vec!["mail".to_string(), "mail-fqdn".to_string()]);
+    }
+
+    #[test]
+    fn challenge_name_match_is_exact_after_normalising() {
+        let apex = "example.com";
+        for same in [
+            "_acme-challenge",
+            "_acme-challenge.",
+            "_ACME-CHALLENGE",
+            " _acme-challenge ",
+            "_acme-challenge.example.com",
+            "_acme-challenge.EXAMPLE.com.",
+        ] {
+            assert!(is_acme_challenge_name(same, "_acme-challenge", apex), "{same:?}");
+        }
+        for other in [
+            "_acme-challenge.mail",
+            "_acme-challenge.acv",
+            "x_acme-challenge",
+            "a._acme-challenge",
+            "_acme-challenge.example.com.example.com",
+            "_acme-challenge.other.com",
+            "",
+            "@",
+        ] {
+            assert!(!is_acme_challenge_name(other, "_acme-challenge", apex), "{other:?}");
+        }
+        for same in [
+            "_acme-challenge.mail",
+            "_Acme-Challenge.Mail.",
+            "_acme-challenge.mail.example.com",
+        ] {
+            assert!(is_acme_challenge_name(same, "_acme-challenge.mail", apex), "{same:?}");
+        }
+        for other in [
+            "_acme-challenge",
+            "_acme-challenge.acv",
+            "_acme-challenge.mail.other",
+            "x_acme-challenge.mail",
+            "a._acme-challenge.mail",
+            "mail",
+        ] {
+            assert!(!is_acme_challenge_name(other, "_acme-challenge.mail", apex), "{other:?}");
+        }
+    }
+
+    /// `(id, name, content)` rows of a records API kept in memory.
+    type FakeZone = std::rc::Rc<std::cell::RefCell<Vec<(String, String, String)>>>;
+
+    /// `GET /api/dns/zones/{id}` lists, `POST .../records` adds,
+    /// `DELETE /api/dns/records/{id}` removes; anything else panics.
+    fn install_fake_zone(
+        zone_id: &'static str,
+        rows: &[(&str, &str, &str)],
+    ) -> (FakeZone, crate::dns::proxy::FakeDnsApiGuard) {
+        use crate::dns::proxy::{set_fake_dns_api, DnsHttpResponse};
+        let zone: FakeZone = std::rc::Rc::new(std::cell::RefCell::new(
+            rows.iter()
+                .map(|(id, name, content)| (id.to_string(), name.to_string(), content.to_string()))
+                .collect(),
+        ));
+        let z = zone.clone();
+        let next = std::cell::Cell::new(0u32);
+        let guard = set_fake_dns_api(move |method, path, body| {
+            let ok = |body: String| Ok(DnsHttpResponse { status: 200, body });
+            if method == "GET" && path == format!("/api/dns/zones/{zone_id}") {
+                let records: Vec<serde_json::Value> = z
+                    .borrow()
+                    .iter()
+                    .map(|(id, name, content)| {
+                        serde_json::json!({"id": id, "type": "TXT", "name": name, "content": content})
+                    })
+                    .collect();
+                return ok(serde_json::json!({"zone": {"id": zone_id}, "records": records}).to_string());
+            }
+            if method == "POST" && path == format!("/api/dns/zones/{zone_id}/records") {
+                let v: serde_json::Value =
+                    serde_json::from_str(body.expect("POST body")).expect("POST json");
+                next.set(next.get() + 1);
+                let id = format!("planted-{}", next.get());
+                z.borrow_mut().push((
+                    id.clone(),
+                    v["name"].as_str().expect("name").to_string(),
+                    v["content"].as_str().expect("content").to_string(),
+                ));
+                return ok(serde_json::json!({"record": {"id": id}}).to_string());
+            }
+            if method == "DELETE" {
+                let id = path.strip_prefix("/api/dns/records/").expect("delete path");
+                z.borrow_mut().retain(|(rid, _, _)| rid != id);
+                return ok("{}".to_string());
+            }
+            panic!("unexpected DNS API call {method} {path}");
+        });
+        (zone, guard)
+    }
+
+    fn zone_rows(zone: &FakeZone) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> =
+            zone.borrow().iter().map(|(_, n, c)| (n.clone(), c.clone())).collect();
+        v.sort();
+        v
+    }
+
+    fn row(name: &str, content: &str) -> (String, String) {
+        (name.to_string(), content.to_string())
+    }
+
+    fn writable_binding(apex: &str) -> DomainBinding {
+        DomainBinding {
+            apex: apex.into(),
+            zone_id: Some("zone-shared".into()),
+            dns_write: true,
+            created_at: 0,
+            status: None,
+            nameservers: Vec::new(),
+            auto_created: false,
+        }
+    }
+
+    /// Two servers on one account share a zone. This one issues for the
+    /// apex while the other has challenges in flight for `mail` and `acv`:
+    /// those stay; this server's leftover at the apex name goes.
+    #[test]
+    fn apex_issue_keeps_another_servers_pending_challenges() {
+        let (zone, _api) = install_fake_zone(
+            "zone-shared",
+            &[
+                ("other-mail", "_acme-challenge.mail", "other-server-mail"),
+                ("other-acv", "_acme-challenge.acv", "other-server-acv"),
+                ("unrelated", "x_acme-challenge", "not-a-challenge"),
+                ("stale-apex", "_acme-challenge", "leftover-from-an-earlier-try"),
+            ],
+        );
+        let binding = writable_binding("example.com");
+        purge_existing_acme_txt(&binding, "example.com");
+        let planted = plant_txt(&binding, "example.com", "this-server-apex").expect("plant");
+        assert_eq!(
+            zone_rows(&zone),
+            vec![
+                row("_acme-challenge", "this-server-apex"),
+                row("_acme-challenge.acv", "other-server-acv"),
+                row("_acme-challenge.mail", "other-server-mail"),
+                row("x_acme-challenge", "not-a-challenge"),
+            ]
+        );
+        // Cleanup after issuance removes only the record this order planted.
+        delete_txt(&planted).expect("delete");
+        assert_eq!(
+            zone_rows(&zone),
+            vec![
+                row("_acme-challenge.acv", "other-server-acv"),
+                row("_acme-challenge.mail", "other-server-mail"),
+                row("x_acme-challenge", "not-a-challenge"),
+            ]
+        );
+    }
+
+    /// A subdomain order leaves the apex's challenge, its siblings and
+    /// names that merely contain its own alone.
+    #[test]
+    fn subdomain_issue_keeps_the_apex_and_sibling_challenges() {
+        let (zone, _api) = install_fake_zone(
+            "zone-shared",
+            &[
+                ("other-apex", "_acme-challenge", "other-server-apex"),
+                ("other-acv", "_acme-challenge.acv", "other-server-acv"),
+                ("nested", "a._acme-challenge.mail", "not-this-name"),
+                ("deeper", "_acme-challenge.mail.other", "other-server-deeper"),
+                ("stale-mail", "_acme-challenge.mail", "leftover-from-an-earlier-try"),
+            ],
+        );
+        let binding = writable_binding("example.com");
+        purge_existing_acme_txt(&binding, "mail.example.com");
+        plant_txt(&binding, "mail.example.com", "this-server-mail").expect("plant");
+        assert_eq!(
+            zone_rows(&zone),
+            vec![
+                row("_acme-challenge", "other-server-apex"),
+                row("_acme-challenge.acv", "other-server-acv"),
+                row("_acme-challenge.mail", "this-server-mail"),
+                row("_acme-challenge.mail.other", "other-server-deeper"),
+                row("a._acme-challenge.mail", "not-this-name"),
+            ]
         );
     }
 

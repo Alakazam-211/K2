@@ -351,7 +351,7 @@ describe('tab bar plus menu', () => {
     post.mockRestore()
   })
 
-  it('the Desktop row (Beta): only on a server with remote-desktop-v1; it opens one Desktop tab and then focuses it', async () => {
+  it('the Desktop row (Beta): only on a server with remote-desktop-v1; each click opens another Desktop tab (LD-35)', async () => {
     usePresetsStore.setState({ presets: [] })
     seedTabs(0, 1)
     renderBar(0)
@@ -374,7 +374,7 @@ describe('tab bar plus menu', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Desktop/ }))
     })
-    expect(desktops()).toBe(1)
+    expect(desktops()).toBe(2)
   })
 
   it('the Board row is in the first list, not only after a repaint: a second open with the changes state cached keeps it', async () => {

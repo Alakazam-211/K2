@@ -135,6 +135,7 @@ import {
   type ProjectGroupShow,
 } from './projects-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { fitToTile } from './doc-tile-fit'
 
 // Sidebar's drag threshold (handleProjectMouseDown): 3px x / 5px y.
 const DRAG_THRESHOLD_X = 3
@@ -320,7 +321,7 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
           />
         }
       >
-        It may have moved or been renamed. Close this tile, or open the file again from Resources on the left.
+        It may have moved or been renamed. Close this tile, or open the file again from its agent in the list on the left.
       </TileState>
     )
   }
@@ -333,7 +334,7 @@ function HtmlIframePane({ filePath }: { filePath: string }): React.JSX.Element {
   // (FileViewerPane parity).
   return (
     <div ref={rootRef} className="h-full overflow-hidden bg-white">
-      <HtmlFrame title={fileName} html={phase.content} profile="scripted" className="w-full h-full border-0 bg-white" />
+      <HtmlFrame title={fileName} html={fitToTile(phase.content)} profile="scripted" className="w-full h-full border-0 bg-white" />
     </div>
   )
 }
@@ -428,8 +429,18 @@ export default function ProjectDashboard({
   // The refetched `show` carries the dashboard's latest revision (the
   // store bumps on project-group:layout-changed). Beyond what we've
   // rendered/written it only sets the stale pill.
+  // A newer revision whose layout is the one on screen (a rename, or our
+  // own save coming back) is not news: take it silently, so the pill only
+  // shows when the tiles really moved somewhere else.
   useEffect(() => {
-    setFreshness((s) => observeRevision(s, dashboard.revision))
+    const incoming = adoptLayout(dashboard.layoutJson, show.pocWorkspaceId)
+    if (JSON.stringify(incoming) === JSON.stringify(rootRef.current)) {
+      setFreshness((s) => adoptRevision(s, dashboard.revision))
+    } else {
+      setFreshness((s) => observeRevision(s, dashboard.revision))
+    }
+    // Keyed on the revision: a layout change always comes with one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dashboard.revision])
 
   const applyLatest = useCallback((): void => {
@@ -820,15 +831,16 @@ export default function ProjectDashboard({
       {stale && (
         <div className="absolute top-1.5 right-1.5 z-30 flex items-center gap-2 px-2 py-1 bg-[var(--color-bg-elevated)] border border-[color-mix(in_srgb,var(--color-status-warn)_40%,transparent)] shadow-lg">
           <span className="w-1.5 h-1.5 rounded-[var(--radius-badge)] bg-[var(--color-status-warn-amber)] flex-shrink-0" />
-          <span className="text-[10px] text-[var(--color-text-secondary)]">
-            Layout updated elsewhere
+          <span className="type-hint text-[var(--color-text-secondary)]">
+            Someone moved this dashboard’s tiles in another window.
           </span>
           <button
             type="button"
             onClick={applyLatest}
-            className="text-[10px] font-medium text-[var(--color-accent)] hover:underline cursor-pointer"
+            data-k2-focus=""
+            className="relative type-hint font-medium text-[var(--color-accent-text)] hover:underline cursor-pointer outline-none"
           >
-            Apply
+            Show their layout
           </button>
         </div>
       )}

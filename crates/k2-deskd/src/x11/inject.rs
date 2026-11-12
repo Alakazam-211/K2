@@ -1,10 +1,14 @@
 //! XTEST posting (D4): pointer, buttons, wheel, keys, and Unicode text
 //! through a spare keycode.
 //!
-//! **Text.** X has no "type this character" request. For each character
-//! deskd maps a keycode that has no keysyms (a spare) to the character's
-//! keysym on every level, presses and releases it, and after the message
-//! maps the spare back to nothing (vs-live R15: the remap changes the whole
+//! **Text.** X has no "type this character" request. A character the keymap
+//! already has is typed on its own key (Shift for its second level): a
+//! client reads a key's character when it gets to the event, with the keymap
+//! as it is by then, so a key that never changes is always right (L9). For
+//! the rest deskd maps keycodes that have no keysyms (spares), one per
+//! character, presses and releases them, and after the message (and a
+//! short wait for the client to read the presses) maps them back to
+//! nothing (vs-live R15: the remap changes the whole
 //! session's keymap, so it never outlives one `text`, and never happens
 //! during a local hold: the injector drops input first).
 //!
@@ -53,19 +57,78 @@ pub fn keysym_for(c: char) -> Keysym {
     }
 }
 
-/// The highest keycode whose keysyms are all NoSymbol.
-pub fn find_spare(min: Keycode, per: u8, keysyms: &[Keysym]) -> Option<Keycode> {
+/// The keysyms of the two Shift keys.
+const SHIFT_KEYSYMS: [Keysym; 2] = [0xffe1, 0xffe2];
+
+/// How one character is typed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stroke {
+    /// A key the keymap already has: its first level, or its second with
+    /// Shift held.
+    Key { keycode: Keycode, shift: bool },
+    /// A keysym the keymap lacks: typed on a spare keycode mapped to it.
+    Spare(Keysym),
+}
+
+/// How to type `text` on this keymap (`keysyms`, `per` to a keycode from
+/// `min`). A client turns a key press into a character when it reads the
+/// event, with the keymap as it is by then; a key the keymap already has
+/// never changes under it, so only what the keymap lacks goes on a spare
+/// (L9: one remapped spare for every character lost most of them).
+pub fn plan_text(text: &str, min: Keycode, per: u8, keysyms: &[Keysym]) -> Vec<Stroke> {
+    let per = per as usize;
+    let has_shift = per > 0 && keysyms.chunks(per).any(|ks| SHIFT_KEYSYMS.contains(&ks[0]));
+    let find = |sym: Keysym, level: usize| {
+        if per <= level {
+            return None;
+        }
+        keysyms.chunks(per).position(|ks| ks[level] == sym).map(|i| min as usize + i).filter(|k| *k <= 255).map(|k| k as Keycode)
+    };
+    text.chars()
+        .map(|c| {
+            let sym = keysym_for(c);
+            if let Some(keycode) = find(sym, 0) {
+                return Stroke::Key { keycode, shift: false };
+            }
+            if has_shift {
+                if let Some(keycode) = find(sym, 1) {
+                    return Stroke::Key { keycode, shift: true };
+                }
+            }
+            Stroke::Spare(sym)
+        })
+        .collect()
+}
+
+/// Every keycode whose keysyms are all NoSymbol, highest first.
+pub fn find_spares(min: Keycode, per: u8, keysyms: &[Keysym]) -> Vec<Keycode> {
     if per == 0 {
-        return None;
+        return Vec::new();
     }
-    keysyms
+    let mut v: Vec<Keycode> = keysyms
         .chunks(per as usize)
         .enumerate()
         .filter(|(_, ks)| ks.iter().all(|k| *k == 0))
         .map(|(i, _)| min as usize + i)
         .filter(|k| *k <= 255)
-        .last()
         .map(|k| k as Keycode)
+        .collect();
+    v.reverse();
+    v
+}
+
+/// How long the spares stay mapped after their last press, at the least,
+/// so a client that reads its events late still finds the character on
+/// them.
+pub const SPARE_SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+/// The most a text waits before it puts the spares back.
+pub const SPARE_SETTLE_MAX: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// [`SPARE_SETTLE`] plus 4 ms for each key event this text sent: a client
+/// reads the events in order, so the more it has to read, the later it
+/// gets to the presses on the spares.
+pub fn spare_settle(events: u32) -> std::time::Duration {
+    (SPARE_SETTLE + std::time::Duration::from_millis(4 * u64::from(events))).min(SPARE_SETTLE_MAX)
 }
 
 /// Whole wheel clicks out of browser deltas, keeping the remainder.
@@ -126,30 +189,85 @@ impl X11Poster {
         Ok(())
     }
 
+    fn tap(&self, keycode: Keycode) -> Result<(), PostError> {
+        self.fake(KEY_PRESS, keycode, 0, 0)?;
+        self.fake(KEY_RELEASE, keycode, 0, 0)
+    }
+
+    /// Put `spares` back to no keysyms, after the client had time to read
+    /// the presses on them (`events`: key events sent before, [`spare_settle`]).
+    fn restore_spares(&self, per: u8, spares: &[Keycode], events: u32) -> Result<(), PostError> {
+        if spares.is_empty() {
+            return Ok(());
+        }
+        self.sync()?;
+        std::thread::sleep(spare_settle(events));
+        let empty = vec![0; per as usize];
+        let mut r = Ok(());
+        for &k in spares {
+            if let Err(e) = self.conn.change_keyboard_mapping(1, k, per, &empty).map_err(xerr) {
+                r = Err(e);
+            }
+        }
+        r.and_then(|_| self.sync())
+    }
+
     fn type_text(&self, text: &str) -> Result<(), PostError> {
         let setup = self.conn.setup();
         let (min, max) = (setup.min_keycode, setup.max_keycode);
         let map = self.conn.get_keyboard_mapping(min, max - min + 1).map_err(xerr)?.reply().map_err(xerr)?;
         let per = map.keysyms_per_keycode;
-        let spare = find_spare(min, per, &map.keysyms).ok_or_else(|| PostError::new(codes::UNSUPPORTED, "no free keycode to type text with"))?;
+        let strokes = plan_text(text, min, per, &map.keysyms);
+        let free = find_spares(min, per, &map.keysyms);
+        if free.is_empty() && strokes.iter().any(|s| matches!(s, Stroke::Spare(_))) {
+            return Err(PostError::new(codes::UNSUPPORTED, "no free keycode to type text with"));
+        }
+        let shift = map.keysyms.chunks(per.max(1) as usize).position(|ks| SHIFT_KEYSYMS.contains(&ks[0])).map(|i| (min as usize + i) as Keycode);
+        // Spares mapped in this text: (keysym, keycode).
+        let mut mapped: Vec<(Keysym, Keycode)> = Vec::new();
+        // Key events sent so far (how much the client has to read).
+        let mut events: u32 = 0;
         let mut result = Ok(());
-        for c in text.chars() {
-            let syms = vec![keysym_for(c); per as usize];
-            let r = (|| {
-                self.conn.change_keyboard_mapping(1, spare, per, &syms).map_err(xerr)?;
-                self.sync()?;
-                self.fake(KEY_PRESS, spare, 0, 0)?;
-                self.fake(KEY_RELEASE, spare, 0, 0)?;
-                self.sync()
+        for s in strokes {
+            events = events.saturating_add(if matches!(s, Stroke::Key { shift: true, .. }) { 4 } else { 2 });
+            let r = (|| match s {
+                Stroke::Key { keycode, shift: false } => self.tap(keycode),
+                Stroke::Key { keycode, shift: true } => {
+                    let sk = shift.ok_or_else(|| PostError::new(codes::UNSUPPORTED, "no Shift key"))?;
+                    self.fake(KEY_PRESS, sk, 0, 0)?;
+                    let r = self.tap(keycode);
+                    self.fake(KEY_RELEASE, sk, 0, 0)?;
+                    r
+                }
+                Stroke::Spare(sym) => {
+                    let kc = match mapped.iter().find(|(k, _)| *k == sym) {
+                        Some((_, kc)) => *kc,
+                        None => {
+                            if mapped.len() == free.len() {
+                                // Every spare is in use: let the client
+                                // catch up, put them back, start over.
+                                let used: Vec<Keycode> = mapped.iter().map(|(_, k)| *k).collect();
+                                mapped.clear();
+                                self.restore_spares(per, &used, events)?;
+                            }
+                            let kc = free[mapped.len()];
+                            self.conn.change_keyboard_mapping(1, kc, per, &vec![sym; per as usize]).map_err(xerr)?;
+                            self.sync()?;
+                            mapped.push((sym, kc));
+                            kc
+                        }
+                    };
+                    self.tap(kc)
+                }
             })();
             if r.is_err() {
                 result = r;
                 break;
             }
         }
-        // Always put the spare back, even after a failure.
-        let empty = vec![0; per as usize];
-        let restore = self.conn.change_keyboard_mapping(1, spare, per, &empty).map_err(xerr).and_then(|_| self.sync());
+        // Always put the spares back, even after a failure.
+        let used: Vec<Keycode> = mapped.iter().map(|(_, k)| *k).collect();
+        let restore = self.restore_spares(per, &used, events);
         result.and(restore)
     }
 }
@@ -202,12 +320,18 @@ mod tests {
     }
 
     #[test]
-    fn spare_is_the_highest_empty_keycode() {
+    fn spares_skip_keycodes_that_have_a_keysym() {
         // min 8, 2 per keycode: 8 full, 9 empty, 10 full, 11 empty.
         let ks = [1, 2, 0, 0, 3, 0, 0, 0];
-        assert_eq!(find_spare(8, 2, &ks), Some(11));
-        assert_eq!(find_spare(8, 2, &[1, 2, 3, 4]), None);
-        assert_eq!(find_spare(8, 0, &[]), None);
+        assert_eq!(find_spares(8, 2, &ks), vec![11, 9]);
+        assert_eq!(find_spares(8, 0, &[]), Vec::<Keycode>::new());
+    }
+
+    #[test]
+    fn spares_stay_mapped_longer_when_more_was_typed_before_them() {
+        assert_eq!(spare_settle(0), SPARE_SETTLE);
+        assert_eq!(spare_settle(100), SPARE_SETTLE + std::time::Duration::from_millis(400));
+        assert_eq!(spare_settle(100_000), SPARE_SETTLE_MAX);
     }
 
     /// min 8, 2 per keycode: 8 a/A, 9 1/!, 10 Shift_L, 11 and 12 empty.

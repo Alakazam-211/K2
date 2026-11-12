@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   type MsgResponse,
   applyComposeHistoryNav,
+  composeThreadUnreachableText,
   applyComposeTextareaAutosize,
   composeHistoryKeyAction,
   composeEmptyEnterSequence,
@@ -889,5 +890,18 @@ describe('applyComposeHistoryNav', () => {
     })
     expect(up.preventDefault).toBe(false)
     expect(up.index).toBe(-1)
+  })
+})
+
+describe('composeThreadUnreachableText', () => {
+  it('names the agent and the reason, with one full stop', () => {
+    expect(composeThreadUnreachableText('reviewer', "your-server.k2.dev didn't answer")).toBe(
+      "Can't reach reviewer's Thread: your-server.k2.dev didn't answer.",
+    )
+    expect(composeThreadUnreachableText('reviewer', 'already ends.')).toBe("Can't reach reviewer's Thread: already ends.")
+  })
+
+  it('plain words with no name or reason', () => {
+    expect(composeThreadUnreachableText('', null)).toBe("Can't reach the agent's Thread: its address never came.")
   })
 })

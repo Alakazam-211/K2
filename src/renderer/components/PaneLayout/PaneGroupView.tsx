@@ -486,6 +486,8 @@ function SidecarAgentChrome({
       cwd={cwd}
       command={command}
       commandHint={commandHint}
+      addrProblem={overlay.problem}
+      onRetryAddr={overlay.retry}
     >
       {children}
     </AgentSessionChrome>

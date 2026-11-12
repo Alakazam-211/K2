@@ -362,6 +362,18 @@ export function composeWaitingLabel(name: string | null | undefined): string {
   return n ? `Sends when ${n} is ready` : 'Sends when the agent is ready'
 }
 
+/** A waiting Thread send that gave up (THREAD_ADDR_WAIT_MS): who, and why
+ *  in plain words (the address lookup's `overlayAddrProblem`). */
+export function composeThreadUnreachableText(
+  name: string | null | undefined,
+  why: string | null | undefined,
+): string {
+  const n = (name ?? '').trim()
+  const who = n ? `${n}'s` : "the agent's"
+  const reason = (why ?? '').trim().replace(/[.\s]+$/, '') || 'its address never came'
+  return `Can't reach ${who} Thread: ${reason}.`
+}
+
 /** Resolve the Agents-list name for this pane's workspace path. */
 export function composeAgentNameFromProjects(
   projects: Array<{

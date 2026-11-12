@@ -8,6 +8,11 @@ export interface SessionViewChromeValue {
   splitLeft: SplitPaneView
   splitRight: SplitPaneView
   overlayAddr: string
+  /** Why `overlayAddr` is still empty, in plain words (a sidecar's lookup):
+   *  the compose bar names it when a send gives up waiting. */
+  overlayAddrProblem?: string | null
+  /** Ask for the address again now (the compose bar's Try again). */
+  retryOverlayAddr?: () => void
   conversationId: string | null
   /** v2 agent name. The daemon resolves cwd. Not a transcript path. */
   agentName: string

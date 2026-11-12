@@ -62,6 +62,7 @@ import {
   composeAgentNameFromProjects,
   composeMessagePlaceholder,
   composeWaitingLabel,
+  composeThreadUnreachableText,
   composerPermitted,
   extractImagePathsFromDraft,
   filterComposeSlashCommands,
@@ -123,6 +124,10 @@ import {
   stashPrefersReducedMotion,
 } from '@/components/PromptStash/PromptStash'
 import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
+
+/** A Thread send waits this long for the Thread's address, then stops
+ *  waiting and says why (the draft stays; Try again asks again). */
+export const THREAD_ADDR_WAIT_MS = 10_000
 
 interface TerminalComposeBarProps {
   /** Resolved PTY SessionId for this pane — the pane's `terminalId`. */
@@ -201,11 +206,15 @@ export function TerminalComposeBar({
     (sendDestination !== 'pty' && sessionChrome?.viewTab === 'thread')
   const threadAddr = sessionChrome?.overlayAddr ?? ''
   const [threadAddrError, setThreadAddrError] = useState<string | null>(null)
+  // A waiting send that gave up (THREAD_ADDR_WAIT_MS): the bar says why and
+  // offers Try again. The draft stays.
+  const [addrWaitGaveUp, setAddrWaitGaveUp] = useState(false)
   // stash-sync-v1: why a chosen stash's files didn't all come back.
   const [stashNotes, setStashNotes] = useState<string[]>([])
   useEffect(() => {
     // A new address (the chat was renamed, S4) clears a stale send error.
     setThreadAddrError(null)
+    setAddrWaitGaveUp(false)
   }, [sendOnThread, threadAddr])
   // prd-thread-message-menu-v1: a message's Reply waits here as a chip and
   // rides the next Thread send as a quote (lib/thread-reply).
@@ -885,9 +894,12 @@ export function TerminalComposeBar({
     if (sendOnThread) {
       if (!threadAddr.trim()) {
         // The Thread has no address yet (its session is still starting):
-        // the draft stays and goes by itself once the address comes.
+        // the draft stays and goes by itself once the address comes, for
+        // THREAD_ADDR_WAIT_MS at most. Ask for the address again now.
         setThreadAddrError(null)
+        setAddrWaitGaveUp(false)
         setQueued(true)
+        sessionChrome?.retryOverlayAddr?.()
         return
       }
     } else if (!sessionId) {
@@ -970,7 +982,7 @@ export function TerminalComposeBar({
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, pendingFiles, scope, reply])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, sessionChrome?.retryOverlayAddr, pendingFiles, scope, reply])
 
   // A waiting send goes once the Thread has its address (with the words in
   // the box then); emptying the box calls it off.
@@ -985,6 +997,18 @@ export function TerminalComposeBar({
     }
     if (threadAddr.trim()) void sendRef.current()
   }, [queued, queuedEmpty, threadAddr])
+
+  // Never wait forever: no address in THREAD_ADDR_WAIT_MS, the send stops
+  // waiting and the bar says why. The draft stays; Try again asks again.
+  const waitingForAddr = queued && !threadAddr.trim()
+  useEffect(() => {
+    if (!waitingForAddr) return
+    const t = setTimeout(() => {
+      setQueued(false)
+      setAddrWaitGaveUp(true)
+    }, THREAD_ADDR_WAIT_MS)
+    return () => clearTimeout(t)
+  }, [waitingForAddr])
 
   const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
   const slashMatches =
@@ -1269,14 +1293,36 @@ export function TerminalComposeBar({
       {waitingLabel}.
     </p>
   ) : null
-  const addrError = threadAddrError ? (
-    <p
-      role="alert"
-      data-testid="compose-thread-addr-error"
-      className="text-[11px] text-[var(--color-status-error-soft)]"
-    >
-      {threadAddrError}
-    </p>
+  // A send error, or a waiting send that gave up (with Try again).
+  const addrErrorText =
+    threadAddrError ??
+    (addrWaitGaveUp
+      ? composeThreadUnreachableText(sessionChrome?.displayName || agentName, sessionChrome?.overlayAddrProblem)
+      : null)
+  const addrError = addrErrorText ? (
+    <div className="flex items-baseline gap-2">
+      <p
+        role="alert"
+        data-testid="compose-thread-addr-error"
+        className="min-w-0 flex-1 text-[11px] text-[var(--color-status-error-soft)]"
+      >
+        {addrErrorText}
+      </p>
+      {addrWaitGaveUp && !threadAddrError ? (
+        <button
+          type="button"
+          data-testid="compose-thread-addr-retry"
+          className="flex-shrink-0 text-[11px] underline text-[var(--color-text-primary)] hover:opacity-80"
+          onClick={() => {
+            setAddrWaitGaveUp(false)
+            sessionChrome?.retryOverlayAddr?.()
+            void send()
+          }}
+        >
+          Try again
+        </button>
+      ) : null}
+    </div>
   ) : null
   const stashNotesEl =
     stashNotes.length > 0 ? (

@@ -412,10 +412,14 @@ export async function daemonCliGet<T = unknown>(
   scope: ServerScope,
   route: string,
   params?: Record<string, string | number | boolean | undefined | null>,
+  /** `signal`: give the request up (a caller's own deadline), so a request
+   *  that never answers frees its slot on that server. */
+  opts?: { signal?: AbortSignal },
 ): Promise<T> {
+  const signal = opts?.signal
   const { res, text } = await cliFetch(scope, { route, method: 'GET' }, (creds) => ({
     url: getUrl(creds, route, params),
-    init: { method: 'GET' },
+    init: signal ? { method: 'GET', signal } : { method: 'GET' },
   }))
   return parseDaemonResponse<T>(res, text)
 }

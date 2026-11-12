@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react'
-import { subscribeThreadAddress, threadAddressChangeMatches } from '@/lib/thread-address-bus'
+import { subscribeThreadAddress, threadAddressChangeMatches, threadErrorText } from '@/lib/thread-address-bus'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import {
   beginSidecarRefresh,
@@ -51,6 +51,10 @@ interface AgentSessionChromeProps {
   /** Pinned ensure provider, when the pane has no command prop. */
   provider?: string
   onRefresh?: () => void
+  /** Why the Thread has no address yet (`useSidecarOverlayAddr`). */
+  addrProblem?: string | null
+  /** Ask for the Thread's address again now (`useSidecarOverlayAddr`). */
+  onRetryAddr?: () => void
   children: ReactNode
 }
 
@@ -79,6 +83,8 @@ export function AgentSessionChrome({
   commandHint,
   provider,
   onRefresh,
+  addrProblem,
+  onRetryAddr,
   children,
 }: AgentSessionChromeProps): JSX.Element {
   // Home M3 — refresh respawns on the room's server; a failed refresh drops
@@ -159,6 +165,8 @@ export function AgentSessionChrome({
         splitLeft,
         splitRight,
         overlayAddr: addr,
+        overlayAddrProblem: addrProblem ?? null,
+        retryOverlayAddr: onRetryAddr,
         conversationId,
         agentName,
         displayName: title,
@@ -528,6 +536,11 @@ export function PinnedSessionBody({
 /** Re-ask until this cell's own address is in the session list. */
 export const SIDECAR_OVERLAY_ADDR_RETRY_MS = 400
 
+/** One ask that has not answered in this long is given up and asked again:
+ *  a request lost on its way to another server never answers, and must not
+ *  stop the asking. */
+export const SIDECAR_OVERLAY_ADDR_ATTEMPT_MS = 5000
+
 /**
  * Clipboard only when it is this sidecar (`sales/reviewer`, `sales/1`).
  * A slash-less handle is the workspace name — pinned Chat, not this cell —
@@ -545,18 +558,28 @@ function sidecarOwnClipboard(row: DaemonHandleRow | undefined): string {
  *  Thread survives a tab rename (S4): the address is looked up again, in
  *  place (no remount), when the daemon says this pane's address changed
  *  (`session_address_changed`, the overlay `address` frame) or a Thread
- *  call for the address it holds missed / answered `movedFrom`. */
+ *  call for the address it holds missed / answered `movedFrom`.
+ *
+ *  It keeps asking until it has one. An ask that has not answered in
+ *  SIDECAR_OVERLAY_ADDR_ATTEMPT_MS is given up and asked again: a request
+ *  to another server lost on the way never answers, and waiting on it left
+ *  an open tab without an address until it was reopened. `problem` says in
+ *  plain words why there is no address yet; `retry` asks again at once. */
 export function useSidecarOverlayAddr(
   projectPath: string,
   paneGroupId: string,
   attachAgentName?: string,
   conversationId?: string | null,
-): { title: string; addr: string } {
+): { title: string; addr: string; problem: string | null; retry: () => void } {
   const room = useRoom()
   const [state, setState] = useState({ title: '', addr: '' })
+  const [problem, setProblem] = useState<string | null>(null)
   const addrRef = useRef('')
   addrRef.current = state.addr
   const relookupRef = useRef<(() => void) | null>(null)
+  const retry = useCallback(() => {
+    relookupRef.current?.()
+  }, [])
 
   useEffect(() => {
     return subscribeThreadAddress((change) => {
@@ -580,6 +603,21 @@ export function useSidecarOverlayAddr(
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    // Only the newest ask's answer counts; an older one still in flight is
+    // ignored when it lands.
+    let attempt = 0
+    // The ask in flight: given up (aborted) when a newer one starts, so a
+    // request that never answers does not hold one of that server's slots.
+    let inflight: AbortController | null = null
+    const server = room.scope.isRemote ? room.scope.label || room.scope.hostKey : 'This server'
+
+    const clearTimers = (): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      if (deadline !== undefined) clearTimeout(deadline)
+      timer = undefined
+      deadline = undefined
+    }
 
     const schedule = (): void => {
       if (cancelled) return
@@ -589,43 +627,67 @@ export function useSidecarOverlayAddr(
     }
 
     const lookup = async (): Promise<void> => {
+      clearTimers()
+      inflight?.abort()
+      const controller = new AbortController()
+      inflight = controller
+      const mine = ++attempt
+      deadline = setTimeout(() => {
+        if (cancelled || mine !== attempt) return
+        setProblem(`${server} didn't answer`)
+        void lookup()
+      }, SIDECAR_OVERLAY_ADDR_ATTEMPT_MS)
       let found = ''
+      let why: string
       try {
-        const rows = await daemonCliGet<DaemonHandleRow[]>(room.scope, 'sessions/list-for-workspace', {
-          path: projectPath,
-        })
-        if (cancelled) return
+        const rows = await daemonCliGet<DaemonHandleRow[]>(
+          room.scope,
+          'sessions/list-for-workspace',
+          { path: projectPath },
+          { signal: controller.signal },
+        )
+        if (cancelled || mine !== attempt) return
         const list = Array.isArray(rows) ? rows : []
         const name = attachAgentName || `tab-${paneGroupId}`
         const row =
           list.find((r) => r.agentName === name) ||
           list.find((r) => r.agentName === `tab-${paneGroupId}`)
         found = sidecarOwnClipboard(row)
-      } catch {
-        if (cancelled) return
+        why = row
+          ? `${server} has no Thread address for this side chat yet`
+          : `${server} doesn't list this side chat`
+      } catch (e) {
+        if (cancelled || mine !== attempt) return
+        const raw = e instanceof Error ? e.message : String(e ?? '')
+        const text = raw.trim() ? threadErrorText(e).trim() : ''
+        why = text ? `couldn't ask ${server} (${text})` : `${server} didn't answer`
       }
-      if (cancelled) return
+      if (cancelled || mine !== attempt) return
+      clearTimers()
+      inflight = null
       if (found) {
+        setProblem(null)
         setState((prev) => (prev.addr === found ? prev : { title: found, addr: found }))
         return
       }
+      setProblem(why)
       schedule()
     }
 
     relookupRef.current = () => {
       if (cancelled) return
-      if (timer !== undefined) clearTimeout(timer)
-      timer = undefined
       void lookup()
     }
     setState({ title: '', addr: '' })
+    setProblem(null)
     void lookup()
     return () => {
       cancelled = true
       relookupRef.current = null
-      if (timer !== undefined) clearTimeout(timer)
+      clearTimers()
+      inflight?.abort()
     }
   }, [room, projectPath, paneGroupId, attachAgentName])
 
-  return state
+  return { ...state, problem, retry }
 }

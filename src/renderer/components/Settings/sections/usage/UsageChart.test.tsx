@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
-import { UsageChart } from './UsageChart'
+import { AXIS_LABEL_SLOT_PX, UsageChart, axisDays } from './UsageChart'
 
 afterEach(() => {
   cleanup()
@@ -28,5 +28,28 @@ describe('UsageChart under the app zoom', () => {
     )
     const svg = screen.getByTestId('usage-chart').querySelector('svg')
     expect(svg?.getAttribute('width')).toBe('600')
+  })
+})
+
+describe('the day axis on a narrow chart', () => {
+  it('keeps about five labels with room, and every day for a short range', () => {
+    expect(axisDays(30)).toEqual([0, 8, 16, 24, 29])
+    expect(axisDays(7)).toEqual([0, 1, 2, 3, 4, 5, 6])
+  })
+
+  it('drops the middle labels first as the room shrinks, then the first; the last day stays', () => {
+    expect(axisDays(30, 3)).toEqual([0, 15, 29])
+    expect(axisDays(30, 2)).toEqual([0, 29])
+    expect(axisDays(30, 1)).toEqual([29])
+    expect(axisDays(7, 4)).toEqual([0, 2, 4, 6])
+  })
+
+  it('at 175 % in a small window (a 180 CSS px plot), labels fit their slots without colliding', () => {
+    const shown = axisDays(30, 180 / AXIS_LABEL_SLOT_PX)
+    expect(shown.length).toBeLessThanOrEqual(3)
+    expect(shown[shown.length - 1]).toBe(29)
+    // Each gap between shown days is at least one label slot wide.
+    const px = (i: number): number => (i / 29) * 180
+    for (let k = 1; k < shown.length; k++) expect(px(shown[k]) - px(shown[k - 1])).toBeGreaterThanOrEqual(AXIS_LABEL_SLOT_PX)
   })
 })

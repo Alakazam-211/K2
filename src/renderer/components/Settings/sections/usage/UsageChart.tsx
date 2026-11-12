@@ -36,14 +36,25 @@ export function ChartLegend({ harnesses }: { harnesses: string[] }): React.JSX.E
   )
 }
 
+/** Room one day label needs on the axis, gap included ("Nov 12" in the
+ *  hint type), in CSS px. */
+export const AXIS_LABEL_SLOT_PX = 56
+
 /** Day labels: every day for a week or so, else about five on an even
- *  step, always the first and the last. */
-export function axisDays(n: number): number[] {
+ *  step, always the first and the last. `room` caps how many fit the axis
+ *  (a narrow card, the app zoomed in): the middle ones go first, then the
+ *  first; the last day always shows. */
+export function axisDays(n: number, room = Infinity): number[] {
   if (n <= 0) return []
-  if (n <= 8) return Array.from({ length: n }, (_, i) => i)
-  const step = Math.ceil((n - 1) / 4)
+  const most = Math.min(n <= 8 ? n : 5, Math.max(1, Math.floor(room)))
+  if (most >= n) return Array.from({ length: n }, (_, i) => i)
+  if (most === 1) return [n - 1]
+  const step = Math.ceil((n - 1) / (most - 1))
+  // A label close before the last one is left out: one within half a step,
+  // and, on a measured axis, one less than a label's room from it.
+  const last = Number.isFinite(room) ? Math.min(n - 1 - step / 2, (n - 1) * (1 - 1 / room) + 1e-9) : n - 1 - step / 2
   const out: number[] = []
-  for (let i = 0; i < n - 1 - step / 2; i += step) out.push(i)
+  for (let i = 0; i < last; i += step) out.push(i)
   out.push(n - 1)
   return out
 }
@@ -183,12 +194,14 @@ export function UsageChart({
       </div>
       <div className="relative mt-1.5 h-4 type-hint tabular-nums text-[var(--color-text-muted)]" aria-hidden="true">
         {width > 0 && !loading
-          ? axisDays(geo.columns.length).map((i) => {
+          ? axisDays(geo.columns.length, (geo.width - geo.plotLeft) / AXIS_LABEL_SLOT_PX).map((i, k, shown) => {
               const c = geo.columns[i]
               const mid = c.x + c.width / 2
-              // A long axis pins its first and last labels to the plot's edges.
-              const end = i === geo.columns.length - 1 && geo.columns.length > 8
-              const start = i === 0 && geo.columns.length > 8
+              // A long axis, or one with labels left out, pins its first and
+              // last labels to the plot's edges, so none sticks out of the card.
+              const pinned = geo.columns.length > 8 || shown.length < geo.columns.length
+              const end = k === shown.length - 1 && pinned
+              const start = k === 0 && i === 0 && pinned && shown.length > 1
               return (
                 <span
                   key={c.day}

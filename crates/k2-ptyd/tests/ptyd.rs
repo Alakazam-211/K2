@@ -597,6 +597,22 @@ fn held_listeners_queue_connections_and_fds_round_trip() {
     assert!(back.as_raw_fd() > 2);
 }
 
+/// A listener ptyd binds says where it is bound. On macOS the address
+/// length passed to `bind` was one byte short: the socket was at the right
+/// path, but the listener reported the path without its last byte.
+#[test]
+fn a_bound_listener_reports_the_path_it_was_given() {
+    let home = Home::new(false);
+    for name in ["a.sock", "ab.sock", "a-longer-name-for-the-socket.sock"] {
+        let path = home.root.join(name);
+        let fd = k2_ptyd::server::listen_unix(&path, 0o600, 8).unwrap_or_else(|e| panic!("listen at {}: {e}", path.display()));
+        let listener = std::os::unix::net::UnixListener::from(fd);
+        assert_eq!(listener.local_addr().unwrap().as_pathname(), Some(path.as_path()));
+        // And it is a socket a client reaches at that path.
+        std::os::unix::net::UnixStream::connect(&path).unwrap_or_else(|e| panic!("connect to {}: {e}", path.display()));
+    }
+}
+
 /// Several `hold_unix_listener` requests read in one batch (the daemon
 /// spawning sessions at once) each get their own listener fd, and the
 /// connection still passes fds afterwards. Before 0.46.12 the second reply

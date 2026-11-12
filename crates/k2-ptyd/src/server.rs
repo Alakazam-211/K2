@@ -347,7 +347,12 @@ pub fn listen_unix(path: &Path, mode: u32, backlog: i32) -> io::Result<OwnedFd> 
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
-    let len = (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
+    // Up to and including the path's NUL. The path starts at sun_path's
+    // offset, not after sa_family_t: macOS has a one-byte sun_len first, so
+    // sa_family_t is one byte there and the path still starts at 2. A length
+    // one short binds the right path but makes getsockname (and Rust's
+    // `local_addr().as_pathname()`) report it without its last byte.
+    let len = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
     // SAFETY: addr is a valid sockaddr_un of `len` bytes.
     cvt(unsafe { libc::bind(fd, &addr as *const _ as *const libc::sockaddr, len) })?;
     {

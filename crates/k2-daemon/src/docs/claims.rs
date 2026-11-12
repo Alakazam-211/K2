@@ -208,7 +208,7 @@ pub(super) fn bounced(s: &Session, c: &Call, e: &SessionError) -> CliResponse {
     let SessionError::Claimed { id, by, name, lines, remaining_ms, note } = e else {
         return routes::session_error(e);
     };
-    let DocCaller::Agent { project_id } = c.caller else {
+    let DocCaller::Agent { project_id, .. } = c.caller else {
         return routes::session_error(e);
     };
     let queued = s
@@ -323,7 +323,7 @@ mod tests {
 
     #[test]
     fn an_agents_last_read_guards_its_next_edit_and_a_person_is_never_guarded() {
-        let agent = DocCaller::Agent { project_id: "claims-test-a".into() };
+        let agent = DocCaller::Agent { project_id: "claims-test-a".into(), session: None };
         let k = key("claims-test.md");
         let mut argv = vec!["sed".to_string(), "-i".into(), "s/a/b/".into()];
         assert_eq!(guard_argv(&agent, &k, &mut argv), None, "never read: no guard");
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn last_reads_survive_a_restart_through_the_docs_store() {
         let (store, dir) = temp_store();
-        let agent = DocCaller::Agent { project_id: "lastread-agent".into() };
+        let agent = DocCaller::Agent { project_id: "lastread-agent".into(), session: None };
         let k = DocKey { space: "lastread-ws".into(), path: "notes/a.md".into() };
         record_read(&agent, &k, 1842);
         flush(&store);

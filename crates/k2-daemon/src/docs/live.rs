@@ -1,5 +1,6 @@
 //! `WS /cli/docs/live`: the Live view's socket (plan L2). One socket is one
-//! person's tab on one text doc, joined to the kit's session; the editor
+//! person's tab on one text doc, or (V3) one person watching a live deck
+//! ([`super::live_deck`]), joined to the kit's session; the editor
 //! component (K2 Cores, `k2-mpc-client`) drives it through the renderer's
 //! `LiveTransport` (`src/renderer/lib/docs-live-transport.ts`).
 //!
@@ -14,8 +15,11 @@
 //! `&workspace=`; `path=` is the same), `&root=source` (the only text root
 //! of the Markdown and text packs), `&resume=<version>` on a reconnect.
 //!
-//! **The contract is the kit's `client/WIRE.md` v2** (kit main `bea1885`;
-//! frames in [`super::live_wire`], pinned against the kit's golden JSON).
+//! **The contract is the kit's `client/WIRE.md` wire 3** (`welcome.wire`,
+//! kit v0.15.x; frames in [`super::live_wire`], pinned against the kit's
+//! golden JSON). K2's host events ride beside the kit's frames
+//! ([`super::host_events`]): `preview_ready`, `turn_end` (with
+//! `turn_idle_ms` in the welcome), and the comment relay.
 //!
 //! **Per socket, in order** (WIRE.md "Connecting"): resolve and jail the
 //! file, check its core is on and the person may read it, `open_file`,
@@ -342,6 +346,11 @@ struct Opened {
     changes: Receiver<ChangeEvent>,
     roster: Receiver<RosterEvent>,
     welcome: Value,
+    /// A live deck (watched; the preview service follows its changes).
+    deck: bool,
+    rel: String,
+    /// The doc's host events (and every turn end).
+    events: super::host_events::Subscription,
 }
 
 fn target_reason(r: &target::Refusal) -> CloseReason {
@@ -363,7 +372,7 @@ fn open_error(e: &SessionError) -> Closed {
         SessionError::PackMismatch { .. } => Closed::k2(
             CloseReason::Declined,
             "stored_as_any_file",
-            "it was opened as an any-file doc earlier (its text was refused then), and stays one",
+            "it was opened as an any-file doc earlier, and stays one",
         ),
         SessionError::Doc(DocError::Quarantined) => Closed {
             code: Some("doc_quarantined".into()),
@@ -411,10 +420,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         super::Unavailable::Failed(_) => Closed::k2(CloseReason::Declined, "docs_unavailable", u.message()),
         _ => restart(),
     })?;
-    let root = params.get("root").map(|r| r.trim()).filter(|r| !r.is_empty()).unwrap_or(ROOT);
-    if root != ROOT {
-        return Err(Closed::k2(CloseReason::Declined, "bad_request", format!("root must be `{ROOT}`")));
-    }
+    let root_param = params.get("root").map(|r| r.trim()).filter(|r| !r.is_empty());
     let resume = match params.get("resume").map(|r| r.trim()).filter(|r| !r.is_empty()) {
         Some(r) => Some(
             r.parse::<u64>()
@@ -428,9 +434,16 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     let t: Target = target::resolve(params.get("workspace").map(String::as_str), &path, caller.default_workspace())
         .map_err(|r| Closed::k2(target_reason(&r), r.code, r.message))?;
     let core = super::cores::core_of(t.tier);
-    // The Live view edits text; a deck (the Slides core) has no view for
-    // people yet, so it is refused like any other file that isn't text.
-    if !matches!(t.tier, Tier::Markdown | Tier::Text(_)) {
+    // The Live view edits text; a live deck (the Slides core on) is watched
+    // ([`super::live_deck`]); any other file is refused.
+    let deck = t.tier == Tier::Deck;
+    if deck && !super::live_deck::root_ok(root_param) {
+        return Err(Closed::k2(CloseReason::Declined, "bad_request", format!("a deck's root is `{}`", super::live_deck::ROOT)));
+    }
+    if !deck && root_param.is_some_and(|r| r != ROOT) {
+        return Err(Closed::k2(CloseReason::Declined, "bad_request", format!("root must be `{ROOT}`")));
+    }
+    if !deck && !matches!(t.tier, Tier::Markdown | Tier::Text(_)) {
         return Err(Closed::k2(
             CloseReason::Declined,
             "not_a_text_doc",
@@ -479,8 +492,41 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         let _ = s.leave(conn);
         open_error(&e)
     };
+    let events = super::host_events::subscribe(&key);
     let changes = session.subscribe(conn).map_err(|e| fail(&session, e))?;
     let roster = session.subscribe_roster(conn).map_err(|e| fail(&session, e))?;
+    if deck {
+        let version = session.status().map_err(|e| fail(&session, e))?.version;
+        let mut welcome = wire::welcome_frame(
+            super::live_deck::ROOT,
+            version,
+            None,
+            joined.client,
+            &pid,
+            wire::rights(DocRights::kit(rights)),
+            core,
+            t.tier.family(),
+            &t.rel,
+        );
+        if let Value::Obj(o) = &mut welcome {
+            o.extend(super::live_deck::welcome_extras(&t, &session, conn));
+        }
+        return Ok(Opened {
+            session,
+            conn,
+            pid,
+            key,
+            core,
+            client: joined.client,
+            version,
+            changes,
+            roster,
+            welcome,
+            deck: true,
+            rel: t.rel.clone(),
+            events,
+        });
+    }
     let read = session.read(conn).map_err(|e| fail(&session, e))?;
     let text = read
         .text_by_root
@@ -506,7 +552,21 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         t.tier.family(),
         &t.rel,
     );
-    Ok(Opened { session, conn, pid, key, core, client: joined.client, version: read.version, changes, roster, welcome })
+    Ok(Opened {
+        session,
+        conn,
+        pid,
+        key,
+        core,
+        client: joined.client,
+        version: read.version,
+        changes,
+        roster,
+        welcome,
+        deck: false,
+        rel: t.rel.clone(),
+        events,
+    })
 }
 
 // ── The socket ───────────────────────────────────────────────────────
@@ -850,6 +910,13 @@ struct Worker {
     seen: Seq,
     /// The person's credential: when it ends, so does this socket.
     login: crate::socket_access::LoginCheck,
+    /// A live deck: watched, never edited here ([`super::live_deck`]).
+    deck: bool,
+    rel: String,
+    /// Host events for this doc, and every turn end.
+    events: super::host_events::Subscription,
+    /// Turns this doc's changes carried (a `turn_end` is sent only for those).
+    turns: super::live_deck::Turns,
 }
 
 /// However the worker ends (a spawn that failed included), its connection
@@ -887,6 +954,10 @@ impl Worker {
             own: HashSet::new(),
             seen: o.version,
             login,
+            deck: o.deck,
+            rel: o.rel,
+            events: o.events,
+            turns: super::live_deck::Turns::default(),
         }
     }
 
@@ -1013,6 +1084,12 @@ impl Worker {
     /// Send one change on, unless it is this connection's own edit.
     fn forward(&mut self, e: ChangeEvent) -> Result<(), Stop> {
         self.seen = self.seen.max(e.version);
+        if let Some(t) = &e.turn {
+            self.turns.saw(t.as_str());
+        }
+        if self.deck {
+            super::live_deck::changed(&self.key, &self.rel, &self.session, self.conn);
+        }
         if self.own.contains(&e.version) {
             return Ok(());
         }
@@ -1058,6 +1135,12 @@ impl Worker {
                     self.drain_changes()?;
                     return Err(Stop::Close(self.why_gone()));
                 }
+            }
+        }
+        // K2's host events: previews, turn ends, the comment relay.
+        while let Ok(ev) = self.events.rx.try_recv() {
+            if let Some(f) = super::live_deck::host_event_frame(&ev, &self.pid, &self.key, &self.turns) {
+                self.send(f)?;
             }
         }
         if self.changes_gone && self.peeked.is_none() {
@@ -1175,6 +1258,11 @@ impl Worker {
             Ok(f) => f,
             Err(b) => return self.send(b.reply()),
         };
+        if self.deck {
+            if let Some(reply) = super::live_deck::refuse(&f) {
+                return self.send(reply);
+            }
+        }
         // Anything that writes or reads the doc asks the store first, never
         // only the last tick. Carets and view hints wait for the next poll.
         let touches_doc = matches!(

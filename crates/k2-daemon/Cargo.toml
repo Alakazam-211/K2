@@ -236,6 +236,15 @@ k2-ptyd = { path = "../k2-ptyd" }
 # links k2-core; the daemon embeds it like k2-ptyd (build.rs).
 k2-export = { path = "../k2-export" }
 
+# Live .pptx previews (rendering-data contract Item 8): the renderer's wire and
+# host-side runner (spawn, limits, watchdog). The worker binary rides beside the
+# daemon; one process per render, never in this one.
+k2-deckrender = { path = "../k2-deckrender" }
+# The preview cache is sealed at rest under the space's host cache key (kit
+# v0.15.0): the same AEAD and HMAC versions k2-vault links (no new crates).
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hmac = "0.12"
+
 # Remote desktop (prd-remote-desktop-tab-v1 D3): the wire to k2-deskd ("K2
 # Screen"). Only the protocol crate: k2-deskd itself (AppKit, x11rb, zbus)
 # is never linked; Linux release daemons embed its binary (build.rs).

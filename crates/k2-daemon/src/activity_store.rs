@@ -145,6 +145,9 @@ struct Effects {
     change: Change,
     event: Option<RowEvent>,
     touch: bool,
+    /// The docs' id of the turn this change ended, and when
+    /// ([`crate::docs::turn`]): `turn_end` on the docs sockets.
+    ended_turn: Option<(String, i64)>,
 }
 
 fn effects_for(st: &mut Store, sid: &str, change: Change, now: i64) -> Option<Effects> {
@@ -160,6 +163,7 @@ fn effects_for(st: &mut Store, sid: &str, change: Change, now: i64) -> Option<Ef
         evidence_at: row.evidence_at,
     });
     let project_id = row.facts.project_id.clone();
+    let ended_turn = change.turn_ended.and_then(|te| crate::docs::turn::of_row(row).map(|t| (t, te.at)));
     let mut touch = false;
     if change.lead_started_working {
         if let Some(pid) = project_id.as_deref() {
@@ -179,10 +183,14 @@ fn effects_for(st: &mut Store, sid: &str, change: Change, now: i64) -> Option<Ef
         change,
         event,
         touch,
+        ended_turn,
     })
 }
 
 fn run_effects(fx: Effects) {
+    if let Some((turn, at)) = &fx.ended_turn {
+        crate::docs::turn::ended(turn, fx.project_id.as_deref(), *at);
+    }
     if let Some(status) = fx.change.status_write {
         write_status(&fx.session_id, fx.pinned_project.as_deref(), status);
     }

@@ -381,6 +381,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/docs/mv", Member),
     post("/cli/docs/name", Member),
     post("/cli/docs/open", Member),
+    // Previews of a live deck (`docs/preview/route.rs`): the doc's read right
+    // (history for a version).
+    get("/cli/docs/preview", Member),
     get("/cli/docs/read", Member),
     post("/cli/docs/redo", Member),
     post("/cli/docs/restore", Member),

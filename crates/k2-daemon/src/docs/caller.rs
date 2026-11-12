@@ -30,15 +30,18 @@ pub enum DocCaller {
     /// The owner token, a login (by its person key: `owner` for the owner
     /// and the logins the owner linked), or a shell tab's passport.
     Person { key: String, via: &'static str },
-    /// An agent, by its workspace's project id.
-    Agent { project_id: String },
+    /// An agent, by its workspace's project id. `session`: the passport's
+    /// session (its activity row's key), for the host turn
+    /// ([`super::turn::current`]); `None` where K2 builds an agent caller
+    /// itself (a mention note, a name lookup).
+    Agent { project_id: String, session: Option<String> },
 }
 
 impl DocCaller {
     pub fn principal(&self) -> Principal {
         match self {
             DocCaller::Person { key, .. } => Principal::Person(key.clone()),
-            DocCaller::Agent { project_id } => Principal::Agent(project_id.clone()),
+            DocCaller::Agent { project_id, .. } => Principal::Agent(project_id.clone()),
         }
     }
 
@@ -49,7 +52,7 @@ impl DocCaller {
     /// The workspace a relative path resolves in when the call names none.
     pub fn default_workspace(&self) -> Option<&str> {
         match self {
-            DocCaller::Agent { project_id } => Some(project_id),
+            DocCaller::Agent { project_id, .. } => Some(project_id),
             DocCaller::Person { .. } => None,
         }
     }
@@ -74,7 +77,7 @@ impl DocCaller {
                     *via,
                 )
             }
-            DocCaller::Agent { project_id } => {
+            DocCaller::Agent { project_id, .. } => {
                 let (path, color) = {
                     let db = k2_core::db::shared();
                     let conn = db.lock();
@@ -163,7 +166,7 @@ pub fn from_passport(session_id: &str, principal: &HookPrincipal) -> Result<DocC
             "forbidden",
             "scoped session principal has no resolvable workspace",
         )),
-        Caller::Agent(a) => Ok(DocCaller::Agent { project_id: a.project_id }),
+        Caller::Agent(a) => Ok(DocCaller::Agent { project_id: a.project_id, session: Some(session_id.to_string()) }),
         Caller::WrongCredential => Err(refusal(
             "403 Forbidden",
             "wrong_credential",
@@ -185,8 +188,8 @@ mod tests {
     #[test]
     fn pids_follow_the_principal() {
         assert_eq!(owner().pid(), "person:owner");
-        assert_eq!(DocCaller::Agent { project_id: "p1".into() }.pid(), "agent:p1");
-        assert_eq!(DocCaller::Agent { project_id: "p1".into() }.default_workspace(), Some("p1"));
+        assert_eq!(DocCaller::Agent { project_id: "p1".into(), session: None }.pid(), "agent:p1");
+        assert_eq!(DocCaller::Agent { project_id: "p1".into(), session: None }.default_workspace(), Some("p1"));
         assert_eq!(owner().default_workspace(), None);
     }
 

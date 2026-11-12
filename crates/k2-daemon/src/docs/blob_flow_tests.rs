@@ -367,11 +367,11 @@ fn purge_and_erasure_are_owner_only() {
     };
     let params = HashMap::new();
     let input = routes::Input { params: &params, body: json!({ "all": true }) };
-    let agent = super::caller::DocCaller::Agent { project_id: key.space.clone() };
+    let agent = super::caller::DocCaller::Agent { project_id: key.space.clone(), session: None };
     let person = super::caller::DocCaller::Person { key: "sam".into(), via: "cli" };
     let owner = super::caller::owner();
     for (caller, rights, ok) in [(&agent, DocRights::OWNER, false), (&person, DocRights::FULL, false), (&owner, DocRights::OWNER, true)] {
-        let c = routes::Call { caller, on_behalf: None, target: &target, input: &input, rights };
+        let c = routes::Call { caller, on_behalf: None, target: &target, input: &input, rights, turn: None };
         match super::annotations::owner_only(&c) {
             Ok(()) => assert!(ok, "{caller:?} passed"),
             Err(r) => {

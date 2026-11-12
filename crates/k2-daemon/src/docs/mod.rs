@@ -19,10 +19,14 @@
 //! | [`export`] | `k2 doc export`: the kit's export verb (P24), jobs, placement, audit |
 //! | [`export_worker`] | the `k2-export` worker: which binary, its hello, limits, slots |
 //! | [`live`] | `WS /cli/docs/live`: the Live view's socket (plan L2), one person's tab joined to the kit's session |
-//! | [`live_wire`] | that socket's JSON frames |
+//! | [`live_wire`] | that socket's JSON frames (wire 3) |
+//! | [`live_deck`] | that socket on a live deck: watched, with previews and host events |
 //! | [`blob_packs`] | which pack a tier-0 file opens with (PSD/PSB files: the PSD pack, with a layer index) and its verbs |
 //! | [`indexer`] | the structure indexer (jobs in the `k2-export` worker) and the blob-doc change events |
 //! | [`annotations`] | comments: mention notes, the owner's purge and participant erasure |
+//! | [`turn`] | the host turn of an agent's write (from its activity row), and `turn_end` |
+//! | [`host_events`] | host events on the docs socket: `preview_ready`, `turn_end`, comment relay |
+//! | [`preview`] | live previews: one host service, a renderer per doc type (`.pptx` today) |
 //!
 //! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
 //! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
@@ -49,13 +53,17 @@ pub mod cores;
 pub mod export;
 pub mod export_worker;
 pub mod host;
+pub mod host_events;
 pub mod indexer;
 pub mod live;
+pub mod live_deck;
 pub mod live_wire;
+pub mod preview;
 pub mod routes;
 pub mod shares;
 pub mod target;
 pub mod tier0;
+pub mod turn;
 pub mod watch;
 
 use std::collections::{HashMap, HashSet};
@@ -439,6 +447,9 @@ impl Runtime {
         self.manager.rekey(old, new.clone())?;
         claims::rekey(self.store().as_deref(), old, new);
         live::doc_moved(old, new);
+        // Previews follow the doc (contract Item 8: a rename never leaves
+        // them at the old key).
+        preview::service::doc_moved(old, new);
         let mut set = self.opened.lock().expect("docs opened set");
         if let Some(p) = set.remove(old) {
             if old.path.starts_with(".k2/") {
@@ -552,6 +563,8 @@ impl Runtime {
         drop(store);
         self.collect_blobs();
         export::sweep_leftovers();
+        // The preview cache's cap (contract Item 8, hook 5).
+        preview::service::upkeep();
         for (space, _) in spaces {
             if workspace_exists(&space) {
                 continue;
@@ -573,7 +586,12 @@ impl Runtime {
                     // stored under it: the same bytes stored again get an
                     // unrelated id. The space row stays until this worked,
                     // so a failure retries on the next sweep.
-                    if !self.purge_space_key(&space) || !claims::forget_space(self.store().as_deref(), &space) {
+                    // Its previews too, before the space row goes (contract
+                    // Item 8, hook 3: a failure retries on the next sweep).
+                    if !self.purge_space_key(&space)
+                        || !claims::forget_space(self.store().as_deref(), &space)
+                        || !preview::service::space_removed(&space)
+                    {
                         continue;
                     }
                     if let Some(store) = self.store() {
@@ -631,6 +649,15 @@ impl Runtime {
         if let Err(e) = blobs.gc() {
             log_debug!("[docs] WARN: blob gc: {e}");
         }
+    }
+}
+
+/// Run the orphan sweep now (removed workspaces' docs, keys and previews),
+/// rather than on its minute tick. For headless tests.
+#[doc(hidden)]
+pub fn sweep_orphans_now() {
+    if let Ok(rt) = runtime() {
+        rt.sweep_orphans();
     }
 }
 

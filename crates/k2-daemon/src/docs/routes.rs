@@ -73,8 +73,8 @@ use serde_json::{json, Value};
 use k2_mpc_base::session::position::{self, At, LineCol, LineRange};
 use k2_mpc_base::session::{
     Approval, ApprovalState, ClaimId, ClaimInfo, ClaimPolicy, ConflictRegion, DiskState, EditOptions, EditResult, EditWithError,
-    LogItem, LogQuery, Need, Notes, RosterEntry, Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest,
-    VersionInfo, WriteOutcome,
+    HistoryOptions, LogItem, LogQuery, Need, Notes, RosterEntry, Role, Session, SessionError, Stay, UndoMode, UndoOutcome,
+    UndoRequest, VersionInfo, WriteOptions, WriteOutcome,
 };
 use k2_core::log_debug;
 use k2_mpc_base::blob::BlobError;
@@ -140,7 +140,7 @@ pub const ROUTES: &[&str] = &[
     STATUS, super::cores::CORES_ROUTE, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
-    super::annotations::PURGE, super::annotations::ERASE,
+    super::annotations::PURGE, super::annotations::ERASE, super::preview::route::PREVIEW,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -389,7 +389,12 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             k2_mpc_base::tools::exit::REFUSED,
         );
     }
-    let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
+    let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights, turn: super::turn::current(caller) };
+    // Previews (contract Item 8): the doc's renderer, read right checked above
+    // (history for a version, in the route).
+    if path == super::preview::route::PREVIEW {
+        return super::preview::route::handle(&rt, &call);
+    }
     // `k2 doc export` (P24), on either tier: the kit's export verb decides
     // which right (read; history with a version).
     if path == super::export::EXPORT || path == super::export::TARGETS {
@@ -584,13 +589,36 @@ pub(super) fn provenance_field(params: &HashMap<String, String>, body: &Value) -
 }
 
 /// One doc call, resolved.
-pub(super) struct Call<'a> {
+pub(crate) struct Call<'a> {
     pub(super) caller: &'a DocCaller,
     /// `person:<key>` when an agent acts for that person.
     pub(super) on_behalf: Option<&'a str>,
     pub(super) target: &'a Target,
     pub(super) input: &'a Input<'a>,
     pub(super) rights: DocRights,
+    /// The host turn of an agent's call ([`super::turn::current`]), on every
+    /// write the call makes; `None` for people and shells. Never read from
+    /// the request.
+    pub(super) turn: Option<k2_mpc_base::Turn>,
+}
+
+impl Call<'_> {
+    /// [`WriteOptions`] with this caller's claim policy and turn.
+    fn write_options(&self) -> WriteOptions {
+        let o = WriteOptions::new().policy(policy(self));
+        match self.turn {
+            Some(t) => o.turn(t),
+            None => o,
+        }
+    }
+
+    /// [`HistoryOptions`] (revert, restore) with this call's turn.
+    fn history_options(&self) -> HistoryOptions {
+        match self.turn {
+            Some(t) => HistoryOptions::new().turn(t),
+            None => HistoryOptions::new(),
+        }
+    }
 }
 
 /// K2's own rights check before the kit's (the kit re-asks on every call):
@@ -647,7 +675,7 @@ pub(crate) fn rights_or_refusal(
 /// The file's multiplayer core must be on ([`super::cores::gate`], MC-4):
 /// checked first, so a loaded session of a core that was turned off is
 /// never handed out, on any path (the `Unloaded` retry, export's fallback).
-pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, OpenError> {
+pub(crate) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, OpenError> {
     super::cores::gate(t).map_err(OpenError::CoreOff)?;
     let key = t.key();
     if let Some(s) = rt.get(&key) {
@@ -677,7 +705,7 @@ pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>,
 /// Why [`open`] gave no session: the file's core is off (K2's own refusal,
 /// never the kit's `Declined`, which would send the file to tier 0), or the
 /// kit's error.
-pub(super) enum OpenError {
+pub(crate) enum OpenError {
     CoreOff(CliResponse),
     Session(SessionError),
 }
@@ -1258,6 +1286,9 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 Some(other) => return Err(VerbError::Response(bad(format!("mode must be all, partial or drop (got {other})")))),
             };
             let mut req = UndoRequest::steps(steps).mode(mode);
+            if let Some(t) = c.turn {
+                req = req.turn(t);
+            }
             if let Some(p) = input.str("forPerson").filter(|p| !p.trim().is_empty()) {
                 req = req.for_person(person_pid(&p).map_err(VerbError::Response)?);
             }
@@ -1273,7 +1304,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 .ok_or_else(|| VerbError::Response(bad("change is required: the change number from k2 doc log")))?;
             let partial = input.flag("partial");
             let j = join(s, c, Stay::UntilIdle)?;
-            let out = s.revert(j.conn, change, partial)?;
+            let out = s.revert_with(j.conn, change, partial, &c.history_options())?;
             own_change(c, &out);
             Ok(undo_response(c, out))
         }
@@ -1283,7 +1314,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 .map_err(VerbError::Response)?
                 .ok_or_else(|| VerbError::Response(bad("version is required: a version id from k2 doc versions")))?;
             let j = join(s, c, Stay::UntilIdle)?;
-            let r = s.restore(j.conn, v)?;
+            let r = s.restore_with(j.conn, v, &c.history_options())?;
             super::claims::record_read(c.caller, &t.key(), r.version);
             edit_reply(s, c, &r, Some(("restored", json!(v))))
         }
@@ -1420,6 +1451,9 @@ fn edit(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     };
     let j = join(s, c, Stay::UntilIdle)?;
     let mut opts = EditOptions::new().policy(policy(c));
+    if let Some(t) = c.turn {
+        opts = opts.turn(t);
+    }
     if let Some(v) = if_version {
         opts = opts.if_version(v);
     }
@@ -1464,7 +1498,7 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     let j = join(s, c, Stay::UntilIdle)?;
     let key = c.target.key();
     if base.trim() == "live" {
-        let r = s.replace_text_with(j.conn, ROOT, &text, policy(c))?;
+        let r = s.replace_text_with_options(j.conn, ROOT, &text, &c.write_options())?;
         super::claims::record_read(c.caller, &key, r.version);
         let warning = matches!(c.caller, DocCaller::Agent { .. }).then(|| {
             json!("--base live replaced whatever was there, including other people's edits since you read it; use --base <version> to merge")
@@ -1481,7 +1515,7 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         return Ok(reply);
     }
     let base: u64 = base.trim().parse().map_err(|_| VerbError::Response(bad("base must be a version number or \"live\"")))?;
-    let report = s.write_base_with(j.conn, ROOT, base, &text, policy(c))?;
+    let report = s.write_base_with_options(j.conn, ROOT, base, &text, &c.write_options())?;
     let out = report.outcome;
     let exit = out.exit();
     match &out {
@@ -1664,7 +1698,10 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     // it named one): an edit from a stale read is refused, exit 1.
     let guarded = if is_edit { super::claims::guard_argv(c.caller, &key, &mut argv) } else { None };
     let j = join(s, c, Stay::UntilIdle)?;
-    let opts = k2_mpc_base::tools::ToolOptions::new().policy(policy(c));
+    let mut opts = k2_mpc_base::tools::ToolOptions::new().policy(policy(c));
+    if let Some(t) = c.turn {
+        opts = opts.turn(t);
+    }
     let out = match s.run_tool_with(j.conn, ROOT, &argv, &stdin, &opts) {
         Ok(o) => o,
         Err(k2_mpc_base::tools::ToolRunError::Tool(e)) => return Ok(ok(tool_refused(c.target, &argv[0], &e))),
@@ -1731,7 +1768,7 @@ pub(super) fn pid_label(pid: &str) -> String {
             format!("{} (person)", k2_core::person_name::effective(&k, &people).display_name)
         }
         Some(p @ Principal::Agent(_)) => {
-            format!("{} (agent)", DocCaller::Agent { project_id: pid_project(&p) }.participant(None).name)
+            format!("{} (agent)", DocCaller::Agent { project_id: pid_project(&p), session: None }.participant(None).name)
         }
         None => pid.to_string(),
     }
@@ -2414,7 +2451,7 @@ mod tests {
     /// touched (this test has no runtime: reaching it would answer 503).
     #[test]
     fn a_provenance_field_is_refused_on_every_route_and_never_reaches_the_kit() {
-        let agent = DocCaller::Agent { project_id: "p1".into() };
+        let agent = DocCaller::Agent { project_id: "p1".into(), session: None };
         let owner = super::super::caller::owner();
         for r in ROUTES {
             let m = if is_post_route(r) { "POST" } else { "GET" };
@@ -2442,7 +2479,7 @@ mod tests {
 
     #[test]
     fn an_agent_never_shares_and_a_person_never_acts_on_behalf() {
-        let agent = DocCaller::Agent { project_id: "p1".into() };
+        let agent = DocCaller::Agent { project_id: "p1".into(), session: None };
         let params = HashMap::new();
         for (m, r) in [("GET", SHARES), ("POST", SHARE), ("POST", UNSHARE)] {
             let resp = handle(m, r, &params, br#"{"workspace":"x","path":"a.md","with":"y"}"#, &agent);

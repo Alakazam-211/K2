@@ -1,0 +1,542 @@
+//! The preview service: which images are current, what to draw, drawing it
+//! within the host's limits, and telling the doc's sockets.
+//!
+//! - **Snapshots.** A doc's bytes at a rev (`file_now`) or a cut version
+//!   (`file_at`) are listed by the type's renderer, and each container's raw
+//!   digest is keyed: `render_hash` = 32 hex of HMAC-SHA256 under the space's
+//!   host cache key for [`HASH_LABEL`] (contract Item 1: the raw digest
+//!   never leaves the host). One snapshot per doc head and per version is
+//!   memoised ([`MEMO`] docs at most), so a listing at an unchanged rev
+//!   costs nothing.
+//! - **Only dirty slides.** When a doc's head moves, the containers whose
+//!   hash changed are re-drawn at the widths someone already looked at
+//!   (their cached widths); untouched containers keep their images. Debounced
+//!   per doc ([`DEBOUNCE`] quiet, [`DEBOUNCE_MAX`] at most): one listing per
+//!   burst of changes serves every dirty container at that rev.
+//! - **Slots and the host cap.** [`SLOTS`] renders at once, one worker
+//!   process each (no pool), [`QUEUE`] waiting; past them a request stays
+//!   `rendering` until asked again. The renderer's own wall ([`WALL`]) is
+//!   enforced in its worker; the host also gives each render [`HOST_CAP`]
+//!   and reports `timeout` past it, whatever the worker does.
+//! - **The push.** Each landed or failed render is `preview_ready` on the
+//!   doc's sockets ([`super::super::host_events`]).
+//! - **Purge.** [`doc_purged`], [`space_removed`], [`doc_moved`] and
+//!   [`upkeep`] are the hooks' service side (memo, failures, audit), with
+//!   [`super::cache`] doing the files.
+
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+
+use k2_core::log_debug;
+use k2_mpc_base::blob::BlobStore;
+use k2_mpc_base::session::{ConnId, Session};
+use k2_mpc_base::store::DocKey;
+
+use super::{cache, Container, FailCode, Failed, NoSideFiles, Page, PreviewRenderer, Source, Width};
+use crate::docs::host;
+use crate::docs::host_events::{self, HostEvent};
+
+/// The host cache key's purpose for render hashes.
+pub const HASH_LABEL: &[u8] = b"k2/doc-previews/render-hash/v1";
+/// Renders at once.
+pub const SLOTS: usize = 2;
+/// Renders waiting for a slot.
+pub const QUEUE: usize = 256;
+/// The renderer's own wall per render (its worker enforces it).
+pub const WALL: Duration = Duration::from_secs(20);
+/// The host's own cap per render, past the worker's wall.
+pub const HOST_CAP: Duration = Duration::from_secs(30);
+/// Snapshots kept.
+pub const MEMO: usize = 32;
+/// A doc's changes are listed once they have been quiet this long...
+pub const DEBOUNCE: Duration = Duration::from_millis(300);
+/// ...or this long after the first, whichever comes first.
+pub const DEBOUNCE_MAX: Duration = Duration::from_secs(2);
+/// The Access Audit event for dropped previews (counts only).
+pub const AUDIT_DROPPED: &str = "doc-previews-dropped";
+
+/// One container of a snapshot, with its keyed hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Keyed {
+    pub c: Container,
+    pub hash: String,
+}
+
+/// A doc's previewable state at one rev (or one cut version).
+pub struct Snapshot {
+    pub key: DocKey,
+    /// The doc version the bytes are.
+    pub rev: u64,
+    /// `Some` for a cut version's snapshot.
+    pub version: Option<u64>,
+    pub renderer: &'static dyn PreviewRenderer,
+    pub build: String,
+    pub page: Option<Page>,
+    pub containers: Vec<Keyed>,
+    pub bytes: Arc<Vec<u8>>,
+}
+
+impl Snapshot {
+    pub fn container(&self, address: &str) -> Option<&Keyed> {
+        self.containers.iter().find(|k| k.c.key == address)
+    }
+}
+
+/// Why there is no snapshot.
+#[derive(Debug)]
+pub enum SnapError {
+    /// The kit refused the read (rights, a version without its carrier...).
+    Session(k2_mpc_base::session::SessionError),
+    /// The renderer couldn't list the bytes.
+    Failed(Failed),
+    /// No blob store (any-file docs off): no host cache key, so no previews.
+    NoKey(String),
+}
+
+fn memo() -> &'static Mutex<HashMap<(DocKey, Option<u64>), Arc<Snapshot>>> {
+    static M: OnceLock<Mutex<HashMap<(DocKey, Option<u64>), Arc<Snapshot>>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 32 hex of HMAC-SHA256(key, digest).
+pub fn keyed_hash(secret: &[u8; 32], digest: &[u8; 32]) -> String {
+    let mut m = <Hmac<Sha256> as Mac>::new_from_slice(secret).expect("HMAC takes any key length");
+    m.update(digest);
+    m.finalize().into_bytes().iter().take(16).map(|b| format!("{b:02x}")).collect()
+}
+
+/// List `bytes` and key every digest: a fresh snapshot.
+pub fn list(
+    blobs: &BlobStore,
+    renderer: &'static dyn PreviewRenderer,
+    key: &DocKey,
+    rev: u64,
+    version: Option<u64>,
+    bytes: Vec<u8>,
+) -> Result<Snapshot, SnapError> {
+    let listing = renderer.list(&bytes).map_err(SnapError::Failed)?;
+    let k = blobs.host_cache_key(&key.space, HASH_LABEL).map_err(|e| SnapError::NoKey(e.to_string()))?;
+    let containers =
+        listing.containers.into_iter().map(|c| Keyed { hash: keyed_hash(k.secret_bytes(), &c.digest), c }).collect();
+    Ok(Snapshot {
+        key: key.clone(),
+        rev,
+        version,
+        renderer,
+        build: renderer.build(),
+        page: listing.page,
+        containers,
+        bytes: Arc::new(bytes),
+    })
+}
+
+/// The doc's head snapshot, read through `conn` (needs read). At an
+/// unchanged rev the memo answers without reading the file. When the head
+/// moved, its dirty containers are queued at the widths already looked at.
+pub fn head(
+    blobs: &Arc<BlobStore>,
+    renderer: &'static dyn PreviewRenderer,
+    key: &DocKey,
+    session: &Session,
+    conn: ConnId,
+) -> Result<Arc<Snapshot>, SnapError> {
+    let now = session.status().map_err(SnapError::Session)?.version;
+    let prev = memo().lock().unwrap_or_else(|p| p.into_inner()).get(&(key.clone(), None)).cloned();
+    if let Some(p) = prev.as_ref().filter(|p| p.rev == now && p.build == renderer.build()) {
+        return Ok(p.clone());
+    }
+    let file = session.file_now(conn).map_err(SnapError::Session)?;
+    let snap = Arc::new(list(blobs, renderer, key, file.version, None, file.bytes)?);
+    if let Some(prev) = prev {
+        for k in dirty(&prev, &snap) {
+            for w in cache::widths_cached(key, &k.c.key, &snap.build) {
+                request(blobs, &snap, &k.c.key, w);
+            }
+        }
+    }
+    remember(snap.clone());
+    Ok(snap)
+}
+
+/// A cut version's snapshot, through `conn` (the kit checks history).
+pub fn at_version(
+    blobs: &Arc<BlobStore>,
+    renderer: &'static dyn PreviewRenderer,
+    key: &DocKey,
+    session: &Session,
+    conn: ConnId,
+    version: u64,
+) -> Result<Arc<Snapshot>, SnapError> {
+    if let Some(s) = memo().lock().unwrap_or_else(|p| p.into_inner()).get(&(key.clone(), Some(version))).cloned() {
+        // The version's bytes never change; the kit still re-checks the right.
+        session.file_at(conn, version).map_err(SnapError::Session)?;
+        return Ok(s);
+    }
+    let file = session.file_at(conn, version).map_err(SnapError::Session)?;
+    let snap = Arc::new(list(blobs, renderer, key, file.version, Some(version), file.bytes)?);
+    remember(snap.clone());
+    Ok(snap)
+}
+
+fn remember(snap: Arc<Snapshot>) {
+    let mut m = memo().lock().unwrap_or_else(|p| p.into_inner());
+    if m.len() >= MEMO {
+        // Drop cut versions first, then anything: a snapshot is cheap to make again.
+        let victim = m.keys().find(|(_, v)| v.is_some()).or_else(|| m.keys().next()).cloned();
+        if let Some(v) = victim {
+            m.remove(&v);
+        }
+    }
+    m.insert((snap.key.clone(), snap.version), snap);
+}
+
+/// The containers of `next` whose hash isn't `prev`'s for them (new ones included).
+pub fn dirty<'a>(prev: &Snapshot, next: &'a Snapshot) -> Vec<&'a Keyed> {
+    next.containers.iter().filter(|k| prev.container(&k.c.key).is_none_or(|p| p.hash != k.hash)).collect()
+}
+
+// ── The queue ────────────────────────────────────────────────────────
+
+type JobId = (DocKey, String, String, Width);
+
+struct Job {
+    id: JobId,
+    snap: Arc<Snapshot>,
+    container: Container,
+    blobs: Arc<BlobStore>,
+}
+
+#[derive(Default)]
+struct Queue {
+    waiting: VecDeque<Job>,
+    running: HashSet<JobId>,
+    failed: HashMap<JobId, FailCode>,
+    workers: usize,
+}
+
+fn queue() -> &'static (Mutex<Queue>, Condvar) {
+    static Q: OnceLock<(Mutex<Queue>, Condvar)> = OnceLock::new();
+    Q.get_or_init(|| (Mutex::new(Queue::default()), Condvar::new()))
+}
+
+/// What a request found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Requested {
+    /// Queued now, or already waiting or drawing.
+    Rendering,
+    /// The last render of exactly this failed (asked again: it isn't retried
+    /// until the doc changes or the daemon restarts).
+    Failed(FailCode),
+    /// The queue is full: ask again later.
+    Busy,
+    /// No such container in the snapshot.
+    NoContainer,
+}
+
+/// Queue a render of `container` at `width` from `snap`.
+pub fn request(blobs: &Arc<BlobStore>, snap: &Arc<Snapshot>, container: &str, width: Width) -> Requested {
+    let Some(k) = snap.container(container) else { return Requested::NoContainer };
+    let id: JobId = (snap.key.clone(), k.c.key.clone(), k.hash.clone(), width);
+    let (lock, cv) = queue();
+    let mut q = lock.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(code) = q.failed.get(&id) {
+        return Requested::Failed(*code);
+    }
+    if q.running.contains(&id) || q.waiting.iter().any(|j| j.id == id) {
+        return Requested::Rendering;
+    }
+    if q.waiting.len() >= QUEUE {
+        return Requested::Busy;
+    }
+    q.waiting.push_back(Job { id, snap: snap.clone(), container: k.c.clone(), blobs: blobs.clone() });
+    if q.workers < SLOTS {
+        q.workers += 1;
+        let spawned = std::thread::Builder::new().name("k2-docs-preview".into()).spawn(worker);
+        if let Err(e) = spawned {
+            q.workers -= 1;
+            log_debug!("[docs/preview] WARN: no render thread: {e}");
+        }
+    }
+    cv.notify_one();
+    Requested::Rendering
+}
+
+/// Whether a render of exactly this is waiting or drawing.
+pub fn rendering(key: &DocKey, container: &str, hash: &str, width: Width) -> bool {
+    let id: JobId = (key.clone(), container.to_string(), hash.to_string(), width);
+    let q = queue().0.lock().unwrap_or_else(|p| p.into_inner());
+    q.running.contains(&id) || q.waiting.iter().any(|j| j.id == id)
+}
+
+/// A worker thread: draws until the queue has been empty for a minute.
+fn worker() {
+    let (lock, cv) = queue();
+    loop {
+        let job = {
+            let mut q = lock.lock().unwrap_or_else(|p| p.into_inner());
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                if let Some(j) = q.waiting.pop_front() {
+                    q.running.insert(j.id.clone());
+                    break Some(j);
+                }
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    q.workers -= 1;
+                    break None;
+                }
+                q = cv.wait_timeout(q, left).unwrap_or_else(|p| p.into_inner()).0;
+            }
+        };
+        let Some(job) = job else { return };
+        let outcome = draw(&job);
+        let mut q = lock.lock().unwrap_or_else(|p| p.into_inner());
+        q.running.remove(&job.id);
+        match outcome {
+            Ok(()) => {
+                q.failed.remove(&job.id);
+            }
+            Err(code) => {
+                if q.failed.len() >= 4096 {
+                    q.failed.clear();
+                }
+                q.failed.insert(job.id.clone(), code);
+            }
+        }
+    }
+}
+
+/// Draw one job under the host cap, cache it, and push `preview_ready`.
+fn draw(job: &Job) -> Result<(), FailCode> {
+    let (key, _, hash, width) = &job.id;
+    let snap = job.snap.clone();
+    let container = job.container.clone();
+    let w = *width;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("k2-docs-preview-render".into()).spawn(move || {
+        let src = Source { doc: &snap.bytes, side: &NoSideFiles };
+        let _ = tx.send(snap.renderer.render(&src, &container, w, WALL));
+    });
+    let result = match spawned {
+        Ok(_) => match rx.recv_timeout(HOST_CAP) {
+            Ok(r) => r,
+            Err(_) => Err(Failed::new(FailCode::Timeout, format!("no answer within the host's {} s", HOST_CAP.as_secs()))),
+        },
+        Err(e) => Err(Failed::new(FailCode::RendererError, format!("no render thread: {e}"))),
+    };
+    let rendered_at_ms = host::now_ms();
+    let outcome = match result {
+        Ok(img) => {
+            let meta = meta_json(&job.snap, &job.container.key, hash, w, &img, rendered_at_ms);
+            match cache::put(&job.blobs, key, &job.container.key, hash, w, &job.snap.build, &meta, &img.bytes) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    log_debug!("[docs/preview] WARN: caching a preview of {}: {e}", host::key_label(key));
+                    Err(FailCode::RendererError)
+                }
+            }
+        }
+        Err(f) => {
+            log_debug!("[docs/preview] {} {} at {}: {} ({})", host::key_label(key), job.container.key, w.as_str(), f.code.as_str(), f.detail);
+            Err(f.code)
+        }
+    };
+    host_events::publish(HostEvent::PreviewReady {
+        key: key.clone(),
+        container: job.container.key.clone(),
+        render_hash: hash.clone(),
+        width: w.as_str(),
+        state: if outcome.is_ok() { "ready" } else { "failed" },
+        failed: outcome.err().map(FailCode::as_str),
+        rev: job.snap.rev,
+        rendered_at_ms,
+    });
+    outcome
+}
+
+/// The metadata kept with an image and answered with it (contract Item 8's
+/// `Preview` table).
+pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, img: &super::Image, rendered_at_ms: u64) -> serde_json::Value {
+    serde_json::json!({
+        "kind": snap.renderer.kind(),
+        "container": container,
+        "render_hash": hash,
+        "page": snap.page.map(|p| serde_json::json!({ "w": p.w, "h": p.h, "unit": p.unit })),
+        "width": width.as_str(),
+        "size": { "w": img.width, "h": img.height },
+        "format": img.format,
+        "mime": img.mime,
+        "rev": snap.rev,
+        "fonts_substituted": img.fonts_substituted.iter().map(|(a, d)| serde_json::json!({ "asked": a, "drawn": d })).collect::<Vec<_>>(),
+        "render_ms": img.render_ms,
+        "rendered_at_ms": rendered_at_ms,
+    })
+}
+
+// ── Debounced re-listing on change (a socket watching the doc) ───────
+
+struct Pending {
+    session: Arc<Session>,
+    conn: ConnId,
+    blobs: Arc<BlobStore>,
+    renderer: &'static dyn PreviewRenderer,
+    first: Instant,
+    last: Instant,
+}
+
+fn pending() -> &'static Mutex<HashMap<DocKey, Pending>> {
+    static P: OnceLock<Mutex<HashMap<DocKey, Pending>>> = OnceLock::new();
+    P.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// A watched doc changed (a docs socket forwarded a change): list it again
+/// once the burst is over, through that socket's connection (it has read),
+/// and queue its dirty containers.
+pub fn doc_changed(blobs: Arc<BlobStore>, renderer: &'static dyn PreviewRenderer, key: &DocKey, session: Arc<Session>, conn: ConnId) {
+    let now = Instant::now();
+    let mut p = pending().lock().unwrap_or_else(|p| p.into_inner());
+    let start = p.is_empty();
+    p.entry(key.clone())
+        .and_modify(|e| {
+            e.last = now;
+            e.session = session.clone();
+            e.conn = conn;
+        })
+        .or_insert(Pending { session, conn, blobs, renderer, first: now, last: now });
+    if start {
+        let _ = std::thread::Builder::new().name("k2-docs-preview-debounce".into()).spawn(debounce);
+    }
+}
+
+fn debounce() {
+    loop {
+        std::thread::sleep(Duration::from_millis(100));
+        let due: Vec<(DocKey, Pending)> = {
+            let mut p = pending().lock().unwrap_or_else(|p| p.into_inner());
+            let now = Instant::now();
+            let keys: Vec<DocKey> = p
+                .iter()
+                .filter(|(_, e)| now.duration_since(e.last) >= DEBOUNCE || now.duration_since(e.first) >= DEBOUNCE_MAX)
+                .map(|(k, _)| k.clone())
+                .collect();
+            let due = keys.into_iter().filter_map(|k| p.remove(&k).map(|e| (k, e))).collect();
+            if p.is_empty() {
+                // This thread ends; the next change starts another. Run what is due first.
+                drop(p);
+                run_due(due);
+                return;
+            }
+            due
+        };
+        run_due(due);
+    }
+}
+
+fn run_due(due: Vec<(DocKey, Pending)>) {
+    for (k, e) in due {
+        if let Err(err) = head(&e.blobs, e.renderer, &k, &e.session, e.conn) {
+            log_debug!("[docs/preview] {} not listed after a change: {err:?}", host::key_label(&k));
+        }
+    }
+}
+
+// ── Purge hooks (service side) ───────────────────────────────────────
+
+/// Audit a drop, counts only, never content.
+pub fn audit_drop(reason: &str, space: &str, key: Option<&DocKey>, entries: usize) {
+    if entries == 0 {
+        return;
+    }
+    let doc = key.map(host::key_label).unwrap_or_else(|| "-".into());
+    host::audit(AUDIT_DROPPED, "k2", format!("space={space} doc={doc} entries={entries} reason={reason}"));
+}
+
+fn forget(pred: impl Fn(&DocKey) -> bool) {
+    memo().lock().unwrap_or_else(|p| p.into_inner()).retain(|(k, _), _| !pred(k));
+    let mut q = queue().0.lock().unwrap_or_else(|p| p.into_inner());
+    q.waiting.retain(|j| !pred(&j.id.0));
+    q.failed.retain(|id, _| !pred(&id.0));
+    pending().lock().unwrap_or_else(|p| p.into_inner()).retain(|k, _| !pred(k));
+}
+
+/// A doc's content was purged or erased (any scope: purged text is in the
+/// pixels), or the doc was deleted: its previews go. Returns the count.
+pub fn doc_purged(key: &DocKey, reason: &str) -> usize {
+    forget(|k| k == key);
+    let n = cache::drop_doc(key);
+    audit_drop(reason, &key.space, Some(key), n);
+    n
+}
+
+/// A removed workspace: its whole preview folder, before its space row
+/// goes. False when the folder is still there (the sweep retries).
+pub fn space_removed(space: &str) -> bool {
+    forget(|k| k.space == space);
+    match cache::drop_space(space) {
+        Ok(n) => {
+            audit_drop("workspace_removed", space, None, n);
+            true
+        }
+        Err(e) => {
+            log_debug!("[docs/preview] WARN: {e}");
+            false
+        }
+    }
+}
+
+/// A rename: the previews follow the doc (a renamed doc keeps its hashes).
+pub fn doc_moved(old: &DocKey, new: &DocKey) {
+    forget(|k| k == old);
+    cache::move_doc(old, new);
+}
+
+/// The cap, on the docs upkeep.
+pub fn upkeep() {
+    let (n, bytes) = cache::prune(cache::cap_bytes());
+    if n > 0 {
+        host::audit(AUDIT_DROPPED, "k2", format!("entries={n} bytes={bytes} reason=cache_cap"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_keyed_hash_depends_on_the_key_and_hides_the_digest() {
+        let d = [7u8; 32];
+        let a = keyed_hash(&[1u8; 32], &d);
+        assert_eq!(a.len(), 32);
+        assert_eq!(a, keyed_hash(&[1u8; 32], &d));
+        assert_ne!(a, keyed_hash(&[2u8; 32], &d), "another space's key, another hash");
+        assert_ne!(a, keyed_hash(&[1u8; 32], &[8u8; 32]));
+        assert!(!a.contains(&"07".repeat(4)), "not the raw digest");
+    }
+
+    #[test]
+    fn dirty_is_the_containers_whose_hash_moved_or_that_are_new() {
+        let c = |key: &str, hash: &str| Keyed {
+            c: Container { key: key.into(), position: 1, title: String::new(), hidden: false, digest: [0; 32], locator: "1".into() },
+            hash: hash.into(),
+        };
+        let snap = |cs: Vec<Keyed>| Snapshot {
+            key: DocKey { space: "s".into(), path: "d.pptx".into() },
+            rev: 1,
+            version: None,
+            renderer: &super::super::deck::DECK,
+            build: "b".into(),
+            page: None,
+            containers: cs,
+            bytes: Arc::new(Vec::new()),
+        };
+        let a = snap(vec![c("@sld:1", "x"), c("@sld:2", "y"), c("@sld:3", "z")]);
+        let b = snap(vec![c("@sld:1", "x"), c("@sld:2", "Y"), c("@sld:4", "w")]);
+        let d: Vec<&str> = dirty(&a, &b).iter().map(|k| k.c.key.as_str()).collect();
+        assert_eq!(d, ["@sld:2", "@sld:4"]);
+        assert!(dirty(&a, &a).is_empty());
+    }
+}

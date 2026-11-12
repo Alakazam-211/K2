@@ -16,8 +16,10 @@
 //! `{client, cursor, label?}` a connection) and every `cursor` event its
 //! `client`, so the file scenarios' client IDs are rewritten too (the kit's
 //! numbers by pid), and `roster_events_devices.json` pins one person on three
-//! connections. Kit v0.15.0: the goldens are wire 3; K2 speaks wire 2, so the
-//! fields wire 3 adds are taken out of the golden side first ([`wire2`]).
+//! connections. Kit v0.15.0: the goldens are wire 3, and so is K2's Live
+//! socket (`welcome.wire`, V3): a change's `turn` and `verb` and the claim
+//! events' `actor` and times are compared as the kit wrote them, the agent's
+//! edit carrying the scenario's host turn.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -179,8 +181,11 @@ impl Fx {
         self.s.read(c).expect("read").text_by_root.into_iter().find(|(r, _)| r == ROOT).expect("root").1
     }
     fn edit(&self, c: ConnId, base: Seq, hunks: Vec<Hunk>) -> Result<Vec<Hunk>, ErrorReport> {
+        self.edit_with(c, base, hunks, &EditOptions::new())
+    }
+    fn edit_with(&self, c: ConnId, base: Seq, hunks: Vec<Hunk>, opts: &EditOptions) -> Result<Vec<Hunk>, ErrorReport> {
         self.host.now.fetch_add(7, Ordering::SeqCst);
-        self.s.edit_at_base(c, ROOT, base, hunks, &EditOptions::new()).map(|r| r.hunks)
+        self.s.edit_at_base(c, ROOT, base, hunks, opts).map(|r| r.hunks)
     }
 }
 
@@ -225,7 +230,11 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
 
     let mut errors: Vec<(&str, ErrorReport)> = Vec::new();
     f.edit(ada, v0, vec![h(9, 9, "zero\n")]).expect("ada's line");
-    let applied = f.edit(agent, v0, vec![h(13, 17, ""), h(23, 23, TRICKY)]).expect("the agent's edit");
+    // With the host's turn (wire 3): on the change event as given, as the
+    // kit's scenario does.
+    let turn = k2_mpc_base::Turn::new("t:1a2b3c4d5e6f7a8b.12").expect("a turn id");
+    let applied =
+        f.edit_with(agent, v0, vec![h(13, 17, ""), h(23, 23, TRICKY)], &EditOptions::new().turn(turn)).expect("the agent's edit");
     assert_eq!(applied, vec![h(18, 22, ""), h(28, 28, TRICKY)]);
     let e = f.edit(ada, v0, vec![h(13, 16, "TWO")]).expect_err("a write conflict");
     assert_eq!(e.id(), "MPC-E111");
@@ -277,10 +286,10 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
     let final_text = f.text(ada);
     let evs = drain(&changes);
     assert_eq!(evs.len(), 3, "{evs:?}");
-    same("change_events.json", &wire2(CHANGE_EVENTS), &changes_file(&evs, v0, &text0, v_end, &final_text, &mut st));
+    same("change_events.json", CHANGE_EVENTS, &changes_file(&evs, v0, &text0, v_end, &final_text, &mut st));
     let evs_app = drain(&changes_app);
     assert_eq!(evs_app.len(), 3);
-    same("change_events_app.json", &wire2(CHANGE_EVENTS_APP), &changes_file(&evs_app, v0, &text0, v_end, &final_text, &mut st));
+    same("change_events_app.json", CHANGE_EVENTS_APP, &changes_file(&evs_app, v0, &text0, v_end, &final_text, &mut st));
 
     let ros = drain(&roster);
     let ros_app = drain(&roster_app);
@@ -304,8 +313,8 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
     let app_file = lens("Widget", &ros_app, &end_app, &mut st);
     // A roster's members are a set (WIRE.md v0.9.8.2): compared by handle,
     // never by position. Every other byte as is.
-    same("roster_events.json", &members_by_handle(&wire2(ROSTER_EVENTS)), &members_by_handle(&ada_file));
-    same("roster_events_app.json", &members_by_handle(&wire2(ROSTER_EVENTS_APP)), &members_by_handle(&app_file));
+    same("roster_events.json", &members_by_handle(ROSTER_EVENTS), &members_by_handle(&ada_file));
+    same("roster_events_app.json", &members_by_handle(ROSTER_EVENTS_APP), &members_by_handle(&app_file));
 
     let got = file(Value::obj(errors.iter().map(|(n, r)| (n.to_string(), r.to_value())).collect::<Vec<_>>()));
     // Errors are keyed on their id, never on their `next`: that is the
@@ -541,37 +550,6 @@ fn snapshot_entries_take_the_live_events_shape() {
 
 /// Pretty JSON without its `"next": …` lines (each is one line: JSON strings
 /// hold no raw line break).
-/// A kit golden file as wire 2. Since kit v0.15.0 the kit's goldens are
-/// wire 3, which only adds fields: a change's `turn` and `verb`, and a claim
-/// event's `actor`, `started_ms`, `at_ms` and `at_rev`. K2's Live socket
-/// still speaks wire 2 (its welcome has no `wire`, so a client 0.15.0 reads
-/// those as absent), so they are taken out before comparing; every other
-/// byte is the kit's.
-fn wire2(pretty: &str) -> String {
-    fn strip(v: &mut Value) {
-        match v {
-            Value::Obj(pairs) => {
-                let change = pairs.iter().any(|(k, _)| k == "hunks");
-                let claim = pairs
-                    .iter()
-                    .any(|(k, val)| k == "kind" && matches!(val.as_str(), Some(kind) if kind.starts_with("claim_")));
-                pairs.retain(|(k, _)| {
-                    let wire3_change = change && matches!(k.as_str(), "turn" | "verb");
-                    let wire3_claim = claim && matches!(k.as_str(), "actor" | "started_ms" | "at_ms" | "at_rev");
-                    !wire3_change && !wire3_claim
-                });
-                pairs.iter_mut().for_each(|(_, val)| strip(val));
-            }
-            Value::List(items) => items.iter_mut().for_each(strip),
-            Value::Null | Value::Bool(_) | Value::Int(_) | Value::UInt(_) | Value::Float(_) | Value::Str(_) => {}
-            other => panic!("wire2: a kit errors::Value variant this test doesn't know: {other:?}"),
-        }
-    }
-    let InOrder(mut v) = serde_json::from_str(pretty).expect("golden file JSON");
-    strip(&mut v);
-    file(v)
-}
-
 fn without_next(pretty: &str) -> String {
     pretty.lines().filter(|l| !l.trim_start().starts_with("\"next\": ")).map(|l| format!("{l}\n")).collect()
 }
@@ -848,4 +826,99 @@ fn k2s_live_encoder_writes_the_kits_devices_golden() {
         ("final", encoded_one(&late[0], &me, &mut st)),
     ]));
     same("roster_events_devices.json", &members_by_handle(ROSTER_DEVICES), &members_by_handle(&got));
+}
+
+// ── wire 3: element presence (`selection`, `pointer`, `viewport`, `focus`, `range`) ──
+
+const ROSTER_ELEM_PRESENCE: &str = kit_golden!("roster_events_elem_presence.json");
+const ROSTER_FOCUS_RANGE: &str = kit_golden!("roster_events_focus_range.json");
+const ROSTER_CLAIMS_ELEMS: &str = kit_golden!("roster_events_claims_elems.json");
+
+/// The kit's element-presence goldens were written from keyed scenarios on
+/// its own test packs. K2's encoder is pinned against every such event in
+/// them: each golden event is rebuilt as the kit's `RosterEvent` (who, the
+/// value, the connection) and encoded by K2, byte for byte. Every kind is
+/// met at least once, so a golden that changes shape fails here.
+#[test]
+fn k2s_element_presence_events_are_the_kits() {
+    use k2_mpc_base::session::{ElemFocus, ElemRange, ElemSelection, Point, Rect, Who};
+    use k2_mpc_base::Key;
+    fn s(v: &Value, k: &str) -> String {
+        v.get(k).and_then(Value::as_str).unwrap_or_else(|| panic!("`{k}` in {}", v.to_json())).to_string()
+    }
+    fn n(v: &Value, k: &str) -> f64 {
+        match v.get(k) {
+            Some(Value::Int(i)) => *i as f64,
+            Some(Value::UInt(u)) => *u as f64,
+            Some(Value::Float(f)) => f.get(),
+            other => panic!("`{k}` is not a number: {other:?}"),
+        }
+    }
+    fn key(k: &str) -> Key {
+        Key::new(k).unwrap_or_else(|e| panic!("key {k}: {e:?}"))
+    }
+    fn client(v: &Value) -> Option<u64> {
+        match v.get("client") {
+            None => None,
+            Some(Value::UInt(c)) => Some(*c),
+            Some(Value::Int(c)) => Some(*c as u64),
+            other => panic!("client: {other:?}"),
+        }
+    }
+    fn rebuild(ev: &Value) -> Option<RosterEvent> {
+        let kind = s(ev, "kind");
+        if !matches!(kind.as_str(), "selection" | "pointer" | "viewport" | "focus" | "range") {
+            return None;
+        }
+        let who = Who::Pid(s(ev, "who"));
+        let val = ev.get(&kind).cloned().filter(|v| !matches!(v, Value::Null));
+        let client = client(ev);
+        Some(match kind.as_str() {
+            "selection" => RosterEvent::Selection {
+                who,
+                selection: val.map(|v| {
+                    let keys = match v.get("keys") {
+                        Some(Value::List(ks)) => ks.iter().map(|k| key(k.as_str().expect("key"))).collect(),
+                        other => panic!("keys: {other:?}"),
+                    };
+                    ElemSelection::new(s(&v, "root"), keys)
+                }),
+                client,
+            },
+            "pointer" => RosterEvent::Pointer { who, pointer: val.map(|v| Point::new(n(&v, "x"), n(&v, "y")).expect("point")), client },
+            "viewport" => RosterEvent::Viewport {
+                who,
+                viewport: val.map(|v| Rect::new(n(&v, "x"), n(&v, "y"), n(&v, "w"), n(&v, "h")).expect("rect")),
+                client,
+            },
+            "focus" => RosterEvent::Focus { who, focus: val.map(|v| ElemFocus::new(s(&v, "root"), key(&s(&v, "key")))), client },
+            _ => RosterEvent::Range {
+                who,
+                range: val.map(|v| {
+                    ElemRange::new(s(&v, "root"), key(&s(&v, "key")), s(&v, "field"), n(&v, "anchor") as usize, n(&v, "head") as usize)
+                }),
+                client,
+            },
+        })
+    }
+    let mut met = std::collections::BTreeSet::new();
+    for (name, g) in [
+        ("roster_events_elem_presence.json", ROSTER_ELEM_PRESENCE),
+        ("roster_events_focus_range.json", ROSTER_FOCUS_RANGE),
+        ("roster_events_claims_elems.json", ROSTER_CLAIMS_ELEMS),
+    ] {
+        let InOrder(v) = serde_json::from_str(g).expect("golden JSON");
+        let Some(Value::List(events)) = v.get("events") else { panic!("{name}: no events") };
+        for ev in events {
+            let Some(rebuilt) = rebuild(ev) else { continue };
+            met.insert(s(ev, "kind"));
+            let got = roster_event(&rebuilt).expect("K2 encodes it");
+            assert_eq!(got.to_json(), ev.to_json(), "{name}: K2's encoding differs from the kit's golden event");
+        }
+    }
+    assert_eq!(
+        met.into_iter().collect::<Vec<_>>(),
+        ["focus", "pointer", "range", "selection", "viewport"],
+        "every element presence kind was checked against a golden"
+    );
 }

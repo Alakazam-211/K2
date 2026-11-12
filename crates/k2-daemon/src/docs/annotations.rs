@@ -64,7 +64,7 @@ pub fn notify_mentions(m: Mention) {
 fn caller_of(pid: &str) -> Option<DocCaller> {
     match Principal::parse(pid)? {
         Principal::Person(key) => Some(DocCaller::Person { key, via: VIA_CLI }),
-        Principal::Agent(project_id) => Some(DocCaller::Agent { project_id }),
+        Principal::Agent(project_id) => Some(DocCaller::Agent { project_id, session: None }),
     }
 }
 

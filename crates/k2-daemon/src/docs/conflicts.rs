@@ -362,7 +362,7 @@ impl Lookup for K2Lookup {
     }
 
     fn agent_name(&self, project_id: &str) -> Option<String> {
-        let name = super::caller::DocCaller::Agent { project_id: project_id.to_string() }.participant(None).name;
+        let name = super::caller::DocCaller::Agent { project_id: project_id.to_string(), session: None }.participant(None).name;
         (name != UNNAMED_AGENT).then_some(name)
     }
 

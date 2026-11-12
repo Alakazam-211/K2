@@ -326,7 +326,12 @@ impl Host for K2Host {
             // Purge stays off `k2 doc` (owner-only, a later surface); when it
             // runs, the audit gets what was reached (scope, counts), never
             // content and never a content hash (K-PURGE-1).
-            AuditEvent::Purged { key, by, scope, counts } => audit(AUDIT_PURGED, by, purged_outcome(key, scope, counts)),
+            AuditEvent::Purged { key, by, scope, counts } => {
+                audit(AUDIT_PURGED, by, purged_outcome(key, scope, counts));
+                // Previews (contract Item 8, hook 1): every scope drops the
+                // doc's previews (purged text is in the pixels), off the lock.
+                previews_purged(key, "purged");
+            }
             // Tier 0 (kit amendment 3): leases are presence (debug log);
             // a break and a conflicting save are audited, metadata only.
             AuditEvent::LeaseAcquired { key, pid, expires_ms, auto } => {
@@ -407,8 +412,19 @@ impl Host for K2Host {
             // Comments (kit A4): never a body. The people and agents a
             // comment mentions are told off the lock (the body is read with
             // `thread()` there); open tabs catch up with `comments --since`.
-            AuditEvent::Annotation { key, seq, thread, comment, op, pid, on_behalf_of, mentions, .. } => {
+            AuditEvent::Annotation { key, seq, thread, comment, op, pid, on_behalf_of, mentions, anchor_key, .. } => {
                 super::indexer::changed(key, super::indexer::Change::Annotation, None, Some(*seq), Some(thread.to_string()));
+                // The docs socket's comment relay (contract gap 29): ids, op
+                // and author only; the body is read through the routes.
+                super::host_events::publish(super::host_events::HostEvent::Comment {
+                    key: key.clone(),
+                    thread: thread.to_string(),
+                    comment: *comment,
+                    op: op.name().to_string(),
+                    author: pid.clone(),
+                    at_ms: now_ms(),
+                    anchor: anchor_key.as_ref().map(|k| k.to_string()),
+                });
                 if !mentions.is_empty() {
                     super::annotations::notify_mentions(super::annotations::Mention {
                         key: key.clone(),
@@ -421,8 +437,15 @@ impl Host for K2Host {
                     });
                 }
             }
-            AuditEvent::AnchorState { key, thread, version, now, .. } => {
+            AuditEvent::AnchorState { key, thread, version, now, was, .. } => {
                 log_debug!("[docs] {} {thread}: anchor {} at version {version}", key_label(key), now.name());
+                super::host_events::publish(super::host_events::HostEvent::AnchorState {
+                    key: key.clone(),
+                    thread: thread.to_string(),
+                    version: *version,
+                    was: was.as_ref().map(|w| w.name().to_string()),
+                    now: now.name().to_string(),
+                });
                 super::indexer::changed(key, super::indexer::Change::AnchorState, Some(*version), None, Some(thread.to_string()))
             }
             AuditEvent::RecheckFailed { key, error } => {
@@ -449,7 +472,9 @@ impl Host for K2Host {
                 format!("{} reason={reason} connections={}", key_label(key), connections.len()),
             ),
             AuditEvent::DocDeleted { key, connections } => {
-                audit(AUDIT_FILE, "k2", format!("{} removed connections={}", key_label(key), connections.len()))
+                audit(AUDIT_FILE, "k2", format!("{} removed connections={}", key_label(key), connections.len()));
+                // Previews, hook 2: a deleted doc's go with it.
+                previews_purged(key, "doc_deleted");
             }
             AuditEvent::Joined { key, pid, conn, .. } => {
                 log_debug!("[docs] {pid} joined {} ({conn})", key_label(key))
@@ -538,6 +563,18 @@ pub fn conflict_dir_for(file: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 /// Milliseconds since the epoch (the kit's clock and the share stamps).
+/// A doc's previews go (a purge, a deleted doc): files and counts off the
+/// session lock (the kit calls the host with it held).
+fn previews_purged(key: &DocKey, reason: &'static str) {
+    let key = key.clone();
+    let spawned = std::thread::Builder::new().name("k2-docs-preview-purge".into()).spawn(move || {
+        super::preview::service::doc_purged(&key, reason);
+    });
+    if let Err(e) = spawned {
+        log_debug!("[docs] WARN: previews of a purged doc not dropped (no thread: {e}); the cache cap will");
+    }
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }

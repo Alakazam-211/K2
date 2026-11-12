@@ -468,7 +468,7 @@ fn can_change(caller: &DocCaller) -> bool {
 /// Whether the caller may see this doc's path in `open.paths`.
 fn may_see(caller: &DocCaller, key: &DocKey) -> bool {
     match caller {
-        DocCaller::Agent { project_id } => &key.space == project_id,
+        DocCaller::Agent { project_id, .. } => &key.space == project_id,
         DocCaller::Person { key: person, .. } => super::host::person_rights(person).read,
     }
 }
@@ -924,7 +924,7 @@ pub(crate) mod tests {
             assert_eq!(owner["later"], json!(["CSV grid", "Word"]));
             assert_eq!(page(&crate::docs::caller::login("anna"))["canChange"], true, "an Admin login");
             assert_eq!(page(&crate::docs::caller::login("mo"))["canChange"], false, "a Member login");
-            assert_eq!(page(&DocCaller::Agent { project_id: "p1".into() })["canChange"], false, "an agent");
+            assert_eq!(page(&DocCaller::Agent { project_id: "p1".into(), session: None })["canChange"], false, "an agent");
             let shell = DocCaller::Person { key: k2_core::notify_prefs::OWNER.into(), via: crate::docs::caller::VIA_TERMINAL };
             assert_eq!(page(&shell)["canChange"], false, "a K2 terminal's passport");
             set("text", true);

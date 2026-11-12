@@ -63,7 +63,7 @@ use k2_mpc_base::tools::{ToolOptions, ToolOutput, ToolRunError};
 
 use super::caller::refusal;
 use super::routes::{self, Call, VerbError};
-use super::target::Target;
+use super::target::{Target, Tier};
 use crate::cli_response::CliResponse;
 use k2_mpc_base::tools::exit;
 
@@ -216,7 +216,39 @@ pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<BlobSessi
     if let Some(s) = rt.get_blob(&key) {
         return Ok(s);
     }
-    rt.open_blob(&key, &t.abs, &t.root).map_err(|e| routes::session_error(&e))
+    rt.open_blob(&key, &t.abs, &t.root).map_err(|e| match &e {
+        SessionError::PackMismatch { stored, .. } if super::target::is_deck_file(&t.rel) && stored.as_str() == Tier::Deck.pack() => {
+            stored_as_live_deck(&t.rel)
+        }
+        _ => routes::session_error(&e),
+    })
+}
+
+/// A deck opened live while the Slides core was on, asked for with it off.
+/// Its live doc (history, versions, comments) is kept, never turned into an
+/// any-file doc behind the owner's back: turning the core back on serves it
+/// again. The file on disk was written back when the core went off and is
+/// the deck as it was, so it still opens in a presentation app.
+pub(super) fn stored_as_live_deck(rel: &str) -> CliResponse {
+    routes::with_exit(
+        refusal(
+            "409 Conflict",
+            "stored_as_live_deck",
+            format!(
+                "{rel} was opened live by the Slides core, which is off now. Turn it on to use this deck in K2 again \
+                 (k2 doc cores on slides): its history is kept. The file itself is up to date and opens in your presentation app"
+            ),
+        ),
+        k2_mpc_base::tools::exit::REFUSED,
+    )
+}
+
+/// A tier-0 write's options: the call's host turn ([`super::turn`]).
+fn blob_write_options(c: &Call) -> k2_mpc_base::session::BlobWriteOptions {
+    match c.turn {
+        Some(t) => k2_mpc_base::session::BlobWriteOptions::new().turn(t),
+        None => k2_mpc_base::session::BlobWriteOptions::new(),
+    }
 }
 
 fn join(s: &BlobSession, c: &Call, stay: Stay) -> Result<Joined, SessionError> {
@@ -402,7 +434,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                 base.trim().parse().map_err(|_| VerbError::Response(routes::bad("base must be a version number (k2 doc status)")))?;
             let bytes = body_bytes(c)?;
             let j = join(s, c, Stay::UntilIdle)?;
-            let w = s.write_bytes(j.conn, &bytes, base)?;
+            let w = s.write_bytes_with(j.conn, &bytes, base, &blob_write_options(c))?;
             on_behalf_reply(s, c, j.conn, json!({ "result": write_json(&w) }), w.changed.then_some(w.version))
         }
         routes::VERSIONS => {
@@ -447,7 +479,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         routes::RESTORE => {
             let v = version_param(c, "version", "a version id from k2 doc versions")?;
             let j = join(s, c, Stay::UntilIdle)?;
-            let w = s.restore(j.conn, v)?;
+            let w = s.restore_with(j.conn, v, &blob_write_options(c))?;
             on_behalf_reply(s, c, j.conn, json!({ "restored": v, "result": write_json(&w) }), w.changed.then_some(w.version))
         }
         routes::NAME => {
@@ -536,6 +568,9 @@ fn blob_tool(s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
     let argv = tool_argv(c)?;
     let argv = mention_pids(argv, c)?;
     let mut opts = ToolOptions::new().json(c.input.flag("json"));
+    if let Some(t) = c.turn {
+        opts = opts.turn(t);
+    }
     if let Some(b) = c.input.u64("readBudget").map_err(VerbError::Response)? {
         opts = opts.read_budget(usize::try_from(b).unwrap_or(usize::MAX));
     }

@@ -1,6 +1,10 @@
 //! The Live socket's frames (`WS /cli/docs/live`, [`super::live`]), as the
-//! kit's `client/WIRE.md` v2 (kit main `bea1885`) specifies them, plus K2's
-//! own extra fields (marked below).
+//! kit's `client/WIRE.md` **wire 3** (kit v0.15.x, `session::WIRE_VERSION`)
+//! specifies them, plus K2's own extra fields (marked below). Wire 3 only
+//! adds to wire 2: a change's `turn` and `verb`; the claim events' `actor`
+//! and times; element presence (`selection`, `pointer`, `viewport`,
+//! `focus`, `range`) as roster events and entry fields; `elem_claims`;
+//! `welcome.wire`. A wire-2 client ignores what it doesn't know.
 //!
 //! **Encoded with the kit's own JSON writer** (`k2_mpc_base::errors::Value`,
 //! as `ErrorReport::to_json`): it keeps object keys in insertion order, so
@@ -16,9 +20,12 @@ use serde_json::Value as Json;
 
 use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
-    ChangeEvent, CursorAt, LeaveReason, LineRange, Overwrite, ParticipantKind, Rights, Role, RosterEvent,
-    RosterMember, SessionError, UndoOutcome, Who,
+    ChangeEvent, ClaimActor, ClaimSpan, CursorAt, ElemFocus, ElemRange, ElemSelection, LeaveReason, LineRange, Overwrite,
+    ParticipantKind, Point, Rect, Rights, Role, RosterEvent, RosterMember, SessionError, UndoOutcome, Who,
 };
+
+/// The wire this host speaks (`welcome.wire`): the vendored kit's.
+pub const WIRE: u32 = k2_mpc_base::session::WIRE_VERSION;
 use k2_mpc_base::store::Seq;
 use k2_mpc_base::text::Hunk;
 
@@ -211,9 +218,11 @@ pub fn hunks(hs: &[Hunk]) -> Value {
 }
 
 /// `ChangeEvent`: `{version, pid, client, via, kind, root, hunks, at_ms,
-/// on_behalf_of}` (`on_behalf_of` is `null` when absent, never left out).
-/// `kind` (`ChangeKind::as_str`) is what lets a client tell a lost edit that
-/// landed late from an undo that landed late under the same client ID.
+/// on_behalf_of, turn, verb}` (`on_behalf_of`, `turn` and `verb` are `null`
+/// when absent, never left out). `kind` (`ChangeKind::as_str`) is what lets
+/// a client tell a lost edit that landed late from an undo that landed late
+/// under the same client ID. `turn` (wire 3) is the host turn of the agent
+/// step that made it ([`super::turn`]); `verb` the pack verb's id.
 pub fn change(e: &ChangeEvent) -> Value {
     Value::obj([
         ("version", Value::from(e.version)),
@@ -225,6 +234,8 @@ pub fn change(e: &ChangeEvent) -> Value {
         ("hunks", hunks(&e.hunks)),
         ("at_ms", Value::from(e.at_ms)),
         ("on_behalf_of", e.on_behalf_of.as_deref().map_or(Value::Null, Value::from)),
+        ("turn", e.turn.as_ref().map_or(Value::Null, |t| Value::from(t.as_str()))),
+        ("verb", e.verb.as_deref().map_or(Value::Null, Value::from)),
     ])
 }
 
@@ -246,7 +257,7 @@ fn role(r: Role) -> &'static str {
     }
 }
 
-fn kind(k: ParticipantKind) -> &'static str {
+pub(crate) fn kind(k: ParticipantKind) -> &'static str {
     match k {
         ParticipantKind::Person => "person",
         ParticipantKind::Agent => "agent",
@@ -277,11 +288,100 @@ fn caret(c: &CursorAt, version: Seq) -> Value {
     ])
 }
 
+/// A claim event's `actor` (wire 3): `{id, name, kind, colour}`, `id` the
+/// event's `who`.
+fn actor(w: &Who, a: &ClaimActor) -> Value {
+    Value::obj([
+        ("id", who(w)),
+        ("name", Value::from(a.name.as_str())),
+        ("kind", Value::from(kind(a.kind))),
+        ("colour", Value::from(a.colour.as_str())),
+    ])
+}
+
+fn keys_value(keys: &[k2_mpc_base::Key]) -> Value {
+    Value::List(keys.iter().map(|k| Value::from(k.as_str())).collect())
+}
+
+/// A coordinate: a whole number as an integer (as the kit's goldens), else
+/// a float; a non-finite one (never sent by a setter) as `null`.
+fn coord(v: f64) -> Value {
+    match k2_mpc_base::errors::Finite::new(v) {
+        None => Value::Null,
+        Some(_) if v.fract() == 0.0 && v.abs() < 9.0e15 => Value::Int(v as i64),
+        Some(f) => Value::Float(f),
+    }
+}
+
+fn selection(s: &ElemSelection) -> Value {
+    Value::obj([("root", Value::from(s.root.as_str())), ("keys", keys_value(&s.keys))])
+}
+
+fn point(p: &Point) -> Value {
+    Value::obj([("x", coord(p.x())), ("y", coord(p.y()))])
+}
+
+fn rect(r: &Rect) -> Value {
+    Value::obj([("x", coord(r.x())), ("y", coord(r.y())), ("w", coord(r.w())), ("h", coord(r.h()))])
+}
+
+fn focus(f: &ElemFocus) -> Value {
+    Value::obj([("root", Value::from(f.root.as_str())), ("key", Value::from(f.key.as_str()))])
+}
+
+fn range(r: &ElemRange) -> Value {
+    Value::obj([
+        ("root", Value::from(r.root.as_str())),
+        ("key", Value::from(r.key.as_str())),
+        ("field", Value::from(r.field.as_str())),
+        ("anchor", Value::from(r.anchor)),
+        ("head", Value::from(r.head)),
+    ])
+}
+
+/// The element presence of an entry or a device, each left out when `None`.
+fn elem_fields(
+    fields: &mut Vec<(&'static str, Value)>,
+    s: &Option<ElemSelection>,
+    p: &Option<Point>,
+    r: &Option<Rect>,
+    f: &Option<ElemFocus>,
+    g: &Option<ElemRange>,
+) {
+    if let Some(s) = s {
+        fields.push(("selection", selection(s)));
+    }
+    if let Some(p) = p {
+        fields.push(("pointer", point(p)));
+    }
+    if let Some(r) = r {
+        fields.push(("viewport", rect(r)));
+    }
+    if let Some(f) = f {
+        fields.push(("focus", focus(f)));
+    }
+    if let Some(g) = g {
+        fields.push(("range", range(g)));
+    }
+}
+
+/// A `selection`, `pointer`, `viewport`, `focus` or `range` event: `client`
+/// only when the event names one.
+fn elem_event(kind: &'static str, w: &Who, value: Value, client: &Option<u64>) -> Value {
+    let mut fields = vec![("kind", Value::from(kind)), ("who", who(w)), (kind, value)];
+    if let Some(c) = client {
+        fields.push(("client", Value::from(*c)));
+    }
+    Value::obj(fields)
+}
+
 /// `RosterMember` → the wire's entry `{handle, name, colour, kind, role, away, cursor, rights}`,
 /// then `devices` (kit v0.10.1) only when the kit gives some (a text doc): one
 /// `{client, cursor, label?}` per connection of the participant, in join order,
 /// `label` only when the host gave one. A client hides only its own
 /// connection's caret (`welcome.client`) and shows the person's other tabs.
+/// Then (wire 3, keyed docs) the element presence on the entry and each
+/// device, and `elem_claims` when the member holds claims on elements.
 fn member(m: &RosterMember, version: Seq) -> Value {
     let p = &m.entry.participant;
     let mut fields = vec![
@@ -303,9 +403,33 @@ fn member(m: &RosterMember, version: Seq) -> Value {
             if let Some(l) = &d.label {
                 o.push(("label", Value::from(l.as_str())));
             }
+            let mut more = Vec::new();
+            elem_fields(&mut more, &d.selection, &d.pointer, &d.viewport, &d.focus, &d.range);
+            o.extend(more);
             Value::obj(o)
         });
         fields.push(("devices", Value::List(devices.collect())));
+    }
+    let e = &m.entry;
+    elem_fields(&mut fields, &e.selection, &e.pointer, &e.viewport, &e.focus, &e.range);
+    let elem_claims: Vec<Value> = e
+        .claims
+        .iter()
+        .filter_map(|c| match &c.span {
+            ClaimSpan::Elems { root, keys } => Some(Value::obj([
+                ("claim", Value::from(c.id.to_string())),
+                ("root", Value::from(root.as_str())),
+                ("keys", keys_value(keys)),
+                ("note", c.note.as_deref().map_or(Value::Null, Value::from)),
+                ("hold", Value::from(c.hold)),
+                ("expires_ms", Value::from(c.expires_ms)),
+                ("started_ms", Value::from(c.taken_ms)),
+            ])),
+            _ => None,
+        })
+        .collect();
+    if !elem_claims.is_empty() {
+        fields.push(("elem_claims", Value::List(elem_claims)));
     }
     Value::obj(fields)
 }
@@ -425,27 +549,56 @@ pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
             }
             Value::obj(fields)
         }
-        RosterEvent::ClaimStarted { who: w, claim, lines: l, note, hold, for_edit, expires_ms, version, .. } => {
+        RosterEvent::ClaimStarted {
+            who: w, claim, lines: l, note, hold, for_edit, expires_ms, version, actor: a, started_ms, ..
+        } => Value::obj([
+            ("kind", Value::from("claim_started")),
+            ("who", who(w)),
+            ("claim", Value::from(claim.to_string())),
+            ("lines", lines(l)),
+            ("note", note.as_deref().map_or(Value::Null, Value::from)),
+            ("hold", Value::from(*hold)),
+            ("for_edit", Value::from(*for_edit)),
+            ("expires_ms", Value::from(*expires_ms)),
+            ("version", Value::from(*version)),
+            ("actor", actor(w, a)),
+            ("started_ms", Value::from(*started_ms)),
+        ]),
+        // Wire 3: a claim on elements (a deck's shapes or slides).
+        RosterEvent::ClaimStartedElems { who: w, claim, root, keys, note, hold, expires_ms, version, actor: a, started_ms, .. } => {
             Value::obj([
-                ("kind", Value::from("claim_started")),
+                ("kind", Value::from("claim_started_elems")),
                 ("who", who(w)),
                 ("claim", Value::from(claim.to_string())),
-                ("lines", lines(l)),
+                ("root", Value::from(root.as_str())),
+                ("keys", keys_value(keys)),
                 ("note", note.as_deref().map_or(Value::Null, Value::from)),
                 ("hold", Value::from(*hold)),
-                ("for_edit", Value::from(*for_edit)),
                 ("expires_ms", Value::from(*expires_ms)),
                 ("version", Value::from(*version)),
+                ("actor", actor(w, a)),
+                ("started_ms", Value::from(*started_ms)),
             ])
         }
-        RosterEvent::ClaimEnded { who: w, claim, how, lines: l, version, .. } => Value::obj([
+        RosterEvent::ClaimEnded { who: w, claim, how, lines: l, version, actor: a, at_ms, at_rev, .. } => Value::obj([
             ("kind", Value::from("claim_ended")),
             ("who", who(w)),
             ("claim", Value::from(claim.to_string())),
             ("how", Value::from(how.as_str())),
             ("lines", lines(l)),
             ("version", Value::from(*version)),
+            ("actor", actor(w, a)),
+            ("at_ms", Value::from(*at_ms)),
+            ("at_rev", at_rev.map_or(Value::Null, Value::from)),
         ]),
+        // Wire 3: element presence (a keyed doc's viewers and agents).
+        RosterEvent::Selection { who: w, selection: s, client, .. } => {
+            elem_event("selection", w, s.as_ref().map_or(Value::Null, selection), client)
+        }
+        RosterEvent::Pointer { who: w, pointer: p, client, .. } => elem_event("pointer", w, p.as_ref().map_or(Value::Null, point), client),
+        RosterEvent::Viewport { who: w, viewport: r, client, .. } => elem_event("viewport", w, r.as_ref().map_or(Value::Null, rect), client),
+        RosterEvent::Focus { who: w, focus: f, client, .. } => elem_event("focus", w, f.as_ref().map_or(Value::Null, focus), client),
+        RosterEvent::Range { who: w, range: g, client, .. } => elem_event("range", w, g.as_ref().map_or(Value::Null, range), client),
         RosterEvent::Note { to, from, kind: k, lines: l, claim, .. } => Value::obj([
             ("kind", Value::from("note")),
             ("to", who(to)),
@@ -517,8 +670,10 @@ fn undone_frame(op: u64, steps: usize, version: Seq, notice: Option<ErrorReport>
     Value::Obj(o)
 }
 
-/// The first frame: `welcome {root, version, text?, client, self, rights}`,
-/// then K2's extras (`core`, `family`, `path`).
+/// The first frame: `welcome {root, version, text?, client, self, rights,
+/// wire}` (`wire`: 3, this host's [`WIRE`]), then K2's extras (`core`,
+/// `family`, `path`, `turn_idle_ms`: the view's fallback for a missed
+/// `turn_end`, [`super::turn::TURN_IDLE_MS`]).
 #[allow(clippy::too_many_arguments)]
 pub fn welcome_frame(
     root: &str,
@@ -543,9 +698,11 @@ pub fn welcome_frame(
         ("client", Value::from(client)),
         ("self", Value::from(self_who)),
         ("rights", Value::from(rights_word)),
+        ("wire", Value::from(WIRE)),
         ("core", Value::from(core)),
         ("family", Value::from(family)),
         ("path", Value::from(path)),
+        ("turn_idle_ms", Value::from(super::turn::TURN_IDLE_MS)),
     ] {
         o.push((k.to_string(), v));
     }

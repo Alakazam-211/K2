@@ -113,18 +113,27 @@ run() {
     echo "$rc"
 }
 has() { grep -q -- "$2" "$tmp/out-$1"; }
-PINS_ALL='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": [{"name": "k2n7-vin", "fp": "aa"}, {"name": "k2n9-vin", "fp": "bb"}, {"name": "k2n10-vin", "fp": "cc"}, {"name": "k2n11-vin", "fp": "dd"}]}'
+# release.sh reads the cross pins from its checkout (PROJECT_DIR=$tmp here).
+mkdir -p "$tmp/scripts/ci" && cp "$ROOT/scripts/ci/cross-pins.sh" "$tmp/scripts/ci/cross-pins.sh"
+ZIGP="$(sed -n 's/^K2_CROSS_ZIG_SHA256_X86_64="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
+ZBP="$(sed -n 's/^K2_CROSS_ZIGBUILD_CRATE_SHA256="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
+NODES4='[{"name": "k2n7-vin", "fp": "aa"}, {"name": "k2n9-vin", "fp": "bb"}, {"name": "k2n10-vin", "fp": "cc"}, {"name": "k2n11-vin", "fp": "dd"}]'
+PINS_ALL='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": '"$NODES4"', "aarch64_cross": {"zig_tarball_sha256": "'"$ZIGP"'", "cargo_zigbuild_crate_sha256": "'"$ZBP"'"}}'
+# A signer from before the cross-toolchain check (no aarch64_cross), and one
+# that pins another zig.
+PINS_OLD='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": '"$NODES4"'}'
+PINS_OTHERZIG='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": '"$NODES4"', "aarch64_cross": {"zig_tarball_sha256": "'"$(printf 'e%.0s' $(seq 64))"'", "cargo_zigbuild_crate_sha256": "'"$ZBP"'"}}'
 PINS_X86='{"controller": "c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7", "nodes": [{"name": "k2n7-vin", "fp": "aa"}, {"name": "k2n9-vin", "fp": "bb"}]}'
 
 echo "pre-flight: compute is the default; GitHub is the fallback, said loudly:"
 rc="$(run pf-default 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-default "MODE compute compute" && has pf-default "Linux x86_64 and aarch64: K2 Compute" && ! has pf-default "FALL BACK" \
     && pass "no K2_LINUX_BUILDS: compute for x86_64 and aarch64 (keychain signer, admin gh)" || fail "default" "rc=$rc $(cat "$tmp/out-pf-default")"
-python3 - "$REL" <<'PY' && pass "release.sh: K2_LINUX_BUILDS defaults to compute; aarch64 defaults to GitHub until the cross toolchain is hash-pinned (Steward)" || fail "defaults" "see release.sh"
+python3 - "$REL" <<'PY' && pass "release.sh: K2_LINUX_BUILDS defaults to compute, K2_COMPUTE_ARM to compute (the cross toolchain is hash-pinned and the signer checks it)" || fail "defaults" "see release.sh"
 import sys
 s = open(sys.argv[1]).read()
 assert 'K2_LINUX_BUILDS="${K2_LINUX_BUILDS:-compute}"' in s
-assert 'K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-github}"' in s
+assert 'K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-compute}"' in s
 PY
 rc="$(K2_COMPUTE_OAUTH=placeholder run pf-placeholder 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-placeholder "MODE github github" && has pf-placeholder "K2 COMPUTE FAILED: Linux x86_64 AND aarch64 FALL BACK TO GITHUB" \
@@ -156,6 +165,13 @@ rc="$(STUB_SIGNER=k2sign STUB_PINS="$PINS_ALL" run pf-k2sign 'k2_linux_builds_pr
 [ "$rc" = 0 ] && has pf-k2sign "MODE compute compute" && has pf-k2sign "Signing user: compute builds from L1 k2n7-vin and V1 k2n9-vin" \
     && has pf-k2sign "Signing user: compute builds from L2 k2n10-vin and V2 k2n11-vin" \
     && pass "compute under k2sign: passes once the signer pinned all four nodes and the controller" || fail "k2sign pre-flight" "rc=$rc $(cat "$tmp/out-pf-k2sign")"
+rc="$(STUB_SIGNER=k2sign STUB_PINS="$PINS_OLD" run pf-k2sign-old-cross 'k2_linux_builds_preflight; mode')"
+[ "$rc" = 0 ] && has pf-k2sign-old-cross "MODE compute github" && has pf-k2sign-old-cross "Linux aarch64 FALL BACK TO GITHUB" \
+    && has pf-k2sign-old-cross "doesn't check the aarch64 cross toolchain hashes" \
+    && pass "a signer without the cross-toolchain check (Steward 11-11): aarch64 goes to GitHub, x86_64 stays" || fail "old signer cross" "rc=$rc $(cat "$tmp/out-pf-k2sign-old-cross")"
+rc="$(STUB_SIGNER=k2sign STUB_PINS="$PINS_OTHERZIG" run pf-k2sign-otherzig 'k2_linux_builds_preflight; mode')"
+[ "$rc" = 0 ] && has pf-k2sign-otherzig "MODE compute github" && has pf-k2sign-otherzig "pins another zig tarball" \
+    && pass "a signer pinning another zig than this checkout's cross-pins.sh: aarch64 goes to GitHub" || fail "other zig" "rc=$rc $(cat "$tmp/out-pf-k2sign-otherzig")"
 rc="$(STUB_SIGNER=k2sign STUB_PINS="$PINS_X86" run pf-k2sign-x86 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-k2sign-x86 "MODE compute github" && has pf-k2sign-x86 "K2 COMPUTE FAILED: Linux aarch64 FALL BACK TO GITHUB" \
     && has pf-k2sign-x86 "L2's node k2n10-vin is not pinned" && has pf-k2sign-x86 "Linux x86_64: K2 Compute; aarch64 and Arch: GitHub" \

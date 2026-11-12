@@ -136,8 +136,10 @@
 #                       K2_COMPUTE_WAIT_MIN (default 60); jobs still running
 #                       then are collected at Step 10.7 (up to
 #                       K2_COMPUTE_LATE_WAIT_MIN more, default 60).
-#   K2_COMPUTE_ARM (default github for now): compute builds aarch64 on
-#   compute too (L2 + V2); github keeps it on GitHub in compute mode.
+#   K2_COMPUTE_ARM (default compute): aarch64 on compute too (L2 + V2,
+#   cross-compiled with the hash-pinned zig and cargo-zigbuild of
+#   scripts/ci/cross-pins.sh; the signer must check those hashes, else the
+#   pre-flight sends aarch64 to GitHub); github keeps it on GitHub.
 #   Settings and node names: scripts/lib/compute-release.sh. Needs this
 #   Mac's K2 as a server on the nodes with a grant (k2 compute nodes).
 #   Audit: ~/k2-release-audit/<v>/compute/.
@@ -393,10 +395,11 @@ case "$K2_LINUX_BUILDS" in
         exit 1
         ;;
 esac
-# aarch64 stays on GitHub by default until the cross toolchain (zig,
-# cargo-zigbuild) is hash-pinned and the signer checks those hashes
-# (Steward condition, 11-11). K2_COMPUTE_ARM=compute builds it on compute.
-K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-github}"
+# aarch64 on compute needs the hash-pinned cross toolchain (zig,
+# cargo-zigbuild) and a signer that checks those hashes (Steward 11-11):
+# the pre-flight sends aarch64 to GitHub when the signer doesn't
+# (k2_compute_signer_check). K2_COMPUTE_ARM=github keeps it there.
+K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-compute}"
 export K2_COMPUTE_ARM
 case "$K2_COMPUTE_ARM" in
     compute|github) ;;
@@ -444,11 +447,33 @@ k2_compute_signer_check() {
         echo "  scripts/k2sign/install.sh from this commit (S3b), then pin the nodes (docs/release/updater-key-ceremony.md)." >&2
         return 1
     fi
-    python3 -I - "$pins" "$l1" "$v1" "$lab" "$vlab" <<'PY'
+    # aarch64: the signer must check the cross toolchain hashes, and pin
+    # the same ones as this checkout (scripts/ci/cross-pins.sh).
+    local zig="" zb=""
+    if [ "$arch" = aarch64 ]; then
+        zig="$(sed -n 's/^K2_CROSS_ZIG_SHA256_X86_64="\([0-9a-f]*\)"$/\1/p' "$PROJECT_DIR/scripts/ci/cross-pins.sh" 2>/dev/null)"
+        zb="$(sed -n 's/^K2_CROSS_ZIGBUILD_CRATE_SHA256="\([0-9a-f]*\)"$/\1/p' "$PROJECT_DIR/scripts/ci/cross-pins.sh" 2>/dev/null)"
+    fi
+    python3 -I - "$pins" "$l1" "$v1" "$lab" "$vlab" "$arch" "$zig" "$zb" <<'PY'
 import json, os, sys
 p, l1, v1, lab, vlab = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+arch, zig, zb = sys.argv[6], sys.argv[7], sys.argv[8]
 names = {n["name"] for n in p.get("nodes") or []}
 bad = []
+if arch == "aarch64":
+    cross = p.get("aarch64_cross")
+    if not isinstance(cross, dict):
+        bad.append("the signing user doesn't check the aarch64 cross toolchain hashes (an older signer): re-run "
+                   "sudo bash scripts/k2sign/install.sh from this commit")
+    elif not zig or not zb:
+        bad.append("this checkout's scripts/ci/cross-pins.sh has no zig / cargo-zigbuild hashes")
+    else:
+        if cross.get("zig_tarball_sha256") != zig:
+            bad.append("the signing user pins another zig tarball (%s…) than scripts/ci/cross-pins.sh (%s…)"
+                       % (str(cross.get("zig_tarball_sha256"))[:12], zig[:12]))
+        if cross.get("cargo_zigbuild_crate_sha256") != zb:
+            bad.append("the signing user pins another cargo-zigbuild crate (%s…) than scripts/ci/cross-pins.sh (%s…)"
+                       % (str(cross.get("cargo_zigbuild_crate_sha256"))[:12], zb[:12]))
 if not p.get("controller"):
     bad.append("no controller pinned: sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <controller_fp read on a node> /Users/%s/.k2/tunnel-key.pem" % os.environ.get("USER", "<you>"))
 if l1 == v1:

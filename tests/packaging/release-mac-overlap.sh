@@ -127,6 +127,18 @@ else
     pass "finish refuses after a failed build"
 fi
 
+# Step 7.5's wait (before the VM): blocks until the build ends; finish
+# then collects without waiting again. A failed build fails the wait.
+rm -f "$work/out-daemon"
+STUB_SLEEP=1 k2_standalone_macos_daemon_start "$app" "$stage" "$proj" > /dev/null 2>&1
+k2_standalone_macos_daemon_wait "$stage" > "$work/wait.log" 2>&1 && pass "wait blocks until a good build ends: 0" \
+    || fail "wait blocks until a good build ends: 0" "$(cat "$work/wait.log")"
+k2_standalone_macos_daemon_finish "$app" "$stage" "$work/out-daemon" > "$work/finish3.log" 2>&1
+check '[ -s "$work/out-daemon" ] && ! grep -q "waiting for the background" "$work/finish3.log"' \
+    "finish after the wait collects it without waiting" "$(cat "$work/finish3.log")"
+STUB_FAIL=1 k2_standalone_macos_daemon_start "$app" "$stage" "$proj" > /dev/null 2>&1
+if k2_standalone_macos_daemon_wait "$stage" > /dev/null 2>&1; then fail "wait fails on a failed build" "returned 0"; else pass "wait fails on a failed build"; fi
+
 # The EXIT trap's kill: stops a running build and everything under it.
 STUB_SLEEP=30 k2_standalone_macos_daemon_start "$app" "$stage" "$proj" > /dev/null 2>&1
 i=0; while [ ! -s "$work/cargo.pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
@@ -198,6 +210,9 @@ poll      = [m.start() for m in re.finditer(r'^k2_standalone_macos_daemon_poll "
 dmg_sub   = at('xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \\\n    "${NOTARY_AUTH[@]}" --wait')
 dmg_stap  = at('staple_with_retry "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"')
 vm        = at('"$PROJECT_DIR/scripts/vm-newuser-pair-smoke.sh"')
+vm_wait   = at('k2_standalone_macos_daemon_wait "$STANDALONE_STAGE" || exit 1')
+vm_step   = at('echo "Step 7.5: Clean-VM new-user pairing smoke..."')
+assert vm_step < vm_wait < vm, "the build ends before the 8 GB VM starts (unless K2_STANDALONE_OVERLAP_VM=1)"
 finish    = at('k2_standalone_macos_daemon_finish "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$STANDALONE_STAGE" "$DIST_DIR/$MAC_ASSET" || exit 1')
 fallback  = re.search(r'^k2_build_standalone_macos_daemon "\$PROJECT_DIR/target/release/bundle/macos/K2.app" "\$DIST_DIR/\$MAC_ASSET" "\$PROJECT_DIR"$', s, re.M).start()
 u1_daemon = at('k2u_sign u1 "$DIST_DIR/$MAC_ASSET"')

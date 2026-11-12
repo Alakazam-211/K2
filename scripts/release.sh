@@ -1358,6 +1358,15 @@ fi # SKIP_BUILD
 if [ "$SKIP_SMOKE" = 0 ]; then
 echo ""
 echo "Step 7.5: Clean-VM new-user pairing smoke..."
+# The VM takes up to 8 GB and the standalone daemon's build (Step 3.6) can
+# take 8 GB on its own (k2-daemon's compile and fat-LTO link), on a 16 GB
+# Mac: let the build finish first rather than swap under the smoke's
+# timeouts. By now (after three notarizations' worth of waiting) little of
+# it is usually left. K2_STANDALONE_OVERLAP_VM=1 runs them together.
+if [ "${K2_STANDALONE_OVERLAP_VM:-0}" != "1" ] && [ -n "$K2_STANDALONE_PID" ]; then
+    echo "  letting the background standalone daemon build finish before the VM starts..."
+    k2_standalone_macos_daemon_wait "$STANDALONE_STAGE" || exit 1
+fi
 "$PROJECT_DIR/scripts/vm-newuser-pair-smoke.sh" \
   "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
   "$VERSION"

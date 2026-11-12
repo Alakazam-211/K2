@@ -419,6 +419,18 @@ k2_standalone_macos_daemon_poll() {
     [ -z "$K2_STANDALONE_RC" ] || [ "$K2_STANDALONE_RC" = 0 ]
 }
 
+# k2_standalone_macos_daemon_wait STAGE_DIR: block until it ends; 0 when it
+# succeeded (or none ran), 1 (with the log's tail) when it failed.
+k2_standalone_macos_daemon_wait() {
+    local stage="$1" t0
+    if [ -n "$K2_STANDALONE_PID" ]; then
+        t0="$(date +%s)"
+        _k2_standalone_reap "$stage"
+        echo "  background standalone daemon build ended (waited $(( $(date +%s) - t0 ))s)."
+    fi
+    [ -z "$K2_STANDALONE_RC" ] || [ "$K2_STANDALONE_RC" = 0 ]
+}
+
 k2_standalone_macos_daemon_finish() {
     local app="$1" stage="$2" out="$3" t0
     t0="$(date +%s)"

@@ -215,7 +215,7 @@ fn template_apply_writes_the_agent_and_a_second_run_changes_nothing() {
         assert!(layers.iter().any(|l| l.source == src), "{src} stacked: {layers:?}");
     }
     let l = lock::read(&path).expect("lock").expect("lock written");
-    assert_eq!((l.id.as_str(), l.version), ("developer", 2));
+    assert_eq!((l.id.as_str(), l.version), ("developer", 3));
     assert_eq!(l.hash, first.template.hash);
     assert_eq!(l.by, "owner-token");
     assert_eq!(l.suggested, vec!["compute.use".to_string()]);

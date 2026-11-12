@@ -2552,6 +2552,14 @@ fn process_argv(pid: i32) -> Option<Vec<String>> {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
+        // macOS: the kernel's argv for a process of ours. `ps` is setuid,
+        // so it fails under a sandbox; it stays as the fallback.
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(argv) = k2_core::mac_proc::argv(pid).ok().filter(|a| !a.is_empty()) {
+                return Some(argv);
+            }
+        }
         let out = k2_core::bg_proc::command("/bin/ps")
             .args(["-o", "args=", "-p", &pid.to_string()])
             .env_clear()

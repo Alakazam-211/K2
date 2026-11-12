@@ -114,9 +114,12 @@ export default function ProjectGroupAvatar({
   const fallbackColor = color ?? groupAvatarColor(groupId)
   const shownUrl = iconUrl ?? fetchedUrl
 
+  // Cut in Terminal (`data-k2-chamfer`), as the tiles' and nav's other
+  // pictures are; Glass rounds it where a caller wraps it (AVATAR_ROUND).
   if (shownUrl) {
     return (
       <span
+        data-k2-chamfer="control"
         className="flex-shrink-0"
         style={{
           width: size,
@@ -143,10 +146,13 @@ export default function ProjectGroupAvatar({
 
   return (
     <span
+      data-k2-chamfer="control"
       className="flex items-center justify-center flex-shrink-0"
       style={{
         width: size,
         height: size,
+        // No edge: the cut's diagonal (which takes the border colour) stays clear.
+        borderColor: 'transparent',
         backgroundColor: fallbackColor,
         color: 'var(--color-on-accent)',
         fontSize: size * 0.5,

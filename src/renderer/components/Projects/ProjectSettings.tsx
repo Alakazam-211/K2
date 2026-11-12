@@ -1688,10 +1688,7 @@ export function ProjectSettingsDetail({
         >
           {iconBusy && <BusyNote text={iconBusy === 'remove' ? 'Removing…' : 'Uploading…'} />}
           <SaveNote state={iconBusy ? 'idle' : pictureSave.state} />
-          <span
-            data-k2-chamfer="control"
-            className={cx(AVATAR_ROUND, 'border-transparent transition-opacity', iconBusy && 'opacity-60')}
-          >
+          <span className={cx(AVATAR_ROUND, 'transition-opacity', iconBusy && 'opacity-60')}>
             <ProjectGroupAvatar
               name={detail.name}
               groupId={detail.id}
@@ -1901,7 +1898,7 @@ export function ProjectSettingsDetail({
           data-testid="project-settings-head"
         >
           <div className="flex items-center gap-3 min-w-0">
-            <span data-k2-chamfer="control" className={cx(AVATAR_ROUND, 'border-transparent')}>
+            <span className={AVATAR_ROUND}>
               <ProjectGroupAvatar
                 name={detail.name}
                 groupId={detail.id}

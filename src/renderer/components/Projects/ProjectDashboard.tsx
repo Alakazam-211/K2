@@ -104,6 +104,7 @@ import {
   observeOwnSave,
   observeRevision,
   readingOrder,
+  displayLayoutFor,
   removePane,
   resizeDivider,
   resolveDropZone,
@@ -786,7 +787,29 @@ export default function ProjectDashboard({
   // by identity (paneKey + occurrence), so ANY restructure MOVES
   // mounted panes (keeping live kessel grid-WS attachments) instead of
   // remounting them.
-  const geometry = useMemo(() => computeLayoutGeometry(root), [root])
+  // A canvas too narrow for the saved tiles (the chat open in a small
+  // window) draws them reflowed, never under MIN_TILE_W_PX; past that the
+  // canvas scrolls. Display only: edits still go to the saved tree
+  // (`rootRef`), and with room again it is drawn as saved.
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const [canvas, setCanvas] = useState<{ w: number; h: number }>({ w: 0, h: 0 })
+  const hasTiles = root !== null
+  useEffect(() => {
+    const el = canvasRef.current
+    if (!el) return
+    const measure = (): void => {
+      const w = el.clientWidth
+      const h = el.clientHeight
+      setCanvas((c) => (c.w === w && c.h === h ? c : { w, h }))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [hasTiles])
+  const display = useMemo(() => displayLayoutFor(root, canvas.w, canvas.h), [root, canvas.w, canvas.h])
+  const geometry = useMemo(() => computeLayoutGeometry(display.root), [display.root])
 
   // ⌘N badges — paneId → 1…9 in reading order (first 9 panes).
   const paneNumbers = useMemo(() => paneNumbersById(root), [root])
@@ -860,7 +883,21 @@ export default function ProjectDashboard({
           <EmptyDashboardState groupId={show.id} memberCount={show.members.length} readOnly={readOnly} />
         </div>
       ) : (
-        <div ref={gridRef} className="relative flex-1 min-h-0 min-w-0">
+        <div
+          ref={canvasRef}
+          className="relative flex-1 min-h-0 min-w-0 overflow-auto"
+          data-dashboard-canvas=""
+          data-dashboard-reflowed={display.reflowed ? '' : undefined}
+        >
+        <div
+          ref={gridRef}
+          className="relative h-full w-full"
+          style={
+            display.minWidthPx || display.minHeightPx
+              ? { minWidth: display.minWidthPx || undefined, minHeight: display.minHeightPx || undefined }
+              : undefined
+          }
+        >
           {geometry.panes.map((g) => {
             const pane = g.pane
             const member = isTerminalPane(pane) || isHtmlDocPane(pane)
@@ -940,8 +977,9 @@ export default function ProjectDashboard({
           })}
 
           {/* Dividers (§6.8.3) — every boundary drags on BOTH axes,
-              live reflow, ~10% floor. Hidden for viewers. */}
-          {!readOnly &&
+              live reflow, ~10% floor. Hidden for viewers, and while the
+              tiles are reflowed (sizes there aren't the saved ones). */}
+          {!readOnly && !display.reflowed &&
             geometry.dividers.map((d) => (
               <div
                 key={`div:${d.splitPath.join('.')}:${d.index}:${d.dir}`}
@@ -999,6 +1037,7 @@ export default function ProjectDashboard({
               }
             />
           )}
+        </div>
         </div>
       )}
     </div>

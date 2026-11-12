@@ -16,6 +16,9 @@ import {
   applyDrop,
   computeLayoutGeometry,
   createLayoutSaver,
+  displayLayoutFor,
+  MIN_TILE_H_PX,
+  MIN_TILE_W_PX,
   findTerminalPaneId,
   initialFreshness,
   insertEdge,
@@ -1120,5 +1123,69 @@ describe('pane type guards + keys', () => {
     expect(paneKey(term('a'))).toBe('t:a')
     expect(paneKey(doc('a', '/x.html'))).toBe('h:a:/x.html')
     expect(paneKey({ kind: 'hologram', extra: 1 })).toBe('u:hologram')
+  })
+})
+
+// ── Display fit: a narrow canvas reflows the tiles, never the saved tree ──
+
+describe('displayLayoutFor (a narrow canvas)', () => {
+  // Six agents in three columns of two, as the busy sample dashboard.
+  const six = (): LayoutNode =>
+    split(
+      'row',
+      [100 / 3, split('col', [50, pane(term('a'))], [50, pane(term('b'))])],
+      [100 / 3, split('col', [50, pane(term('c'))], [50, pane(term('d'))])],
+      [100 / 3, split('col', [50, pane(term('e'))], [50, pane(doc('f', '/w/f/status.html'))])],
+    )
+  const widths = (root: LayoutNode | null, px: number): number[] =>
+    computeLayoutGeometry(root).panes.map((g) => (g.w / 100) * px)
+  const ids = (root: LayoutNode | null): string[] => layoutPanes(root).map((e) => e.paneId)
+
+  it('draws the saved tree as saved when every tile has room', () => {
+    const root = six()
+    const d = displayLayoutFor(root, 1200, 700)
+    expect(d.reflowed).toBe(false)
+    expect(d.root).toBe(root)
+    expect(d.minWidthPx).toBe(0)
+    expect(d.minHeightPx).toBe(0)
+  })
+
+  it('reflows to fewer columns so no tile is under the minimum, in reading order', () => {
+    const root = six()
+    const d = displayLayoutFor(root, 600, 700)
+    expect(d.reflowed).toBe(true)
+    // 600px holds two 240px columns: three rows of two.
+    for (const w of widths(d.root, 600)) expect(w).toBeGreaterThanOrEqual(MIN_TILE_W_PX)
+    expect(widths(d.root, 600).every((w) => Math.abs(w - 300) < 0.01)).toBe(true)
+    // The same tiles, same ids, same order: they move, never remount.
+    expect(ids(d.root)).toEqual(ids(root))
+    assertTidy(d.root)
+  })
+
+  it('a canvas of one column stacks the tiles and scrolls down when they would be too short', () => {
+    const d = displayLayoutFor(six(), 380, 700)
+    expect(d.reflowed).toBe(true)
+    expect(widths(d.root, 380)).toEqual(Array(6).fill(380))
+    expect(d.minWidthPx).toBe(0)
+    expect(d.minHeightPx).toBe(6 * MIN_TILE_H_PX)
+  })
+
+  it('narrower than one tile: the canvas scrolls sideways rather than squeeze it', () => {
+    const d = displayLayoutFor(six(), 200, 700)
+    expect(d.minWidthPx).toBe(MIN_TILE_W_PX)
+  })
+
+  it('never changes the saved tree, and with room again draws it as saved', () => {
+    const root = six()
+    const before = serializeDashboardLayout(root)
+    displayLayoutFor(root, 380, 700)
+    expect(serializeDashboardLayout(root)).toBe(before)
+    expect(displayLayoutFor(root, 1200, 700).root).toBe(root)
+  })
+
+  it('unmeasured (no width yet) or empty: as saved', () => {
+    const root = six()
+    expect(displayLayoutFor(root, 0, 0).root).toBe(root)
+    expect(displayLayoutFor(null, 380, 700)).toEqual({ root: null, reflowed: false, minWidthPx: 0, minHeightPx: 0 })
   })
 })

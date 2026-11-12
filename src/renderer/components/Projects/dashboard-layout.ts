@@ -692,6 +692,57 @@ export function computeLayoutGeometry(root: LayoutNode | null): LayoutGeometry {
   return { panes, dividers }
 }
 
+// ── Display fit (a narrow canvas; never saved) ───────────────────────────
+
+/** The narrowest a tile is drawn: its name, the folded view picker and
+ *  close still fit in the bar (tile-bar-fit.ts folds the picker at about
+ *  230px). */
+export const MIN_TILE_W_PX = 240
+/** The shortest a reflowed tile is drawn: a bar, a few lines and the box. */
+export const MIN_TILE_H_PX = 200
+
+export interface DisplayLayout {
+  /** What to draw: the saved tree, or a reflow of it. */
+  root: LayoutNode | null
+  /** True when `root` is a reflow (display only: never saved). */
+  reflowed: boolean
+  /** The grid's smallest size (px; 0 = the canvas): past it the canvas
+   *  scrolls. */
+  minWidthPx: number
+  minHeightPx: number
+}
+
+/**
+ * What a dashboard draws in a canvas `widthPx` × `heightPx`. When every
+ * tile of the saved layout is at least MIN_TILE_W_PX wide it is drawn as
+ * saved. Otherwise (the project chat open in a small window) its tiles
+ * reflow, in reading order, into as many equal columns as fit at that
+ * width (a grid, row by row, like the presets), and the canvas scrolls
+ * when even that doesn't fit (one column under MIN_TILE_W_PX, or rows
+ * under MIN_TILE_H_PX). The reflow is for display only: the saved tree
+ * is never changed, and with room again it is drawn as saved. Pane ids
+ * are the saved tree's (same reading order), so tiles move rather than
+ * remount.
+ */
+export function displayLayoutFor(root: LayoutNode | null, widthPx: number, heightPx: number): DisplayLayout {
+  const asSaved: DisplayLayout = { root, reflowed: false, minWidthPx: 0, minHeightPx: 0 }
+  if (!root || !(widthPx > 0)) return asSaved
+  const geometry = computeLayoutGeometry(root)
+  const narrowest = Math.min(...geometry.panes.map((g) => (g.w / 100) * widthPx))
+  if (narrowest >= MIN_TILE_W_PX) return asSaved
+  const panes = readingOrder(root)
+  const cols = Math.max(1, Math.min(panes.length, Math.floor(widthPx / MIN_TILE_W_PX)))
+  const rows: LayoutNode[] = []
+  for (let i = 0; i < panes.length; i += cols) rows.push(equalSplit('row', panes.slice(i, i + cols).map(paneNode)))
+  const reflow = normalizeNode(equalSplit('col', rows))
+  return {
+    root: reflow,
+    reflowed: true,
+    minWidthPx: widthPx < MIN_TILE_W_PX ? MIN_TILE_W_PX : 0,
+    minHeightPx: heightPx > 0 && rows.length * MIN_TILE_H_PX > heightPx ? rows.length * MIN_TILE_H_PX : 0,
+  }
+}
+
 // ── Drop zones (§6.8.2 — 5-zone hit-test + edge bands) ───────────────────
 
 /** Container edge bands (~24px) — full-span insert zones. */

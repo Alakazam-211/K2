@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
+import { clientToCssPx } from '@/lib/app-zoom'
 import { cx } from './cx'
 import { usePressSpring } from './usePressSpring'
 
@@ -53,14 +54,16 @@ export function Segmented<T extends string>({
       const on = root.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
       indicator.hidden = !on
       if (!on) return
-      // Rects, not offsetLeft: labels land on fractions of a pixel.
+      // Rects, not offsetLeft: labels land on fractions of a pixel. Rects are
+      // window px; the thumb's width and translate are CSS px, which the app
+      // zoom scales (lib/app-zoom).
       const box = on.getBoundingClientRect()
-      indicator.style.width = `${box.width}px`
+      indicator.style.width = `${clientToCssPx(box.width)}px`
       // The thumb is placed from the padding box. clientLeft is a whole number,
       // so a hairline border (0.5px on Glass's track) has to come from the
-      // computed width for the thumb to land exactly.
+      // computed width (already CSS px) for the thumb to land exactly.
       const border = parseFloat(getComputedStyle(root).borderLeftWidth) || 0
-      indicator.style.transform = `translateX(${box.left - root.getBoundingClientRect().left - border}px)`
+      indicator.style.transform = `translateX(${clientToCssPx(box.left - root.getBoundingClientRect().left) - border}px)`
     }
     place()
     const frame = requestAnimationFrame(() => {

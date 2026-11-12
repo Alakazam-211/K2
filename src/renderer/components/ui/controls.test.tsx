@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Button, ProgressiveHeaderBlur, Segmented, Slider, Toggle } from '@/components/ui'
+import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
 
 afterEach(cleanup)
 
@@ -84,6 +85,24 @@ describe('Segmented', () => {
     expect(container.querySelector<HTMLElement>('.k2-segment-thumb')!.style.transform).toBe('translateX(29.5px)')
     style.mockRestore()
     rect.mockRestore()
+  })
+
+  it('at 150% app zoom, sizes and moves the indicator in CSS px, so it covers its option on screen', () => {
+    applyAppZoomForTest(1.5)
+    // Window px, as the engine reports them under the zoom: the option is
+    // 45 wide, 45 right of the track (30 and 30 CSS px).
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { left: this.getAttribute('role') === 'radio' ? 60 : 15, width: 45 } as DOMRect
+    })
+    try {
+      const { container } = render(<Segmented aria-label="Pick" value="c" onChange={() => {}} options={options} />)
+      const thumb = container.querySelector<HTMLElement>('.k2-segment-thumb')!
+      expect(thumb.style.width).toBe('30px')
+      expect(thumb.style.transform).toBe('translateX(30px)')
+    } finally {
+      rect.mockRestore()
+      resetAppZoomForTest()
+    }
   })
 
   it('arrow keys skip disabled segments and wrap', () => {

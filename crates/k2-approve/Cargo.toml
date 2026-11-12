@@ -27,3 +27,8 @@ verify = ["dep:aws-lc-rs"]
 base64 = "0.22"
 sha2 = "0.10"
 aws-lc-rs = { version = "1", optional = true }
+
+[dev-dependencies]
+# The real-device fixtures hold PEM text with newlines, which the strict
+# approval reader (rightly) refuses; tests read those files with serde_json.
+serde_json = "1"

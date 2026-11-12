@@ -4,7 +4,7 @@
 
 use base64::Engine;
 use k2_approve::attest::{self, K2_PHONE_APP_ID};
-use k2_approve::json::{self, Value};
+use serde_json::Value;
 use k2_approve::{keys, payload, time, Environment};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -15,19 +15,15 @@ fn read(rel: &str) -> Vec<u8> {
 }
 
 fn obj(rel: &str) -> Value {
-    json::parse(std::str::from_utf8(&read(rel)).expect("utf8")).expect("strict JSON")
+    serde_json::from_slice(&read(rel)).expect("JSON")
 }
 
 fn get<'a>(v: &'a Value, k: &str) -> &'a Value {
-    let Value::Obj(o) = v else { panic!("not an object") };
-    &o.iter().find(|(n, _)| n == k).unwrap_or_else(|| panic!("no {k}")).1
+    v.get(k).unwrap_or_else(|| panic!("no {k}"))
 }
 
 fn s<'a>(v: &'a Value, k: &str) -> &'a str {
-    match get(v, k) {
-        Value::Str(s) => s,
-        other => panic!("{k}: {other:?}"),
-    }
+    get(v, k).as_str().unwrap_or_else(|| panic!("{k} is not a string"))
 }
 
 fn b64(s: &str) -> Vec<u8> {

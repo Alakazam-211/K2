@@ -36,6 +36,13 @@ deny = [
     { crate = "ffmpeg-next" },
 ]
 
+# X11 capture: x11rb's pure-Rust connection with `shm`, `damage` and
+# `xfixes` only (the Steward's ruling for this crate): no libxcb bindings
+# and no Xcursor theme loader.
+[[bans.features]]
+crate = "x11rb"
+deny = ["allow-unsafe-code", "dl-libxcb", "cursor"]
+
 [advisories]
 ignore = [
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained: notice only, via zbus 5; clears with zbus 6" },

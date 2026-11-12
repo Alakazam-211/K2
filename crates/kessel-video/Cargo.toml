@@ -1,6 +1,6 @@
 [package]
 name = "kessel-video"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 # zbus 5's minimum (with zvariant and zbus_macros), for the Linux backend.
 # The windows crate (0.62) needs 1.82.
@@ -33,10 +33,12 @@ apple = ["dep:objc2", "dep:block2", "dep:log"]
 # through Media Foundation's MFTs (the GPU driver's or Microsoft's own). OS
 # components through the `windows` crate.
 windows = ["dep:windows", "dep:windows-future"]
-# V4L2 cameras (raw ioctls) and the xdg-desktop-portal ScreenCast (zbus,
-# pure Rust) with PipeWire (the system's libpipewire, loaded at run time:
-# nothing to install at build time). No H.264: Linux has no OS codec.
-linux = ["dep:libc", "dep:zbus", "dep:serde"]
+# V4L2 cameras (raw ioctls), X11 screens (x11rb's pure-Rust connection:
+# MIT-SHM, DAMAGE, XFIXES; listed, no picker) and the xdg-desktop-portal
+# ScreenCast (zbus, pure Rust) with PipeWire (the system's libpipewire,
+# loaded at run time: nothing to install at build time). No H.264: Linux
+# has no OS codec.
+linux = ["dep:libc", "dep:zbus", "dep:serde", "dep:x11rb"]
 # Camera2 cameras and MediaCodec H.264 encoding through the NDK's system
 # libraries (libcamera2ndk, libmediandk), declared in Rust: no build script,
 # no C, nothing vendored. Needs API 24. Screen capture runs from a
@@ -77,6 +79,11 @@ log = { version = "0.4", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { version = "0.2", optional = true }
 serde = { version = "1", optional = true }
+# X11 screen capture. The pure-Rust connection only (no libxcb, no
+# `allow-unsafe-code`, `dl-libxcb` or `cursor`): the three extensions the
+# capture uses and nothing else. MIT OR Apache-2.0. Linux only, so the
+# other targets' dependency graphs don't change.
+x11rb = { version = "0.14", optional = true, default-features = false, features = ["shm", "damage", "xfixes"] }
 zbus = { version = "5", optional = true }
 
 [target.'cfg(windows)'.dependencies]

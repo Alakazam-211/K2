@@ -1,7 +1,9 @@
-//! The Linux backend: V4L2 cameras through raw ioctls, and screens through
-//! the xdg-desktop-portal ScreenCast (zbus) with a PipeWire stream (the
-//! system's libpipewire, loaded at run time). Linux has no OS H.264, so
-//! codecs come from the VP8 crates.
+//! The Linux backend: V4L2 cameras through raw ioctls, and screens two
+//! ways: an X11 display's screens are listed and open without a picker
+//! (MIT-SHM, DAMAGE and XFIXES over x11rb, `x11.rs`), and the
+//! xdg-desktop-portal ScreenCast (zbus) picks a screen or window that a
+//! PipeWire stream delivers (the system's libpipewire, loaded at run
+//! time). Linux has no OS H.264, so codecs come from the VP8 crates.
 
 #[cfg(not(target_pointer_width = "64"))]
 compile_error!("the V4L2 and SPA structs here are laid out for 64-bit targets");
@@ -11,6 +13,7 @@ mod pipewire;
 mod portal;
 mod screen;
 mod v4l2;
+mod x11;
 
 use crate::api::{
     Done, EventHub, EventRx, FrameSource, VideoBackend, VideoDecoder, VideoEncoder, Wake,
@@ -120,15 +123,18 @@ impl VideoBackend for LinuxBackend {
         let mut caps = Capabilities::new("linux", os_name());
         crate::rust_codecs::add_capabilities(&mut caps);
         caps.camera = true;
-        let screens = screen::supported();
+        let portal = screen::supported();
+        // An X11 display's screens are listed and open without a picker.
+        let x11 = x11::available();
         caps.screen = ScreenCapability {
-            supported: screens,
-            // The portal is the only way to choose a screen on Linux.
-            system_picker: screens,
-            list: false,
+            supported: portal || x11,
+            // The portal is the only picker on Linux.
+            system_picker: portal,
+            list: x11,
             windows: screen::windows_supported(),
-            // Embedded in the frames when the portal offers it.
-            cursor: screens,
+            // Drawn in on X11; embedded in the frames when the portal
+            // offers it.
+            cursor: portal || x11,
             // The portal shares what the person picks; it can't leave our
             // own windows out of a display.
             exclude_own_windows: false,
@@ -164,7 +170,8 @@ impl VideoBackend for LinuxBackend {
     }
 
     fn screen_permission(&self) -> Permission {
-        // Nothing to grant ahead: the portal asks the person at each pick.
+        // Nothing to grant ahead: the portal asks the person at each pick,
+        // and an X11 display is open to whoever holds its cookie.
         Permission::Granted
     }
 
@@ -174,8 +181,8 @@ impl VideoBackend for LinuxBackend {
 
     fn screen_sources(&self) -> Result<Vec<ScreenSourceInfo>, VideoError> {
         self.live()?;
-        // Only the portal's picker can choose a screen on Linux.
-        Ok(Vec::new())
+        // The X11 display's screens; the portal's choices aren't listed.
+        Ok(x11::sources())
     }
 
     fn pick_screen(&self, opts: PickOptions, done: Done<Result<ScreenSelection, VideoError>>) {
@@ -192,7 +199,10 @@ impl VideoBackend for LinuxBackend {
         wake: Wake,
     ) -> Result<Box<dyn FrameSource>, VideoError> {
         self.live()?;
-        screen::open(s, c, wake)
+        match s {
+            ScreenSelection::Listed(id) if x11::is_x11_id(id) => x11::open(id, c, wake),
+            _ => screen::open(s, c, wake),
+        }
     }
 
     fn encoder(
@@ -266,9 +276,13 @@ mod tests {
                 .err(),
             Some(VideoError::Unsupported(_))
         ));
-        assert!(b.screen_sources().expect("list").is_empty());
-        assert!(!caps.screen.list && !caps.screen.exclude_own_windows);
-        eprintln!("[linux] screen capture here: {}", caps.screen.supported);
+        // An X11 display (DISPLAY) lists its screens; without one the list
+        // is empty and only the portal picks.
+        let listed = b.screen_sources().expect("list");
+        assert_eq!(caps.screen.list, !listed.is_empty(), "{listed:?}");
+        assert!(listed.iter().all(|s| s.id.starts_with("x11:")), "{listed:?}");
+        assert!(!caps.screen.exclude_own_windows);
+        eprintln!("[linux] screen capture here: {}, listed: {listed:?}", caps.screen.supported);
         assert_eq!(
             b.open_screen(
                 &ScreenSelection::Listed("display:0".into()),
@@ -277,7 +291,7 @@ mod tests {
             )
             .err(),
             Some(VideoError::NotFound),
-            "Linux has no list: only the portal picks"
+            "not an id the list gives"
         );
         b.shutdown();
         assert_eq!(b.screen_sources().err(), Some(VideoError::ShutDown));

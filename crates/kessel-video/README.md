@@ -32,7 +32,7 @@ won't. Each change is listed in CHANGELOG.md.
 |---|---|---|---|---|---|
 | macOS (Apple Silicon) | AVFoundation | ScreenCaptureKit (12.3+) | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | The test suite passes, including VideoToolbox H.264 encoding and decoding. **Camera and screen capture are untested on hardware**: they need a person to grant permission, so their tests only run by hand and have not been run. |
 | iOS (iPhone, iPad) | AVFoundation | Frame-in: the app feeds its broadcast upload extension's frames | H.264 (VideoToolbox), VP8 | H.264 (VideoToolbox), VP8 | **Type-checked and unit-tested only: never run on an iPhone or iPad.** The backend shares its VideoToolbox, pixel buffer and AVFoundation code with macOS, where that code's tests pass. The iOS-only code and its tests (which need the simulator or a phone) have not run, and camera capture, rotation and interruptions need a device and a person. |
-| Linux (x86-64) | V4L2 | The ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. **Camera capture is untested with a real camera, and screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
+| Linux (x86-64) | V4L2 | X11 screens (MIT-SHM, DAMAGE, XFIXES; listed, no picker), and the ScreenCast portal with PipeWire | VP8 (no H.264: Linux has no OS codec) | VP8 | The test suite passes on machines with no camera and no desktop. X11 capture is tested against Xvfb (an in-memory X server). **Camera capture is untested with a real camera, and portal screen capture is untested on a desktop** (`scripts/try-linux-screen.sh` in the repository is the manual check). |
 | Windows (x86-64) | Media Foundation | Windows Graphics Capture | H.264 (Media Foundation), VP8 | H.264 (Media Foundation), VP8 | The test suite passes on Windows 11 with no GPU, including H.264 encoding and decoding through Microsoft's software MFTs. **Hardware H.264 MFTs are untested** (they need a machine with a GPU), and **camera and screen capture are untested on hardware** (their tests run by hand). |
 | Android (API 24+) | Camera2 through the NDK | MediaProjection (API 26+), once the app hands one over | H.264 (MediaCodec), VP8 | VP8 | **Type-checked and unit-tested only: never run on a device or an emulator** (aarch64 and x86-64). The backend's logic (cameras, rotation, pause and resume, MediaProjection screens, errors, VP8) is tested on a host over a scripted platform; the NDK and JNI calls themselves have not run. |
 | Any | the fake backend | the fake backend | VP8, the fake's structural H.264 | the same | Tested on Linux and macOS. |
@@ -70,8 +70,20 @@ caller has already decrypted and verified.
 - **Windows:** displays and windows, and the system picker (pass the app's
   HWND with `PickOptions::with_parent_window`). No window exclusion: Windows
   can only hide our windows from every capture.
-- **Linux:** the portal's picker is the only way to choose, and there is no
-  window exclusion.
+- **Linux:** two ways, neither with window exclusion.
+  - **X11:** `screen_sources()` lists the screens of the display in
+    `DISPLAY` (`x11:0`), and `open_screen(&ScreenSelection::Listed(id), …)`
+    opens one with no picker and no prompt: X11 lets any client that holds
+    the display's cookie read the screen. This also works with an
+    in-memory X server (Xvfb) on a machine nobody sits at. Frames come only
+    when the screen changed (DAMAGE) or, with `cursor` set, when the pointer
+    moved, at most at the asked rate; the first comes at once. The cursor is
+    drawn in from XFIXES' image. A size change (RandR) gives frames of the
+    new size and `SourceEvent::Started` with it. Reads go through MIT-SHM,
+    or the core `GetImage` request where MIT-SHM can't be used (a display
+    over ssh). A 24- or 32-bit TrueColor screen only.
+  - **The portal:** its picker chooses a screen or a window (Wayland
+    desktops, and X11 desktops that run one).
 - **iOS:** a broadcast upload extension captures the screen in its own
   process; the app feeds its frames into a `frame_in()` source. The
   capabilities say `screen.frame_in`: wait for the app's frames instead of
@@ -173,7 +185,11 @@ tool, so don't give it untrusted input.
 ## Platform notes
 
 On Linux:
-- Screen capture needs xdg-desktop-portal with a desktop backend and
+- X11 screen capture needs `DISPLAY` (and `XAUTHORITY` where the display
+  uses a cookie file) in the process's environment, and the X server's
+  DAMAGE extension; MIT-SHM and XFIXES are used when present. It speaks the
+  X11 protocol over x11rb's pure-Rust connection: no libX11 or libxcb.
+- Portal screen capture needs xdg-desktop-portal with a desktop backend and
   PipeWire at run time. libpipewire is the system's own, loaded with dlopen:
   nothing is linked or needed at build time, and a system without it reports
   no screen capture.
@@ -343,8 +359,8 @@ undefined symbols allowed on Android) and run it on macOS.
   `windows` crate needs 1.82).
 - No system libraries or headers at build time on any platform. The OS
   backends reach the OS through system frameworks (macOS), OS DLLs through
-  the `windows` crate (Windows), raw ioctls, D-Bus in pure Rust and a
-  run-time dlopen of the system's libpipewire (Linux), and the NDK's system
+  the `windows` crate (Windows), raw ioctls, D-Bus and the X11 protocol in
+  pure Rust and a run-time dlopen of the system's libpipewire (Linux), and the NDK's system
   libraries `libcamera2ndk` and `libmediandk`, declared in Rust and linked
   from the NDK's own stubs like any Android app (Android). No build script
   and no C is compiled.
@@ -409,7 +425,9 @@ What parses data from the network, and how it is tested:
   ScreenCaptureKit), `win` (Media Foundation and its MFTs, Direct3D 11 and
   Windows Graphics Capture through the `windows` crate, with Media
   Foundation's DLLs loaded at run time) and `linux` (V4L2 ioctls,
-  mmap, a file descriptor from the portal, and libpipewire through dlopen).
+  mmap, a file descriptor from the portal, libpipewire through dlopen, and
+  the X11 capture's shared memory: a memfd mapped and passed to the X
+  server, and `poll` on its socket).
   The rest of the crate is `deny(unsafe_code)`: the API, the frame and pixel
   code, conversion, the H.264 helpers, the VP8 glue, the fake and null
   backends. The decode path for VP8 has no `unsafe` of its own.
@@ -417,6 +435,7 @@ What parses data from the network, and how it is tested:
   `deny(unsafe_code)` except for its NEON (aarch64) and SSE2 (x86_64)
   loop-filter modules (since 0.1.1; its README explains how they are kept
   in bounds, and `--cfg vp8_portable` leaves them out).
+- x11rb is used without its `allow-unsafe-code` feature (no libxcb).
 - objc2, block2, the `windows` crate, libc, zbus and crossbeam-queue use
   `unsafe` internally, as FFI and lock-free queue crates do.
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.7
+
+X11 screen capture on Linux, listed and opened without a picker. No API
+changes: the existing calls do more on Linux. The Linux backend gains the
+`x11rb` crate (MIT OR Apache-2.0; its pure-Rust connection with the `shm`,
+`damage` and `xfixes` extensions only, no libxcb).
+
+### X11 screens (Linux)
+
+- `screen_sources()` now lists the screens of the X display in `DISPLAY`,
+  with ids `x11:0`, `x11:1`, … (it was always empty on Linux), and
+  `capabilities().screen.list` is true when there is one. Without an X
+  display both are as before.
+- `open_screen(&ScreenSelection::Listed("x11:0".into()), …)` captures that
+  screen with no picker and no prompt: MIT-SHM reads (the core `GetImage`
+  where MIT-SHM can't be used), DAMAGE so that a still screen gives no
+  frames, and XFIXES' cursor image drawn in when `CaptureConstraints::cursor`
+  is set (a pointer move then gives a frame too). The first frame comes at
+  once. A size change on the X server gives frames of the new size and
+  `SourceEvent::Started` with it. Frames are BGRA, at most at the asked
+  rate. Screens that aren't 24- or 32-bit TrueColor answer `Unsupported`.
+- It works the same with an in-memory X server (Xvfb) on a machine with no
+  screen and nobody at it, which is what it is tested against.
+- `capabilities().screen.supported` and `.cursor` are true with either an X
+  display or the ScreenCast portal; `.system_picker` still means the
+  portal. Portal picks open as before.
+
 ## 0.1.6
 
 The encoder report now matches what VideoToolbox actually used. No API

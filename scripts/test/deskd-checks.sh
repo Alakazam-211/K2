@@ -12,7 +12,11 @@
 #   macos   check + test k2-deskd-proto and k2-deskd (no TCC, no capture:
 #           nothing here prompts), and check the daemon's desktop module
 #   xvfb    only the Xvfb integration tests (Linux)
-#   deny    cargo deny --all-features (licences + bans), Steward R27
+#   x11     kessel-video's X11 capture against Xvfb (each test starts its
+#           own; xrandr for the size change) and the crate's other lib
+#           tests, Linux virtual desktop L1
+#   deny    cargo deny --all-features (licences + bans), Steward R27 and
+#           R32 (kessel-video's x11rb)
 #
 # Tests run with every K2_* variable unset and a temp HOME (CLAUDE.md); cargo
 # keeps its own CARGO_HOME / RUSTUP_HOME. Every step prints its exit code and
@@ -116,13 +120,21 @@ case "$mode" in
     xvfb)
         xvfb_tests
         ;;
+    x11)
+        step "kessel-video lib tests" test_env cargo test -p kessel-video --lib --no-fail-fast
+        step "kessel-video X11 capture (Xvfb, the ignored ones)" \
+            test_env cargo test -p kessel-video --lib --no-fail-fast -- --include-ignored linux::x11::
+        ;;
     deny)
         # One run covers macOS and Linux: crates/k2-deskd/deny.toml lists both
         # targets. Then the lockfile: the only new packages may be our own.
+        # (cargo-deny 0.20 takes --config before the subcommand.)
         step "cargo deny k2-deskd --all-features (macOS + Linux targets)" \
-            cargo deny --manifest-path crates/k2-deskd/Cargo.toml --all-features check --config "$PWD/crates/k2-deskd/deny.toml" licenses bans advisories
+            cargo deny --manifest-path crates/k2-deskd/Cargo.toml --all-features --config "$PWD/crates/k2-deskd/deny.toml" check licenses bans advisories
         step "cargo deny k2-daemon's new wire crate --all-features" \
-            cargo deny --manifest-path crates/k2-deskd-proto/Cargo.toml --all-features check --config "$PWD/crates/k2-deskd/deny.toml" licenses bans
+            cargo deny --manifest-path crates/k2-deskd-proto/Cargo.toml --all-features --config "$PWD/crates/k2-deskd/deny.toml" check licenses bans
+        step "cargo deny kessel-video --all-features (every target; R32: x11rb shm/damage/xfixes only)" \
+            cargo deny --manifest-path crates/kessel-video/Cargo.toml --all-features --config "$PWD/crates/kessel-video/deny.toml" check licenses bans advisories
         step "Cargo.lock adds no third-party crate" lock_adds_only_ours
         ;;
     lock)
@@ -137,7 +149,7 @@ case "$mode" in
         diff <(echo "$before") <(echo "$after")
         ;;
     *)
-        echo "usage: $0 linux|linux-unit|macos|macos-daemon|xvfb|deny|lock" >&2
+        echo "usage: $0 linux|linux-unit|macos|macos-daemon|xvfb|x11|deny|lock" >&2
         exit 2
         ;;
 esac

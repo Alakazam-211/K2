@@ -210,6 +210,38 @@ mod tests {
         assert_eq!(find_spare(8, 0, &[]), None);
     }
 
+    /// min 8, 2 per keycode: 8 a/A, 9 1/!, 10 Shift_L, 11 and 12 empty.
+    const MAP: [Keysym; 10] = [0x61, 0x41, 0x31, 0x21, 0xffe1, 0, 0, 0, 0, 0];
+
+    #[test]
+    fn text_uses_the_keys_the_keymap_has_and_spares_only_for_the_rest() {
+        // A client reads a key's character when it gets to the event, with
+        // the keymap as it is then: a key the keymap has never changes
+        // under it. Only characters it lacks go on a spare.
+        assert_eq!(
+            plan_text("aA1!é", 8, 2, &MAP),
+            vec![
+                Stroke::Key { keycode: 8, shift: false },
+                Stroke::Key { keycode: 8, shift: true },
+                Stroke::Key { keycode: 9, shift: false },
+                Stroke::Key { keycode: 9, shift: true },
+                Stroke::Spare(0xe9),
+            ]
+        );
+    }
+
+    #[test]
+    fn with_no_shift_key_a_second_level_character_goes_on_a_spare() {
+        let no_shift = [0x61, 0x41, 0, 0];
+        assert_eq!(plan_text("aA", 8, 2, &no_shift), vec![Stroke::Key { keycode: 8, shift: false }, Stroke::Spare(0x41)]);
+    }
+
+    #[test]
+    fn spares_are_the_highest_empty_keycodes_first() {
+        assert_eq!(find_spares(8, 2, &MAP), vec![12, 11]);
+        assert_eq!(find_spares(8, 2, &[1, 2, 3, 4]), Vec::<Keycode>::new());
+    }
+
     #[test]
     fn wheel_clicks_and_directions() {
         let mut w = WheelClicks::default();

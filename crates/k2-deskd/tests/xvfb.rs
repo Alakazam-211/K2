@@ -119,7 +119,7 @@ fn xtest_wheel_clicks_buttons_four_and_five() {
 }
 
 #[test]
-fn text_types_through_a_spare_keycode_and_restores_it() {
+fn text_types_one_press_per_character_and_restores_the_keymap() {
     let t = Target::new();
     let (mut inj, x) = injector();
     let hold = LocalHold::default();
@@ -130,8 +130,105 @@ fn text_types_through_a_spare_keycode_and_restores_it() {
     let log = t.take_after(SETTLE);
     let presses: Vec<&String> = log.iter().filter(|l| l.starts_with("key-press")).collect();
     assert_eq!(presses.len(), 4, "one press per character: {log:?}");
-    let spare = presses[0].clone();
-    assert!(presses.iter().all(|p| **p == spare), "all on the one spare keycode: {log:?}");
+    let after = x.conn.get_keyboard_mapping(min, max - min + 1).unwrap().reply().unwrap();
+    assert_eq!(before.keysyms, after.keysyms, "the keymap must be put back after the text");
+}
+
+/// A window that reads keys the way a toolkit does: it turns each key
+/// press into a character with the keymap it holds when it gets to the
+/// event (fetched again on every MappingNotify, so it sees the server's
+/// keymap as it is then, not as it was when the key was pressed), and it
+/// is a little slow, as a busy browser is. Returns what it typed so far.
+struct TypingTarget {
+    typed: Arc<Mutex<String>>,
+}
+
+impl TypingTarget {
+    fn new(per_event: Duration) -> TypingTarget {
+        let (conn, screen) = x11rb::connect(None).expect("DISPLAY must name the Xvfb server");
+        let s = conn.setup().roots[screen].clone();
+        let win = conn.generate_id().unwrap();
+        let mask = EventMask::KEY_PRESS | EventMask::KEY_RELEASE | EventMask::STRUCTURE_NOTIFY;
+        conn.create_window(s.root_depth, win, s.root, 0, 0, s.width_in_pixels, s.height_in_pixels, 0, WindowClass::INPUT_OUTPUT, 0, &CreateWindowAux::new().event_mask(mask).override_redirect(1))
+            .unwrap();
+        conn.map_window(win).unwrap();
+        conn.flush().unwrap();
+        loop {
+            if let Event::MapNotify(_) = conn.wait_for_event().unwrap() {
+                break;
+            }
+        }
+        conn.set_input_focus(InputFocus::POINTER_ROOT, win, x11rb::CURRENT_TIME).unwrap();
+        conn.sync().unwrap();
+        let typed = Arc::new(Mutex::new(String::new()));
+        let t2 = Arc::clone(&typed);
+        std::thread::spawn(move || {
+            let conn: RustConnection = conn;
+            let (min, max) = (conn.setup().min_keycode, conn.setup().max_keycode);
+            let fetch = |c: &RustConnection| c.get_keyboard_mapping(min, max - min + 1).unwrap().reply().unwrap();
+            let mut map = fetch(&conn);
+            let mut shift = false;
+            loop {
+                let ev = match conn.wait_for_event() {
+                    Ok(e) => e,
+                    Err(_) => return,
+                };
+                std::thread::sleep(per_event);
+                let per = map.keysyms_per_keycode as usize;
+                let syms = |code: u8, m: &x11rb::protocol::xproto::GetKeyboardMappingReply| -> Vec<u32> {
+                    let i = (code - min) as usize * per;
+                    m.keysyms[i..i + per].to_vec()
+                };
+                match ev {
+                    Event::MappingNotify(_) => map = fetch(&conn),
+                    Event::KeyPress(e) => {
+                        let ks = syms(e.detail, &map);
+                        if ks[0] == 0xffe1 || ks[0] == 0xffe2 {
+                            shift = true;
+                            continue;
+                        }
+                        let k = if shift && per > 1 && ks[1] != 0 { ks[1] } else { ks[0] };
+                        let c = match k {
+                            0x20..=0x7e | 0xa0..=0xff => char::from_u32(k),
+                            k if k & 0xff00_0000 == 0x0100_0000 => char::from_u32(k & 0x00ff_ffff),
+                            _ => Some('?'),
+                        };
+                        t2.lock().unwrap().push(c.unwrap_or('?'));
+                    }
+                    Event::KeyRelease(e) => {
+                        let ks = syms(e.detail, &map);
+                        if ks[0] == 0xffe1 || ks[0] == 0xffe2 {
+                            shift = false;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        TypingTarget { typed }
+    }
+
+    fn typed_after(&self, settle: Duration) -> String {
+        std::thread::sleep(settle);
+        self.typed.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn text_reaches_a_slow_client_exactly() {
+    // L9 on a live box: "hello world 123" typed into a browser came out as
+    // "eo2". A client looks a key up when it reads the event; with every
+    // character on one remapped spare, it reads most of them after the
+    // spare was remapped again (or put back to nothing).
+    let t = TypingTarget::new(Duration::from_millis(5));
+    let (mut inj, x) = injector();
+    let hold = LocalHold::default();
+    let setup = x.conn.setup();
+    let (min, max) = (setup.min_keycode, setup.max_keycode);
+    let before = x.conn.get_keyboard_mapping(min, max - min + 1).unwrap().reply().unwrap();
+    let text = "hello world 123 ABC xyz!? é€😀 ok";
+    assert_eq!(inj.inject(&InputEvent::Text { text: text.into() }, &hold, Instant::now()).unwrap(), Outcome::Posted);
+    assert_eq!(t.typed_after(Duration::from_millis(1_500)), text);
     let after = x.conn.get_keyboard_mapping(min, max - min + 1).unwrap().reply().unwrap();
     assert_eq!(before.keysyms, after.keysyms, "the keymap must be put back after the text");
 }

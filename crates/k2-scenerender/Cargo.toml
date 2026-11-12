@@ -1,0 +1,55 @@
+[package]
+name = "k2-scenerender"
+# The worker has its own version line, independent of the K2 release (like
+# k2-deckrender): the host checks the protocol in each response
+# (proto::PROTO), not this number. release.sh does not bump it.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "K2's 3D stills renderer for live BLEND docs: one process per request draws a K2SCENE1 scene's views (auto 3/4, turntable, cameras) on the CPU to WebP or PNG, with time, memory, file and network limits it puts on itself. The lib holds the wire, the digests and the host-side runner; the bin is the worker."
+
+# The worker parses untrusted bytes, so it holds no tokens, no DB and no OS
+# integration: it never links k2-core or k2-daemon (like k2-deckrender).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-scenerender"
+path = "src/main.rs"
+
+[features]
+# TEST ONLY: the worker honours the request's `hostile` field (sleep, spin,
+# allocate without bound, abort, try the network, write a file, report its
+# environment and its limits), to prove every limit (tests/limits.rs).
+# Release builds never enable it; the packaging checks refuse a
+# k2-scenerender carrying its marker.
+test-hostile = []
+
+# Kessel Steward's conditions: these five only, at the versions already in
+# K2's Cargo.lock (through k2-deckrender's tree); no other crate, no glTF or
+# hash crate (sha256.rs is FIPS 180-4, ours). tests/licences.rs pins the list.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# WebP lossless (pure Rust) and PNG.
+image-webp = "0.2"
+png = "0.18"
+libc = "0.2"
+
+[[test]]
+name = "render"
+path = "tests/render.rs"
+
+[[test]]
+name = "digests"
+path = "tests/digests.rs"
+
+[[test]]
+name = "limits"
+path = "tests/limits.rs"
+required-features = ["test-hostile"]
+
+[[test]]
+name = "licences"
+path = "tests/licences.rs"

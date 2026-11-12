@@ -33,6 +33,9 @@ members = [
     # The .pptx slide renderer: one process per render, on the vendored deckcraft
     # (vendor/deckcraft); its fuzz/ is a workspace of its own.
     "crates/k2-deckrender",
+    # The 3D stills renderer for live BLEND docs: one process per request, all
+    # our own code (K2SCENE1 in, WebP/PNG out); its fuzz/ is a workspace of its own.
+    "crates/k2-scenerender",
     # Voice audio pipeline (devices, AEC/NS/AGC, Opus, jitter buffers);
     # MIT OR Apache-2.0, Kessel family.
     "crates/kessel-audio",

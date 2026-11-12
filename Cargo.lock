@@ -5069,6 +5069,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-scenerender"
+version = "0.1.0"
+dependencies = [
+ "image-webp",
+ "libc",
+ "png 0.18.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "k2-signer"
 version = "0.1.0"
 dependencies = [

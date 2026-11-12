@@ -80,7 +80,7 @@ part_web() {
 part_rust_check() {
     step "cargo check -D warnings, all targets"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node \
-        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export -p k2-deckrender \
+        -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export -p k2-deckrender -p k2-scenerender \
         -p k2-deskd-proto -p k2-deskd --all-targets
     step "cargo check airgap feature"
     RUSTFLAGS="-D warnings" cargo check -p k2-core -p k2-daemon --features airgap --all-targets
@@ -128,6 +128,10 @@ part_rust_test() {
     # worker), its renders, and the licence listing of what it ships.
     step "cargo nextest k2-deckrender (Linux)"
     cargo nextest run --profile ci -p k2-deckrender --features test-hostile
+    # The 3D stills renderer: its limits against the real binary (test-hostile
+    # worker), its renders, the determinism digests and the licence listing.
+    step "cargo nextest k2-scenerender (Linux)"
+    cargo nextest run --profile ci -p k2-scenerender --features test-hostile
     cargo nextest run --profile ci -p k2-core --test ptyd_backend
 
     step "cargo nextest root helper"

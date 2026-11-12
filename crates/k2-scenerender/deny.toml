@@ -1,0 +1,47 @@
+# cargo-deny policy for k2-scenerender (the 3D stills renderer):
+#   cargo deny --manifest-path crates/k2-scenerender/Cargo.toml \
+#       --config crates/k2-scenerender/deny.toml check licenses bans advisories sources
+# Kessel Steward's conditions: permissive licences only, no git sources, and
+# the five direct dependencies tests/licences.rs pins (serde, serde_json,
+# image-webp, png, libc). No ignores.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+exclude-dev = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    # No glTF loader and no hash crate in what ships (the Steward's conditions).
+    { name = "gltf" },
+    { name = "gltf-json" },
+    { name = "sha2" },
+    { name = "blend" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[advisories]
+ignore = []

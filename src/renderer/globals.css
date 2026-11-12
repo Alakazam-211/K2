@@ -1811,6 +1811,14 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
   border: 1px solid var(--color-control-edge);
   border-radius: var(--radius-pill);
 }
+/* A Settings row's button on a line of its own that is still wider than the
+   line (a narrow pane, the app zoomed in): its label wraps rather than
+   running off the card. Where there's room it keeps to one line, as every
+   Button does (ui/Button.tsx). */
+:is([data-setting-row-control], [data-setting-row-below]) button.k2-focus {
+  max-width: 100%;
+  white-space: normal;
+}
 /* One line, always: a wrapped label would break the sliding highlight. */
 .k2-segment-label { display: block; white-space: nowrap; }
 /* Too wide for its own line, it shows as a dropdown (segmented-fit.ts). The

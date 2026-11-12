@@ -117,7 +117,7 @@ export function SettingRow({
         >
           {children}
         </div>
-        {below && <div className="mt-2">{below}</div>}
+        {below && <div data-setting-row-below="" className="mt-2">{below}</div>}
       </div>
     )
   }
@@ -148,7 +148,7 @@ export function SettingRow({
             {children}
           </div>
         </div>
-        {below && <div className="mt-2">{below}</div>}
+        {below && <div data-setting-row-below="" className="mt-2">{below}</div>}
       </div>
     )
   }

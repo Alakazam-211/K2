@@ -346,7 +346,7 @@ function BoardMenu(props: {
         data-k2-chamfer="surface"
         {...floatMaterial('menu', 'frost')}
         style={{ '--k2-menu-origin': 'top left' } as React.CSSProperties}
-        className="flex max-h-[min(60vh,420px)] flex-col border border-[var(--color-border)] bg-[var(--color-bg)] py-1 [box-shadow:var(--shadow-3)]"
+        className="flex max-h-[min(calc(var(--k2-vh)*0.6),420px)] flex-col border border-[var(--color-border)] bg-[var(--color-bg)] py-1 [box-shadow:var(--shadow-3)]"
         onKeyDown={onKeyDown}
       >
         {searching ? (

@@ -295,7 +295,7 @@ function SheetFrame({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid="project-settings-sheet"
-        className="w-[min(76rem,calc(100vw-2.5rem))] h-[min(56rem,calc(100vh-2.5rem))] overflow-hidden"
+        className="w-[min(76rem,calc(var(--k2-vw)-2.5rem))] h-[min(56rem,calc(var(--k2-vh)-2.5rem))] overflow-hidden"
       >
         {/* data-toast-host: the toasts this sheet's changes make show in
             it (bottom centre), not on the page under its scrim. */}

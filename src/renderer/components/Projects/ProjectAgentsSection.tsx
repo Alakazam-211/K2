@@ -623,7 +623,7 @@ export function AddAgentDialog({
           memberIds={memberIds}
           onAdded={() => onChanged()}
           inset="px-3"
-          listClassName="max-h-[min(50vh,22rem)]"
+          listClassName="max-h-[min(calc(var(--k2-vh)*0.5),22rem)]"
         />
       </div>
     </AccessSheet>

@@ -163,7 +163,7 @@ function TabPicker({
         <Chevron open={open} />
       </button>
       {open && (
-        <BarMenuPanel menu={menu} label="Dashboards and Feedback" onClose={() => setOpen(false)} testId="tab-picker-menu" className="max-h-[min(70vh,30rem)] overflow-y-auto">
+        <BarMenuPanel menu={menu} label="Dashboards and Feedback" onClose={() => setOpen(false)} testId="tab-picker-menu" className="max-h-[min(calc(var(--k2-vh)*0.7),30rem)] overflow-y-auto">
           <div className="px-3 pt-1.5 pb-1 type-hint font-semibold text-[var(--color-text-secondary)]" role="presentation">
             Dashboards
           </div>
@@ -266,7 +266,7 @@ function ProjectSwitcher({ show, compact }: { show: ProjectGroupShow; compact: b
           onClose={() => setOpen(false)}
           testId="project-switcher"
           focusFirst="[data-switcher-find]"
-          className="max-h-[min(70vh,30rem)] overflow-y-auto w-[17rem]"
+          className="max-h-[min(calc(var(--k2-vh)*0.7),30rem)] overflow-y-auto w-[17rem]"
         >
           <div className="px-2 pt-1 pb-1.5">
             <SearchField

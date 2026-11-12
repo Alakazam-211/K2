@@ -24,7 +24,7 @@ import { DIALOG_MUTED, useScrollEdges } from '@/components/Settings/sections/Acc
 
 /** The sheet's one height: the pick step's list and the review hold here and
  *  scroll; shorter steps leave the footer where it is. */
-export const TEMPLATE_SHEET_HEIGHT = 'h-[min(40rem,calc(100vh-2.5rem))]'
+export const TEMPLATE_SHEET_HEIGHT = 'h-[min(40rem,calc(var(--k2-vh)-2.5rem))]'
 
 export function TemplateSheetFrame({
   testId,
@@ -111,7 +111,7 @@ export function TemplateSheetFrame({
         aria-describedby={intro ? introId : undefined}
         aria-busy={busy || undefined}
         data-testid={testId}
-        className={`w-[min(36rem,calc(100vw-2.5rem))] ${TEMPLATE_SHEET_HEIGHT} flex flex-col`}
+        className={`w-[min(36rem,calc(var(--k2-vw)-2.5rem))] ${TEMPLATE_SHEET_HEIGHT} flex flex-col`}
       >
         <div className={`flex-shrink-0 px-5 pt-5 pb-4 pr-10 border-b ${edge(body.edges.top)}`} data-testid={`${testId}-head`}>
           {step ? (

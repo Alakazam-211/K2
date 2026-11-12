@@ -729,3 +729,102 @@ async fn one_ci_message_per_run_monitors_stats_and_log_search() {
     }
     k2_daemon::ci_engine::test_sink_close();
 }
+
+/// prd-compute-blacksmith-class-v1 B2 (§4.1.4, §4.1.5, §10): the trusted
+/// cache is saved only by CI checks of a trusted branch at a pushed commit,
+/// as the plan's `cache_commit` says; `--ref main` on a local commit and a
+/// plain run at main save only scratch; an agent narrows the trusted
+/// branches but never widens them; a node without cache generations gets
+/// no cache fields; the nodes' lineages reach `k2 compute cache --lineage`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
+    use k2_core::compute::proto::frames::Frame;
+    use k2_core::compute::proto::gens::{CacheCommit, LineageInfo, LineageStatus};
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
+    let (ws, _bare) = seed_repo_ws(&env, "trustapp", Some(CI_TOML));
+    let sha1 = git(&ws.path, &["rev-parse", "HEAD"]);
+    active_node("gn-1", "k2n7", &ws, true);
+    let mut gens_offer = offer();
+    gens_offer.protocol = 10;
+    gens_offer.features.extend(["cache-gens".to_string(), "job-uid".to_string()]);
+    let mut node = compute_ws::test_attach("gn-1", gens_offer);
+    let agent = passport(&ws);
+
+    // The trusted branches: main by default; an agent can't add one.
+    let r = get(d.port, "/cli/ci/cache/trust", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["branches"].clone(), j(&r)["default"].clone()), (json!(["main"]), json!(true)));
+    let r = post(d.port, "/cli/ci/cache/trust/set", &agent, json!({"add": ["feat"]})).await;
+    assert_eq!((r.status, code(&r).as_str()), (403, "cache_trust_needs_person"), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("only a person"), "{}", r.body);
+    let r = post(d.port, "/cli/ci/cache/trust/set", &agent, json!({"set": ["main", "feat"]})).await;
+    assert_eq!(code(&r), "cache_trust_needs_person", "--set that adds is widening too");
+    let r = post(d.port, "/cli/ci/cache/trust/set", OWNER, json!({"workspace": ws.id, "add": ["rel"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["branches"], json!(["main", "rel"]));
+    let r = post(d.port, "/cli/ci/cache/trust/set", &agent, json!({"remove": ["rel"]})).await;
+    assert_eq!((r.status, j(&r)["branches"].clone()), (200, json!(["main"])), "an agent narrows: {}", r.body);
+
+    // A watched push to main: its checks may save the trusted cache, and
+    // the plan names the verified branch.
+    let r = post(d.port, "/cli/ci/watch", &agent, json!({"on": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    tick().await;
+    let run = j(&get(d.port, "/cli/ci/status", &agent, "").await)["runs"][0].clone();
+    let unit = check(&run, "unit")["job"].as_str().expect("unit job").to_string();
+    let plan = row(&unit).plan().expect("plan");
+    assert_eq!((plan.cache_commit, plan.cache_ref.as_deref()), (Some(CacheCommit::Trusted), Some("main")), "watched trusted push");
+    let _ = node.frames();
+
+    // A local commit labelled main by hand: not on the remote's main, so
+    // it saves only scratch/main (rule 1, BK-1); the check fetched the
+    // remote's main into a K2-owned ref, never a local branch.
+    std::fs::write(ws.path.join("a.txt"), "local\n").unwrap();
+    git(&ws.path, &["commit", "-q", "-am", "local only"]);
+    let local = git(&ws.path, &["rev-parse", "HEAD"]);
+    let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": local, "ref": "main", "checks": ["unit"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
+    let plan = row(&job).plan().expect("plan");
+    assert_eq!((plan.cache_commit, plan.cache_ref.as_deref()), (Some(CacheCommit::Scratch), Some("main")), "a local commit never saves trusted");
+    assert_eq!(git(&ws.path, &["rev-parse", "refs/k2-ci/main"]), sha1, "the remote's main, in K2's own ref");
+    // The same commit once pushed: trusted.
+    git(&ws.path, &["push", "-q", "origin", "main"]);
+    let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": local, "ref": "main", "checks": ["unit"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
+    assert_eq!(row(&job).plan().unwrap().cache_commit, Some(CacheCommit::Trusted), "pushed to main: trusted");
+
+    // A plain run at main saves only scratch/main (its argv is the
+    // caller's); a body naming the trusted cache is not read.
+    let r = post(d.port, "/cli/compute/run", &agent, json!({"argv": ["true"], "sha": "main", "node": "k2n7", "cacheCommit": "trusted"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let plan = row(&job).plan().unwrap();
+    assert_eq!((plan.cache_commit, plan.cache_ref.as_deref()), (Some(CacheCommit::Scratch), Some("main")), "a plain run never saves trusted");
+
+    // A node without cache generations gets no cache fields; a secret
+    // job's fork (`none`) only goes to a node giving it its own uid.
+    let jrow = row(&job);
+    let fitted = k2_daemon::compute_place::fit_plan(&plan, &jrow, &offer().features, None).unwrap();
+    assert_eq!((fitted.cache_commit, fitted.cache_ref), (None, None), "stripped for a node without cache-gens");
+    let mut secret_plan = plan.clone();
+    (secret_plan.cache_commit, secret_plan.cache_ref) = (Some(CacheCommit::None), None);
+    let gens_only = vec!["cache-gens".to_string()];
+    assert_eq!(k2_daemon::compute_place::fit_plan(&secret_plan, &jrow, &gens_only, None).unwrap().cache_commit, None, "no job-uid: no secret fork");
+    let both = vec!["cache-gens".to_string(), "job-uid".to_string()];
+    assert_eq!(k2_daemon::compute_place::fit_plan(&secret_plan, &jrow, &both, None).unwrap().cache_commit, Some(CacheCommit::None));
+
+    // The node's lineages reach `k2 compute cache --lineage`.
+    let key = row(&unit).plan().unwrap().src.unwrap().project_key;
+    let li = |lineage: &str, seq: u64| LineageInfo { key: key.clone(), name: "target".into(), lineage: lineage.into(), head_seq: seq, head_commit: sha1.clone(), bytes: 1 << 30, last_used: 1, forks: 0 };
+    compute_ws::test_frame("gn-1", Frame::LineageStatus(LineageStatus { at: 1, lineages: vec![li("trusted", 3), li("scratch/feat", 1)], truncated: false }));
+    let r = get(d.port, "/cli/compute/cache/lineages", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["nodes"][0]["lineages"].as_array().unwrap().len(), 2, "{}", r.body);
+    let r = get(d.port, "/cli/compute/cache/lineages", &agent, "lineage=trusted").await;
+    assert_eq!(j(&r)["nodes"][0]["lineages"].as_array().unwrap().len(), 1, "{}", r.body);
+    assert_eq!(j(&r)["nodes"][0]["lineages"][0]["headSeq"], 3);
+}

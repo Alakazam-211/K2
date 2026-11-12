@@ -75,6 +75,8 @@ pub const ROUTES: &[&str] = &[
     compute_ws::ATTACH_PATH,
     "/cli/compute/cache",
     "/cli/compute/cache/clear",
+    // B2: `k2 compute cache --lineage` (a reader verb).
+    "/cli/compute/cache/lineages",
     compute_ws::ENROLL_PATH,
     "/cli/compute/events",
     // Git access for jobs (0.46.9, GH#78, `compute_git`).
@@ -743,6 +745,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/queue" => views::queue(&who, params),
         // Job caches on the nodes (`--cache NAME`, protocol 6).
         "/cli/compute/cache" => caches(&who, params, mgr),
+        "/cli/compute/cache/lineages" => cache_lineages(&who, params),
         "/cli/compute/cache/clear" => cache_clear(&who, body, mgr),
         // Node admin (prd-k2-node-admin-v1): approvals, policy, update,
         // health, alerts; and a shared node's servers.
@@ -1490,7 +1493,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
 /// submitter (`<workspace>/ci-<run>/ci`); no session is woken. Idempotent
 /// on the body's `clientJobId` like `/cli/compute/run`. The answer is the
 /// run route's JSON (`job`, `notices`, `warnings`, …).
-pub(crate) fn submit_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value) -> R<serde_json::Value> {
+pub(crate) fn submit_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value, cache: Option<&crate::ci_engine::CiCache>) -> R<serde_json::Value> {
     let ws = ws_by_id(ws_id).ok_or_else(|| no("workspace_not_found", 404, "the workspace is no longer registered"))?;
     let who = Who::Agent { project_id: ws.id.clone(), session_id: format!("ci-{}", &run_id[..run_id.len().min(8)]) };
     let client_id = s(body, "clientJobId").ok_or_else(|| no(codes::BAD_REQUEST, 400, "clientJobId is required"))?;
@@ -1509,7 +1512,8 @@ pub(crate) fn submit_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value)
             return Ok(serde_json::json!({ "job": job_summary(&j), "existing": true }));
         }
     }
-    let sub = submit_one(&who, body, &ws, client_id, &request_sha, &SubmitOpts::default())?;
+    let opts = SubmitOpts { ci_cache: cache.map(|c| (c.commit, c.cache_ref.clone())), ..SubmitOpts::default() };
+    let sub = submit_one(&who, body, &ws, client_id, &request_sha, &opts)?;
     Ok(submitted_json(&who, &sub))
 }
 
@@ -1735,6 +1739,9 @@ struct SubmitOpts {
     session: Option<String>,
     /// `--plan`: stop before anything is stored; `Submitted::preview`.
     dry: bool,
+    /// B2: a CI check's cache, as the CI engine decided it (never from a
+    /// request body; `submit_for_ci` only).
+    ci_cache: Option<(k2_core::compute::proto::gens::CacheCommit, Option<String>)>,
 }
 
 struct Submitted {
@@ -2407,6 +2414,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         (Some(src), Some(info), repo, src_path, with)
     };
     let cwd = if source.as_ref().is_some_and(|i| i.caller_elsewhere) { None } else { cwd };
+    // B2 (§4.1.4): a release build keeps no lineage (B3); a secret job may
+    // fork trusted and saves nothing (only under its own uid: stripped for
+    // a node without `job-uid`); a CI check as the engine decided; any
+    // other job saves only its own scratch copy (its branch, or wt:<name>).
+    let (cache_commit, cache_ref) = gens_fields(src.is_some(), receipt_v.is_some(), !secret_envs.is_empty(), opts.ci_cache.clone(), source.as_ref().and_then(|i| i.scratch_ref.clone()));
     let ctl = store::JobCtl {
         any: any.then_some(filter),
         admin: who.is_admin(),
@@ -2494,10 +2506,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // GPU jobs S6: only an explicit `--gpu-mem`, and only ever placed
         // on nodes offering `gpu-mem` (the default is the node's own).
         gpu_mem: want.gpu_mem,
-        // prd-compute-blacksmith-class-v1 (B0 contracts): defined, not
-        // sent yet. Each needs its feature on the node (`gens::plan_features`).
-        cache_commit: None,
-        cache_ref: None,
+        // prd-compute-blacksmith-class-v1 B2: how the job's build cache is
+        // kept on a node with cache generations. Stripped for any other node
+        // (`compute_place::fit_plan`). Setup and burst are later slices.
+        cache_commit,
+        cache_ref,
         setup: Vec::new(),
         cpus_burst: None,
     };
@@ -2683,6 +2696,51 @@ fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option
 fn caches(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     let p = |k: &str| params.get(k).map(String::as_str).filter(|v| !v.is_empty());
     cache_op(who, p("node"), p("workspace"), p("name"), false, false, mgr)
+}
+
+/// `GET /cli/compute/cache/lineages?workspace=&node=&lineage=` (B2,
+/// §4.1.9): the workspace's cache generations on each connected node, as
+/// the nodes' `lineage_status` said: per lineage its head (seq, commit,
+/// age), size and forks running. Only this workspace's project (its key
+/// is a hash of the workspace and its remote, so no other workspace's
+/// lineage can match). `lineage`: `trusted`, `scratch` or `release`.
+fn cache_lineages(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    need_credential(who)?;
+    passport_gate(who)?;
+    let p = |k: &str| params.get(k).map(String::as_str).filter(|v| !v.is_empty());
+    let ws = target_ws(who, p("workspace"))?;
+    let kind = p("lineage");
+    if let Some(k) = kind {
+        if !matches!(k, "trusted" | "scratch" | "release") {
+            return Err(no(codes::BAD_REQUEST, 400, "--lineage is trusted, scratch or release"));
+        }
+    }
+    let key = repo_pick(&ws, &serde_json::json!({})).ok().map(|pick| pick.project_key(&ws));
+    let now = compute::now();
+    let db = k2_core::db::shared();
+    let mut nodes = Vec::new();
+    for (node_id, l) in crate::compute_ws::all_lineages() {
+        let name = store::node_by_id(&db.lock(), &node_id).map(|n| n.name).unwrap_or_else(|| node_id.clone());
+        if p("node").is_some_and(|n| n != name && n != node_id) {
+            continue;
+        }
+        let rows: Vec<serde_json::Value> = l
+            .lineages
+            .iter()
+            .filter(|x| key.as_deref() == Some(x.key.as_str()))
+            .filter(|x| kind.is_none_or(|k| x.lineage == k || x.lineage.starts_with(&format!("{k}/"))))
+            .map(|x| {
+                serde_json::json!({
+                    "lineage": x.lineage, "headSeq": x.head_seq, "headCommit": x.head_commit,
+                    "bytes": x.bytes, "lastUsed": x.last_used, "ageSecs": (now - x.last_used).max(0), "forks": x.forks,
+                })
+            })
+            .collect();
+        if !rows.is_empty() {
+            nodes.push(serde_json::json!({"node": name, "lineages": rows, "truncated": l.truncated}));
+        }
+    }
+    Ok(serde_json::json!({"workspace": ws.handle, "nodes": nodes}))
 }
 
 /// An agent's `k2 compute cache` reaches its own workspace (`handle`,
@@ -3628,6 +3686,10 @@ pub(crate) struct SourceInfo {
     /// `--repo` names a repo the caller doesn't run from: its `cwd` (a
     /// folder of another repo) is dropped.
     pub(crate) caller_elsewhere: bool,
+    /// B2: the scratch lineage a plain job saves to: `wt:<checkout>` with
+    /// `--dirty`, else the branch it runs (`--sha <branch>` or the
+    /// checkout's), else `wt:<checkout>`.
+    pub(crate) scratch_ref: Option<String>,
 }
 
 impl SourceInfo {
@@ -3795,8 +3857,53 @@ fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Ve
         warnings.push("no fetchable https origin: the node gets history as git bundles from this server".into());
     }
     let pk = compute::sync::project_key_in(&ws.id, remote.as_deref(), pick.rel.as_deref());
-    let info = SourceInfo { checkout, path: rel, commit: commit.clone(), dirty: dirty_info, repo: pick.rel, caller_elsewhere };
+    let scratch_ref = scratch_ref_for(&root, &rel, dirty, sha);
+    let info = SourceInfo { checkout, path: rel, commit: commit.clone(), dirty: dirty_info, repo: pick.rel, caller_elsewhere, scratch_ref };
     Ok((Src { project_key: pk, remote_url: remote, commit, dirty: blob, slots: 1 }, info))
+}
+
+/// B2: a plain job's scratch lineage (§4.1.2): `wt:<checkout>` for
+/// `--dirty` (its changes are its own), else the branch it builds, else
+/// `wt:<checkout>`. Never a trusted lineage: that is the CI engine's.
+fn scratch_ref_for(root: &Path, rel: &str, dirty: bool, sha: Option<&str>) -> Option<String> {
+    use k2_core::compute::proto::gens::{valid_ref, WORKTREE_REF_PREFIX};
+    let wt = || {
+        let name: String = rel.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or("workspace").chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' }).take(64).collect();
+        let r = format!("{WORKTREE_REF_PREFIX}{}", name.trim_start_matches(['-', '.']));
+        valid_ref(&r).then_some(r)
+    };
+    if dirty {
+        return wt();
+    }
+    let named = sha.filter(|x| !(x.len() >= 7 && x.bytes().all(|b| b.is_ascii_hexdigit())) && *x != "HEAD" && valid_ref(x) && !x.starts_with(WORKTREE_REF_PREFIX));
+    if let Some(b) = named {
+        return Some(b.to_string());
+    }
+    let head = k2_core::git_safe::git(root).args(["symbolic-ref", "--quiet", "--short", "HEAD"]).output().ok().filter(|o| o.status.success());
+    match head.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()) {
+        Some(b) if sha.is_none_or(|x| x == "HEAD") && valid_ref(&b) && !b.starts_with(WORKTREE_REF_PREFIX) => Some(b),
+        _ => wt(),
+    }
+}
+
+/// B2: the plan's cache fields for one job (see the call site).
+fn gens_fields(
+    has_src: bool,
+    release: bool,
+    secret: bool,
+    ci: Option<(k2_core::compute::proto::gens::CacheCommit, Option<String>)>,
+    scratch: Option<String>,
+) -> (Option<k2_core::compute::proto::gens::CacheCommit>, Option<String>) {
+    use k2_core::compute::proto::gens::CacheCommit;
+    match () {
+        _ if !has_src || release => (None, None),
+        _ if secret => (Some(CacheCommit::None), None),
+        _ if ci.is_some() => ci.map(|(c, r)| (Some(c), r)).unwrap_or((None, None)),
+        _ => match scratch {
+            Some(r) => (Some(CacheCommit::Scratch), Some(r)),
+            None => (None, None),
+        },
+    }
 }
 
 pub(crate) fn job_for(who: &Who, token: Option<&str>) -> R<store::JobRow> {
@@ -3911,6 +4018,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
             prefer_not: kids.iter().map(|k| k.node_id.clone()).collect(),
             session: None,
             dry: false,
+            ci_cache: None,
         };
         match submit_one(who, &cv, ws, &child_client, &child_sha, &opts) {
             Ok(sub) => {

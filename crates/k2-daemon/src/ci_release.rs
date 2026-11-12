@@ -338,7 +338,7 @@ pub(crate) fn release(who: &Who, body: &[u8]) -> R<Value> {
         let (job, state, desc) = if failed.is_some() {
             (None, check_state::ERROR, "not submitted: another job of the set was refused".to_string())
         } else {
-            match crate::compute_routes::submit_for_ci(&ws.id, &run_id, &body) {
+            match crate::compute_routes::submit_for_ci(&ws.id, &run_id, &body, None) {
                 Ok(r) => match r["job"]["id"].as_str() {
                     Some(id) => {
                         submitted.push(id.to_string());

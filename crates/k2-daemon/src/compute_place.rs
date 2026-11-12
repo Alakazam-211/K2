@@ -406,6 +406,11 @@ pub struct Cand {
     /// to the quote, so a burst stops piling onto the node with the lowest
     /// quote (11-03: 15 jobs on k2n10 while others had room soon).
     pub held_wait: u64,
+    /// B2 (§4.1.6): this server's `trusted` cache heads on the node,
+    /// `(project key, head commit)`, from its `lineage_status`.
+    pub gen_heads: Vec<(String, String)>,
+    /// The workspace whose repo answers ancestry for [`gen_warmth`].
+    pub ws_id: String,
 }
 
 impl Cand {
@@ -1182,7 +1187,8 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         let holds_cache = cache_at.as_deref() == Some(n.id.as_str());
         let est_wait = (online && !share::is_shared(&offer)).then(|| waits.eta(&n.id, offer.parallel_max));
         let held_wait = if share::is_shared(&offer) { waits.held_eta(&n.id, offer.parallel_max) } else { 0 };
-        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait });
+        let gen_heads = if online { crate::compute_ws::trusted_heads(&n.id) } else { Vec::new() };
+        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait, held_wait, gen_heads, ws_id: w.ws_id.clone() });
     }
     out
 }
@@ -1336,8 +1342,67 @@ impl Cand {
 }
 
 /// How warm a node's free slots are for this repo: 2 = one built this
-/// exact commit, 1 = one built this repo (incremental), 0 = cold.
+/// exact commit, 1 = one built this repo (incremental), 0 = cold. With
+/// cache generations (B2) the node's `trusted` head counts the same way:
+/// 2 when it is this commit, 1 when it is an ancestor within
+/// [`k2_core::compute::proto::gens::WARM_ANCESTRY_COMMITS`] commits.
 pub fn warmth(c: &Cand, project_key: Option<&str>, commit: Option<&str>) -> u8 {
+    slot_warmth(c, project_key, commit).max(gen_warmth(c, project_key, commit))
+}
+
+/// B2 (§4.1.6, BK-17): the node's `trusted` head for this project, scored.
+/// The ancestry is asked of the workspace's repo, once per distinct
+/// (head, commit) ([`ancestry_near`] memoizes); a head the repo doesn't
+/// have counts as cold. A failed slot never scores here (BK-20): only a
+/// generation a passing trusted check saved.
+pub fn gen_warmth(c: &Cand, project_key: Option<&str>, commit: Option<&str>) -> u8 {
+    let (Some(pk), Some(commit)) = (project_key, commit) else { return 0 };
+    let mut best = 0;
+    for (_, head) in c.gen_heads.iter().filter(|(k, _)| k == pk) {
+        if head == commit {
+            return 2;
+        }
+        if ancestry_near(&c.ws_id, head, commit) {
+            best = 1;
+        }
+    }
+    best
+}
+
+/// Is `head` an ancestor of `commit` within the warm distance, in the
+/// workspace's repo? Memoized (a placement asks per candidate per tick).
+pub fn ancestry_near(ws_id: &str, head: &str, commit: &str) -> bool {
+    use std::collections::HashMap;
+    static MEMO: std::sync::Mutex<Option<HashMap<(String, String, String), bool>>> = std::sync::Mutex::new(None);
+    let key = (ws_id.to_string(), head.to_string(), commit.to_string());
+    if let Some(v) = MEMO.lock().unwrap_or_else(|p| p.into_inner()).get_or_insert_with(HashMap::new).get(&key) {
+        return *v;
+    }
+    let near = (|| {
+        if !k2_core::ci::is_sha(head) || !k2_core::ci::is_sha(commit) {
+            return Some(false);
+        }
+        let ws = crate::compute_routes::ws_by_id(ws_id)?;
+        let root = k2_core::compute::sync::repo_root(std::path::Path::new(&ws.path)).ok()?;
+        let anc = k2_core::git_safe::git(&root).args(["merge-base", "--is-ancestor", head, commit]).output().ok()?;
+        if !anc.status.success() {
+            return Some(false);
+        }
+        let n = k2_core::git_safe::git(&root).args(["rev-list", "--count", &format!("{head}..{commit}")]).output().ok()?;
+        let n: u32 = String::from_utf8_lossy(&n.stdout).trim().parse().ok()?;
+        Some(n <= k2_core::compute::proto::gens::WARM_ANCESTRY_COMMITS)
+    })()
+    .unwrap_or(false);
+    let mut g = MEMO.lock().unwrap_or_else(|p| p.into_inner());
+    let m = g.get_or_insert_with(HashMap::new);
+    if m.len() > 4096 {
+        m.clear();
+    }
+    m.insert(key, near);
+    near
+}
+
+fn slot_warmth(c: &Cand, project_key: Option<&str>, commit: Option<&str>) -> u8 {
     project_key
         .map(|pk| {
             let slots: Vec<_> = c.offer.slots.iter().filter(|s| s.project_key == pk && !s.busy).collect();
@@ -1812,6 +1877,15 @@ impl GrantCaps {
 pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], caps: Option<GrantCaps>) -> Option<Plan> {
     let has = |f: &str| features.iter().any(|x| x == f);
     let mut p = plan.clone();
+    // B2: cache generations only on a node offering them (an older node
+    // would compute another digest); a secret job's fork (`none`) only on
+    // a node that gives secret jobs their own uid.
+    let gens_ok = has(k2_core::compute::proto::gens::FEATURE_CACHE_GENS)
+        && (p.cache_commit != Some(k2_core::compute::proto::gens::CacheCommit::None) || has(k2_core::compute::proto::ci::FEATURE_JOB_UID));
+    if !gens_ok {
+        p.cache_commit = None;
+        p.cache_ref = None;
+    }
     let tiers2 = offers_tiers2(features);
     p.tier = offers_tiers(features).then(|| j.tier().for_peer(tiers2));
     if !has(pshare::FEATURE_QUEUE) {
@@ -2453,7 +2527,7 @@ mod tests {
         if running > 0 {
             load.running_by_workspace.insert("ws-other-secret".into(), running);
         }
-        Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None, held_wait: 0 }
+        Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None, held_wait: 0, gen_heads: Vec::new(), ws_id: "ws-test".into() }
     }
 
     /// Make `c` a node shared with another server (this server a tenant):

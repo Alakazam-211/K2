@@ -63,6 +63,10 @@ struct Conn {
     /// Protocol 9: the node's self-statement, checked against the key
     /// this server pinned for it (`node_statement`).
     statement: Option<k2_core::compute::proto::ci::Signed>,
+    /// Protocol 10 (B2): this server's lineages on the node, as its last
+    /// `lineage_status` said (placement's warm heads, `k2 compute cache
+    /// --lineage`). Only while it's connected.
+    lineages: Option<k2_core::compute::proto::gens::LineageStatus>,
     bytes_in: Arc<AtomicU64>,
     bytes_out: Arc<AtomicU64>,
 }
@@ -150,6 +154,36 @@ pub fn is_online(node_id: &str) -> bool {
 /// its pinned key), while it's connected.
 pub fn node_statement(node_id: &str) -> Option<k2_core::compute::proto::ci::Signed> {
     with_engine(|e| e.conns.get(node_id).and_then(|c| c.statement.clone()))
+}
+
+/// B2: a node's `lineage_status` (checked; a malformed one is dropped).
+fn on_lineage_status(node_id: &str, l: k2_core::compute::proto::gens::LineageStatus) {
+    if let Err(e) = l.check() {
+        log_debug!("[compute] node {node_id} sent a bad lineage_status: {e}");
+        return;
+    }
+    with_engine(|e| {
+        if let Some(c) = e.conns.get_mut(node_id) {
+            c.lineages = Some(l);
+        }
+    });
+}
+
+/// B2: the node's lineages for this server, while it's connected.
+pub fn lineages_of(node_id: &str) -> Option<k2_core::compute::proto::gens::LineageStatus> {
+    with_engine(|e| e.conns.get(node_id).and_then(|c| c.lineages.clone()))
+}
+
+/// B2: every connected node's lineages for this server.
+pub fn all_lineages() -> Vec<(String, k2_core::compute::proto::gens::LineageStatus)> {
+    with_engine(|e| e.conns.iter().filter_map(|(id, c)| c.lineages.clone().map(|l| (id.clone(), l))).collect())
+}
+
+/// B2: the node's `trusted` heads, `(project key, head commit)`.
+pub fn trusted_heads(node_id: &str) -> Vec<(String, String)> {
+    lineages_of(node_id)
+        .map(|l| l.lineages.into_iter().filter(|x| x.lineage == k2_core::compute::proto::gens::LINEAGE_TRUSTED).map(|x| (x.key, x.head_commit)).collect())
+        .unwrap_or_default()
 }
 
 pub fn live_view(node_id: &str) -> (bool, Option<&'static str>, Option<Offer>) {
@@ -551,7 +585,7 @@ async fn run_session(
         let id = e.next_conn;
         if let Some(old) = e.conns.insert(
             node_id.clone(),
-            Conn { conn_id: id, tx: tx.clone(), route, offer: None, statement: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
+            Conn { conn_id: id, tx: tx.clone(), route, offer: None, statement: None, lineages: None, bytes_in: bytes_in.clone(), bytes_out: bytes_out.clone() },
         ) {
             let _ = old.tx.send(Out::Close);
         }
@@ -798,6 +832,8 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         // Protocol 7: package requests through the node.
         Frame::PkgRequestFwd(f) => crate::compute_pkg::on_fwd(&node_id, f),
         Frame::PkgRequestDone(r) => crate::compute_pkg::on_done(&node_id, r),
+        // Protocol 10 (B2): the node's lineages for this server.
+        Frame::LineageStatus(l) => on_lineage_status(&node_id, l),
         other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
     }
 }
@@ -840,7 +876,7 @@ pub fn test_attach(node_id: &str, offer: Offer) -> TestConn {
         let id = e.next_conn;
         e.conns.insert(
             node_id.to_string(),
-            Conn { conn_id: id, tx, route: "loopback", offer: None, statement: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
+            Conn { conn_id: id, tx, route: "loopback", offer: None, statement: None, lineages: None, bytes_in: Arc::new(AtomicU64::new(0)), bytes_out: Arc::new(AtomicU64::new(0)) },
         );
     });
     let conn_id = with_engine(|e| e.conns.get(node_id).map(|c| c.conn_id)).unwrap_or(0);
@@ -3530,6 +3566,7 @@ mod tests {
                     route: "relay",
                     offer: Some(offer_with(features)),
                     statement: None,
+                    lineages: None,
                     bytes_in: Arc::new(AtomicU64::new(0)),
                     bytes_out: Arc::new(AtomicU64::new(0)),
                 },

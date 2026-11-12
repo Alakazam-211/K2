@@ -245,7 +245,7 @@ pub fn envelope(j: &JobRow, node: Option<&str>) -> Value {
     } else {
         next.push(format!("k2 compute attach {short}"));
     }
-    json!({
+    let mut v = json!({
         "job": j.id,
         "short": short,
         "node": node,
@@ -282,7 +282,29 @@ pub fn envelope(j: &JobRow, node: Option<&str>) -> Value {
         "tools": tools(j),
         "resources": resources(j),
         "host": host(j),
-    })
+    });
+    // B2 (§4.1.9): which generation it forked and what the node did with
+    // the fork. Only from a node with cache generations (absent otherwise,
+    // so every other result is as before).
+    if let Some(c) = cache(j) {
+        v["cache"] = c;
+    }
+    v
+}
+
+/// `result.cache`: `{lineage, seq, commit, forkSecs, committed,
+/// commitLineage, why}` from the node's `Outputs.cache`.
+pub fn cache(j: &JobRow) -> Option<Value> {
+    let c = outputs_raw(j)?.get("cache").filter(|c| c.is_object()).cloned()?;
+    Some(json!({
+        "lineage": c.get("lineage"),
+        "seq": c.get("seq"),
+        "commit": c.get("commit"),
+        "forkSecs": c.get("fork_ms").and_then(Value::as_u64).map(|ms| ms as f64 / 1000.0),
+        "committed": c.get("committed").and_then(Value::as_bool).unwrap_or(false),
+        "commitLineage": c.get("commit_lineage"),
+        "why": c.get("why"),
+    }))
 }
 
 #[cfg(test)]

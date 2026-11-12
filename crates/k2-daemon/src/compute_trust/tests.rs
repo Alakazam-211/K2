@@ -965,6 +965,7 @@ fn lane_secrets_end_to_end_between_two_servers() {
                 &format!("run{}", crypto::random_id().unwrap()),
                 &json!({"node": node, "argv": ["true"], "noSource": true, "clientJobId": uuid::Uuid::new_v4().simple().to_string(),
                     "secrets": [{"name": "GMAIL_CLIENT_ID"}]}),
+                None,
             )
         };
         let job_of = |v: &Value| v["job"]["id"].as_str().unwrap().to_string();

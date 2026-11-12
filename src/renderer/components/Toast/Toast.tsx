@@ -184,6 +184,12 @@ function resolveToastAnchor(settingsOpen: boolean, page: AppPage): ToastAnchor |
   // its own changes make: under its scrim they would be hidden.
   const sheet = firstVisible(document, '[data-toast-host="sheet"]')
   if (sheet) return sheet
+  // The Projects page: its dashboard's canvas when one is open (toasts sit
+  // at its bottom right, clear of the tiles' bars and the project bar).
+  if (page === 'projects') {
+    const canvas = firstVisible(document, '[data-toast-host="projects-canvas"]')
+    if (canvas) return canvas
+  }
   const pageHost = PAGE_HOST[page]
   if (pageHost) {
     const el = document.querySelector(`[data-toast-host="${pageHost}"]`)
@@ -202,15 +208,27 @@ const PANE_STACK_STYLE: React.CSSProperties = {
   zIndex: 30,
 }
 
-/** In a modal sheet, and on the Projects page: bottom centre, as over
- *  Settings, clear of the title-row actions at the top (the sheet's ×,
- *  the project bar's Layout and Chat). */
-const BOTTOM_HOSTS = new Set(['sheet', 'projects'])
+/** In a modal sheet: bottom centre, as over Settings, clear of the
+ *  sheet's × at the top. */
+const BOTTOM_HOSTS = new Set(['sheet'])
 const SHEET_STACK_STYLE: React.CSSProperties = {
   position: 'absolute',
   bottom: 16,
   left: '50%',
   transform: 'translateX(-50%)',
+  zIndex: 30,
+}
+
+/** The Projects page: bottom right of its dashboard's canvas (or of the
+ *  page, with no dashboard open). The other pages put toasts at the top
+ *  right of their content, and Settings and sheets at the bottom centre;
+ *  here the top right is the project bar's Layout and Chat and every
+ *  tile's bar, so the stack keeps the right edge and goes to the bottom. */
+const CORNER_HOSTS = new Set(['projects', 'projects-canvas'])
+const CORNER_STACK_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 16,
+  right: 16,
   zIndex: 30,
 }
 
@@ -270,7 +288,9 @@ export default function Toast(): React.JSX.Element | null {
           ? { left: '50%', transform: 'translateX(-50%)' }
           : BOTTOM_HOSTS.has(live.getAttribute('data-toast-host') ?? '')
             ? SHEET_STACK_STYLE
-            : PANE_STACK_STYLE
+            : CORNER_HOSTS.has(live.getAttribute('data-toast-host') ?? '')
+              ? CORNER_STACK_STYLE
+              : PANE_STACK_STYLE
       }
     >
       {installNotice && (

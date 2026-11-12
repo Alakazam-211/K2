@@ -849,6 +849,13 @@ export default function ProjectDashboard({
 
   return (
     <div className="flex-1 flex flex-col min-h-0 min-w-0 relative" data-projects-dashboard-panes>
+      {/* Where the page's toasts show while this dashboard is open: its
+          bottom right (Toast.tsx), above the tiles, not scrolling. */}
+      <div
+        data-toast-host="projects-canvas"
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        style={{ zIndex: 40 }}
+      />
       {/* Stale pill (§6.3a): another client saved a newer layout. It
           NEVER auto-applies — apply-on-open, or explicitly here. */}
       {stale && (

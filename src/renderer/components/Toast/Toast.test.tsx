@@ -35,6 +35,17 @@ function expectTopRightOf(host: HTMLElement): void {
   expect(document.querySelectorAll('[data-toast-stack]')).toHaveLength(1)
 }
 
+function expectBottomRightOf(host: HTMLElement): void {
+  const el = stack()
+  expect(el.parentElement).toBe(host)
+  expect(el.style.position).toBe('absolute')
+  expect(el.style.bottom).toBe('16px')
+  expect(el.style.right).toBe('16px')
+  expect(el.style.top).toBe('')
+  expect(el.style.left).toBe('')
+  expect(el.style.transform).toBe('')
+}
+
 function show(message: string): void {
   act(() => {
     useToastStore.getState().addToast(message, 'info')
@@ -192,14 +203,10 @@ describe('Toast stack placement', () => {
       'wiki',
     ]
     const expectOn = (host: HTMLElement, page: string): void => {
-      // Projects: bottom centre, clear of the project bar's Layout and Chat.
+      // Projects: bottom right, clear of the project bar's Layout and Chat
+      // and the tiles' bars (the right edge, as the other pages).
       if (page !== 'projects') return expectTopRightOf(host)
-      const el = stack()
-      expect(el.parentElement).toBe(host)
-      expect(el.style.position).toBe('absolute')
-      expect(el.style.bottom).toBe('16px')
-      expect(el.style.top).toBe('')
-      expect(el.style.left).toBe('50%')
+      expectBottomRightOf(host)
     }
     for (const page of pages) {
       cleanup()
@@ -234,11 +241,39 @@ describe('Toast stack placement', () => {
     expect(screen.queryByText('Buried')).toBeNull()
   })
 
+  it("Projects: an open dashboard's canvas hosts the toasts, at its bottom right", () => {
+    usePageViewStore.setState({ page: 'projects' })
+    render(
+      <>
+        <div data-toast-host="projects" data-testid="page-host" />
+        <div data-toast-host="projects-canvas" data-testid="canvas-host" />
+        <Toast />
+      </>,
+    )
+    show('Removed Notes from Spring launch.')
+    expectBottomRightOf(screen.getByTestId('canvas-host'))
+    expect(screen.getByTestId('page-host').contains(stack())).toBe(false)
+  })
+
+  it('Projects with no dashboard open: the page hosts them, at its bottom right', () => {
+    usePageViewStore.setState({ page: 'projects' })
+    render(
+      <>
+        <div data-toast-host="projects" data-testid="page-host" />
+        <div data-toast-host="projects-canvas" style={{ display: 'none' }} />
+        <Toast />
+      </>,
+    )
+    show('Saved.')
+    expectBottomRightOf(screen.getByTestId('page-host'))
+  })
+
   it('a modal sheet over the page hosts the toasts, at its bottom centre (not under its scrim)', () => {
     usePageViewStore.setState({ page: 'projects' })
     render(
       <>
         <div data-toast-host="projects" data-testid="page-host" />
+        <div data-toast-host="projects-canvas" />
         <div data-toast-host="sheet" data-testid="sheet-host" />
         <Toast />
       </>,

@@ -386,6 +386,34 @@ mod tests {
         crate::test_env::write_executable(path, body);
     }
 
+    /// Runs a fake's `--help` once, with a long limit, before a test probes
+    /// it. The first run of a new script can take seconds on a busy macOS
+    /// box (a fake's first probe passed `PROBE_TIMEOUT` on the Mac compute
+    /// node), and that is the OS, not the probe under test.
+    #[cfg(unix)]
+    fn first_run(path: &Path) {
+        let mut child = crate::bg_proc::command(path)
+            .arg("--help")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap_or_else(|e| panic!("first run of {}: {e}", path.display()));
+        let started = Instant::now();
+        loop {
+            match child.try_wait().expect("wait for the first run") {
+                Some(st) => {
+                    assert!(st.success(), "first run of {} --help: {st}", path.display());
+                    return;
+                }
+                None => {
+                    assert!(started.elapsed() < Duration::from_secs(60), "{} --help still running after 60 s", path.display());
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+    }
+
     /// Fake Codex whose `--help` lists the flag (like 0.155+); any other
     /// call appends its argv to `calls.log` next to it.
     #[cfg(unix)]
@@ -394,6 +422,7 @@ mod tests {
             &dir.join("codex"),
             "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  printf 'Usage: codex\\n      --no-alt-screen\\n          Disable alternate screen mode\\n      --no-daemon\\n          Run without the shared background server, even if it is already running\\n'\n  exit 0\nfi\necho \"$@\" >> \"$(dirname \"$0\")/calls.log\"\n",
         );
+        first_run(&dir.join("codex"));
     }
 
     /// Fake Codex 0.154: no `--no-daemon` in help.
@@ -403,6 +432,7 @@ mod tests {
             &dir.join("codex"),
             "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  printf 'Usage: codex\\n      --no-alt-screen\\n          Disable alternate screen mode\\n'\n  exit 0\nfi\nexit 2\n",
         );
+        first_run(&dir.join("codex"));
     }
 
     #[test]

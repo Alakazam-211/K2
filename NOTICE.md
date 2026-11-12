@@ -302,7 +302,7 @@ dependencies either: it is a library with no DOM. The Live editor is K2's own co
 the app's own `@codemirror/*` packages (`view`, `state`, `commands`, `language`,
 `lang-markdown`; MIT).
 
-## Multiplayer kit: k2-mpc-markdown v0.7.16 (vendored)
+## Multiplayer kit: k2-mpc-markdown v0.7.17 (vendored)
 
 The Markdown type pack for the kit (schema, file codec, its own verbs such as
 `replace-section`, the parity list), vendored beside it.
@@ -310,7 +310,7 @@ The Markdown type pack for the kit (schema, file codec, its own verbs such as
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-markdown` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.16` (`e1e1655`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.17` (`6cdc73e`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 | **Dependencies** | k2-mpc-base only (above): yrs (MIT), regex-automata, redb and thiserror (MIT OR Apache-2.0), and `unicode-ident` (build time only, Unicode-3.0) |
 

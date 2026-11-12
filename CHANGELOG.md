@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.20 (2026-11-12): pairs with kit v0.16.0
+
+**Requires `k2-mpc-base` v0.16.0**. This pack's code and tests are unchanged from v0.7.19.
+
+- Pairs with kit v0.16.0. Its changes are additive: the view schema, addresses and view
+  index, the keyed watch (new frames behind the feature `keyed_watch`; wire still 3) with view
+  deltas, roster addresses, and the structure index's row format 2. The pack hooks it adds
+  (`Pack::view_schema`, `view_derive`, `address_of` / `key_of`, `watch_extras`) are provided
+  methods with defaults, and this pack declares none of them: its text docs have no view schema
+  and no keyed watch (the hunk channel), so it behaves as in v0.7.19. No new error id.
+- `Cargo.lock`: k2-mpc-base 0.16.0 (only the kit's crate version moves); the crate version.
+
 ## v0.7.19 (2026-11-12): pairs with kit v0.15.1
 
 **Requires `k2-mpc-base` v0.15.1**. This pack's code and tests are unchanged from v0.7.18.

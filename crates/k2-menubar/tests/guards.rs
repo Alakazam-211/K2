@@ -69,6 +69,29 @@ fn running_check_does_not_read_token_files_or_status() {
     assert_eq!(handler.matches("process::exit").count(), 1, "{handler}");
 }
 
+/// Every quit takes the icon: the daemon's shutdown unloads the helper when
+/// the decision is a quit. `/cli/daemon/stop` is a quit; a restart (even
+/// `end_agents=1`) is not.
+#[test]
+fn daemon_quit_unloads_the_helper_and_restart_does_not() {
+    let stop = read_repo("crates/k2-daemon/src/daemon_stop.rs");
+    let shutdown = arm_between(&stop, "pub fn on_shutdown", "pub fn detach_all");
+    let quit_at = shutdown.find("if decision.quit").expect("shutdown checks quit");
+    let retire_at = shutdown.find("retire_menu_bar_helper()").expect("quit retires the helper");
+    let owner_return = shutdown.find("let Some(owner) = owner else").expect("ptyd part after");
+    assert!(quit_at < retire_at && retire_at < owner_return, "{shutdown}");
+    let retire = arm_between(&stop, "fn retire_menu_bar_helper", "fn spawn_detached");
+    assert!(retire.contains("DAEMON_LAUNCHD_LABEL"), "only the launchd daemon: {retire}");
+    assert!(retire.contains("spawn_detached(\"launchctl\""), "{retire}");
+
+    let routes = read_repo("crates/k2-daemon/src/routes/dispatcher.rs");
+    let stop_arm = arm_between(&routes, "\"/cli/daemon/stop\" =>", "DispatchOutcome::Done;\n        }");
+    assert!(stop_arm.contains("request_quit()"), "{stop_arm}");
+    let restart_arm = arm_between(&routes, "\"/cli/daemon/restart\" =>", "\"/cli/daemon/stop\" =>");
+    assert!(restart_arm.contains("request_end_agents()"), "{restart_arm}");
+    assert!(!restart_arm.contains("request_quit"), "a restart is not a quit");
+}
+
 #[test]
 fn helper_retire_unloads_only_its_own_label() {
     let lib = read_repo("crates/k2-menubar/src/lib.rs");

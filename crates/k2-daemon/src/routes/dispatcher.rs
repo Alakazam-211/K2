@@ -4184,7 +4184,7 @@ async fn handle_one_request(
             // SEAM (as #651): the harness has no shutdown_tx and must never
             // stop the test process.
             if let Some(tx) = state.shutdown_tx.clone() {
-                crate::daemon_stop::request_end_agents();
+                crate::daemon_stop::request_quit(); // a quit: on a Mac the menu-bar icon goes too
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(300)).await;
                     k2_core::log_debug!("[daemon] stop requested — ending agents and stopping");

@@ -17,9 +17,11 @@
 //!    wake a sleeping machine to run it. This is how Time Machine
 //!    handles battery-powered hourly backups.
 //! 3. **Menu-bar helper** (`dev.k2.menubar`): macOS status item for this
-//!    Mac's daemon. Own label. Its Quit daemon unloads `dev.k2.daemon`,
-//!    then its own label (`unload -w`), and exits. Opening K2 loads both
-//!    again ([`ensure_loaded`] uses `load -w`, which undoes the `-w`).
+//!    Mac's daemon. Own label. Any quit of the daemon (its Quit daemon,
+//!    `k2 daemon stop`, the red close with the server off) unloads this
+//!    label too (`unload -w`, from the daemon's shutdown and the helper);
+//!    restarts leave it. Opening K2 loads both again ([`ensure_loaded`]
+//!    uses `load -w`, which undoes the `-w`).
 //!
 //! Scope for this module: plist XML generation + file writes + launchctl
 //! invocation. The orchestration ("on first launch of 0.33.0, install

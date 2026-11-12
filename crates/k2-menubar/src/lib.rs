@@ -4,7 +4,10 @@
 //! AND an HTTP 2xx from loopback `/boot-status`. No token. Quit unloads
 //! `~/Library/LaunchAgents/dev.k2.daemon.plist`, then this helper's own
 //! `dev.k2.menubar.plist` (so launchd's KeepAlive does not bring the icon
-//! back), and the helper exits. Opening K2 loads both again.
+//! back), and the helper exits. Opening K2 loads both again. The daemon
+//! also unloads `dev.k2.menubar` on any quit (k2-daemon `daemon_stop`), so
+//! the icon goes when the daemon is quit some other way; this helper still
+//! does it itself for when the daemon was not running.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -274,14 +277,20 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// launchctl runs in its own process group: the daemon's quit unloads this
+/// helper too, and launchd then ends the helper's process group, which
+/// must not cut this unload short.
 #[cfg(unix)]
 pub fn quit_daemon_plist(path: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
     if !path.exists() {
         return Ok(());
     }
     let args = unload_launchctl_args(path);
     let output = Command::new("launchctl")
         .args(&args)
+        .stdin(std::process::Stdio::null())
+        .process_group(0)
         .output()
         .map_err(|e| format!("launchctl: {e}"))?;
     let stderr = String::from_utf8_lossy(&output.stderr);

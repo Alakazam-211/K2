@@ -22,6 +22,13 @@
 //! None of this runs unless this daemon talked to a ptyd: with the switch
 //! off and no ptyd, shutdown is unchanged.
 //!
+//! **Quit vs end agents.** A quit (`POST /cli/daemon/stop`, a stop intent,
+//! a systemd stop job) ends agents and the daemon. `restart?end_agents=1`
+//! ends agents but is a restart. On a Mac, a quit by the launchd daemon
+//! also unloads the menu-bar helper's `dev.k2.menubar` job, so its icon
+//! goes with the daemon; a restart (update, `kickstart -k`, a crash, a
+//! downgrade rollback) leaves the icon. Opening K2 loads both again.
+//!
 //! S6 hook: the update-apply paths are restarts and need nothing here; a
 //! downgrade guard (P62) calls [`end_all_ptyd_sessions`].
 
@@ -35,6 +42,13 @@ use k2_core::log_debug;
 pub const INTENT_MAX_AGE_SECS: u64 = 120;
 
 static STOP_FLAG: AtomicBool = AtomicBool::new(false);
+/// `POST /cli/daemon/stop`: this shutdown is a quit, not a restart.
+static QUIT_FLAG: AtomicBool = AtomicBool::new(false);
+
+/// The launchd label of this Mac's daemon.
+pub const DAEMON_LAUNCHD_LABEL: &str = "dev.k2.daemon";
+/// The menu-bar helper's LaunchAgent label (written by the desktop app).
+pub const MENU_BAR_HELPER_LABEL: &str = "dev.k2.menubar";
 
 /// Windows: the shutdown decision said quit.
 #[cfg(windows)]
@@ -57,11 +71,25 @@ pub fn request_end_agents() {
     STOP_FLAG.store(true, Ordering::SeqCst);
 }
 
+/// `POST /cli/daemon/stop`: end agents AND treat this shutdown as a quit.
+pub fn request_quit() {
+    STOP_FLAG.store(true, Ordering::SeqCst);
+    QUIT_FLAG.store(true, Ordering::SeqCst);
+}
+
 /// What shutdown does with ptyd sessions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExitPlan {
     EndAgents(String),
     KeepAgents(String),
+}
+
+/// The shutdown decision: what happens to agents, and whether this is a
+/// quit (the daemon is not coming back on its own) rather than a restart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    pub plan: ExitPlan,
+    pub quit: bool,
 }
 
 /// `<K2 home>/run/stop-intent.json` (P88: from the K2 home).
@@ -137,21 +165,42 @@ pub fn job_type_from_list_jobs(out: &str, unit: &str) -> Option<String> {
 }
 
 /// The §7.6 decision, in order.
-pub fn decide() -> ExitPlan {
-    if STOP_FLAG.load(Ordering::SeqCst) {
-        return ExitPlan::EndAgents("stop requested".into());
-    }
-    if let Some(by) = take_intent() {
-        return ExitPlan::EndAgents(format!("stop intent ({by})"));
-    }
-    #[cfg(target_os = "linux")]
-    if let Some(job) = systemd_job_type() {
-        if job == "stop" {
-            return ExitPlan::EndAgents("systemd stop job".into());
+pub fn decide() -> Decision {
+    let systemd_job = || {
+        #[cfg(target_os = "linux")]
+        {
+            systemd_job_type()
         }
-        return ExitPlan::KeepAgents(format!("systemd {job} job"));
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    };
+    decide_from(STOP_FLAG.load(Ordering::SeqCst), QUIT_FLAG.load(Ordering::SeqCst), take_intent, systemd_job)
+}
+
+/// Pure part of [`decide`]. The stop intent and the systemd job are only
+/// looked up when the flags haven't decided (reading the intent deletes it).
+pub fn decide_from(
+    stop_flag: bool,
+    quit_flag: bool,
+    intent: impl FnOnce() -> Option<String>,
+    systemd_job: impl FnOnce() -> Option<String>,
+) -> Decision {
+    if stop_flag {
+        let why = if quit_flag { "stop requested" } else { "restart ending agents" };
+        return Decision { plan: ExitPlan::EndAgents(why.into()), quit: quit_flag };
     }
-    ExitPlan::KeepAgents("restart (no stop intent)".into())
+    if let Some(by) = intent() {
+        return Decision { plan: ExitPlan::EndAgents(format!("stop intent ({by})")), quit: true };
+    }
+    if let Some(job) = systemd_job() {
+        if job == "stop" {
+            return Decision { plan: ExitPlan::EndAgents("systemd stop job".into()), quit: true };
+        }
+        return Decision { plan: ExitPlan::KeepAgents(format!("systemd {job} job")), quit: false };
+    }
+    Decision { plan: ExitPlan::KeepAgents("restart (no stop intent)".into()), quit: false }
 }
 
 /// Shutdown (daemon_main, after the shutdown broadcast, before the tunnel
@@ -162,16 +211,25 @@ pub fn on_shutdown() {
     // keep-alive supervisor reads: a stop quits, anything else restarts.
     #[cfg(windows)]
     {
-        let plan = decide();
+        let plan = decide().plan;
         log_debug!("[daemon] shutdown: {plan:?}");
         WINDOWS_QUIT.store(matches!(plan, ExitPlan::EndAgents(_)), Ordering::SeqCst);
     }
     #[cfg(unix)]
     {
-        let Some(owner) = k2_core::terminal::ptyd::client::global().current_owner() else {
+        let owner = k2_core::terminal::ptyd::client::global().current_owner();
+        // A Mac decides even without ptyd: a quit takes the menu-bar icon too.
+        if owner.is_none() && !cfg!(target_os = "macos") {
+            return; // this daemon never used ptyd: today's exit
+        }
+        let decision = decide();
+        if decision.quit {
+            retire_menu_bar_helper();
+        }
+        let Some(owner) = owner else {
             return; // this daemon never used ptyd: today's exit
         };
-        match decide() {
+        match decision.plan {
             ExitPlan::EndAgents(why) => {
                 let n = end_all_ptyd_sessions(&owner);
                 log_debug!("[daemon] shutdown: ended {n} ptyd agent session(s): {why}");
@@ -332,6 +390,42 @@ fn launchd_label() -> Option<String> {
     std::env::var("XPC_SERVICE_NAME").ok().filter(|v| !v.is_empty() && v != "0" && v.contains("k2"))
 }
 
+/// `~/Library/LaunchAgents/dev.k2.menubar.plist` under `home`.
+pub fn menu_bar_helper_plist(home: &std::path::Path) -> PathBuf {
+    home.join("Library/LaunchAgents").join(format!("{MENU_BAR_HELPER_LABEL}.plist"))
+}
+
+/// `launchctl unload -w <helper plist>`: stops the icon and keeps login
+/// from starting it. The desktop app's open runs `launchctl load -w` on it.
+pub fn menu_bar_unload_args(plist: &std::path::Path) -> Vec<String> {
+    vec!["unload".into(), "-w".into(), plist.to_string_lossy().into_owned()]
+}
+
+/// Quit only: unload the menu-bar helper so its icon goes with the daemon.
+/// Only the launchd `dev.k2.daemon` does this (a dev daemon or a test
+/// daemon leaves the icon alone; `launchd_label` is `None` off macOS), and
+/// only when the desktop app installed the helper. Detached, in its own
+/// session: launchd ends this daemon's process group as it exits. The
+/// helper's own Quit daemon unloads it too; the second unload is a no-op.
+#[cfg(unix)]
+fn retire_menu_bar_helper() {
+    if launchd_label().as_deref() != Some(DAEMON_LAUNCHD_LABEL) {
+        return;
+    }
+    let Some(home) = k2_core::paths::home_dir() else { return };
+    let plist = menu_bar_helper_plist(&home);
+    if !plist.is_file() {
+        return;
+    }
+    let args = menu_bar_unload_args(&plist);
+    let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+    if spawn_detached("launchctl", &argv) {
+        log_debug!("[daemon] quit: launchctl unload -w {}", plist.display());
+    } else {
+        log_debug!("[daemon] quit: could not run launchctl to unload {}", plist.display());
+    }
+}
+
 /// Run `prog args` in its own session, stdio to /dev/null, not waited on.
 fn spawn_detached(prog: &str, args: &[&str]) -> bool {
     let mut cmd = k2_core::bg_proc::command(prog);
@@ -363,6 +457,57 @@ mod tests {
         assert_eq!(intent_fresh(raw, 900), None, "from the future");
         assert_eq!(intent_fresh("not json", 1000), None);
         assert_eq!(intent_fresh(r#"{"by":"cli"}"#, 1000), None, "no time");
+    }
+
+    fn none() -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn stop_route_and_stop_intent_are_quits() {
+        let d = decide_from(true, true, || panic!("flags decide first"), || panic!("flags decide first"));
+        assert_eq!(d.plan, ExitPlan::EndAgents("stop requested".into()));
+        assert!(d.quit);
+
+        let d = decide_from(false, false, || Some("menubar".to_string()), || panic!("intent decides first"));
+        assert_eq!(d.plan, ExitPlan::EndAgents("stop intent (menubar)".into()));
+        assert!(d.quit);
+
+        let d = decide_from(false, false, none, || Some("stop".to_string()));
+        assert_eq!(d.plan, ExitPlan::EndAgents("systemd stop job".into()));
+        assert!(d.quit);
+    }
+
+    #[test]
+    fn restarts_are_not_quits() {
+        // `restart?end_agents=1` ends agents but the daemon comes back.
+        let d = decide_from(true, false, || panic!("flags decide first"), || panic!("flags decide first"));
+        assert_eq!(d.plan, ExitPlan::EndAgents("restart ending agents".into()));
+        assert!(!d.quit);
+
+        // kickstart -k, an update, a crash: SIGTERM with no stop intent.
+        let d = decide_from(false, false, none, none);
+        assert_eq!(d.plan, ExitPlan::KeepAgents("restart (no stop intent)".into()));
+        assert!(!d.quit);
+
+        let d = decide_from(false, false, none, || Some("restart".to_string()));
+        assert_eq!(d.plan, ExitPlan::KeepAgents("systemd restart job".into()));
+        assert!(!d.quit);
+    }
+
+    #[test]
+    fn quit_unloads_only_the_menu_bar_helper_plist() {
+        let plist = menu_bar_helper_plist(std::path::Path::new("/Users/example"));
+        assert_eq!(plist, PathBuf::from("/Users/example/Library/LaunchAgents/dev.k2.menubar.plist"));
+        assert_eq!(
+            menu_bar_unload_args(&plist),
+            vec![
+                "unload".to_string(),
+                "-w".to_string(),
+                "/Users/example/Library/LaunchAgents/dev.k2.menubar.plist".to_string(),
+            ]
+        );
+        assert_ne!(MENU_BAR_HELPER_LABEL, DAEMON_LAUNCHD_LABEL);
     }
 
     #[test]

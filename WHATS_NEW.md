@@ -11,7 +11,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Styles is now Themes.** Settings → Themes is the same page with a clearer name. Glass's dark gold palette is now called **Dusk**; your choice is kept.
 
 ### Fixes
-- **Quit daemon in the Mac menu bar takes the menu-bar icon away too,** instead of leaving it showing "Daemon: Not running". Opening K2 (or `k2 daemon start`) brings both back.
+- **Quitting the daemon on a Mac takes the menu-bar icon away too,** instead of leaving it showing "Daemon: Not running": from the menu bar, `k2 daemon stop`, or closing the window with "keep server running" off. Restarts and updates keep the icon. Opening K2 (or `k2 daemon start`) brings both back.
 - **When an app saves over an agent's change, both are kept.** Before, an app that still had an older copy of a file open could save over an agent's write, and the agent's change was left only in history. Now the app's save is the current version, the agent's version is kept beside it in `.k2/conflicts/` as `<file> (<agent>'s version)`, the file's tab shows a notice once, and one line goes to the workspace's Thread.
 - **Garden widgets that follow data nobody has changed in a week load again** (a Board's projects, an access list) instead of stopping with "your cursor is older than kept history", and a widget whose data really did fall out of history now reloads it by itself.
 - **Agents can read their inbox again in every session.** When several sessions started at the same moment, some (sidecars or main agents) could lose their private connection to K2, and `k2 inbox read` answered "the K2 daemon gave no usable answer". Each session now gets its connection, and the `k2` command falls back to the normal one if it ever can't reach it.

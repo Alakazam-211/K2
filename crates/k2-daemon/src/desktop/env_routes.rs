@@ -65,6 +65,25 @@ fn address(project_id: &str, session_id: &str) -> String {
     crate::cell_identity::sidecar_thread_addr(project_id, session_id).unwrap_or_else(|| crate::compute_routes::ws_handle(project_id))
 }
 
+/// The holder for a person or an agent to read: its name, and its address
+/// when that says more (`alpha (helper), address alpha/helper`).
+fn holder_words(by: &str) -> String {
+    let name = hold_name(by);
+    if name == by {
+        name
+    } else {
+        format!("{name}, address {by}")
+    }
+}
+
+/// When a hold ends, in plain words: this server's clock time and how long
+/// from now (`13:46 (in 30 min)`), never a Unix time.
+fn until_words(until: i64, now: i64) -> String {
+    let mins = ((until - now).max(0) + 59) / 60;
+    let at = chrono::DateTime::from_timestamp(until, 0).map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string()).unwrap_or_default();
+    format!("{at} (in {mins} min)")
+}
+
 fn agents_only() -> CliResponse {
     refuse(
         403,
@@ -156,8 +175,9 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
             403,
             "desktop_in_use",
             format!(
-                "{holder} ({}) is using {name}'s desktop until {} (Unix time). It frees when that session runs k2 desktop env --release or the hold ends.",
-                h.by, h.until
+                "{} is using {name}'s desktop until {}. It frees when that session runs k2 desktop env --release or the hold ends.",
+                holder_words(&h.by),
+                until_words(h.until, now)
             ),
             json!({"holder": {"by": h.by, "name": holder, "until": h.until}}),
         );
@@ -172,7 +192,7 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
             return refuse_with(
                 403,
                 "desktop_in_use",
-                format!("{} is using {name}'s desktop until {} (Unix time).", hold_name(&h.by), h.until),
+                format!("{} is using {name}'s desktop until {}.", holder_words(&h.by), until_words(h.until, m.now())),
                 json!({"holder": {"by": h.by, "name": hold_name(&h.by), "until": h.until}}),
             )
         }

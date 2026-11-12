@@ -11,12 +11,15 @@ const h = vi.hoisted(() => ({
   gets: [] as Array<{ scope: unknown; route: string }>,
   posts: [] as Array<{ scope: unknown; route: string }>,
   body: null as unknown,
+  /** Answers held back, served in order before `body`. */
+  held: [] as Array<Promise<unknown>>,
 }))
 
 vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: async (scope: unknown, route: string) => {
     h.gets.push({ scope, route })
-    return h.body
+    const held = h.held.shift()
+    return held ? await held : h.body
   },
   daemonCliPost: async (scope: unknown, route: string) => {
     h.posts.push({ scope, route })
@@ -28,10 +31,16 @@ vi.mock('@/stores/connect-host', () => ({ onActiveHostChange: () => () => {} }))
 
 // Usage v2 B20: the daemon pushes `subscription_usage_changed`.
 const pushes = vi.hoisted(() => new Set<() => void>())
+// A server default change (Settings → Subs / Tokens, any client).
+const accountPushes = vi.hoisted(() => new Set<() => void>())
 vi.mock('@/stores/session-events', () => ({
   onSubscriptionUsageChanged: (_scope: unknown, fn: () => void) => {
     pushes.add(fn)
     return () => pushes.delete(fn)
+  },
+  onLlmAccountsChanged: (_scope: unknown, fn: () => void) => {
+    accountPushes.add(fn)
+    return () => accountPushes.delete(fn)
   },
 }))
 
@@ -86,6 +95,7 @@ beforeEach(() => {
   visibility = 'visible'
   h.gets.length = 0
   h.posts.length = 0
+  h.held.length = 0
   h.body = doc(0.1)
   useWindowFocusStore.setState({ isFocused: true })
   resetSubscriptionUsageForTests()
@@ -194,5 +204,36 @@ describe('one poller per server (B32) and the push (B20)', () => {
     stop()
     stop = null
     expect(pushes.size).toBe(0)
+  })
+
+  // Rosson 11-12: after "Make default" the chip kept the old token's numbers.
+  it('re-reads at once when the server default changes, and stops listening on release', async () => {
+    stop = startUsageCachePoll(target)
+    expect(accountPushes.size).toBe(1)
+    h.body = doc(0.42)
+    for (const fn of accountPushes) fn()
+    await settle()
+    expect(h.gets).toHaveLength(1)
+    expect(usedOf('win')).toBe(0.42)
+    stop()
+    stop = null
+    expect(accountPushes.size).toBe(0)
+  })
+
+  it('a read already in flight when the news arrives is followed by a fresh one', async () => {
+    stop = startUsageCachePoll(target)
+    // A read that started before the switch (the old token's numbers).
+    let answerOld: (v: unknown) => void = () => {}
+    h.held.push(new Promise((r) => (answerOld = r)))
+    await vi.advanceTimersByTimeAsync(USAGE_CACHE_POLL_MS)
+    expect(h.gets).toHaveLength(1)
+    // The switch lands; the daemon now serves the new default's numbers.
+    h.body = doc(0.33)
+    for (const fn of pushes) fn()
+    answerOld(doc(0.9))
+    await settle()
+    await settle()
+    expect(h.gets).toHaveLength(2)
+    expect(usedOf('win')).toBe(0.33)
   })
 })

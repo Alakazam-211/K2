@@ -7,7 +7,7 @@ import {
 import { primaryScope, scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
 import { onActiveHostChange } from '@/stores/connect-host'
 import { useWindowFocusStore } from '@/stores/window-focus'
-import { onSubscriptionUsageChanged } from '@/stores/session-events'
+import { onLlmAccountsChanged, onSubscriptionUsageChanged } from '@/stores/session-events'
 import { createKeyedPollers } from '@/lib/keyed-poller'
 import { errorMessage } from '@/lib/daemon-http-error'
 
@@ -32,7 +32,10 @@ const REFRESH_ROUTE = 'usage/subscriptions/refresh'
 
 interface SubscriptionUsageStore {
   entries: Record<string, UsageEntry>
-  load: (target: UsageTarget) => Promise<void>
+  /** `fresh`: the numbers changed after any read now in flight began (a
+   *  push, a server default change), so read again once it lands rather
+   *  than share its older answer. */
+  load: (target: UsageTarget, opts?: { fresh?: boolean }) => Promise<void>
   /** Menu open: asks the daemon (it decides freshness). A
    *  scope that may not send the refresh (a view-only room) only GETs. */
   refreshOnOpen: (target: UsageTarget) => Promise<void>
@@ -72,7 +75,7 @@ export function usageEntryFor(key: string): UsageEntry | null {
   return useSubscriptionUsageStore.getState().entries[key] ?? null
 }
 
-export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set) => {
+export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set, get) => {
   const write = (key: string, epoch: number, next: Partial<UsageEntry>): void => {
     if (epoch !== epochOf(key)) return
     set((s) => {
@@ -84,9 +87,9 @@ export const useSubscriptionUsageStore = create<SubscriptionUsageStore>((set) =>
   return {
     entries: {},
 
-    load: (target) => {
+    load: (target, opts) => {
       const running = loadInflight.get(target.key)
-      if (running) return running
+      if (running) return opts?.fresh ? running.then(() => get().load(target)) : running
       const epoch = epochOf(target.key)
       const p = (async () => {
         try {
@@ -169,9 +172,9 @@ export function startUsageCachePoll(target: UsageTarget, intervalMs = USAGE_CACH
 
 function runCachePoll(target: UsageTarget, intervalMs: number): () => void {
   let stopped = false
-  const read = (): void => {
+  const read = (fresh = false): void => {
     if (stopped) return
-    void useSubscriptionUsageStore.getState().load(target)
+    void useSubscriptionUsageStore.getState().load(target, { fresh })
   }
   const tick = (): void => {
     if (pageHidden()) return
@@ -186,8 +189,11 @@ function runCachePoll(target: UsageTarget, intervalMs: number): () => void {
     if (!prev.isFocused && state.isFocused) tick()
   })
   // A push is cheap (a GET of the cache) and the numbers are new: read even
-  // while hidden so the page shows them the moment it is shown.
-  const unsubChanged = onSubscriptionUsageChanged(target.scope, read)
+  // while hidden so the page shows them the moment it is shown. A server
+  // default change (from any client) means another token's numbers: read
+  // then too. Either way a read already in flight is older than the news.
+  const unsubChanged = onSubscriptionUsageChanged(target.scope, () => read(true))
+  const unsubDefault = onLlmAccountsChanged(target.scope, () => read(true))
   return () => {
     if (stopped) return
     stopped = true
@@ -195,5 +201,6 @@ function runCachePoll(target: UsageTarget, intervalMs: number): () => void {
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
     unsubFocus()
     unsubChanged()
+    unsubDefault()
   }
 }

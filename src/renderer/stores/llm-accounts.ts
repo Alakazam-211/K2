@@ -16,6 +16,7 @@ import { onActiveHostChange } from '@/stores/connect-host'
 import { isWebClient } from '@/lib/is-web'
 import { onLlmAccountsChanged, onSubscriptionUsageChanged } from '@/stores/session-events'
 import type { HarnessUsage } from '@/lib/subscription-usage'
+import { useSubscriptionUsageStore } from '@/stores/subscription-usage'
 
 export type AccountState = 'not_set_up' | 'signing_in' | 'signed_in' | 'needs_login' | 'unknown'
 
@@ -287,6 +288,16 @@ export function loadErrorText(scope: ServerScope, e: unknown): string {
 // new server — this computer's tokens on a remote, 0.45.0's bug.
 const loadInflight = new Map<string, Promise<void>>()
 const epochs = new Map<string, number>()
+/** Bumped when a change this window sent is answered: a list read that
+ *  began before then is older than the change and lands nowhere (a fresh
+ *  read follows). Without it the read after a switch shared an earlier,
+ *  still-running read and put the old default back on screen. */
+const changeGens = new Map<string, number>()
+/** The last list each server sent, before any pending switch is drawn on it. */
+const served = new Map<string, LlmAccountsDoc>()
+/** Switches sent and not yet answered, per server: tool → (token, seq). */
+const pendingSwitches = new Map<string, Map<string, { id: string; seq: number }>>()
+let switchSeq = 0
 /** Mounted watchers of the window's server (`primary`). */
 let primaryWatchers = 0
 
@@ -300,10 +311,57 @@ function epochOf(key: string): number {
   return epochs.get(key) ?? 0
 }
 
+function changeGenOf(key: string): number {
+  return changeGens.get(key) ?? 0
+}
+
+/** `doc` with `tool`'s server default moved to token `id`: the badge, the
+ *  live token (a subscription only; an API token leaves the tool's own
+ *  store as it was) and "since". */
+export function withDefault(doc: LlmAccountsDoc, tool: string, id: string): LlmAccountsDoc {
+  return {
+    ...doc,
+    tools: doc.tools.map((t) => {
+      if (t.tool !== tool || t.activeId === id) return t
+      const to = t.accounts.find((a) => a.id === id)
+      if (!to) return t
+      return {
+        ...t,
+        activeId: id,
+        liveAccountId: to.kind === 'api_key' ? t.liveAccountId : id,
+        switchedAt: Math.floor(Date.now() / 1000),
+        accounts: t.accounts.map((a) => (a.active === (a.id === id) ? a : { ...a, active: a.id === id })),
+      }
+    }),
+  }
+}
+
+/** The server's list with this window's unanswered switches drawn on it. */
+function drawn(key: string, doc: LlmAccountsDoc): LlmAccountsDoc {
+  const pending = pendingSwitches.get(key)
+  if (!pending) return doc
+  let out = doc
+  for (const [tool, p] of pending) out = withDefault(out, tool, p.id)
+  return out
+}
+
+/** Show the last served list again, with what is still pending. */
+function redraw(key: string): void {
+  const base = served.get(key)
+  if (!base) return
+  useLlmAccountsStore.setState((s) => {
+    const entry = s.entries[key]
+    if (!entry) return s
+    return { entries: { ...s.entries, [key]: { ...entry, doc: drawn(key, base) } } }
+  })
+}
+
 /** Forget one server's entry; an in-flight load for it lands nowhere. */
 function dropEntry(key: string): void {
   epochs.set(key, epochOf(key) + 1)
   loadInflight.delete(key)
+  served.delete(key)
+  pendingSwitches.delete(key)
   useLlmAccountsStore.setState((s) => {
     if (!(key in s.entries)) return s
     const entries = { ...s.entries }
@@ -314,25 +372,31 @@ function dropEntry(key: string): void {
 
 interface LlmAccountsStore {
   entries: Record<string, AccountsEntry>
-  load: (scope: ServerScope) => Promise<void>
+  /** `fresh`: the list changed after any read now in flight began (the
+   *  daemon said so, or a change was answered), so read again once it
+   *  lands rather than share its older answer. */
+  load: (scope: ServerScope, opts?: { fresh?: boolean }) => Promise<void>
 }
 
-export const useLlmAccountsStore = create<LlmAccountsStore>((set) => ({
+export const useLlmAccountsStore = create<LlmAccountsStore>((set, get) => ({
   entries: {},
-  load: (scope) => {
+  load: (scope, opts) => {
     const key = scope.id
     const running = loadInflight.get(key)
-    if (running) return running
+    if (running) return opts?.fresh ? running.then(() => get().load(scope)) : running
     const epoch = epochOf(key)
+    const gen = changeGenOf(key)
     const p = (async () => {
       try {
         const doc = parseAccountsDoc(await daemonCliGet<unknown>(scope, 'llm/accounts/list'))
-        if (epoch !== epochOf(key)) return
-        set((s) => ({ entries: { ...s.entries, [key]: { doc, error: null, reason: null } } }))
+        if (epoch !== epochOf(key) || gen !== changeGenOf(key)) return
+        served.set(key, doc)
+        set((s) => ({ entries: { ...s.entries, [key]: { doc: drawn(key, doc), error: null, reason: null } } }))
       } catch (e) {
         // The window moved to another server mid-request: that server's
-        // own load (after the switch) fills the entry.
-        if (epoch !== epochOf(key) || hostSwitched(e)) return
+        // own load (after the switch) fills the entry. A read older than
+        // an answered change: the fresh read after it fills it.
+        if (epoch !== epochOf(key) || hostSwitched(e) || gen !== changeGenOf(key)) return
         // Keep the last list from THIS server (the entry is dropped on a
         // switch, so it is never another server's) and say what failed.
         set((s) => ({
@@ -363,6 +427,8 @@ onActiveHostChange(() => resetWindowLlmAccounts())
 export function resetLlmAccountsForTests(): void {
   for (const key of new Set([...epochs.keys(), ...loadInflight.keys()])) epochs.set(key, epochOf(key) + 1)
   loadInflight.clear()
+  served.clear()
+  pendingSwitches.clear()
   primaryWatchers = 0
   useLlmAccountsStore.setState({ entries: {} })
 }
@@ -384,8 +450,9 @@ export function watchLlmAccounts(scope: ServerScope): () => void {
   const primary = scope.isPrimary
   if (primary) primaryWatchers += 1
   void useLlmAccountsStore.getState().load(scope)
+  // The daemon's news is newer than any read in flight: read after it.
   const off = onLlmAccountsChanged(scope, () => {
-    void useLlmAccountsStore.getState().load(scope)
+    void useLlmAccountsStore.getState().load(scope, { fresh: true })
   })
   let timer: ReturnType<typeof setTimeout> | null = null
   const offUsage = onSubscriptionUsageChanged(scope, () => {
@@ -407,10 +474,19 @@ export function watchLlmAccounts(scope: ServerScope): () => void {
   }
 }
 
+/** A change was answered (or refused): any read that began before it is
+ *  older than the server now; read the list again after it. */
+function changed(scope: ServerScope): void {
+  changeGens.set(scope.id, changeGenOf(scope.id) + 1)
+  void useLlmAccountsStore.getState().load(scope, { fresh: true })
+}
+
 async function mutate<T>(scope: ServerScope, route: string, body: Record<string, unknown>): Promise<T> {
-  const out = await daemonCliPost<T>(scope, `llm/accounts/${route}`, body)
-  void useLlmAccountsStore.getState().load(scope)
-  return out
+  try {
+    return await daemonCliPost<T>(scope, `llm/accounts/${route}`, body)
+  } finally {
+    changed(scope)
+  }
 }
 
 export function addLogin(
@@ -439,8 +515,52 @@ export function cancelLogin(scope: ServerScope, loginId: string): Promise<{ logi
   return mutate(scope, 'login/cancel', { loginId })
 }
 
-export function switchLogin(scope: ServerScope, id: string): Promise<unknown> {
-  return mutate(scope, 'switch', { id })
+/** The token the daemon says is now the default (its answer's
+ *  `account.id`, else `switch.to`); null on an answer without either. */
+function answeredDefault(out: unknown): string | null {
+  if (!out || typeof out !== 'object') return null
+  const o = out as { account?: { id?: unknown }; switch?: { to?: unknown } }
+  if (typeof o.account?.id === 'string') return o.account.id
+  if (typeof o.switch?.to === 'string') return o.switch.to
+  return null
+}
+
+/** Make token `id` its tool's server default. The list shows it at once;
+ *  the daemon's answer confirms it (a refusal puts the old default back),
+ *  then the list and the top-bar usage are read again. */
+export async function switchLogin(scope: ServerScope, id: string): Promise<unknown> {
+  const key = scope.id
+  const entryDoc = useLlmAccountsStore.getState().entries[key]?.doc ?? null
+  const tool = entryDoc?.tools.find((t) => t.accounts.some((a) => a.id === id))?.tool ?? null
+  const seq = ++switchSeq
+  if (tool && entryDoc) {
+    if (!served.has(key)) served.set(key, entryDoc)
+    const pending = pendingSwitches.get(key) ?? new Map<string, { id: string; seq: number }>()
+    pending.set(tool, { id, seq })
+    pendingSwitches.set(key, pending)
+    redraw(key)
+  }
+  const settle = (): void => {
+    if (!tool) return
+    const pending = pendingSwitches.get(key)
+    if (pending?.get(tool)?.seq === seq) pending.delete(tool)
+    if (pending?.size === 0) pendingSwitches.delete(key)
+  }
+  try {
+    const out = await daemonCliPost<unknown>(scope, 'llm/accounts/switch', { id })
+    // Confirmed: the daemon's answer stands until the re-read lands.
+    const base = served.get(key)
+    if (tool && base) served.set(key, withDefault(base, tool, answeredDefault(out) ?? id))
+    return out
+  } finally {
+    settle()
+    redraw(key)
+    changed(scope)
+    // The top-bar chip reads that server's usage; read it again now (the
+    // daemon also announces it, for every client).
+    const usage = useSubscriptionUsageStore.getState()
+    if (usage.entries[key]) void usage.load({ key, scope }, { fresh: true })
+  }
 }
 
 export function switchToNext(scope: ServerScope, tool: string): Promise<unknown> {

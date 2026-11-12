@@ -38,8 +38,10 @@ import {
   exhaustedWarnings,
   parseAccountsDoc,
   resetLlmAccountsForTests,
+  useLlmAccountsStore,
   type LlmAccount,
 } from '@/stores/llm-accounts'
+import { primaryScope } from '@/kessel/server-scope'
 
 const NOW_S = Math.floor(Date.now() / 1000)
 const IN_TWO_DAYS = new Date((NOW_S + 2 * 86400) * 1000).toISOString()
@@ -77,6 +79,8 @@ const SWITCHED_AT = NOW_S - 2 * 3600
 
 let logins: unknown[] = []
 let docExtra: Record<string, unknown> = {}
+/** The daemon's server default for Claude (a switch moves it). */
+let defaultId = 'acc_rakzm'
 
 function doc(): Record<string, unknown> {
   const notYet = (tool: string, display: string) => ({
@@ -85,9 +89,9 @@ function doc(): Record<string, unknown> {
   return {
     tools: [
       {
-        tool: 'claude', display: 'Claude', supported: true, subscription: true, apiKeys: true, activeId: 'acc_rakzm',
-        liveAccountId: 'acc_rakzm', switchedAt: SWITCHED_AT, switchedBy: 'owner-token', loginMethod: 'temp_home',
-        accounts: [RAKZM, AFSROW, LUMON], pins: [],
+        tool: 'claude', display: 'Claude', supported: true, subscription: true, apiKeys: true, activeId: defaultId,
+        liveAccountId: defaultId, switchedAt: SWITCHED_AT, switchedBy: 'owner-token', loginMethod: 'temp_home',
+        accounts: [RAKZM, AFSROW, LUMON].map((a) => ({ ...a, active: a.id === defaultId })), pins: [],
       },
       notYet('codex', 'Codex'), notYet('grok', 'Grok'), notYet('gemini', 'Gemini'),
       notYet('cursor', 'Cursor Agent'), notYet('pi', 'Pi'), notYet('hermes', 'Hermes'),
@@ -103,6 +107,7 @@ beforeEach(() => {
   resetLlmAccountsForTests()
   logins = []
   docExtra = {}
+  defaultId = 'acc_rakzm'
   h.daemonCliGet.mockReset()
   h.daemonCliPost.mockReset()
   h.daemonCliGet.mockImplementation(async (route: string) => {
@@ -181,6 +186,100 @@ describe('switching the server default', () => {
     fireEvent.click(makeDefault('acc_lumon'))
     fireEvent.click(confirmButton('Make default'))
     await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_lumon' }))
+  })
+})
+
+// Rosson 11-12: "Make default" showed its note, but the list kept the old
+// default and the top bar kept the old numbers; a second try worked.
+describe('Make default shows the change on the screen', () => {
+  const isDefault = (id: string): boolean =>
+    within(screen.getByTestId(`llm-account-${id}`)).queryByText('Server default') !== null
+  const switches = (): number => h.daemonCliPost.mock.calls.filter((c) => c[0] === 'llm/accounts/switch').length
+
+  /** The switch route: held until the test answers it. */
+  function holdSwitch(): { answer: () => void; fail: (msg: string) => void } {
+    let answer = (): void => {}
+    let fail = (_msg: string): void => {}
+    h.daemonCliPost.mockImplementation((route: string, body: { id?: string }) => {
+      if (route === 'llm/accounts/switch') {
+        return new Promise((resolve, reject) => {
+          answer = () => {
+            defaultId = body.id ?? ''
+            resolve({ switch: { to: body.id, alreadyActive: false }, account: { ...AFSROW, active: true } })
+          }
+          fail = (msg) => reject(new Error(msg))
+        })
+      }
+      if (route.startsWith('llm/accounts/')) return Promise.resolve({})
+      return Promise.reject(new Error(`unexpected POST ${route}`))
+    })
+    return { answer: () => answer(), fail: (m) => fail(m) }
+  }
+
+  it('the first confirm sends the switch exactly once', async () => {
+    const sw = holdSwitch()
+    await renderColumn()
+    fireEvent.click(makeDefault('acc_afsrow'))
+    fireEvent.click(confirmButton('Make default'))
+    await waitFor(() => expect(switches()).toBe(1))
+    sw.answer()
+    expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/switch', { id: 'acc_afsrow' })
+    await waitFor(() => expect(isDefault('acc_afsrow')).toBe(true))
+    expect(switches()).toBe(1)
+  })
+
+  it('the badge moves at once, before the daemon answers, and stays after', async () => {
+    const sw = holdSwitch()
+    await renderColumn()
+    expect(isDefault('acc_rakzm')).toBe(true)
+    fireEvent.click(makeDefault('acc_afsrow'))
+    fireEvent.click(confirmButton('Make default'))
+    await waitFor(() => expect(isDefault('acc_afsrow')).toBe(true))
+    expect(isDefault('acc_rakzm')).toBe(false)
+    // The old default now offers Make default; the new one doesn't.
+    expect(makeDefault('acc_rakzm').disabled).toBe(false)
+    expect(within(screen.getByTestId('llm-account-acc_afsrow')).queryByRole('button', { name: 'Make default' })).toBeNull()
+    sw.answer()
+    expect((await screen.findByText('“afsrow” is now the Claude server default.'))).toBeTruthy()
+    await waitFor(() => expect(h.daemonCliGet.mock.calls.filter((c) => c[0] === 'llm/accounts/list').length).toBeGreaterThan(1))
+    expect(isDefault('acc_afsrow')).toBe(true)
+    expect(isDefault('acc_rakzm')).toBe(false)
+  })
+
+  it('a list read that began before the switch cannot put the old default back', async () => {
+    await renderColumn()
+    await waitFor(() => expect(h.daemonCliPost).toHaveBeenCalledWith('llm/accounts/refresh', { usage: true }))
+    await waitFor(() => expect(useLlmAccountsStore.getState().entries[primaryScope().id]?.doc).toBeTruthy())
+    // A read already on its way (the page's open refresh, a usage event)
+    // that will answer with the list from before the switch.
+    let answerOld: (v: unknown) => void = () => {}
+    const old = doc()
+    h.daemonCliGet.mockImplementationOnce(() => new Promise((r) => (answerOld = r)))
+    void useLlmAccountsStore.getState().load(primaryScope())
+    const sw = holdSwitch()
+    fireEvent.click(makeDefault('acc_afsrow'))
+    fireEvent.click(confirmButton('Make default'))
+    sw.answer()
+    await screen.findByText('“afsrow” is now the Claude server default.')
+    answerOld(old)
+    const reads = h.daemonCliGet.mock.calls.length
+    await waitFor(() => expect(h.daemonCliGet.mock.calls.length).toBeGreaterThan(reads))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(isDefault('acc_afsrow')).toBe(true)
+    expect(isDefault('acc_rakzm')).toBe(false)
+    expect(switches()).toBe(1)
+  })
+
+  it('a refused switch puts the badge back and says why', async () => {
+    const sw = holdSwitch()
+    await renderColumn()
+    fireEvent.click(makeDefault('acc_afsrow'))
+    fireEvent.click(confirmButton('Make default'))
+    await waitFor(() => expect(isDefault('acc_afsrow')).toBe(true))
+    sw.fail('the server is busy')
+    expect((await screen.findByTestId('llm-row-error')).textContent).toContain('the server is busy')
+    expect(isDefault('acc_rakzm')).toBe(true)
+    expect(isDefault('acc_afsrow')).toBe(false)
   })
 })
 

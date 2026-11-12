@@ -62,7 +62,7 @@
       else if (sd === 'point') { x = r.left + pw + 4 > W - 12 ? r.left - pw - 2 : r.left + 2; y = r.top + ph + 4 > H - 12 ? r.top - ph - 2 : r.top + 2 }   // a right-click menu: at the pointer
       else if (sd === 'up') { x = r.left + r.width / 2 - pw / 2; y = r.top - ph - 10 }
       else { x = r.left + r.width / 2 - pw / 2; y = r.bottom + 10 }
-      return [Math.max(12, Math.min(W - pw - 12, x)), Math.max(60, Math.min(H - ph - 12, y))]
+      return [Math.max(12, Math.min(W - pw - 12, x)), Math.max(12, Math.min(H - ph - 12, y))]
     }
     let [x, y] = at(side)
     if (avoid) {
@@ -71,7 +71,7 @@
       x = best[0]; y = best[1]
       // Still over it (no side fits): beside it, on whichever side has more room.
       if (hits([x, y]) > 0) {
-        const bx = avoid.right + 12 + pw <= W - 12 ? avoid.right + 12 : Math.max(12, avoid.left - pw - 12); const by = Math.max(60, Math.min(H - ph - 12, avoid.top))
+        const bx = avoid.right + 12 + pw <= W - 12 ? avoid.right + 12 : Math.max(12, avoid.left - pw - 12); const by = Math.max(12, Math.min(H - ph - 12, avoid.top))
         if (hits([bx, by]) < hits([x, y])) { x = bx; y = by }   // only if it really covers less
       }
     }

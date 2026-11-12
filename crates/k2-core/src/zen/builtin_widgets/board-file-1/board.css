@@ -253,8 +253,9 @@ textarea.ed-title { min-width: 140px; }
 .toolbar { left: 12px; top: 50%; transform: translateY(-50%); flex-direction: column; padding: 5px; }
 .toolbar .btn { width: 38px; height: 38px; }
 .toolbar .sep { width: 22px; height: 1px; margin: 4px 0; }
-.topleft { left: 12px; top: 60px; }
-.topright { right: 12px; top: 60px; }
+/* A tab has no Garden chrome above the frame (board-1 keeps 60px for it): the bars sit 12px down, like the sides. */
+.topleft { left: 12px; top: 12px; }
+.topright { right: 12px; top: 12px; }
 .boardname { display: flex; align-items: center; gap: 8px; padding: 0 8px 0 6px; height: 34px; }
 .boardname .logo { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; }
 .boardname .name { display: flex; align-items: center; gap: 4px; height: 30px; margin: 0 -4px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-weight: 650; font-size: 14px; cursor: pointer; }
@@ -289,7 +290,7 @@ textarea.ed-title { min-width: 140px; }
 .zoomlabel:hover { background: color-mix(in srgb, var(--text) 7%, transparent); }
 .minimap { width: 220px; height: 140px; border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); cursor: pointer; }
 
-.hud { position: absolute; left: 50%; top: 60px; transform: translateX(-50%); z-index: 21; display: flex; gap: 8px; }
+.hud { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 21; display: flex; gap: 8px; }
 .pill { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 6px 0 14px; background: var(--panel); border-radius: 999px; box-shadow: var(--shadow-2), 0 0 0 1px color-mix(in srgb, var(--line) 70%, transparent); font-weight: 600; }
 .pill .time { font-size: 18px; font-variant-numeric: tabular-nums; min-width: 52px; letter-spacing: 0.01em; }
 .pill .btn { min-width: 30px; height: 30px; border-radius: 50%; }

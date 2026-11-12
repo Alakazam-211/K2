@@ -1,10 +1,9 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { floatMaterial } from '@/components/ui/float-material'
 import { Button } from '@/components/ui/Button'
-import { createPortal } from 'react-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet } from '@/lib/daemon-cli'
-import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import { ProviderIcon } from '@/components/AgentIcon/ProviderIcon'
 import type { TabsStore } from '@/stores/tabs'
@@ -18,7 +17,6 @@ import {
   type HeartbeatSessionCandidate,
 } from '@/lib/heartbeat-delivery'
 import { primaryScope } from '@/kessel/server-scope'
-import { useBrowserOverlay } from '@/lib/browser-overlay'
 
 /**
  * Per-heartbeat delivery drop-down — answers "where does this
@@ -94,11 +92,12 @@ export function HeartbeatSessionPicker({
     if (!pinnedIds || !sessions) return null
     return sessions.find((s) => pinnedIds.includes(s.sessionId))?.sessionId ?? null
   }, [pinnedIds, sessions])
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  const buttonRef = useRef<HTMLButtonElement | null>(null)
-  const menuRef = useRef<HTMLDivElement | null>(null)
-  const [menuBox, setMenuBox] = useState<{ top: number; left: number; zIndex: number } | null>(null)
-  useBrowserOverlay({ active: open && menuBox !== null, ref: menuRef, kind: 'menu', watch: menuBox })
+  // The app's popover layer: portalled, placed in CSS px under (or, with no
+  // room below, over) the trigger and kept inside the window at any app
+  // zoom; closes on a press outside or Escape. The tiles render many
+  // pickers side by side, so a stuck-open one would stack under its
+  // neighbours.
+  const menu = useAnchoredMenu<HTMLButtonElement>({ open, onClose: () => setOpen(false), gap: 4, width: 'min' })
 
   // The closed trigger shows the explicit session's TITLE, which only
   // chat/list knows — so that one case also warrants a mount fetch.
@@ -170,44 +169,6 @@ export function HeartbeatSessionPicker({
     return () => { cancelled = true }
   }, [open, projectId])
 
-  // Close on outside click — the tiles render many pickers side by
-  // side, so a stuck-open popover would stack under its neighbors.
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      const node = e.target as Node
-      if (rootRef.current?.contains(node)) return
-      if (menuRef.current?.contains(node)) return
-      setOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    return () => window.removeEventListener('mousedown', onDown)
-  }, [open])
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setMenuBox(null)
-      return
-    }
-    const place = (): void => {
-      const trigger = buttonRef.current
-      if (!trigger) return
-      const rect = trigger.getBoundingClientRect()
-      setMenuBox({
-        top: rect.bottom + 4,
-        left: rect.left,
-        zIndex: menuLayerForTrigger(trigger),
-      })
-    }
-    place()
-    window.addEventListener('resize', place)
-    window.addEventListener('scroll', place, true)
-    return () => {
-      window.removeEventListener('resize', place)
-      window.removeEventListener('scroll', place, true)
-    }
-  }, [open])
-
   const candidates = useMemo(
     () => selectableSessions(sessions ?? [], pinnedSessionId),
     [sessions, pinnedSessionId],
@@ -240,12 +201,12 @@ export function HeartbeatSessionPicker({
   )
 
   return (
-    <div ref={rootRef} className="relative inline-flex min-w-0">
+    <div className="relative inline-flex min-w-0">
       {variant === 'field' ? (
         // A Settings row's control: the quiet button itself, so its size,
         // edge and focus ring match the buttons beside it.
         <Button
-          ref={buttonRef}
+          ref={menu.anchorRef}
           variant="quiet"
           onClick={() => setOpen((v) => !v)}
           title={TRIGGER_TITLE}
@@ -258,7 +219,7 @@ export function HeartbeatSessionPicker({
         </Button>
       ) : (
         <button
-          ref={buttonRef}
+          ref={menu.anchorRef}
           type="button"
           onClick={() => setOpen((v) => !v)}
           title={TRIGGER_TITLE}
@@ -270,17 +231,14 @@ export function HeartbeatSessionPicker({
           {triggerBody}
         </button>
       )}
-      {open && menuBox && createPortal(
+      {open && menu.portal(
         <div
-          ref={menuRef}
+          ref={menu.menuRef}
           role="listbox"
           data-testid="heartbeat-wakeup-menu"
-          style={{
-            position: 'fixed',
-            top: menuBox.top,
-            left: menuBox.left,
-            zIndex: menuBox.zIndex,
-          }}
+          // The body's font size, not the trigger's: the list's 36ch width
+          // reads from it.
+          style={{ ...menu.style, fontSize: undefined }}
           {...floatMaterial('menu')} className="w-[36ch] max-h-[calc(var(--k2-vh)*0.4)] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
         >
           {/* 1 — Pinned chat: the prominent, visually-distinct first
@@ -371,7 +329,6 @@ export function HeartbeatSessionPicker({
             })
           )}
         </div>,
-        document.body,
       )}
     </div>
   )

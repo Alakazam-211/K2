@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { HeartbeatSessionPicker } from './HeartbeatSessionPicker'
 import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
+import { applyAppZoomForTest, resetAppZoomForTest, setScreenRect, setWindowSize } from '@/test-utils/app-zoom'
 
 const cli = vi.hoisted(() => ({
   get: vi.fn(async (route: string, _params?: unknown) => {
@@ -110,5 +111,45 @@ describe('HeartbeatSessionPicker menu', () => {
     fireEvent.click(screen.getByRole('option', { name: /Pinned chat/ }))
     expect(onSelect).toHaveBeenCalledWith({ mode: 'pinned' })
     expect(screen.queryByTestId('heartbeat-wakeup-menu')).toBeNull()
+  })
+})
+
+// Under the app zoom the trigger's rect and the window are window px; the
+// list's fixed edges are CSS px, which the zoom scales.
+describe('HeartbeatSessionPicker under the app zoom', () => {
+  afterEach(() => {
+    resetAppZoomForTest()
+    setWindowSize(1024, 768)
+  })
+
+  const px = (v: string): number => {
+    if (!v.endsWith('px')) throw new Error(`not px: "${v}"`)
+    return Number(v.slice(0, -2))
+  }
+  const openAt = (top: number): HTMLElement => {
+    render(<HeartbeatSessionPicker projectPath="/ws/proj" projectId="p1" value={{ mode: 'auto' }} onSelect={() => {}} />)
+    const trigger = screen.getByRole('button', { name: 'Heartbeat wakeup destination' })
+    setScreenRect(trigger, { left: 300, top, width: 90, height: 30 })
+    fireEvent.click(trigger)
+    return screen.getByTestId('heartbeat-wakeup-menu')
+  }
+
+  it('at 150%, opens 4 CSS px under the trigger, left edges lined up on screen', () => {
+    const z = 1.5
+    setWindowSize(1000, 800)
+    applyAppZoomForTest(z)
+    const menu = openAt(100)
+    expect(px(menu.style.top) * z).toBeCloseTo(130 + 4 * z, 5)
+    expect(px(menu.style.left) * z).toBeCloseTo(300, 5)
+  })
+
+  it('at 150%, opens over the trigger when the list would run off the bottom of the window', () => {
+    const z = 1.5
+    setWindowSize(1000, 800)
+    applyAppZoomForTest(z)
+    const menu = openAt(800 - 40 - 30)
+    expect(menu.style.top).toBe('')
+    // On screen its bottom edge sits 4 CSS px above the trigger's top.
+    expect(800 - px(menu.style.bottom) * z).toBeCloseTo(730 - 4 * z, 5)
   })
 })

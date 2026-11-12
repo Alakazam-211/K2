@@ -117,6 +117,12 @@ pub fn run() {
     if crate::handoff::handed_off() {
         rt.shutdown_background();
         crate::handoff::drain_then_exit();
+    } else {
+        // A stop: blocking work still running (a handler waiting on the
+        // database, a child that never answers) gets a short grace, then
+        // the process exits anyway. Dropping the runtime would wait for
+        // it forever, and the daemon would never quit.
+        crate::daemon_stop::finish_runtime(rt, crate::daemon_stop::RUNTIME_DRAIN_LIMIT);
     }
     // Windows: say why this daemon ended, for the keep-alive supervisor
     // (quit: 0; anything else: start me again).
@@ -2142,7 +2148,11 @@ async fn async_main() {
     // Live docs (MI14): close every session and let go of docs.redb on a
     // normal stop too (a hand-off already did this in quiesce; a second
     // call is a no-op). Every change is durable before it was acked.
-    let _ = tokio::task::spawn_blocking(|| crate::docs::release("daemon stop")).await;
+    // Every shutdown step is bounded (`daemon_stop::bounded_step`): one
+    // stuck on the database or a child that never answers is logged and
+    // left behind, and the daemon still quits.
+    use crate::daemon_stop::{bounded_step, SHUTDOWN_STEP_LIMIT};
+    let _ = bounded_step("live docs release", SHUTDOWN_STEP_LIMIT, || crate::docs::release("daemon stop")).await;
 
     // 0.40.48: release the tunnel BEFORE exiting. frpc is our child; if we
     // exit without stopping it, it is orphaned and keeps the frps
@@ -2166,21 +2176,20 @@ async fn async_main() {
     // running in ptyd for the next daemon. No-op when ptyd was never used.
     // After a hand-off, quiesce already detached them.
     if !k2_core::handoff_state::draining() {
-        crate::daemon_stop::on_shutdown();
+        let _ = bounded_step("agent sessions (ptyd)", SHUTDOWN_STEP_LIMIT, crate::daemon_stop::on_shutdown).await;
     }
     if k2_core::handoff_state::draining() {
         log_debug!("[daemon] handed off: leaving frpc and Caddy to the successor");
         log_debug!("[daemon] async_main exiting");
         return;
     }
-    match tokio::task::spawn_blocking(|| k2_core::tunnel::stop_tunnel("daemon shutdown")).await {
-        Ok(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
-        Ok(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),
-        Err(e) => log_debug!("[daemon] tunnel stop join error: {e}"),
+    match bounded_step("tunnel stop", SHUTDOWN_STEP_LIMIT, || k2_core::tunnel::stop_tunnel("daemon shutdown")).await {
+        Some(Ok(())) => log_debug!("[daemon] tunnel released for shutdown"),
+        Some(Err(e)) => log_debug!("[daemon] tunnel stop on shutdown: {e}"),
+        None => {}
     }
-    match tokio::task::spawn_blocking(k2_core::skin_door::stop_caddy).await {
-        Ok(()) => log_debug!("[daemon] skin Caddy stopped for shutdown"),
-        Err(e) => log_debug!("[daemon] skin Caddy stop join error: {e}"),
+    if bounded_step("skin Caddy stop", SHUTDOWN_STEP_LIMIT, k2_core::skin_door::stop_caddy).await.is_some() {
+        log_debug!("[daemon] skin Caddy stopped for shutdown");
     }
 
     log_debug!("[daemon] async_main exiting");

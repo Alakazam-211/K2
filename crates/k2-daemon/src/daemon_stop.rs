@@ -243,6 +243,45 @@ pub fn on_shutdown() {
     }
 }
 
+/// The longest one shutdown step (docs release, agent sessions, tunnel,
+/// Caddy) may take before the daemon goes on without it.
+pub const SHUTDOWN_STEP_LIMIT: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// After the main task ends: how long blocking work still running (a
+/// request handler waiting on the database, a keychain read) may go on
+/// before the process exits anyway.
+pub const RUNTIME_DRAIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Run one shutdown step on the blocking pool, waiting at most `limit`.
+/// `None`: it failed or didn't finish (logged); the daemon goes on and
+/// still quits. A step left running is dropped with the runtime
+/// ([`finish_runtime`]).
+pub async fn bounded_step<T: Send + 'static>(
+    name: &str,
+    limit: std::time::Duration,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    match tokio::time::timeout(limit, tokio::task::spawn_blocking(f)).await {
+        Ok(Ok(v)) => Some(v),
+        Ok(Err(e)) => {
+            log_debug!("[daemon] shutdown: {name} failed: {e}");
+            None
+        }
+        Err(_) => {
+            log_debug!("[daemon] shutdown: {name} did not finish within {} s; quitting without it", limit.as_secs());
+            None
+        }
+    }
+}
+
+/// Shut the main runtime down, waiting at most `limit` for blocking work
+/// still running. Dropping a runtime waits for every blocking task with no
+/// limit, so one stuck task (a handler waiting on the database that a
+/// stuck keychain read held) kept the daemon from ever quitting.
+pub fn finish_runtime(rt: tokio::runtime::Runtime, limit: std::time::Duration) {
+    rt.shutdown_timeout(limit);
+}
+
 /// `KeepAgents` / hand-off quiesce: detach every ptyd session. Returns how
 /// many.
 pub fn detach_all() -> usize {
@@ -447,6 +486,30 @@ fn spawn_detached(prog: &str, args: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stuck_blocking_task_does_not_keep_the_daemon_from_quitting() {
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("runtime");
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        // Stands for a request handler stuck on the database for good.
+        rt.spawn_blocking(move || {
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(120));
+        });
+        // A shutdown step stuck the same way is left behind within its limit.
+        let t0 = std::time::Instant::now();
+        let step = rt.block_on(bounded_step("stuck step", std::time::Duration::from_millis(200), || {
+            std::thread::sleep(std::time::Duration::from_secs(120));
+        }));
+        assert!(step.is_none(), "a stuck step reports it didn't finish");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "a stuck step held shutdown {:?}", t0.elapsed());
+        assert_eq!(rt.block_on(bounded_step("quick step", std::time::Duration::from_secs(5), || 7)), Some(7));
+
+        let t1 = std::time::Instant::now();
+        finish_runtime(rt, std::time::Duration::from_millis(300));
+        let took = t1.elapsed();
+        drop(release_tx);
+        assert!(took < std::time::Duration::from_secs(5), "the runtime waited {took:?} for a stuck blocking task");
+    }
 
     #[test]
     fn intent_is_honoured_only_while_fresh() {

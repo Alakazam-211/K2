@@ -8850,6 +8850,8 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Signed approvals (prd-signed-approvals-v1 S1): the whole arm is approve/tcp.rs.
+        p if crate::approve::routes::is_route(p) => crate::approve::tcp::serve(&mut *stream, &mut buf, is_post, p, &path, &query, bearer_token.as_deref(), state.token.as_str()).await,
         // Permission cards (prd-agent-settings-cards-v1 rev 3.1 §2.4, lane
         // A1). Skipped while the server switch is off, so the family
         // answers exactly as an unknown route does today. With it on, the

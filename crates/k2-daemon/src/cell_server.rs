@@ -853,6 +853,15 @@ mod unix_impl {
             // Permission cards (prd-agent-settings-cards-v1 rev 3.1 §2.4,
             // lane A1): this cell's passport asks for one named change.
             // The handler applies both switches (off → today's 403 body).
+            // Signed approvals (prd-signed-approvals-v1 S1): this cell's
+            // passport asks, reads, waits on and cancels its own requests.
+            p if crate::approve::routes::is_route(p) => {
+                if body.len() > crate::approve::routes::MAX_BODY {
+                    return from_cli(crate::approve::routes::too_large());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::approve::routes::handle(p, &who, is_post, body, params))
+            }
             p if crate::permission::routes::is_route(p) => {
                 if body.len() > crate::permission::routes::MAX_BODY {
                     return from_cli(crate::permission::routes::too_large());

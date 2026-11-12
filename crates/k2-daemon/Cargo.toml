@@ -88,6 +88,9 @@ sew-client = { path = "../../third_party/sew-client", default-features = false, 
 # into k2so-core (the `session_stream` feature flag was retired in
 # 0.39.0e).
 k2-core = { path = "../k2-core" }
+# Signed approvals (prd-signed-approvals-v1 S1): the payload and record shape
+# checks only. The daemon never verifies a signature, so no `verify`.
+k2-approve = { path = "../k2-approve", default-features = false }
 # The root-helper contract (paths, verb catalog, Stalwart pin table,
 # templates, signed-build check). The helper binary itself is its own
 # crate (k2-root-helper) and is never linked here.

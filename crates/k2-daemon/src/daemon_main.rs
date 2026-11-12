@@ -1646,6 +1646,8 @@ async fn async_main() {
     turn_changes::spawn();
     // Thread cards past their time frame turn `expired` (0.45.5).
     overlay_routes::spawn_card_expiry();
+    // Signed approvals past their answer_by turn `expired`.
+    crate::approve::expiry::spawn();
     // A Thread that moves on Codex/Hermes adoption (pane key -> provider
     // id) tells its live views to follow, and its open turn moves too.
     overlay_ws::install_move_listener();

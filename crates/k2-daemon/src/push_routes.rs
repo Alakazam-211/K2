@@ -1059,7 +1059,7 @@ pub(crate) fn deliver_thread(event: PushEvent) {
     // push per person an hour-window of 30. Over it, the push is dropped
     // (the card is on the Thread and in "Waiting on you").
     if let PushEvent::ThreadPost(t) = &event {
-        if matches!(t.budget, k2_core::push::ThreadBudget::Permission { .. })
+        if t.budget.is_card()
             && !budget::global().try_take_for(
                 budget::BudgetClass::Permission,
                 &t.principal,
@@ -1072,7 +1072,7 @@ pub(crate) fn deliver_thread(event: PushEvent) {
             return;
         }
         // The Thread coalescer notes its own alerts; a card never passes it.
-        if matches!(t.budget, k2_core::push::ThreadBudget::Permission { .. }) {
+        if t.budget.is_card() {
             crate::badge_push::alert_sent(&event);
         }
     }

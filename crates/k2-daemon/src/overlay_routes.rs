@@ -4429,7 +4429,7 @@ fn inject_skin_thread(resolved: &ResolvedOverlay, pass: &SkinPass, text: &str, t
 /// A card's new status, to every open view of its Thread. Its `waiting`
 /// count changed for everyone (thread-read-v1): the overlay publish sends
 /// the read frames, and every person's phone may get a corrected badge.
-fn publish_card_frame(cb: &CardCallback) {
+pub(crate) fn publish_card_frame(cb: &CardCallback) {
     crate::overlay_ws::publish(OverlayFrame {
         rev: 0,
         collection: "thread".to_string(),

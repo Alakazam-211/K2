@@ -294,6 +294,8 @@ pub(crate) const V1_ACTIONS: [&str; 68] = [
     // 0.46.12 (Rosson): "Let this agent hire agents", split from
     // agents.manage (now its sidecars only).
     "agents.hire",
+    // 0.46.13 (prd-signed-approvals-v1 S1): ask people for signed approvals.
+    "approve.request",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -523,6 +525,8 @@ pub(crate) const ROWS: &[Row] = &[
     // agents" is off. Its sidecar-only refusal (`main_only`) can't be
     // requested.
     row(ask("agents.hire", Floor::Admin), code(403, "hire_off"), "/cli/agents/hire", POST),
+    // 0.46.13: `k2 approve request` while approve.request is off.
+    row(ask("approve.request", Floor::Admin), code(403, "approve_request_off"), "/cli/approve/request", POST),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
     // `k2 agent harness` / `k2 workspace swap-canonical` on the agent's own
     // workspace (0.46.6): the refusal carries the normalized harness.
@@ -1479,6 +1483,8 @@ mod tests {
             // and `k2 mail sending <ws> off` by an agent without mail-manage.
             (403, "POST", "/cli/sew/chat/manage/space/create", vec![], Some(json!({"slug":"jobs","app":"jobs"})), json!({"ok":false,"error":{"code":"chat_account_needed","hint":"x","details":{"workspace":"alpha"}}}), "chat.account"),
             (403, "POST", "/cli/mail/config/set", vec![], Some(json!({"workspace":"sales","agentSend":"off"})), json!({"ok":false,"error":{"code":"owner_only","hint":"x","workspace":{"name":"alpha","path":"/a","id":"w"}}}), "mail.stop-sending"),
+            // 0.46.13: `k2 approve request` without the permission.
+            (403, "POST", "/cli/approve/request", vec![], Some(json!({"payload_b64":"AA=="})), json!({"ok":false,"error":{"code":"approve_request_off","hint":"x"}}), "approve.request"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {

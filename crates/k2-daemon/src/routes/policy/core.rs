@@ -102,6 +102,20 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/api-keys/hire-ceiling-options", Owner),
     get("/cli/api-keys/list", Owner),
     post("/cli/api-keys/revoke", Owner),
+    // Signed approvals (prd-signed-approvals-v1 S1): an agent asks, reads,
+    // waits on and cancels with its passport only; the asked person reads
+    // the bytes and answers from their own login (the handler refuses the
+    // owner token and every passport there); Owner/Admin hold the
+    // `approve.request` switch. A Voice & Chat only login is never asked.
+    both("/cli/approve/agents", Admin),
+    post("/cli/approve/answer", Member),
+    post("/cli/approve/cancel", NoLogin),
+    get("/cli/approve/get", Member),
+    get("/cli/approve/pending", Member),
+    post("/cli/approve/request", NoLogin),
+    post("/cli/approve/rule", Member),
+    get("/cli/approve/status", NoLogin),
+    get("/cli/approve/wait", NoLogin),
     post("/cli/auth/change-password", VoiceChat),
     // phone-web-off (2026-10-24): Companion pairing. The pair redeem is
     // Public (the one-time code is the credential); minting a code, the

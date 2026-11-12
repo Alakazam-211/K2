@@ -4773,6 +4773,7 @@ dependencies = [
  "imap-proto",
  "instant-acme",
  "jsonwebtoken",
+ "k2-approve",
  "k2-core",
  "k2-deskd-proto",
  "k2-export",

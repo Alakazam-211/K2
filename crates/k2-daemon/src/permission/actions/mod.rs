@@ -31,6 +31,7 @@
 //! | `recording.rs` | 0.46.11 | `apps.recording` (its App requires recording, or its server reads transcripts; the owner only) |
 //! | `vault_send.rs` | 0.46.11 | `vault.send` (a person sends a person-given secret to an agent on another server for the agent, once or from now on) |
 //! | `vault_grant_server.rs` | 0.46.11 | `vault.grant-server` (share a server secret with the asking workspace, until removed) |
+//! | `approve.rs` | 0.46.13 | `approve.request` (+ `-off`): let the agent ask people for signed approvals |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -41,6 +42,7 @@ use k2_core::permission::catalog::{ActionSpec, NotCardableSpec};
 use serde_json::{Map, Value};
 
 pub(crate) mod app_login;
+pub(crate) mod approve;
 pub(crate) mod box_login_grant;
 pub(crate) mod chat_account;
 pub(crate) mod chat_cards;
@@ -156,6 +158,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(recording::actions());
     out.extend(vault_send::actions());
     out.extend(vault_grant_server::actions());
+    out.extend(approve::actions());
     out
 }
 
@@ -185,6 +188,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(recording::not_cardable());
     out.extend(vault_send::not_cardable());
     out.extend(vault_grant_server::not_cardable());
+    out.extend(approve::not_cardable());
     out
 }
 

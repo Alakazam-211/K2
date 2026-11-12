@@ -182,6 +182,9 @@ pub mod pending_live;
 // Permission cards (prd-agent-settings-cards-v1, 0.46.3 Beta): P0 stubs per
 // lane; nothing is wired, so with the switches off K2 is unchanged.
 mod permission;
+// Signed approvals S1 (prd-signed-approvals-v1): `/cli/approve/*`, the
+// approval card, its push and expiry.
+mod approve;
 pub mod pinned_chat;
 pub mod pinned_chat_choice;
 // S1 (presence/multiplayer arc): process-wide connected-users registry +
@@ -655,6 +658,7 @@ pub mod test_harness {
         crate::thread_activity::spawn();
         crate::turn_changes::spawn();
         crate::overlay_routes::spawn_card_expiry();
+        crate::approve::expiry::spawn();
         crate::overlay_ws::install_move_listener();
         // A spawn that finishes waiting git steps emits ProjectsChanged.
         crate::git_tools_routes::install_listener();

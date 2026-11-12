@@ -451,6 +451,10 @@ pub const GET_WRITE_PARAMS: &[(&str, &str, &[&str])] = &[
 // Read by the ratchet tests (the list is the reviewed record).
 #[cfg_attr(not(test), allow(dead_code))]
 pub const GET_READS_WITH_HOUSEKEEPING: &[(&str, &str)] = &[
+    ("/cli/approve/get", "turns signed approvals past their answer_by to expired first (the sweep); answering is POST"),
+    ("/cli/approve/pending", "turns signed approvals past their answer_by to expired first (the sweep)"),
+    ("/cli/approve/status", "turns signed approvals past their answer_by to expired first (the sweep); asking and cancelling are POST"),
+    ("/cli/approve/wait", "long-polls one request; turns approvals past their answer_by to expired first (the sweep)"),
     ("/cli/agents/running", "drops dead PTYs from the in-memory session map"),
     ("/cli/auth/device/pair-code/status", "moves pairing codes whose ten minutes ran out to expired (and reports them on the events bus)"),
     ("/cli/auth/devices", "validating the caller's session may reap it or slide a paired phone's expiry"),
@@ -1170,6 +1174,7 @@ mod tests {
     /// GET-serving rows whose path holds a [`MUTATING_WORDS`] word but
     /// whose GET is a read (verified handler by handler for 0.44.4).
     const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
+        ("/cli/approve/agents", "GET lists who holds approve.request; turning it on or off is POST"),
         ("/cli/vault/send-allow", "GET lists the standing send grants (and a person's picker); adding and removing are POST with a body"),
         ("/cli/vault/run-helper", "returns the path of this daemon's own binary; nothing changes (the run itself is POST /cli/vault/run)"),
         ("/cli/agents/work/create", "410 Gone, no state"),

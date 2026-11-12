@@ -23,10 +23,6 @@ pub const STATUS_RUNNING: &str = "Daemon: Running";
 pub const STATUS_NOT_RUNNING: &str = "Daemon: Not running";
 pub const QUIT_LABEL: &str = "Quit daemon";
 
-/// A successful Quit daemon also ends the helper: the icon goes away with
-/// the daemon. A failed quit keeps the helper and its icon.
-pub const QUIT_EXITS_HELPER: bool = true;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DaemonState {
     Running,
@@ -74,7 +70,7 @@ pub fn pid_from_launchctl_print(stdout: &str) -> Option<u32> {
         let Some(rest) = rest.strip_prefix('=') else {
             continue;
         };
-        let token = rest.trim().split_whitespace().next().unwrap_or("");
+        let token = rest.split_whitespace().next().unwrap_or("");
         if let Ok(pid) = token.parse::<u32>() {
             return Some(pid);
         }
@@ -204,6 +200,8 @@ pub fn unload_succeeded(exit_ok: bool, stderr: &str) -> bool {
     exit_ok || stderr.contains("Could not find") || stderr.contains("No such")
 }
 
+/// A successful Quit daemon also ends the helper (`exit_helper`): the icon
+/// goes away with the daemon. A failed quit keeps the helper and its icon.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuitEffect {
     pub ok: bool,
@@ -225,7 +223,7 @@ pub fn interpret_quit(
     };
     QuitEffect {
         ok,
-        exit_helper: ok && QUIT_EXITS_HELPER,
+        exit_helper: ok,
     }
 }
 
@@ -502,7 +500,7 @@ gui/501/dev.k2.daemon = {\n\
                 plist.display().to_string(),
             ]
         );
-        assert!(QUIT_EXITS_HELPER);
+        assert!(interpret_quit(true, true, true, "").exit_helper);
         assert_eq!(QUIT_LABEL, "Quit daemon");
     }
 

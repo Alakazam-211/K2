@@ -36,7 +36,7 @@
 //! record.
 //!
 //! **The base.** The kit hands over what the file last held; choosing the version the app
-//! opened instead (S0a, the kit's outside-save bridge) plugs in at
+//! opened instead (the kit's planned outside-save bridge) plugs in at
 //! [`crate::pack::PptxPack::merge3_since`], where the stale guards stand until then.
 
 use std::cell::RefCell;

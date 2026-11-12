@@ -539,6 +539,39 @@ for r in data:
 " 2>/dev/null || cat
 }
 
+# Signed approvals (prd-signed-approvals-v1): `k2 approve verify|show|key-id`
+# run the k2-approve program on this machine and never ask the daemon: a
+# relying party checks an approval against the keys IT trusts.
+# K2_APPROVE_BIN names the program; else k2-approve beside this script, else
+# on PATH.
+cmd_approve_local() {
+    local bin="" self dir
+    if [ -n "${K2_APPROVE_BIN:-}" ]; then
+        [ -x "$K2_APPROVE_BIN" ] || { echo "k2 approve: K2_APPROVE_BIN=$K2_APPROVE_BIN is not a program" >&2; exit 2; }
+        bin="$K2_APPROVE_BIN"
+    else
+        self="$0"
+        while [ -L "$self" ]; do
+            dir="$(cd "$(dirname "$self")" && pwd)"
+            self="$(readlink "$self")"
+            case "$self" in /*) ;; *) self="$dir/$self" ;; esac
+        done
+        dir="$(cd "$(dirname "$self")" && pwd)"
+        if [ -x "$dir/k2-approve" ]; then
+            bin="$dir/k2-approve"
+        elif command -v k2-approve >/dev/null 2>&1; then
+            bin="$(command -v k2-approve)"
+        fi
+    fi
+    if [ -z "$bin" ]; then
+        echo "k2 approve $1: the k2-approve program isn't installed here." >&2
+        echo "  Build it from the K2 source: cargo install --path crates/k2-approve" >&2
+        echo "  Or check by hand with openssl: docs/signed-approvals.md (\"With openssl only\")." >&2
+        exit 2
+    fi
+    exec "$bin" "$@"
+}
+
 cmd_review_approve() {
     local agent="${1:-}" branch="${2:-}"
     if [ -z "$agent" ] || [ -z "$branch" ]; then

@@ -721,6 +721,8 @@ fi
 [ "${1:-}" = "hooks" ] && [ "${2:-}" = "emit" ] && _skip_conn_gate=1
 # `k2 checkin` is retired: its stub prints pointers and never calls the daemon.
 [ "${1:-}" = "checkin" ] && _skip_conn_gate=1
+# Signed approvals: verify, show and key-id run k2-approve locally (no daemon).
+[ "${1:-}" = "approve" ] && case "${2:-}" in verify|show|key-id|""|-h|--help|help) _skip_conn_gate=1 ;; esac
 # `k2 tickets template` prints the static brief skeleton (H42).
 case "${1:-}" in
     tickets|feedback) [ "${2:-}" = "template" ] && _skip_conn_gate=1 ;;

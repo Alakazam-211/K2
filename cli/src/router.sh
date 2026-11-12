@@ -278,6 +278,15 @@ case "${1:-help}" in
     reviews)
         shift; cmd_reviews "$@"
         ;;
+    approve)
+        # Signed approvals (prd-signed-approvals-v1). verify/show/key-id are
+        # local (k2-approve); request/status/cancel are the daemon's.
+        case "${2:-}" in
+            verify|show|key-id) shift; cmd_approve_local "$@" ;;
+            ""|-h|--help|help) shift; cmd_approve_local --help ;;
+            *) echo "k2 approve: unknown subcommand ${2:-} (verify, show, key-id)" >&2; exit 2 ;;
+        esac
+        ;;
     review)
         case "${2:-}" in
             approve)  shift 2; cmd_review_approve "$@" ;;

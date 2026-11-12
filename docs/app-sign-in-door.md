@@ -45,12 +45,27 @@ Without the SDK: `GET /cli/skin/auth/door` on `K2_GATEWAY_URL` with
 
 ## Where the door is
 
-- **Yes:** the App's K2 label (`<app>.<box>.k2.dev`, with the default
-  client-IP front), every custom domain on the App, and its local front port.
+- **Yes:** the App's K2 label (`<app>.<box>.k2.dev`, through K2's front,
+  which is on unless the manifest says `host.clientIp: false`), every custom
+  domain on the App, and its local front port.
 - **No:** a label whose manifest says `host.clientIp: false`, a `--cmd`
   service, a name served by your own web server, or a CDN in front that
   doesn't pass the path on. There `GET /.k2/auth/ping` gets your own App's
   answer, not `{"k2": true}`: send no password.
+
+## The visitor's address
+
+K2 drops every `X-K2-Client-IP`, `X-Forwarded-For`, `X-Real-IP` and
+`Forwarded` a visitor sends. It sets `X-K2-Client-IP` (with a single-value
+`X-Forwarded-For` and `X-Real-IP`) only when it knows the visitor: through
+the box's own :443 (`k2 front`), or through K2 Connect once its relay passes
+visitor addresses (`k2 tunnel status` shows "Visitor IPs"). Until then, and
+for callers on the box itself, the App gets none of them. K2's per-visitor
+sign-in limits then wait and only the per-App ones hold, so one visitor's
+flood of wrong passwords can close the App's sign-in for everyone, five
+minutes at a time. When the header is there, pass it on `k2.login`
+(`clientIp`) and on resets (`X-K2-Client-IP` on
+`POST /cli/skin/password/reset`), so a flood limits that visitor only.
 
 ## A minimal page
 

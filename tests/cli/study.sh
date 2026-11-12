@@ -842,7 +842,8 @@ for needle in "/.k2/auth/ping" "/.k2/auth/sign-in" "k2.auth.begin()" "k2.auth.ex
     "password_change_required" "bad_origin" "k2 app auth door on" "tauri://localhost" "send no password" "authAt" \
     "k2.auth.doorStatus()" "/cli/skin/auth/door" "hosts: [{host, door}]" "passExpiresAt" "refreshExpiresAt" "k2skr_" \
     "k2.guests.refresh({refresh})" "always goes with the App pass" "/cli/skin/refresh {refresh}" "refresh_reused" \
-    "\"mustChangePassword\":true,\"changeToken\":\"k2chg_…\"" "Read body.changeToken"; do
+    "\"mustChangePassword\":true,\"changeToken\":\"k2chg_…\"" "Read body.changeToken" \
+    "K2 drops every copy a visitor sends" "k2 tunnel status: Visitor IPs" "per-visitor limits wait and per-App ones"; do
     assert_contains "auth-pages: $needle" "$ap_out" "$needle"
 done
 # The responsibility statement waits for its legal review (vs-live V30):
@@ -850,7 +851,8 @@ done
 assert_absent "auth-pages: no draft statement" "$ap_out" "DRAFT WORDING"
 ap_lines="$(printf '%s\n' "$ap_out" | wc -l | tr -d ' ')"
 # 0.46.11: + IS THE DOOR ON? and DEVICE SIGN-IN AND REFRESH (80 → 100).
-if [ "$ap_lines" -le 100 ]; then echo "  PASS: auth-pages is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: auth-pages is $ap_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
+# 0.46.12: + THE VISITOR'S ADDRESS (100 → 110).
+if [ "$ap_lines" -le 110 ]; then echo "  PASS: auth-pages is bounded ($ap_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: auth-pages is $ap_lines lines (max 110)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: auth-pages row" "$("$K2" study)" "  auth-pages          Your own sign-in page posts passwords to K2"
 echo "== k2 study tauri (prd-tauri-core-0467-v1 TC-14, 0.46.7) =="
 ta_out="$("$K2" study tauri)"

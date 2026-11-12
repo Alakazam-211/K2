@@ -41269,6 +41269,7 @@ if "label" in d:
     print("%s: client IP %s" % (d["label"], "on (HTTP/1.1 rewrite, X-K2-Client-IP)" if d["clientIp"] else "off (raw splice)"))
 labels = d.get("labels") or []
 print("Nested services with the client-IP rewrite: %s" % (", ".join(labels) if labels else "none (all raw)"))
+print("Apps: on unless the manifest says host.clientIp: false (not listed here). The App gets X-K2-Client-IP only when K2 knows the visitor: k2 tunnel status (Visitor IPs).")
 '
 }
 
@@ -57385,11 +57386,21 @@ PHONES AND TAURI
   CORS on every verb and ping. Any other Origin must be the request's own host.
 
 WHERE THE DOOR IS
-  Yes: <app>.<box>.k2.dev (the default client-IP front), every custom name,
-  the App's front port. No: host.clientIp: false on the k2.dev label, a
-  --cmd service, a name your own web server or a CDN answers. Anything but
-  {"k2": true} from ping: send no password. Your own form posting to your
-  server (k2.login) stays allowed; then your server must never log passwords.
+  Yes: <app>.<box>.k2.dev (K2's front, on unless host.clientIp: false),
+  every custom name, the App's front port. No: host.clientIp: false on the
+  k2.dev label, a --cmd service, a name your own web server or a CDN
+  answers. Anything but {"k2": true} from ping: send no password. Your own
+  form posting to your server (k2.login) stays allowed; then your server
+  must never log passwords.
+
+THE VISITOR'S ADDRESS (X-K2-Client-IP)
+  K2 drops every copy a visitor sends. It sets X-K2-Client-IP (and
+  X-Forwarded-For, X-Real-IP) only when it knows the visitor: through the
+  box's own :443 (k2 front), or through K2 Connect once its relay passes
+  addresses (k2 tunnel status: Visitor IPs). Until then, and for callers on
+  the box itself, there is none: per-visitor limits wait and per-App ones
+  hold, so one flood of wrong passwords can close the App's sign-in for
+  everyone, 5 minutes at a time. Forward it on k2.login (clientIp).
 
 THE VERBS (POST, JSON, Content-Length, at most 8 KiB)
   sign-in          {username, password, challenge}              → {ok, code}

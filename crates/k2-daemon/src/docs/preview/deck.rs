@@ -132,6 +132,7 @@ impl PreviewRenderer for Deck {
                 width: r.meta.width,
                 height: r.meta.height,
                 fonts_substituted: r.meta.fonts.substituted.iter().map(|s| (s.requested.clone(), s.used.clone())).collect(),
+                without_modifiers: false,
                 render_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
                 bytes: r.image,
             }),

@@ -15,6 +15,7 @@
 //! |---|---|
 //! | `mod.rs` | the per-type interface ([`PreviewRenderer`]), the registry ([`renderer_for`]), the shared types |
 //! | [`deck`] | `.pptx` slides: the pptx pack's view index, drawn by `k2-deckrender` (one process per render) |
+//! | [`scene`] | live BLEND scenes: the pack's mesh read (K2SCENE1; not in K2 yet), cameras and objects drawn by `k2-scenerender` (one process per request) |
 //! | [`cache`] | the sealed on-disk cache, its cap, and the purge hooks' file side |
 //! | [`service`] | per-doc index memo, dirty detection, the render queue and slots, the host time cap, `preview_ready` |
 //! | [`route`] | `GET /cli/docs/preview` |
@@ -37,6 +38,7 @@
 pub mod cache;
 pub mod deck;
 pub mod route;
+pub mod scene;
 pub mod service;
 
 use super::target::Target;
@@ -171,6 +173,9 @@ pub struct Image {
     pub height: u32,
     /// Families the file asked for that were drawn in another: `(asked, drawn)`.
     pub fonts_substituted: Vec<(String, String)>,
+    /// A scene drawn from base meshes, without some object's modifiers (the
+    /// view says "shown without modifiers"). Always false for a deck.
+    pub without_modifiers: bool,
     pub render_ms: u32,
 }
 
@@ -217,7 +222,7 @@ pub trait PreviewRenderer: Send + Sync {
 
 /// Every renderer, in the order they are asked.
 pub fn renderers() -> &'static [&'static dyn PreviewRenderer] {
-    static ALL: [&dyn PreviewRenderer; 1] = [&deck::DECK];
+    static ALL: [&dyn PreviewRenderer; 2] = [&deck::DECK, &scene::SCENE];
     &ALL
 }
 
@@ -262,5 +267,8 @@ mod tests {
         assert!(renderer_for(&t("talk.pptx", Tier::Blob)).is_none(), "a deck served at tier 0 (Slides off)");
         assert!(renderer_for(&t("notes.md", Tier::Markdown)).is_none());
         assert!(renderer_for(&t("photo.png", Tier::Blob)).is_none());
+        // The scene renderer is registered, but serves nothing until the BLEND pack's mesh read lands.
+        assert!(renderers().iter().any(|r| r.kind() == "scene"));
+        assert!(renderer_for(&t("scene.blend", Tier::Blob)).is_none());
     }
 }

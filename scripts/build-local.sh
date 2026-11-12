@@ -166,7 +166,14 @@ if [ ! -x "$DECKRENDER_SRC" ]; then
 fi
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
-k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC" "$EXPORT_SRC" "$DECKRENDER_SRC"
+# k2-scenerender (the 3D stills renderer) rides beside it too.
+cargo build --release -p k2-scenerender --bin k2-scenerender
+SCENERENDER_SRC="target/release/k2-scenerender"
+if [ ! -x "$SCENERENDER_SRC" ]; then
+    echo "  FATAL: k2-scenerender not at $SCENERENDER_SRC after cargo build" >&2
+    exit 1
+fi
+k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC" "$EXPORT_SRC" "$DECKRENDER_SRC" "$SCENERENDER_SRC"
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 # K2 Screen.app (remote desktop, prd-remote-desktop-tab-v1 D3) beside it.
 cargo build --release -p k2-deskd --bin k2-deskd

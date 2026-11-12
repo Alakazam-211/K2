@@ -1,0 +1,278 @@
+//! Live BLEND scenes: 3D stills, the second [`super::PreviewRenderer`].
+//!
+//! - **The mesh read** (in the daemon, host-only): the BLEND pack's read of a
+//!   doc version into K2SCENE1 (K2 Render's neutral contract,
+//!   `k2_scenerender::scene`): base meshes triangulated by the pack,
+//!   transforms as stored, no animation evaluated, each object's modifier
+//!   types and whether they were applied. **Not in K2 yet** ([`mesh_read`]
+//!   answers `unsupported_part`, and [`SceneRenderer::serves`] no doc), so
+//!   everything after it is wired against K2SCENE1 bytes: [`list_k2scene`]
+//!   and [`render_k2scene`].
+//! - **Listing:** `@scene` (the auto 3/4 view of everything), one container
+//!   per camera (`@cam:<id>`) and one per object (`@obj:<id>`), each with the
+//!   raw digest of what it draws, computed from the mesh read alone: meshes,
+//!   transforms, colours, sidedness and cameras, never an object's id
+//!   (`k2_scenerender::digest`). So the cache key is (doc, object or camera,
+//!   render hash over the meshes it draws, width), and editing one object
+//!   re-draws that object, the scene and the cameras, nothing else.
+//! - **Drawing** (out of process): one `k2-scenerender` per render
+//!   (`k2_scenerender::host`: posix_spawn, the limits on argv, a watchdog),
+//!   WebP lossless, thumbnail limits up to 640 px (1 thread, 5 s, 512 MiB)
+//!   and still limits above (4 threads, 10 s, 1 GiB). A view drawn from base
+//!   meshes says so (`without_modifiers` in the image's metadata: the view
+//!   shows "shown without modifiers").
+//!
+//! **Which worker** (the k2-deckrender order): `K2_SCENERENDER_BIN` in a
+//! debug build only (tests), else `k2-scenerender` beside the daemon (`K2
+//! Daemon.app`). With neither, every render fails `renderer_error`.
+
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use k2_core::log_debug;
+use k2_scenerender::digest::{self, Target};
+use k2_scenerender::host::{self, Limits, SceneRequest};
+use k2_scenerender::proto::{FailureCode, ImageFormat, BINARY_NAME, PROTO, VERSION};
+use k2_scenerender::scene::InputLimits;
+
+use super::{Container, FailCode, Failed, Image, Listing, PreviewRenderer, Source, Width};
+use crate::docs::target::Target as DocTarget;
+
+/// Debug builds only: the worker binary.
+pub const ENV_BIN: &str = "K2_SCENERENDER_BIN";
+
+pub struct SceneRenderer;
+
+pub static SCENE: SceneRenderer = SceneRenderer;
+
+/// The worker binary: the debug override, else beside this executable.
+pub fn binary() -> Option<PathBuf> {
+    if cfg!(debug_assertions) {
+        if let Some(p) = std::env::var_os(ENV_BIN).map(PathBuf::from).filter(|p| !p.as_os_str().is_empty()) {
+            return Some(p);
+        }
+    }
+    let here = std::env::current_exe().ok()?;
+    let beside = here.parent()?.join(BINARY_NAME);
+    beside.is_file().then_some(beside)
+}
+
+/// The BLEND pack's mesh read: a doc version's bytes to K2SCENE1.
+///
+/// TODO(K2 Cores): call the BLEND pack's host-only mesh read here (its v1:
+/// base meshes triangulated by the pack, transforms as stored, `modifiers`
+/// and `modifiers_not_applied` per object) once the pack is vendored in K2,
+/// with its own bounds before it allocates; and give a live BLEND doc its
+/// tier, so [`SceneRenderer::serves`] says yes. Until then no doc is served
+/// and this answers `unsupported_part`. K2 parses no `.blend` itself.
+pub fn mesh_read(_doc: &[u8]) -> Result<Vec<u8>, Failed> {
+    Err(Failed::new(FailCode::UnsupportedPart, "the BLEND pack's mesh read isn't in this build"))
+}
+
+fn code(c: FailureCode) -> FailCode {
+    match c {
+        FailureCode::TooLarge => FailCode::TooLarge,
+        FailureCode::Timeout => FailCode::Timeout,
+        // Bytes the reader refuses, or a view of something that isn't there: the file's.
+        FailureCode::InvalidInput => FailCode::UnsupportedPart,
+        FailureCode::RendererError => FailCode::RendererError,
+    }
+}
+
+/// The containers of a K2SCENE1, with their raw digests. Reads the header
+/// only (every bound checked) and hashes each mesh's data once.
+pub fn list_k2scene(k2scene: &[u8]) -> Result<Listing, Failed> {
+    let items = digest::list(k2scene, &InputLimits::default()).map_err(|e| Failed::new(FailCode::UnsupportedPart, format!("the scene: {e}")))?;
+    let containers = items
+        .into_iter()
+        .enumerate()
+        .map(|(i, it)| Container {
+            title: if it.target == Target::Scene { "Scene".into() } else { it.title },
+            key: it.key,
+            position: i as u32 + 1,
+            hidden: false,
+            digest: it.digest,
+            locator: it.target.locator(),
+        })
+        .collect();
+    Ok(Listing { page: None, containers })
+}
+
+/// The limits for a render at `width`, within the host's `wall`.
+pub fn limits_for(width: Width, wall: Duration) -> Limits {
+    let mut l = Limits::for_width(width.px());
+    l.wall = l.wall.min(wall);
+    l.max_output_bytes = l.max_output_bytes.min(width.max_bytes());
+    l
+}
+
+/// Draw `container` of a K2SCENE1 at `width`, out of process, within `wall`.
+pub fn render_k2scene(k2scene: &[u8], container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
+    let Some(bin) = binary() else {
+        return Err(Failed::new(FailCode::RendererError, format!("{BINARY_NAME} isn't installed beside the daemon")));
+    };
+    render_k2scene_with(&bin, k2scene, container, width, wall)
+}
+
+/// [`render_k2scene`] with the worker at `bin`.
+pub fn render_k2scene_with(bin: &Path, k2scene: &[u8], container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
+    let Some(target) = Target::from_locator(&container.locator) else {
+        return Err(Failed::new(FailCode::RendererError, format!("not a scene locator: {:?}", container.locator)));
+    };
+    let mut req = SceneRequest::new(k2scene, vec![target.view(width.px())]);
+    req.format = ImageFormat::Webp;
+    let started = std::time::Instant::now();
+    match host::render(bin, &req, &limits_for(width, wall)) {
+        Ok(mut r) => {
+            let Some(v) = r.views.pop() else {
+                return Err(Failed::new(FailCode::RendererError, "the worker drew no view"));
+            };
+            Ok(Image {
+                mime: match r.format {
+                    ImageFormat::Webp => "image/webp",
+                    ImageFormat::Png => "image/png",
+                },
+                format: match r.format {
+                    ImageFormat::Webp => "webp-lossless",
+                    ImageFormat::Png => "png",
+                },
+                width: v.meta.width,
+                height: v.meta.height,
+                fonts_substituted: Vec::new(),
+                without_modifiers: v.meta.without_modifiers,
+                render_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+                bytes: v.image,
+            })
+        }
+        Err(f) => {
+            if !f.stderr.is_empty() {
+                log_debug!("[docs/preview] k2-scenerender stderr ({}): {}", f.code, f.stderr.chars().take(2_000).collect::<String>());
+            }
+            Err(Failed::new(code(f.code), f.detail))
+        }
+    }
+}
+
+impl PreviewRenderer for SceneRenderer {
+    fn kind(&self) -> &'static str {
+        "scene"
+    }
+
+    fn build(&self) -> String {
+        format!("scenerender-p{PROTO}-{VERSION}")
+    }
+
+    /// No doc yet: a live BLEND doc needs the pack's mesh read and its tier
+    /// (see [`mesh_read`]).
+    fn serves(&self, _t: &DocTarget) -> bool {
+        false
+    }
+
+    fn list(&self, bytes: &[u8]) -> Result<Listing, Failed> {
+        list_k2scene(&mesh_read(bytes)?)
+    }
+
+    fn render(&self, src: &Source<'_>, container: &Container, width: Width, wall: Duration) -> Result<Image, Failed> {
+        render_k2scene(&mesh_read(src.doc)?, container, width, wall)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k2_scenerender::scene::encode;
+    use k2_scenerender::testgen;
+
+    fn scene_with_camera() -> k2_scenerender::scene::Scene {
+        let mut s = testgen::grid_scene(2, true);
+        s.cameras = testgen::camera_scene().cameras;
+        s
+    }
+
+    #[test]
+    fn a_scene_lists_itself_its_cameras_and_its_objects_without_a_page() {
+        let l = list_k2scene(&encode(&scene_with_camera())).expect("a listing");
+        assert!(l.page.is_none(), "a scene has no page");
+        let keys: Vec<(&str, u32, &str, &str)> = l.containers.iter().map(|c| (c.key.as_str(), c.position, c.locator.as_str(), c.title.as_str())).collect();
+        assert_eq!(
+            keys,
+            [
+                ("@scene", 1, "scene", "Scene"),
+                ("@cam:Camera", 2, "c0", "Camera"),
+                ("@obj:Item.000", 3, "o0", "Item.000"),
+                ("@obj:Item.001", 4, "o1", "Item.001"),
+                ("@obj:Item.002", 5, "o2", "Item.002"),
+                ("@obj:Item.003", 6, "o3", "Item.003"),
+            ]
+        );
+        assert_eq!(list_k2scene(&encode(&scene_with_camera())).expect("again"), l, "the same bytes list the same");
+    }
+
+    /// Moving one object changes its own digest, the scene's and the
+    /// camera's; the other objects keep theirs (only they re-render). Renaming
+    /// changes no digest (ids are not in them).
+    #[test]
+    fn an_edit_dirties_only_what_draws_it_and_a_rename_nothing() {
+        let a = scene_with_camera();
+        let mut b = a.clone();
+        b.objects[3].transform[12] += 1.0;
+        let (la, lb) = (list_k2scene(&encode(&a)).expect("a"), list_k2scene(&encode(&b)).expect("b"));
+        let changed: Vec<&str> = la.containers.iter().zip(&lb.containers).filter(|(x, y)| x.digest != y.digest).map(|(x, _)| x.key.as_str()).collect();
+        assert_eq!(changed, ["@scene", "@cam:Camera", "@obj:Item.003"]);
+        let mut c = a.clone();
+        c.objects[0].id = "Renamed".into();
+        let lc = list_k2scene(&encode(&c)).expect("c");
+        assert!(la.containers.iter().zip(&lc.containers).all(|(x, y)| x.digest == y.digest));
+        assert_eq!(lc.containers[2].key, "@obj:Renamed");
+    }
+
+    #[test]
+    fn junk_is_unsupported_and_failures_map_to_the_contracts_codes() {
+        assert_eq!(list_k2scene(b"not a scene").expect_err("junk").code, FailCode::UnsupportedPart);
+        assert_eq!(code(FailureCode::InvalidInput), FailCode::UnsupportedPart);
+        assert_eq!(code(FailureCode::RendererError), FailCode::RendererError);
+        assert_eq!(code(FailureCode::Timeout), FailCode::Timeout);
+        assert_eq!(code(FailureCode::TooLarge), FailCode::TooLarge);
+        // Until the pack's mesh read is in K2, a doc's bytes list as unsupported.
+        assert_eq!(SCENE.list(b"BLENDER-v300").expect_err("no mesh read").code, FailCode::UnsupportedPart);
+        assert_eq!(SCENE.kind(), "scene");
+        assert!(SCENE.build().starts_with("scenerender-p1-"));
+    }
+
+    #[test]
+    fn widths_get_thumbnail_or_still_limits_within_the_hosts_wall() {
+        let t = limits_for(Width::Thumb, Duration::from_secs(20));
+        assert_eq!((t.threads, t.wall, t.memory_bytes, t.max_output_bytes), (1, Duration::from_secs(5), 512 << 20, Width::Thumb.max_bytes()));
+        let t2 = limits_for(Width::Thumb2x, Duration::from_secs(20));
+        assert_eq!(t2.threads, 1);
+        let f = limits_for(Width::Full, Duration::from_secs(3));
+        assert_eq!((f.threads, f.wall, f.memory_bytes, f.max_output_bytes), (4, Duration::from_secs(3), 1 << 30, Width::Full.max_bytes()));
+    }
+
+    /// The real worker when it is built (cargo build -p k2-scenerender):
+    /// beside this test binary's folder, or K2_SCENERENDER_BIN.
+    #[test]
+    fn a_container_renders_through_the_worker_when_it_is_built() {
+        let built = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().and_then(|d| d.parent()).map(|d| d.join(BINARY_NAME)))
+            .filter(|p| p.is_file());
+        let Some(bin) = built.or_else(|| std::env::var_os(ENV_BIN).map(PathBuf::from)) else {
+            eprintln!("[docs/preview] k2-scenerender not built; skipping the worker render");
+            return;
+        };
+        let mut s = scene_with_camera();
+        s.objects[1].modifiers = vec!["SUBSURF".into()];
+        s.objects[1].modifiers_not_applied = true;
+        let bytes = encode(&s);
+        let l = list_k2scene(&bytes).expect("listing");
+        for (c, without, height) in [(&l.containers[0], true, 240), (&l.containers[1], true, 180), (&l.containers[2], false, 240), (&l.containers[3], true, 240)] {
+            let img = render_k2scene_with(&bin, &bytes, c, Width::Thumb, Duration::from_secs(60)).unwrap_or_else(|f| panic!("{}: {:?}", c.key, f));
+            assert_eq!((img.mime, img.format, img.width, img.height), ("image/webp", "webp-lossless", 320, height), "{}", c.key);
+            assert_eq!(&img.bytes[..4], b"RIFF");
+            assert_eq!(img.without_modifiers, without, "{}", c.key);
+        }
+        let bad = Container { locator: "x9".into(), ..l.containers[0].clone() };
+        assert_eq!(render_k2scene_with(&bin, &bytes, &bad, Width::Thumb, Duration::from_secs(60)).expect_err("locator").code, FailCode::RendererError);
+    }
+}

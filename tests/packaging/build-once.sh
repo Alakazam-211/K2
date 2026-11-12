@@ -132,7 +132,7 @@ pass_or '[ -e "$proj/target/release/bundle/dmg/bundle_dmg.sh" ] && [ ! -e "$proj
     "the fresh tauri bundle replaces target/release/bundle (DMG script included, stale bundle gone)" "$(ls -R "$proj/target" | head -30)"
 pass_or 'grep -q "^  \[tauri\] tauri: Finished release" "$work/step2.log"' "tauri's output is prefixed [tauri]" "$(cat "$work/step2.log")"
 
-want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-deckrender --bin k2-deckrender -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
+want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-deckrender --bin k2-deckrender -p k2-scenerender --bin k2-scenerender -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
 [ "$(wc -l < "$CALLS" | tr -d ' ')" = 1 ] && pass "one cargo call builds every sidecar" \
     || fail "cargo calls" "$(cat "$CALLS")"
 [ "$(head -1 "$CALLS")" = "$want	embed=	export=" ] && pass "the call is K2_MAC_SIDECAR_CARGO_ARGS, release, no embed" \
@@ -140,12 +140,12 @@ want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-p
 app="$proj/target/release/bundle/macos/K2.app"
 helper="$app/Contents/Helpers/K2 Daemon.app/Contents/MacOS"
 ok=1
-for f in "$helper/k2-daemon" "$helper/k2-ptyd" "$helper/k2-export" "$helper/k2-deckrender" "$app/Contents/MacOS/k2-power-helper" \
+for f in "$helper/k2-daemon" "$helper/k2-ptyd" "$helper/k2-export" "$helper/k2-deckrender" "$helper/k2-scenerender" "$app/Contents/MacOS/k2-power-helper" \
     "$app/Contents/MacOS/k2-node" "$app/Contents/MacOS/k2-menubar" \
     "$app/Contents/Helpers/K2 Screen.app/Contents/MacOS/k2-deskd"; do
     [ -x "$f" ] || { ok=0; echo "        missing: $f" >&2; }
 done
-[ "$ok" = 1 ] && pass "every sidecar is in K2.app (daemon + ptyd + export + deckrender nested, K2 Screen beside)" || fail "bundle" "see missing files above"
+[ "$ok" = 1 ] && pass "every sidecar is in K2.app (daemon + ptyd + export + deckrender + scenerender nested, K2 Screen beside)" || fail "bundle" "see missing files above"
 grep -q "bin k2-ptyd" "$helper/k2-ptyd" && grep -q "bin k2-daemon" "$helper/k2-daemon" \
     && pass "the nested binaries are the ones that call built" || fail "nested bytes" "$(cat "$helper/k2-daemon")"
 

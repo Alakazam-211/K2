@@ -361,7 +361,7 @@ fn draw(job: &Job) -> Result<(), FailCode> {
 /// The metadata kept with an image and answered with it (contract Item 8's
 /// `Preview` table).
 pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, img: &super::Image, rendered_at_ms: u64) -> serde_json::Value {
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "kind": snap.renderer.kind(),
         "container": container,
         "render_hash": hash,
@@ -374,7 +374,12 @@ pub fn meta_json(snap: &Snapshot, container: &str, hash: &str, width: Width, img
         "fonts_substituted": img.fonts_substituted.iter().map(|(a, d)| serde_json::json!({ "asked": a, "drawn": d })).collect::<Vec<_>>(),
         "render_ms": img.render_ms,
         "rendered_at_ms": rendered_at_ms,
-    })
+    });
+    // A scene drawn from base meshes says so (the view shows "shown without modifiers").
+    if img.without_modifiers {
+        v["without_modifiers"] = serde_json::json!(true);
+    }
+    v
 }
 
 // ── Debounced re-listing on change (a socket watching the doc) ───────

@@ -14,6 +14,9 @@
 #     Contents/MacOS/k2-deckrender      the .pptx slide renderer (vendor/deckcraft),
 #                                       one process per render: beside the daemon,
 #                                       like k2-export (no daemon caller yet)
+#     Contents/MacOS/k2-scenerender     the 3D stills renderer for live BLEND docs,
+#                                       one process per request: beside the daemon,
+#                                       like k2-deckrender
 #     Contents/Resources/K2.icns        src-tauri/icons/icon.icns
 #
 # Sourced (not executed) by scripts/build-app.sh, scripts/dev-build.sh,
@@ -44,6 +47,9 @@ K2_EXPORT_HOSTILE_MARKER="K2_EXPORT_TEST_HOSTILE_ENABLED"
 K2_DAEMON_HELPER_DECKRENDER="k2-deckrender"
 # A test-hostile k2-deckrender build carries this; nothing that ships may.
 K2_DECKRENDER_HOSTILE_MARKER="K2_DECKRENDER_TEST_HOSTILE_ENABLED"
+K2_DAEMON_HELPER_SCENERENDER="k2-scenerender"
+# A test-hostile k2-scenerender build carries this; nothing that ships may.
+K2_SCENERENDER_HOSTILE_MARKER="K2_SCENERENDER_TEST_HOSTILE_ENABLED"
 
 # The ONE cargo call that builds every Rust sidecar K2.app ships on macOS
 # (scripts/lib/build-binaries.sh, Step 2 of release.sh) and the standalone
@@ -60,6 +66,7 @@ K2_MAC_SIDECAR_CARGO_ARGS=(
     -p k2-ptyd --bin k2-ptyd
     -p k2-export --bin k2-export
     -p k2-deckrender --bin k2-deckrender
+    -p k2-scenerender --bin k2-scenerender
     -p k2-node --bin k2-node
     -p k2-menubar --bin k2-menubar
     -p k2-deskd --bin k2-deskd
@@ -95,13 +102,18 @@ k2_daemon_helper_deckrender() {
     printf '%s/Contents/MacOS/%s' "$(k2_daemon_helper_dir "$1")" "$K2_DAEMON_HELPER_DECKRENDER"
 }
 
-# k2_daemon_helper_assemble APP DAEMON_SRC PTYD_SRC EXPORT_SRC DECKRENDER_SRC
+# Path of the nested k2-scenerender inside APP.
+k2_daemon_helper_scenerender() {
+    printf '%s/Contents/MacOS/%s' "$(k2_daemon_helper_dir "$1")" "$K2_DAEMON_HELPER_SCENERENDER"
+}
+
+# k2_daemon_helper_assemble APP DAEMON_SRC PTYD_SRC EXPORT_SRC DECKRENDER_SRC SCENERENDER_SRC
 # Builds K2 Daemon.app inside APP from DAEMON_SRC (+ k2-ptyd from PTYD_SRC,
-# k2-export from EXPORT_SRC and k2-deckrender from DECKRENDER_SRC, nested
-# beside the daemon) and removes the pre-0.43.2 APP/Contents/MacOS/k2-daemon.
-# Exits non-zero on any failure.
+# k2-export from EXPORT_SRC, k2-deckrender from DECKRENDER_SRC and
+# k2-scenerender from SCENERENDER_SRC, nested beside the daemon) and removes
+# the pre-0.43.2 APP/Contents/MacOS/k2-daemon. Exits non-zero on any failure.
 k2_daemon_helper_assemble() {
-    local app="$1" daemon_src="$2" ptyd_src="$3" export_src="$4" deckrender_src="$5"
+    local app="$1" daemon_src="$2" ptyd_src="$3" export_src="$4" deckrender_src="$5" scenerender_src="$6"
     local helper version icon_src
     helper="$(k2_daemon_helper_dir "$app")"
     version="$(_k2_daemon_helper_version)"
@@ -115,6 +127,8 @@ k2_daemon_helper_assemble() {
         || { echo "FATAL: k2-export binary missing at '${export_src}' (cargo build --release -p k2-export --bin k2-export)" >&2; return 1; }
     [ -n "$deckrender_src" ] && [ -x "$deckrender_src" ] \
         || { echo "FATAL: k2-deckrender binary missing at '${deckrender_src}' (cargo build --release -p k2-deckrender --bin k2-deckrender)" >&2; return 1; }
+    [ -n "$scenerender_src" ] && [ -x "$scenerender_src" ] \
+        || { echo "FATAL: k2-scenerender binary missing at '${scenerender_src}' (cargo build --release -p k2-scenerender --bin k2-scenerender)" >&2; return 1; }
     [ -f "$icon_src" ] || { echo "FATAL: K2 icon missing at $icon_src" >&2; return 1; }
     [ -n "$version" ] || { echo "FATAL: no version in src-tauri/tauri.conf.json" >&2; return 1; }
 
@@ -128,6 +142,8 @@ k2_daemon_helper_assemble() {
     chmod 0755 "$helper/Contents/MacOS/$K2_DAEMON_HELPER_EXPORT" || return 1
     cp "$deckrender_src" "$helper/Contents/MacOS/$K2_DAEMON_HELPER_DECKRENDER" || return 1
     chmod 0755 "$helper/Contents/MacOS/$K2_DAEMON_HELPER_DECKRENDER" || return 1
+    cp "$scenerender_src" "$helper/Contents/MacOS/$K2_DAEMON_HELPER_SCENERENDER" || return 1
+    chmod 0755 "$helper/Contents/MacOS/$K2_DAEMON_HELPER_SCENERENDER" || return 1
     cp "$icon_src" "$helper/Contents/Resources/$K2_DAEMON_HELPER_ICON" || return 1
 
     cat > "$helper/Contents/Info.plist" <<EOF
@@ -168,7 +184,7 @@ EOF
     # Pre-0.43.2 layout. Leaving it would keep a second, stale daemon in the
     # bundle and let an old LaunchAgent plist keep launching it.
     rm -f "$app/Contents/MacOS/$K2_DAEMON_HELPER_EXE"
-    echo "  K2 Daemon.app assembled (v${version}, ${K2_DAEMON_HELPER_BUNDLE_ID}, + ${K2_DAEMON_HELPER_PTYD}, ${K2_DAEMON_HELPER_EXPORT}, ${K2_DAEMON_HELPER_DECKRENDER})."
+    echo "  K2 Daemon.app assembled (v${version}, ${K2_DAEMON_HELPER_BUNDLE_ID}, + ${K2_DAEMON_HELPER_PTYD}, ${K2_DAEMON_HELPER_EXPORT}, ${K2_DAEMON_HELPER_DECKRENDER}, ${K2_DAEMON_HELPER_SCENERENDER})."
 }
 
 _k2_plist_get() {
@@ -260,27 +276,43 @@ k2_daemon_helper_verify() {
         echo "FATAL: stray $app/Contents/MacOS/$K2_DAEMON_HELPER_DECKRENDER (it belongs in $K2_DAEMON_HELPER_APP)" >&2
         return 1
     fi
-    echo "  ✓ K2 Daemon.app present: Info.plist, icon $icon, ${K2_DAEMON_HELPER_BUNDLE_ID}, v${want_version}, ${K2_DAEMON_HELPER_PTYD}, ${K2_DAEMON_HELPER_EXPORT}, ${K2_DAEMON_HELPER_DECKRENDER}."
+    # k2-scenerender rides beside the daemon too, and is never a test-hostile build.
+    local sr sr_kind
+    sr="$(k2_daemon_helper_scenerender "$app")"
+    [ -x "$sr" ] || { echo "FATAL: k2-scenerender missing at $sr" >&2; return 1; }
+    sr_kind="$(file -b "$sr")"
+    case "$sr_kind" in *Mach-O*) ;; *) echo "FATAL: $sr is not a Mach-O executable: $sr_kind" >&2; return 1 ;; esac
+    if grep -a -q "$K2_SCENERENDER_HOSTILE_MARKER" "$sr"; then
+        echo "FATAL: $sr is a test-hostile build (cargo --features test-hostile); it must never ship" >&2
+        return 1
+    fi
+    if [ -e "$app/Contents/MacOS/$K2_DAEMON_HELPER_SCENERENDER" ]; then
+        echo "FATAL: stray $app/Contents/MacOS/$K2_DAEMON_HELPER_SCENERENDER (it belongs in $K2_DAEMON_HELPER_APP)" >&2
+        return 1
+    fi
+    echo "  ✓ K2 Daemon.app present: Info.plist, icon $icon, ${K2_DAEMON_HELPER_BUNDLE_ID}, v${want_version}, ${K2_DAEMON_HELPER_PTYD}, ${K2_DAEMON_HELPER_EXPORT}, ${K2_DAEMON_HELPER_DECKRENDER}, ${K2_DAEMON_HELPER_SCENERENDER}."
 }
 
 # k2_daemon_helper_sign APP IDENTITY ENTITLEMENTS
-# Signs the nested k2-ptyd, k2-export and k2-deckrender (hardened runtime,
-# NO entitlements: ptyd only forks/execs agents, the export worker and the
-# slide renderer only read stdin and write stdout; all link system libraries
-# only), then the
+# Signs the nested k2-ptyd, k2-export, k2-deckrender and k2-scenerender
+# (hardened runtime, NO entitlements: ptyd only forks/execs agents, the export
+# worker and the two renderers only read stdin and write stdout; all link
+# system libraries only), then the
 # helper app (its main executable gets the daemon's entitlements + hardened
 # runtime). The helper's seal covers both, so they must be signed first.
 # Call BEFORE signing the outer APP.
 k2_daemon_helper_sign() {
     local app="$1" identity="$2" entitlements="$3"
-    local helper ptyd exp dr
+    local helper ptyd exp dr sr
     helper="$(k2_daemon_helper_dir "$app")"
     ptyd="$(k2_daemon_helper_ptyd "$app")"
     exp="$(k2_daemon_helper_export "$app")"
     dr="$(k2_daemon_helper_deckrender "$app")"
+    sr="$(k2_daemon_helper_scenerender "$app")"
     [ -x "$ptyd" ] || { echo "FATAL: k2-ptyd missing at $ptyd (assemble first)" >&2; return 1; }
     [ -x "$exp" ] || { echo "FATAL: k2-export missing at $exp (assemble first)" >&2; return 1; }
     [ -x "$dr" ] || { echo "FATAL: k2-deckrender missing at $dr (assemble first)" >&2; return 1; }
+    [ -x "$sr" ] || { echo "FATAL: k2-scenerender missing at $sr (assemble first)" >&2; return 1; }
     codesign --force --options runtime --timestamp \
         --identifier "dev.k2.app.ptyd" \
         --sign "$identity" \
@@ -300,12 +332,18 @@ k2_daemon_helper_sign() {
     codesign --verify --strict "$dr" \
         || { echo "FATAL: $dr signature does not verify" >&2; return 1; }
     codesign --force --options runtime --timestamp \
+        --identifier "dev.k2.app.scenerender" \
+        --sign "$identity" \
+        "$sr" || { echo "FATAL: codesign of $sr failed" >&2; return 1; }
+    codesign --verify --strict "$sr" \
+        || { echo "FATAL: $sr signature does not verify" >&2; return 1; }
+    codesign --force --options runtime --timestamp \
         --entitlements "$entitlements" \
         --sign "$identity" \
         "$helper" || { echo "FATAL: codesign of $helper failed" >&2; return 1; }
     codesign --verify --strict "$helper" \
         || { echo "FATAL: $helper signature does not verify" >&2; return 1; }
-    echo "  Signed K2 Daemon.app (+ k2-ptyd, k2-export, k2-deckrender)."
+    echo "  Signed K2 Daemon.app (+ k2-ptyd, k2-export, k2-deckrender, k2-scenerender)."
 }
 
 # k2_build_standalone_macos_daemon APP OUT [PROJECT_DIR]
@@ -569,6 +607,37 @@ k2_daemon_helper_verify_shipped_deckrender() {
     echo "  ✓ Notarized app ships a signed k2-deckrender (Gatekeeper accepts it)."
 }
 
+# k2_daemon_helper_verify_shipped_scenerender APP
+# The 3D stills renderer, as k2_daemon_helper_verify_shipped_deckrender checks
+# k2-deckrender: after notarization + staple the nested k2-scenerender is
+# intact, signed as dev.k2.app.scenerender, and Gatekeeper accepts the bundle.
+k2_daemon_helper_verify_shipped_scenerender() {
+    local app="$1" sr sinfo
+    sr="$(k2_daemon_helper_scenerender "$app")"
+    [ -x "$sr" ] || { echo "FATAL: the notarized app has no k2-scenerender at $sr" >&2; return 1; }
+    codesign --verify --strict "$sr" \
+        || { echo "FATAL: k2-scenerender in the notarized app does not verify" >&2; return 1; }
+    sinfo="$(codesign -dv "$sr" 2>&1)" \
+        || { echo "FATAL: codesign -dv $sr failed: $sinfo" >&2; return 1; }
+    grep -q "^Identifier=dev.k2.app.scenerender\$" <<<"$sinfo" \
+        || { echo "FATAL: k2-scenerender in the notarized app is not dev.k2.app.scenerender" >&2; return 1; }
+    spctl --assess --type execute "$app" \
+        || { echo "FATAL: Gatekeeper rejects the notarized app (with its k2-scenerender)" >&2; return 1; }
+    echo "  ✓ Notarized app ships a signed k2-scenerender (Gatekeeper accepts it)."
+}
+
+# k2_daemon_helper_verify_tarball_scenerender TARBALL
+# The update bundle holds the nested k2-scenerender beside the daemon, executable.
+k2_daemon_helper_verify_tarball_scenerender() {
+    local tgz="$1" want listing
+    want="K2.app/Contents/Helpers/${K2_DAEMON_HELPER_APP}/Contents/MacOS/${K2_DAEMON_HELPER_SCENERENDER}"
+    listing="$(tar -tvzf "$tgz")" \
+        || { echo "FATAL: cannot list $tgz" >&2; return 1; }
+    grep -F -- "$want" <<<"$listing" | grep -q '^-rwx' \
+        || { echo "FATAL: $tgz has no executable $want" >&2; return 1; }
+    echo "  ✓ Update bundle carries ${want}."
+}
+
 # k2_daemon_helper_verify_tarball_deckrender TARBALL
 # The update bundle holds the nested k2-deckrender beside the daemon, executable.
 k2_daemon_helper_verify_tarball_deckrender() {
@@ -726,5 +795,32 @@ k2_daemon_helper_verify_signed() {
         return 1
     fi
     [ "$drc" -eq 0 ] || { echo "FATAL: signed k2-deckrender --version exited rc=$drc: ${dout:0:400}" >&2; return 1; }
-    echo "  ✓ K2 Daemon.app signed (runtime + entitlements); daemon execs past AMFI: $out; $pout; $eout; $dout (runtime, no entitlements, team $pteam)"
+
+    # k2-scenerender: as k2-deckrender (it parses untrusted scene bytes;
+    # nothing may attach to it, and it holds no entitlement).
+    local sr sinfo sents steam sout src
+    sr="$(k2_daemon_helper_scenerender "$app")"
+    sinfo="$(codesign -dv "$sr" 2>&1)" \
+        || { echo "FATAL: codesign -dv $sr failed: $sinfo" >&2; return 1; }
+    grep -q "^Identifier=dev.k2.app.scenerender\$" <<<"$sinfo" \
+        || { echo "FATAL: k2-scenerender code identifier is not dev.k2.app.scenerender" >&2; return 1; }
+    grep -q "flags=.*runtime" <<<"$sinfo" \
+        || { echo "FATAL: k2-scenerender is not signed with the hardened runtime" >&2; return 1; }
+    steam="$(sed -n 's/^TeamIdentifier=//p' <<<"$sinfo")"
+    [ "$team" = "$steam" ] \
+        || { echo "FATAL: k2-scenerender Team ID '$steam' differs from the daemon's '$team'" >&2; return 1; }
+    sents="$(codesign -d --entitlements - "$sr" 2>/dev/null)" \
+        || { echo "FATAL: cannot read k2-scenerender entitlements" >&2; return 1; }
+    if grep -q "<key>" <<<"$sents"; then
+        echo "FATAL: k2-scenerender carries entitlements; it must have none" >&2
+        return 1
+    fi
+    src=0
+    sout="$("$sr" --version 2>&1)" || src=$?
+    if [ "$src" -eq 137 ]; then
+        echo "FATAL: signed k2-scenerender SIGKILL'd at exec (137 = AMFI). Output: ${sout:0:400}" >&2
+        return 1
+    fi
+    [ "$src" -eq 0 ] || { echo "FATAL: signed k2-scenerender --version exited rc=$src: ${sout:0:400}" >&2; return 1; }
+    echo "  ✓ K2 Daemon.app signed (runtime + entitlements); daemon execs past AMFI: $out; $pout; $eout; $dout; $sout (runtime, no entitlements, team $pteam)"
 }

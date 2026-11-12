@@ -48,6 +48,17 @@ rm "$mac/$K2_DAEMON_HELPER_DECKRENDER"
 tar -czf "$work/deckrender-missing.tar.gz" -C "$work/ok" K2.app
 if k2_daemon_helper_verify_tarball_deckrender "$work/deckrender-missing.tar.gz" 2>/dev/null; then echo "FAIL: a bundle without k2-deckrender passed"; exit 1; fi
 
+# The 3D stills renderer: the same check on the update bundle.
+printf 'x' > "$mac/$K2_DAEMON_HELPER_SCENERENDER"; chmod 0755 "$mac/$K2_DAEMON_HELPER_SCENERENDER"
+tar -czf "$work/scenerender.tar.gz" -C "$work/ok" K2.app
+k2_daemon_helper_verify_tarball_scenerender "$work/scenerender.tar.gz" >/dev/null || { echo "FAIL: a bundle with k2-scenerender was refused"; exit 1; }
+chmod 0644 "$mac/$K2_DAEMON_HELPER_SCENERENDER"
+tar -czf "$work/scenerender-noexec.tar.gz" -C "$work/ok" K2.app
+if k2_daemon_helper_verify_tarball_scenerender "$work/scenerender-noexec.tar.gz" 2>/dev/null; then echo "FAIL: a non-executable k2-scenerender passed"; exit 1; fi
+rm "$mac/$K2_DAEMON_HELPER_SCENERENDER"
+tar -czf "$work/scenerender-missing.tar.gz" -C "$work/ok" K2.app
+if k2_daemon_helper_verify_tarball_scenerender "$work/scenerender-missing.tar.gz" 2>/dev/null; then echo "FAIL: a bundle without k2-scenerender passed"; exit 1; fi
+
 # ── The standalone macOS daemon embeds the signed k2-ptyd (P84) ──
 # Stubs on PATH: `codesign` accepts the nested k2-ptyd as dev.k2.app.ptyd
 # (or not, with STUB_BAD_SIG=1); `cargo` plays build.rs: it writes a daemon
@@ -115,4 +126,6 @@ grep -q '^k2_daemon_helper_verify_shipped_export "K2.app"$' "$here/scripts/relea
 grep -q '^k2_daemon_helper_verify_tarball_export "target/release/bundle/macos/K2.app.tar.gz"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the update bundle's k2-export"; exit 1; }
 grep -q '^k2_daemon_helper_verify_shipped_deckrender "K2.app"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the notarized app's k2-deckrender"; exit 1; }
 grep -q '^k2_daemon_helper_verify_tarball_deckrender "target/release/bundle/macos/K2.app.tar.gz"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the update bundle's k2-deckrender"; exit 1; }
-echo "ok: release k2-ptyd, k2-export and k2-deckrender checks"
+grep -q '^k2_daemon_helper_verify_shipped_scenerender "K2.app"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the notarized app's k2-scenerender"; exit 1; }
+grep -q '^k2_daemon_helper_verify_tarball_scenerender "target/release/bundle/macos/K2.app.tar.gz"$' "$here/scripts/release.sh" || { echo "FAIL: release.sh doesn't check the update bundle's k2-scenerender"; exit 1; }
+echo "ok: release k2-ptyd, k2-export, k2-deckrender and k2-scenerender checks"

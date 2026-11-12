@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.10 (2026-11-12)
+
+Pairs with kit v0.16.0 (`d2245444`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's changes are additive (the view schema, addresses and view index, the keyed watch behind the feature `keyed_watch` with view deltas, roster addresses, the structure index's row format 2); the pack hooks it adds are provided methods with defaults, and the bridge uses none of them. No new error id; wire still 3.
+
 ## v0.1.9 (2026-11-12)
 
 Pairs with kit v0.15.1 (`e31ed4d9`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's changes are speed on keyed docs that aren't tables and the pack contract's carrier row for a pack that keeps a carrier; no kit API, wire or error id changed, and the bridge keeps no carrier.

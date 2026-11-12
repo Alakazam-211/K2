@@ -82,7 +82,7 @@ k2 agent hire "$A" --name "Manager" --json >"$SANDBOX_HOME/hire-a.json" || fail 
 k2 agent hire "$B" --name "Companion" --json >"$SANDBOX_HOME/hire-b.json" || fail "hire B: $(cat "$SANDBOX_HOME/hire-b.json")"
 K2_PROJECT_PATH="$B" k2 heartbeat schedule add --name triage --daily --time 07:00 --instructions "B-TRIAGE" >/dev/null || fail "add B's triage"
 K2_PROJECT_PATH="$A" k2 heartbeat schedule add --name roundup --daily --time 08:00 --instructions "A-ROUNDUP" >/dev/null || fail "add A's roundup"
-k2 agent restart "$A" --json >/dev/null || fail "start A's pinned chat"
+k2 agent restart "$A" --harness claude --json >/dev/null || fail "start A's pinned chat"
 for _ in $(seq 1 100); do [ -s "$SHIM_DIR/claude.env" ] && break; sleep 0.1; done
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SHIM_DIR/claude.env" | head -1)"
 [ -n "$PASSPORT" ] || fail "the pinned chat got no passport"

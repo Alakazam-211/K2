@@ -65,7 +65,7 @@ if jq . <<<"$table" >/dev/null 2>&1; then fail "the table is not JSON"; fi
 ok "workspace list --json is JSON; the table still prints"
 
 echo "== agent restart by full path =="
-r1="$(k2 agent restart "$SPACED" --json)" || fail "restart by spaced path: $r1"
+r1="$(k2 agent restart "$SPACED" --harness claude --json)" || fail "restart by spaced path: $r1"
 sid="$(jq -r .sessionId <<<"$r1")"
 [ -n "$sid" ] && [ "$sid" != null ] || fail "sessionId: $r1"
 r2="$(k2 agent restart "$SPACED/" --json)" || fail "restart with a trailing slash: $r2"

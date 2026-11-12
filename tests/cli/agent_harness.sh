@@ -95,7 +95,7 @@ B="$SANDBOX_HOME/work/harness-b-$RANDOM$RANDOM"
 mkdir -p "$SANDBOX_HOME/work"
 k2 agent hire "$A" --name "Desk" --json >"$SANDBOX_HOME/hire-a.json" || fail "hire A: $(cat "$SANDBOX_HOME/hire-a.json")"
 k2 agent hire "$B" --name "Ops" --json >"$SANDBOX_HOME/hire-b.json" || fail "hire B: $(cat "$SANDBOX_HOME/hire-b.json")"
-k2 agent restart "$A" --json >/dev/null || fail "start A's pinned chat"
+k2 agent restart "$A" --harness claude --json >/dev/null || fail "start A's pinned chat"
 wait_starts claude 1
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SHIM_DIR/claude.env" | head -1)"
 [ -n "$PASSPORT" ] || fail "the pinned chat got no passport"

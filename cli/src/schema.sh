@@ -693,10 +693,11 @@ cmd_schema() {
     },
     {
       "name": "agent restart",
-      "usage": "k2 agent restart <name> [--dry-run] [--json]",
+      "usage": "k2 agent restart <name> [--harness <harness>] [--dry-run] [--json]",
       "description": "Restart an agent's pinned chat session on the same conversation (resume), so it re-reads its charter and .mcp.json. Reports the old and new session ids. Sidecar tabs are not touched.",
       "args": [{"name": "name", "required": true}],
       "flags": [
+        {"name": "--harness", "arg": "harness", "description": "For an agent that has never had a chat: the LLM CLI to start it on (claude, codex, grok, ...). On a server that has never had a pinned chat, restart without it exits 1 (harness_choice_needed) and starts nothing. Ignored once the agent has a chat."},
         {"name": "--dry-run", "arg": null, "description": "Show which session would restart; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok, oldSessionId, sessionId, conversationId)."}
       ]

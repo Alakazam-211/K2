@@ -48643,10 +48643,11 @@ cmd_schema() {
     },
     {
       "name": "agent restart",
-      "usage": "k2 agent restart <name> [--dry-run] [--json]",
+      "usage": "k2 agent restart <name> [--harness <harness>] [--dry-run] [--json]",
       "description": "Restart an agent's pinned chat session on the same conversation (resume), so it re-reads its charter and .mcp.json. Reports the old and new session ids. Sidecar tabs are not touched.",
       "args": [{"name": "name", "required": true}],
       "flags": [
+        {"name": "--harness", "arg": "harness", "description": "For an agent that has never had a chat: the LLM CLI to start it on (claude, codex, grok, ...). On a server that has never had a pinned chat, restart without it exits 1 (harness_choice_needed) and starts nothing. Ignored once the agent has a chat."},
         {"name": "--dry-run", "arg": null, "description": "Show which session would restart; change nothing."},
         {"name": "--json", "arg": null, "description": "JSON output (ok, oldSessionId, sessionId, conversationId)."}
       ]
@@ -63806,7 +63807,16 @@ USAGE
   old handle that was retired, it exits 4 and the error names each
   workspace's handle and path: use one of those.
 
+On a server that has never had a pinned chat, the first one waits for you to
+pick its LLM: restart then exits 1 (harness_choice_needed), lists the
+harnesses and starts nothing. Run it again with --harness.
+
 FLAGS
+  --harness <harness>     For an agent that has never had a chat: the LLM CLI
+                          to start it on (claude, codex, grok, …). It becomes
+                          the workspace's default agent. Ignored once the
+                          agent has a chat; to move a chat to another
+                          harness, use k2 agent harness.
   --dry-run               Show which session would restart; change nothing
   --json                  JSON output: {ok, changed, name, path, oldSessionId,
                           sessionId, conversationId, resumedExisting, provider}
@@ -65822,13 +65832,20 @@ PYEOF
 # The old session id comes from `agent conf` (live.sessionId).
 cmd_agent_restart() {
     if _wants_help "$@"; then cmd_help_agent_restart; exit 0; fi
-    local name="" dry_run=false as_json=false
+    local name="" dry_run=false as_json=false harness=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) dry_run=true; shift ;;
             --json) as_json=true; shift ;;
+            --harness)
+                if [ $# -lt 2 ] || [ -z "$2" ] || [ "${2#-}" != "$2" ]; then
+                    _agent_err "bad_usage" "--harness needs a value (claude, codex, grok, …) — usage: k2 agent restart <name> --harness <harness>"
+                    exit 2
+                fi
+                harness="$2"; shift 2 ;;
+            --harness=*) harness="${1#--harness=}"; shift ;;
             -*)
-                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent restart <name> [--dry-run] [--json]"
+                _agent_err "bad_usage" "unknown flag '$1' — usage: k2 agent restart <name> [--harness <harness>] [--dry-run] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$name" ]; then name="$1"; else
@@ -65846,13 +65863,14 @@ cmd_agent_restart() {
     conf=$(_agent_conf_fetch "$name") || rc=$?
     [ "$rc" -ne 0 ] && exit "$rc"
     CONF="$conf" DRY_RUN="$dry_run" AS_JSON="$as_json" ABASE="$BASE_URL" ATOKEN="$TOKEN" \
-        python3 - <<'PYEOF'
+        AHARNESS="$harness" python3 - <<'PYEOF'
 import json, os, sys
 import urllib.error, urllib.parse, urllib.request
 
 conf = json.loads(os.environ["CONF"])
 dry_run = os.environ.get("DRY_RUN") == "true"
 as_json = os.environ.get("AS_JSON") == "true"
+harness = os.environ.get("AHARNESS", "").strip()
 path = conf["path"]
 label = conf.get("name") or os.path.basename(path)
 live = conf.get("live") or {}
@@ -65873,7 +65891,10 @@ if dry_run:
 
 url = os.environ["ABASE"] + "/cli/workspace/ensure-pinned-chat?token=" + \
     urllib.parse.quote(os.environ["ATOKEN"], safe="")
-body = json.dumps({"project": path, "forceRespawn": True}).encode()
+req_body = {"project": path, "forceRespawn": True}
+if harness:
+    req_body["harness"] = harness
+body = json.dumps(req_body).encode()
 req = urllib.request.Request(url, data=body,
                              headers={"Content-Type": "application/json"}, method="POST")
 try:
@@ -65885,6 +65906,18 @@ except urllib.error.HTTPError as e:
         msg = json.loads(raw).get("error")
     except Exception:
         msg = None
+    # The first pinned chat on a server that never had one waits for a
+    # pick (pinned_chat_choice): say how to pick from here.
+    if isinstance(msg, dict) and msg.get("code") == "harness_choice_needed":
+        choices = msg.get("harnesses") or []
+        names = ", ".join("%s%s" % (c.get("harness"), " (installed)" if c.get("installed") else "")
+                          for c in choices if c.get("harness"))
+        sys.stderr.write(json.dumps({"error": {"code": "harness_choice_needed",
+            "hint": "%s has never had a chat, and the first chat on this server waits for "
+                    "you to pick its LLM. Run again with --harness <harness>: %s. "
+                    "Nothing has started yet." % (label, names or "claude, codex or grok"),
+            "harnesses": choices}}) + "\n")
+        sys.exit(1)
     if isinstance(msg, dict):
         msg = msg.get("hint") or msg.get("message")
     sys.stderr.write(json.dumps({"error": {"code": "daemon_error",

@@ -104,7 +104,7 @@ for p in rows:
 }
 passport_of() {
     rm -f "$SHIM/claude.env"
-    owner_k2 agent restart "$1" --json >/dev/null || fail "start the pinned chat of $1"
+    owner_k2 agent restart "$1" --harness claude --json >/dev/null || fail "start the pinned chat of $1"
     for _ in $(seq 1 100); do [ -s "$SHIM/claude.env" ] && break; sleep 0.1; done
     sed -n 's/^K2_HOOK_TOKEN=//p' "$SHIM/claude.env" | head -1
 }

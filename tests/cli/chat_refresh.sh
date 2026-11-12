@@ -102,7 +102,7 @@ ok "help, usage, study page"
 A="$SANDBOX_HOME/work/refresh-a-$RANDOM$RANDOM"
 mkdir -p "$SANDBOX_HOME/work"
 k2 agent hire "$A" --name "Desk" --json >"$SANDBOX_HOME/hire-a.json" || fail "hire A: $(cat "$SANDBOX_HOME/hire-a.json")"
-k2 agent restart "$A" --json >/dev/null || fail "start A's pinned chat"
+k2 agent restart "$A" --harness claude --json >/dev/null || fail "start A's pinned chat"
 wait_starts claude 1
 wait_passport claude ""
 old_id="$(pin | jq -r .resumeSession)"

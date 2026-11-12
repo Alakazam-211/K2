@@ -115,7 +115,7 @@ for p in rows:
 passport_of() { # start the pinned chat of <path> on <daemon>; print its passport
     local d="$1" dir="$2" shim="$SANDBOX/$1/shim"
     rm -f "$shim/claude.env"
-    owner_k2 "$d" agent restart "$dir" --json >/dev/null || fail "start the pinned chat of $dir"
+    owner_k2 "$d" agent restart "$dir" --harness claude --json >/dev/null || fail "start the pinned chat of $dir"
     for _ in $(seq 1 100); do [ -s "$shim/claude.env" ] && break; sleep 0.1; done
     sed -n 's/^K2_HOOK_TOKEN=//p' "$shim/claude.env" | head -1
 }

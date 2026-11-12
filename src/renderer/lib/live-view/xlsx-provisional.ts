@@ -126,8 +126,11 @@ export interface XlsxViewSnapshot extends Omit<ViewSnapshotJson, 'schema' | 'con
   containers: XlsxViewContainer[]
 }
 
-/** provisional: replaced when the kit ships it. The welcome with RC's `turn_idle_ms` (K2's). */
-export interface XlsxWelcome extends Welcome {
+/** provisional: replaced when the kit ships it. The welcome with RC's `turn_idle_ms` (K2's). A keyed doc's welcome may leave out a text
+ *  doc's `root` and `version` (the xlsx addendum's welcome does: its state comes by the keyed watch). */
+export interface XlsxWelcome extends Omit<Welcome, 'root' | 'version'> {
+  root?: string
+  version?: number
   turn_idle_ms?: number
 }
 

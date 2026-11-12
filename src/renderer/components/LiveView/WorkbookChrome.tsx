@@ -192,7 +192,7 @@ export function SheetTabs({
   const latest = state.recent.find((r) => r.age === 0)
   const flashKey = (() => {
     if (!latest) return null
-    for (const o of latest.frame.ops) if (o.root === book.schema.containers || o.root === book.state.schema.composite?.find((c) => c.list === book.schema.containers)?.map) return o.key
+    for (const o of latest.frame.ops) if (o.kind !== 'text' && (o.root === book.schema.containers || o.root === book.state.schema.composite?.find((c) => c.list === book.schema.containers)?.map)) return o.key
     return null
   })()
   const visible = all.filter((s) => !s.hidden || s.key === stage)

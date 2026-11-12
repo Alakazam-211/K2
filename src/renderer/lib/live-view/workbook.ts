@@ -4,7 +4,8 @@
 // letters by the grid slot's rule (kit item VG), cells with their shown form,
 // corners and A1. No React, no DOM.
 
-import { applyKeyedOps, mapKey, type KeyedState, type KeyedValue } from './kit'
+import { mapKey, type KeyedState, type KeyedValue } from './kit'
+import { foldOps } from './keyed-fold'
 import type {
   CellRange,
   ContainerDerived,
@@ -55,9 +56,9 @@ export function bookFromSnapshot(
   return { rev, state, schema: view.schema, a1, containers }
 }
 
-/** A frame onto a book: its ops (KeyedWatch's rules), then the pack's derived values. Throws `KeyedMisfit` when it doesn't fit. */
+/** A frame onto a book: its ops (the kit's KeyedWatch, keyed-fold.ts), then the pack's derived values. Throws `KeyedMisfit` when it doesn't fit. */
 export function applyFrameToBook(book: Book, f: XlsxOpsChangeFrame): Book {
-  const state = applyKeyedOps(book.state, f.ops)
+  const state = foldOps(book.state, book.rev, f)
   const d: XlsxFrameDerived = f.derived ?? {}
   let a1 = book.a1
   if (d.units) {

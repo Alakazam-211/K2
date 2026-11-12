@@ -1,13 +1,14 @@
 // The live workbook's client state, as one pure reducer over what a source
 // sends: the welcome, the keyed watch's frames (snapshot head, pages, changes)
-// folded the way the kit's `KeyedWatch` folds them, the roster's presence and
+// folded by the kit's own `KeyedWatch` (keyed-fold.ts), the roster's presence and
 // claim events, and the host's `turn_end`. Plus the client's own gestures
 // (follow on or off). No React, no DOM: the view renders `LiveWorkbookState`.
 
-import { applyKeyedPage, emptyKeyedState, KeyedMisfit, type ClaimActor, type ElemFocus, type ElemSelection, type KeyedRootState, type KeyedSnapshotFrame, type KeyedState, type Point, type Rect, type ViewUnit } from './kit'
+import type { ClaimActor, ElemFocus, ElemSelection, KeyedPageFrame, KeyedSchema, KeyedSnapshotFrame, Point, Rect } from './kit'
+import { checkPage, foldSnapshot, KeyedMisfit } from './keyed-fold'
 import { actorFrom, framePhrase, type Actor, type LogEntry } from './wording'
 import { applyFrameToBook, bookFromSnapshot, cornerPlace, gridOf, overlaps, rangeA1, rangeRect, sheetOfRow, type Book, type Rect4 } from './workbook'
-import type { CellRange, CellsValue, ClockFrame, TurnEndFrame, XlsxKeyedPageFrame, XlsxOpsChangeFrame, XlsxRosterEntry, XlsxRosterEvent, XlsxViewSnapshot, XlsxWelcome } from './xlsx-provisional'
+import type { CellRange, CellsValue, ClockFrame, TurnEndFrame, XlsxKeyedPageFrame, XlsxOpsChangeFrame, XlsxRosterEntry, XlsxRosterEvent, XlsxViewSnapshot, XlsxViewUnit, XlsxWelcome } from './xlsx-provisional'
 
 /** What a source sends: kit frames (mirrored in kit.ts / xlsx-provisional.ts) plus the host's tier. */
 export type LiveWorkbookFrame =
@@ -76,10 +77,11 @@ export interface RecentChange {
   age: number
 }
 
-/** The snapshot being built, page by page. */
+/** The snapshot being built, page by page: its head and the pages so far (each checked as it came), folded when whole. */
 export interface Building {
-  state: KeyedState
-  units: Map<string, ViewUnit[]>
+  head: KeyedSnapshotFrame
+  pagesIn: readonly XlsxKeyedPageFrame[]
+  schema: KeyedSchema
   view: XlsxViewSnapshot | null
   got: number
   pages: number
@@ -195,18 +197,17 @@ function pushLog(s: LiveWorkbookState, e: LogInput): Pick<LiveWorkbookState, 'lo
   return { log, logSeq: s.logSeq + 1 }
 }
 
-function copyRoot(r: KeyedRootState): KeyedRootState {
-  return r.kind === 'list' ? { kind: 'list', live: r.live.slice(), hidden: new Map(r.hidden) } : { kind: 'map', entries: new Map(r.entries) }
-}
-
 function asked(s: LiveWorkbookState, why: string, detail: string): LiveWorkbookState {
   return { ...s, awaiting: true, building: null, resync: { why, detail } }
 }
 
 // ---------- the keyed watch (KeyedWatch's rules) ----------
 
+/** The head as the kit's frame: the xlsx view is the kit's view plus r1's provisional fields. */
+const kitHead = (f: Extract<LiveWorkbookFrame, { type: 'keyed_snapshot' }>): KeyedSnapshotFrame => f as KeyedSnapshotFrame
+
 function onHead(s: LiveWorkbookState, f: Extract<LiveWorkbookFrame, { type: 'keyed_snapshot' }>): LiveWorkbookState {
-  const building: Building = { state: emptyKeyedState(f.schema), units: new Map(), view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto, rootsIn: [], a1: {} }
+  const building: Building = { head: kitHead(f), pagesIn: [], schema: f.schema, view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto, rootsIn: [], a1: {} }
   const next: LiveWorkbookState = { ...s, awaiting: false, seq: f.seq, building, refused: null }
   return f.pages === 0 ? finish(next) : next
 }
@@ -217,29 +218,37 @@ function onPage(s: LiveWorkbookState, f: XlsxKeyedPageFrame): LiveWorkbookState 
   const b = s.building
   if (!b) return asked(s, 'inconsistent', `a page with no snapshot (seq ${f.seq})`)
   if (f.page !== b.got + 1 || f.pages !== b.pages || f.upto !== b.upto) return asked(s, 'inconsistent', `page ${f.page} of ${f.pages} out of order`)
-  // Copy what the page touches, so the state before stays whole (a reducer may run twice).
-  const roots = new Map(b.state.roots)
-  const r = roots.get(f.root)
-  if (r && !f.units) roots.set(f.root, copyRoot(r))
-  const state: KeyedState = { schema: b.state.schema, roots }
-  const units = new Map(b.units)
+  // The page is checked by the kit's watch now; the snapshot is folded once it is whole.
   try {
-    applyKeyedPage(state, units, f)
+    checkPage(b.head, b.pagesIn as readonly KeyedPageFrame[], f)
   } catch (e) {
     if (e instanceof KeyedMisfit) return asked(s, 'inconsistent', e.message)
     throw e
   }
   const rootsIn = f.units || b.rootsIn.includes(f.root) ? b.rootsIn : [...b.rootsIn, f.root]
   const a1 = f.derived?.a1 ? { ...b.a1, ...f.derived.a1 } : b.a1
-  const nb: Building = { ...b, state, units, got: b.got + 1, rootsIn, a1 }
+  const nb: Building = { ...b, pagesIn: [...b.pagesIn, f], got: b.got + 1, rootsIn, a1 }
   const next: LiveWorkbookState = { ...s, seq: f.seq, building: nb }
   return nb.got === nb.pages ? finish(next) : next
+}
+
+/** The building snapshot folded (the kit's watch over its head and pages); units carry the xlsx `derived` they came with. */
+function foldBuilding(b: Building): Book | null {
+  if (!b.view) return null
+  const { state, units } = foldSnapshot(b.head, b.pagesIn)
+  return bookFromSnapshot(state, b.view, units as Map<string, XlsxViewUnit[]>, b.upto, b.a1)
 }
 
 function finish(s: LiveWorkbookState): LiveWorkbookState {
   const b = s.building as Building
   if (!b.view) return { ...s, building: null, book: null, resync: { why: 'inconsistent', detail: 'the snapshot has no view index' } }
-  const book = bookFromSnapshot(b.state, b.view, b.units, b.upto, b.a1)
+  let book: Book | null
+  try {
+    book = foldBuilding(b)
+  } catch (e) {
+    if (e instanceof KeyedMisfit) return asked(s, 'inconsistent', e.message)
+    throw e
+  }
   return followSync({ ...s, building: null, book, recent: [] })
 }
 
@@ -332,6 +341,9 @@ function onRoster(s: LiveWorkbookState, e: XlsxRosterEvent): LiveWorkbookState {
         ...pushLog(s, { kind: 'claim_end', id: e.claim, actor: actorFrom(actor ?? { id: e.who, name: e.who, kind: 'agent', colour: null }), at: e.at_ms ?? null, how: e.how, label: c?.label ?? null, lines }),
       }
     }
+    // The kit's other roster kinds (ranges, watching counts, text claims...): nothing a workbook view folds.
+    default:
+      return s
   }
 }
 
@@ -431,7 +443,7 @@ export function loadingOf(s: LiveWorkbookState): { phase: 'connect' | 'pages' | 
   if (s.book && !s.building) return { phase: 'live', done: 1, total: 1, rootsIn: [], roots: [] }
   const b = s.building
   if (!b) return { phase: 'connect', done: 0, total: 1, rootsIn: [], roots: [] }
-  return { phase: 'pages', done: b.got, total: b.pages, rootsIn: b.rootsIn, roots: b.state.schema.roots.map((r) => r.name) }
+  return { phase: 'pages', done: b.got, total: b.pages, rootsIn: b.rootsIn, roots: b.schema.roots.map((r) => r.name) }
 }
 
 /**
@@ -442,7 +454,12 @@ export function loadingOf(s: LiveWorkbookState): { phase: 'connect' | 'pages' | 
 export function buildingBook(s: LiveWorkbookState): Book | null {
   const b = s.building
   if (!b?.view || !b.rootsIn.includes(b.view.schema.grid.cells)) return null
-  return bookFromSnapshot(b.state, b.view, b.units, b.upto, b.a1)
+  try {
+    return foldBuilding(b)
+  } catch (e) {
+    if (e instanceof KeyedMisfit) return null
+    throw e
+  }
 }
 
 /** The welcome's idle time after which a turn shows as ended with no `turn_end` (r1.1). */

@@ -185,7 +185,7 @@ export function WorkbookGrid(props: WorkbookGridProps): React.JSX.Element {
 
   const latest = live ? state.recent.find((r) => r.age === 0) : undefined
   const prevGrid = latest ? gridOf(latest.before, sheet) : null
-  const opKeys = new Set(latest?.frame.ops.map((o) => o.key) ?? [])
+  const opKeys = new Set(latest?.frame.ops.flatMap((o) => (o.kind === 'text' ? [] : [o.key])) ?? [])
   const insertBands = (latest?.frame.derived?.bands ?? []).filter((b) => b.container === sheet && b.op === 'insert' && b.axis === 'rows')
   const insertedRows = new Set<number>()
   for (const b of insertBands) for (let n = b.from; n <= b.to; n++) insertedRows.add(n)

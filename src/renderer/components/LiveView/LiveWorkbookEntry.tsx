@@ -5,7 +5,8 @@
 // this renders its children and nothing else.
 //
 // The source is chosen here. Today it is always the sample; the real one is
-// the KeyedWatchWorkbookSource seam in lib/live-view/source.ts.
+// KeyedWatchWorkbookSource in lib/live-view/source.ts (the kit's keyed
+// watch on a doc socket), not wired to a socket yet.
 
 import { lazy, Suspense, useState } from 'react'
 import { Segmented } from '@/components/ui'

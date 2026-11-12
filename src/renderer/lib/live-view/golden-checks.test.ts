@@ -104,7 +104,7 @@ describe('Frames (turn-frames.json)', () => {
     const f = frame(23)
     const g0 = grid(22)
     const g1 = grid(23)
-    const opKeys = new Set(f.ops.map((o) => o.key))
+    const opKeys = new Set(f.ops.flatMap((o) => (o.kind === 'text' ? [] : [o.key])))
     const moved = g1.rows.filter((r) => g0.rowByKey.has(r.key) && g0.rowByKey.get(r.key)?.n !== r.n)
     const units = f.derived?.units ?? {}
     expect(f.ops.length).toBe(2)
@@ -131,7 +131,7 @@ describe('Frames (turn-frames.json)', () => {
         else if (e.type === 'ops_change') {
           const B1 = B[e.rev]
           const mine = claims.filter((c) => c.actor.id === e.actor.id)
-          const rows = e.ops.filter((o) => o.root === 'rows' || o.root === 'cells').map((o) => o.key)
+          const rows = e.ops.flatMap((o) => (o.kind !== 'text' && (o.root === 'rows' || o.root === 'cells') ? [o.key] : []))
           const hit = mine.find((c) => {
             const CR = claimRect(B1, c)
             const g = gridOf(B1, c.container)

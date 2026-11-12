@@ -903,6 +903,210 @@ impl Gens {
     pub fn forks_of(&self, lineage_dir: &Path) -> u32 {
         self.inner.lock().unwrap().forks.get(lineage_dir).copied().unwrap_or(0)
     }
+
+    /// The `lineage_status` frame for one server's root (protocol 10): every
+    /// lineage with a head, scratch capped at
+    /// [`k2_node_proto::gens::MAX_SCRATCH_LINEAGES`] per project (newest
+    /// first), at most [`k2_node_proto::gens::MAX_STATUS_LINEAGES`].
+    pub fn status(&self, root: &Path, now: i64) -> k2_node_proto::gens::LineageStatus {
+        use k2_node_proto::gens::{LineageInfo, LineageStatus, LINEAGE_SCRATCH, MAX_SCRATCH_LINEAGES, MAX_STATUS_LINEAGES};
+        let mut all = lineages_in(root);
+        all.sort_by(|a, b| (&a.set.key, b.head.last_used).cmp(&(&b.set.key, a.head.last_used)));
+        let mut out = Vec::new();
+        let mut scratch: std::collections::HashMap<String, usize> = Default::default();
+        let mut truncated = false;
+        for e in all {
+            let Some(g) = &e.head.gen else { continue };
+            if e.head.lineage.starts_with(LINEAGE_SCRATCH) {
+                let n = scratch.entry(e.set.key.clone()).or_default();
+                *n += 1;
+                if *n > MAX_SCRATCH_LINEAGES {
+                    truncated = true;
+                    continue;
+                }
+            }
+            if out.len() >= MAX_STATUS_LINEAGES {
+                truncated = true;
+                break;
+            }
+            out.push(LineageInfo {
+                key: e.set.key.clone(),
+                name: e.set.name.clone(),
+                lineage: e.head.lineage.clone(),
+                head_seq: e.head.seq,
+                head_commit: g.commit.clone(),
+                bytes: g.bytes,
+                last_used: e.head.last_used,
+                forks: self.forks_of(&e.dir),
+            });
+        }
+        LineageStatus { at: now, lineages: out, truncated }
+    }
+
+    /// Keep one server's generations within `p` (§4.1.3): leftovers of
+    /// earlier deletes go; every lineage keeps its head and the one before
+    /// it; a scratch lineage idle [`k2_node_proto::gens::SCRATCH_IDLE_SECS`]
+    /// goes; a lineage whose head is over `lineage_max_bytes` (or, copying,
+    /// over [`k2_node_proto::gens::COPY_LINEAGE_MAX_BYTES`]) resets (its
+    /// next job builds cold); over the budget (or under disk pressure),
+    /// scratch goes first, least recently used first, then the others
+    /// reset. A lineage with a running fork is never touched. Returns what
+    /// it did (one line each) and the folders to delete.
+    pub fn evict(&self, root: &Path, p: &EvictPolicy) -> (Vec<String>, Vec<PathBuf>) {
+        use k2_node_proto::gens::{CloneMethod, COPY_LINEAGE_MAX_BYTES, LINEAGE_SCRATCH, SCRATCH_IDLE_SECS};
+        let _g = self.commit.lock().unwrap();
+        let mut lines = Vec::new();
+        let mut doomed = leftovers(root);
+        let cap = if self.fs.clone == CloneMethod::Copy { p.lineage_max_bytes.min(COPY_LINEAGE_MAX_BYTES) } else { p.lineage_max_bytes };
+        let mut live: Vec<(LineageEntry, u64)> = Vec::new();
+        for e in lineages_in(root) {
+            if self.forks_of(&e.dir) > 0 {
+                continue;
+            }
+            let head_seq = e.head.seq;
+            doomed.extend(self.prune(&e.dir, head_seq));
+            let scratch = e.head.lineage.starts_with(LINEAGE_SCRATCH);
+            if scratch && p.now - e.head.last_used > SCRATCH_IDLE_SECS {
+                lines.push(format!("{} of {}: unused for 3 days, removed", e.head.lineage, e.set.key));
+                doomed.extend(aside(&e.dir));
+                continue;
+            }
+            let bytes = e.head.gen.as_ref().map(|g| g.bytes).unwrap_or(0);
+            if bytes > cap {
+                lines.push(format!("{} of {}: head is {} GB, over {} GB, reset (its next job builds cold)", e.head.lineage, e.set.key, bytes >> 30, cap >> 30));
+                doomed.extend(self.reset(&e));
+                continue;
+            }
+            let kept = gen_dirs(&e.dir).len() as u64;
+            live.push((e, bytes.saturating_mul(kept.max(1))));
+        }
+        let mut total: u64 = live.iter().map(|(_, b)| *b).sum();
+        // Scratch first, least recently used first; then the rest the same way.
+        live.sort_by_key(|(e, _)| (!e.head.lineage.starts_with(LINEAGE_SCRATCH), e.head.last_used));
+        for (e, b) in live {
+            let scratch = e.head.lineage.starts_with(LINEAGE_SCRATCH);
+            let over = total > p.budget_bytes;
+            if !(over || (p.pressure && scratch)) {
+                continue;
+            }
+            if scratch {
+                lines.push(format!("{} of {}: removed ({})", e.head.lineage, e.set.key, if over { "over the cache budget" } else { "disk low" }));
+                doomed.extend(aside(&e.dir));
+            } else if e.head.gen.is_some() {
+                lines.push(format!("{} of {}: reset, over the cache budget (its next job builds cold)", e.head.lineage, e.set.key));
+                doomed.extend(self.reset(&e));
+            } else {
+                continue;
+            }
+            total = total.saturating_sub(b);
+        }
+        (lines, doomed)
+    }
+
+    /// Reset a lineage: every generation aside, the head says none (the
+    /// seq keeps counting). Under the commit lock.
+    fn reset(&self, e: &LineageEntry) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for (seq, p) in gen_dirs(&e.dir) {
+            let a = e.dir.join(format!(".del-g{seq}"));
+            if std::fs::rename(&p, &a).is_ok() {
+                out.push(a);
+            }
+        }
+        let _ = write_head(&e.dir, &Head { gen: None, ..e.head.clone() });
+        out
+    }
+}
+
+/// [`Gens::evict`]'s limits.
+#[derive(Debug, Clone, Copy)]
+pub struct EvictPolicy {
+    pub now: i64,
+    /// All of this server's generations together.
+    pub budget_bytes: u64,
+    /// One lineage's head.
+    pub lineage_max_bytes: u64,
+    /// The disk is low: scratch lineages go whatever the budget says.
+    pub pressure: bool,
+}
+
+/// One lineage on disk.
+#[derive(Debug, Clone)]
+pub struct LineageEntry {
+    pub set: SetId,
+    pub dir: PathBuf,
+    pub head: Head,
+}
+
+/// Every lineage with a readable head under one server's root.
+pub fn lineages_in(root: &Path) -> Vec<LineageEntry> {
+    let mut out = Vec::new();
+    let g = gens_root(root);
+    let Ok(keys) = std::fs::read_dir(&g) else { return out };
+    for k in keys.flatten() {
+        let key = k.file_name().to_string_lossy().into_owned();
+        if !k2_node_proto::frames::valid_project_key(&key) {
+            continue;
+        }
+        let Ok(set) = SetId::target(root, &key) else { continue };
+        let Ok(ls) = std::fs::read_dir(set.dir()) else { continue };
+        for l in ls.flatten() {
+            if l.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if let Ok(Some(head)) = read_head(&l.path()) {
+                // The folder must be the one its head's name maps to.
+                if set.lineage_dir(&head.lineage).ok().as_deref() == Some(l.path().as_path()) {
+                    out.push(LineageEntry { set: set.clone(), dir: l.path(), head });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Leftovers of an earlier delete (a crash mid-delete): `.del-*` under any
+/// set or lineage folder, and the probe's scratch folder.
+fn leftovers(root: &Path) -> Vec<PathBuf> {
+    let g = gens_root(root);
+    let mut out = Vec::new();
+    if g.join(PROBE_DIR).exists() {
+        out.push(g.join(PROBE_DIR));
+    }
+    let dels = |d: &Path, out: &mut Vec<PathBuf>| {
+        if let Ok(rd) = std::fs::read_dir(d) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with(".del-") {
+                    out.push(e.path());
+                }
+            }
+        }
+    };
+    let Ok(keys) = std::fs::read_dir(&g) else { return out };
+    for k in keys.flatten() {
+        let Ok(sets) = std::fs::read_dir(k.path()) else { continue };
+        for s in sets.flatten() {
+            dels(&s.path(), &mut out);
+            if let Ok(ls) = std::fs::read_dir(s.path()) {
+                for l in ls.flatten() {
+                    dels(&l.path(), &mut out);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A whole lineage folder renamed aside in its set folder, for deletion.
+fn aside(dir: &Path) -> Vec<PathBuf> {
+    let Some(parent) = dir.parent() else { return vec![] };
+    let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let a = parent.join(format!(".del-{name}-{}", std::process::id()));
+    let a = if a.exists() { parent.join(format!(".del-{name}-{}-{}", std::process::id(), crate::util::now())) } else { a };
+    match std::fs::rename(dir, &a) {
+        Ok(()) => vec![a],
+        Err(_) => vec![],
+    }
 }
 
 /// The `g<seq>` folders of a lineage.
@@ -1287,5 +1491,103 @@ mod lineage_tests {
         let e = g.fork(&ForkAsk { set: &set, commit: CacheCommit::Trusted, cache_ref: None, dst: &dst, now: 1 }).unwrap_err();
         assert!(e.contains("mode 750"), "{e}");
         assert!(!dst.exists());
+    }
+
+    fn policy(now: i64) -> EvictPolicy {
+        EvictPolicy { now, budget_bytes: u64::MAX, lineage_max_bytes: u64::MAX, pressure: false }
+    }
+
+    fn evict(g: &Gens, root: &Path, p: &EvictPolicy) -> Vec<String> {
+        let (lines, doomed) = g.evict(root, p);
+        for d in doomed {
+            remove_tree(&d).unwrap();
+        }
+        lines
+    }
+
+    /// §4.1.3 eviction: an idle scratch lineage goes after 3 days, never
+    /// one with a running fork; trusted stays; leftovers of a crash go.
+    #[test]
+    fn idle_scratch_goes_and_running_forks_are_never_touched() {
+        let (root, g, set) = setup("gens-evict-idle");
+        done(&g, fork(&g, &set, CacheCommit::Trusted, None, "t"), &ok_end(&sha('a'), &yes));
+        for r in ["old", "busy"] {
+            done(&g, fork(&g, &set, CacheCommit::Scratch, Some(r), r), &ok_end(&sha('b'), &yes));
+        }
+        let running = fork(&g, &set, CacheCommit::Scratch, Some("busy"), "running");
+        let crash = set.dir().join(".del-crashed");
+        std::fs::create_dir_all(crash.join("x")).unwrap();
+        let later = 200 + k2_node_proto::gens::SCRATCH_IDLE_SECS + 1;
+        let lines = evict(&g, &root, &policy(later));
+        assert!(lines.iter().any(|l| l.contains("scratch/old") && l.contains("3 days")), "{lines:?}");
+        assert!(!set.lineage_dir("scratch/old").unwrap().exists());
+        assert!(set.lineage_dir("scratch/busy").unwrap().join(HEAD_FILE).exists(), "a lineage with a running fork stays");
+        assert!(set.lineage_dir("trusted").unwrap().join(HEAD_FILE).exists());
+        assert!(!crash.exists(), "a crashed delete's leftover goes");
+        done(&g, running, &ok_end(&sha('c'), &yes));
+    }
+
+    /// A trusted head over the lineage cap resets: the next trusted check
+    /// builds cold and starts a new chain (no parent), the seq keeps
+    /// counting. Over the budget, scratch goes before trusted resets.
+    #[test]
+    fn over_the_caps_scratch_goes_first_and_trusted_resets() {
+        let (root, g, set) = setup("gens-evict-cap");
+        let t = fork(&g, &set, CacheCommit::Trusted, None, "t");
+        put(&t.target().join("big"), &"x".repeat(64 << 10));
+        done(&g, t, &ok_end(&sha('a'), &yes));
+        done(&g, fork(&g, &set, CacheCommit::Scratch, Some("pr"), "pr"), &ok_end(&sha('b'), &yes));
+        let trusted_bytes = read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().gen.unwrap().bytes;
+        assert!(trusted_bytes >= 64 << 10, "{trusted_bytes}");
+        // Budget fits trusted alone: only scratch goes.
+        let lines = evict(&g, &root, &EvictPolicy { budget_bytes: trusted_bytes * 2, ..policy(300) });
+        assert!(lines.iter().any(|l| l.contains("scratch/pr") && l.contains("budget")), "{lines:?}");
+        assert!(read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().gen.is_some(), "trusted kept: {lines:?}");
+        // A head over the lineage cap resets.
+        let lines = evict(&g, &root, &EvictPolicy { lineage_max_bytes: 1024, ..policy(300) });
+        assert!(lines.iter().any(|l| l.starts_with("trusted") && l.contains("reset")), "{lines:?}");
+        let h = read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap();
+        assert!(h.gen.is_none() && h.seq == 1);
+        assert!(gen_dirs(&set.lineage_dir("trusted").unwrap()).is_empty());
+        let t = fork(&g, &set, CacheCommit::Trusted, None, "t2");
+        assert!(t.from.is_none(), "after a reset the next trusted check builds cold");
+        done(&g, t, &ok_end(&sha('c'), &yes));
+        let h = read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap();
+        assert_eq!(h.seq, 2, "the seq keeps counting");
+        assert_eq!(h.gen.unwrap().parent_digest, None, "a new chain");
+    }
+
+    /// Disk pressure: every scratch lineage without a running fork goes,
+    /// whatever the budget.
+    #[test]
+    fn disk_pressure_drops_scratch() {
+        let (root, g, set) = setup("gens-evict-pressure");
+        done(&g, fork(&g, &set, CacheCommit::Trusted, None, "t"), &ok_end(&sha('a'), &yes));
+        done(&g, fork(&g, &set, CacheCommit::Scratch, Some("a"), "a"), &ok_end(&sha('b'), &yes));
+        let lines = evict(&g, &root, &EvictPolicy { pressure: true, ..policy(300) });
+        assert!(lines.iter().any(|l| l.contains("disk low")), "{lines:?}");
+        assert!(!set.lineage_dir("scratch/a").unwrap().exists());
+        assert!(read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().gen.is_some());
+    }
+
+    /// The `lineage_status` frame: heads only, scratch capped per project
+    /// (newest first), and it checks.
+    #[test]
+    fn status_lists_heads_and_caps_scratch() {
+        let (root, g, set) = setup("gens-status");
+        done(&g, fork(&g, &set, CacheCommit::Trusted, None, "t"), &ok_end(&sha('a'), &yes));
+        let n = k2_node_proto::gens::MAX_SCRATCH_LINEAGES + 2;
+        for i in 0..n {
+            let f = fork(&g, &set, CacheCommit::Scratch, Some(&format!("b{i}")), &format!("s{i}"));
+            done(&g, f, &Ended { now: 1000 + i as i64, ..ok_end(&sha('b'), &yes) });
+        }
+        let s = g.status(&root, 5000);
+        s.check().unwrap();
+        assert!(s.truncated);
+        let scratch: Vec<&str> = s.lineages.iter().filter(|l| l.lineage.starts_with("scratch/")).map(|l| l.lineage.as_str()).collect();
+        assert_eq!(scratch.len(), k2_node_proto::gens::MAX_SCRATCH_LINEAGES);
+        assert!(scratch.contains(&format!("scratch/b{}", n - 1).as_str()) && !scratch.contains(&"scratch/b0"), "newest first: {scratch:?}");
+        let t = s.lineages.iter().find(|l| l.lineage == "trusted").unwrap();
+        assert_eq!((t.head_seq, t.head_commit.as_str()), (1, sha('a').as_str()));
     }
 }

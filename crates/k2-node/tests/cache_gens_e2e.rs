@@ -146,13 +146,19 @@ async fn trusted_checks_never_see_a_pr_jobs_writes() {
     assert_eq!(pr.cache.as_ref().and_then(|c| c.commit_lineage.as_deref()), Some("scratch/pr-1"), "{:?}", pr.cache);
     assert!(pr.sys.contains("gen trusted #1"), "{}", pr.sys);
 
+    let pr2 = run(&mut c, &n, &repo, "pr2", &second, CacheCommit::Scratch, Some("pr-1"), LOOK).await;
+    assert_eq!(pr2.out, "POISON\nplanted\n", "the same PR's next run starts from its own scratch copy");
+    let other = run(&mut c, &n, &repo, "other", &second, CacheCommit::Scratch, Some("pr-2"), LOOK).await;
+    assert_eq!(other.out, "clean\norig\n", "another branch never sees it");
+
     let t2 = run(&mut c, &n, &repo, "t2", &second, CacheCommit::Trusted, None, LOOK).await;
     assert_eq!(t2.out, "clean\norig\n", "a trusted check never sees the PR's target or CARGO_HOME writes");
     assert_eq!(t2.warmth.as_deref(), Some("gen"));
     assert_eq!(head_seq(&n, "trusted"), 2);
 
-    let pr2 = run(&mut c, &n, &repo, "pr2", &second, CacheCommit::Scratch, Some("pr-1"), LOOK).await;
-    assert_eq!(pr2.out, "POISON\nplanted\n", "only the same PR sees its own scratch copy");
+    // Trusted moved past the PR's base: its next run starts from trusted.
+    let pr3 = run(&mut c, &n, &repo, "pr3", &second, CacheCommit::Scratch, Some("pr-1"), LOOK).await;
+    assert_eq!(pr3.out, "clean\norig\n", "a scratch copy older than trusted's head isn't forked");
 
     let bad = run(&mut c, &n, &repo, "bad", &second, CacheCommit::Trusted, None, "exit 101").await;
     assert_eq!(bad.state, JobState::Done, "a non-zero exit is a done job with its exit code");

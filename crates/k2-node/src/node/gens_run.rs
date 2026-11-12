@@ -228,23 +228,53 @@ impl Node {
         .await
         .ok()?;
         let _ = std::fs::remove_file(&rec);
-        if !doomed.is_empty() {
-            tokio::task::spawn_blocking(move || {
-                for d in doomed {
-                    if let Err(e) = crate::gens::remove_tree(&d) {
-                        crate::nlog!("cache generations: {e}");
-                    }
-                }
-            });
+        remove_later(doomed);
+        if res.committed {
+            self.gens_evict(&t.paths.root());
         }
         Some(res)
+    }
+
+    /// The eviction limits now (§4.1.3): generations get the warm budget
+    /// (half the disk budget, as warm slots), one lineage half of that
+    /// unless the owner's switch file says otherwise; low disk drops
+    /// scratch first.
+    fn gens_policy(&self) -> crate::gens::EvictPolicy {
+        let (cap, floor) = {
+            let l = self.local.lock().unwrap();
+            (super::disk::warm_cap(&l.policy), l.policy.disk_floor_bytes)
+        };
+        let max = self.opts.cache_gens.as_ref().and_then(|s| s.lineage_max_gb).map(|g| g.saturating_mul(1 << 30)).unwrap_or(cap / 2);
+        crate::gens::EvictPolicy { now: self.now(), budget_bytes: cap, lineage_max_bytes: max, pressure: self.disk_free_bytes() < floor.saturating_add(super::disk::RECLAIM_MARGIN) }
+    }
+
+    /// Evict in one server's root (in the background; logs each step).
+    pub(super) fn gens_evict(&self, root: &std::path::Path) {
+        let Some(g) = self.gens.clone() else { return };
+        let (p, root) = (self.gens_policy(), root.to_path_buf());
+        tokio::task::spawn_blocking(move || {
+            let (lines, doomed) = g.evict(&root, &p);
+            for l in lines {
+                crate::nlog!("cache generations: {l}");
+            }
+            for d in doomed {
+                if let Err(e) = crate::gens::remove_tree(&d) {
+                    crate::nlog!("cache generations: {e}");
+                }
+            }
+        });
     }
 
     /// Forks no running job holds (a crash between fork and end, or a job
     /// that ended while k2-node was down) and their records go.
     pub(super) async fn gens_sweep(&self) {
         let Some(_g) = self.gens.clone() else { return };
-        let running: std::collections::HashSet<(Slot, String)> = self.jobs.lock().unwrap().keys().cloned().collect();
+        // Running attempts by (slot, job) and by job key (a fork being made
+        // has its folder before its record).
+        let (running, running_keys): (std::collections::HashSet<(Slot, String)>, std::collections::HashSet<String>) = {
+            let j = self.jobs.lock().unwrap();
+            (j.keys().cloned().collect(), j.iter().map(|((s, job), r)| super::tenant::job_key(*s, job, r.generation)).collect())
+        };
         let tenants: Vec<Arc<Tenant>> = self.tenants.read().unwrap().values().cloned().collect();
         let held: std::collections::HashSet<PathBuf> = self.gens_forks.lock().unwrap().values().map(|f| f.dir.clone()).collect();
         for t in tenants {
@@ -267,14 +297,17 @@ impl Node {
                 }
             }
             let forks = crate::gens::forks_root(&t.paths.root());
-            let Ok(rd) = std::fs::read_dir(&forks) else { continue };
-            for e in rd.flatten() {
-                let p = e.path();
-                if !kept.contains(&p) && !held.contains(&p) {
-                    crate::nlog!("cache generations: removing {} (no job holds it)", p.display());
-                    let _ = crate::gens::remove_tree(&p);
+            if let Ok(rd) = std::fs::read_dir(&forks) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    let made_now = e.file_name().to_str().is_some_and(|k| running_keys.contains(k));
+                    if !kept.contains(&p) && !held.contains(&p) && !made_now {
+                        crate::nlog!("cache generations: removing {} (no job holds it)", p.display());
+                        let _ = crate::gens::remove_tree(&p);
+                    }
                 }
             }
+            self.gens_evict(&t.paths.root());
         }
     }
 }
@@ -301,4 +334,18 @@ pub fn git_is_ancestor(g: &crate::sync::Git, mirror: &std::path::Path, a: &str, 
         Some(1) => Ok(false),
         _ => Err(format!("git merge-base: {}", String::from_utf8_lossy(&out.stderr).trim())),
     }
+}
+
+/// Delete folders in the background, logging what fails.
+fn remove_later(doomed: Vec<PathBuf>) {
+    if doomed.is_empty() {
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        for d in doomed {
+            if let Err(e) = crate::gens::remove_tree(&d) {
+                crate::nlog!("cache generations: {e}");
+            }
+        }
+    });
 }

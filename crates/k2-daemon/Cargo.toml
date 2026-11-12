@@ -157,7 +157,7 @@ chrono-tz = "0.10"
 # the `projects` table directly (it's the only daemon code that touches
 # a column k2so-core doesn't already wrap). Bundled feature matches
 # what k2so-core uses so rusqlite resolves to a single crate version.
-rusqlite = { version = "0.31", features = ["bundled", "hooks"] }
+rusqlite = { version = "0.41", features = ["bundled", "hooks"] }
 
 # Futures helpers (Stream trait / StreamExt / SinkExt) needed by
 # tokio-tungstenite's async message loop.

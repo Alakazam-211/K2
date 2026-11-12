@@ -1748,7 +1748,7 @@ fn open_db(path: &Path) -> Result<Connection, String> {
         crate::log_debug!("[skin] WARN {e}");
     }
     // Last, so the migrations above wake nothing.
-    access_live::install(&conn);
+    access_live::install(&mut conn).map_err(|e| format!("skin.db update hook: {e}"))?;
     Ok(conn)
 }
 
@@ -2337,6 +2337,17 @@ fn db() -> &'static Mutex<Option<SkinDb>> {
 }
 
 fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, String> {
+    with_conn_inner(|c| f(c))
+}
+
+/// [`with_conn`] with `&mut`: tests that set a hook (rusqlite takes `&mut` for
+/// those).
+#[cfg(test)]
+fn with_conn_mut<T, F: FnOnce(&mut Connection) -> Result<T, String>>(f: F) -> Result<T, String> {
+    with_conn_inner(f)
+}
+
+fn with_conn_inner<T, F: FnOnce(&mut Connection) -> Result<T, String>>(f: F) -> Result<T, String> {
     let path = store_path();
     let mut guard = db().lock();
     let reopen = match guard.as_ref() {
@@ -2350,7 +2361,7 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
             conn,
         });
     }
-    let conn = &guard.as_ref().expect("skin db opened").conn;
+    let conn = &mut guard.as_mut().expect("skin db opened").conn;
     let held = ties::HeldGuard::enter();
     let out = f(conn);
     // Under the mutex: whoever sees the generation move and then reads, reads

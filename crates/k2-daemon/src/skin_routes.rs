@@ -4512,8 +4512,29 @@ mod tests {
     /// and `projects` the same number of times.
     #[test]
     fn users_list_reads_app_names_once_however_many_grants_and_guests() {
-        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use rusqlite::ffi;
+        use std::ffi::{c_char, c_int, c_void, CStr};
         use std::sync::{Arc, Mutex};
+        // rusqlite sets an authorizer only through `&mut Connection`, and the
+        // scoped test DB is shared (`ReentrantMutex`, `&` only), so this one
+        // goes through SQLite's C API: the table name of every column read.
+        unsafe extern "C" fn record_read(
+            seen: *mut c_void,
+            code: c_int,
+            table: *const c_char,
+            _column: *const c_char,
+            _db: *const c_char,
+            _trigger: *const c_char,
+        ) -> c_int {
+            if code == ffi::SQLITE_READ && !table.is_null() {
+                // SAFETY: `seen` is the Arc'd Mutex below, alive until the
+                // authorizer is cleared; SQLite passes a NUL-terminated name.
+                let seen = unsafe { &*(seen as *const Mutex<Vec<String>>) };
+                let name = unsafe { CStr::from_ptr(table) }.to_string_lossy().into_owned();
+                seen.lock().expect("seen").push(name);
+            }
+            ffi::SQLITE_OK
+        }
         let _home = crate::test_support::TempHome::new();
         let db = k2_core::db::scoped_for_test();
         let (app, room) = ("svc-roster-batch", "room-roster-batch");
@@ -4526,23 +4547,28 @@ mod tests {
         // DB's authorizer (asked once per column per prepared statement).
         let reads = || -> (usize, usize) {
             let seen = Arc::new(Mutex::new(Vec::<String>::new()));
-            let s2 = seen.clone();
             {
                 let handle = db.handle();
                 let conn = handle.lock();
                 conn.flush_prepared_statement_cache();
-                conn.authorizer(Some(move |ctx: AuthContext<'_>| {
-                    if let AuthAction::Read { table_name, .. } = ctx.action {
-                        s2.lock().expect("seen").push(table_name.to_string());
-                    }
-                    Authorization::Allow
-                }));
+                // SAFETY: the handle is the open scoped connection; `seen`
+                // outlives the authorizer (cleared below before it drops).
+                let rc = unsafe {
+                    ffi::sqlite3_set_authorizer(
+                        conn.handle(),
+                        Some(record_read),
+                        Arc::as_ptr(&seen) as *mut c_void,
+                    )
+                };
+                assert_eq!(rc, ffi::SQLITE_OK, "set authorizer");
             }
             let r = handle_users_get();
             {
                 let handle = db.handle();
                 let conn = handle.lock();
-                conn.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+                // SAFETY: as above; clearing it takes no pointer.
+                let rc = unsafe { ffi::sqlite3_set_authorizer(conn.handle(), None, std::ptr::null_mut()) };
+                assert_eq!(rc, ffi::SQLITE_OK, "clear authorizer");
             }
             assert_eq!(r.status, "200 OK", "{}", r.body);
             let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");

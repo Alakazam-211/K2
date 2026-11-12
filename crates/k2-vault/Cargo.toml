@@ -15,7 +15,7 @@ description = "K2 vault: one encrypted store for passwords, tokens and keys, use
 # the age v1 X25519 format is written here directly (`agefmt.rs`) and
 # checked byte-for-byte against `age` in the tests only.
 [dependencies]
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
 hmac = "0.12"

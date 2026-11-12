@@ -64,7 +64,8 @@ fn watched(action: Action, table: &str) -> bool {
 /// Set on the one connection, after the migrations (`open_db`). Runs inside
 /// SQLite, under the skin mutex: an atomic and a short list, nothing else. It fires
 /// before the commit, so it only marks; [`settle`] acts once the call returns.
-pub(super) fn install(conn: &Connection) {
+/// rusqlite refuses a hook only on a connection it doesn't own (never here).
+pub(super) fn install(conn: &mut Connection) -> rusqlite::Result<()> {
     conn.update_hook(Some(|action: Action, _db: &str, table: &str, rowid: i64| {
         if !watched(action, table) {
             return;
@@ -78,7 +79,7 @@ pub(super) fn install(conn: &Connection) {
             }
         }
         FULL.store(true, Ordering::SeqCst);
-    }));
+    }))
 }
 
 /// After a `with_conn` closure returned, still under the mutex: whoever sees the
@@ -215,21 +216,21 @@ mod tests {
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
         let seen = Arc::new(StdMutex::new(BTreeSet::new()));
         let s2 = seen.clone();
-        skin::with_conn(|c| {
+        skin::with_conn_mut(|c| {
             c.flush_prepared_statement_cache();
             c.authorizer(Some(move |ctx: AuthContext<'_>| {
                 if let AuthAction::Read { table_name, .. } = ctx.action {
                     s2.lock().expect("seen").insert(table_name.to_string());
                 }
                 Authorization::Allow
-            }));
-            Ok(())
+            }))
+            .map_err(|e| e.to_string())
         })
         .expect("authorizer");
         f();
-        skin::with_conn(|c| {
-            c.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
-            Ok(())
+        skin::with_conn_mut(|c| {
+            c.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+                .map_err(|e| e.to_string())
         })
         .expect("authorizer off");
         let out = seen.lock().expect("seen").clone();

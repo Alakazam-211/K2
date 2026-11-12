@@ -226,7 +226,7 @@ k2-core = { path = "../crates/k2-core", features = ["test-util"] }
 # as a DIRECT dependency of this crate (Phase 2 close-out, 2026-05-23) but
 # the bench still needs it; dev-only, same bundled version k2-core pins,
 # so cargo reuses the one compiled artifact. Never ships in release.
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 
 # Sandbox dirs for the worktree command's path-safety unit tests.
 tempfile = "3"

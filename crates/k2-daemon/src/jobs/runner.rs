@@ -478,32 +478,48 @@ fn finish(live: &Live, code: Option<i64>, outcome: &str, _note: Option<&str>, by
     }
 }
 
+/// Does process `pid`'s environment carry `K2_JOB_RUN=<run id>`? Linux
+/// reads `/proc/<pid>/environ`. macOS asks the kernel (our own user's
+/// processes); when it won't say, `ps -E`, which is setuid and so fails
+/// under a sandbox. `false` when K2 can't tell.
+fn leader_is_run(pid: i64, run_id: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let want = format!("K2_JOB_RUN={run_id}");
+        std::fs::read(format!("/proc/{pid}/environ"))
+            .map(|env| env.split(|b| *b == 0).any(|kv| kv == want.as_bytes()))
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(has) = crate::vault::server_refs::process_env_has(pid, "K2_JOB_RUN", run_id.as_bytes()) {
+            return has;
+        }
+        let want = format!("K2_JOB_RUN={run_id}");
+        k2_core::bg_proc::command("/bin/ps")
+            .args(["-E", "-ww", "-o", "command=", "-p", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().any(|w| w == want))
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (pid, run_id);
+        false
+    }
+}
+
 /// Boot: stop a group a previous daemon's run left behind, only when its
 /// leader is provably that run: its environment carries
-/// `K2_JOB_RUN=<run id>` (Linux `/proc/<pid>/environ`; macOS `ps -E`,
-/// which shows the environment of the user's own processes). Otherwise
-/// the group is left alone; its passport is already revoked.
+/// `K2_JOB_RUN=<run id>`. Otherwise the group is left alone; its
+/// passport is already revoked.
 pub fn stop_leftover_group(pid: i64, run_id: &str) {
     if pid <= 1 {
         return;
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let want = format!("K2_JOB_RUN={run_id}");
-    #[cfg(target_os = "linux")]
-    let ours = std::fs::read(format!("/proc/{pid}/environ"))
-        .map(|env| env.split(|b| *b == 0).any(|kv| kv == want.as_bytes()))
-        .unwrap_or(false);
-    #[cfg(target_os = "macos")]
-    let ours = k2_core::bg_proc::command("/bin/ps")
-        .args(["-E", "-ww", "-o", "command=", "-p", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().any(|w| w == want))
-        .unwrap_or(false);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let ours = false;
-    if ours {
+    if leader_is_run(pid, run_id) {
         #[cfg(unix)]
         unsafe {
             libc::killpg(pid as i32, libc::SIGKILL)
@@ -515,6 +531,55 @@ pub fn stop_leftover_group(pid: i64, run_id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const LEADER_CHILD_READY: &str = "leader-child-ready";
+
+    /// Not a check: the child of the test below. Sleeps only when spawned
+    /// as one. (Not `/bin/sleep`: macOS hides an Apple binary's environment.)
+    #[test]
+    #[ignore = "child process for a_leader_is_ours_only_with_its_run_id_in_its_environment"]
+    fn leader_child_sleeps() {
+        use std::io::Write;
+        if std::env::var_os("LEADER_CHILD").is_some() {
+            println!("{LEADER_CHILD_READY}");
+            std::io::stdout().flush().expect("flush ready line");
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_leader_is_ours_only_with_its_run_id_in_its_environment() {
+        use std::io::BufRead;
+        let mut child = k2_core::bg_proc::command(std::env::current_exe().expect("test binary path"))
+            .args(["--exact", "jobs::runner::tests::leader_child_sleeps", "--ignored", "--test-threads=1", "--nocapture", "-q"])
+            .env("LEADER_CHILD", "1")
+            .env("K2_JOB_RUN", "run-0123abcd")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn child");
+        // Wait until the child runs its own code, so its environment is set up.
+        let mut out = std::io::BufReader::new(child.stdout.take().expect("child stdout is piped"));
+        let mut line = String::new();
+        loop {
+            line.clear();
+            assert_ne!(out.read_line(&mut line).expect("read child stdout"), 0, "the child exited before it was ready");
+            if line.trim() == LEADER_CHILD_READY {
+                break;
+            }
+        }
+        let pid = child.id() as i64;
+        let ours = leader_is_run(pid, "run-0123abcd");
+        let another = leader_is_run(pid, "run-0123abcdef");
+        let a_prefix = leader_is_run(pid, "run-0123");
+        child.kill().expect("kill child");
+        child.wait().expect("reap child");
+        assert!(ours, "the run id in its environment is found");
+        assert!(!another, "another run's id is not");
+        assert!(!a_prefix, "a prefix of the id is not a match");
+        assert!(!leader_is_run(pid, "run-0123abcd"), "a process that is gone is not ours");
+    }
 
     #[test]
     fn windows_path_uses_semicolons_cli_homes_first_and_dedupes() {

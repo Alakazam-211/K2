@@ -120,11 +120,11 @@ echo "pre-flight: compute is the default; GitHub is the fallback, said loudly:"
 rc="$(run pf-default 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-default "MODE compute compute" && has pf-default "Linux x86_64 and aarch64: K2 Compute" && ! has pf-default "FALL BACK" \
     && pass "no K2_LINUX_BUILDS: compute for x86_64 and aarch64 (keychain signer, admin gh)" || fail "default" "rc=$rc $(cat "$tmp/out-pf-default")"
-python3 - "$REL" <<'PY' && pass "release.sh: K2_LINUX_BUILDS defaults to compute, K2_COMPUTE_ARM to compute" || fail "defaults" "see release.sh"
+python3 - "$REL" <<'PY' && pass "release.sh: K2_LINUX_BUILDS defaults to compute; aarch64 defaults to GitHub until the cross toolchain is hash-pinned (Steward)" || fail "defaults" "see release.sh"
 import sys
 s = open(sys.argv[1]).read()
 assert 'K2_LINUX_BUILDS="${K2_LINUX_BUILDS:-compute}"' in s
-assert 'K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-compute}"' in s
+assert 'K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-github}"' in s
 PY
 rc="$(K2_COMPUTE_OAUTH=placeholder run pf-placeholder 'k2_linux_builds_preflight; mode')"
 [ "$rc" = 0 ] && has pf-placeholder "MODE github github" && has pf-placeholder "K2 COMPUTE FAILED: Linux x86_64 AND aarch64 FALL BACK TO GITHUB" \

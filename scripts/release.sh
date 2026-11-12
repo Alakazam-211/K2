@@ -136,7 +136,8 @@
 #                       K2_COMPUTE_WAIT_MIN (default 60); jobs still running
 #                       then are collected at Step 10.7 (up to
 #                       K2_COMPUTE_LATE_WAIT_MIN more, default 60).
-#   K2_COMPUTE_ARM=github keeps aarch64 on GitHub in compute mode.
+#   K2_COMPUTE_ARM (default github for now): compute builds aarch64 on
+#   compute too (L2 + V2); github keeps it on GitHub in compute mode.
 #   Settings and node names: scripts/lib/compute-release.sh. Needs this
 #   Mac's K2 as a server on the nodes with a grant (k2 compute nodes).
 #   Audit: ~/k2-release-audit/<v>/compute/.
@@ -392,7 +393,10 @@ case "$K2_LINUX_BUILDS" in
         exit 1
         ;;
 esac
-K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-compute}"
+# aarch64 stays on GitHub by default until the cross toolchain (zig,
+# cargo-zigbuild) is hash-pinned and the signer checks those hashes
+# (Steward condition, 11-11). K2_COMPUTE_ARM=compute builds it on compute.
+K2_COMPUTE_ARM="${K2_COMPUTE_ARM:-github}"
 export K2_COMPUTE_ARM
 case "$K2_COMPUTE_ARM" in
     compute|github) ;;

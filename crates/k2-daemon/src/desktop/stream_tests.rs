@@ -468,6 +468,16 @@ async fn wait_for(what: &str, f: impl Fn() -> bool) {
     }
 }
 
+/// The server has let `n` closed controllers go: each one's lease is
+/// dropped, then its held input released. The close reaches the client
+/// before that, so a viewer opened at once can find the lease still held.
+async fn controller_left(fake: &Arc<Fake>, n: usize) {
+    wait_for("release when the closed controller left", || {
+        fake.releases.lock().unwrap().iter().filter(|r| **r == ReleaseReason::ViewerClosed).count() >= n
+    })
+    .await;
+}
+
 fn audit_events() -> Vec<(String, String)> {
     k2_core::desktop::audit::read(None, 1000)
         .expect("audit")
@@ -714,13 +724,15 @@ fn kick_disable_and_disconnect_at_the_screen_close_viewers() {
         let _ = frame(&mut a).await;
         assert_eq!(viewers::close_user(CONSOLE, "", "ada", 4403, "kicked"), 1);
         assert_eq!(closed(&mut a, Duration::from_secs(3)).await, (4403, "kicked".into()));
-        let fake = e.fake.clone();
-        wait_for("release when the kicked controller left", || fake.releases.lock().unwrap().contains(&ReleaseReason::ViewerClosed)).await;
+        controller_left(&e.fake, 1).await;
 
         let mut o = viewer("olive", &olive, &[], fast()).await;
         let _ = frame(&mut o).await;
         e.fake.event(StreamEvent::BannerDisconnect);
         assert_eq!(closed(&mut o, Duration::from_secs(3)).await, (4403, "disconnected_at_screen".into()));
+        // Olive drove: until the server lets that viewer go, the next one
+        // would open watching, not driving.
+        controller_left(&e.fake, 2).await;
 
         let mut o = viewer("olive", &olive, &[], fast()).await;
         let _ = frame(&mut o).await;

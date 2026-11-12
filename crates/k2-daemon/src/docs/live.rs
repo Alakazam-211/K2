@@ -238,6 +238,10 @@ enum Ctl {
     CoreOff { by: Option<String>, on_disk: Option<bool> },
     /// The doc was renamed (`k2 doc mv`): `closed {reason: "moved", path}`.
     Moved { path: String },
+    /// The text doc became a tier-0 doc (the kit's demote, [`doc_demoted`]):
+    /// the core-off close, so the view reopens the file the usual way.
+    /// `written`: the demotion wrote the live state to the file.
+    Demoted { written: bool },
 }
 
 fn sockets() -> &'static Mutex<HashMap<u64, Handle>> {
@@ -301,6 +305,22 @@ fn retire_prev(prev: u64, pid: &str, key: &DocKey) -> bool {
 pub fn doc_moved(old: &DocKey, new: &DocKey) -> usize {
     let s = sockets().lock().unwrap_or_else(|p| p.into_inner());
     s.values().filter(|h| h.key == *old).filter(|h| h.ctl.send(Ctl::Moved { path: new.path.clone() }).is_ok()).count()
+}
+
+/// **Called by `Runtime::open_blob` after the kit's demote:** the text doc
+/// at `key` is a tier-0 doc now (its name routes to tier 0), under the same
+/// key. Every Live socket on one of the text session's `connections` ends
+/// with the close a view already reopens on: `closed {reason: "closed",
+/// code: "core_off", core, version, written}` and close code 4010, whose
+/// message says why. The view then opens the file the usual way, at tier 0.
+/// A socket that saw the session close first (the roster's `Closed`) waits
+/// for this, as it waits for a core flip. Returns how many were told.
+pub fn doc_demoted(key: &DocKey, connections: &[(ConnId, String)], written: bool) -> usize {
+    let s = sockets().lock().unwrap_or_else(|p| p.into_inner());
+    s.values()
+        .filter(|h| h.key == *key && connections.iter().any(|(c, _)| *c == h.conn))
+        .filter(|h| h.ctl.send(Ctl::Demoted { written }).is_ok())
+        .count()
 }
 
 /// The docs with a Live socket open (the Settings row's "open now" line):
@@ -1015,6 +1035,7 @@ impl Worker {
             match self.ctl.try_recv() {
                 Ok(Ctl::Replaced) => return Stop::Close(Closed::new(CloseReason::Left)),
                 Ok(Ctl::CoreOff { by, on_disk }) => return Stop::Close(self.core_off(by, on_disk)),
+                Ok(Ctl::Demoted { written }) => return Stop::Close(self.demoted(written)),
                 Ok(Ctl::Moved { path }) => {
                     return Stop::Close(Closed {
                         path: Some(path.clone()),
@@ -1255,6 +1276,7 @@ impl Worker {
         match self.ctl.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ctl::CoreOff { by, on_disk }) => Flip::Off { by, on_disk },
             Ok(Ctl::Replaced) => Flip::Other(Closed::new(CloseReason::Left)),
+            Ok(Ctl::Demoted { written }) => Flip::Other(self.demoted(written)),
             Ok(Ctl::Moved { path }) => Flip::Other(Closed {
                 path: Some(path.clone()),
                 ..Closed::k2(CloseReason::Moved, "moved", format!("the file was renamed to {path}; open it there"))
@@ -1279,6 +1301,23 @@ impl Worker {
             written: Some(written),
             ws_code: wire::code::CORE_OFF,
             ..Closed::k2(CloseReason::Closed, "core_off", message)
+        }
+    }
+
+    /// The text doc became a tier-0 doc ([`doc_demoted`]): the core-off
+    /// close (the one a view reopens the file on), at the last version this
+    /// socket saw (the text session is gone), and why in its message.
+    fn demoted(&self, written: bool) -> Closed {
+        Closed {
+            core: Some(self.core.to_string()),
+            version: Some(self.seen),
+            written: Some(written),
+            ws_code: wire::code::CORE_OFF,
+            ..Closed::k2(
+                CloseReason::Closed,
+                "core_off",
+                "K2 no longer edits this kind of file as live text: it is an any-file doc now, with every version kept. It reopens the usual way",
+            )
         }
     }
 

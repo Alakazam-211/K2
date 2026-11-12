@@ -46,6 +46,8 @@
 pub mod annotations;
 #[cfg(test)]
 mod blob_flow_tests;
+#[cfg(test)]
+mod demote_tests;
 pub mod blob_packs;
 pub mod caller;
 pub mod claims;
@@ -75,7 +77,7 @@ use std::time::Duration;
 
 use k2_core::log_debug;
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
-use k2_mpc_base::session::{BlobSession, Config, PoolStats, Session, SessionError, SessionManager};
+use k2_mpc_base::session::{BlobSession, Config, Demotion, PoolStats, Session, SessionError, SessionManager};
 use k2_mpc_base::store::{DocKey, DocStore};
 
 /// The vendored kit writes docs back to their files (its C4, base
@@ -363,6 +365,38 @@ fn workspace_exists(id: &str) -> bool {
     }
 }
 
+/// The tier-0 open of `key` (`open_blob_file` with its file type's pack),
+/// and the kit's demote when the doc is stored as live text under a name
+/// that now routes to tier 0 by itself ([`target::Tier::of`] is `Blob`: the
+/// CAD, BIM and circuit-board files the text pack moved to not-text, and
+/// K2's own design list). `demote_text_file` runs once: the same key and doc
+/// id become a tier-0 doc with every text version, the live state current
+/// and written to the file, an outside save since the last sync kept beside
+/// it (keep-both, never merged by lines), the change log readable as the
+/// live log. The text session closes as `demoted`. Later opens find a tier-0
+/// doc and never demote again.
+///
+/// Any other mismatch stays the kit's `PackMismatch`: a text file served at
+/// tier 0 only because its pack refuses it today (it turned binary, or too
+/// large) keeps its live history. `Some` only when this call demoted.
+pub(crate) fn open_blob_or_demote(
+    manager: &SessionManager,
+    key: &DocKey,
+    abs: &Path,
+    root: &Path,
+) -> Result<(Arc<BlobSession>, Option<Demotion>), SessionError> {
+    let pack = blob_packs::pack_for(&key.path);
+    match manager.open_blob_file(pack.clone(), key, abs, root) {
+        Err(SessionError::PackMismatch { stored, .. })
+            if stored == k2_mpc_text::SCHEMA.name && matches!(target::Tier::of(&key.path), target::Tier::Blob) =>
+        {
+            let (s, d) = manager.demote_text_file(Arc::new(k2_mpc_text::PACK), pack, key, abs, root)?;
+            Ok((s, (!d.already).then_some(d)))
+        }
+        r => r.map(|s| (s, None)),
+    }
+}
+
 /// Host-table namespace of the workspaces (spaces) K2 has opened docs in, so
 /// the sweep can delete a removed workspace's docs (`delete_space`).
 const SPACES_NS: &str = "k2.docs.spaces";
@@ -388,8 +422,25 @@ impl Runtime {
     /// with its file type's pack ([`blob_packs::pack_for`]: PSD/PSB files
     /// get the PSD pack and its layer index). A version with no index yet
     /// is queued for the indexer.
+    ///
+    /// A doc stored as live text under a name that now routes to tier 0 is
+    /// demoted first, once ([`open_blob_or_demote`]); the Live sockets that
+    /// were in its text session are told to reopen it ([`live::doc_demoted`]).
     pub fn open_blob(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<BlobSession>, SessionError> {
-        let s = self.manager.open_blob_file(blob_packs::pack_for(&key.path), key, abs, root)?;
+        let (s, demoted) = open_blob_or_demote(&self.manager, key, abs, root)?;
+        if let Some(d) = demoted {
+            let told = live::doc_demoted(key, &d.connections, d.written);
+            log_debug!(
+                "[docs] {} was live text and is now an any-file doc: {} versions, {} changes kept, written={}, kept_both={}, {} of {} connections told",
+                host::key_label(key),
+                d.versions.len(),
+                d.changes,
+                d.written,
+                d.kept_both,
+                told,
+                d.connections.len(),
+            );
+        }
         self.note_opened(key, abs);
         if blob_packs::indexes(&key.path) {
             indexer::on_open(&s, key);

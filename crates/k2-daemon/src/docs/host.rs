@@ -471,6 +471,19 @@ impl Host for K2Host {
                 "k2",
                 format!("{} reason={reason} connections={}", key_label(key), connections.len()),
             ),
+            // Kit v0.17.0: a live text doc whose name now routes to tier 0
+            // became a tier-0 doc under the same key (`open_blob_or_demote`).
+            // Counts only; an outside save it kept beside the live state is
+            // its own `BlobConflict` (the tab notice and the agents' note).
+            AuditEvent::Demoted { key, connections, versions, changes, kept_both } => audit(
+                AUDIT_FILE,
+                "k2",
+                format!(
+                    "{} demoted to any-file versions={versions} changes={changes} kept_both={kept_both} connections={}",
+                    key_label(key),
+                    connections.len()
+                ),
+            ),
             AuditEvent::DocDeleted { key, connections } => {
                 audit(AUDIT_FILE, "k2", format!("{} removed connections={}", key_label(key), connections.len()));
                 // Previews, hook 2: a deleted doc's go with it.

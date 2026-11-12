@@ -395,31 +395,55 @@ impl Drop for KnobsOff {
 /// to fail on that ("ptyd closed the connection") and kill a live program.
 /// It must retry like the IO loop's reattach and keep the program.
 ///
-/// A 256 KiB ring and a 150 ms pause before the first attach (debug-only
-/// knobs; the pause stands in for a loaded box) make the ring full and the
-/// flood still running when the attach lands. Six sessions at once, each
-/// flooding for one second by the clock, then printing `flood-done`. Every
-/// spawn must succeed and every program survive; at least one session must
-/// have overrun (on a loaded box not all of them do).
+/// A 256 KiB ring and a pause before the first attach (debug-only knobs;
+/// the pause stands in for a loaded box) make the ring full and the flood
+/// still running when the attach lands. Six sessions at once, each
+/// flooding by the clock, then printing `flood-done`. Every spawn must
+/// succeed and every program survive; at least one session must have
+/// overrun (on a loaded box not all of them do).
+///
+/// Whether a session overruns is a race between the pause and how fast a
+/// loaded box starts six programs: on a busy Mac node none had filled the
+/// ring within 150 ms, and the test failed on its own setup. So when no
+/// session overran, the round is run again with a longer pause and a
+/// longer flood. Every round holds every spawn and every program to the
+/// same checks; only "did the setup happen" is tried again, and it still
+/// fails if no round overruns.
 #[test]
 fn a_flood_during_the_first_attach_never_fails_the_spawn() {
     let _g = setup();
+    // (pause before the first attach, how long each program floods), ms.
+    const ROUNDS: &[(u64, u64)] = &[(150, 1000), (500, 2000), (1500, 4000)];
+    let mut tried = Vec::new();
+    for (round, (pause_ms, flood_ms)) in ROUNDS.iter().enumerate() {
+        let (overran, of) = first_attach_flood_round(round, *pause_ms, *flood_ms);
+        eprintln!("first-attach flood, pause {pause_ms} ms: {overran} of {of} session(s) overran");
+        if overran >= 1 {
+            return;
+        }
+        tried.push(*pause_ms);
+    }
+    panic!("no session overran with a pause of {tried:?} ms; the test proves nothing");
+}
+
+/// One round of the test above: how many sessions overran, of how many.
+fn first_attach_flood_round(round: usize, pause_ms: u64, flood_ms: u64) -> (usize, usize) {
     let agent = test_agent_bin();
     const KNOBS: &[&str] = &["K2_PTYD_TEST_RING_BYTES", "K2_PTYD_TEST_FIRST_ATTACH_DELAY_MS"];
     let off = KnobsOff(KNOBS);
     std::env::set_var("K2_PTYD_TEST_RING_BYTES", (256 * 1024).to_string());
-    std::env::set_var("K2_PTYD_TEST_FIRST_ATTACH_DELAY_MS", "150");
+    std::env::set_var("K2_PTYD_TEST_FIRST_ATTACH_DELAY_MS", pause_ms.to_string());
     type Spawned = (PathBuf, Result<std::sync::Arc<DaemonPtySession>, std::io::Error>);
     let spawned: Vec<Spawned> = std::thread::scope(|sc| {
         let handles: Vec<_> = (0..6)
             .map(|i| {
-                let dir = home().join(format!("first-attach-{i}"));
+                let dir = home().join(format!("first-attach-{round}-{i}"));
                 let _ = std::fs::remove_dir_all(&dir);
                 let agent = agent.clone();
                 sc.spawn(move || {
                     // Through /bin/sh: the temp-HOME spawn guard only lets
                     // system binaries start directly.
-                    let r = DaemonPtySession::spawn(cfg(&format!("exec '{}' flood-for '{}' 1000", agent.display(), dir.display())));
+                    let r = DaemonPtySession::spawn(cfg(&format!("exec '{}' flood-for '{}' {flood_ms}", agent.display(), dir.display())));
                     (dir, r)
                 })
             })
@@ -450,11 +474,9 @@ fn a_flood_during_the_first_attach_never_fails_the_spawn() {
         }
         assert!(!ptyd_log.contains(&format!("exited sid={sid}")), "session {sid} ended during the flood");
     }
-    // A loaded box floods slower, so not every session overruns; one is
-    // enough to prove the point (every spawn above succeeded).
-    eprintln!("first-attach flood: {overran} of {} session(s) overran", sessions.len());
-    assert!(overran >= 1, "no session overran; the test proves nothing");
+    let of = sessions.len();
     for (_, s) in sessions {
         s.kill();
     }
+    (overran, of)
 }

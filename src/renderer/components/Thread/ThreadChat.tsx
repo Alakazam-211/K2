@@ -476,6 +476,11 @@ export function ThreadChatComposer({
   )
 }
 
+/** An error note's colour: the desktop box's error text
+ *  (`--zen-danger-text`, THREAD_ZEN_DESKTOP_TOKENS); in a Garden, which sets
+ *  no such token, its own `--zen-danger`. */
+export const THREAD_CHAT_NOTE_ERROR_COLOR = 'var(--zen-danger-text, var(--zen-danger))'
+
 /** A line above the box: a refusal (`error`) or a quiet note. */
 export function ThreadChatNote({ children, error = false, testId }: { children: ReactNode; error?: boolean; testId?: string }): JSX.Element {
   return (
@@ -486,7 +491,7 @@ export function ThreadChatNote({ children, error = false, testId }: { children: 
       style={{
         margin: '0 6px 6px',
         fontSize: '0.8em',
-        color: error ? 'var(--zen-danger)' : 'var(--zen-text-muted)',
+        color: error ? THREAD_CHAT_NOTE_ERROR_COLOR : 'var(--zen-text-muted)',
       }}
     >
       {children}

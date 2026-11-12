@@ -35,9 +35,11 @@ import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { CHAMFER_SCOPE, THREAD_CHAMFER_CSS, THREAD_FOOTER_FADE_CSS, THREAD_ZEN_DESKTOP_TOKENS, ThreadBubble } from './ThreadZenKit'
 import {
+  THREAD_CHAT_NOTE_ERROR_COLOR,
   THREAD_CHAT_SEND_SIZE,
   ThreadChatBubble,
   ThreadChatComposer,
+  ThreadChatNote,
   ThreadChatScope,
   ThreadChatZenContext,
   threadChatScopeProps,
@@ -249,6 +251,50 @@ describe('every K2 Style paints the chat as it paints the Thread', () => {
     for (let el: HTMLElement | null = mine; el && el !== root; el = el.parentElement) {
       expect(el.style.getPropertyValue('--zen-bubble-me')).toBe('')
     }
+  })
+})
+
+describe('an error note', () => {
+  it('reads the Style’s error text on the desktop; a Garden keeps its own --zen-danger', () => {
+    // Desktop: the box sets --zen-danger-text from the error text token (the
+    // bright status red is 3.4:1 on Glass light's panel).
+    expect((THREAD_ZEN_DESKTOP_TOKENS as Record<string, string>)['--zen-danger-text']).toBe(
+      'var(--color-status-error-text, var(--color-status-error))',
+    )
+    expect(THREAD_CHAT_NOTE_ERROR_COLOR).toBe('var(--zen-danger-text, var(--zen-danger))')
+    const desk = render(
+      <ThreadChatScope testId="scope">
+        <ThreadChatNote error testId="note">Couldn’t send</ThreadChatNote>
+      </ThreadChatScope>,
+    )
+    const deskScope = must(desk.container.querySelector('[data-testid="scope"]') as HTMLElement | null, 'scope')
+    expect(deskScope.style.getPropertyValue('--zen-danger-text')).toBe('var(--color-status-error-text, var(--color-status-error))')
+    const deskNote = must(desk.container.querySelector('[data-testid="note"]') as HTMLElement | null, 'note')
+    expect(deskNote.style.color).toBe(THREAD_CHAT_NOTE_ERROR_COLOR)
+    desk.unmount()
+    // A Garden root sets --zen-danger only; nothing between it and the note
+    // sets --zen-danger-text, so the note falls back to the Garden's red.
+    const { container } = render(
+      <div data-zen-root="" style={{ '--zen-danger': '#c53030' } as React.CSSProperties}>
+        <ThreadChatZenContext.Provider value={true}>
+          <ThreadChatScope testId="scope">
+            <ThreadChatNote error testId="note">Couldn’t send</ThreadChatNote>
+          </ThreadChatScope>
+        </ThreadChatZenContext.Provider>
+      </div>,
+    )
+    const root = must(container.querySelector('[data-zen-root]') as HTMLElement | null, 'garden')
+    const note = must(container.querySelector('[data-testid="note"]') as HTMLElement | null, 'note')
+    expect(note.style.color).toBe(THREAD_CHAT_NOTE_ERROR_COLOR)
+    for (let el: HTMLElement | null = note; el; el = el.parentElement) {
+      expect(el.style.getPropertyValue('--zen-danger-text')).toBe('')
+    }
+    expect(root.style.getPropertyValue('--zen-danger')).toBe('#c53030')
+  })
+
+  it('a quiet note stays muted', () => {
+    const { getByTestId } = render(<ThreadChatNote testId="note">Saved.</ThreadChatNote>)
+    expect(getByTestId('note').style.color).toBe('var(--zen-text-muted)')
   })
 })
 

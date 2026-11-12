@@ -106,6 +106,10 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-needs-you': 'var(--color-status-needs-you)',
   '--zen-ok': 'var(--color-status-ok)',
   '--zen-danger': 'var(--color-status-error)',
+  // Red words (a chat's error note): the Style's error text, which reads at
+  // 4.5:1 on the panel in every look (the bright status red is 3.4:1 on
+  // Glass light). A Garden sets no such token: its notes keep --zen-danger.
+  '--zen-danger-text': 'var(--color-status-error-text, var(--color-status-error))',
   // Zen's default shape (zen-tokens), not the Style's square corners.
   '--zen-radius': '14px',
   '--zen-bubble-radius': '18px',

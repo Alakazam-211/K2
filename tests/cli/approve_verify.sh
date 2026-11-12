@@ -79,7 +79,8 @@ check "show refuses a hidden character" 3 "refused (forbidden_char)" approve sho
 words="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["alex-phone-bio"]["words"])' "$FIX/keys.json")"
 check "key-id prints the fingerprint words" 0 "words:  $words" approve key-id "$FIX/keys/alex-phone-bio.pem"
 check "help" 0 "k2 approve verify --approval" approve --help
-check "an unknown subcommand" 2 "unknown subcommand" approve sign
+# request/status/cancel are the daemon's: with no connection they stop at the gate.
+check "request needs the daemon" 1 "Cannot connect to K2" approve request --to alex --payload x
 
 rc=0
 env -u K2_APPROVE_BIN PATH=/usr/bin:/bin HOME="$tmp/home" bash "$K2" approve verify --approval x --keys y > "$tmp/out" 2>&1 || rc=$?

@@ -45,12 +45,14 @@ import {
   cardText,
   desktopStateLabel,
   DESKTOP_FEATURE,
-  firstDesktop,
+  mayStartOf,
+  startRefusalText,
   tabState,
   VIRTUAL_DESKTOP_FEATURE,
   VIRTUAL_ENABLE_CARD,
   VIRTUAL_STATES,
   type CardAction,
+  type DesktopList,
   type DesktopListEntry,
 } from './desktop-state'
 import type { DesktopStreamConnector } from './desktop-stream'
@@ -88,7 +90,10 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
   const scope = room.scope
   const visible = useIsTabVisible()
   const virtualOn = scope.serverSupports(DESKTOP_FEATURE) && scope.serverSupports(VIRTUAL_DESKTOP_FEATURE)
-  const { list, failed } = useDesktopList(scope, visible, virtualOn)
+  // A new tab asks the list for its workspace's desktop (`default`); the
+  // workspace is the project id (`projects.id`, `?workspace=`).
+  const [firstWorkspace] = useState(() => (props.data.desktopId ? null : room.activeProjectId()))
+  const { list, failed } = useDesktopList(scope, visible, virtualOn, firstWorkspace)
   // This tab's own pick (the store's copy follows; a stamp is async to us).
   const [picked, setPicked] = useState<{ desktopId: string; name?: string } | null>(null)
   const desktopId = picked?.desktopId ?? props.data.desktopId ?? (virtualOn ? undefined : SERVER_DESKTOP_ID)
@@ -114,8 +119,8 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
     [stamp],
   )
 
-  // A new tab's first desktop (§6): its workspace's agent desktop when that
-  // agent's switch is on (it is listed), else This server.
+  // A new tab's first desktop (§6): the list's `default` (its workspace's
+  // agent desktop when that switch is on, else This server).
   useEffect(() => {
     if (props.data.desktopId || picked) return
     if (!virtualOn) {
@@ -127,8 +132,8 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
       return
     }
     if (!list) return
-    pick(firstDesktop(list, { id: room.activeProjectId(), path: room.cwd() }), true)
-  }, [props.data.desktopId, picked, virtualOn, list, failed, room, pick])
+    pick(list.desktops.find((d) => d.id === list.default) ?? null, true)
+  }, [props.data.desktopId, picked, virtualOn, list, failed, pick])
 
   if (desktopId === undefined) {
     return (
@@ -147,7 +152,7 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
       list={list}
       stamp={stamp}
       onPick={(id) => {
-        const entry = list?.find((d) => d.id === id)
+        const entry = list?.desktops.find((d) => d.id === id)
         if (entry) pick(entry, false)
       }}
     />
@@ -158,7 +163,7 @@ interface DesktopViewProps extends DesktopPaneProps {
   desktopId: string
   name?: string
   virtualOn: boolean
-  list: DesktopListEntry[] | null
+  list: DesktopList | null
   stamp(patch: Partial<DesktopItemData>): void
   onPick(id: string): void
 }
@@ -264,6 +269,11 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
   // status names (This server's `virtual` when the tab says `console`).
   const target = status?.desktop || param || SERVER_DESKTOP_ID
   const isVirtual = props.virtualOn && target.startsWith('virtual')
+  const mayStart = !!status && isVirtual && mayStartOf(status)
+  // A start, wake or setup the daemon refused: its words on the card.
+  const [refusal, setRefusal] = useState<string | null>(null)
+  const shownState = status?.state
+  useEffect(() => setRefusal(null), [shownState, props.desktopId])
   const paneSize = (): { width: number; height: number } | undefined => {
     const el = areaRef.current
     if (!el || typeof el.getBoundingClientRect !== 'function') return undefined
@@ -385,12 +395,16 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
     })
   }
 
-  const post = (what: string, fn: () => Promise<unknown>): void => {
+  /** Send a start / wake / setup / stop; a refusal is shown on the card
+   *  (`onCard`) or as a toast, in the daemon's words. */
+  const post = (what: string, fn: () => Promise<unknown>, onCard = true): void => {
     setBusy(true)
+    setRefusal(null)
     fn()
       .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err)
-        useToastStore.getState().addToast(`${what}: ${msg}`, 'error')
+        const msg = startRefusalText(err)
+        if (onCard) setRefusal(msg)
+        else useToastStore.getState().addToast(`${what}: ${msg}`, 'error')
       })
       .finally(() => {
         setBusy(false)
@@ -398,10 +412,13 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
       })
   }
 
-  // An Owner's or Admin's shown tab wakes an asleep desktop by itself (§6);
-  // a Member's and a hidden tab show the card. Asked once per sleep.
+  // An Owner's or Admin's shown tab wakes an asleep desktop by itself (§6):
+  // the socket closed 4410 `desktop_asleep`, status reads `asleep`, this
+  // POSTs start, and `ready` dials again with a new ticket. A Member's and
+  // a hidden tab show the card and wait for `desktop_state`. Asked once per
+  // sleep.
   const wakeAsked = useRef(false)
-  const mayWake = !!status?.you.mayControl
+  const mayWake = mayStart
   useEffect(() => {
     if (state !== 'asleep') {
       wakeAsked.current = false
@@ -416,6 +433,10 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
   const onAction = useCallback(
     (action: CardAction) => {
       if (action === 'start') {
+        if (!mayStart) {
+          refresh()
+          return
+        }
         post('Couldn’t start the desktop', () => startDesktop(scope, target, paneSize()))
         return
       }
@@ -445,14 +466,14 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
       refresh()
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- post/paneSize read refs
-    [scope, refresh, target, isVirtual],
+    [scope, refresh, target, isVirtual, mayStart],
   )
 
   if (!supported) {
     return <DesktopStateCard state="update_k2" mayManage={false} onAction={onAction} />
   }
   // The picker's entries: This server's `console` and `virtual` are one.
-  const picks = (props.list ?? []).map((d) => ({ id: d.id, label: d.name, stateLabel: desktopStateLabel(d.state) }))
+  const picks = (props.list?.desktops ?? []).map((d) => ({ id: d.id, label: d.name, stateLabel: desktopStateLabel(d.state) }))
   const pickedId = picks.find((d) => sameDesktop(d.id, props.desktopId))?.id ?? props.desktopId
   if (!status || !state) {
     return (
@@ -481,7 +502,8 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
     )
   }
   const hold = status.virtual?.hold
-  const card = state === 'ready' ? null : cardText(state, status, status.you.mayManage, status.you.mayControl)
+  const card = state === 'ready' ? null : cardText(state, status, status.you.mayManage, mayStart, isVirtual)
+  const listLabel = props.list?.desktops.find((d) => d.id === pickedId)?.label
   const oneToOne = fit === '1:1'
   const frameStyle: React.CSSProperties | undefined = oneToOne && widthPt > 0 ? { width: widthPt * cssPerPt, height: heightPt * cssPerPt } : undefined
   const closed = stream.conn === 'closed' || stream.conn === 'error'
@@ -491,11 +513,11 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
         desktops={picks}
         desktopId={pickedId}
         onPickDesktop={props.onPick}
-        separate={!isServerDesktop(props.desktopId)}
-        hold={hold && hold.agent ? { agent: hold.agent, untilMs: hold.until * 1000 } : null}
+        label={isServerDesktop(props.desktopId) ? null : (status.virtual?.label ?? listLabel ?? null)}
+        hold={hold && hold.by ? { agent: hold.by, untilMs: hold.until * 1000 } : null}
         onCloseDesktop={
-          isVirtual && ready && status.you.mayControl
-            ? () => post('Couldn’t close the desktop', () => stopDesktop(scope, target))
+          isVirtual && ready && mayStart
+            ? () => post('Couldn’t close the desktop', () => stopDesktop(scope, target), false)
             : undefined
         }
         machine={status.machine}
@@ -583,9 +605,10 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
           <DesktopStateCard
             state={state}
             mayManage={status.you.mayManage}
-            mayControl={status.you.mayControl}
+            mayControl={isVirtual ? mayStart : status.you.mayControl}
             line={card?.line}
-            notes={card?.notes}
+            notes={refusal ? [...(card?.notes ?? []), refusal] : card?.notes}
+            action={card?.action}
             // A machine state's own words go under its line; the virtual
             // states and `unavailable` put them in the line (cardText).
             detail={state === status.state && state !== 'unavailable' && !VIRTUAL_STATES.has(state) ? status.message : undefined}

@@ -62,23 +62,62 @@ export interface DesktopStatus {
   hideApps?: string[]
   grants?: DesktopGrant[]
   viewers?: DesktopViewer[]
-  /** A virtual desktop (prd-linux-virtual-desktop-v1 §6). */
+  // A virtual desktop (contract-virtual-desktop-wire-v1): absent on macOS
+  // and for `console`.
+  /** `server` (This server) or `agent`. */
+  kind?: 'server' | 'agent' | string
+  /** "This server", or the agent's name. */
+  name?: string
+  workspaceId?: string
+  /** An agent's desktop: its workspace's "Allow a virtual desktop" switch. */
+  agentsAllowed?: boolean
+  /** Only with `closed`, when K2 closed it (`message` holds the sentence). */
+  reason?: DesktopCloseReason | null
   virtual?: VirtualDesktopInfo
 }
 
-/** What status says about a virtual desktop. */
+/** Who may start, wake and close a virtual desktop (`you.mayStart`):
+ *  Owners and Admins, the owner token and a K2 terminal; never a Member.
+ *  An older daemon doesn't say: there, nobody. */
+export function mayStartOf(status: Pick<DesktopStatus, 'you'>): boolean {
+  return (status.you as { mayStart?: unknown }).mayStart === true
+}
+
+export interface DesktopCloseReason {
+  code: 'asleep_too_long' | 'low_memory' | 'restarted' | 'closed_by' | 'switched_off' | 'crashed' | 'nobody_viewing' | string
+  /** Unix seconds. */
+  at: number
+  by?: string
+  detail?: string
+}
+
+/** The `virtual` object of status. */
 export interface VirtualDesktopInfo {
-  /** The agent holding it awake, and until when (Unix seconds). */
-  hold?: { agent: string; until: number } | null
-  /** How many desktops this server runs at once (the `waiting` card). */
-  awakeLimit?: number
-  /** No browser on the box: the Start card says it opens empty (LD-20). */
-  noApps?: boolean
-  /** No cgroup freezer: it closes instead of sleeping. */
+  size?: { width: number; height: number } | null
+  display?: string | null
+  memoryBytes?: number | null
+  present?: Array<{ viewer: string; user: string }>
+  /** The agent session holding it awake (its K2 address) and until when
+   *  (Unix seconds); null when none. */
+  hold?: { by: string; until: number } | null
+  nextSleepAt?: number | null
+  nextCloseAt?: number | null
+  /** false: this server closes a desktop instead of pausing it. */
   canSleep?: boolean
-  /** Where K2 can't install the packages itself: the command to run by
-   *  hand. */
-  command?: string
+  /** K2 Screen's own state on that display. */
+  screen?: string
+  /** Queued for an awake slot. */
+  waiting?: { position: number; awakeLimit: number } | null
+  /** "Separate, not private" (agent desktops only). */
+  label?: string | null
+  /** With `not_set_up`: the missing packages, and the command to run by
+   *  hand (null when K2 can install them). */
+  missing?: string[]
+  manual?: string | null
+  /** With `not_set_up`: what Set up installs. */
+  setupCard?: string | null
+  /** Awake 7 days: suggest closing and starting again. */
+  suggestRecycle?: boolean
 }
 
 /** One desktop this person may open (`GET /cli/desktop/list`). */
@@ -90,9 +129,15 @@ export interface DesktopListEntry {
   name: string
   /** ready, asleep, closed… */
   state: string
-  /** An agent's desktop: its workspace id and folder. */
+  /** An agent's desktop: its workspace id, and "Separate, not private". */
   workspaceId?: string
-  path?: string
+  label?: string
+}
+
+export interface DesktopList {
+  /** The desktop a new tab in the asked workspace opens. */
+  default: string
+  desktops: DesktopListEntry[]
 }
 
 function isObj(v: unknown): v is Record<string, unknown> {
@@ -101,19 +146,20 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 /** `GET /cli/desktop/list`, read so an odd reply is a plain error and an
  *  entry K2 can't read is dropped. */
-export function readDesktopList(body: unknown): DesktopListEntry[] {
+export function readDesktopList(body: unknown): DesktopList {
   if (!isObj(body) || !Array.isArray(body.desktops)) throw new Error('the reply didn’t list any desktops')
-  const out: DesktopListEntry[] = []
+  const desktops: DesktopListEntry[] = []
   for (const d of body.desktops) {
     if (!isObj(d) || typeof d.id !== 'string' || !d.id) continue
     const kind = d.kind === 'agent' ? 'agent' : 'server'
     const name = typeof d.name === 'string' && d.name ? d.name : kind === 'server' ? 'This server' : d.id
     const entry: DesktopListEntry = { id: d.id, kind, name, state: typeof d.state === 'string' ? d.state : '' }
     if (typeof d.workspaceId === 'string' && d.workspaceId) entry.workspaceId = d.workspaceId
-    if (typeof d.path === 'string' && d.path) entry.path = d.path
-    out.push(entry)
+    if (typeof d.label === 'string' && d.label) entry.label = d.label
+    desktops.push(entry)
   }
-  return out
+  const dflt = typeof body.default === 'string' && body.default ? body.default : (desktops.find((d) => d.kind === 'server')?.id ?? '')
+  return { default: dflt, desktops }
 }
 
 /** The picker's word for a desktop's state (§6: awake, asleep, not started). */
@@ -132,17 +178,6 @@ export function desktopStateLabel(state: string): string {
   }
 }
 
-/** The first desktop a new tab shows (§6): in an agent's workspace whose
- *  switch is on (its desktop is listed), that agent's; otherwise This
- *  server. */
-export function firstDesktop(list: readonly DesktopListEntry[], workspace: { id?: string | null; path?: string | null }): DesktopListEntry | null {
-  const { id, path } = workspace
-  const mine = list.find(
-    (d) => d.kind === 'agent' && ((!!id && (d.workspaceId === id || d.id === `virtual:${id}`)) || (!!path && d.path === path)),
-  )
-  if (mine) return mine
-  return list.find((d) => d.kind === 'server') ?? list[0] ?? null
-}
 
 /** Every card the tab can show. `running` is the picture (no card). */
 export type TabState =
@@ -173,8 +208,6 @@ export type VirtualState =
   | 'waking'
   | 'waiting'
   | 'gone'
-  | 'failed'
-  | 'not_possible'
 
 export const VIRTUAL_STATES: ReadonlySet<string> = new Set<VirtualState>([
   'not_set_up',
@@ -185,8 +218,6 @@ export const VIRTUAL_STATES: ReadonlySet<string> = new Set<VirtualState>([
   'waking',
   'waiting',
   'gone',
-  'failed',
-  'not_possible',
 ])
 
 const MACHINE_STATES: ReadonlySet<string> = new Set<MachineState>([
@@ -227,8 +258,8 @@ export interface CardSpec {
   /** What a Member (watch only) reads instead, where it differs. */
   memberMessage?: string
   /** The action, when this viewer may take it: `ownerOnly` for an Owner,
-   *  `controllers` for an Owner or Admin. */
-  action?: { id: CardAction; label: string; ownerOnly: boolean; controllers?: boolean }
+   *  `starters` for whoever may start a desktop (`you.mayStart`). */
+  action?: { id: CardAction; label: string; ownerOnly: boolean; starters?: boolean }
 }
 
 /** The states table (§8, plus `unavailable`, `blocked_in_login_items` and
@@ -273,7 +304,7 @@ export const STATE_CARDS: Readonly<Record<Exclude<TabState, 'ready'>, CardSpec>>
   closed: {
     message: 'This server has no screen. K2 can start a desktop on it.',
     memberMessage: "The desktop isn't running. An Owner or Admin can start it.",
-    action: { id: 'start', label: 'Start desktop', ownerOnly: false, controllers: true },
+    action: { id: 'start', label: 'Start desktop', ownerOnly: false, starters: true },
   },
   starting: { message: 'Starting the desktop…' },
   asleep: {
@@ -283,66 +314,117 @@ export const STATE_CARDS: Readonly<Record<Exclude<TabState, 'ready'>, CardSpec>>
   waking: { message: 'Waking the desktop…' },
   waiting: { message: 'Waiting for another desktop to go to sleep.' },
   gone: { message: 'This desktop no longer exists.' },
-  failed: {
-    message: "K2 couldn't start the desktop.",
-    action: { id: 'start', label: 'Retry', ownerOnly: false, controllers: true },
-  },
-  not_possible: { message: "K2 can't start a desktop on this computer." },
 }
 
 /** The card for `state` as THIS viewer sees it: an owner-only action is
- *  dropped for anyone who can't manage the desktop, an Owner-or-Admin one
- *  for anyone who can't control it (a Member), and a Member reads the
- *  Member sentence where the table has one. `mayControl` defaults to
- *  `mayManage`. */
-export function cardFor(state: Exclude<TabState, 'ready'>, mayManage: boolean, mayControl: boolean = mayManage): CardSpec {
+ *  dropped for anyone who can't manage the desktop, a starter's one (Start)
+ *  for anyone who may not start it (a Member), who also reads the Member
+ *  sentence where the table has one. `mayStart` defaults to `mayManage`. */
+export function cardFor(state: Exclude<TabState, 'ready'>, mayManage: boolean, mayStart: boolean = mayManage): CardSpec {
   const spec = STATE_CARDS[state]
   const action = spec.action
-  const allowed = !action || (action.ownerOnly ? mayManage : action.controllers ? mayControl : true)
-  const message = !mayControl && spec.memberMessage ? spec.memberMessage : spec.message
+  const allowed = !action || (action.ownerOnly ? mayManage : action.starters ? mayStart : true)
+  const message = !mayStart && spec.memberMessage ? spec.memberMessage : spec.message
   if (allowed && message === spec.message) return spec
   return allowed && action ? { message, action } : { message }
 }
 
-export const NO_APPS_LINE = 'Opens with no apps. Agents can put a browser on it.'
 export const NO_SLEEP_LINE = "This server can't pause a desktop, so it closes when nobody is viewing it."
+export const AGENT_SWITCH_OFF_LINE = 'This agent isn’t allowed a desktop yet. Turn on “Allow a virtual desktop” in its workspace settings.'
 
-/** A card's words with the daemon's own filled in (§6): a closed desktop's
- *  reason, a failure's reason, why it can't run here, how many run at once,
- *  and (LD-6) the daemon's sentence on the `unavailable` card. `notes` are
- *  the smaller lines under it. */
+export interface CardText {
+  line: string
+  notes: string[]
+  /** Replaces the table's action (`null`: none). */
+  action?: CardSpec['action'] | null
+}
+
+/** A virtual desktop card's words with the daemon's filled in (contract
+ *  `virtual-desktop-wire-v1`): a closed desktop's reason, the setup card
+ *  and the command to run by hand, the place in the queue, and the
+ *  daemon's `message` on `unavailable` (LD-6), which on a virtual desktop
+ *  also gets Retry. `notes` are the smaller lines under it. */
 export function cardText(
   state: Exclude<TabState, 'ready'>,
-  status: Pick<DesktopStatus, 'message' | 'virtual'> | null,
+  status: Pick<DesktopStatus, 'message' | 'virtual' | 'reason' | 'kind' | 'agentsAllowed'> | null,
   mayManage: boolean,
-  mayControl: boolean = mayManage,
-): { line: string; notes: string[] } {
-  const base = cardFor(state, mayManage, mayControl).message
+  mayStart: boolean = mayManage,
+  virtualDesktop = false,
+): CardText {
+  const base = cardFor(state, mayManage, mayStart).message
   const msg = status?.message?.trim() ?? ''
   const v = status?.virtual
   const notes: string[] = []
   switch (state) {
-    case 'closed':
-      if (mayControl && v?.noApps) notes.push(NO_APPS_LINE)
-      if (mayControl && v?.canSleep === false) notes.push(NO_SLEEP_LINE)
-      if (!msg) return { line: base, notes }
-      // Closed with a reason: the reason is the line; a Member is also told
-      // who can start it.
-      return mayControl ? { line: msg, notes } : { line: msg, notes: [base] }
-    case 'waiting':
-      return { line: v?.awakeLimit ? `${base} This server runs ${v.awakeLimit} at a time.` : base, notes }
-    case 'failed':
-    case 'unavailable':
-      return { line: msg || base, notes }
+    case 'closed': {
+      const agentOff = status?.kind === 'agent' && status.agentsAllowed === false
+      if (agentOff) notes.push(AGENT_SWITCH_OFF_LINE)
+      if (mayStart && v?.canSleep === false) notes.push(NO_SLEEP_LINE)
+      const out: CardText = { line: base, notes }
+      if (agentOff) out.action = null
+      // Closed by K2 (`reason`): its sentence is the line; a Member is also
+      // told who can start it.
+      if (status?.reason && msg) {
+        out.line = msg
+        if (!mayStart) out.notes = [base, ...notes]
+      }
+      return out
+    }
     case 'not_set_up':
-      if (v?.command) notes.push(`To install them by hand: ${v.command}`)
+      if (v?.setupCard) notes.push(v.setupCard)
+      if (v?.manual) notes.push(`To install them by hand: ${v.manual}`)
       return { line: base, notes }
-    case 'not_possible':
-      if (v?.command) notes.push(v.command)
-      return { line: msg ? `K2 can't start a desktop on this computer: ${msg.replace(/\.$/, '')}.` : base, notes }
+    case 'waiting': {
+      const w = v?.waiting
+      if (!w) return { line: base, notes }
+      if (w.position > 0) notes.push(w.position === 1 ? 'It is next in line.' : `It is number ${w.position} in line.`)
+      return { line: `${base} This server runs ${w.awakeLimit} at a time.`, notes }
+    }
+    case 'unavailable':
+      if (!virtualDesktop) return { line: msg || base, notes }
+      return { line: msg || base, notes, action: { id: mayStart ? 'start' : 'retry', label: 'Retry', ownerOnly: false } }
     default:
       return { line: base, notes }
   }
+}
+
+/** What `POST /cli/desktop/start` (or `setup`) refused, in plain words: the
+ *  daemon's own sentence where it sends one, plus what the refusal carries
+ *  (the desktops that could be closed, Xvfb's last line, the command to run
+ *  by hand). */
+export function startRefusalText(err: unknown): string {
+  const e = (err ?? {}) as { code?: unknown; message?: unknown; body?: unknown }
+  const code = typeof e.code === 'string' ? e.code : ''
+  const hint = typeof e.message === 'string' ? e.message.trim() : ''
+  const body = (e.body && typeof e.body === 'object' ? e.body : {}) as Record<string, unknown>
+  const fixed: Record<string, string> = {
+    owner_or_admin: 'Starting a desktop is for Owners and Admins.',
+    owner_only: 'Only an Owner can set up the desktop.',
+    linux_only: 'Linux servers only.',
+    desktop_off: 'Remote desktop is off on this server.',
+    not_set_up: 'The desktop packages aren’t installed yet.',
+    too_many_desktops: 'This server already has as many desktops as it can hold.',
+    low_memory: 'This server is low on memory, so K2 didn’t start a desktop.',
+    desktop_gone: 'This desktop no longer exists.',
+    start_failed: 'The desktop didn’t start.',
+    not_virtual: 'This server’s desktop is a real screen session: K2 doesn’t start or close it.',
+    agent_desktop_off: AGENT_SWITCH_OFF_LINE,
+    no_x11_socket_dir: 'This server’s /tmp/.X11-unix folder is missing or has the wrong permissions.',
+    setup_manual: 'K2 can’t install the desktop packages on this server.',
+    setup_failed: 'Installing the desktop packages failed.',
+    setting_up: 'The desktop packages are already being installed.',
+  }
+  let line = hint || fixed[code] || 'K2 couldn’t do that.'
+  if (code === 'too_many_desktops' && Array.isArray(body.closable) && body.closable.length > 0) {
+    line += ` Close one first: ${body.closable.filter((c) => typeof c === 'string').join(', ')}.`
+  }
+  if (code === 'start_failed' && typeof body.detail === 'string' && body.detail && !line.includes(body.detail)) {
+    line += ` ${body.detail}`
+  }
+  if ((code === 'setup_manual' || code === 'setup_failed') && typeof body.manual === 'string' && body.manual && !line.includes(body.manual)) {
+    line += ` To install them by hand: ${body.manual}`
+  }
+  return line
 }
 
 /** The S14 sentence the off card shows before turning it on. */

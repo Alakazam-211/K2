@@ -36,6 +36,12 @@ export const CLOSE_REASON = {
    *  to (a Mac's K2 Screen sends H.264 only). A `state` message with why
    *  comes just before. */
   pictureFailed: 'picture_failed',
+  /** 4410: a virtual desktop went to sleep (a `state asleep` text comes
+   *  first). The tab shows the asleep card; an Owner's or Admin's shown tab
+   *  wakes it and dials again. */
+  desktopAsleep: 'desktop_asleep',
+  /** 4410: a virtual desktop was closed. */
+  desktopClosed: 'desktop_closed',
 } as const
 
 export type Codec = 'jpeg' | 'h264' | 'vp8'
@@ -209,6 +215,8 @@ export function closeReasonText(code: number, reason: string): string {
   }
   if (code === CLOSE_DESKTOP_OFF) {
     if (reason === CLOSE_REASON.pictureFailed) return 'The picture stopped. Try again.'
+    if (reason === CLOSE_REASON.desktopAsleep) return 'The desktop is asleep. Everything on it is kept.'
+    if (reason === CLOSE_REASON.desktopClosed) return 'The desktop was closed.'
     return reason === CLOSE_REASON.deskdEnded
       ? 'K2 Screen stopped on this computer.'
       : 'Remote desktop was turned off on this computer.'

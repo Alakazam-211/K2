@@ -1,24 +1,27 @@
 // @vitest-environment jsdom
 // The Desktop tab on a Linux server's virtual desktops
-// (prd-linux-virtual-desktop-v1 §6, L6; LD-6, LD-20, LD-30, LD-35–37),
-// against a fake daemon, fail loud:
+// (prd-linux-virtual-desktop-v1 §6, L6; LD-6, LD-30, LD-35–37), against a
+// fake daemon speaking contract-virtual-desktop-wire-v1, fail loud:
 //  - each virtual state renders its sentence and its one action for the
-//    right role; a Member sees no Start (and the Member sentences);
-//  - Start posts the pane's size; Set up is the Owner's;
+//    right role (`you.mayStart`); a Member sees no Start (and the Member
+//    sentences);
+//  - Start posts the pane's size; Set up is the Owner's and shows the
+//    setup card and the command to run by hand; a refused start shows the
+//    daemon's words on the card;
 //  - an Owner's shown tab on an asleep desktop asks to wake it; a Member's
 //    and a hidden tab show the card;
 //  - a closed desktop shows its reason; `unavailable` shows the daemon's
-//    message; an unknown state falls back to the generic card;
+//    message with Retry; `waiting` its place in line; `gone` keeps the
+//    picker; an unknown state falls back to the generic card;
 //  - the picker lists what `desktop/list` returns, hidden with one entry;
 //    picking stamps the tab;
-//  - a new tab in a switched-on agent's workspace opens that agent's
-//    desktop, else This server;
-//  - an agent's desktop says "Separate, not private" and, while the agent
-//    holds it, names the agent and its end time;
+//  - a new tab asks the list for its workspace (`?workspace=<project id>`)
+//    and opens its `default`;
+//  - an agent's desktop shows the daemon's label and, while an agent
+//    session holds it, names it and its end time;
 //  - Close desktop asks first, then posts stop;
 //  - without `virtual-desktop-v1` no Start or Set up shows;
-//  - on a macOS server (one desktop) nothing changes: no picker, no label,
-//    no Close desktop.
+//  - on a macOS server (one desktop) nothing changes.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent } from '@testing-library/react'
@@ -33,6 +36,7 @@ const daemon = vi.hoisted(() => ({
   list: null as unknown,
   gets: [] as Array<{ route: string; params: Params }>,
   posts: [] as Array<{ route: string; body: unknown }>,
+  refuse: null as null | { route: string; err: Error },
 }))
 vi.mock('@/stores/session-events', async () => {
   const actual = await vi.importActual<typeof import('@/stores/session-events')>('@/stores/session-events')
@@ -61,6 +65,7 @@ vi.mock('@/lib/daemon-cli', async () => {
     daemonCliPost: vi.fn(async (_scope: unknown, route: string, body: unknown) => {
       if (route === 'desktop/ticket') throw new Error('no stream in this suite')
       daemon.posts.push({ route, body })
+      if (daemon.refuse && daemon.refuse.route === route) throw daemon.refuse.err
       if (route === 'desktop/start' || route === 'desktop/stop' || route === 'desktop/setup') return { ok: true }
       throw new Error(`unexpected POST ${route}`)
     }),
@@ -69,36 +74,48 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 import { DesktopPane } from './DesktopPane'
 import { CLOSE_DESKTOP_CONFIRM, SEPARATE_NOT_PRIVATE } from './DesktopToolbar'
-import { NO_APPS_LINE, STATE_CARDS, type DesktopStatus, type VirtualState } from './desktop-state'
+import { AGENT_SWITCH_OFF_LINE, NO_SLEEP_LINE, STATE_CARDS, type DesktopStatus, type VirtualState } from './desktop-state'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { DesktopItemData } from '@/stores/tabs'
 
 const setDesktopItemState = vi.fn()
 const tabs = { getState: () => ({ setDesktopItemState }) }
 
-type Over = Omit<Partial<DesktopStatus>, 'you'> & { you?: Partial<DesktopStatus['you']> }
-const OWNER = { role: 'owner', mayView: true, mayControl: true, mayManage: true }
-const ADMIN = { role: 'admin', mayView: true, mayControl: true, mayManage: false }
-const MEMBER = { role: 'member', mayView: true, mayControl: false, mayManage: false }
+type You = DesktopStatus['you'] & { mayStart?: boolean }
+type Over = Omit<Partial<DesktopStatus>, 'you'> & { you?: Partial<You> }
+const OWNER = { role: 'owner', mayView: true, mayControl: true, mayManage: true, mayStart: true }
+const ADMIN = { role: 'admin', mayView: true, mayControl: true, mayManage: false, mayStart: true }
+const MEMBER = { role: 'member', mayView: true, mayControl: false, mayManage: false, mayStart: false }
 
 function vstatus(desktop: string, over: Over = {}): DesktopStatus {
   const { you, ...rest } = over
+  const agent = desktop.startsWith('virtual:')
   return {
-    desktop, machine: 'test-node-07', enabled: true, backend: 'linux', state: 'closed', message: '', lane: 'main',
-    you: { ...OWNER, sameMachine: false, ...you },
+    desktop, machine: 'test-node-07', enabled: true, backend: 'linux', state: 'closed', message: 'The desktop isn’t running.', lane: 'main',
+    kind: agent ? 'agent' : 'server',
+    name: agent ? 'scout' : 'This server',
+    reason: null,
+    ...(agent ? { workspaceId: desktop.slice('virtual:'.length), agentsAllowed: true } : {}),
+    you: { ...OWNER, sameMachine: false, ...you } as DesktopStatus['you'],
+    virtual: {
+      size: null, display: null, memoryBytes: null, present: [], hold: null, nextSleepAt: null, nextCloseAt: null, canSleep: true,
+      screen: 'off', waiting: null, label: agent ? 'Separate, not private' : null, missing: [], manual: null, setupCard: null, suggestRecycle: false,
+    },
     ...rest,
   }
 }
 
 const AGENT = 'virtual:w9'
 const LIST3 = {
+  default: 'virtual',
   desktops: [
     { id: 'virtual', kind: 'server', name: 'This server', state: 'ready' },
-    { id: AGENT, kind: 'agent', name: 'scout', state: 'asleep', workspaceId: 'w9' },
-    { id: 'virtual:w2', kind: 'agent', name: 'ada', state: 'closed', workspaceId: 'w2' },
+    { id: AGENT, kind: 'agent', name: 'scout', state: 'asleep', workspaceId: 'w9', label: 'Separate, not private' },
+    { id: 'virtual:w2', kind: 'agent', name: 'ada', state: 'closed', workspaceId: 'w2', label: 'Separate, not private' },
   ],
 }
 
@@ -117,13 +134,10 @@ function Harness(props: { data: DesktopItemData; shown?: boolean }): React.JSX.E
   )
 }
 
-async function render(
-  data: DesktopItemData,
-  opts: { scope?: ServerScope; shown?: boolean; activeProjectId?: string; cwd?: string } = {},
-): Promise<void> {
+async function render(data: DesktopItemData, opts: { scope?: ServerScope; shown?: boolean; activeProjectId?: string } = {}): Promise<void> {
   await act(async () => {
     renderInRoom(
-      testRoom({ tabs, scope: opts.scope ?? linuxScope(), isPrimary: false, activeProjectId: opts.activeProjectId ?? 'w1', cwd: opts.cwd ?? '/srv/alpha' }),
+      testRoom({ tabs, scope: opts.scope ?? linuxScope(), isPrimary: false, activeProjectId: opts.activeProjectId ?? 'w1' }),
       <Harness data={data} shown={opts.shown} />,
     )
   })
@@ -136,21 +150,26 @@ function card(): HTMLElement {
   return el
 }
 const line = (): string => card().querySelector('[data-desktop-card-line]')?.textContent ?? ''
+const notes = (): string[] => Array.from(card().querySelectorAll('[data-desktop-card-note]')).map((n) => n.textContent ?? '')
 const actions = (): string[] =>
   Array.from(card().querySelectorAll<HTMLElement>('[data-desktop-card-action]')).map((a) => a.dataset.desktopCardAction ?? '')
 
 beforeEach(() => {
   daemon.status = { virtual: vstatus('virtual') }
-  daemon.list = { desktops: [{ id: 'virtual', kind: 'server', name: 'This server', state: 'closed' }] }
+  daemon.list = { default: 'virtual', desktops: [{ id: 'virtual', kind: 'server', name: 'This server', state: 'closed' }] }
   daemon.gets = []
   daemon.posts = []
+  daemon.refuse = null
   setDesktopItemState.mockReset()
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
 describe('virtual states and their actions', () => {
   // [state, role, the action that role sees]
-  const CASES: Array<[VirtualState, typeof OWNER, string[]]> = [
+  const CASES: Array<[VirtualState | 'unavailable', typeof OWNER, string[]]> = [
     ['not_set_up', OWNER, ['set-up']],
     ['not_set_up', ADMIN, []],
     ['setting_up', OWNER, []],
@@ -161,9 +180,8 @@ describe('virtual states and their actions', () => {
     ['waking', OWNER, []],
     ['waiting', OWNER, []],
     ['gone', OWNER, []],
-    ['failed', OWNER, ['start']],
-    ['failed', MEMBER, []],
-    ['not_possible', OWNER, []],
+    ['unavailable', OWNER, ['start']],
+    ['unavailable', MEMBER, ['retry']],
   ]
   it.each(CASES)('%s as %o: its sentence and its one action', async (state, you, want) => {
     daemon.status = { virtual: vstatus('virtual', { state, you }) }
@@ -185,32 +203,61 @@ describe('virtual states and their actions', () => {
     await render({ desktopId: 'virtual' })
     expect(line()).toBe("The desktop isn't running. An Owner or Admin can start it.")
     cleanup()
-    daemon.status = { virtual: vstatus('virtual', { state: 'waiting', virtual: { awakeLimit: 2 } }) }
+    daemon.status = { virtual: vstatus('virtual', { state: 'gone' }) }
+    await render({ desktopId: 'virtual' })
+    expect(line()).toBe('This desktop no longer exists.')
+  })
+
+  it('waiting: how many run at once, and its place in line', async () => {
+    const base = vstatus('virtual', { state: 'waiting' })
+    daemon.status = { virtual: { ...base, virtual: { ...base.virtual, waiting: { position: 2, awakeLimit: 2 } } } }
     await render({ desktopId: 'virtual' })
     expect(line()).toBe('Waiting for another desktop to go to sleep. This server runs 2 at a time.')
-    cleanup()
-    daemon.status = { virtual: vstatus('virtual', { state: 'not_possible', message: 'this server has no systemd user manager' }) }
-    await render({ desktopId: 'virtual' })
-    expect(line()).toBe("K2 can't start a desktop on this computer: this server has no systemd user manager.")
+    expect(notes()).toEqual(['It is number 2 in line.'])
   })
 
-  it('where K2 can’t install the packages, the card prints the command', async () => {
-    daemon.status = { virtual: vstatus('virtual', { state: 'not_set_up', virtual: { command: 'sudo apt-get install xvfb icewm fonts-dejavu-core' } }) }
+  it('unavailable shows the daemon’s message; Retry starts it again', async () => {
+    daemon.status = { virtual: vstatus('virtual', { state: 'unavailable', message: 'K2 can’t start a desktop here: /tmp/.X11-unix is missing.' }) }
     await render({ desktopId: 'virtual' })
-    expect(card().textContent).toContain('To install them by hand: sudo apt-get install xvfb icewm fonts-dejavu-core')
+    expect(line()).toBe('K2 can’t start a desktop here: /tmp/.X11-unix is missing.')
+    await act(async () => {
+      fireEvent.click(card().querySelector<HTMLElement>('[data-desktop-card-action="start"]')!)
+    })
+    expect(daemon.posts.map((p) => p.route)).toEqual(['desktop/start'])
   })
 
-  it('a closed desktop shows its reason', async () => {
-    daemon.status = { virtual: vstatus('virtual', { state: 'closed', message: 'Your desktop was closed after a day asleep.' }) }
+  it('Set up: the setup card, and the command to run by hand', async () => {
+    const base = vstatus('virtual', { state: 'not_set_up' })
+    daemon.status = {
+      virtual: {
+        ...base,
+        virtual: { ...base.virtual, missing: ['xvfb', 'icewm'], manual: 'sudo apt-get install xvfb icewm fonts-dejavu-core', setupCard: 'Installs Xvfb, IceWM and a font from your distro.' },
+      },
+    }
+    await render({ desktopId: 'virtual' })
+    expect(notes()).toEqual(['Installs Xvfb, IceWM and a font from your distro.', 'To install them by hand: sudo apt-get install xvfb icewm fonts-dejavu-core'])
+  })
+
+  it('a closed desktop shows its reason; a server that can’t pause says so', async () => {
+    daemon.status = {
+      virtual: vstatus('virtual', { state: 'closed', message: 'Your desktop was closed after a day asleep.', reason: { code: 'asleep_too_long', at: 1731300000 } }),
+    }
     await render({ desktopId: 'virtual' })
     expect(line()).toBe('Your desktop was closed after a day asleep.')
     expect(actions()).toEqual(['start'])
+    cleanup()
+    const base = vstatus('virtual', { state: 'closed' })
+    daemon.status = { virtual: { ...base, virtual: { ...base.virtual, canSleep: false } } }
+    await render({ desktopId: 'virtual' })
+    expect(notes()).toContain(NO_SLEEP_LINE)
   })
 
-  it('the Start card says it opens with no apps when the server has no browser', async () => {
-    daemon.status = { virtual: vstatus('virtual', { state: 'closed', virtual: { noApps: true } }) }
-    await render({ desktopId: 'virtual' })
-    expect(card().textContent).toContain(NO_APPS_LINE)
+  it('an agent’s desktop whose switch is off has no Start, and says why', async () => {
+    daemon.list = LIST3
+    daemon.status = { [AGENT]: vstatus(AGENT, { state: 'closed', agentsAllowed: false }) }
+    await render({ desktopId: AGENT, name: 'scout' })
+    expect(actions()).toEqual([])
+    expect(notes()).toContain(AGENT_SWITCH_OFF_LINE)
   })
 
   it('Start posts this pane’s size; Set up posts setup', async () => {
@@ -234,6 +281,36 @@ describe('virtual states and their actions', () => {
     expect(daemon.posts).toEqual([{ route: 'desktop/setup', body: {} }])
   })
 
+  it('a refused start shows the daemon’s words and what the refusal carries', async () => {
+    daemon.status = { virtual: vstatus('virtual', { state: 'closed' }) }
+    daemon.refuse = {
+      route: 'desktop/start',
+      err: new DaemonHttpError('This server already has 4 desktops, its most.', 409, 'too_many_desktops', null, {
+        ok: false, error: { code: 'too_many_desktops', hint: 'This server already has 4 desktops, its most.' }, closable: ['virtual:w2'],
+      }),
+    }
+    await render({ desktopId: 'virtual' })
+    await act(async () => {
+      fireEvent.click(card().querySelector<HTMLElement>('[data-desktop-card-action="start"]')!)
+    })
+    for (let i = 0; i < 5; i++) await act(async () => {})
+    expect(notes()).toContain('This server already has 4 desktops, its most. Close one first: virtual:w2.')
+  })
+
+  it('a setup K2 can’t do shows the command to run by hand', async () => {
+    daemon.status = { virtual: vstatus('virtual', { state: 'not_set_up' }) }
+    daemon.refuse = {
+      route: 'desktop/setup',
+      err: new DaemonHttpError('', 409, 'setup_manual', null, { ok: false, error: { code: 'setup_manual', hint: '' }, manual: 'sudo pacman -S xorg-server-xvfb icewm ttf-dejavu' }),
+    }
+    await render({ desktopId: 'virtual' })
+    await act(async () => {
+      fireEvent.click(card().querySelector<HTMLElement>('[data-desktop-card-action="set-up"]')!)
+    })
+    for (let i = 0; i < 5; i++) await act(async () => {})
+    expect(notes()).toContain('K2 can’t install the desktop packages on this server. To install them by hand: sudo pacman -S xorg-server-xvfb icewm ttf-dejavu')
+  })
+
   it('the status asked for is this tab’s desktop', async () => {
     daemon.status = { [AGENT]: vstatus(AGENT, { state: 'closed' }) }
     daemon.list = LIST3
@@ -250,9 +327,8 @@ describe('asleep', () => {
     expect((daemon.posts[0].body as { desktop: string }).desktop).toBe('virtual')
   })
 
-  it('a hidden tab shows the card and asks nothing; shown, it asks to wake', async () => {
+  it('a hidden tab asks nothing; shown, it asks to wake', async () => {
     daemon.status = { virtual: vstatus('virtual', { state: 'asleep' }) }
-    // A hidden tab never reads status (it isn't shown), so it never wakes.
     await render({ desktopId: 'virtual' }, { shown: false })
     expect(daemon.posts).toEqual([])
     await act(async () => setShown(true))
@@ -267,21 +343,22 @@ describe('asleep', () => {
     expect(line()).toBe('The desktop is asleep. An Owner or Admin can wake it.')
     expect(daemon.posts).toEqual([])
   })
+
+  it('an older daemon that doesn’t say mayStart: no wake, no Start', async () => {
+    const s = vstatus('virtual', { state: 'asleep' })
+    delete (s.you as { mayStart?: boolean }).mayStart
+    daemon.status = { virtual: s }
+    await render({ desktopId: 'virtual' })
+    expect(daemon.posts).toEqual([])
+  })
 })
 
 describe('unknown and older states', () => {
-  it('`unavailable` shows the daemon’s message (LD-6)', async () => {
-    daemon.status = { virtual: vstatus('virtual', { state: 'unavailable', message: 'K2 Screen stopped: out of memory.' }) }
-    await render({ desktopId: 'virtual' })
-    expect(card().dataset.desktopCard).toBe('unavailable')
-    expect(line()).toBe('K2 Screen stopped: out of memory.')
-  })
-
   it('an unknown state falls back to the generic card', async () => {
-    daemon.status = { virtual: vstatus('virtual', { state: 'hibernating' }) }
+    daemon.status = { virtual: vstatus('virtual', { state: 'hibernating', message: '' }) }
     await render({ desktopId: 'virtual' })
     expect(card().dataset.desktopCard).toBe('unavailable')
-    expect(actions()).toEqual([])
+    expect(line()).toBe(STATE_CARDS.unavailable.message)
   })
 
   it('without virtual-desktop-v1 no Start or Set up shows', async () => {
@@ -319,31 +396,47 @@ describe('the picker and the first desktop', () => {
     expect(document.querySelector('[data-desktop-picker]')).toBeNull()
   })
 
-  it('a new tab in a switched-on agent’s workspace opens that agent’s desktop', async () => {
+  it('a gone desktop keeps the picker to choose another', async () => {
     daemon.list = LIST3
+    daemon.status = { 'virtual:w7': vstatus('virtual:w7', { state: 'gone' }) }
+    await render({ desktopId: 'virtual:w7', name: 'old' })
+    expect(card().dataset.desktopCard).toBe('gone')
+    expect(document.querySelector('[data-desktop-picker]')).not.toBeNull()
+  })
+
+  it('a new tab asks the list for its workspace and opens its default', async () => {
+    daemon.list = { ...LIST3, default: AGENT }
     daemon.status = { virtual: vstatus('virtual'), [AGENT]: vstatus(AGENT) }
     await render({}, { activeProjectId: 'w9' })
+    expect(daemon.gets.find((g) => g.route === 'desktop/list')?.params).toEqual({ workspace: 'w9' })
     expect(setDesktopItemState).toHaveBeenCalledWith('t1', 'pg1', 'i1', { desktopId: AGENT, name: 'scout' })
   })
 
-  it('a new tab anywhere else opens This server', async () => {
+  it('a new tab whose default is This server opens This server', async () => {
     daemon.list = LIST3
     await render({}, { activeProjectId: 'w5' })
     expect(setDesktopItemState).toHaveBeenCalledWith('t1', 'pg1', 'i1', { desktopId: 'virtual' })
   })
+
+  it('a restored tab doesn’t ask for a workspace', async () => {
+    daemon.list = LIST3
+    await render({ desktopId: 'virtual' })
+    expect(daemon.gets.find((g) => g.route === 'desktop/list')?.params).toBeUndefined()
+  })
 })
 
 describe('an agent’s desktop', () => {
-  it('says "Separate, not private" and names the agent holding it, until when', async () => {
+  it('shows the daemon’s label and names the session holding it, until when', async () => {
     daemon.list = LIST3
     const until = Date.UTC(2026, 10, 11, 23, 5) / 1000
-    daemon.status = { [AGENT]: vstatus(AGENT, { state: 'asleep', you: MEMBER, virtual: { hold: { agent: 'scout', until } } }) }
+    const base = vstatus(AGENT, { state: 'asleep', you: MEMBER })
+    daemon.status = { [AGENT]: { ...base, virtual: { ...base.virtual, hold: { by: 'k2/scout', until } } } }
     await render({ desktopId: AGENT, name: 'scout' })
     expect(document.querySelector('[data-desktop-separate]')?.textContent).toBe(SEPARATE_NOT_PRIVATE)
     const hold = document.querySelector('[data-desktop-hold]')?.textContent ?? ''
     const time = new Date(until * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    expect(hold).toContain(`scout is working here until ${time}.`)
-    expect(hold).toContain('You and scout can both move the pointer.')
+    expect(hold).toContain(`k2/scout is working here until ${time}.`)
+    expect(hold).toContain('You and k2/scout can both move the pointer.')
   })
 
   it('This server has no label and no hold line', async () => {
@@ -374,20 +467,24 @@ describe('Close desktop', () => {
 })
 
 describe('a macOS server', () => {
+  const mac = (): ServerScope => ({ ...fakeScope('your-server.k2.dev'), serverSupports: (f: string) => f === 'remote-desktop-v1' })
   it('nothing changes: no picker, no label, no Close desktop, no list asked', async () => {
-    daemon.status = { console: { ...vstatus('console', { state: 'ready' }), backend: 'macos', machine: 'office-mini' } }
-    await render({ desktopId: 'console' }, { scope: { ...fakeScope('your-server.k2.dev'), serverSupports: (f: string) => f === 'remote-desktop-v1' } })
+    daemon.status = {
+      console: { desktop: 'console', machine: 'office-mini', enabled: true, backend: 'macos', state: 'ready', message: '', lane: 'main', you: { ...OWNER, mayStart: false, sameMachine: false } },
+    }
+    await render({ desktopId: 'console' }, { scope: mac() })
     expect(document.querySelector('[data-desktop-picker]')).toBeNull()
     expect(document.querySelector('[data-desktop-separate]')).toBeNull()
     expect(document.querySelector('[data-desktop-close]')).toBeNull()
     expect(daemon.gets.some((g) => g.route === 'desktop/list')).toBe(false)
     expect(daemon.gets.filter((g) => g.route === 'desktop/status').map((g) => g.params)).toEqual([undefined])
-    expect(STATE_CARDS.closed.action?.id).toBe('start')
   })
 
-  it('a new tab with no virtual desktops opens This server without asking for a list', async () => {
-    daemon.status = { console: { ...vstatus('console', { state: 'ready' }), backend: 'macos' } }
-    await render({}, { scope: { ...fakeScope('your-server.k2.dev'), serverSupports: (f: string) => f === 'remote-desktop-v1' } })
+  it('a new tab opens This server without asking for a list', async () => {
+    daemon.status = {
+      console: { desktop: 'console', machine: 'office-mini', enabled: true, backend: 'macos', state: 'ready', message: '', lane: 'main', you: { ...OWNER, mayStart: false, sameMachine: false } },
+    }
+    await render({}, { scope: mac() })
     expect(daemon.gets.some((g) => g.route === 'desktop/list')).toBe(false)
     expect(document.querySelector('[data-desktop-pane]')).not.toBeNull()
   })

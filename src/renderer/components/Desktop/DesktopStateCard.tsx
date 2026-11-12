@@ -4,7 +4,7 @@
 // and asks again before it sends.
 
 import { useState } from 'react'
-import { cardFor, DESKTOP_ENABLE_CARD, type CardAction, type TabState } from './desktop-state'
+import { cardFor, DESKTOP_ENABLE_CARD, type CardAction, type CardSpec, type TabState } from './desktop-state'
 
 export interface DesktopStateCardProps {
   state: Exclude<TabState, 'ready'>
@@ -13,6 +13,8 @@ export interface DesktopStateCardProps {
   /** This viewer may drive it (an Owner or Admin): Start shows. Defaults to
    *  `mayManage`. */
   mayControl?: boolean
+  /** Replaces the table's action (`cardText`); null: none. */
+  action?: CardSpec['action'] | null
   /** The line, when the daemon's words fill it (`cardText`). */
   line?: string
   /** Smaller lines under it (`cardText`). */
@@ -28,7 +30,7 @@ export interface DesktopStateCardProps {
 export function DesktopStateCard(props: DesktopStateCardProps): React.JSX.Element {
   const spec = cardFor(props.state, props.mayManage, props.mayControl ?? props.mayManage)
   const [confirming, setConfirming] = useState(false)
-  const action = spec.action
+  const action = props.action === undefined ? spec.action : (props.action ?? undefined)
   const line = props.line ?? spec.message
   const click = (): void => {
     if (!action) return

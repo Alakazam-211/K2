@@ -41,9 +41,10 @@ export interface DesktopToolbarProps {
   /** The desktop shown (an id in `desktops`). */
   desktopId?: string
   onPickDesktop?(id: string): void
-  /** An agent's desktop: show "Separate, not private". */
-  separate?: boolean
-  /** The agent holding this desktop, and until when (Unix ms). */
+  /** An agent's desktop: the daemon's label ("Separate, not private"). */
+  label?: string | null
+  /** The agent session holding this desktop (its K2 address), and until
+   *  when (Unix ms). */
   hold?: { agent: string; untilMs: number } | null
   /** Close desktop (an Owner or Admin on a virtual desktop). */
   onCloseDesktop?(): void
@@ -117,9 +118,9 @@ export function DesktopToolbar(props: DesktopToolbarProps): React.JSX.Element {
           ))}
         </select>
       ) : null}
-      {props.separate ? (
+      {props.label ? (
         <span className="flex-shrink-0 text-[var(--color-text-muted)]" data-desktop-separate="" title={SEPARATE_NOT_PRIVATE_TITLE}>
-          {SEPARATE_NOT_PRIVATE}
+          {props.label}
         </span>
       ) : null}
       <span className="flex-shrink-0 truncate font-medium text-[var(--color-text-primary)]" data-desktop-machine="">

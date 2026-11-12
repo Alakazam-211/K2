@@ -3,7 +3,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import { readDesktopList, type DesktopGrant, type DesktopListEntry, type DesktopStatus, type DesktopViewer } from './desktop-state'
+import { readDesktopList, type DesktopGrant, type DesktopList, type DesktopStatus, type DesktopViewer } from './desktop-state'
 import type { Display } from './desktop-wire'
 
 export interface DesktopAuditLine {
@@ -27,9 +27,11 @@ export function fetchDesktopStatus(scope: ServerScope, desktop?: string): Promis
   return daemonCliGet<DesktopStatus>(scope, 'desktop/status', desktop ? { desktop } : undefined)
 }
 
-/** `GET /cli/desktop/list`: the desktops this person may open. */
-export async function fetchDesktopList(scope: ServerScope): Promise<DesktopListEntry[]> {
-  return readDesktopList(await daemonCliGet<unknown>(scope, 'desktop/list'))
+/** `GET /cli/desktop/list`: the desktops this person may open.
+ *  `workspace`: the project id a new tab opens in; the reply's `default` is
+ *  that workspace's agent desktop when its switch is on, else This server. */
+export async function fetchDesktopList(scope: ServerScope, workspace?: string | null): Promise<DesktopList> {
+  return readDesktopList(await daemonCliGet<unknown>(scope, 'desktop/list', workspace ? { workspace } : undefined))
 }
 
 /** Start (or wake) a virtual desktop at this pane's size (§3.5). */

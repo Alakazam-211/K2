@@ -26,6 +26,8 @@ const daemon = vi.hoisted(() => ({
   status: null as unknown,
   posts: [] as Array<{ route: string; body: unknown }>,
   tickets: 0,
+  /** What status reads after a `desktop/start` (a wake). */
+  afterStart: null as unknown,
 }))
 vi.mock('@/stores/session-events', async () => {
   const actual = await vi.importActual<typeof import('@/stores/session-events')>('@/stores/session-events')
@@ -46,6 +48,10 @@ vi.mock('@/lib/daemon-cli', async () => {
       if (route === 'desktop/ticket') {
         daemon.tickets += 1
         return { ok: true, ticket: `k2dt_test${daemon.tickets}`, expiresIn: 60 }
+      }
+      if (route === 'desktop/start') {
+        daemon.status = daemon.afterStart
+        return daemon.afterStart
       }
       throw new Error(`unexpected POST ${route}`)
     }),
@@ -133,6 +139,7 @@ beforeEach(() => {
   daemon.status = status()
   daemon.posts = []
   daemon.tickets = 0
+  daemon.afterStart = null
   renders = 0
   FakeWebSocket.reset()
   resetGridDialQueueForTests()
@@ -216,6 +223,42 @@ describe('DesktopPane stream', () => {
     FakeWebSocket.reset()
     await openPane({ desktopId: 'console' })
     expect(daemon.posts.find((p) => p.route === 'desktop/ticket')?.body).toEqual({})
+  })
+
+  it('asleep (4410 desktop_asleep): an Owner’s shown tab wakes it, gets a new ticket and dials again', async () => {
+    const vstat = (state: string, mayStart = true): unknown => ({
+      ...status(), desktop: 'virtual', backend: 'linux', state, kind: 'server', you: { ...status().you, mayStart },
+    })
+    daemon.status = vstat('ready')
+    daemon.afterStart = vstat('ready')
+    const sock = await openPane({ desktopId: 'virtual' })
+    expect(daemon.tickets).toBe(1)
+    daemon.status = vstat('asleep')
+    await act(async () => sock.serverText({ t: 'state', state: 'asleep', message: 'The desktop is asleep. Everything on it is kept.' }))
+    await act(async () => sock.serverClose(4410, 'desktop_asleep'))
+    await flush()
+    await flush()
+    expect(daemon.posts.filter((p) => p.route === 'desktop/start').map((p) => (p.body as { desktop: string }).desktop)).toEqual(['virtual'])
+    for (let i = 0; i < 50 && FakeWebSocket.instances.length < 2; i++) await act(async () => {})
+    expect(daemon.tickets).toBe(2)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
+  it('asleep: a Member’s tab shows the card and waits (no wake, no new ticket)', async () => {
+    const vstat = (state: string): unknown => ({
+      ...status(), desktop: 'virtual', backend: 'linux', state, kind: 'server',
+      you: { role: 'member', mayView: true, mayControl: false, mayManage: false, sameMachine: false, mayStart: false },
+    })
+    daemon.status = vstat('ready')
+    const sock = await openPane({ desktopId: 'virtual' })
+    daemon.status = vstat('asleep')
+    await act(async () => sock.serverText({ t: 'state', state: 'asleep', message: 'The desktop is asleep. Everything on it is kept.' }))
+    await act(async () => sock.serverClose(4410, 'desktop_asleep'))
+    await flush()
+    await flush()
+    expect(document.querySelector('[data-desktop-card="asleep"]')).not.toBeNull()
+    expect(daemon.posts.some((p) => p.route === 'desktop/start')).toBe(false)
+    expect(daemon.tickets).toBe(1)
   })
 
   it('a hidden tab pauses with fps 0 and keeps its socket; shown, its rate and a keyframe', async () => {

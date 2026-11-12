@@ -49,7 +49,8 @@ import {
   splitText,
 } from './desktop-input'
 import { desktopDataFromSerializedBrowser, desktopTabTitle, isServerDesktop, sameDesktop, serializeDesktopItem } from './desktop-serialize'
-import { cardFor, openDesktopIsForMe, STATE_CARDS, tabState, type DesktopStatus } from './desktop-state'
+import { cardFor, openDesktopIsForMe, readDesktopList, startRefusalText, STATE_CARDS, tabState, type DesktopStatus } from './desktop-state'
+import { DaemonHttpError } from '@/lib/daemon-http-error'
 
 const REPO = join(__dirname, '../../../..')
 
@@ -136,6 +137,49 @@ describe('desktop-wire: the Rust goldens', () => {
     expect(closeReasonText(4410, 'desktop_off')).toBe('Remote desktop was turned off on this computer.')
     expect(closeReasonText(4401, 'grant_gone')).toBe('Your access to this screen was taken away.')
     expect(closeReasonText(1006, '')).toBe('The connection to this computer closed.')
+    expect(closeReasonText(4410, 'desktop_asleep')).toBe('The desktop is asleep. Everything on it is kept.')
+    expect(closeReasonText(4410, 'desktop_closed')).toBe('The desktop was closed.')
+  })
+})
+
+describe('virtual desktop wire (contract-virtual-desktop-wire-v1)', () => {
+  it('reads desktop/list with its default; an entry it can’t read is dropped', () => {
+    const l = readDesktopList({
+      default: 'virtual:ws_1a2b',
+      desktops: [
+        { id: 'virtual', kind: 'server', name: 'This server', state: 'asleep' },
+        { id: 'virtual:ws_1a2b', kind: 'agent', name: 'scientist', workspaceId: 'ws_1a2b', state: 'closed', label: 'Separate, not private' },
+        { kind: 'agent' },
+      ],
+    })
+    expect(l).toEqual({
+      default: 'virtual:ws_1a2b',
+      desktops: [
+        { id: 'virtual', kind: 'server', name: 'This server', state: 'asleep' },
+        { id: 'virtual:ws_1a2b', kind: 'agent', name: 'scientist', workspaceId: 'ws_1a2b', state: 'closed', label: 'Separate, not private' },
+      ],
+    })
+    expect(() => readDesktopList({})).toThrow('the reply didn’t list any desktops')
+    // No default: This server.
+    expect(readDesktopList({ desktops: [{ id: 'virtual', kind: 'server', state: 'closed' }] }).default).toBe('virtual')
+  })
+
+  it('a refused start in plain words: the daemon’s own first, else ours, plus what it carries', () => {
+    const refusal = (code: string, hint: string, extra: Record<string, unknown> = {}): DaemonHttpError =>
+      new DaemonHttpError(hint, 409, code, { code, hint }, { ok: false, error: { code, hint }, ...extra })
+    expect(startRefusalText(refusal('low_memory', 'Only 600 MB of memory is free; a desktop needs 1 GB.'))).toBe('Only 600 MB of memory is free; a desktop needs 1 GB.')
+    expect(startRefusalText(refusal('low_memory', ''))).toBe('This server is low on memory, so K2 didn’t start a desktop.')
+    expect(startRefusalText(refusal('owner_or_admin', ''))).toBe('Starting a desktop is for Owners and Admins.')
+    expect(startRefusalText(refusal('linux_only', ''))).toBe('Linux servers only.')
+    expect(startRefusalText(refusal('desktop_gone', ''))).toBe('This desktop no longer exists.')
+    expect(startRefusalText(refusal('too_many_desktops', '', { closable: ['virtual:a', 'virtual:b'] }))).toBe(
+      'This server already has as many desktops as it can hold. Close one first: virtual:a, virtual:b.',
+    )
+    expect(startRefusalText(refusal('start_failed', '', { detail: 'Xvfb: cannot open display' }))).toBe('The desktop didn’t start. Xvfb: cannot open display')
+    expect(startRefusalText(refusal('setup_failed', '', { manual: 'sudo apt-get install xvfb' }))).toBe(
+      'Installing the desktop packages failed. To install them by hand: sudo apt-get install xvfb',
+    )
+    expect(startRefusalText(new Error(''))).toBe('K2 couldn’t do that.')
   })
 })
 

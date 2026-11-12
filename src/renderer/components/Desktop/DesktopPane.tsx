@@ -16,6 +16,17 @@
 //    pointer, buttons, wheel, physical keys by `code` (`routeKey`: Capture
 //    keys off keeps K2's ⌘ shortcuts), composed text as `text`. Every key
 //    and button held is released on blur, hide, view-only and hand-back.
+//
+// Several Desktop tabs, each on its own desktop (prd-linux-virtual-desktop-v1
+// §6): `DesktopPane` picks the desktop (the tab's, else the first one: its
+// workspace's agent desktop, else This server) and draws `DesktopView`
+// keyed by it, so switching desktops in the picker starts a fresh view. On
+// a server with `virtual-desktop-v1` the toolbar has the picker (from
+// `desktop/list`, hidden with one entry), the virtual desktop's cards
+// (Set up, Start at this pane's size, asleep, waking, waiting…), Close
+// desktop, "Separate, not private" on an agent's desktop, and the agent's
+// hold. A shown tab says `present` every 30 s; an Owner's or Admin's shown
+// tab wakes an asleep desktop.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useToastStore } from '@/stores/toast'
@@ -26,13 +37,26 @@ import type { DesktopItemData } from '@/stores/tabs'
 import { CursorOverlay } from './cursor-overlay'
 import { DesktopStateCard } from './DesktopStateCard'
 import { DesktopToolbar } from './DesktopToolbar'
-import { enableDesktop, fetchDesktopDisplays } from './desktop-api'
+import { enableDesktop, fetchDesktopDisplays, setupDesktop, startDesktop, stopDesktop } from './desktop-api'
 import { checkInput, keyCodeToSend, mapPointer, oneToOneCssPerPt, pictureLayout, pointerButton, splitText, wheelMode, type Fit } from './desktop-input'
 import { chordEvents, keysMenu, routeKey, type KeysMenuEntry } from './desktop-keymap'
-import type { DesktopFit } from './desktop-serialize'
-import { tabState, type CardAction } from './desktop-state'
+import { isServerDesktop, sameDesktop, SERVER_DESKTOP_ID, type DesktopFit } from './desktop-serialize'
+import {
+  cardText,
+  desktopStateLabel,
+  DESKTOP_FEATURE,
+  firstDesktop,
+  tabState,
+  VIRTUAL_DESKTOP_FEATURE,
+  VIRTUAL_ENABLE_CARD,
+  VIRTUAL_STATES,
+  type CardAction,
+  type DesktopListEntry,
+} from './desktop-state'
 import type { DesktopStreamConnector } from './desktop-stream'
 import { CLOSE_DESKTOP_OFF, type Display, type ViewerMsg } from './desktop-wire'
+import { useDesktopList } from './useDesktopList'
+import { useDesktopPresence } from './useDesktopPresence'
 import { useDesktopStatus } from './useDesktopStatus'
 import { useDesktopStream } from './useDesktopStream'
 import type { WorkerLike } from '@/components/Stream/stream-player'
@@ -53,11 +77,98 @@ function dpr(): number {
   return typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
 }
 
+/** The desktop id a request names: none for This server's older `console`
+ *  id (the daemon picks This server's own: `console` or `virtual`). */
+function desktopParam(id: string): string | undefined {
+  return id === SERVER_DESKTOP_ID ? undefined : id
+}
+
 export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
   const room = useRoom()
   const scope = room.scope
   const visible = useIsTabVisible()
-  const { supported, status, error, refresh } = useDesktopStatus(scope, visible)
+  const virtualOn = scope.serverSupports(DESKTOP_FEATURE) && scope.serverSupports(VIRTUAL_DESKTOP_FEATURE)
+  const { list, failed } = useDesktopList(scope, visible, virtualOn)
+  // This tab's own pick (the store's copy follows; a stamp is async to us).
+  const [picked, setPicked] = useState<{ desktopId: string; name?: string } | null>(null)
+  const desktopId = picked?.desktopId ?? props.data.desktopId ?? (virtualOn ? undefined : SERVER_DESKTOP_ID)
+  const name = picked ? picked.name : props.data.name
+
+  const stamp = useCallback(
+    (patch: Partial<DesktopItemData>) => {
+      room.tabs.getState().setDesktopItemState(props.tabId, props.paneGroupId, props.itemId, patch)
+    },
+    [room, props.tabId, props.paneGroupId, props.itemId],
+  )
+
+  const pick = useCallback(
+    (entry: Pick<DesktopListEntry, 'id' | 'kind' | 'name'> | null, first: boolean) => {
+      const id = entry?.id ?? SERVER_DESKTOP_ID
+      const agentName = entry?.kind === 'agent' ? entry.name : undefined
+      setPicked({ desktopId: id, ...(agentName ? { name: agentName } : {}) })
+      // A new tab's first pick names only the desktop; a picker switch also
+      // forgets the display chosen on the other one.
+      if (first) stamp({ desktopId: id, ...(agentName ? { name: agentName } : {}) })
+      else stamp({ desktopId: id, name: agentName, displayId: undefined })
+    },
+    [stamp],
+  )
+
+  // A new tab's first desktop (§6): its workspace's agent desktop when that
+  // agent's switch is on (it is listed), else This server.
+  useEffect(() => {
+    if (props.data.desktopId || picked) return
+    if (!virtualOn) {
+      pick(null, true)
+      return
+    }
+    if (failed) {
+      pick(null, true)
+      return
+    }
+    if (!list) return
+    pick(firstDesktop(list, { id: room.activeProjectId(), path: room.cwd() }), true)
+  }, [props.data.desktopId, picked, virtualOn, list, failed, room, pick])
+
+  if (desktopId === undefined) {
+    return (
+      <div className="flex h-full w-full items-center justify-center text-xs text-[var(--color-text-muted)]" data-desktop-loading="">
+        Checking this computer…
+      </div>
+    )
+  }
+  return (
+    <DesktopView
+      key={desktopId}
+      {...props}
+      desktopId={desktopId}
+      name={name}
+      virtualOn={virtualOn}
+      list={list}
+      stamp={stamp}
+      onPick={(id) => {
+        const entry = list?.find((d) => d.id === id)
+        if (entry) pick(entry, false)
+      }}
+    />
+  )
+}
+
+interface DesktopViewProps extends DesktopPaneProps {
+  desktopId: string
+  name?: string
+  virtualOn: boolean
+  list: DesktopListEntry[] | null
+  stamp(patch: Partial<DesktopItemData>): void
+  onPick(id: string): void
+}
+
+function DesktopView(props: DesktopViewProps): React.JSX.Element {
+  const room = useRoom()
+  const scope = room.scope
+  const visible = useIsTabVisible()
+  const param = desktopParam(props.desktopId)
+  const { supported, status, error, refresh } = useDesktopStatus(scope, visible, param)
   const [busy, setBusy] = useState(false)
   const [enableCard, setEnableCard] = useState<string | undefined>(undefined)
   const [fetchedDisplays, setFetchedDisplays] = useState<Display[]>([])
@@ -65,10 +176,11 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
   const [flip, setFlip] = useState(false)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
+  const areaRef = useRef<HTMLDivElement | null>(null)
   const [cursor] = useState(() => new CursorOverlay())
   useEffect(() => () => cursor.dispose(), [cursor])
 
-  const state = status ? tabState(status) : null
+  const state = status ? tabState(status, props.virtualOn) : null
   const ready = state === 'ready'
   const fit: DesktopFit = props.data.fit ?? 'fit'
   const mayControl = !!status?.you.mayControl
@@ -80,6 +192,7 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
     visible,
     mayControl,
     viewOnly,
+    desktop: param ?? null,
     display: props.data.displayId ?? null,
     canvasRef,
     cursor,
@@ -92,6 +205,10 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
     },
   })
   const live = stream.conn === 'open'
+  // "This viewer is here" (LD-24): only over an open socket, while shown.
+  useDesktopPresence(() => {
+    stream.send({ t: 'present' })
+  }, visible && live)
   const controlling = stream.control.you
   const drives = live && stream.session.drives(viewOnly)
   const drivesRef = useRef(drives)
@@ -142,12 +259,17 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
     return () => ro.disconnect()
   }, [relayout, stream.canvasKey, ready])
 
-  const stamp = useCallback(
-    (patch: Partial<Omit<DesktopItemData, 'desktopId'>>) => {
-      room.tabs.getState().setDesktopItemState(props.tabId, props.paneGroupId, props.itemId, patch)
-    },
-    [room, props.tabId, props.paneGroupId, props.itemId],
-  )
+  const stamp = props.stamp
+  // The virtual desktop this tab acts on (Start, wake, Close): the one
+  // status names (This server's `virtual` when the tab says `console`).
+  const target = status?.desktop || param || SERVER_DESKTOP_ID
+  const isVirtual = props.virtualOn && target.startsWith('virtual')
+  const paneSize = (): { width: number; height: number } | undefined => {
+    const el = areaRef.current
+    if (!el || typeof el.getBoundingClientRect !== 'function') return undefined
+    const r = el.getBoundingClientRect()
+    return r.width > 0 && r.height > 0 ? { width: Math.round(r.width), height: Math.round(r.height) } : undefined
+  }
 
   const toast = (msg: string, kind: 'error' | 'info' = 'error'): void => {
     useToastStore.getState().addToast(msg, kind)
@@ -263,12 +385,48 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
     })
   }
 
+  const post = (what: string, fn: () => Promise<unknown>): void => {
+    setBusy(true)
+    fn()
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        useToastStore.getState().addToast(`${what}: ${msg}`, 'error')
+      })
+      .finally(() => {
+        setBusy(false)
+        refresh()
+      })
+  }
+
+  // An Owner's or Admin's shown tab wakes an asleep desktop by itself (§6);
+  // a Member's and a hidden tab show the card. Asked once per sleep.
+  const wakeAsked = useRef(false)
+  const mayWake = !!status?.you.mayControl
+  useEffect(() => {
+    if (state !== 'asleep') {
+      wakeAsked.current = false
+      return
+    }
+    if (!visible || !mayWake || wakeAsked.current) return
+    wakeAsked.current = true
+    post('Couldn’t wake the desktop', () => startDesktop(scope, target, paneSize()))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per sleep
+  }, [state, visible, mayWake, target, scope])
+
   const onAction = useCallback(
     (action: CardAction) => {
+      if (action === 'start') {
+        post('Couldn’t start the desktop', () => startDesktop(scope, target, paneSize()))
+        return
+      }
+      if (action === 'set-up') {
+        post('Couldn’t set up the desktop', () => setupDesktop(scope))
+        return
+      }
       if (action === 'turn-on' || action === 'ask-at-mac') {
         // Ask at the Mac re-arms K2 Screen, which asks for its permission.
         setBusy(true)
-        enableDesktop(scope)
+        enableDesktop(scope, isVirtual ? 'virtual' : undefined)
           .then(
             (r) => {
               if (r.card) setEnableCard(r.card)
@@ -286,25 +444,60 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
       }
       refresh()
     },
-    [scope, refresh],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- post/paneSize read refs
+    [scope, refresh, target, isVirtual],
   )
 
   if (!supported) {
     return <DesktopStateCard state="update_k2" mayManage={false} onAction={onAction} />
   }
+  // The picker's entries: This server's `console` and `virtual` are one.
+  const picks = (props.list ?? []).map((d) => ({ id: d.id, label: d.name, stateLabel: desktopStateLabel(d.state) }))
+  const pickedId = picks.find((d) => sameDesktop(d.id, props.desktopId))?.id ?? props.desktopId
   if (!status || !state) {
     return (
-      <div className="flex h-full w-full items-center justify-center text-xs text-[var(--color-text-muted)]" data-desktop-loading="">
-        {error ? `Couldn’t read this computer’s Remote desktop: ${error}` : 'Checking this computer…'}
+      <div className="flex h-full w-full flex-col" data-desktop-loading="">
+        {picks.length > 1 ? (
+          <div className="flex h-10 flex-shrink-0 items-center border-b border-[var(--color-border)] px-2 text-xs">
+            <select
+              className="h-6 flex-shrink-0 border border-[var(--color-border)] bg-[var(--color-bg)] px-1 text-xs text-[var(--color-text-primary)]"
+              aria-label="Desktop"
+              data-desktop-picker=""
+              value={pickedId}
+              onChange={(e) => props.onPick(e.target.value)}
+            >
+              {picks.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label} ({d.stateLabel})
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+        <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-[var(--color-text-muted)]">
+          {error ? `Couldn’t read this computer’s Remote desktop: ${error}` : 'Checking this computer…'}
+        </div>
       </div>
     )
   }
+  const hold = status.virtual?.hold
+  const card = state === 'ready' ? null : cardText(state, status, status.you.mayManage, status.you.mayControl)
   const oneToOne = fit === '1:1'
   const frameStyle: React.CSSProperties | undefined = oneToOne && widthPt > 0 ? { width: widthPt * cssPerPt, height: heightPt * cssPerPt } : undefined
   const closed = stream.conn === 'closed' || stream.conn === 'error'
   return (
     <div className="flex h-full w-full flex-col" data-desktop-pane={state}>
       <DesktopToolbar
+        desktops={picks}
+        desktopId={pickedId}
+        onPickDesktop={props.onPick}
+        separate={!isServerDesktop(props.desktopId)}
+        hold={hold && hold.agent ? { agent: hold.agent, untilMs: hold.until * 1000 } : null}
+        onCloseDesktop={
+          isVirtual && ready && status.you.mayControl
+            ? () => post('Couldn’t close the desktop', () => stopDesktop(scope, target))
+            : undefined
+        }
         machine={status.machine}
         displays={displays}
         displayId={stream.display ?? props.data.displayId ?? displays.find((d) => d.main)?.id ?? null}
@@ -337,7 +530,7 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
         onClipCopy={onClipCopy}
         onKeys={onKeys}
       />
-      <div className="relative min-h-0 flex-1" data-desktop-stage="" data-desktop-viewer-mac={String(isMacPlatform())}>
+      <div ref={areaRef} className="relative min-h-0 flex-1" data-desktop-stage="" data-desktop-viewer-mac={String(isMacPlatform())}>
         {ready ? (
           <div
             ref={stageRef}
@@ -390,8 +583,13 @@ export function DesktopPane(props: DesktopPaneProps): React.JSX.Element {
           <DesktopStateCard
             state={state}
             mayManage={status.you.mayManage}
-            detail={state === status.state ? status.message : undefined}
-            enableCard={enableCard}
+            mayControl={status.you.mayControl}
+            line={card?.line}
+            notes={card?.notes}
+            // A machine state's own words go under its line; the virtual
+            // states and `unavailable` put them in the line (cardText).
+            detail={state === status.state && state !== 'unavailable' && !VIRTUAL_STATES.has(state) ? status.message : undefined}
+            enableCard={enableCard ?? (isVirtual ? VIRTUAL_ENABLE_CARD : undefined)}
             busy={busy}
             onAction={onAction}
           />

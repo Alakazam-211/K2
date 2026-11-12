@@ -36,6 +36,9 @@ export interface DesktopStreamOptions {
   /** What this viewer decodes (the player's probe). */
   decode: DecodeSupport
   window: number
+  /** The desktop to show (prd-linux-virtual-desktop-v1 §3.1); null: This
+   *  server (the daemon's own pick). */
+  desktop?: string | null
   display?: string | null
   view?: boolean
   stats?: boolean
@@ -81,7 +84,7 @@ export function ticketRefusalText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-export const wsDesktopStream: DesktopStreamConnector = ({ scope, decode, window: win, display, view, stats, pw, handlers }) => {
+export const wsDesktopStream: DesktopStreamConnector = ({ scope, decode, window: win, desktop, display, view, stats, pw, handlers }) => {
   let ws: WebSocket | null = null
   let closed = false
   const pending: string[] = []
@@ -93,7 +96,10 @@ export const wsDesktopStream: DesktopStreamConnector = ({ scope, decode, window:
   void (async () => {
     let ticket: string
     try {
-      const r = await daemonCliPost<{ ticket: string }>(scope, 'desktop/ticket', display ? { display } : {})
+      const r = await daemonCliPost<{ ticket: string }>(scope, 'desktop/ticket', {
+        ...(desktop ? { desktop } : {}),
+        ...(display ? { display } : {}),
+      })
       ticket = r.ticket
     } catch (err) {
       if (!closed) handlers.onConn('error', ticketRefusalText(err), err instanceof DaemonHttpError ? err.status : undefined)

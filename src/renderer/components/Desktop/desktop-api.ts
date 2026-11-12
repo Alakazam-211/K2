@@ -3,7 +3,7 @@
 
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
-import type { DesktopGrant, DesktopStatus, DesktopViewer } from './desktop-state'
+import { readDesktopList, type DesktopGrant, type DesktopListEntry, type DesktopStatus, type DesktopViewer } from './desktop-state'
 import type { Display } from './desktop-wire'
 
 export interface DesktopAuditLine {
@@ -21,8 +21,30 @@ export interface DesktopAuditLine {
   outcome?: string
 }
 
-export function fetchDesktopStatus(scope: ServerScope): Promise<DesktopStatus> {
-  return daemonCliGet<DesktopStatus>(scope, 'desktop/status')
+/** `desktop` names the desktop (prd-linux-virtual-desktop-v1 §3.1); left
+ *  out, This server. */
+export function fetchDesktopStatus(scope: ServerScope, desktop?: string): Promise<DesktopStatus> {
+  return daemonCliGet<DesktopStatus>(scope, 'desktop/status', desktop ? { desktop } : undefined)
+}
+
+/** `GET /cli/desktop/list`: the desktops this person may open. */
+export async function fetchDesktopList(scope: ServerScope): Promise<DesktopListEntry[]> {
+  return readDesktopList(await daemonCliGet<unknown>(scope, 'desktop/list'))
+}
+
+/** Start (or wake) a virtual desktop at this pane's size (§3.5). */
+export function startDesktop(scope: ServerScope, desktop: string, size?: { width: number; height: number }): Promise<unknown> {
+  return daemonCliPost(scope, 'desktop/start', { desktop, ...(size ? { width: size.width, height: size.height } : {}) })
+}
+
+/** Close a virtual desktop: what was open on it is lost. */
+export function stopDesktop(scope: ServerScope, desktop: string): Promise<unknown> {
+  return daemonCliPost(scope, 'desktop/stop', { desktop })
+}
+
+/** Install the desktop packages through the root helper (an Owner's yes). */
+export function setupDesktop(scope: ServerScope): Promise<unknown> {
+  return daemonCliPost(scope, 'desktop/setup', {})
 }
 
 export async function fetchDesktopDisplays(scope: ServerScope): Promise<Display[]> {
@@ -30,8 +52,10 @@ export async function fetchDesktopDisplays(scope: ServerScope): Promise<Display[
   return r.displays
 }
 
-export function enableDesktop(scope: ServerScope): Promise<{ enabled: boolean; state: string; card?: string }> {
-  return daemonCliPost(scope, 'desktop/enable', {})
+/** `desktop`: the switch to turn on (`virtual`: every virtual desktop on
+ *  the server, §4 item 2); left out, This server's. */
+export function enableDesktop(scope: ServerScope, desktop?: string): Promise<{ enabled: boolean; state: string; card?: string }> {
+  return daemonCliPost(scope, 'desktop/enable', desktop ? { desktop } : {})
 }
 
 export function disableDesktop(scope: ServerScope): Promise<{ enabled: boolean; closed: number }> {

@@ -18,20 +18,23 @@ export interface DesktopStatusView {
   refresh(): void
 }
 
-export function useDesktopStatus(scope: ServerScope, visible: boolean): DesktopStatusView {
+/** `desktop`: the desktop to read (undefined: This server, the daemon's
+ *  own pick). */
+export function useDesktopStatus(scope: ServerScope, visible: boolean, desktop?: string, enabled = true): DesktopStatusView {
   const supported = scope.serverSupports(DESKTOP_FEATURE)
+  const asking = supported && enabled
   const [status, setStatus] = useState<DesktopStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const refresh = useCallback(() => setTick((n) => n + 1), [])
 
   useEffect(() => {
-    if (!supported || !visible) return
+    if (!asking || !visible) return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | null = null
     const load = async (): Promise<void> => {
       try {
-        const next = await fetchDesktopStatus(scope)
+        const next = await fetchDesktopStatus(scope, desktop)
         if (cancelled) return
         setStatus(next)
         setError(null)
@@ -48,12 +51,12 @@ export function useDesktopStatus(scope: ServerScope, visible: boolean): DesktopS
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [scope, supported, visible, tick])
+  }, [scope, asking, visible, tick, desktop])
 
   useEffect(() => {
-    if (!supported || !visible) return
+    if (!asking || !visible) return
     return onDesktopState(scope, () => refresh())
-  }, [scope, supported, visible, refresh])
+  }, [scope, asking, visible, refresh])
 
   return { supported, status, error, refresh }
 }

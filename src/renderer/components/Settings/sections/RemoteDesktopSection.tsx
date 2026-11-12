@@ -25,7 +25,13 @@ import {
   setDesktopHideApps,
   type DesktopAuditLine,
 } from '@/components/Desktop/desktop-api'
-import { DESKTOP_ENABLE_CARD, DESKTOP_FEATURE, type DesktopStatus } from '@/components/Desktop/desktop-state'
+import {
+  DESKTOP_ENABLE_CARD,
+  DESKTOP_FEATURE,
+  VIRTUAL_DESKTOP_FEATURE,
+  VIRTUAL_ENABLE_CARD,
+  type DesktopStatus,
+} from '@/components/Desktop/desktop-state'
 import type { SettingEntry } from '../searchManifest'
 
 export const REMOTE_DESKTOP_MANIFEST: SettingEntry[] = [
@@ -104,6 +110,10 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
   }
 
   const manage = !!status?.you.mayManage
+  // A Linux server with no screen: This server is its `virtual` desktop,
+  // and the switch turns on every virtual desktop there (§4 item 2), with
+  // its own card (LD-18).
+  const virtual = scope.serverSupports(VIRTUAL_DESKTOP_FEATURE) && !!status?.desktop.startsWith('virtual')
   const hideApps = hideDraft ?? (status?.hideApps ?? []).join('\n')
   return (
     <div className="max-w-2xl" data-settings-id="remote-desktop.switch" data-testid="remote-desktop-section">
@@ -147,7 +157,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
           </div>
           {confirmOn ? (
             <div className="border border-[var(--color-border)] p-3 mb-4" data-testid="remote-desktop-enable-card">
-              <p className="type-hint text-[var(--color-text-secondary)] mb-2">{DESKTOP_ENABLE_CARD}</p>
+              <p className="type-hint text-[var(--color-text-secondary)] mb-2">{virtual ? VIRTUAL_ENABLE_CARD : DESKTOP_ENABLE_CARD}</p>
               <div className="flex gap-2">
                 <Button
                   variant="accent"
@@ -155,7 +165,7 @@ export function RemoteDesktopSection({ scope = primaryScope() }: { scope?: Serve
                   data-testid="remote-desktop-enable-confirm"
                   onClick={() => {
                     setConfirmOn(false)
-                    void act('Couldn’t turn on Remote desktop', () => enableDesktop(scope))
+                    void act('Couldn’t turn on Remote desktop', () => enableDesktop(scope, virtual ? 'virtual' : undefined))
                   }}
                 >
                   Turn on

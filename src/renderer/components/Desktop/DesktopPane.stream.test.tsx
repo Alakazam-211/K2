@@ -119,7 +119,10 @@ function rect(r: { left: number; top: number; width: number; height: number }): 
   } as DOMRect)
 }
 
-const sent = (s: FakeWebSocket): Array<{ t: string; [k: string]: unknown }> => s.sentJson().filter((m) => m.t !== 'ack')
+// What the pane sent, less the window acks and the presence pings (their
+// own test counts them).
+const sent = (s: FakeWebSocket): Array<{ t: string; [k: string]: unknown }> => s.sentJson().filter((m) => m.t !== 'ack' && m.t !== 'present')
+const presentsSent = (s: FakeWebSocket): number => s.sentJson().filter((m) => m.t === 'present').length
 const button = (sel: string): HTMLButtonElement => {
   const b = document.querySelector<HTMLButtonElement>(sel)
   if (!b) throw new Error(`no ${sel}; pane: ${document.body.innerHTML.slice(0, 600)}`)
@@ -183,6 +186,36 @@ describe('DesktopPane stream', () => {
     expect(sent(sock).slice(-2)).toEqual([{ t: 'key', code: 'KeyA', down: false }, { t: 'hand-back' }])
     await act(async () => sock.serverText({ t: 'control', controller: null, you: false, localHold: false }))
     expect(button('[data-desktop-take-control]').dataset.desktopTakeControl).toBe('take')
+  })
+
+  it('a shown tab says `present` at once and every 30 s; a hidden one doesn’t (LD-24)', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const sock = await openPane({ desktopId: 'virtual' })
+      const presents = (): number => presentsSent(sock)
+      expect(presents()).toBe(1)
+      await act(async () => vi.advanceTimersByTime(30_000))
+      expect(presents()).toBe(2)
+      await act(async () => setShown(false))
+      await flush()
+      await act(async () => vi.advanceTimersByTime(90_000))
+      expect(presents()).toBe(2)
+      await act(async () => setShown(true))
+      await flush()
+      expect(presents()).toBe(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the ticket names this tab’s desktop; This server’s older id names none', async () => {
+    await openPane({ desktopId: 'virtual:w9' })
+    expect(daemon.posts.find((p) => p.route === 'desktop/ticket')?.body).toEqual({ desktop: 'virtual:w9' })
+    cleanup()
+    daemon.posts = []
+    FakeWebSocket.reset()
+    await openPane({ desktopId: 'console' })
+    expect(daemon.posts.find((p) => p.route === 'desktop/ticket')?.body).toEqual({})
   })
 
   it('a hidden tab pauses with fps 0 and keeps its socket; shown, its rate and a keyframe', async () => {

@@ -40,7 +40,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 import { RemoteDesktopSection } from './RemoteDesktopSection'
 import { settingsNav } from '../Settings'
-import { DESKTOP_ENABLE_CARD, type DesktopStatus } from '@/components/Desktop/desktop-state'
+import { DESKTOP_ENABLE_CARD, VIRTUAL_ENABLE_CARD, type DesktopStatus } from '@/components/Desktop/desktop-state'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { __resetServerScopesForTests, noteServerVersion } from '@/kessel/server-scope'
 import type { ServerScope } from '@/kessel/server-scope'
@@ -99,6 +99,19 @@ describe('RemoteDesktopSection: Owner', () => {
       fireEvent.click(screen.getByTestId('remote-desktop-enable-confirm'))
     })
     expect(daemon.posts).toEqual([{ route: 'desktop/enable', body: {} }])
+  })
+
+  it('on a Linux server with no screen the switch shows the `virtual` card (LD-18)', async () => {
+    daemon.status = status({ ...OWNER_EXTRA, desktop: 'virtual', backend: 'linux', state: 'not_set_up', message: '' })
+    await show()
+    fireEvent.click(screen.getByTestId('remote-desktop-switch'))
+    const shown = screen.getByTestId('remote-desktop-enable-card').textContent ?? ''
+    expect(shown).toContain(VIRTUAL_ENABLE_CARD)
+    expect(shown).not.toContain(DESKTOP_ENABLE_CARD)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('remote-desktop-enable-confirm'))
+    })
+    expect(daemon.posts).toEqual([{ route: 'desktop/enable', body: { desktop: 'virtual' } }])
   })
 
   it('grant, revoke, kick and hidden apps send the routes’ bodies', async () => {

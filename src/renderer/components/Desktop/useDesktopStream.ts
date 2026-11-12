@@ -44,6 +44,8 @@ export interface UseDesktopStreamArgs {
   mayControl: boolean
   /** Start view-only (`view=1`). */
   viewOnly: boolean
+  /** The desktop to show; null: This server (the daemon's pick). */
+  desktop?: string | null
   /** The display asked for at dial time. */
   display: string | null
   canvasRef: React.RefObject<HTMLCanvasElement | null>
@@ -188,6 +190,7 @@ export function useDesktopStream(args: UseDesktopStreamArgs): DesktopStreamView 
         scope,
         decode,
         window: STREAM_WINDOW,
+        desktop: a.desktop ?? null,
         display: a.display,
         view: a.viewOnly,
         stats: true,

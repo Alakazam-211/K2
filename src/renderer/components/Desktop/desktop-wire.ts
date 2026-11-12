@@ -122,13 +122,15 @@ export type ViewerMsg =
   | { t: 'hand-back' }
   | { t: 'display'; id: string }
   | { t: 'view'; on: boolean }
+  /** This viewer has the tab in view (every 30 s while shown; LD-24). */
+  | { t: 'present' }
 
 const SERVER_TAGS: ReadonlySet<string> = new Set([
   'hello', 'state', 'control', 'viewers', 'cursor', 'cursor-pos', 'displays', 'clipboard', 'fps', 'codec', 'error', 'stats',
 ])
 const VIEWER_TAGS: ReadonlySet<string> = new Set([
   'ack', 'fps', 'keyframe', 'pointer', 'button', 'wheel', 'key', 'text', 'clipboard-set', 'clipboard-get',
-  'take-control', 'hand-back', 'display', 'view',
+  'take-control', 'hand-back', 'display', 'view', 'present',
 ])
 
 /** Messages that act on the machine (refused for a watcher). Same list as

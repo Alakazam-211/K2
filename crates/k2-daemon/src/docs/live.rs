@@ -428,7 +428,9 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     let t: Target = target::resolve(params.get("workspace").map(String::as_str), &path, caller.default_workspace())
         .map_err(|r| Closed::k2(target_reason(&r), r.code, r.message))?;
     let core = super::cores::core_of(t.tier);
-    if t.tier == Tier::Blob {
+    // The Live view edits text; a deck (the Slides core) has no view for
+    // people yet, so it is refused like any other file that isn't text.
+    if !matches!(t.tier, Tier::Markdown | Tier::Text(_)) {
         return Err(Closed::k2(
             CloseReason::Declined,
             "not_a_text_doc",

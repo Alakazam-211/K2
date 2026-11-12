@@ -100,12 +100,20 @@ pub fn core_of(tier: Tier) -> &'static str {
         Tier::Markdown => docs_cores::MARKDOWN,
         Tier::Text(_) => docs_cores::TEXT,
         Tier::Blob => docs_cores::ANY_FILE,
+        Tier::Deck => docs_cores::SLIDES,
     }
 }
 
-/// The core of a workspace-relative path.
+/// The core of a workspace-relative path, by its name (a deck's is the
+/// Slides core's, on or off).
 pub fn core_of_path(rel: &str) -> &'static str {
     core_of(Tier::of(rel))
+}
+
+/// The core that serves a path now: [`core_of_path`], except that a deck is
+/// the any-file core's while the Slides core is off ([`super::target::tier_now`]).
+pub fn core_now(rel: &str) -> &'static str {
+    core_of(super::target::tier_now(rel))
 }
 
 /// The core as a sentence names it: "the Markdown core".
@@ -114,6 +122,7 @@ fn sentence_name(id: &str) -> &'static str {
         docs_cores::MARKDOWN => "the Markdown core",
         docs_cores::TEXT => "the text and code core",
         docs_cores::BOARD => "the Board core",
+        docs_cores::SLIDES => "the Slides core",
         _ => "the any-file core",
     }
 }
@@ -350,7 +359,9 @@ pub(crate) fn sync_with(
             //    naming the person and whether its doc is on disk. 4. They
             //    leave the watcher index (`forget`).
             let id = core.id;
-            let done = closer.close_where(&|k: &DocKey| core_of_path(&k.path) == id);
+            // By name, and as served now: a deck's sessions go with the
+            // Slides core, and with the any-file core while Slides is off.
+            let done = closer.close_where(&|k: &DocKey| core_of_path(&k.path) == id || core_now(&k.path) == id);
             let on_disk: HashMap<DocKey, bool> = done.iter().map(|c| (c.key.clone(), c.error.is_none())).collect();
             super::live::close_core(id, Some(by_name.as_str()), &on_disk);
             for c in done {
@@ -477,7 +488,7 @@ fn open_now(caller: &DocCaller) -> BTreeMap<&'static str, (usize, usize, Vec<Str
         if participants == 0 {
             continue;
         }
-        let e = out.entry(core_of_path(&key.path)).or_default();
+        let e = out.entry(core_now(&key.path)).or_default();
         e.0 += 1;
         e.1 += participants;
         if may_see(caller, &key) {
@@ -501,10 +512,13 @@ pub fn cores_route_for(caller: &DocCaller, path: Option<&str>) -> CliResponse {
     let r = cores_route(caller);
     let Some(p) = path.map(str::trim).filter(|p| !p.is_empty()) else { return r };
     let Ok(mut v) = serde_json::from_str::<Value>(&r.body) else { return r };
-    let tier = Tier::of(p);
-    // A board is `Tier::Blob` to the docs routes, and its own row here.
+    let tier = super::target::tier_now(p);
+    // A board is `Tier::Blob` to the docs routes, and its own row here. A
+    // deck is the Slides core's while it is on (no live view for people yet:
+    // it opens the usual way), else any-file's.
     let core = if super::target::is_board_file(p) { docs_cores::BOARD } else { core_of(tier) };
-    v["file"] = json!({ "core": core, "on": is_on(core), "liveView": tier != Tier::Blob });
+    let live_view = matches!(tier, Tier::Markdown | Tier::Text(_));
+    v["file"] = json!({ "core": core, "on": is_on(core), "liveView": live_view });
     CliResponse { body: v.to_string(), ..r }
 }
 
@@ -617,10 +631,61 @@ pub(crate) mod tests {
         assert_eq!(core_of_path("src/main.rs"), "text");
         assert_eq!(core_of_path("data.csv"), "text");
         assert_eq!(core_of_path("photo.png"), "any-file");
-        assert_eq!(core_of_path("deck.pptx"), "any-file");
-        for p in ["art/poster.psd", "scene.blend", "part.dwg", "gear.step", "print.stl", "model.fbx"] {
+        assert_eq!(core_of_path("deck.pptx"), "slides");
+        assert_eq!(core_of_path("a/Talk.PPTX"), "slides");
+        for p in ["art/poster.psd", "scene.blend", "part.dwg", "gear.step", "print.stl", "model.fbx", "deck.pptx.zip", "deck.ppt"] {
             assert_eq!(core_of_path(p), "any-file", "{p}");
         }
+        assert_ne!(core_of_path(".pptx"), "slides", "a name with nothing before the dot isn't a deck");
+    }
+
+    /// A deck is served by the Slides core while it is on, and by the
+    /// any-file core while it is off (as before the Slides core).
+    #[test]
+    fn a_deck_is_served_by_the_slides_core_only_while_it_is_on() {
+        let _m = mirror_lock();
+        all_off();
+        assert_eq!(core_now("talk.pptx"), "any-file");
+        assert_eq!(crate::docs::target::tier_now("talk.pptx"), Tier::Blob);
+        set("slides", true);
+        assert_eq!(core_now("talk.pptx"), "slides");
+        assert_eq!(crate::docs::target::tier_now("talk.pptx"), Tier::Deck);
+        assert_eq!(core_now("photo.png"), "any-file", "only decks move");
+        all_off();
+    }
+
+    /// Turning Slides off closes the loaded decks; turning any-file off
+    /// closes them too while Slides is off (they are any-file docs then), and
+    /// leaves them while Slides is on.
+    #[test]
+    fn a_flip_closes_the_decks_its_core_serves() {
+        let _m = mirror_lock();
+        crate::test_support::with_temp_home(|| {
+            all_off();
+            let key = |p: &str| key("p1", p);
+            let fake = Fake {
+                loaded: vec![key("talk.pptx"), key("photo.png"), key("notes.md")],
+                dirty: Vec::new(),
+                failing: Vec::new(),
+                calls: AtomicUsize::new(0),
+                closed: Mutex::new(Vec::new()),
+            };
+            sync_with(&map(&[("any-file", true), ("slides", true)]), "owner-token", Some(&fake), count_start);
+            sync_with(&map(&[("any-file", false), ("slides", true)]), "owner-token", Some(&fake), count_start);
+            assert_eq!(*fake.closed.lock().expect("closed"), vec![key("photo.png")], "a live deck stays while Slides is on");
+            fake.closed.lock().expect("closed").clear();
+            sync_with(&map(&[("any-file", false), ("slides", false)]), "owner-token", Some(&fake), count_start);
+            assert_eq!(*fake.closed.lock().expect("closed"), vec![key("talk.pptx")], "Slides off closes the decks");
+            fake.closed.lock().expect("closed").clear();
+            sync_with(&map(&[("any-file", true)]), "owner-token", Some(&fake), count_start);
+            sync_with(&map(&[("any-file", false)]), "owner-token", Some(&fake), count_start);
+            assert_eq!(
+                *fake.closed.lock().expect("closed"),
+                vec![key("talk.pptx"), key("photo.png")],
+                "with Slides off, a deck is an any-file doc"
+            );
+            all_off();
+        });
     }
 
     #[test]
@@ -723,7 +788,7 @@ pub(crate) mod tests {
             assert_eq!(events.len(), 1, "one event per flip: {events:?}");
             assert_eq!(
                 events[0],
-                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "board": false, "markdown": false, "text": true},
+                json!({"kind": "doc_cores_changed", "cores": {"any-file": false, "board": false, "markdown": false, "slides": false, "text": true},
                        "core": "markdown", "on": false, "by": "anna"})
             );
             let last = last_changes().lock().expect("last").get("markdown").cloned().expect("last change");
@@ -809,7 +874,7 @@ pub(crate) mod tests {
             set("markdown", true);
             let file = |p: &str| -> Value {
                 let v: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some(p)).body).expect("json");
-                assert_eq!(v["cores"].as_array().map(Vec::len), Some(4), "the rows are still there");
+                assert_eq!(v["cores"].as_array().map(Vec::len), Some(5), "the rows are still there");
                 v["file"].clone()
             };
             assert_eq!(file("/nowhere/notes.md"), json!({"core": "markdown", "on": true, "liveView": true}));
@@ -819,18 +884,23 @@ pub(crate) mod tests {
             for board in ["plan.k5board", "a/b/X.K5BOARD", "Makefile.k5board", ".env.k5board"] {
                 assert_eq!(file(board), json!({"core": "board", "on": false, "liveView": false}), "{board}");
             }
+            // A deck: any-file's while Slides is off; Slides' while on, with
+            // no live view for people (it opens the usual way).
+            assert_eq!(file("talk.pptx"), json!({"core": "any-file", "on": false, "liveView": false}));
+            set("slides", true);
+            assert_eq!(file("talk.pptx"), json!({"core": "slides", "on": true, "liveView": false}));
             let none: Value = serde_json::from_str(&cores_route_for(&crate::docs::caller::owner(), Some("  ")).body).expect("json");
             assert!(none.get("file").is_none(), "{none}");
             all_off();
         });
     }
 
-    /// The read route: four rows from the registry (the Board's view is
+    /// The read route: five rows from the registry (the Board's view is
     /// `garden`), every core off by default, all-zero `open` without a
     /// runtime, and `canChange` only for the owner token and Owner/Admin
     /// logins.
     #[test]
-    fn the_read_route_lists_four_cores_and_says_who_can_change_them() {
+    fn the_read_route_lists_five_cores_and_says_who_can_change_them() {
         let _m = mirror_lock();
         crate::test_support::with_temp_home(|| {
             all_off();
@@ -842,8 +912,9 @@ pub(crate) mod tests {
             assert_eq!(owner["ok"], true);
             assert_eq!(owner["canChange"], true);
             let ids: Vec<&str> = owner["cores"].as_array().expect("rows").iter().map(|r| r["id"].as_str().expect("id")).collect();
-            assert_eq!(ids, ["markdown", "text", "any-file", "board"]);
+            assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides"]);
             assert_eq!(owner["cores"][3]["view"], "garden");
+            assert_eq!(owner["cores"][4]["view"], "none", "Slides: no live view for people yet");
             for row in owner["cores"].as_array().expect("rows") {
                 assert_eq!(row["on"], false, "{row}");
                 assert_eq!(row["status"], "beta");

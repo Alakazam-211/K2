@@ -1289,7 +1289,7 @@ One core opens as a Garden, not a file kind:
   k2 doc cores on <core>      turn one on (people only: the owner or an Admin)
   k2 doc cores off <core>     turn one off; files open live are written to disk
                               and closed (their history stays)
-    <core>: markdown | text | any-file | board
+    <core>: markdown | text | any-file | board | slides
   --json                      the daemon's JSON (on/off: the switches and the report)
   --host <server> [--token T] another server (a Connect login with the Owner or Admin role)
 
@@ -1324,7 +1324,7 @@ _doc_cores() {
     case "${#_DOC_ARGS[@]}" in
         0) ;;
         2) action="${_DOC_ARGS[0]}"; core="${_DOC_ARGS[1]}" ;;
-        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file | board)" ;;
+        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file | board | slides)" ;;
     esac
     if [ -z "$action" ]; then
         _doc_call GET /cli/docs/cores ""
@@ -1344,8 +1344,8 @@ print("While a core is off, k2 doc refuses its files (core_off, exit 3) and peop
 '
         return 0
     fi
-    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file | board)" ;; esac
-    case "$core" in markdown|text|any-file|board) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file, board)" ;; esac
+    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file | board | slides)" ;; esac
+    case "$core" in markdown|text|any-file|board|slides) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file, board, slides)" ;; esac
     if [ -n "${SCOPED_TOKEN:-}" ]; then
         [ "${_DOC_JSON:-0}" = "1" ] || echo "Error [person_only]: k2 doc cores on|off is for people, from a terminal outside K2 or Settings → Cores → Multiplayer. An agent can list the cores (k2 doc cores) and asks its human (k2 thread) to turn one on." >&2
         python3 -c 'import json; print(json.dumps({"error": {"code": "person_only", "hint": "k2 doc cores on|off is for people"}}))' >&2

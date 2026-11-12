@@ -24,7 +24,9 @@
 //! tier 0. A text file a pack refuses at open (`too_large`, `not_utf8`,
 //! `binary`, `mixed_line_endings`) falls back to tier 0 with the reason
 //! shown (`routes`), never to a plain editor. A path keeps its kind for
-//! life (`mv` can't change Markdown, text or any-file).
+//! life (`mv` can't change Markdown, text or any-file). A `.pptx` deck is a
+//! live keyed doc ([`Tier::Deck`], the pptx pack) while the Slides core is
+//! on, and a tier-0 doc while it is off ([`tier_now`]).
 //!
 //! **Never live docs** (MI12), refused before any open, on every tier:
 //! - secret files by path or content (`secret_paths::classify`), `secret`;
@@ -36,6 +38,22 @@
 use std::path::{Path, PathBuf};
 
 use k2_mpc_base::store::DocKey;
+
+/// A `.pptx` deck, by its name alone (any case, a name before the dot).
+pub fn is_deck_file(rel: &str) -> bool {
+    let name = rel.rsplit(['/', '\\']).next().unwrap_or(rel);
+    name.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && ext.eq_ignore_ascii_case("pptx"))
+}
+
+/// A path's tier now: [`Tier::of`], except that a deck is an any-file doc
+/// while the Slides core is off (as before that core), so every route,
+/// export and the Live socket treat it exactly as they did.
+pub fn tier_now(rel: &str) -> Tier {
+    match Tier::of(rel) {
+        Tier::Deck if !super::cores::is_on(k2_core::docs_cores::SLIDES) => Tier::Blob,
+        t => t,
+    }
+}
 
 /// A Board file, by its name alone (any case, whatever comes before it).
 pub fn is_board_file(rel: &str) -> bool {
@@ -80,6 +98,11 @@ pub enum Tier {
     Text(k2_mpc_text::Family),
     /// Any other file (tier 0): presence, a lease, versions and restore.
     Blob,
+    /// A `.pptx` deck as a live keyed doc (K2 Cores' pptx pack, `PptxLive`),
+    /// behind the Slides core: slides and shapes by their own ids, the pack's
+    /// verbs for agents, no live view for people yet. While that core is off
+    /// a deck is [`Tier::Blob`] ([`tier_now`]).
+    Deck,
 }
 
 impl Tier {
@@ -89,6 +112,8 @@ impl Tier {
         // name prefixes, and a board is a zip, never text.
         if is_board_file(rel) || is_design_file(rel) {
             Tier::Blob
+        } else if is_deck_file(rel) {
+            Tier::Deck
         } else if k2_mpc_markdown::is_markdown_path(rel) {
             Tier::Markdown
         } else if let Some(pack) = k2_mpc_text::TextPack::for_path(rel) {
@@ -98,38 +123,43 @@ impl Tier {
         }
     }
 
-    /// On the wire: `1` (live text: Markdown or the text pack) or `0` (any
-    /// file).
+    /// On the wire: `1` (a live doc: Markdown, the text pack, a deck) or `0`
+    /// (any file).
     pub fn number(self) -> u8 {
         match self {
-            Tier::Markdown | Tier::Text(_) => 1,
+            Tier::Markdown | Tier::Text(_) | Tier::Deck => 1,
             Tier::Blob => 0,
         }
     }
 
-    /// The pack's name on the wire: `markdown`, `text`, or `blob`.
+    /// The pack's name on the wire: `markdown`, `text`, `pptx` or `blob`.
     pub fn pack(self) -> &'static str {
         match self {
             Tier::Markdown => "markdown",
             Tier::Text(_) => "text",
+            Tier::Deck => "pptx",
             Tier::Blob => "blob",
         }
     }
 
     /// The editor family (`markdown`, the text pack's `text` / `code` /
-    /// `config` / `markup` / `diagram` / `csv-as-text`, or `none`).
+    /// `config` / `markup` / `diagram` / `csv-as-text`, `deck`, or `none`).
     pub fn family(self) -> &'static str {
         match self {
             Tier::Markdown => "markdown",
             Tier::Text(f) => f.name(),
+            Tier::Deck => "deck",
             Tier::Blob => "none",
         }
     }
 
     /// The same kind of doc (`mv` keeps it): Markdown, text (any family:
-    /// one schema), or any-file.
+    /// one schema), a deck, or any-file.
     pub fn same_kind(self, other: Tier) -> bool {
-        matches!((self, other), (Tier::Markdown, Tier::Markdown) | (Tier::Text(_), Tier::Text(_)) | (Tier::Blob, Tier::Blob))
+        matches!(
+            (self, other),
+            (Tier::Markdown, Tier::Markdown) | (Tier::Text(_), Tier::Text(_)) | (Tier::Deck, Tier::Deck) | (Tier::Blob, Tier::Blob)
+        )
     }
 }
 
@@ -386,12 +416,13 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     if is_board_file(&rel) {
         return Err(Refusal::board_file(&rel));
     }
-    if !Tier::of(&rel).same_kind(t.tier) {
+    if !tier_now(&rel).same_kind(t.tier) {
         return Err(Refusal::bad(
             "tier_change",
             match t.tier {
                 Tier::Markdown => format!("{} is a Markdown doc; mv keeps it one (name it .md or .markdown)", t.rel),
                 Tier::Text(_) => format!("{} is a text doc; mv keeps it text ({rel} isn't: Markdown, or not text)", t.rel),
+                Tier::Deck => format!("{} is a deck; mv keeps it one (name it .pptx)", t.rel),
                 Tier::Blob => format!("{} is an any-file doc; mv keeps it one ({rel} would be a text doc)", t.rel),
             },
         ));
@@ -575,7 +606,7 @@ fn resolve_any(workspace: Option<&str>, path: &str, default_workspace: Option<&s
     }
     let rel = rel_string(&root, &abs)?;
     deny(&rel, &link, &abs)?;
-    let tier = Tier::of(&rel);
+    let tier = tier_now(&rel);
     Ok(Target { project_id, root, rel, abs, tier })
 }
 
@@ -622,6 +653,23 @@ mod tests {
             assert!(!is_board_file(name), "{name}");
         }
         assert_eq!(Tier::of("plan.k5board.md"), Tier::Markdown);
+    }
+
+    /// A `.pptx` (any case) is a deck by name; nothing else is. A deck is a
+    /// live doc (tier 1, the pptx pack), and mv keeps it one.
+    #[test]
+    fn a_pptx_is_a_deck_by_name_and_nothing_else_is() {
+        for name in ["talk.pptx", "a/b/Talk.PPTX", "q3 review.Pptx", ".hidden.pptx"] {
+            assert!(is_deck_file(name), "{name}");
+            assert_eq!(Tier::of(name), Tier::Deck, "{name}");
+        }
+        for name in [".pptx", "talk.ppt", "talk.pptx.zip", "talk.potx", "talk.ppsx", "pptx", "dir.pptx/a.md"] {
+            assert!(!is_deck_file(name), "{name}");
+            assert_ne!(Tier::of(name), Tier::Deck, "{name}");
+        }
+        assert_eq!((Tier::Deck.number(), Tier::Deck.pack(), Tier::Deck.family()), (1, "pptx", "deck"));
+        assert!(Tier::Deck.same_kind(Tier::Deck));
+        assert!(!Tier::Deck.same_kind(Tier::Blob) && !Tier::Blob.same_kind(Tier::Deck));
     }
 
     #[test]
@@ -739,9 +787,11 @@ mod tests {
             assert_eq!(Tier::of(p), Tier::Text(f), "{p}");
             assert_eq!(Tier::of(p).number(), 1, "{p}");
         }
-        for p in ["logo.png", "report.pdf", "deck.pptx", "song.mp3", "a.zip", "font.woff2"] {
+        for p in ["logo.png", "report.pdf", "deck.ppt", "song.mp3", "a.zip", "font.woff2"] {
             assert_eq!(Tier::of(p), Tier::Blob, "{p}");
         }
+        // A .pptx is a deck by name (the Slides core; a tier-0 doc while it is off).
+        assert_eq!(Tier::of("deck.pptx"), Tier::Deck);
         assert_eq!(Tier::Blob.number(), 0);
         assert_eq!(Tier::of("data.csv").family(), "csv-as-text");
         assert!(Tier::of("a.txt").same_kind(Tier::of("b.toml")), "text stays text across families");

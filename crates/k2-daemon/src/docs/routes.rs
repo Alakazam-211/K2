@@ -409,10 +409,11 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             return super::tier0::handle(path, &rt, &call, Some(&why));
         }
         Err(OpenError::Session(SessionError::PackMismatch { stored, .. })) if stored == k2_mpc_base::store::BLOB_DOC_PACK => {
-            let why = super::tier0::Fallback {
-                code: "stored_as_any_file".into(),
-                message: "it was opened as an any-file doc earlier (its text was refused then), and stays one".into(),
+            let message = match target.tier {
+                target::Tier::Deck => "it was opened as an any-file doc earlier (before the Slides core was on), and stays one",
+                _ => "it was opened as an any-file doc earlier (its text was refused then), and stays one",
             };
+            let why = super::tier0::Fallback { code: "stored_as_any_file".into(), message: message.into() };
             return super::tier0::handle(path, &rt, &call, Some(&why));
         }
         Err(e) => return e.into_response(),
@@ -660,6 +661,10 @@ pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>,
     }
     let pack: Arc<dyn k2_mpc_base::session::Pack> = match t.tier {
         target::Tier::Text(_) => Arc::new(k2_mpc_text::TextPack::for_path(&t.rel).unwrap_or(k2_mpc_text::PACK)),
+        // A deck (the Slides core): a live keyed doc, written back by splicing
+        // into its carrier. A deck the pack declines (or one over the kit's
+        // keyed limit) is a tier-0 doc, as any declined file.
+        target::Tier::Deck => Arc::new(k2_mpc_pptx::PptxLive::default()),
         _ => Arc::new(k2_mpc_markdown::PACK),
     };
     let opened = rt.open(&key, &t.abs, &t.root, pack);

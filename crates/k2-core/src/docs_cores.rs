@@ -53,6 +53,9 @@ pub const ANY_FILE: &str = "any-file";
 /// The Board Garden (plan-board-garden-v1 §1.4, Rosson 2026-11-01): a Beta,
 /// off by default. Adding a Board Garden turns it on in the same step.
 pub const BOARD: &str = "board";
+/// `.pptx` decks as live keyed docs (K2 Cores' pptx pack, `PptxLive`), a Beta,
+/// off by default. Off, a deck is an any-file doc, as before the core.
+pub const SLIDES: &str = "slides";
 
 /// Every core, in the order Settings and the CLI list them.
 pub const CORES: &[Core] = &[
@@ -88,6 +91,14 @@ pub const CORES: &[Core] = &[
         short: "the Board Garden (a whiteboard for you and your agents)",
         view: CoreView::Garden,
     },
+    Core {
+        id: SLIDES,
+        name: "Slides core",
+        status: "beta",
+        description: ".pptx decks. Agents read and change slides and shapes with deck verbs (slide list, shape text, shape move), and a save from your presentation app is taken in by slide and shape. Decks still open the usual way: there's no live view yet. Off: a .pptx is an any-file doc.",
+        short: ".pptx decks: slide and shape verbs for agents",
+        view: CoreView::None,
+    },
 ];
 
 /// Whether a core opens files (and so needs the docs runtime): every view
@@ -104,7 +115,7 @@ pub fn by_id(id: &str) -> Option<&'static Core> {
     CORES.iter().find(|c| c.id == id)
 }
 
-/// `markdown, text, any-file, board`, for refusals.
+/// `markdown, text, any-file, board, slides`, for refusals.
 pub fn ids_list() -> String {
     CORES.iter().map(|c| c.id).collect::<Vec<_>>().join(", ")
 }
@@ -141,9 +152,9 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn four_cores_in_order() {
+    fn five_cores_in_order() {
         let ids: Vec<&str> = CORES.iter().map(|c| c.id).collect();
-        assert_eq!(ids, ["markdown", "text", "any-file", "board"]);
+        assert_eq!(ids, ["markdown", "text", "any-file", "board", "slides"]);
         assert_eq!(by_id("board").expect("board").view, CoreView::Garden);
         assert_eq!(by_id("board").expect("board").status, "beta");
         assert!(opens_files("markdown") && opens_files("any-file") && !opens_files("board") && !opens_files("nope"));
@@ -151,7 +162,21 @@ mod tests {
         assert_eq!(by_id("any-file").expect("any-file").view, CoreView::None);
         assert_eq!(by_id("markdown").expect("markdown").view, CoreView::Live);
         assert!(by_id("word").is_none());
-        assert_eq!(ids_list(), "markdown, text, any-file, board");
+        assert_eq!(ids_list(), "markdown, text, any-file, board, slides");
+    }
+
+    /// The Slides core opens files (decks, live) but has no view for people
+    /// yet: a deck opens the usual way.
+    #[test]
+    fn the_slides_core_opens_decks_with_no_view_for_people() {
+        let c = by_id(SLIDES).expect("slides");
+        assert_eq!(c.view, CoreView::None);
+        assert_eq!(c.status, "beta");
+        assert!(opens_files(SLIDES));
+        for text in [c.description, c.short] {
+            assert!(text.contains(".pptx"), "{text}");
+        }
+        assert!(c.description.contains("Off: a .pptx is an any-file doc"), "{}", c.description);
     }
 
     /// People look for these by file type (Settings and `k2 doc cores`).
@@ -174,7 +199,7 @@ mod tests {
         validate_partial(&json!({})).expect("empty is fine");
         assert_eq!(
             validate_partial(&json!({"word": true})).expect_err("unknown"),
-            "multiplayerCores.word: no such core (markdown, text, any-file, board)"
+            "multiplayerCores.word: no such core (markdown, text, any-file, board, slides)"
         );
         assert_eq!(
             validate_partial(&json!({"markdown": "yes"})).expect_err("not a bool"),

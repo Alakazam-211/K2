@@ -583,6 +583,21 @@ pub enum KeyedRoot {
     Map(BTreeMap<String, Value>),
 }
 
+/// How many entries a root holds, as the kit's test-only visit counts count them: a list's
+/// live and deleted elements and its places, a map's keys, 1 for a text.
+#[cfg_attr(not(any(test, feature = "differential")), allow(dead_code))]
+pub(crate) fn root_entries(r: &KeyedRoot) -> usize {
+    match r {
+        KeyedRoot::Text(_) => 1,
+        KeyedRoot::List {
+            live,
+            hidden,
+            places,
+        } => live.len() + hidden.len() + places.len(),
+        KeyedRoot::Map(m) => m.len(),
+    }
+}
+
 /// What changed from `before` to `after` (two states of one doc, the second later), as an
 /// applied stream: **the stream of a merged update** (CSV seam design §4.2). A change made
 /// here reports its own ops ([`crate::Doc::edit_applied`]); a merged update (another

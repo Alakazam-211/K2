@@ -1,5 +1,106 @@
 # Changelog
 
+## v0.15.1 (2026-11-12)
+
+A host release on v0.15.0. The crate version is `0.15.1`; the client's stays `0.15.0` (its code
+is unchanged since v0.15.0; only its N−1 test moved). No public API change, no wire change (still version 3)
+and no new error id. The store format is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7,
+`STORE_FORMAT_BASE` 5) and no store needs a migration; one added row comes without a format
+bump (below). Pairs with the markdown, text, board, csv and psd pack tags of this release, and
+with the pptx pack's v0.1.2.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.15.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it).
+
+For a host, in short (details below):
+
+- **Speed on keyed docs that aren't tables (a deck, a board):** a pack's structured read, its
+  field verbs and a one-element list change (insert, move, delete) cost the kit what they
+  touch, not the whole doc; opening an untouched file renders nothing (it compares the file by
+  a stored hash). Tables and text docs are unchanged. No call, event or error changes.
+- **A list root in the view a pack's verb reads carries no `places`** (empty, as a version's
+  view already was); its live order and deleted elements are exact. No pack in this release
+  reads them.
+- **The pack contract gains the carrier's byte-exact row:** a pack that keeps a carrier runs the
+  kit's `session::test_support::carrier_judge` (feature `test-support`, test builds only) over
+  its corpus, and the template's `scripts/pack-checks/carrier-row.sh` fails one that doesn't.
+- **Going back to v0.15.0 or v0.14.0:** the store's sync table gains a third row per doc (what
+  the doc is known to render as). An older kit reads the first two rows only, moves, copies and
+  deletes a doc's rows by range, and leaves the third as it was; this release then renders to
+  compare whenever that row doesn't name the synced bytes at the doc's version.
+
+- **The N−1 rows depend on the previous release** (tooling and tests only). `tools/n1/n1.sh`
+  reads each kit's crate version from its manifest and hands it to the rows (`K2MB_N1_READER`,
+  `K2MB_N1_PREV`), and the wire row reads the previous client's `WIRE_VERSION`. Against a
+  release that doesn't know a table (v0.14.0: the turn, verb and carrier tables, wire 2) the
+  rows assert what they did; against one that knows them (v0.15.0 and later) they assert plain
+  round trips: its delete takes a doc's turn rows, its rewrite takes a store with carriers, its
+  delete gives a carrier's count back, and this client reads its wire-3 turns and claim times.
+  Changed: `n1_turns_after` (`tests/grid_store.rs`), `n1_carrier_after`
+  (`tests/live_carrier.rs`), `tools/n1/consumer-carrier` and `client/test/n1-wire.test.ts`.
+- **A one-element list change on a keyed doc costs the kit what it touches** (performance; no
+  API change). On a live keyed doc that isn't a table, an insert, move or delete in v0.15.0
+  re-read the whole list into the live view, copied the doc before every agent's list change,
+  and rendered the file to see whether the disk replica should re-sync. Now:
+  - the live view replays each list op from its positions before and after (no element read),
+    and the read bases' journal keeps the ops, not a copy of the list. A keyed doc's live view
+    carries no `places` (empty, as a version's view);
+  - an agent's change copies the doc first only when it can cut a version (K-HIST-4), decided
+    from the view's lengths;
+  - the disk replica's re-sync after an insert, a delete, a restore or a drop renders only when
+    the doc's content digest (kept by the view) equals the synced content's;
+  - presence reads liveness from the view, so the engine's list order isn't rebuilt for it;
+  - a move's revert record asks the engine for the moved element's left neighbours
+    (`Doc::left_chain`) instead of copying the list's places.
+  The engine's own work stays O(the list) on Yrs (its plan reads the whole list); it is
+  measured and counted apart (`differential::take_engine_visits`). Plant
+  `KeyedMutant::ListReReadsRoot`. Details: `docs/SESSIONS.md`, "A keyed doc's live view".
+- **The carrier pack's byte-exact row is part of the pack contract** (new, test-only API; packs
+  that keep a carrier must add it). `docs/PACK_TEMPLATE.md`: a pack whose `wants_carrier()` is
+  true MUST show that an untouched doc writes back byte for byte, which the kit relies on when
+  it opens an untouched carrier file without rendering it. The row is the kit's:
+  `session::test_support::carrier_judge(pack, corpus)` (feature `test-support`) checks, per
+  file, the hook (`encode_from` of the file's own content is the file), the file opened live
+  through the kit (it renders as itself and a flush leaves it), and the same after a restart,
+  reporting every failure by file and leg; it returns `CarrierVerdict::NotACarrierPack` and
+  checks nothing for any other pack. `scripts/pack-checks/carrier-row.sh`, now in the
+  template's check script, fails a pack that keeps a carrier and never calls the judge (its
+  self-test runs in the evidence part). The kit runs the judge on its own carrier packs.
+  **The pptx pack needs the row before it pins this kit.**
+- **A structured call on a keyed doc costs what it touches** (performance; no API change). On a
+  live keyed doc that isn't a table (a deck, a board), a pack's structured read and verb in
+  v0.15.0 rebuilt a view of every root from the engine on every call (and a read a second copy,
+  for its read base): about 1 µs per element and field of the whole doc per call. Now:
+  - the session keeps the doc's keyed state as a **live view**, built once on first need and
+    kept in step by every change from its applied stream (a map op sets or removes its key; a
+    list or text root a change touched is read afresh, O(that root)); a verb's `View` shares it,
+    with no copy;
+  - a read records its version as a **read base without a copy**: while a base lives the
+    session keeps the reverse of each change since, and a verb naming positions at an older
+    base gets that version rebuilt (O(doc), only then). Bases are kept and counted as before;
+  - the `keyed_max_entries` count comes from the view's lengths, never a recount;
+  - the Yrs adapter keeps the doc's deleted units for a change's write identity instead of
+    reading the whole delete set on every structured edit.
+  Tables are unchanged. Details: `docs/SESSIONS.md`, "A keyed doc's live view".
+- **Opening an untouched file renders nothing** (performance; an additive store row). The open
+  rendered the doc twice to check that the file holds it. The store now records what the doc
+  is known to render as (its log position, the bytes' keyed hash, the codec settings: a third
+  row of the sync table, no format bump), at a write-back, at an open that rendered to compare,
+  and at a carrier pack's import (the carrier's contract: an untouched doc writes back byte for
+  byte). When it names the synced bytes at the doc's version, the open compares the file by
+  hash only; otherwise (an outside save, a process stopped before a write-back, an older kit's
+  store) it
+  renders as before, and records what it learnt. An older kit reads the sync table's first two
+  rows only. Details: `docs/SESSIONS.md`, "The carrier (K1)".
+- **Test-only counts and plants** (`differential`): `take_entry_visits`, the entries the kit
+  read or copied in bulk on a thread, and `set_view_checks`, which switches off the checks a
+  test build makes of the live view (every hand-out against the engine doc, every rebuilt read
+  base against a snapshot, the kept deleted units against the delete set). Plants
+  `KeyedMutant::ReadVisitsWholeDoc` and `KeyedMutant::OpenRendersToCompare`. The rows:
+  `tests/keyed_cost.rs` (a one-entry read and verb visit at most 16 entries at 1,000 and 50,000
+  elements and fields; an untouched open renders nothing), with the measurement
+  (`keyed_cost_measure`, ignored).
+
 ## v0.15.0 (2026-11-11)
 
 A host release on v0.14.0. The crate version is `0.15.0`; the client's is `0.15.0`. Pairs with

@@ -9,6 +9,10 @@
 // - This client (wire 3) on the previous release's goldens (wire 2): the same, with no `turn`, no
 //   focus or range, and claims attributed from the roster.
 // - This client on a wire-2 welcome sends no frame a wire-2 host doesn't take.
+//
+// The previous release's wire is its `WIRE_VERSION` (src/wire.ts; none there: 2). Above is a wire-2
+// release (v0.14.0). A wire-3 one (v0.15.0 and later) is a plain round trip: this client reads
+// its turns, verbs and claim times as they are.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -22,6 +26,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PREV = join(HERE, "n1-prev");
 const OURS = join(HERE, "golden");
 const has = existsSync(join(PREV, "src", "presence.ts")) && existsSync(join(PREV, "golden"));
+/** The previous release's wire version: its `WIRE_VERSION`, or 2 before it had one. */
+const prevWire = has ? Number(/export const WIRE_VERSION = (\d+);/.exec(readFileSync(join(PREV, "src", "wire.ts"), "utf8"))?.[1] ?? 2) : 2;
 
 type Change = { root: string; version: number; text: string; events: ChangeEvent[]; final_version: number; final_text: string };
 type Roster = { self: string; client?: number; events: RosterEvent[]; final: RosterEvent };
@@ -93,7 +99,7 @@ function readsAll(client: Client, dir: string): number {
 }
 
 describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
-  it("the previous client (wire 2) reads this kit's goldens (wire 3)", async () => {
+  it("the previous client reads this kit's goldens (wire 3)", async () => {
     const prev = await previous();
     const n = readsAll(prev, OURS);
     expect(n).toBeGreaterThanOrEqual(10);
@@ -113,15 +119,23 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
     expect(w.sent).toEqual([]);
   });
 
-  it("this client (wire 3) reads the previous release's goldens (wire 2)", () => {
+  it("this client (wire 3) reads the previous release's goldens", () => {
+    expect([2, 3]).toContain(prevWire);
     const n = readsAll({ LiveText, PresenceChannel }, join(PREV, "golden"));
     expect(n).toBeGreaterThanOrEqual(8);
-    // no turn or verb there: none read
-    for (const e of load<Change>(join(PREV, "golden"), "change_events.json").events) {
-      expect(e.turn).toBeUndefined();
-      expect(e.verb).toBeUndefined();
+    const changes = load<Change>(join(PREV, "golden"), "change_events.json").events;
+    if (prevWire >= 3) {
+      // wire 3 both sides: its turns are there, and read as they are
+      expect(changes.some((e) => typeof e.turn === "string")).toBe(true);
+    } else {
+      // no turn or verb there: none read
+      for (const e of changes) {
+        expect(e.turn).toBeUndefined();
+        expect(e.verb).toBeUndefined();
+      }
     }
-    // claims from a wire-2 stream: attributed from the roster, no start time
+    // claims: from a wire-2 stream, attributed from the roster with no start time; from a
+    // wire-3 one, with the actor and start time the stream carries
     const g = load<Roster>(join(PREV, "golden"), "roster_events_claims_elems.json");
     const w = wire();
     const p = new PresenceChannel(w.t, { root: "source", version: 0, client: 1, self: g.self, rights: "edit" }, now);
@@ -129,7 +143,8 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
     expect(p.claims().length).toBeGreaterThan(0);
     for (const c of p.claims()) {
       expect(c.actor.name.length).toBeGreaterThan(0);
-      expect(c.startedMs).toBeNull();
+      if (prevWire >= 3) expect(typeof c.startedMs).toBe("number");
+      else expect(c.startedMs).toBeNull();
     }
   });
 

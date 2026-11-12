@@ -1634,11 +1634,26 @@ fn n1_verbs_after() {
     }
 }
 
+/// tools/n1: whether the kit version in the environment variable `var` (a crate version,
+/// `MAJOR.MINOR.PATCH`, which `n1.sh` reads from that kit's manifest) is at least `min`. Unset
+/// (a run by hand): false, the rows' expectations of a build older than every table they check.
+fn n1_version_at_least(var: &str, min: (u64, u64, u64)) -> bool {
+    let Ok(v) = std::env::var(var) else {
+        return false;
+    };
+    let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+    assert_eq!(n.len(), 3, "{var}={v:?}: not MAJOR.MINOR.PATCH");
+    (n[0], n[1], n[2]) >= min
+}
+
 /// tools/n1 `node-both` (after v0.14.0), after the other build's consumer opened, wrote, tried
 /// to rewrite, and deleted a.md in the stores of `K2MB_N1_OUT`: this build reads the file as the
-/// other build left it, opens it, and requires that a.md's turn rows (which the other build can't
-/// erase) are gone after the open, and that turns.md's turn outlived the other build, read back
-/// through the log. A producer before turns wrote none: then nothing is checked.
+/// other build left it, opens it, and requires that a.md's turn rows are gone after the open,
+/// and that turns.md's turn outlived the other build, read back through the log. Which build
+/// deleted a.md is `K2MB_N1_READER`: one before v0.15.0 doesn't know `change_turns`, so its
+/// delete leaves a.md's rows for this build's open to sweep; v0.15.0 and later delete them with
+/// the doc (a plain round trip: none left as it left the file). A producer before turns wrote
+/// none: then nothing is checked.
 #[test]
 #[ignore = "tools/n1: reads the stores another build's consumer left"]
 fn n1_turns_after() {
@@ -1655,10 +1670,22 @@ fn n1_turns_after() {
             gone.len(),
             live.len()
         );
-        assert!(
-            !gone.is_empty(),
-            "{name}: a.md's turn row, left by the delete"
-        );
+        if n1_version_at_least("K2MB_N1_READER", (0, 15, 0)) {
+            assert!(
+                gone.is_empty(),
+                "{name}: its delete took a.md's rows (it knows change_turns): {gone:?}"
+            );
+            assert_eq!(
+                live.len(),
+                1,
+                "{name}: turns.md's row, as the other build left it"
+            );
+        } else {
+            assert!(
+                !gone.is_empty(),
+                "{name}: a.md's turn row, left by the delete"
+            );
+        }
         let store = Arc::new(DocStore::open(&path).unwrap());
         drop(store);
         let (gone, live) = raw_turns(&path);

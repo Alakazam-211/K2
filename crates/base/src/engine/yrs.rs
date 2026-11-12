@@ -59,6 +59,20 @@ pub(crate) struct YrsDoc {
     /// check found its marker path and the full walk disagree; the walk was used). Shared
     /// with the hook, which runs inside a transaction and only pushes here.
     positions: Arc<Mutex<Vec<EngineCheck>>>,
+    /// The clock units the doc has deleted ([`YrsDoc::change_number`]'s part), counted from
+    /// the doc's delete set on first need (O(blocks)) and kept by each change made here (its
+    /// own deletes); [`DELETED_UNKNOWN`] until counted, and again after any merged update.
+    deleted: std::sync::atomic::AtomicU64,
+}
+
+/// [`YrsDoc::deleted`] not counted.
+const DELETED_UNKNOWN: u64 = u64::MAX;
+
+/// A delete set's clock units.
+fn deleted_units(ds: &yrs::IdSet) -> u64 {
+    ds.iter()
+        .flat_map(|(_, ranges)| ranges.iter().map(|r| u64::from(r.end - r.start)))
+        .sum()
 }
 
 /// A throwaway replica and its handle on one text root ([`YrsDoc::replica`]).
@@ -588,16 +602,28 @@ impl YrsDoc {
                 prof!("engine.encode_update");
                 txn.encode_update_v1()
             };
+            // what this change deleted (the doc's deleted units grow by it)
+            let gone = deleted_units(txn.delete_set());
             {
                 prof!("engine.txn_commit");
                 drop(txn);
             }
-            Ok(update)
+            Ok((update, gone))
         });
-        if made.is_err() {
-            self.poisoned = true;
+        let deleted = self.deleted.get_mut();
+        match made {
+            Ok((update, gone)) => {
+                if *deleted != DELETED_UNKNOWN {
+                    *deleted += gone;
+                }
+                Ok(update)
+            }
+            Err(e) => {
+                self.poisoned = true;
+                *deleted = DELETED_UNKNOWN;
+                Err(e)
+            }
         }
-        made
     }
 
     /// Replace this doc's state with `state` (v2, from [`YrsDoc::encode_v2`] of this doc):
@@ -785,14 +811,30 @@ impl YrsDoc {
     /// A number that strictly increases across `client`'s changes to this doc: its clock
     /// plus every clock unit the doc has deleted. A change that writes inserts (the clock
     /// grows) or removes (the deleted units grow); the [`WriteId`]s of a change carry it.
+    ///
+    /// The deleted units are counted once (O(blocks): the doc's delete set) and then kept by
+    /// each change made here, so a change costs O(its own deletes), not O(doc).
     fn change_number(&self, client: ClientId) -> u64 {
+        use std::sync::atomic::Ordering::Relaxed;
         let txn = self.doc.transact();
-        let deleted: u64 = txn
-            .snapshot()
-            .delete_set
-            .iter()
-            .flat_map(|(_, ranges)| ranges.iter().map(|r| u64::from(r.end - r.start)))
-            .sum();
+        let deleted = match self.deleted.load(Relaxed) {
+            DELETED_UNKNOWN => {
+                let d = deleted_units(&txn.snapshot().delete_set);
+                self.deleted.store(d, Relaxed);
+                d
+            }
+            d => {
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::view_checks() {
+                    assert_eq!(
+                        d,
+                        deleted_units(&txn.snapshot().delete_set),
+                        "the deleted units kept are the doc's"
+                    );
+                }
+                d
+            }
+        };
         u64::from(txn.state_vector().get(&ClientID::new(client))) + deleted
     }
 
@@ -806,12 +848,19 @@ impl YrsDoc {
         if let Some(o) = cache.get(root) {
             return Ok(o.clone());
         }
-        let o = Arc::new(structured::order(&self.doc.transact(), refs)?);
+        let o = {
+            prof!("engine.order_rebuild");
+            Arc::new(structured::order(&self.doc.transact(), refs)?)
+        };
+        // a rebuilt order reads every slot of the root (the engine's work, counted apart)
+        engine_visits!(o.places.len());
         cache.insert(*name, o.clone());
         Ok(o)
     }
 
     fn forget_orders(&mut self) {
+        // a merged update or a reset: the deleted units are counted again on next need
+        *self.deleted.get_mut() = DELETED_UNKNOWN;
         self.orders
             .get_mut()
             .unwrap_or_else(|p| p.into_inner())
@@ -869,6 +918,7 @@ impl YrsDoc {
             checks,
             positions,
             pending: self.pending.clone(),
+            deleted: std::sync::atomic::AtomicU64::new(DELETED_UNKNOWN),
         })
     }
 
@@ -1307,6 +1357,7 @@ impl YrsDoc {
         // comes from here), and only then written.
         let structured = edits.iter().any(|e| !matches!(e, Edit::Text { .. }));
         let planned = if structured {
+            prof!("engine.plan");
             let change = self.change_number(client);
             let txn = self.doc.transact();
             Some(structured::plan(
@@ -1412,6 +1463,7 @@ impl EngineDoc for YrsDoc {
             checks,
             positions,
             pending: None,
+            deleted: std::sync::atomic::AtomicU64::new(DELETED_UNKNOWN),
         })
     }
 
@@ -1537,6 +1589,24 @@ impl EngineDoc for YrsDoc {
 
     fn places(&self, root: &str) -> Result<Vec<Key>, DocError> {
         Ok(self.order(root)?.places.clone())
+    }
+
+    fn left_chain(&self, root: &str, key: &str, max: usize) -> Result<Vec<String>, DocError> {
+        let o = self.order(root)?;
+        let Some(at) = o.places.iter().position(|k| k.as_str() == key) else {
+            engine_visits!(o.places.len());
+            return Ok(Vec::new());
+        };
+        // the scan for its place reads the slots before it (the engine's work)
+        engine_visits!(at + 1);
+        let mut out = Vec::new();
+        for k in o.places[..at].iter().rev() {
+            out.push(k.as_str().to_owned());
+            if o.index.contains_key(k) || out.len() == max {
+                break;
+            }
+        }
+        Ok(out)
     }
 
     fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError> {

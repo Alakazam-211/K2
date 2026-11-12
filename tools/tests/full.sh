@@ -14,7 +14,8 @@
 #                engine-features check (cargo tree, no build; not in a public cut) on what the
 #                part ships, and tools/oss-check.sh with its
 #                self-test (K-OSS-3: both licence files, "MIT OR Apache-2.0" on our crates and
-#                package.json files)
+#                package.json files), and the self-test of the pack template's carrier-row
+#                check (scripts/pack-checks/carrier-row.sh)
 #   base-c       the kit: soak (CI variant), edit_paths, edit_cost, history, presence, sessions, roster, app_view, overflow
 #   base-d       the kit: disk, if_version, blame, blame_incremental (blame_cost is ignored: a
 #                measurement), and position_index with its planted engine bugs (v0.9.7)
@@ -52,6 +53,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           timed windows_names sh tools/check-windows-names.sh .
           timed oss_selftest sh tools/test-oss-check.sh
           timed oss sh tools/oss-check.sh .
+          # the pack template's carrier-row check (scripts/pack-checks/carrier-row.sh), self-test
+          timed carrier_row_selftest sh tools/test-carrier-row.sh
           ;;
   base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
           timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;

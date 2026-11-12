@@ -97,11 +97,20 @@
 #                                                and opens the older store with the file as the
 #                                                carrier. The last line is `N-1 CARRIER OK`.
 #
+# The rows depend on the previous release: the node modes read each kit's crate version from
+# its manifest and hand it to the rows (K2MB_N1_READER, the build whose consumer ran on a store;
+# K2MB_N1_PREV, the previous release). Against a release that doesn't know a table (v0.14.0 and
+# the turn, verb and carrier tables), they assert what that build does with rows it can't read
+# (a rewrite refused, rows and counts its delete leaves); against one that knows them (v0.15.0
+# and later), plain round trips (its rewrite and delete take them as this build's do).
+#
 # A previous release older than v0.10.1 has no K2MB_N1_RESTORE: `layout-both` adds the
 # revert of the revert to its copy of the producer (python3), and stops if it can't. Ship the
 # laid-out dir with the job (an untracked dir in the checkout: `--dirty`). The job prints
 # `N-1 OK` once per direction, then `N-1 BOTH OK`.
 set -eu
+# kit_version DIR: the crate version in DIR/crates/base/Cargo.toml (the kit's own manifest)
+kit_version() { sed -n 's/^version = "\(.*\)"$/\1/p' "$1/crates/base/Cargo.toml" | head -1; }
 MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir>}
 case $MODE in
   layout)
@@ -173,7 +182,8 @@ PY
     OUT=$(cd "$OUT" && pwd)
     for pair in "fwd head prev" "rev prev head"; do
       set -- $pair
-      echo "== $1: the $2 build writes, the $3 build reads"
+      READER=$(kit_version "$OUT/$3/kit")
+      echo "== $1: the $2 build writes, the $3 build ($READER) reads"
       (cd "$OUT/$2/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_RESTORE=1 K2MB_N1_AGENTS=1 \
         K2MB_N1_PERSONS=1 K2MB_N1_TURNS=1 K2MB_N1_VERBS=1 \
         cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
@@ -181,7 +191,7 @@ PY
       (cd "$OUT/$1" && cargo run -q)
       # after v0.14.0: a.md's turns (deleted by the other build) swept, turns.md's read back.
       # First: it reads the file as the other build left it, before any open here sweeps it
-      (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
+      (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_READER="$READER" \
         cargo test -p k2-mpc-base --test grid_store n1_turns_after -- --ignored --nocapture)
       # after v0.14.0: verbs.md's pack verb read back after the other build
       (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
@@ -246,12 +256,13 @@ PY
   node-carrier)
     OUT=${2:?dir}
     OUT=$(cd "$OUT" && pwd)
+    PREV=$(kit_version "$OUT/old")
     echo "== this build writes the carriers"
     K2MB_N1_OUT="$OUT/carrier" cargo test -p k2-mpc-base --test live_carrier n1_carrier_producer -- --ignored --nocapture
-    echo "== the previous release"
-    (cd "$OUT/carrier" && cargo run -q)
+    echo "== the previous release ($PREV)"
+    (cd "$OUT/carrier" && K2MB_N1_PREV="$PREV" cargo run -q)
     echo "== this build again"
-    K2MB_N1_OUT="$OUT/carrier" cargo test -p k2-mpc-base --test live_carrier n1_carrier_after -- --ignored --nocapture
+    K2MB_N1_OUT="$OUT/carrier" K2MB_N1_PREV="$PREV" cargo test -p k2-mpc-base --test live_carrier n1_carrier_after -- --ignored --nocapture
     echo "N-1 CARRIER OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;

@@ -39,6 +39,7 @@ case ${1:?part: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, wir
       echo "tools/evidence docs/evidence tools/check-private.sh tools/test-check-private.sh tools/private-allow.txt" \
       "tools/check-windows-names.sh tools/test-windows-names.sh" $EF \
       "tools/oss-check.sh tools/test-oss-check.sh LICENSE-MIT LICENSE-APACHE NOTICE.md" \
+      "scripts/pack-checks/carrier-row.sh tools/test-carrier-row.sh" \
       "client/LICENSE-MIT client/LICENSE-APACHE" \
       $(git ls-files '*Cargo.toml' '*package.json' | grep -v '^vendor/' | tr '\n' ' ') ;;
   # bundled with STRIP_DOCS=1 since v0.9.7 (the K5 run_tool test put it 600 characters

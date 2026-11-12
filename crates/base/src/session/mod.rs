@@ -48,11 +48,16 @@ mod view;
 
 /// Helpers for packs' own tests (feature `test-support`; no host enables it): build an
 /// in-memory doc from a pack's decoded content as a session's import does, without copying
-/// the kit's code.
+/// the kit's code; and the carrier pack's byte-exact row ([`test_support::carrier_judge`]),
+/// which every pack that keeps a carrier runs over its corpus (`docs/PACK_TEMPLATE.md`).
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    pub use super::carrier_judge::{carrier_judge, CarrierVerdict};
     pub use super::view::import_edits;
 }
+
+#[cfg(feature = "test-support")]
+mod carrier_judge;
 
 /// The version of the live wire this kit speaks (`client/WIRE.md`, "Wire versions"): what a
 /// host puts in `welcome.wire`. 3 adds, to version 2, a change's `turn`, the roster's `focus` and

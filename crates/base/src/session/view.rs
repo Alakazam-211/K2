@@ -3,6 +3,7 @@
 //! against, and what [`super::Pack::line_map`] maps.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::doc::{Edit, Neutral};
 use crate::elem::{Anchor, Key, KeyedRoot, KeyedState, ListOp, MapOp, Value};
@@ -12,9 +13,12 @@ use crate::text::diff;
 /// A doc's roots by key: text as text, a list's live elements in order with its deleted
 /// ones (and where they sit), a map's keys and values; and the doc's codec settings when the
 /// session took it ([`View::codec`]). A snapshot: it never changes after it is taken.
+///
+/// The session hands a keyed doc's verbs (not a table's) the **live view** it keeps in step
+/// with every change: taking one copies nothing, and a verb pays only for what it reads.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct View {
-    state: KeyedState,
+    state: Arc<KeyedState>,
     codec: Vec<u8>,
     /// The value limit [`View::table`]'s table carries (`None`: the default).
     max_value: Option<usize>,
@@ -22,6 +26,11 @@ pub struct View {
 
 impl View {
     pub fn new(state: KeyedState) -> Self {
+        Self::shared(Arc::new(state))
+    }
+
+    /// A view of a state the session shares (its live view): no copy.
+    pub(crate) fn shared(state: Arc<KeyedState>) -> Self {
         Self {
             state,
             codec: Vec::new(),
@@ -68,14 +77,11 @@ impl View {
                     },
                     Neutral::Map(m) => KeyedRoot::Map(m.clone()),
                 };
+                entry_visits!(crate::doc::neutral_entries(n));
                 (r.clone(), x)
             })
             .collect();
-        Self {
-            state: KeyedState { roots },
-            codec: Vec::new(),
-            max_value: None,
-        }
+        Self::new(KeyedState { roots })
     }
 
     pub fn keyed(&self) -> &KeyedState {
@@ -83,7 +89,10 @@ impl View {
     }
 
     pub fn into_keyed(self) -> KeyedState {
-        self.state
+        Arc::try_unwrap(self.state).unwrap_or_else(|shared| {
+            entry_visits!(state_entries(&shared));
+            (*shared).clone()
+        })
     }
 
     fn root(&self, root: &str) -> Option<&KeyedRoot> {
@@ -141,6 +150,7 @@ impl View {
             .roots
             .iter()
             .map(|(r, x)| {
+                entry_visits!(crate::elem::root_entries(x));
                 let n = match x {
                     KeyedRoot::Text(t) => Neutral::Text(t.clone()),
                     KeyedRoot::List { live, .. } => Neutral::List(live.clone()),
@@ -153,25 +163,46 @@ impl View {
 
     /// A rough size in bytes (keys and values), for caches.
     pub(crate) fn bytes(&self) -> usize {
-        let v = |x: &Value| x.as_str().map_or(0, str::len);
-        self.state
-            .roots
-            .iter()
-            .map(|(_, x)| match x {
-                KeyedRoot::Text(t) => t.len(),
-                KeyedRoot::List { live, hidden, .. } => {
-                    live.iter()
-                        .map(|(k, x)| k.as_str().len() + v(x))
-                        .sum::<usize>()
-                        + hidden
-                            .iter()
-                            .map(|(k, x)| k.as_str().len() + v(x))
-                            .sum::<usize>()
-                }
-                KeyedRoot::Map(m) => m.iter().map(|(k, x)| k.len() + v(x)).sum(),
-            })
-            .sum()
+        state_bytes(&self.state)
     }
+}
+
+/// A value's size in [`View::bytes`]'s count.
+pub(crate) fn value_bytes(x: &Value) -> usize {
+    x.as_str().map_or(0, str::len)
+}
+
+/// A root's size in [`View::bytes`]'s count (keys and values). O(root).
+pub(crate) fn root_bytes(x: &KeyedRoot) -> usize {
+    entry_visits!(crate::elem::root_entries(x));
+    match x {
+        KeyedRoot::Text(t) => t.len(),
+        KeyedRoot::List { live, hidden, .. } => {
+            live.iter()
+                .map(|(k, x)| k.as_str().len() + value_bytes(x))
+                .sum::<usize>()
+                + hidden
+                    .iter()
+                    .map(|(k, x)| k.as_str().len() + value_bytes(x))
+                    .sum::<usize>()
+        }
+        KeyedRoot::Map(m) => m.iter().map(|(k, x)| k.len() + value_bytes(x)).sum(),
+    }
+}
+
+/// A state's size in [`View::bytes`]'s count. O(doc).
+pub(crate) fn state_bytes(state: &KeyedState) -> usize {
+    state.roots.iter().map(|(_, x)| root_bytes(x)).sum()
+}
+
+/// A state's entries, as the test-only visit counts count them.
+#[cfg_attr(not(any(test, feature = "differential")), allow(dead_code))]
+pub(crate) fn state_entries(state: &KeyedState) -> usize {
+    state
+        .roots
+        .iter()
+        .map(|(_, x)| crate::elem::root_entries(x))
+        .sum()
 }
 
 /// An import's edits: each text root's text, each list root's elements as one forward run

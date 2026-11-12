@@ -65,6 +65,25 @@ macro_rules! prof {
     };
 }
 
+/// A visit count (test-only): with the `differential` feature (or in the kit's tests) it adds
+/// `$n` entries read or copied in bulk to this thread's count
+/// ([`differential::take_entry_visits`]); otherwise it is nothing, and `$n` isn't evaluated.
+macro_rules! entry_visits {
+    ($n:expr) => {
+        #[cfg(any(test, feature = "differential"))]
+        $crate::differential::count_entry_visits(($n) as u64);
+    };
+}
+
+/// An engine visit count (test-only): as [`entry_visits`], for the engine adapter's bulk reads
+/// ([`differential::take_engine_visits`]).
+macro_rules! engine_visits {
+    ($n:expr) => {
+        #[cfg(any(test, feature = "differential"))]
+        $crate::differential::count_engine_visits(($n) as u64);
+    };
+}
+
 /// A production timer scope (v0.10.1, [`timers`]): times the rest of the enclosing block
 /// under [`timers::Path`]`::$path` when the timers are on; one relaxed load and a branch
 /// when they are off. In every build.

@@ -136,5 +136,10 @@ export const useSidebarStore = create<SidebarState>((set, get) => ({
   }
 }))
 
-// Initialize on import
-useSidebarStore.getState().initFromSettings()
+/** The first load.
+ *  `bootAppStores()` (boot-app-stores.ts) calls this once at
+ *  app start. It does not run at import: a test that imports this store
+ *  fires no fetch. */
+export function bootSidebar(): void {
+  useSidebarStore.getState().initFromSettings()
+}

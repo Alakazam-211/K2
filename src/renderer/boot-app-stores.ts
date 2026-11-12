@@ -9,7 +9,9 @@
  * stores in before the gate.
  */
 import { bootPanels } from './stores/panels'
+import { bootSidebar } from './stores/sidebar'
 
 export function bootAppStores(): void {
   bootPanels()
+  bootSidebar()
 }

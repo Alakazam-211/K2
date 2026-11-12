@@ -7,7 +7,7 @@
 // the zoom. A popover placed from a measured rect and clamped to innerWidth
 // without converting lands zoom × too far right and down, off the window.
 import { afterEach, describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { appZoom, clientRectToCss, cssViewport, clientToCssPx } from './app-zoom'
@@ -60,13 +60,29 @@ describe('window px to CSS px', () => {
   })
 })
 
-// What the top bar opens (Help, Send feedback, the profile, presence, the
-// server list, the voice list) is sized to fit the window. `100vw`/`100vh`
-// are the window in CSS px, which the zoom draws larger than the window, so
-// at 150 % a box of `calc(100vh - 96px)` ran off the top and bottom.
-describe('top-bar surfaces size from the zoom-aware window', () => {
+// Anything sized to fit the window or placed from a measured rect has to
+// use the zoom-aware window. `100vw`/`100vh` are the window in CSS px, which
+// the zoom draws larger than the window, so at 150 % a box of
+// `calc(100vh - 96px)` ran off the top and bottom; and innerWidth/innerHeight
+// are window px, so a fixed box clamped to them could still leave the window.
+describe('the renderer sizes and places from the zoom-aware window', () => {
   const renderer = join(dirname(fileURLToPath(import.meta.url)), '..')
   const read = (rel: string): string => readFileSync(join(renderer, rel), 'utf8')
+
+  /** Source files under src/renderer (not tests, vendored or dev pages). */
+  function sources(dir = ''): string[] {
+    const out: string[] = []
+    for (const name of readdirSync(join(renderer, dir))) {
+      const rel = dir ? `${dir}/${name}` : name
+      if (statSync(join(renderer, rel)).isDirectory()) {
+        if (['zen-lib', 'public', 'dev', 'test-utils', 'node_modules'].includes(name)) continue
+        out.push(...sources(rel))
+      } else if (/\.(tsx?|css)$/.test(name) && !/\.test\./.test(name)) {
+        out.push(rel)
+      }
+    }
+    return out
+  }
 
   it('globals.css defines --k2-vw / --k2-vh as the window over the app zoom', () => {
     const css = read('globals.css')
@@ -74,18 +90,31 @@ describe('top-bar surfaces size from the zoom-aware window', () => {
     expect(css).toContain('--k2-vh: calc(100vh / var(--k2-app-zoom, 1));')
   })
 
-  const SURFACES = [
-    'components/Help/HelpExplorer.tsx',
-    'components/SendFeedback/SendFeedbackDialog.tsx',
-    'components/TopBar/AdminProfileButton.tsx',
-    'components/Presence/PresenceModal.tsx',
-    'components/TopBar/ServerSwitcher.tsx',
-    'components/Voice/VoicePopover.tsx',
-  ]
-  for (const rel of SURFACES) {
-    it(`${rel} uses no raw vw/vh`, () => {
-      const raw = read(rel).match(/\b\d+(\.\d+)?(vw|vh|dvh|svh)\b/g)
-      expect(raw, `raw viewport units in ${rel}`).toBeNull()
-    })
-  }
+  it('no raw vw/vh outside the --k2-vw / --k2-vh definitions', () => {
+    const found: string[] = []
+    for (const rel of sources()) {
+      // The definitions, and the note that explains them.
+      if (rel === 'globals.css' || rel === 'lib/app-zoom.ts') continue
+      for (const m of read(rel).matchAll(/(?<![\w.-])\d+(\.\d+)?(vw|vh|dvh|svh|lvh)\b/g)) found.push(`${rel}: ${m[0]}`)
+    }
+    expect(found).toEqual([])
+  })
+
+  // Each of these reads the window size in window px on purpose.
+  const WINDOW_PX = new Map([
+    ['lib/app-zoom.ts', 'converts it to CSS px for everyone else'],
+    ['components/ContextMenu/ContextMenu.tsx', 'the submenu flip compares it with a measured rect, both window px'],
+    ['components/Settings/controls/SettingControls.tsx', 'the clip rect is converted with the trigger rect'],
+    ['lib/zen/zen-controls.ts', 'on-screen checks next to elementFromPoint, all window px'],
+    ['shims/tauri-window.ts', 'the web stand-in for the native window size'],
+  ])
+
+  it('innerWidth/innerHeight only where window px are meant', () => {
+    const found: string[] = []
+    for (const rel of sources()) {
+      if (WINDOW_PX.has(rel)) continue
+      if (/\.inner(Width|Height)\b/.test(read(rel))) found.push(rel)
+    }
+    expect(found).toEqual([])
+  })
 })

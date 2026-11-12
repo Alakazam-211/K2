@@ -161,7 +161,7 @@ export function showZenFilePreview(p: ZenFilePreview): void {
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
           fontSize: '12px',
           lineHeight: '1.5',
-          minWidth: 'min(720px, 80vw)',
+          minWidth: 'min(720px, calc(var(--k2-vw)*0.8))',
         })
         const text = content.text.length > TEXT_MAX ? content.text.slice(0, TEXT_MAX) : content.text
         pre.textContent = content.truncated || content.text.length > TEXT_MAX ? `${text}\n…` : text
@@ -171,7 +171,7 @@ export function showZenFilePreview(p: ZenFilePreview): void {
       }
       const url = zenImageDataUrl(content.mime, content.base64)
       if (!url) return note('This image can’t be shown here.')
-      const img = node('img', { maxWidth: '100%', maxHeight: 'calc(100vh - 140px)', objectFit: 'contain', display: 'block' })
+      const img = node('img', { maxWidth: '100%', maxHeight: 'calc(var(--k2-vh) - 140px)', objectFit: 'contain', display: 'block' })
       img.alt = p.name
       let triedFallback = false
       img.addEventListener('error', () => {

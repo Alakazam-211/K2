@@ -64,7 +64,7 @@ function AskBox({ bridge, req, onClose }: { bridge: ZenWidgetBridge; req: ZenSou
   const decl: ZenWidgetDecl = { id: ZEN_SOURCE_ASK_ID, kind: 'source-ask', column: 0, props: {}, caps: [...ZEN_SOURCE_ASK_CAPS], source: 'builtin' }
   return (
     <ZenOverlay label="Ask an agent" onClose={onClose} testId="zen-source-ask" width={520}>
-      <div data-zen-source-ask={req.address} className="flex flex-col" style={{ height: 'min(70vh, 520px)', minHeight: 0 }}>
+      <div data-zen-source-ask={req.address} className="flex flex-col" style={{ height: 'min(calc(var(--k2-vh)*0.7), 520px)', minHeight: 0 }}>
         <ZenAskMyAgent
           bridge={bridge}
           decl={decl}

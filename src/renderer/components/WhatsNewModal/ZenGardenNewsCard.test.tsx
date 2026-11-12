@@ -186,6 +186,21 @@ describe('the Garden news card (GS40–GS43)', () => {
     expect(shown.every((ids) => ids.length === 0)).toBe(true)
   })
 
+  // The 1000 px floor is CSS px (the card and the dialog beside it): at
+  // 150 % a 1280 px window holds only 853 of them, too narrow for both.
+  it('at 150 % app zoom a 1280 px window is under the floor: no card', async () => {
+    window.__k2soZoom = 1.5
+    try {
+      const shown: string[][] = []
+      render(<ZenGardenNewsCard dialogVisible onShown={(ids) => shown.push(ids)} onAction={() => undefined} />)
+      await waitFor(() => expect(h.calls.some((c) => c.route === 'zen/news')).toBe(true))
+      expect(document.querySelector('[data-zen-news-card]')).toBeNull()
+      expect(shown.every((ids) => ids.length === 0)).toBe(true)
+    } finally {
+      delete window.__k2soZoom
+    }
+  })
+
   it('shows one item, the more line and the copies line', async () => {
     h.news = { ok: true, items: [UPDATE, DIARY], copiesWithNewerDefault: 1 }
     render(<ZenGardenNewsCard dialogVisible onShown={() => undefined} onAction={() => undefined} />)

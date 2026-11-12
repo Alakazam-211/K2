@@ -13,6 +13,7 @@ import LinuxStoplights from '@/components/TopBar/LinuxStoplights'
 import WindowControls from '@/components/TopBar/WindowControls'
 import type { ZenRect } from '@/lib/zen/zen-controls'
 import type { DesktopOs } from '@/lib/desktop-chrome'
+import { clientRectToCss } from '@/lib/app-zoom'
 
 export function zenClusterSide(os: DesktopOs): 'left' | 'right' | null {
   if (os === 'linux') return 'left'
@@ -68,7 +69,8 @@ export function ZenChromeCluster({
       return
     }
     const measure = (): void => {
-      const r = el.getBoundingClientRect()
+      // CSS px: it becomes the safe-area vars (app zoom, lib/app-zoom).
+      const r = clientRectToCss(el.getBoundingClientRect())
       onRect({ left: r.left, top: r.top, width: r.width, height: r.height })
     }
     measure()

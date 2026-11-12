@@ -30,13 +30,15 @@ import {
   ZEN_OPEN_NEW_GARDEN_EVENT,
   type ZenNewsItem,
 } from '@/lib/zen/zen-sync'
+import { cssViewport } from '@/lib/app-zoom'
 
 export { ZEN_OPEN_NEW_GARDEN_EVENT }
 
+/** The window's width in CSS px (app zoom), what the card's breakpoint is. */
 function useViewportWidth(): number {
-  const [w, setW] = useState(() => (typeof window === 'undefined' ? 0 : window.innerWidth))
+  const [w, setW] = useState(() => (typeof window === 'undefined' ? 0 : cssViewport().width))
   useEffect(() => {
-    const on = (): void => setW(window.innerWidth)
+    const on = (): void => setW(cssViewport().width)
     window.addEventListener('resize', on)
     return () => window.removeEventListener('resize', on)
   }, [])

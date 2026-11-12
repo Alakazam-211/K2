@@ -81,7 +81,7 @@ function Chooser({
         marginTop: 14,
         minWidth: 260,
         maxWidth: 360,
-        maxHeight: '50vh',
+        maxHeight: 'calc(var(--k2-vh)*0.5)',
         padding: 6,
         gap: 2,
         textAlign: 'left',

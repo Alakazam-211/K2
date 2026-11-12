@@ -68,6 +68,7 @@ import { useZenSyncPreviewBar } from './ZenSyncPreviewBar'
 import { ZenChromeCluster, zenClusterSide } from './ZenChromeCluster'
 import { ZenPage } from './ZenPage'
 import { ZenK2ChromeContext, type ZenK2Chrome } from './ZenTemplateControls'
+import { cssViewport } from '@/lib/app-zoom'
 
 // S5: the Zen theme engine (tokens, scheme, type, shape, motion) through the
 // S4 plug-in point. Once per app session.
@@ -284,7 +285,7 @@ function useStoplightArea(chrome: ZenChromeSource): {
       : os === 'mac'
       ? currentMacStoplightArea(chrome)
       : side
-        ? clusterArea(cluster, side, typeof window === 'undefined' ? 0 : window.innerWidth)
+        ? clusterArea(cluster, side, typeof window === 'undefined' ? 0 : cssViewport().width)
         : clusterArea(null, 'left', 0)
   const onClusterRect = useCallback((rect: ZenRect | null) => {
     setCluster((prev) =>

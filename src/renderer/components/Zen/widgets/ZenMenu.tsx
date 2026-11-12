@@ -513,7 +513,7 @@ export function ZenMenu({
             data-zen-menu-placement={menu.placement}
             className="flex flex-col"
             onKeyDown={onListKey}
-            style={{ ...menu.style, ...ZEN_DROPDOWN_STYLE, maxHeight: 'calc(100vh - 24px)', overflowY: 'auto' }}
+            style={{ ...menu.style, ...ZEN_DROPDOWN_STYLE, maxHeight: 'calc(var(--k2-vh) - 24px)', overflowY: 'auto' }}
           >
             {panel === 'theme' ? themePanel() : panel === 'usage' ? usagePanel() : topPanel()}
           </div>,

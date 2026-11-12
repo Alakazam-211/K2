@@ -79,8 +79,8 @@ export function ZenOverlay({
               className="flex flex-col"
               style={{
                 position: 'relative',
-                width: `min(${width}px, calc(100vw - 32px))`,
-                maxHeight: 'calc(100vh - 48px)',
+                width: `min(${width}px, calc(var(--k2-vw) - 32px))`,
+                maxHeight: 'calc(var(--k2-vh) - 48px)',
                 overflow: 'hidden',
                 color: 'var(--zen-text)',
                 background: 'var(--zen-surface-raised)',

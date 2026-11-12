@@ -22,6 +22,7 @@ import { closeZenAddAgent, noteZenAgentAdded, useZenAddAgentStore } from '@/lib/
 import { useCurrentZenGarden } from '@/lib/zen/zen-gardens'
 import { useZenGardenHomesStore } from '@/lib/zen/zen-garden-homes'
 import { AddAgentPicker } from '@/components/Home/HomeAddPanels'
+import { clientRectToCss, cssViewport } from '@/lib/app-zoom'
 
 /** Picker width (CSS px). The Home panel insets 12px each side inside it. */
 export const ZEN_ADD_AGENT_WIDTH_PX = 340
@@ -35,14 +36,17 @@ interface Spot {
   top: number
 }
 
-function spotFor(anchor: HTMLElement | null): Spot {
-  const vw = typeof window === 'undefined' ? 0 : window.innerWidth
-  const vh = typeof window === 'undefined' ? 0 : window.innerHeight
+/** Fixed left/top for the picker over `anchor` (CSS px). */
+export function zenAddAgentSpot(anchor: HTMLElement | null): Spot {
+  // CSS px throughout: the spot is a fixed left/top (app zoom, lib/app-zoom).
+  const view = typeof window === 'undefined' ? { width: 0, height: 0 } : cssViewport()
+  const vw = view.width
+  const vh = view.height
   const maxLeft = Math.max(0, vw - ZEN_ADD_AGENT_WIDTH_PX)
   if (!anchor || !anchor.isConnected) {
     return { left: Math.min(maxLeft, Math.max(0, CORNER_PX - PANEL_INSET_PX)), top: vh - CORNER_PX }
   }
-  const r = anchor.getBoundingClientRect()
+  const r = clientRectToCss(anchor.getBoundingClientRect())
   return { left: Math.min(maxLeft, Math.max(0, r.left - PANEL_INSET_PX)), top: r.top - GAP_PX }
 }
 
@@ -56,7 +60,7 @@ export function ZenAddAgentPicker(): React.JSX.Element | null {
   const home = useHomesStore((s) => s.homes.find((h) => h.id === homeId) ?? null)
   const gardenId = useCurrentZenGarden()?.id ?? null
   const boxRef = useRef<HTMLDivElement | null>(null)
-  const [spot, setSpot] = useState<Spot>(() => spotFor(anchor))
+  const [spot, setSpot] = useState<Spot>(() => zenAddAgentSpot(anchor))
 
   // Leaving Zen (this unmounts) closes it, so it never comes back on the
   // next Zen-on or lingers over the regular Home.
@@ -74,7 +78,7 @@ export function ZenAddAgentPicker(): React.JSX.Element | null {
   // Place it above the anchor now and on every resize.
   useLayoutEffect(() => {
     if (!open) return
-    const place = (): void => setSpot(spotFor(anchor))
+    const place = (): void => setSpot(zenAddAgentSpot(anchor))
     place()
     window.addEventListener('resize', place)
     return () => window.removeEventListener('resize', place)

@@ -3169,6 +3169,17 @@ mod tests {
 
     // ── table shape ──────────────────────────────────────────────────
 
+    /// Not a check: writes the table, one row a line, to the file named by
+    /// `K2_ROUTES_DUMP`. A change to how [`ROUTES`] is put together is shown
+    /// to leave every row as it was by comparing the file before and after.
+    #[test]
+    #[ignore = "writes ROUTES to the file named by K2_ROUTES_DUMP"]
+    fn dump_routes() {
+        let to = std::env::var("K2_ROUTES_DUMP").expect("K2_ROUTES_DUMP names the file to write");
+        let text: String = ROUTES.iter().map(|r| format!("{} GET={:?} POST={:?}\n", r.path, r.get, r.post)).collect();
+        std::fs::write(&to, text).expect("write the dump");
+    }
+
     #[test]
     fn routes_are_sorted_unique_and_every_row_has_a_method() {
         for w in ROUTES.windows(2) {

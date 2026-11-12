@@ -9,6 +9,25 @@ export { transform, Bias } from "./position";
 export { KEYED_WATCH_FEATURE, KeyedWatch, REPORT_EVERY, keyedStateJson, mapKey } from "./keyed";
 export type { KeyedRootState, KeyedState, KeyedWatchOptions, ResyncReason } from "./keyed";
 export { KeyedView, VIEW_TEXT_MAX } from "./view";
+export {
+  CELLS_FEATURE,
+  CELLS_RANGES_MAX,
+  CELL_CLAIMS_FEATURE,
+  blankNumbers,
+  cellsA1,
+  colLabel,
+  colLetters,
+  colNumber,
+  colOfCellField,
+  cornerA1,
+  cornerAt,
+  cornerNumbers,
+  cornerProblem,
+  fieldClass,
+  gridNumbers,
+  rangeA1,
+} from "./grid";
+export type { CornerProblem, GridLine, GridNumbers } from "./grid";
 export { MAX_CLIENT_ID, MAX_KEY_LEN, MAX_KIT_CLIENT, MAX_PREFIX_LEN, MAX_TAG_LEN, formatKey, markKey, nextFor, parseKey, parseTag, retiredMark, writerTag } from "./mint";
 export type { MintError, TaggedKey } from "./mint";
 export { resolveParents, resolveRef, resolveRefs } from "./refs";
@@ -61,4 +80,17 @@ export type {
   ViewSnapshotJson,
   ViewSrc,
   ViewUnit,
+  Band,
+  CellClaim,
+  CellRange,
+  Cells,
+  ContainerDerived,
+  Corner,
+  FieldClass,
+  FrameDerived,
+  GridNumbering,
+  GridSlot,
+  StyleHint,
+  UnitDerived,
+  Written,
 } from "./wire";

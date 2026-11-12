@@ -1,5 +1,212 @@
 # Changelog
 
+## v0.17.0 (2026-11-12)
+
+A host release on v0.16.0. The crate version is `0.17.0`; the client's is `0.17.0`. A minor
+version: new API (text → tier 0, the carrier's pairing K1b, the live grid) and one behaviour
+change on keyed docs (below). The live wire stays version 3 (every addition optional). One new
+error id, `MPC-E521`. The store format is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7,
+`STORE_FORMAT_BASE` 5) and no store needs a migration; two tables are added without a format
+bump (`carrier_pairings`, `demoted_changes`). Pairs with the markdown, text, board, csv, psd and
+pptx pack tags of this release.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.16.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it).
+
+### What changes for K2
+
+- **The demote path for a text doc whose type now routes to tier 0.** The text pack sends CAD,
+  BIM and circuit-board files (`.ifc`, `.step`, `.dxf`, the `.kicad_*` files and others) to
+  tier 0. When `open_blob_file` answers `PackMismatch` with `stored` the text pack, call
+  `SessionManager::demote_text_file(text_pack, AnyFile, &key, path, root)` once, then open the
+  file at tier 0 as usual (a second call is a no-op, `Demotion::already`). The same key and doc
+  id become a tier-0 doc: every text version a tier-0 version, the live state (unwritten changes
+  included) the current one, written to the file. An outside save since the last sync keeps
+  both (`Demotion::kept_both`, a conflict copy, `AuditEvent::BlobConflict`). The change log
+  stays readable as `BlobSession::live_log(conn)`. The text session closes with
+  `RosterEvent::Closed { reason: "demoted" }`, `AuditEvent::SessionClosed` and
+  `AuditEvent::Demoted`; tell those tabs to reopen at tier 0 (the old handle's calls fail
+  `MPC-E519`). This replaces the interim rule (close, rekey the text doc aside, import), and the
+  409 K2 answers today. `docs/SESSIONS.md`, "Text → tier 0".
+- **An outside save on unwritten changes keeps both** on a keyed doc that isn't a table (decks
+  and boards included): when the doc holds changes the file doesn't, a save that changes the
+  content becomes the live doc exactly, and the kit's state is kept as a version and a conflict
+  copy (one `BlobConflict`, `DiskCheck::Conflict`), as a save over the kit's write already was.
+  Before, the save was merged by key onto the unwritten changes. Tables unchanged.
+- **The live grid** (additive, wire 3): the grid slot in the view schema, cells presence
+  (`Session::set_cells`, `RosterEvent::Cells`), cells claims (`Session::claim_cells`,
+  `RosterEvent::ClaimStartedCells`), what a verb wrote, and typed derived values. Its client
+  frames are behind the features `cells` and `cell_claims` in `welcome.features`.
+  `client/WIRE.md`, "The live grid"; `client/PRESENCE.md`, "Cells in a live grid".
+- **An outside save on a carrier pack's doc (a deck) is the carrier first** (fix): the kit took
+  a save as the carrier only after rendering the doc with the one before, so a carrier pack's
+  doc holding the save could be marked dirty. Now every rendering from the save on is handed
+  the save. No API change.
+- **The carrier's pairing (K1b)** is for packs (no host call): a new error,
+  **`MPC-E521` `pairing_mismatch`** (exit 1; the file is left as it was, the doc keeps its
+  changes), may reach a host from a pack that pairs. No pack in this release pairs.
+- **Pack authors:** the live grid adds two `ViewSchema` fields (`field_class_prefix`, `grid`).
+  A pack whose `ViewSchema { .. }` literal names every field without `..ViewSchema::NONE`
+  stops compiling: build it from `..ViewSchema::NONE`, as the doc comment on `ViewSchema`
+  says, so a field the kit adds has its default. The pptx pack's v0.1.4 does.
+- **No store migration, wire still 3.** N−1 is checked both ways against v0.16.0: stores, the
+  wire, carriers, index rows, pairings and demoted docs.
+
+### K1b, the carrier's pairing
+
+**K1b, the carrier's pairing**, for a carrier pack that mints its keys (rows, timeline items,
+scene objects), and the two outside-save fixes of the live-plans review. One additive table
+(`carrier_pairings`, no format bump), one new error id (`MPC-E521`), no wire change. A pack that
+doesn't opt in sees no change but the keep-both rule below. Design:
+`docs/design/carrier-synced-content-r0.md`; `docs/SESSIONS.md`, "The carrier's pairing (K1b)".
+
+- **An outside save is the carrier, with its pairing, before anything renders the doc that took
+  it** (fix, K1 and K1b): the settle after a save (is the doc clean?) rendered the doc with the
+  carrier and pairing of the sync point before, and only then took the save as the carrier. For
+  a pack that re-keys on a save (keys that follow the file, as a workbook's rows), the old
+  pairing named keys gone from the doc: the pack's splice refused it, rightly, and the kit kept
+  that refusal, so the next read failed with `MPC-E521` (and the doc was marked dirty). For a
+  carrier pack without pairing, the settle spliced into the old bytes and could mark a doc
+  holding the save dirty. Now `settle_saved` keeps the save as the carrier (pairing made from
+  the replica, which holds the save) first; a rendering refused with a carrier or pairing that
+  has since been replaced isn't reported any more. The pack's refusal is unchanged. Rows:
+  `live_paired` (a re-keying save, read, written and `file_at` byte for byte; the same on
+  unwritten changes, both kept) and `live_carrier` (every rendering from the save on is handed
+  the save); plant `KeyedMutant::SettleBeforeCarrier`, caught by name in both.
+- **The pairing** (`Pack::wants_pairing`, default `false`; `Pack::pairing`, default
+  `list_pairing`; `Pack::encode_from_paired`, default `encode_from`): the carrier's keys in the
+  order the pack's decode yields its units, made once per sync point (a kit write, an outside
+  save taken in, a change that moved no byte, an open with none stored) and kept with every
+  carrier, live and per version, in memory and in `carrier_pairings`. Every rendering of the
+  live doc and every version's file hands the carrier's own pairing to `encode_from_paired`, so
+  a version cut between two syncs pairs exactly (`file_at`, the conflict copies' comparisons).
+  Keys only: a purge has nothing in it to erase. New types `Pairing` (with `to_bytes` /
+  `from_bytes`) and `SpliceError`.
+- **A pairing that doesn't fit is refused, never spliced by guess:**
+  `SpliceError::PairingMismatch` from the pack; the live doc's rendering fails with
+  `SessionError::PairingMismatch`, **`MPC-E521` `pairing_mismatch`** (exit 1; the file is left as
+  it was, the doc keeps its changes); a version's file is `MPC-E208`.
+- **Whether the doc holds an outside save** is a keyed comparison for a keyed doc that isn't a
+  table (the synced state with the save's edits, on a throwaway copy of the replica), with no
+  pack call: rendering into the save's bytes paired the doc with keys the replica didn't hold
+  yet. Tables unchanged.
+- **An outside save on unwritten changes keeps both** (behaviour change, every keyed doc that
+  isn't a table, decks and boards included): when the doc holds changes the file doesn't, a save
+  that changes the content keeps both, as a save over the kit's write already did (a version
+  and a conflict copy of the kit's version, one `BlobConflict`, `DiskCheck::Conflict`), and the
+  save becomes the live doc exactly, by identity. Before, it was merged by key onto the
+  unwritten changes: a minted key could collide, the merge could break the pack's own rules,
+  and a live value was overridden with no copy. The kit writes no merge after such a save
+  now; a stored `kit:merge` author from an older store is still read as the kit's write.
+- **Plants** (`KeyedMutant`): `SyncedContentStale`, `SpliceWithoutMatch`,
+  `PairingMissingOnVersion`, `HoldsFileCallsPack`, `DirtySaveMergedByKey`; each caught by name
+  (`tests/live_paired.rs`, `tests/keyed_live.rs`). `MergeWriteNotRecorded` is retired with the
+  merge write it planted. Counters: `differential::take_pairings_made`,
+  `differential::take_held_renders`.
+- **`carrier_judge`** checks the paired hook for a pack that pairs.
+- **N−1:** `tools/n1/n1.sh layout-pairing` / `node-pairing` (`tools/n1/consumer-pairing`). A
+  previous release ignores `carrier_pairings` (it reads and writes such a store as before),
+  refuses a rewrite and so a purge naming it (`MPC-E502`), and its doc delete leaves the rows,
+  which this build's open sweeps; this build makes again a pairing an older write left stale,
+  and makes one for an older store's doc. A version cut before the doc had a pairing stays
+  `MPC-E208`.
+- `docs/PACK_TEMPLATE.md`: "A carrier pack that mints its keys: the pairing (K1b)".
+
+### A live grid: the grid slot, cells presence, cells claims, what a verb wrote
+
+What a view needs to draw a live spreadsheet (or any sparse grid) with no pack code, and the
+presence and claims that name its cells. Additive: wire 3 stays (new frame and event kinds,
+new fields), no store format change, no new error id.
+
+- **The grid slot** (`k2_mpc_base::grid::GridSlot`, `ViewSchema::grid`): which roots hold the
+  rows (the units), columns and cells, the cell field's column template, the **numbering rule**
+  (each keyed row's and column's gap field: within a container, in list order, `number =
+  previous + gap + 1`, the first `gap + first`), the column labels, the last row and column, a
+  cell's JSON parts, the row and column field names (hidden, height, width, with units), how to
+  read a viewport (`"cells"`), the style hint's table, and `cell_derived` (the derived values
+  that are maps by cell field). The snapshot's schema carries it as `grid`, only when declared;
+  `ViewSchema::check` checks it. `GridNumbers` (one container's keyed rows and columns with their
+  numbers, hidden ones marked), `col_letters`, `a1`; `Session::grid_numbers_at`.
+- **A field's class by prefix**: `ViewSchema::field_class_prefix` (ordered `(prefix, class)`
+  rules, after the exact `field_class`), `ViewSchema::class_of_field`, the class
+  `FieldClass::Cell` and the unit delta op `UnitOp::Cell` (`"cell"`), so a cell write is classed
+  as one in view deltas (it was `props`). The snapshot's schema carries `field_class_prefix`
+  only when declared.
+- **Cells presence** (`Cells`, `Corner`, `CellRange`, `CELLS_RANGES_MAX` = 16):
+  `Session::set_cells` / `set_cells_at`, `RosterEntry::cells`, `Device::cells`,
+  `RosterEvent::Cells` (in a flush after `Selection`, before `Range`). A corner is the last keyed
+  row and column at or before the cell plus offsets, in normal form. Setting cells sets the focus
+  to their container; a focus on another container drops them; a range is dropped, never moved,
+  when a corner's row or column goes or a change breaks its form (the caret on its own).
+  Refusals: `SelectionTooLarge` past 16 ranges (`MPC-E310`, whose message and next steps
+  now name a grid's cell ranges beside a selection's elements), `BadPosition` (`MPC-E114`),
+  `Watching` (`MPC-E305`).
+- **What a verb wrote** (`CellsReport`, `StructOutput::writing`): a grid verb hands the kit the
+  ranges it wrote, the band it inserted or deleted, or the container it added or renamed; the
+  acting **agent's** cells and focus follow (ranges with the caret at the first's start; an
+  inserted band as whole rows or columns; a delete's caret on the first visible cell after the
+  band; a container's first cell unless its cells are already there). A person's are never moved.
+- **Cells claims**: `Session::claim_cells` / `claim_cells_at` (one range), `ClaimSpan::CellRange`,
+  `RosterEvent::ClaimStartedCells` with the actor and times; `claim_ended`'s `lines` are the
+  range's first and last row numbers. Under `ClaimPolicy::Respect` it refuses another agent's
+  write to a cell inside it and delete of a row or column inside it (`ElemsClaimed`, `MPC-E301`),
+  never a person's; inserts inside grow it; its owner's write inside ends it unless held; a broken
+  corner ends it (`deleted`). An agent's claim moves its focus and cells to the range.
+- **A change frame's derived values, typed**: `FrameDerived` (per-unit `a1`, per-container
+  `merges` and `styles` as `StyleHint`s, `written`, `bands` as `Band`s), put on the frame with
+  `WatchExtras::grid`.
+- **A snapshot page's derived values**: `Pack::page_derived` gives per-unit values by field (a
+  formula cell's A1 text); the kit puts each on the page of the units' fields that holds its
+  entry, as `derived.<name>.<unit address>.<field>` (`WatchPage::derived`), counted in the page's
+  budget, so a formula never shows as its cached number while the snapshot loads.
+- Rows: `tests/grid_view.rs` against the shared vector `client/test/vectors/grid_view.tsv` (row
+  numbers and column letters at three revs; every corner and range's A1; refused corners; an
+  agent's cells after its claim and each verb; a person's never moved; corners dropped, never
+  moved; what a cells claim holds off; the claim's actor; a page's formula text; a cell write
+  classed `cell`), `wire_golden.rs`'s `roster_events_cells.json`, and the plants
+  `GridMutant::GapIgnored`, `CornersMoveNotDrop` and `ClaimCellsActorMissing`, which they catch.
+
+### Text → tier 0
+
+`SessionManager::demote_text_file` and `demote_text`: a live text doc becomes a tier-0
+doc under the same key and doc id, its history kept in place. One additive table
+(`demoted_changes`, no format bump), one new audit event (`AuditEvent::Demoted`), no new error
+id, no wire change. `docs/SESSIONS.md`, "Text → tier 0".
+
+- **Why, and when K2 calls it.** The text pack now routes CAD, BIM and circuit-board files
+  (`.ifc`, `.step`, `.dxf`, the `.kicad_*` files and others) to tier 0; a doc already stored as
+  text under such a name was stuck (`open_blob_file` said `PackMismatch`, and K2 answered 409).
+  When `open_blob_file` says `PackMismatch` with `stored` a text pack, call
+  `demote_text_file(pack, AnyFile, &key, path, root)` once, then open at tier 0 as usual. It
+  replaces the interim rule (close, rekey the text doc aside, import the file), which moved the
+  history off the file's key.
+- **Nothing is lost.** Every text version becomes a tier-0 version holding exactly what its
+  `file_at` gave; the live doc's final state becomes current (a change the file never got,
+  unwritten or left when a process stopped before its write-back, included) and is written to the file (`Demotion::written`;
+  retried on `tick` when the file can't be written).
+- **An outside save since the last sync is never merged by lines:** tier 0's keep-both rule (the
+  save current, the live state a version and a conflict copy; `Demotion::kept_both`,
+  `AuditEvent::BlobConflict`).
+- **The change log stays readable** as the live log, `BlobSession::live_log(conn)` (history
+  right): `LogItem::Change` rows with their approval states. Content between versions, blame,
+  revert records and undo aren't kept.
+- **The text session ends cleanly:** roster `Closed { reason: "demoted" }`, claims ended
+  (`left`), `AuditEvent::SessionClosed { reason: "demoted" }` and `AuditEvent::Demoted { key,
+  connections, versions, changes, kept_both }`; later calls on the old handle fail with
+  `SessionError::Closed { reason: "demoted" }` (`MPC-E519`). Tell those tabs to reopen the file
+  at tier 0.
+- A second call is a no-op (`Demotion::already`). A structured doc or a pack with a carrier is
+  refused `Declined { code: "not_text" }` (`MPC-E407`); another pack `PackMismatch`.
+- **Erasure and purge** reach everything it keeps (the tier-0 purge, and `erase_participant`,
+  which renames the erased pid in the live log too).
+- **Plants** (`DemoteMutant`): `DropsUnwritten`, `MergesByLine`; each caught by name
+  (`tests/demote.rs`).
+- **N−1:** an older kit (v0.16.0 and before) opens a demoted doc as the plain tier-0 doc it is
+  (every version and the current one read exactly) without its live log; it refuses a rewrite,
+  and so a purge or an erasure, before changing anything (`NewerData`, `MPC-E502`), and leaves a
+  deleted doc's live-log rows, which this build's open sweeps. `tools/n1/n1.sh layout-demote` /
+  `node-demote` (`tools/n1/consumer-demote`) checks both ways.
+
 ## v0.16.0 (2026-11-12)
 
 A host release on v0.15.1. The crate version is `0.16.0`; the client's is `0.16.0`. A minor

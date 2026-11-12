@@ -198,6 +198,7 @@ impl Refusal for SessionError {
             S::Doc(e) => doc(e, msg),
             S::Store(e) => store(e, msg),
             S::Pack(_) => rep(&r::PACK_ERROR, msg),
+            S::PairingMismatch { reason } => rep(&r::PAIRING_MISMATCH, msg).with("reason", reason),
             S::Unloaded => rep(&r::UNLOADED, msg),
             S::Released => rep(&r::RELEASED, msg),
             S::Deleted => rep(&r::DELETED, msg),

@@ -496,6 +496,22 @@ pub enum AuditEvent {
         changes: u64,
         tier0_kept: u64,
     },
+    /// The live text doc at `key` became a tier-0 blob doc, keeping its key, its doc id and
+    /// its history ([`crate::session::SessionManager::demote_text_file`]). Its text session
+    /// closed: `connections` (each with its pid) were in it and are gone (each roster
+    /// subscription got [`crate::session::RosterEvent::Closed`] with reason `demoted`, each claim
+    /// ended as `left`); later calls on it fail with [`crate::session::SessionError::Closed`]
+    /// (`demoted`). Tell those tabs to open the file at tier 0. `versions` text versions became
+    /// blob versions and `changes` changes are kept as the live log; `kept_both` when the file
+    /// was saved from outside since the last sync (its save is current, the live state a
+    /// version and a conflict copy).
+    Demoted {
+        key: DocKey,
+        connections: Vec<(ConnId, String)>,
+        versions: u64,
+        changes: u64,
+        kept_both: bool,
+    },
     /// The edit path's runtime check (v0.9.3, [`crate::session::Config::edit_check_every`])
     /// found that change `change`'s update, made on the doc as `client`, differed from the
     /// same edit made through a throwaway replica. The replica's update was applied (never

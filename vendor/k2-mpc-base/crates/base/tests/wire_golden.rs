@@ -270,6 +270,9 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
         &m.entry.focus,
         &m.entry.range,
     );
+    if let Some(c) = &m.entry.cells {
+        fields.push(("cells", c.to_value()));
+    }
     if let Some(Value::List(devices)) = fields
         .iter_mut()
         .find(|(k, _)| *k == "devices")
@@ -286,6 +289,9 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
                 &d.focus,
                 &d.range,
             );
+            if let Some(c) = &d.cells {
+                more.push(("cells", c.to_value()));
+            }
             o.extend(more.into_iter().map(|(k, v)| (k.to_owned(), v)));
         }
     }
@@ -308,6 +314,30 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
         .collect();
     if !elem_claims.is_empty() {
         fields.push(("elem_claims", Value::List(elem_claims)));
+    }
+    // a member's cells claims (`cell_claims`), only when they hold some
+    let cell_claims: Vec<Value> = m
+        .entry
+        .claims
+        .iter()
+        .filter_map(|c| match &c.span {
+            ClaimSpan::CellRange { range, .. } => Some(Value::obj([
+                ("claim", Value::from(st.claim(c.id.get()))),
+                (
+                    "container",
+                    Value::from(c.addresses.first().map_or("", String::as_str)),
+                ),
+                ("ranges", Value::List(vec![range.to_value()])),
+                ("note", c.note.as_deref().map_or(Value::Null, Value::from)),
+                ("hold", Value::from(c.hold)),
+                ("expires_ms", Value::from(c.expires_ms)),
+                ("started_ms", Value::from(c.taken_ms)),
+            ])),
+            _ => None,
+        })
+        .collect();
+    if !cell_claims.is_empty() {
+        fields.push(("cell_claims", Value::List(cell_claims)));
     }
     Value::obj(fields)
 }
@@ -670,6 +700,43 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             ("claim", Value::from(st.claim(claim.get()))),
             ("root", Value::from(root.as_str())),
             ("keys", addresses_value(addresses)),
+            ("note", note.as_deref().map_or(Value::Null, Value::from)),
+            ("hold", Value::from(*hold)),
+            ("expires_ms", Value::from(*expires_ms)),
+            ("version", Value::from(*version)),
+            ("actor", actor(w, a)),
+            ("started_ms", Value::from(*started_ms)),
+        ]),
+        RosterEvent::Cells {
+            who: w,
+            cells: c,
+            client,
+            ..
+        } => elem_event(
+            "cells",
+            w,
+            c.as_ref().map_or(Value::Null, |c| c.to_value()),
+            client,
+            st,
+        ),
+        RosterEvent::ClaimStartedCells {
+            who: w,
+            claim,
+            address,
+            range,
+            note,
+            hold,
+            expires_ms,
+            version,
+            actor: a,
+            started_ms,
+            ..
+        } => Value::obj([
+            ("kind", Value::from("claim_started_cells")),
+            ("who", who(w)),
+            ("claim", Value::from(st.claim(claim.get()))),
+            ("container", Value::from(address.as_str())),
+            ("ranges", Value::List(vec![range.to_value()])),
             ("note", note.as_deref().map_or(Value::Null, Value::from)),
             ("hold", Value::from(*hold)),
             ("expires_ms", Value::from(*expires_ms)),
@@ -2515,6 +2582,164 @@ fn the_verb_wire_json_is_golden() {
             ),
             ("final_version", Value::from(s.status().unwrap().version)),
             ("final_text", Value::from(final_text.as_str())),
+        ])),
+    );
+    drop(s);
+    mgr.release().unwrap();
+}
+
+// ---------- a live grid's cells presence and cells claims ----------
+
+#[path = "sheet_pack/mod.rs"]
+mod sheet_pack;
+
+/// The shared grid vector's turn (`client/test/vectors/grid_view.tsv`), as Ada (a person)
+/// sees it: an agent takes a cells claim, then runs every verb of the vector (an outside save's
+/// ops are Ada's raw edit), releasing the claim where the vector says. One flush after each.
+///
+/// `roster_events_cells.json`: `self`, `client`, and `flushes`, each `{rev, events}`: the
+/// snapshot first (rev 20), the claim's flush (rev 20), then one per rev. The client folds it
+/// and checks the agent's cells after each rev against the vector (`grid-presence.test.ts`).
+#[test]
+fn cells_presence_is_golden() {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-golden-{}-cells", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _dir = TmpDir(dir.clone());
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(200_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let mut config = Config::default();
+    config.edit_rate_per_s = 1_000_000;
+    config.edit_burst = 1_000_000;
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), config);
+    let v = sheet_pack::vector();
+    let s = mgr
+        .open(
+            Arc::new(sheet_pack::Sheet::default()),
+            &DocKey {
+                space: "ws".into(),
+                path: "budget.sheet".into(),
+            },
+            Some(v.file.as_bytes()),
+        )
+        .unwrap();
+    let tick = || {
+        host.now.fetch_add(500, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let ada = s
+        .join(
+            Participant::new(
+                "person:ada",
+                "Ada",
+                "#7c3aed",
+                ParticipantKind::Person,
+                "tab",
+            ),
+            Stay::Held,
+        )
+        .unwrap();
+    let atlas = s
+        .join(
+            Participant::new(
+                "agent:atlas",
+                "Atlas",
+                "#6d5bd0",
+                ParticipantKind::Agent,
+                "cli",
+            ),
+            Stay::Held,
+        )
+        .unwrap();
+    let mut st = Stable::default();
+    st.clients.insert(ada.client, 90071);
+    st.clients.insert(atlas.client, 4711);
+    let roster = s.subscribe_roster(ada.conn).unwrap();
+    tick();
+    let mut flushes: Vec<(u64, Vec<RosterEvent>)> = vec![(20, drain(&roster))];
+
+    let (container, range, note, hold) = v.claim.clone().unwrap();
+    let claim = s
+        .claim_cells(
+            atlas.conn,
+            &container,
+            range,
+            Some(60_000),
+            Some(note),
+            hold,
+        )
+        .unwrap();
+    tick();
+    flushes.push((20, drain(&roster)));
+    for step in &v.steps {
+        let ver = s.status().unwrap().version;
+        match &step.verb {
+            Some(_) => {
+                let a: Vec<String> = [
+                    "grid",
+                    "step",
+                    &step.rev.to_string(),
+                    "--base",
+                    &ver.to_string(),
+                ]
+                .iter()
+                .map(|x| x.to_string())
+                .collect();
+                let out = s.run_tool(atlas.conn, sheet_pack::ROWS, &a, b"").unwrap();
+                assert_eq!(out.exit, 0, "rev {}: {}", step.rev, out.stderr_summary);
+            }
+            None => {
+                s.edit_ops(
+                    ada.conn,
+                    step.edits.clone(),
+                    &EditOptions::new().if_version(ver),
+                )
+                .unwrap();
+            }
+        }
+        if step.claim_lines.is_some() {
+            s.release_claim(atlas.conn, Some(claim.id)).unwrap();
+        }
+        tick();
+        flushes.push((step.rev, drain(&roster)));
+    }
+    let snap = &flushes[0].1[0];
+    let me = self_in(snap, "Ada");
+    // every kind the client folds is in the stream
+    let all: Vec<&RosterEvent> = flushes.iter().flat_map(|(_, e)| e).collect();
+    for want in ["cells", "claim_started_cells", "claim_ended", "focus"] {
+        assert!(
+            all.iter().any(|e| matches!(
+                (want, e),
+                ("cells", RosterEvent::Cells { .. })
+                    | ("claim_started_cells", RosterEvent::ClaimStartedCells { .. })
+                    | ("claim_ended", RosterEvent::ClaimEnded { .. })
+                    | ("focus", RosterEvent::Focus { .. })
+            )),
+            "no {want} event"
+        );
+    }
+    let flushes_json: Vec<Value> = flushes
+        .iter()
+        .map(|(rev, evs)| {
+            Value::obj([
+                ("rev", Value::from(*rev)),
+                (
+                    "events",
+                    Value::List(evs.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+                ),
+            ])
+        })
+        .collect();
+    golden(
+        &golden_dir().join("roster_events_cells.json"),
+        &file(Value::obj([
+            ("self", me.clone()),
+            ("client", Value::from(st.client(ada.client))),
+            ("flushes", Value::List(flushes_json)),
         ])),
     );
     drop(s);

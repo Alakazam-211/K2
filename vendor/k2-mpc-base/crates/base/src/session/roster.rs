@@ -203,6 +203,15 @@ pub enum RosterEvent {
         range: Option<ElemRange>,
         client: Option<ClientId>,
     },
+    /// Their cell caret and ranges on a grid ([`RosterEntry::cells`]), or gone (cleared,
+    /// dropped by a focus on another container, or every range and the caret dropped because a
+    /// corner's row or column went or its form broke). As [`RosterEvent::Selection`]; in a flush
+    /// it comes after the selection and before the range.
+    Cells {
+        who: Who,
+        cells: Option<crate::grid::Cells>,
+        client: Option<ClientId>,
+    },
     /// A claim was taken (explicitly or by a read's `--for-edit`). Never coalesced.
     ClaimStarted {
         who: Who,
@@ -238,6 +247,27 @@ pub enum RosterEvent {
         /// Who holds it (wire 3).
         actor: ClaimActor,
         /// When it was taken, on the host's clock (wire 3).
+        started_ms: u64,
+    },
+    /// A claim on one range of a grid's cells was taken ([`super::Session::claim_cells`]). Its
+    /// own kind, as an element claim's. Never coalesced. It ends with [`RosterEvent::ClaimEnded`],
+    /// whose `lines` are then the range's first and last row numbers on its container.
+    ClaimStartedCells {
+        who: Who,
+        claim: ClaimId,
+        /// The container's key; `address` is what the wire carries as the event's `container`.
+        container: Key,
+        address: String,
+        /// One range, its corners' addresses filled.
+        range: crate::grid::CellRange,
+        note: Option<String>,
+        hold: bool,
+        expires_ms: u64,
+        /// The doc's version when it was taken.
+        version: Seq,
+        /// Who holds it.
+        actor: ClaimActor,
+        /// When it was taken, on the host's clock.
         started_ms: u64,
     },
     /// A claim ended, and how. Never coalesced.
@@ -298,6 +328,7 @@ struct Told {
     viewport: ToldKind<Rect>,
     focus: ToldKind<ElemFocus>,
     range: ToldKind<ElemRange>,
+    cells: ToldKind<crate::grid::Cells>,
 }
 
 /// One presence kind as subscribers were last told it: the participant's value (what a consumer
@@ -493,6 +524,7 @@ impl RosterHub {
                             viewport: ToldKind::default(),
                             focus: ToldKind::default(),
                             range: ToldKind::default(),
+                            cells: ToldKind::default(),
                         });
                     }
                     RosterEvent::Left { who, .. } => self.told.retain(|t| &t.who != who),
@@ -525,6 +557,7 @@ impl RosterHub {
                             viewport: ToldKind::default(),
                             focus: ToldKind::default(),
                             range: ToldKind::default(),
+                            cells: ToldKind::default(),
                         });
                         self.told.len() - 1
                     }
@@ -643,7 +676,18 @@ fn told(r: &Row) -> Told {
             top: r.entry.range.clone(),
             conns: ranges(&r.entry),
         },
+        cells: ToldKind {
+            top: r.entry.cells.clone(),
+            conns: cellses(&r.entry),
+        },
     }
+}
+
+fn cellses(e: &RosterEntry) -> Vec<(ClientId, Option<crate::grid::Cells>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.cells.clone()))
+        .collect()
 }
 
 fn focuses(e: &RosterEntry) -> Vec<(ClientId, Option<ElemFocus>)> {
@@ -709,8 +753,8 @@ fn kind_events<T: Clone + PartialEq>(
     }
 }
 
-/// One participant's `Focus`, `Selection`, `Range`, `Pointer` and `Viewport` events for a flush
-/// (focus first: a view moves to the container before it draws what is selected there).
+/// One participant's `Focus`, `Selection`, `Cells`, `Range`, `Pointer` and `Viewport` events for
+/// a flush (focus first: a view moves to the container before it draws what is selected there).
 fn elem_events(t: &mut Told, who: &Who, e: &RosterEntry, batch: &mut Vec<RosterEvent>) {
     kind_events(&mut t.focus, &e.focus, focuses(e), |x, c| {
         batch.push(RosterEvent::Focus {
@@ -723,6 +767,13 @@ fn elem_events(t: &mut Told, who: &Who, e: &RosterEntry, batch: &mut Vec<RosterE
         batch.push(RosterEvent::Selection {
             who: who.clone(),
             selection: x,
+            client: c,
+        })
+    });
+    kind_events(&mut t.cells, &e.cells, cellses(e), |x, c| {
+        batch.push(RosterEvent::Cells {
+            who: who.clone(),
+            cells: x,
             client: c,
         })
     });

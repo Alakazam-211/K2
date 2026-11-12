@@ -5,13 +5,14 @@
 // DOM-free host driver (`live-host.ts`) and the library tests use them.
 
 import { vi } from "vitest";
+import { gridRead } from "../src/grid";
 import { coalesce, type Hunk } from "../src/hunk";
 import { KeyedWatch } from "../src/keyed";
 import { KeyedView } from "../src/view";
 import { LiveText } from "../src/live";
 import { PresenceChannel } from "../src/presence";
 import { Carried, rebaseOurs } from "../src/rebase";
-import type { ChangeEvent } from "../src/wire";
+import type { ChangeEvent, ClaimActor, RosterEvent } from "../src/wire";
 import type { FakeServer } from "./fake-server";
 
 /**
@@ -174,6 +175,31 @@ export function withGapUndetected<T>(f: () => T): T {
  * sends `watch` and `report` to a host that didn't list `"keyed_watch"`. */
 export function withWatchSentAnyway<T>(f: () => T): T {
   const spy = vi.spyOn(KeyedWatch.prototype, "supported", "get").mockReturnValue(true);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with the grid's numbering ignoring each row's and column's gap (`GridGapIgnored`):
+ * every gap reads as 0, so the numbers after a blank row come out one short. */
+export function withGridGapIgnored<T>(f: () => T): T {
+  const spy = vi.spyOn(gridRead, "gap").mockReturnValue(0);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with a claim on cells not taking its actor from its event
+ * (`ClaimCellsActorMissing`): its `ClaimView` names only the claimant's id, with no name, kind or
+ * colour, as if the event carried none and the roster had no row. */
+export function withClaimCellsActorMissing<T>(f: () => T): T {
+  type E = Extract<RosterEvent, { kind: "claim_started_cells" }>;
+  const P = PresenceChannel.prototype as unknown as { cellsClaimActor(e: E): ClaimActor };
+  const spy = vi.spyOn(P, "cellsClaimActor").mockImplementation((e: E) => ({ id: e.who, name: "", kind: "", colour: "" }));
   try {
     return f();
   } finally {

@@ -1582,6 +1582,35 @@ impl BlobSession {
         blob_log(&store, self.doc_id, base.as_deref())
     }
 
+    /// The doc's **live log** (`docs/SESSIONS.md`, "Text → tier 0"): every change it logged
+    /// while it was a live text doc, as that doc's `log` listed them (newest first; changes
+    /// only, its versions are this doc's versions now), each with its approval state. Empty
+    /// for a doc never demoted. No content: who, when, how, lines added and removed, for whom,
+    /// the turn and the pack verb. Needs history, as [`BlobSession::log`].
+    pub fn live_log(&self, conn: ConnId) -> Result<Vec<super::LogItem>> {
+        let out = self.live_log_inner(conn);
+        self.for_viewer(conn, out, |l, items| {
+            items.into_iter().map(|i| l.log_item(i)).collect()
+        })
+    }
+
+    fn live_log_inner(&self, conn: ConnId) -> Result<Vec<super::LogItem>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::History, Action::History, now)?;
+        let store = Self::store(&st)?;
+        let mut out: Vec<super::LogItem> = store
+            .demoted_changes(self.doc_id)?
+            .into_iter()
+            .map(|c| super::LogItem::Change {
+                approval: c.approval.map(|a| a.state),
+                info: c.info,
+            })
+            .collect();
+        out.reverse();
+        Ok(out)
+    }
+
     /// **Blame** for any file (tier 0, P22): the current version's setter and a summary of
     /// the version history (how many versions, who set them, most recent first). Needs read
     /// and history (K-PERM-9).
@@ -3387,6 +3416,14 @@ impl BlobSession {
                 None
             }
         }
+    }
+
+    /// A demotion's write-back ([`super::SessionManager::demote_text_file`]): the current
+    /// version to the file now, if it doesn't hold it (`write_back`'s rules).
+    pub(crate) fn write_back_now(&self) -> Result<bool> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        self.write_back(&mut st, now)
     }
 
     /// Write the current version to the file if it doesn't hold it. Checks the file first

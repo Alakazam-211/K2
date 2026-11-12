@@ -186,6 +186,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::SaveMismatch { .. }
         | SessionError::Blob(_)
         | SessionError::Pack(_)
+        | SessionError::PairingMismatch { .. }
         | SessionError::Unloaded
         | SessionError::Released
         | SessionError::Closed { .. }

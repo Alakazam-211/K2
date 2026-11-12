@@ -123,6 +123,7 @@ pub mod elem;
 mod engine;
 pub mod errors;
 pub mod export;
+pub mod grid;
 mod hash;
 pub mod ids;
 pub mod index;

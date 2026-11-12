@@ -97,6 +97,28 @@
 #                                                and opens the older store with the file as the
 #                                                carrier. The last line is `N-1 CARRIER OK`.
 #
+# The carrier's pairing (K1b, after v0.15.1), both ways:
+#
+#   tools/n1/n1.sh layout-pairing <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/pairing the consumer
+#                                                (tools/n1/consumer-pairing)
+#   tools/n1/n1.sh node-pairing <dir>            on a build node, from the repo root: this
+#                                                build's `n1_pairing_producer` writes three live
+#                                                docs of a pack that pairs, each with a carrier
+#                                                and its pairing (`carrier_pairings`); the
+#                                                previous release (it knows the carrier, not the
+#                                                pairing) ignores the pairing rows: it writes one
+#                                                doc with its own encode, refuses a rewrite naming
+#                                                `carrier_pairings`, deletes one doc (leaving its
+#                                                pairing rows) and writes a store of its own;
+#                                                this build's `n1_pairing_after` opens the
+#                                                untouched doc on its stored pairing, makes the
+#                                                written doc's pairing again, finds the deleted
+#                                                doc's rows swept after its rewrite, and opens the
+#                                                older store with the pairing made from its
+#                                                synced state; each with a verb spliced exactly.
+#                                                The last line is `N-1 PAIRING OK`.
+#
 # The structure index's row format 2 (the view items), both ways:
 #
 #   tools/n1/n1.sh layout-index <previous tag> <dir>   no cargo: <dir>/old is the previous
@@ -115,6 +137,26 @@
 #                                                indexes them again. The last line is
 #                                                `N-1 INDEX OK`.
 #
+# The text → tier 0 demotion (`demoted_changes`, after v0.16.0), both ways:
+#
+#   tools/n1/n1.sh layout-demote <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/demote the consumer
+#                                                (tools/n1/consumer-demote)
+#   tools/n1/n1.sh node-demote <dir>             on a build node, from the repo root: this
+#                                                build's `n1_demote_producer` writes
+#                                                <dir>/demote/fwd (two demoted docs, one kept
+#                                                both ways); the previous release reads every
+#                                                version exactly, is refused a text open
+#                                                (PackMismatch), a purge and an erasure
+#                                                (NewerData), writes a version and deletes a doc;
+#                                                this build's `n1_demote_after` sweeps the
+#                                                deleted doc's live log, reads the other's and
+#                                                purges. Then the previous release writes
+#                                                <dir>/demote/rev (a text doc with a change the
+#                                                file never got and an outside save after), and
+#                                                this build's `n1_demote_prev_store` demotes it,
+#                                                keeping both. The last line is `N-1 DEMOTE OK`.
+#
 # The rows depend on the previous release: the node modes read each kit's crate version from
 # its manifest and hand it to the rows (K2MB_N1_READER, the build whose consumer ran on a store;
 # K2MB_N1_PREV, the previous release). Against a release that doesn't know a table (v0.14.0 and
@@ -129,7 +171,7 @@
 set -eu
 # kit_version DIR: the crate version in DIR/crates/base/Cargo.toml (the kit's own manifest)
 kit_version() { sed -n 's/^version = "\(.*\)"$/\1/p' "$1/crates/base/Cargo.toml" | head -1; }
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-index <tag> <dir> | node-index <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -283,6 +325,28 @@ PY
     K2MB_N1_OUT="$OUT/carrier" K2MB_N1_PREV="$PREV" cargo test -p k2-mpc-base --test live_carrier n1_carrier_after -- --ignored --nocapture
     echo "N-1 CARRIER OK"
     ;;
+  layout-pairing)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/pairing"
+    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-pairing/." "$OUT/pairing/"
+    cp "$OUT/old/Cargo.lock" "$OUT/pairing/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-pairing)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the pairings"
+    K2MB_N1_OUT="$OUT/pairing" cargo test -p k2-mpc-base --test live_paired n1_pairing_producer -- --ignored --nocapture
+    echo "== the previous release ($(kit_version "$OUT/old"))"
+    (cd "$OUT/pairing" && cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT/pairing" cargo test -p k2-mpc-base --test live_paired n1_pairing_after -- --ignored --nocapture
+    echo "N-1 PAIRING OK"
+    ;;
   layout-index)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
@@ -304,6 +368,32 @@ PY
     echo "== this build again"
     K2MB_N1_OUT="$OUT" cargo test -p k2-mpc-base --test blob_index_v2 n1_index_after -- --ignored --nocapture
     echo "N-1 INDEX OK"
+    ;;
+  layout-demote)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/demote"
+    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-demote/." "$OUT/demote/"
+    cp "$OUT/old/Cargo.lock" "$OUT/demote/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-demote)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== forward: this build demotes"
+    K2MB_N1_OUT="$OUT/demote" cargo test -p k2-mpc-base --test demote n1_demote_producer -- --ignored --nocapture
+    echo "== forward: the previous release ($(kit_version "$OUT/old")) reads"
+    (cd "$OUT/demote" && cargo run -q -- read "$OUT/demote")
+    echo "== forward: this build again"
+    K2MB_N1_OUT="$OUT/demote" cargo test -p k2-mpc-base --test demote n1_demote_after -- --ignored --nocapture
+    echo "== reverse: the previous release writes a text doc"
+    (cd "$OUT/demote" && cargo run -q -- produce "$OUT/demote")
+    echo "== reverse: this build demotes it"
+    K2MB_N1_OUT="$OUT/demote" cargo test -p k2-mpc-base --test demote n1_demote_prev_store -- --ignored --nocapture
+    echo "N-1 DEMOTE OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

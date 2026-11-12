@@ -152,6 +152,49 @@ export interface ElemClaim {
   started_ms?: number;
 }
 
+/**
+ * One corner of a cell range in a live grid (WIRE.md, "The live grid"), by address: `row` is the
+ * last keyed row of the container at or before the cell (`null` when there is none), `row_off`
+ * how many rows past it (with `row: null`, the row number itself, so at least 1); `col` and
+ * `col_off` the same for columns. In normal form, always: no keyed row (column) of the container
+ * lies strictly between `row` and the cell. A corner is never moved; the kit drops it when its
+ * row or column stops being live or its form breaks.
+ */
+export interface Corner {
+  row: string | null;
+  row_off: number;
+  col: string | null;
+  col_off: number;
+}
+
+/** A block of cells from `start` to `end`; either may be above or left of the other. */
+export interface CellRange {
+  start: Corner;
+  end: Corner;
+}
+
+/** A connection's cells in one container (a sheet): its active cell (inside a range when there
+ * are ranges) and at most 16 ranges (`CELLS_RANGES_MAX`). */
+export interface Cells {
+  container: string;
+  active: Corner | null;
+  ranges: CellRange[];
+}
+
+/** A live claim on a block of cells, as a roster entry names it (`cell_claims`). */
+export interface CellClaim {
+  /** `claim-N`. */
+  claim: string;
+  container: string;
+  /** One range. */
+  ranges: CellRange[];
+  note: string | null;
+  hold: boolean;
+  expires_ms: number;
+  /** When it was taken, on the host's clock. */
+  started_ms: number;
+}
+
 /** Who holds a claim, as its events carry it (wire 3; the kit's `ClaimActor`, with `id` the
  * event's `who`), so a view needs no roster lookup, even after the claimant left. */
 export interface ClaimActor {
@@ -199,6 +242,9 @@ export type RosterEvent =
    * range goes (`null`) when its field changed or its element went: never moved. */
   | { kind: "focus"; who: Handle; focus: ElemFocus | null; client?: number }
   | { kind: "range"; who: Handle; range: ElemRange | null; client?: number }
+  /** A connection's cells in a live grid (feature `cells`), as `selection`. `null`: gone (cleared,
+   * its focus moved to another container, or nothing of it is left after a row or column went). */
+  | { kind: "cells"; who: Handle; cells: Cells | null; client?: number }
   /** `actor` and `started_ms`: wire 3, absent from an older host. */
   | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; actor?: ClaimActor; started_ms?: number; [k: string]: unknown }
   /** A claim on elements of a list root: it has no lines, so it has its own kind. It ends with
@@ -218,9 +264,27 @@ export type RosterEvent =
       /** When it was taken, on the host's clock (wire 3). */
       started_ms?: number;
     }
+  /** A claim on a block of cells of a live grid (feature `cell_claims`): one range of one
+   * container. It ends with `claim_ended`. Always with its actor and start time. */
+  | {
+      kind: "claim_started_cells";
+      who: Handle;
+      claim: string;
+      container: string;
+      /** One range. */
+      ranges: CellRange[];
+      note: string | null;
+      hold: boolean;
+      expires_ms: number;
+      version: number;
+      actor: ClaimActor;
+      started_ms: number;
+    }
   /** `actor`, `at_ms` (when it ended, the host's clock) and `at_rev` (the change that ended it:
-   * `edited`, `deleted`; else `null`): wire 3, absent from an older host. */
-  | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; actor?: ClaimActor; at_ms?: number; at_rev?: number | null; [k: string]: unknown }
+   * `edited`, `deleted`; else `null`): wire 3, absent from an older host. `lines`: a claim on
+   * lines, its lines; a claim on cells, its range's first and last row numbers at `version`, in
+   * the rows root. */
+  | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; actor?: ClaimActor; at_ms?: number; at_rev?: number | null; lines?: LineSpan; [k: string]: unknown }
   | { kind: "note"; to: Handle; from: Handle; [k: string]: unknown }
   | {
       kind: "overwritten";
@@ -269,6 +333,8 @@ export interface Device {
   /** This connection's focus and text range (wire 3); absent or `null` when it has none. */
   focus?: ElemFocus | null;
   range?: ElemRange | null;
+  /** This connection's cells in a live grid; absent or `null` when it has none. */
+  cells?: Cells | null;
 }
 
 /** One participant as the host shows them (from the kit's `RosterMember`). */
@@ -297,9 +363,14 @@ export interface RosterEntry {
    * older host. */
   focus?: ElemFocus | null;
   range?: ElemRange | null;
+  /** The most active connection's cells in a live grid that has some; absent or `null` when
+   * none has. */
+  cells?: Cells | null;
   /** The participant's live claims on elements, so a late subscriber sees who holds what.
    * Present only when they hold some. */
   elem_claims?: ElemClaim[];
+  /** The participant's live claims on cells, likewise. Present only when they hold some. */
+  cell_claims?: CellClaim[];
   /** `RosterMember.rights`, when the host sends it. */
   rights?: Rights;
   /** This connection itself. */
@@ -399,9 +470,16 @@ export type ClientFrame =
    * lists `"focus"` or `"range"`. Answered only when refused. */
   | { type: "focus"; req: number; focus: ElemFocus | null }
   | { type: "range"; req: number; range: ElemRange | null }
+  /** This connection's cells in a live grid (`null`: clear), sent only when the host lists
+   * `"cells"`. It also sets the connection's focus to their container. Answered only when
+   * refused. */
+  | { type: "cells"; req: number; cells: Cells | null }
   /** Claim elements of a list root (`Session::claim_elems`). `req` is the channel's own request
    * number, never an `op` (WIRE.md, Claim frames). Answered by `claimed` or `presence_refused`. */
   | { type: "claim"; req: number; root: string; keys: string[]; ttl_ms?: number; note?: string; hold?: boolean }
+  /** Claim one block of cells of a live grid: `cells` in place of `root` and `keys`, sent only
+   * when the host lists `"cell_claims"`. Answered as the claim on elements. */
+  | { type: "claim"; req: number; cells: Pick<Cells, "container" | "ranges">; ttl_ms?: number; note?: string; hold?: boolean }
   /** Release this participant's claim, or all of them here with no `claim`
    * (`Session::release_claim`). Answered by `released` or `presence_refused`. */
   | { type: "release"; req: number; claim?: string }
@@ -581,6 +659,50 @@ export interface KeyedSchema {
  * values stand for words. */
 export type ViewSrc = null | string | { list_value: true } | { derived: string } | { field: string; values: Record<string, string> };
 
+/** What a field holds, for the change frames' op kinds (the view schema's `field_class`):
+ * `cell` is a cell's value in a live grid. */
+export type FieldClass = "geometry" | "text" | "style" | "visibility" | "meta" | "cell";
+
+/** How one axis of a live grid is numbered: each row's (column's) gap is its `gap_field` value
+ * in its composite map, and the first one's number is its gap plus `first`. */
+export interface GridNumbering {
+  gap_field: string;
+  first: number;
+}
+
+/**
+ * Where a live grid lives in the keyed doc (the view schema's `grid`; WIRE.md, "The live grid"):
+ * the rows (always the schema's `units`), the columns, their composite maps (`cells` for the rows,
+ * keyed `<row address>\x1f<field>`; `col_fields` for the columns), which field names a column's
+ * container, how numbers are worked out, the highest row and column numbers, how a cell's value
+ * is encoded, the row and column fields a view reads, and how a peer's viewport is measured
+ * (`"cells"`: in cells of its focus container).
+ */
+export interface GridSlot {
+  rows: string;
+  cols: string;
+  cells: string;
+  col_fields: string;
+  col_container_field: string;
+  /** A field of the rows' map starting with this is a row field; any other is a cell. */
+  row_fields_start: string;
+  /** A cell field's column address: `{container}` the container's address, `{field}` the field. */
+  col_of_cell_field: string;
+  numbering: { rows: GridNumbering; cols: GridNumbering };
+  /** How a column is labelled: `letters` (1 = A, 27 = AA) or `numbers`. */
+  col_label: "letters" | "numbers";
+  max: { rows: number; cols: number };
+  cell: { encoding: string; type: string; value: string; formula: string; formula_kind: string; style: string; types: Record<string, string> };
+  row_fields: { hidden: string; height: string; height_unit: string };
+  col_field_names: { hidden: string; width: string; width_unit: string };
+  viewport: string;
+  style_hint: { field: string; default: string; table: string; parts: string[] };
+  /** The pack's derived values that are kept by cell field (`a1`, a formula's text as people
+   * read it): a snapshot's rows pages carry them, and a change's `derived.units` updates them.
+   * Absent: none. */
+  cell_derived?: string[];
+}
+
 /** The pack's view schema, as the snapshot's view carries it (the rendering-data contract's
  * §1.2). */
 export interface ViewSchemaJson {
@@ -593,8 +715,14 @@ export interface ViewSchemaJson {
   container_fields: { title: ViewSrc; hidden: ViewSrc; layout: ViewSrc };
   unit_fields: { kind: ViewSrc; name: ViewSrc; alt: ViewSrc; text: ViewSrc; hidden: ViewSrc; editable_text: ViewSrc; placeholder: ViewSrc };
   geometry: { field: string; parts: string[]; rot_unit: string } | null;
-  field_class: Record<string, string>;
+  field_class: Record<string, FieldClass>;
+  /** Ordered `[prefix, class]` rules: a field with no `field_class` entry takes the class of the
+   * first prefix it starts with. Absent from an older kit (none). */
+  field_class_prefix?: [string, FieldClass][];
   derived: { containers: string[]; units: string[] };
+  /** The live grid, for a pack whose units are a grid's rows; `null` (or absent, from an older
+   * kit) otherwise. */
+  grid?: GridSlot | null;
 }
 
 /** One container of the view index (a slide), by address; `position` from 1. */
@@ -649,11 +777,12 @@ export interface ViewSnapshotJson {
  * its address and its container's (before a `delete`, after anything else), the kinds of
  * change, the geometry field's value before and after when the change moved it (`null`
  * otherwise, and for an empty one), the fields that changed (names only), whether it is hidden
- * now (with `hide_show`), and its placeholder type. */
+ * now (with `hide_show`), and its placeholder type. `cell`: a field of class `cell` changed (a
+ * row's cell value in a live grid), listed last. */
 export interface UnitDelta {
   key: string;
   container: string | null;
-  ops: ("add" | "delete" | "restore" | "reorder" | "move_resize" | "rotate" | "flip" | "text" | "style" | "hide_show" | "props")[];
+  ops: ("add" | "delete" | "restore" | "reorder" | "move_resize" | "rotate" | "flip" | "text" | "style" | "hide_show" | "props" | "cell")[];
   geom_before: string | null;
   geom_after: string | null;
   fields: string[];
@@ -712,6 +841,10 @@ export interface KeyedPageFrame {
   entries?: [string, string | null, KeyedValue][];
   text?: string;
   units?: KeyedUnitsPage;
+  /** On a page of the rows' map in a live grid: the pack's derived values kept by cell field
+   * (the grid's `cell_derived`) for this page's entries, `{name: {row address: {field: text}}}`;
+   * absent when there are none. */
+  derived?: Record<string, Record<string, Record<string, string>>>;
 }
 
 /** Who made a change: `kind` is `person`, `agent`, `app` or `file` (an outside save; no
@@ -765,8 +898,65 @@ export interface OpsChangeFrame {
   units?: UnitDelta[];
   containers_changed?: ContainerDelta[];
   containers?: string[];
-  /** The pack's derived values (`null`: none), opaque here. */
-  derived: unknown;
+  /** The pack's derived values (`null`: none): the kit's typed parts, and any other key a pack
+   * adds. */
+  derived: FrameDerived | null;
   /** The containers whose render hash changed (`null`: none). */
   render_hashes: Record<string, string> | null;
+}
+
+/** A change frame's `derived` (WIRE.md, "Derived values"): what only the pack works out, by
+ * address, in the parts the kit gives builders for; a pack may add other keys. */
+export interface FrameDerived {
+  /** Per unit (a grid's row) by address. */
+  units?: Record<string, UnitDerived>;
+  /** Per container (a sheet) by address. */
+  containers?: Record<string, ContainerDerived>;
+  /** The cells a verb wrote. */
+  written?: Written;
+  /** The rows or columns a verb inserted or deleted. */
+  bands?: Band[];
+  [k: string]: unknown;
+}
+
+/** What the pack worked out for one unit: `a1`, by field, the field's value as people read it
+ * in A1 terms (a formula's text), `null` when it has none. */
+export interface UnitDerived {
+  a1?: Record<string, string | null>;
+  [k: string]: unknown;
+}
+
+/** What the pack worked out for one container: its merged blocks, and its style hints by the
+ * cells' style id. */
+export interface ContainerDerived {
+  merges?: CellRange[];
+  styles?: Record<string, StyleHint>;
+  [k: string]: unknown;
+}
+
+/** Enough of a cell style for a view to hint at it: bold, the fill colour (`null`: none), and the
+ * number format. */
+export interface StyleHint {
+  bold: boolean;
+  fill: string | null;
+  numfmt: string;
+}
+
+/** The cells a verb wrote, in one container. */
+export interface Written {
+  container: string;
+  ranges: CellRange[];
+}
+
+/**
+ * Rows or columns a verb inserted or deleted, by number: an insert's `from`..`to` are numbers
+ * after the change (`numbers: "after"`), a delete's are numbers before it (`"before"`).
+ */
+export interface Band {
+  container: string;
+  axis: "rows" | "cols";
+  op: "insert" | "delete";
+  from: number;
+  to: number;
+  numbers: "before" | "after";
 }

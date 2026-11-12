@@ -26,6 +26,7 @@ import rosterEventsOverwritten from "./golden/roster_events_overwritten.json";
 import rosterEventsOverwrittenApp from "./golden/roster_events_overwritten_app.json";
 import rosterEventsOverwrittenGrid from "./golden/roster_events_overwritten_grid.json";
 import rosterEventsRollup from "./golden/roster_events_rollup.json";
+import rosterEventsCells from "./golden/roster_events_cells.json";
 import rosterTraceElemPresence from "./golden/roster_trace_elem_presence.json";
 
 /** `T` as tsc infers it from JSON: string literal types widened to `string`. */
@@ -60,3 +61,4 @@ rosterEventsElemPresence satisfies W<DevicesGolden>;
 rosterEventsClaimsElems satisfies W<RosterGolden & { about: string }>;
 rosterEventsFocusRange satisfies W<DevicesGolden & { about: string; refused: string }>;
 rosterTraceElemPresence satisfies W<{ traces: (RosterGolden & { seed: number })[] }>;
+rosterEventsCells satisfies W<{ self: string; client: number; flushes: { rev: number; events: RosterEvent[] }[] }>;

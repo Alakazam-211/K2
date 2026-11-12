@@ -25,6 +25,7 @@ mod blob;
 mod blob_refs;
 mod blob_struct;
 mod delete;
+mod demoted;
 pub(crate) mod enc;
 mod history;
 mod live_carrier;
@@ -42,6 +43,8 @@ pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
 pub(crate) use blob_refs::BlobRefScan;
 pub(crate) use blob_struct::{StructCommitted, StructPut};
+pub(crate) use demoted::DemoteRows;
+pub use demoted::DemotedChange;
 pub use history::Redaction;
 pub(crate) use history::{
     window_plan, Carry, ClockSpan, HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot,
@@ -50,7 +53,7 @@ pub(crate) use history::{
 pub use history::{ChangeInfo, ChangeKind, RootHunks, VersionInfo};
 #[cfg(test)]
 pub(crate) use history::{CommitInterrupt, INTERRUPT_COMMIT};
-pub(crate) use live_carrier::Released;
+pub(crate) use live_carrier::{Released, LIVE_SLOT};
 pub use live_copies::LiveCopyRow;
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
@@ -367,6 +370,10 @@ pub(super) const ADDITIVE_TABLES: &[Additive] = &[
         on_orphan: Some(live_carrier::release_orphan_versions),
     },
     Additive {
+        rows: DocRows::Pair(live_carrier::CARRIER_PAIRINGS),
+        on_orphan: None,
+    },
+    Additive {
         rows: DocRows::Named(blob_refs::DOC_BLOB_REFS),
         on_orphan: Some(blob_refs::release_orphan),
     },
@@ -392,6 +399,10 @@ pub(super) const ADDITIVE_TABLES: &[Additive] = &[
     },
     Additive {
         rows: DocRows::Pair(annot::ANNOT_CHANGED),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(demoted::DEMOTED_CHANGES),
         on_orphan: None,
     },
 ];
@@ -536,6 +547,8 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(verbs::CHANGE_VERBS), Erase::Range),
     (DocRows::One(live_carrier::LIVE_CARRIERS), Erase::Blob),
     (DocRows::Pair(live_carrier::VERSION_CARRIERS), Erase::Blob),
+    (DocRows::Pair(live_carrier::CARRIER_PAIRINGS), Erase::Range),
+    (DocRows::Pair(demoted::DEMOTED_CHANGES), Erase::Range),
 ];
 
 /// The tables not keyed by doc id: `meta` (the store's own), `paths` (key → doc: a delete

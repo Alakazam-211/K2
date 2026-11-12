@@ -14,7 +14,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)`; tier 0: `conflict_dir(file)` (default: beside the file), `conflict_copy_name(file_name, at_ms, who)` (default `None`: the pack's name) |
 | `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)), `check_merged(root, text)` (default: every text passes; see "A merge the pack refuses" under Outside edits) |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
-| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob`, `promote_blob_file`, `promote_blob` ([Tier 0 → text](#tier-0--text-v092)) |
+| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob`, `promote_blob_file`, `promote_blob` ([Tier 0 → text](#tier-0--text-v092)), `demote_text_file`, `demote_text` ([Text → tier 0](#text--tier-0)) |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
@@ -3042,6 +3042,116 @@ search it and say so with `NotReached::Tier0History(n)`.
 An older build (v0.9.1) reads a promoted doc as a text doc and ignores its tier-0 rows;
 deleting the doc there still releases their blobs (deletion erases every blob row of a doc).
 
+### Text → tier 0
+
+The mirror of [Tier 0 → text](#tier-0--text-v092). A pack can move a name to not-text: the
+text pack sends CAD, BIM and circuit-board files (`.ifc`, `.step`, `.dxf`, the `.kicad_*`
+files and others) to tier 0, because a whole-line merge of their lines can write duplicate ids
+or leave references pointing at the wrong things. A doc already stored as live text under such
+a name stays a text doc: `open_blob_file` on it is `PackMismatch { stored: <its text pack>,
+pack: "kit:blob" }`, nothing changed. The host **demotes** it: the same key and doc id become a
+tier-0 doc, its history kept in place.
+
+`SessionManager::demote_text_file(pack, to, &key, path, root) -> (Arc<BlobSession>,
+Demotion)` (`demote_text(pack, to, &key)` for a doc without a file). `pack` is the text doc's
+pack (to load it when it isn't loaded), `to` the blob pack the tier-0 doc opens with
+(`AnyFile` until the type has its own). A manager call with no participant, like
+`delete_doc` and `promote_blob_file`: the host checks its own rights first.
+
+**When to call it.** When the host routes a file to tier 0 and `open_blob_file` says
+`PackMismatch` with `stored` a text pack's name (the pack moved the extension to not-text).
+Call it once, then open the file at tier 0 as usual; a second call is a no-op
+(`Demotion::already`). It replaces the interim rule (close, rekey the text doc aside, import
+the file as a new tier-0 doc), which moved the history away from the file's key.
+
+What it does, under the text session's lock, **never through the text doc's own disk path**
+(that path merges an outside save by lines, the thing a demotion avoids):
+
+1. **The live doc's final state** is rendered, as a write-back writes it. A change the file
+   never got (not written back yet, or left by a crash before write-back) is in it.
+2. **The file** is read once into the blob store and judged against the doc's sync point (the
+   keyed hash of what the kit last wrote or read, or a write-back in flight): it holds the live
+   state, or what the kit last synced, or else **another program saved it since**.
+3. **Every text version becomes a tier-0 version** holding exactly the bytes its `file_at`
+   gave (the pack's encoding of its content with the doc's codec settings), with its time,
+   name and last author (`via: "live"`; the first is `Import`, an outside save's `External`,
+   the rest `Write`). Then the live state becomes the next version (unless the last version
+   holds it already): its author is the last change's.
+4. **An outside save since the last sync** is not merged by lines: tier 0's keep-both rule.
+   Its bytes become the current version (`kit:external`, `External`, the copy recorded), the
+   live state stays as the version before it, and a **conflict copy** of the live state is
+   written beside the file (or in `Host::conflict_dir`), named as tier 0 names one.
+   `AuditEvent::BlobConflict` reports it, as for any conflicting save at tier 0.
+5. **One store transaction** (`DocStore::demote_text_doc`) switches the doc: the metadata
+   (`kit:blob`, no engine), the versions (after any tier-0 history the doc kept from an earlier
+   promotion), the file's sync state, and the **live log**, while it erases the text doc's own
+   rows (log, snapshot, clients, text versions, approvals, change summaries, revert records,
+   sync replica, hash key; carriers and value references released). A crash before it leaves
+   the text doc exactly as it was; after it, the doc is tier 0.
+6. **The text session closes** with typed events: every roster subscription gets
+   `RosterEvent::Closed { reason: "demoted" }` last, live claims end (`AuditEvent::ClaimEnded`,
+   `left`), the host gets `AuditEvent::SessionClosed { reason: "demoted" }` and
+   `AuditEvent::Demoted { key, connections, versions, changes, kept_both }`, change
+   subscriptions end, and every later call on the old handle fails with
+   `SessionError::Closed { reason: "demoted" }` (`MPC-E519`; `DEMOTED` is the reason's
+   constant). Waiting outside-save notes go (they mean nothing at tier 0).
+7. The blob session opens on the file and **writes the live state** when the file doesn't hold
+   it yet (`Demotion::written`). A file that can't be written keeps the live state as the
+   current version: the tier-0 session's write-back retries on `tick`, as for any tier-0
+   version the file never got. Later opens are tier 0; a text open is `PackMismatch {
+   stored: "kit:blob" }`.
+
+`Demotion { key, already, versions, live, current, changes, kept_both, conflict_copy, written,
+connections }`: `versions` maps each text version to the tier-0 version it became, `live` is
+the version holding the live state, `current` the current one (`live`, or the outside save's),
+`conflict_copy` the copy's path (when `kept_both` and it was written).
+
+**What the host shows.**
+- To the people and agents who were in the doc (`Demoted.connections`): the file now opens
+  the non-live way (versions, a lease, keep-both on clashing saves); reopen it at tier 0.
+- `kept_both`: the same notice as any tier-0 conflict, naming the conflict copy that holds the
+  live state, and that the file is the other program's save.
+- Nothing else changes for the file's history: its versions read as tier-0 versions (`log`,
+  `read_version`, `file_at_to`, `restore`), and the change log stays readable:
+
+| Call | Rights | What it does |
+|---|---|---|
+| `BlobSession::live_log(conn)` | history | the text doc's changes as its `log` listed them (`LogItem::Change`, newest first): seq, kind, author, via, time, for whom, lines added and removed, turn, pack verb, approval state. Empty for a doc never demoted |
+
+**What isn't kept.** Content between versions (the log's updates: a version holds the file as
+it was when cut, and text versions are cut by time, not per change), blame, revert records and
+undo. Pending approvals stay readable in the live log; they can no longer be settled (the
+person restores a version instead). Person-writer leases end with the session.
+
+**Errors** (nothing changed): `NotFound`; `PackMismatch` when the doc's pack isn't `pack`;
+`Declined { code: "not_text" }` (`MPC-E407`) for a structured doc or a pack that keeps a
+carrier (only a plain text doc becomes tier 0 this way); `Declined { code: "too_large" }`
+when the file is over the blob limit; `Declined { code: "hard_linked" }` (`MPC-E412`);
+`BadPath` from `demote_text` for a doc that lives in a file; `NoBlobStore`; a disk, blob or
+store error.
+
+**Erasure and purge.** The tier-0 versions are purged as any (`BlobSession::purge`; the whole
+history is every version but the current, its blobs removed at once, the store file
+rewritten, which also drops the bytes of the text rows the demotion erased). Participant
+erasure (`BlobSession::erase_participant`) renames the erased pid in the live log too (author,
+for whom, the approval's names) and drops the turn and verb of their changes, as a text doc's
+erasure does; a pseudonym the live log already names is refused. A live-log row holds no
+content. A text purge with a participant scope reaches the live log too (a doc demoted, then
+promoted again).
+
+**Store.** One additive per-doc table, `demoted_changes` (`(doc, n)` → a change summary and its
+approval record), **without a format bump**, on the terms of `change_turns`: created lazily by
+the first demotion, erased with its doc, copied by `rewrite_file`, swept at open when an older
+kit deleted its doc. A doc demoted, promoted and demoted again keeps both runs (`n` counts on).
+
+**An older kit (N−1, v0.16.0 and before)** has no demotion and doesn't know the table. It opens
+a demoted doc as the tier-0 doc it is: every version, its bytes and the current one read as
+this kit wrote them (never a misreading), without the live log. It refuses a rewrite, and so a
+purge or an erasure, before changing anything (`StoreError::NewerData { table:
+"demoted_changes" }`, `MPC-E502`), and its doc delete leaves the live-log rows, which this
+kit's next open removes. A text open there is `PackMismatch { stored: "kit:blob" }`.
+`tools/n1/n1.sh layout-demote` / `node-demote` runs both ways.
+
 ## Store: history tables
 
 Seven tables beside the log, created on open: `changes` (summary and hunk shape per change;
@@ -3198,11 +3308,24 @@ kit's default, after the last writer of the kit's version. The session returns
 the file (a write-back sets it, an outside save taken in clears it), and before that it is
 read from the store: the change at the sync point (`synced_seq`) is the kit's, any change but
 an outside save or the import (a sync point with no change record left counts as the kit's).
-So a restart between the kit's write and the save changes nothing. An outside save taken in
-while the doc held changes the file didn't (applied by key, so the doc doesn't render the
-save) is followed by the kit's write of the merge: its `External` version names `kit:merge`
-(`MERGE_PID`) among its authors besides `kit:external`, and the store check reads a sync
-point at such a save as the kit's write. Whatever the store can't say (no change record at
+So a restart between the kit's write and the save changes nothing.
+
+**A save on unwritten changes keeps both too** (K1b, the live-plans review): when the doc holds
+changes the file doesn't (its version past the sync point, after the usual re-sync check: inside
+the quiet time, while the file was missing or declined, or after a crash before the write-back),
+a save that changes the content keeps both by the same rule. The save becomes the live doc
+**exactly**: the doc is moved to the synced state with the save's edits, by identity (units only
+the live doc has are deleted, the save's are inserted, values set), so a save is never merged by
+key with unwritten changes. Such a merge could give a save's new unit a key a live insert
+already took (the pack mints from the replica), leave a state the pack's own rules forbid
+(overlapping clips, duplicate names) that it never saw, and override a live value with no copy
+or note. The doc then holds the file, and nothing is written. A save whose content is the synced
+state's (other bytes, the same content) changes nothing, as before.
+
+Before K1b a save taken in while the doc held changes the file didn't was merged by key and
+followed by the kit's write of the merge, whose `External` version names `kit:merge`
+(`MERGE_PID`) among its authors besides `kit:external`; the store check still reads a sync
+point at such a save (in a store from an older kit) as the kit's write. Whatever the store can't say (no change record at
 the sync point, or an outside save with no version left) reads as the kit's write too: keep
 both. One noisy case: after a restart, a re-save of the kit's content in other bytes still
 reads as the kit's write (the app's next differing save keeps both: an extra copy, never a
@@ -3369,7 +3492,11 @@ bytes, the **carrier**, and hands them to the pack (`session/live/carrier.rs`,
 - **What it is:** exactly the bytes the kit last read from the file or wrote to it, at the sync
   point. It is taken at every read of the file that is the sync point (the open, an outside save
   taken in, any read of the file as last synced) and at every kit write; an echo of an older
-  write, a declined save or a missing file changes nothing.
+  write, a declined save or a missing file changes nothing. An outside save taken in is the
+  carrier (with its pairing, K1b) **before anything renders the doc that took it**: the settle
+  that decides whether the doc is clean, a write-back, a read. Rendering it into the bytes from
+  the sync point before would splice into the wrong file (and pair with keys a re-keying pack
+  took out of the doc).
 - **The pack's rules** (`Pack::encode_from`'s docs): it decodes the carrier itself and splices
   only what differs; untouched is byte for byte (content equal to what the carrier decodes to
   returns the carrier, so it is idempotent); the result decodes to the content; a pack that
@@ -3501,6 +3628,60 @@ no row, renders to compare once, and records it.
   sweep), keeping the blobs' time. A version it cuts has no carrier. Its own removals at once
   (a tier-0 purge) don't know waiting puts.
 - `tools/n1/n1.sh layout-carrier` / `node-carrier` checks both ways against a previous release.
+
+## The carrier's pairing (K1b)
+
+A pack whose units have no id in the file (rows, timeline items, scene objects) **mints** its
+keys, so once a live insert or an app's save has moved the units, `decode(carrier)` can't give
+the live keys back. The kit keeps the carrier's **pairing** with it: the carrier's keys, in the
+order the pack's decode yields its units (`session/live/carrier.rs`,
+`store/live_carrier.rs`; design: `docs/design/carrier-synced-content-r0.md`).
+
+- **Opting in.** `Pack::wants_pairing() -> bool` (default `false`), `Pack::pairing(content,
+  codec) -> Result<Pairing, PackError>` (default `list_pairing`: each list root's keys in list
+  order) and `Pack::encode_from_paired(carrier, pairing, content, codec) -> Result<Vec<u8>,
+  SpliceError>` (default: `encode_from`, ignoring the pairing). A pack that doesn't opt in sees
+  no change: no pairing made or kept, `encode_from` called as before.
+- **Made** once per sync point, from the content the file holds there: the content a kit write
+  rendered; the save, once the replica holds an outside save taken in (with the save as the
+  carrier, before anything renders the doc that took it); the doc when a change that moved no byte
+  makes the replica the doc (same bytes, maybe new keys); at an open whose stored pairing
+  doesn't name the stored carrier and sync seq, the stored synced state. Test builds count
+  each (`differential::take_pairings_made`): N reads make none.
+- **Kept** beside the carrier in memory and in one additive table, `carrier_pairings` (`(doc,
+  slot)` → the carrier blob it pairs, the sync seq, the keys; the live slot is `u64::MAX`, a
+  version's is its id), in the carrier's transactions: a new live carrier and every version at
+  its seq take it; a version cut takes the live one (its carrier is the live one, from the last
+  sync point, so a version cut between two syncs pairs exactly); a version's row goes with its
+  carrier (retention, purge, sweep, doc delete). **Keys only**, never a value: a purge has
+  nothing in it to erase, and the values a pack splices against come from the carrier alone.
+- **Handed over** with every rendering: the live doc's (write-back, sync checks, `read`'s bytes,
+  `file_now`, a conflict copy) with the live pairing; a version's file (`file_at`, the copies'
+  comparisons) with the version's own. A version whose pairing is missing or names another blob
+  is `MPC-E208`. **A version cut before the doc had a pairing** (by an older kit, by a build
+  before K1b, or while the pack didn't pair) has none, and stays `MPC-E208`: its content is
+  readable with `show --version`, and the kit never pairs it by guess. This is accepted, not a
+  gap to close later.
+- **A pairing that doesn't fit** (`SpliceError::PairingMismatch`): nothing is spliced and the
+  kit never falls back to another hook. The live doc's rendering is refused, **`MPC-E521`
+  `pairing_mismatch`** (exit 1): the file is left as it was, the doc keeps its changes, and the
+  next outside save sets carrier and pairing again. A version's file is `MPC-E208`.
+- **Whether the doc holds an outside save** is, for a keyed doc that isn't a table, a keyed
+  comparison: the doc after the save's edits against the synced state with the save's edits
+  (on a throwaway copy of the replica). No pack call: rendering the doc into the save's bytes
+  would pair it with keys the replica doesn't hold yet. Tables render and compare as before.
+
+### Older kits (N−1)
+
+One additive table, no format bump, in the doc tables (delete, rewrite) and the orphan sweep. An
+older kit on this store keeps no pairing; its writes leave the live row naming another blob or
+seq, which this kit makes again at the next open; it refuses a rewrite, and so a purge, naming
+`carrier_pairings` (`MPC-E502`); its doc delete leaves rows the next open here removes. This kit
+on an older store finds no rows: the open makes the live pairing from the stored synced state,
+and the versions an older kit cut have none (`file_at` is `MPC-E208` for a pack that pairs).
+- `tools/n1/n1.sh layout-pairing` / `node-pairing` checks both ways against a previous release:
+  it ignores the pairing rows, refuses a rewrite naming `carrier_pairings`, and leaves a deleted
+  doc's rows, which this kit's open sweeps.
 
 ## Store: the host's table
 

@@ -20,7 +20,7 @@
 #   base-d       the kit: disk, if_version, blame, blame_incremental (blame_cost is ignored: a
 #                measurement), and position_index with its planted engine bugs (v0.9.7)
 #   errors       the kit: error_ids (the registry snapshot, explain goldens, ERRORS.md, the walk), tools_session, pack_verbs, and the mpc example
-#   base-b       the kit: tier 0's integration tests (tier0, tier0_large, promote), the parity harnesses (parity, parity_blob, parity_grid) and erasure
+#   base-b       the kit: tier 0's integration tests (tier0, tier0_large, promote, demote), the parity harnesses (parity, parity_blob, parity_grid) and erasure
 #   spec-undo    the undo spec suite, its mutant tests included
 #   wire-guard   the untrusted-wire build guard (tools/tests/wire-guard.sh), and the native
 #                engine's absence without its feature
@@ -56,8 +56,8 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
           # the pack template's carrier-row check (scripts/pack-checks/carrier-row.sh), self-test
           timed carrier_row_selftest sh tools/test-carrier-row.sh
           ;;
-  base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
-          timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
+  base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit --no-run
+          timed base_b tests -p k2-mpc-base --test tier0 --test tier0_large --test promote --test demote --test parity --test parity_blob --test parity_grid --test erasure --test live_edit ;;
   base-c) timed build cargo test -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow --no-run
           timed base_c tests -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --test roster --test app_view --test overflow ;;
   base-d) timed build cargo test -p k2-mpc-base --test disk --test if_version --test blame --test blame_incremental --test blame_cost --no-run

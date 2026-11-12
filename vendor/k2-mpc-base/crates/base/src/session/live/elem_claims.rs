@@ -292,6 +292,7 @@ impl Session {
             edited: false,
             grid: None,
             elems: Some(span),
+            cells: None,
         };
         let info = self.elem_claim_info(st, &claim, now);
         let actor = claim.actor();

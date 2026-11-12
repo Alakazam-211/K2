@@ -5,6 +5,7 @@
 import { apply, validate, type Hunk } from "./hunk";
 import type {
   ErrorReport,
+  GridSlot,
   KeyedPageFrame,
   KeyedSchema,
   KeyedSnapshotFrame,
@@ -246,8 +247,18 @@ export class KeyedWatch {
   private _seq = 0;
   private _rev: number | null = null;
   private st: KeyedState | null = null;
-  private building: { state: KeyedState; units: Map<string, ViewUnit[]>; view: ViewSnapshotJson | null; got: number; pages: number; upto: number } | null = null;
+  private building: {
+    state: KeyedState;
+    units: Map<string, ViewUnit[]>;
+    view: ViewSnapshotJson | null;
+    derived: Map<string, string>;
+    got: number;
+    pages: number;
+    upto: number;
+  } | null = null;
   private kv: KeyedView | null = null;
+  /** The derived values kept by cell field (`cellDerived`), by `derivedKey`. */
+  private cd = new Map<string, string>();
   /** A `watch` is out: every frame before the next snapshot's head is dropped. */
   private awaiting = false;
   private sinceReport = 0;
@@ -303,6 +314,22 @@ export class KeyedWatch {
    * `view` is (empty for a container with none). */
   units(container: string): readonly ViewUnit[] {
     return this.kv?.units(container) ?? [];
+  }
+
+  /** The view schema's live grid (`view.schema.grid`), `null` when the pack has none or there is
+   * no view: what the grid helpers (`gridNumbers`, `cornerA1`...) read with `state`. */
+  get grid(): GridSlot | null {
+    return this.kv?.grid ?? null;
+  }
+
+  /**
+   * A derived value the pack keeps by cell field (one of the grid's `cell_derived`, such as `a1`,
+   * a formula's text as people read it) for field `field` of row `unit`, `null` when it has none.
+   * A snapshot's rows pages carry them, so a cell's is here as soon as its page lands; each
+   * change's `derived.units` updates them (`null` there removes one).
+   */
+  cellDerived(name: string, unit: string, field: string): string | null {
+    return this.cd.get(derivedKey(name, unit, field)) ?? null;
   }
 
   /** The view is the doc's: every change since the snapshot carried its view deltas. `false`
@@ -408,7 +435,7 @@ export class KeyedWatch {
   private onHead(f: KeyedSnapshotFrame): void {
     this.awaiting = false;
     this._seq = f.seq;
-    this.building = { state: emptyState(f.schema), units: new Map(), view: f.view ?? null, got: 0, pages: f.pages, upto: f.upto };
+    this.building = { state: emptyState(f.schema), units: new Map(), view: f.view ?? null, derived: new Map(), got: 0, pages: f.pages, upto: f.upto };
     if (f.pages === 0) this.finish();
   }
 
@@ -418,6 +445,15 @@ export class KeyedWatch {
     const b = this.building ?? fail(`a page with no snapshot (seq ${f.seq})`);
     if (f.page !== b.got + 1 || f.pages !== b.pages || f.upto !== b.upto) fail(`page ${f.page} of ${f.pages} out of order`);
     applyPage(b.state, b.units, f);
+    if (f.derived) {
+      const names = new Set(b.view?.schema.grid?.cell_derived ?? []);
+      for (const [name, byUnit] of Object.entries(f.derived)) {
+        if (!names.has(name)) continue;
+        for (const [unit, byField] of Object.entries(byUnit)) {
+          for (const [field, text] of Object.entries(byField)) if (typeof text === "string") b.derived.set(derivedKey(name, unit, field), text);
+        }
+      }
+    }
     b.got++;
     this._seq = f.seq;
     if (b.got === b.pages) this.finish();
@@ -428,6 +464,7 @@ export class KeyedWatch {
     this.building = null;
     this.st = b.state;
     this.kv = b.view ? new KeyedView(b.view, b.units, b.state.schema) : null;
+    this.cd = b.derived;
     this._rev = b.upto;
     this.report();
     for (const cb of this.snapshotCbs) cb(b.upto);
@@ -446,9 +483,34 @@ export class KeyedWatch {
       if (e instanceof ViewMisfit) fail(`view: ${e.message}`);
       throw e;
     }
+    this.keepCellDerived(f);
     this._seq = f.seq;
     this._rev = f.rev;
     if (++this.sinceReport >= this.reportEvery) this.report();
     for (const cb of this.changeCbs) cb(f);
   }
+
+  /** A change's `derived.units` into the values kept by cell field: a text sets one, `null`
+   * removes it; names the grid doesn't keep by cell field are left alone. */
+  private keepCellDerived(f: OpsChangeFrame): void {
+    const units = f.derived?.units;
+    const names = this.grid?.cell_derived;
+    if (!units || !names) return;
+    for (const [unit, d] of Object.entries(units)) {
+      for (const name of names) {
+        const byField = d[name];
+        if (!byField || typeof byField !== "object") continue;
+        for (const [field, text] of Object.entries(byField as Record<string, unknown>)) {
+          const k = derivedKey(name, unit, field);
+          if (text === null) this.cd.delete(k);
+          else if (typeof text === "string") this.cd.set(k, text);
+        }
+      }
+    }
+  }
+}
+
+/** The key of one derived value kept by cell field. */
+function derivedKey(name: string, unit: string, field: string): string {
+  return name + SEP + unit + SEP + field;
 }

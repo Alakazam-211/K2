@@ -34,15 +34,35 @@ pub(super) struct ElemPresence {
     viewport: Option<Rect>,
     focus: Option<ElemFocus>,
     range: Option<ElemRange>,
+    /// The cell caret and ranges on a grid (`cells`), on one container.
+    pub(super) cells: Option<crate::grid::Cells>,
 }
 
 impl ElemPresence {
+    /// Set the focus; cells on another container go (a cells value belongs to one container),
+    /// and so do they when the focus is cleared.
+    pub(super) fn set_focus(&mut self, focus: Option<ElemFocus>) {
+        if let Some(c) = &self.cells {
+            if focus.as_ref().map(|f| &f.key) != c.container.as_ref() {
+                self.cells = None;
+            }
+        }
+        self.focus = focus;
+    }
+
+    /// An agent's verb or cells claim moved it ([`Session::verb_cells`]): its focus and cells,
+    /// together.
+    pub(super) fn cells_moved(&mut self, focus: ElemFocus, cells: Option<crate::grid::Cells>) {
+        self.focus = Some(focus);
+        self.cells = cells;
+    }
+
     /// An agent's verb changed elements ([`Session::verb_presence`]): its focus moves to `focus`
     /// (when a touched element has a live container), and its selection is replaced by
     /// `selection` (`None`: none of what it touched is live).
     fn verb_touched(&mut self, focus: Option<ElemFocus>, selection: Option<ElemSelection>) {
         if focus.is_some() {
-            self.focus = focus;
+            self.set_focus(focus);
         }
         self.selection = selection;
     }
@@ -51,7 +71,7 @@ impl ElemPresence {
     /// claim has a container), and its selection is replaced by `selection` (when given).
     pub(super) fn claimed(&mut self, focus: Option<ElemFocus>, selection: Option<ElemSelection>) {
         if focus.is_some() {
-            self.focus = focus;
+            self.set_focus(focus);
         }
         if selection.is_some() {
             self.selection = selection;
@@ -66,6 +86,7 @@ pub(super) fn fold(conns: &[&Member], entry: &mut RosterEntry) {
     entry.viewport = conns.iter().find_map(|m| m.elem.viewport);
     entry.focus = conns.iter().find_map(|m| m.elem.focus.clone());
     entry.range = conns.iter().find_map(|m| m.elem.range.clone());
+    entry.cells = conns.iter().find_map(|m| m.elem.cells.clone());
     for d in &mut entry.devices {
         if let Some(m) = conns.iter().find(|m| m.client == d.client) {
             d.selection = m.elem.selection.clone();
@@ -73,6 +94,7 @@ pub(super) fn fold(conns: &[&Member], entry: &mut RosterEntry) {
             d.viewport = m.elem.viewport;
             d.focus = m.elem.focus.clone();
             d.range = m.elem.range.clone();
+            d.cells = m.elem.cells.clone();
         }
     }
 }
@@ -129,8 +151,14 @@ pub(super) fn address_entry<P: Pack + ?Sized>(pack: &P, e: &mut RosterEntry) {
             }
         };
     one(&mut e.selection, &mut e.focus, &mut e.range);
+    if let Some(c) = e.cells.as_mut() {
+        super::cells::address_cells(pack, c);
+    }
     for d in &mut e.devices {
         one(&mut d.selection, &mut d.focus, &mut d.range);
+        if let Some(c) = d.cells.as_mut() {
+            super::cells::address_cells(pack, c);
+        }
     }
     for c in &mut e.claims {
         if let awareness::ClaimSpan::Elems { root, keys } = &c.span {
@@ -338,7 +366,7 @@ impl Session {
             self.check_live_elem(st, &f.root, &f.key)?;
         }
         let mut out = focus.clone();
-        st.members[i].elem.focus = focus;
+        st.members[i].elem.set_focus(focus);
         if let Some(f) = out.as_mut() {
             address_focus(&*self.pack, f);
         }
@@ -395,7 +423,7 @@ impl Session {
         m.last_cursor_ms = Some(now);
         if !planted_range_keeps_focus() {
             if let Some(f) = focus {
-                m.elem.focus = Some(f);
+                m.elem.set_focus(Some(f));
             }
         }
         let mut out = r.clone();
@@ -595,6 +623,16 @@ impl Session {
                     m.elem.focus = None;
                 }
             }
+            if let Some(c) = &m.elem.cells {
+                // its container went: so does it (its corners are checked below)
+                let gone = match (self.pack.view_schema(), &c.container) {
+                    (Some(vs), Some(k)) => !live(vs.containers, k),
+                    _ => true,
+                };
+                if gone {
+                    m.elem.cells = None;
+                }
+            }
             if let Some(r) = &m.elem.range {
                 let gone = !live(&r.root, &r.key)
                     || match &written {
@@ -609,6 +647,7 @@ impl Session {
             }
         }
         st.members = members;
+        self.cells_after(st, changed);
     }
 }
 

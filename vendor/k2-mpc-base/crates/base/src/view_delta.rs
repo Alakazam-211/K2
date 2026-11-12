@@ -59,6 +59,8 @@ pub enum UnitOp {
     Style,
     HideShow,
     Props,
+    /// A grid cell's value changed (a field of class [`FieldClass::Cell`]).
+    Cell,
 }
 
 impl UnitOp {
@@ -75,6 +77,7 @@ impl UnitOp {
             UnitOp::Style => "style",
             UnitOp::HideShow => "hide_show",
             UnitOp::Props => "props",
+            UnitOp::Cell => "cell",
         }
     }
 }
@@ -610,8 +613,8 @@ fn class_of(vs: &ViewSchema, hidden: Src, field: &str) -> FieldClass {
     if vs.geometry.is_some_and(|g| g.field == field) {
         return FieldClass::Geometry;
     }
-    if let Some((_, c)) = vs.field_class.iter().find(|(f, _)| *f == field) {
-        return *c;
+    if let Some(c) = vs.class_of_field(field) {
+        return c;
     }
     let hides = match hidden {
         Src::Field(f) => f == field,
@@ -871,6 +874,7 @@ fn one<P: Pack + ?Sized>(
                         FieldClass::Style => ops.push(UnitOp::Style),
                         FieldClass::Visibility => ops.push(UnitOp::HideShow),
                         FieldClass::Meta => ops.push(UnitOp::Props),
+                        FieldClass::Cell => ops.push(UnitOp::Cell),
                     }
                     fields.push(f.clone());
                 }

@@ -830,10 +830,12 @@ WATCHING = e("MPC-E305", "watching", Presence, 3, "K11 (participants_max)", CHAN
 
 SELECTION_TOO_LARGE = e("MPC-E310", "selection_too_large", Presence, 2, "K-PRES-6",
     &["select"],
-    "selection too large: {len} keys (the most is {max})",
-    "A selection holds at most 256 elements, and nothing changed. Select fewer (details.max).")
+    "selection too large: {len} elements or cell ranges (the most is {max})",
+    "A selection holds at most 256 elements, and a grid's cells at most 16 ranges; nothing \
+     changed. Select fewer (details.max).")
     .step("select", &["--clear"],
-        "A selection holds at most 256 elements; clear it, then select fewer.");
+        "A selection holds at most 256 elements and a grid's cells at most 16 ranges; clear it, \
+         then select fewer.");
 
 // 320–329: comment threads (annotations, A4)
 
@@ -1076,6 +1078,15 @@ ENGINE_MISMATCH = e("MPC-E520", "engine_mismatch", Store, 6, "K-FMT-2, K-FMT-4",
      engine, or one rolled back from it), so it was not loaded. Nothing changed. Open it with \
      a build that runs that engine, or ask the host's operator to migrate it; don't retry.")
     .indirect("a doc stored by a build on another engine");
+
+PAIRING_MISMATCH = e("MPC-E521", "pairing_mismatch", Store, 1, "K1b (carrier pairing)", ANY,
+    "the file's pairing doesn't fit it: {reason} (pairing_mismatch)",
+    "The file type writes the doc back by splicing into the file's own bytes, pairing each unit \
+     of the file with a key the kit kept for it. The keys kept don't fit the file, so the file \
+     type can't tell which unit is which and wrote nothing rather than guess. The file is as it \
+     was and the doc keeps every change. Report it; an app's next save of the file sets the \
+     pairing again.")
+    .indirect("a file type's pairing that doesn't fit its file");
 
 // ---------------------------------------------------------------- 6xx erasure
 

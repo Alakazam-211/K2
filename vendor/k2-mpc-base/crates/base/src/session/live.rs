@@ -12,8 +12,10 @@ mod at_base;
 mod blame;
 mod blob_refs;
 mod carrier;
+mod cells;
 mod claims;
 mod copies;
+mod demote;
 mod elem_claims;
 mod elem_presence;
 mod grid;
@@ -38,6 +40,8 @@ pub use at_base::{CursorAtVersion, CursorDrop, EditAtBase};
 #[cfg(feature = "conformance")]
 pub use blame::CharBlame;
 pub use blame::{Blame, BlameLine};
+pub(crate) use demote::{planted_merges_by_line, DemoteFile};
+pub use demote::{Demotion, DEMOTED};
 pub use grid::{
     AuditReport, AuditViolation, CellBlame, ElemBlame, FacetConflict, GridConflict, GridWrite,
     GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
@@ -979,6 +983,11 @@ struct State {
     /// The carrier (K1, `live/carrier.rs`): the bytes the kit last read from the file or wrote
     /// to it, for a pack that opts in. `None` until the store's is loaded or the file is read.
     carrier: Option<Arc<[u8]>>,
+    /// The carrier's pairing (K1b, `live/carrier.rs`), for a pack that mints its keys
+    /// (`Pack::wants_pairing`): the carrier's keys, with the sync seq it was made at. Set with
+    /// the carrier at every sync point; `None` beside a carrier only when it couldn't be made
+    /// (a rendering is then refused, never spliced by guess).
+    pairing: Option<(Seq, Arc<super::pack::Pairing>)>,
     /// The carrier as the view index's derive hook reads it, with the pack's decode of it
     /// (`crate::view_index::ViewCarrier`, decoded once per carrier): replaced when the carrier
     /// changes (`live/view_index.rs`).
@@ -1011,6 +1020,9 @@ struct State {
     /// The pack verb of the change about to commit ([`EditOptions::verb`]): set right before
     /// the commit by the verb's entry, taken by it (as `next_turn`).
     next_verb: Option<&'static str>,
+    /// What the grid verb about to commit wrote ([`crate::tools::StructOutput::cells`]): set
+    /// right before the commit by the verb's entry, taken by it (as `next_verb`).
+    next_cells: Option<crate::grid::CellsReport>,
     /// Conformance only: outside saves record their writes with no identity, as a write
     /// merged in from elsewhere whose writer the engine doesn't report (KC7, Yrs only).
     #[cfg(feature = "conformance")]
@@ -1585,6 +1597,7 @@ impl Session {
                 last_copy_cleanup_ms: None,
                 copies_edited: HashMap::new(),
                 carrier: None,
+                pairing: None,
                 view_carrier: None,
                 view_cache: None,
                 render_failed: std::cell::RefCell::new(None),
@@ -1596,6 +1609,7 @@ impl Session {
                 next_refs_strict: false,
                 next_turn: None,
                 next_verb: None,
+                next_cells: None,
                 #[cfg(feature = "conformance")]
                 outside_without_identity: false,
                 group_hint: None,
@@ -2529,6 +2543,7 @@ impl Session {
                     viewport: None,
                     focus: None,
                     range: None,
+                    cells: None,
                 })
                 .collect();
             // the planted fault (test-only): every connection shows the most active one's caret
@@ -2557,6 +2572,9 @@ impl Session {
                 .filter_map(|c| {
                     if c.elems.is_some() {
                         return Some(self.elem_claim_info(st, c, now));
+                    }
+                    if c.cells.is_some() {
+                        return Some(self.cell_claim_info(st, c, now));
                     }
                     Some(c.info(text(&c.root)?, now))
                 })
@@ -3988,6 +4006,7 @@ impl Session {
         let n_steps = steps.len();
         let turn = st.next_turn.take();
         let pack_verb = st.next_verb.take();
+        let cells_report = st.next_cells.take();
         let verb = st.verb_hint.take().unwrap_or_else(|| {
             kind_verb(steps.first().map_or(ChangeKind::Edit, |s| s.kind)).to_owned()
         });
@@ -4313,6 +4332,7 @@ impl Session {
         {
             prof!("commit.verb_presence");
             self.verb_presence(st, i, &verb_named, &streams);
+            self.verb_cells(st, i, cells_report);
         }
         // a grid change that re-identified elements (rows or columns inserted, deleted,
         // restored or dropped; a header switch) and left the doc rendering the synced bytes:
@@ -6239,17 +6259,10 @@ impl Session {
                 key: st.key.clone(),
             });
         }
-        let out = self.ingest(st, &bytes, h.clone(), now)?;
-        // the save taken in is the sync point: the carrier (K1); a declined one is not
-        if let Some(seq) = st
-            .disk
-            .as_ref()
-            .filter(|d| d.synced_hash == h)
-            .map(|d| d.synced_seq)
-        {
-            self.keep_carrier(st, &bytes, seq, now);
-        }
-        Ok(out)
+        // the save taken in is the sync point, and its bytes the carrier (K1) with their
+        // pairing (K1b), kept by `settle_saved` before anything renders the doc that took it; a
+        // declined save is neither
+        self.ingest(st, &bytes, h, now)
     }
 
     fn set_missing(&self, st: &mut State) -> DiskCheck {
@@ -6479,7 +6492,7 @@ impl Session {
                     key: st.key.clone(),
                 });
             }
-            self.settle_saved(st, now)?;
+            self.settle_saved(st, bytes, now)?;
             return Ok(DiskCheck::Unchanged);
         }
         let client = self.external_client(st)?;
@@ -6873,16 +6886,29 @@ impl Session {
             seq,
         });
         self.finish_removals(st, removed, seq - 1, seq, now);
-        self.settle_saved(st, now)?;
+        self.settle_saved(st, bytes, now)?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })
     }
 
-    /// [`Session::settle_dirty`] after an outside save the store has: the save has succeeded, so
-    /// a failure is reported, never returned. It can't tell whether the doc differs from the
-    /// file, so the doc counts as dirty, and the write-back looks again.
-    fn settle_saved(&self, st: &mut State, now: u64) -> Result<()> {
-        if let Err(e) = self.settle_dirty(st, now) {
+    /// [`Session::settle_dirty`] after an outside save the store has, `bytes` the save. First
+    /// the save is the carrier (K1) with its pairing (K1b), at the new sync point: whatever
+    /// renders the doc that took it (this settle, a write-back, a read) splices into the save,
+    /// never into the bytes from the sync point before, whose pairing can name keys the save
+    /// took out of the doc (a pack that re-keys on a save: `MPC-E521`, kept for the next read).
+    /// Then the save has succeeded, so a failure is reported, never returned. It can't tell
+    /// whether the doc differs from the file, so the doc counts as dirty, and the write-back
+    /// looks again.
+    fn settle_saved(&self, st: &mut State, bytes: &[u8], now: u64) -> Result<()> {
+        let late = carrier::planted_settle_before_carrier();
+        if !late {
+            self.keep_saved_carrier(st, bytes, now);
+        }
+        let settled = self.settle_dirty(st, now);
+        if late {
+            self.keep_saved_carrier(st, bytes, now);
+        }
+        if let Err(e) = settled {
             #[cfg(any(test, feature = "differential"))]
             if crate::differential::resync_mutant()
                 == Some(crate::differential::ResyncMutant::SettleReturnsTheError)
@@ -6893,6 +6919,14 @@ impl Session {
             self.disk_error(st, "settling after an outside save", e);
         }
         Ok(())
+    }
+
+    /// The outside save taken in (`bytes`, the file at the sync point) is the carrier at the
+    /// sync point's seq, with its pairing made from the replica, which holds the save.
+    fn keep_saved_carrier(&self, st: &mut State, bytes: &[u8], now: u64) {
+        if let Some(seq) = st.disk.as_ref().map(|d| d.synced_seq) {
+            self.keep_carrier(st, bytes, seq, now);
+        }
     }
 
     /// After the sync point moved: dirty when the doc differs from the file, clean if not.
@@ -6996,6 +7030,9 @@ impl Session {
         if let Err(e) = stored {
             self.disk_error(st, "recording the re-synced disk replica", e);
         }
+        // the same bytes, maybe new keys: the carrier's pairing is made again (K1b)
+        let seq = st.version;
+        self.resync_pairing(st, seq);
         Ok(())
     }
 
@@ -7173,7 +7210,12 @@ impl Session {
         st.synced_digest = Self::view_digest(st).map(|x| (st.version, x));
         // the bytes written are the carrier (K1)
         if !carrier::planted_carrier_stale() {
-            self.keep_carrier(st, &bytes, st.version, now);
+            // a pack that pairs (K1b) pairs the bytes with the content just written
+            let held = match self.pack.wants_pairing() {
+                true => self.content(st).ok(),
+                false => None,
+            };
+            self.keep_carrier_held(st, &bytes, st.version, now, held.as_deref());
         }
         replica?;
         Ok(true)

@@ -57,6 +57,110 @@ pub struct Reconciled {
 #[error("pack: {0}")]
 pub struct PackError(pub String);
 
+/// The keys of the units a carrier holds (K1b, `docs/SESSIONS.md`, "The carrier's pairing"):
+/// root by root, in the order the pack's decode of the carrier yields them. **Keys only, never
+/// a value**: the values a pack splices against come from the carrier itself. Made by
+/// [`Pack::pairing`] at every sync point and kept by the kit with every carrier, live and per
+/// version, for a pack that mints its keys ([`Pack::wants_pairing`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Pairing {
+    pub roots: Vec<(String, Vec<Key>)>,
+}
+
+/// The record version of [`Pairing::to_bytes`].
+const PAIRING_V1: u8 = 1;
+
+impl Pairing {
+    /// The keys of root `root`, if the pairing names it.
+    pub fn keys(&self, root: &str) -> Option<&[Key]> {
+        self.roots
+            .iter()
+            .find(|(r, _)| r == root)
+            .map(|(_, k)| k.as_slice())
+    }
+
+    /// How many keys in all.
+    pub fn len(&self) -> usize {
+        self.roots.iter().map(|(_, k)| k.len()).sum()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The stored form: a version byte, then each root's name and keys, length-prefixed.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = vec![PAIRING_V1];
+        let mut put = |b: &[u8]| {
+            out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+            out.extend_from_slice(b);
+        };
+        put(&(self.roots.len() as u32).to_le_bytes());
+        for (root, keys) in &self.roots {
+            put(root.as_bytes());
+            put(&(keys.len() as u32).to_le_bytes());
+            for k in keys {
+                put(k.as_str().as_bytes());
+            }
+        }
+        out
+    }
+
+    /// [`Pairing::to_bytes`]'s inverse; `None` for another version or a damaged record (read as
+    /// no pairing: the kit makes it again or refuses, never guesses).
+    pub fn from_bytes(b: &[u8]) -> Option<Pairing> {
+        let (&v, mut rest) = b.split_first()?;
+        if v != PAIRING_V1 {
+            return None;
+        }
+        fn take<'a>(rest: &mut &'a [u8]) -> Option<&'a [u8]> {
+            let n = u32::from_le_bytes(rest.get(..4)?.try_into().ok()?) as usize;
+            let body = rest.get(4..4usize.checked_add(n)?)?;
+            *rest = &rest[4 + n..];
+            Some(body)
+        }
+        fn count(b: &[u8]) -> Option<usize> {
+            Some(u32::from_le_bytes(b.try_into().ok()?) as usize)
+        }
+        let roots = count(take(&mut rest)?)?;
+        let mut out = Vec::new();
+        for _ in 0..roots {
+            let root = std::str::from_utf8(take(&mut rest)?).ok()?.to_owned();
+            let n = count(take(&mut rest)?)?;
+            let mut keys = Vec::new();
+            for _ in 0..n {
+                keys.push(Key::new(std::str::from_utf8(take(&mut rest)?).ok()?).ok()?);
+            }
+            out.push((root, keys));
+        }
+        rest.is_empty().then_some(Pairing { roots: out })
+    }
+}
+
+/// Why [`Pack::encode_from_paired`] didn't splice.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SpliceError {
+    /// The pairing doesn't fit the carrier (another number of units in a root, a root it
+    /// doesn't name): the pack can't tell which file unit a key is, so nothing was spliced.
+    #[error("the carrier's pairing doesn't fit it: {0}")]
+    PairingMismatch(String),
+    #[error(transparent)]
+    Pack(#[from] PackError),
+}
+
+/// [`Pack::pairing`]'s default: each list root's keys, in list order.
+pub fn list_pairing(content: &[(String, Neutral)]) -> Pairing {
+    Pairing {
+        roots: content
+            .iter()
+            .filter_map(|(r, n)| match n {
+                Neutral::List(l) => Some((r.clone(), l.iter().map(|(k, _)| k.clone()).collect())),
+                _ => None,
+            })
+            .collect(),
+    }
+}
+
 /// The element a key of a [composite](Pack::composite) Map root belongs to: its list root and
 /// the element's key, which is everything before the key's first
 /// [`crate::table::CELL_SEP`]. `None` when `map_root` isn't declared, the key has no separator,
@@ -120,6 +224,54 @@ pub trait Pack: Send + Sync {
     ) -> Result<Vec<u8>, PackError> {
         let _ = carrier;
         self.encode(content, codec)
+    }
+
+    /// Whether the kit keeps a **pairing** with the carrier (K1b; `docs/SESSIONS.md`, "The
+    /// carrier's pairing"): for a pack that keeps a carrier ([`Pack::wants_carrier`]) and
+    /// **mints** its keys (rows with no ids, timeline items, scene objects), so that
+    /// [`Pack::decode`] of the carrier can't give the live keys once a live insert or an app's
+    /// save has moved its units. The kit then makes a [`Pairing`] at every sync point
+    /// ([`Pack::pairing`]), keeps it with every carrier, live and per version, and calls
+    /// [`Pack::encode_from_paired`] instead of [`Pack::encode_from`]. Default: `false` (a pack
+    /// whose keys are the file's own ids, a deck's shape ids, needs none: nothing is made or
+    /// kept, and `encode_from` is called as before).
+    fn wants_pairing(&self) -> bool {
+        false
+    }
+
+    /// The pairing of `content` as the file it renders to holds it: each root's keys in the
+    /// order this pack's [`Pack::decode`] of that file yields the units. Called by the kit at
+    /// every sync point (a kit write, an outside save taken in, a change that moved no byte, an
+    /// open with no pairing stored) with the content the file holds there. Keys only: a key
+    /// must hold no user content. Default: [`list_pairing`] (each list root's keys in list
+    /// order), right for a pack whose decode yields a list root's units in list order.
+    fn pairing(&self, content: &[(String, Neutral)], codec: &[u8]) -> Result<Pairing, PackError> {
+        let _ = codec;
+        Ok(list_pairing(content))
+    }
+
+    /// Doc content back to file bytes by splicing it into `carrier`, whose units carry the keys
+    /// `pairing` gives (K1b). Called instead of [`Pack::encode_from`] when
+    /// [`Pack::wants_pairing`] is `true`, with the carrier's own pairing: the live carrier's for
+    /// the live doc, a version's own for a version's file.
+    ///
+    /// The pack decodes `carrier`, **takes every value from it**, and puts `pairing`'s keys on
+    /// its units in order; a pairing that doesn't fit (another number of units in a root, a
+    /// root it lacks) is [`SpliceError::PairingMismatch`], and nothing is spliced: **never a
+    /// splice by guess**. Then it diffs that keyed carrier against `content` by key and splices
+    /// the diff. The rules of [`Pack::encode_from`] hold: untouched is byte for byte, the result
+    /// decodes to `content`, a failure leaves the file as it was.
+    ///
+    /// Default: [`Pack::encode_from`], ignoring the pairing.
+    fn encode_from_paired(
+        &self,
+        carrier: &[u8],
+        pairing: &Pairing,
+        content: &[(String, Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, SpliceError> {
+        let _ = pairing;
+        Ok(self.encode_from(carrier, content, codec)?)
     }
 
     /// Normalise text an editor or agent is inserting into `root` (e.g. `\r\n` to `\n`).
@@ -310,6 +462,22 @@ pub trait Pack: Send + Sync {
         index: &mut crate::view_index::ViewIndex,
     ) {
         let _ = (source, index);
+    }
+
+    /// Per-unit derived values a keyed watch's snapshot carries on the pages of the units'
+    /// fields (a grid's formula cells' A1 text, so a formula never shows as its cached number
+    /// while the snapshot loads): for each of `units` (keys of the view schema's units, the
+    /// ones whose fields the snapshot pages), the values by field. `state` is the doc's keyed
+    /// state at the snapshot's rev. The kit puts each value on the page that holds that field's
+    /// entry, as `derived.<name>.<unit address>.<field>`; a value for a field with no entry is
+    /// left out. Bounded, no I/O, called once per snapshot. Default: none.
+    fn page_derived(
+        &self,
+        state: &crate::elem::KeyedState,
+        units: &[Key],
+    ) -> Vec<crate::grid::PageDerived> {
+        let _ = (state, units);
+        Vec::new()
     }
 
     /// The address of element `key` of the MovableList root `root` (contract gap 2): how the

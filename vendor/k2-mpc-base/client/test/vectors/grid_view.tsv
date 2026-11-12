@@ -1,0 +1,364 @@
+# The live grid's shared vector: the workbook's keyed state at rev 20, the changes
+# after it, what each verb reports, and what the rows check (numbers and letters, corners
+# and A1, an agent's cells after each verb, a cells claim). Elements by address.
+# Written from hand-made goldens by a script; no kit or pack code ran. Tab-separated.
+state	20
+list	sheets	@sheet:1	worksheet
+list	sheets	@sheet:2	worksheet
+list	sheets	@sheet:3	worksheet
+list	sheets	@sheet:4	worksheet
+map	sheet_props	@sheet:1	edit	1
+map	sheet_props	@sheet:1	hidden	0
+map	sheet_props	@sheet:1	name	Budget
+map	sheet_props	@sheet:1	shift	1
+map	sheet_props	@sheet:1	sid	1
+map	sheet_props	@sheet:1	state	visible
+map	sheet_props	@sheet:2	edit	1
+map	sheet_props	@sheet:2	hidden	0
+map	sheet_props	@sheet:2	name	Rates
+map	sheet_props	@sheet:2	shift	1
+map	sheet_props	@sheet:2	sid	2
+map	sheet_props	@sheet:2	state	visible
+map	sheet_props	@sheet:3	edit	1
+map	sheet_props	@sheet:3	hidden	1
+map	sheet_props	@sheet:3	name	Lists
+map	sheet_props	@sheet:3	shift	1
+map	sheet_props	@sheet:3	sid	3
+map	sheet_props	@sheet:3	state	hidden
+map	sheet_props	@sheet:4	edit	1
+map	sheet_props	@sheet:4	hidden	1
+map	sheet_props	@sheet:4	name	Setup
+map	sheet_props	@sheet:4	shift	1
+map	sheet_props	@sheet:4	sid	4
+map	sheet_props	@sheet:4	state	veryHidden
+list	cols	@sheet:1/col:c1	col
+list	cols	@sheet:1/col:c2	col
+list	cols	@sheet:1/col:c3	col
+list	cols	@sheet:1/col:c4	col
+list	cols	@sheet:1/col:c5	col
+list	cols	@sheet:1/col:c6	col
+list	cols	@sheet:2/col:c1	col
+list	cols	@sheet:2/col:c2	col
+list	cols	@sheet:3/col:c1	col
+list	cols	@sheet:4/col:c1	col
+list	cols	@sheet:4/col:c2	col
+map	col_props	@sheet:1/col:c1	sheet	1
+map	col_props	@sheet:1/col:c1	w	22
+map	col_props	@sheet:1/col:c2	sheet	1
+map	col_props	@sheet:1/col:c3	sheet	1
+map	col_props	@sheet:1/col:c4	sheet	1
+map	col_props	@sheet:1/col:c5	sheet	1
+map	col_props	@sheet:1/col:c6	sheet	1
+map	col_props	@sheet:1/col:c6	w	36
+map	col_props	@sheet:2/col:c1	sheet	2
+map	col_props	@sheet:2/col:c1	w	12
+map	col_props	@sheet:2/col:c2	sheet	2
+map	col_props	@sheet:3/col:c1	sheet	3
+map	col_props	@sheet:4/col:c1	sheet	4
+map	col_props	@sheet:4/col:c2	sheet	4
+list	rows	@sheet:1/row:r1	row
+list	rows	@sheet:1/row:r2	row
+list	rows	@sheet:1/row:r3	row
+list	rows	@sheet:1/row:r4	row
+list	rows	@sheet:1/row:r5	row
+list	rows	@sheet:1/row:r6	row
+list	rows	@sheet:1/row:r7	row
+list	rows	@sheet:1/row:r8	row
+list	rows	@sheet:1/row:r9	row
+list	rows	@sheet:1/row:r10	row
+list	rows	@sheet:1/row:r11	row
+list	rows	@sheet:1/row:r12	row
+list	rows	@sheet:1/row:r13	row
+list	rows	@sheet:1/row:r14	row
+list	rows	@sheet:1/row:r15	row
+list	rows	@sheet:1/row:r16	row
+list	rows	@sheet:1/row:r17	row
+list	rows	@sheet:1/row:r18	row
+list	rows	@sheet:2/row:r1	row
+list	rows	@sheet:2/row:r2	row
+list	rows	@sheet:2/row:r3	row
+list	rows	@sheet:2/row:r4	row
+list	rows	@sheet:2/row:r5	row
+list	rows	@sheet:3/row:r1	row
+list	rows	@sheet:3/row:r2	row
+list	rows	@sheet:3/row:r3	row
+list	rows	@sheet:3/row:r4	row
+list	rows	@sheet:3/row:r5	row
+list	rows	@sheet:4/row:r1	row
+map	cells	@sheet:1/row:r1	@ht	24
+map	cells	@sheet:1/row:r1	@sheet	1
+map	cells	@sheet:1/row:r1	c1	{"t":"s","v":"Team budget 2026","s":1}
+map	cells	@sheet:1/row:r10	@sheet	1
+map	cells	@sheet:1/row:r10	c1	{"t":"s","v":"Office"}
+map	cells	@sheet:1/row:r10	c2	{"t":"s","v":"Ops"}
+map	cells	@sheet:1/row:r10	c3	{"t":"n","v":"3600","s":3}
+map	cells	@sheet:1/row:r10	c4	{"t":"n","v":"3600","s":3}
+map	cells	@sheet:1/row:r10	c5	{"t":"n","v":"7200","f":"{s1-r10|c3}+{s1-r10|c4}","s":3}
+map	cells	@sheet:1/row:r11	@sheet	1
+map	cells	@sheet:1/row:r11	c1	{"t":"s","v":"Design tools"}
+map	cells	@sheet:1/row:r11	c2	{"t":"s","v":"Design"}
+map	cells	@sheet:1/row:r11	c3	{"t":"n","v":"1800","s":3}
+map	cells	@sheet:1/row:r11	c4	{"t":"n","v":"1800","s":3}
+map	cells	@sheet:1/row:r11	c5	{"t":"n","v":"3600","f":"{s1-r11|c3}+{s1-r11|c4}","s":3}
+map	cells	@sheet:1/row:r12	@sheet	1
+map	cells	@sheet:1/row:r12	c1	{"t":"s","v":"Research"}
+map	cells	@sheet:1/row:r12	c2	{"t":"s","v":"Design"}
+map	cells	@sheet:1/row:r12	c3	{"t":"n","v":"4000","s":3}
+map	cells	@sheet:1/row:r12	c4	{"t":"n","v":"3000","s":3}
+map	cells	@sheet:1/row:r12	c5	{"t":"n","v":"7000","f":"{s1-r12|c3}+{s1-r12|c4}","s":3}
+map	cells	@sheet:1/row:r13	@sheet	1
+map	cells	@sheet:1/row:r13	c1	{"t":"s","v":"Hiring"}
+map	cells	@sheet:1/row:r13	c2	{"t":"s","v":"Ops"}
+map	cells	@sheet:1/row:r13	c3	{"t":"n","v":"7000","s":3}
+map	cells	@sheet:1/row:r13	c4	{"t":"n","v":"5000","s":3}
+map	cells	@sheet:1/row:r13	c5	{"t":"n","v":"12000","f":"{s1-r13|c3}+{s1-r13|c4}","s":3}
+map	cells	@sheet:1/row:r14	@sheet	1
+map	cells	@sheet:1/row:r14	c1	{"t":"s","v":"Contingency"}
+map	cells	@sheet:1/row:r14	c2	{"t":"s","v":"Ops"}
+map	cells	@sheet:1/row:r14	c3	{"t":"n","v":"2000","s":3}
+map	cells	@sheet:1/row:r14	c4	{"t":"n","v":"2000","s":3}
+map	cells	@sheet:1/row:r14	c5	{"t":"n","v":"4000","f":"{s1-r14|c3}+{s1-r14|c4}","s":3}
+map	cells	@sheet:1/row:r14	c6	{"t":"s","v":"held back"}
+map	cells	@sheet:1/row:r15	@gap	1
+map	cells	@sheet:1/row:r15	@hidden	1
+map	cells	@sheet:1/row:r15	@sheet	1
+map	cells	@sheet:1/row:r15	c1	{"t":"s","v":"fx rate (hidden)"}
+map	cells	@sheet:1/row:r15	c3	{"t":"n","v":"0.92","f":"{s2-r3|c2}","s":3}
+map	cells	@sheet:1/row:r16	@sheet	1
+map	cells	@sheet:1/row:r16	c1	{"t":"s","v":"Total","s":4}
+map	cells	@sheet:1/row:r16	c3	{"t":"n","v":"60100","f":"SUM({s1-r3|c3}:{s1-r14|c3})","s":4}
+map	cells	@sheet:1/row:r16	c4	{"t":"n","v":"50100","f":"SUM({s1-r3|c4}:{s1-r14|c4})","s":4}
+map	cells	@sheet:1/row:r16	c5	{"t":"n","v":"110200","f":"SUM({s1-r3|c5}:{s1-r14|c5})","s":4}
+map	cells	@sheet:1/row:r17	@sheet	1
+map	cells	@sheet:1/row:r17	c1	{"t":"s","v":"Total (EUR)","s":4}
+map	cells	@sheet:1/row:r17	c5	{"t":"n","v":"101384","f":"{s1-r16|c5}*{s1-r15|c3}","s":4}
+map	cells	@sheet:1/row:r18	@sheet	1
+map	cells	@sheet:1/row:r18	c1	{"t":"s","v":"Figures in USD; EUR uses the hidden rate in row 17."}
+map	cells	@sheet:1/row:r2	@gap	1
+map	cells	@sheet:1/row:r2	@sheet	1
+map	cells	@sheet:1/row:r2	c1	{"t":"s","v":"Item","s":2}
+map	cells	@sheet:1/row:r2	c2	{"t":"s","v":"Owner","s":2}
+map	cells	@sheet:1/row:r2	c3	{"t":"s","v":"Q1","s":2}
+map	cells	@sheet:1/row:r2	c4	{"t":"s","v":"Q2","s":2}
+map	cells	@sheet:1/row:r2	c5	{"t":"s","v":"Total","s":2}
+map	cells	@sheet:1/row:r2	c6	{"t":"s","v":"Note","s":2}
+map	cells	@sheet:1/row:r3	@sheet	1
+map	cells	@sheet:1/row:r3	c1	{"t":"s","v":"Laptops"}
+map	cells	@sheet:1/row:r3	c2	{"t":"s","v":"Eng"}
+map	cells	@sheet:1/row:r3	c3	{"t":"n","v":"12000","s":3}
+map	cells	@sheet:1/row:r3	c4	{"t":"n","v":"8000","s":3}
+map	cells	@sheet:1/row:r3	c5	{"t":"n","v":"20000","f":"{s1-r3|c3}+{s1-r3|c4}","s":3}
+map	cells	@sheet:1/row:r3	c6	{"t":"s","v":"replacement cycle"}
+map	cells	@sheet:1/row:r4	@sheet	1
+map	cells	@sheet:1/row:r4	c1	{"t":"s","v":"Monitors"}
+map	cells	@sheet:1/row:r4	c2	{"t":"s","v":"Eng"}
+map	cells	@sheet:1/row:r4	c3	{"t":"n","v":"3000","s":3}
+map	cells	@sheet:1/row:r4	c4	{"t":"n","v":"1500","s":3}
+map	cells	@sheet:1/row:r4	c5	{"t":"n","v":"4500","f":"{s1-r4|c3}+{s1-r4|c4}","s":3}
+map	cells	@sheet:1/row:r5	@sheet	1
+map	cells	@sheet:1/row:r5	c1	{"t":"s","v":"Licences"}
+map	cells	@sheet:1/row:r5	c2	{"t":"s","v":"Ops"}
+map	cells	@sheet:1/row:r5	c3	{"t":"n","v":"4200","s":3}
+map	cells	@sheet:1/row:r5	c4	{"t":"n","v":"4200","s":3}
+map	cells	@sheet:1/row:r5	c5	{"t":"n","v":"8400","f":"{s1-r5|c3}+{s1-r5|c4}","s":3}
+map	cells	@sheet:1/row:r6	@sheet	1
+map	cells	@sheet:1/row:r6	c1	{"t":"s","v":"Cloud"}
+map	cells	@sheet:1/row:r6	c2	{"t":"s","v":"Eng"}
+map	cells	@sheet:1/row:r6	c3	{"t":"n","v":"9000","s":3}
+map	cells	@sheet:1/row:r6	c4	{"t":"n","v":"9500","s":3}
+map	cells	@sheet:1/row:r6	c5	{"t":"n","v":"18500","f":"{s1-r6|c3}+{s1-r6|c4}","s":3}
+map	cells	@sheet:1/row:r7	@sheet	1
+map	cells	@sheet:1/row:r7	c1	{"t":"s","v":"Travel"}
+map	cells	@sheet:1/row:r7	c2	{"t":"s","v":"Sales"}
+map	cells	@sheet:1/row:r7	c3	{"t":"n","v":"6000","s":3}
+map	cells	@sheet:1/row:r7	c4	{"t":"n","v":"7000","s":3}
+map	cells	@sheet:1/row:r7	c5	{"t":"n","v":"13000","f":"{s1-r7|c3}+{s1-r7|c4}","s":3}
+map	cells	@sheet:1/row:r7	c6	{"t":"s","v":"two offsites"}
+map	cells	@sheet:1/row:r8	@sheet	1
+map	cells	@sheet:1/row:r8	c1	{"t":"s","v":"Events"}
+map	cells	@sheet:1/row:r8	c2	{"t":"s","v":"Sales"}
+map	cells	@sheet:1/row:r8	c3	{"t":"n","v":"5000","s":3}
+map	cells	@sheet:1/row:r8	c4	{"t":"n","v":"2000","s":3}
+map	cells	@sheet:1/row:r8	c5	{"t":"n","v":"7000","f":"{s1-r8|c3}+{s1-r8|c4}","s":3}
+map	cells	@sheet:1/row:r9	@sheet	1
+map	cells	@sheet:1/row:r9	c1	{"t":"s","v":"Training"}
+map	cells	@sheet:1/row:r9	c2	{"t":"s","v":"Ops"}
+map	cells	@sheet:1/row:r9	c3	{"t":"n","v":"2500","s":3}
+map	cells	@sheet:1/row:r9	c4	{"t":"n","v":"2500","s":3}
+map	cells	@sheet:1/row:r9	c5	{"t":"n","v":"5000","f":"{s1-r9|c3}+{s1-r9|c4}","s":3}
+map	cells	@sheet:2/row:r1	@sheet	2
+map	cells	@sheet:2/row:r1	c1	{"t":"s","v":"Currency","s":2}
+map	cells	@sheet:2/row:r1	c2	{"t":"s","v":"Rate","s":2}
+map	cells	@sheet:2/row:r2	@sheet	2
+map	cells	@sheet:2/row:r2	c1	{"t":"s","v":"USD"}
+map	cells	@sheet:2/row:r2	c2	{"t":"n","v":"1"}
+map	cells	@sheet:2/row:r3	@sheet	2
+map	cells	@sheet:2/row:r3	c1	{"t":"s","v":"EUR"}
+map	cells	@sheet:2/row:r3	c2	{"t":"n","v":"0.92"}
+map	cells	@sheet:2/row:r4	@sheet	2
+map	cells	@sheet:2/row:r4	c1	{"t":"s","v":"GBP"}
+map	cells	@sheet:2/row:r4	c2	{"t":"n","v":"0.79"}
+map	cells	@sheet:2/row:r5	@sheet	2
+map	cells	@sheet:2/row:r5	c1	{"t":"s","v":"Updated"}
+map	cells	@sheet:2/row:r5	c2	{"t":"s","v":"2026-11-01"}
+map	cells	@sheet:3/row:r1	@sheet	3
+map	cells	@sheet:3/row:r1	c1	{"t":"s","v":"Owners","s":2}
+map	cells	@sheet:3/row:r2	@sheet	3
+map	cells	@sheet:3/row:r2	c1	{"t":"s","v":"Eng"}
+map	cells	@sheet:3/row:r3	@sheet	3
+map	cells	@sheet:3/row:r3	c1	{"t":"s","v":"Ops"}
+map	cells	@sheet:3/row:r4	@sheet	3
+map	cells	@sheet:3/row:r4	c1	{"t":"s","v":"Sales"}
+map	cells	@sheet:3/row:r5	@sheet	3
+map	cells	@sheet:3/row:r5	c1	{"t":"s","v":"Design"}
+map	cells	@sheet:4/row:r1	@sheet	4
+map	cells	@sheet:4/row:r1	c1	{"t":"s","v":"template version"}
+map	cells	@sheet:4/row:r1	c2	{"t":"n","v":"3"}
+map	book	date1904		0
+map	book	fmt		1
+map	book	mark/c/1		6
+map	book	mark/c/2		2
+map	book	mark/c/3		1
+map	book	mark/c/4		2
+map	book	mark/r/1		18
+map	book	mark/r/2		5
+map	book	mark/r/3		5
+map	book	mark/r/4		1
+map	book	mark/sheet		4
+a1	@sheet:1/row:r3	c5	=C4+D4
+a1	@sheet:1/row:r4	c5	=C5+D5
+a1	@sheet:1/row:r5	c5	=C6+D6
+a1	@sheet:1/row:r6	c5	=C7+D7
+a1	@sheet:1/row:r7	c5	=C8+D8
+a1	@sheet:1/row:r8	c5	=C9+D9
+a1	@sheet:1/row:r9	c5	=C10+D10
+a1	@sheet:1/row:r10	c5	=C11+D11
+a1	@sheet:1/row:r11	c5	=C12+D12
+a1	@sheet:1/row:r12	c5	=C13+D13
+a1	@sheet:1/row:r13	c5	=C14+D14
+a1	@sheet:1/row:r14	c5	=C15+D15
+a1	@sheet:1/row:r15	c3	=Rates!B3
+a1	@sheet:1/row:r16	c3	=SUM(C4:C15)
+a1	@sheet:1/row:r16	c4	=SUM(D4:D15)
+a1	@sheet:1/row:r16	c5	=SUM(E4:E15)
+a1	@sheet:1/row:r17	c5	=E18*C17
+claim	@sheet:1	@sheet:1/row:r3,0,@sheet:1/col:c3,0:@sheet:1/row:r14,0,@sheet:1/col:c4,0	updating Q2 figures	hold
+claim_cells	@sheet:1	@sheet:1/row:r3,0,@sheet:1/col:c3,0	@sheet:1/row:r3,0,@sheet:1/col:c3,0:@sheet:1/row:r14,0,@sheet:1/col:c4,0
+rev	21	range set
+op	map	cells	@sheet:1/row:r4	c4	set	{"t":"n","v":"2000","s":3}
+op	map	cells	@sheet:1/row:r5	c4	set	{"t":"n","v":"4500","s":3}
+op	map	cells	@sheet:1/row:r6	c4	set	{"t":"n","v":"9800","s":3}
+report	written	@sheet:1	@sheet:1/row:r4,0,@sheet:1/col:c4,0:@sheet:1/row:r6,0,@sheet:1/col:c4,0
+agent_cells	@sheet:1	@sheet:1/row:r4,0,@sheet:1/col:c4,0	@sheet:1/row:r4,0,@sheet:1/col:c4,0:@sheet:1/row:r6,0,@sheet:1/col:c4,0
+rev	22	cell set
+op	map	cells	@sheet:1/row:r5	c6	set	{"t":"s","v":"renewal in March"}
+report	written	@sheet:1	@sheet:1/row:r5,0,@sheet:1/col:c6,0:@sheet:1/row:r5,0,@sheet:1/col:c6,0
+agent_cells	@sheet:1	@sheet:1/row:r5,0,@sheet:1/col:c6,0	@sheet:1/row:r5,0,@sheet:1/col:c6,0:@sheet:1/row:r5,0,@sheet:1/col:c6,0
+rev	23	rows insert
+op	list	rows	@sheet:1/row:r19	insert	@sheet:1/row:r8	row
+op	map	cells	@sheet:1/row:r19	@sheet	set	1
+report	band	@sheet:1	rows	insert	10	10
+agent_cells	@sheet:1	@sheet:1/row:r19,0,@sheet:1/col:c1,0	@sheet:1/row:r19,0,@sheet:1/col:c1,0:@sheet:1/row:r19,0,@sheet:1/col:c6,16378
+rev	24	range set
+op	map	cells	@sheet:1/row:r19	c1	set	{"t":"s","v":"Contractors"}
+op	map	cells	@sheet:1/row:r19	c2	set	{"t":"s","v":"Eng"}
+op	map	cells	@sheet:1/row:r19	c3	set	{"t":"n","v":"3000","s":3}
+op	map	cells	@sheet:1/row:r19	c4	set	{"t":"n","v":"4000","s":3}
+op	map	cells	@sheet:1/row:r19	c5	set	{"f":"{s1-r19|c3}+{s1-r19|c4}","s":3}
+report	written	@sheet:1	@sheet:1/row:r19,0,@sheet:1/col:c1,0:@sheet:1/row:r19,0,@sheet:1/col:c5,0
+agent_cells	@sheet:1	@sheet:1/row:r19,0,@sheet:1/col:c1,0	@sheet:1/row:r19,0,@sheet:1/col:c1,0:@sheet:1/row:r19,0,@sheet:1/col:c5,0
+rev	25	cell set
+op	map	cells	@sheet:1/row:r17	c5	set	{"f":"{s1-r16|c5}*{s2-r3|c2}","s":4}
+report	written	@sheet:1	@sheet:1/row:r17,0,@sheet:1/col:c5,0:@sheet:1/row:r17,0,@sheet:1/col:c5,0
+agent_cells	@sheet:1	@sheet:1/row:r17,0,@sheet:1/col:c5,0	@sheet:1/row:r17,0,@sheet:1/col:c5,0:@sheet:1/row:r17,0,@sheet:1/col:c5,0
+claim_lines	4	16
+rev	26	sheet rename
+op	map	sheet_props	@sheet:2	name	set	FX rates
+report	container	@sheet:2
+agent_cells	@sheet:2	@sheet:2/row:r1,0,@sheet:2/col:c1,0	-
+rev	27	sheet add
+op	list	sheets	@sheet:5	insert	@sheet:4	worksheet
+op	map	sheet_props	@sheet:5	sid	set	5
+op	map	sheet_props	@sheet:5	name	set	Notes
+op	map	sheet_props	@sheet:5	state	set	visible
+op	map	sheet_props	@sheet:5	hidden	set	0
+op	map	sheet_props	@sheet:5	shift	set	1
+op	map	sheet_props	@sheet:5	edit	set	1
+report	container	@sheet:5
+agent_cells	@sheet:5	-,1,-,1	-
+rev	28	rows delete
+op	map	cells	@sheet:1/row:r15	@gap	delete
+report	band	@sheet:1	rows	delete	17	17
+agent_cells	@sheet:1	@sheet:1/row:r16,0,@sheet:1/col:c1,0	-
+rev	29	-
+op	map	cells	@sheet:1/row:r3	c3	set	{"t":"n","v":"12500","s":3}
+op	map	cells	@sheet:1/row:r3	c5	set	{"t":"n","v":"20500","f":"{s1-r3|c3}+{s1-r3|c4}","s":3}
+op	map	cells	@sheet:1/row:r4	c5	set	{"t":"n","v":"5000","f":"{s1-r4|c3}+{s1-r4|c4}","s":3}
+op	map	cells	@sheet:1/row:r5	c5	set	{"t":"n","v":"8700","f":"{s1-r5|c3}+{s1-r5|c4}","s":3}
+op	map	cells	@sheet:1/row:r6	c5	set	{"t":"n","v":"18800","f":"{s1-r6|c3}+{s1-r6|c4}","s":3}
+op	map	cells	@sheet:1/row:r19	c5	set	{"t":"n","v":"7000","f":"{s1-r19|c3}+{s1-r19|c4}","s":3}
+op	map	cells	@sheet:1/row:r16	c3	set	{"t":"n","v":"63600","f":"SUM({s1-r3|c3}:{s1-r14|c3})","s":4}
+op	map	cells	@sheet:1/row:r16	c4	set	{"t":"n","v":"55200","f":"SUM({s1-r3|c4}:{s1-r14|c4})","s":4}
+op	map	cells	@sheet:1/row:r16	c5	set	{"t":"n","v":"118800","f":"SUM({s1-r3|c5}:{s1-r14|c5})","s":4}
+op	map	cells	@sheet:1/row:r17	c5	set	{"t":"n","v":"109296","f":"{s1-r16|c5}*{s2-r3|c2}","s":4}
+rev	30	cell set
+op	map	cells	@sheet:1/row:r6	c6	set	{"t":"s","v":"check against FX rates"}
+report	written	@sheet:1	@sheet:1/row:r6,0,@sheet:1/col:c6,0:@sheet:1/row:r6,0,@sheet:1/col:c6,0
+agent_cells	@sheet:1	@sheet:1/row:r6,0,@sheet:1/col:c6,0	@sheet:1/row:r6,0,@sheet:1/col:c6,0:@sheet:1/row:r6,0,@sheet:1/col:c6,0
+numbers	20	@sheet:1	rows	@sheet:1/row:r1=1,@sheet:1/row:r2=3,@sheet:1/row:r3=4,@sheet:1/row:r4=5,@sheet:1/row:r5=6,@sheet:1/row:r6=7,@sheet:1/row:r7=8,@sheet:1/row:r8=9,@sheet:1/row:r9=10,@sheet:1/row:r10=11,@sheet:1/row:r11=12,@sheet:1/row:r12=13,@sheet:1/row:r13=14,@sheet:1/row:r14=15,@sheet:1/row:r15=17,@sheet:1/row:r16=18,@sheet:1/row:r17=19,@sheet:1/row:r18=20
+numbers	20	@sheet:1	cols	@sheet:1/col:c1=A,@sheet:1/col:c2=B,@sheet:1/col:c3=C,@sheet:1/col:c4=D,@sheet:1/col:c5=E,@sheet:1/col:c6=F
+blank_rows	20	@sheet:1	2,16
+numbers	20	@sheet:2	rows	@sheet:2/row:r1=1,@sheet:2/row:r2=2,@sheet:2/row:r3=3,@sheet:2/row:r4=4,@sheet:2/row:r5=5
+numbers	20	@sheet:2	cols	@sheet:2/col:c1=A,@sheet:2/col:c2=B
+blank_rows	20	@sheet:2	-
+numbers	20	@sheet:3	rows	@sheet:3/row:r1=1,@sheet:3/row:r2=2,@sheet:3/row:r3=3,@sheet:3/row:r4=4,@sheet:3/row:r5=5
+numbers	20	@sheet:3	cols	@sheet:3/col:c1=A
+blank_rows	20	@sheet:3	-
+numbers	20	@sheet:4	rows	@sheet:4/row:r1=1
+numbers	20	@sheet:4	cols	@sheet:4/col:c1=A,@sheet:4/col:c2=B
+blank_rows	20	@sheet:4	-
+numbers	28	@sheet:1	rows	@sheet:1/row:r1=1,@sheet:1/row:r2=3,@sheet:1/row:r3=4,@sheet:1/row:r4=5,@sheet:1/row:r5=6,@sheet:1/row:r6=7,@sheet:1/row:r7=8,@sheet:1/row:r8=9,@sheet:1/row:r19=10,@sheet:1/row:r9=11,@sheet:1/row:r10=12,@sheet:1/row:r11=13,@sheet:1/row:r12=14,@sheet:1/row:r13=15,@sheet:1/row:r14=16,@sheet:1/row:r15=17,@sheet:1/row:r16=18,@sheet:1/row:r17=19,@sheet:1/row:r18=20
+numbers	28	@sheet:1	cols	@sheet:1/col:c1=A,@sheet:1/col:c2=B,@sheet:1/col:c3=C,@sheet:1/col:c4=D,@sheet:1/col:c5=E,@sheet:1/col:c6=F
+blank_rows	28	@sheet:1	2
+numbers	28	@sheet:2	rows	@sheet:2/row:r1=1,@sheet:2/row:r2=2,@sheet:2/row:r3=3,@sheet:2/row:r4=4,@sheet:2/row:r5=5
+numbers	28	@sheet:2	cols	@sheet:2/col:c1=A,@sheet:2/col:c2=B
+blank_rows	28	@sheet:2	-
+numbers	28	@sheet:3	rows	@sheet:3/row:r1=1,@sheet:3/row:r2=2,@sheet:3/row:r3=3,@sheet:3/row:r4=4,@sheet:3/row:r5=5
+numbers	28	@sheet:3	cols	@sheet:3/col:c1=A
+blank_rows	28	@sheet:3	-
+numbers	28	@sheet:4	rows	@sheet:4/row:r1=1
+numbers	28	@sheet:4	cols	@sheet:4/col:c1=A,@sheet:4/col:c2=B
+blank_rows	28	@sheet:4	-
+numbers	28	@sheet:5	rows	-
+numbers	28	@sheet:5	cols	-
+blank_rows	28	@sheet:5	-
+numbers	29	@sheet:1	rows	@sheet:1/row:r1=1,@sheet:1/row:r2=3,@sheet:1/row:r3=4,@sheet:1/row:r4=5,@sheet:1/row:r5=6,@sheet:1/row:r6=7,@sheet:1/row:r7=8,@sheet:1/row:r8=9,@sheet:1/row:r19=10,@sheet:1/row:r9=11,@sheet:1/row:r10=12,@sheet:1/row:r11=13,@sheet:1/row:r12=14,@sheet:1/row:r13=15,@sheet:1/row:r14=16,@sheet:1/row:r15=17,@sheet:1/row:r16=18,@sheet:1/row:r17=19,@sheet:1/row:r18=20
+numbers	29	@sheet:1	cols	@sheet:1/col:c1=A,@sheet:1/col:c2=B,@sheet:1/col:c3=C,@sheet:1/col:c4=D,@sheet:1/col:c5=E,@sheet:1/col:c6=F
+blank_rows	29	@sheet:1	2
+numbers	29	@sheet:2	rows	@sheet:2/row:r1=1,@sheet:2/row:r2=2,@sheet:2/row:r3=3,@sheet:2/row:r4=4,@sheet:2/row:r5=5
+numbers	29	@sheet:2	cols	@sheet:2/col:c1=A,@sheet:2/col:c2=B
+blank_rows	29	@sheet:2	-
+numbers	29	@sheet:3	rows	@sheet:3/row:r1=1,@sheet:3/row:r2=2,@sheet:3/row:r3=3,@sheet:3/row:r4=4,@sheet:3/row:r5=5
+numbers	29	@sheet:3	cols	@sheet:3/col:c1=A
+blank_rows	29	@sheet:3	-
+numbers	29	@sheet:4	rows	@sheet:4/row:r1=1
+numbers	29	@sheet:4	cols	@sheet:4/col:c1=A,@sheet:4/col:c2=B
+blank_rows	29	@sheet:4	-
+numbers	29	@sheet:5	rows	-
+numbers	29	@sheet:5	cols	-
+blank_rows	29	@sheet:5	-
+cells_a1	20	CS1	@sheet:1	@sheet:1/row:r16,0,@sheet:1/col:c5,0	-	E18	-
+cells_a1	20	CS2	@sheet:2	@sheet:2/row:r1,0,@sheet:2/col:c1,0	@sheet:2/row:r1,0,@sheet:2/col:c1,0:@sheet:2/row:r4,0,@sheet:2/col:c2,0	A1	A1:B4
+cells_a1	20	CS3	@sheet:2	@sheet:2/row:r1,0,@sheet:2/col:c1,0	@sheet:2/row:r1,0,@sheet:2/col:c1,0:@sheet:2/row:r5,995,@sheet:2/col:c2,8	A1	A1:J1000
+cells_a1	20	CS4	@sheet:1	@sheet:1/row:r3,0,@sheet:1/col:c5,0	@sheet:1/row:r3,0,@sheet:1/col:c3,0:@sheet:1/row:r14,0,@sheet:1/col:c3,0;@sheet:1/row:r3,0,@sheet:1/col:c5,0:@sheet:1/row:r14,0,@sheet:1/col:c5,0	E4	C4:C15,E4:E15
+range_a1	20	CS5	@sheet:1	@sheet:1/row:r1,0,@sheet:1/col:c4,0:@sheet:1/row:r18,1048556,@sheet:1/col:c4,0	D1:D1048576
+range_a1	20	CS5	@sheet:1	@sheet:1/row:r8,0,@sheet:1/col:c1,0:@sheet:1/row:r8,0,@sheet:1/col:c6,16378	A9:XFD9
+corner_a1	20	CS6	@sheet:1	@sheet:1/row:r1,1,@sheet:1/col:c1,0	A2
+range_a1	22	CS7	@sheet:1	@sheet:1/row:r3,0,@sheet:1/col:c3,0:@sheet:1/row:r14,0,@sheet:1/col:c4,0	C4:D15
+range_a1	23	CS7	@sheet:1	@sheet:1/row:r3,0,@sheet:1/col:c3,0:@sheet:1/row:r14,0,@sheet:1/col:c4,0	C4:D16
+corner_refused	20	CS11	@sheet:1	@sheet:1/row:r1,2,@sheet:1/col:c1,0	not in its form
+corner_refused	20	CS11	@sheet:1	@sheet:1/row:r1,0,@sheet:1/col:c6,16379	past the last column
+corner_refused	20	CS11	@sheet:1	@sheet:1/row:r18,1048557,@sheet:1/col:c1,0	past the last row
+corner_a1	20	max	@sheet:1	@sheet:1/row:r18,1048556,@sheet:1/col:c6,16378	XFD1048576
+corner_refused	20	CS11	@sheet:1	@sheet:2/row:r1,0,@sheet:1/col:c1,0	a row of another sheet
+corner_a1	27	AG4	@sheet:5	-,1,-,1	A1

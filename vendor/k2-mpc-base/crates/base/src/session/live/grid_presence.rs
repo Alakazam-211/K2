@@ -523,6 +523,9 @@ impl Session {
         if c.elems.is_some() {
             return Ok(self.elem_claim_info(st, c, now));
         }
+        if c.cells.is_some() {
+            return Ok(self.cell_claim_info(st, c, now));
+        }
         if c.grid.is_some() {
             let g = self.grid_now(st)?;
             return Ok(Self::grid_claim_info(&g, c, now));
@@ -822,6 +825,7 @@ impl Session {
             edited: false,
             grid: Some(span),
             elems: None,
+            cells: None,
         };
         let info = Self::grid_claim_info(&g, &claim, now);
         let actor = claim.actor();
@@ -1057,6 +1061,7 @@ impl Session {
             return Ok(());
         }
         self.check_elem_claims(st, i, edits, now)?;
+        self.check_cell_claims(st, i, edits, now)?;
         let pid = st.members[i].p.pid.clone();
         let (touched, reserved) = self.grid_touched(st, i, edits)?;
         // a reservation handed to someone else
@@ -1127,6 +1132,7 @@ impl Session {
         now: u64,
     ) {
         self.elem_claims_after(st, stream, now);
+        self.cell_claims_after(st, stream, now);
         if !self.is_grid() || stream.is_empty() {
             return;
         }

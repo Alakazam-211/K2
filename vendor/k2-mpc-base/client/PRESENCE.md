@@ -244,3 +244,67 @@ address (`@sld:256/sp:4` on a deck; the key itself for a pack that maps none): w
 edge, in and out (after v0.15.1 it fills the roster's addresses itself; WIRE.md, Presence
 frames), so the client keeps no mapping and compares them as the opaque strings they are. Nothing
 changes for a doc whose pack maps nothing: the strings are the keys, as before.
+
+## Cells in a live grid
+
+In a doc whose view schema has a `grid` (a workbook: sheets, rows, cells), a connection shows its
+cells: the active cell and up to 16 ranges in one sheet, each corner by address (WIRE.md, "The
+live grid"). Numbers and A1 are worked out from the keyed state the client keeps, never read out
+of an address.
+
+```ts
+const grid = watch.grid!;                                    // KeyedWatch: the view schema's grid
+const numbers = gridNumbers(watch.state!, watch.view!.schema, "@sheet:1");
+const start = cornerAt(numbers, 4, 3)!;                      // C4, in normal form
+const end = cornerAt(numbers, 15, 4)!;                       // D15
+presence.setCells({ container: "@sheet:1", active: start, ranges: [{ start, end }] }, "sheets");
+rangeA1(numbers, { start, end });                            // "C4:D15"
+const claim = await presence.claimCells({ container: "@sheet:1", ranges: [{ start, end }] }, { note: "updating Q2" });
+```
+
+- **Frames go out only when the host takes them:** `cellsSupported` and `cellClaimsSupported` are
+  whether `welcome.features` lists `"cells"` and `"cell_claims"`. Otherwise `setCells` records the
+  value and `reconnected` sends it (after the focus) if a later connection lists it; `claimCells`
+  sends nothing and rejects with `unsupported`.
+- **Cells set the focus.** The host moves your focus to the cells' sheet; the channel sets its own
+  focus there too, in the `root` you pass (the containers' list root; without it, the current
+  focus's root), and sends no `focus` frame for it. **A focus on another sheet** (or none) clears
+  your cells here, as the host drops them.
+- **Refusals:** the channel refuses itself, unsent, more than 16 ranges (`MPC-E310`) and a claim
+  on other than one range (`MPC-E304`). The host refuses a corner that isn't live, isn't in normal
+  form or is out of bounds, an active cell outside the ranges, another sheet's corner
+  (`MPC-E114`), and a watcher (`MPC-E305`). A refused value isn't sent again on a reconnect.
+- **Kept by keys, dropped, never moved:** an insert inside a range grows it; a range whose corner's
+  row or column goes, or whose corner leaves normal form, is dropped (the roster's `cells` says
+  what is left). Send new cells then.
+- `peers()` gains `cells` (`{container, active, ranges}` or `null`), from the roster's `cells`
+  events, entries and devices.
+- **Claims on cells** are in `claims()` with the rest: a `ClaimView` with `cells: {container,
+  ranges}`, `root` `""` and no `keys`, the actor from its `claim_started_cells` event (from the
+  member's row in a snapshot's `cell_claims`). `claim_ended` ends it, its `lines` the range's first
+  and last row numbers then. `release(claim)` releases it. Under the host's Respect policy a claim
+  holds off other agents' writes to its cells and deletes of its rows or columns; an insert inside
+  grows it.
+- **An agent's cells follow its work** (the host's; a person's are never moved): a verb that wrote
+  cells selects what it wrote; an insert selects the inserted rows or columns whole; a delete puts
+  a caret on the first visible cell after it; adding or renaming a sheet moves its focus there (a
+  caret at A1 unless its cells were already there); a claim on cells selects the claimed range.
+  They arrive as the usual `focus`, `selection` and `cells` events, in that order in a flush.
+
+**The helpers** (`src/grid.ts`, pure functions, no DOM):
+
+| function | gives |
+|---|---|
+| `gridNumbers(state, schema, container)` | the sheet's keyed rows and columns with their numbers (`GridNumbers`) |
+| `blankNumbers(lines, first?)` | the numbers no keyed row has, up to the last one |
+| `colLetters(n)`, `colNumber(letters)` | 27 ↔ `AA`, 16384 ↔ `XFD` |
+| `colLabel(grid, n)` | a column header by the grid's `col_label` |
+| `cornerAt(numbers, row, col)` | the corner, in normal form, of a cell by its numbers (`null` out of bounds) |
+| `cornerNumbers(numbers, corner)` | a corner's row and column numbers (`null` when it isn't one) |
+| `cornerProblem(numbers, corner)` | why it isn't one: `bad`, `row`, `col` (not live here), `row_form`, `col_form`, `rows_max`, `cols_max`; `null` when it is |
+| `cornerA1`, `rangeA1`, `cellsA1` | A1 (always letters): `E18`, `C4:D15`, `{active, ranges}` |
+| `colOfCellField(grid, container, field)` | a cell field's column address (`null` for a row field) |
+| `fieldClass(schema, field, of?)` | a field's class: geometry, exact, prefix (`cell`), hidden, meta |
+
+`KeyedWatch.cellDerived("a1", row, field)` gives a formula's text as people read it (`=C4+D4`), from
+the snapshot's pages and each change's `derived`.

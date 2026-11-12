@@ -5,5 +5,44 @@
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the spec-undo test that checks the enumerator ends a run at its own assertion-stop pseudo-rule; not an engine defect
-# v0.16.0: "no longer" a client view that has stopped being current (a change frame with no deltas)
-client/src/view.ts: * leaves the view as it was and no longer current. */
+# v0.17.0: "out of bounds" a grid cell or corner outside the sheet's rows or columns (grid.rs, grid.ts, WIRE.md, PRESENCE.md); "crash" a process that stopped before its write-back (the demote and pairing rows and docs); "panic" a test helper's unwind; "no longer" a formula cell that stopped being one, puts that stopped waiting, approvals that can't be settled
+client/PRESENCE.md: form or is out of bounds, an active cell outside the ranges, another sheet's corner
+client/PRESENCE.md: | `cornerAt(numbers, row, col)` | the corner, in normal form, of a cell by its numbers (`null` out of bounds) |
+client/WIRE.md: bounds, an active cell outside the ranges, another container's corner), `MPC-E310` (more than
+client/src/grid.ts: * container; `null` when either is out of bounds (under 1, past the most, not whole). */
+client/test/grid-view.test.ts: it("cornerAt gives the corner in normal form, and nothing out of bounds", () => {
+crates/base/src/differential.rs: /// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+crates/base/src/grid.rs: OutOfBounds(Axis),
+crates/base/src/grid.rs: CornerError::OutOfBounds(a) => {
+crates/base/src/grid.rs: return Err(CornerError::OutOfBounds(axis));
+crates/base/src/grid.rs: /// Per unit (by address): per cell field, its new A1 text, `None` when no longer a formula.
+crates/base/src/grid.rs: Err(CornerError::OutOfBounds(Axis::Rows))
+crates/base/src/session/live/demote.rs: // the puts no longer wait: referenced by a version, or given up
+crates/base/src/session/manager.rs: ///   got, unwritten or left by a crash, included), written to the file by the tier-0
+crates/base/src/session/manager.rs: ///   other rows go, in the same store transaction (a crash before it leaves the text doc
+crates/base/src/store/demoted.rs: //! A crash before the commit leaves the text doc exactly as it was; after it, the blob doc.
+crates/base/src/store/demoted.rs: /// Test-only: fail the demotion after every write, before the commit (a crash
+crates/base/src/store/demoted.rs: "test: crash before the demotion's commit",
+crates/base/tests/demote.rs: //! - a change the file never got (closed so, as after a crash): kept, and written;
+crates/base/tests/demote.rs: //! starts from the file) turns the unwritten-change and crash rows red, `MergesByLine` (the
+crates/base/tests/demote.rs: /// A doc closed with a change the file never got (b's door, made without the file; a crash
+crates/base/tests/demote.rs: fn row_crash_change_is_kept() -> Result<(), String> {
+crates/base/tests/demote.rs: const ROW: &str = "row_crash_change_is_kept";
+crates/base/tests/demote.rs: let f = fx("crash");
+crates/base/tests/demote.rs: assert!(f.mgr.close(&key(NAME), "crash").unwrap());
+crates/base/tests/demote.rs: fn crash_change_is_kept() {
+crates/base/tests/demote.rs: row_crash_change_is_kept().unwrap();
+crates/base/tests/demote.rs: /// "demote drops unwritten": the unwritten-change and crash rows go red, by name.
+crates/base/tests/demote.rs: ("row_crash_change_is_kept", row_crash_change_is_kept),
+crates/base/tests/keyed_live.rs: /// The same with a restart between the agent's change and the app's save (a crash before the
+crates/base/tests/live_paired.rs: /// A crash: a new manager on the same stores, the old one dropped without a write-back.
+crates/base/tests/live_paired.rs: /// The same across a restart: the agent's edit is in the store, the kit never wrote it (a crash
+docs/SESSIONS.md: never got (not written back yet, or left by a crash before write-back) is in it.
+docs/SESSIONS.md: sync replica, hash key; carriers and value references released). A crash before it leaves
+docs/SESSIONS.md: undo. Pending approvals stay readable in the live log; they can no longer be settled (the
+docs/SESSIONS.md: the quiet time, while the file was missing or declined, or after a crash before the write-back),
+tools/n1/consumer-demote/src/main.rs: //!   never got (made without the file, as after a crash) and then an outside save, for this
+tools/n1/consumer-demote/src/main.rs: assert!(mgr.close(&key(name), "crash").unwrap());
+# v0.17.0 (main e3015a9d): "no longer" keys a doc has stopped holding; "panic" a test row reporting an error instead of unwinding
+crates/base/tests/live_paired.rs: // pairing names keys the doc no longer has
+crates/base/tests/live_paired.rs: /// `row list` as `c`, the error as text (the row reports it instead of panicking).

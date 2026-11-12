@@ -7,6 +7,7 @@
 
 import type {
   ContainerDelta,
+  GridSlot,
   KeyedSchema,
   OpsChangeFrame,
   UnitDelta,
@@ -138,6 +139,12 @@ export class KeyedView {
   /** The units of the container with address `container`, back to front. */
   units(container: string): readonly ViewUnit[] {
     return this.lists.get(container) ?? [];
+  }
+
+  /** The view schema's live grid (`schema.grid`, kept as the snapshot gave it, with its
+   * `field_class_prefix`), `null` when the pack has none. */
+  get grid(): GridSlot | null {
+    return this.vs.grid ?? null;
   }
 
   /** One change, after its ops were applied to `st`. A frame with no deltas (an older kit)

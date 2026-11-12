@@ -498,6 +498,7 @@ impl Session {
             edited: false,
             grid: None,
             elems: None,
+            cells: None,
         };
         let info = claim.info(text, now);
         let actor = claim.actor();
@@ -546,6 +547,8 @@ impl Session {
         let c = st.aware.claims.remove(k);
         let lines = if let Some(e) = &c.elems {
             Self::elem_lines(st, e)
+        } else if let Some(cs) = &c.cells {
+            self.cell_lines(st, cs)
         } else if c.grid.is_some() {
             self.grid_claim_lines(st, &c)
         } else {
@@ -577,7 +580,8 @@ impl Session {
             next_waiter: waiters.first().cloned(),
             waiters: waiters.clone(),
         });
-        if grant {
+        // a cells claim isn't handed on: a waiter claims the range again
+        if grant && c.cells.is_none() {
             let span = (c.s, c.e);
             self.grant_reservation(
                 st,

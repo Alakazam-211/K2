@@ -470,6 +470,9 @@ pub struct RosterEntry {
     pub focus: Option<ElemFocus>,
     /// The most active connection's text range that has one ([`super::Session::set_range`]).
     pub range: Option<ElemRange>,
+    /// On a grid with a view schema's grid slot: the most active connection's cell caret and
+    /// ranges that has one ([`super::Session::set_cells`]).
+    pub cells: Option<crate::grid::Cells>,
 }
 
 /// One connection of a participant, on a text doc's roster ([`RosterEntry::devices`]): the
@@ -497,6 +500,8 @@ pub struct Device {
     pub focus: Option<ElemFocus>,
     /// This connection's text range, if it has one.
     pub range: Option<ElemRange>,
+    /// This connection's cell caret and ranges, if it has them.
+    pub cells: Option<crate::grid::Cells>,
 }
 
 /// At most this many characters of a connection's label

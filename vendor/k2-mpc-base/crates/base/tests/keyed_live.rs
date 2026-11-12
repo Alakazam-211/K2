@@ -780,84 +780,75 @@ fn keyed_stale_save_after_a_kit_write_across_a_restart() {
     row_keyed_stale_save_after_a_kit_write_across_a_restart().unwrap();
 }
 
-/// A kit write of a merge counts too: an outside save landed while the agent's change was
-/// unwritten (no kit write since the last outside save: it applies, by key), the kit wrote the
-/// merged doc, and then the app saves its buffer again.
-fn row_keyed_stale_save_after_a_merged_write_keeps_both() -> Result<(), String> {
-    const ROW: &str = "row_keyed_stale_save_after_a_merged_write_keeps_both";
-    let f = fx("stale-merged");
+/// A save that lands on unwritten changes keeps both too (K1b: one rule, never a merge by key):
+/// the agent's change isn't written yet when the app saves (s2's title). The save becomes the
+/// live doc exactly; the kit's version (with the agent's change) is a version and a conflict
+/// copy; one conflict event; the doc then holds the file, so nothing is written. Red before the
+/// rule: the save was merged by key onto the agent's change, with no copy and no event.
+fn row_keyed_save_on_unwritten_changes_keeps_both() -> Result<(), String> {
+    const ROW: &str = "row_keyed_save_on_unwritten_changes_keeps_both";
+    let f = fx("dirty");
     f.write(ONE);
     let s = f.open();
     let bot = f.agent(&s);
     set_field(&s, bot, "s1", "title", "Agent").unwrap();
-    // the app saves before the kit wrote the agent's change: no kit write since the last
-    // outside save, so it applies (s2's title), and the agent's change stays
     f.advance(1_000);
-    app_save(&f.path(), "s1\ttitle=A\ns2\ttitle=First\n");
+    const SAVE: &str = "s1\ttitle=A\ns2\ttitle=First\n";
+    app_save(&f.path(), SAVE);
     let out = s.file_changed().unwrap();
-    need(matches!(out, DiskCheck::Ingested { .. }), ROW, || {
-        format!("a save with no kit write since is plain: {out:?}")
+    let DiskCheck::Conflict {
+        kept,
+        copy: Some(copy),
+        ..
+    } = out
+    else {
+        return Err(format!(
+            "{ROW}: a save on unwritten changes keeps both: {out:?}"
+        ));
+    };
+    need(text(&s, bot) == SAVE, ROW, || {
+        format!("the save is the live doc exactly: {:?}", text(&s, bot))
     })?;
-    need(
-        text(&s, bot) == "s1\ttitle=Agent\ns2\ttitle=First\n",
-        ROW,
-        || format!("both changes are live: {:?}", text(&s, bot)),
-    )?;
-    need(s.flush(bot).unwrap().written, ROW, || {
-        "the kit writes the merged doc".into()
+    let held = fs::read_to_string(&copy).unwrap();
+    need(held == AGENTS, ROW, || {
+        format!("the copy holds the kit's version: {held:?}")
     })?;
-    // the app's buffer still lacks the agent's title
-    f.advance(1_000);
-    app_save(&f.path(), PERSONS);
-    let out = s.file_changed().unwrap();
-    need(matches!(out, DiskCheck::Conflict { .. }), ROW, || {
-        format!("a save over the kit's merged write keeps both: {out:?}")
+    let kept_bytes = s.file_at(bot, kept).map(|b| b.bytes);
+    need(kept_bytes.as_deref() == Ok(AGENTS.as_bytes()), ROW, || {
+        format!("the kept version holds the kit's version: {kept_bytes:?}")
     })?;
     need(conflict_events(&f).len() == 1, ROW, || {
         format!("one conflict event: {:?}", conflict_events(&f))
-    })
+    })?;
+    need(!s.flush(bot).unwrap().written, ROW, || {
+        "the doc holds the file: nothing is written".into()
+    })?;
+    need(f.bytes() == SAVE, ROW, || "the save stays on disk".into())
 }
 
 #[test]
-fn keyed_stale_save_after_a_merged_write_keeps_both() {
-    row_keyed_stale_save_after_a_merged_write_keeps_both().unwrap();
+fn keyed_save_on_unwritten_changes_keeps_both() {
+    row_keyed_save_on_unwritten_changes_keeps_both().unwrap();
 }
 
-/// The same with a restart between the kit's write of the merge and the app's next save: the
-/// merge is on the store (its save's version names the kit's merge), so the save keeps both.
-/// Red before the record: after the restart the sync point read as the app's own save, and the
-/// stale save was applied plainly over the agent's change.
-fn row_keyed_stale_save_after_a_merged_write_across_a_restart() -> Result<(), String> {
-    const ROW: &str = "row_keyed_stale_save_after_a_merged_write_across_a_restart";
-    let mut f = fx("stale-merged-restart");
+/// The same with a restart between the agent's change and the app's save (a crash before the
+/// write-back: the change is in the store, never in the file).
+fn row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart() -> Result<(), String> {
+    const ROW: &str = "row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart";
+    let mut f = fx("dirty-restart");
     f.write(ONE);
     let s = f.open();
     let bot = f.agent(&s);
     set_field(&s, bot, "s1", "title", "Agent").unwrap();
-    f.advance(1_000);
-    app_save(&f.path(), "s1\ttitle=A\ns2\ttitle=First\n");
-    let out = s.file_changed().unwrap();
-    need(matches!(out, DiskCheck::Ingested { .. }), ROW, || {
-        format!("a save with no kit write since is plain: {out:?}")
-    })?;
-    need(s.flush(bot).unwrap().written, ROW, || {
-        "the kit writes the merged doc".into()
-    })?;
-    need(
-        f.bytes() == "s1\ttitle=Agent\ns2\ttitle=First\n",
-        ROW,
-        || format!("the file holds the merge: {:?}", f.bytes()),
-    )?;
     drop(s);
     f.restart();
     let s = f.open();
     let bot = f.agent(&s);
-    // the app's buffer still lacks the agent's title
     f.advance(1_000);
     app_save(&f.path(), PERSONS);
     let out = s.file_changed().unwrap();
     need(matches!(out, DiskCheck::Conflict { .. }), ROW, || {
-        format!("a save over the kit's merged write keeps both after a restart: {out:?}")
+        format!("a save on unwritten changes keeps both after a restart: {out:?}")
     })?;
     need(text(&s, bot) == PERSONS, ROW, || {
         format!("the save is the live doc: {:?}", text(&s, bot))
@@ -865,29 +856,34 @@ fn row_keyed_stale_save_after_a_merged_write_across_a_restart() -> Result<(), St
     let ev = conflict_events(&f);
     need(ev.len() == 1, ROW, || format!("one conflict event: {ev:?}"))?;
     let kept = s.file_at(bot, ev[0].1).map(|b| b.bytes);
-    need(
-        kept.as_deref() == Ok(&b"s1\ttitle=Agent\ns2\ttitle=First\n"[..]),
-        ROW,
-        || format!("the kept version holds the kit's merge: {kept:?}"),
-    )
+    need(kept.as_deref() == Ok(AGENTS.as_bytes()), ROW, || {
+        format!("the kept version holds the agent's change: {kept:?}")
+    })
 }
 
 #[test]
-fn keyed_stale_save_after_a_merged_write_across_a_restart() {
-    row_keyed_stale_save_after_a_merged_write_across_a_restart().unwrap();
+fn keyed_save_on_unwritten_changes_keeps_both_after_a_restart() {
+    row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart().unwrap();
 }
 
-/// The planted fault "merge write not recorded": the restart row goes red, by name (the
-/// in-memory row doesn't need the record).
+/// The planted fault "dirty save merged by key": both rows go red, by name.
 #[test]
-fn the_planted_merge_write_not_recorded_is_caught_by_name() {
-    differential::with_keyed_mutant(KeyedMutant::MergeWriteNotRecorded, || {
-        let name = "row_keyed_stale_save_after_a_merged_write_across_a_restart";
-        let e = row_keyed_stale_save_after_a_merged_write_across_a_restart()
-            .expect_err(&format!("planted, {name} must fail"));
-        assert!(e.starts_with(&format!("{name}: ")), "{e}");
-        row_keyed_stale_save_after_a_merged_write_keeps_both()
-            .expect("the in-memory row holds without the record");
+fn the_planted_dirty_save_merged_by_key_is_caught_by_name() {
+    differential::with_keyed_mutant(KeyedMutant::DirtySaveMergedByKey, || {
+        for (name, row) in [
+            (
+                "row_keyed_save_on_unwritten_changes_keeps_both",
+                row_keyed_save_on_unwritten_changes_keeps_both as fn() -> Result<(), String>,
+            ),
+            (
+                "row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart",
+                row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart,
+            ),
+        ] {
+            let e = row().expect_err(&format!("planted, {name} must fail"));
+            assert!(e.starts_with(&format!("{name}: ")), "{e}");
+            assert!(e.contains("keeps both"), "{e}");
+        }
     });
 }
 
@@ -1191,8 +1187,8 @@ fn the_planted_keyed_outside_save_applied_silently_is_caught_by_name() {
                 row_keyed_stale_save_after_a_kit_write_across_a_restart,
             ),
             (
-                "row_keyed_stale_save_after_a_merged_write_keeps_both",
-                row_keyed_stale_save_after_a_merged_write_keeps_both,
+                "row_keyed_save_on_unwritten_changes_keeps_both",
+                row_keyed_save_on_unwritten_changes_keeps_both,
             ),
         ] {
             let e = row().expect_err(&format!("planted, {name} must fail"));

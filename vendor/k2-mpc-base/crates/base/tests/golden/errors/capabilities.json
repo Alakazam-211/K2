@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -719,7 +719,7 @@
       "errors": ["MPC-E106"]
     }
   ],
-  "errors_any_verb": ["MPC-E101", "MPC-E107", "MPC-E108", "MPC-E109", "MPC-E146", "MPC-E154", "MPC-E401", "MPC-E402", "MPC-E403", "MPC-E404", "MPC-E407", "MPC-E415", "MPC-E501", "MPC-E502", "MPC-E503", "MPC-E505", "MPC-E508", "MPC-E509", "MPC-E510", "MPC-E513", "MPC-E514", "MPC-E515", "MPC-E516", "MPC-E517", "MPC-E518", "MPC-E519", "MPC-E520", "MPC-E706", "MPC-E707", "MPC-E709", "MPC-E710"],
+  "errors_any_verb": ["MPC-E101", "MPC-E107", "MPC-E108", "MPC-E109", "MPC-E146", "MPC-E154", "MPC-E401", "MPC-E402", "MPC-E403", "MPC-E404", "MPC-E407", "MPC-E415", "MPC-E501", "MPC-E502", "MPC-E503", "MPC-E505", "MPC-E508", "MPC-E509", "MPC-E510", "MPC-E513", "MPC-E514", "MPC-E515", "MPC-E516", "MPC-E517", "MPC-E518", "MPC-E519", "MPC-E520", "MPC-E521", "MPC-E706", "MPC-E707", "MPC-E709", "MPC-E710"],
   "meta_verbs": [
     {
       "name": "explain",
@@ -2168,6 +2168,12 @@
       "id": "MPC-E520",
       "name": "engine_mismatch",
       "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E521",
+      "name": "pairing_mismatch",
+      "exit": 1,
       "status": "live"
     },
     {

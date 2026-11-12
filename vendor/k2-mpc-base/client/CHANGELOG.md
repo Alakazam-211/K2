@@ -3,6 +3,37 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.17.0 (kit tag v0.17.0)
+
+The client for kit v0.17.0. Still wire 3 (`WIRE_VERSION` 3): the live grid is behind its
+feature names (`cells`, `cell_claims`), and with a host that doesn't list them the client
+behaves exactly as 0.16.0.
+
+- **The live grid** (WIRE.md, "The live grid"; PRESENCE.md, "Cells in a live grid"). Additive
+  within wire 3: `WIRE_VERSION` stays 3, and a client before it ignores every part.
+  - `wire.ts`: `Corner`, `CellRange`, `Cells`, `CellClaim`; the view schema's `grid`
+    (`GridSlot`, `GridNumbering`) and `field_class_prefix`; `FieldClass` with `cell`, and the
+    unit-delta op `cell`; the roster's `cells` and `claim_started_cells` events, `cells` on
+    entries and devices, `cell_claims` on entries, `lines` on `claim_ended`; the client frame
+    `cells` and the claim frame's `cells`; a page's `derived`; and `OpsChangeFrame.derived` typed
+    (`FrameDerived`: `UnitDerived`, `ContainerDerived`, `StyleHint`, `Written`, `Band`) where it
+    was untyped.
+  - `src/grid.ts`: `gridNumbers`, `blankNumbers`, `colLetters`, `colNumber`, `colLabel`,
+    `cornerAt`, `cornerNumbers`, `cornerProblem`, `cornerA1`, `rangeA1`, `cellsA1`,
+    `colOfCellField`, `fieldClass`; `CELLS_FEATURE`, `CELL_CLAIMS_FEATURE`, `CELLS_RANGES_MAX`.
+  - `KeyedView.grid`, `KeyedWatch.grid`, and `KeyedWatch.cellDerived(name, row, field)`: the
+    formula text kept from the snapshot's rows pages and each change's `derived.units`.
+  - `PresenceChannel`: `setCells(cells | null, root?)` (sends `cells` under the `cells` feature,
+    sets its own focus to the sheet, refuses more than 16 ranges itself with `MPC-E310`; a focus
+    on another sheet clears its cells), `claimCells({container, ranges: [range]}, opts)` (under
+    `cell_claims`; other than one range is `MPC-E304`, unsent), `cellsSupported`,
+    `cellClaimsSupported`, `PresencePeer.cells`, and claims on cells in `claims()` (`ClaimView.cells`,
+    `root` `""`, no `keys`; the actor from the event).
+  - Rows: `test/grid-view.test.ts` on the shared vector `test/vectors/grid_view.tsv`, and
+    `test/grid-presence.test.ts` with the kit's roster golden `roster_events_cells.json`
+    (required). Plants `GridGapIgnored` (`withGridGapIgnored`) and `ClaimCellsActorMissing`
+    (`withClaimCellsActorMissing`). The N-1 row folds the new golden on the previous client.
+
 ## 0.16.0 (kit tag v0.16.0)
 
 The client for kit v0.16.0. Still wire 3 (`WIRE_VERSION` 3): the keyed watch is behind its

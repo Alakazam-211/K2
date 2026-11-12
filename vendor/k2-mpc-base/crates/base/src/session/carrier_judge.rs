@@ -5,7 +5,8 @@
 //! doesn't keep a carrier gets [`CarrierVerdict::NotACarrierPack`] and nothing is checked.
 //!
 //! Per file, three legs, every failure reported (not just the first):
-//! 1. **the hook**: `encode_from(file, decode(file))` is the file, byte for byte;
+//! 1. **the hook**: `encode_from(file, decode(file))` is the file, byte for byte (for a pack that
+//!    pairs, `encode_from_paired` with the pairing of `decode(file)`);
 //! 2. **through the kit**: the file opened live renders as itself (`file_now`), and a flush leaves
 //!    it as it was;
 //! 3. **after a restart**: a new manager on the same store opens it again, renders it as itself,
@@ -99,9 +100,19 @@ fn the_hook(pack: &dyn Pack, bytes: &[u8]) -> Result<(), String> {
             .position(|(n, _)| n == r)
             .unwrap_or(usize::MAX)
     });
-    let out = pack
-        .encode_from(bytes, &roots, &decoded.codec)
-        .map_err(|e| format!("encode_from failed: {}", e.0))?;
+    // a pack that pairs (K1b): the file's own keys, as its decode minted them
+    let out = match pack.wants_pairing() {
+        true => {
+            let pairing = pack
+                .pairing(&roots, &decoded.codec)
+                .map_err(|e| format!("pairing failed: {}", e.0))?;
+            pack.encode_from_paired(bytes, &pairing, &roots, &decoded.codec)
+                .map_err(|e| format!("encode_from_paired failed: {e}"))?
+        }
+        false => pack
+            .encode_from(bytes, &roots, &decoded.codec)
+            .map_err(|e| format!("encode_from failed: {}", e.0))?,
+    };
     if out != bytes {
         return Err(first_difference(&out, bytes));
     }

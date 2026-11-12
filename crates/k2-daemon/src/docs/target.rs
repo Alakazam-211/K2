@@ -71,13 +71,12 @@ pub fn is_board_file(rel: &str) -> bool {
 const DESIGN_EXTENSIONS: &[&str] = &[
     // layered images and vector art
     "psb", "ai", "indd", "xcf", "kra", "sketch", "afdesign", "afphoto",
-    // CAD
-    "dwg", "dxf", "dgn", "step", "stp", "iges", "igs", "sat", "sldprt", "sldasm", "slddrw", "ipt", "iam", "idw", "f3d", "f3z",
-    "3dm", "skp", "fcstd", "catpart", "catproduct", "x_t", "x_b", "rvt", "rfa", "ifc", "ifczip", "p21",
-    // electronics design (KiCad's text formats: live text merges could duplicate entity ids)
-    "kicad_sch", "kicad_pcb", "kicad_sym", "kicad_mod",
-    // 3D models and scenes
-    "stl", "obj", "ply", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "abc", "3ds", "c4d", "max", "ma", "mb", "lwo",
+    // CAD (`.dxf`, `.step`/`.stp`, `.iges`/`.igs` and `.ifc` are on the text
+    // pack's own not-text list since text v0.2.22, so they aren't here)
+    "dwg", "dgn", "sat", "sldprt", "sldasm", "slddrw", "ipt", "iam", "idw", "f3d", "f3z",
+    "3dm", "skp", "fcstd", "catpart", "catproduct", "x_t", "x_b", "rvt", "rfa",
+    // 3D models and scenes (`.obj` is the text pack's not-text list's)
+    "stl", "ply", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "abc", "3ds", "c4d", "max", "ma", "mb", "lwo",
     "blend1",
 ];
 
@@ -742,8 +741,8 @@ mod tests {
     fn design_cad_and_3d_files_are_any_file_docs() {
         for p in [
             "art/poster.psd", "art/big.PSB", "scene.blend", "scene.blend1", "part.dwg", "plan.DXF", "gear.step", "gear.stp",
-            "gear.iges", "bracket.sldprt", "body.f3d", "house.skp", "print.stl", "mesh.obj", "mesh.ply", "model.fbx",
-            "model.glb", "model.gltf", "print.3mf", "stage.usdz", "board.kicad_pcb", "sheet.kicad_sch", "lib.kicad_sym",
+            "gear.iges", "site.ifc", "board.kicad_pcb", "bracket.sldprt", "body.f3d", "house.skp", "print.stl", "mesh.obj", "mesh.ply", "model.fbx",
+            "model.glb", "model.gltf", "print.3mf", "stage.usdz", "sheet.kicad_sch", "lib.kicad_sym",
             "fp.kicad_mod", "part.p21", "site.ifczip",
         ] {
             assert_eq!(Tier::of(p), Tier::Blob, "{p}");
@@ -754,14 +753,41 @@ mod tests {
         assert!(!is_design_file("a/.dwg"), "a dotfile named .dwg has no extension");
     }
 
-    /// K2's list doesn't take a type away from the pack's table.
+    /// K2's list doesn't take a type away from the pack's table: each entry
+    /// is a name the pack doesn't know (`Unknown`), or one it already calls
+    /// not text (`NotText`, text v0.2.22 on; redundant here, never live), never
+    /// a text type of its own.
     #[test]
     fn the_design_list_takes_nothing_from_the_text_table() {
         for e in DESIGN_EXTENSIONS {
             assert_eq!(*e, e.to_ascii_lowercase(), "{e}");
             let p = format!("file.{e}");
-            assert_eq!(k2_mpc_text::lookup(&p), k2_mpc_text::Lookup::Unknown, "{e} is in the pack's own table now: drop it here");
+            let l = k2_mpc_text::lookup(&p);
+            assert!(
+                matches!(l, k2_mpc_text::Lookup::Unknown | k2_mpc_text::Lookup::NotText),
+                "{e} is a text type in the pack's own table now ({l:?}): drop it here"
+            );
         }
+    }
+
+    /// Text v0.2.22: CAD, BIM and circuit-board files are on the pack's
+    /// not-text list (their lines point at each other by id). Every one is a
+    /// tier-0 doc, never live text, by any spelling, whether or not K2's own
+    /// list names it.
+    #[test]
+    fn cad_bim_and_circuit_board_files_are_tier_0_never_live_text() {
+        for e in [
+            "ifc", "ifczip", "step", "stp", "p21", "dxf", "kicad_sch", "kicad_pcb", "kicad_sym", "kicad_mod", "iges", "igs", "obj",
+        ] {
+            assert_eq!(k2_mpc_text::lookup(&format!("f.{e}")), k2_mpc_text::Lookup::NotText, "{e}: the pack's not-text list");
+            for p in [format!("model.{e}"), format!("cad/Part.{}", e.to_ascii_uppercase())] {
+                assert_eq!(Tier::of(&p), Tier::Blob, "{p}");
+                assert!(k2_mpc_text::TextPack::for_path(&p).is_none(), "{p}: no text pack opens it");
+            }
+        }
+        // G-code and ASCII STL have no ids between lines: G-code stays live
+        // text (STL is a 3D model on K2's own list, tier 0 either way).
+        assert!(matches!(Tier::of("part.gcode"), Tier::Text(_)));
     }
 
     #[test]

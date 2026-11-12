@@ -482,7 +482,21 @@ pub const TABLE: &[Group] = &[
 ];
 
 /// Extensions that are never text for this pack: media, office documents, archives,
-/// program binaries, fonts and databases. A host opens them some other way (tier 0).
+/// program binaries, fonts and databases, and CAD, BIM and circuit-board files. A host opens
+/// them some other way (tier 0).
+///
+/// **CAD, BIM and circuit boards** (the last group) are often text, but their lines carry ids
+/// and references to each other. A whole-line merge can then write the same id twice (two
+/// agents each add an entity with the next free number), or keep a reference that now points
+/// at the wrong thing (a merge across an app's save that renumbered the ids still parses).
+/// They stay at tier 0 (a shared file with versions, keep-both on clashing saves) until each
+/// type has its own pack. Formats checked and kept as text (no ids or references between
+/// lines; each falls to the strict guard of an unknown name):
+/// - G-code (`.gcode`): a line program run top to bottom. (Line numbers `N..` are optional
+///   and a sender renumbers them; a merge can still interleave two moves, as in any text.)
+/// - ASCII STL (`.stl`): each facet is a self-contained block of its own vertices, with no
+///   ids. A binary STL fails the guard (NUL bytes) and opens at tier 0 anyway.
+#[rustfmt::skip] // one CAD extension per line, each with its reason; rustfmt would repack them
 pub const NOT_TEXT: &[&str] = &[
     // images
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "icns", "heic", "heif", "avif", "tif",
@@ -497,6 +511,22 @@ pub const NOT_TEXT: &[&str] = &[
     // fonts
     "woff", "woff2", "ttf", "otf", "eot", // databases and 3D binaries
     "sqlite", "sqlite3", "db", "glb", "3mf", "blend",
+    // CAD, BIM and circuit boards: ids and references between lines (see above)
+    "ifc",       // BIM, a STEP file: `#12=` entity numbers referenced as `#12`, and GlobalIds
+    "ifczip",    // the same, zipped
+    "step",      // STEP: `#12=` entity numbers, referenced by other entities as `#12`
+    "stp",       // STEP
+    "p21",       // STEP
+    "dxf",       // group codes and values on alternate lines (a merge can shift the pairing);
+                 // entity handles (code 5) referenced by owners (330) and the next free one
+    "kicad_sch", // circuit-board S-expressions: `(uuid ..)` on items, symbols by reference
+    "kicad_pcb", // nets by number (`(net 3 "GND")` on pads and tracks), uuids
+    "kicad_sym", // symbol libraries: units and `extends` name other symbols
+    "kicad_mod", // footprints: uuids on items, pads by number
+    "iges",      // IGES: directory and parameter records point at each other by line number
+    "igs",       // IGES
+    "obj",       // faces name vertices by their position in the file (`f 1 2 3`, `f -1 ..`):
+                 // a vertex line added or removed renumbers every later reference
 ];
 
 /// How a path was matched.
@@ -645,6 +675,35 @@ mod tests {
         // a name that merely contains it stays text
         assert!(matches!(lookup("k5board.txt"), Lookup::Known { .. }));
         assert!(crate::TextPack::for_path("k5board.txt").is_some());
+    }
+
+    #[test]
+    fn a_cad_or_circuit_board_file_is_never_text() {
+        for e in [
+            "ifc",
+            "ifczip",
+            "step",
+            "stp",
+            "p21",
+            "dxf",
+            "kicad_sch",
+            "kicad_pcb",
+            "kicad_sym",
+            "kicad_mod",
+            "iges",
+            "igs",
+            "obj",
+        ] {
+            for p in [format!("m.{e}"), format!("d/M.{}", e.to_ascii_uppercase())] {
+                assert_eq!(lookup(&p), Lookup::NotText, "{p}");
+                assert!(crate::TextPack::for_path(&p).is_none(), "{p}");
+            }
+        }
+        // checked and kept: no ids or references between lines (see NOT_TEXT)
+        for p in ["part.gcode", "mesh.stl"] {
+            assert_eq!(lookup(p), Lookup::Unknown, "{p}");
+        }
+        assert!(matches!(lookup("notes.step.txt"), Lookup::Known { .. }));
     }
 
     #[test]

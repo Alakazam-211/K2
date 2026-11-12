@@ -353,7 +353,8 @@ Agents:
                  busy (a running job holds it; never cleared). Owner/admin,
                  or an agent allowed to manage compute nodes
   k2 compute cache --lineage trusted|scratch|release|all [--node N] [--json]
-                 cache generations (nodes whose owner turned them on): per
+                 cache generations (only nodes whose owner turned them on
+                 list anything; release copies come in a later release): per
                  node, each copy of this workspace's build cache (target,
                  CARGO_HOME, sccache): the shared one your trusted branches'
                  CI checks save (k2 ci cache trust), each branch's or

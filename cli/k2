@@ -27744,7 +27744,8 @@ Agents:
                  busy (a running job holds it; never cleared). Owner/admin,
                  or an agent allowed to manage compute nodes
   k2 compute cache --lineage trusted|scratch|release|all [--node N] [--json]
-                 cache generations (nodes whose owner turned them on): per
+                 cache generations (only nodes whose owner turned them on
+                 list anything; release copies come in a later release): per
                  node, each copy of this workspace's build cache (target,
                  CARGO_HOME, sccache): the shared one your trusted branches'
                  CI checks save (k2 ci cache trust), each branch's or
@@ -36806,7 +36807,10 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   k2 ci run [<rev>] [--check a,b] [--ref BRANCH] [--tier ci|standard]
             [--wait [--wait-min 60]] [--json]
                                 check one commit now (default HEAD; only
-                                committed code is checked)
+                                committed code is checked). --ref is a
+                                label: the run saves the shared build
+                                cache only if the remote's BRANCH has the
+                                commit (k2 ci cache trust)
   k2 ci status [<run|commit|branch>] [--limit N] [--json]
                                 the watch and recent runs, or one run
   k2 ci logs <run|commit|branch> [--check NAME] [--failures]
@@ -36854,7 +36858,10 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   k2 ci cache trust --add BRANCH | --set a,b
                                 a person's step (the owner or an Admin, from a
                                 terminal outside K2): an agent gets
-                                cache_trust_needs_person (exit 3)
+                                cache_trust_needs_person (exit 3); ask your
+                                person (k2 thread) to run it. An empty list
+                                (every branch removed): no check saves the
+                                shared copy
   --workspace <name>            people: which workspace (default: the
                                 one this folder is in)
 
@@ -60413,9 +60420,12 @@ CACHE GENERATIONS (nodes whose owner turned them on)
       run by the daemon from a commit that is pushed there, that pass:
       they save the shared "trusted" copy every job here starts from;
     - any other job (a PR branch, a plain k2 compute run, --dirty): saves
-      only its own scratch copy (its branch, or wt:<worktree> for --dirty),
-      which only later runs of the same branch or worktree start from, and
-      only until the trusted copy is newer;
+      only its own scratch copy, named after its branch (k2 compute run
+      --sha main: "main"; a k2 ci run with --ref main on a commit not on
+      the remote's main: "main" too), or wt:<worktree> for --dirty. A job of
+      that branch or worktree starts from its scratch copy while that copy
+      was made from the current trusted one; once the trusted copy moves
+      on, from the trusted copy again;
     - a secret job, a release build: save nothing.
   So nothing a PR or a plain run writes into target/ or CARGO_HOME ever
   reaches a trusted check, and several jobs of one repo start warm at once.
@@ -60713,7 +60723,7 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   build is cold, and it needs the network for dependencies unless they
   are vendored (cargo vendor). Split slow builds from the step that
   needs the secret when you can.
-  Exception (cache generations, CACHE GENERATIONS below): on a Linux node
+  Exception (see CACHE GENERATIONS above): on a Linux node
   that runs each secret job as a uid of its own (it offers job-uid) and
   keeps cache generations, a secret job starts from a copy of the trusted
   build cache (warm) and saves nothing back: the copy sits in its own

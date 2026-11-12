@@ -7003,9 +7003,12 @@ CACHE GENERATIONS (nodes whose owner turned them on)
       run by the daemon from a commit that is pushed there, that pass:
       they save the shared "trusted" copy every job here starts from;
     - any other job (a PR branch, a plain k2 compute run, --dirty): saves
-      only its own scratch copy (its branch, or wt:<worktree> for --dirty),
-      which only later runs of the same branch or worktree start from, and
-      only until the trusted copy is newer;
+      only its own scratch copy, named after its branch (k2 compute run
+      --sha main: "main"; a k2 ci run with --ref main on a commit not on
+      the remote's main: "main" too), or wt:<worktree> for --dirty. A job of
+      that branch or worktree starts from its scratch copy while that copy
+      was made from the current trusted one; once the trusted copy moves
+      on, from the trusted copy again;
     - a secret job, a release build: save nothing.
   So nothing a PR or a plain run writes into target/ or CARGO_HOME ever
   reaches a trusted check, and several jobs of one repo start warm at once.
@@ -7303,7 +7306,7 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   build is cold, and it needs the network for dependencies unless they
   are vendored (cargo vendor). Split slow builds from the step that
   needs the secret when you can.
-  Exception (cache generations, CACHE GENERATIONS below): on a Linux node
+  Exception (see CACHE GENERATIONS above): on a Linux node
   that runs each secret job as a uid of its own (it offers job-uid) and
   keeps cache generations, a secret job starts from a copy of the trusted
   build cache (warm) and saves nothing back: the copy sits in its own

@@ -19,7 +19,10 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   k2 ci run [<rev>] [--check a,b] [--ref BRANCH] [--tier ci|standard]
             [--wait [--wait-min 60]] [--json]
                                 check one commit now (default HEAD; only
-                                committed code is checked)
+                                committed code is checked). --ref is a
+                                label: the run saves the shared build
+                                cache only if the remote's BRANCH has the
+                                commit (k2 ci cache trust)
   k2 ci status [<run|commit|branch>] [--limit N] [--json]
                                 the watch and recent runs, or one run
   k2 ci logs <run|commit|branch> [--check NAME] [--failures]
@@ -67,7 +70,10 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   k2 ci cache trust --add BRANCH | --set a,b
                                 a person's step (the owner or an Admin, from a
                                 terminal outside K2): an agent gets
-                                cache_trust_needs_person (exit 3)
+                                cache_trust_needs_person (exit 3); ask your
+                                person (k2 thread) to run it. An empty list
+                                (every branch removed): no check saves the
+                                shared copy
   --workspace <name>            people: which workspace (default: the
                                 one this folder is in)
 

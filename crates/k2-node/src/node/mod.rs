@@ -62,6 +62,7 @@ mod sync_src;
 pub mod tenant;
 
 pub use run::mem_cap_detail;
+pub use run::disk_usage;
 pub use tenant::{job_key, kind_name, Hub, Tenant, TransferEvent, TransferKey};
 
 /// The product version (build.rs reads the daemon's), not the crate's.

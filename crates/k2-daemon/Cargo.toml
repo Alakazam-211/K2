@@ -117,6 +117,11 @@ k2-mpc-markdown = { path = "../../vendor/k2-mpc-markdown/crates/markdown" }
 # structure index, beside the blob; agents never write these files. Its own
 # workspace (vendor/k2-mpc-psd, without its fuzz/), as the other packs.
 k2-mpc-psd = { path = "../../vendor/k2-mpc-psd/crates/psd" }
+# The pptx pack (K2 Cores): a deck as a live keyed doc (`PptxLive`), written back by splicing
+# into the file's own bytes; behind the Slides core. It names its package layer,
+# k2-mpc-ooxml's `k2-mpc-opc`, by path beside it (vendor/k2-mpc-ooxml). Both are their own
+# workspaces (without their fuzz/ and checkers/), as the other packs.
+k2-mpc-pptx = { path = "../../vendor/k2-mpc-pptx/crates/pptx" }
 k2-mpc-text = { path = "../../vendor/k2-mpc-text/crates/text" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"
@@ -385,6 +390,8 @@ sha2 = "0.10"
 k2-core = { path = "../k2-core", features = ["test-util"] }
 # Vault route tests run on a temp vault with the fake key store.
 k2-vault = { path = "../k2-vault", features = ["test-util"] }
+# The pptx pack's deck generator (`testgen`, test-only) for the Slides core's tests.
+k2-mpc-pptx = { path = "../../vendor/k2-mpc-pptx/crates/pptx", features = ["testgen"] }
 # The changes card's tests (workbench-v1 B7) build temp repos. Same git2
 # version/features k2-core uses: the one crate already in the lock tree.
 git2 = { version = "0.19", default-features = false }

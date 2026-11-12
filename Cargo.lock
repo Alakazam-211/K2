@@ -4781,6 +4781,7 @@ dependencies = [
  "k2-mpc-board",
  "k2-mpc-board-bridge",
  "k2-mpc-markdown",
+ "k2-mpc-pptx",
  "k2-mpc-psd",
  "k2-mpc-text",
  "k2-node",
@@ -4928,6 +4929,24 @@ name = "k2-mpc-markdown"
 version = "0.7.19"
 dependencies = [
  "k2-mpc-base",
+]
+
+[[package]]
+name = "k2-mpc-opc"
+version = "0.1.1"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "roxmltree",
+]
+
+[[package]]
+name = "k2-mpc-pptx"
+version = "0.1.2"
+dependencies = [
+ "k2-mpc-base",
+ "k2-mpc-opc",
+ "roxmltree",
 ]
 
 [[package]]
@@ -8103,6 +8122,15 @@ checksum = "80804dadbfa2851c95fe45ff9ae8f4328d6371fdc0d51b14740d49a8b41d3758"
 dependencies = [
  "cc",
  "wide",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]

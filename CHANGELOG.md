@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.1.3 (2026-11-11): pairs with kit v0.15.0
+
+**Requires `k2-mpc-base` v0.15.0**, checked out beside this repo. The crate version is `0.1.3`;
+`Cargo.lock` records k2-mpc-base 0.15.0 (only the kit's crate version moves). This pack's own
+code is unchanged from v0.1.2. As for v0.1.2, the tag is a cut commit that leaves out the test
+tooling (`fuzz/`, `scripts/oracle/`).
+
+- Pairs with kit v0.15.0. Its additions are additive or provided methods with defaults (turns,
+  tier 0's `BlobWriteOptions` among them, the pack verb on a change, `Pack::container_of`, the
+  carrier hook, host cache keys); this pack overrides none of them, so PSD and PSB files behave
+  as in v0.1.2. The kit's changes for keyed live docs don't reach this tier-0 pack.
+- `crates/psd/Cargo.toml`'s kit comment names v0.15.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.15.0 and the crate version 0.1.3.
+
 ## v0.1.2 (2026-11-11): pairs with kit v0.14.0
 
 **Requires `k2-mpc-base` v0.14.0**, checked out beside this repo. The crate version is `0.1.2`;

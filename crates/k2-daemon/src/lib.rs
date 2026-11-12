@@ -195,6 +195,7 @@ pub mod product_feedback_diag;
 pub mod product_feedback_drain;
 pub mod product_feedback_routes;
 pub mod project_config_routes;
+pub mod project_group_member_view_routes;
 pub mod project_group_routes;
 pub mod providers;
 // AR6: one owner per nested URL label (claim/point/run/transfer rule).

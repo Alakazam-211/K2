@@ -43,15 +43,18 @@
 #                   the app is never opened
 #   K2SA_OPEN       stands in for /usr/bin/open on the app path (tests of the
 #                   app's capability checks; the stub must never be reached)
-#   K2SA_NOTIFY=0   no macOS notification (osascript is not run)
+#   K2SA_NOTIFY=0   no macOS notification (osascript is not run; test mode,
+#                   K2SIGN_TEST_ROOT set, never runs it either)
 # In test mode (K2SIGN_TEST_ROOT set) with no helper, the app path is refused
 # unless K2SA_OPEN and K2_SIGN_APPROVE_APP are both set: a test never reaches
 # /usr/bin/open or the real app.
 
 k2sa_log() { printf '[sign-approve] %s\n' "$*" >&2; }
-# A macOS notification for the person at the Mac; K2SA_NOTIFY=0 (tests) skips it.
+# A macOS notification for the person at the Mac; K2SA_NOTIFY=0 (tests) skips
+# it, and test mode (K2SIGN_TEST_ROOT) never posts one, even without it.
 k2sa_notify() {
     [ "${K2SA_NOTIFY:-1}" = 0 ] && return 0
+    [ -n "${K2SIGN_TEST_ROOT:-}" ] && return 0
     /usr/bin/osascript -e "display notification \"$1\" with title \"K2 release\"" >/dev/null 2>&1 || true
 }
 k2sa_fail() { printf '\033[1;31m[sign-approve] ERROR: %s\033[0m\n' "$*" >&2; return 1; }

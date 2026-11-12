@@ -146,6 +146,7 @@ check "…and with the open stub but no K2_SIGN_APPROVE_APP" 1 "refusing to open
     "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" k2sa_run_helper "$tmp/none.json" "$tmp/none.der" 0.46.99
 # (Checked by reading the code: running k2sa_notify unstubbed would post one.)
 grep -q '^    \[ "${K2SA_NOTIFY:-1}" = 0 \] && return 0$' "$TREE/scripts/lib/sign-approve.sh" \
+    && grep -q '^    \[ -n "${K2SIGN_TEST_ROOT:-}" \] && return 0$' "$TREE/scripts/lib/sign-approve.sh" \
     && [ "$(grep -v '^[[:space:]]*#' "$TREE/scripts/lib/sign-approve.sh" | grep -c '/usr/bin/osascript')" = 1 ] \
     && [ "$(grep -v '^[[:space:]]*#' "$TREE/scripts/lib/sign-approve.sh" | grep -cE '/usr/bin/open([^a-z]|$)')" = 1 ] \
     && grep -q 'open_cmd="${K2SA_OPEN:-/usr/bin/open}"' "$TREE/scripts/lib/sign-approve.sh" \

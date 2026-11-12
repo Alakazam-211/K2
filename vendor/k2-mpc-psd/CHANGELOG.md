@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.1.5 (2026-11-12): pairs with kit v0.16.0
+
+**Requires `k2-mpc-base` v0.16.0**, checked out beside this repo. The crate version is `0.1.5`;
+`Cargo.lock` records k2-mpc-base 0.16.0 (only the kit's crate version moves). As for v0.1.4, the
+tag is a cut commit that leaves out the test tooling (`fuzz/`, `scripts/oracle/`).
+
+- Pairs with kit v0.16.0. Its changes are additive: the view schema, addresses and view index,
+  the keyed watch (new frames behind the feature `keyed_watch`; wire still 3) with view deltas,
+  roster addresses, and the structure index's row format 2. The pack hooks it adds
+  (`Pack::view_schema`, `view_derive`, `address_of` / `key_of`, `watch_extras`) are provided
+  methods with defaults, and this pack declares none of them. Its index reader hands no view
+  items, so the kit writes its index rows in row format 1, byte for byte as before. No new
+  error id.
+- `crates/psd/Cargo.toml`'s kit comment names v0.16.0; `Cargo.lock` and `fuzz/Cargo.lock`:
+  k2-mpc-base 0.16.0 and the crate version 0.1.5.
+- **The vendored reader's report of lost layers follows its own rule for where the layers are.**
+  `PsdFile::unreadable_layer_block` now looks only at the global block `from_bytes` reads the
+  layers from: `Lr16` in a 16-bit file, `Lr32` in a 32-bit one, else the first `Layr`, `Lr16` or
+  `Lr32`. Before, it looked at the first block with any of those keys. Two kinds of file were
+  reported wrongly. A flat 32-bit file with a malformed `Lr16` block, which a 32-bit file never
+  reads layers from, was reported as having lost its layers. A 16-bit file whose `Lr16` block
+  was malformed, with a readable `Layr` block before it, was reported as having lost nothing.
+  The pack's index was right both times: it reads the first file as flat and refuses the second
+  as unreadable. Only the report was wrong, and nothing the pack ships calls it; this
+  repository's index-against-full-reader comparison does, and the `index_draft` fuzz target
+  found the difference. A marked local change (`vendor/photocraft-psd/VENDORED.md` has its row;
+  `src/file.rs` says so on its first line).
+- The test-only comparison of a records walk with the full reader now also checks that both say
+  the same about lost layers, so the `records_diff` fuzz target holds the two together too.
+- Hand-built regression rows: `a_block_the_depth_never_reads_loses_no_layers` and
+  `a_readable_block_before_the_depths_own_hides_no_loss` (`tests/pack.rs`), and
+  `a_layer_keyed_block_the_depth_never_reads_loses_nothing` (`tests/records.rs`).
+
 ## v0.1.4 (2026-11-12): pairs with kit v0.15.1
 
 **Requires `k2-mpc-base` v0.15.1**, checked out beside this repo. The crate version is `0.1.4`;

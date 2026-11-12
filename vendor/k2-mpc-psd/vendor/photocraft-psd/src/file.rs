@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): `unreadable_layer_block` looks only at the block `from_bytes` reads the layers from.
 //! The top-level [`PsdFile`] model, parser and writer.
 
 use crate::error::{PsdError, Result};
@@ -233,11 +234,19 @@ impl PsdFile {
     /// be parsed, with the parse error. [`Self::from_bytes`] keeps such a block verbatim in
     /// [`Self::global_blocks`] and leaves [`Self::layer_info`] `None`, so the file reads as
     /// flattened; this tells a reader that its layers were lost rather than absent.
+    ///
+    /// The block is the one [`Self::from_bytes`] reads the layers from: `Lr16` in a 16-bit file,
+    /// `Lr32` in a 32-bit one, else the first of the three keys. Any other of those keys is an
+    /// ordinary block, so its failing to parse loses nothing (local change, see VENDORED.md).
     pub fn unreadable_layer_block(&self) -> Option<(&TaggedBlock, PsdError)> {
         if self.layer_info.is_some() {
             return None;
         }
-        let block = self.global_blocks.iter().find(|b| matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr"))?;
+        let block = self.global_blocks.iter().find(|b| match self.header.depth {
+            16 => &b.key == b"Lr16",
+            32 => &b.key == b"Lr32",
+            _ => matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr"),
+        })?;
         LayerInfo::read_body(&block.data, self.header.version).err().map(|e| (block, e))
     }
 

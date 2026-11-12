@@ -14,7 +14,7 @@ use k2_mpc_psd::differential::{compare_index_with_full, Stepped};
 use k2_mpc_psd::pack::{FORMAT, PACK, VERBS};
 use k2_mpc_psd::{index_psd, PsdPack};
 use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
-use photocraft_psd::{testgen, GroupSpec, LayerSpec, PixelData, PsdBuilder};
+use photocraft_psd::{testgen, GroupSpec, LayerSpec, PixelData, PsdBuilder, PsdFile};
 use support::*;
 
 fn limits() -> IndexLimits {
@@ -556,6 +556,58 @@ fn what_is_not_a_psd_and_what_is_broken_are_told_apart() {
         Err(IndexRefused::Read(_)) => {}
         other => panic!("a stream failing midway is a read error: {other:?}"),
     }
+}
+
+/// Which global block holds a file's layers is the depth's: `Lr16` in a 16-bit file, `Lr32` in a
+/// 32-bit one, else the first of `Layr`, `Lr16` and `Lr32` (the full reader's `from_bytes`). Only
+/// that block can lose the layers. Another layer-keyed block is an ordinary block, readable or not.
+/// The index and the full reader's report of lost layers must follow the same rule.
+#[test]
+fn a_block_the_depth_never_reads_loses_no_layers() {
+    let psb = false;
+    // a layer count of one with no record behind it
+    let bad = 1i16.to_be_bytes().to_vec();
+    // 32 bits, no layers in the section, one malformed `Lr16`: a 32-bit file never reads its
+    // layers from `Lr16`, so the file is flat and nothing was lost.
+    let lm = section(psb, &[], &[], &block(b"Lr16", &bad, &[0; 2]));
+    let file = hand_file(psb, 32, &[], &lm);
+    let full = PsdFile::from_bytes(&file).expect("check: the full reader reads the file");
+    assert!(full.layer_info.is_none(), "check: no layers");
+    assert!(
+        full.unreadable_layer_block().is_none(),
+        "a block the depth doesn't read layers from never says the layers were lost"
+    );
+    let d = index_with(&file, &limits()).expect("a flat file indexes");
+    assert!(d.nodes.is_empty());
+    compare_index_with_full(&file).expect("the index agrees with the full reader");
+}
+
+/// The same rule the other way (see above): a readable layer-keyed block before the depth's own
+/// never hides that the depth's own block lost the layers.
+#[test]
+fn a_readable_block_before_the_depths_own_hides_no_loss() {
+    let psb = false;
+    let bad = 1i16.to_be_bytes().to_vec();
+    // 16 bits: a readable `Layr`, then a malformed `Lr16`. The `Lr16` held the layers and lost
+    // them; the readable `Layr` before it changes nothing.
+    let other = layer_info_one(psb, b"other", 1, 1);
+    let blocks = [
+        block(b"Layr", &other, &[0; 2]),
+        block(b"Lr16", &bad, &[0; 2]),
+    ]
+    .concat();
+    let file = hand_file(psb, 16, &[], &section(psb, &[], &[], &blocks));
+    let full = PsdFile::from_bytes(&file).expect("check: the full reader reads the file");
+    assert!(full.layer_info.is_none(), "check: the layers were lost");
+    let (lost, _) = full
+        .unreadable_layer_block()
+        .expect("the full reader says the layers were lost");
+    assert_eq!(&lost.key, b"Lr16", "and names the block that lost them");
+    match index_with(&file, &limits()) {
+        Err(IndexRefused::Unreadable { .. }) => {}
+        other => panic!("expected Unreadable, got {other:?}"),
+    }
+    compare_index_with_full(&file).expect("the index agrees with the full reader");
 }
 
 #[test]

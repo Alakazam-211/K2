@@ -214,6 +214,13 @@ pub fn check_agrees(
             "the walk reports an unreadable layer block but the full reader has layers".into(),
         );
     }
+    if w.unreadable.is_some() != full.unreadable_layer_block().is_some() {
+        return Err(format!(
+            "lost layers: the walk says {}, the full reader {}",
+            w.unreadable.is_some(),
+            full.unreadable_layer_block().is_some()
+        ));
+    }
     if w.layers.len() != want_layers.len() {
         return Err(format!(
             "layer count differs: {} vs {}",

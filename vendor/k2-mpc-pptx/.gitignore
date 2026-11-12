@@ -1,0 +1,5 @@
+target/
+.DS_Store
+# fetched test files and checker output (never committed)
+/.corpus/
+/.checked/

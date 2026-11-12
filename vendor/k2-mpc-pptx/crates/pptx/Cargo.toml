@@ -1,0 +1,38 @@
+[package]
+name = "k2-mpc-pptx"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Reads and writes pptx packages for the K2 multiplayer kit, tier 0.5: slides and shapes by their own ids, a structure index, a three-way merge of saves by shape, and agent verbs that splice only what they change."
+
+[lib]
+name = "k2_mpc_pptx"
+
+[features]
+# Test-only: planted bugs (`mutant::active`), to prove the tests catch them. Never in a build.
+# The switch is the package layer's, so its own planted bugs come on too.
+mutants = ["k2-mpc-opc/mutants"]
+# Test-only: the deck generator our tests, the checker step and the fuzz targets build their
+# fixtures with (`testgen`). Never in a build.
+testgen = []
+
+[dependencies]
+k2-mpc-base = { workspace = true }
+# The package layer shared by the docx, pptx and xlsx packs (k2-mpc-ooxml): the zip reader and
+# byte-exact writer, content types, relationships, the package merge and its `PartMerge` hook.
+k2-mpc-opc = { workspace = true }
+# XML with byte ranges per node and attribute (MIT OR Apache-2.0); DTDs are refused.
+roxmltree = "0.21"
+
+[dev-dependencies]
+# The generator, for this crate's own tests.
+k2-mpc-pptx = { path = ".", features = ["testgen"] }
+# The kit's test-only API for this crate's tests: the carrier pack's byte-exact row
+# (`session::test_support::carrier_judge`), which the pack contract requires of a pack that
+# keeps a carrier.
+k2-mpc-base = { workspace = true, features = ["test-support"] }
+# Test-only judge, independent of this crate's and the package layer's own reader and writer:
+# a second zip reader and writer (MIT), deflate only, no other method or crypto.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

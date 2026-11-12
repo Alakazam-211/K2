@@ -1015,21 +1015,25 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 // (MS3: a path resolves only inside its room's own list).
 registerPrimaryRoomProjects(useProjectsStore)
 
-// Initialize on import
-useProjectsStore.getState().fetchProjects()
-
-// Phase 2.5 fix (finding #547): retry the load if the daemon
-// (re)connects after a failed initial fetch. Plan B — projects-list now
-// goes through the host-aware `daemonCliGet('projects/list')` HTTP layer
-// (local OR remote), and the last-active-session restore inside
-// fetchProjects calls `settingsGet()`; a failure in either causes the
-// catch-all `[projects] fetchProjects failed` log seen in the original
-// finding #547 repro. Re-running once the daemon's WS comes up gets the
-// user a real restore instead of "first project".
-onDaemonConnected(() => {
-  if (hasLoadedFromDaemon) return
+/** The first projects load, and its retry when the daemon (re)connects.
+ *  `bootStores()` (boot-stores.ts) calls this once at app start. It does
+ *  not run at import: a test that imports this store fires no fetch. */
+export function bootProjects(): void {
   useProjectsStore.getState().fetchProjects()
-})
+
+  // Phase 2.5 fix (finding #547): retry the load if the daemon
+  // (re)connects after a failed initial fetch. Plan B — projects-list now
+  // goes through the host-aware `daemonCliGet('projects/list')` HTTP layer
+  // (local OR remote), and the last-active-session restore inside
+  // fetchProjects calls `settingsGet()`; a failure in either causes the
+  // catch-all `[projects] fetchProjects failed` log seen in the original
+  // finding #547 repro. Re-running once the daemon's WS comes up gets the
+  // user a real restore instead of "first project".
+  onDaemonConnected(() => {
+    if (hasLoadedFromDaemon) return
+    useProjectsStore.getState().fetchProjects()
+  })
+}
 
 // #625 — on a real active-host CHANGE, re-run the active-project /
 // active-workspace restore against the NEW host. The projects LIST

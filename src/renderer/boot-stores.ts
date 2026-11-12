@@ -9,8 +9,10 @@
  *
  * Keep the order: it is the order the entry's imports ran these in.
  */
+import { bootProjects } from './stores/projects'
 import { bootSettings } from './stores/settings'
 
 export function bootStores(): void {
   bootSettings()
+  bootProjects()
 }

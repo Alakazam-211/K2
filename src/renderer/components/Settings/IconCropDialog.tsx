@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { DialogCloseButton, DialogScrim, useDialogCancel } from '@/components/ui'
+import { clientToCssPx } from '@/lib/app-zoom'
 
 interface IconCropDialogProps {
   imageDataUrl: string
@@ -69,9 +70,11 @@ export default function IconCropDialog({
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!dragging) return
+    // The pointer moves in on-screen px; the canvas is drawn in CSS px,
+    // which the app zoom scales (lib/app-zoom).
     setOffset({
-      x: dragStart.current.ox + (e.clientX - dragStart.current.x),
-      y: dragStart.current.oy + (e.clientY - dragStart.current.y)
+      x: dragStart.current.ox + clientToCssPx(e.clientX - dragStart.current.x),
+      y: dragStart.current.oy + clientToCssPx(e.clientY - dragStart.current.y)
     })
   }, [dragging])
 

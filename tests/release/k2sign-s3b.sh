@@ -426,6 +426,10 @@ bundle envval "$S2" build-a "{\"plan.env\": {\"BUILD_COMMIT\": \"$T\", \"BUILD_T
 register "H1 BUILD_COMMIT is not the commit it ran" 3 "BUILD_COMMIT/BUILD_TREE are not the commit and tree it ran" 0.47.2 envval
 bundle planarts "$S2" build-a '{"plan.artifacts": ["dist/*", "../*"]}'
 register "H1 other artifact globs" 3 "the plan collects" 0.47.2 planarts
+bundle plangpu "$S2" build-a '{"plan.gpu": {"kind": "any"}}'
+register "H1 a GPU job (--gpu)" 3 "L1: the plan asks for a GPU (--gpu)" 0.47.2 plangpu
+bundle plangpumem "$S2" build-a '{}' build-b '{"plan.gpu_mem": 4294967296}'
+register "H1 …a GPU memory budget alone, on V1" 3 "V1: the plan asks for a GPU (--gpu)" 0.47.2 plangpumem
 bundle planfield "$S2" build-a '{"plan.future_switch": 1}'
 register "H1 a plan field the signer doesn't know" 3 "the plan has fields the signer doesn't know: future_switch" 0.47.2 planfield
 bundle planargv "$S2" build-a '{"plan.argv": ["bash", "-c", "x"]}'

@@ -1189,7 +1189,7 @@ COMPUTE_PLAN_ENV = ("BUILD_COMMIT", "BUILD_TREE")
 PLAN_KEYS = {"job_id", "node_id", "workspace_id", "workspace_label", "requested_by", "argv", "env", "cwd", "limits",
              "src", "exclusive", "created_at", "needs", "artifacts", "stall_secs", "class", "session_id", "est_secs",
              "est_p90_secs", "ws_max_running", "secret_env", "tier", "cache", "src_path", "with", "submitter",
-             "submitter_max_running", "packages", "git_access", "receipt_v"}
+             "submitter_max_running", "packages", "git_access", "receipt_v", "gpu", "gpu_mem"}
 TOOLCHAIN_CHANNEL_RE = re.compile(r'^\s*channel\s*=\s*"([0-9A-Za-z][0-9A-Za-z.-]{0,63})"\s*$', re.M)
 # The DER header of a P-256 SubjectPublicKeyInfo (k2-node-proto crypto.rs).
 P256_SPKI_PREFIX = bytes.fromhex("3059301306072a8648ce3d020106082a8648ce3d030107034200")
@@ -1390,6 +1390,8 @@ def check_plan(label, plan, rc, pol, argv, want_needs):
     if plan.get("receipt_v") is not None:
         raise Refused("%s: the plan asks for receipt v%r: this signer checks v1 receipts only (the S3b path; "
                       "receipt v2 is k2-signer's, docs/ci-formats-v1.md)" % (label, plan["receipt_v"]))
+    if plan.get("gpu") is not None or plan.get("gpu_mem") is not None:
+        raise Refused("%s: the plan asks for a GPU (--gpu): the release build never does" % label)
     if plan.get("exclusive") is not True:
         raise Refused("%s: the job was not exclusive: other jobs (its own workspace's too) could run beside it on the "
                       "node, as its uid, while the OAuth values were in its env (k2 compute run --exclusive)" % label)

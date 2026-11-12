@@ -6,3 +6,15 @@
 # Vendored Zen libraries keep their exact upstream bytes (seven LICENSE.txt
 # files there mix CRLF and LF).
 src/renderer/zen-lib/** -text
+
+# Generated files (scripts/regen.sh writes them): GitHub folds them in
+# diffs. On a merge conflict take either side, then run scripts/regen.sh.
+crates/k2-core/src/app_surface.rs linguist-generated
+sdk/generated/** linguist-generated
+sdk/server/dist/** linguist-generated
+sdk/server/src/generated/** linguist-generated
+src/renderer/lib/k2-caps.generated.ts linguist-generated
+src/renderer/lib/zen/zen-verbs.generated.ts linguist-generated
+src/renderer/styles.generated.css linguist-generated
+src/renderer/styles.generated.ts linguist-generated
+src/shared/cli-catalog.generated.json linguist-generated

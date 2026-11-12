@@ -26,7 +26,7 @@ says which it speaks in `welcome.wire`; a welcome without it is wire 2.
 | Wire | Kits | What it added |
 |---|---|---|
 | 2 | v0.9.8 to v0.14.0 | the frames below without the wire-3 items (K2 pins its frames to this one) |
-| 3 | after v0.14.0 | every addition is a field, a roster event kind, a client frame behind a feature name, or a welcome field: a change's `turn` and `verb`; the roster's `focus` and `range` (event kinds, and fields on entries and devices); the claim events' `actor` and times (`started_ms`; `at_ms` and `at_rev` on `claim_ended`); the client frames `focus` and `range` (features `focus` and `range`); `welcome.wire` |
+| 3 | after v0.14.0 | every addition is a field, a roster event kind, a client frame behind a feature name, or a welcome field: a change's `turn` and `verb`; the roster's `focus` and `range` (event kinds, and fields on entries and devices); the claim events' `actor` and times (`started_ms`; `at_ms` and `at_rev` on `claim_ended`); the client frames `focus` and `range` (features `focus` and `range`); `welcome.wire`; and, after v0.15.1, [the keyed watch](#the-keyed-watch) (feature `keyed_watch`: the client frames `watch` and `report`, the host frames `keyed_snapshot`, `keyed_page`, `ops_change` and `watch_refused`), with its [view deltas](#view-deltas) (`units`, `containers_changed` and `containers` on `ops_change`; `composite` in the snapshot's `schema`); and the roster's elements [by address](#presence-frames), filled by the kit |
 
 **N−1, both ways.** Nothing in wire 3 changes or removes a wire-2 field, frame or meaning:
 
@@ -34,6 +34,23 @@ says which it speaks in `welcome.wire`; a welcome without it is wire 2.
   kinds it doesn't know ([the rule above](#the-hunk-channels-frames)); it never sends `focus` or
   `range`, and a host never needs them. It shows no focus or range, groups nothing by turn, and
   names no verb.
+- **A client before the keyed watch** (wire 3 up to v0.15.1) never sends `watch`, so a host never
+  sends it the watch's frames; one that got them anyway ignores them (frame types it doesn't know).
+  **A client with it on an older host** (no `keyed_watch` in `welcome.features`) sends nothing
+  and has no keyed state. The keyed watch is additive within wire 3: `WIRE_VERSION` stays 3.
+- **View deltas** (after v0.15.1) are fields on `ops_change` and in the snapshot's `schema`.
+  **A client before them** ignores the fields; its `view` stays as the snapshot gave it, as
+  before. **A client with them on a kit before them** (no `units` or `containers_changed` on a
+  change, or no `schema.composite`) keeps the snapshot's view, applies no change to it, and says
+  so: `KeyedWatch.viewCurrent` is `false` until the next snapshot. The keyed state is applied the
+  same either way.
+- **Elements by address in the roster** (after v0.15.1): the kit fills each selection's,
+  focus's, range's and element claim's addresses, and the wire carries them as `keys` / `key`.
+  With a pack whose addresses are its keys (the default, `Pack::address_of`) they are the same
+  strings as before, byte for byte, so **a client of either age sees no change**. With a pack
+  that maps them (a deck's `s256-7` is `@sld:256/sp:7`), a client always got addresses where a
+  host converted them; a host on a kit before this converted them itself
+  (`Session::address_of`), and on this kit sends the kit's.
 - **A wire-3 client on a wire-2 host** (no `welcome.wire`, no `focus` or `range` in
   `welcome.features`): it sends no `focus` or `range` frame (the setters record the value, and
   send it on a later connection whose host lists the feature, as for `presence`); a change event
@@ -190,8 +207,21 @@ They sit outside the doc's numbering: none of them takes or moves a version.
   the focus** to its element's container (the pack's `container_of`). A range is **never
   moved**: when its field changes (anyone's change) or its element stops being live, the kit
   drops it (`range: null` on the roster), and the client sends a new one.
-- Keys are the live store's own today; the contract's addresses (`@sld:256`) arrive with its
-  gap 2, converted by the kit at its edge.
+- **Elements by address.** On the wire an element is named by its address (`@sld:256`,
+  `@sld:256/sp:4`), the pack's `Pack::address_of` of its key (by default the key itself, so a
+  pack that maps nothing sees no change). The host converts at the kit's edge: the setters by
+  address (`set_selection_at`, `set_focus_at`, `set_range_at`, `claim_elems_at`) take what the
+  client sent and return what they set by address; `Session::resolve_address(conn, address)`
+  and `Session::address_of(root, key)` convert either way. **Out, the kit converts** (after
+  v0.15.1): every selection, focus, range and element claim it hands out (the roster's rows and
+  devices, `Snapshot`, the `selection`, `focus`, `range` and `claim_started_elems` events, the
+  setters' replies, `ClaimInfo`) carries its elements' addresses beside the keys
+  (`ElemSelection::addresses`, `ElemFocus::address`, `ElemRange::address`,
+  `ClaimInfo::addresses`, `RosterEvent::ClaimStartedElems::addresses`), and the host sends those
+  as the wire's `keys` / `key`; it calls no `address_of` per frame. They are the keys themselves
+  for a pack that maps nothing, so the wire is unchanged there. Two values are equal by their
+  keys (the addresses follow from them). The keyed watch's frames carry addresses already ([The
+  keyed watch](#the-keyed-watch)).
 
 - `keys` are element keys of `root`, a MovableList root: at most 256 (`MPC-E310`), each live
   (`MPC-E114`, which also covers a root that isn't a list). No keys means clear. Coordinates are
@@ -242,6 +272,7 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `claims` | `claim`, `release` |
 | `focus` (wire 3) | `focus` |
 | `range` (wire 3) | `range` |
+| `keyed_watch` (wire 3, after v0.15.1) | `watch`, `report` ([The keyed watch](#the-keyed-watch)) |
 
 ## Claim frames
 
@@ -295,6 +326,7 @@ this spec, no socket.
 | `presence_refused` | `req`, `error` | a presence or claim frame refused; nothing changed ([Presence frames](#presence-frames), [Claim frames](#claim-frames)) |
 | `error` | `error` | a client frame the host couldn't take that has no `op` to answer (over the cap, unreadable) |
 | `closed` | `reason`, `code?`, `path?`, `error?` | the last frame; then the host closes the socket ([Closing](#closing)) |
+| `keyed_snapshot`, `keyed_page`, `ops_change`, `watch_refused` | see [The keyed watch](#the-keyed-watch) | the keyed watch's frames, only on a connection whose host lists `keyed_watch` |
 
 - `event` is the kit's `ChangeEvent`: `{version, pid, client, via, kind, root, hunks, at_ms,
   on_behalf_of}` (`pid` and `on_behalf_of` are opaque handles for App viewers, K5; `kind`
@@ -628,8 +660,11 @@ even after the claimant left:
   start, its `focus` goes to the claim's first container in document order and its
   `selection` is **replaced** by the claimed keys (in the order it gave them). A person's claim
   leaves their presence alone. Later calls override both.
-- The contract's `scope` and `container` fields come with its view schema (gap 1); keys are the
-  live store's own until its addresses (gap 2).
+- The contract's `scope` and `container` fields follow from the pack's view schema
+  (`Pack::view_schema`: which list root holds the containers, which the units); a claim's keys
+  go out as addresses, as every element on the wire: the kit fills them
+  (`RosterEvent::ClaimStartedElems::addresses`, a snapshot's `ClaimInfo::addresses`) and the host
+  sends them as `keys` ([Presence frames](#presence-frames)).
 
 ### Selection, pointer and viewport in the roster
 
@@ -790,6 +825,160 @@ never coalesced. Every field is always present, on both kinds.
   restart doesn't.
 - **Logs.** The kit's `Debug` doesn't print `yours`, `file` or `message`'s text; don't log
   `message` yourself. The audit entry holds no content.
+
+## The keyed watch
+
+What a person watching a live keyed doc that isn't a table (a deck, a board) needs: its keyed state,
+then every change as it lands. Data only: a view (the host's) draws from it. The kit's side is
+`Session::watch_keyed`, `Session::watch_snapshot` and `KeyedWatch` (`session/live/watch.rs`); the
+client's is `KeyedWatch` (`src/keyed.ts`). A text doc has the hunk channel instead, and a table
+its own frames: `Session::keyed_watchable` says which docs have it.
+
+**The gate.** A host lists `"keyed_watch"` in `welcome.features` only for a doc that has it. A
+client sends `watch` and `report` only when it is listed; a host that doesn't list it never sends
+the frames below (the kit gives it no watch: `watch_keyed` with options built from that
+connection's features returns none).
+
+**Client → host** (no `op`, no `req`; no reply but the frames below):
+
+| `type` | Fields | The kit's call |
+|---|---|---|
+| `watch` | | the first frame on a connection that lists the feature, and again after a gap: open the watch if there is none (`watch_keyed`), then send `watch_snapshot`'s frames |
+| `report` | `seq` | the last numbered frame the client applied; after each whole snapshot and every 64 changes (`REPORT_EVERY`). A host may ignore it on this engine |
+
+**Host → client, numbered.** Every frame of the watch takes the next `seq` on this connection, from
+1: a snapshot's head, each of its pages, each change. Presence, roster and claim frames are never
+numbered and never counted. A client that sees a `seq` other than the next one (a lost frame)
+asks again (`watch`) and drops every frame until a snapshot's head; a frame that doesn't fit its
+state (an op on what isn't there, a change at or before its version) is treated the same way.
+Nothing is guessed.
+
+| `type` | Fields | What |
+|---|---|---|
+| `keyed_snapshot` | `seq`, `upto`, `schema {name, roots: [{name, kind}], composite: [{map, list}]}`, `view`, `pages` | the doc at version `upto` follows in `pages` pages; `kind` is `text`, `list` or `map`; `composite` the map roots whose keys are a list's elements' fields (`Pack::composite`; after v0.15.1). `view`: the view index's snapshot at `upto` when the pack declares a view schema (`ViewSnapshot::to_value`: the view schema, `tier`, `rev`, `page`, `fonts`, `layouts`, `containers`), else `null`. Always taken, whatever came before: it replaces the client's state |
+| `keyed_page` | `seq`, `upto`, `page` (from 1), `pages`, `root`, and one of `live`, `hidden`, `entries`, `text`, `units` | the keyed state's runs, one root each, in schema order: `live` `[[address, value], ...]` (elements in order, appended), `hidden` (deleted elements), `entries` `[[key, field, value], ...]` (map entries, split as ops are), `text` (appended); then the view index's units, container by container: `units` `{container, from, units, next, total}` (`ViewIndex::units_page`; `root` is the units root) |
+| `ops_change` | `seq`, `rev`, `at_ms`, `change_kind`, `actor {id, name, kind, colour}`, `client`, `via`, `on_behalf_of`, `turn`, `verb`, `claim`, `ops`, then for a pack with a view schema `units`, `containers_changed` and `containers` ([View deltas](#view-deltas)), then `derived`, `render_hashes` | one committed change, now at version `rev` |
+| `watch_refused` | `error` | unnumbered: the host can't serve the watch (`MPC-E401`, below) |
+
+- **The snapshot is the fallback for everything:** a client's gap, a reconnect (numbering starts
+  again at 1 on every connection), a watch that fell behind (its queue of
+  `Config::subscriber_queue` changes filled), and a change whose frame would pass the frame cap
+  (it isn't sent; the next frames are a snapshot). `KeyedWatch::needs_snapshot` tells the host
+  when. A change already in a snapshot (at or before its `upto`) is never sent after it.
+- **Pages** are at most the host's page cap of JSON (`WatchOptions::page_bytes`, 1 MiB by default,
+  at least 1 KiB), under the 4 MiB frame; a `units` page is at most the larger of the cap and the
+  view index's least page budget (`VIEW_PAGE_MIN`, 16 KiB), and holds at least one unit. The head
+  holds the view index's snapshot whole (the view schema and every container), under the frame
+  cap. An entry bigger than a page has a page of its own; one
+  whose page would pass the frame cap refuses the snapshot, `MPC-E401` (`declined_too_large`), sent
+  as `watch_refused`. A text root is split at character boundaries.
+- **A catch-up** (the changes since the client's version, when they fit the cap) would answer a
+  `watch` before the snapshot it replaces; it isn't built, so every `watch` gets a snapshot.
+
+- **What the snapshot reads:** the live doc's keyed state and the view index built from it at
+  the same version (`Session::watch_state`; the index as `Session::view_index` gives it). The
+  keyed state is there because the change frames are ops on it; the view index's `view` and
+  `units` are as of the snapshot, and each change frame's [view deltas](#view-deltas) keep them
+  (the client's `KeyedView`); what only the pack works out rides on the frame's `derived`.
+- **Elements by address** everywhere in these frames: a list element is its address
+  (`Pack::address_of`), a composite map key is its element's address, `\x1f`, the field; a plain
+  map's keys are as they are.
+
+**A change frame's fields:**
+
+- `rev`: the doc's version after it (`ChangeEvent.version`); one frame per change, every root it
+  touched in it. `change_kind`: `ChangeKind::as_str` (`edit`, `undo`, `redo`, `revert`, `restore`,
+  `external`, `import`).
+- `actor`: who made it, so a view words it without the roster, even after they left: `id` the pid
+  (an App viewer gets a handle), `name`, `kind` (`person`, `agent`, `app`; **`file`** for an outside
+  save, whose `id` is `kit:external`) and `colour` as the host stamped it (`null` for the file: the
+  host picks its own).
+- `client`, `via`, `on_behalf_of`, `turn`, `verb`: as on `ChangeEvent` (`turn` is `null` for an App
+  viewer).
+- `claim`: the actor's own claim on what it touched (an element it changed, or that element's
+  container), `claim-N`, else `null`.
+- `ops`: every root's, in apply order; ops with no effect are left out, a `drop` is carried:
+  - text: `{root, kind: "text", hunks: [{start, end, insert}]}`, UTF-8 bytes of the root's text
+    before;
+  - list: `{root, kind: "list", op, key, index_before, index_after, before?, after?, effect}`, `key`
+    the element's address: `op`
+    one of `insert`, `move`, `delete`, `restore`, `set`, `drop`; the indexes are positions in the
+    live order just before and just after it (`null`: not shown); `effect` `visible`, or `hidden`
+    for a write to a deleted element (its value, or its place);
+  - map: `{root, kind: "map", op: "set" | "delete", key, field, before?, after?}`: on a root the pack
+    declares composite, `key` is the element's address and `field` the rest of the map key
+    (`<key>\x1f<field>`); otherwise `key` is the whole map key and `field` is `null`.
+  - `before` and `after` are values (a string, or `null` for none) and are left out when the op has
+    none (before an insert, after a map delete).
+- `derived` and `render_hashes`: the pack's (`Pack::watch_extras`): its derived values, opaque, and
+  `{container: hash}` for the containers whose render hash changed; `null` when it gives none.
+  For a pack with a view schema, both are read from the view index before and after the change
+  (`ViewChange`), built through the index the kit keeps for reads; when the pack gives no
+  `render_hashes`, the kit's are the containers whose index render hash changed.
+
+**Applying them** (the client's `KeyedWatch`, and the kit's own live view): a list op's element is
+at `index_before` before it and at `index_after` after it; a delete moves the element and its value
+to the deleted set, a restore back, a `drop` takes it out of the deleted set. The client's state
+compared with the kit's is canonical JSON (`watch_state_json` / `keyedStateJson`): `{"roots":[...]}`,
+each `{name, kind, ...}` in schema order, elements by address, a list's `live` in order and
+`hidden` by address, a map's `entries` by key (a composite one `<address>\x1f<field>`) in UTF-8
+byte order, a text whole; no spaces; strings escaped as the kit's writer
+does: `"`, `\`, `\n`, `\r`, `\t`, then every other control character and U+2028, U+2029 as
+`\u00xx` (lower case), everything else as UTF-8.
+
+**JSON.** Each frame is exactly `WatchFrame::to_json()`. Goldens: `test/golden/keyed_snapshot.json`
+(a snapshot in pages of the smallest cap, and under `view` a deck's with the view index's snapshot
+and units) and `test/golden/keyed_frames.json` (a scripted session's
+frames after its snapshot), written by `crates/base/tests/keyed_watch.rs`; the seeded traces in
+`test/vectors/keyed_watch.json` replay in `test/keyed-watch.test.ts` to the kit's own final state,
+byte for byte.
+
+### View deltas
+
+What a change did to the view, so a watcher keeps its view index without running pack code
+(the rendering-data contract's Item 2). The kit works them out from the change's ops and the
+pack's view schema (`view_delta::view_deltas`), generically; a pack with no view schema gets none
+of the three fields (the frame is as before, byte for byte).
+
+- **`containers_changed`**: `[{key, op, position_before, position_after, hidden_after, fields}]`.
+  One per op on the containers' list, in apply order: `add` (insert), `delete`, `restore`,
+  `reorder` (move), `props` (a new list value), with the container's 1-based positions in the
+  live order just before and just after the op (`null`: not shown). Then one per container whose
+  fields changed: `hide_show` when a visibility field did (the schema's `field_class`, or its
+  hidden field), with `hidden_after`; else `props`; `fields` names them (never values).
+  Positions and `hidden_after` are `null` where they don't apply. A container's fields set by the
+  change that adds it fold into its `add`; one that shifted only because another came or went
+  isn't listed: the order says where it is.
+- **`units`**: `[{key, container, ops, geom_before, geom_after, fields, hidden_after,
+  placeholder_type}]`, one per unit whose place in the view changed, in the order the change
+  first touched them. A unit is **shown** when it is live and its container field names a live
+  container. One that comes into view gets `add` (inserted by this change) or `restore`; one
+  that leaves it `delete`, also when it comes or goes because its container did (or its
+  container's id changed). A shown unit that stays gets one op per kind of change, in this
+  order: `reorder` (moved in the units' list), `move_resize`, `rotate` and `flip` (the geometry
+  field compared part by part: `x`, `y`, `w`, `h`; `rot`; `fh`, `fv`), `text`, `style`,
+  `hide_show` (with `hidden_after`), `props` (a meta field, a new list value, or a new
+  container). `fields`: the fields that changed (on an `add` or a `restore`, every field the
+  change set). `container`: its container's address (before a `delete`, after anything else).
+  `geom_before` / `geom_after`: the geometry field's own string, `null` when the geometry wasn't
+  touched, before an add, after a delete, and for an empty one (a box from a layout).
+  `placeholder_type`: the type part of the schema's placeholder field, or `null`.
+- **`containers`**: the render hint: every container a delta names, then those in
+  `render_hashes`, each once.
+- Ops with no effect and writes to deleted elements give nothing. Several changes committed by
+  one call (an undo of a group) are worked out one by one, each against the doc as it was right
+  after it.
+
+**Applying them** (the client's `KeyedView`, after the frame's ops are in the keyed state):
+containers in order, by their positions (a delta that doesn't fit is an inconsistent frame: a
+fresh snapshot); a container's and a unit's fields are read again from the keyed state for the
+fields named, by the view schema; the geometry from `geom_after`; a unit that comes into view is
+built from the keyed state in its `container`; each container a delta touched lists its shown
+units again in the units' list order (`z` from 0). A view field the pack derives (the schema's
+`derived`) keeps the snapshot's value. The client's view then equals a fresh snapshot's view and
+units, which `test/view-deltas.test.ts` checks against the kit's vectors
+(`test/vectors/view_deltas.json`, written by `crates/base/tests/view_deltas.rs`, which also
+checks every change's deltas against the view index before and after it).
 
 ## What the client guarantees
 

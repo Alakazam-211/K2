@@ -19,7 +19,7 @@ use std::collections::HashMap;
 
 use super::awareness::{ActivityEntry, ClaimInfo, Note, ReservationInfo};
 use super::error::SessionError;
-use super::live::{Blame, ChangeEvent, LogItem};
+use super::live::{Blame, ChangeEvent, LogItem, WatchChange};
 use super::participant::{RosterEntry, RESERVED_PID_PREFIX};
 use super::roster::{RosterEvent, RosterMember, Who};
 
@@ -150,6 +150,16 @@ impl Lens<'_> {
         for h in &mut c.hidden {
             h.relabel(|p| self.pid(p));
         }
+        c
+    }
+
+    /// A keyed watch's change frame: its actor and the person it was made for by handle, no
+    /// turn (as [`Lens::change`]); the actor's name, kind and colour stay, as the roster shows
+    /// them.
+    pub fn watch_change(&mut self, mut c: WatchChange) -> WatchChange {
+        c.actor.id = self.pid(&c.actor.id);
+        c.on_behalf_of = self.opt(c.on_behalf_of.take());
+        c.turn = None;
         c
     }
 
@@ -461,6 +471,7 @@ impl Lens<'_> {
                 claim,
                 root,
                 keys,
+                addresses,
                 note,
                 hold,
                 expires_ms,
@@ -472,6 +483,7 @@ impl Lens<'_> {
                 claim,
                 root,
                 keys,
+                addresses,
                 note,
                 hold,
                 expires_ms,

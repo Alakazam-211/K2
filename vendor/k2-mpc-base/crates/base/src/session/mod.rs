@@ -64,6 +64,7 @@ mod carrier_judge;
 /// `range` (kinds, and fields on entries and devices), the claim events' actor and times, and the
 /// `focus` and `range` client frames. All additive: a version-2 client ignores what it doesn't
 /// know, and a version-3 client sends the new frames only to a host that lists their feature.
+/// The keyed watch ([`KEYED_WATCH_FEATURE`]) is additive within version 3 the same way.
 pub const WIRE_VERSION: u32 = 3;
 
 pub use crate::store::{Approval, ApprovalState};
@@ -86,6 +87,11 @@ pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScop
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
 pub(crate) use live::Shown;
+pub use live::{
+    keyed_state_json, watch_state_json, KeyedWatch, WatchActor, WatchChange, WatchExtras,
+    WatchFrame, WatchOp, WatchOptions, WatchPage, WatchPart, WatchSnapshot, KEYED_WATCH_FEATURE,
+    WATCH_FRAME_MAX, WATCH_PAGE_BYTES, WATCH_PAGE_BYTES_MIN,
+};
 pub use live::{
     AuditReport, AuditViolation, CellBlame, ElemBlame, FacetConflict, GridConflict, GridWrite,
     GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,

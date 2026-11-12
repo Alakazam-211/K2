@@ -65,6 +65,8 @@ pub enum IndexMutant {
     RowParentsUnchecked,
     /// A worker's result is decoded with no bound on what it can allocate.
     NoDecodeBudget,
+    /// A stored row of format 2 drops a node's view geometry (row format 2's items).
+    IndexV2FieldDropped,
     // the read side (A2) and claims by node (A5)
     /// A structure read checks no rights: not read, not history for another version.
     ReadSkipsRights,
@@ -122,6 +124,7 @@ impl IndexMutant {
             "delete-keeps-keys" => Self::DeleteKeepsKeys,
             "row-parents-unchecked" => Self::RowParentsUnchecked,
             "no-decode-budget" => Self::NoDecodeBudget,
+            "index-v2-field-dropped" => Self::IndexV2FieldDropped,
             "read-skips-rights" => Self::ReadSkipsRights,
             "no-budget" => Self::NoBudget,
             "guesses-near-name" => Self::GuessesNearName,
@@ -807,6 +810,102 @@ pub fn with_contract_mutant<R>(mutant: ContractMutant, f: impl FnOnce() -> R) ->
         }
     }
     let _back = Back(CONTRACT_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault in the view index (rendering-data contract gaps 1 to 6, [`crate::view_index`]), so its
+/// tests can show they catch it (`tests/view_index.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ViewMutant {
+    /// The live builder ignores a field the schema names (a unit's `hidden`: every unit shown).
+    SchemaFieldIgnored,
+    /// The kit's inverse of an address ignores the pack's mapping and reads the address as a
+    /// key, so the address it hands out doesn't lead back to the element.
+    AddressNotInverse,
+    /// The live index hands the derive hook no carrier (K1), so what only the file's bytes hold
+    /// is missing from it.
+    DeriveIgnoresCarrier,
+    /// The kept index is reused while the doc changes: its key is the carrier's id alone, not
+    /// (carrier id, rev), so a read after a change gets the index from before it.
+    DeriveCacheStale,
+    /// A keyed watch's change frame carries no render hash of the containers the change
+    /// re-rendered (the kit's, from the view index before and after it).
+    FrameMissesRenderHash,
+    /// The roster's element presence and claims go out with the live store's keys where the
+    /// pack's addresses belong (`Session::roster`, the roster events).
+    RosterKeysLeak,
+}
+
+thread_local! {
+    /// The carrier decodes the view index's derive hook ran on this thread
+    /// ([`crate::view_index::ViewCarrier::decoded`]). A count, never a timing.
+    static CARRIER_DECODES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// One carrier decode by the derive hook ([`crate::view_index::ViewCarrier::decoded`]).
+pub(crate) fn count_carrier_decode() {
+    CARRIER_DECODES.with(|c| c.set(c.get() + 1));
+}
+
+/// This thread's carrier decodes since the last take, reset to 0: how many times a view index
+/// read ran the pack's decode of a carrier ([`crate::view_index::ViewCarrier::decoded`]).
+pub fn take_carrier_decodes() -> u64 {
+    CARRIER_DECODES.with(|c| c.replace(0))
+}
+
+thread_local! {
+    static VIEW_MUTANT: std::cell::Cell<Option<ViewMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The view index fault planted on this thread, if any.
+pub fn view_mutant() -> Option<ViewMutant> {
+    VIEW_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_view_mutant<R>(mutant: ViewMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ViewMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            VIEW_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(VIEW_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A keyed watch's planted fault (`session/live/watch.rs`), installed per thread by
+/// [`with_watch_mutant`], so the watch's rows show they catch it (`tests/keyed_watch.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WatchMutant {
+    /// After a snapshot at `upto`, a change still queued at exactly `upto` goes out as well (the
+    /// comparison is `<`, not `<=`): the watcher applies it twice.
+    SnapshotOffByOne,
+    /// A unit delta's geometry after is its geometry before (`crate::view_delta`): a watcher
+    /// keeps the old box.
+    DeltaGeomStale,
+}
+
+thread_local! {
+    static WATCH_MUTANT: std::cell::Cell<Option<WatchMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The watch fault planted on this thread, if any.
+pub fn watch_mutant() -> Option<WatchMutant> {
+    WATCH_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_watch_mutant<R>(mutant: WatchMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<WatchMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            WATCH_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(WATCH_MUTANT.with(|m| m.replace(Some(mutant))));
     f()
 }
 

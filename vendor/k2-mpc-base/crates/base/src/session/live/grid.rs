@@ -277,6 +277,10 @@ impl VerbHistory for LockedHistory<'_> {
         self.st.version
     }
 
+    fn synced(&self) -> Option<Seq> {
+        self.st.disk.as_ref().map(|d| d.synced_seq)
+    }
+
     fn last_write(&self, root: &str, key: &str, facet: Facet) -> Option<ElemBlame> {
         if !self.allowed {
             return None;
@@ -4002,6 +4006,7 @@ impl Session {
         st.last_change_ms = now;
         st.version = seq;
         self.view_after(st, before_seq, seq, &a.stream, &[]);
+        self.flush_watch(st);
         self.grid_presence_after(st, None, &a.stream, now);
         self.elem_presence_after(st, Some(&a.stream));
         st.log_entries += 1;

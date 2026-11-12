@@ -236,3 +236,11 @@ if (presence.claimsSupported) {
 
 A selection is by key, so it needs no mapping through changes. A key whose element stops being live
 leaves it, for everyone, and doesn't come back if the element does.
+
+**Elements by address.** Every `key` and `keys` on these frames, both ways, is the element's
+address (`@sld:256/sp:4` on a deck; the key itself for a pack that maps none): what you send to
+`setSelection`, `setFocus`, `setRange` and `claim`, and what the roster's `selection`,
+`focus`, `range`, `claim_started_elems` and `elem_claims` carry. The kit converts at its
+edge, in and out (after v0.15.1 it fills the roster's addresses itself; WIRE.md, Presence
+frames), so the client keeps no mapping and compares them as the opaque strings they are. Nothing
+changes for a doc whose pack maps nothing: the strings are the keys, as before.

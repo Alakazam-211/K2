@@ -521,7 +521,7 @@ impl Session {
     pub(super) fn any_claim_info(&self, st: &State, k: usize, now: u64) -> Result<ClaimInfo> {
         let c = &st.aware.claims[k];
         if c.elems.is_some() {
-            return Ok(Self::elem_claim_info(st, c, now));
+            return Ok(self.elem_claim_info(st, c, now));
         }
         if c.grid.is_some() {
             let g = self.grid_now(st)?;

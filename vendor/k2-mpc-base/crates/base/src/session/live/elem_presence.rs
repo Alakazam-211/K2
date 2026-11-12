@@ -77,6 +77,68 @@ pub(super) fn fold(conns: &[&Member], entry: &mut RosterEntry) {
     }
 }
 
+/// The planted fault [`crate::differential::ViewMutant::RosterKeysLeak`].
+fn planted_roster_keys_leak() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::view_mutant() == Some(crate::differential::ViewMutant::RosterKeysLeak) {
+        return true;
+    }
+    false
+}
+
+/// Elements `keys` of list root `root` by address ([`Pack::address_of`], contract gap 2).
+pub(super) fn addresses<P: Pack + ?Sized>(pack: &P, root: &str, keys: &[Key]) -> Vec<String> {
+    keys.iter().map(|k| address(pack, root, k)).collect()
+}
+
+fn address<P: Pack + ?Sized>(pack: &P, root: &str, key: &Key) -> String {
+    if planted_roster_keys_leak() {
+        return key.as_str().to_owned();
+    }
+    pack.address_of(root, key)
+}
+
+/// A selection, focus and range with their elements' addresses filled in.
+pub(super) fn address_selection<P: Pack + ?Sized>(pack: &P, s: &mut ElemSelection) {
+    s.addresses = addresses(pack, &s.root, &s.keys);
+}
+
+pub(super) fn address_focus<P: Pack + ?Sized>(pack: &P, f: &mut ElemFocus) {
+    f.address = address(pack, &f.root, &f.key);
+}
+
+pub(super) fn address_range<P: Pack + ?Sized>(pack: &P, r: &mut ElemRange) {
+    r.address = address(pack, &r.root, &r.key);
+}
+
+/// A roster row as the kit hands it out: every element its selection, focus, range (its own and
+/// each device's) and element claims name, by address too. The roster, its snapshot and its
+/// events all read their rows here ([`Session::roster`]), so no key reaches the wire where an
+/// address belongs.
+pub(super) fn address_entry<P: Pack + ?Sized>(pack: &P, e: &mut RosterEntry) {
+    let one =
+        |s: &mut Option<ElemSelection>, f: &mut Option<ElemFocus>, r: &mut Option<ElemRange>| {
+            if let Some(s) = s {
+                address_selection(pack, s);
+            }
+            if let Some(f) = f {
+                address_focus(pack, f);
+            }
+            if let Some(r) = r {
+                address_range(pack, r);
+            }
+        };
+    one(&mut e.selection, &mut e.focus, &mut e.range);
+    for d in &mut e.devices {
+        one(&mut d.selection, &mut d.focus, &mut d.range);
+    }
+    for c in &mut e.claims {
+        if let awareness::ClaimSpan::Elems { root, keys } = &c.span {
+            c.addresses = addresses(pack, root, keys);
+        }
+    }
+}
+
 /// The composite map root holding the fields of `list`'s elements ([`Pack::composite`]).
 fn fields_root(composites: &[(&'static str, &'static str)], list: &str) -> Option<&'static str> {
     composites.iter().find(|(_, l)| *l == list).map(|(m, _)| *m)
@@ -151,8 +213,12 @@ impl Session {
         if selection.is_some() {
             m.last_cursor_ms = Some(now);
         }
-        m.elem.selection = selection.clone();
-        Ok(selection)
+        let mut out = selection.clone();
+        m.elem.selection = selection;
+        if let Some(s) = out.as_mut() {
+            address_selection(&*self.pack, s);
+        }
+        Ok(out)
     }
 
     /// Set this connection's pointer, or clear it with `None`. Needs read. Subscribers get the
@@ -181,6 +247,81 @@ impl Session {
         Ok(())
     }
 
+    /// [`Session::set_selection`] by address ([`Pack::address_of`], contract gap 2): every
+    /// address names a live element of one list root ([`Session::resolve_address`]); none clears
+    /// it. Returns the selection as stored, by address.
+    pub fn set_selection_at(&self, conn: ConnId, addresses: &[String]) -> Result<Vec<String>> {
+        let selection = match addresses {
+            [] => None,
+            _ if addresses.len() > ELEM_SELECTION_MAX => {
+                return Err(SessionError::SelectionTooLarge {
+                    len: addresses.len(),
+                    max: ELEM_SELECTION_MAX,
+                })
+            }
+            _ => {
+                let mut root: Option<String> = None;
+                let mut keys = Vec::with_capacity(addresses.len());
+                for a in addresses {
+                    let (r, k) = self.resolve_address(conn, a)?;
+                    match &root {
+                        Some(x) if *x != r => {
+                            return Err(SessionError::BadPosition(format!(
+                                "{a} is in {r:?}, not {x:?}: a selection is in one root"
+                            )))
+                        }
+                        Some(_) => {}
+                        None => root = Some(r),
+                    }
+                    keys.push(k);
+                }
+                let root = root.expect("one address at least");
+                Some(ElemSelection::new(root, keys))
+            }
+        };
+        let out = self.set_selection(conn, selection)?;
+        Ok(out.map_or_else(Vec::new, |s| {
+            s.keys
+                .iter()
+                .map(|k| self.pack.address_of(&s.root, k))
+                .collect()
+        }))
+    }
+
+    /// [`Session::set_focus`] by address (contract gap 2): the address names a live element
+    /// ([`Session::resolve_address`]); `None` clears it. Returns the focus as stored, by
+    /// address.
+    pub fn set_focus_at(&self, conn: ConnId, address: Option<&str>) -> Result<Option<String>> {
+        let focus = match address {
+            None => None,
+            Some(a) => {
+                let (root, key) = self.resolve_address(conn, a)?;
+                Some(ElemFocus::new(root, key))
+            }
+        };
+        let out = self.set_focus(conn, focus)?;
+        Ok(out.map(|f| self.pack.address_of(&f.root, &f.key)))
+    }
+
+    /// [`Session::set_range`] by address (contract gap 2): `(address, field, anchor, head)`, the
+    /// element by address ([`Session::resolve_address`]); `None` clears it. Returns the stored
+    /// range's element by address.
+    pub fn set_range_at(
+        &self,
+        conn: ConnId,
+        range: Option<(&str, &str, usize, usize)>,
+    ) -> Result<Option<String>> {
+        let range = match range {
+            None => None,
+            Some((a, field, anchor, head)) => {
+                let (root, key) = self.resolve_address(conn, a)?;
+                Some(ElemRange::new(root, key, field, anchor, head))
+            }
+        };
+        let out = self.set_range(conn, range)?;
+        Ok(out.map(|r| self.pack.address_of(&r.root, &r.key)))
+    }
+
     /// Set the container this connection has in view (rendering-data contract Item 3), or
     /// clear it with `None`. Needs read. The root must be a MovableList and the key a live
     /// element of it ([`SessionError::BadPosition`] otherwise; the focus stays as it was). A
@@ -196,8 +337,12 @@ impl Session {
         if let Some(f) = &focus {
             self.check_live_elem(st, &f.root, &f.key)?;
         }
-        st.members[i].elem.focus = focus.clone();
-        Ok(focus)
+        let mut out = focus.clone();
+        st.members[i].elem.focus = focus;
+        if let Some(f) = out.as_mut() {
+            address_focus(&*self.pack, f);
+        }
+        Ok(out)
     }
 
     /// Set this connection's caret or selection inside one element's text field (rendering-data
@@ -253,8 +398,10 @@ impl Session {
                 m.elem.focus = Some(f);
             }
         }
-        m.elem.range = Some(r.clone());
-        Ok(Some(r))
+        let mut out = r.clone();
+        m.elem.range = Some(r);
+        address_range(&*self.pack, &mut out);
+        Ok(Some(out))
     }
 
     /// After a pack verb's change by member `i` landed (contract Item 3, gap 11; `named`: what
@@ -323,12 +470,61 @@ impl Session {
         Ok(())
     }
 
-    /// The focus on the container of element `key` of `root` ([`Pack::container_of`]), when the
-    /// pack names one that is a live element of a list root.
+    /// The focus on the container of element `key` of `root`, when that is a live element of a
+    /// list root. With a view schema ([`Pack::view_schema`], contract gap 1) a unit's container
+    /// is the one its container field names ([`Session::schema_container`]) and a container is
+    /// its own; any other root's (or a pack's without a schema) is [`Pack::container_of`]'s.
     pub(super) fn container_focus(&self, st: &State, root: &str, key: &Key) -> Option<ElemFocus> {
-        let (croot, ckey) = self.pack.container_of(root, key)?;
+        let (croot, ckey) = match self.pack.view_schema() {
+            Some(vs) if root == vs.units => self.schema_container(st, &vs, key)?,
+            Some(vs) if root == vs.containers => (root.to_owned(), key.clone()),
+            _ => self.pack.container_of(root, key)?,
+        };
         self.check_live_elem(st, &croot, &ckey).ok()?;
         Some(ElemFocus::new(croot, ckey))
+    }
+
+    /// The container unit `key` is in, through the view schema: the value of its
+    /// `unit_container_field` is the container's key, or, with a `container_id_field`, the
+    /// value of that field of the container. The pack's [`Pack::container_of`] is tried first
+    /// as a hint (checked: its container must hold that id), so a pack that names containers by
+    /// key costs one field read; otherwise the live containers are read in order and the first
+    /// that holds the id is it.
+    pub(super) fn schema_container(
+        &self,
+        st: &State,
+        vs: &crate::view_index::ViewSchema,
+        key: &Key,
+    ) -> Option<(String, Key)> {
+        let composites = self.pack.composite();
+        let read = |map: &str, k: &Key, field: &str| match st.doc.map_get(map, &field_key(k, field))
+        {
+            Ok(Some(crate::elem::Value::Str(s))) => Some(s),
+            _ => None,
+        };
+        let id = read(
+            fields_root(composites, vs.units)?,
+            key,
+            vs.unit_container_field,
+        )?;
+        let ckey = match vs.container_id_field {
+            None => Key::new(id).ok()?,
+            Some(f) => {
+                let cmap = fields_root(composites, vs.containers)?;
+                let holds = |k: &Key| read(cmap, k, f).is_some_and(|v| v == id);
+                match self.pack.container_of(vs.units, key) {
+                    Some((r, k)) if r == vs.containers && holds(&k) => k,
+                    _ => st
+                        .doc
+                        .list(vs.containers)
+                        .ok()?
+                        .into_iter()
+                        .map(|(k, _)| k)
+                        .find(|k| holds(k))?,
+                }
+            }
+        };
+        Some((vs.containers.to_owned(), ckey))
     }
 
     fn refuse_watcher(&self, st: &State, i: usize) -> Result<()> {
@@ -387,7 +583,7 @@ impl Session {
         for m in members.iter_mut() {
             if !planted_selection_keeps_deleted() {
                 if let Some(s) = m.elem.selection.as_mut() {
-                    let ElemSelection { root, keys } = s;
+                    let ElemSelection { root, keys, .. } = s;
                     keys.retain(|k| live(root, k));
                     if keys.is_empty() {
                         m.elem.selection = None;

@@ -1,0 +1,270 @@
+{
+  "about": "The view deltas of the rendering-data contract goldens (r1.6): turn-frames.json revs 41-46, and cases C, E and F of cases-untested.json, each unit delta with its container added. Hand-made from the contract, not kit output; crates/base/tests/view_deltas.rs replays the same steps on a deck with the contract view schema and compares.",
+  "turn": [
+    {
+      "step": "shape text",
+      "rev": 41,
+      "units": [
+        {
+          "key": "@sld:256/sp:2",
+          "container": "@sld:256",
+          "ops": [
+            "text"
+          ],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": [
+            "text"
+          ],
+          "hidden_after": null,
+          "placeholder_type": "ctrTitle"
+        }
+      ],
+      "containers_changed": [],
+      "containers": [
+        "@sld:256"
+      ]
+    },
+    {
+      "step": "shape move",
+      "rev": 42,
+      "units": [
+        {
+          "key": "@sld:257/sp:7",
+          "container": "@sld:257",
+          "ops": [
+            "move_resize"
+          ],
+          "geom_before": "7000000,2000000,3000000,1000000,1800000,1,0",
+          "geom_after": "7500000,4000000,3000000,1000000,1800000,1,0",
+          "fields": [
+            "geom"
+          ],
+          "hidden_after": null,
+          "placeholder_type": null
+        }
+      ],
+      "containers_changed": [],
+      "containers": [
+        "@sld:257"
+      ]
+    },
+    {
+      "step": "slide add",
+      "rev": 43,
+      "units": [
+        {
+          "key": "@sld:260/sp:2",
+          "container": "@sld:260",
+          "ops": [
+            "add"
+          ],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": [
+            "slide",
+            "fid",
+            "ph",
+            "name",
+            "edit"
+          ],
+          "hidden_after": null,
+          "placeholder_type": "title"
+        },
+        {
+          "key": "@sld:260/sp:3",
+          "container": "@sld:260",
+          "ops": [
+            "add"
+          ],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": [
+            "slide",
+            "fid",
+            "ph",
+            "name",
+            "edit"
+          ],
+          "hidden_after": null,
+          "placeholder_type": "body"
+        }
+      ],
+      "containers_changed": [
+        {
+          "key": "@sld:260",
+          "op": "add",
+          "position_before": null,
+          "position_after": 5,
+          "hidden_after": null,
+          "fields": []
+        }
+      ],
+      "containers": [
+        "@sld:260"
+      ]
+    },
+    {
+      "step": "shape text",
+      "rev": 44,
+      "units": [
+        {
+          "key": "@sld:260/sp:2",
+          "container": "@sld:260",
+          "ops": [
+            "text"
+          ],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": [
+            "text"
+          ],
+          "hidden_after": null,
+          "placeholder_type": "title"
+        }
+      ],
+      "containers_changed": [],
+      "containers": [
+        "@sld:260"
+      ]
+    },
+    {
+      "step": "slide move",
+      "rev": 45,
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@sld:259",
+          "op": "reorder",
+          "position_before": 4,
+          "position_after": 3,
+          "hidden_after": null,
+          "fields": []
+        }
+      ],
+      "containers": [
+        "@sld:259"
+      ]
+    },
+    {
+      "step": "shape text",
+      "rev": 46,
+      "units": [
+        {
+          "key": "@sld:260/sp:3",
+          "container": "@sld:260",
+          "ops": [
+            "text"
+          ],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": [
+            "text"
+          ],
+          "hidden_after": null,
+          "placeholder_type": "body"
+        }
+      ],
+      "containers_changed": [],
+      "containers": [
+        "@sld:260"
+      ]
+    }
+  ],
+  "cases": {
+    "C": [
+      {
+        "step": "slide hide",
+        "rev": 47,
+        "units": [],
+        "containers_changed": [
+          {
+            "key": "@sld:258",
+            "op": "hide_show",
+            "position_before": null,
+            "position_after": null,
+            "hidden_after": true,
+            "fields": [
+              "hidden"
+            ]
+          }
+        ],
+        "containers": [
+          "@sld:258"
+        ]
+      }
+    ],
+    "E": [
+      {
+        "step": "shape delete",
+        "rev": 47,
+        "units": [
+          {
+            "key": "@sld:260/sp:3",
+            "container": "@sld:260",
+            "ops": [
+              "delete"
+            ],
+            "geom_before": null,
+            "geom_after": null,
+            "fields": [],
+            "hidden_after": null,
+            "placeholder_type": "body"
+          }
+        ],
+        "containers_changed": [],
+        "containers": [
+          "@sld:260"
+        ]
+      },
+      {
+        "step": "undo",
+        "rev": 48,
+        "units": [
+          {
+            "key": "@sld:260/sp:3",
+            "container": "@sld:260",
+            "ops": [
+              "restore"
+            ],
+            "geom_before": null,
+            "geom_after": null,
+            "fields": [],
+            "hidden_after": null,
+            "placeholder_type": "body"
+          }
+        ],
+        "containers_changed": [],
+        "containers": [
+          "@sld:260"
+        ]
+      }
+    ],
+    "F": [
+      {
+        "step": "outside save",
+        "rev": 47,
+        "units": [
+          {
+            "key": "@sld:257/sp:7",
+            "container": "@sld:257",
+            "ops": [
+              "hide_show"
+            ],
+            "geom_before": null,
+            "geom_after": null,
+            "fields": [
+              "hidden"
+            ],
+            "hidden_after": true,
+            "placeholder_type": null
+          }
+        ],
+        "containers_changed": [],
+        "containers": [
+          "@sld:257"
+        ]
+      }
+    ]
+  }
+}

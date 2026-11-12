@@ -494,6 +494,9 @@ pub struct VerbCtx<'a> {
 pub(crate) trait VerbHistory {
     /// The doc's version the verb runs on.
     fn version(&self) -> Seq;
+    /// The doc's sync point: the version its file last held (the kit's last read of the file
+    /// or write to it); `None` for a doc with no file.
+    fn synced(&self) -> Option<Seq>;
     /// The last write to one element facet, attributed; `None` without the history right
     /// or with no write recorded.
     fn last_write(
@@ -557,6 +560,14 @@ impl<'a> VerbCtx<'a> {
     /// The doc's version the verb runs on (`None` outside a session call).
     pub fn version(&self) -> Option<Seq> {
         self.hist.map(|h| h.version())
+    }
+    /// The doc's **sync point**: the version its file last held, as the kit last read the file
+    /// or wrote to it. A change after it isn't in the file yet (unwritten); one at or before it
+    /// is. `None` for a doc with no file, and outside a session call. Needs no history right: a
+    /// pack's verb that must tell written changes from unwritten ones (a spreadsheet's mixed
+    /// row inserts and deletes between two syncs) reads it.
+    pub fn synced(&self) -> Option<Seq> {
+        self.hist.and_then(|h| h.synced())
     }
     /// The last write to one element facet (who, in which change), as `blame` reports it;
     /// `None` if the caller lacks the history right, outside a session call, or with no write

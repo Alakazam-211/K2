@@ -216,17 +216,32 @@ pub const ELEM_SELECTION_MAX: usize = 256;
 /// Elements selected by identity: keys of one MovableList root. It follows moves with no
 /// mapping, and a key whose element stops being live leaves it
 /// ([`super::Session::set_selection`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `addresses` are the same elements by address ([`super::Pack::address_of`], contract gap 2),
+/// in the same order: what the wire carries as the selection's `keys`. The kit fills them on
+/// every selection it hands out (the roster, its events, the setters' replies); [`Self::new`]
+/// starts them as the keys themselves (a pack's default addresses).
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ElemSelection {
     pub root: String,
     pub keys: Vec<crate::elem::Key>,
+    pub addresses: Vec<String>,
 }
+
+/// Equal by identity (root and keys): the addresses follow from the keys through the pack.
+impl PartialEq for ElemSelection {
+    fn eq(&self, o: &Self) -> bool {
+        self.root == o.root && self.keys == o.keys
+    }
+}
+impl Eq for ElemSelection {}
 
 impl ElemSelection {
     pub fn new(root: impl Into<String>, keys: Vec<crate::elem::Key>) -> Self {
         Self {
             root: root.into(),
+            addresses: keys.iter().map(|k| k.as_str().to_owned()).collect(),
             keys,
         }
     }
@@ -238,19 +253,32 @@ impl ElemSelection {
 /// ([`super::Session::claim_elems`]); a text range sets it too
 /// ([`super::Session::set_range`]). It leaves when its element stops being live.
 ///
-/// TODO(contract gap 2): the wire carries addresses (`@sld:256`), which the kit converts to
-/// and from keys at its edge; until then the key is the live store's own.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The key is the live store's own. The wire carries addresses (`@sld:256`, contract gap 2):
+/// [`super::Session::set_focus_at`] takes one and returns the focus by address, and
+/// [`super::Session::address_of`] converts a stored focus ([`super::Pack::address_of`]).
+/// `address` is the element's address, what the wire carries as the focus's `key`: the kit
+/// fills it on every focus it hands out; [`Self::new`] starts it as the key.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ElemFocus {
     pub root: String,
     pub key: crate::elem::Key,
+    pub address: String,
 }
+
+/// Equal by identity (root and key), as [`ElemSelection`].
+impl PartialEq for ElemFocus {
+    fn eq(&self, o: &Self) -> bool {
+        self.root == o.root && self.key == o.key
+    }
+}
+impl Eq for ElemFocus {}
 
 impl ElemFocus {
     pub fn new(root: impl Into<String>, key: crate::elem::Key) -> Self {
         Self {
             root: root.into(),
+            address: key.as_str().to_owned(),
             key,
         }
     }
@@ -263,16 +291,27 @@ impl ElemFocus {
 /// shows UTF-16). It is never moved: when the field changes, or the element stops being live,
 /// it is dropped, and its owner sends a new one ([`super::Session::set_range`]).
 ///
-/// TODO(contract gap 2): addresses on the wire, as for [`ElemFocus`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// By address, as for [`ElemFocus`]: [`super::Session::set_range_at`]; `address` is the
+/// element's, filled by the kit as on [`ElemFocus`].
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ElemRange {
     pub root: String,
     pub key: crate::elem::Key,
+    pub address: String,
     pub field: String,
     pub anchor: usize,
     pub head: usize,
 }
+
+/// Equal by identity (root, key, field and offsets), as [`ElemSelection`].
+impl PartialEq for ElemRange {
+    fn eq(&self, o: &Self) -> bool {
+        (&self.root, &self.key, &self.field, self.anchor, self.head)
+            == (&o.root, &o.key, &o.field, o.anchor, o.head)
+    }
+}
+impl Eq for ElemRange {}
 
 impl ElemRange {
     pub fn new(
@@ -284,6 +323,7 @@ impl ElemRange {
     ) -> Self {
         Self {
             root: root.into(),
+            address: key.as_str().to_owned(),
             key,
             field: field.into(),
             anchor,

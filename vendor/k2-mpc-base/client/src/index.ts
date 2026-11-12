@@ -6,6 +6,9 @@ export type { ChangeInfo, DuplicateRisk, Landed, LiveOptions, LiveTimers, OpId, 
 export { CLAIMS_FEATURE, CLAIM_KEYS_MAX, CLAIM_NOTE_MAX, ClaimRejected, ELEM_SELECTION_MAX, FOCUS_FEATURE, FRAME_MS, PRESENCE_FEATURE, PresenceChannel, RANGE_FEATURE, defaultScheduler, participantKind, rangeToUtf16 } from "./presence";
 export type { ClaimOptions, ClaimRejectedReason, ClaimView, FrameScheduler, InsertHereResult, InsertPreview, InsertRefusal, Mark, MarkPlacement, Participant, ParticipantKind, PresenceChannelOptions, PresenceFrameType, PresencePeer, PresenceRefusal, Range16 } from "./presence";
 export { transform, Bias } from "./position";
+export { KEYED_WATCH_FEATURE, KeyedWatch, REPORT_EVERY, keyedStateJson, mapKey } from "./keyed";
+export type { KeyedRootState, KeyedState, KeyedWatchOptions, ResyncReason } from "./keyed";
+export { KeyedView, VIEW_TEXT_MAX } from "./view";
 export { MAX_CLIENT_ID, MAX_KEY_LEN, MAX_KIT_CLIENT, MAX_PREFIX_LEN, MAX_TAG_LEN, formatKey, markKey, nextFor, parseKey, parseTag, retiredMark, writerTag } from "./mint";
 export type { MintError, TaggedKey } from "./mint";
 export { resolveParents, resolveRef, resolveRefs } from "./refs";
@@ -42,4 +45,20 @@ export type {
   ServerFrame,
   Transport,
   Welcome,
+  KeyedPageFrame,
+  KeyedRootKind,
+  KeyedSchema,
+  KeyedSnapshotFrame,
+  KeyedUnitsPage,
+  KeyedValue,
+  OpsChangeFrame,
+  WatchActor,
+  WatchOp,
+  ContainerDelta,
+  UnitDelta,
+  ViewContainer,
+  ViewSchemaJson,
+  ViewSnapshotJson,
+  ViewSrc,
+  ViewUnit,
 } from "./wire";

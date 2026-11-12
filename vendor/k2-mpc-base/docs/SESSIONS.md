@@ -799,9 +799,10 @@ Carets and views (per connection):
     bytes** of it, on character boundaries. Refused with `MPC-E114`, the range as it was, for a
     root with no composite map, a key that isn't live, a field that isn't a string, and an
     offset off a boundary or past the end.
-  - **A range sets the focus** to its element's container, `Pack::container_of(root, key)`
-    (new, default: the element itself; a deck pack names the shape's slide), so a range is never
-    shown on a container out of view.
+  - **A range sets the focus** to its element's container, so a range is never shown on a
+    container out of view. With a view schema (`Pack::view_schema`, below) a unit's container
+    is the one its container field names, and a container is its own; any other root's (or a
+    pack's with no schema) is `Pack::container_of(root, key)` (default: the element itself).
   - **A range is never moved.** After any change that writes its field (anyone's, its owner's
     too; an outside save; a reload), or when its element stops being live, it is dropped
     (`None`) and its owner sends a new one. A change to another field or element leaves it.
@@ -812,11 +813,20 @@ Carets and views (per connection):
   - The roster carries them: `RosterEntry::focus` and `range`, the same on each `Device`, and
     `RosterEvent::Focus` and `Range`, by the rule for `Selection`. Within a flush a
     participant's focus comes first, then selection, range, pointer and viewport.
-  - Keys are the live store's own. The contract's addresses (`@sld:256`) come with its gap 2.
+  - These setters take the live store's keys. **The same by address** (contract gap 2):
+    `set_focus_at`, `set_selection_at`, `set_range_at` and `claim_elems_at` take the addresses
+    the wire carries (`@sld:256`, `@sld:256/sp:4`) and return what they set by address. An
+    address resolves through `Session::resolve_address(conn, address)` (needs read): the one
+    list root whose `Pack::key_of` takes it and whose element with that key the doc knows;
+    none, or elements of two roots, is `MPC-E114`. `Session::address_of(root, key)` is the
+    other way. A pack maps the two with `Pack::address_of` and its inverse `Pack::key_of`
+    (default: the address is the key); the kit checks every key back, and a mapping that isn't
+    one to one is the pack's bug (`SessionError::Pack`).
   - **An agent's verbs move its presence** (contract Item 3, gap 11). When a pack's verb run
     through `run_tool` changes elements of a keyed doc that isn't a table, the kit sets the
     acting **agent's** focus and selection, on the verb's connection:
-    - **focus:** the container (`Pack::container_of`) of the last element the change touched,
+    - **focus:** the container (through the view schema, else `Pack::container_of`, as for a
+      range) of the last element the change touched,
       in the order of its ops: **the last container touched wins** (`shape move s256-2 s259-3`
       focuses slide 259; the same shapes named the other way round focus 256). An element whose
       container isn't live is passed over; with none, the focus stays as it was;
@@ -831,6 +841,33 @@ Carets and views (per connection):
     - a raw write (`edit_ops`), an undo, a redo, a revert or a restore is no verb and moves
       nothing. Later calls (`set_focus`, `set_selection`, a claim, the next verb) override it,
       and the roster carries it at the next flush.
+- **The view index** (rendering-data contract Item 1; gaps 1 and 3; `k2_mpc_base::view_index`).
+  A pack that has a view declares its **view schema** once (`Pack::view_schema`, default
+  `None`: no view index): the list root of its containers (a deck's slides) and of its units
+  (its shapes), the unit field naming a unit's container (and the container field it matches),
+  where the page size is and in what native unit, which field or list value gives each view
+  field (kind, name, alt, text, hidden, editable text, placeholder; a container's title,
+  hidden and layout), the one geometry field and its parts (`x,y,w,h,rot,fh,fv`), each field's
+  class, and how a version's structure index maps to the same view (`BlobView`).
+  - `Session::view_index(conn)` (needs read) builds the doc's `ViewIndex` at its current change
+    from the live view's keyed state (no copy of the doc): `tier` live, `rev` its version,
+    containers in order, units by container, back to front, each by its address. The pack
+    then sets what only it works out (`Pack::view_derive`: titles, inherited boxes, fonts, a
+    group's children; from the doc's carrier for a pack that keeps one, the live store winning:
+    [The carrier (K1)](#the-carrier-k1)) and the kit puts units in their containers' order and
+    counts them. The index is kept by (carrier id, rev) and a read reuses it until either
+    changes.
+    `BlobSession::view_index(conn, version)` builds the same shape from a version's structure
+    index (`tier` blob, `version` set), with the index reads' rights and refusals. `None` for
+    a pack with no schema (or, on the blob tier, no `BlobView`). A schema that doesn't fit
+    the doc's roots is `SessionError::Pack`.
+  - **For a watch:** `ViewIndex::snapshot()` is everything but the units (with the schema:
+    `ViewSnapshot::to_value(&schema)`); `ViewIndex::units_page(container, from, budget)` reads
+    one container's units in pages of at most `budget` bytes of the page's compact JSON (at
+    least `VIEW_PAGE_MIN`, 16 KiB; any one unit fits), and at least one unit, with `next` for
+    the following page. Reading every page of every container gives the units back in order.
+  - The index holds no raw digest (a container's `render_hash` is a keyed hash), and every
+    name, title, alt text and text summary is cut to `VIEW_TEXT_MAX` (1,024 bytes).
 - Stored positions are byte offsets carried through every change by
   `position::transform`:
   - before a hunk: unchanged;
@@ -1058,7 +1095,8 @@ ClaimInfo` needs edit. "I'm working on lines 40–60."
   (`Edited`, `Deleted`), else `None`.
 - **An agent's claim on elements moves its presence** (`claim_elems`; contract Item 3, Q19): its
   selection is **replaced** by the claimed keys (in the order given), and its focus goes to the
-  claim's first container in document order (`Pack::container_of` of each key; the earliest by
+  claim's first container in document order (each key's, through the view schema, else
+  `Pack::container_of`; the earliest by
   its position in its list). For a deck: a claim on shapes focuses their slide, a claim on
   slides 259 and 258 (positions 4 and 3) focuses 258. A person's claim leaves their presence
   alone. Later calls override both; the roster carries them at the next flush, after the
@@ -2642,6 +2680,38 @@ new format), and an overlay never lands on rows it wasn't made for. Within one f
 written once: the first job or read wins, and a late job (one that outlived a session unload)
 changes nothing already shown.
 
+**The view items (row format 2).** What a view of a version draws that a node's plain fields
+don't say comes from the pack's reader with the rest, so the file is parsed where the reader
+runs (the host's sandboxed worker), never in the session: per node a `NodeView` (its box on the
+page as `ViewGeom`: composed through its groups, or inherited, with rotation, flips and
+`approx`; the field kinds its text holds; the text a view shows, a table's rows or a slide
+number at its position; `editable_text`; the fonts it uses, as indexes) and a render digest
+(`DraftNode::render`, keyed like every digest: `IndexNode::render_hash`), and per doc the fonts
+(`IndexDraft::fonts`). The draft's check bounds them (`INDEX_FONTS_MAX`, words for field kinds,
+the text limit, font indexes the draft lists); on the wire a draft with any goes as version 2,
+one with none as version 1. The blob tier's `ViewIndex` takes them over the plain fields
+(`ViewIndex::blob`).
+
+- **Stored as row format 2** (`INDEX_ROW_FORMAT`): the fonts after the doc's attributes, each
+  node's view and render hash after its fields. A row with none is written as format 1, byte for
+  byte what a kit before them stored, so a pack that hands none sees nothing change. A row of
+  format 1 reads with every item absent (`None`, empty): the view shows the plain fields, fewer
+  details, never other ones. Any other format byte is `Corrupt`.
+- **A pack hands them only from a format it bumped to for them:** `IndexSpec::with_older_format
+  (older)` says this format's rows are format `older`'s plus the items. A draft with items from
+  a spec that names none is refused (`MPC-E714`), nothing recorded. A version whose only row is
+  of format `older` reads from it, `Ready`, the items absent and its minted keys that format's,
+  and `index_job` offers a job that indexes it again under the new format (its commit removes
+  the older row, as any commit does): optional, and until it runs the version shows fewer
+  details.
+- **Older kits (N−1).** A kit before row format 2 never reads one: it asks only for the older
+  format, finds a version indexed only under the new one pending, indexes it under its own
+  format (row format 1), and its commit removes the newer format's row (a commit keeps one
+  format per pack and blob); back here the version reads from that older row, items absent,
+  until indexed again. Had a row of format 2 reached its decoder, it would refuse it as damaged
+  (`Corrupt`): the format bump is what keeps it from getting there. Rows of format 1 this kit
+  writes are its own bytes. `tools/n1/n1.sh layout-index` / `node-index` checks both ways.
+
 **Purge.** The row goes with the blob, and a version's overlay with the version. A
 `purge_space_key` rewrites the store file too (`PurgeReport::index_rows_removed`,
 `store_rewritten`): a space's rows hold names and text, and the key's own bytes must leave the
@@ -3351,8 +3421,35 @@ bytes, the **carrier**, and hands them to the pack (`session/live/carrier.rs`,
   stays as the file's last-written copy, reported as `NotReached::File` with the file and its
   sync replica. A doc delete gives every count back (blob GC removes the blobs past its
   grace).
-- **Never leaves the kit** but to `encode_from`: no read, export, wire or event carries it.
-  What leaves is what `encode_from` returns (the file, a version's file).
+- **Never leaves the kit** but to `encode_from` and the view index's derive hook (below): no
+  read, export, wire or event carries it. What leaves is what `encode_from` returns (the file, a
+  version's file) and what the hook derives from it (a keyed render hash, never a raw digest).
+- **The view index reads it** (`Pack::view_derive`, `view_index::ViewCarrier`). On the live
+  tier the derive hook gets the carrier with the keyed state (`ViewSource::Live(state,
+  carrier)`; `None` for a pack that keeps none, or before the kit holds one), for what only the
+  file's bytes hold: a deck's fonts, each slide's render hash, field kinds, a group's children,
+  the boxes placeholders inherit from their layout.
+  - **The live store wins.** A field the store models is never read from the carrier; an
+    element the carrier holds and the store changed is derived from the store's value (a
+    group's children are placed from the group's live box; a placeholder the store gave a box
+    has that box, not its layout's). The carrier supplies only what the store doesn't model.
+  - **Decoded once per carrier.** The pack decodes it through `ViewCarrier::decoded`, which
+    runs the decode on the first read after the carrier changes and keeps the result with it
+    (test builds count each run: `differential::take_carrier_decodes`). A change of the doc
+    reuses it; only a new carrier (the kit's write, an outside save taken in, a reload, a
+    purge's new doc key) is decoded again.
+  - **Kept by (carrier id, rev).** `Session::view_index` keeps the index it built, by the
+    carrier's id (the keyed hash of its bytes under the doc's key) and the doc's version, and a
+    read gives it back until either changes: N reads of an unchanged doc build nothing and
+    decode nothing. Dropped with the live view (a purge, a reload to another version).
+  - **The keyed watch reads the same kept index:** a snapshot's view index, and each change
+    frame's view of the change (`ViewChange`: the index before and after it, for
+    `Pack::watch_extras`; the kit's `render_hashes` are the containers whose hash changed
+    when the pack gives none). While a watch is open the index is built once per change, and
+    the next read gets it kept.
+  - A render hash the pack works out is keyed under the doc's key (`ViewCarrier::render_hash`)
+    before it goes in the index. `encode_from` is unchanged, and the blob tier reads no file
+    bytes for its view index (its source is the version's structure index).
 - **Reads never render the file.** A structured read verb (a pack's `structured_read`) on a
   keyed doc reads the keyed state and the read's version only: no content copy, no `encode` or
   `encode_from`, no "does the file hold the doc" check. Only a caller that asks for the file's

@@ -6,13 +6,20 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::draft::{IndexDraft, Shape};
 use super::{
-    digest_key, key_digest, Fingerprint, IndexNode, IndexView, KeyClass, NodeHash, NodeKey,
-    NodeRect, NotIndexedWhy,
+    digest_key, get_view_with, key_digest, put_fonts, put_view, Fingerprint, IndexNode, IndexView,
+    KeyClass, NodeHash, NodeKey, NodeRect, NodeView, NotIndexedWhy, INDEX_FONTS_MAX,
+    INDEX_ROW_FORMAT,
 };
 use crate::store::enc::{R, W};
 use crate::store::{StoreError, VersionId};
+use crate::view_index::FontUse;
 
+/// Row format 1: the nodes. A row with no view item is still written so, byte for byte what a
+/// kit before the view items wrote.
 const ROW_VERSION: u8 = 1;
+/// Row format 2 ([`INDEX_ROW_FORMAT`]): the view items too, after the doc's attributes (the
+/// fonts) and after each node's fields (its view and render hash).
+const ROW_VERSION_VIEW: u8 = INDEX_ROW_FORMAT;
 const TAG_READY: u8 = 0;
 const TAG_NOT_INDEXED: u8 = 1;
 const KEYS_VERSION: u8 = 1;
@@ -51,6 +58,8 @@ pub(crate) struct RowNode {
     pub record_hash: NodeHash,
     pub content_hash: Option<NodeHash>,
     pub weak: BTreeMap<String, String>,
+    pub view: Option<NodeView>,
+    pub render_hash: Option<NodeHash>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +67,18 @@ pub(crate) struct ReadyRow {
     pub source: String,
     pub attrs: BTreeMap<String, String>,
     pub nodes: Vec<RowNode>,
+    pub fonts: Vec<FontUse>,
+}
+
+impl ReadyRow {
+    /// Whether the row carries a view item: then it is stored as format 2.
+    pub(crate) fn has_view_items(&self) -> bool {
+        !self.fonts.is_empty()
+            || self
+                .nodes
+                .iter()
+                .any(|n| n.view.is_some() || n.render_hash.is_some())
+    }
 }
 
 /// One `blob_struct` row.
@@ -97,12 +118,15 @@ pub(crate) fn build_row(draft: &IndexDraft, shape: &Shape, space_key: &[u8; 32])
             record_hash: key_digest(&key, &n.record),
             content_hash: n.content.as_ref().map(|d| key_digest(&key, d)),
             weak: n.weak.clone(),
+            view: n.view.clone(),
+            render_hash: n.render.as_ref().map(|d| key_digest(&key, d)),
         })
         .collect();
     ReadyRow {
         source: draft.source.clone(),
         attrs: draft.attrs.clone(),
         nodes,
+        fonts: draft.fonts.clone(),
     }
 }
 
@@ -184,7 +208,7 @@ fn get_hash(b: Vec<u8>) -> Result<NodeHash, StoreError> {
     Ok(NodeHash::from_raw(b))
 }
 
-fn put_node(w: &mut W, n: &RowNode) {
+fn put_node(w: &mut W, n: &RowNode, items: bool) {
     w.opt_str(n.native.as_deref())
         .str(&n.kind)
         .str(&n.name)
@@ -221,9 +245,70 @@ fn put_node(w: &mut W, n: &RowNode) {
         }
     }
     put_map(w, &n.weak);
+    if items {
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::index_mutant()
+            == Some(crate::differential::IndexMutant::IndexV2FieldDropped)
+        {
+            let dropped = n.view.as_ref().map(|v| NodeView {
+                geom: None,
+                ..v.clone()
+            });
+            put_view(w, dropped.as_ref());
+            put_opt_hash(w, n.render_hash.as_ref());
+            return;
+        }
+        put_view(w, n.view.as_ref());
+        put_opt_hash(w, n.render_hash.as_ref());
+    }
 }
 
-fn get_node(r: &mut R<'_>) -> Result<RowNode, StoreError> {
+fn put_opt_hash(w: &mut W, h: Option<&NodeHash>) {
+    match h {
+        None => {
+            w.u8(0);
+        }
+        Some(h) => {
+            w.u8(1);
+            put_hash(w, h);
+        }
+    }
+}
+
+fn get_opt_hash(r: &mut R<'_>) -> Result<Option<NodeHash>, StoreError> {
+    match r.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(get_hash(r.bytes()?)?)),
+        _ => Err(StoreError::Corrupt(WHAT)),
+    }
+}
+
+fn get_fonts(r: &mut R<'_>) -> Result<Vec<FontUse>, StoreError> {
+    let n = r.u32()? as usize;
+    if n > INDEX_FONTS_MAX {
+        return Err(StoreError::Corrupt(WHAT));
+    }
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let family = r.str()?;
+        let script = r.str()?;
+        let from = r.str()?;
+        let embedded = match r.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(StoreError::Corrupt(WHAT)),
+        };
+        out.push(FontUse {
+            family,
+            script,
+            from,
+            embedded,
+        });
+    }
+    Ok(out)
+}
+
+fn get_node(r: &mut R<'_>, items: bool) -> Result<RowNode, StoreError> {
     let native = r.opt_str()?;
     let kind = r.str()?;
     let name = r.str()?;
@@ -262,6 +347,12 @@ fn get_node(r: &mut R<'_>) -> Result<RowNode, StoreError> {
         _ => return Err(StoreError::Corrupt(WHAT)),
     };
     let weak = get_map(r)?;
+    let (view, render_hash) = if items {
+        let view = get_view_with(r, u32::MAX as usize, &mut |_| {})?;
+        (view, get_opt_hash(r)?)
+    } else {
+        (None, None)
+    };
     Ok(RowNode {
         native,
         kind,
@@ -278,36 +369,50 @@ fn get_node(r: &mut R<'_>) -> Result<RowNode, StoreError> {
         record_hash,
         content_hash,
         weak,
+        view,
+        render_hash,
     })
 }
 
-/// A row's stored bytes. The node count sits at a fixed place, for [`peek_row`].
+/// A row's stored bytes: format 2 when it carries a view item, else format 1. The node count
+/// sits at a fixed place, for [`peek_row`].
 pub(crate) fn enc_struct_row(row: &StructRow) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(ROW_VERSION);
     match row {
         StructRow::Ready(r) => {
+            let items = r.has_view_items();
+            w.u8(if items { ROW_VERSION_VIEW } else { ROW_VERSION });
             w.u8(TAG_READY).u32(r.nodes.len() as u32);
             w.str(&r.source);
             put_map(&mut w, &r.attrs);
+            if items {
+                put_fonts(&mut w, &r.fonts);
+            }
             for n in &r.nodes {
-                put_node(&mut w, n);
+                put_node(&mut w, n, items);
             }
         }
         StructRow::NotIndexed(why) => {
-            w.u8(TAG_NOT_INDEXED);
+            w.u8(ROW_VERSION).u8(TAG_NOT_INDEXED);
             put_why(&mut w, why);
         }
     }
     w.0
 }
 
+/// A row's format byte: whether it carries the view items. Any other is `Corrupt`.
+fn row_items(r: &mut R<'_>) -> Result<bool, StoreError> {
+    match r.u8()? {
+        ROW_VERSION => Ok(false),
+        ROW_VERSION_VIEW => Ok(true),
+        _ => Err(StoreError::Corrupt(WHAT)),
+    }
+}
+
 /// A row's status from its stored bytes, without decoding its nodes.
 pub(crate) fn peek_row(b: &[u8]) -> Result<RowStatus, StoreError> {
     let mut r = R::new(b, WHAT);
-    if r.u8()? != ROW_VERSION {
-        return Err(StoreError::Corrupt(WHAT));
-    }
+    row_items(&mut r)?;
     match r.u8()? {
         TAG_READY => Ok(RowStatus::Ready { nodes: r.u32()? }),
         TAG_NOT_INDEXED => Ok(RowStatus::NotIndexed(get_why(&mut r)?)),
@@ -318,9 +423,7 @@ pub(crate) fn peek_row(b: &[u8]) -> Result<RowStatus, StoreError> {
 /// A row, decoded in full.
 pub(crate) fn dec_struct_row(b: &[u8]) -> Result<StructRow, StoreError> {
     let mut r = R::new(b, WHAT);
-    if r.u8()? != ROW_VERSION {
-        return Err(StoreError::Corrupt(WHAT));
-    }
+    let items = row_items(&mut r)?;
     let row = match r.u8()? {
         TAG_READY => {
             let n = r.u32()? as usize;
@@ -329,6 +432,11 @@ pub(crate) fn dec_struct_row(b: &[u8]) -> Result<StructRow, StoreError> {
             }
             let source = r.str()?;
             let attrs = get_map(&mut r)?;
+            let fonts = if items {
+                get_fonts(&mut r)?
+            } else {
+                Vec::new()
+            };
             // reserved from the length a damaged row can't lie about, and grown as nodes decode
             let mut nodes = Vec::with_capacity(n.min(RESERVE_NODES));
             #[cfg(any(test, feature = "differential"))]
@@ -337,19 +445,25 @@ pub(crate) fn dec_struct_row(b: &[u8]) -> Result<StructRow, StoreError> {
             #[cfg(not(any(test, feature = "differential")))]
             let check_parents = true;
             for i in 0..n {
-                let node = get_node(&mut r)?;
+                let node = get_node(&mut r, items)?;
                 if check_parents && node.parent.is_some_and(|p| p as usize >= i) {
                     return Err(StoreError::Corrupt(WHAT));
                 }
                 nodes.push(node);
             }
-            StructRow::Ready(ReadyRow {
+            let row = ReadyRow {
                 source,
                 attrs,
                 nodes,
-            })
+                fonts,
+            };
+            // a format-2 row carries a view item: one without any is format 1's, written so
+            if items && !row.has_view_items() {
+                return Err(StoreError::Corrupt(WHAT));
+            }
+            StructRow::Ready(row)
         }
-        TAG_NOT_INDEXED => StructRow::NotIndexed(get_why(&mut r)?),
+        TAG_NOT_INDEXED if !items => StructRow::NotIndexed(get_why(&mut r)?),
         _ => return Err(StoreError::Corrupt(WHAT)),
     };
     r.end()?;
@@ -533,6 +647,8 @@ pub(crate) fn view_of(
             record_hash: n.record_hash,
             content_hash: n.content_hash,
             fingerprint,
+            view: n.view,
+            render_hash: n.render_hash,
         });
     }
     Ok(IndexView {
@@ -540,6 +656,7 @@ pub(crate) fn view_of(
         source: row.source,
         attrs: row.attrs,
         nodes,
+        fonts: row.fonts,
     })
 }
 
@@ -564,7 +681,117 @@ mod tests {
             record_hash: NodeHash::from_raw([1; 32]),
             content_hash: None,
             weak: BTreeMap::new(),
+            view: None,
+            render_hash: None,
         }
+    }
+
+    /// A row of format 1 as a kit before the view items stored it (one node, `@n:1`, a group
+    /// named `Layers` with text `hi`): hand-written, so it doesn't follow this encoder.
+    fn v1_row_bytes() -> Vec<u8> {
+        let mut w = W::default();
+        w.u8(1).u8(TAG_READY).u32(1).str("fmt-1");
+        w.u32(1).str("seed").str("7");
+        w.opt_str(Some("@n:1")).str("group").str("Layers");
+        w.u32(0).u32(0).u32(0);
+        w.u8(1).u64(1).u64(2).u64(3).u64(4);
+        w.u8(1).u8(1);
+        w.opt_str(Some("hi"));
+        w.u32(0);
+        w.u32(1).str("styles");
+        w.bytes(&[7; 32]);
+        w.u8(0);
+        w.u32(0);
+        w.0
+    }
+
+    /// A row of format 1 still reads, with every view item absent; one with no view item is
+    /// still written as format 1, byte for byte.
+    #[test]
+    fn a_format_1_row_reads_with_the_view_items_absent() {
+        let b = v1_row_bytes();
+        let StructRow::Ready(row) = dec_struct_row(&b).expect("format 1 decodes") else {
+            panic!("ready");
+        };
+        assert_eq!(row.fonts, Vec::new());
+        assert_eq!(row.nodes.len(), 1);
+        assert_eq!(row.nodes[0].text.as_deref(), Some("hi"));
+        assert_eq!(row.nodes[0].view, None);
+        assert_eq!(row.nodes[0].render_hash, None);
+        assert_eq!(
+            enc_struct_row(&StructRow::Ready(row.clone())),
+            b,
+            "no view item: written as format 1, the same bytes"
+        );
+        let v = view_of(3, row, &KeysRow::default()).unwrap();
+        assert!(v.fonts.is_empty() && v.nodes[0].view.is_none());
+        assert!(v.nodes[0].render_hash.is_none());
+    }
+
+    /// A row with view items is format 2 and round-trips; a format-2 row with none, or with a
+    /// format byte past 2, is corrupt.
+    #[test]
+    fn a_format_2_row_round_trips_its_view_items() {
+        use crate::index::ViewGeom;
+        use crate::view_index::{Bbox, EditableText, Flip};
+        crate::differential::under_env_index_mutant(|| {
+            let mut n = node(None);
+            let mut v = NodeView::new();
+            v.geom = Some(ViewGeom {
+                bbox: Bbox {
+                    x: 1,
+                    y: -2,
+                    w: 3,
+                    h: 4,
+                },
+                rot: 60_000,
+                flip: Flip { h: false, v: true },
+                inherited: true,
+                approx: false,
+            });
+            v.editable_text = Some(EditableText::Never);
+            v.fields = vec!["slidenum".into()];
+            v.text = Some("1\t2".into());
+            v.fonts = vec![0];
+            n.view = Some(v);
+            n.render_hash = Some(NodeHash::from_raw([9; 32]));
+            let row = ReadyRow {
+                source: "f".into(),
+                attrs: BTreeMap::new(),
+                nodes: vec![n],
+                fonts: vec![FontUse {
+                    family: "Aptos".into(),
+                    script: "latin".into(),
+                    from: "explicit".into(),
+                    embedded: true,
+                }],
+            };
+            let b = enc_struct_row(&StructRow::Ready(row.clone()));
+            assert_eq!(b[0], INDEX_ROW_FORMAT, "view items: format 2");
+            assert_eq!(peek_row(&b).unwrap(), RowStatus::Ready { nodes: 1 });
+            assert_eq!(
+                dec_struct_row(&b).unwrap(),
+                StructRow::Ready(row.clone()),
+                "every view item reads back"
+            );
+            let mut newer = b.clone();
+            newer[0] = INDEX_ROW_FORMAT + 1;
+            assert!(matches!(
+                dec_struct_row(&newer),
+                Err(StoreError::Corrupt(_))
+            ));
+            assert!(matches!(peek_row(&newer), Err(StoreError::Corrupt(_))));
+            let mut bare = enc_struct_row(&StructRow::Ready(ReadyRow {
+                fonts: Vec::new(),
+                nodes: vec![node(None)],
+                ..row
+            }));
+            bare[0] = INDEX_ROW_FORMAT;
+            assert!(
+                dec_struct_row(&bare).is_err(),
+                "a format-2 row is never one without the items' bytes"
+            );
+        });
     }
 
     /// A stored row is not trusted: a bad parent is `Corrupt` at decode, so `view_of` always
@@ -577,6 +804,7 @@ mod tests {
                     source: "f".into(),
                     attrs: BTreeMap::new(),
                     nodes: vec![node(Some(parent))],
+                    fonts: Vec::new(),
                 });
                 let b = enc_struct_row(&row);
                 assert!(

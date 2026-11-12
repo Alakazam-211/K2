@@ -120,7 +120,10 @@ impl Session {
             .filter(|b| synced.as_deref() == Some(file_hash(&st.hash_key, b).as_slice()));
         let now = self.host.now_ms();
         match held {
-            Some(b) => st.carrier = Some(Arc::from(b)),
+            Some(b) => {
+                st.carrier = Some(Arc::from(b));
+                st.view_carrier = None;
+            }
             None => {
                 if let Ok(gone) = store.set_live_carrier(self.doc_id, None, 0, now) {
                     let _ = blobs.remove_unreferenced_now(&gone);
@@ -155,6 +158,8 @@ impl Session {
             }
         }
         st.carrier = Some(Arc::from(bytes));
+        // the view index's derive reads the new carrier, decoded afresh
+        st.view_carrier = None;
     }
 
     /// Put `bytes` in the doc's space and make them the stored carrier at `seq`. Returns the

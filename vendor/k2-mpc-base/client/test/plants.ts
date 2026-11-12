@@ -6,6 +6,8 @@
 
 import { vi } from "vitest";
 import { coalesce, type Hunk } from "../src/hunk";
+import { KeyedWatch } from "../src/keyed";
+import { KeyedView } from "../src/view";
 import { LiveText } from "../src/live";
 import { PresenceChannel } from "../src/presence";
 import { Carried, rebaseOurs } from "../src/rebase";
@@ -150,6 +152,39 @@ export function withClaimsSentAnyway<T>(f: () => T): T {
  * that didn't list `"presence"` (the fault `welcome.features` prevents). */
 export function withPresenceSentAnyway<T>(f: () => T): T {
   const spy = vi.spyOn(PresenceChannel.prototype, "supported", "get").mockReturnValue(true);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with the keyed watch's gap check planted out (`GapNotDetected`): a `KeyedWatch` takes
+ * a frame after a skipped `seq` as the next one, and asks for no snapshot. */
+export function withGapUndetected<T>(f: () => T): T {
+  const spy = vi.spyOn(KeyedWatch.prototype, "inOrder").mockReturnValue(true);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with the keyed watch's feature check planted out (`FeatureNotGated`): a `KeyedWatch`
+ * sends `watch` and `report` to a host that didn't list `"keyed_watch"`. */
+export function withWatchSentAnyway<T>(f: () => T): T {
+  const spy = vi.spyOn(KeyedWatch.prototype, "supported", "get").mockReturnValue(true);
+  try {
+    return f();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Run `f` with the view's container deltas planted out (`ClientViewDrift`): a `KeyedView`
+ * skips every `containers_changed` entry, so its containers drift from the doc's. */
+export function withContainerDeltaSkipped<T>(f: () => T): T {
+  const spy = vi.spyOn(KeyedView.prototype, "containerDelta").mockImplementation(() => {});
   try {
     return f();
   } finally {

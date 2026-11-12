@@ -34,6 +34,9 @@ const VALUES = [
   "Carried",
   "ClaimRejected",
   "ELEM_SELECTION_MAX",
+  "KEYED_WATCH_FEATURE",
+  "KeyedView",
+  "KeyedWatch",
   "LiveText",
   "PRESENCE_FEATURE",
   "PresenceChannel",
@@ -42,10 +45,12 @@ const VALUES = [
   "canRetry",
   "coalesce",
   "indexToByte",
+  "keyedStateJson",
   "rebaseOurs",
   "setDefaultLiveTimers",
   "transform",
   "utf8Len",
+  "VIEW_TEXT_MAX",
 ] as const satisfies readonly (keyof typeof lib)[];
 
 /** Types a host imports from the package root: each must resolve (a compile error if not). */
@@ -76,6 +81,17 @@ export type HostTypes = [
   Lib.InsertHereResult,
   Lib.LiveOptions,
   Lib.LiveTimers,
+  // the keyed watch (WIRE.md, "The keyed watch")
+  Lib.KeyedWatch,
+  Lib.KeyedState,
+  Lib.OpsChangeFrame,
+  Lib.WatchOp,
+  // the view deltas (WIRE.md, "View deltas")
+  Lib.KeyedView,
+  Lib.UnitDelta,
+  Lib.ContainerDelta,
+  Lib.ViewSnapshotJson,
+  Lib.ViewUnit,
 ];
 
 /** Test helpers a host imports (from `k2-mpc-client/test`, or each module by path). */

@@ -67,6 +67,7 @@ impl NodeClaim {
             hold: true,
             for_edit: false,
             waiters: Vec::new(),
+            addresses: Vec::new(),
         }
     }
 

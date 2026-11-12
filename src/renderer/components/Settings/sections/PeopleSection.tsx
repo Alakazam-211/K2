@@ -34,6 +34,7 @@ import {
   type SaveState,
   SETTING_LIST_ROW_HOVER,
 } from '../controls/SettingControls'
+import { splitPage, useSplitPage } from '../controls/split-page'
 import type { SettingEntry } from '../searchManifest'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { SewPersonAccess } from './SewAccessParts'
@@ -272,6 +273,8 @@ function UserDetailsNote({ details, onRetry }: { details: UserDetailErrors; onRe
 }
 
 export function PeopleSection(): React.JSX.Element {
+  // Narrow (a small window, the app zoomed in): the roster goes on top.
+  const [setRootEl, stacked] = useSplitPage()
   const [selection, setSelection] = useState<Selection>(() => takePersonHandoff() ?? 'everyone')
   const [view, setView] = useState<View>('people')
   const [needApps, setNeedApps] = useState(false)
@@ -319,8 +322,8 @@ export function PeopleSection(): React.JSX.Element {
   const appChoices = (apps.data?.apps ?? []).map((a) => ({ value: a.id, label: `${a.name} (${a.kind === 'skin' ? 'app' : a.kind})` }))
 
   return (
-    <div className="h-full min-h-0 flex">
-      <aside aria-label="People" className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]">
+    <div ref={setRootEl} data-people-layout={stacked ? 'stacked' : 'split'} className={splitPage.root(stacked)}>
+      <aside aria-label="People" className={splitPage.list(stacked)}>
         <div className="flex-shrink-0 px-4 pt-6 pb-3">
           <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">User Access</h2>
           <p className="type-hint text-[var(--color-text-secondary)] leading-relaxed">
@@ -328,7 +331,7 @@ export function PeopleSection(): React.JSX.Element {
           </p>
           <AccessAuditLink className="mt-1" />
         </div>
-        <div data-settings-id="people.roster" className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-4 [scrollbar-gutter:stable]">
+        <div data-settings-id="people.roster" className={splitPage.listBody(stacked, 'px-4 pb-4 space-y-4')}>
           <button
             type="button"
             data-testid="people-everyone"
@@ -358,7 +361,7 @@ export function PeopleSection(): React.JSX.Element {
         </div>
       </aside>
 
-      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+      <div className={splitPage.pane(stacked)}>
         <div className="w-full max-w-[52rem] space-y-6 pb-6">
           {!ready && users.status !== 'error' ? (
             <>

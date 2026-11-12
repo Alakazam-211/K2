@@ -41,8 +41,13 @@ import {
   type StyleScheme,
 } from '@/styles.generated'
 import type { SettingEntry } from '../searchManifest'
+import { splitPage, useSplitPage, SPLIT_PAGE_MIN_PX } from '../controls/split-page'
 import { SaveNote, SettingRow, SettingsGroup, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 import { Button, Input, Segmented, Slider, Tag, cx } from '@/components/ui'
+
+/** Below this page width (CSS px) the style list goes on top of the shown
+ *  style, one scroll (controls/split-page). */
+export const STYLES_SPLIT_MIN_PX = SPLIT_PAGE_MIN_PX
 
 /** Registry terminal colors are 0xRRGGBB ints (Kessel's format). */
 const intToHex = (n: number): string => `#${n.toString(16).padStart(6, '0')}`
@@ -214,6 +219,8 @@ export function StylesSection(): React.JSX.Element {
   // Which style's DETAIL is showing. Defaults to the active style; kept
   // as local state so browsing a style's palettes doesn't commit it.
   const [selectedStyleId, setSelectedStyleId] = useState(styleId)
+  // Narrow (a small window, the app zoomed in): the list goes on top.
+  const [setRootEl, stacked] = useSplitPage()
   const selectedStyle = PICKER_STYLES.find((s) => s.id === selectedStyleId) ?? PICKER_STYLES[0]
   const selectedIsActive = selectedStyle.id === styleId
 
@@ -428,12 +435,16 @@ export function StylesSection(): React.JSX.Element {
   const accentPaletteName = selectedIsActive ? activePalette.name : `${activeStyle.name} ${activePalette.name}`
 
   return (
-    <div className="h-full min-h-0 flex">
+    <div
+      ref={setRootEl}
+      data-styles-layout={stacked ? 'stacked' : 'split'}
+      className={splitPage.root(stacked)}
+    >
       {/* ── The styles ── */}
       <aside
         aria-label="Themes"
         data-settings-id="styles.style-picker"
-        className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
+        className={splitPage.list(stacked)}
       >
         <div className="flex-shrink-0 px-4 pt-6 pb-3">
           <h2 className="flex items-center h-7 type-heading text-[var(--color-text-primary)]">Themes</h2>
@@ -446,7 +457,7 @@ export function StylesSection(): React.JSX.Element {
             Glass: each style is a tile you press (Usage's totals), its edge
             on the heading's line and the selected one edged in the accent
             (styles/glass/overrides.css, [data-style-row]). */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-1 [scrollbar-gutter:stable]">
+        <div className={splitPage.listBody(stacked, 'px-4 pb-4 space-y-1')}>
           {PICKER_STYLES.map((style) => {
             const isActive = style.id === styleId
             const isSelected = style.id === selectedStyle.id
@@ -505,7 +516,7 @@ export function StylesSection(): React.JSX.Element {
       </aside>
 
       {/* ── The shown style ── */}
-      <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 [scrollbar-gutter:stable]">
+      <div className={splitPage.pane(stacked)}>
         <div className="w-full max-w-[52rem] space-y-6 pb-6">
           <header className="space-y-3">
             <div className="flex items-start justify-between gap-4">

@@ -19,7 +19,7 @@ import { useStyleStore } from '@/stores/style'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { getStyle } from '@/styles.generated'
-import { STYLES_MANIFEST, StylesSection } from './StylesSection'
+import { STYLES_MANIFEST, STYLES_SPLIT_MIN_PX, StylesSection } from './StylesSection'
 import { SECTION_LABELS, searchManifest } from '../searchManifest'
 
 afterEach(() => {
@@ -460,5 +460,35 @@ describe('search', () => {
     useStyleStore.getState().applyStyle({ styleId: 'glass', paletteId: 'obsidian', schemeMode: 'dark' })
     render(<StylesSection />)
     expect(document.querySelector('[data-settings-id="styles.dials"]')).not.toBeNull()
+  })
+})
+
+describe('a narrow page (a small window, the app zoomed in)', () => {
+  const real = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+  const withPageWidth = (width: number): void => {
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.dataset.stylesLayout !== undefined ? width : 0
+      },
+    })
+  }
+  afterEach(() => {
+    if (real) Object.defineProperty(HTMLElement.prototype, 'clientWidth', real)
+  })
+
+  it('puts the style list on top of the shown style, one scroll, below the split width', () => {
+    withPageWidth(STYLES_SPLIT_MIN_PX - 1)
+    const { container } = render(<StylesSection />)
+    const page = container.querySelector<HTMLElement>('[data-styles-layout]')!
+    expect(page.dataset.stylesLayout).toBe('stacked')
+    expect(page.className).toContain('overflow-y-auto')
+    expect(screen.getByRole('complementary', { name: 'Themes' }).className).not.toContain('w-72')
+  })
+
+  it('keeps the list beside the style from the split width', () => {
+    withPageWidth(STYLES_SPLIT_MIN_PX)
+    const { container } = render(<StylesSection />)
+    expect(container.querySelector<HTMLElement>('[data-styles-layout]')!.dataset.stylesLayout).toBe('split')
   })
 })

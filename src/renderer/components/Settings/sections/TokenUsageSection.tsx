@@ -147,6 +147,12 @@ const CONTENT_WIDTH = 'max-w-[52rem]'
  *  measured from the page, so it follows the Settings pane, not the window. */
 export const USAGE_TWO_COLUMN_MIN_PX = 1040
 
+/** Page width (px) below which the breakdown's table (a name and six
+ *  5.25rem number columns) can't fit and it shows as a list, as it does
+ *  beside the chart. Measured from the page in CSS px, so it follows the
+ *  Settings pane and the app zoom. */
+export const USAGE_TABLE_MIN_PX = 720
+
 /** Two columns: wide enough to use a big display, short of an ultra-wide
  *  one's lines too long to follow. */
 const WIDE_CONTENT_WIDTH = 'max-w-[112rem]'
@@ -516,7 +522,10 @@ const WIDER: Record<UsageRange, UsageRange | null> = { today: '7d', '7d': '30d',
 
 export function TokenUsageSection(): React.JSX.Element {
   const [rootEl, rootRef] = useState<HTMLDivElement | null>(null)
-  const wide = useElementWidth(rootEl) >= USAGE_TWO_COLUMN_MIN_PX
+  const pageWidth = useElementWidth(rootEl)
+  const wide = pageWidth >= USAGE_TWO_COLUMN_MIN_PX
+  // Too narrow for the breakdown's number columns: one row per name instead.
+  const tight = pageWidth > 0 && pageWidth < USAGE_TABLE_MIN_PX
   const hostKey = useConnectHostStore((s) => activeHostKey(s.activeHost))
   const windowName = useConnectHostStore((s) =>
     s.activeHost === 'local' ? 'this computer' : s.activeHost.hostname || s.activeHost.label || 'this server',
@@ -707,7 +716,7 @@ export function TokenUsageSection(): React.JSX.Element {
       projects={nameProjects}
       measure={measure}
       onPick={(key) => setFilters(filterForGroup(tab, key, filters))}
-      list={columns}
+      list={columns || tight}
     />
   )
 

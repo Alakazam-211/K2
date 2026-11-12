@@ -135,9 +135,15 @@ import { Button, Callout, Input, OverflowMenu, SearchField, Segmented, Surface, 
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
 import { clientToCssPx } from '@/lib/app-zoom'
+import { SPLIT_PAGE_MIN_PX } from '@/components/Settings/controls/split-page'
 
 /** Below this width (px) of the detail body the two halves stack. */
 export const HALVES_MIN_WIDTH = 720
+
+/** Below this page width (CSS px) the project list goes on top of the
+ *  selected project instead of beside it: the list's 18rem plus 20rem for
+ *  the project's rows (a small window, the app zoomed in). */
+export const PROJECTS_SPLIT_MIN_PX = SPLIT_PAGE_MIN_PX
 
 /** What a role refusal (the server's `forbidden`) says: who can do it. */
 const ROLE_REFUSED = 'only the owner or an admin of this server can change this'
@@ -1686,6 +1692,8 @@ function ListHeading({ children }: { children: React.ReactNode }): React.JSX.Ele
 }
 
 export default function ProjectSettings(): React.JSX.Element {
+  // The page's width in CSS px (any app zoom): narrow, the list goes on top.
+  const [pageRef, pageWidth] = useElementWidth(PROJECTS_SPLIT_MIN_PX)
   const groups = useProjectGroupsStore((s) => s.groups)
   const groupsError = useProjectGroupsStore((s) => s.groupsError)
 
@@ -2074,15 +2082,24 @@ export default function ProjectSettings(): React.JSX.Element {
   }
 
   const searching = searchActive
+  const listOnTop = pageWidth < PROJECTS_SPLIT_MIN_PX
   const shownNotice = notice && shown && (notice.forId === null || notice.forId === shown.id) ? notice.text : null
 
   return (
-    <div className="flex h-full min-h-0">
+    <div
+      ref={pageRef}
+      data-project-settings-layout={listOnTop ? 'stacked' : 'split'}
+      className={listOnTop ? 'flex flex-col h-full min-h-0' : 'flex h-full min-h-0'}
+    >
       {newProjectDialog}
-      {/* ── Left: the project list ── */}
+      {/* ── Left (or, narrow, on top): the project list ── */}
       <aside
         aria-label="Projects"
-        className="w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]"
+        className={
+          listOnTop
+            ? 'max-h-[40%] flex-shrink-0 min-h-0 flex flex-col border-b border-[var(--color-border)]'
+            : 'w-72 flex-shrink-0 min-h-0 flex flex-col border-r border-[var(--color-border)]'
+        }
       >
         <div className="flex-shrink-0 px-4 pt-6 pb-4">
           <SearchField

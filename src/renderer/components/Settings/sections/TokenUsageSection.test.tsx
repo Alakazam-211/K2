@@ -57,7 +57,7 @@ vi.mock('@/lib/open-settings-page', () => ({
   openSettingsPage: async (section: string) => h.openSettings(section),
 }))
 
-import { ROLE_GATE_TEXT, TokenUsageSection, USAGE_TWO_COLUMN_MIN_PX } from './TokenUsageSection'
+import { ROLE_GATE_TEXT, TokenUsageSection, USAGE_TABLE_MIN_PX, USAGE_TWO_COLUMN_MIN_PX } from './TokenUsageSection'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { usePageViewStore } from '@/stores/page-view'
@@ -510,6 +510,15 @@ describe('on a wide pane', () => {
     expect(screen.getByTestId('usage-breakdown').dataset.breakdownLayout).toBe('list')
     resizePane(USAGE_TWO_COLUMN_MIN_PX - 40)
     expect(page().dataset.usageLayout).toBe('one-column')
+  })
+
+  it('too narrow for the table (a small window, the app zoomed in), the breakdown is a list in one column', async () => {
+    paneWidth = USAGE_TABLE_MIN_PX - 1
+    await renderPage()
+    expect(page().dataset.usageLayout).toBe('one-column')
+    expect(screen.getByTestId('usage-breakdown').dataset.breakdownLayout).toBe('list')
+    resizePane(USAGE_TABLE_MIN_PX)
+    expect(screen.getByTestId('usage-breakdown').dataset.breakdownLayout).toBe('table')
   })
 
   it('an empty range is one card across the page, not two columns', async () => {

@@ -53,7 +53,7 @@ vi.mock('./projects-api', async () => {
 })
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import ProjectSettings, { HALVES_MIN_WIDTH, shortFolder } from './ProjectSettings'
+import ProjectSettings, { HALVES_MIN_WIDTH, PROJECTS_SPLIT_MIN_PX, shortFolder } from './ProjectSettings'
 import * as projectsApi from './projects-api'
 import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
 import { useProjectGroupsStore } from '@/stores/project-groups'
@@ -216,6 +216,28 @@ describe('two halves', () => {
     const right = screen.getByTestId('project-settings-right')
     expect(left.className).not.toContain('overflow-y-auto')
     expect(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it(`a page under ${PROJECTS_SPLIT_MIN_PX} CSS px (a small window, zoomed in) puts the project list on top of the project`, async () => {
+    applyAppZoomForTest(1.75)
+    const rect = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+      // 800 on screen at 175 %: 457 CSS px.
+      if ((this as HTMLElement).dataset?.projectSettingsLayout !== undefined) {
+        return { width: 800, height: 600, top: 0, left: 0, right: 800, bottom: 600, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      return rect.call(this)
+    }
+    try {
+      const { container } = render(<ProjectSettings />)
+      await waitFor(() => expect(screen.getByTestId('project-settings-detail')).toBeTruthy())
+      const page = container.querySelector<HTMLElement>('[data-project-settings-layout]')!
+      expect(page.dataset.projectSettingsLayout).toBe('stacked')
+      expect(screen.getByRole('complementary', { name: 'Projects' }).className).not.toContain('w-72')
+    } finally {
+      Element.prototype.getBoundingClientRect = rect
+      resetAppZoomForTest()
+    }
   })
 
   it('at 150% app zoom, compares the body’s CSS width: 900 px on screen is 600 CSS px, so the halves stack', async () => {

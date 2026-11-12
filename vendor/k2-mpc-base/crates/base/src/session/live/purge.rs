@@ -717,6 +717,9 @@ impl Session {
         // a participant purge renames client owners: they are read again (D1's owners and
         // the agent client IDs reused from them)
         st.owners = None;
+        // and the person-writer rows: an erased person's writers are never picked again, and
+        // the rotated hash key leaves tags from before matching nothing
+        self.reload_writers(st)?;
         st.log_entries = 0;
         st.log_bytes = 0;
         st.state_bytes = state.len() as u64;

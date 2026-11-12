@@ -27,6 +27,7 @@ mod next_change_tests;
 mod purge;
 mod removed;
 mod tier0_history;
+mod writers;
 
 pub use at_base::{CursorAtVersion, CursorDrop, EditAtBase};
 #[cfg(feature = "conformance")]
@@ -86,9 +87,49 @@ pub struct Joined {
     pub client: ClientId,
     pub version: Seq,
     /// The connection [`Session::join_replacing`] closed for this one; `None` from
-    /// [`Session::join`] and [`Session::join_shared`], or when there was none to close.
+    /// [`Session::join`] and [`Session::join_shared`], or when there was none to close. With
+    /// person-writer reuse, the connection a reclaim handed its writer over from.
     pub replaced: Option<ConnId>,
+    /// This connection's writer lease (person-writer reuse, [`Config::reuse_person_writers`],
+    /// a join with [`JoinOptions::device`]): the host sends it to the client
+    /// (`welcome.lease`), which names it on its next reconnect ([`JoinOptions::reclaim`]).
+    /// `None` without person-writer reuse.
+    pub lease: Option<WriterLease>,
+    /// The reclaim took the client's own writer back ([`JoinOptions::reclaim`]): `client` is
+    /// the one it named, and nothing from its previous lease can land after this join (that
+    /// connection is closed). `false` for every other join.
+    pub kept: bool,
+    /// A reclaim that didn't take its writer back: the doc's version when the lease it named
+    /// ended, when the kit knows it (no change of that lease lands after it; changes under that
+    /// writer after it are a later lease's). `None` when kept, unknown, or not a reclaim.
+    pub prev_ended: Option<Seq>,
 }
+
+/// A connection's writer lease (person-writer reuse, [`Config::reuse_person_writers`]): its
+/// writer and a random token per hand-out. The token is no security boundary (the host scopes
+/// a reclaim to the authenticated person); it tells a connection's own lease from a later one
+/// of the same writer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WriterLease {
+    /// The writer (the connection's client ID).
+    pub client: ClientId,
+    /// The lease's token (never 0).
+    pub token: u64,
+}
+
+/// A host's opaque device key ([`JoinOptions::device`]): 1 to [`DEVICE_KEY_MAX`] bytes. Its
+/// `Debug` shows only its length; the kit keeps only a keyed tag of it.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct DeviceKey(Vec<u8>);
+
+impl std::fmt::Debug for DeviceKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeviceKey({} bytes)", self.0.len())
+    }
+}
+
+/// The longest device key, in bytes ([`JoinOptions::device`]).
+pub const DEVICE_KEY_MAX: usize = 64;
 
 /// Options for [`Session::join_with`] (v0.10.1): [`Session::join`] and
 /// [`Session::join_shared`] are `join_with` with the defaults.
@@ -105,7 +146,17 @@ pub struct JoinOptions {
     /// Close the pid's connection holding this client ID, as [`Session::join_replacing`]
     /// (a reconnect). The new connection's label is the one given here, never the replaced
     /// connection's: a host reconnecting a tab passes its label again.
+    /// With a device key and person-writer reuse, a bare `prev` closes nothing (the kit can't
+    /// tell the old connection from a sibling that holds that writer now): use `reclaim`.
     pub prev: Option<ClientId>,
+    /// The device this connection runs on (person-writer reuse,
+    /// [`Config::reuse_person_writers`]): see [`JoinOptions::device`]. `None`: a fresh writer
+    /// per connection, as before.
+    pub device: Option<DeviceKey>,
+    /// The connection keeps no client state ([`JoinOptions::device_stateless`]).
+    pub stateless: bool,
+    /// The lease this connection's client held last ([`JoinOptions::reclaim`]).
+    pub reclaim: Option<WriterLease>,
 }
 
 impl JoinOptions {
@@ -133,6 +184,48 @@ impl JoinOptions {
     /// [`Joined::replaced`] is `None`.
     pub fn replacing(mut self, prev: ClientId) -> Self {
         self.prev = Some(prev);
+        self
+    }
+
+    /// The device this connection runs on, as an opaque key of 1 to [`DEVICE_KEY_MAX`] bytes
+    /// (person-writer reuse, [`Config::reuse_person_writers`]; for a person or an App guest
+    /// without [`Participant::own_replica`]): the connection takes a free writer of this person
+    /// on this device instead of a fresh one. A key of another length is ignored (a fresh
+    /// writer, as without one); a key never fails a join.
+    ///
+    /// **Not a security boundary.** The key only chooses among the writers of the person the
+    /// host authenticated (the participant's pid), all of them free, so a wrong or forged key
+    /// costs at most a fresh writer. The host may take it from the client (a browser's random id
+    /// kept in its storage) or derive it (an app install's id), and scopes it to the
+    /// authenticated person by the pid it stamps. The kit stores only a keyed tag of it.
+    ///
+    /// Pass it only for a client that releases its connection when done
+    /// ([`Session::release`], the wire's `bye`) and reclaims its lease on a reconnect
+    /// ([`JoinOptions::reclaim`]): an older client gets no device key, and so a fresh writer
+    /// per connection.
+    pub fn device(mut self, key: impl AsRef<[u8]>) -> Self {
+        self.device = Some(DeviceKey(key.as_ref().to_vec()));
+        self.stateless = false;
+        self
+    }
+
+    /// [`JoinOptions::device`] for a connection that keeps no client state (a command-line
+    /// verb, [`Session::join_shared`]): nothing of it can come back later, so every end of it
+    /// frees its writer, as a release does.
+    pub fn device_stateless(mut self, key: impl AsRef<[u8]>) -> Self {
+        self.device = Some(DeviceKey(key.as_ref().to_vec()));
+        self.stateless = true;
+        self
+    }
+
+    /// The lease this client's previous connection held ([`Joined::lease`], the wire's
+    /// `prev` and `lease`): with a device key, the join takes that writer back when the lease
+    /// is this person's on this device and still the writer's (its connection is closed
+    /// first, under the same lock, when it is still present: [`Joined::replaced`]), and says
+    /// so ([`Joined::kept`]). Otherwise it closes nothing and joins as without it, telling the
+    /// version that lease ended at when known ([`Joined::prev_ended`]).
+    pub fn reclaim(mut self, lease: WriterLease) -> Self {
+        self.reclaim = Some(lease);
         self
     }
 }
@@ -614,6 +707,8 @@ struct Member {
     /// that can write keeps them whether or not it has landed a change
     /// ([`Session::keep_own_replica_rows`]).
     rows_kept: bool,
+    /// Its person-writer lease (person-writer reuse, `live/writers.rs`), if it has one.
+    lease: Option<writers::MemberLease>,
 }
 
 impl std::ops::Deref for Member {
@@ -703,6 +798,9 @@ struct State {
     /// is never among them, nor an ID of unknown kind (an older kit's owner record): either
     /// may still have a writer outside this session.
     reusable_clients: std::collections::HashSet<ClientId>,
+    /// The person-device writers the session knows ([`Config::reuse_person_writers`]): read
+    /// from the store at load (when on), kept as leases come and go (`live/writers.rs`).
+    writers: writers::Writers,
     hist: HashMap<String, History>,
     /// The version the session loaded (or reloaded) at: undo history before it was lost.
     loaded_seq: Seq,
@@ -1011,6 +1109,22 @@ fn planted_reuse_held() -> bool {
     false
 }
 
+/// The planted fault [`crate::differential::ApplyFault::StoreCommitFails`]: a change's store
+/// commit fails. Without the `differential` feature there is no hook.
+#[cfg(any(test, feature = "differential"))]
+fn planted_store_commit_fails() -> Result<()> {
+    if crate::differential::apply_fault() == Some(crate::differential::ApplyFault::StoreCommitFails)
+    {
+        return Err(crate::store::StoreError::Db("a planted failure".into()).into());
+    }
+    Ok(())
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_store_commit_fails() -> Result<()> {
+    Ok(())
+}
+
 /// One raw draw of 53 bits (any value, 0 and 2^53 - 1 included): [`mint_client_id`]'s source.
 fn client_draw() -> ClientId {
     #[cfg(any(test, feature = "differential"))]
@@ -1046,8 +1160,15 @@ fn planted_reusable_at_load(
             Some(store.clients_of(id)?.into_iter().map(|(c, _)| c).collect())
         }
         Some(ClientMutant::NoReuseAfterReload) => Some(Default::default()),
-        // a store fault, planted in `DocStore::open`
-        Some(ClientMutant::NoOrphanSweep) | None => None,
+        // a store fault, planted in `DocStore::open`; person-writer faults, planted in
+        // `live/writers.rs`
+        Some(
+            ClientMutant::NoOrphanSweep
+            | ClientMutant::ReusePersonHeld
+            | ClientMutant::ReuseParked
+            | ClientMutant::HandoverWithoutClose,
+        )
+        | None => None,
     })
 }
 
@@ -1247,6 +1368,11 @@ impl Session {
             Some(planted) => planted,
             None => store.reusable_clients(doc_id)?,
         };
+        let writers = if config.reuse_person_writers {
+            writers::Writers::load(&store, doc_id, loaded_version, now)?
+        } else {
+            writers::Writers::default()
+        };
         Ok(Self {
             host,
             config,
@@ -1272,6 +1398,7 @@ impl Session {
                 joins: 0,
                 owners: None,
                 reusable_clients,
+                writers,
                 hist: HashMap::new(),
                 loaded_seq: loaded_version,
                 last_version_seq,
@@ -1593,12 +1720,27 @@ impl Session {
     }
 
     fn remove_member(&self, st: &mut State, i: usize, reason: LeaveReason) {
+        self.remove_member_with(st, i, reason, false);
+    }
+
+    /// [`Self::remove_member`]; `stays_present`: the pid stays present through a connection
+    /// about to join (a person-writer hand-over), so no participant `Left` is recorded. Its
+    /// person-writer lease ends as the member's `lease.end` says (`live/writers.rs`).
+    fn remove_member_with(
+        &self,
+        st: &mut State,
+        i: usize,
+        reason: LeaveReason,
+        stays_present: bool,
+    ) {
         let m = st.members.remove(i);
         st.subs.retain(|(c, _, _)| *c != m.conn);
         st.roster.drop_conn(m.conn);
         st.settings_subs.retain(|(c, _)| *c != m.conn);
         self.conn_gone(st, m.pres.conn);
-        if !m.pres.watcher && !st.members.iter().any(|o| o.p.pid == m.pres.p.pid) {
+        self.lease_ended(st, m.client, m.lease);
+        if !stays_present && !m.pres.watcher && !st.members.iter().any(|o| o.p.pid == m.pres.p.pid)
+        {
             st.roster.record(
                 RosterEvent::Left {
                     who: Who::of(&m.pres.p.pid),
@@ -1632,6 +1774,16 @@ impl Session {
     fn keep_own_replica_rows(&self, st: &mut State, pid: &str, granted: Rights) -> Result<()> {
         if !granted.edit {
             return Ok(());
+        }
+        // a person-writer lease's row is written once its connection can write
+        let leased: Vec<ClientId> = st
+            .members
+            .iter()
+            .filter(|m| m.p.pid == pid && m.lease.is_some())
+            .map(|m| m.client)
+            .collect();
+        for c in leased {
+            st.writers.writable(c);
         }
         for k in 0..st.members.len() {
             let m = &st.members[k];
@@ -1730,7 +1882,7 @@ impl Session {
     /// command-line call while a `watch` runs. Use this for anything with its own lifetime
     /// (a socket, a `watch`); use [`Session::join_shared`] for one-shot verbs.
     pub fn join(&self, p: Participant, stay: Stay) -> Result<Joined> {
-        self.join_impl(p, stay, false, None, None)
+        self.join_impl(p, stay, false, None, None, None)
     }
 
     /// Like [`Session::join`], and closes the connection of this doc that holds client ID
@@ -1741,7 +1893,7 @@ impl Session {
     /// by another pid's, is ignored: that connection is untouched and this is a plain join.
     /// [`Joined::replaced`] names the connection closed.
     pub fn join_replacing(&self, p: Participant, stay: Stay, prev: ClientId) -> Result<Joined> {
-        self.join_impl(p, stay, false, Some(prev), None)
+        self.join_impl(p, stay, false, Some(prev), None, None)
     }
 
     /// Like [`Session::join`], but reuses the pid's existing shared connection with the same
@@ -1750,7 +1902,7 @@ impl Session {
     /// one client ID instead of minting one per call (every client ID stays in the doc's
     /// state for good).
     pub fn join_shared(&self, p: Participant, stay: Stay) -> Result<Joined> {
-        self.join_impl(p, stay, true, None, None)
+        self.join_impl(p, stay, true, None, None, None)
     }
 
     /// [`Session::join`] with options (v0.10.1): a label for the connection
@@ -1758,8 +1910,11 @@ impl Session {
     /// [`super::Device`]), [`JoinOptions::shared`](field@JoinOptions::shared) for
     /// [`Session::join_shared`]'s reuse, and [`JoinOptions::prev`](field@JoinOptions::prev)
     /// for [`Session::join_replacing`]'s close of the reconnecting client's last connection.
+    /// With [`Config::reuse_person_writers`], [`JoinOptions::device`] and
+    /// [`JoinOptions::reclaim`] choose the connection's writer (v0.14.0).
     pub fn join_with(&self, p: Participant, stay: Stay, opts: &JoinOptions) -> Result<Joined> {
-        self.join_impl(p, stay, opts.shared, opts.prev, opts.label.clone())
+        let person = writers::PersonJoin::of(&self.config, opts);
+        self.join_impl(p, stay, opts.shared, opts.prev, opts.label.clone(), person)
     }
 
     fn join_impl(
@@ -1769,6 +1924,7 @@ impl Session {
         shared: bool,
         prev: Option<ClientId>,
         label: Option<String>,
+        person: Option<writers::PersonJoin<'_>>,
     ) -> Result<Joined> {
         timed!(Join);
         let label = super::participant::device_label(label.as_deref());
@@ -1806,15 +1962,62 @@ impl Session {
                     client: m.client,
                     version: st.version,
                     replaced: None,
+                    lease: m.lease.map(|l| WriterLease {
+                        client: m.client,
+                        token: l.token,
+                    }),
+                    kept: false,
+                    prev_ended: None,
                 });
             }
         }
-        let (client, rows_kept) = match self.reusable_client(st, &p)? {
-            Some(c) => (c, true),
+        // person-writer reuse (v0.14.0, `live/writers.rs`): a person's writer per device
+        let person = person.filter(|_| writers::takes_part(&p));
+        let mut prev = prev;
+        let mut handed_from = None;
+        let mut lease = None;
+        let (mut kept, mut prev_ended) = (false, None);
+        let picked = match &person {
+            Some(pj) => {
+                // a bare `prev` closes nothing: the kit can't tell the old connection from a
+                // sibling holding that writer now (a reclaim names its lease)
+                prev = None;
+                let tag = writers::device_tag(&st.hash_key, pj.key);
+                let pick = self.pick_person_writer(st, &p, tag, pj.reclaim, now)?;
+                if let Some(j) = pick.from {
+                    // the hand-over: the holder goes first, under this lock, so no point has
+                    // two connections on one writer, and nothing of its lease lands after
+                    handed_from = Some(st.members[j].pres.conn);
+                    if !writers::planted_handover_keeps_holder() {
+                        if let Some(l) = st.members[j].lease.as_mut() {
+                            l.end = writers::End::Handover;
+                        }
+                        self.remove_member_with(st, j, LeaveReason::Left, true);
+                    }
+                }
+                let token = writers::new_token();
+                self.lease_writer(st, pick.client, &p.pid, tag, token, rights.edit);
+                lease = Some(writers::MemberLease {
+                    token,
+                    device: tag,
+                    stateless: pj.stateless,
+                    end: writers::End::Unclean,
+                });
+                (kept, prev_ended) = (pick.kept, pick.prev_ended);
+                Some(pick.client)
+            }
+            None => None,
+        };
+        let reused = match picked {
+            Some(c) => Some(c),
+            None => self.reusable_client(st, &p)?,
+        };
+        let (client, rows_kept) = match reused {
+            Some(c) => (c, picked.is_none()),
             None => {
                 let store = self.store(st)?;
                 let c = fresh_client(store, self.doc_id, |c| {
-                    st.members.iter().any(|m| m.client == c)
+                    st.members.iter().any(|m| m.client == c) || st.writers.contains(c)
                 })?;
                 // what the ID was minted for goes with its owner, so a later load knows: an
                 // agent's that edits through the session alone may be reused, an own
@@ -1857,7 +2060,7 @@ impl Session {
             // a stat check on join (errors are reported as events)
             let _ = self.disk_check(st, now, false);
         }
-        if !watcher && !st.members.iter().any(|m| m.p.pid == pres.p.pid) {
+        if !watcher && handed_from.is_none() && !st.members.iter().any(|m| m.p.pid == pres.p.pid) {
             st.roster.record(
                 RosterEvent::Joined {
                     who: Who::of(&pres.p.pid),
@@ -1878,6 +2081,7 @@ impl Session {
             elem: Default::default(),
             label,
             rows_kept,
+            lease,
         });
         // join_replacing: the pid's connection holding `prev` closes as `leave` closes it,
         // after the new one is in (the pid stays present: no participant Left)
@@ -1892,13 +2096,24 @@ impl Session {
                 let old = st.members[i].pres.conn;
                 self.remove_member(st, i, LeaveReason::Left);
                 old
-            });
+            })
+            .or(handed_from);
+        debug_assert!(
+            writers::one_holder_each(st),
+            "two present connections hold one writer"
+        );
         self.roster_flush(st, now, false);
         Ok(Joined {
             conn,
             client,
             version: st.version,
             replaced,
+            lease: lease.map(|l| WriterLease {
+                client,
+                token: l.token,
+            }),
+            kept,
+            prev_ended,
         })
     }
 
@@ -2916,7 +3131,8 @@ impl Session {
     /// `write --base V`: apply only what the caller changed between version `base` and
     /// `new_text`, three-way merged onto the live text. Overlap with a change made since
     /// `base` gives [`WriteOutcome::Conflicts`] and applies nothing, except that two
-    /// appends at the end of the text both land, the live one first (merge rule O5). Valid
+    /// appends at the end of the text both land, the live one first (merge rule O5). A clean
+    /// merge the pack refuses ([`Pack::check_merged`]) is a conflict too. Valid
     /// bases: the live version, recently read versions, and stored versions. When the file
     /// has a BOM ([`Pack::writes_bom`]), one leading U+FEFF of `new_text` is taken off: it is
     /// the BOM `cat` printed.
@@ -2963,6 +3179,13 @@ impl Session {
         let merged = {
             timed!(WriteBaseMerge);
             merge::merge3(&base_text, &ours, &live)
+        };
+        // a clean merge the pack refuses (`Pack::check_merged`) is a conflict: nothing applied
+        let merged = match merged {
+            Merge::Clean(c) if self.merge_refused(root, &c.text, &ours, &live) => {
+                Merge::Conflicts(vec![merge::refused_merge(&base_text, &ours, &live)])
+            }
+            m => m,
         };
         match merged {
             Merge::Conflicts(c) => {
@@ -3672,18 +3895,14 @@ impl Session {
                 },
             });
         }
-        let appended = {
+        // person-writer rows changed since the last change landed ride in its transaction
+        st.writers.writable(client);
+        let writer_rows = st.writers.dirty();
+        let appended = self.store(st).and_then(|s| {
             prof!("commit.store");
-            self.store(st).and_then(|s| {
-                #[cfg(any(test, feature = "differential"))]
-                if crate::differential::apply_fault()
-                    == Some(crate::differential::ApplyFault::StoreCommitFails)
-                {
-                    return Err(crate::store::StoreError::Db("a planted failure".into()).into());
-                }
-                Ok(s.commit_changes(self.doc_id, &entries, &changes, &versions)?)
-            })
-        };
+            planted_store_commit_fails()?;
+            Ok(s.commit_changes_with(self.doc_id, &entries, &changes, &versions, &writer_rows)?)
+        });
         let seqs = match appended {
             Ok(s) => s,
             Err(e) => {
@@ -3691,6 +3910,7 @@ impl Session {
                 return Err(e);
             }
         };
+        st.writers.stored(&writer_rows);
         // the change's owner row landed with it: D1's owners follow
         if let Some(o) = st.owners.as_mut() {
             o.entry(client).or_insert_with(|| pid.clone());
@@ -4907,6 +5127,9 @@ impl Session {
         {
             self.compact(&mut st);
         }
+        // person-writer leases end (parked, or free for a stateless connection); the rows
+        // changed since the last change landed are written
+        self.close_writers(&mut st);
         // claims end (waiting hosts are told), then the presence extras go with the session
         self.end_all_claims(&mut st, awareness::ClaimEnd::Left);
         // a text doc's waiting notes go to the manager for the doc's next session; a grid
@@ -4940,7 +5163,9 @@ impl Session {
     /// state) and its new text, applied as [`EXTERNAL_PID`] (`via: "disk"`), with a version
     /// cut before it ([`VersionReason::BeforeExternal`], when the doc moved since the last
     /// version) and after it ([`VersionReason::External`]). Edits not yet written back are
-    /// kept: the next write-back writes the merged doc.
+    /// kept: the next write-back writes the merged doc. A merge the pack refuses
+    /// ([`Pack::check_merged`]) takes the save whole instead; the version before it holds the
+    /// live text it replaced.
     pub fn file_changed(&self) -> Result<DiskCheck> {
         let r = self.file_changed_in();
         self.shown(r)
@@ -5442,6 +5667,21 @@ impl Session {
 
     // --- internals ---
 
+    /// Whether the pack refuses a whole-line merge of `root` (`Pack::check_merged`): `merged`
+    /// fails its check while both merged texts, `ours` and `theirs`, pass it. A text that was
+    /// already refused before the merge is the writer's own, so the merge goes ahead as before.
+    fn merge_refused(&self, root: &str, merged: &str, ours: &str, theirs: &str) -> bool {
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::check_merged_mutant()
+            == Some(crate::differential::CheckMergedMutant::Skipped)
+        {
+            return false;
+        }
+        self.pack.check_merged(root, merged).is_err()
+            && self.pack.check_merged(root, ours).is_ok()
+            && self.pack.check_merged(root, theirs).is_ok()
+    }
+
     fn render(&self, st: &State) -> Result<Vec<u8>> {
         Ok(self.pack.encode(&self.content(st)?, &st.codec)?)
     }
@@ -5627,7 +5867,7 @@ impl Session {
             Some(c) => c,
             None => {
                 let c = fresh_client(&store, self.doc_id, |c| {
-                    st.members.iter().any(|m| m.client == c)
+                    st.members.iter().any(|m| m.client == c) || st.writers.contains(c)
                 })?;
                 store.set_client(self.doc_id, c, EXTERNAL_PID)?;
                 c
@@ -5727,10 +5967,17 @@ impl Session {
                 continue;
             }
             let live = &st.texts.iter().find(|(r, _)| r == root).expect("a root").1;
-            let merged = {
+            let mut merged = {
                 timed!(IngestMerge);
                 merge::merge3_keep_both(&synced, t, live)
             };
+            if self.merge_refused(root, &merged.text, t, live) {
+                // the pack refuses the merge (`Pack::check_merged`): the save is taken whole, as
+                // a merge onto the live text with no change of its own. The live text it
+                // replaces is in the version cut before the save; the notes name it
+                merged = merge::merge3_keep_both(live, t, live);
+                debug_assert_eq!(merged.text, *t, "a merge with one side is that side");
+            }
             merge_sides.push((root.clone(), merged.hunks.clone()));
             // trimmed to the characters that change (v0.9.7): the merge's sides are whole
             // lines (Option B), a guarantee about the merged text; the change applied to the

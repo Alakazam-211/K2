@@ -137,6 +137,12 @@ use enc::{R, W};
 ///   that knows the table rewrites the store again. Its doc delete isn't refused and can't
 ///   erase rows of a table it doesn't know; every open here removes what it left.
 ///
+///   v0.14.0 adds a third kind to that table, still **without a format bump**: kind 2, a
+///   person's writer on one device ([`PersonWriterRow`], person-writer reuse), a longer row.
+///   A kit from v0.10.2 to v0.13.x reuses only rows equal to the agent kind's one byte and
+///   draws fresh IDs only where no owner row is, so it never hands out such an ID; it copies
+///   the rows as bytes on a rewrite and erases them with their doc.
+///
 ///   One more on the same terms, `doc_blob_refs` (the blobs a doc's values name; `blob_refs.rs`),
 ///   created lazily by the first name. Its counts are in `blobs`, so an older kit's blob GC
 ///   honours them. An older kit's own writes take none (`docs/SESSIONS.md`, "Blob references").
@@ -197,6 +203,109 @@ const CLIENT_KINDS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("c
 const KIND_AGENT: u8 = 0;
 /// [`CLIENT_KINDS`]: a participant with its own replica (never reused).
 const KIND_OWN_REPLICA: u8 = 1;
+/// [`CLIENT_KINDS`]: a person's writer on one device (person-writer reuse,
+/// `Config::reuse_person_writers`, v0.14.0): a longer row, [`PersonWriterRow`], still without
+/// a format bump. An older kit (v0.10.2 on) reuses only rows equal to `[KIND_AGENT]`, so it
+/// never reuses one of these, and its `fresh_client` skips every ID with an owner row, so it
+/// never hands one out either; it copies and erases the rows as bytes.
+const KIND_PERSON_DEVICE: u8 = 2;
+/// [`KIND_PERSON_DEVICE`] rows' layout version: a row of another version (a later kit's) is
+/// read as unknown, never reused.
+const PERSON_ROW_VERSION: u8 = 1;
+/// [`KIND_PERSON_DEVICE`] rows' length: kind, version, state, device tag (16), token, ended
+/// token, ended version, ended time (8 each).
+const PERSON_ROW_LEN: usize = 3 + 16 + 8 * 4;
+
+/// One person-device writer's row (`client_kinds`, kind 2; person-writer reuse,
+/// `Config::reuse_person_writers`): the device it belongs to (a keyed tag, never the host's
+/// key), whether a lease holds it, and when the last lease that ended without a release ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct PersonWriterRow {
+    /// A lease holds it (held, or parked when no connection does): only that lease's token
+    /// takes it back. `false`: free for the same person and device.
+    pub leased: bool,
+    /// The device's tag: HMAC-SHA256 of the host's device key under the doc's hash key, first
+    /// 16 bytes. A purge rotates the key, so tags written before it match nothing after it.
+    pub device: [u8; 16],
+    /// The lease's token while `leased` (0 when free).
+    pub token: u64,
+    /// The token of the last lease that ended without a release (0: none recorded).
+    pub ended_token: u64,
+    /// The doc's version when that lease ended: no change of that lease lands after it.
+    pub ended_seq: Seq,
+    /// When it ended (the host's clock), for the park expiry.
+    pub ended_ms: u64,
+}
+
+impl PersonWriterRow {
+    /// A row for `device`, leased with `token`.
+    pub fn leased(device: [u8; 16], token: u64) -> Self {
+        Self {
+            leased: true,
+            device,
+            token,
+            ..Self::default()
+        }
+    }
+}
+
+fn enc_person_row(r: &PersonWriterRow) -> [u8; PERSON_ROW_LEN] {
+    let mut b = [0u8; PERSON_ROW_LEN];
+    b[0] = KIND_PERSON_DEVICE;
+    b[1] = PERSON_ROW_VERSION;
+    b[2] = u8::from(r.leased);
+    b[3..19].copy_from_slice(&r.device);
+    b[19..27].copy_from_slice(&r.token.to_le_bytes());
+    b[27..35].copy_from_slice(&r.ended_token.to_le_bytes());
+    b[35..43].copy_from_slice(&r.ended_seq.to_le_bytes());
+    b[43..51].copy_from_slice(&r.ended_ms.to_le_bytes());
+    b
+}
+
+/// A kind-2 row, or `None` for any other kind, another layout version or a damaged row (read
+/// as unknown: never reused).
+fn dec_person_row(b: &[u8]) -> Option<PersonWriterRow> {
+    if b.len() != PERSON_ROW_LEN || b[0] != KIND_PERSON_DEVICE || b[1] != PERSON_ROW_VERSION {
+        return None;
+    }
+    let u = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().expect("8 bytes"));
+    let leased = match b[2] {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    Some(PersonWriterRow {
+        leased,
+        device: b[3..19].try_into().expect("16 bytes"),
+        token: u(19),
+        ended_token: u(27),
+        ended_seq: u(35),
+        ended_ms: u(43),
+    })
+}
+
+/// Write person-writer rows in `w` (the transaction of a change, or a session close's): each
+/// one's kind row, and its owner row when it has none (a row already there stays: a
+/// participant purge may have renamed it).
+fn put_person_writers_in(
+    w: &redb::WriteTransaction,
+    id: DocId,
+    rows: &[(ClientId, String, PersonWriterRow)],
+) -> Result<(), StoreError> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let mut owners = w.open_table(CLIENTS)?;
+    let mut kinds = w.open_table(CLIENT_KINDS)?;
+    for (client, owner, row) in rows {
+        if owners.get((id, *client))?.is_none() {
+            owners.insert((id, *client), owner.as_str())?;
+        }
+        kinds.insert((id, *client), enc_person_row(row).as_slice())?;
+    }
+    Ok(())
+}
 
 /// [`Additive::on_orphan`].
 pub(super) type OnOrphan = fn(&redb::WriteTransaction, DocId) -> Result<(), StoreError>;
@@ -2018,6 +2127,51 @@ impl DocStore {
             }
         }
         Ok(out)
+    }
+
+    /// The person-device writers of doc `id` (`client_kinds` kind 2, with their owner rows),
+    /// in client order: what person-writer reuse may take (`Config::reuse_person_writers`).
+    /// Empty without the table; a row of another kind or layout, or without an owner row, is
+    /// not listed (never reused).
+    pub fn person_writers(
+        &self,
+        id: DocId,
+    ) -> Result<Vec<(ClientId, String, PersonWriterRow)>, StoreError> {
+        let r = self.begin_read()?;
+        let t = match r.open_table(CLIENT_KINDS) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let owners = r.open_table(CLIENTS)?;
+        let mut out = Vec::new();
+        for kv in t.range((id, 0)..=(id, u64::MAX))? {
+            let (k, v) = kv?;
+            let Some(row) = dec_person_row(v.value()) else {
+                continue;
+            };
+            let client = k.value().1;
+            if let Some(o) = owners.get((id, client))? {
+                out.push((client, o.value().to_owned(), row));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Write person-writer rows (and their owner rows where missing) in one transaction: a
+    /// session's close writes those its connections changed since their last change landed.
+    pub(crate) fn put_person_writers(
+        &self,
+        id: DocId,
+        rows: &[(ClientId, String, PersonWriterRow)],
+    ) -> Result<(), StoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let w = self.begin_write()?;
+        put_person_writers_in(&w, id, rows)?;
+        w.commit()?;
+        Ok(())
     }
 
     /// Every client ID recorded for doc `id`, with its owner, in client order.

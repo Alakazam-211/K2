@@ -43,7 +43,11 @@
 #                                                the consumer then deletes the doc, and HEAD's
 #                                                build (`n1_kinds_after_delete`) reads the
 #                                                file as the delete left it, opens it, and fails
-#                                                if a deleted doc's client_kinds rows remain
+#                                                if a deleted doc's client_kinds rows remain;
+#                                                with K2MB_N1_PERSONS (v0.14.0) it also leaves
+#                                                person-device writers (persons-<store>): the
+#                                                consumer never hands one out, and this build's
+#                                                `n1_persons_after` takes keep.md's back
 #
 # The blob references (after v0.10.2), both the case that holds and the documented limit:
 #
@@ -139,11 +143,14 @@ PY
       set -- $pair
       echo "== $1: the $2 build writes, the $3 build reads"
       (cd "$OUT/$2/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_RESTORE=1 K2MB_N1_AGENTS=1 \
-        cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
+        K2MB_N1_PERSONS=1 cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
       ls -l "$OUT/$1/text.redb" "$OUT/$1/grid.redb"
       (cd "$OUT/$1" && cargo run -q)
       (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
         cargo test -p k2-mpc-base --test grid_store n1_kinds_after_delete -- --ignored --nocapture)
+      # v0.14.0: keep.md's person-device writers, taken back by this build after the other's
+      (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
+        cargo test -p k2-mpc-base --test grid_store n1_persons_after -- --ignored --nocapture)
     done
     echo "N-1 BOTH OK"
     ;;

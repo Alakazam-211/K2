@@ -5,3 +5,28 @@
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the spec-undo test that checks the enumerator ends a run at its own assertion-stop pseudo-rule; not an engine defect
+# v0.14.0, person-writer reuse: "crash" is a client or tab ending without a clean close (no bye), the design's own word for an unclean end; "no longer" a purge's tags or a connection's membership; "panics" a test closure's unwind, which the mutant guard survives
+crates/base/src/differential.rs: /// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+crates/base/src/differential.rs: /// `r3_crash_with_pending_edits`, R11).
+crates/base/src/session/live/writers.rs: //!   an unload, a crash): only a reclaim naming that lease ([`JoinOptions::reclaim`]) takes it
+crates/base/src/session/live/writers.rs: //! lost to a crash leaves its writer as the row had it (free or parked): nothing of it is in
+crates/base/src/session/live/writers.rs: //! the doc. At load, a row still leased whose end wasn't recorded (a crash) ends at the loaded
+crates/base/src/session/live/writers.rs: /// The doc's rows, with a crash's unrecorded lease ends recorded at `version`.
+crates/base/src/session/live/writers.rs: // its lease's end wasn't recorded (a crash): no change of it lands after this
+crates/base/src/session/live/writers.rs: return; // a purge reloaded the rows since (its tags no longer match)
+crates/base/tests/person_writer_leases.rs: /// crash (its end never written) is parked at the next load's.
+crates/base/tests/person_writers.rs: //! - `r1_two_tabs` (R1), `r2_reconnect_half_open` (R2), `r3_crash_with_pending_edits` (R3),
+crates/base/tests/person_writers.rs: //! - `reuse-parked` (R11, `ClientMutant::ReuseParked`): `r3_crash_with_pending_edits` fails at
+crates/base/tests/person_writers.rs: fn r3_crash_with_pending_edits() {
+docs/SESSIONS.md: lost rights, a host close, an unload, a crash): only the client's own reclaim takes it back,
+docs/design/person-writer-reuse-r0.md: `leave`, idle expiry, kick, rights lost, a host close or unload, and a crash are all
+docs/design/person-writer-reuse-r0.md: close/unload/crash       ▼      │ (kept = true, new token)    ▼
+docs/design/person-writer-reuse-r0.md: a writer whose row says *leased* is **PARKED**: a crash or an unload never frees a writer.
+docs/design/person-writer-reuse-r0.md: - Nothing from the old connection can apply after this: its `ConnId` is no longer a member,
+docs/design/person-writer-reuse-r0.md: write per leave) and at load for writers left leased by a crash: the loaded version. Every op
+docs/design/person-writer-reuse-r0.md: | H5 | A crash between commit and broadcast, or during a lease. | The op is durable, or it is absent everywhere. Leased rows load as PARKED, never FREE. |
+docs/design/person-writer-reuse-r0.md: | R3 crash with pending edits | Tab 1 has an edit in flight and a queue; its socket dies; `leave` (unclean). Tab 2, same device, joins; then tab 1 reclaims. | Tab 2 gets a writer ≠ T. Tab 1 is `kept`; its queued hunks apply under T. Every log entry under T starts at the previous entries' end (the contiguity check, below). Replayed into a fresh Yrs doc and into a fresh Yjs doc (the conformance harness), there are no duplicate `(client, clock)`. Native: a replay through admission never refuses E195. |
+docs/design/person-writer-reuse-r0.md: - a share of ends unclean and never reclaimed (crash, a tab closed while offline, a `bye` lost);
+docs/design/person-writer-reuse-r0.md: state on a crash.
+docs/design/person-writer-reuse-r0.md: and is lost to a crash leaves its writer as the store had it (free or parked): nothing of it
+docs/design/person-writer-reuse-r0.md: is in the doc. A release lost to a crash leaves the writer parked (never handed out held).

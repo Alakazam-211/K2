@@ -92,6 +92,22 @@ pub trait Pack: Send + Sync {
         Cow::Borrowed(text)
     }
 
+    /// Whether `text` may be `root`'s text after a whole-line merge: a format whose
+    /// lines depend on each other (JSON's commas and brackets) can refuse a merge that two
+    /// valid texts made invalid. The kit asks it of a text doc's merges only, and acts on a
+    /// refusal only when both merged texts pass and the merge doesn't:
+    /// - an outside save ([`super::Session::file_changed`]): the save is taken whole instead of
+    ///   merged. The live text it replaces stays in the "before external edit" version, and
+    ///   the removal notes tell its authors what went and which version holds it;
+    /// - `write --base`'s clean merge: refused as one conflict over every line either side
+    ///   changed ([`crate::text::merge::refused_merge`]); nothing is applied.
+    ///
+    /// Default: every text passes (the merge is taken as it is).
+    fn check_merged(&self, root: &str, text: &str) -> Result<(), Declined> {
+        let _ = (root, text);
+        Ok(())
+    }
+
     /// How this pack's text splits into tokens for D1 (undo spec v1.10): a fresh change
     /// rewrites the tokens it touches wherever someone else wrote them, so it is never built
     /// from someone else's text. Words by default; a code pack would use

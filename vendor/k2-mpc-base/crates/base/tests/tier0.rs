@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::blob::{BlobConfig, BlobError, BlobStore};
+use k2_mpc_base::differential::{self, Tier0Mutant};
 use k2_mpc_base::session::{
     Action, AnyFile, Approval, ApprovalState, AuditEvent, BlobLogEntry, BlobLogKind, BlobMerge,
     BlobPack, BlobSession, BlobWriteResult, Config, ConnId, DiskCheck, DiskState, Host, LeaseEnd,
@@ -28,7 +29,11 @@ struct TestHost {
     /// Where conflict copies go (`Host::conflict_dir`): (the folder, the workspace it
     /// mirrors); `None` = beside the file.
     conflicts: Mutex<Option<(PathBuf, PathBuf)>>,
+    /// The host's conflict-copy names (`Host::conflict_copy_name`); `None` = the default.
+    copy_names: Mutex<Option<CopyNamer>>,
 }
+
+type CopyNamer = fn(&str, u64, &str) -> Option<String>;
 
 impl Host for TestHost {
     fn rights(&self, who: &Participant, _key: &DocKey) -> Rights {
@@ -50,6 +55,9 @@ impl Host for TestHost {
         let (root, ws) = self.conflicts.lock().unwrap().clone()?;
         let rel = file.parent()?.strip_prefix(&ws).ok()?;
         Some(root.join(rel))
+    }
+    fn conflict_copy_name(&self, file_name: &str, at_ms: u64, who: &str) -> Option<String> {
+        (*self.copy_names.lock().unwrap())?(file_name, at_ms, who)
     }
 }
 
@@ -91,6 +99,7 @@ fn fx_with(tag: &str, bc: BlobConfig) -> Fx {
         rights: Mutex::new(HashMap::new()),
         events: Mutex::new(Vec::new()),
         conflicts: Mutex::new(None),
+        copy_names: Mutex::new(None),
     });
     let store = Arc::new(DocStore::open(p.join("docs.redb")).unwrap());
     let h = host.clone();
@@ -693,11 +702,12 @@ fn a_save_recreating_a_write_of_ours_after_an_outside_save_is_kept() {
     let a = f.join(&s, person("alice", "Alice"));
     s.write_bytes(a, b"v2", 1).unwrap();
     assert_eq!(fs::read(&path).unwrap(), b"v2");
-    // a person saves over it, then saves the old bytes again
+    // a person saves over it (over a kit write, with no lease: kept both, the stale-save
+    // rule), then saves the old bytes again
     app_save(&path, b"mine");
     assert!(matches!(
         s.file_changed().unwrap(),
-        DiskCheck::Ingested { .. }
+        DiskCheck::Conflict { .. }
     ));
     app_save(&path, b"v2");
     assert!(matches!(
@@ -3136,4 +3146,414 @@ fn record_saved_needs_edit() {
     );
     f.grant("alice", Rights::full());
     assert_eq!(s.versions(a).unwrap().len(), 1, "nothing recorded");
+}
+
+// ---------- an outside save over a kit write (the stale-save rule) ----------
+
+fn need(ok: bool, row: &str, what: impl FnOnce() -> String) -> Result<(), String> {
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("{row}: {}", what()))
+    }
+}
+
+fn version_bytes(s: &BlobSession, c: ConnId, v: u64) -> Vec<u8> {
+    let mut r = s.read_version(c, v).unwrap();
+    let mut out = Vec::new();
+    r.reader.read_to_end(&mut out).unwrap();
+    out
+}
+
+/// Every `BlobConflict` event of the doc at `name`: (current, kept, copy, lease holder).
+type ConflictEvent = (u64, u64, Option<String>, Option<String>);
+fn conflict_events(f: &Fx, name: &str) -> Vec<ConflictEvent> {
+    f.events()
+        .into_iter()
+        .filter_map(|e| match e {
+            AuditEvent::BlobConflict {
+                key,
+                current,
+                kept,
+                copy,
+                lease_holder,
+                ..
+            } if key.path == name => Some((current, kept, copy, lease_holder)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// After a kit write (no lease held, nothing pending), an app that opened the file before it
+/// saves: both are kept. The save is current and on disk; the kit's write is the version
+/// `kept` and the conflict copy, byte for byte; one `BlobConflict` names the copy.
+fn row_stale_save_after_a_kit_write_keeps_both() -> Result<(), String> {
+    const ROW: &str = "row_stale_save_after_a_kit_write_keeps_both";
+    let f = fx("stale-kit");
+    let path = f.path("notes.md");
+    fs::write(&path, b"# notes\n").unwrap();
+    f.grant("bot", Rights::full());
+    let s = f.open("notes.md");
+    let g = f.join(&s, agent("bot"));
+    let w = s.write_bytes(g, b"# notes\nthe agent's line\n", 1).unwrap();
+    assert!(w.written, "control: the kit's write is on disk");
+    assert_eq!(s.lease().unwrap(), None, "control: no lease is held");
+    assert_eq!(s.status().unwrap().disk, Some(DiskState::Clean));
+    // the app still shows the file as it was before the agent's write, and saves
+    f.advance(1_000);
+    app_save(&path, b"# notes\nthe person's line\n");
+    let out = s.file_changed().unwrap();
+    let DiskCheck::Conflict {
+        version,
+        kept,
+        copy,
+    } = out
+    else {
+        return Err(format!("{ROW}: expected a conflict, got {out:?}"));
+    };
+    need(kept == w.version, ROW, || {
+        format!(
+            "the kit's write is the kept version: {kept} != {}",
+            w.version
+        )
+    })?;
+    let copy = copy.ok_or_else(|| format!("{ROW}: a conflict copy was written"))?;
+    let name = copy.file_name().unwrap().to_str().unwrap().to_owned();
+    need(
+        name == "notes (conflict bot 2026-10-27 143001).md",
+        ROW,
+        || format!("the copy has the kit's name: {name}"),
+    )?;
+    let held = fs::read(&copy).unwrap();
+    need(held == b"# notes\nthe agent's line\n", ROW, || {
+        format!("the copy holds the kit's write: {held:?}")
+    })?;
+    need(
+        version_bytes(&s, g, kept) == b"# notes\nthe agent's line\n",
+        ROW,
+        || "the kept version holds the kit's write".into(),
+    )?;
+    let st = s.status().unwrap();
+    need(st.version == version, ROW, || "the save is current".into())?;
+    need(st.current.reason == BlobReason::External, ROW, || {
+        format!("the save is an outside save: {:?}", st.current.reason)
+    })?;
+    need(
+        st.current.conflict_copy.as_deref() == Some(&*name),
+        ROW,
+        || "the save's version records the copy".into(),
+    )?;
+    need(
+        fs::read(&path).unwrap() == b"# notes\nthe person's line\n",
+        ROW,
+        || "the app's save stays on disk".into(),
+    )?;
+    let ev = conflict_events(&f, "notes.md");
+    need(
+        ev == [(version, kept, Some(name.clone()), None)],
+        ROW,
+        || format!("one BlobConflict, with the copy and no lease holder: {ev:?}"),
+    )
+}
+
+#[test]
+fn stale_save_after_a_kit_write_keeps_both() {
+    row_stale_save_after_a_kit_write_keeps_both().unwrap();
+}
+
+/// The same with a pack that can merge: no merge over a kit write (the base would be the
+/// kit's own version, so a merge would take the save whole). Kept both.
+fn row_stale_save_after_a_kit_write_is_not_merged() -> Result<(), String> {
+    const ROW: &str = "row_stale_save_after_a_kit_write_is_not_merged";
+    let f = fx("stale-kit-merge");
+    let path = f.path("set.txt");
+    fs::write(&path, "a\n").unwrap();
+    f.grant("bot", Rights::full());
+    let s = f
+        .mgr
+        .open_blob_file(Arc::new(LineSets), &key("set.txt"), &path, &f.ws)
+        .unwrap();
+    let g = f.join(&s, agent("bot"));
+    let w = s.write_bytes(g, b"a\nb\n", 1).unwrap();
+    assert!(w.written && s.lease().unwrap().is_none());
+    app_save(&path, b"c\n");
+    let out = s.file_changed().unwrap();
+    let DiskCheck::Conflict { kept, copy, .. } = out else {
+        return Err(format!("{ROW}: expected a conflict, got {out:?}"));
+    };
+    need(kept == w.version, ROW, || "the kit's write is kept".into())?;
+    let copy = copy.ok_or_else(|| format!("{ROW}: a conflict copy was written"))?;
+    need(fs::read(&copy).unwrap() == b"a\nb\n", ROW, || {
+        "the copy holds the kit's write".into()
+    })?;
+    need(fs::read(&path).unwrap() == b"c\n", ROW, || {
+        "the file is the save, no merge written back".into()
+    })
+}
+
+#[test]
+fn stale_save_after_a_kit_write_is_not_merged() {
+    row_stale_save_after_a_kit_write_is_not_merged().unwrap();
+}
+
+/// A restart between the kit's write and the save changes nothing: the decision reads the
+/// stored version, not the session's memory. Both a save found while open and a save made
+/// while closed (found on open) keep both.
+fn row_stale_save_after_a_kit_write_across_a_restart() -> Result<(), String> {
+    const ROW: &str = "row_stale_save_after_a_kit_write_across_a_restart";
+    let f = fx("stale-kit-restart");
+    let path = f.path("plan.md");
+    let other = f.path("todo.md");
+    fs::write(&path, b"plan 1\n").unwrap();
+    fs::write(&other, b"todo 1\n").unwrap();
+    f.grant("bot", Rights::full());
+    let (w1, w2) = {
+        let s = f.open("plan.md");
+        let g = f.join(&s, agent("bot"));
+        let w1 = s.write_bytes(g, b"plan agent\n", 1).unwrap();
+        let t = f.open("todo.md");
+        let g2 = f.join(&t, agent("bot"));
+        let w2 = t.write_bytes(g2, b"todo agent\n", 1).unwrap();
+        assert!(w1.written && w2.written);
+        (w1.version, w2.version)
+    };
+    let f = restart(f);
+    f.grant("bot", Rights::full());
+    // saved while the host was down: found on open
+    f.advance(1_000);
+    app_save(&other, b"todo person\n");
+    let t = f.open("todo.md");
+    let g = f.join(&t, agent("bot"));
+    let st = t.status().unwrap();
+    need(st.current.reason == BlobReason::External, ROW, || {
+        "todo.md: the save is current".into()
+    })?;
+    let copies = st.conflict_copies;
+    need(copies.len() == 1 && copies[0].kept == w2, ROW, || {
+        format!("todo.md: one copy, of the kit's write: {copies:?}")
+    })?;
+    need(
+        fs::read(&copies[0].path).unwrap() == b"todo agent\n",
+        ROW,
+        || "todo.md: the copy holds the kit's write".into(),
+    )?;
+    need(version_bytes(&t, g, w2) == b"todo agent\n", ROW, || {
+        "todo.md: the kit's write is a version".into()
+    })?;
+    let ev = conflict_events(&f, "todo.md");
+    need(
+        ev.len() == 1 && ev[0].0 == st.version && ev[0].2.is_some(),
+        ROW,
+        || format!("todo.md: one BlobConflict with the copy: {ev:?}"),
+    )?;
+    // opened clean after the restart, then saved
+    let s = f.open("plan.md");
+    let g = f.join(&s, agent("bot"));
+    need(
+        s.status().unwrap().disk == Some(DiskState::Clean),
+        ROW,
+        || "plan.md: reopened clean".into(),
+    )?;
+    app_save(&path, b"plan person\n");
+    let out = s.file_changed().unwrap();
+    let DiskCheck::Conflict {
+        version,
+        kept,
+        copy,
+    } = out
+    else {
+        return Err(format!("{ROW}: plan.md: expected a conflict, got {out:?}"));
+    };
+    need(kept == w1, ROW, || {
+        "plan.md: the kit's write is kept".into()
+    })?;
+    let copy = copy.ok_or_else(|| format!("{ROW}: plan.md: a conflict copy was written"))?;
+    need(fs::read(&copy).unwrap() == b"plan agent\n", ROW, || {
+        "plan.md: the copy holds the kit's write".into()
+    })?;
+    need(version_bytes(&s, g, kept) == b"plan agent\n", ROW, || {
+        "plan.md: the kit's write is a version".into()
+    })?;
+    let ev = conflict_events(&f, "plan.md");
+    need(
+        ev.len() == 1 && ev[0].0 == version && ev[0].2.is_some(),
+        ROW,
+        || format!("plan.md: one BlobConflict with the copy: {ev:?}"),
+    )
+}
+
+#[test]
+fn stale_save_after_a_kit_write_across_a_restart() {
+    row_stale_save_after_a_kit_write_across_a_restart().unwrap();
+}
+
+/// Unchanged: an outside save over the file's own content (the first version read from the
+/// file, then an outside save) is a plain new version, with no copy.
+#[test]
+fn an_outside_save_over_an_outside_save_is_a_plain_version() {
+    let f = fx("outside-outside");
+    let path = f.path("draft.md");
+    fs::write(&path, b"one\n").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("draft.md");
+    let a = f.join(&s, person("alice", "Alice"));
+    for (i, bytes) in [&b"two\n"[..], b"three\n"].into_iter().enumerate() {
+        f.advance(1_000);
+        app_save(&path, bytes);
+        let out = s.file_changed().unwrap();
+        assert!(
+            matches!(out, DiskCheck::Ingested { version } if version == 2 + i as u64),
+            "save {i}: {out:?}"
+        );
+        assert_eq!(read_all(&s, a), bytes);
+    }
+    // and the same after a restart
+    drop(s);
+    let f = restart(f);
+    f.grant("alice", Rights::full());
+    let s = f.open("draft.md");
+    app_save(&path, b"four\n");
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Ingested { version: 4 }
+    ));
+    assert_eq!(names_in(&f.ws), ["draft.md"], "no conflict copy");
+    assert!(!f
+        .events()
+        .iter()
+        .any(|e| matches!(e, AuditEvent::BlobConflict { .. })));
+}
+
+/// Unchanged: a save of exactly what the kit wrote records nothing.
+#[test]
+fn a_save_identical_to_a_kit_write_is_a_no_op() {
+    let f = fx("stale-kit-same");
+    let path = f.path("same.md");
+    fs::write(&path, b"one\n").unwrap();
+    f.grant("bot", Rights::full());
+    let s = f.open("same.md");
+    let g = f.join(&s, agent("bot"));
+    let w = s.write_bytes(g, b"two\n", 1).unwrap();
+    assert!(w.written);
+    f.advance(1_000);
+    app_save(&path, b"two\n");
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+    assert_eq!(s.status().unwrap().version, w.version);
+    assert_eq!(s.versions(g).unwrap().len(), 2);
+    // after a restart, too
+    drop(s);
+    let f = restart(f);
+    f.grant("bot", Rights::full());
+    let s = f.open("same.md");
+    f.advance(1_000);
+    app_save(&path, b"two\n");
+    assert_eq!(s.file_changed().unwrap(), DiskCheck::Unchanged);
+    assert_eq!(s.status().unwrap().version, w.version);
+    assert_eq!(names_in(&f.ws), ["same.md"], "no conflict copy");
+}
+
+/// `Host::conflict_copy_name`: the host's name first, then the pack's, then the kit's; a
+/// name with a path separator, `.` or `..` is passed over; never over an existing file.
+#[test]
+fn the_hosts_conflict_copy_name_comes_first() {
+    struct Named;
+    impl BlobPack for Named {
+        fn conflict_copy_name(&self, file_name: &str, _at_ms: u64, who: &str) -> String {
+            format!("pack-{who}-{file_name}")
+        }
+    }
+    fn persons(file_name: &str, _at_ms: u64, who: &str) -> Option<String> {
+        let (stem, ext) = file_name.rsplit_once('.').unwrap();
+        Some(format!("{stem} ({who}'s version).{ext}"))
+    }
+    fn escape(_: &str, _: u64, _: &str) -> Option<String> {
+        Some("../escape.md".into())
+    }
+    fn dots(_: &str, _: u64, _: &str) -> Option<String> {
+        Some("..".into())
+    }
+    let f = fx("host-names");
+    f.grant("bot", Rights::full());
+    // (host's namer, pack, the name expected each time)
+    type Case = (Option<CopyNamer>, bool, [&'static str; 2]);
+    let cases: [Case; 5] = [
+        (
+            Some(persons as CopyNamer),
+            false,
+            ["a0 (bot's version).md", "a0 (bot's version) 2.md"],
+        ),
+        (
+            Some(persons as CopyNamer),
+            true,
+            ["a1 (bot's version).md", "a1 (bot's version) 2.md"],
+        ),
+        (None, true, ["pack-bot-a2.md", "pack-bot-a2 2.md"]),
+        (
+            Some(escape as CopyNamer),
+            true,
+            ["pack-bot-a3.md", "pack-bot-a3 2.md"],
+        ),
+        (
+            Some(dots as CopyNamer),
+            false,
+            [
+                "a4 (conflict bot 2026-10-27 143013).md",
+                "a4 (conflict bot 2026-10-27 143014).md",
+            ],
+        ),
+    ];
+    for (i, (namer, pack, want)) in cases.into_iter().enumerate() {
+        *f.host.copy_names.lock().unwrap() = namer;
+        let name = format!("a{i}.md");
+        let path = f.path(&name);
+        fs::write(&path, b"one\n").unwrap();
+        let s = if pack {
+            f.mgr
+                .open_blob_file(Arc::new(Named), &key(&name), &path, &f.ws)
+                .unwrap()
+        } else {
+            f.open(&name)
+        };
+        let g = f.join(&s, agent("bot"));
+        for (n, want) in want.into_iter().enumerate() {
+            let v = s.status().unwrap().version;
+            s.write_bytes(g, format!("bot {n}\n").as_bytes(), v)
+                .unwrap();
+            f.advance(1_000);
+            app_save(&path, format!("person {n}\n").as_bytes());
+            let out = s.file_changed().unwrap();
+            let DiskCheck::Conflict { copy: Some(c), .. } = out else {
+                panic!("case {i}, save {n}: expected a conflict with a copy, got {out:?}");
+            };
+            assert_eq!(c.file_name().unwrap().to_str().unwrap(), want, "case {i}");
+            assert_eq!(c.parent().unwrap(), f.ws, "case {i}: beside the file");
+            assert_eq!(fs::read(&c).unwrap(), format!("bot {n}\n").as_bytes());
+        }
+        f.advance(1_000);
+    }
+    *f.host.copy_names.lock().unwrap() = None;
+}
+
+/// The planted fault "stale-after-kit-write ignored": each stale-save row goes red, by name.
+#[test]
+fn the_planted_stale_after_kit_write_ignored_is_caught_by_name() {
+    differential::with_tier0_mutant(Tier0Mutant::StaleAfterKitWriteIgnored, || {
+        for (name, row) in [
+            (
+                "row_stale_save_after_a_kit_write_keeps_both",
+                row_stale_save_after_a_kit_write_keeps_both as fn() -> Result<(), String>,
+            ),
+            (
+                "row_stale_save_after_a_kit_write_is_not_merged",
+                row_stale_save_after_a_kit_write_is_not_merged,
+            ),
+            (
+                "row_stale_save_after_a_kit_write_across_a_restart",
+                row_stale_save_after_a_kit_write_across_a_restart,
+            ),
+        ] {
+            let e = row().expect_err(&format!("planted, {name} must fail"));
+            assert!(e.starts_with(&format!("{name}: ")), "{e}");
+        }
+    });
 }

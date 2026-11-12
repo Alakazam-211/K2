@@ -85,9 +85,16 @@ For a doc made of keyed elements. `PRESENCE.md` has the calls, `WIRE.md` the fra
 - **Rule 0: one edit in flight.** `LiveText` keeps it; the editor never sends frames itself and
   never resends an edit already handed to the transport.
 - **The retry loop:** on a close, `canRetry(reason)` decides (never the transport's own
-  `retry`); back off with jitter, then `connect({resume: live.version, prev: live.client})`,
-  then `live.reconnected(welcome)`. `prev` lets the host leave the previous connection first
-  (WIRE.md, Reconnecting).
+  `retry`); back off with jitter, then
+  `connect({resume: live.version, prev: live.client, lease: live.lease})`, then
+  `live.reconnected(welcome)`. `prev` lets the host leave the previous connection first; with a
+  host that reuses writers (kit v0.14.0), `lease` lets it give this client its writer back
+  (`welcome.kept`), and `prev` alone closes nothing (WIRE.md, Reconnecting).
+- **Say `bye` when the page goes** (a host with writer leases): on `pagehide` (or the editor's
+  close), call `live.bye()` before closing the transport. It sends `bye` only when the client
+  holds nothing unsent; the host then frees the writer for the person's next tab on this device.
+  When it returns false, just close: the writer stays reserved for this client's reconnect. A
+  page restored from the back-forward cache connects as new (`live.lease` is gone after `bye`).
 - **Re-apply checks presence first** for a lost reply (`MPC-E000` with `asOf`): only `absent`
   is placed; `present` is dismissed as already there; `unknown` is kept. Then `reapply(id)`,
   then `noteReapplied(id)`.

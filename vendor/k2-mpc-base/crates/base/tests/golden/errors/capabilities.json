@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1046,6 +1046,8 @@
     "position_check_every": 1000,
     "writeback_check_every": 100,
     "reuse_agent_clients": 1,
+    "reuse_person_writers": 0,
+    "person_writer_park_ms": 0,
     "blame_check_every": 100,
     "blame_check_large_at": 20000,
     "blame_check_every_large": 1000,

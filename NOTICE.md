@@ -272,15 +272,15 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Is **MIT**. These packages do **not** relicense the product. |
 
-## Multiplayer kit: k2-mpc-base v0.13.1 (vendored)
+## Multiplayer kit: k2-mpc-base v0.14.0 (vendored)
 
 Live docs (Markdown, plain text and any file) run on Alakazam Labs' multiplayer kit,
 vendored with `git subtree`.
 
 | | |
 |--|--|
-| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract, the structure index, comments and claims by node), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.13.2 (`vendor/k2-mpc-base/client/src`: the library under the app's Live editor, `src/renderer/components/LiveEditor`) |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.13.1` (`6ef688e`; crate version `0.13.1`, client `0.13.2`) |
+| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity, the export contract, the structure index, comments and claims by node), with its own `NOTICE.md` and `CHANGELOG.md`; and its JS client `k2-mpc-client` 0.14.0 (`vendor/k2-mpc-base/client/src`: the library under the app's Live editor, `src/renderer/components/LiveEditor`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.14.0` (`30ddf8f`; crate version `0.14.0`, client `0.14.0`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
 
 Its Rust dependencies, in K2's `Cargo.lock`:

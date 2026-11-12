@@ -138,7 +138,14 @@ assert_contains "first chat asks for a harness" "$resp" '"code":"harness_choice_
 claude_installed="$(python3 -c 'import json,sys; print([h["installed"] for h in json.loads(sys.argv[1])["error"]["harnesses"] if h["harness"] == "claude"])' "$resp")"
 [ "$claude_installed" = "[True]" ] && ok "the pick lists the claude shim as installed" \
     || bad "the pick lists the claude shim as installed (got $claude_installed in $resp)"
-[ ! -e "$SB/claude.env" ] || bad "the first chat started before a harness was picked"
+# A chat start names its conversation (--session-id); a version probe of the
+# shim doesn't.
+if grep -Eq -- '^--(session-id|resume)$' "$SB/claude.argv" 2>/dev/null; then
+    bad "the first chat started before a harness was picked (argv: $(tr '\n' ' ' <"$SB/claude.argv"))"
+else
+    ok "nothing started before the pick"
+fi
+rm -f "$SB/claude.env" "$SB/claude.argv"
 # Picking claude: the pinned chat comes up on the claude shim.
 resp="$(curl -s -X POST "http://127.0.0.1:$DPORT/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
     -H 'Content-Type: application/json' --data-raw "{\"project\":\"$WSA\",\"harness\":\"claude\"}")"

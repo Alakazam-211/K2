@@ -377,19 +377,32 @@ function FileRow({
     <div
       data-file-row={doc.fileName}
       className={cx('group relative flex items-center gap-2 pl-[3.25rem] pr-3 py-1 select-none', SETTING_LIST_ROW_HOVER)}
-      title={doc.filePath}
+      title={html ? `${doc.filePath}\nDouble-click to open on this dashboard` : doc.filePath}
       onMouseDown={(e) => {
         if (!html || noteViewerInteractionBlocked()) return
         if ((e.target as HTMLElement).closest('button')) return
         startDashDrag(e, payload, suppressClick)
       }}
+      // Double-click opens an HTML file (on this dashboard, or focuses its
+      // tile there), as a click on the old Resources row did.
+      onDoubleClick={(e) => {
+        if (!html || (e.target as HTMLElement).closest('button')) return
+        show()
+      }}
       onContextMenu={async (e) => {
         e.preventDefault()
         e.stopPropagation()
         const picked = await showContextMenu([
+          ...(html
+            ? [
+                { id: 'open', label: 'Open', tooltip: onDashboard ? 'Go to its tile on this dashboard' : 'Show it on this dashboard' },
+                { id: 'sep-open', label: '', type: 'separator' },
+              ]
+            : []),
           { id: 'toggle-pin', label: isPinned ? 'Unpin' : 'Pin to top' },
           { id: 'remove', label: 'Remove from Files' },
         ])
+        if (picked === 'open') show()
         if (picked === 'toggle-pin') onTogglePin(doc)
         if (picked === 'remove') {
           try {

@@ -250,6 +250,27 @@ describe('the nav', () => {
     expect(useProjectGroupsStore.getState().paneRequest).toMatchObject({ workspaceId: 'w1', filePath: '/x/status.html' })
   })
 
+  it('an HTML file opens from its row: double-click, or Open first in its right-click menu', async () => {
+    await renderPage()
+    const file = await waitFor(() => {
+      const el = document.querySelector('[data-file-row="status.html"]') as HTMLElement | null
+      if (!el) throw new Error('no file row')
+      return el
+    })
+    useProjectGroupsStore.setState({ paneRequest: null })
+    fireEvent.doubleClick(file)
+    expect(useProjectGroupsStore.getState().paneRequest).toMatchObject({ workspaceId: 'w1', filePath: '/x/status.html' })
+
+    useProjectGroupsStore.setState({ paneRequest: null })
+    ctxMenu.pick = 'open'
+    const shown = vi.mocked(showContextMenu)
+    shown.mockClear()
+    fireEvent.contextMenu(file)
+    await waitFor(() => expect(useProjectGroupsStore.getState().paneRequest).toMatchObject({ workspaceId: 'w1', filePath: '/x/status.html' }))
+    const items = shown.mock.calls[0][0] as Array<{ id: string; label: string }>
+    expect(items.map((i) => i.label)).toEqual(['Open', '', 'Pin to top', 'Remove from Files'])
+  })
+
   it('⌘N shows on the row only on hover or focus', async () => {
     useProjectGroupsStore.setState({ dashPaneNumbers: { w2: 2 } })
     await renderPage()

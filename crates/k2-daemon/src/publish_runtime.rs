@@ -2531,7 +2531,7 @@ fn unbound_helpers() -> &'static parking_lot::Mutex<std::collections::HashSet<St
 }
 
 /// The argv of a live process, or `None` when it can't be read. Linux
-/// reads `/proc/<pid>/cmdline`; macOS asks `ps`. Not for a child spawned a
+/// reads `/proc/<pid>/cmdline`; macOS asks the kernel. Not for a child spawned a
 /// moment ago: on Linux its cmdline reads empty for a few ms after `spawn`
 /// returns (the kernel sets the argv bounds after releasing the parent).
 /// The one caller reads helpers reattached from an earlier daemon life.
@@ -2552,30 +2552,7 @@ fn process_argv(pid: i32) -> Option<Vec<String>> {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        // macOS: the kernel's argv for a process of ours. `ps` is setuid,
-        // so it fails under a sandbox; it stays as the fallback.
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(argv) = k2_core::mac_proc::argv(pid).ok().filter(|a| !a.is_empty()) {
-                return Some(argv);
-            }
-        }
-        let out = k2_core::bg_proc::command("/bin/ps")
-            .args(["-o", "args=", "-p", &pid.to_string()])
-            .env_clear()
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if text.is_empty() {
-            None
-        } else {
-            // Service ids are uuids, so whitespace splitting is enough to
-            // find `--app <id>` (paths with spaces only split other args).
-            Some(text.split_whitespace().map(str::to_string).collect())
-        }
+        k2_core::mac_proc::argv_or_ps(pid)
     }
     #[cfg(not(unix))]
     {

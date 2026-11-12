@@ -100,6 +100,30 @@ pub fn argv(pid: i32) -> Result<Vec<String>, ArgvError> {
     parse_procargs2_argv(&buf).ok_or(ArgvError::Unreadable)
 }
 
+/// The argv of `pid` on a Unix without `/proc`: on macOS the kernel's
+/// argv for a process of ours; when that can't say (and on other BSDs),
+/// `ps -o args=` split on whitespace, so there an argument with a space
+/// comes back in pieces. `ps` is setuid on macOS and fails under a sandbox.
+#[cfg(all(unix, not(target_os = "linux")))]
+pub fn argv_or_ps(pid: i32) -> Option<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(argv) = argv(pid).ok().filter(|a| !a.is_empty()) {
+            return Some(argv);
+        }
+    }
+    let out = crate::bg_proc::command("/bin/ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .env_clear()
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let argv: Vec<String> = String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect();
+    (!argv.is_empty()).then_some(argv)
+}
+
 /// The raw `KERN_PROCARGS2` reply for `pid` (argv and env together).
 #[cfg(target_os = "macos")]
 fn procargs2(pid: i32) -> Option<Vec<u8>> {
@@ -226,6 +250,14 @@ mod tests {
             b.push(0);
         }
         b
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn argv_or_ps_is_this_process_argv() {
+        let want: Vec<String> = std::env::args().collect();
+        assert_eq!(argv_or_ps(std::process::id() as i32), Some(want));
+        assert_eq!(argv_or_ps(-1), None, "no such pid");
     }
 
     #[cfg(target_os = "macos")]

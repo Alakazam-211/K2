@@ -9,13 +9,19 @@
 # RUSTUP_TOOLCHAIN on the node and override this file. The GitHub
 # workflows name the same version (tests/packaging/rust-pin.sh checks).
 #
-# No `targets`: every release build is native (macOS aarch64 on z3mbpZ,
-# Linux x86_64 on the nodes, Windows on its box). A cross build adds its
-# own target (daemon-binaries.yml's aarch64 leg).
+# `targets`: the Linux aarch64 release binaries are cross-compiled on the
+# x86_64 compute nodes (scripts/ci/build-linux-bins.sh with zig). A job
+# can't add a Rust target itself (the node's rustup is read-only to it),
+# and an explicit `--needs rust@` ignores this file, so the aarch64 build
+# job names no rust@ need: the node installs this file's channel AND its
+# targets, and the signing user checks the receipt's rustc against the
+# channel. Every other machine gets the aarch64 Linux standard library
+# once (about 30 MB) and never uses it.
 #
 # To move to a new Rust: change `channel`, the four `toolchain:` lines in
 # .github/workflows, and run the full gate on a node.
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]
+targets = ["aarch64-unknown-linux-gnu"]
 profile = "minimal"

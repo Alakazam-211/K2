@@ -106,6 +106,10 @@ k2_repro_build_env() {
     done
     export PATH="$wdir:$PATH"
     export K2_REPRO_CC_DIR="$wdir"
+    # The same maps as one flags string, for a compiler the wrappers can't
+    # wrap (build-linux-bins.sh's zig cross build puts them in CFLAGS_<triple>).
+    K2_REPRO_CFLAGS="${cflags# }"
+    export K2_REPRO_CFLAGS
 
     if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
         SOURCE_DATE_EPOCH="$(git -c safe.directory='*' -C "$src" log -1 --format=%ct 2>/dev/null || true)"

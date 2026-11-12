@@ -18,8 +18,15 @@
 # UNSIGNED, always: the updater key and the root-helper key never leave
 # z3mbpZ (release.sh signs after it fetched and checked these).
 #
-# Native only. aarch64 is built on an aarch64 machine (the ARM Linux VM
-# on a Mac mini, G10), never cross-compiled here: a mismatch is refused.
+# x86_64 builds natively. aarch64 builds natively on an aarch64 machine,
+# or cross-compiled on an x86_64 node with zig as the C compiler and
+# linker (cargo-zigbuild): we have no ARM Linux node, and zig needs no
+# root. The versions and the glibc floor are pinned in
+# scripts/ci/cross-pins.sh (K2 Compute installs both from --needs,
+# scripts/lib/compute-release.sh); the build refuses any other version.
+# zig ships its own libc headers and stubs, so nothing comes from the
+# node's distro and every x86_64 node builds the same bytes. Any other
+# host/target pair is refused.
 #
 # Job inputs are plain env names: K2 Compute refuses any K2_* name in
 # --env (env_k2_reserved), so a node job passes BUILD_* and this script
@@ -83,11 +90,20 @@ if [ "$(uname -s)" != "Linux" ]; then
 fi
 HOST_ARCH="$(uname -m)"
 [ "$HOST_ARCH" = "arm64" ] && HOST_ARCH="aarch64"
+CROSS=0
 if [ "$HOST_ARCH" != "$ARCH" ]; then
-    echo "FATAL: asked for $ARCH on a $HOST_ARCH machine. Build each arch natively (aarch64: the ARM Linux VM node)." >&2
-    exit 1
+    if [ "$HOST_ARCH" = "x86_64" ] && [ "$ARCH" = "aarch64" ]; then
+        CROSS=1
+    else
+        echo "FATAL: asked for $ARCH on a $HOST_ARCH machine. Build x86_64 natively; aarch64 natively or cross from x86_64 (zig)." >&2
+        exit 1
+    fi
 fi
 TRIPLE="${ARCH}-unknown-linux-gnu"
+# shellcheck source=scripts/ci/cross-pins.sh
+source "$ROOT/scripts/ci/cross-pins.sh"
+CROSS_GLIBC="$K2_CROSS_GLIBC"
+ZIG_V="" ZIGBUILD_V=""
 
 # shellcheck source=scripts/require-mail-oauth-build-env.sh
 source "$ROOT/scripts/require-mail-oauth-build-env.sh"
@@ -116,6 +132,53 @@ else
 fi
 
 k2_repro_build_env "$ROOT"
+
+# aarch64 from x86_64: every `cargo build` (here and in the embed helpers)
+# becomes `cargo zigbuild` for <triple>.<glibc>; zig compiles the C deps
+# and links. cargo-zigbuild still writes to target/<triple>/release. The
+# C path maps go in CFLAGS_<triple> (cargo-zigbuild names its compiler by
+# full path, which the repro wrappers don't wrap). zig and cargo-zigbuild
+# must be cross-pins.sh's versions: two nodes build the same bytes only
+# with the same toolchain.
+if [ "$CROSS" = 1 ]; then
+    command -v zig >/dev/null 2>&1 || { echo "FATAL: the aarch64 cross build needs zig (--needs zig@<version>)" >&2; exit 1; }
+    command -v cargo-zigbuild >/dev/null 2>&1 || { echo "FATAL: the aarch64 cross build needs cargo-zigbuild (--needs cargo:cargo-zigbuild@<version>)" >&2; exit 1; }
+    ZIG_V="$(zig version)"
+    ZIGBUILD_V="$(cargo-zigbuild --version | awk '{print $2}')"
+    if [ "$ZIG_V" != "$K2_CROSS_ZIG" ]; then
+        echo "FATAL: zig is $ZIG_V; scripts/ci/cross-pins.sh pins $K2_CROSS_ZIG" >&2; exit 1
+    fi
+    if [ "$ZIGBUILD_V" != "$K2_CROSS_ZIGBUILD" ]; then
+        echo "FATAL: cargo-zigbuild is $ZIGBUILD_V; scripts/ci/cross-pins.sh pins $K2_CROSS_ZIGBUILD" >&2; exit 1
+    fi
+    if [ ! -d "$(rustc --print sysroot)/lib/rustlib/$TRIPLE" ]; then
+        echo "Adding the Rust standard library for $TRIPLE (rustup target add)..."
+        rustup target add "$TRIPLE"
+    fi
+    cflags_var="CFLAGS_${TRIPLE//-/_}"
+    cxxflags_var="CXXFLAGS_${TRIPLE//-/_}"
+    export "$cflags_var=${!cflags_var:+${!cflags_var} }$K2_REPRO_CFLAGS"
+    export "$cxxflags_var=${!cxxflags_var:+${!cxxflags_var} }$K2_REPRO_CFLAGS"
+    # zig's own cache (its libc stubs and compiler-rt) stays inside the job.
+    export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-${TMPDIR:-/tmp}/k2-zig-cache}"
+    cargo() {
+        if [ "${1:-}" = "build" ]; then
+            shift
+            local -a a=()
+            while [ $# -gt 0 ]; do
+                if [ "$1" = "--target" ] && [ "${2:-}" = "$TRIPLE" ]; then
+                    a+=(--target "$TRIPLE.$CROSS_GLIBC"); shift 2
+                else
+                    a+=("$1"); shift
+                fi
+            done
+            command cargo zigbuild "${a[@]}"
+        else
+            command cargo "$@"
+        fi
+    }
+    echo "  cross: $TRIPLE on $HOST_ARCH with zig $ZIG_V (cargo-zigbuild $ZIGBUILD_V), glibc $CROSS_GLIBC"
+fi
 
 TARGET_DIR="${CARGO_TARGET_DIR:-target}"
 REL="$TARGET_DIR/$TRIPLE/release"
@@ -193,7 +256,7 @@ K2_BI_OUT="$OUT" K2_BI_ARCH="$ARCH" K2_BI_VERSION="$VERSION" K2_BI_OAUTH="$OAUTH
 K2_BI_COMMIT="$(k2_ci_rev HEAD "${BUILD_COMMIT:-unknown}")" \
 K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
-K2_BI_GLIBC="$(ldd --version 2>/dev/null | head -1 || echo unknown)" \
+K2_BI_GLIBC="$(if [ "$CROSS" = 1 ]; then echo "cross: glibc $CROSS_GLIBC (zig $ZIG_V, cargo-zigbuild $ZIGBUILD_V)"; else ldd --version 2>/dev/null | head -1 || echo unknown; fi)" \
 K2_BI_PTYD="$PTYD_SHA" K2_BI_EXPORT="$EXPORT_SHA" K2_BI_DESKD="$DESKD_SHA" \
 K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE" \
 python3 - <<'PY'

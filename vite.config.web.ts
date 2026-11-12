@@ -35,6 +35,7 @@ export default defineConfig({
       '@tauri-apps/api/event': shim('tauri-event.ts'),
       '@tauri-apps/api/window': shim('tauri-window.ts'),
       '@tauri-apps/api/webview': shim('tauri-webview.ts'),
+      '@tauri-apps/api/webviewWindow': shim('tauri-webview-window.ts'),
       '@tauri-apps/api/app': shim('tauri-app.ts'),
       '@tauri-apps/plugin-opener': shim('plugin-opener.ts'),
       '@tauri-apps/plugin-clipboard-manager': shim('plugin-clipboard-manager.ts'),

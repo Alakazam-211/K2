@@ -395,8 +395,11 @@ struct ListPlan {
 
 impl ListPlan {
     fn new<T: ReadTxn>(txn: &T, r: &ListRefs) -> Result<Self, DocError> {
+        prof!("engine.list_plan_read");
         let l = read_list(txn, r)?;
         let n = l.slots.len();
+        // the plan reads every slot and register of the list (the engine's work, counted apart)
+        engine_visits!(n);
         let mut by_slot: HashMap<Arc<str>, u32> = HashMap::with_capacity(n);
         for (i, (id, _)) in l.slots.iter().enumerate() {
             by_slot.insert(id.clone(), i as u32);

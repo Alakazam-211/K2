@@ -365,6 +365,50 @@ belongs to the doc. It keeps the last `read_bases_max` (64) versions, each for
 version and any stored version (import, automatic and named versions) are always valid bases;
 an unknown or expired base is `BaseExpired`, exit 8.
 
+### A keyed doc's live view
+
+A structured call on a keyed doc that isn't a table (a deck, a board) costs what it touches,
+not the whole doc:
+
+- **The live view.** The session keeps the doc's keyed state (what a pack's structured verb
+  reads as its `View`) in step with every change: built once on first need (O(doc), the first
+  call after a load), then handed to each verb without a copy. A change keeps it from its
+  applied stream: a map op sets or removes its key (O(log n)); a list op (insert, move,
+  delete, restore, set, drop) is replayed on the list from its positions before and after (no
+  element read; the elements after the position shift); a text root the change touched is read
+  afresh (O(that root)). A list op that doesn't fit the view (a kit bug, refused loudly in test
+  builds) has its list read afresh instead. A local change and an outside save keep it; a
+  reload to another version and a purge drop it, to be built again.
+- **No places in the view.** A list root of a keyed doc's live view carries no `places`
+  (empty, as a version's view): keeping every element's place in step would need the engine's
+  order after each change. Its live order and its deleted elements are exact. A move's revert
+  record asks the engine for the moved element's left neighbours instead (`Doc::left_chain`).
+- **The rest of a change's bookkeeping is the change's size too**: whether an element is live
+  (presence, the selection a verb moves) is read from the view and the engine's register,
+  never the engine's list order; whether an agent's change can cut a version before it
+  (K-HIST-4) is decided from the view's lengths, and the doc is copied only when it can; and
+  whether a change left the doc rendering the file's bytes (the disk replica's re-sync after
+  an insert, a delete, a restore or a drop) is decided by a content digest the view keeps
+  (one term per rendered element, with the key before it, and per map entry): a doc whose
+  content isn't the synced content isn't rendered to compare; equal digests are confirmed by
+  rendering.
+- **The engine's floor.** On Yrs, a list change still costs the engine O(the list): its plan
+  reads every slot and register of the list (`engine/structured.rs`, `ListPlan::new`), and
+  its order is rebuilt on the next read of the list's order (a move's revert record asks for
+  it). The kit's own work is the change's size; the test-only counts keep the two apart
+  (`take_entry_visits`, `take_engine_visits`).
+- **Read bases without copies.** A structured read records its version as a base (as above)
+  without copying the doc. While any read base lives, the session keeps the reverse of each
+  change since the oldest one (each map key's value before, each list op as applied, each
+  re-read root's content before); a verb that names positions at an older base (`#N` under
+  `--base`, R-1) gets that version rebuilt from the live view (O(doc), only then). Bases are
+  kept and counted as before (the doc's size per base against `read_bases_max_bytes`); the
+  journal's ops and roots count against the same bound, oldest bases first.
+- **The size limit's count** (`keyed_max_entries`) is taken from the view's lengths and kept by
+  every change, never recounted.
+- **Tables are unchanged**: their read verbs render the file (they print and take line
+  numbers), and their views and read bases are read from the engine as before.
+
 ## Editing
 
 Every edit call is **one atomic change**:
@@ -3319,6 +3363,16 @@ bytes, the **carrier**, and hands them to the pack (`session/live/carrier.rs`,
   of the live doc (a write-back, a sync check, a flush) keeps its failure with the doc's
   version, and a structured read at that version returns that error without encoding; once
   the doc changes, the next rendering decides again.
+- **An open renders only what it doesn't know.** Opening the file compares it with
+  the sync point by hash, never by rendering the doc, when the store knows what the doc renders
+  as: a fact recorded where the kit learns it (a write-back, which rendered the doc and wrote
+  it; an open that rendered it to compare; a carrier pack's import, by the carrier's contract
+  that an untouched doc writes back byte for byte), as the doc's log position, the bytes'
+  keyed hash and the codec settings (the sync table's third row). When the fact names the
+  synced bytes at the doc's version, nothing renders; otherwise (an outside save, a crash
+  before a write-back, a store from an older kit) the open renders to compare as before, and
+  records what it learnt. So opening an untouched file renders nothing, the first open
+  included.
 - **One encode per sync point.** An edit renders nothing: it is durable in the store when it
   returns, and the doc is dirty until the next write-back, which renders it once and writes the
   file (the write-back when due on `tick`, after `Config::write_quiet_ms` without a change or
@@ -3330,7 +3384,12 @@ bytes, the **carrier**, and hands them to the pack (`session/live/carrier.rs`,
 
 ### Older kits (N−1)
 
-The tables are additive, with no format bump, created by the first carrier.
+The tables are additive, with no format bump, created by the first carrier. What the doc
+renders as is a third row of the existing sync table, `(doc, 2)`: an older kit reads
+rows 0 and 1 only, and moves, copies and deletes a doc's rows by range, so it carries the row or
+drops it with the doc; its own syncs leave it naming an older position or hash, which this kit
+then doesn't take for the sync point's, and renders to compare. This kit on an older store finds
+no row, renders to compare once, and records it.
 
 - **This kit on an older store:** no table, no carrier: the first read of the file at the sync
   point is the carrier, and the versions at that point take it. The versions the older kit cut

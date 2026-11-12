@@ -587,6 +587,9 @@ impl Session {
         let read_bases = st.read_bases.len() as u64;
         st.read_bases.clear();
         st.read_base_bytes = 0;
+        // and the reverse of the changes they read before (a keyed doc's journal)
+        st.undo_journal.clear();
+        st.journal_bytes = 0;
         if let Some((pid, ps)) = &erase {
             st.hist.remove(pid); // U20: the erased person's own history goes
             for (_, a) in st.authors.iter_mut() {
@@ -714,8 +717,11 @@ impl Session {
         counts.read_bases = read_bases;
         // memory follows the store
         st.doc = doc;
-        // counted again on next need (the re-encoded doc's deleted elements may differ)
+        // counted again on next need (the re-encoded doc's deleted elements may differ), and
+        // a keyed doc's live view read afresh (values may be erased)
         st.keyed_size = None;
+        Self::drop_live_view(st);
+        st.synced_digest = None;
         st.hash_key = key;
         st.reverts = None;
         // the re-encoded doc keeps every live element's ID; rebuilt on next need anyway

@@ -13,6 +13,11 @@
 //!   doc delete (`c.deck`) leaves the row and the count, which this repo's open gives back.
 //! - **The other way:** it writes a store of its own (`old/`), with no carrier, which
 //!   `n1_carrier_after` opens.
+//!
+//! The above is a release before the carrier (v0.14.0). Against one that knows the carrier
+//! tables (`K2MB_N1_PREV`, this build's crate version, which `n1.sh` reads from its manifest:
+//! v0.15.0 and later), the rewrite and the delete are plain round trips: its rewrite takes the
+//! store, and its delete gives the count back, so its GC removes `c.deck`'s carrier.
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -28,6 +33,17 @@ use k2_mpc_base::session::{
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
 
 const T0: u64 = 1_000_000;
+
+/// Whether this build knows the carrier tables (`live_carriers`, `version_carriers`): its crate
+/// version, `K2MB_N1_PREV`, is v0.15.0 or later. Unset: a build before them.
+fn knows_carriers() -> bool {
+    let Ok(v) = std::env::var("K2MB_N1_PREV") else {
+        return false;
+    };
+    let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+    assert_eq!(n.len(), 3, "K2MB_N1_PREV={v:?}: not MAJOR.MINOR.PATCH");
+    (n[0], n[1], n[2]) >= (0, 15, 0)
+}
 const HOUR: u64 = 60 * 60_000;
 
 /// The test pack without the hook: one line per shape (`key`, then `\t<field>=<value>`), `#`
@@ -185,23 +201,45 @@ fn main() {
     mgr.release().unwrap();
     drop(mgr);
 
-    match store.check_rewritable() {
-        Err(StoreError::NewerData { table })
-            if table == "live_carriers" || table == "version_carriers" =>
-        {
-            println!("rewrite refused before any change (table {table:?})");
+    let knows = knows_carriers();
+    if knows {
+        store.check_rewritable().expect("it knows the carrier tables");
+        let r = store.rewrite_file().expect("its rewrite takes the store");
+        println!("rewrite_file ok, the carrier tables known ({r:?})");
+    } else {
+        match store.check_rewritable() {
+            Err(StoreError::NewerData { table })
+                if table == "live_carriers" || table == "version_carriers" =>
+            {
+                println!("rewrite refused before any change (table {table:?})");
+            }
+            other => panic!("expected the rewrite refused, got {other:?}"),
         }
-        other => panic!("expected the rewrite refused, got {other:?}"),
     }
+    let c_file = std::fs::read("ws/c.deck").unwrap();
+    let c_blob = blobs.id_of("ws", &mut c_file.as_slice()).unwrap().0;
     let c = store.find(&key("c.deck")).unwrap().expect("c.deck");
     store.delete_doc(c, now.load(Ordering::SeqCst)).unwrap();
     now.fetch_add(2 * HOUR, Ordering::SeqCst);
     blobs.gc().unwrap();
-    assert!(
-        blobs.stats().unwrap().blobs >= 4,
-        "its delete can't give back a count it doesn't know"
-    );
-    println!("doc delete: left the row and the count");
+    if knows {
+        assert_eq!(
+            blobs.info("ws", &c_blob).unwrap(),
+            None,
+            "its delete gives c.deck's count back, and its GC takes the carrier"
+        );
+        println!("doc delete: the count given back; GC removed the carrier");
+    } else {
+        assert!(
+            blobs.stats().unwrap().blobs >= 4,
+            "its delete can't give back a count it doesn't know"
+        );
+        assert!(
+            blobs.info("ws", &c_blob).unwrap().is_some(),
+            "c.deck's carrier is kept"
+        );
+        println!("doc delete: left the row and the count");
+    }
     drop((store, blobs));
 
     // the other way: a store of its own, with no carrier

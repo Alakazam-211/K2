@@ -226,6 +226,24 @@ pub(crate) trait EngineDoc: Sized + Send {
     fn hidden(&self, root: &str) -> Result<BTreeMap<Key, Value>, DocError>;
     /// Every element of a list root, live and deleted, in place order.
     fn places(&self, root: &str) -> Result<Vec<Key>, DocError>;
+    /// Element `key`'s left neighbours in place order, nearest first, up to and including the
+    /// nearest live one, at most `max` (a move's revert record); empty when `key` has no
+    /// place. The default reads [`EngineDoc::places`]; an engine with its order at hand
+    /// answers without copying it.
+    fn left_chain(&self, root: &str, key: &str, max: usize) -> Result<Vec<String>, DocError> {
+        let places = self.places(root)?;
+        let Some(at) = places.iter().position(|k| k.as_str() == key) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for k in places[..at].iter().rev() {
+            out.push(k.as_str().to_owned());
+            if matches!(self.elem(root, k.as_str())?, ElemState::Live(_)) || out.len() == max {
+                break;
+            }
+        }
+        Ok(out)
+    }
     fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError>;
     fn map_get(&self, root: &str, key: &str) -> Result<Option<Value>, DocError>;
     /// The write that holds a register now (E4's `winner`), from the state alone: O(1).
@@ -324,6 +342,10 @@ impl EngineDoc for Engine {
 
     fn places(&self, root: &str) -> Result<Vec<Key>, DocError> {
         on_engine!(self, d => d.places(root))
+    }
+
+    fn left_chain(&self, root: &str, key: &str, max: usize) -> Result<Vec<String>, DocError> {
+        on_engine!(self, d => d.left_chain(root, key, max))
     }
 
     fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError> {

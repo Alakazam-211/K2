@@ -524,6 +524,15 @@ pub enum KeyedMutant {
     /// "read encodes": a structured read verb renders the file (the doc's content, then the
     /// pack's encoding) on every read, as before, though it reads the keyed state only.
     ReadEncodes,
+    /// "read visits whole doc": a structured read verb's view is built from every root of the
+    /// engine doc on every read, as before, instead of the live view the session keeps in step.
+    ReadVisitsWholeDoc,
+    /// "open renders to compare": attaching the file renders the doc to compare it with the
+    /// file, as before, though the sync point already says whether the doc renders it.
+    OpenRendersToCompare,
+    /// "list rereads root": a list op's change reads the whole list root afresh from the engine
+    /// into the live view, as before, instead of replaying the op on it.
+    ListReReadsRoot,
 }
 
 thread_local! {
@@ -1519,6 +1528,60 @@ impl From<PlantedPositionBug> for yrs::PlantedPositionBug {
             }
         }
     }
+}
+
+thread_local! {
+    /// Entries the kit read or copied in bulk on this thread (`entry_visits!`): list elements, map
+    /// entries and text roots read from the engine doc by a whole-root reader, copied into or
+    /// out of a view, or counted. A count, never a timing.
+    static ENTRY_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Whether the session checks its live view of a keyed doc against the engine doc, and a
+    /// read base it rebuilds against the snapshot taken with it (on by default in test builds).
+    static VIEW_CHECKS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+thread_local! {
+    /// Entries the engine adapter read in bulk on this thread (`engine_visits!`): a list's
+    /// order rebuilt from its slots, a list plan's read of every slot and register. Counted
+    /// apart from the kit's own ([`take_entry_visits`]): the engine's work is its side's.
+    static ENGINE_VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Add `n` to this thread's engine visit count (`engine_visits!`).
+#[doc(hidden)]
+pub fn count_engine_visits(n: u64) {
+    ENGINE_VISITS.with(|v| v.set(v.get() + n));
+}
+
+/// This thread's engine visit count since the last take, reset to 0 (the engine adapter's
+/// bulk reads: list orders rebuilt, list plans read).
+pub fn take_engine_visits() -> u64 {
+    ENGINE_VISITS.with(|v| v.replace(0))
+}
+
+/// Add `n` to this thread's visit count (`entry_visits!`).
+#[doc(hidden)]
+pub fn count_entry_visits(n: u64) {
+    ENTRY_VISITS.with(|v| v.set(v.get() + n));
+}
+
+/// This thread's visit count since the last take, reset to 0: the entries the kit read or
+/// copied in bulk (whole-root engine reads, view copies), a count independent of timing.
+pub fn take_entry_visits() -> u64 {
+    ENTRY_VISITS.with(|v| v.replace(0))
+}
+
+/// Switch the live view's checks on this thread (on by default): every hand-out of a keyed
+/// doc's live view is compared with the engine doc, and every rebuilt read base with the
+/// snapshot taken with it. Off, the kit does only what a host build does (the counts and the
+/// measurements switch them off). Returns the previous setting.
+pub fn set_view_checks(on: bool) -> bool {
+    VIEW_CHECKS.with(|c| c.replace(on))
+}
+
+/// Whether the live view's checks are on on this thread ([`set_view_checks`]).
+pub fn view_checks() -> bool {
+    VIEW_CHECKS.with(|c| c.get())
 }
 
 thread_local! {

@@ -23,6 +23,7 @@ mod grid_tests;
 mod grid_undo;
 mod group;
 mod history;
+mod keyed_view;
 mod mint;
 #[cfg(test)]
 mod next_change_tests;
@@ -866,8 +867,12 @@ struct ReadBase {
     version: Seq,
     at_ms: u64,
     texts: Vec<(&'static str, String)>,
-    /// A structured doc's content at that version, by key (deleted rows where they sit).
+    /// A table's content at that version, by key (deleted rows where they sit). A keyed doc
+    /// that isn't a table keeps none: its live view and the journal rebuild it
+    /// (`live/keyed_view.rs`).
     view: Option<Arc<View>>,
+    /// Test builds, a keyed doc's read base: the state it read, to check the rebuild against.
+    check: Option<Arc<crate::elem::KeyedState>>,
     bytes: usize,
 }
 
@@ -921,6 +926,16 @@ struct State {
     blame_checks: u64,
     read_bases: VecDeque<ReadBase>,
     read_base_bytes: usize,
+    /// A keyed doc's live view (not a table's), kept in step by every change
+    /// (`live/keyed_view.rs`); `None` until first needed.
+    live_view: Option<keyed_view::LiveView>,
+    /// The reverse of every change since the oldest read base of a keyed doc, oldest first,
+    /// and the size of the roots it holds.
+    undo_journal: VecDeque<keyed_view::Undo>,
+    journal_bytes: usize,
+    /// A keyed doc's content digest at the sync point (`live/keyed_view.rs`): the synced
+    /// position and the digest of the content the file holds, when the kit knows it.
+    synced_digest: Option<(Seq, u128)>,
     /// Outside saves ingested, for the sampled identity check ([`Config::edit_check_every`]).
     outside_saves: u64,
     /// Recent change authors, for "contributors since last read".
@@ -1534,6 +1549,10 @@ impl Session {
                 blame_checks: 0,
                 read_bases: VecDeque::new(),
                 read_base_bytes: 0,
+                live_view: None,
+                undo_journal: VecDeque::new(),
+                journal_bytes: 0,
+                synced_digest: None,
                 authors,
                 outside_saves: 0,
                 subs: Vec::new(),
@@ -1753,6 +1772,20 @@ impl Session {
             Some((&sync, &hash_key)),
             Some(&change),
         )?;
+        // a pack that keeps a carrier renders the doc by splicing it into the bytes it was read
+        // from, which give it back unchanged (the carrier's contract: an untouched doc writes
+        // back byte for byte): the doc as imported is known to render as the file, and opening
+        // it renders nothing to compare (`store::Rendered`; a fact not recorded costs one)
+        if pack.wants_carrier() {
+            let _ = store.set_rendered(
+                doc_id,
+                &crate::store::Rendered {
+                    seq: seq.unwrap_or(0),
+                    hash: sync.hash.clone(),
+                    codec: content.codec.clone(),
+                },
+            );
+        }
         let ub = entry.as_ref().map_or(0, |e| e.body.yrs_len());
         let mut authors = VecDeque::new();
         if let Some(s) = seq {
@@ -2931,16 +2964,32 @@ impl Session {
                 return;
             }
         }
-        // a structured doc's base is its keyed state (deleted rows where they sit)
-        let view = match self.structured {
-            true => match st.doc.keyed_state() {
-                Ok(k) => Some(Arc::new(View::new(k))),
+        prof!("read.read_base");
+        // a table's base is its keyed state (deleted rows where they sit); a keyed doc's is
+        // its version alone, rebuilt from the live view and the journal when a verb needs it
+        // (counted as the view's size, as when it was a copy)
+        let (view, check, view_bytes) = match (self.structured, self.keeps_view()) {
+            (true, true) => match self.live_view_bytes(st) {
+                Ok(n) => {
+                    let check = match keyed_view::checks_on() {
+                        true => self.live_state(st).ok(),
+                        false => None,
+                    };
+                    (None, check, n)
+                }
                 Err(_) => return,
             },
-            false => None,
+            (true, false) => match st.doc.keyed_state() {
+                Ok(k) => {
+                    let v = View::new(k);
+                    let n = v.bytes();
+                    (Some(Arc::new(v)), None, n)
+                }
+                Err(_) => return,
+            },
+            (false, _) => (None, None, 0),
         };
-        let bytes: usize = st.texts.iter().map(|(_, t)| t.len()).sum::<usize>()
-            + view.as_ref().map_or(0, |v| v.bytes());
+        let bytes: usize = st.texts.iter().map(|(_, t)| t.len()).sum::<usize>() + view_bytes;
         if bytes > c.read_bases_max_bytes || c.read_bases_max == 0 {
             return;
         }
@@ -2949,13 +2998,18 @@ impl Session {
             at_ms: now,
             texts: st.texts.clone(),
             view,
+            check,
             bytes,
         });
         st.read_base_bytes += bytes;
-        while st.read_bases.len() > c.read_bases_max || st.read_base_bytes > c.read_bases_max_bytes
+        while st.read_bases.len() > c.read_bases_max
+            || st.read_base_bytes + st.journal_bytes > c.read_bases_max_bytes
         {
             let old = st.read_bases.pop_front().expect("non-empty");
             st.read_base_bytes -= old.bytes;
+            if st.read_bases.is_empty() {
+                break;
+            }
         }
         self.prune_read_bases(st, now);
     }
@@ -2969,6 +3023,9 @@ impl Session {
         {
             let old = st.read_bases.pop_front().expect("non-empty");
             st.read_base_bytes -= old.bytes;
+        }
+        if self.keeps_view() {
+            Self::prune_journal(st);
         }
     }
 
@@ -3934,8 +3991,15 @@ impl Session {
             .edits
             .iter()
             .any(|e| matches!(e, Edit::List { ops, .. } if !ops.is_empty()));
-        let orig_snap = match agent_cut && self.structured && lists {
-            true => Some(self.snapshot(st)?),
+        let orig_snap = match agent_cut
+            && self.structured
+            && lists
+            && self.cut_possible(st, &steps[0].edits)?
+        {
+            true => {
+                prof!("commit.agent_snapshot");
+                Some(self.snapshot(st)?)
+            }
             false => None,
         };
         // a pack verb's change moves the acting agent's presence (contract gap 11): what it
@@ -4134,8 +4198,14 @@ impl Session {
         let mut regions_of = Vec::with_capacity(applied.len());
         let (mut elems, mut hidden) = (Vec::new(), Vec::new());
         let mut streams: Vec<crate::elem::Applied> = Vec::new();
+        let mut text_roots: Vec<String> = Vec::new();
         for ((a, seq), e) in applied.into_iter().zip(&seqs).zip(&entries) {
             prof!("commit.bookkeeping");
+            for (root, _) in &a.roots {
+                if !text_roots.contains(root) {
+                    text_roots.push(root.clone());
+                }
+            }
             st.log_entries += 1;
             st.log_bytes += e.body.yrs_len();
             st.state_bytes += e.body.yrs_len();
@@ -4186,7 +4256,10 @@ impl Session {
                 };
                 Self::broadcast(st, &ev);
             }
-            self.grid_size_after(st, &a.stream);
+            {
+                prof!("commit.size_after");
+                self.grid_size_after(st, &a.stream);
+            }
             streams.extend(a.stream.iter().cloned());
             if n_steps == 1 {
                 changed = a.changed;
@@ -4198,10 +4271,24 @@ impl Session {
             regions_of.push(Some((*seq, a.regions)));
         }
         st.version = *seqs.last().expect("one seq per entry");
+        {
+            prof!("commit.live_view");
+            let texts: Vec<&str> = text_roots.iter().map(String::as_str).collect();
+            self.view_after(st, version_before, st.version, &streams, &texts);
+        }
         Self::mark_dirty(st, now);
-        self.grid_presence_after(st, Some(i), &streams, now);
-        self.elem_presence_after(st, Some(&streams));
-        self.verb_presence(st, i, &verb_named, &streams);
+        {
+            prof!("commit.grid_presence");
+            self.grid_presence_after(st, Some(i), &streams, now);
+        }
+        {
+            prof!("commit.elem_presence");
+            self.elem_presence_after(st, Some(&streams));
+        }
+        {
+            prof!("commit.verb_presence");
+            self.verb_presence(st, i, &verb_named, &streams);
+        }
         // a grid change that re-identified elements (rows or columns inserted, deleted,
         // restored or dropped; a header switch) and left the doc rendering the synced bytes:
         // the replica becomes the doc now, so an outside save merged later, after more
@@ -4210,6 +4297,7 @@ impl Session {
         // returned, as a caller told it failed would make it again. The replica stays behind
         // the doc (`synced_seq`), and an outside save or a write-back tries again first.
         if self.structured && identity_changed(&streams) {
+            prof!("commit.resync");
             if let Err(e) = self.resync_if_synced(st) {
                 #[cfg(any(test, feature = "differential"))]
                 if crate::differential::resync_mutant()
@@ -4913,6 +5001,11 @@ impl Session {
                 st.prov = None;
                 st.grid_size = None;
                 st.keyed_size = None;
+                // the doc is the store's again: the live view (kept only by changes that
+                // landed) still holds it at its version; at another, it is built afresh
+                if st.live_view_seq() != Some(version) {
+                    Self::drop_live_view(st);
+                }
                 self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
@@ -5797,10 +5890,16 @@ impl Session {
         let by_version = crate::differential::reopen_step_by_version();
         #[cfg(not(any(test, feature = "differential")))]
         let by_version = false;
+        // what the doc is known to render as (`store::Rendered`): when it names the synced
+        // bytes at this version, nothing is rendered to compare
         let in_step = seq == st.version
-            && (by_version || {
+            && (by_version || self.known_to_render(st, seq, &hash) || {
                 let live = self.render(st)?;
-                hash == file_hash(&key, &live) || legacy_matches(&hash, &live)
+                let same = hash == file_hash(&key, &live);
+                if same {
+                    self.note_rendered(st, seq, &hash);
+                }
+                same || legacy_matches(&hash, &live)
             });
         let mut d = Disk {
             path: path.to_owned(),
@@ -5850,9 +5949,21 @@ impl Session {
         }
         st.disk = Some(d);
         let out = self.disk_check(st, now, true)?;
-        // changes the file never got (a crash before write-back): write them soon
-        let live = file_hash(&st.hash_key, &self.render(st)?);
-        if st.disk.as_ref().is_some_and(|d| d.synced_hash != live) {
+        // changes the file never got (a crash before write-back): write them soon. Rendered to
+        // compare only when the doc isn't known to render the synced bytes
+        let synced = st.disk.as_ref().map(|d| d.synced_hash.clone());
+        let holds = match &synced {
+            None => true,
+            Some(h) if self.known_to_render(st, st.version, h) => true,
+            Some(h) => {
+                let same = *h == file_hash(&st.hash_key, &self.render(st)?);
+                if same {
+                    self.note_rendered(st, st.version, h);
+                }
+                same
+            }
+        };
+        if !holds {
             Self::mark_dirty(st, now);
         } else {
             // the stored replica may predate a change that moved no byte (a crash before
@@ -5917,6 +6028,45 @@ impl Session {
             Err(e) => Some((st.version, e.clone())),
         };
         r
+    }
+
+    /// Whether the doc at log position `seq` is known to render as the bytes `hash` names, with
+    /// the session's codec settings (`store::Rendered`, recorded where the kit learnt it): then
+    /// opening the file needn't render the doc to compare. Never under the plant
+    /// [`crate::differential::KeyedMutant::OpenRendersToCompare`].
+    fn known_to_render(&self, st: &State, seq: Seq, hash: &[u8]) -> bool {
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::keyed_mutant()
+            == Some(crate::differential::KeyedMutant::OpenRendersToCompare)
+        {
+            return false;
+        }
+        let Ok(store) = self.store(st) else {
+            return false;
+        };
+        matches!(
+            store.rendered(self.doc_id),
+            Ok(Some(r)) if r.seq == seq && r.hash == hash && r.codec == st.codec
+        )
+    }
+
+    /// Record that the doc at `seq` renders as the bytes `hash` names, with the session's
+    /// codec settings (`store::Rendered`). A fact the store can't take costs a rendering at
+    /// the next open, nothing more: a failure is ignored.
+    fn note_rendered(&self, st: &State, seq: Seq, hash: &[u8]) {
+        if hash.is_empty() || self.known_to_render(st, seq, hash) {
+            return;
+        }
+        if let Ok(store) = self.store(st) {
+            let _ = store.set_rendered(
+                self.doc_id,
+                &crate::store::Rendered {
+                    seq,
+                    hash: hash.to_vec(),
+                    codec: st.codec.clone(),
+                },
+            );
+        }
     }
 
     /// The doc's file can't be rendered at its current version, as the last rendering found
@@ -6658,6 +6808,10 @@ impl Session {
         st.last_change_ms = now;
         st.texts = after;
         st.version = seq;
+        if self.keeps_view() {
+            // (a text merge keeps no stream: a keyed doc's live view is read afresh)
+            Self::drop_live_view(st);
+        }
         st.codec = content.codec;
         st.log_entries += 1;
         st.log_bytes += entry.body.yrs_len();
@@ -6729,6 +6883,13 @@ impl Session {
         if d.synced_hash.is_empty() || d.synced_seq == st.version {
             return Ok(());
         }
+        // a keyed doc whose content isn't the content the file holds can't render as the file:
+        // nothing to render (the content digests, O(1)); equal ones are confirmed by rendering
+        if let (Some((s, synced)), Some(now)) = (st.synced_digest, Self::view_digest(st)) {
+            if s == d.synced_seq && synced != now {
+                return Ok(());
+            }
+        }
         if file_hash(&st.hash_key, &self.render(st)?) == d.synced_hash {
             self.resync_replica(st)?;
         }
@@ -6782,6 +6943,9 @@ impl Session {
         let d = st.disk.as_mut().expect("has disk");
         d.replica_bytes = state.len() as u64;
         d.synced_seq = st.version;
+        // the file holds the doc's content now
+        st.synced_digest = Self::view_digest(st).map(|x| (st.version, x));
+        let d = st.disk.as_mut().expect("has disk");
         let sync = SyncState {
             hash: d.synced_hash.clone(),
             seq: st.version,
@@ -6880,9 +7044,11 @@ impl Session {
         let d = st.disk.as_mut().expect("has disk");
         if h == d.synced_hash && !stale {
             // nothing to write, but the doc may have changed since the replica was synced
-            // (a change that moved no byte): the replica becomes the doc (v0.9.4)
+            // (a change that moved no byte): the replica becomes the doc (v0.9.4), and it is
+            // known to render as the file
             d.dirty_since = None;
             self.resync_replica(st)?;
+            self.note_rendered(st, st.version, &h);
             return Ok(false);
         }
         // the disk replica, decoded now if a reopen left it encoded (v0.9.8): a stored sync
@@ -6970,6 +7136,8 @@ impl Session {
         }
         d.stat = Some(disk::Seen::now(stat));
         d.dirty_since = None;
+        // the file holds the doc's content now
+        st.synced_digest = Self::view_digest(st).map(|x| (st.version, x));
         // the bytes written are the carrier (K1)
         if !carrier::planted_carrier_stale() {
             self.keep_carrier(st, &bytes, st.version, now);

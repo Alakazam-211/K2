@@ -278,6 +278,7 @@ impl Session {
     ) -> Result<ToolOutput, ToolRunError> {
         prof!("tools.run_tool");
         let out = self.run_tool_inner(conn, root, argv, stdin, opts);
+        prof!("tools.as_seen");
         self.tool_output_as_seen(conn, out)
     }
 
@@ -430,7 +431,10 @@ impl Session {
             }
             let (for_edit, args) = super::take_for_edit(&args)?;
             let f = v.parse_structured(&args)?;
-            let (pack, codec) = self.pack_and_codec()?;
+            let (pack, codec) = {
+                prof!("verb.pack_and_codec");
+                self.pack_and_codec()?
+            };
             let (read, out, notes, for_edit) =
                 self.read_view_with(conn, verb, for_edit, |view, hist| {
                     let ctx =
@@ -476,7 +480,10 @@ impl Session {
         // table (R-1); under --if-version the live one is that version
         let at_base = v.positional_in(&args).is_some();
         let f = v.parse_structured(&args)?;
-        let (pack, codec) = self.pack_and_codec()?;
+        let (pack, codec) = {
+            prof!("verb.pack_and_codec");
+            self.pack_and_codec()?
+        };
         let mut eo = crate::session::EditOptions::new().policy(opts.policy);
         eo.if_version = if_version;
         eo.base = base;
@@ -508,6 +515,7 @@ impl Session {
                 format!("edited {name} ({}) · v{}", elems_text(&c.elems), c.version),
             ),
             None => {
+                prof!("verb.status");
                 let v = self.status()?.version;
                 (v, format!("no change to {name} · v{v}"))
             }

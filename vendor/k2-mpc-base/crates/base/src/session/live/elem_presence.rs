@@ -298,7 +298,7 @@ impl Session {
             .find_map(|(r, k)| self.container_focus(st, r, k));
         let mut keys: Vec<Key> = touched
             .iter()
-            .filter(|(r, k)| r == root && matches!(st.doc.elem(r, k), Ok(ElemState::Live(_))))
+            .filter(|(r, k)| r == root && self.elem_live(st, r, k))
             .map(|(_, k)| k.clone())
             .collect();
         if keys.len() > ELEM_SELECTION_MAX {
@@ -315,7 +315,7 @@ impl Session {
                 "{root:?} is not a list of elements in this doc"
             )));
         }
-        if !matches!(st.doc.elem(root, key), Ok(ElemState::Live(_))) {
+        if !self.elem_live(st, root, key) {
             return Err(SessionError::BadPosition(format!(
                 "element {key} of {root:?} is not live (unknown or deleted)"
             )));
@@ -380,8 +380,10 @@ impl Session {
     pub(super) fn elem_presence_after(&self, st: &mut State, changed: Option<&[ElemApplied]>) {
         let written = changed.map(written_fields);
         let composites = self.pack.composite();
-        let State { members, doc, .. } = st;
-        let live = |root: &str, k: &Key| matches!(doc.elem(root, k), Ok(ElemState::Live(_)));
+        // liveness from the live view (no engine order rebuilt for it), read before the members
+        // are changed
+        let mut members = std::mem::take(&mut st.members);
+        let live = |root: &str, k: &Key| self.elem_live(st, root, k);
         for m in members.iter_mut() {
             if !planted_selection_keeps_deleted() {
                 if let Some(s) = m.elem.selection.as_mut() {
@@ -410,6 +412,7 @@ impl Session {
                 }
             }
         }
+        st.members = members;
     }
 }
 

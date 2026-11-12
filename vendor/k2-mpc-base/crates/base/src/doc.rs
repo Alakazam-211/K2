@@ -216,6 +216,17 @@ pub(crate) fn check_client(id: ClientId) -> Result<(), DocError> {
 
 /// Every kind implemented; root names non-empty, unique and free of `/` (a MovableList root
 /// `R` is several engine roots named `R/...`, so `/` would let two roots collide).
+/// How many entries a root's plain content holds, as the kit's test-only visit counts count
+/// them: a list's elements, a map's keys, 1 for a text.
+#[cfg_attr(not(any(test, feature = "differential")), allow(dead_code))]
+pub(crate) fn neutral_entries(n: &Neutral) -> usize {
+    match n {
+        Neutral::Text(_) => 1,
+        Neutral::List(l) => l.len(),
+        Neutral::Map(m) => m.len(),
+    }
+}
+
 fn check_schema(schema: &Schema) -> Result<(), DocError> {
     for (i, (name, k)) in schema.roots.iter().enumerate() {
         if !k.implemented() {
@@ -299,6 +310,7 @@ impl Doc {
                     // check_schema refuses unimplemented kinds
                     other => unreachable!("unimplemented kind {other:?} in a live doc"),
                 };
+                entry_visits!(neutral_entries(&n));
                 Ok(((*name).to_owned(), n))
             })
             .collect()
@@ -315,22 +327,40 @@ impl Doc {
             .schema
             .roots
             .iter()
-            .map(|(name, kind)| {
-                let r = match kind {
-                    Kind::Text => KeyedRoot::Text(self.inner.text(name)?),
-                    Kind::MovableList => KeyedRoot::List {
-                        live: self.inner.list(name)?,
-                        hidden: self.inner.hidden(name)?,
-                        places: self.inner.places(name)?,
-                    },
-                    Kind::Map => KeyedRoot::Map(self.inner.map(name)?),
-                    // check_schema refuses unimplemented kinds
-                    other => unreachable!("unimplemented kind {other:?} in a live doc"),
-                };
-                Ok(((*name).to_owned(), r))
-            })
+            .map(|(name, kind)| Ok(((*name).to_owned(), self.keyed_root_of(name, *kind)?)))
             .collect::<Result<_, DocError>>()?;
         Ok(KeyedState { roots })
+    }
+
+    /// One root of [`Doc::keyed_state`]: what a keyed view reads afresh for a root a change
+    /// touched. O(root).
+    pub(crate) fn keyed_root(&self, root: &str) -> Result<KeyedRoot, DocError> {
+        let (name, kind) = self
+            .schema
+            .roots
+            .iter()
+            .find(|(n, _)| *n == root)
+            .ok_or_else(|| DocError::NoRoot {
+                schema: self.schema.name,
+                root: root.to_owned(),
+            })?;
+        self.keyed_root_of(name, *kind)
+    }
+
+    fn keyed_root_of(&self, name: &str, kind: Kind) -> Result<KeyedRoot, DocError> {
+        let r = match kind {
+            Kind::Text => KeyedRoot::Text(self.inner.text(name)?),
+            Kind::MovableList => KeyedRoot::List {
+                live: self.inner.list(name)?,
+                hidden: self.inner.hidden(name)?,
+                places: self.inner.places(name)?,
+            },
+            Kind::Map => KeyedRoot::Map(self.inner.map(name)?),
+            // check_schema refuses unimplemented kinds
+            other => unreachable!("unimplemented kind {other:?} in a live doc"),
+        };
+        entry_visits!(crate::elem::root_entries(&r));
+        Ok(r)
     }
 
     /// What changed since `before` (this doc's [`Doc::keyed_state`], taken earlier), as an
@@ -386,13 +416,30 @@ impl Doc {
     /// its place). O(slots) when the order isn't cached.
     pub(crate) fn places(&self, root: &str) -> Result<Vec<Key>, DocError> {
         self.root(root, Kind::MovableList)?;
-        self.inner.places(root)
+        let p = self.inner.places(root)?;
+        entry_visits!(p.len());
+        Ok(p)
+    }
+
+    /// Element `key` of list root `root`: its left neighbours in place order, nearest first, up
+    /// to and including the nearest live one, at most `max` (a move's revert record), from the
+    /// engine's order without copying it; empty when `key` has no place.
+    pub(crate) fn left_chain(
+        &self,
+        root: &str,
+        key: &Key,
+        max: usize,
+    ) -> Result<Vec<String>, DocError> {
+        self.root(root, Kind::MovableList)?;
+        self.inner.left_chain(root, key.as_str(), max)
     }
 
     /// A MovableList root's live elements, in order, with their values. O(elements).
     pub fn list(&self, root: &str) -> Result<Vec<(Key, Value)>, DocError> {
         self.root(root, Kind::MovableList)?;
-        self.inner.list(root)
+        let l = self.inner.list(root)?;
+        entry_visits!(l.len());
+        Ok(l)
     }
 
     /// Where `key` is in a MovableList root: live (and at which index), deleted, or never
@@ -412,7 +459,9 @@ impl Doc {
     /// A Map root's keys and values.
     pub fn map(&self, root: &str) -> Result<BTreeMap<String, Value>, DocError> {
         self.root(root, Kind::Map)?;
-        self.inner.map(root)
+        let m = self.inner.map(root)?;
+        entry_visits!(m.len());
+        Ok(m)
     }
 
     pub fn map_get(&self, root: &str, key: &str) -> Result<Option<Value>, DocError> {

@@ -5,32 +5,6 @@
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the enumerator's own assertion-stop pseudo-rule (its stop set's name for a failed oracle assertion); not an engine defect
 # names the spec-undo test that checks the enumerator ends a run at its own assertion-stop pseudo-rule; not an engine defect
-# v0.15.0: "no longer" a put that has stopped waiting, bytes the file has stopped holding, or elements a doc has stopped needing (MPC-E822's next step); "crash" a process ending without its write-back (the carrier's and the keyed rows' restart cases); "panic" a test helper's unwind; "was wrong" a test's own error text
-crates/base/src/blob.rs: /// put no longer waits. The kit's own writers call it after the transaction that references
-crates/base/src/differential.rs: /// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
-crates/base/src/errors/registry.rs: elements or fields it no longer needs, then make the change again; a change that \
-crates/base/src/errors/registry.rs: "The doc is at its live size limit; read it, remove elements or fields it no longer \
-crates/base/src/session/live/carrier.rs: //!   kit's write, a crash between a write and its carrier, a moved doc: dropped, and the file's
-crates/base/src/session/live/carrier.rs: /// ([`AuditEvent::DiskError`]) and kept in memory (the stored one, no longer the sync
-crates/base/src/session/live/carrier.rs: // the put no longer waits: the row references it, or it was given up
-crates/base/src/session/manager.rs: // the put no longer waits: referenced by the doc's first version, or given up
-crates/base/src/session/tier0.rs: // the put no longer waits: referenced by the version, or given up
-crates/base/src/session/tier0.rs: // the ticket's put no longer waits: referenced by the save's version, or given up
-crates/base/src/session/tier0.rs: // the put no longer waits: referenced by the save's version, or given up
-crates/base/src/session/tier0.rs: // the put no longer waits: referenced by the merge's version, or given up
-crates/base/src/store/live_carrier.rs: //! carrier; its own writes leave the live row naming bytes the file no longer holds (this kit
-crates/base/tests/contract_presence.rs: /// body (s259-3): her focus is slide 4 (contract case A). `Err` says what was wrong.
-crates/base/tests/contract_presence.rs: /// selection to the shape (c-11). `Err` says what was wrong.
-crates/base/tests/contract_verbs.rs: /// The verb of change `seq` in the log, `None` when it has none; panics when the log hasn't it.
-crates/base/tests/golden/errors/explain/MPC-E822.txt: next:     The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.
-crates/base/tests/golden/errors/explain/MPC-E822.txt: step:     cat; why: The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again.
-crates/base/tests/golden/errors/explain/MPC-E822.txt: "next": "The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.",
-crates/base/tests/golden/errors/explain/MPC-E822.txt: "why": "The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again."
-crates/base/tests/keyed_live.rs: /// A crash: a new manager on the same stores, the old one dropped without a write-back.
-crates/base/tests/live_carrier.rs: /// A crash: a new manager on the same stores, the old one dropped without a write-back.
-docs/ERRORS.md: - **Next:** The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.
-docs/ERRORS.md: - **Next step:** `cat`. The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again.
-docs/SESSIONS.md: sync point; otherwise (an older kit wrote the file since, a crash between a write and its
-docs/SESSIONS.md: never lost once its call returns (the store holds it; a crash before the write-back writes it
-docs/SESSIONS.md: the file no longer holds, which this kit drops at the next load (above); it refuses a rewrite,
-tools/n1/consumer-carrier/src/main.rs: //!   (the stored carrier is left naming bytes the file no longer holds: this repo's
+# v0.15.1: "crash" a process ending without its write-back (the open that renders to compare)
+crates/base/src/session/live.rs: // changes the file never got (a crash before write-back): write them soon. Rendered to
+docs/SESSIONS.md: synced bytes at the doc's version, nothing renders; otherwise (an outside save, a crash

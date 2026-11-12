@@ -37,6 +37,7 @@ use k2_mpc_base::doc::{Edit, Neutral};
 use k2_mpc_base::elem::{Anchor, Key, ListOp, MapOp, Value};
 use k2_mpc_base::parity::PersonAction;
 use k2_mpc_base::schema::{Kind, Schema};
+use k2_mpc_base::session::test_support::{carrier_judge, CarrierVerdict};
 use k2_mpc_base::session::{
     AuditEvent, Config, ConnId, Declined, DiskCheck, EditOptions, Host, Pack, PackContent,
     PackError, Participant, ParticipantKind, PurgeRequest, PurgeScope, Reconciled, Rights, Session,
@@ -929,6 +930,83 @@ fn an_untouched_live_doc_writes_back_byte_for_byte() {
     row_an_untouched_live_doc_writes_back_byte_for_byte().unwrap();
 }
 
+// ---------- the pack contract's byte-exact row (`test_support::carrier_judge`) ----------
+
+/// A carrier pack whose splice canonicalises: its `encode_from` is `encode`, which drops the
+/// opaque lines, so an untouched doc doesn't write back byte for byte.
+struct Canonical(Arc<Deck>);
+
+impl Pack for Canonical {
+    fn schema(&self) -> Schema {
+        self.0.schema()
+    }
+    fn decode(&self, b: &[u8]) -> Result<PackContent, Declined> {
+        self.0.decode(b)
+    }
+    fn encode(&self, c: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError> {
+        self.0.encode(c, codec)
+    }
+    fn wants_carrier(&self) -> bool {
+        true
+    }
+    fn encode_from(
+        &self,
+        _: &[u8],
+        c: &[(String, Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, PackError> {
+        self.0.encode(c, codec)
+    }
+    fn reconcile(&self, synced: &View, bytes: &[u8], codec: &[u8]) -> Result<Reconciled, Declined> {
+        self.0.reconcile(synced, bytes, codec)
+    }
+}
+
+/// The kit's row for the pack contract: `deck-carrier` writes back byte for byte (the hook,
+/// through the kit, after a restart) over its corpus.
+#[test]
+fn the_carrier_judge_passes_a_byte_exact_pack() {
+    let corpus: [(&str, &[u8]); 3] = [
+        ("a.deck", F0.as_bytes()),
+        ("b.deck", F1.as_bytes()),
+        ("c.deck", F2.as_bytes()),
+    ];
+    assert_eq!(
+        carrier_judge(Deck::new(true), &corpus),
+        Ok(CarrierVerdict::ByteExact { files: 3 })
+    );
+}
+
+/// A pack that doesn't keep a carrier: the row doesn't apply, nothing is checked.
+#[test]
+fn the_carrier_judge_skips_a_pack_without_a_carrier() {
+    assert_eq!(
+        carrier_judge(Deck::new(false), &[("a.deck", F0.as_bytes())]),
+        Ok(CarrierVerdict::NotACarrierPack)
+    );
+}
+
+/// The row's negative: a splice that canonicalises fails it at the hook and through the kit,
+/// naming the file and the leg.
+#[test]
+fn the_carrier_judge_catches_a_splice_that_canonicalises() {
+    let e = carrier_judge(
+        Arc::new(Canonical(Deck::new(true))),
+        &[("a.deck", F0.as_bytes())],
+    )
+    .expect_err("the opaque lines go");
+    assert!(
+        e.iter()
+            .any(|l| l.starts_with("carrier row: a.deck: the hook:")),
+        "{e:?}"
+    );
+    assert!(
+        e.iter()
+            .any(|l| l.starts_with("carrier row: a.deck: opened live:")),
+        "{e:?}"
+    );
+}
+
 // ---------- packs that don't opt in ----------
 
 /// A pack that doesn't opt in: no hook call, no blob, the file written with `encode` as before.
@@ -1456,10 +1534,17 @@ fn n1_carrier_producer() {
 /// After the previous release's run: the carrier its write left stale is dropped and the file
 /// it wrote is the carrier; the carrier it left alone is the stored one; the count its delete
 /// left goes back at the open and GC removes the blob; and its own store, with no carrier, opens
-/// with the file as the carrier.
+/// with the file as the carrier. A previous release that knows the carrier tables
+/// (`K2MB_N1_PREV` v0.15.0 and later) gave the deleted doc's count back itself, and its GC took
+/// the blob: a plain round trip.
 #[test]
 #[ignore = "tools/n1: reads the store the previous release's consumer left"]
 fn n1_carrier_after() {
+    let prev_knows = std::env::var("K2MB_N1_PREV").is_ok_and(|v| {
+        let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+        assert_eq!(n.len(), 3, "K2MB_N1_PREV={v:?}: not MAJOR.MINOR.PATCH");
+        (n[0], n[1], n[2]) >= (0, 15, 0)
+    });
     let dir = n1_dir();
     let (blobs, mgr, ws) = n1_open(&dir, N1_T0 + 6 * HOUR);
     let id = |name: &str| {
@@ -1469,7 +1554,15 @@ fn n1_carrier_after() {
             .0
     };
     let refs = |name: &str| blobs.info("ws", &id(name)).unwrap().map(|x| x.1);
-    assert_eq!(refs("c.deck"), Some(0), "the open gave back c's count");
+    if prev_knows {
+        assert_eq!(
+            refs("c.deck"),
+            None,
+            "the older kit's delete and GC took c's carrier"
+        );
+    } else {
+        assert_eq!(refs("c.deck"), Some(0), "the open gave back c's count");
+    }
     assert_eq!(refs("b.deck"), Some(1), "b's carrier is held");
     // b: the stored carrier, without the file
     let pack = Deck::new(true);

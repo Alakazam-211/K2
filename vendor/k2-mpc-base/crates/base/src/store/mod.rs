@@ -455,12 +455,15 @@ fn planted_sweep_skips_table() -> bool {
 const VERSIONS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("versions");
 const APPROVALS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("approvals");
 const HOST: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("host");
-/// Disk sync: `(doc, 0)` is the synced state, `(doc, 1)` a write-back in flight.
+/// Disk sync: `(doc, 0)` is the synced state, `(doc, 1)` a write-back in flight, `(doc, 2)`
+/// what the doc is known to render as ([`Rendered`]; an added row: an older kit reads
+/// slots 0 and 1 only, and moves, copies and deletes a doc's rows by range).
 const SYNC: TableDefinition<(u64, u8), &[u8]> = TableDefinition::new("sync");
 /// Doc → its hash key: the key of its keyed sync hashes (format 3). A purge replaces it.
 const DOC_KEYS: TableDefinition<u64, &[u8]> = TableDefinition::new("doc_keys");
 const SYNCED: u8 = 0;
 const PENDING: u8 = 1;
+const RENDERED: u8 = 2;
 
 /// How a per-doc table is keyed: the doc id first, so a doc's rows are one key range.
 #[derive(Clone, Copy)]
@@ -830,6 +833,53 @@ pub(crate) fn fresh_key() -> Result<[u8; 32], StoreError> {
 /// A write-back in flight as [`DocStore::set_pending_sync`] stored it (its encoded row).
 #[derive(Debug)]
 pub(crate) struct PendingSync(Vec<u8>);
+
+/// Disk sync: what the doc is known to render as, so opening its file needn't render it to
+/// compare: the doc at log position `seq`, with codec settings `codec` (spliced into the bytes
+/// `hash` names, for a pack that keeps a carrier), renders as the bytes whose keyed hash is
+/// `hash`. Recorded where the kit learns it (a write-back, which rendered the doc and wrote
+/// it; an open that rendered it to compare; a carrier pack's import); a fact about a log
+/// position, so it stays true however the sync point moves after (a purge, which rewrites the
+/// log, replaces the hash key: the old hash then names nothing). An older kit leaves it as it
+/// was; a reader compares it with the synced state and renders when they differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Rendered {
+    pub seq: Seq,
+    pub hash: Vec<u8>,
+    pub codec: Vec<u8>,
+}
+
+/// [`Rendered`], record version 1: `u8 1 | u64 seq | bytes hash | bytes codec`.
+fn enc_rendered(x: &Rendered) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1).u64(x.seq).bytes(&x.hash).bytes(&x.codec);
+    w.0
+}
+
+/// A [`Rendered`] row; `None` for one this kit can't read (a newer record: no fact).
+fn dec_rendered(b: &[u8]) -> Option<Rendered> {
+    let mut r = R::new(b, "rendered");
+    if r.u8().ok()? != 1 {
+        return None;
+    }
+    let x = Rendered {
+        seq: r.u64().ok()?,
+        hash: r.bytes().ok()?,
+        codec: r.bytes().ok()?,
+    };
+    r.end().ok()?;
+    Some(x)
+}
+
+/// A write-back's [`Rendered`] fact: the doc at the synced position renders as the bytes it
+/// wrote (`meta`'s synced hash), with `meta`'s codec settings.
+fn rendered_of(meta: &DocMeta) -> Option<Rendered> {
+    meta.synced_hash.as_ref().map(|h| Rendered {
+        seq: meta.synced_seq,
+        hash: h.clone(),
+        codec: meta.codec.clone(),
+    })
+}
 
 fn enc_sync(s: &SyncState) -> Vec<u8> {
     let mut w = W::default();
@@ -2413,6 +2463,10 @@ impl DocStore {
                 return Err(StoreError::Corrupt("no write-back in flight"));
             }
             t.insert((id, SYNCED), p.0.as_slice())?;
+            // the kit wrote the doc's rendering at that position: what it renders as
+            if let Some(x) = rendered_of(meta) {
+                t.insert((id, RENDERED), enc_rendered(&x).as_slice())?;
+            }
             let mut docs = w.open_table(DOCS)?;
             let old = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
             if old.key != meta.key {
@@ -2424,8 +2478,29 @@ impl DocStore {
         Ok(())
     }
 
+    /// What the doc is known to render as ([`Rendered`]), if a kit recorded it.
+    pub(crate) fn rendered(&self, id: DocId) -> Result<Option<Rendered>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(SYNC)?;
+        let x = t.get((id, RENDERED))?;
+        Ok(x.and_then(|v| dec_rendered(v.value())))
+    }
+
+    /// Record what the doc is known to render as ([`Rendered`]).
+    pub(crate) fn set_rendered(&self, id: DocId, x: &Rendered) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        if w.open_table(DOCS)?.get(id)?.is_none() {
+            return Err(StoreError::NoDoc(id));
+        }
+        w.open_table(SYNC)?
+            .insert((id, RENDERED), enc_rendered(x).as_slice())?;
+        w.commit()?;
+        Ok(())
+    }
+
     /// The write-back in flight landed: it becomes the synced state, and `meta` (with the
-    /// new synced hash and position) is stored, in one transaction.
+    /// new synced hash and position) is stored, in one transaction, with the fact that the
+    /// doc at that position renders as those bytes ([`Rendered`]: the kit wrote them).
     pub(crate) fn promote_pending_sync(&self, id: DocId, meta: &DocMeta) -> Result<(), StoreError> {
         let w = self.begin_write()?;
         {
@@ -2436,6 +2511,9 @@ impl DocStore {
                 .value()
                 .to_vec();
             t.insert((id, SYNCED), p.as_slice())?;
+            if let Some(x) = rendered_of(meta) {
+                t.insert((id, RENDERED), enc_rendered(&x).as_slice())?;
+            }
             let mut docs = w.open_table(DOCS)?;
             let old = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
             if old.key != meta.key {

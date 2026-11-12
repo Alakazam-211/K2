@@ -521,19 +521,51 @@ fn stored(e: &Effect) -> StoredEffect {
 /// first, up to and including the nearest live one.
 pub const LEFT_CHAIN: usize = 8;
 
-/// Each list root's places (live and deleted, in place order) and live keys just before a
-/// change: [`elem_records`] replays the change's ops on them to name each move's left
-/// neighbours in place order.
-pub(super) type Befores = HashMap<String, (Vec<Key>, HashSet<Key>)>;
+/// What a change's revert record needs from its list roots just before it: a move names its
+/// left neighbours in place order (spec v1.10 S4).
+/// - `full`: a root whose change moves an element among other ops: its places (live and
+///   deleted, in place order) and live keys, which [`elem_records`] replays the ops on;
+/// - `chains`: a root whose change is one move: that move's left neighbours, asked of the
+///   engine's order without copying the list (`Doc::left_chain`).
+///
+/// A root whose change moves nothing needs neither: no op but a move names neighbours.
+#[derive(Debug, Default)]
+pub(super) struct Befores {
+    full: HashMap<String, (Vec<Key>, HashSet<Key>)>,
+    chains: HashMap<(String, Key), Vec<String>>,
+}
+
+impl Befores {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+}
 
 /// [`Befores`] for the list roots `edits` touch.
 pub(super) fn befores_of(doc: &Doc, edits: &[Edit]) -> Result<Befores> {
     let mut out = Befores::new();
+    // each root's ops, across the change's edits
+    let mut ops_of: Vec<(&str, Vec<&ListOp>)> = Vec::new();
     for e in edits {
-        if let Edit::List { root, .. } = e {
-            if !out.contains_key(root) {
+        if let Edit::List { root, ops } = e {
+            match ops_of.iter_mut().find(|(r, _)| r == root) {
+                Some((_, all)) => all.extend(ops),
+                None => ops_of.push((root.as_str(), ops.iter().collect())),
+            }
+        }
+    }
+    for (root, ops) in ops_of {
+        if !ops.iter().any(|o| matches!(o, ListOp::Move { .. })) {
+            continue;
+        }
+        match ops.as_slice() {
+            [ListOp::Move { key, .. }] => {
+                let chain = doc.left_chain(root, key, LEFT_CHAIN)?;
+                out.chains.insert((root.to_owned(), key.clone()), chain);
+            }
+            _ => {
                 let live = doc.list(root)?.into_iter().map(|(k, _)| k).collect();
-                out.insert(root.clone(), (doc.places(root)?, live));
+                out.full.insert(root.to_owned(), (doc.places(root)?, live));
             }
         }
     }
@@ -586,7 +618,7 @@ pub(super) fn elem_records(
             ElemApplied::List { root, ops } => {
                 let (places, live) = states
                     .entry(root.clone())
-                    .or_insert_with(|| befores.get(root).cloned().unwrap_or_default());
+                    .or_insert_with(|| befores.full.get(root).cloned().unwrap_or_default());
                 let list_ops: &[ListOp] = match e {
                     Edit::List { ops, .. } => ops,
                     _ => &[],
@@ -604,7 +636,10 @@ pub(super) fn elem_records(
                             live.insert(key.clone());
                         }
                         Some(ListOp::Move { key, to }) => {
-                            left = left_chain(places, live, key);
+                            left = match befores.chains.get(&(root.clone(), key.clone())) {
+                                Some(chain) => chain.clone(),
+                                None => left_chain(places, live, key),
+                            };
                             if applied {
                                 if let Some(p) = places.iter().position(|k| k == key) {
                                     places.remove(p);
@@ -1228,7 +1263,10 @@ impl Session {
         let client = st.members[i].client;
         // the axes as they were, for what it touches; its owner's own change ends a grid claim
         // (A10), marked below, only once it has landed
-        let axes = self.touch_axes(st)?;
+        let axes = {
+            prof!("apply.touch_axes");
+            self.touch_axes(st)?
+        };
         #[cfg(any(test, feature = "differential"))]
         if crate::differential::mark_mutant()
             == Some(crate::differential::MarkMutant::GridMarkBeforeLanding)
@@ -1237,14 +1275,27 @@ impl Session {
             self.mark_grid_claims(st, i, &named);
         }
         self.planted_early_elem_marks(st, i, &edits);
-        let befores = befores_of(&st.doc, &edits)?;
-        let made = st.doc.edit_applied(client, &edits)?;
+        let befores = {
+            prof!("apply.befores");
+            befores_of(&st.doc, &edits)?
+        };
+        let made = {
+            prof!("apply.engine");
+            st.doc.edit_applied(client, &edits)?
+        };
         let Some(update) = made.update else {
             return Ok(None);
         };
-        let touched = self.grid_landed(st, i, &made.applied, &edits, axes.as_ref());
-        let landed = self.elems_landed(st, &made.applied);
+        let touched = {
+            prof!("apply.grid_landed");
+            self.grid_landed(st, i, &made.applied, &edits, axes.as_ref())
+        };
+        let landed = {
+            prof!("apply.elems_landed");
+            self.elems_landed(st, &made.applied)
+        };
         let writer = st.members[i].p.pid.clone();
+        prof!("apply.records");
         let applied = self.structured_applied(
             st,
             Made {
@@ -1424,6 +1475,13 @@ impl Session {
     /// counted on first need ([`Config::keyed_max_entries`]).
     fn keyed_size(&self, st: &mut State) -> Result<usize> {
         if let Some(n) = st.keyed_size {
+            return Ok(n);
+        }
+        if self.keeps_view() {
+            // from the live view's lengths: O(roots)
+            let live = self.live_state(st)?;
+            let n = keyed_view::keyed_entries(&live);
+            st.keyed_size = Some(n);
             return Ok(n);
         }
         let k = st.doc.keyed_state()?;
@@ -1793,17 +1851,28 @@ impl Session {
         {
             return Err(SessionError::NeedsBase);
         }
-        self.check_tagged_keys(st, i, edits)?;
-        self.check_cell_keys(st, edits)?;
+        {
+            prof!("guards.keys");
+            self.check_tagged_keys(st, i, edits)?;
+            self.check_cell_keys(st, edits)?;
+        }
         if let Some(b) = opts.base {
+            prof!("guards.base");
             self.check_marks(st, edits, b)?;
             self.check_base(st, i, edits, b)?;
         }
         if let Some(s) = opts.seen {
             self.check_marks(st, edits, s)?;
         }
-        self.check_limits(st, edits)?;
-        self.check_grid_claims(st, i, edits, opts.policy, now)?;
+        {
+            prof!("guards.limits");
+            self.check_limits(st, edits)?;
+        }
+        {
+            prof!("guards.claims");
+            self.check_grid_claims(st, i, edits, opts.policy, now)?;
+        }
+        prof!("guards.blob_refs");
         self.check_blob_refs(st, edits)
     }
 
@@ -1971,11 +2040,16 @@ impl Session {
             },
             _ => None,
         };
-        let view = View::new(st.doc.keyed_state().map_err(SessionError::from)?)
-            .with_codec(&st.codec)
-            .with_max_value(self.config.grid_max_value_len);
+        // a keyed doc's live view (no copy), a table's keyed state
+        let view = {
+            prof!("edit.view");
+            self.verb_view(st)?
+        };
         let hist = LockedHistory::new(self, st, i);
-        let edits = match catch_unwind(AssertUnwindSafe(|| f(&view, at.as_deref(), &hist))) {
+        let edits = match catch_unwind(AssertUnwindSafe(|| {
+            prof!("edit.verb");
+            f(&view, at.as_deref(), &hist)
+        })) {
             Ok(r) => r,
             Err(payload) => {
                 drop(guard);
@@ -1985,12 +2059,20 @@ impl Session {
         if let Some(h) = hist.handles() {
             st.handles = h;
         }
+        // the views share the live view's state: let it go before the change keeps the live
+        // view in step, which would otherwise copy it
+        drop(view);
+        drop(at);
         let edits = edits.map_err(EditWithError::Compute)?;
-        let edits = self.normalize(edits)?;
+        let edits = {
+            prof!("edit.normalize");
+            self.normalize(edits)?
+        };
         if edits.is_empty() {
             return Ok((None, Notes::default()));
         }
         if edits.iter().any(|e| !matches!(e, Edit::Text { .. })) {
+            prof!("edit.guards");
             self.structured_guards(st, i, &edits, opts, now)?;
         } else {
             for e in &edits {
@@ -2007,9 +2089,12 @@ impl Session {
         st.next_verb = opts.verb;
         let v = st.version;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
-        let notes = match &touched {
-            Some(e) => self.grid_notes_for_edits(st, i, e, now),
-            None => Notes::default(),
+        let notes = {
+            prof!("edit.notes");
+            match &touched {
+                Some(e) => self.grid_notes_for_edits(st, i, e, now),
+                None => Notes::default(),
+            }
         };
         Ok(((res.version != v).then_some(res), notes))
     }
@@ -2038,12 +2123,25 @@ impl Session {
         } else if let Some(e) = Self::render_failure(st) {
             return Err(e);
         }
-        let read = Self::read_head(st, i);
-        let view = View::new(st.doc.keyed_state()?)
-            .with_codec(&st.codec)
-            .with_max_value(self.config.grid_max_value_len);
+        let read = {
+            prof!("read.head");
+            Self::read_head(st, i)
+        };
+        // a keyed doc's live view (no copy), a table's keyed state; the plant reads every root
+        let view = {
+            prof!("read.view");
+            match keyed_view::planted_read_visits_whole_doc() {
+                true => View::new(st.doc.keyed_state()?)
+                    .with_codec(&st.codec)
+                    .with_max_value(self.config.grid_max_value_len),
+                false => self.verb_view(st)?,
+            }
+        };
         let hist = LockedHistory::new(self, st, i);
-        let (r, shown, refused) = match catch_unwind(AssertUnwindSafe(|| f(&view, &hist))) {
+        let (r, shown, refused) = match catch_unwind(AssertUnwindSafe(|| {
+            prof!("read.verb");
+            f(&view, &hist)
+        })) {
             Ok(r) => r,
             Err(payload) => {
                 drop(guard);
@@ -2056,8 +2154,14 @@ impl Session {
         if refused_read(refused) {
             return Ok((read, r, Notes::default(), None));
         }
-        self.mark_read(st, i, read.version, now);
-        self.expire_claims(st, now);
+        {
+            prof!("read.mark_read");
+            self.mark_read(st, i, read.version, now);
+        }
+        {
+            prof!("read.expire_claims");
+            self.expire_claims(st, now);
+        }
         // the rows or cells shown, by key: --for-edit's claim, and the notes about those rows
         let span = if self.is_grid() {
             shown.as_ref().and_then(GridSpan::of)
@@ -2069,7 +2173,10 @@ impl Session {
             Some(r) => self.grid_notes_for_rows(st, i, r, now),
             None => Notes::default(),
         };
-        self.log_activity(st, i, ActivityKind::Read, verb, None, now, None);
+        {
+            prof!("read.activity");
+            self.log_activity(st, i, ActivityKind::Read, verb, None, now, None);
+        }
         Ok((read, r, notes, for_edit))
     }
 
@@ -2241,10 +2348,17 @@ impl Session {
     /// deleted rows: a version holds the live ones). `None`: expired.
     fn base_view(&self, st: &mut State, base: Seq, now: u64) -> Result<Option<Arc<View>>> {
         if base == st.version {
-            return Ok(Some(Arc::new(View::new(st.doc.keyed_state()?))));
+            return Ok(Some(Arc::new(match self.keeps_view() {
+                true => View::shared(self.live_state(st)?),
+                false => View::new(st.doc.keyed_state()?),
+            })));
         }
         self.prune_read_bases(st, now);
         if let Some(b) = st.read_bases.iter().find(|b| b.version == base) {
+            if b.view.is_none() && self.keeps_view() {
+                // a keyed doc's read base: rebuilt from the live view and the journal
+                return Ok(self.rebuilt_base(st, base)?.map(|k| Arc::new(View::new(k))));
+            }
             return Ok(b.view.clone());
         }
         let store = self.store(st)?;
@@ -3887,6 +4001,7 @@ impl Session {
         st.last_version_seq = seq;
         st.last_change_ms = now;
         st.version = seq;
+        self.view_after(st, before_seq, seq, &a.stream, &[]);
         self.grid_presence_after(st, None, &a.stream, now);
         self.elem_presence_after(st, Some(&a.stream));
         st.log_entries += 1;

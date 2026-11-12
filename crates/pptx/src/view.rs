@@ -12,8 +12,13 @@
 //!   number's text shown as the slide's position; **`name_is_generic`**;
 //! - **layouts** (gap 28): each layout's own name and master; each unit's placeholder type.
 //!
-//! On a live deck these are read from the written bytes (the carrier with the live changes
-//! spliced in, contract Q2), so they are what the renderer sees.
+//! **Two phases**, so the live view shares them: [`read_open`] reads the file into a
+//! [`DeckRead`] (each shape as the file holds it: its own transform, the box it would inherit,
+//! its text with any slide number left open, its fonts; each slide's render digest), and
+//! [`DeckRead::index`] places it: every shape's box composed through its groups, each slide's
+//! text at its position. The live tier's derive hook ([`crate::live::view_derive`]) keeps the
+//! carrier's [`DeckRead`] and places the same shapes from the live store's boxes ([`place`]),
+//! so the blob view and the live view of the same bytes agree by construction.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +26,7 @@ use k2_mpc_base::index::Digest;
 use roxmltree::{Document, Node};
 
 use crate::deck::{rels_of, Pptx, SlideRef};
-use crate::geom::{compose, GroupXf, Xf};
+use crate::geom::{compose, GroupXf, Placed, Xf};
 use crate::live::model::{flips, table_text, text_edit, TextEdit};
 use crate::render;
 use crate::slide::{effective, read_shape, read_xfrm, tree_node, xfrm_node};
@@ -55,6 +60,33 @@ impl FontUse {
         };
         (rank, self.family.as_str(), self.script)
     }
+}
+
+/// The deck's fonts from each slide's (in slide order, each once), theme major first, then
+/// theme minor, then explicit, by family and script; and each slide's, as indexes into them.
+pub fn deck_fonts(per_slide: &[Vec<FontUse>]) -> (Vec<FontUse>, Vec<Vec<usize>>) {
+    let mut all: Vec<FontUse> = Vec::new();
+    for f in per_slide {
+        for x in f {
+            if !all.contains(x) {
+                all.push(x.clone());
+            }
+        }
+    }
+    all.sort_by(|a, b| a.order().cmp(&b.order()));
+    let idx = per_slide
+        .iter()
+        .map(|f| {
+            let mut i: Vec<usize> = f
+                .iter()
+                .filter_map(|x| all.iter().position(|a| a == x))
+                .collect();
+            i.sort_unstable();
+            i.dedup();
+            i
+        })
+        .collect();
+    (all, idx)
 }
 
 /// A layout, by its address.
@@ -184,6 +216,14 @@ pub fn field_kind(ty: &str) -> Option<&'static str> {
     }
 }
 
+/// The field kinds in `kinds`, once each, in the contract's order.
+pub fn field_order(kinds: &BTreeSet<&'static str>) -> Vec<&'static str> {
+    ["slidenum", "datetime"]
+        .into_iter()
+        .filter(|k| kinds.contains(k))
+        .collect()
+}
+
 /// The text body (or table) of a shape whose text and fields count.
 fn text_root<'a, 'i>(n: Node<'a, 'i>) -> Option<Node<'a, 'i>> {
     if is(n, P, "graphicFrame") {
@@ -202,34 +242,65 @@ fn fields_of(n: Node<'_, '_>) -> Vec<&'static str> {
             }
         }
     }
-    ["slidenum", "datetime"]
-        .into_iter()
-        .filter(|k| seen.contains(k))
-        .collect()
+    field_order(&seen)
 }
 
-/// A text body's text with each slide-number field shown as `position`.
-fn text_at(n: Node<'_, '_>, position: usize) -> String {
-    let mut out: Vec<String> = Vec::new();
-    for p in n.descendants().filter(|d| is(*d, A, "p")) {
+/// A piece of a shape's text as the view shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Piece {
+    Text(String),
+    /// A slide-number field: the slide's position, wherever the slide is.
+    SlideNum,
+}
+
+/// A shape's text as read, a slide number left open until the slide's position is known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRead(Vec<Piece>);
+
+impl TextRead {
+    /// The text with each slide number shown as `position`, cut to [`SUMMARY_MAX`].
+    pub fn at(&self, position: usize) -> UnitText {
         let mut s = String::new();
+        for p in &self.0 {
+            match p {
+                Piece::Text(t) => s.push_str(t),
+                Piece::SlideNum => s.push_str(&position.to_string()),
+            }
+        }
+        summary(s)
+    }
+}
+
+/// A text body's text, each slide-number field a [`Piece::SlideNum`].
+fn text_pieces(n: Node<'_, '_>) -> TextRead {
+    let mut out: Vec<Piece> = Vec::new();
+    let text = |out: &mut Vec<Piece>, s: &str| match out.last_mut() {
+        Some(Piece::Text(t)) => t.push_str(s),
+        _ => out.push(Piece::Text(s.to_owned())),
+    };
+    for (i, p) in n.descendants().filter(|d| is(*d, A, "p")).enumerate() {
+        if i > 0 {
+            text(&mut out, "\n");
+        }
         let mut skip_to = 0usize;
         for d in p.descendants() {
             if d.range().start < skip_to {
                 continue;
             }
             if is(d, A, "fld") && d.attribute("type") == Some("slidenum") {
-                s.push_str(&position.to_string());
+                out.push(Piece::SlideNum);
                 skip_to = d.range().end;
             } else if is(d, A, "t") {
-                s.push_str(d.text().unwrap_or(""));
+                text(&mut out, d.text().unwrap_or(""));
             } else if is(d, A, "br") {
-                s.push('\n');
+                text(&mut out, "\n");
             }
         }
-        out.push(s);
     }
-    out.join("\n")
+    if out.is_empty() {
+        out.push(Piece::Text(String::new()));
+    }
+    TextRead(out)
 }
 
 fn summary(t: String) -> UnitText {
@@ -344,6 +415,18 @@ fn latin_of(n: Option<Node<'_, '_>>) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// One shape's fonts: all its text uses (a group's: its children's), the ones its style alone
+/// gives, and the ones a run in its first run's format gives (what `shape text` writes).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShapeFonts {
+    pub all: Vec<FontUse>,
+    pub style: Vec<FontUse>,
+    pub retext: Vec<FontUse>,
+}
+
+/// A top-level shape's style fonts and re-texted run fonts, as [`Fonts::collect`] fills them.
+type Top<'a> = (&'a mut Vec<FontUse>, &'a mut Vec<FontUse>);
+
 impl Fonts {
     fn resolve(&self, tf: &str, script: &'static str) -> Option<FontUse> {
         let theme = |family: &str, from: &'static str, script: &'static str| {
@@ -371,15 +454,52 @@ impl Fonts {
         }
     }
 
+    /// The default typeface of text in a shape with no style reference: a title placeholder's,
+    /// another placeholder's, or other text's.
+    fn default_for(&self, placeholder: Option<Option<&str>>) -> &str {
+        match placeholder {
+            Some(Some("title" | "ctrTitle")) => &self.title,
+            Some(_) => &self.body,
+            None => &self.other,
+        }
+    }
+
+    /// The fonts of one run whose properties are `rpr`, in a shape whose default is `default`.
+    fn run(&self, rpr: Option<Node<'_, '_>>, default: &str, out: &mut Vec<FontUse>) {
+        let tf = |e: &str| {
+            rpr.and_then(|r| child(r, A, e))
+                .and_then(|x| x.attribute("typeface"))
+                .map(str::to_owned)
+        };
+        let latin = tf("latin").unwrap_or_else(|| default.to_owned());
+        out.extend(self.resolve(&latin, "latin"));
+        for (e, script) in [("ea", "ea"), ("cs", "cs"), ("sym", "sym")] {
+            if let Some(x) = tf(e) {
+                out.extend(self.resolve(&x, script));
+            }
+        }
+    }
+
     /// The fonts one shape's text uses (a group's: its children's).
-    fn of_shape(&self, outer: Node<'_, '_>, out: &mut Vec<FontUse>) {
+    fn of_shape(&self, outer: Node<'_, '_>) -> ShapeFonts {
+        let mut out = ShapeFonts::default();
+        let (mut style, mut retext) = (Vec::new(), Vec::new());
+        self.collect(outer, &mut out.all, Some((&mut style, &mut retext)));
+        out.style = style;
+        out.retext = retext;
+        out
+    }
+
+    /// The fonts of `outer`'s text into `all`; for a top-level shape, also its style's and a
+    /// re-texted run's into `top`.
+    fn collect(&self, outer: Node<'_, '_>, all: &mut Vec<FontUse>, top: Option<Top<'_>>) {
         let n = effective(outer);
         if is(n, P, "grpSp") {
             for c in n
                 .children()
                 .filter(|c| c.is_element() && !is(*c, P, "nvGrpSpPr") && !is(*c, P, "grpSpPr"))
             {
-                self.of_shape(c, out);
+                self.collect(c, all, None);
             }
             return;
         }
@@ -388,35 +508,33 @@ impl Fonts {
             .and_then(|s| child(s, A, "fontRef"))
             .and_then(|f| f.attribute("idx"))
             .map(|i| if i == "major" { "+mj-lt" } else { "+mn-lt" });
-        let default = match (&info.placeholder, style_ref) {
-            (_, Some(r)) => r.to_owned(),
-            (Some(ph), None) => match ph.kind.as_deref() {
-                Some("title" | "ctrTitle") => self.title.clone(),
-                _ => self.body.clone(),
-            },
-            (None, None) => self.other.clone(),
+        let default = match style_ref {
+            Some(r) => r.to_owned(),
+            None => self
+                .default_for(info.placeholder.as_ref().map(|p| p.kind.as_deref()))
+                .to_owned(),
         };
+        let mut style = Vec::new();
         if let Some(r) = style_ref {
-            out.extend(self.resolve(r, "latin"));
+            style.extend(self.resolve(r, "latin"));
         }
-        let Some(t) = text_root(n) else { return };
-        for run in t
-            .descendants()
-            .filter(|d| is(*d, A, "r") || is(*d, A, "fld"))
-        {
-            let rpr = child(run, A, "rPr");
-            let tf = |e: &str| {
-                rpr.and_then(|r| child(r, A, e))
-                    .and_then(|x| x.attribute("typeface"))
-                    .map(str::to_owned)
-            };
-            let latin = tf("latin").unwrap_or_else(|| default.clone());
-            out.extend(self.resolve(&latin, "latin"));
-            for (e, script) in [("ea", "ea"), ("cs", "cs"), ("sym", "sym")] {
-                if let Some(x) = tf(e) {
-                    out.extend(self.resolve(&x, script));
-                }
+        all.extend(style.iter().cloned());
+        if let Some(t) = text_root(n) {
+            for r in t
+                .descendants()
+                .filter(|d| is(*d, A, "r") || is(*d, A, "fld"))
+            {
+                self.run(child(r, A, "rPr"), &default, all);
             }
+        }
+        if let Some((top_style, top_retext)) = top {
+            // `shape text` keeps the first paragraph's first run's format, or none
+            let first = child(n, P, "txBody")
+                .and_then(|tb| child(tb, A, "p"))
+                .and_then(|p| child(p, A, "r"))
+                .and_then(|r| child(r, A, "rPr"));
+            self.run(first, &default, top_retext);
+            *top_style = style;
         }
     }
 }
@@ -443,6 +561,7 @@ fn theme_fonts(doc: &Document<'_>) -> [String; 6] {
 }
 
 /// Per master part: its placeholder boxes and the fonts its slides fall back to.
+#[derive(Debug, Clone)]
 struct MasterCtx {
     boxes: Vec<PhBox>,
     fonts: Fonts,
@@ -487,106 +606,291 @@ fn master_ctx(
     })
 }
 
-struct Walk<'c> {
-    sid: u32,
-    position: usize,
-    text: &'c str,
-    layout: &'c [PhBox],
-    master: &'c [PhBox],
-    units: Vec<Unit>,
+/// One shape as the file holds it, before it is placed ([`place`]).
+#[derive(Debug, Clone)]
+pub struct ShapeRead {
+    pub id: Option<u32>,
+    pub kind: &'static str,
+    pub name: String,
+    pub descr: Option<String>,
+    pub hidden: bool,
+    /// Its own transform, in its parent's coordinates.
+    pub own: Option<Xf>,
+    /// The box a placeholder with no transform takes from its layout, else its master.
+    pub inherited: Option<Xf>,
+    pub placeholder: Option<UnitPh>,
+    pub text: Option<TextRead>,
+    pub fields: Vec<&'static str>,
+    /// `shape text` sets its text losing nothing (a top-level shape's).
+    pub plain: bool,
+    /// Whether `shape text` can set its text, and at what cost: what the live store's `edit`
+    /// field holds for a top-level shape ([`text_edit`]).
+    pub edit: TextEdit,
+    /// A group's transform and child space.
+    pub group: Option<GroupXf>,
+    pub is_group: bool,
+    /// A group's shapes, back to front.
+    pub children: Vec<ShapeRead>,
+    /// A top-level shape's fonts (empty for a group's children: the group's hold theirs).
+    pub fonts: ShapeFonts,
 }
 
-impl Walk<'_> {
-    #[allow(clippy::too_many_arguments)]
-    fn shape(
-        &mut self,
-        outer: Node<'_, '_>,
-        z: u32,
-        parent: Option<String>,
-        groups: &mut Vec<GroupXf>,
-        parent_approx: bool,
-    ) {
-        let info = read_shape(outer);
-        let n = effective(outer);
-        let top = parent.is_none();
-        let key = info.id.map(|id| format!("@sld:{}/sp:{id}", self.sid));
-        let own = xfrm_node(n).map(xf_of);
-        let (xf, inherited_box) = match (own, &info.placeholder) {
-            (Some(x), _) => (Some(x), false),
-            (None, Some(ph)) => {
-                let ty = ph.kind.as_deref().unwrap_or("obj");
-                (
-                    inherited(ty, ph.idx.as_deref(), self.layout, self.master),
-                    true,
-                )
+fn shape_read(
+    outer: Node<'_, '_>,
+    text: &str,
+    layout: &[PhBox],
+    master: &[PhBox],
+    fonts: Option<&Fonts>,
+) -> ShapeRead {
+    let info = read_shape(outer);
+    let n = effective(outer);
+    let own = xfrm_node(n).map(xf_of);
+    let inherited_box = match (&own, &info.placeholder) {
+        (None, Some(ph)) => inherited(
+            ph.kind.as_deref().unwrap_or("obj"),
+            ph.idx.as_deref(),
+            layout,
+            master,
+        ),
+        _ => None,
+    };
+    let unit_text = match info.kind {
+        "placeholder" | "textbox" | "shape" => child(n, P, "txBody").map(text_pieces),
+        "table" => Some(TextRead(vec![Piece::Text(table_text(n))])),
+        _ => None,
+    };
+    let is_group = is(n, P, "grpSp");
+    let edit = text_edit(text, outer);
+    let children = if is_group {
+        n.children()
+            .filter(|c| {
+                c.is_element()
+                    && !is(*c, P, "nvGrpSpPr")
+                    && !is(*c, P, "grpSpPr")
+                    && !is(*c, P, "extLst")
+            })
+            .map(|c| shape_read(c, text, layout, master, None))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ShapeRead {
+        id: info.id,
+        kind: info.kind,
+        name: info.name.clone(),
+        descr: info.descr.clone(),
+        hidden: info.hidden,
+        own,
+        inherited: inherited_box,
+        placeholder: info.placeholder.as_ref().map(|p| UnitPh {
+            ty: p.kind.clone().unwrap_or_else(|| "obj".into()),
+            idx: p.idx.clone(),
+        }),
+        text: unit_text,
+        fields: fields_of(n),
+        plain: edit == TextEdit::Plain,
+        edit,
+        group: if is_group { group_xf(n) } else { None },
+        is_group,
+        children,
+        fonts: fonts.map(|f| f.of_shape(outer)).unwrap_or_default(),
+    }
+}
+
+/// Where a slide's shapes are placed: its id and its position (for a slide number's text).
+#[derive(Debug, Clone, Copy)]
+pub struct At {
+    pub sid: u32,
+    pub position: usize,
+}
+
+/// Place shape `r` at `z` under `parent` (`None` at the top of its slide), inside `groups`
+/// (outermost first), whose innermost's box is approximate when `parent_approx`: its unit,
+/// then its children's, back to front ([`compose`]). `own` replaces its own transform (the
+/// live store's box: [`crate::live::view_derive`]); `None` keeps the file's.
+#[allow(clippy::too_many_arguments)]
+pub fn place(
+    at: At,
+    r: &ShapeRead,
+    z: u32,
+    parent: Option<String>,
+    groups: &mut Vec<GroupXf>,
+    parent_approx: bool,
+    own: Option<Xf>,
+    out: &mut Vec<Unit>,
+) {
+    let top = parent.is_none();
+    let key = r.id.map(|id| format!("@sld:{}/sp:{id}", at.sid));
+    let mine = own.or(r.own);
+    let (xf, inherited_box) = match (mine, &r.placeholder) {
+        (Some(x), _) => (Some(x), false),
+        (None, Some(_)) => (r.inherited, true),
+        (None, None) => (None, false),
+    };
+    let placed: Option<Placed> = xf.map(|x| compose(x, groups, parent_approx));
+    out.push(Unit {
+        key: key.clone(),
+        container: format!("@sld:{}", at.sid),
+        parent: parent.clone(),
+        live: top,
+        kind: r.kind,
+        name_is_generic: name_is_generic(&r.name),
+        name: r.name.clone(),
+        alt: r.descr.clone(),
+        z,
+        bbox: placed.map(|p| Bbox {
+            x: p.x,
+            y: p.y,
+            w: p.w,
+            h: p.h,
+        }),
+        bbox_inherited: inherited_box && placed.is_some(),
+        rot: placed.map_or(0, |p| p.rot),
+        flip_h: placed.is_some_and(|p| p.fh),
+        flip_v: placed.is_some_and(|p| p.fv),
+        approx_box: placed.is_some_and(|p| p.approx),
+        text: r.text.as_ref().map(|t| t.at(at.position)),
+        fields: r.fields.clone(),
+        hidden: r.hidden,
+        placeholder: r.placeholder.clone(),
+        editable_text: top && r.plain,
+    });
+    if r.is_group {
+        let g = r.group.map(|mut g| {
+            if let Some(o) = own {
+                g.own = o;
             }
-            (None, None) => (None, false),
-        };
-        let placed = xf.map(|x| compose(x, groups, parent_approx));
-        let text = match info.kind {
-            "placeholder" | "textbox" | "shape" => {
-                child(n, P, "txBody").map(|t| summary(text_at(t, self.position)))
-            }
-            "table" => Some(summary(table_text(n))),
-            _ => None,
-        };
-        self.units.push(Unit {
-            key: key.clone(),
-            container: format!("@sld:{}", self.sid),
-            parent: parent.clone(),
-            live: top,
-            kind: info.kind,
-            name_is_generic: name_is_generic(&info.name),
-            name: info.name.clone(),
-            alt: info.descr.clone(),
-            z,
-            bbox: placed.map(|p| Bbox {
-                x: p.x,
-                y: p.y,
-                w: p.w,
-                h: p.h,
-            }),
-            bbox_inherited: inherited_box && placed.is_some(),
-            rot: placed.map_or(0, |p| p.rot),
-            flip_h: placed.is_some_and(|p| p.fh),
-            flip_v: placed.is_some_and(|p| p.fv),
-            approx_box: placed.is_some_and(|p| p.approx),
-            text,
-            fields: fields_of(n),
-            hidden: info.hidden,
-            placeholder: info.placeholder.as_ref().map(|p| UnitPh {
-                ty: p.kind.clone().unwrap_or_else(|| "obj".into()),
-                idx: p.idx.clone(),
-            }),
-            editable_text: top && text_edit(self.text, outer) == TextEdit::Plain,
+            g
         });
-        if is(n, P, "grpSp") {
-            let g = group_xf(n);
-            if let Some(g) = g {
-                groups.push(g);
-            }
-            let approx = placed.is_some_and(|p| p.approx);
-            let kids: Vec<Node<'_, '_>> = n
-                .children()
-                .filter(|c| {
-                    c.is_element()
-                        && !is(*c, P, "nvGrpSpPr")
-                        && !is(*c, P, "grpSpPr")
-                        && !is(*c, P, "extLst")
-                })
-                .collect();
-            for (cz, c) in kids.into_iter().enumerate() {
-                self.shape(c, cz as u32, key.clone(), groups, approx);
-            }
-            if g.is_some() {
-                groups.pop();
-            }
+        if let Some(g) = g {
+            groups.push(g);
+        }
+        let approx = placed.is_some_and(|p| p.approx);
+        for (cz, c) in r.children.iter().enumerate() {
+            place(at, c, cz as u32, key.clone(), groups, approx, None, out);
+        }
+        if g.is_some() {
+            groups.pop();
         }
     }
 }
 
-/// One slide as read: its fonts, its units, its title, its field kinds, whether it has a table.
-type SlideRead = (Vec<FontUse>, Vec<Unit>, String, Vec<&'static str>, bool);
+/// One slide as read.
+#[derive(Debug, Clone)]
+pub struct SlideRead {
+    pub sid: u32,
+    /// Its position in the file, from 1.
+    pub position: usize,
+    pub title: String,
+    pub hidden: bool,
+    /// Its layout's address.
+    pub layout: Option<String>,
+    /// Its shapes, back to front.
+    pub shapes: Vec<ShapeRead>,
+    /// The fonts its text uses, shape by shape.
+    pub fonts: Vec<FontUse>,
+    /// The field kinds its shapes' text holds (a group's children's too).
+    pub has_fields: Vec<&'static str>,
+    /// It holds a table.
+    pub table: bool,
+    /// The raw digest of its render closure ([`render::render_digest`]), at its position.
+    pub digest: Digest,
+}
+
+/// A layout's placeholder boxes, its master's, and the fonts its slides' text falls back to.
+#[derive(Debug, Clone)]
+struct LayoutCtx {
+    boxes: Vec<PhBox>,
+    master: Vec<PhBox>,
+    fonts: Fonts,
+}
+
+/// A deck as read ([`read_open`]): every slide's shapes as the file holds them, and what a
+/// placement needs; [`DeckRead::index`] places them.
+#[derive(Debug, Clone)]
+pub struct DeckRead {
+    /// `p:sldSz` `(cx, cy)`, EMU.
+    pub page: (i64, i64),
+    pub layouts: Vec<LayoutEntry>,
+    /// In presentation order.
+    pub slides: Vec<SlideRead>,
+    /// By layout id.
+    layout_ctx: BTreeMap<u64, LayoutCtx>,
+    /// The deck's own text defaults (a slide with no layout).
+    base: Fonts,
+}
+
+impl DeckRead {
+    /// The slide with this id.
+    pub fn slide(&self, sid: u32) -> Option<&SlideRead> {
+        self.slides.iter().find(|s| s.sid == sid)
+    }
+
+    fn ctx(&self, layout: Option<u64>) -> (Option<&LayoutCtx>, &Fonts) {
+        let l = layout.and_then(|id| self.layout_ctx.get(&id));
+        (l, l.map_or(&self.base, |l| &l.fonts))
+    }
+
+    /// The box a placeholder of type `ty` and index `idx` with no transform takes on a slide
+    /// of layout `layout` (a slide the file doesn't hold yet).
+    pub fn inherited(&self, layout: Option<u64>, ty: &str, idx: Option<&str>) -> Option<Xf> {
+        let (l, _) = self.ctx(layout);
+        let l = l?;
+        inherited(ty, idx, &l.boxes, &l.master)
+    }
+
+    /// The fonts a run with no font of its own uses in a shape with no style reference, on a
+    /// slide of layout `layout`: a placeholder's of type `placeholder` (`Some(None)`: an
+    /// object placeholder), or a text box's (`None`).
+    pub fn default_fonts(
+        &self,
+        layout: Option<u64>,
+        placeholder: Option<Option<&str>>,
+    ) -> Vec<FontUse> {
+        let (_, f) = self.ctx(layout);
+        f.resolve(f.default_for(placeholder), "latin")
+            .into_iter()
+            .collect()
+    }
+
+    /// The view index of the deck as read: every shape placed, each slide's text at its
+    /// position.
+    pub fn index(&self) -> ViewIndex {
+        let per: Vec<Vec<FontUse>> = self.slides.iter().map(|s| s.fonts.clone()).collect();
+        let (all, idx) = deck_fonts(&per);
+        let mut containers = Vec::new();
+        let mut units = Vec::new();
+        for (s, idx) in self.slides.iter().zip(idx) {
+            let at = At {
+                sid: s.sid,
+                position: s.position,
+            };
+            let mut us = Vec::new();
+            for (z, r) in s.shapes.iter().enumerate() {
+                place(at, r, z as u32, None, &mut Vec::new(), false, None, &mut us);
+            }
+            containers.push(Container {
+                key: format!("@sld:{}", s.sid),
+                position: s.position as u32,
+                title: s.title.clone(),
+                hidden: s.hidden,
+                layout: s.layout.clone(),
+                render_hash: s.digest,
+                fonts: idx,
+                has_fields: s.has_fields.clone(),
+                unit_count: us.len() as u32,
+            });
+            units.extend(us);
+        }
+        ViewIndex {
+            page: self.page,
+            fonts: all,
+            layouts: self.layouts.clone(),
+            containers,
+            units,
+        }
+    }
+}
 
 /// The view index of a file.
 pub fn index(bytes: &[u8], limits: &Limits) -> Result<ViewIndex, Decline> {
@@ -596,6 +900,11 @@ pub fn index(bytes: &[u8], limits: &Limits) -> Result<ViewIndex, Decline> {
 
 /// The view index of an open deck.
 pub fn index_open(p: &Pptx<'_>, limits: &Limits) -> Result<ViewIndex, Decline> {
+    Ok(read_open(p, limits)?.index())
+}
+
+/// An open deck read, every shape as the file holds it ([`DeckRead`]).
+pub fn read_open(p: &Pptx<'_>, limits: &Limits) -> Result<DeckRead, Decline> {
     let deck = &p.deck;
     let pdoc = parse_xml(p.text(&p.main)?, limits)?;
     let proot = pdoc.root_element();
@@ -631,43 +940,31 @@ pub fn index_open(p: &Pptx<'_>, limits: &Limits) -> Result<ViewIndex, Decline> {
         .filter_map(|(_, l)| l.id.map(|i| (l.part.as_str(), i)))
         .collect();
     let mut layout_boxes: BTreeMap<String, Vec<PhBox>> = BTreeMap::new();
-    let mut per_slide: Vec<SlideRead> = Vec::new();
+    let none = Vec::new();
+    let mut slides = Vec::new();
+    let mut per_slide: Vec<Vec<FontUse>> = Vec::new();
     for (i, s) in deck.slides.iter().enumerate() {
         let text = p.text(&s.part)?;
         let doc = parse_xml(text, limits)?;
         let layout_part = s.layout.clone().unwrap_or_default();
-        if !layout_boxes.contains_key(&layout_part) && p.opc.parts.contains_key(&layout_part) {
-            let ldoc = parse_xml(p.text(&layout_part)?, limits)?;
-            layout_boxes.insert(layout_part.clone(), ph_boxes(&ldoc));
-        }
-        let none = Vec::new();
+        load_layout(p, &layout_part, limits, &mut layout_boxes)?;
         let lb = layout_boxes.get(&layout_part).unwrap_or(&none);
         let mctx = layout_master.get(&layout_part).and_then(|m| masters.get(m));
         let mb = mctx.map_or(&none, |m| &m.boxes);
         let fonts_ctx = mctx.map_or_else(|| base.clone(), |m| m.fonts.clone());
-        let mut w = Walk {
-            sid: s.id,
-            position: i + 1,
-            text,
-            layout: lb,
-            master: mb,
-            units: Vec::new(),
-        };
+        let mut shapes = Vec::new();
         let mut fonts = Vec::new();
         let mut title = String::new();
         let mut table = false;
         if let Some(tn) = tree_node(doc.root_element()) {
-            let tops: Vec<Node<'_, '_>> = tn
-                .children()
-                .filter(|c| {
-                    c.is_element()
-                        && !is(*c, P, "nvGrpSpPr")
-                        && !is(*c, P, "grpSpPr")
-                        && !is(*c, P, "extLst")
-                })
-                .collect();
-            for (z, c) in tops.into_iter().enumerate() {
-                fonts_ctx.of_shape(c, &mut fonts);
+            for c in tn.children().filter(|c| {
+                c.is_element()
+                    && !is(*c, P, "nvGrpSpPr")
+                    && !is(*c, P, "grpSpPr")
+                    && !is(*c, P, "extLst")
+            }) {
+                let r = shape_read(c, text, lb, mb, Some(&fonts_ctx));
+                fonts.extend(r.fonts.all.iter().cloned());
                 let info = read_shape(c);
                 if title.is_empty()
                     && info
@@ -677,7 +974,7 @@ pub fn index_open(p: &Pptx<'_>, limits: &Limits) -> Result<ViewIndex, Decline> {
                 {
                     title = cut(info.text.as_deref().unwrap_or(""), TITLE_MAX).to_owned();
                 }
-                w.shape(c, z as u32, None, &mut Vec::new(), false);
+                shapes.push(r);
             }
             table = doc.descendants().any(|d| {
                 is(d, A, "graphicData")
@@ -686,65 +983,75 @@ pub fn index_open(p: &Pptx<'_>, limits: &Limits) -> Result<ViewIndex, Decline> {
             });
         }
         let mut has = BTreeSet::new();
-        for u in &w.units {
-            has.extend(u.fields.iter().copied());
+        let mut walk: Vec<&ShapeRead> = shapes.iter().collect();
+        while let Some(r) = walk.pop() {
+            has.extend(r.fields.iter().copied());
+            walk.extend(r.children.iter());
         }
-        let has_fields: Vec<&'static str> = ["slidenum", "datetime"]
-            .into_iter()
-            .filter(|k| has.contains(k))
-            .collect();
-        per_slide.push((fonts, w.units, title, has_fields, table));
-    }
-    // the deck's fonts: theme major, theme minor, then explicit, by family and script
-    let mut all: Vec<FontUse> = Vec::new();
-    for (f, ..) in &per_slide {
-        for x in f {
-            if !all.contains(x) {
-                all.push(x.clone());
-            }
-        }
-    }
-    all.sort_by(|a, b| a.order().cmp(&b.order()));
-    let mut containers = Vec::new();
-    let mut units = Vec::new();
-    for (i, (s, (f, us, title, has_fields, table))) in deck.slides.iter().zip(per_slide).enumerate()
-    {
-        let mut idx: Vec<usize> = f
-            .iter()
-            .filter_map(|x| all.iter().position(|a| a == x))
-            .collect();
-        idx.sort_unstable();
-        idx.dedup();
-        let used: Vec<FontUse> = idx.iter().map(|i| all[*i].clone()).collect();
-        let hash = render::render_digest(
-            p,
-            s,
-            i + 1,
-            has_fields.contains(&"slidenum"),
-            table,
-            &used,
-            limits,
-        )?;
-        containers.push(Container {
-            key: format!("@sld:{}", s.id),
-            position: (i + 1) as u32,
+        per_slide.push(fonts.clone());
+        slides.push(SlideRead {
+            sid: s.id,
+            position: i + 1,
             title,
             hidden: s.hidden,
             layout: slide_layout(s, &layout_ids),
-            render_hash: hash,
-            fonts: idx,
-            has_fields,
-            unit_count: us.len() as u32,
+            shapes,
+            fonts,
+            has_fields: field_order(&has),
+            table,
+            digest: Digest::of(&[]),
         });
-        units.extend(us);
     }
-    Ok(ViewIndex {
+    // each slide's render digest, over the fonts it uses in the deck's order
+    let (all, idx) = deck_fonts(&per_slide);
+    for ((sr, s), idx) in slides.iter_mut().zip(&deck.slides).zip(idx) {
+        let used: Vec<FontUse> = idx.iter().map(|i| all[*i].clone()).collect();
+        sr.digest = render::render_digest(
+            p,
+            s,
+            sr.position,
+            sr.has_fields.contains(&"slidenum"),
+            sr.table,
+            &used,
+            limits,
+        )?;
+    }
+    // every layout's boxes and fonts, for a slide the file doesn't hold yet
+    let mut layout_ctx = BTreeMap::new();
+    for (_, l) in deck.layouts() {
+        let Some(id) = l.id else { continue };
+        load_layout(p, &l.part, limits, &mut layout_boxes)?;
+        let mctx = layout_master.get(&l.part).and_then(|m| masters.get(m));
+        layout_ctx.insert(
+            id,
+            LayoutCtx {
+                boxes: layout_boxes.get(&l.part).cloned().unwrap_or_default(),
+                master: mctx.map(|m| m.boxes.clone()).unwrap_or_default(),
+                fonts: mctx.map_or_else(|| base.clone(), |m| m.fonts.clone()),
+            },
+        );
+    }
+    Ok(DeckRead {
         page: deck.size.unwrap_or((0, 0)),
-        fonts: all,
         layouts,
-        containers,
-        units,
+        slides,
+        layout_ctx,
+        base,
     })
+}
+
+/// Layout part `part`'s placeholder boxes into `boxes`, once.
+fn load_layout(
+    p: &Pptx<'_>,
+    part: &str,
+    limits: &Limits,
+    boxes: &mut BTreeMap<String, Vec<PhBox>>,
+) -> Result<(), Decline> {
+    if !boxes.contains_key(part) && p.opc.parts.contains_key(part) {
+        let ldoc = parse_xml(p.text(part)?, limits)?;
+        boxes.insert(part.to_owned(), ph_boxes(&ldoc));
+    }
+    Ok(())
 }
 
 fn slide_layout(s: &SlideRef, ids: &BTreeMap<&str, u64>) -> Option<String> {

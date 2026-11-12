@@ -43,9 +43,10 @@ describe('Feedback tab states', () => {
       .mockImplementationOnce(() => new Promise((r) => (answer = r)))
     render(<ProjectFeedbackTab members={MEMBERS} />)
     const card = await screen.findByTestId('project-feedback-error')
-    expect(card.textContent).toContain('Couldn’t load your agents’ questions')
+    expect(card.textContent).toContain('Couldn’t load this project’s tickets')
     expect(card.querySelector('[data-load-detail]')?.textContent).toBe('the reply had no item list')
-    expect(card.textContent).not.toMatch(/feedback\/|list-all|Failed to load|ticket/)
+    // No route names or raw failure lines ("tickets" is the Tickets page's own word).
+    expect(card.textContent).not.toMatch(/feedback\/|list-all|Failed to load/)
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     const busy = (await screen.findByRole('button', { name: 'Trying again…' })) as HTMLButtonElement
     expect(busy.disabled).toBe(true)
@@ -58,12 +59,13 @@ describe('Feedback tab states', () => {
     feed.all.mockResolvedValue([])
     render(<ProjectFeedbackTab members={MEMBERS} />)
     const card = await screen.findByTestId('project-feedback-empty')
-    expect(card.textContent).toContain('Nothing to answer yet')
-    const line = screen.getByText('When an agent in this project asks you something, it shows up here.')
+    expect(card.textContent).toContain('No tickets yet')
+    const line = screen.getByText('When an agent in this project files a ticket for you, it shows up here, as on the Tickets page.')
     // The state card's body text: the secondary text colour, no fade.
     expect(line.className).toContain('text-[var(--color-text-secondary)]')
     expect(line.className).not.toMatch(/opacity|text-muted/)
-    expect(card.textContent).not.toMatch(/k2 |`|ticket/i)
+    // Plain words, no CLI; "tickets" is the Tickets page's own word.
+    expect(card.textContent).not.toMatch(/k2 |`/i)
     expect(screen.queryByTestId('board')).toBeNull()
   })
 })

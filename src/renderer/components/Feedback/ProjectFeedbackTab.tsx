@@ -15,7 +15,7 @@ import { fetchAllFeedback, type FeedbackListRow, type FeedbackProjectRef } from 
 import { TicketBoard } from './TicketBoard'
 import { ProjectStateCard, StateCanvas, StateRetry } from '@/components/Projects/StateCard'
 
-/** The empty tab's icon: a speech bubble with a question in it. */
+/** The empty tab's icon (a ticket is an agent's question for a person). */
 function AskIcon(): React.JSX.Element {
   return (
     <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
@@ -96,14 +96,14 @@ export function ProjectFeedbackTab({
   }, [loadList])
 
   // Nothing loaded and the read failed: one state card in place of the
-  // board (a refetch failing under loaded questions keeps the board's
+  // board (a refetch failing under loaded tickets keeps the board's
   // line). Try again keeps the card up, its button busy.
   if (error && (rows === null || rows.length === 0)) {
     return (
       <StateCanvas>
         <ProjectStateCard
           kind="error"
-          title="Couldn’t load your agents’ questions"
+          title="Couldn’t load this project’s tickets"
           detail={error}
           testId="project-feedback-error"
           action={<StateRetry onClick={retry} busy={retrying} />}
@@ -119,8 +119,8 @@ export function ProjectFeedbackTab({
   if (rows !== null && rows.length === 0) {
     return (
       <StateCanvas>
-        <ProjectStateCard kind="empty" icon={<AskIcon />} title="Nothing to answer yet" testId="project-feedback-empty">
-          When an agent in this project asks you something, it shows up here.
+        <ProjectStateCard kind="empty" icon={<AskIcon />} title="No tickets yet" testId="project-feedback-empty">
+          When an agent in this project files a ticket for you, it shows up here, as on the Tickets page.
         </ProjectStateCard>
       </StateCanvas>
     )

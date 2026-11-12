@@ -85,6 +85,24 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/desktop/setup" and os.path.exists(os.path.join(work, "setup_async")):
             open(os.path.join(work, "setup_polls"), "w").write("2")
             return self._reply(200, {"ok": True, "state": "setting_up", "message": "Installing the desktop packages\u2026"})
+        if path == "/cli/desktop/env":
+            b = json.loads(body or "{}")
+            if b.get("release"):
+                return self._reply(200, {"ok": True, "desktop": "virtual:ws1", "released": True})
+            if os.path.exists(os.path.join(work, "env_off")):
+                return self._reply(403, {"ok": False, "error": {"code": "desktop_switch_off", "hint": "the \"Allow a virtual desktop\" switch is off"},
+                                         "permission": {"requestable": True, "command": "k2 permission request desktop.use --why WHY"}})
+            polls = os.path.join(work, "env_polls")
+            ready = {"ok": True, "desktop": "virtual:ws1", "name": "scientist", "state": "ready", "message": "Ready.",
+                     "display": ":101", "xauthority": "/home/k2/.k2/desktop/virtual-ws1/Xauthority", "profile": "/home/k2/.k2/desktop/virtual-ws1/profile",
+                     "env": {"DISPLAY": ":101", "XAUTHORITY": "/home/k2/.k2/desktop/virtual-ws1/Xauthority", "K2_DESKTOP_PROFILE": "/home/k2/.k2/desktop/virtual-ws1/profile"},
+                     "hold": {"by": "scientist", "until": 1731301800}, "holdFor": 1800, "label": "Separate, not private"}
+            if os.path.exists(polls):
+                n = int(open(polls).read())
+                if n > 0:
+                    open(polls, "w").write(str(n - 1))
+                    return self._reply(200, dict(ready, state="waiting", message="Waiting for another desktop to go to sleep.", display=None, xauthority=None, env={}))
+            return self._reply(200, ready)
         if path == "/cli/agent-access/set":
             b = json.loads(body)
             return self._reply(200, {"ok": True, "workspace": "scientist", "toggle": b.get("toggle"), "agentsCanUseDesktop": b.get("value")})
@@ -190,6 +208,35 @@ set +e
 k2 allow maybe >/dev/null 2>&1; rc=$?
 set -e
 [ "$rc" = "2" ] && pass "allow takes on or off" || bad "allow maybe exit $rc"
+
+# k2 desktop env (L8): shell lines for eval, the hold in a comment.
+out="$(k2 env)"
+case "$(last_req)" in "POST /cli/desktop/env? {}") pass "env posts {}" ;; *) bad "env request: $(last_req)" ;; esac
+case "$out" in *"export DISPLAY=:101"*"export XAUTHORITY=/home/k2/.k2/desktop/virtual-ws1/Xauthority"*"export K2_DESKTOP_PROFILE=/home/k2/.k2/desktop/virtual-ws1/profile"*) pass "env prints exports" ;; *) bad "env: $out" ;; esac
+case "$out" in *"# virtual:ws1 (scientist): Ready. Yours until"*"--release when done"*"Separate, not private"*) pass "env says whose and until when" ;; *) bad "env comment: $out" ;; esac
+got="$(env -i PATH="$PATH" bash -c "eval \"\$1\"; printf '%s|%s' \"\$DISPLAY\" \"\$K2_DESKTOP_PROFILE\"" _ "$out")"
+[ "$got" = ":101|/home/k2/.k2/desktop/virtual-ws1/profile" ] && pass "eval sets the variables" || bad "eval gave: $got"
+out="$(k2 env --release)"
+case "$(last_req)" in *'"release": true'*) pass "env --release posts release" ;; *) bad "release request: $(last_req)" ;; esac
+case "$out" in *"released"*) pass "env --release says so" ;; *) bad "release: $out" ;; esac
+echo 1 > "$WORK/env_polls"
+set +e
+out="$(k2 env 2>"$WORK/err")"; rc=$?
+set -e
+[ "$rc" = "0" ] && pass "env waits for a waiting desktop" || bad "env waiting exit $rc"
+case "$(cat "$WORK/err")" in *"# waiting: Waiting for another desktop"*) pass "env says it waits" ;; *) bad "env wait line: $(cat "$WORK/err")" ;; esac
+case "$out" in *"export DISPLAY=:101"*) pass "then prints the exports" ;; *) bad "env after wait: $out" ;; esac
+touch "$WORK/env_off"
+set +e
+err="$(k2 env 2>&1 >/dev/null)"; rc=$?
+set -e
+[ "$rc" = "3" ] && pass "switch off exits 3" || bad "env off exit $rc"
+case "$err" in *"desktop_switch_off"*"Ask with: k2 permission request desktop.use"*) pass "switch off says how to ask" ;; *) bad "env off: $err" ;; esac
+rm -f "$WORK/env_off"
+set +e
+k2 status --release >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" = "2" ] && pass "--release only goes with env" || bad "status --release exit $rc"
 
 [ "$fail" = "0" ] || exit 1
 echo "desktop_virtual_cli: ok"

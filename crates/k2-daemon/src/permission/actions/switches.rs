@@ -305,7 +305,7 @@ const LEVEL: &[ParamSpec] =
 
 /// The Agent tab's switches, in Settings order. Index = the const generic
 /// of [`check_on`] / [`apply_on`] and their twins.
-pub(crate) static SWITCHES: [Switch; 19] = [
+pub(crate) static SWITCHES: [Switch; 20] = [
     Switch {
         on: on_spec(
             "compute.use",
@@ -689,6 +689,30 @@ pub(crate) static SWITCHES: [Switch; 19] = [
         ),
         writer: Writer::Access("sim"),
     },
+    // 0.46.12 (prd-linux-virtual-desktop-v1 LD-38, 0301): "Allow a virtual
+    // desktop" (off by default). `k2 desktop env` is its door.
+    Switch {
+        on: on_spec(
+            "desktop.use",
+            "desktop.use-off",
+            Floor::Admin,
+            &[],
+            "Allow a virtual desktop",
+            "Let {ws} have a desktop of its own on this Linux server",
+            "It may start, wake and keep awake one desktop for its own workspace (k2 desktop env) and put windows on it. People can watch and use it in a Desktop tab. Separate, not private: other agents on the server could still reach it.",
+            &[code_wall("desktop_switch_off", "/cli/desktop/env")],
+            WallCoverage::Code,
+        ),
+        off: off_spec(
+            "desktop.use-off",
+            Floor::Admin,
+            &[],
+            "Allow a virtual desktop",
+            "Stop {ws} using a virtual desktop",
+            "Its desktop stays as it is until an Owner or Admin closes it or it sleeps; new k2 desktop env calls are refused.",
+        ),
+        writer: Writer::Access("desktop"),
+    },
     // The Org Chart (prd-org-chart-v1 §7, Rosson 2026-11-10): "Manage the
     // org chart". The Owner turns it on (it lets an agent make itself a
     // head, and so write to every agent once a day); the Owner or an Admin
@@ -786,6 +810,12 @@ fn is_on(sw: &Switch, ctx: &Ctx, want_on: bool) -> Result<bool, String> {
             let db = k2_core::db::shared();
             let conn = db.lock();
             Ok(k2_core::sim::store::agents_can_use_sim(&conn, ws))
+        }
+        Writer::Access("desktop") => {
+            path()?;
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            Ok(k2_core::desktop::store::agents_can_use_desktop(&conn, ws))
         }
         Writer::Access("apps_manage_full") => {
             path()?;
@@ -901,7 +931,7 @@ macro_rules! register {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18)
+    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
 }
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────

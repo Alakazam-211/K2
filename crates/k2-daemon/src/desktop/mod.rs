@@ -13,6 +13,7 @@
 
 pub mod deskd;
 pub mod deskd_link;
+pub mod env_routes;
 pub mod launch_agent;
 pub mod managed;
 pub mod routes;

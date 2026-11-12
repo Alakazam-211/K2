@@ -3,6 +3,7 @@
 // "Waiting on you" shape, and the action → Agent tab row map.
 
 import { READ_TRANSCRIPTS_ROW } from './AgentsReadTranscriptsToggle'
+import { VIRTUAL_DESKTOP_ROW } from './AgentsVirtualDesktopToggle'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -243,12 +244,19 @@ describe('the "Asked for this" chip map', () => {
       row === transcriptsRow &&
       transcripts.includes('data-settings-id={READ_TRANSCRIPTS_ROW}') &&
       transcripts.includes('<AskedChip row={READ_TRANSCRIPTS_ROW} />')
+    // Allow a virtual desktop too (0.46.12): its own file, a constant.
+    const desktop = readFileSync(join(__dirname, 'AgentsVirtualDesktopToggle.tsx'), 'utf8')
+    expect(projects.includes('<AgentsVirtualDesktopToggle project={project}')).toBe(true)
+    const desktopRow = desktop.includes(`VIRTUAL_DESKTOP_ROW = '${VIRTUAL_DESKTOP_ROW}'`) ? VIRTUAL_DESKTOP_ROW : null
+    expect(desktopRow).toBe('projects.agents-can-use-desktop')
+    const inDesktop = (row: string): boolean =>
+      row === desktopRow && desktop.includes('data-settings-id={VIRTUAL_DESKTOP_ROW}') && desktop.includes('<AskedChip row={VIRTUAL_DESKTOP_ROW} />')
     for (const row of new Set(Object.values(PERMISSION_ACTION_ROWS))) {
       const inProjects = projects.includes(`data-settings-id="${row}"`) || orgChart.includes(`data-settings-id="${row}"`)
       const inApps = row === 'projects.agents-can-manage-skin' && apps.includes('projects.agents-can-manage-skin')
-      expect(inProjects || inApps || inTranscripts(row), row).toBe(true)
+      expect(inProjects || inApps || inTranscripts(row) || inDesktop(row), row).toBe(true)
       // …and that row carries the chip.
-      expect(projects.includes(`<AskedChip row="${row}" />`) || orgChart.includes(`<AskedChip row="${row}" />`) || inTranscripts(row), `chip on ${row}`).toBe(true)
+      expect(projects.includes(`<AskedChip row="${row}" />`) || orgChart.includes(`<AskedChip row="${row}" />`) || inTranscripts(row) || inDesktop(row), `chip on ${row}`).toBe(true)
     }
   })
 

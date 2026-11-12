@@ -444,6 +444,16 @@ _cli_tool_id_for_verb() {
         # to its own workspace's device and checks its "Allow mobile
         # devices" switch), never the owner token.
         sim) echo "sim" ;;
+        # k2 desktop env (prd-linux-virtual-desktop-v1 L8) rides the locked
+        # sim tool id: inside a K2 terminal it sends the session passport
+        # (the daemon gives the agent its own workspace's desktop and checks
+        # its "Allow a virtual desktop" switch), never the owner token. The
+        # other desktop verbs are people's and stay as they were.
+        desktop)
+            case "${2:-}" in
+                env) echo "sim" ;;
+                *) echo "" ;;
+            esac ;;
         # k2 doc (Markdown multiplayer v1, vs-live MI4): id + locked, so
         # inside a K2 terminal the daemon sees the session passport (its
         # own workspace; another only when connected and shared), never
@@ -26358,6 +26368,8 @@ k2 desktop — this computer's screen in a Desktop tab (Remote desktop, Beta)
 People only: the owner, and the logins the owner allows. Agents can't use
 this in v1: they can't see or drive the screen with K2, and can't ask to
 (an agent gets desktop_people_only, exit 3, "It can't be requested.").
+The one agent verb is k2 desktop env (below): a desktop of the agent's own
+on a Linux server, to put windows on.
 
   k2 desktop [status] [--json]      on or off, the machine's state, what you may do;
                                     the owner also sees viewers, grants, hidden apps
@@ -26408,6 +26420,16 @@ On a Linux server with no screen (a virtual desktop K2 starts; never on a Mac):
   --desktop <id>                    any verb above: which desktop. virtual is
                                     This server, virtual:<workspace id> an
                                     agent's own; default This server
+  k2 desktop env [--release] [--timeout 2m] [--json]
+                                    AGENTS, on a Linux server: your own desktop.
+                                    Starts or wakes it and prints shell lines;
+                                    run  eval "$(k2 desktop env)"  then start a
+                                    GUI program (agent-browser --headed, a
+                                    browser with --user-data-dir
+                                    "$K2_DESKTOP_PROFILE"). Each call holds it
+                                    for you 30 minutes; --release when done.
+                                    Needs your workspace's "Allow a virtual
+                                    desktop" switch (exit 3 + Ask with: if off)
   k2 desktop allow [on|off] [--workspace <ws>] [--json]
                                     "Allow a virtual desktop" for one agent
                                     (Owner or Admin; default: this workspace).
@@ -26673,6 +26695,70 @@ print("Installed. k2 desktop start starts it.")
 ' || exit 1
 }
 
+# _desktop_env <as_json> <release> <timeout> <desktop or empty>: POST
+# /cli/desktop/env. Prints shell lines for eval (export DISPLAY=…), a
+# comment line with the state and the hold; waits (another call every 2 s,
+# which also renews the hold) while the desktop is waiting, starting or
+# waking, up to --timeout (2 minutes).
+_desktop_env() {
+    local as_json="$1" release="$2" wait_for="$3" desk="$4" body raw code out state secs=120 waited=0
+    if [ "$release" = 1 ]; then
+        body='{"release": true}'
+    else
+        body='{}'
+    fi
+    body="$(_desktop_body "$body" "$desk")"
+    if [ -n "$wait_for" ]; then
+        case "$wait_for" in
+            *[!0-9smh]*|"") echo "usage: --timeout 2m|90s|120" >&2; exit 2 ;;
+            *h) secs=$(( ${wait_for%h} * 3600 )) ;;
+            *m) secs=$(( ${wait_for%m} * 60 )) ;;
+            *s) secs="${wait_for%s}" ;;
+            *) secs="$wait_for" ;;
+        esac
+        case "$secs" in ""|*[!0-9]*) echo "usage: --timeout 2m|90s|120" >&2; exit 2 ;; esac
+    fi
+    while :; do
+        raw="$(_sidecar_send POST /cli/desktop/env "$body")"
+        code="${raw##*$'\n'}"
+        out="${raw%$'\n'*}"
+        [ "$code" = "200" ] || _desktop_render "$as_json" env "$raw"
+        [ "$release" = 1 ] && break
+        state="$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state") or "")')"
+        case "$state" in waiting|starting|waking) ;; *) break ;; esac
+        if [ "$waited" -ge "$secs" ]; then
+            echo "k2 desktop: your desktop is still $state after ${waited} s; run k2 desktop env again later" >&2
+            [ "$as_json" = 1 ] && printf '%s\n' "$out"
+            exit 1
+        fi
+        [ "$as_json" = 1 ] || echo "# $state: $(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("message") or "")')" >&2
+        sleep 2
+        waited=$((waited + 2))
+    done
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    K2_DT_BODY="$out" python3 -c '
+import datetime, json, os, shlex
+d = json.loads(os.environ["K2_DT_BODY"])
+if "released" in d:
+    print("# %s: %s" % (d.get("desktop"), "released: it can sleep when nobody is watching" if d.get("released") else "you held nothing"))
+    raise SystemExit(0)
+env = d.get("env") or {}
+for k in ("DISPLAY", "XAUTHORITY", "K2_DESKTOP_PROFILE"):
+    if k in env:
+        print("export %s=%s" % (k, shlex.quote(env[k])))
+h = d.get("hold") or {}
+try:
+    until = datetime.datetime.fromtimestamp(h.get("until", 0)).strftime("%H:%M")
+except Exception:
+    until = "?"
+print("# %s (%s): %s Yours until %s: run k2 desktop env again to keep it, k2 desktop env --release when done. %s: people can watch and use it in a Desktop tab." % (
+    d.get("desktop"), d.get("name") or "", d.get("message") or d.get("state"), until, d.get("label") or "Separate, not private"))
+' || exit 1
+}
+
 # _desktop_body <json object> <desktop id or empty>: the body with "desktop".
 _desktop_body() {
     if [ -z "${2:-}" ]; then
@@ -26689,7 +26775,7 @@ cmd_desktop() {
         help|--help|-h) _desktop_usage; return 0 ;;
         --json) sub=status; set -- --json "$@" ;;
     esac
-    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size="" wait_for="" no_wait=0 ws=""
+    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size="" wait_for="" no_wait=0 ws="" release=0
     local args=() hides=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -26701,6 +26787,7 @@ cmd_desktop() {
             --timeout) wait_for="${2:-}"; shift 2 || { echo "usage: --timeout 10m|90s|600 (how long k2 desktop setup waits)" >&2; exit 2; } ;;
             --timeout=*) wait_for="${1#--timeout=}"; shift ;;
             --no-wait) no_wait=1; shift ;;
+            --release) release=1; shift ;;
             --workspace) ws="${2:-}"; shift 2 || { echo "usage: --workspace <path|name> (k2 desktop allow)" >&2; exit 2; } ;;
             --workspace=*) ws="${1#--workspace=}"; shift ;;
             --since) since="${2:-}"; shift 2 || { echo "usage: --since 1d|2h|30m|<RFC 3339 time>" >&2; exit 2; } ;;
@@ -26733,8 +26820,14 @@ cmd_desktop() {
     if [ -n "$size" ] && [ "$sub" != "start" ]; then
         echo "usage: --size goes with k2 desktop start" >&2; exit 2
     fi
-    if { [ -n "$wait_for" ] || [ "$no_wait" = 1 ]; } && [ "$sub" != "setup" ]; then
-        echo "usage: --timeout and --no-wait go with k2 desktop setup" >&2; exit 2
+    if [ "$no_wait" = 1 ] && [ "$sub" != "setup" ]; then
+        echo "usage: --no-wait goes with k2 desktop setup" >&2; exit 2
+    fi
+    if [ -n "$wait_for" ] && [ "$sub" != "setup" ] && [ "$sub" != "env" ]; then
+        echo "usage: --timeout goes with k2 desktop setup or k2 desktop env" >&2; exit 2
+    fi
+    if [ "$release" = 1 ] && [ "$sub" != "env" ]; then
+        echo "usage: --release goes with k2 desktop env" >&2; exit 2
     fi
     if [ -n "$ws" ] && [ "$sub" != "allow" ]; then
         echo "usage: --workspace goes with k2 desktop allow" >&2; exit 2
@@ -26806,6 +26899,11 @@ cmd_desktop() {
             raw="$(_sidecar_send POST /cli/desktop/open "$(_desktop_body "$body" "$desk")")" ;;
         displays)
             raw="$(_sidecar_send GET /cli/desktop/displays "$dq")" ;;
+        env)
+            # An agent's own desktop (L8): the passport picks it.
+            [ "${#args[@]}" -eq 0 ] || { echo "usage: k2 desktop env [--release] [--timeout 2m] [--json]" >&2; exit 2; }
+            _desktop_env "$as_json" "$release" "$wait_for" "$desk"
+            return 0 ;;
         allow)
             # "Allow a virtual desktop" for one agent (LD-38): the Owner or
             # an Admin, like the Settings row. Default: this workspace.
@@ -47532,7 +47630,7 @@ cmd_schema() {
     {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
     {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
     {"name": "sim", "usage": "k2 sim status | list-devices [--platform android|ios] | boot [--platform android|ios] [--device \"Pixel 9\"] [--no-tab] | stop | erase [--yes]", "description": "This workspace's mobile device (prd-mobile-dev-v1): one Android emulator (iOS Simulator on a Mac) owned by the daemon, shown live in the Mobile tab. status lists the lanes this server can run and the device; boot opens the Mobile tab for your human unless --no-tab; stop keeps the device's data, erase deletes it (--yes off a terminal). Agents need the workspace's \"Allow mobile devices\" switch (exit 3 + Ask with: otherwise). See k2 study sim.", "args": [], "flags": [{"name": "--platform", "arg": "android|ios", "description": "boot: the lane (default: the first this server can run)."}, {"name": "--device", "arg": "profile", "description": "boot: a profile from k2 sim list-devices."}, {"name": "--no-tab", "arg": null, "description": "boot: do not open the Mobile tab."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
-    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays | list | start [--size WxH] | stop | setup [--timeout 10m] [--no-wait] | allow [on|off] [--workspace <ws>]  (any verb but allow: --desktop <id>)", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. On a Linux server with no screen K2 starts a virtual desktop instead (Xvfb + IceWM): setup installs its packages (Owner), start/stop (Owners and Admins), list shows what you may open; --desktop virtual:<workspace id> is an agent's own (Separate, not private). It sleeps 10 min after the last viewer leaves. allow on|off [--workspace <ws>] is the agent's \"Allow a virtual desktop\" switch (Owner or Admin). See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays | list | start | stop | setup | allow"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--desktop", "arg": "id", "description": "which desktop: virtual (This server on Linux), virtual:<workspace id> (an agent's), console; default This server."}, {"name": "--size", "arg": "WxH", "description": "start: the size, 1280x720 to 1920x1080 (default 1280x720); fixed until it is closed."}, {"name": "--timeout", "arg": "10m|90s", "description": "setup: how long to wait for the install (default 10m); it goes on on the server after."}, {"name": "--no-wait", "arg": null, "description": "setup: return at once; status says setting_up until it ends."}, {"name": "--workspace", "arg": "path|name", "description": "allow: which agent (default: this workspace)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
+    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays | list | start [--size WxH] | stop | setup [--timeout 10m] [--no-wait] | allow [on|off] [--workspace <ws>] | env [--release] [--timeout 2m]  (any verb but allow and env: --desktop <id>)", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. On a Linux server with no screen K2 starts a virtual desktop instead (Xvfb + IceWM): setup installs its packages (Owner), start/stop (Owners and Admins), list shows what you may open; --desktop virtual:<workspace id> is an agent's own (Separate, not private). It sleeps 10 min after the last viewer leaves. allow on|off [--workspace <ws>] is the agent's \"Allow a virtual desktop\" switch (Owner or Admin). AGENTS: env is the one agent verb: eval \"$(k2 desktop env)\" gives you a desktop of your own (DISPLAY, XAUTHORITY, K2_DESKTOP_PROFILE) on a Linux server, held 30 min per call; --release when done; needs that switch (exit 3 + Ask with: otherwise). See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays | list | start | stop | setup | allow | env"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--desktop", "arg": "id", "description": "which desktop: virtual (This server on Linux), virtual:<workspace id> (an agent's), console; default This server."}, {"name": "--size", "arg": "WxH", "description": "start: the size, 1280x720 to 1920x1080 (default 1280x720); fixed until it is closed."}, {"name": "--timeout", "arg": "10m|90s", "description": "setup: how long to wait for the install (default 10m); it goes on on the server after. env: how long to wait for a waiting desktop (default 2m)."}, {"name": "--no-wait", "arg": null, "description": "setup: return at once; status says setting_up until it ends."}, {"name": "--workspace", "arg": "path|name", "description": "allow: which agent (default: this workspace)."}, {"name": "--release", "arg": null, "description": "env: drop your hold on your desktop (it can sleep when nobody watches)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
     {"name": "sim tree", "usage": "k2 sim tree [--all] [--find <text>] [--boxes] [--json]", "description": "What is on the device's screen, one format for every lane: interactive elements by default with short ids (e5) tied to a snapshot (t7). Ids of elements still on screen carry over; a gone or older id fails loudly (stale_element / stale_snapshot, exit 3). Read this before acting.", "args": [], "flags": [{"name": "--all", "arg": null, "description": "Every element, not only interactive ones."}, {"name": "--find", "arg": "text", "description": "Only elements whose label, value or id contain it."}, {"name": "--boxes", "arg": null, "description": "Each element's frame in dp."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim tap", "usage": "k2 sim tap e5 | tap --at x,y · type [--into e3] \"text\" | type [--into e3] --secret <vault-name> · swipe up|down|left|right [--from e7] · key enter|backspace|tab|arrow-up|… · button home|back|lock|dev-menu|… · rotate left|right · open-url <url> · location <lat,lon> · appearance dark|light", "description": "Act on the device (POST /cli/sim/act). Each prints one line with the result and what changed: ok tap e5 · 140ms · +e9 text \"Saved\". --secret types a vault secret you never see. While a person is using the device (3 s after their tap, or Take over) an action exits 2 held: run k2 sim wait, then k2 sim tree.", "args": [{"name": "element", "required": false, "description": "An id from k2 sim tree (e5, or t7:e5)."}], "flags": [{"name": "--at", "arg": "x,y", "description": "tap: a point in dp (screens with no tree)."}, {"name": "--into", "arg": "element", "description": "type: focus this field first."}, {"name": "--secret", "arg": "vault-name", "description": "type: a vault secret instead of text."}, {"name": "--from", "arg": "element", "description": "swipe: start on this element."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim install", "usage": "k2 sim install <app.apk|App.app> · launch <package|bundleId> · terminate <id>", "description": "Install an app you built in your own terminal, then launch or stop it.", "args": [{"name": "path", "required": true, "description": "The built .apk (Android) or .app (iOS Simulator)."}], "flags": [{"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
@@ -52944,9 +53042,11 @@ FOR PEOPLE ONLY
   on another device, and lets an allowed person drive it with keyboard and
   mouse. It is for people: the owner, and the logins the owner allows.
   If you are an agent: you can't see or drive the screen with K2's
-  commands, and you can't ask for it. Every k2 desktop verb answers an
-  agent desktop_people_only (exit 3) and "It can't be requested." If your
-  human wants it, tell them the steps below (k2 thread); don't try.
+  commands, and you can't ask for that. Every k2 desktop verb but one
+  answers an agent desktop_people_only (exit 3) and "It can't be
+  requested." If your human wants it, tell them the steps below
+  (k2 thread); don't try. The one exception is k2 desktop env: a desktop
+  of your own on a Linux server (FOR AGENTS, at the end).
 
 WHO MAY DO WHAT
   Owner login            watch, drive, and manage (switch, grants, kick, log),
@@ -52956,8 +53056,8 @@ WHO MAY DO WHAT
   Voice & Chat only      never
   the owner at this      manage only (every k2 desktop verb), from a plain
   computer               terminal or a K2 shell tab; never watch it from here
-  agents, App passes,    refused: desktop_people_only
-  API keys
+  agents, App passes,    refused: desktop_people_only (an agent's one
+  API keys               verb is k2 desktop env, its own desktop)
   Nobody watches from this same computer, a login included ("You're on
   this computer"): you watch from another device, over K2 Connect or the
   LAN, signed in with a login.
@@ -53059,6 +53159,51 @@ ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
   this server's K2 user, so one agent could reach another's. There is no
   terminal on these desktops, and a k2 command run by a program on one
   never acts as the owner.
+
+FOR AGENTS: A DESKTOP OF YOUR OWN (Linux servers)
+  An agent can't watch or drive anyone's screen through K2. What it can
+  have is a desktop of its own to put windows on, so a person can watch
+  and help. From your own terminal:
+
+    eval "$(k2 desktop env)"        starts (or wakes) your desktop and sets
+                                    DISPLAY, XAUTHORITY and K2_DESKTOP_PROFILE
+                                    in this shell. Without eval it only prints
+                                    the export lines.
+
+  Then start GUI programs from that same shell, in the background:
+    agent-browser --headed open https://example.com   (uses this shell's
+                                    DISPLAY; returns at once, the browser
+                                    stays open on the desktop)
+    chromium --user-data-dir="$K2_DESKTOP_PROFILE" https://example.com &
+    xmessage hello &                (any X11 program)
+  No browser? command -v chromium firefox google-chrome agent-browser.
+  agent-browser can fetch its own (npm install -g agent-browser, then
+  agent-browser install). agent-desktop reads the accessibility tree
+  there (the desktop runs the AT-SPI bus when it is installed).
+
+  It is always your workspace's desktop (virtual:<workspace id>); your
+  sidecars share it. Each call holds it for you for 30 minutes and keeps
+  it awake (4 hours at most with nobody watching): run k2 desktop env
+  again to keep it, k2 desktop env --release when you are done. While one
+  session holds it, another session of your workspace gets desktop_in_use
+  with who and until when. A new desktop is 1280x720. If it is waiting for
+  another desktop to sleep, k2 desktop env waits (--timeout 2m).
+  Your browser profile folder ($K2_DESKTOP_PROFILE) is this desktop's
+  alone: nothing is copied into it.
+
+  Your person watches it in a Desktop tab: + → Desktop (Beta) in your
+  workspace opens your desktop, or the picker in any Desktop tab lists it
+  by your name. You don't open the tab yourself: tell your person it is up
+  and what is on it (k2 thread).
+
+  Refusals (exit 3): desktop_switch_off = your workspace's "Allow a virtual
+  desktop" switch is off; run the "Ask with:" line it prints. desktop_off =
+  the owner hasn't turned virtual desktops on: ask your person (the owner
+  runs k2 desktop enable; k2 desktop env starts the desktop itself).
+  desktop_in_use = another session of your workspace holds it (see above).
+  not_your_desktop = you named another desktop (leave --desktop out).
+  Exit 1: not_set_up = the server lacks the desktop packages: ask your
+  person (the owner runs k2 desktop setup). On a Mac: linux_only.
 EOF
 }
 

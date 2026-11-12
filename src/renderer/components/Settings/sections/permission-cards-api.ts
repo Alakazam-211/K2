@@ -295,6 +295,7 @@ export const PERMISSION_ACTION_ROWS: Readonly<Record<string, string>> = {
   'gardens.manage': 'projects.agents-can-manage-gardens',
   'organization.manage': 'projects.agents-can-manage-org-chart',
   'voice.transcripts-read': 'projects.agents-can-read-transcripts',
+  'desktop.use': 'projects.agents-can-use-desktop',
   'dns.manage': 'projects.dns-manage-enabled',
   'connections.create': 'projects.agents-can-create-connections',
   'connections.add': 'projects.agents-can-create-connections',

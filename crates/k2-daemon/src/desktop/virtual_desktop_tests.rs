@@ -28,6 +28,8 @@ pub(crate) struct Fake {
     pub(crate) alive: Mutex<HashSet<u32>>,
     /// `Some(why)`: /tmp/.X11-unix is missing or wrong.
     pub(crate) x11_dir: Mutex<Option<String>>,
+    /// Where at-spi-bus-launcher is (None: not installed).
+    pub(crate) atspi: Mutex<Option<String>>,
 }
 
 impl Fake {
@@ -47,6 +49,7 @@ impl Fake {
             frozen: Mutex::new(HashSet::new()),
             alive: Mutex::new(HashSet::new()),
             x11_dir: Mutex::new(None),
+            atspi: Mutex::new(None),
         })
     }
 
@@ -207,6 +210,10 @@ impl Host for Fake {
         self.log.lock().unwrap().push(format!("reclaim {cgroup} {bytes}"));
         Ok(())
     }
+
+    fn atspi_launcher(&self) -> Option<String> {
+        self.atspi.lock().unwrap().clone()
+    }
 }
 
 pub(crate) struct FakeClock(pub(crate) AtomicI64);
@@ -331,6 +338,50 @@ fn start_runs_xvfb_then_the_session_with_a_clean_env_and_never_ac() {
     let rec = r.record("virtual");
     assert_eq!((rec.state, rec.display.as_deref(), rec.size), (State::Ready, Some(":100"), size(1600, 900)));
     assert_eq!(rec.boot_id, "boot-1");
+}
+
+/// L8 (§3.9): agent-desktop reads the accessibility tree over AT-SPI, so
+/// the session starts at-spi-bus-launcher on the desktop's own bus when it
+/// is installed (it publishes the bus on the display), and not otherwise.
+#[test]
+fn the_session_starts_the_accessibility_bus_when_installed() {
+    let r = Rig::new(true, true);
+    *r.host.atspi.lock().unwrap() = Some("/usr/libexec/at-spi-bus-launcher".into());
+    r.m.start("virtual:w1", Asker::Agent, None).unwrap();
+    let session = r.runs("systemd-run").into_iter().find(|l| l.contains("-session.service")).expect("the session");
+    assert!(
+        session.contains(&format!("dbus-run-session -- /bin/sh -c {ATSPI_SH} k2-session /usr/libexec/at-spi-bus-launcher icewm-session")),
+        "{session}"
+    );
+    let r = Rig::new(true, true);
+    r.m.start("virtual:w1", Asker::Agent, None).unwrap();
+    let session = r.runs("systemd-run").into_iter().find(|l| l.contains("-session.service")).expect("the session");
+    assert!(session.ends_with("dbus-run-session -- icewm-session"), "no launcher, no wrapper: {session}");
+}
+
+/// LD-31: a browser profile folder per desktop, 0700, never shared.
+#[test]
+fn each_desktop_has_its_own_profile_folder() {
+    let r = Rig::new(true, true);
+    let a = r.m.profile_dir("virtual:w1").expect("made");
+    let b = r.m.profile_dir("virtual:w2").expect("made");
+    assert_ne!(a, b);
+    assert_eq!(a, r.home.join(".k2/desktop/virtual-w1/profile"));
+    for p in [&a, &b] {
+        let m = std::fs::symlink_metadata(p).unwrap();
+        assert!(m.is_dir() && !m.file_type().is_symlink(), "{}", p.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(m.permissions().mode() & 0o777, 0o700, "{}", p.display());
+        }
+    }
+    // Kept across a close (an agent's logins in it stay its own).
+    r.m.start("virtual:w1", Asker::Agent, None).unwrap();
+    std::fs::write(a.join("Cookies"), b"x").unwrap();
+    r.m.close_with("virtual:w1", CloseReason::ClosedBy { by: "test".into() });
+    assert!(a.join("Cookies").is_file());
+    assert_eq!(r.m.profile_dir("virtual:w1").unwrap(), a);
 }
 
 #[test]
@@ -915,6 +966,17 @@ mod xvfb {
             (i(12), i(14), u(16), u(18))
         }
 
+        /// The root window's children (QueryTree).
+        pub fn children(&mut self) -> Vec<u32> {
+            let mut r = vec![15u8, 0];
+            r.extend_from_slice(&2u16.to_le_bytes());
+            r.extend_from_slice(&self.root.to_le_bytes());
+            self.send(&r);
+            let v = self.reply();
+            let n = u16::from_le_bytes([v[16], v[17]]) as usize;
+            (0..n).map(|i| u32::from_le_bytes(v[32 + 4 * i..36 + 4 * i].try_into().unwrap())).collect()
+        }
+
         /// A window's WM_NAME.
         pub fn name(&mut self, id: u32) -> String {
             let mut r = vec![20u8, 0];
@@ -971,6 +1033,36 @@ mod xvfb {
         let w = x.window(10, 20, 300, 200, "k2-test");
         assert_eq!(x.geometry(w), (10, 20, 300, 200));
         m.close_with(&id, CloseReason::ClosedBy { by: "test".into() });
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// L8: two agents get two desktops, and neither's input reaches the
+    /// other's windows: each display takes only its own cookie, and a
+    /// window made on one is not on the other.
+    #[test]
+    fn two_agents_desktops_keep_to_themselves() {
+        let (m, home) = real();
+        let (a, b) = (id(), id());
+        m.start(&a, Asker::Agent, None).unwrap();
+        m.start(&b, Asker::Agent, None).unwrap();
+        let (da, db) = (m.status(&a).display.unwrap(), m.status(&b).display.unwrap());
+        assert_ne!(da, db, "two displays");
+        let ca = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&a)).join("Xauthority"));
+        let cb = cookie_of(&home.join(".k2/desktop").join(vd::folder_slug(&b)).join("Xauthority"));
+        assert_ne!(ca, cb, "two cookies");
+        assert!(connect(&db, Some(&ca)).is_err(), "A's cookie doesn't open B's display");
+        assert!(connect(&da, Some(&cb)).is_err(), "B's cookie doesn't open A's display");
+        let mut xa = connect(&da, Some(&ca)).unwrap();
+        let mut xb = connect(&db, Some(&cb)).unwrap();
+        let before = xb.children();
+        let w = xa.window(30, 40, 200, 100, "agent a");
+        assert!(xa.children().contains(&w), "on A");
+        assert_eq!(xb.children(), before, "nothing new on B");
+        // Profiles: one each, never the same folder.
+        assert_ne!(m.profile_dir(&a).unwrap(), m.profile_dir(&b).unwrap());
+        for id in [&a, &b] {
+            m.close_with(id, CloseReason::ClosedBy { by: "test".into() });
+        }
         let _ = std::fs::remove_dir_all(home);
     }
 

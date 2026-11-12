@@ -140,12 +140,13 @@ fn viewer(user: &str, user_id: &str) -> ViewerInfo {
     }
 }
 
-/// Agents, App passes, API keys: `desktop_people_only` on every route;
-/// a bad token is the plain 403.
+/// Agents, App passes, API keys: `desktop_people_only` on every route but
+/// `env` (an agent's own desktop, its own gate: `env_routes`); a bad token
+/// is the plain 403.
 #[test]
 fn every_route_refuses_agents_and_app_credentials() {
     let _e = env();
-    for path in ROUTES {
+    for path in ROUTES.iter().filter(|p| **p != super::super::env_routes::ROUTE) {
         for who in [agent(), Who::Wrong] {
             let (s, v) = call(&who, path, json!({}));
             assert_eq!((s, code(&v)), (403, PEOPLE_ONLY), "{path} {who:?}: {v}");
@@ -171,7 +172,7 @@ fn methods_are_checked_first() {
         assert_eq!(r.status, "405 Method Not Allowed", "{path}");
     }
     assert!(!store::is_enabled(CONSOLE).unwrap());
-    assert_eq!(POST_ROUTES.len(), 11);
+    assert_eq!(POST_ROUTES.len(), 12);
 }
 
 /// Owner login over Connect: on, the card, an audit line, a push to the

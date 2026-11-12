@@ -178,6 +178,11 @@ fn state(w: Writer, ws: &Ws) -> bool {
             let conn = db.lock();
             k2_core::sim::store::agents_can_use_sim(&conn, &ws.id)
         }
+        Writer::Access("desktop") => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::desktop::store::agents_can_use_desktop(&conn, &ws.id)
+        }
         Writer::Access("org_chart_manage") => {
             let db = k2_core::db::shared();
             let conn = db.lock();

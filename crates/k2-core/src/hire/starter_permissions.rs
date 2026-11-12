@@ -30,7 +30,7 @@
 //! Everything else (every `vault.*`, `mail.*`, `dns.manage`, `apps.*`,
 //! `app.*`, `publish.*`, `sew.*`, `db.agent-access`, `docs.share`,
 //! `git.land`, `zen.sign*`, `agent.harness-switch`, `chat.account`,
-//! `chat.manage`, `sim.use`, every `garden.*` approval and every other
+//! `chat.manage`, `sim.use`, `desktop.use`, every `garden.*` approval and every other
 //! `compute.*`) is asked for on a card: Kessel reads untrusted input, so
 //! secrets, sending as the person, the network edge, Apps and users, money
 //! and deletion stay one click away.

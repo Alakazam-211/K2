@@ -19,7 +19,11 @@
 //! POST /cli/desktop/start      {desktop?, width?, height?} Owner, Admin (Linux): start or wake
 //! POST /cli/desktop/stop       {desktop?}                 Owner, Admin (Linux): close it
 //! POST /cli/desktop/setup      {}                         Owner (Linux): the packages
+//! POST /cli/desktop/env        {release?}                 an AGENT (Linux): its own desktop
 //! ```
+//!
+//! **Agents.** `env` is the one route for agents, with its own gate
+//! (`env_routes`, LD-19); every other route refuses them.
 //!
 //! **Which desktop.** Every route takes an optional `desktop` (the query on
 //! GET, the body on POST). Left out it is This server: [`current_desktop`],
@@ -62,6 +66,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/desktop/disable",
     "/cli/desktop/displays",
     "/cli/desktop/enable",
+    "/cli/desktop/env",
     "/cli/desktop/grant",
     "/cli/desktop/grants",
     "/cli/desktop/kick",
@@ -80,6 +85,7 @@ pub const ROUTES: &[&str] = &[
 pub const POST_ROUTES: &[&str] = &[
     "/cli/desktop/disable",
     "/cli/desktop/enable",
+    "/cli/desktop/env",
     "/cli/desktop/grant",
     "/cli/desktop/kick",
     "/cli/desktop/open",
@@ -366,7 +372,7 @@ pub fn notify_new_viewer(user: &str, ingress: &str) {
     notify("viewer", format!("{user} started watching {}'s screen ({ingress}).", machine()));
 }
 
-fn body_json(body: &[u8]) -> Result<Value, CliResponse> {
+pub(crate) fn body_json(body: &[u8]) -> Result<Value, CliResponse> {
     if body.iter().all(u8::is_ascii_whitespace) {
         return Ok(json!({}));
     }
@@ -409,6 +415,10 @@ pub fn handle(who: &Who, req: &Req<'_>) -> CliResponse {
     }
     if !is_post_route(req.path) && req.is_post {
         return CliResponse::method_not_allowed();
+    }
+    // An agent's own desktop: its own gate, ahead of the people-only one.
+    if req.path == super::env_routes::ROUTE {
+        return super::env_routes::handle(who, req);
     }
     let p = match principal(who) {
         Ok(p) => p,

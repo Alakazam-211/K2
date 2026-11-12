@@ -133,6 +133,15 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 const FIREWALL_WHERE: &str =
     "the owner or an admin does this, in Settings → Network → Custom Domains → Firewall or with k2 firewall from a terminal outside K2";
 
+/// `k2 desktop env` (0.46.12): the agent's own desktop only, one session of
+/// a workspace at a time, and only while the Owner keeps virtual desktops on.
+const DESKTOP_OWN_WHERE: &str = "k2 desktop env always gives you your own workspace's desktop: run it with no --desktop";
+const DESKTOP_IN_USE_WHERE: &str =
+    "another session of your workspace holds the desktop: wait until it runs k2 desktop env --release or its hold ends (the error says when)";
+const DESKTOP_OFF_WHERE: &str =
+    "virtual desktops are off on this server: the owner turns them on in Settings → Remote Desktop or with k2 desktop enable from a terminal outside K2";
+const DESKTOP_ENV_WHERE: &str = "k2 desktop env is for agents: people open a Desktop tab, or use k2 desktop start";
+
 /// Remote desktop (0.46.11): people only; an agent can't see or drive the
 /// screen, and can't ask to.
 const DESKTOP_WHERE: &str =
@@ -161,7 +170,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 66] = [
+pub(crate) const V1_ACTIONS: [&str; 67] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -280,6 +289,8 @@ pub(crate) const V1_ACTIONS: [&str; 66] = [
     "vault.grant-server",
     // 0.46.11 (Rosson 2026-11-10): "Read call transcripts" (Owner).
     "voice.transcripts-read",
+    // 0.46.12 (prd-linux-virtual-desktop-v1 LD-38): "Allow a virtual desktop".
+    "desktop.use",
 ];
 
 /// `git.land`: the sidecar and its branch tip the refusal names.
@@ -815,6 +826,13 @@ pub(crate) const ROWS: &[Row] = &[
     // ── remote desktop (0.46.11) ───────────────────────────────────────
     // People only, reads included: never requestable.
     row(Target::Cannot { r#where: DESKTOP_WHERE }, code(403, "desktop_people_only"), "/cli/desktop/", ANY),
+    // `k2 desktop env` (0.46.12, LD-19): the agent's own switch is
+    // requestable; the rest isn't (LD-29, LD-33, the Owner's switch).
+    row(ask("desktop.use", Floor::Admin), code(403, "desktop_switch_off"), "/cli/desktop/env", POST),
+    row(Target::Cannot { r#where: DESKTOP_OWN_WHERE }, code(403, "not_your_desktop"), "/cli/desktop/env", POST),
+    row(Target::Cannot { r#where: DESKTOP_IN_USE_WHERE }, code(403, "desktop_in_use"), "/cli/desktop/env", POST),
+    row(Target::Cannot { r#where: DESKTOP_OFF_WHERE }, code(403, "desktop_off"), "/cli/desktop/env", POST),
+    row(Target::Cannot { r#where: DESKTOP_ENV_WHERE }, code(403, "desktop_env_agents_only"), "/cli/desktop/env", POST),
     // ── the Org Chart (0.46.11) ─────────────────────────────────────────
     // An agent without "Manage the org chart" on a manage verb.
     row(ask("organization.manage", Floor::Owner), code(403, "org_manage_off"), "/cli/organization/", ANY),
@@ -1400,6 +1418,8 @@ mod tests {
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"gpu":{"vendor":"any","count":1}})), json!({"error":{"code":"gpu_needs_grant","hint":"x","node":"k2n11"}}), "compute.gpu"),
             // Mobile dev (0.46.6): `k2 sim boot` with "Allow mobile devices" off.
             (403, "POST", "/cli/sim/boot", vec![], Some(json!({})), json!({"error":{"code":"sim_switch_off","hint":"x"},"code":"sim_switch_off"}), "sim.use"),
+            // 0.46.12 (L8): `k2 desktop env` with "Allow a virtual desktop" off.
+            (403, "POST", "/cli/desktop/env", vec![], Some(json!({})), json!({"ok":false,"error":{"code":"desktop_switch_off","hint":"x"}}), "desktop.use"),
             // 0.46.6: an agent moving its own pinned chat (both doors).
             (403, "POST", "/cli/agent/harness", vec![], Some(json!({"workspace":"sales","harness":"Claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"switched":false}), "agent.harness-switch"),
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
@@ -1970,7 +1990,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 66);
+        assert_eq!(V1_ACTIONS.len(), 67);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

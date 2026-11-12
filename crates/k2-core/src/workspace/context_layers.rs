@@ -1717,6 +1717,8 @@ You can drive a web browser and this machine's desktop apps, not only a terminal
 - **Desktop:**
   - Read `agent-desktop skills get desktop` and `agent-desktop skills get platform` first.
   - Then the loop: `snapshot` (@refs), `find`, `click`, `type`, `screenshot`.
+- **On a Linux server with no screen:** get your own display with `eval "$(k2 desktop env)"` (it starts or wakes a desktop of your own and sets `DISPLAY`, `XAUTHORITY` and `K2_DESKTOP_PROFILE`), then run `agent-browser --headed …` or any GUI program in that shell; people watch it in a Desktop tab. Run it again within 30 minutes to keep it, `k2 desktop env --release` when done.
+- It needs your workspace's "Allow a virtual desktop" switch (refused: run the `Ask with:` line it prints). Point a browser's profile at `$K2_DESKTOP_PROFILE` so its logins stay on your desktop. More: `k2 study desktop`.
 
 **Rules:**
 - **Focus:** if you ever have to take focus (bring a window or app to the front, or click with a physical, headed pointer), give it back to the window that had it before, in the same step. Never leave the person's focus somewhere else.
@@ -4003,11 +4005,11 @@ mod tests {
     // ── 0.46.11: Browser and computer use, built in ──────────────────
     // Literals on purpose: these run red on a K2 without the built-in pack.
 
-    /// sha256 of the pack text as it shipped as a user pack on rosson.k2.dev
-    /// (`~/.k2/context/catalog/packs/browser-and-computer-use/layer.md`,
-    /// 2406 bytes). The built-in copies it byte for byte.
+    /// sha256 of the pack text: as it shipped as a user pack on rosson.k2.dev
+    /// (2406 bytes) plus, 0.46.12, the two lines on a Linux server's
+    /// `k2 desktop env` (prd-linux-virtual-desktop-v1 L8).
     const BROWSER_PACK_SHA256: &str =
-        "299199fe6cc1177061929fdab19e89687c427ea76ac3038ca121ef9772afcb4e";
+        "871747f60088be7eef49a2143e30c6eb059c1cccce99314b70c60531bda5ff6c";
 
     fn sha256_hex(bytes: &[u8]) -> String {
         use sha2::{Digest, Sha256};
@@ -4018,7 +4020,7 @@ mod tests {
     }
 
     fn assert_browser_pack_text(body: &str) {
-        assert_eq!(body.len(), 2406, "browser pack length; got:\n{body}");
+        assert_eq!(body.len(), 3009, "browser pack length; got:\n{body}");
         assert_eq!(
             sha256_hex(body.as_bytes()),
             BROWSER_PACK_SHA256,
@@ -4038,6 +4040,9 @@ mod tests {
             "**Passwords:** never type them.",
             "ask your person before any irreversible",
             "agent-browser close",
+            "eval \"$(k2 desktop env)\"",
+            "Allow a virtual desktop",
+            "$K2_DESKTOP_PROFILE",
         ] {
             assert!(body.contains(needle), "browser pack must say {needle:?}");
         }

@@ -9,9 +9,11 @@ FOR PEOPLE ONLY
   on another device, and lets an allowed person drive it with keyboard and
   mouse. It is for people: the owner, and the logins the owner allows.
   If you are an agent: you can't see or drive the screen with K2's
-  commands, and you can't ask for it. Every k2 desktop verb answers an
-  agent desktop_people_only (exit 3) and "It can't be requested." If your
-  human wants it, tell them the steps below (k2 thread); don't try.
+  commands, and you can't ask for that. Every k2 desktop verb but one
+  answers an agent desktop_people_only (exit 3) and "It can't be
+  requested." If your human wants it, tell them the steps below
+  (k2 thread); don't try. The one exception is k2 desktop env: a desktop
+  of your own on a Linux server (FOR AGENTS, at the end).
 
 WHO MAY DO WHAT
   Owner login            watch, drive, and manage (switch, grants, kick, log),
@@ -21,8 +23,8 @@ WHO MAY DO WHAT
   Voice & Chat only      never
   the owner at this      manage only (every k2 desktop verb), from a plain
   computer               terminal or a K2 shell tab; never watch it from here
-  agents, App passes,    refused: desktop_people_only
-  API keys
+  agents, App passes,    refused: desktop_people_only (an agent's one
+  API keys               verb is k2 desktop env, its own desktop)
   Nobody watches from this same computer, a login included ("You're on
   this computer"): you watch from another device, over K2 Connect or the
   LAN, signed in with a login.
@@ -124,5 +126,50 @@ ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
   this server's K2 user, so one agent could reach another's. There is no
   terminal on these desktops, and a k2 command run by a program on one
   never acts as the owner.
+
+FOR AGENTS: A DESKTOP OF YOUR OWN (Linux servers)
+  An agent can't watch or drive anyone's screen through K2. What it can
+  have is a desktop of its own to put windows on, so a person can watch
+  and help. From your own terminal:
+
+    eval "$(k2 desktop env)"        starts (or wakes) your desktop and sets
+                                    DISPLAY, XAUTHORITY and K2_DESKTOP_PROFILE
+                                    in this shell. Without eval it only prints
+                                    the export lines.
+
+  Then start GUI programs from that same shell, in the background:
+    agent-browser --headed open https://example.com   (uses this shell's
+                                    DISPLAY; returns at once, the browser
+                                    stays open on the desktop)
+    chromium --user-data-dir="$K2_DESKTOP_PROFILE" https://example.com &
+    xmessage hello &                (any X11 program)
+  No browser? command -v chromium firefox google-chrome agent-browser.
+  agent-browser can fetch its own (npm install -g agent-browser, then
+  agent-browser install). agent-desktop reads the accessibility tree
+  there (the desktop runs the AT-SPI bus when it is installed).
+
+  It is always your workspace's desktop (virtual:<workspace id>); your
+  sidecars share it. Each call holds it for you for 30 minutes and keeps
+  it awake (4 hours at most with nobody watching): run k2 desktop env
+  again to keep it, k2 desktop env --release when you are done. While one
+  session holds it, another session of your workspace gets desktop_in_use
+  with who and until when. A new desktop is 1280x720. If it is waiting for
+  another desktop to sleep, k2 desktop env waits (--timeout 2m).
+  Your browser profile folder ($K2_DESKTOP_PROFILE) is this desktop's
+  alone: nothing is copied into it.
+
+  Your person watches it in a Desktop tab: + → Desktop (Beta) in your
+  workspace opens your desktop, or the picker in any Desktop tab lists it
+  by your name. You don't open the tab yourself: tell your person it is up
+  and what is on it (k2 thread).
+
+  Refusals (exit 3): desktop_switch_off = your workspace's "Allow a virtual
+  desktop" switch is off; run the "Ask with:" line it prints. desktop_off =
+  the owner hasn't turned virtual desktops on: ask your person (the owner
+  runs k2 desktop enable; k2 desktop env starts the desktop itself).
+  desktop_in_use = another session of your workspace holds it (see above).
+  not_your_desktop = you named another desktop (leave --desktop out).
+  Exit 1: not_set_up = the server lacks the desktop packages: ask your
+  person (the owner runs k2 desktop setup). On a Mac: linux_only.
 --- stderr
 --- requests

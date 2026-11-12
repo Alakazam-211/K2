@@ -920,6 +920,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/desktop/disable", Owner),
     get("/cli/desktop/displays", Member),
     post("/cli/desktop/enable", Owner),
+    // An agent's own desktop (L8): passports only; the handler refuses
+    // every login (desktop_env_agents_only), so the floor keeps them out.
+    post("/cli/desktop/env", Owner),
     post("/cli/desktop/grant", Owner),
     get("/cli/desktop/grants", Owner),
     post("/cli/desktop/kick", Owner),
@@ -933,8 +936,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/desktop/setup", Owner),
     post("/cli/desktop/start", Admin),
     get("/cli/desktop/status", Member),
-    get("/cli/desktop/stream", Member),
     post("/cli/desktop/stop", Admin),
+    get("/cli/desktop/stream", Member),
     post("/cli/desktop/ticket", Member),
     get("/cli/desktop/viewers", Owner),
     post("/cli/dns-manage", Admin),

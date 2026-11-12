@@ -166,6 +166,7 @@ const ACTION_WORDS: Record<string, string> = {
   'mail.approve': 'send an email that needs approval',
   'db.agent-access': 'create databases',
   'sim.use': 'use mobile devices',
+  'desktop.use': 'use a virtual desktop',
   'organization.manage': 'manage the org chart',
   'connections.create': 'add a connection',
   'connections.add': 'add a connection',

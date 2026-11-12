@@ -71,7 +71,20 @@ pub trait Host: Send + Sync {
     /// swap (`memory.reclaim`; `cgroup` is its path under
     /// /sys/fs/cgroup). EAGAIN means it took what it could: that is `Ok`.
     fn reclaim(&self, cgroup: &str, bytes: u64) -> Result<(), String>;
+    /// Where `at-spi-bus-launcher` is installed, if it is (L8: the
+    /// accessibility bus agent-desktop reads).
+    fn atspi_launcher(&self) -> Option<String>;
 }
+
+/// The session with the accessibility bus (L8): `$1` is the launcher, the
+/// rest the window manager. The launcher runs on the desktop's own session
+/// bus and publishes the accessibility bus on the display (AT_SPI_BUS), so
+/// a program given only DISPLAY finds it.
+pub const ATSPI_SH: &str = "l=$1; shift; \"$l\" --launch-immediately & exec \"$@\"";
+
+/// Where distros put at-spi-bus-launcher (it is not on PATH).
+pub const ATSPI_LAUNCHERS: [&str; 4] =
+    ["/usr/libexec/at-spi-bus-launcher", "/usr/libexec/at-spi2-core/at-spi-bus-launcher", "/usr/lib/at-spi2-core/at-spi-bus-launcher", "/usr/lib/at-spi-bus-launcher"];
 
 /// `memory.reclaim`'s answer (L0 11-11): EAGAIN after it reclaimed what it
 /// could is normal, not a failure.
@@ -365,18 +378,38 @@ impl Manager {
         self.mode() == RunMode::Systemd && self.host.freezer()
     }
 
-    /// The session command: the override, IceWM, else openbox.
+    /// The session command: the override, IceWM, else openbox, on its own
+    /// session bus, with the accessibility bus when it is installed.
     fn window_manager(&self) -> Option<Vec<String>> {
         if let Some(s) = &self.cfg.session {
             return Some(s.clone());
         }
-        if self.host.has_program("icewm-session") {
-            Some(s(&["dbus-run-session", "--", "icewm-session"]))
+        let wm = if self.host.has_program("icewm-session") {
+            "icewm-session"
         } else if self.host.has_program("openbox-session") {
-            Some(s(&["dbus-run-session", "--", "openbox-session"]))
+            "openbox-session"
         } else {
-            None
-        }
+            return None;
+        };
+        Some(match self.host.atspi_launcher() {
+            Some(l) => {
+                let mut v = s(&["dbus-run-session", "--", "/bin/sh", "-c", ATSPI_SH, "k2-session"]);
+                v.push(l);
+                v.push(wm.to_string());
+                v
+            }
+            None => s(&["dbus-run-session", "--", wm]),
+        })
+    }
+
+    /// The desktop's browser profile folder (LD-31): `<its folder>/profile`,
+    /// 0700, made on first use, kept across closes. Never copied or linked
+    /// from anywhere: each desktop's logins are its own.
+    pub fn profile_dir(&self, id: &str) -> io::Result<PathBuf> {
+        let p = self.dir(id).join("profile");
+        make_private_dir(&self.dir(id))?;
+        make_private_dir(&p)?;
+        Ok(p)
     }
 
     /// What a start needs and the box lacks (empty: set up).
@@ -1274,6 +1307,10 @@ impl Host for RealHost {
 
     fn display_taken(&self, n: u32) -> bool {
         display_taken_in(Path::new("/tmp"), n)
+    }
+
+    fn atspi_launcher(&self) -> Option<String> {
+        ATSPI_LAUNCHERS.iter().find(|p| Path::new(p).is_file()).map(|p| p.to_string())
     }
 
     fn reclaim(&self, cgroup: &str, bytes: u64) -> Result<(), String> {

@@ -1100,6 +1100,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/desktop/start",
         "/cli/desktop/stop",
         "/cli/desktop/setup",
+        // 0.46.12 (L8): an agent's own virtual desktop, its one Desktop
+        // route (its own gate: the workspace's "Allow a virtual desktop").
+        "/cli/desktop/env",
         // 0.46.4: extra subdomains of its own workspace on its App.
         "/cli/app/domains",
         "/cli/app/domain/add",

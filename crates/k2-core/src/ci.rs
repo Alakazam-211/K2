@@ -821,6 +821,44 @@ pub struct Trusted {
     pub default: bool,
     pub by: Option<String>,
     pub at: Option<i64>,
+    /// The git remote a person's trust or watch change saw ([`normalize_remote`]).
+    /// A run is trusted only while its remote still has this URL; `None` =
+    /// no run is trusted until a person sets the trusted branches.
+    pub remote: Option<String>,
+}
+
+/// A git remote URL, normalised to `host/path` (lowercase host; no scheme,
+/// credentials, port-less `:` of scp form, trailing `/` or `.git`), so the
+/// same repo reads the same however it is spelled. A local path stays a
+/// path (trailing `/` and `.git` dropped). `None` for an empty URL.
+pub fn normalize_remote(url: &str) -> Option<String> {
+    let u = url.trim();
+    if u.is_empty() {
+        return None;
+    }
+    let (host, path) = if let Some((scheme, rest)) = u.split_once("://") {
+        if scheme.eq_ignore_ascii_case("file") {
+            (String::new(), rest.to_string())
+        } else {
+            let rest = rest.rsplit_once('@').map(|(_, r)| r).unwrap_or(rest);
+            match rest.split_once('/') {
+                Some((h, p)) => (h.to_ascii_lowercase(), p.to_string()),
+                None => (rest.to_ascii_lowercase(), String::new()),
+            }
+        }
+    } else if let Some((left, p)) = u.split_once(':').filter(|(l, _)| !l.contains('/') && !l.is_empty()) {
+        // scp form: [user@]host:path
+        let h = left.rsplit_once('@').map(|(_, h)| h).unwrap_or(left);
+        (h.to_ascii_lowercase(), p.to_string())
+    } else {
+        (String::new(), u.to_string())
+    };
+    let mut path = path.trim_end_matches('/').to_string();
+    if let Some(p) = path.strip_suffix(".git") {
+        path = p.to_string();
+    }
+    let path = path.trim_start_matches('/');
+    Some(if host.is_empty() { format!("/{path}") } else { format!("{host}/{path}") })
 }
 
 /// A trusted branch: a plain branch name (no glob, no `wt:`).
@@ -839,29 +877,39 @@ pub fn is_person_label(label: &str) -> bool {
 /// only when a person set the watch (an agent may set a watch, and must
 /// not widen the trusted branches through it), else `main`.
 pub fn trusted(conn: &Connection, ws: &str) -> Trusted {
-    type Row = (Option<String>, Option<String>, Option<i64>, String, String, i64);
+    type Row = (Option<String>, Option<String>, Option<i64>, String, String, i64, Option<String>);
     let row: Option<Row> = conn
         .query_row(
-            "SELECT trusted_branches_json, trusted_by, trusted_at, branches_json, watch_by, watch_at FROM ci_workspaces WHERE workspace_id = ?1",
+            "SELECT trusted_branches_json, trusted_by, trusted_at, branches_json, watch_by, watch_at, trusted_remote FROM ci_workspaces WHERE workspace_id = ?1",
             params![ws],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         )
         .optional()
         .ok()
         .flatten();
-    let fallback = || Trusted { branches: vec![crate::compute::proto::ci_config::DEFAULT_TRUSTED_BRANCH.to_string()], default: true, by: None, at: None };
-    let Some((json, by, at, watch, watch_by, watch_at)) = row else { return fallback() };
+    let main = || vec![crate::compute::proto::ci_config::DEFAULT_TRUSTED_BRANCH.to_string()];
+    let Some((json, by, at, watch, watch_by, watch_at, remote)) = row else {
+        return Trusted { branches: main(), default: true, by: None, at: None, remote: None };
+    };
     if let Some(j) = json {
         let branches: Vec<String> = serde_json::from_str::<Vec<String>>(&j).map(|v| v.into_iter().filter(|b| valid_trusted_branch(b)).collect()).unwrap_or_default();
-        return Trusted { branches, default: false, by, at };
+        return Trusted { branches, default: false, by, at, remote };
     }
     if watch_at > 0 && is_person_label(&watch_by) {
         let w: Vec<String> = serde_json::from_str(&watch).unwrap_or_default();
         if let Some(b) = w.into_iter().find(|b| valid_trusted_branch(b)) {
-            return Trusted { branches: vec![b], default: true, by: None, at: None };
+            return Trusted { branches: vec![b], default: true, by: None, at: None, remote };
         }
     }
-    fallback()
+    Trusted { branches: main(), default: true, by: None, at: None, remote }
+}
+
+/// A person turned the watch on: record the remote it saw, unless one is
+/// recorded already (changing it is `k2 ci cache trust --set`, a person's).
+pub fn record_remote_if_unset(conn: &Connection, ws: &str, remote: &str) -> Result<(), String> {
+    conn.execute("UPDATE ci_workspaces SET trusted_remote = ?2 WHERE workspace_id = ?1 AND trusted_remote IS NULL", params![ws, remote])
+        .map_err(|e| format!("ci trusted remote: {e}"))?;
+    Ok(())
 }
 
 /// Does `next` add a branch `now` doesn't have (a person's step)?
@@ -872,7 +920,7 @@ pub fn trust_widens(now: &[String], next: &[String]) -> bool {
 /// Store the trusted branches (a row is made if the workspace has none,
 /// watch off). Checked: plain branch names, at most
 /// [`MAX_TRUSTED_BRANCHES`], duplicates dropped. The caller decides who may.
-pub fn set_trusted(conn: &Connection, ws: &str, branches: &[String], by: &str, at: i64) -> Result<Vec<String>, String> {
+pub fn set_trusted(conn: &Connection, ws: &str, branches: &[String], remote: Option<&str>, by: &str, at: i64) -> Result<Vec<String>, String> {
     let mut out: Vec<String> = Vec::new();
     for b in branches {
         if !valid_trusted_branch(b) {
@@ -887,9 +935,10 @@ pub fn set_trusted(conn: &Connection, ws: &str, branches: &[String], by: &str, a
     }
     let json = serde_json::to_string(&out).map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT INTO ci_workspaces (workspace_id, trusted_branches_json, trusted_by, trusted_at) VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(workspace_id) DO UPDATE SET trusted_branches_json = ?2, trusted_by = ?3, trusted_at = ?4",
-        params![ws, json, by, at],
+        "INSERT INTO ci_workspaces (workspace_id, trusted_branches_json, trusted_by, trusted_at, trusted_remote) VALUES (?1, ?2, ?3, ?4, ?5) \
+         ON CONFLICT(workspace_id) DO UPDATE SET trusted_branches_json = ?2, trusted_by = ?3, trusted_at = ?4, \
+         trusted_remote = COALESCE(?5, trusted_remote)",
+        params![ws, json, by, at, remote],
     )
     .map_err(|e| format!("ci trusted branches: {e}"))?;
     Ok(out)
@@ -920,17 +969,23 @@ mod tests {
         assert_eq!(trusted(&c, "ws").branches, vec!["main"], "no row: main");
         let w = Watch { remote: "origin".into(), branches: vec!["rel/*".into(), "trunk".into()], poll_secs: 60, tier: "ci".into(), max_inflight: 2 };
         set_watch(&c, "ws", &w, "agent:ws", 1).unwrap();
-        assert_eq!(trusted(&c, "ws"), Trusted { branches: vec!["main".into()], default: true, by: None, at: None }, "an agent's watch never widens");
+        assert_eq!(trusted(&c, "ws"), Trusted { branches: vec!["main".into()], default: true, by: None, at: None, remote: None }, "an agent's watch never widens");
         set_watch(&c, "ws", &w, "login:rosson", 2).unwrap();
         assert_eq!(trusted(&c, "ws").branches, vec!["trunk"], "a person's watch: its first plain branch");
-        let set = set_trusted(&c, "ws", &["main".into(), "rel/1".into(), "main".into()], "owner", 3).unwrap();
+        let set = set_trusted(&c, "ws", &["main".into(), "rel/1".into(), "main".into()], Some("github.com/acme/app"), "owner", 3).unwrap();
         assert_eq!(set, vec!["main", "rel/1"]);
         let t = trusted(&c, "ws");
         assert_eq!((t.branches, t.default, t.by.as_deref(), t.at), (vec!["main".to_string(), "rel/1".to_string()], false, Some("owner"), Some(3)));
         for bad in ["rel/*", "wt:x", "", "a..b"] {
-            assert!(set_trusted(&c, "ws", &[bad.into()], "owner", 4).is_err(), "{bad:?}");
+            assert!(set_trusted(&c, "ws", &[bad.into()], None, "owner", 4).is_err(), "{bad:?}");
         }
-        set_trusted(&c, "other", &[], "agent:other", 5).unwrap();
+        // An agent's narrowing keeps the recorded remote; only a person's
+        // change records one.
+        set_trusted(&c, "ws", &["main".into()], None, "agent:ws", 5).unwrap();
+        assert_eq!(trusted(&c, "ws").remote.as_deref(), Some("github.com/acme/app"));
+        record_remote_if_unset(&c, "ws", "evil.example/x").unwrap();
+        assert_eq!(trusted(&c, "ws").remote.as_deref(), Some("github.com/acme/app"), "a watch never replaces a recorded remote");
+        set_trusted(&c, "other", &[], None, "agent:other", 5).unwrap();
         assert!(trusted(&c, "other").branches.is_empty(), "an empty list trusts nothing (a new row, watch off)");
         assert!(workspace(&c, "other").is_some_and(|r| !r.watch_on));
         c.execute("UPDATE ci_workspaces SET trusted_branches_json = 'garbage' WHERE workspace_id = 'ws'", []).unwrap();
@@ -938,6 +993,18 @@ mod tests {
         assert!(trust_widens(&["main".into()], &["main".into(), "x".into()]));
         assert!(!trust_widens(&["main".into(), "x".into()], &["x".into()]));
         assert!(is_person_label("owner") && is_person_label("login:a") && !is_person_label("agent:a") && !is_person_label("shell:a"));
+        for (url, want) in [
+            ("https://github.com/Acme/app.git", "github.com/Acme/app"),
+            ("https://user:tok@GitHub.com/Acme/app/", "github.com/Acme/app"),
+            ("git@github.com:Acme/app.git", "github.com/Acme/app"),
+            ("ssh://git@github.com/Acme/app", "github.com/Acme/app"),
+            ("/srv/repos/app.git/", "/srv/repos/app"),
+            ("file:///srv/repos/app.git", "/srv/repos/app"),
+        ] {
+            assert_eq!(normalize_remote(url).as_deref(), Some(want), "{url}");
+        }
+        assert_ne!(normalize_remote("https://github.com/acme/app"), normalize_remote("https://github.com/evil/app"));
+        assert_eq!(normalize_remote("  "), None);
     }
 
     fn pats(p: &[&str]) -> Vec<String> {

@@ -1512,7 +1512,7 @@ pub(crate) fn submit_for_ci(ws_id: &str, run_id: &str, body: &serde_json::Value,
             return Ok(serde_json::json!({ "job": job_summary(&j), "existing": true }));
         }
     }
-    let opts = SubmitOpts { ci_cache: cache.map(|c| (c.commit, c.cache_ref.clone())), ..SubmitOpts::default() };
+    let opts = SubmitOpts { ci_cache: cache.cloned(), ..SubmitOpts::default() };
     let sub = submit_one(&who, body, &ws, client_id, &request_sha, &opts)?;
     Ok(submitted_json(&who, &sub))
 }
@@ -1741,7 +1741,7 @@ struct SubmitOpts {
     dry: bool,
     /// B2: a CI check's cache, as the CI engine decided it (never from a
     /// request body; `submit_for_ci` only).
-    ci_cache: Option<(k2_core::compute::proto::gens::CacheCommit, Option<String>)>,
+    ci_cache: Option<crate::ci_engine::CiCache>,
 }
 
 struct Submitted {
@@ -2418,7 +2418,18 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // fork trusted and saves nothing (only under its own uid: stripped for
     // a node without `job-uid`); a CI check as the engine decided; any
     // other job saves only its own scratch copy (its branch, or wt:<name>).
-    let (cache_commit, cache_ref) = gens_fields(src.is_some(), receipt_v.is_some(), !secret_envs.is_empty(), opts.ci_cache.clone(), source.as_ref().and_then(|i| i.scratch_ref.clone()));
+    let ci = opts.ci_cache.as_ref().map(|c| {
+        // The node fetches `src.remote_url` itself (rule 5): a trusted
+        // cache only when that is the pinned remote too.
+        let off_pin = c.commit == k2_core::compute::proto::gens::CacheCommit::Trusted
+            && src.as_ref().and_then(|s| s.remote_url.as_deref()).and_then(k2_core::ci::normalize_remote).is_some_and(|u| Some(&u) != c.remote.as_ref());
+        if off_pin {
+            (k2_core::compute::proto::gens::CacheCommit::Scratch, c.cache_ref.clone())
+        } else {
+            (c.commit, c.cache_ref.clone())
+        }
+    });
+    let (cache_commit, cache_ref) = gens_fields(src.is_some(), receipt_v.is_some(), !secret_envs.is_empty(), ci, source.as_ref().and_then(|i| i.scratch_ref.clone()));
     let ctl = store::JobCtl {
         any: any.then_some(filter),
         admin: who.is_admin(),

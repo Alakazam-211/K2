@@ -70,10 +70,12 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   k2 ci cache trust --add BRANCH | --set a,b
                                 a person's step (the owner or an Admin, from a
                                 terminal outside K2): an agent gets
-                                cache_trust_needs_person (exit 3); ask your
-                                person (k2 thread) to run it. An empty list
-                                (every branch removed): no check saves the
-                                shared copy
+                                cache_trust_needs_person (exit 3) and the
+                                k2 permission request line to ask with. A
+                                person's change also records the git remote's
+                                URL: while the remote has another URL, no check
+                                saves the shared copy (a person runs --set
+                                again). An empty list: no check saves it
   --workspace <name>            people: which workspace (default: the
                                 one this folder is in)
 
@@ -838,6 +840,7 @@ v = json.load(sys.stdin)
 b = v.get("branches") or []
 print("trusted branches (%s): %s%s" % (v.get("workspace"), ", ".join(b) or "none", " (the default)" if v.get("default") else ""))
 if v.get("by"): print("set by %s" % v["by"])
+print("remote: %s" % (v.get("remote") or "none recorded yet (a person runs k2 ci cache trust --set <branches>; until then no check saves the shared copy)"))
 print(v.get("note", ""))'
             fi
             ;;

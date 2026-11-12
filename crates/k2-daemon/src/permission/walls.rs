@@ -255,6 +255,9 @@ pub(crate) const V1_ACTIONS: [&str; 68] = [
     // the list (narrowing it is the agent's own; widening is a person's).
     "compute.allow-nodes",
     "compute.allow-nodes-clear",
+    // prd-compute-blacksmith-class-v1 B2: add trusted branches to the
+    // agent's own CI cache (removing one is the agent's own).
+    "ci.cache-trust",
     // 0.46.8: the agent's own chat account (the `chat` grant), and turning
     // off a workspace's agent email sending (any workspace on the server).
     "chat.account",
@@ -438,6 +441,13 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         needs: Some("/error/clear"),
         ..row(ask("compute.allow-nodes-clear", Floor::Admin), code(403, "allow_nodes_needs_person"), "/cli/compute/allow-nodes/set", POST)
+    },
+    // B2: the agent's own trusted-branch change that adds a branch (the
+    // refusal names them in `error.branches`).
+    Row {
+        params: &[("branches", &[ParamFrom::Response("/error/branches")])],
+        needs: Some("/error/branches"),
+        ..row(ask("ci.cache-trust", Floor::Admin), code(403, "cache_trust_needs_person"), "/cli/ci/cache/trust/set", POST)
     },
     // Package requests (0.46.9, prd-compute-self-serve-environments-v1 §6):
     // a filed request held for this server's owner answers `pkgHeld: true`
@@ -1470,6 +1480,7 @@ mod tests {
             // 0.46.8: a job aimed at a node off the workspace's node list, and an agent clearing its list.
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n2"})), json!({"error":{"code":"node_not_allowed","hint":"x","node":"k2n2-m1","nodes":"k2n2-m1"}}), "compute.allow-nodes"),
             (403, "POST", "/cli/compute/allow-nodes/set", vec![], Some(json!({"clear":true})), json!({"error":{"code":"allow_nodes_needs_person","hint":"x","clear":true}}), "compute.allow-nodes-clear"),
+            (403, "POST", "/cli/ci/cache/trust/set", vec![], Some(json!({"add":["rel"]})), json!({"error":{"code":"cache_trust_needs_person","hint":"x","workspace":"k2","branches":"rel"}}), "ci.cache-trust"),
             // 0.46.9 (GH#78): an agent's git-access grant.
             (403, "POST", "/cli/compute/git-access/grant", vec![], Some(json!({"github":"acme/app"})), json!({"error":{"code":"git_access_needs_person","hint":"x","workspace":"k2","repos":"acme/app"}}), "compute.git-access"),
             // 0.46.10: the grant with no credential yet, and the agent's own setup.

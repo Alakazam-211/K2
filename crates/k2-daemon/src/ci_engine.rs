@@ -82,6 +82,10 @@ pub trait Ops: Send + Sync {
     /// into the K2-owned `refs/k2-ci/<branch>` (never a local branch) and
     /// say whether `sha` is on it.
     fn remote_branch_has(&self, root: &Path, remote: &str, sha: &str, branch: &str) -> Result<bool, String>;
+    /// B2: the URL git really fetches `<remote>` from (`git ls-remote
+    /// --get-url`: after every `url.<x>.insteadOf`), normalised
+    /// ([`ci::normalize_remote`]). The trusted cache is pinned to it.
+    fn remote_url(&self, root: &Path, remote: &str) -> Option<String>;
     /// What a compute job says now.
     fn job(&self, job_id: &str) -> Option<JobFacts>;
     /// One commit status. `Err` is one line for the check's row.
@@ -420,6 +424,10 @@ pub struct CiCache {
     pub cache_ref: Option<String>,
     /// Why, one line (the run's note).
     pub why: String,
+    /// For a trusted cache: the remote URL a person recorded (normalised).
+    /// The job's own `src.remote_url` must match it too, or it saves only
+    /// scratch (`compute_routes::gens_fields`).
+    pub remote: Option<String>,
 }
 
 /// Rule 1 (BK-1): a run's checks may save the trusted cache only when its
@@ -429,17 +437,33 @@ pub struct CiCache {
 /// `--ref` alone never makes a run trusted (it is free text and the commit
 /// may be local). Any other branch run saves its own `scratch/<branch>`;
 /// a run with no branch keeps today's warm slots.
-pub(crate) fn ci_cache(o: &dyn Ops, root: &Path, s: &Start<'_>, trusted: &[String]) -> Option<CiCache> {
+pub(crate) fn ci_cache(o: &dyn Ops, root: &Path, s: &Start<'_>, trusted: &ci::Trusted) -> Option<CiCache> {
     use k2_core::compute::proto::gens::{valid_ref, CacheCommit};
     let b = s.git_ref?;
     if !ci::valid_trusted_branch(b) {
-        return valid_ref(b).then(|| CiCache { commit: CacheCommit::Scratch, cache_ref: Some(b.to_string()), why: format!("saves only scratch/{b}") });
+        return valid_ref(b).then(|| CiCache { commit: CacheCommit::Scratch, cache_ref: Some(b.to_string()), why: format!("saves only scratch/{b}"), remote: None });
     }
-    let scratch = |why: String| Some(CiCache { commit: CacheCommit::Scratch, cache_ref: Some(b.to_string()), why });
-    if !trusted.iter().any(|t| t == b) {
+    let scratch = |why: String| Some(CiCache { commit: CacheCommit::Scratch, cache_ref: Some(b.to_string()), why, remote: None });
+    if !trusted.branches.iter().any(|t| t == b) {
         return scratch(format!("{b} isn't a trusted branch (k2 ci cache trust): saves only scratch/{b}"));
     }
-    let trusted_cache = |why: String| Some(CiCache { commit: CacheCommit::Trusted, cache_ref: Some(b.to_string()), why });
+    // The remote is pinned (BK-1, review item 1): a person's trust or watch
+    // change recorded the URL git fetches from; an agent repointing the
+    // remote (its URL or an insteadOf) gets no trusted save.
+    let Some(pinned) = trusted.remote.clone() else {
+        return scratch(format!("no remote recorded for the trusted cache yet: a person runs k2 ci cache trust --set {b} (it records {}'s URL); saves only scratch/{b}", s.remote));
+    };
+    match o.remote_url(root, s.remote) {
+        Some(now) if now == pinned => {}
+        now => {
+            return scratch(format!(
+                "{}'s URL is {} but a person recorded {pinned} for the trusted cache: saves only scratch/{b} (a person re-runs k2 ci cache trust --set … to record the new one)",
+                s.remote,
+                now.as_deref().unwrap_or("unknown")
+            ))
+        }
+    }
+    let trusted_cache = |why: String| Some(CiCache { commit: CacheCommit::Trusted, cache_ref: Some(b.to_string()), why, remote: Some(pinned.clone()) });
     if s.trigger == "watch" {
         return trusted_cache(format!("a watched push to trusted branch {b}: passing checks save the trusted cache"));
     }
@@ -573,7 +597,7 @@ pub(crate) fn launch(o: &dyn Ops, ws: &Ws, s: &Start<'_>, p: Prepared, now: i64)
         let trusted = {
             let db = db();
             let conn = db.lock();
-            ci::trusted(&conn, &ws.id).branches
+            ci::trusted(&conn, &ws.id)
         };
         o.repo_root(Path::new(&ws.path)).ok().and_then(|root| ci_cache(o, &root, s, &trusted))
     };
@@ -916,6 +940,15 @@ impl Ops for Real {
         Some(format!("{owner}/{repo}"))
     }
 
+    fn remote_url(&self, root: &Path, remote: &str) -> Option<String> {
+        if !ci::valid_remote(remote) {
+            return None;
+        }
+        let mut c = git(root);
+        c.args(["ls-remote", "--get-url", remote]);
+        ci::normalize_remote(run_git(c, "read the remote's URL").ok()?.trim())
+    }
+
     fn remote_branch_has(&self, root: &Path, remote: &str, sha: &str, branch: &str) -> Result<bool, String> {
         if !ci::valid_remote(remote) || !ci::is_sha(sha) || !ci::valid_trusted_branch(branch) {
             return Err(format!("won't check '{sha}' on '{remote}' '{branch}'"));
@@ -1089,6 +1122,8 @@ mod tests {
         caches: Mutex<Vec<Option<CiCache>>>,
         /// B2: the remote's branch has the commit (`None`: an error).
         on_remote: Mutex<Option<bool>>,
+        /// B2: the remote's URL as git fetches it (normalised).
+        url: Mutex<Option<String>>,
     }
 
     impl Fake {
@@ -1138,6 +1173,9 @@ mod tests {
         }
         fn remote_slug(&self, _: &Path, _: &str) -> Option<String> {
             self.slug.lock().unwrap().clone()
+        }
+        fn remote_url(&self, _: &Path, _: &str) -> Option<String> {
+            self.url.lock().unwrap().clone()
         }
         fn remote_branch_has(&self, _: &Path, _: &str, _: &str, branch: &str) -> Result<bool, String> {
             self.fetched.lock().unwrap().push(format!("+refs/heads/{branch}:refs/k2-ci/{branch}"));
@@ -1391,6 +1429,12 @@ mod tests {
         let f = Fake::default();
         let ws = seed_ws();
         watch(&ws, 2);
+        *f.url.lock().unwrap() = Some("github.com/acme/app".into());
+        {
+            let db = db();
+            let conn = db.lock();
+            ci::set_trusted(&conn, &ws.id, &["main".into()], Some("github.com/acme/app"), "owner", 1).unwrap();
+        }
         let (a, b) = (sha('a'), sha('b'));
         *f.tips.lock().unwrap() = format!("{a}\trefs/heads/main\n{b}\trefs/heads/integ/x\n");
         f.configs.lock().unwrap().insert(a.clone(), CFG.into());
@@ -1411,20 +1455,38 @@ mod tests {
         }
         // Manual runs labelled main: trusted only when the remote has it.
         let root = Path::new(&ws.path).to_path_buf();
+        let tr = |branches: &[&str], remote: Option<&str>| ci::Trusted {
+            branches: branches.iter().map(|b| b.to_string()).collect(),
+            default: false,
+            by: None,
+            at: None,
+            remote: remote.map(str::to_string),
+        };
+        let main = tr(&["main"], Some("github.com/acme/app"));
         fn man(sha: &str) -> Start<'_> {
             Start { sha, git_ref: Some("main"), trigger: "manual", by: "agent:x", tier: "ci", remote: "origin", only: &[] }
         }
         *f.on_remote.lock().unwrap() = Some(false);
-        let c = ci_cache(&f, &root, &man(&b), &["main".into()]).unwrap();
+        let c = ci_cache(&f, &root, &man(&b), &main).unwrap();
         assert_eq!((c.commit, c.cache_ref.as_deref()), (CacheCommit::Scratch, Some("main")), "a local commit labelled main: {}", c.why);
         assert!(f.fetched.lock().unwrap().iter().any(|x| x == "+refs/heads/main:refs/k2-ci/main"), "fetched into a K2-owned ref");
         *f.on_remote.lock().unwrap() = None;
-        assert_eq!(ci_cache(&f, &root, &man(&b), &["main".into()]).unwrap().commit, CacheCommit::Scratch, "a remote that can't answer: scratch");
+        assert_eq!(ci_cache(&f, &root, &man(&b), &main).unwrap().commit, CacheCommit::Scratch, "a remote that can't answer: scratch");
         *f.on_remote.lock().unwrap() = Some(true);
-        assert_eq!(ci_cache(&f, &root, &man(&a), &["main".into()]).unwrap().commit, CacheCommit::Trusted, "on the remote's main");
-        assert_eq!(ci_cache(&f, &root, &man(&a), &["trunk".into()]).unwrap().commit, CacheCommit::Scratch, "main isn't trusted here");
+        assert_eq!(ci_cache(&f, &root, &man(&a), &main).unwrap().commit, CacheCommit::Trusted, "on the remote's main");
+        assert_eq!(ci_cache(&f, &root, &man(&a), &tr(&["trunk"], Some("github.com/acme/app"))).unwrap().commit, CacheCommit::Scratch, "main isn't trusted here");
         let no_ref = Start { git_ref: None, ..man(&a) };
-        assert_eq!(ci_cache(&f, &root, &no_ref, &["main".into()]), None, "no branch: today's warm slots");
+        assert_eq!(ci_cache(&f, &root, &no_ref, &main), None, "no branch: today's warm slots");
+        // The remote is pinned: repointed (or never recorded), no trusted save.
+        *f.url.lock().unwrap() = Some("github.com/evil/app".into());
+        let c = ci_cache(&f, &root, &man(&a), &main).unwrap();
+        assert_eq!(c.commit, CacheCommit::Scratch, "a repointed remote: {}", c.why);
+        assert!(c.why.contains("github.com/evil/app"), "{}", c.why);
+        *f.url.lock().unwrap() = None;
+        assert_eq!(ci_cache(&f, &root, &man(&a), &main).unwrap().commit, CacheCommit::Scratch, "an unreadable remote URL");
+        *f.url.lock().unwrap() = Some("github.com/acme/app".into());
+        assert_eq!(ci_cache(&f, &root, &man(&a), &tr(&["main"], None)).unwrap().commit, CacheCommit::Scratch, "nothing recorded yet");
+        assert_eq!(ci_cache(&f, &root, &man(&a), &main).unwrap().remote.as_deref(), Some("github.com/acme/app"), "a trusted cache carries the pin");
     }
 
     #[test]

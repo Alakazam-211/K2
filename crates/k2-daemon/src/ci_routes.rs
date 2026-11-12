@@ -240,9 +240,23 @@ fn status(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
 
 // ── /cli/ci/cache/trust (B2, §4.1.5) ─────────────────────────────────
 
+/// The URL git fetches the workspace's CI remote from now (the watch's
+/// remote, else origin), normalised.
+fn trusted_remote_now(ws: &Ws) -> Option<String> {
+    let o = engine::ops();
+    let root = o.repo_root(Path::new(&ws.path)).ok()?;
+    let remote = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ci::workspace(&conn, &ws.id).filter(|w| w.watch_at > 0).map(|w| w.remote).unwrap_or_else(|| ci::DEFAULT_REMOTE.to_string())
+    };
+    o.remote_url(&root, &remote)
+}
+
 fn trust_view(ws: &Ws, t: &ci::Trusted) -> serde_json::Value {
     serde_json::json!({
         "workspace": ws.handle,
+        "remote": t.remote,
         "branches": t.branches,
         "default": t.default,
         "by": t.by,
@@ -302,10 +316,20 @@ fn cache_trust_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         return Err(r);
     }
     let by = who.label();
+    // A person's change records the remote URL git fetches from now (the
+    // trusted cache is pinned to it); an agent's narrowing never touches it.
+    let remote = if who.is_admin() { trusted_remote_now(&ws) } else { None };
+    if who.is_admin() && remote.is_none() {
+        return Err(no(
+            codes::REMOTE_UNREACHABLE,
+            409,
+            format!("can't read the git remote's URL in workspace {}'s repo (the trusted cache is pinned to it): check its remote (k2 ci watch shows which)", ws.handle),
+        ));
+    }
     let stored = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        ci::set_trusted(&conn, &ws.id, &next, &by, now()).map_err(|e| no("bad_request", 400, e))?
+        ci::set_trusted(&conn, &ws.id, &next, remote.as_deref(), &by, now()).map_err(|e| no("bad_request", 400, e))?
     };
     audit(who, "ci.cache.trust", None, Some(&ws.id), None, serde_json::json!({ "from": now_list, "to": stored }));
     let db = k2_core::db::shared();
@@ -743,6 +767,13 @@ fn watch(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> 
         let db = k2_core::db::shared();
         let conn = db.lock();
         ci::set_watch(&conn, &ws.id, &w, &by, at).map_err(|e| no(codes::BAD_WATCH, 400, e))?;
+        // A person's watch records the remote for the trusted cache when
+        // none is (never an agent's; never replacing one).
+        if who.is_admin() {
+            if let Some(url) = engine::ops().repo_root(Path::new(&ws.path)).ok().and_then(|root| engine::ops().remote_url(&root, &w.remote)) {
+                ci::record_remote_if_unset(&conn, &ws.id, &url).map_err(|e| no("internal", 500, e))?;
+            }
+        }
         if skip {
             for (sha, branch) in &tips {
                 ci::mark_seen(&conn, &ws.id, sha, branch, at);

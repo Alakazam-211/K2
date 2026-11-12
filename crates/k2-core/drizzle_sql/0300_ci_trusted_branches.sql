@@ -8,8 +8,16 @@
 -- (`--add`, `--set`) is a person's. `trusted_by` / `trusted_at` say who
 -- changed it last. A workspace with no `ci_workspaces` row gets one (watch
 -- off) when the list is first set.
+--
+-- `trusted_remote`: the git remote's URL (normalised: host/path, no
+-- scheme, credentials or `.git`) a person's trust or watch change saw.
+-- A run is trusted only while the remote it is checked against still
+-- has this URL: an agent repointing `origin` gets no trusted save. Only a
+-- person's change records it; NULL = no run is trusted yet.
 ALTER TABLE ci_workspaces ADD COLUMN trusted_branches_json TEXT;
 --> statement-breakpoint
 ALTER TABLE ci_workspaces ADD COLUMN trusted_by TEXT;
 --> statement-breakpoint
 ALTER TABLE ci_workspaces ADD COLUMN trusted_at INTEGER;
+--> statement-breakpoint
+ALTER TABLE ci_workspaces ADD COLUMN trusted_remote TEXT;

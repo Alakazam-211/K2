@@ -366,6 +366,33 @@ fn allow_nodes_cards_are_a_persons_and_ask_only_when_needed() {
     assert!(ask_refused(&ws, "compute.allow-nodes", json!({ "nodes": b_name })).contains("compute nodes are off"));
 }
 
+/// B2: adding a trusted CI branch is a person's card (Admin floor); a
+/// branch already trusted (main, by default) asks nothing; a glob is
+/// refused at the ask.
+#[test]
+fn the_cache_trust_card_is_a_persons_and_asks_only_when_needed() {
+    use k2_core::permission::catalog::{Direction, Floor, Proof};
+    let r = super::super::find("ci.cache-trust").expect("ci.cache-trust registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!((r.spec.floor, r.spec.direction, r.spec.proof), (Floor::Admin, Direction::Loosen, Proof::Click));
+    assert!(crate::routes::route_policy::lookup(crate::ci_routes::CACHE_TRUST_SET).and_then(|x| x.post).is_some(), "the route the card calls");
+
+    let _home = crate::test_support::TempHome::new();
+    let _on = ComputeOn::set(true);
+    let ws = seed("cctr");
+    let (s, v) = ask(&ws, "ci.cache-trust", json!({ "branches": "main" }));
+    assert_eq!((s.as_str(), &v["status"]), ("200 OK", &json!("already_done")), "main is trusted by default: {v}");
+    assert!(ask_refused(&ws, "ci.cache-trust", json!({ "branches": "rel/*" })).contains("not a branch name"));
+    let v = ask_ok(&ws, "ci.cache-trust", json!({ "branches": "rel" }));
+    let vw = view(&ws, &card_of(&v));
+    assert_eq!(vw["whatChanges"], format!("Trust rel for {}'s CI cache.", ws.handle), "{vw}");
+    assert!(vw["consequences"].as_str().unwrap_or("").contains("every job"), "{vw}");
+    let member = login("cctm", Role::Member);
+    below_floor(answer_as(&member, &ws, &card_of(&v), json!({ "answer": "Allow" })), "admin");
+    let _off = ComputeOn::set(false);
+    assert!(ask_refused(&ws, "ci.cache-trust", json!({ "branches": "rel" })).contains("compute nodes are off"));
+}
+
 // ── compute.packages and compute.packages-policy (0.46.9) ────────────
 
 /// One filed package request batch for `ws` on `node_id`, moved to `state`.

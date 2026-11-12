@@ -682,6 +682,87 @@ fn apply_allow_nodes_clear(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) ->
     apply_allow_to(who, body, message)
 }
 
+// ── ci.cache-trust (prd-compute-blacksmith-class-v1 B2, §4.1.5) ─────
+
+/// `ci.cache-trust branches=`: add branches to the asking workspace's
+/// trusted branches, whose passing CI checks save the build cache every
+/// job of the workspace starts from. A person decides (the owner or an
+/// Admin); applying it also records the git remote the workspace fetches
+/// from now (the trusted cache is pinned to it). Removing a branch is the
+/// agent's own (`k2 ci cache trust --remove`), so there is no twin.
+pub(crate) static CI_CACHE_TRUST: ActionSpec = ActionSpec {
+    id: "ci.cache-trust",
+    area: Area::Compute,
+    params: &[ParamSpec { key: "branches", kind: ParamKind::Branch, required: true, list: true, choices: &[] }],
+    floor: Floor::Admin,
+    direction: Direction::Loosen,
+    grant: Grant::Standing,
+    proof: Proof::Click,
+    expiry: Expiry::STANDARD,
+    words: Words {
+        setting: "Trusted CI branches",
+        what_changes: "Trust {branches} for {ws}'s CI cache",
+        consequences: "Passing CI checks of {branches} (pushed commits, checked by the K2 daemon) then save the build cache every job of {ws} starts from, so code merged there reaches every later build. Trust only branches whose commits you review.",
+        scope: "{ws}'s CI cache",
+        duration: "until someone removes the branch",
+        retry: "run your command again",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "compute", path: "k2 ci cache trust (a terminal outside K2)" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: k2_core::ci::CACHE_TRUST_NEEDS_PERSON },
+        route_prefix: crate::ci_routes::CACHE_TRUST_SET,
+        method: WallMethod::Post,
+        params: &[("branches", ParamFrom::Response("/error/branches"))],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
+/// The `branches=` names (a list, or one comma-separated string).
+fn branch_names(ctx: &Ctx) -> Vec<String> {
+    match ctx.params.get("branches") {
+        Some(serde_json::Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Some(serde_json::Value::String(s)) => s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn check_cache_trust(ctx: &Ctx) -> Check {
+    if !compute_on() {
+        return Check::Moved("compute nodes are off on this server".into());
+    }
+    let names = branch_names(ctx);
+    if names.is_empty() {
+        return Check::Moved("name the branches: branches=<branch>[,<branch>…]".into());
+    }
+    if let Some(bad) = names.iter().find(|b| !k2_core::ci::valid_trusted_branch(b)) {
+        return Check::Moved(format!("{bad:?} is not a branch name (no globs, no wt:)"));
+    }
+    let now = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        k2_core::ci::trusted(&conn, &ctx.workspace_id)
+    };
+    if names.iter().all(|b| now.branches.contains(b)) {
+        Check::AlreadyDone
+    } else {
+        Check::Needed
+    }
+}
+
+fn apply_cache_trust(ctx: &Ctx, who: &Answerer, _confirm: Option<&str>) -> Applied {
+    let names = branch_names(ctx);
+    let path = crate::ci_routes::CACHE_TRUST_SET;
+    if let Err(r) = super::switches::route_floor(who, path) {
+        return super::switches::applied(&r, "");
+    }
+    let body = json!({ "workspace": ctx.workspace_id, "add": names });
+    let message = format!("{}'s CI checks of {} may save its trusted build cache now.", ctx.workspace_handle, names.join(", "));
+    let r = crate::compute_routes::handle(path, who_of(who), body.to_string().as_bytes(), &HashMap::new());
+    super::switches::applied(&r, message)
+}
+
 // ── compute.packages (0.46.9, prd-compute-self-serve-environments-v1 §6, §14) ──
 
 /// A package request batch or row id (`cpr_…`, `k2_core::compute::pkgreq`).
@@ -1215,6 +1296,7 @@ pub(crate) fn actions() -> Vec<Registered> {
         Registered { spec: &GPU_OFF, check: check_gpu_off, apply: apply_gpu_off },
         Registered { spec: &ALLOW_NODES, check: check_allow_nodes, apply: apply_allow_nodes },
         Registered { spec: &ALLOW_NODES_CLEAR, check: check_allow_nodes_clear, apply: apply_allow_nodes_clear },
+        Registered { spec: &CI_CACHE_TRUST, check: check_cache_trust, apply: apply_cache_trust },
         Registered { spec: &PACKAGES, check: check_packages, apply: apply_packages },
         Registered { spec: &PACKAGES_POLICY, check: check_packages_policy, apply: apply_packages_policy },
     ]

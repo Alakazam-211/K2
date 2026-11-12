@@ -797,6 +797,34 @@ async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
     let job_pushed = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
     assert_eq!(row(&job_pushed).plan().unwrap().cache_commit, Some(CacheCommit::Trusted), "pushed to main: trusted");
 
+    // The remote is pinned (review item 1): the agent repoints origin at a
+    // repo it controls and pushes there; its checks save only scratch.
+    let evil = env.home.join("trustapp-evil.git");
+    std::fs::create_dir_all(&evil).unwrap();
+    git(&evil, &["init", "-q", "--bare"]);
+    git(&ws.path, &["remote", "set-url", "origin", evil.to_str().unwrap()]);
+    std::fs::write(ws.path.join("a.txt"), "evil\n").unwrap();
+    git(&ws.path, &["commit", "-q", "-am", "pushed to another remote"]);
+    git(&ws.path, &["push", "-q", "origin", "main"]);
+    let evil_sha = git(&ws.path, &["rev-parse", "HEAD"]);
+    let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": evil_sha, "ref": "main", "checks": ["unit"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job_evil = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
+    assert_eq!(row(&job_evil).plan().unwrap().cache_commit, Some(CacheCommit::Scratch), "a repointed origin: no trusted save");
+    // Only a person records the new remote; then the same commit is trusted.
+    let r = post(d.port, "/cli/ci/cache/trust/set", &agent, json!({"set": ["main"]})).await;
+    assert_eq!(r.status, 200, "an agent's same-list set is no widening: {}", r.body);
+    assert!(!j(&r)["remote"].as_str().unwrap_or_default().contains("trustapp-evil"), "an agent never records a remote: {}", r.body);
+    let r = post(d.port, "/cli/ci/cache/trust/set", OWNER, json!({"workspace": ws.id, "set": ["main"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(j(&r)["remote"].as_str().unwrap().ends_with("trustapp-evil"), "{}", r.body);
+    let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": evil_sha, "ref": "main", "checks": ["unit"]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job_evil2 = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
+    assert_eq!(row(&job_evil2).plan().unwrap().cache_commit, Some(CacheCommit::Trusted), "a person re-set trust with the new remote");
+    // Back to the first remote (the project key below is its).
+    git(&ws.path, &["remote", "set-url", "origin", "https://github.com/acme/app.git"]);
+
     // A plain run at main saves only scratch/main (its argv is the
     // caller's); a body naming the trusted cache is not read.
     let r = post(d.port, "/cli/compute/run", &agent, json!({"argv": ["true"], "sha": "main", "node": "k2g7", "cacheCommit": "trusted", "clientJobId": "b2-plain-run-at-main-01"})).await;
@@ -831,7 +859,7 @@ async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
     // Every run of this workspace ends here (its [ci] messages never land
     // in a later test's sink), and the watch goes off.
     let lint = check(&run, "lint")["job"].as_str().expect("lint job").to_string();
-    for jb in [&unit, &lint, &job_local, &job_pushed] {
+    for jb in [&unit, &lint, &job_local, &job_pushed, &job_evil, &job_evil2] {
         // A newer run on main superseded some (cancelled): those have ended.
         if !matches!(row(jb).state.as_str(), "done" | "failed" | "cancelled" | "timeout" | "interrupted") {
             finish_job(jb, 0);

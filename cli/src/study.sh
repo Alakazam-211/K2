@@ -736,10 +736,15 @@ TRUSTED CACHE (nodes with cache generations; k2 study compute)
   refs/k2-ci/<branch> to check; --ref alone is just a label). A check of
   any other branch, a local commit, or any plain k2 compute run saves only
   its own scratch copy. Trusted branches are server state, never read from
-  .k2/ci.toml (a PR could name its own branch there):
-    k2 ci cache trust                the list (default: main)
+  .k2/ci.toml (a PR could name its own branch there). The shared copy is
+  also pinned to the git remote a person's change saw (its URL after any
+  insteadOf): if the remote is repointed, checks save only scratch until a
+  person sets the branches again. Nothing is recorded until a person sets
+  them (or turns the watch on):
+    k2 ci cache trust                the list and the recorded remote
     k2 ci cache trust --remove B     yours to do
-    k2 ci cache trust --add B        a person's (cache_trust_needs_person)
+    k2 ci cache trust --add B        a person's (cache_trust_needs_person;
+                                     ask with the k2 permission request line)
 
 ALSO
   k2 ci freeze --until 3d --why "0.9 release": a release freeze (K2 moves

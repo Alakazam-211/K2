@@ -173,6 +173,10 @@ pub enum ParamKind {
     /// `vault.share-service service=`. Checked in that workspace only; a
     /// service of the same name elsewhere is never reached.
     Service,
+    /// A git branch name (a plain name: no glob, no `wt:`; checked with
+    /// `crate::ci::valid_trusted_branch`): `ci.cache-trust branches=`
+    /// (prd-compute-blacksmith-class-v1 B2).
+    Branch,
     /// The name a secret arrives under (an env variable or a file), never a
     /// value: `vault.share-service env_name=`, `file_name=`.
     DeliveryName,
@@ -783,6 +787,7 @@ mod tests {
         assert_eq!(serde_json::to_value(ParamKind::ChatScope).unwrap(), serde_json::json!("chat-scope"));
         assert_eq!(serde_json::to_value(ParamKind::OtherSecret).unwrap(), serde_json::json!("other-secret"));
         assert_eq!(serde_json::to_value(ParamKind::SecretFrom).unwrap(), serde_json::json!("secret-from"));
+        assert_eq!(serde_json::to_value(ParamKind::Branch).unwrap(), serde_json::json!("branch"));
         let mut s = USE;
         s.params = &[
             ParamSpec { key: "app", kind: ParamKind::App, required: true, list: false, choices: &[] },

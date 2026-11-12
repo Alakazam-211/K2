@@ -9,10 +9,11 @@
 //! - pacman: `-S --needed` (`--print` first for the list); with
 //!   `--noconfirm` a conflict's "remove?" takes its default, no, and the
 //!   install stops.
-//! - dnf: never `--allowerasing`, so it can't remove anything.
+//! - dnf: no list until Fedora's names are checked; refused with the
+//!   manual text, nothing installed.
 //! - Refused below [`DESKTOP_MIN_FREE_BYTES`] on `/` or `/var`.
 
-use k2_root_proto::apps::{gib, APT_GET, DNF, ENV, FREE_CHECK_PATHS, PACMAN};
+use k2_root_proto::apps::{gib, APT_GET, ENV, FREE_CHECK_PATHS, PACMAN};
 use k2_root_proto::desktop::{
     apt_sim_installs, apt_sim_removals, manual_command, packages_for, APT_LOCK_WAIT_SECS,
     DESKTOP_MIN_FREE_BYTES, ICEWM_SESSION, OPENBOX, XVFB,
@@ -93,13 +94,8 @@ fn install(ctx: &Ctx, pm: Pm, pkgs: &[&str]) -> HResult<Vec<String>> {
             ctx.run_ok(PACMAN, &a, None)?;
             added
         }
-        Pm::Dnf => {
-            let mut a = vec!["install", "-y", "-q", "--setopt=install_weak_deps=False"];
-            a.extend_from_slice(pkgs);
-            ctx.run_ok(DNF, &a, None)?;
-            // dnf -q prints no transaction list.
-            Vec::new()
-        }
+        // packages_install refuses dnf before this (no checked list).
+        Pm::Dnf => return Err(Fail::state("no_package_list: dnf (nothing was installed)")),
     })
 }
 
@@ -111,7 +107,11 @@ pub fn packages_install(ctx: &Ctx) -> HResult<J> {
         ))
     })?;
     let pkgs = packages_for(pm_name(pm)).ok_or_else(|| {
-        Fail::state(format!("no_package_list: K2 has no desktop package list for {} (nothing was installed)", pm_name(pm)))
+        Fail::state(format!(
+            "no_package_list: K2 has no checked desktop package list for {} yet, so nothing was installed. {}",
+            pm_name(pm),
+            manual_command(Some(pm_name(pm)))
+        ))
     })?;
     disk_floor(ctx)?;
     let added = install(ctx, pm, pkgs)?;

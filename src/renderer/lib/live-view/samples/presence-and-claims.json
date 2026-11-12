@@ -1,0 +1,314 @@
+{
+  "_golden": {
+    "hand_made": true,
+    "not_kit_output": true,
+    "from": "rendering-data-contract-xlsx-r0.md, Items 3 and 4",
+    "type": "presence (peers) and claims at three points of the turn in turn-frames.json",
+    "revision": "r1",
+    "notes": [
+      "r1: every presence and claim event between P1 and P3 (the agent's focus, selection and cells after each verb; claim start and end with the actor) is in turn-frames.json's timeline. P3's agent cells follow ruling 2",
+      "the view is Ada's client (person:ada). isSelf and sameUser are worked out by the client; they are not sent",
+      "all elements are addresses, as on the wire. Row addresses name KEYS, not row numbers: @sheet:1/row:r16 is the Totals row, row 18 at rev 20 and row 19 after rev 23",
+      "focus, selection, pointer and viewport EXIST (kit 44c3c9ff). 'cells' is NEW (kit item VC): a cell caret plus range selections, each range one unit given by two corners",
+      "a corner is {row, row_off, col, col_off}: the last keyed row (column) at or before the cell, and how many rows (columns) past it. null row means 'before the first keyed row', and row_off is then the row number. Offsets are 0 on a keyed row or column",
+      "viewport, for a grid, is in cells (this addendum's rule, declared in the schema's grid slot): x = first visible column number, y = first visible row number, w = columns, h = rows, on the focus sheet. The kit stores it as it does today; it does not move it",
+      "_a1 fields are annotations for checking, not on the wire: the view works them out from the corners and the numbering",
+      "colours are placeholders for the hex colour K2 stamps at join",
+      "mode is derived by the client: editing = holds a claim covering its cells or selection; selecting = has a selection or a range; else viewing",
+      "presence needs K2 to relay element presence (contract r1.6 gap 10) and, for 'cells', the new frame and roster kind"
+    ]
+  },
+  "points": [
+    {
+      "id": "P1",
+      "when": "after claim-31 starts (at_ms 200000), before rev 21 lands; the doc is at rev 20",
+      "rev": 20,
+      "peers": [
+        {
+          "handle": "agent:atlas",
+          "name": "Atlas",
+          "kind": "agent",
+          "colour": "#6d5bd0",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "selection": null,
+          "cells": {
+            "container": "@sheet:1",
+            "active": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+            "ranges": [
+              {
+                "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+                "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+                "_a1": "C4:D15"
+              }
+            ],
+            "_active_a1": "C4"
+          },
+          "pointer": null,
+          "viewport": null,
+          "mode_derived": "editing",
+          "isSelf": false,
+          "sameUser": false,
+          "_note": "a cells claim's start sets the agent's focus to the claim's sheet and replaces its 'cells' with the claimed range, the active cell at the range's start (NEW rule, by analogy with the element-claim rule, Q19). Its row 'selection' is left alone (null here)"
+        },
+        {
+          "handle": "person:ada",
+          "name": "Ada",
+          "kind": "person",
+          "colour": "#d9822b",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "selection": null,
+          "cells": {
+            "container": "@sheet:1",
+            "active": { "row": "@sheet:1/row:r16", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+            "ranges": [],
+            "_active_a1": "E18"
+          },
+          "pointer": null,
+          "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 },
+          "_viewport_a1": "A1:H30",
+          "mode_derived": "viewing",
+          "isSelf": true,
+          "sameUser": false,
+          "_note": "Ada clicked the Q1+Q2 total: a caret with no range. Her row holds what the host last reported for her"
+        },
+        {
+          "handle": "person:sam",
+          "name": "Sam",
+          "kind": "person",
+          "colour": "#2b9bd9",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "selection": null,
+          "cells": {
+            "container": "@sheet:2",
+            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "ranges": [
+              {
+                "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+                "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 },
+                "_a1": "A1:B4"
+              }
+            ],
+            "_active_a1": "A1"
+          },
+          "pointer": null,
+          "viewport": { "x": 1, "y": 1, "w": 6, "h": 25 },
+          "_viewport_a1": "A1:F25 on Rates",
+          "mode_derived": "selecting",
+          "isSelf": false,
+          "sameUser": false,
+          "_note": "Sam is on the other sheet. Ada's view shows him as an avatar on the Rates tab; his range and visible area are drawn only when Ada opens that tab"
+        }
+      ],
+      "claims_active": [
+        {
+          "id": "claim-31",
+          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "scope": "cells",
+          "container": "@sheet:1",
+          "keys": null,
+          "ranges": [
+            {
+              "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+              "_a1": "C4:D15"
+            }
+          ],
+          "label": "updating Q2 figures",
+          "hold": true,
+          "started_ms": 200000,
+          "expires_ms": 260000
+        }
+      ],
+      "claims_ended": []
+    },
+    {
+      "id": "P2",
+      "when": "after rev 24 lands (at_ms 207000): a row was inserted at 10 and filled",
+      "rev": 24,
+      "peers": [
+        {
+          "handle": "agent:atlas",
+          "name": "Atlas",
+          "kind": "agent",
+          "colour": "#6d5bd0",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "selection": { "root": "rows", "keys": ["@sheet:1/row:r19"] },
+          "cells": {
+            "container": "@sheet:1",
+            "active": { "row": "@sheet:1/row:r19", "row_off": 0, "col": "@sheet:1/col:c1", "col_off": 0 },
+            "ranges": [
+              {
+                "start": { "row": "@sheet:1/row:r19", "row_off": 0, "col": "@sheet:1/col:c1", "col_off": 0 },
+                "end": { "row": "@sheet:1/row:r19", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+                "_a1": "A10:E10"
+              }
+            ],
+            "_active_a1": "A10"
+          },
+          "pointer": null,
+          "viewport": null,
+          "mode_derived": "editing",
+          "isSelf": false,
+          "sameUser": false,
+          "_note": "'selection' (rows touched) is the kit's existing verb rule. 'cells' is the rev 24 frame's derived 'written' rectangle, applied by the kit (r1 ruling 1). editing: claim-31 covers C10:D10, part of its cells. The agent's events between P1 and P3 are in turn-frames.json's timeline"
+        },
+        {
+          "handle": "person:ada",
+          "name": "Ada",
+          "kind": "person",
+          "colour": "#d9822b",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:1" },
+          "selection": null,
+          "cells": {
+            "container": "@sheet:1",
+            "active": { "row": "@sheet:1/row:r16", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+            "ranges": [],
+            "_active_a1": "E19"
+          },
+          "pointer": null,
+          "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 },
+          "_viewport_a1": "A1:H30",
+          "mode_derived": "viewing",
+          "isSelf": true,
+          "sameUser": false,
+          "_note": "Ada's caret is the same corner as at P1, so it follows the Totals row down to E19 with no event. Her viewport is the same numbers, A1:H30: a viewport is a place on screen, so it does not follow the content"
+        },
+        {
+          "handle": "person:sam",
+          "name": "Sam",
+          "kind": "person",
+          "colour": "#2b9bd9",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "selection": null,
+          "cells": {
+            "container": "@sheet:2",
+            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "ranges": [
+              {
+                "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+                "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 },
+                "_a1": "A1:B4"
+              }
+            ],
+            "_active_a1": "A1"
+          },
+          "pointer": null,
+          "viewport": { "x": 1, "y": 1, "w": 6, "h": 25 },
+          "mode_derived": "selecting",
+          "isSelf": false,
+          "sameUser": false
+        }
+      ],
+      "claims_active": [
+        {
+          "id": "claim-31",
+          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "scope": "cells",
+          "container": "@sheet:1",
+          "keys": null,
+          "ranges": [
+            {
+              "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+              "_a1": "C4:D16"
+            }
+          ],
+          "label": "updating Q2 figures",
+          "hold": true,
+          "started_ms": 200000,
+          "expires_ms": 260000,
+          "_note": "the same corners as at P1. The row inserted between them at rev 23 is inside, so the claim now covers rows 4-16. No claim event was sent"
+        }
+      ],
+      "claims_ended": []
+    },
+    {
+      "id": "P3",
+      "when": "after rev 26 lands (at_ms 211000): claim-31 was released at 209500 and the sheet Rates is now FX rates",
+      "rev": 26,
+      "peers": [
+        {
+          "handle": "agent:atlas",
+          "name": "Atlas",
+          "kind": "agent",
+          "colour": "#6d5bd0",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "selection": { "root": "sheets", "keys": ["@sheet:2"] },
+          "cells": {
+            "container": "@sheet:2",
+            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "ranges": [],
+            "_active_a1": "A1"
+          },
+          "pointer": null,
+          "viewport": null,
+          "mode_derived": "selecting",
+          "isSelf": false,
+          "sameUser": false,
+          "_note": "r1 ruling 2: a sheet verb (add, rename) focuses that sheet; the agent's cells are kept if they are on that sheet, else they become a caret at A1. Atlas's cells were on Budget, so: a caret at A1 of FX rates. Its row 'selection' is the kit's verb rule (the sheet touched). The events are in turn-frames.json's timeline at 211000"
+        },
+        {
+          "handle": "person:ada",
+          "name": "Ada",
+          "kind": "person",
+          "colour": "#d9822b",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "selection": null,
+          "cells": null,
+          "pointer": null,
+          "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 },
+          "_viewport_a1": "A1:H30 on FX rates",
+          "mode_derived": "viewing",
+          "isSelf": true,
+          "sameUser": false,
+          "_note": "Ada's view follows the agent (the default), so her client sent focus @sheet:2, then its viewport there. Her caret on Budget was dropped with the focus move"
+        },
+        {
+          "handle": "person:sam",
+          "name": "Sam",
+          "kind": "person",
+          "colour": "#2b9bd9",
+          "away": false,
+          "focus": { "root": "sheets", "key": "@sheet:2" },
+          "selection": null,
+          "cells": {
+            "container": "@sheet:2",
+            "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "ranges": [
+              {
+                "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+                "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 },
+                "_a1": "A1:B4"
+              }
+            ],
+            "_active_a1": "A1"
+          },
+          "pointer": null,
+          "viewport": { "x": 1, "y": 1, "w": 6, "h": 25 },
+          "mode_derived": "selecting",
+          "isSelf": false,
+          "sameUser": false,
+          "_note": "now on the same sheet as Ada: his range and visible area are drawn. A rename changes no key, so nothing of his moved"
+        }
+      ],
+      "claims_active": [],
+      "claims_ended": [
+        {
+          "id": "claim-31",
+          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "how": "released",
+          "at_ms": 209500,
+          "at_rev": null
+        }
+      ]
+    }
+  ]
+}

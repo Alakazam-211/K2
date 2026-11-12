@@ -1,0 +1,1434 @@
+{
+  "_golden": {
+    "hand_made": true,
+    "not_kit_output": true,
+    "revision": "r1",
+    "written_with": "a scratch script applying the contract's rules by hand; no kit or pack code ran",
+    "from": "rendering-data-contract-xlsx-r0.md (r1), Items 2-4; the frame shape is the kit's ops_change (client/WIRE.md at 44c3c9ff)",
+    "type": "the xlsx timeline: the welcome, the agent turn (revs 21-28) with every claim, presence and turn event between the frames, and an outside save (rev 29)",
+    "notes": [
+      "the snapshot is assumed to have taken seq 1-10, so the frames are seq 11-19",
+      "turn = 't:' + 16 hex + '.' + turn_seq, computed by the daemon; the hash part is made up",
+      "colours are placeholders for the hex colour K2 stamps at join; at_ms is a fake clock",
+      "every op is the kit's existing form. 'derived' is the pack's opaque slot (Pack::watch_extras), filled as this addendum defines: units.<row>.a1, containers.<sheet> (merges, styles: the whole value when it changed), written (r1), bands (r1)",
+      "written: the rectangle or rectangles a grid verb wrote, by corners at the frame's rev (r1 ruling 1)",
+      "bands: rows or columns inserted or deleted, by number: 'after' numbers for an insert, 'before' numbers for a delete (r1 ruling 4)",
+      "roster_flush entries are the presence stream's events at that moment, with the actor on claim events (r1 ruling 7)",
+      "'claim' covering a cell inside a cell-range claim is NEW (kit item VK)",
+      "the outside save's client and via are HYPOTHESIS (0 and 'external'); its actor name is HYPOTHESIS: the kit names no display name for kit:external",
+      "_view, _note and _see are annotations, not on the wire"
+    ]
+  },
+  "actors": {
+    "agent:atlas": {
+      "id": "agent:atlas",
+      "name": "Atlas",
+      "kind": "agent",
+      "colour": "#6d5bd0"
+    },
+    "kit:external": {
+      "id": "kit:external",
+      "name": "outside save",
+      "kind": "file",
+      "colour": null
+    }
+  },
+  "timeline": [
+    {
+      "at_ms": 199000,
+      "event": "welcome",
+      "frame": {
+        "type": "welcome",
+        "client": 90071,
+        "self": "person:ada",
+        "rights": "read",
+        "wire": 3,
+        "features": [
+          "presence",
+          "claims",
+          "focus",
+          "range",
+          "keyed_watch",
+          "cells",
+          "cell_claims"
+        ],
+        "turn_idle_ms": 20000
+      },
+      "_note": "self and client let the client work out isSelf and sameUser. turn_idle_ms is the host's idle fallback for a turn's end (base contract Item 2, K2). 'cells' and 'cell_claims' are this addendum's NEW features. A text doc's root, version and text fields are left out: a keyed doc's state comes by the keyed watch"
+    },
+    {
+      "at_ms": 199050,
+      "event": "keyed_snapshot",
+      "seq": "1-10",
+      "_note": "the snapshot of keyed-state-rev20.json and index-rev20.json: head, the roots' pages in schema order (sheets, sheet_props, cols, col_props, rows, cells, book), then the units pages"
+    },
+    {
+      "at_ms": 200000,
+      "event": "roster_flush",
+      "roster_events": [
+        {
+          "kind": "claim_started_cells",
+          "who": "agent:atlas",
+          "claim": "claim-31",
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r3",
+                "row_off": 0,
+                "col": "@sheet:1/col:c3",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r14",
+                "row_off": 0,
+                "col": "@sheet:1/col:c4",
+                "col_off": 0
+              }
+            }
+          ],
+          "note": "updating Q2 figures",
+          "hold": true,
+          "expires_ms": 260000,
+          "version": 20,
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          },
+          "started_ms": 200000
+        },
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "client": 4711,
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r3",
+              "row_off": 0,
+              "col": "@sheet:1/col:c3",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r3",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c3",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r14",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "_note": "the claim's start moves the agent's focus and replaces its cells; its row selection is left alone (null)"
+    },
+    {
+      "at_ms": 201500,
+      "event": "ops_change",
+      "rev": 21,
+      "seq": 11,
+      "verb": "range set",
+      "_see": "frames[0]"
+    },
+    {
+      "at_ms": 201500,
+      "event": "roster_flush",
+      "after_rev": 21,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r4",
+              "@sheet:1/row:r5",
+              "@sheet:1/row:r6"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r4",
+              "row_off": 0,
+              "col": "@sheet:1/col:c4",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r4",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r6",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c4",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "the agent's presence after the verb, in one flush: focus, then selection, then cells (Item 3)"
+    },
+    {
+      "at_ms": 203000,
+      "event": "ops_change",
+      "rev": 22,
+      "seq": 12,
+      "verb": "cell set",
+      "_see": "frames[1]"
+    },
+    {
+      "at_ms": 203000,
+      "event": "roster_flush",
+      "after_rev": 22,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r5"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r5",
+              "row_off": 0,
+              "col": "@sheet:1/col:c6",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r5",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r5",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "the agent's presence after the verb, in one flush: focus, then selection, then cells (Item 3)"
+    },
+    {
+      "at_ms": 205000,
+      "event": "ops_change",
+      "rev": 23,
+      "seq": 13,
+      "verb": "rows insert",
+      "_see": "frames[2]"
+    },
+    {
+      "at_ms": 205000,
+      "event": "roster_flush",
+      "after_rev": 23,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r19"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r19",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 16378
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "the agent's presence after the verb, in one flush: focus, then selection, then cells (Item 3)"
+    },
+    {
+      "at_ms": 207000,
+      "event": "ops_change",
+      "rev": 24,
+      "seq": 14,
+      "verb": "range set",
+      "_see": "frames[3]"
+    },
+    {
+      "at_ms": 207000,
+      "event": "roster_flush",
+      "after_rev": 24,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r19"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r19",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r19",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "the agent's presence after the verb, in one flush: focus, then selection, then cells (Item 3)"
+    },
+    {
+      "at_ms": 209000,
+      "event": "ops_change",
+      "rev": 25,
+      "seq": 15,
+      "verb": "cell set",
+      "_see": "frames[4]"
+    },
+    {
+      "at_ms": 209000,
+      "event": "roster_flush",
+      "after_rev": 25,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r17"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r17",
+              "row_off": 0,
+              "col": "@sheet:1/col:c5",
+              "col_off": 0
+            },
+            "ranges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r17",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r17",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c5",
+                  "col_off": 0
+                }
+              }
+            ]
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "the agent's presence after the verb, in one flush: focus, then selection, then cells (Item 3)"
+    },
+    {
+      "at_ms": 209500,
+      "event": "roster_flush",
+      "roster_events": [
+        {
+          "kind": "claim_ended",
+          "who": "agent:atlas",
+          "claim": "claim-31",
+          "how": "released",
+          "lines": {
+            "root": "rows",
+            "first": 4,
+            "last": 16
+          },
+          "version": 25,
+          "at_ms": 209500,
+          "at_rev": null,
+          "actor": {
+            "id": "agent:atlas",
+            "name": "Atlas",
+            "kind": "agent",
+            "colour": "#6d5bd0"
+          }
+        }
+      ],
+      "_note": "released by its owner; lines are the range's first and last row numbers at version 25 (C4:D16), for display"
+    },
+    {
+      "at_ms": 211000,
+      "event": "ops_change",
+      "rev": 26,
+      "seq": 16,
+      "verb": "sheet rename",
+      "_see": "frames[5]"
+    },
+    {
+      "at_ms": 211000,
+      "event": "roster_flush",
+      "after_rev": 26,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:2"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "sheets",
+            "keys": [
+              "@sheet:2"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:2",
+            "active": {
+              "row": "@sheet:2/row:r1",
+              "row_off": 0,
+              "col": "@sheet:2/col:c1",
+              "col_off": 0
+            },
+            "ranges": []
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "a sheet verb focuses that sheet; the agent's cells were on Budget, not on it, so they become a caret at A1 of FX rates (ruling 2)"
+    },
+    {
+      "at_ms": 213000,
+      "event": "ops_change",
+      "rev": 27,
+      "seq": 17,
+      "verb": "sheet add",
+      "_see": "frames[6]"
+    },
+    {
+      "at_ms": 213000,
+      "event": "roster_flush",
+      "after_rev": 27,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:5"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "sheets",
+            "keys": [
+              "@sheet:5"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:5",
+            "active": {
+              "row": null,
+              "row_off": 1,
+              "col": null,
+              "col_off": 1
+            },
+            "ranges": []
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "an empty sheet has no keyed row or column, so A1 is {row: null, row_off: 1, col: null, col_off: 1}"
+    },
+    {
+      "at_ms": 215000,
+      "event": "ops_change",
+      "rev": 28,
+      "seq": 18,
+      "verb": "rows delete",
+      "_see": "frames[7]"
+    },
+    {
+      "at_ms": 215000,
+      "event": "roster_flush",
+      "after_rev": 28,
+      "roster_events": [
+        {
+          "kind": "focus",
+          "who": "agent:atlas",
+          "focus": {
+            "root": "sheets",
+            "key": "@sheet:1"
+          },
+          "client": 4711
+        },
+        {
+          "kind": "selection",
+          "who": "agent:atlas",
+          "selection": {
+            "root": "rows",
+            "keys": [
+              "@sheet:1/row:r15"
+            ]
+          },
+          "client": 4711
+        },
+        {
+          "kind": "cells",
+          "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": {
+              "row": "@sheet:1/row:r15",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "ranges": []
+          },
+          "client": 4711
+        }
+      ],
+      "_note": "a delete leaves a caret on the first cell after the deleted band: A17 (the hidden fx row, now row 17). The row selection is the kit's verb rule: the row whose field the verb wrote"
+    },
+    {
+      "at_ms": 216500,
+      "event": "turn_end",
+      "frame": {
+        "type": "turn_end",
+        "turn": "t:5e0a9d31c7b2f846.7",
+        "actor": {
+          "id": "agent:atlas",
+          "name": "Atlas",
+          "kind": "agent",
+          "colour": "#6d5bd0"
+        },
+        "at_ms": 216500
+      },
+      "_note": "host event (K2); with no turn_end, the turn ends after turn_idle_ms (20000) of the agent idle"
+    },
+    {
+      "at_ms": 230000,
+      "event": "ops_change",
+      "rev": 29,
+      "seq": 19,
+      "verb": null,
+      "_see": "frames[8]"
+    }
+  ],
+  "frames": [
+    {
+      "type": "ops_change",
+      "seq": 11,
+      "rev": 21,
+      "at_ms": 201500,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "range set",
+      "claim": "claim-31",
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r4",
+          "field": "c4",
+          "before": "{\"t\":\"n\",\"v\":\"1500\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"2000\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r5",
+          "field": "c4",
+          "before": "{\"t\":\"n\",\"v\":\"4200\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"4500\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r6",
+          "field": "c4",
+          "before": "{\"t\":\"n\",\"v\":\"9500\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"9800\",\"s\":3}"
+        }
+      ],
+      "derived": {
+        "written": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r4",
+                "row_off": 0,
+                "col": "@sheet:1/col:c4",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r6",
+                "row_off": 0,
+                "col": "@sheet:1/col:c4",
+                "col_off": 0
+              },
+              "_a1": "D5:D7"
+            }
+          ]
+        }
+      },
+      "render_hashes": null,
+      "_view": "Atlas set D5:D7 on Budget. 'written' is the pack's rectangle: the view outlines it and words 'D5:D7'. E5:E7 and the totals keep their cached results, now possibly out of date (no calculator)."
+    },
+    {
+      "type": "ops_change",
+      "seq": 12,
+      "rev": 22,
+      "at_ms": 203000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "cell set",
+      "claim": null,
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r5",
+          "field": "c6",
+          "after": "{\"t\":\"s\",\"v\":\"renewal in March\"}"
+        }
+      ],
+      "derived": {
+        "written": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r5",
+                "row_off": 0,
+                "col": "@sheet:1/col:c6",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r5",
+                "row_off": 0,
+                "col": "@sheet:1/col:c6",
+                "col_off": 0
+              },
+              "_a1": "F6"
+            }
+          ]
+        }
+      },
+      "render_hashes": null,
+      "_view": "Atlas set F6 (a new cell: no 'before'). Column F is outside claim-31 (C:D), so claim is null."
+    },
+    {
+      "type": "ops_change",
+      "seq": 13,
+      "rev": 23,
+      "at_ms": 205000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "rows insert",
+      "claim": "claim-31",
+      "ops": [
+        {
+          "root": "rows",
+          "kind": "list",
+          "op": "insert",
+          "key": "@sheet:1/row:r19",
+          "index_before": null,
+          "index_after": 8,
+          "after": "row",
+          "effect": "visible"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "@sheet",
+          "after": "1"
+        }
+      ],
+      "derived": {
+        "units": {
+          "@sheet:1/row:r9": {
+            "a1": {
+              "c5": "=C11+D11"
+            }
+          },
+          "@sheet:1/row:r10": {
+            "a1": {
+              "c5": "=C12+D12"
+            }
+          },
+          "@sheet:1/row:r11": {
+            "a1": {
+              "c5": "=C13+D13"
+            }
+          },
+          "@sheet:1/row:r12": {
+            "a1": {
+              "c5": "=C14+D14"
+            }
+          },
+          "@sheet:1/row:r13": {
+            "a1": {
+              "c5": "=C15+D15"
+            }
+          },
+          "@sheet:1/row:r14": {
+            "a1": {
+              "c5": "=C16+D16"
+            }
+          },
+          "@sheet:1/row:r16": {
+            "a1": {
+              "c3": "=SUM(C4:C16)",
+              "c4": "=SUM(D4:D16)",
+              "c5": "=SUM(E4:E16)"
+            }
+          },
+          "@sheet:1/row:r17": {
+            "a1": {
+              "c5": "=E19*C18"
+            }
+          }
+        },
+        "written": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r19",
+                "row_off": 0,
+                "col": "@sheet:1/col:c1",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r19",
+                "row_off": 0,
+                "col": "@sheet:1/col:c6",
+                "col_off": 16378
+              },
+              "_a1": "A10:XFD10"
+            }
+          ]
+        },
+        "bands": [
+          {
+            "container": "@sheet:1",
+            "axis": "rows",
+            "op": "insert",
+            "from": 10,
+            "to": 10,
+            "numbers": "after"
+          }
+        ]
+      },
+      "render_hashes": null,
+      "_view": "Atlas inserted one row at 10 on Budget. Two ops: the list insert (index_after is the place in the workbook-wide rows list, not a row number) and the new row's @sheet field. Rows 10-20 become 11-21 with no op: the view renumbers from order plus gap. derived carries the A1 text of every formula whose text changed, the written band and 'bands'. claim-31 now covers rows 4-16, with no claim event."
+    },
+    {
+      "type": "ops_change",
+      "seq": 14,
+      "rev": 24,
+      "at_ms": 207000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "range set",
+      "claim": "claim-31",
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "c1",
+          "after": "{\"t\":\"s\",\"v\":\"Contractors\"}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "c2",
+          "after": "{\"t\":\"s\",\"v\":\"Eng\"}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "c3",
+          "after": "{\"t\":\"n\",\"v\":\"3000\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "c4",
+          "after": "{\"t\":\"n\",\"v\":\"4000\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "c5",
+          "after": "{\"f\":\"{s1-r19|c3}+{s1-r19|c4}\",\"s\":3}"
+        }
+      ],
+      "derived": {
+        "units": {
+          "@sheet:1/row:r19": {
+            "a1": {
+              "c5": "=C10+D10"
+            }
+          }
+        },
+        "written": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r19",
+                "row_off": 0,
+                "col": "@sheet:1/col:c1",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r19",
+                "row_off": 0,
+                "col": "@sheet:1/col:c5",
+                "col_off": 0
+              },
+              "_a1": "A10:E10"
+            }
+          ]
+        }
+      },
+      "render_hashes": null,
+      "_view": "Atlas filled A10:E10. E10 is a formula written live: no 't' and no 'v', so the view shows its A1 text and 'not calculated'. C10:D10 lies inside claim-31, so claim is claim-31."
+    },
+    {
+      "type": "ops_change",
+      "seq": 15,
+      "rev": 25,
+      "at_ms": 209000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "cell set",
+      "claim": null,
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r17",
+          "field": "c5",
+          "before": "{\"t\":\"n\",\"v\":\"101384\",\"f\":\"{s1-r16|c5}*{s1-r15|c3}\",\"s\":4}",
+          "after": "{\"f\":\"{s1-r16|c5}*{s2-r3|c2}\",\"s\":4}"
+        }
+      ],
+      "derived": {
+        "units": {
+          "@sheet:1/row:r17": {
+            "a1": {
+              "c5": "=E19*Rates!B3"
+            }
+          }
+        },
+        "written": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": {
+                "row": "@sheet:1/row:r17",
+                "row_off": 0,
+                "col": "@sheet:1/col:c5",
+                "col_off": 0
+              },
+              "end": {
+                "row": "@sheet:1/row:r17",
+                "row_off": 0,
+                "col": "@sheet:1/col:c5",
+                "col_off": 0
+              },
+              "_a1": "E20"
+            }
+          ]
+        }
+      },
+      "render_hashes": null,
+      "_view": "Atlas changed E20's formula from =E19*C18 to =E19*Rates!B3. The register loses 'v' and 't'. claim null: column E is outside claim-31."
+    },
+    {
+      "type": "ops_change",
+      "seq": 16,
+      "rev": 26,
+      "at_ms": 211000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "sheet rename",
+      "claim": null,
+      "ops": [
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:2",
+          "field": "name",
+          "before": "Rates",
+          "after": "FX rates"
+        }
+      ],
+      "derived": {
+        "units": {
+          "@sheet:1/row:r15": {
+            "a1": {
+              "c3": "='FX rates'!B3"
+            }
+          },
+          "@sheet:1/row:r17": {
+            "a1": {
+              "c5": "=E19*'FX rates'!B3"
+            }
+          }
+        }
+      },
+      "render_hashes": null,
+      "_view": "Atlas renamed Rates to FX rates. derived carries the A1 text of the two Budget formulas that name the sheet. No 'written': a rename writes no cells."
+    },
+    {
+      "type": "ops_change",
+      "seq": 17,
+      "rev": 27,
+      "at_ms": 213000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "sheet add",
+      "claim": null,
+      "ops": [
+        {
+          "root": "sheets",
+          "kind": "list",
+          "op": "insert",
+          "key": "@sheet:5",
+          "index_before": null,
+          "index_after": 4,
+          "after": "worksheet",
+          "effect": "visible"
+        },
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:5",
+          "field": "sid",
+          "after": "5"
+        },
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:5",
+          "field": "name",
+          "after": "Notes"
+        },
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:5",
+          "field": "state",
+          "after": "visible"
+        },
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:5",
+          "field": "hidden",
+          "after": "0"
+        },
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:5",
+          "field": "shift",
+          "after": "1"
+        },
+        {
+          "root": "sheet_props",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:5",
+          "field": "edit",
+          "after": "1"
+        }
+      ],
+      "derived": null,
+      "render_hashes": null,
+      "_view": "Atlas added the sheet Notes as tab 5 (after the two hidden sheets). sheetId 5 is minted from the book's mark and the sheets the store holds; the mark is not written."
+    },
+    {
+      "type": "ops_change",
+      "seq": 18,
+      "rev": 28,
+      "at_ms": 215000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "agent:atlas",
+        "name": "Atlas",
+        "kind": "agent",
+        "colour": "#6d5bd0"
+      },
+      "client": 4711,
+      "via": "cli",
+      "on_behalf_of": null,
+      "turn": "t:5e0a9d31c7b2f846.7",
+      "verb": "rows delete",
+      "claim": null,
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "delete",
+          "key": "@sheet:1/row:r15",
+          "field": "@gap",
+          "before": "1"
+        }
+      ],
+      "derived": {
+        "units": {
+          "@sheet:1/row:r17": {
+            "a1": {
+              "c5": "=E18*'FX rates'!B3"
+            }
+          }
+        },
+        "bands": [
+          {
+            "container": "@sheet:1",
+            "axis": "rows",
+            "op": "delete",
+            "from": 17,
+            "to": 17,
+            "numbers": "before"
+          }
+        ]
+      },
+      "render_hashes": null,
+      "_view": "Atlas deleted row 17 on Budget, a blank row: no list op, one gap op. 'bands' names the deleted rows by their numbers before the change, so the view draws the line at the right place even in a run of several blank rows. Rows 18-21 become 17-20."
+    },
+    {
+      "type": "ops_change",
+      "seq": 19,
+      "rev": 29,
+      "at_ms": 230000,
+      "change_kind": "external",
+      "actor": {
+        "id": "kit:external",
+        "name": "outside save",
+        "kind": "file",
+        "colour": null
+      },
+      "client": 0,
+      "via": "external",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r3",
+          "field": "c3",
+          "before": "{\"t\":\"n\",\"v\":\"12000\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"12500\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r3",
+          "field": "c5",
+          "before": "{\"t\":\"n\",\"v\":\"20000\",\"f\":\"{s1-r3|c3}+{s1-r3|c4}\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"20500\",\"f\":\"{s1-r3|c3}+{s1-r3|c4}\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r4",
+          "field": "c5",
+          "before": "{\"t\":\"n\",\"v\":\"4500\",\"f\":\"{s1-r4|c3}+{s1-r4|c4}\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"5000\",\"f\":\"{s1-r4|c3}+{s1-r4|c4}\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r5",
+          "field": "c5",
+          "before": "{\"t\":\"n\",\"v\":\"8400\",\"f\":\"{s1-r5|c3}+{s1-r5|c4}\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"8700\",\"f\":\"{s1-r5|c3}+{s1-r5|c4}\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r6",
+          "field": "c5",
+          "before": "{\"t\":\"n\",\"v\":\"18500\",\"f\":\"{s1-r6|c3}+{s1-r6|c4}\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"18800\",\"f\":\"{s1-r6|c3}+{s1-r6|c4}\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r19",
+          "field": "c5",
+          "before": "{\"f\":\"{s1-r19|c3}+{s1-r19|c4}\",\"s\":3}",
+          "after": "{\"t\":\"n\",\"v\":\"7000\",\"f\":\"{s1-r19|c3}+{s1-r19|c4}\",\"s\":3}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r16",
+          "field": "c3",
+          "before": "{\"t\":\"n\",\"v\":\"60100\",\"f\":\"SUM({s1-r3|c3}:{s1-r14|c3})\",\"s\":4}",
+          "after": "{\"t\":\"n\",\"v\":\"63600\",\"f\":\"SUM({s1-r3|c3}:{s1-r14|c3})\",\"s\":4}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r16",
+          "field": "c4",
+          "before": "{\"t\":\"n\",\"v\":\"50100\",\"f\":\"SUM({s1-r3|c4}:{s1-r14|c4})\",\"s\":4}",
+          "after": "{\"t\":\"n\",\"v\":\"55200\",\"f\":\"SUM({s1-r3|c4}:{s1-r14|c4})\",\"s\":4}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r16",
+          "field": "c5",
+          "before": "{\"t\":\"n\",\"v\":\"110200\",\"f\":\"SUM({s1-r3|c5}:{s1-r14|c5})\",\"s\":4}",
+          "after": "{\"t\":\"n\",\"v\":\"118800\",\"f\":\"SUM({s1-r3|c5}:{s1-r14|c5})\",\"s\":4}"
+        },
+        {
+          "root": "cells",
+          "kind": "map",
+          "op": "set",
+          "key": "@sheet:1/row:r17",
+          "field": "c5",
+          "before": "{\"f\":\"{s1-r16|c5}*{s2-r3|c2}\",\"s\":4}",
+          "after": "{\"t\":\"n\",\"v\":\"109296\",\"f\":\"{s1-r16|c5}*{s2-r3|c2}\",\"s\":4}"
+        }
+      ],
+      "derived": {
+        "containers": {
+          "@sheet:1": {
+            "merges": [
+              {
+                "start": {
+                  "row": "@sheet:1/row:r1",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r1",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                },
+                "_a1": "A1:F1"
+              },
+              {
+                "start": {
+                  "row": "@sheet:1/row:r18",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c1",
+                  "col_off": 0
+                },
+                "end": {
+                  "row": "@sheet:1/row:r18",
+                  "row_off": 0,
+                  "col": "@sheet:1/col:c6",
+                  "col_off": 0
+                },
+                "_a1": "A20:F20"
+              }
+            ],
+            "styles": {
+              "0": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "General"
+              },
+              "1": {
+                "bold": true,
+                "fill": "#DDEBF7",
+                "numfmt": "General"
+              },
+              "2": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              },
+              "3": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              },
+              "4": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        }
+      },
+      "render_hashes": null,
+      "_view": "An outside save: the file is the actor (kind file, id kit:external, colour null: K2 picks its own). Someone changed C4 in a desktop app, which recalculated on load (the kit's write sets fullCalcOnLoad), so every formula whose result changed arrives with a cached value: E10 and E20 lose 'not calculated'. The app also merged A20:F20: merges live in the carrier, so the change arrives as the sheet's derived merges, with no op. Assumes the kit wrote the file at rev 28 and the app opened that file, so there is nothing to keep both of."
+    }
+  ]
+}

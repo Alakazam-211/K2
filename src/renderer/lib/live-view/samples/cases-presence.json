@@ -1,0 +1,378 @@
+{
+  "_golden": {
+    "hand_made": true,
+    "not_kit_output": true,
+    "from": "rendering-data-contract-xlsx-r0.md, Items 3 and 4",
+    "type": "one case for each presence form: the visible range (viewport in cells), the cell caret, a range as one unit, and claims on ranges; with their wire frames and roster events. r1: an agent's cells after each kind of verb (AG1-AG4), sheet states (HS1), width and height units (UN1)",
+    "revision": "r1",
+    "notes": [
+      "r1: the sample now has two hidden sheets (Lists, sheetId 3, hidden; Setup, sheetId 4, very hidden), so the sheet the turn adds is @sheet:5",
+      "state: keyed-state-rev20.json unless a case says otherwise. Row addresses name keys, not row numbers",
+      "MARKS: 'EXISTS' = on kit main 44c3c9ff; 'NEW' = asked by this addendum, not built",
+      "the frame type 'cells', the roster kind 'cells', the feature 'cells', the claim frame's 'cells' field and the roster kind 'claim_started_cells' are NEW names, proposed here; the kit picks the final spelling at its WIRE bump",
+      "a corner is {row, row_off, col, col_off}: the last keyed row (column) at or before the cell, then an offset. The kit refuses a corner that isn't in this form (MPC-E114), so two clients never spell one cell two ways",
+      "_a1 fields are annotations, not on the wire"
+    ]
+  },
+  "cases": [
+    {
+      "id": "VR1",
+      "form": "visible range (K2 Design ask 1)",
+      "mark": "EXISTS on the wire (viewport); NEW only as a declared meaning (the schema's grid slot says viewport is in cells)",
+      "client_frame": { "type": "viewport", "req": 7, "rect": { "x": 1, "y": 1, "w": 8, "h": 30 } },
+      "roster_event": { "kind": "viewport", "who": "person:ada", "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 }, "client": 90071 },
+      "with_focus": { "root": "sheets", "key": "@sheet:1" },
+      "means": "Ada sees columns 1-8 (A-H) and rows 1-30 of Budget",
+      "_a1": "A1:H30"
+    },
+    {
+      "id": "VR2",
+      "form": "visible range, scrolled part-way into a row",
+      "client_frame": { "type": "viewport", "req": 8, "rect": { "x": 1, "y": 12.5, "w": 8, "h": 30 } },
+      "means": "visible rows are floor(y) to ceil(y + h) - 1, so rows 12-42, row 12 half shown; columns the same way",
+      "_a1": "A12:H42"
+    },
+    {
+      "id": "VR3",
+      "form": "visible range across an insert above it",
+      "before": { "rev": 22, "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 } },
+      "change": "rev 23: a row inserted at 10",
+      "after": { "rev": 23, "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 } },
+      "means": "no event. A viewport is where a person's screen is, in row and column numbers, as a spreadsheet keeps the scroll place; the content under it moved down one row"
+    },
+    {
+      "id": "VR4",
+      "form": "visible range when switching sheets",
+      "client_frames": [
+        { "type": "focus", "req": 9, "focus": { "root": "sheets", "key": "@sheet:2" } },
+        { "type": "viewport", "req": 10, "rect": { "x": 1, "y": 1, "w": 8, "h": 30 } }
+      ],
+      "roster_events_one_flush": [
+        { "kind": "focus", "who": "person:ada", "focus": { "root": "sheets", "key": "@sheet:2" }, "client": 90071 },
+        { "kind": "cells", "who": "person:ada", "cells": null, "client": 90071 },
+        { "kind": "viewport", "who": "person:ada", "viewport": { "x": 1, "y": 1, "w": 8, "h": 30 }, "client": 90071 }
+      ],
+      "means": "the kit already orders focus first in a flush (WIRE 'Selection, pointer and viewport in the roster'); the viewport is read on the new focus sheet. Her cells value on Budget is dropped with the focus move (NEW rule)"
+    },
+    {
+      "id": "VR5",
+      "form": "visible range refused",
+      "rows": [
+        { "frame": { "type": "viewport", "req": 11, "rect": { "x": 1, "y": 1, "w": -2, "h": 30 } }, "reply": { "type": "presence_refused", "req": 11, "error": { "id": "MPC-E114" } }, "why": "a negative size (EXISTS)" },
+        { "frame": { "type": "viewport", "req": 3, "rect": { "x": 1, "y": 1, "w": 8, "h": 30 } }, "from": "a watcher past the participant cap", "reply": { "type": "presence_refused", "req": 3, "error": { "id": "MPC-E305" } }, "why": "watchers send no presence (EXISTS)" }
+      ]
+    },
+    {
+      "id": "CS1",
+      "form": "cell caret (no range)",
+      "mark": "NEW",
+      "client_frame": {
+        "type": "cells", "req": 12,
+        "cells": {
+          "container": "@sheet:1",
+          "active": { "row": "@sheet:1/row:r16", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+          "ranges": []
+        }
+      },
+      "roster_event": {
+        "kind": "cells", "who": "person:ada", "client": 90071,
+        "cells": {
+          "container": "@sheet:1",
+          "active": { "row": "@sheet:1/row:r16", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+          "ranges": []
+        }
+      },
+      "_a1": "E18",
+      "also": "setting cells sets the connection's focus to its container, as a text range does (NEW rule, by analogy with WIRE 'range')"
+    },
+    {
+      "id": "CS2",
+      "form": "a range as ONE unit (K2 Design ask 2)",
+      "mark": "NEW",
+      "client_frame": {
+        "type": "cells", "req": 13,
+        "cells": {
+          "container": "@sheet:2",
+          "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+          "ranges": [
+            {
+              "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+              "end": { "row": "@sheet:2/row:r4", "row_off": 0, "col": "@sheet:2/col:c2", "col_off": 0 }
+            }
+          ]
+        }
+      },
+      "_a1": "A1:B4",
+      "compare_today": "the existing 'select' names whole elements of one list root: here 4 row keys, and no way to say columns A-B or a blank cell"
+    },
+    {
+      "id": "CS3",
+      "form": "a 10,000-cell range, mostly blank, still one unit",
+      "mark": "NEW",
+      "cells": {
+        "container": "@sheet:2",
+        "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+        "ranges": [
+          {
+            "start": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 },
+            "end": { "row": "@sheet:2/row:r5", "row_off": 995, "col": "@sheet:2/col:c2", "col_off": 8 }
+          }
+        ]
+      },
+      "_a1": "A1:J1000",
+      "means": "row 1000 is 995 rows past the last keyed row (row 5); column J is 8 past the last keyed column (B). 10,000 cells, about 300 bytes on the wire"
+    },
+    {
+      "id": "CS4",
+      "form": "several ranges (Ctrl-click)",
+      "mark": "NEW",
+      "cells": {
+        "container": "@sheet:1",
+        "active": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+        "ranges": [
+          {
+            "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+            "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 }
+          },
+          {
+            "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 },
+            "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c5", "col_off": 0 }
+          }
+        ]
+      },
+      "_a1": "C4:C15 and E4:E15, active E4",
+      "limit": "at most 16 ranges (NEW limit, Q-X5v)"
+    },
+    {
+      "id": "CS5",
+      "form": "a whole column and a whole row",
+      "mark": "NEW",
+      "column_D": {
+        "start": { "row": "@sheet:1/row:r1", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 },
+        "end": { "row": "@sheet:1/row:r18", "row_off": 1048556, "col": "@sheet:1/col:c4", "col_off": 0 },
+        "_a1": "D1:D1048576"
+      },
+      "row_9": {
+        "start": { "row": "@sheet:1/row:r8", "row_off": 0, "col": "@sheet:1/col:c1", "col_off": 0 },
+        "end": { "row": "@sheet:1/row:r8", "row_off": 0, "col": "@sheet:1/col:c6", "col_off": 16378 },
+        "_a1": "A9:XFD9"
+      },
+      "means": "no special form: a whole column runs to the sheet's last row (1,048,576), a whole row to its last column (16,384). The view shows them as a column or row band"
+    },
+    {
+      "id": "CS6",
+      "form": "a caret on a blank cell",
+      "mark": "NEW",
+      "active": { "row": "@sheet:1/row:r1", "row_off": 1, "col": "@sheet:1/col:c1", "col_off": 0 },
+      "_a1": "A2 (row 2 is blank: one past keyed row 1)"
+    },
+    {
+      "id": "CS7",
+      "form": "a range grows with an insert inside it",
+      "mark": "NEW (follows from keyed corners; the kit does nothing)",
+      "range": {
+        "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+        "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 }
+      },
+      "_a1_rev22": "C4:D15",
+      "_a1_rev23": "C4:D16",
+      "event": null,
+      "means": "rev 23 inserts @sheet:1/row:r19 between r8 and r9, both inside. No roster event: the corners did not change"
+    },
+    {
+      "id": "CS8",
+      "form": "a corner's row is deleted",
+      "mark": "NEW",
+      "before": {
+        "who": "person:sam",
+        "cells": {
+          "container": "@sheet:1",
+          "active": { "row": "@sheet:1/row:r9", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+          "ranges": [
+            {
+              "start": { "row": "@sheet:1/row:r9", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 }
+            }
+          ]
+        },
+        "_a1": "C10:D15, active C10"
+      },
+      "change": "an agent's rows delete removes row 15 (@sheet:1/row:r14, a list delete)",
+      "roster_event": {
+        "kind": "cells", "who": "person:sam", "client": 77001,
+        "cells": {
+          "container": "@sheet:1",
+          "active": { "row": "@sheet:1/row:r9", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+          "ranges": []
+        }
+      },
+      "means": "the range is dropped, never moved or shrunk, as the kit drops a text range (WIRE 'range'). The active cell stays: its row is live. Sam's client sends a new value when he next moves"
+    },
+    {
+      "id": "CS9",
+      "form": "an insert inside a blank stretch breaks a corner's form",
+      "mark": "NEW",
+      "before": {
+        "range": {
+          "start": { "row": "@sheet:1/row:r14", "row_off": 1, "col": "@sheet:1/col:c2", "col_off": 0 },
+          "end": { "row": "@sheet:1/row:r14", "row_off": 1, "col": "@sheet:1/col:c3", "col_off": 0 }
+        },
+        "_a1": "B16:C16 (blank row 16 at rev 20)"
+      },
+      "change": "a row inserted at 16: a new keyed row now stands one past r14",
+      "result": "the corner {r14, 1} would now name the new row, which is not the cell the person chose (that blank row is now 17). The kit drops the range and sends the roster event, as CS8",
+      "means": "the kit checks each corner's form after every change that touches the rows or columns of a sheet with a cells value on it; a corner whose offset now reaches a keyed row is dropped"
+    },
+    {
+      "id": "CS10",
+      "form": "focus moves to another sheet",
+      "mark": "NEW",
+      "means": "a PERSON's cells value is dropped (roster event cells: null in the same flush as the focus). See VR4 and presence-and-claims.json P3 (Ada). An agent's cells after a verb follow AG1-AG4 instead (r1)"
+    },
+    {
+      "id": "AG1",
+      "form": "an agent's cells after a verb that writes cells (r1 ruling 1)",
+      "mark": "NEW",
+      "rule": "the frame's derived 'written' (the pack's rectangles, by corners at the frame's rev) becomes the agent's cells: ranges = written, active = the first range's start",
+      "example": "turn-frames.json rev 21: written D5:D7, then cells {active D5, ranges [D5:D7]} in the same flush"
+    },
+    {
+      "id": "AG2",
+      "form": "after an insert (r1 ruling 2)",
+      "mark": "NEW",
+      "rule": "the inserted rows or columns, as whole-band ranges (a row band runs to column 16,384; a column band to row 1,048,576); active = the band's start",
+      "example": "rev 23: rows insert at 10, cells {active A10, ranges [A10:XFD10]}, which is also its 'written'"
+    },
+    {
+      "id": "AG3",
+      "form": "after a delete (r1 ruling 2)",
+      "mark": "NEW",
+      "rule": "a caret on the first cell after the deleted band: for rows, column A of the first row after it; for columns, row 1 of the first column after it. No ranges. The frame has no 'written'; its 'bands' names the deleted band by its numbers before the change (ruling 4)",
+      "example": "rev 28: blank row 17 deleted, cells {active A17 = {row: @sheet:1/row:r15, row_off: 0, col: @sheet:1/col:c1, col_off: 0}, ranges []}; bands [{axis rows, op delete, from 17, to 17, numbers before}]"
+    },
+    {
+      "id": "AG4",
+      "form": "after a sheet add or rename (r1 ruling 2)",
+      "mark": "NEW",
+      "rule": "focus moves to that sheet. The agent's cells are kept if they are on that sheet, else they become a caret at A1 of it",
+      "examples": [
+        { "rev": 26, "verb": "sheet rename", "cells": { "container": "@sheet:2", "active": { "row": "@sheet:2/row:r1", "row_off": 0, "col": "@sheet:2/col:c1", "col_off": 0 }, "ranges": [] }, "_a1": "A1 of FX rates" },
+        { "rev": 27, "verb": "sheet add", "cells": { "container": "@sheet:5", "active": { "row": null, "row_off": 1, "col": null, "col_off": 1 }, "ranges": [] }, "_a1": "A1 of an empty sheet: no keyed row or column yet" }
+      ]
+    },
+    {
+      "id": "HS1",
+      "form": "sheet states in the index (r1 ruling 6)",
+      "mark": "NEW (Container.state)",
+      "containers": [
+        { "key": "@sheet:1", "title": "Budget", "hidden": false, "state": "visible" },
+        { "key": "@sheet:3", "title": "Lists", "hidden": true, "state": "hidden" },
+        { "key": "@sheet:4", "title": "Setup", "hidden": true, "state": "very_hidden" }
+      ],
+      "means": "hidden stays a bool for every view; state tells a view which hidden sheets the file hides from its own menus ('hidden by the file', Q-X14). From the sheet's state field: visible, hidden, veryHidden"
+    },
+    {
+      "id": "UN1",
+      "form": "widths and heights (r1 ruling 8)",
+      "mark": "NEW (names only; the values EXIST in the store)",
+      "column_width": { "field": "col_props w", "unit": "characters of the default font's maximum digit width, as stored in the file", "example": { "col": "@sheet:1/col:c1", "w": "22" } },
+      "row_height": { "field": "cells @ht", "unit": "points", "example": { "row": "@sheet:1/row:r1", "@ht": "24" } },
+      "means": "the grid slot names both units. Pixels are K2's: points × 96 / 72 for heights; for widths, the default font's maximum digit width in pixels, which needs that font's metrics (HYPOTHESIS: the pack can derive the default font's name and size from the carrier's styles part, for K2 to measure)"
+    },
+    {
+      "id": "CS11",
+      "form": "cells refused",
+      "mark": "NEW",
+      "rows": [
+        { "why": "17 ranges", "error": "MPC-E310", "by": "the client, unsent, and the host" },
+        { "why": "a corner's row is not live, or is on another sheet than 'container'", "error": "MPC-E114" },
+        { "why": "a corner not in its form: {row: @sheet:1/row:r1, row_off: 2} names row 3, which is keyed (@sheet:1/row:r2)", "error": "MPC-E114" },
+        { "why": "a position past the sheet's last row or column (1,048,576 by 16,384)", "error": "MPC-E114" },
+        { "why": "'active' outside every range when ranges are given", "error": "MPC-E114" },
+        { "why": "a watcher", "error": "MPC-E305" }
+      ],
+      "rights": "read, as select, pointer, viewport and focus"
+    },
+    {
+      "id": "CC1",
+      "form": "a claim on a range, one unit",
+      "mark": "NEW",
+      "client_frame": {
+        "type": "claim", "req": 21,
+        "cells": {
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 }
+            }
+          ]
+        },
+        "note": "updating Q2 figures", "hold": true, "ttl_ms": 60000
+      },
+      "reply": { "type": "claimed", "req": 21, "claim": "claim-31" },
+      "roster_events_one_flush": [
+        {
+          "kind": "claim_started_cells", "who": "agent:atlas", "claim": "claim-31",
+          "container": "@sheet:1",
+          "ranges": [
+            {
+              "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+              "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 }
+            }
+          ],
+          "note": "updating Q2 figures", "hold": true, "expires_ms": 260000, "version": 20,
+          "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" },
+          "started_ms": 200000
+        },
+        { "kind": "focus", "who": "agent:atlas", "focus": { "root": "sheets", "key": "@sheet:1" } },
+        {
+          "kind": "cells", "who": "agent:atlas",
+          "cells": {
+            "container": "@sheet:1",
+            "active": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+            "ranges": [
+              {
+                "start": { "row": "@sheet:1/row:r3", "row_off": 0, "col": "@sheet:1/col:c3", "col_off": 0 },
+                "end": { "row": "@sheet:1/row:r14", "row_off": 0, "col": "@sheet:1/col:c4", "col_off": 0 }
+              }
+            ]
+          }
+        }
+      ],
+      "end": {
+        "kind": "claim_ended", "who": "agent:atlas", "claim": "claim-31", "how": "released",
+        "lines": { "root": "rows", "first": 4, "last": 16 },
+        "version": 25, "at_ms": 209500, "at_rev": null,
+        "actor": { "id": "agent:atlas", "name": "Atlas", "kind": "agent", "colour": "#6d5bd0" }
+      },
+      "_a1": "C4:D15 at the start; C4:D16 at the release",
+      "notes": [
+        "claim_ended is the kit's existing event. For an element claim its 'lines' are list positions, for display only. For a cells claim this addendum proposes the range's first and last row NUMBERS on its sheet at that version (NEW meaning, computed through the grid slot's numbering): rows 4 and 16 at version 25, after the insert at rev 23. A list position would mean little here: the rows list is workbook-wide",
+        "an agent's cells claim moves its focus and replaces its cells value (NEW rule); its row selection is left alone"
+      ]
+    },
+    {
+      "id": "CC2",
+      "form": "what a cells claim holds off (agents only, under the host's ClaimPolicy::Respect)",
+      "mark": "NEW",
+      "claim": "claim-31, C4:D15 on Budget, by agent:atlas",
+      "rows": [
+        { "who": "agent:brook", "verb": "cell set @sheet:1 D7 --value 9900", "result": "refused MPC-E301", "details": { "claim": "claim-31", "by": "agent:atlas", "name": "Atlas", "note": "updating Q2 figures" }, "why": "D7 is inside" },
+        { "who": "agent:brook", "verb": "cell set @sheet:1 E7 --value 1", "result": "applied", "why": "column E is outside" },
+        { "who": "agent:brook", "verb": "rows delete @sheet:1 AT 9", "result": "refused MPC-E301", "why": "row 9 (@sheet:1/row:r8) holds claimed cells" },
+        { "who": "agent:brook", "verb": "rows insert @sheet:1 AT 10", "result": "applied", "why": "no claimed cell changes; the range grows (Q-X6v asks whether to refuse instead)" },
+        { "who": "agent:brook", "verb": "rows hide @sheet:1 AT 9", "result": "applied", "why": "row fields (@hidden, @ht) are not cells; not covered in v1 (Q-X6v)" },
+        { "who": "person:ada", "verb": "types in D7", "result": "applied", "why": "a claim never refuses a person (EXISTS rule); people write live only from slice X6" },
+        { "who": "agent:atlas", "verb": "range set @sheet:1 D5 --tsv", "result": "applied; frame claim = claim-31", "why": "its own claim; held, so it does not end on the edit" }
+      ]
+    },
+    {
+      "id": "CC3",
+      "form": "a claim on whole rows (EXISTS today)",
+      "mark": "EXISTS",
+      "client_frame": { "type": "claim", "req": 22, "root": "rows", "keys": ["@sheet:1/row:r3", "@sheet:1/row:r4"], "note": "rows 4-5", "hold": false },
+      "means": "element claims on the rows root work today, up to 256 keyed rows. They can't name a blank row, columns, or a range of more than 256 rows. Cells claims (CC1) are for those"
+    }
+  ]
+}

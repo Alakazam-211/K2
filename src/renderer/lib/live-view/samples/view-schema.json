@@ -1,0 +1,160 @@
+{
+  "_golden": {
+    "hand_made": true,
+    "not_kit_output": true,
+    "from": "rendering-data-contract-xlsx-r0.md, section 1.2; the field names as xlsx-live-slice-plan-r0.md section 1",
+    "type": "ViewSchema (ViewSchema::to_value at kit 44c3c9ff), plus the NEW grid slot",
+    "notes": [
+      "every slot above 'grid' exists in the kit's ViewSchema at 44c3c9ff and is filled as the plan's section 2 says",
+      "'grid' is NEW (kit item VG): it lets a view number rows and columns, find a cell's column, read a cell register and read a viewport in cells, with no pack code",
+      "'derived' drops the plan's 'row' and 'cols' (the numbering in 'grid' replaces them) and adds 'merges' (Q-X8v)",
+      "'text' is null, not the plan's derived row_text: the grid reads cells from the keyed state (Q-X12)",
+      "field_class lists exact names, as the kit matches today. Cell fields (c1, c2...) aren't listed: the change frames carry raw ops, which the view classes by the grid slot's rule (a field of 'cells' not starting with '@' is a cell). A prefix rule is only needed when the kit groups ops into unit deltas (not built at 44c3c9ff)",
+      "r1: container_fields gains 'state' (NEW kit slot): visible, hidden or very_hidden, from the sheet's state field (ruling 6)",
+      "r1: derived.containers gains 'styles': per style index, bold, fill colour and number-format code, pack-derived from the carrier (ruling 10). Full styles stay LATER, for K2 Render",
+      "r1: the grid slot names the units: column width in characters of the default font's maximum digit width, as stored; row height in points (ruling 8)",
+      "r1: root_order is the pack schema's root order, which the snapshot's pages follow: columns and their props before cells (ruling 3)",
+      "r1: change frames' derived also carries 'written' and 'bands' (rulings 1 and 4); they are frame-only, so they aren't index fields"
+    ],
+    "revision": "r1"
+  },
+  "pack": "xlsx",
+  "root_order": [
+    "sheets",
+    "sheet_props",
+    "cols",
+    "col_props",
+    "rows",
+    "cells",
+    "book"
+  ],
+  "containers": "sheets",
+  "units": "rows",
+  "unit_container_field": "@sheet",
+  "container_id_field": "sid",
+  "native_unit": "cell",
+  "page": null,
+  "container_fields": {
+    "title": "name",
+    "hidden": "hidden",
+    "state": {
+      "field": "state",
+      "values": {
+        "visible": "visible",
+        "hidden": "hidden",
+        "veryHidden": "very_hidden"
+      },
+      "_mark": "NEW (r1)"
+    },
+    "layout": null
+  },
+  "unit_fields": {
+    "kind": {
+      "list_value": true
+    },
+    "name": null,
+    "alt": null,
+    "text": null,
+    "hidden": "@hidden",
+    "editable_text": null,
+    "placeholder": null
+  },
+  "geometry": null,
+  "field_class": {
+    "@sheet": "meta",
+    "@gap": "meta",
+    "@hidden": "visibility",
+    "@ht": "style",
+    "@s": "style",
+    "sid": "meta",
+    "name": "meta",
+    "state": "visibility",
+    "hidden": "visibility",
+    "shift": "meta",
+    "edit": "meta"
+  },
+  "derived": {
+    "containers": [
+      "merges",
+      "styles"
+    ],
+    "units": [
+      "a1"
+    ],
+    "frames_only": [
+      "written",
+      "bands"
+    ]
+  },
+  "grid": {
+    "_mark": "NEW (kit item VG)",
+    "rows": "rows",
+    "cols": "cols",
+    "cells": "cells",
+    "col_fields": "col_props",
+    "col_container_field": "sheet",
+    "row_fields_start": "@",
+    "col_of_cell_field": "{container}/col:{field}",
+    "numbering": {
+      "rows": {
+        "gap_field": "@gap",
+        "first": 1
+      },
+      "cols": {
+        "gap_field": "gap",
+        "first": 1
+      },
+      "rule": "within one container, in list order: number = previous number + gap + 1 (the first: gap + first). A missing gap field is 0"
+    },
+    "col_label": "letters",
+    "max": {
+      "rows": 1048576,
+      "cols": 16384
+    },
+    "cell": {
+      "encoding": "json",
+      "type": "t",
+      "value": "v",
+      "formula": "f",
+      "formula_kind": "fk",
+      "style": "s",
+      "types": {
+        "n": "number",
+        "s": "text",
+        "b": "true or false (1 or 0)",
+        "e": "error, its text as the value",
+        "d": "date, ISO text"
+      },
+      "_note": "f holds references as keys and is never shown; the view shows derived a1"
+    },
+    "row_fields": {
+      "hidden": "@hidden",
+      "height": "@ht",
+      "height_unit": "pt"
+    },
+    "col_field_names": {
+      "hidden": "hidden",
+      "width": "w",
+      "width_unit": "characters of the default font's maximum digit width, as stored"
+    },
+    "viewport": "cells",
+    "style_hint": {
+      "_mark": "NEW (r1)",
+      "from": "the cell register's s (0 when absent)",
+      "table": "Container.derived.styles[<s>]",
+      "parts": {
+        "bold": "bool",
+        "fill": "#RRGGBB or null",
+        "numfmt": "the number-format code as stored ('General', '#,##0', 'yyyy-mm-dd'...)"
+      }
+    }
+  },
+  "address": {
+    "container": "@sheet:<sheetId>",
+    "unit": "@sheet:<sheetId>/row:r<n>",
+    "col": "@sheet:<sheetId>/col:c<n>",
+    "note": "r<n> and c<n> are minted keys (the n-th row or column this sheet keyed), never positions. The store's keys s<sheetId>, s<sheetId>-r<n>, s<sheetId>-c<n> stay inside the kit. A cell has no address of its own: it is (row address, cell field), the composite map key as the watch carries it"
+  },
+  "blob": null,
+  "_blob_note": "the plan's section 2: the structure index has no node per row, so the blob tier's view index would be sheets only. Declared null here until the pack's BlobView is written (gap X-B)"
+}

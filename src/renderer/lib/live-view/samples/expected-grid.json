@@ -1,0 +1,2674 @@
+{
+  "_golden": {
+    "hand_made": true,
+    "not_kit_output": true,
+    "revision": "r1",
+    "written_with": "a scratch script applying the contract's rules by hand; no kit or pack code ran",
+    "from": "rendering-data-contract-xlsx-r0.md (r1), section 3",
+    "type": "what the grid shows at rev 20, rev 28 and rev 29: the check values for a mock",
+    "notes": [
+      "built from the keyed state plus the numbering rule plus derived A1 text, merges and style hints, nothing else",
+      "a formula cell shows its A1 text; its result is the file's cached value, shown as 'as last calculated', or none ('not calculated') for a formula written live",
+      "style is the hint of the cell's style index, left out when it is the default (not bold, no fill, General)",
+      "blank_rows are rows with no element: drawn empty, with their numbers",
+      "rev 29 follows the outside save: every result recalculated by the app, and a second merge"
+    ]
+  },
+  "rev20": [
+    {
+      "sheet": "@sheet:1",
+      "name": "Budget",
+      "state": "visible",
+      "columns": {
+        "A": "@sheet:1/col:c1",
+        "B": "@sheet:1/col:c2",
+        "C": "@sheet:1/col:c3",
+        "D": "@sheet:1/col:c4",
+        "E": "@sheet:1/col:c5",
+        "F": "@sheet:1/col:c6"
+      },
+      "merges": [
+        "A1:F1"
+      ],
+      "blank_rows": [
+        2,
+        16
+      ],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:1/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Team budget 2026",
+              "style": {
+                "bold": true,
+                "fill": "#DDEBF7",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:1/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Item",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "B": {
+              "value": "Owner",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "C": {
+              "value": "Q1",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "D": {
+              "value": "Q2",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "E": {
+              "value": "Total",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "F": {
+              "value": "Note",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:1/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Laptops"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "12000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "8000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C4+D4",
+              "result": "20000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "replacement cycle"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:1/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Monitors"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "1500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C5+D5",
+              "result": "4500",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 6,
+          "address": "@sheet:1/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Licences"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "4200",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "4200",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C6+D6",
+              "result": "8400",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 7,
+          "address": "@sheet:1/row:r6",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Cloud"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "9000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "9500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C7+D7",
+              "result": "18500",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 8,
+          "address": "@sheet:1/row:r7",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Travel"
+            },
+            "B": {
+              "value": "Sales"
+            },
+            "C": {
+              "value": "6000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "7000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C8+D8",
+              "result": "13000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "two offsites"
+            }
+          }
+        },
+        {
+          "number": 9,
+          "address": "@sheet:1/row:r8",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Events"
+            },
+            "B": {
+              "value": "Sales"
+            },
+            "C": {
+              "value": "5000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C9+D9",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 10,
+          "address": "@sheet:1/row:r9",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Training"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "2500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C10+D10",
+              "result": "5000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 11,
+          "address": "@sheet:1/row:r10",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Office"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "3600",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "3600",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C11+D11",
+              "result": "7200",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 12,
+          "address": "@sheet:1/row:r11",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Design tools"
+            },
+            "B": {
+              "value": "Design"
+            },
+            "C": {
+              "value": "1800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "1800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C12+D12",
+              "result": "3600",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 13,
+          "address": "@sheet:1/row:r12",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Research"
+            },
+            "B": {
+              "value": "Design"
+            },
+            "C": {
+              "value": "4000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C13+D13",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 14,
+          "address": "@sheet:1/row:r13",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Hiring"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "7000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "5000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C14+D14",
+              "result": "12000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 15,
+          "address": "@sheet:1/row:r14",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Contingency"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C15+D15",
+              "result": "4000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "held back"
+            }
+          }
+        },
+        {
+          "number": 17,
+          "address": "@sheet:1/row:r15",
+          "hidden": true,
+          "cells": {
+            "A": {
+              "value": "fx rate (hidden)"
+            },
+            "C": {
+              "formula": "=Rates!B3",
+              "result": "0.92",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 18,
+          "address": "@sheet:1/row:r16",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Total",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "C": {
+              "formula": "=SUM(C4:C15)",
+              "result": "60100",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "formula": "=SUM(D4:D15)",
+              "result": "50100",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=SUM(E4:E15)",
+              "result": "110200",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 19,
+          "address": "@sheet:1/row:r17",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Total (EUR)",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=E18*C17",
+              "result": "101384",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 20,
+          "address": "@sheet:1/row:r18",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Figures in USD; EUR uses the hidden rate in row 17."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:2",
+      "name": "Rates",
+      "state": "visible",
+      "columns": {
+        "A": "@sheet:2/col:c1",
+        "B": "@sheet:2/col:c2"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:2/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Currency",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "B": {
+              "value": "Rate",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 2,
+          "address": "@sheet:2/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "USD"
+            },
+            "B": {
+              "value": "1"
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:2/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "EUR"
+            },
+            "B": {
+              "value": "0.92"
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:2/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "GBP"
+            },
+            "B": {
+              "value": "0.79"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:2/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Updated"
+            },
+            "B": {
+              "value": "2026-11-01"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:3",
+      "name": "Lists",
+      "state": "hidden",
+      "columns": {
+        "A": "@sheet:3/col:c1"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:3/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Owners",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 2,
+          "address": "@sheet:3/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Eng"
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:3/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Ops"
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:3/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Sales"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:3/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Design"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:4",
+      "name": "Setup",
+      "state": "very_hidden",
+      "columns": {
+        "A": "@sheet:4/col:c1",
+        "B": "@sheet:4/col:c2"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:4/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "template version"
+            },
+            "B": {
+              "value": "3"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "rev28": [
+    {
+      "sheet": "@sheet:1",
+      "name": "Budget",
+      "state": "visible",
+      "columns": {
+        "A": "@sheet:1/col:c1",
+        "B": "@sheet:1/col:c2",
+        "C": "@sheet:1/col:c3",
+        "D": "@sheet:1/col:c4",
+        "E": "@sheet:1/col:c5",
+        "F": "@sheet:1/col:c6"
+      },
+      "merges": [
+        "A1:F1"
+      ],
+      "blank_rows": [
+        2
+      ],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:1/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Team budget 2026",
+              "style": {
+                "bold": true,
+                "fill": "#DDEBF7",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:1/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Item",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "B": {
+              "value": "Owner",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "C": {
+              "value": "Q1",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "D": {
+              "value": "Q2",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "E": {
+              "value": "Total",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "F": {
+              "value": "Note",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:1/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Laptops"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "12000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "8000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C4+D4",
+              "result": "20000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "replacement cycle"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:1/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Monitors"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C5+D5",
+              "result": "4500",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 6,
+          "address": "@sheet:1/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Licences"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "4200",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "4500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C6+D6",
+              "result": "8400",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "renewal in March"
+            }
+          }
+        },
+        {
+          "number": 7,
+          "address": "@sheet:1/row:r6",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Cloud"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "9000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "9800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C7+D7",
+              "result": "18500",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 8,
+          "address": "@sheet:1/row:r7",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Travel"
+            },
+            "B": {
+              "value": "Sales"
+            },
+            "C": {
+              "value": "6000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "7000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C8+D8",
+              "result": "13000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "two offsites"
+            }
+          }
+        },
+        {
+          "number": 9,
+          "address": "@sheet:1/row:r8",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Events"
+            },
+            "B": {
+              "value": "Sales"
+            },
+            "C": {
+              "value": "5000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C9+D9",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 10,
+          "address": "@sheet:1/row:r19",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Contractors"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "4000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C10+D10",
+              "result": null,
+              "result_state": "not_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 11,
+          "address": "@sheet:1/row:r9",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Training"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "2500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C11+D11",
+              "result": "5000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 12,
+          "address": "@sheet:1/row:r10",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Office"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "3600",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "3600",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C12+D12",
+              "result": "7200",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 13,
+          "address": "@sheet:1/row:r11",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Design tools"
+            },
+            "B": {
+              "value": "Design"
+            },
+            "C": {
+              "value": "1800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "1800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C13+D13",
+              "result": "3600",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 14,
+          "address": "@sheet:1/row:r12",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Research"
+            },
+            "B": {
+              "value": "Design"
+            },
+            "C": {
+              "value": "4000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C14+D14",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 15,
+          "address": "@sheet:1/row:r13",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Hiring"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "7000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "5000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C15+D15",
+              "result": "12000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 16,
+          "address": "@sheet:1/row:r14",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Contingency"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C16+D16",
+              "result": "4000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "held back"
+            }
+          }
+        },
+        {
+          "number": 17,
+          "address": "@sheet:1/row:r15",
+          "hidden": true,
+          "cells": {
+            "A": {
+              "value": "fx rate (hidden)"
+            },
+            "C": {
+              "formula": "='FX rates'!B3",
+              "result": "0.92",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 18,
+          "address": "@sheet:1/row:r16",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Total",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "C": {
+              "formula": "=SUM(C4:C16)",
+              "result": "60100",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "formula": "=SUM(D4:D16)",
+              "result": "50100",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=SUM(E4:E16)",
+              "result": "110200",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 19,
+          "address": "@sheet:1/row:r17",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Total (EUR)",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=E18*'FX rates'!B3",
+              "result": null,
+              "result_state": "not_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 20,
+          "address": "@sheet:1/row:r18",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Figures in USD; EUR uses the hidden rate in row 17."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:2",
+      "name": "FX rates",
+      "state": "visible",
+      "columns": {
+        "A": "@sheet:2/col:c1",
+        "B": "@sheet:2/col:c2"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:2/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Currency",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "B": {
+              "value": "Rate",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 2,
+          "address": "@sheet:2/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "USD"
+            },
+            "B": {
+              "value": "1"
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:2/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "EUR"
+            },
+            "B": {
+              "value": "0.92"
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:2/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "GBP"
+            },
+            "B": {
+              "value": "0.79"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:2/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Updated"
+            },
+            "B": {
+              "value": "2026-11-01"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:3",
+      "name": "Lists",
+      "state": "hidden",
+      "columns": {
+        "A": "@sheet:3/col:c1"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:3/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Owners",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 2,
+          "address": "@sheet:3/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Eng"
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:3/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Ops"
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:3/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Sales"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:3/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Design"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:4",
+      "name": "Setup",
+      "state": "very_hidden",
+      "columns": {
+        "A": "@sheet:4/col:c1",
+        "B": "@sheet:4/col:c2"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:4/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "template version"
+            },
+            "B": {
+              "value": "3"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:5",
+      "name": "Notes",
+      "state": "visible",
+      "columns": {},
+      "merges": [],
+      "blank_rows": [],
+      "rows": []
+    }
+  ],
+  "rev29": [
+    {
+      "sheet": "@sheet:1",
+      "name": "Budget",
+      "state": "visible",
+      "columns": {
+        "A": "@sheet:1/col:c1",
+        "B": "@sheet:1/col:c2",
+        "C": "@sheet:1/col:c3",
+        "D": "@sheet:1/col:c4",
+        "E": "@sheet:1/col:c5",
+        "F": "@sheet:1/col:c6"
+      },
+      "merges": [
+        "A1:F1",
+        "A20:F20"
+      ],
+      "blank_rows": [
+        2
+      ],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:1/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Team budget 2026",
+              "style": {
+                "bold": true,
+                "fill": "#DDEBF7",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:1/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Item",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "B": {
+              "value": "Owner",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "C": {
+              "value": "Q1",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "D": {
+              "value": "Q2",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "E": {
+              "value": "Total",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "F": {
+              "value": "Note",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:1/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Laptops"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "12500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "8000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C4+D4",
+              "result": "20500",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "replacement cycle"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:1/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Monitors"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C5+D5",
+              "result": "5000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 6,
+          "address": "@sheet:1/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Licences"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "4200",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "4500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C6+D6",
+              "result": "8700",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "renewal in March"
+            }
+          }
+        },
+        {
+          "number": 7,
+          "address": "@sheet:1/row:r6",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Cloud"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "9000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "9800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C7+D7",
+              "result": "18800",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 8,
+          "address": "@sheet:1/row:r7",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Travel"
+            },
+            "B": {
+              "value": "Sales"
+            },
+            "C": {
+              "value": "6000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "7000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C8+D8",
+              "result": "13000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "two offsites"
+            }
+          }
+        },
+        {
+          "number": 9,
+          "address": "@sheet:1/row:r8",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Events"
+            },
+            "B": {
+              "value": "Sales"
+            },
+            "C": {
+              "value": "5000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C9+D9",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 10,
+          "address": "@sheet:1/row:r19",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Contractors"
+            },
+            "B": {
+              "value": "Eng"
+            },
+            "C": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "4000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C10+D10",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 11,
+          "address": "@sheet:1/row:r9",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Training"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "2500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2500",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C11+D11",
+              "result": "5000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 12,
+          "address": "@sheet:1/row:r10",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Office"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "3600",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "3600",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C12+D12",
+              "result": "7200",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 13,
+          "address": "@sheet:1/row:r11",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Design tools"
+            },
+            "B": {
+              "value": "Design"
+            },
+            "C": {
+              "value": "1800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "1800",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C13+D13",
+              "result": "3600",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 14,
+          "address": "@sheet:1/row:r12",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Research"
+            },
+            "B": {
+              "value": "Design"
+            },
+            "C": {
+              "value": "4000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "3000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C14+D14",
+              "result": "7000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 15,
+          "address": "@sheet:1/row:r13",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Hiring"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "7000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "5000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C15+D15",
+              "result": "12000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 16,
+          "address": "@sheet:1/row:r14",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Contingency"
+            },
+            "B": {
+              "value": "Ops"
+            },
+            "C": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "value": "2000",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=C16+D16",
+              "result": "4000",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            },
+            "F": {
+              "value": "held back"
+            }
+          }
+        },
+        {
+          "number": 17,
+          "address": "@sheet:1/row:r15",
+          "hidden": true,
+          "cells": {
+            "A": {
+              "value": "fx rate (hidden)"
+            },
+            "C": {
+              "formula": "='FX rates'!B3",
+              "result": "0.92",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": false,
+                "fill": null,
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 18,
+          "address": "@sheet:1/row:r16",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Total",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "C": {
+              "formula": "=SUM(C4:C16)",
+              "result": "63600",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "D": {
+              "formula": "=SUM(D4:D16)",
+              "result": "55200",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=SUM(E4:E16)",
+              "result": "118800",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 19,
+          "address": "@sheet:1/row:r17",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Total (EUR)",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            },
+            "E": {
+              "formula": "=E18*'FX rates'!B3",
+              "result": "109296",
+              "result_state": "as_last_calculated",
+              "style": {
+                "bold": true,
+                "fill": "#FFF2CC",
+                "numfmt": "#,##0"
+              }
+            }
+          }
+        },
+        {
+          "number": 20,
+          "address": "@sheet:1/row:r18",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Figures in USD; EUR uses the hidden rate in row 17."
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:2",
+      "name": "FX rates",
+      "state": "visible",
+      "columns": {
+        "A": "@sheet:2/col:c1",
+        "B": "@sheet:2/col:c2"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:2/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Currency",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            },
+            "B": {
+              "value": "Rate",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 2,
+          "address": "@sheet:2/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "USD"
+            },
+            "B": {
+              "value": "1"
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:2/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "EUR"
+            },
+            "B": {
+              "value": "0.92"
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:2/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "GBP"
+            },
+            "B": {
+              "value": "0.79"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:2/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Updated"
+            },
+            "B": {
+              "value": "2026-11-01"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:3",
+      "name": "Lists",
+      "state": "hidden",
+      "columns": {
+        "A": "@sheet:3/col:c1"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:3/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Owners",
+              "style": {
+                "bold": true,
+                "fill": "#F2F2F2",
+                "numfmt": "General"
+              }
+            }
+          }
+        },
+        {
+          "number": 2,
+          "address": "@sheet:3/row:r2",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Eng"
+            }
+          }
+        },
+        {
+          "number": 3,
+          "address": "@sheet:3/row:r3",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Ops"
+            }
+          }
+        },
+        {
+          "number": 4,
+          "address": "@sheet:3/row:r4",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Sales"
+            }
+          }
+        },
+        {
+          "number": 5,
+          "address": "@sheet:3/row:r5",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "Design"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:4",
+      "name": "Setup",
+      "state": "very_hidden",
+      "columns": {
+        "A": "@sheet:4/col:c1",
+        "B": "@sheet:4/col:c2"
+      },
+      "merges": [],
+      "blank_rows": [],
+      "rows": [
+        {
+          "number": 1,
+          "address": "@sheet:4/row:r1",
+          "hidden": false,
+          "cells": {
+            "A": {
+              "value": "template version"
+            },
+            "B": {
+              "value": "3"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "sheet": "@sheet:5",
+      "name": "Notes",
+      "state": "visible",
+      "columns": {},
+      "merges": [],
+      "blank_rows": [],
+      "rows": []
+    }
+  ]
+}

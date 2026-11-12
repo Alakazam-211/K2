@@ -1,0 +1,979 @@
+{
+  "_golden": {
+    "hand_made": true,
+    "not_kit_output": true,
+    "revision": "r1",
+    "written_with": "a scratch script applying the contract's rules by hand; no kit or pack code ran",
+    "from": "rendering-data-contract-xlsx-r0.md (r1), Item 1",
+    "type": "ViewIndex at rev 20 (ViewIndex::to_value), with the NEW fields this addendum asks for",
+    "notes": [
+      "on the wire the snapshot's 'view' is the schema, tier, rev, page, fonts, layouts and containers; units come as 'units' pages per container",
+      "Container.state is NEW (r1): visible, hidden or very_hidden, from the sheet's state field",
+      "Unit.derived and Container.derived are NEW (kit item V1); the kit at 44c3c9ff has neither field",
+      "Container.derived.merges: merged ranges as keyed corners (pack, from the carrier). Container.derived.styles: the style hint of every style index used on the sheet: bold, fill and number-format code (pack, from the carrier; r1)",
+      "derived.a1 holds each formula cell's A1 text by its cell field; null derived = the row has no formula",
+      "z is the row's place in its sheet's run (0-based), not its row number",
+      "_row_number and _a1 are annotations for checking, not on the wire"
+    ]
+  },
+  "tier": "live",
+  "rev": 20,
+  "version": null,
+  "page": null,
+  "fonts": [],
+  "layouts": [],
+  "containers": [
+    {
+      "key": "@sheet:1",
+      "position": 1,
+      "title": "Budget",
+      "hidden": false,
+      "state": "visible",
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 18,
+      "derived": {
+        "merges": [
+          {
+            "start": {
+              "row": "@sheet:1/row:r1",
+              "row_off": 0,
+              "col": "@sheet:1/col:c1",
+              "col_off": 0
+            },
+            "end": {
+              "row": "@sheet:1/row:r1",
+              "row_off": 0,
+              "col": "@sheet:1/col:c6",
+              "col_off": 0
+            },
+            "_a1": "A1:F1"
+          }
+        ],
+        "styles": {
+          "0": {
+            "bold": false,
+            "fill": null,
+            "numfmt": "General"
+          },
+          "1": {
+            "bold": true,
+            "fill": "#DDEBF7",
+            "numfmt": "General"
+          },
+          "2": {
+            "bold": true,
+            "fill": "#F2F2F2",
+            "numfmt": "General"
+          },
+          "3": {
+            "bold": false,
+            "fill": null,
+            "numfmt": "#,##0"
+          },
+          "4": {
+            "bold": true,
+            "fill": "#FFF2CC",
+            "numfmt": "#,##0"
+          }
+        }
+      }
+    },
+    {
+      "key": "@sheet:2",
+      "position": 2,
+      "title": "Rates",
+      "hidden": false,
+      "state": "visible",
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 5,
+      "derived": {
+        "merges": [],
+        "styles": {
+          "0": {
+            "bold": false,
+            "fill": null,
+            "numfmt": "General"
+          },
+          "2": {
+            "bold": true,
+            "fill": "#F2F2F2",
+            "numfmt": "General"
+          }
+        }
+      }
+    },
+    {
+      "key": "@sheet:3",
+      "position": 3,
+      "title": "Lists",
+      "hidden": true,
+      "state": "hidden",
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 5,
+      "derived": {
+        "merges": [],
+        "styles": {
+          "0": {
+            "bold": false,
+            "fill": null,
+            "numfmt": "General"
+          },
+          "2": {
+            "bold": true,
+            "fill": "#F2F2F2",
+            "numfmt": "General"
+          }
+        }
+      }
+    },
+    {
+      "key": "@sheet:4",
+      "position": 4,
+      "title": "Setup",
+      "hidden": true,
+      "state": "very_hidden",
+      "layout": null,
+      "render_hash": null,
+      "fonts": [],
+      "has_fields": [],
+      "unit_count": 1,
+      "derived": {
+        "merges": [],
+        "styles": {
+          "0": {
+            "bold": false,
+            "fill": null,
+            "numfmt": "General"
+          }
+        }
+      }
+    }
+  ],
+  "units": [
+    {
+      "key": "@sheet:1/row:r1",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 1
+    },
+    {
+      "key": "@sheet:1/row:r2",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 1,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 3
+    },
+    {
+      "key": "@sheet:1/row:r3",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 2,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C4+D4"
+        }
+      },
+      "_row_number": 4
+    },
+    {
+      "key": "@sheet:1/row:r4",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 3,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C5+D5"
+        }
+      },
+      "_row_number": 5
+    },
+    {
+      "key": "@sheet:1/row:r5",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 4,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C6+D6"
+        }
+      },
+      "_row_number": 6
+    },
+    {
+      "key": "@sheet:1/row:r6",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 5,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C7+D7"
+        }
+      },
+      "_row_number": 7
+    },
+    {
+      "key": "@sheet:1/row:r7",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 6,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C8+D8"
+        }
+      },
+      "_row_number": 8
+    },
+    {
+      "key": "@sheet:1/row:r8",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 7,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C9+D9"
+        }
+      },
+      "_row_number": 9
+    },
+    {
+      "key": "@sheet:1/row:r9",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 8,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C10+D10"
+        }
+      },
+      "_row_number": 10
+    },
+    {
+      "key": "@sheet:1/row:r10",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 9,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C11+D11"
+        }
+      },
+      "_row_number": 11
+    },
+    {
+      "key": "@sheet:1/row:r11",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 10,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C12+D12"
+        }
+      },
+      "_row_number": 12
+    },
+    {
+      "key": "@sheet:1/row:r12",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 11,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C13+D13"
+        }
+      },
+      "_row_number": 13
+    },
+    {
+      "key": "@sheet:1/row:r13",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 12,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C14+D14"
+        }
+      },
+      "_row_number": 14
+    },
+    {
+      "key": "@sheet:1/row:r14",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 13,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=C15+D15"
+        }
+      },
+      "_row_number": 15
+    },
+    {
+      "key": "@sheet:1/row:r15",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 14,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": true,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c3": "=Rates!B3"
+        }
+      },
+      "_row_number": 17
+    },
+    {
+      "key": "@sheet:1/row:r16",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 15,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c3": "=SUM(C4:C15)",
+          "c4": "=SUM(D4:D15)",
+          "c5": "=SUM(E4:E15)"
+        }
+      },
+      "_row_number": 18
+    },
+    {
+      "key": "@sheet:1/row:r17",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 16,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": {
+        "a1": {
+          "c5": "=E18*C17"
+        }
+      },
+      "_row_number": 19
+    },
+    {
+      "key": "@sheet:1/row:r18",
+      "container": "@sheet:1",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 17,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 20
+    },
+    {
+      "key": "@sheet:2/row:r1",
+      "container": "@sheet:2",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 1
+    },
+    {
+      "key": "@sheet:2/row:r2",
+      "container": "@sheet:2",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 1,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 2
+    },
+    {
+      "key": "@sheet:2/row:r3",
+      "container": "@sheet:2",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 2,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 3
+    },
+    {
+      "key": "@sheet:2/row:r4",
+      "container": "@sheet:2",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 3,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 4
+    },
+    {
+      "key": "@sheet:2/row:r5",
+      "container": "@sheet:2",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 4,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 5
+    },
+    {
+      "key": "@sheet:3/row:r1",
+      "container": "@sheet:3",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 1
+    },
+    {
+      "key": "@sheet:3/row:r2",
+      "container": "@sheet:3",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 1,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 2
+    },
+    {
+      "key": "@sheet:3/row:r3",
+      "container": "@sheet:3",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 2,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 3
+    },
+    {
+      "key": "@sheet:3/row:r4",
+      "container": "@sheet:3",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 3,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 4
+    },
+    {
+      "key": "@sheet:3/row:r5",
+      "container": "@sheet:3",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 4,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 5
+    },
+    {
+      "key": "@sheet:4/row:r1",
+      "container": "@sheet:4",
+      "parent": null,
+      "live": true,
+      "kind": "row",
+      "name": "",
+      "name_is_generic": null,
+      "alt": null,
+      "z": 0,
+      "bbox": null,
+      "bbox_inherited": false,
+      "rot": 0,
+      "flip": {
+        "h": false,
+        "v": false
+      },
+      "approx_box": false,
+      "text": null,
+      "fields": [],
+      "hidden": false,
+      "placeholder": null,
+      "editable_text": null,
+      "derived": null,
+      "_row_number": 1
+    }
+  ]
+}

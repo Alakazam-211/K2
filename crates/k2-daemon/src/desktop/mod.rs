@@ -17,6 +17,7 @@ pub mod launch_agent;
 pub mod managed;
 pub mod routes;
 pub mod stream;
+pub mod virtual_desktop;
 
 /// The `/boot-status` feature key: the routes exist (clients show + →
 /// Desktop and the off card with it).

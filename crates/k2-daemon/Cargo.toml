@@ -70,6 +70,12 @@ sew-test-pins-upgrade = ["sew-test-pins", "k2-root-proto/sew-test-pins-upgrade"]
 # TEST ONLY (V22): the real pins plus Sew's next test build as the pin,
 # so a box on the real pin upgrades to it. Build the helper with it too.
 sew-test-pin-next = ["sew-test-pins", "k2-root-proto/sew-test-pin-next"]
+# TEST ONLY (prd-linux-virtual-desktop-v1 L3): the virtual desktop tests
+# that start a real Xvfb (Linux, `Xvfb` installed). `xvfb-systemd-tests`
+# adds the freeze/thaw test, which needs a systemd user manager (a fleet box
+# as its K2 user, not a compute job).
+xvfb-tests = []
+xvfb-systemd-tests = ["xvfb-tests"]
 
 [dependencies]
 # Sew chat (S30 K15): the real `SewChat` backend talks to Sew's mgmt

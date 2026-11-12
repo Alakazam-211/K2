@@ -37,16 +37,27 @@ pub mod policy;
 pub mod store;
 pub mod ticket;
 pub mod viewers;
+pub mod virtual_desktop;
 pub mod wire;
 
-/// The one desktop of v1: the console user's session.
+/// A machine's real screen session (every Mac; a Linux box someone is
+/// logged into). Linux servers with no screen also have virtual desktops
+/// ([`virtual_desktop`]).
 pub const CONSOLE: &str = "console";
+
+/// The `/boot-status` key of daemons that start virtual desktops (Linux
+/// only, LD-16): clients show Set up, Start and the picker with it.
+pub const VIRTUAL_FEATURE_KEY: &str = "virtual-desktop-v1";
 
 /// The feature key in `/boot-status` (clients show + → Desktop with it).
 pub const FEATURE_KEY: &str = "remote-desktop-v1";
 
 /// The enable card (S14), returned by `enable` and shown before Turn on.
 pub const ENABLE_CARD: &str = "Anyone you allow can see and do anything you can on this computer, including your mail, files and passwords. Owners and Admins can open it; Members only with your grant, and only to watch. It stays on until an Owner turns it off. On Linux, K2 can't hide password apps from the picture, and notifications (2FA codes too) show in it.";
+
+/// The enable card for the `virtual` switch (LD-18): every virtual
+/// desktop on the server, the shared one and each agent's.
+pub const VIRTUAL_ENABLE_CARD: &str = "K2 will start a desktop on this server. Anyone you allow can see and use whatever is opened on it. Programs on it run as this server's K2 user. It stays on until an Owner turns it off.";
 
 /// The machine's state as the deskd side reports it (`status.state`, the
 /// stream's `state`). The tab adds `off`, `not_allowed` and `same_machine`
@@ -143,5 +154,13 @@ mod tests {
         for needle in ["anything you can", "passwords", "until an Owner turns it off", "only to watch"] {
             assert!(ENABLE_CARD.contains(needle), "{needle}");
         }
+    }
+
+    #[test]
+    fn the_virtual_enable_card_is_honest() {
+        for needle in ["start a desktop on this server", "Anyone you allow can see and use", "run as this server's K2 user", "until an Owner turns it off"] {
+            assert!(VIRTUAL_ENABLE_CARD.contains(needle), "{needle}");
+        }
+        assert_ne!(VIRTUAL_ENABLE_CARD, ENABLE_CARD);
     }
 }

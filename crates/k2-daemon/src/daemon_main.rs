@@ -2044,6 +2044,8 @@ async fn async_main() {
     // Remote desktop (D6): the routes and the stream talk to the real
     // K2 Screen (k2-deskd); a switch left on starts it again.
     crate::desktop::managed::boot();
+    // Virtual desktops (Linux): take back those left running; never starts one.
+    crate::desktop::virtual_desktop::boot();
 
     // Sew S27 grant hook: delivers `tool_outbox` rows (written in the same
     // skin.db transaction as each chat grant change) to Sew's mgmt socket,

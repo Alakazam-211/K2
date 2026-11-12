@@ -343,13 +343,21 @@ fi
 if [ -f "${K2_HOME}/heartbeat.port" ]; then
     PORT="${PORT:-$(cat "${K2_HOME}/heartbeat.port" 2>/dev/null)}"
 fi
-if [ -r "${K2_HOME}/heartbeat.token" ]; then
+# A K2 virtual desktop (prd-linux-virtual-desktop-v1 LD-10) runs every
+# program with K2_NO_OWNER_FALLBACK=1: a terminal opened there has no
+# session passport, and must never act as this server's owner by reading
+# the owner token files. The connection gate below says why.
+_k2_no_owner_fallback=""
+if [ "${K2_NO_OWNER_FALLBACK:-}" = "1" ]; then
+    _k2_no_owner_fallback=1
+fi
+if [ -z "$_k2_no_owner_fallback" ] && [ -r "${K2_HOME}/heartbeat.token" ]; then
     DISK_OWNER_TOKEN="$(cat "${K2_HOME}/heartbeat.token" 2>/dev/null)"
 fi
 # Fresh headless boxes always get daemon.token; heartbeat.token is the
 # same secret written alongside. Prefer heartbeat (CLI convention) but
 # accept daemon.token so external owner ops work when only one is present.
-if [ -z "$DISK_OWNER_TOKEN" ] && [ -r "${K2_HOME}/daemon.token" ]; then
+if [ -z "$_k2_no_owner_fallback" ] && [ -z "$DISK_OWNER_TOKEN" ] && [ -r "${K2_HOME}/daemon.token" ]; then
     DISK_OWNER_TOKEN="$(cat "${K2_HOME}/daemon.token" 2>/dev/null)"
 fi
 if [ -z "$TOKEN" ] && [ -n "$DISK_OWNER_TOKEN" ]; then
@@ -1068,6 +1076,18 @@ case "${1:-}" in
         ;;
 esac
 
+# The virtual-desktop guard (LD-10): with no passport, only the pages that
+# never reach the daemon run; everything else (k2 daemon … too, which reads
+# the owner token itself) is refused, saying why.
+_k2_offline_verb=""
+case "${1:-}" in ""|study|help|--help|-h|--schema|version|--version) _k2_offline_verb=1 ;; esac
+for _a in "$@"; do case "$_a" in -h|--help) _k2_offline_verb=1 ;; esac; done
+if [ -n "$_k2_no_owner_fallback" ] && [ -z "$TOKEN" ] && [ -z "$_k2_offline_verb" ]; then
+    echo "Error: k2 won't act as this server's owner here." >&2
+    echo "This program runs on a K2 virtual desktop (K2_NO_OWNER_FALLBACK=1) and has no session passport, so k2 doesn't read the owner token (~/.k2/daemon.token)." >&2
+    echo "Use k2 from a K2 terminal tab, or from your own device signed in to this server." >&2
+    exit 3
+fi
 if [ "$_skip_conn_gate" != "1" ] && { [ -z "$PORT" ] || [ -z "$TOKEN" ]; }; then
     echo "Error: Cannot connect to K2." >&2
     echo "Either run this from a K2 terminal, or ensure K2 is running." >&2

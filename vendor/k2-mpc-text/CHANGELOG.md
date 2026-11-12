@@ -1,8 +1,37 @@
 # Changelog
 
+## v0.2.19 (2026-11-11): pairs with kit v0.14.0
+
+**Requires `k2-mpc-base` v0.14.0** (its `Pack::check_merged`).
+
+- **Jupyter notebooks (`.ipynb`) open as JSON text** (the `config` family, as `.json`), no
+  longer as a file of unknown type, until a notebook pack serves them.
+- **A JSON file or a notebook is never left broken by a merge.** Before, a person's save
+  merged over an agent's change that wasn't yet written back could leave a `.json` or
+  `.ipynb` file that was no longer JSON (both add a key at the end of one object, or one
+  inserts a notebook cell while the other deletes the last one), and a notebook left like that
+  won't open in Jupyter. Now, for `.json`, `.ipynb`, `.geojson` and `.webmanifest` (the new
+  `json` group, `Syntax::Json`), the pack checks the merged text with `serde_json`
+  (`Pack::check_merged`). When two valid texts would merge into invalid JSON, the person's
+  save is kept whole, and the agent's text stays in the version before the save, which the
+  agent's note names. An agent's `write --base` that would merge into invalid JSON is
+  refused as a conflict, nothing applied. JSONC and JSON5 stay unguarded (not strict JSON).
+  The two reproduction rows in `tests/session.rs` now pass, and a plant that skips the check
+  turns each red by name.
+- **Pairs with kit v0.14.0**, the first kit tag with `Pack::check_merged`. Its other additions
+  (`Host::conflict_copy_name`, person-writer reuse, off by default) need nothing from this
+  pack, and its tier-0 change (an app's save over an agent's write keeps both) is for blob
+  files, not text docs. `serde_json` is now a dependency (MIT OR Apache-2.0; it and its own
+  dependencies were already in the lock through the kit). No store or doc format change: a doc
+  opens in v0.2.18 as before (N-1).
+- `scripts/private-allow.txt`'s header says what `scripts/check-private.sh` skips (only the
+  allowlist itself). v0.2.18's pairing line names the kit tag alone.
+- `Cargo.lock`: k2-mpc-text 0.2.19 and k2-mpc-base 0.14.0 (the kit's crate version), and
+  `serde_json` in this crate's dependencies; the crate version.
+
 ## v0.2.18 (2026-11-10): pairs with kit v0.13.1
 
-**Requires `k2-mpc-base` v0.13.1** (the tag at its public cut 6ef688e4). This pack's code and
+**Requires `k2-mpc-base` v0.13.1**. This pack's code and
 tests are unchanged from v0.2.17.
 
 - Pairs with kit v0.13.1 (no kit API change since v0.13.0).
@@ -10,7 +39,7 @@ tests are unchanged from v0.2.17.
   are no longer in the tree. It reads them from `MPC_PRIVATE_PATTERNS`, else the file
   `MPC_PRIVATE_PATTERNS_FILE` names, else `~/.config/k2-mpc/private-patterns.txt`, and with
   none it exits 2. `scripts/private-allow.txt` works as before.
-- `Cargo.lock`: k2-mpc-base 0.13.1 (only the kit's crate version moves; no `mpce` entry); the
+- `Cargo.lock`: k2-mpc-base 0.13.1 (only the kit's crate version moves); the
   crate version.
 
 ## v0.2.17 (2026-11-10): pairs with kit v0.13.0

@@ -123,19 +123,31 @@ text under the strict guard, so the set a grid pack takes over is exactly `.csv`
 | logs | text | 1 MiB | LF | `.log` | — |
 | code | code | 4 MiB | LF | `.c` `.h` `.cc` `.cpp` `.cxx` `.c++` `.hpp` `.hh` `.hxx` `.h++` `.ino` `.m` `.mm` `.rs` `.go` `.zig` `.nim` `.d` `.swift` `.cu` `.cuh` `.java` `.kt` `.kts` `.scala` `.sc` `.groovy` `.gradle` `.clj` `.cljs` `.cljc` `.edn` `.cs` `.csx` `.fs` `.fsi` `.fsx` `.vb` `.py` `.pyi` `.pyw` `.rb` `.rake` `.gemspec` `.pl` `.pm` `.php` `.lua` `.r` `.jl` `.tcl` `.awk` `.dart` `.js` `.mjs` `.cjs` `.jsx` `.ts` `.mts` `.cts` `.tsx` `.vue` `.svelte` `.astro` `.coffee` `.sh` `.bash` `.zsh` `.fish` `.ksh` `.csh` `.tcsh` `.ps1` `.psm1` `.psd1` `.hs` `.lhs` `.elm` `.ml` `.mli` `.ex` `.exs` `.erl` `.hrl` `.purs` `.rkt` `.scm` `.ss` `.lisp` `.el` `.css` `.scss` `.sass` `.less` `.styl` `.hbs` `.handlebars` `.mustache` `.jinja` `.jinja2` `.j2` `.ejs` `.erb` `.liquid` `.twig` `.njk` `.pug` `.haml` `.sql` `.graphql` `.gql` `.proto` `.thrift` `.prisma` `.cmake` `.mk` `.mak` `.make` `.bazel` `.bzl` `.nix` `.tf` `.tfvars` `.hcl` `.dockerfile` `.containerfile` `.v` `.sv` `.svh` `.vhd` `.vhdl` `.asm` `.s` `.wat` `.glsl` `.vert` `.frag` `.hlsl` `.wgsl` `.metal` `.f` `.f90` `.f95` `.for` `.pas` `.ada` `.adb` `.ads` `.cob` `.cbl` `.sol` `.vim` `.diff` `.patch` | `Makefile` `GNUmakefile` `Dockerfile` `Containerfile` `Jenkinsfile` `Vagrantfile` `Gemfile` `Rakefile` `Podfile` `Brewfile` `Fastfile` `Procfile` `Justfile` `Tiltfile` `Snakefile` `Earthfile` `BUILD` `WORKSPACE` `PKGBUILD` `.bashrc` `.bash_profile` `.bash_logout` `.zshrc` `.zprofile` `.zshenv` `.profile` `.kshrc` `.vimrc` `.gvimrc` `.envrc` `Dockerfile.*` `Containerfile.*` `Makefile.*` |
 | code-windows | code | 4 MiB | CRLF | `.bat` `.cmd` | — |
-| config | config | 4 MiB | LF | `.json` `.jsonc` `.json5` `.jsonl` `.ndjson` `.geojson` `.webmanifest` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.cnf` `.properties` `.env` `.lock` `.plist` | `.gitignore` `.gitattributes` `.gitmodules` `.gitconfig` `.mailmap` `.editorconfig` `.npmrc` `.yarnrc` `.nvmrc` `.node-version` `.python-version` `.ruby-version` `.tool-versions` `.prettierrc` `.eslintrc` `.babelrc` `.stylelintrc` `.dockerignore` `.npmignore` `.eslintignore` `.prettierignore` `.hgignore` `.env` `.flake8` `.pylintrc` `.clang-format` `.clang-tidy` `.htaccess` `.curlrc` `.wgetrc` `.inputrc` `CODEOWNERS` `Caddyfile` `go.mod` `go.sum` `go.work` `Pipfile` `.env.*` |
+| json | config | 4 MiB | LF | `.json` `.geojson` `.webmanifest` `.ipynb` | — |
+| config | config | 4 MiB | LF | `.jsonc` `.json5` `.jsonl` `.ndjson` `.yaml` `.yml` `.toml` `.ini` `.cfg` `.conf` `.cnf` `.properties` `.env` `.lock` `.plist` | `.gitignore` `.gitattributes` `.gitmodules` `.gitconfig` `.mailmap` `.editorconfig` `.npmrc` `.yarnrc` `.nvmrc` `.node-version` `.python-version` `.ruby-version` `.tool-versions` `.prettierrc` `.eslintrc` `.babelrc` `.stylelintrc` `.dockerignore` `.npmignore` `.eslintignore` `.prettierignore` `.hgignore` `.env` `.flake8` `.pylintrc` `.clang-format` `.clang-tidy` `.htaccess` `.curlrc` `.wgetrc` `.inputrc` `CODEOWNERS` `Caddyfile` `go.mod` `go.sum` `go.work` `Pipfile` `.env.*` |
 | markup | markup | 4 MiB | LF | `.html` `.htm` `.xhtml` `.xml` `.xsl` `.xslt` `.xsd` `.dtd` `.svg` `.rss` `.atom` `.wsdl` `.xaml` `.csproj` `.fsproj` `.vbproj` `.props` `.targets` `.resx` `.tex` `.latex` `.sty` `.cls` `.bib` `.rst` `.adoc` `.asciidoc` `.org` `.textile` `.pod` | — |
 | diagram | diagram | 4 MiB | LF | `.mermaid` `.mmd` `.puml` `.plantuml` `.iuml` `.dot` `.gv` `.drawio` `.dio` | — |
 | csv | csv-as-text | 4 MiB | LF | `.csv` `.tsv` | — |
 
 **Unknown names:** `text` family, 4 MiB, LF, strict control-byte guard.
 
+**Merges that must stay JSON (the `json` group):** a whole-line merge of two saves can leave
+JSON that no longer parses, because a comma or a bracket on one line depends on the lines
+around it. For the `json` group the pack checks a merged text with `serde_json` (strict JSON,
+RFC 8259). When a merge of two valid texts isn't JSON, the kit takes a person's save whole
+(the live text it replaces stays in the version before the save, and the removal note names
+that version), and refuses an agent's `write --base` as a conflict (it re-reads and writes
+again). JSONC and JSON5 (`.jsonc`, `.json5`, and dotfiles such as `.eslintrc`) aren't strict
+JSON, and no parser for them is among the dependencies, so they stay unguarded. JSON Lines
+(`.jsonl`, `.ndjson`) merge as whole lines, so each line stays the value someone wrote.
+
 **Not text (opened some other way, e.g. tier 0):**
 `.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.ico` `.icns` `.heic` `.heif` `.avif` `.tif` `.tiff` `.psd` `.svgz` `.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac` `.opus` `.mp4` `.webm` `.mov` `.mkv` `.avi` `.m4v` `.pdf` `.doc` `.docx` `.xls` `.xlsx` `.ppt` `.pptx` `.odt` `.ods` `.odp` `.key` `.pages` `.numbers` `.epub` `.zip` `.gz` `.tgz` `.bz2` `.xz` `.zst` `.7z` `.rar` `.tar` `.jar` `.war` `.apk` `.ipa` `.dmg` `.iso` `.k5board` `.wasm` `.bin` `.exe` `.dll` `.so` `.dylib` `.class` `.o` `.a` `.lib` `.pyc` `.pyo` `.pdb` `.woff` `.woff2` `.ttf` `.otf` `.eot` `.sqlite` `.sqlite3` `.db` `.glb` `.3mf` `.blend`
 
-Files another pack serves (`.md` and `.markdown` for Markdown; later `.ipynb`, ...) aren't
-listed here: a host asks the more specific pack first, and this pack is the fallback. `.csv`
-and `.tsv` are listed until a grid pack serves them.
+Files another pack serves (`.md` and `.markdown` for Markdown, ...) aren't listed here: a
+host asks the more specific pack first, and this pack is the fallback. `.csv` and `.tsv` are
+listed until a grid pack serves them, and `.ipynb` (Jupyter notebooks, which are JSON) until
+a notebook pack does.
 
 To add a type, add its extension or name to a group, or add a group with other settings. Then
 add it to this table. The tests fail if the table and this README disagree, or if a key is

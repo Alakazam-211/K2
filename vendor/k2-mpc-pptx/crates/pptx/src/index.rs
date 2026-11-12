@@ -20,23 +20,43 @@
 //! EMU, its plain text (cut to the kit's limit, flagged `text_truncated`), a placeholder's type
 //! and index, alt text; the record digest is the shape's XML, and a picture's content digest
 //! its image's bytes. A slide's `creation_id` is a weak id. Nothing a node holds is styling.
+//!
+//! **The view items** (the kit's row format 2, from [`FORMAT`] 2): what the view index of a
+//! version draws that the fields above don't say, worked out here, where the file is parsed
+//! (a host's index worker), by the same code the live tier's derive hook uses
+//! ([`crate::view::read_open`] and [`crate::view::place`], through
+//! [`crate::live::view_derive`]), so the blob tier's view and the live one agree by
+//! construction. The deck's fonts; per slide its render digest (keyed by the kit), its fonts
+//! and field kinds; per shape its box on the page (a group's children composed, a placeholder's
+//! inherited box), field kinds, the text a view shows (a table's rows tab-separated, a slide
+//! number at the slide's position) and whether `shape text` can set it. A shape with no id, or
+//! with one another shape on the slide also has, gets none (it shows fewer details, never
+//! another shape's), and so does a deck the view can't read.
 
+use std::collections::HashMap;
 use std::io::Read;
 
 use k2_mpc_base::index::{
     cut_text, Digest, DraftNode, IndexDraft, IndexLimits, IndexRefused, IndexVerbs, NodeRect,
-    INDEX_ATTR_VALUE_MAX, INDEX_NAME_MAX,
+    NodeView, ViewGeom, INDEX_ATTR_VALUE_MAX, INDEX_FONTS_MAX, INDEX_NAME_MAX,
 };
+use k2_mpc_base::view_index as kv;
 
 use crate::deck::{rels_of, target_of, Pptx};
+use crate::live::model::TextEdit;
 use crate::slide::{self, placeholder_text, ShapeInfo};
+use crate::view;
 use crate::xmlx::{cut, parse_xml};
 use crate::{Decline, Limits};
 
 /// The pack's name in the index's key.
 pub const PACK: &str = "pptx";
 /// The reader's output format: bump when what a file reads to changes, and the kit recomputes.
-pub const FORMAT: u32 = 1;
+/// 2: the view items (the kit's row format 2).
+pub const FORMAT: u32 = 2;
+/// The format before the view items, whose rows (the same nodes) format 2 reads with the items
+/// absent until a version is indexed again ([`k2_mpc_base::index::IndexSpec::with_older_format`]).
+pub const OLDER_FORMAT: u32 = 1;
 /// The index verbs' names.
 pub const VERBS: IndexVerbs = IndexVerbs::new(
     "shape list",
@@ -227,7 +247,123 @@ pub fn draft(p: &Pptx<'_>, limits: &IndexLimits, pl: &Limits) -> Result<IndexDra
             b.push(n, 1)?;
         }
     }
-    Ok(b.draft)
+    let mut d = b.draft;
+    add_view_items(p, &mut d, limits, pl);
+    Ok(d)
+}
+
+/// The kit's word for a shape's text edit.
+fn editable(e: TextEdit) -> kv::EditableText {
+    match e {
+        TextEdit::Plain => kv::EditableText::Plain,
+        TextEdit::Formatted => kv::EditableText::Formatted,
+        TextEdit::Never => kv::EditableText::Never,
+    }
+}
+
+/// A placed shape's view items: its box, field kinds, text (cut to the index's text limit) and
+/// whether `shape text` can set it (`edit`, a top-level shape's; a group's child never).
+fn unit_view(u: &view::Unit, edit: Option<TextEdit>, limits: &IndexLimits) -> NodeView {
+    let mut v = NodeView::new();
+    v.geom = u.bbox.map(|b| ViewGeom {
+        bbox: kv::Bbox {
+            x: b.x,
+            y: b.y,
+            w: b.w,
+            h: b.h,
+        },
+        rot: u.rot,
+        flip: kv::Flip {
+            h: u.flip_h,
+            v: u.flip_v,
+        },
+        inherited: u.bbox_inherited,
+        approx: u.approx_box,
+    });
+    v.editable_text = match u.live {
+        true => edit.map(editable),
+        false => Some(kv::EditableText::Never),
+    };
+    v.fields = u.fields.iter().map(|f| (*f).to_owned()).collect();
+    if let Some(t) = &u.text {
+        let (kept, was_cut) = cut_text(&t.summary, limits.max_text_bytes);
+        v.text = Some(kept.to_owned());
+        v.text_truncated = t.truncated || was_cut;
+    }
+    v
+}
+
+/// The view items of an open deck on its draft's nodes, by key, from the pack's view of it
+/// (the module's **view items**). Nothing is added when the view can't read the deck or its
+/// fonts don't fit the kit's limits; a key two nodes (or two shapes) share gets none.
+fn add_view_items(p: &Pptx<'_>, d: &mut IndexDraft, limits: &IndexLimits, pl: &Limits) {
+    let Ok(read) = view::read_open(p, pl) else {
+        return;
+    };
+    let vi = read.index();
+    if vi.fonts.len() > INDEX_FONTS_MAX
+        || vi
+            .fonts
+            .iter()
+            .any(|f| f.family.is_empty() || f.family.len() > INDEX_NAME_MAX)
+    {
+        return;
+    }
+    let mut edit: HashMap<String, TextEdit> = HashMap::new();
+    for s in &read.slides {
+        for r in &s.shapes {
+            if let Some(id) = r.id {
+                edit.insert(format!("@sld:{}/sp:{id}", s.sid), r.edit);
+            }
+        }
+    }
+    // each key once: a shared one names no single shape
+    let mut units: HashMap<&str, Option<&view::Unit>> = HashMap::new();
+    for u in &vi.units {
+        if let Some(k) = u.key.as_deref() {
+            units.entry(k).and_modify(|e| *e = None).or_insert(Some(u));
+        }
+    }
+    let mut slides: HashMap<String, Option<&view::Container>> = HashMap::new();
+    for c in &vi.containers {
+        slides
+            .entry(c.key.clone())
+            .and_modify(|e| *e = None)
+            .or_insert(Some(c));
+    }
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    for n in &d.nodes {
+        if let Some(k) = &n.key {
+            *seen.entry(k.clone()).or_default() += 1;
+        }
+    }
+    for n in &mut d.nodes {
+        let Some(k) = n.key.as_deref() else { continue };
+        if seen.get(k) != Some(&1) {
+            continue;
+        }
+        if n.kind == "slide" {
+            if let Some(Some(c)) = slides.get(k) {
+                let mut v = NodeView::new();
+                v.fonts = c.fonts.iter().map(|i| *i as u32).collect();
+                v.fields = c.has_fields.iter().map(|f| (*f).to_owned()).collect();
+                n.view = Some(v);
+                n.render = Some(c.render_hash);
+            }
+        } else if let Some(Some(u)) = units.get(k) {
+            n.view = Some(unit_view(u, edit.get(k).copied(), limits));
+        }
+    }
+    d.fonts = vi
+        .fonts
+        .iter()
+        .map(|f| kv::FontUse {
+            family: f.family.clone(),
+            script: f.script.to_owned(),
+            from: f.from.to_owned(),
+            embedded: f.embedded,
+        })
+        .collect();
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -6,8 +6,9 @@ use std::io::Read;
 
 use k2_mpc_base::index::{IndexDraft, IndexLimits, IndexRefused, IndexSpec};
 use k2_mpc_base::session::{BlobMerge, BlobPack};
+use k2_mpc_base::view_index::{ViewIndex, ViewSchema, ViewSource};
 
-use crate::index::{index_pptx, FORMAT, PACK, VERBS};
+use crate::index::{index_pptx, FORMAT, OLDER_FORMAT, PACK, VERBS};
 use crate::merge::{merge3, Conflicts, Outcome};
 use crate::mutant;
 use crate::Limits;
@@ -98,8 +99,10 @@ impl BlobPack for PptxPack {
         self.merge3_since(base, ours, theirs, Since::KitMayHaveWritten)
     }
 
+    /// Format 2 carries the view items, and reads format 1's rows (the same nodes) until a
+    /// version is indexed again ([`crate::index::FORMAT`]).
     fn index_spec(&self) -> Option<IndexSpec> {
-        Some(IndexSpec::new(PACK, FORMAT, &VERBS))
+        Some(IndexSpec::new(PACK, FORMAT, &VERBS).with_older_format(OLDER_FORMAT))
     }
 
     fn index(
@@ -109,5 +112,15 @@ impl BlobPack for PptxPack {
         limits: &IndexLimits,
     ) -> Result<IndexDraft, IndexRefused> {
         index_pptx(src, size, limits, &self.limits)
+    }
+
+    /// The deck's view schema ([`crate::live::view_schema::VIEW`]), with its mapping of the
+    /// structure index: the kit's view index on the blob tier.
+    fn view_schema(&self) -> Option<ViewSchema> {
+        Some(crate::live::view_schema::VIEW)
+    }
+
+    fn view_derive(&self, source: ViewSource<'_>, index: &mut ViewIndex) {
+        crate::live::view_schema::derive(source, index);
     }
 }

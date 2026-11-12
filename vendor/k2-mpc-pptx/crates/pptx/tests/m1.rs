@@ -2,7 +2,9 @@
 //! 2,500 shapes (50 slides of 50 text boxes), through the kit's session; then the kit's
 //! memory estimate and the write-back's time (the one rendering per sync point, through the
 //! carrier hook K1); then one-element list changes, `shape add`, `shape order` and `shape
-//! delete`, p50 and p99 of the verb alone (the deck ends with the shapes it started with). A
+//! delete`, p50 and p99 of the verb alone (the deck ends with the shapes it started with); and
+//! the view index with the carrier's items (the first read, unchanged reads, reads after a
+//! move). A
 //! measurement, not a row: run it on a node in a release build,
 //! `cargo test --release -p k2-mpc-pptx --test m1 -- --ignored --nocapture`; `M1_SLIDES=N`
 //! measures a deck of N slides of 50 text boxes instead. It feeds the keyed limit (25,000
@@ -190,6 +192,47 @@ fn m1_heap_verb_p99_and_slide_show() {
         "M1: slide show (50 shapes), 100 calls: p50 {:.3} ms, p99 {:.3} ms",
         pct(&mut show, 0.5),
         pct(&mut show, 0.99)
+    );
+    // the view index with the carrier's items: the first read decodes the carrier, an
+    // unchanged read is the kept index, a read after a change builds it from the kept decode
+    let t = Instant::now();
+    s.view_index(a)
+        .expect("the view index")
+        .expect("a view schema");
+    let first_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let mut kept = Vec::new();
+    for _ in 0..100 {
+        let t = Instant::now();
+        s.view_index(a).expect("the view index");
+        kept.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    let mut rebuilt = Vec::new();
+    for i in 0..50u32 {
+        let sid = 256 + (i * 5) % n_slides;
+        let v = run(&s, a, &["slide", "list", "--limit", "1"])
+            .expect("a read")
+            .version;
+        let call = args(&[
+            "shape",
+            "move",
+            &format!("@sld:{sid}/sp:2"),
+            "--y",
+            &(3_000 + i * 10).to_string(),
+            "--base",
+            &v.to_string(),
+        ]);
+        let o = s.run_tool(a, SHAPES, &call, b"").expect("the move");
+        assert_eq!(o.exit, 0, "{}", String::from_utf8_lossy(&o.stdout));
+        let t = Instant::now();
+        s.view_index(a).expect("the view index");
+        rebuilt.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!(
+        "M1: view index (with the carrier's items): the first read (the carrier decoded) {first_ms:.1} ms; 100 unchanged reads (kept) p50 {:.3} ms, p99 {:.3} ms; 50 reads each after a move (built from the kept decode) p50 {:.1} ms, p99 {:.1} ms",
+        pct(&mut kept, 0.5),
+        pct(&mut kept, 0.99),
+        pct(&mut rebuilt, 0.5),
+        pct(&mut rebuilt, 0.99)
     );
     let now = LIVE.load(Ordering::Relaxed);
     println!(

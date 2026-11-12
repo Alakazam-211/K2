@@ -4,7 +4,9 @@
 //! - [`model`]: the roots, their keys and fields, and the deck read into them;
 //! - [`splice`]: the live content written back into the file by splicing only what changed
 //!   ([`splice::encode_from`]);
-//! - [`verbs`]: the agent's verbs on the live store, with bounded reads.
+//! - [`verbs`]: the agent's verbs on the live store, with bounded reads;
+//! - [`view_schema`] and [`view_derive`]: the kit's view index of the deck, what the pack
+//!   derives on it, and what it reads from the carrier.
 //!
 //! **Keys are the file's own ids** (`s<sldId>`, `s<sldId>-<cNvPr>`), for imported elements and
 //! for ones a verb adds alike: a verb fixes the new element's file id inside its own change,
@@ -25,6 +27,8 @@
 pub mod model;
 pub mod splice;
 pub mod verbs;
+pub mod view_derive;
+pub mod view_schema;
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -32,6 +36,7 @@ use k2_mpc_base::doc::{Edit, Neutral};
 use k2_mpc_base::elem::{Anchor, Key, ListOp, MapOp, Value};
 use k2_mpc_base::schema::{Kind, Schema};
 use k2_mpc_base::session::{Declined, Pack, PackContent, PackError, Reconciled, View};
+use k2_mpc_base::view_index::{ViewIndex, ViewSchema, ViewSource};
 
 pub use model::{
     f, parse_key, prop, shape_key, slide_key, Geom, LiveDeck, LiveShape, LiveSlide, Ph, TextEdit,
@@ -234,6 +239,52 @@ impl Pack for PptxLive {
 
     fn wants_carrier(&self) -> bool {
         true
+    }
+
+    /// The deck's view schema ([`view_schema::VIEW`]): the kit builds the view index from it.
+    fn view_schema(&self) -> Option<ViewSchema> {
+        Some(view_schema::VIEW)
+    }
+
+    /// The slide titles, the layouts and the generic names ([`view_schema::derive`]), then
+    /// what only the carrier holds ([`view_derive::derive`]: a group's children, inherited
+    /// boxes, field kinds, fonts, render hashes; the live store wins).
+    fn view_derive(&self, source: ViewSource<'_>, index: &mut ViewIndex) {
+        view_schema::derive(source, index);
+        if let ViewSource::Live(state, Some(carrier)) = source {
+            view_derive::derive(state, carrier, index, &self.limits);
+        }
+    }
+
+    /// A change frame's derived values of the slides it touched, from the view index after it
+    /// ([`view_derive::watch_extras`]); the kit adds the render hashes that changed.
+    fn watch_extras(
+        &self,
+        ops: &[k2_mpc_base::elem::Applied],
+        _state: &k2_mpc_base::elem::KeyedState,
+        view: Option<k2_mpc_base::view_index::ViewChange<'_>>,
+    ) -> k2_mpc_base::session::WatchExtras {
+        view_derive::watch_extras(ops, view)
+    }
+
+    /// `@sld:<sldId>`, `@sld:<sldId>/sp:<cNvPr>` ([`view_schema::address_of`]).
+    fn address_of(&self, root: &str, key: &Key) -> String {
+        view_schema::address_of(root, key)
+    }
+
+    fn key_of(&self, root: &str, address: &str) -> Option<Key> {
+        view_schema::key_of(root, address)
+    }
+
+    /// A shape's slide by its key alone (`s256-7` is on `s256`): the kit's hint before it
+    /// checks the shape's `slide` field through the view schema.
+    fn container_of(&self, root: &str, key: &Key) -> Option<(String, Key)> {
+        match (root, parse_key(key.as_str())?) {
+            (SHAPES, (sid, Some(_))) | (SLIDES, (sid, None)) => {
+                Some((SLIDES.to_owned(), slide_key(sid)))
+            }
+            _ => None,
+        }
     }
 
     /// The live content spliced into `carrier`, the bytes the kit last read from the file or

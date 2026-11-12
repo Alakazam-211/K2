@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod hash_rows;
+pub mod kit_view_golden;
 pub mod live;
 pub mod live_rows;
 pub mod matrix;

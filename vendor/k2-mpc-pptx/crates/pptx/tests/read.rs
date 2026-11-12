@@ -309,7 +309,11 @@ fn the_pack_indexes_through_the_kit_interface() {
     let bytes = testgen::deck(&testgen::sample());
     let pack = PptxPack::default();
     let spec = pack.index_spec().expect("an index");
-    assert_eq!((spec.pack, spec.format), ("pptx", 1));
+    assert_eq!(
+        (spec.pack, spec.format, spec.older_format),
+        ("pptx", 2, Some(1)),
+        "format 2 (the view items) reads format 1's rows"
+    );
     let d = pack
         .index(&mut bytes.as_slice(), bytes.len() as u64, &ilimits())
         .expect("indexes");

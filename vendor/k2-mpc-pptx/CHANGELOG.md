@@ -1,5 +1,106 @@
 # Changelog
 
+## v0.1.3 (2026-11-12): pairs with kit v0.16.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.16.0** (its cut `d2245444`: the view schema, addresses and view
+index, the derive hook with the carrier, the keyed watch's `Pack::watch_extras` with its view
+argument, and the structure index's row format 2) and **`k2-mpc-ooxml` v0.1.1** (`k2-mpc-opc`
+0.1.1, unchanged), each checked out beside this repo. As for v0.1.2, the tag is a cut commit
+that leaves out the fuzz crate (`fuzz/`).
+
+- **The kit v0.16.0:** `Cargo.toml`'s comment and the README name the tag and its cut.
+  `Cargo.lock` and `fuzz/Cargo.lock`: k2-mpc-base 0.16.0 and the crate version 0.1.3 (only
+  those versions move; k2-mpc-opc stays 0.1.1).
+
+### The blob tier's view items (index format 2)
+
+**Requires the kit's row format 2** (kit v0.16.0: `NodeView`, `IndexSpec::with_older_format`).
+
+- **The index reader carries the view items** (`index::draft`): what the live tier reads from
+  the carrier, worked out where the file is parsed (the host's index worker), by the same code
+  the live tier's derive hook uses (`view::read_open`, `DeckRead::index`, `view::place`), so the
+  two tiers agree by construction: the deck's fonts; per slide its render digest (keyed by the
+  kit), its fonts and field kinds; per shape its box on the page (a group's children composed
+  through the group, a placeholder's box inherited from its layout or master), rotation, flips,
+  `approx_box`, field kinds, the text a view shows (a table's rows tab-separated, a slide
+  number at the slide's position) and `editable_text` (`plain`, `formatted` or `never`, as
+  `live::model::text_edit` gives the live store's `edit`; a group's child `never`). A shape with
+  no id, or with one another shape on its slide shares, gets none, and so does a deck the view
+  can't read: fewer details, never another shape's. `view::ShapeRead::edit` is new.
+- **Index format 2** (`index::FORMAT`), reading format 1's rows (`index::OLDER_FORMAT`, the same
+  nodes) with the items absent until a version is indexed again
+  (`IndexSpec::with_older_format`).
+- `tests/kit_view.rs`: the blob tier's index of the golden deck is the live tier's with no gap
+  listed (each tier's render hashes as the golden's labels, since each keys them under its own
+  key), and the draft's raw render digests are the pack's own view's. The gaps it listed before
+  (fonts, render hashes, field kinds, the 7 inherited boxes, `@sld:257/sp:5` and `sp:6`'s
+  composed boxes and rotations, `sp:7`'s flip, `editable_text` on all 12 units, the table's
+  text) are closed.
+- **What changes for K2:** re-indexing old versions is optional: the kit offers a job for a
+  version whose index is of format 1 (`BlobSession::index_job`), and until it runs those
+  versions show fewer details in the blob tier's view (no fonts, render hashes, inherited or
+  composed boxes, flips, field kinds or `editable_text`; a table's text one cell per line),
+  never wrong ones.
+
+### The deck's view schema, addresses and the live view from the carrier
+
+**Requires the kit's view index** (kit v0.16.0: `Pack::view_schema`, `Pack::address_of`,
+`k2_mpc_base::view_index`).
+
+- **The deck's view schema** (the rendering contract's gap 1): `live::view_schema::VIEW`, which
+  `PptxLive` and `PptxPack` both give the kit. Slides are the containers and shapes the units;
+  a shape's `slide` field holds its slide's `sid`; the page is the deck map's `cx` × `cy` in
+  EMU; `geom` is the one geometry field; `edit` gives `editable_text` (`1` plain, `fmt`
+  formatted, `0` never). On the blob tier the structure index's `slide` nodes are the
+  containers and every node under one but `notes` a unit. The kit builds a deck's `ViewIndex`
+  from it on both tiers.
+- **Addresses** (gap 2): `@sld:<sldId>` for a slide and `@sld:<sldId>/sp:<cNvPr>` for a shape
+  (`view_schema::address_of` and `key_of`, the structure index's own keys), so the live store's
+  keys never reach the wire. `PptxLive::container_of` names a shape's slide by its key, the kit's
+  hint before it checks the shape's `slide` field: a range on a shape, an agent's claim and its
+  verbs now focus the shape's slide (before, the kit's default focused the shape itself).
+- **What the pack derives on the kit's index** (`view_schema::derive`): each slide's title, the
+  layouts (from the deck map), `name_is_generic`, a placeholder with no type as `obj`.
+- `tests/kit_view.rs`: the kit's index of the golden deck against the contract's
+  `index-rev40.json`, field by field (transcribed in `tests/common/kit_view_golden.rs`), and the
+  blob tier's against the live tier's; any difference not listed fails.
+- **The live view reads the carrier** (`live::view_derive`; needs the kit's carrier hand-off,
+  `ViewSource::Live(state, carrier)`, and `Pack::watch_extras`' view argument, kit v0.16.0):
+  what only the file's bytes hold is set on the kit's live index,
+  so the live index of the golden deck is `index-rev40.json` with no gap left (render hashes
+  compared as the golden's labels). From the carrier, decoded once per carrier
+  (`ViewCarrier::decoded`, the pack's `view::read_open` and the live model of it):
+  - a group's children (`live: false`), placed by `view::place`, the code that places every
+    shape of the pack's own view of a file, from the group's **live** box: a group the store
+    moved or resized moves or scales them (contract Item 1, steps 1 to 8, the true centre);
+  - the box a placeholder inherits from its layout, else its master, while the store holds none
+    (`bbox_inherited`), a new slide's from its layout;
+  - field kinds (`fields`, `has_fields`), and a slide number's text at the slide's live
+    position;
+  - fonts, per slide and per deck: a shape's from the carrier while its text is the carrier's,
+    its style's and first run's format's once the store changed its text, the layout's
+    defaults for a shape the file doesn't hold yet;
+  - render hashes: the carrier's render digest for a slide the store didn't change as drawn
+    (the written bytes' digest, contract Q2), else a digest over the carrier's id and the slide
+    as the store holds it, which changes with every change to the drawing.
+  The rule: the live store wins, and the carrier supplies only what the store doesn't model.
+- **`view` in two phases:** `view::read_open` reads a file into a `DeckRead` (each shape as the
+  file holds it, each slide's render digest) and `DeckRead::index` places it (`view::place`);
+  `view::index` is the two, unchanged in what it gives.
+- **Change frames** (`PptxLive::watch_extras`): a keyed watch's `derived` holds, for each slide
+  a change touched, its derived values after it (title, fonts, field kinds, unit count) and its
+  units carrying anything derived (a group's children, an inherited box, field kinds); the kit
+  adds the render hashes that changed.
+- Rows in `tests/kit_view.rs`: N reads of an unchanged deck decode the carrier zero times (one
+  decode per carrier, `live::view_derive::take_decodes`, test-only); a group the agent moved
+  moves its children, unwritten and written, as the pack's view of the written file places
+  them; a change frame carries the touched slide's new render hash. The blob tier's gaps were
+  listed there: its structure index carried no fonts, render hashes, field kinds, inherited
+  boxes, composed children's boxes, flips, `edit`, and a table's text one cell per line (closed
+  by index format 2, above).
+- M1 prints the view index's reads: the first (the carrier decoded), 100 unchanged (kept) and
+  50 each after a move (built from the kept decode).
+
 ## v0.1.2 (2026-11-12): pairs with kit v0.15.1 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.15.1** (the carrier row's judge, `test_support::carrier_judge`,

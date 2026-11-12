@@ -486,7 +486,52 @@ elif verb == "view":
         die({"code": "unsupported",
              "hint": "this K2 server is too old for a project's view; update K2 on it"})
     want = os.environ.get("P_VIEW", "")
-    if not want:
+    target = os.environ.get("P_ARG_WORKSPACE", "")
+    if target:
+        # 0302: one member agent's own view (`members[].defaultView` is the
+        # view its tile opens in, `ownDefaultView` its own or null). The
+        # member is found here, by id, name, agent name or path (same rules
+        # as <workspace>), so a print and a set address the same agent.
+        members = show.get("members", [])
+        if members and any("ownDefaultView" not in m for m in members):
+            die({"code": "unsupported",
+                 "hint": "this K2 server is too old for one agent's own view; update K2 on it"})
+        low = target.lower()
+        found = None
+        for m in members:
+            if (m.get("workspaceId") == target
+                    or (m.get("name") or "").lower() == low
+                    or (m.get("agentName") or "").lower() == low
+                    or ("/" in target and m.get("path") and same_path(m["path"], target))):
+                found = m
+                break
+        if found is None:
+            die({"code": "not_a_member",
+                 "hint": "'%s' is not a member of %s (see: k2 project show %s)" % (target, name, name)})
+        agent = mname(found)
+        if not want:
+            cur = found.get("defaultView")
+            own = found.get("ownDefaultView")
+            if as_json:
+                print(dumps({"ok": True, "project": name, "agent": agent,
+                             "defaultView": cur, "ownDefaultView": own}))
+            else:
+                print("%s in %s opens in: %s (%s)" % (
+                    agent, name, cur, "its own view" if own else "the project's view"))
+        else:
+            d = call("POST", "/cli/project-group/set-member-default-view",
+                     body={"group": show.get("id"), "workspace": found.get("workspaceId"),
+                           "view": None if want == "default" else want})
+            cur = d.get("defaultView")
+            own = d.get("ownDefaultView")
+            if as_json:
+                print(dumps({"ok": True, "project": name, "agent": agent,
+                             "defaultView": cur, "ownDefaultView": own}))
+            elif own:
+                print("%s in %s now opens in: %s" % (agent, name, cur))
+            else:
+                print("%s in %s now follows the project's view: %s" % (agent, name, cur))
+    elif not want:
         cur = show.get("defaultView")
         if as_json:
             print(dumps({"ok": True, "project": name, "defaultView": cur}))
@@ -646,19 +691,22 @@ cmd_project_pin() {
 # thread or chatter (no split: a project tile shows one view).
 cmd_project_view() {
     if _wants_help "$@"; then cmd_help_project_view; exit 0; fi
-    local project="" view="" as_json=false lower
+    local project="" view="" agent="" as_json=false lower
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
+            --agent)
+                [ $# -ge 2 ] && [ -n "$2" ] || { _project_err "usage" "--agent requires an agent's name, folder path or workspace id"; exit 2; }
+                agent="$2"; shift 2 ;;
             -*)
-                _project_err "usage" "unknown flag '$1' — usage: k2 project view <project> [terminal|thread|chatter] [--json]"
+                _project_err "usage" "unknown flag '$1' — usage: k2 project view <project> [terminal|thread|chatter|default] [--agent <name>] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$project" ]; then project="$1"
                 elif [ -z "$view" ]; then
                     lower="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
                     case "$lower" in
-                        terminal|thread|chatter) view="$lower" ;;
+                        terminal|thread|chatter|default) view="$lower" ;;
                         split)
                             _project_err "usage" "split is not a project view: a project's agents open in terminal, thread or chatter"
                             exit 2 ;;
@@ -667,7 +715,7 @@ cmd_project_view() {
                             exit 2 ;;
                     esac
                 else
-                    _project_err "usage" "unexpected extra argument '$1' — usage: k2 project view <project> [terminal|thread|chatter] [--json]"
+                    _project_err "usage" "unexpected extra argument '$1' — usage: k2 project view <project> [terminal|thread|chatter|default] [--agent <name>] [--json]"
                     exit 2
                 fi
                 shift ;;
@@ -677,7 +725,11 @@ cmd_project_view() {
         _project_err "usage" "view requires a <project> (add terminal, thread or chatter to set it)"
         exit 2
     fi
-    local P_VERB="view" P_JSON="$as_json" P_ARG_PROJECT="$project" P_VIEW="$view"
+    if [ "$view" = "default" ] && [ -z "$agent" ]; then
+        _project_err "usage" "default clears one agent's own view, so it needs --agent <name>; a project's own view is terminal, thread or chatter"
+        exit 2
+    fi
+    local P_VERB="view" P_JSON="$as_json" P_ARG_PROJECT="$project" P_VIEW="$view" P_ARG_WORKSPACE="$agent"
     _project_py
 }
 
@@ -917,6 +969,7 @@ COMMANDS
   pin <project> [on|off]         Show it in everyone's Pinned section (default on)
   view <project> [<view>]        Print or set the view the project's agents
                                  open in: terminal, thread or chatter
+                                 (--agent <name>: one agent's own view)
   delete <project> --yes         Delete a project with its dashboards and chat
                                  (owner or admin only; agents can't)
   list                           List this server's projects (members, PoC, pinned)
@@ -1057,40 +1110,58 @@ EOF
 cmd_help_project_view() {
     cat <<'EOF'
 Print or set the view a project opens its agents in: terminal, thread or
-chatter. Every agent on the project's dashboards opens in this view. New
-projects start on thread.
+chatter. Every agent on the project's dashboards opens in this view, unless
+that agent has its own view (--agent, below). New projects start on thread.
 
 Anyone can switch one agent with the view picker in its bar. That switch
 is only for them, and it ends when they restart the app or when this
 default changes; the agent then goes back to the project's default view.
 
+With --agent <name>, the same for one agent of the project: its own view,
+for everyone, in place of the project's. The view `default` clears it, so
+the agent follows the project's view again.
+
 With no <view>, prints the current default, like this:
   sales opens agents in: thread
+  ada in sales opens in: terminal (its own view)
+  bo in sales opens in: thread (the project's view)
 Anyone may read it; no permission is needed. After a set it prints:
   sales now opens agents in: terminal
+  ada in sales now opens in: chatter
+  ada in sales now follows the project's view: thread
 
 Setting it is for the owner, an admin, or an agent with "Manage K2
-projects" on (on by default). A Member login gets exit 1 with code
-forbidden; an agent with the switch off gets exit 1 with code
-agent_permission_off.
+projects" on (on by default), for the project's view and one agent's alike.
+A Member login gets exit 1 with code forbidden; an agent with the switch
+off gets exit 1 with code agent_permission_off.
 
 USAGE
   k2 project view <project> [terminal|thread|chatter] [--json]
+  k2 project view <project> [terminal|thread|chatter|default] --agent <name> [--json]
 
 VIEWS
-  thread       The agent's Thread: you and the agent, like a text chat (default)
+  thread       The agent's Thread: you and the agent, like a text chat (new projects)
   terminal     The agent's live terminal
   chatter      Messages between this agent and other agents
+  default      Only with --agent: clear the agent's own view
   There is no split view for a project. Any other view (split, for one) is
   refused with exit 2, code usage, before the daemon is asked, so before
   any permission check.
 
 FLAGS
+  --agent <name>  One agent of the project: its name, folder path or
+               workspace id. One that is not a member gets exit 1 with code
+               not_a_member, before anything is set.
   --json       JSON output: {"ok":true,"project":"sales","defaultView":"thread"}
+               With --agent it adds "agent" and "ownDefaultView" (null when
+               the agent follows the project's view).
 
 EXAMPLES
   k2 project view sales
   k2 project view sales terminal
+  k2 project view sales --agent ada
+  k2 project view sales chatter --agent ada
+  k2 project view sales default --agent ada
 
 EXIT CODES
   0 ok · 1 refused · 2 bad usage (an unknown view) · 4 project not found or ambiguous

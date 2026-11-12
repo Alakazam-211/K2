@@ -11,6 +11,10 @@
 #      the switch off exits 1 and the error ends with the permission card's
 #      "Ask with: …" line (or "It can't be requested."), and an older daemon
 #      (no defaultView) is a clear error that never posts.
+#   3. `--agent <name>` (0302): print one member's view (its own or the
+#      project's), set it (the member's workspace id is posted), clear it
+#      with `default`; a non-member exits 1 not_a_member without posting;
+#      `default` without --agent exits 2 before any request.
 #
 # Hermetic: throwaway HOME, every K2_* session var unset, a python stub on
 # loopback. No real daemon, no ~/.k2, no keychain.
@@ -52,11 +56,18 @@ nodaemon() { env HOME="$HOME2" K2_PORT=1 K2_HOOK_TOKEN=test-token "$K2_CLI" "$@"
 pj_help="$(nodaemon project --help)"
 assert_contains "project help lists view" "$pj_help" "view <project> [<view>]        Print or set the view the project's agents"
 assert_contains "project help names the views" "$pj_help" "open in: terminal, thread or chatter"
+assert_contains "project help names --agent" "$pj_help" "(--agent <name>: one agent's own view)"
 assert_contains "project help: switch default" "$pj_help" "projects\" (on by default; Settings"
 assert_contains "project help: switch sentence is one line" "$pj_help" "code forbidden. Each workspace has that per-agent switch, \"Manage K2"
 assert_contains "project help: view is admin" "$pj_help" "setting the view its agents open in (\`view\`) are for the owner, an admin,"
 view_help="$(nodaemon project view --help)"
 assert_contains "view help usage" "$view_help" "k2 project view <project> [terminal|thread|chatter] [--json]"
+assert_contains "view help agent usage" "$view_help" "k2 project view <project> [terminal|thread|chatter|default] --agent <name> [--json]"
+assert_contains "view help: default clears" "$view_help" "default      Only with --agent: clear the agent's own view"
+assert_contains "view help: agent print example" "$view_help" "  ada in sales opens in: terminal (its own view)"
+assert_contains "view help: agent follow example" "$view_help" "  bo in sales opens in: thread (the project's view)"
+assert_contains "view help: agent set example" "$view_help" "  ada in sales now opens in: chatter"
+assert_contains "view help: agent clear example" "$view_help" "  ada in sales now follows the project's view: thread"
 assert_contains "view help default" "$view_help" "New
 projects start on thread."
 assert_contains "view help member" "$view_help" "A Member login gets exit 1 with code
@@ -72,7 +83,8 @@ assert_contains "view help: set example" "$view_help" "  sales now opens agents 
 assert_contains "view help exit codes" "$view_help" "0 ok · 1 refused · 2 bad usage (an unknown view) · 4 project not found or ambiguous"
 assert_eq "view -h is the same text" "$(nodaemon project view sales -h)" "$view_help"
 schema_row="$(nodaemon --schema | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps([c for c in d["commands"] if c["name"]=="project view"]))')"
-assert_contains "schema lists project view" "$schema_row" '"usage": "k2 project view <project> [terminal|thread|chatter] [--json]"'
+assert_contains "schema lists project view" "$schema_row" '"usage": "k2 project view <project> [terminal|thread|chatter|default] [--agent <name>] [--json]"'
+assert_contains "schema lists --agent" "$schema_row" '"name": "--agent", "arg": "name"'
 
 # ── 2. stub daemon ───────────────────────────────────────────────────
 python3 - "$WORK" <<'PYEOF' &
@@ -80,7 +92,17 @@ import json, os, sys, urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 work = sys.argv[1]
-state = {"view": "thread"}
+state = {"view": "thread", "own": {"w-ada": None, "w-bo": None}}
+MEMBERS = [("w-ada", "ada", "/srv/agents/ada", "Ada"), ("w-bo", "bo", "/srv/agents/bo", None)]
+
+def members_json():
+    out = []
+    for wid, name, path, agent_name in MEMBERS:
+        own = state["own"][wid]
+        out.append({"workspaceId": wid, "name": name, "path": path, "agentName": agent_name,
+                    "createdAt": 1, "sessionAlive": False, "sessionId": None,
+                    "defaultView": own or state["view"], "ownDefaultView": own})
+    return out
 
 def mode():
     try:
@@ -106,9 +128,13 @@ class H(BaseHTTPRequestHandler):
             g = rec["group"]
             if g.lower() in ("sales", "g-1"):
                 out = {"ok": True, "id": "g-1", "name": "sales", "pocWorkspaceId": None,
-                       "members": [], "defaultView": state["view"]}
+                       "members": members_json(), "defaultView": state["view"]}
                 if m == "old":
                     del out["defaultView"]
+                if m == "old-members":
+                    for mm in out["members"]:
+                        del mm["defaultView"]
+                        del mm["ownDefaultView"]
             elif g == "s":
                 status = 400
                 out = {"ok": False, "error": {"code": "ambiguous_id",
@@ -139,6 +165,18 @@ class H(BaseHTTPRequestHandler):
             else:
                 state["view"] = b["view"]
                 out = {"ok": True, "id": "g-1", "name": "sales", "defaultView": state["view"]}
+        elif parsed.path == "/cli/project-group/set-member-default-view":
+            if m == "member":
+                status = 403
+                out = {"ok": False, "error": {"code": "forbidden",
+                       "hint": "only the owner, an admin, or an agent with 'Manage K2 projects' can change the view an agent opens in on a project (it changes it for everyone)"}}
+            elif "view" not in b or b["workspace"] not in state["own"]:
+                status = 400
+                out = {"ok": False, "error": {"code": "usage", "hint": "bad body"}}
+            else:
+                state["own"][b["workspace"]] = b["view"]
+                out = {"ok": True, "groupId": "g-1", "workspaceId": b["workspace"],
+                       "defaultView": b["view"] or state["view"], "ownDefaultView": b["view"]}
         data = json.dumps(out).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -265,6 +303,72 @@ run project view sales terminal
 assert_eq "older daemon exits 1" "$rc" "1"
 assert_contains "older daemon code" "$err" '"code":"unsupported"'
 assert_absent "older daemon never posts" "$(reqs)" "set-default-view"
+
+echo "== --agent: one agent's own view =="
+set_mode ""
+reset
+run project view sales --agent ada
+assert_eq "agent print exit 0" "$rc" "0"
+assert_eq "agent print follows the project" "$out" "Ada in sales opens in: thread (the project's view)"
+assert_absent "agent print never posts" "$(reqs)" "set-member-default-view"
+run project view sales --agent ada --json
+assert_eq "agent print --json" "$out" '{"ok":true,"project":"sales","agent":"Ada","defaultView":"thread","ownDefaultView":null}'
+
+reset
+run project view sales Chatter --agent ADA
+assert_eq "agent set exit 0" "$rc" "0"
+assert_eq "agent set output" "$out" "Ada in sales now opens in: chatter"
+python3 - "$WORK/reqs.jsonl" <<'PYEOF' && ok "agent set posts the project id, the member's workspace id and the view" || bad "agent set request ($(reqs))"
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+posts = [r for r in rows if r["path"] == "/cli/project-group/set-member-default-view"]
+assert len(posts) == 1 and posts[0]["method"] == "POST", rows
+assert json.loads(posts[0]["body"]) == {"group": "g-1", "workspace": "w-ada", "view": "chatter"}, posts
+assert not [r for r in rows if r["path"] == "/cli/project-group/set-default-view"], rows
+PYEOF
+run project view sales --agent /srv/agents/ada
+assert_eq "agent by path: its own view" "$out" "Ada in sales opens in: chatter (its own view)"
+run project view sales --agent bo
+assert_eq "the other agent still follows" "$out" "bo in sales opens in: thread (the project's view)"
+run project view sales
+assert_eq "the project's view is unchanged" "$out" "sales opens agents in: thread"
+
+reset
+run project view sales default --agent w-ada --json
+assert_eq "agent clear --json exit 0" "$rc" "0"
+assert_eq "agent clear --json" "$out" '{"ok":true,"project":"sales","agent":"Ada","defaultView":"thread","ownDefaultView":null}'
+assert_contains "clear posts view null" "$(reqs)" '\"view\":null'
+run project view sales terminal --agent ada
+run project view sales default --agent ada
+assert_eq "agent clear output" "$out" "Ada in sales now follows the project's view: thread"
+
+echo "== --agent: refusals =="
+reset
+run project view sales terminal --agent nobody
+assert_eq "not a member exits 1" "$rc" "1"
+assert_contains "not a member code" "$err" '"code":"not_a_member"'
+assert_contains "not a member names it" "$err" "'nobody' is not a member of sales"
+assert_absent "not a member never posts" "$(reqs)" "set-member-default-view"
+for args in "sales default" "sales Default" "sales --agent" "sales split --agent ada"; do
+    reset
+    # shellcheck disable=SC2086
+    run project view $args
+    assert_eq "'view $args' exits 2" "$rc" "2"
+    assert_contains "'view $args' is a usage error" "$err" '"code":"usage"'
+    assert_eq "'view $args' sends nothing" "$(reqs)" ""
+done
+run project view sales default
+assert_contains "default without --agent says why" "$err" "default clears one agent's own view, so it needs --agent <name>"
+set_mode member
+run project view sales terminal --agent ada
+assert_eq "member login exits 1" "$rc" "1"
+assert_contains "member login code" "$err" '"code":"forbidden"'
+set_mode old-members
+reset
+run project view sales terminal --agent ada
+assert_eq "older daemon (no member views) exits 1" "$rc" "1"
+assert_contains "older daemon code" "$err" '"code":"unsupported"'
+assert_absent "older daemon never posts" "$(reqs)" "set-member-default-view"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

@@ -299,8 +299,12 @@ fn actor(w: &Who, a: &ClaimActor) -> Value {
     ])
 }
 
-fn keys_value(keys: &[k2_mpc_base::Key]) -> Value {
-    Value::List(keys.iter().map(|k| Value::from(k.as_str())).collect())
+/// Elements as the wire names them: by address (kit v0.16.0, contract gap 2:
+/// `@sld:256/sp:7` for a deck; a pack that maps no addresses gives its keys,
+/// so the bytes are as before). The kit fills the addresses on every
+/// selection, focus, range and element claim it hands out.
+fn addresses_value(addresses: &[String]) -> Value {
+    Value::List(addresses.iter().map(|a| Value::from(a.as_str())).collect())
 }
 
 /// A coordinate: a whole number as an integer (as the kit's goldens), else
@@ -314,7 +318,7 @@ fn coord(v: f64) -> Value {
 }
 
 fn selection(s: &ElemSelection) -> Value {
-    Value::obj([("root", Value::from(s.root.as_str())), ("keys", keys_value(&s.keys))])
+    Value::obj([("root", Value::from(s.root.as_str())), ("keys", addresses_value(&s.addresses))])
 }
 
 fn point(p: &Point) -> Value {
@@ -326,13 +330,13 @@ fn rect(r: &Rect) -> Value {
 }
 
 fn focus(f: &ElemFocus) -> Value {
-    Value::obj([("root", Value::from(f.root.as_str())), ("key", Value::from(f.key.as_str()))])
+    Value::obj([("root", Value::from(f.root.as_str())), ("key", Value::from(f.address.as_str()))])
 }
 
 fn range(r: &ElemRange) -> Value {
     Value::obj([
         ("root", Value::from(r.root.as_str())),
-        ("key", Value::from(r.key.as_str())),
+        ("key", Value::from(r.address.as_str())),
         ("field", Value::from(r.field.as_str())),
         ("anchor", Value::from(r.anchor)),
         ("head", Value::from(r.head)),
@@ -416,10 +420,10 @@ fn member(m: &RosterMember, version: Seq) -> Value {
         .claims
         .iter()
         .filter_map(|c| match &c.span {
-            ClaimSpan::Elems { root, keys } => Some(Value::obj([
+            ClaimSpan::Elems { root, .. } => Some(Value::obj([
                 ("claim", Value::from(c.id.to_string())),
                 ("root", Value::from(root.as_str())),
-                ("keys", keys_value(keys)),
+                ("keys", addresses_value(&c.addresses)),
                 ("note", c.note.as_deref().map_or(Value::Null, Value::from)),
                 ("hold", Value::from(c.hold)),
                 ("expires_ms", Value::from(c.expires_ms)),
@@ -565,13 +569,13 @@ pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
             ("started_ms", Value::from(*started_ms)),
         ]),
         // Wire 3: a claim on elements (a deck's shapes or slides).
-        RosterEvent::ClaimStartedElems { who: w, claim, root, keys, note, hold, expires_ms, version, actor: a, started_ms, .. } => {
+        RosterEvent::ClaimStartedElems { who: w, claim, root, addresses, note, hold, expires_ms, version, actor: a, started_ms, .. } => {
             Value::obj([
                 ("kind", Value::from("claim_started_elems")),
                 ("who", who(w)),
                 ("claim", Value::from(claim.to_string())),
                 ("root", Value::from(root.as_str())),
-                ("keys", keys_value(keys)),
+                ("keys", addresses_value(addresses)),
                 ("note", note.as_deref().map_or(Value::Null, Value::from)),
                 ("hold", Value::from(*hold)),
                 ("expires_ms", Value::from(*expires_ms)),
@@ -830,6 +834,25 @@ mod golden_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Kit v0.16.0: element presence goes on the wire by address (a deck's
+    /// `@sld:256/sp:7`), never by the store's key; a pack that maps no
+    /// addresses gives its keys, so those bytes don't change.
+    #[test]
+    fn element_presence_is_sent_by_address() {
+        let key = |k: &str| k2_mpc_base::Key::new(k).expect("key");
+        let mut sel = ElemSelection::new("shapes", vec![key("s256-7"), key("s256-9")]);
+        assert_eq!(selection(&sel).to_json(), r#"{"root":"shapes","keys":["s256-7","s256-9"]}"#, "addresses start as the keys");
+        sel.addresses = vec!["@sld:256/sp:7".into(), "@sld:256/sp:9".into()];
+        assert_eq!(selection(&sel).to_json(), r#"{"root":"shapes","keys":["@sld:256/sp:7","@sld:256/sp:9"]}"#);
+        let mut f = ElemFocus::new("slides", key("s256"));
+        f.address = "@sld:256".into();
+        assert_eq!(focus(&f).to_json(), r#"{"root":"slides","key":"@sld:256"}"#);
+        let mut r = ElemRange::new("shapes", key("s256-7"), "text", 1, 4);
+        r.address = "@sld:256/sp:7".into();
+        let v = range(&r).to_json();
+        assert!(v.contains(r#""key":"@sld:256/sp:7""#) && !v.contains("s256-7"), "{v}");
+    }
 
     #[test]
     fn every_client_frame_parses_and_junk_is_refused_with_its_op() {

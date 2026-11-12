@@ -1501,7 +1501,7 @@ mod lineage_tests {
     #[test]
     #[ignore]
     fn measure_fork_commit_discard_of_a_real_target() {
-        let src = PathBuf::from(std::env::var("K2_GENS_MEASURE").expect("K2_GENS_MEASURE=<a cargo target dir>"));
+        let src = PathBuf::from(std::env::var("K2_GENS_MEASURE").or_else(|_| std::env::var("CARGO_TARGET_DIR")).expect("K2_GENS_MEASURE (or CARGO_TARGET_DIR) = a cargo target dir"));
         assert!(src.is_dir(), "{} is not a folder", src.display());
         let (root, g, _) = setup("gens-measure");
         let gens = gens_root(&root);
@@ -1605,7 +1605,7 @@ mod lineage_tests {
         let trusted_bytes = read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().gen.unwrap().bytes;
         assert!(trusted_bytes >= 64 << 10, "{trusted_bytes}");
         // Budget fits trusted alone: only scratch goes.
-        let lines = evict(&g, &root, &EvictPolicy { budget_bytes: trusted_bytes * 2, ..policy(300) });
+        let lines = evict(&g, &root, &EvictPolicy { budget_bytes: trusted_bytes * 3 / 2, ..policy(300) });
         assert!(lines.iter().any(|l| l.contains("scratch/pr") && l.contains("budget")), "{lines:?}");
         assert!(read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().gen.is_some(), "trusted kept: {lines:?}");
         // A head over the lineage cap resets.

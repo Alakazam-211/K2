@@ -1176,6 +1176,7 @@ mod tests {
     const GET_VERB_NAMED_READS: &[(&str, &str)] = &[
         ("/cli/approve/agents", "GET lists who holds approve.request; turning it on or off is POST"),
         ("/cli/vault/send-allow", "GET lists the standing send grants (and a person's picker); adding and removing are POST with a body"),
+        ("/cli/ci/cache/trust", "lists the trusted branches of the CI cache; changing them is POST /cli/ci/cache/trust/set"),
         ("/cli/vault/run-helper", "returns the path of this daemon's own binary; nothing changes (the run itself is POST /cli/vault/run)"),
         ("/cli/agents/work/create", "410 Gone, no state"),
         ("/cli/folder-trust/status", "reads the scan and the stored decision; grants, cards and decisions are POST routes"),

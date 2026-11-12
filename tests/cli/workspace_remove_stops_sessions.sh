@@ -71,7 +71,9 @@ start_workspace() {
         || fail "hire $tag: $(cat "$SANDBOX_HOME/hire-$tag.json")"
     id="$(k2 agent conf "$dir" --json | jq -r .id)"
     [ -n "$id" ] && [ "$id" != null ] || fail "no project id for $dir"
-    resp="$(post /cli/workspace/ensure-pinned-chat "$(jq -nc --arg p "$dir" '{project:$p}')")"
+    # A new server's first pinned chat waits for a harness pick (409
+    # harness_choice_needed): pick claude, the shim, as the Chat tab would.
+    resp="$(post /cli/workspace/ensure-pinned-chat "$(jq -nc --arg p "$dir" '{project:$p, harness:"claude"}')")"
     [ "$(jq -r .sessionId <<<"$resp")" != null ] || fail "ensure-pinned-chat $tag: $resp"
     pinned="$(pid_for "$dir --")"
     resp="$(post /cli/sessions/v2/spawn "$(jq -nc --arg c "$dir" --arg t "tab-rm-$tag" \

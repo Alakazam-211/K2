@@ -130,9 +130,18 @@ for ws in "$WSA" "$WSB"; do
     resp="$(curl -s -X POST "http://127.0.0.1:$DPORT/cli/workspace/create?token=$DTOKEN&path=$(enc "$ws")" --data-raw '')"
     assert_absent "workspace $(basename "$ws") registered" "$resp" '"error"'
 done
-# Default harness claude: the pinned chat comes up on the claude shim.
+# A new server's first pinned chat waits for the person to pick its LLM:
+# 409 harness_choice_needed with the harnesses, and nothing starts.
 resp="$(curl -s -X POST "http://127.0.0.1:$DPORT/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
     -H 'Content-Type: application/json' --data-raw "{\"project\":\"$WSA\"}")"
+assert_contains "first chat asks for a harness" "$resp" '"code":"harness_choice_needed"'
+claude_installed="$(python3 -c 'import json,sys; print([h["installed"] for h in json.loads(sys.argv[1])["error"]["harnesses"] if h["harness"] == "claude"])' "$resp")"
+[ "$claude_installed" = "[True]" ] && ok "the pick lists the claude shim as installed" \
+    || bad "the pick lists the claude shim as installed (got $claude_installed in $resp)"
+[ ! -e "$SB/claude.env" ] || bad "the first chat started before a harness was picked"
+# Picking claude: the pinned chat comes up on the claude shim.
+resp="$(curl -s -X POST "http://127.0.0.1:$DPORT/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
+    -H 'Content-Type: application/json' --data-raw "{\"project\":\"$WSA\",\"harness\":\"claude\"}")"
 assert_contains "pinned chat spawned" "$resp" '"sessionId"'
 for _ in $(seq 1 100); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"

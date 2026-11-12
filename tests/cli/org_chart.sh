@@ -148,7 +148,9 @@ agent() {
         -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$ws")" \
         "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
     case "$reg" in *'"error"'*) fail "register $ws: $reg" ;; *"$ws"*) ;; *) fail "register $ws: $reg" ;; esac
-    resp="$(api POST /cli/workspace/ensure-pinned-chat "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$ws")")"
+    # A new server's first pinned chat waits for a harness pick (409
+    # harness_choice_needed): pick claude, the shim, as the Chat tab would.
+    resp="$(api POST /cli/workspace/ensure-pinned-chat "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1], "harness": "claude"}))' "$ws")")"
     case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat $1: $resp" ;; esac
     for _ in $(seq 1 400); do [ -s "$SB/env.$1" ] && break; sleep 0.05; done
     [ -s "$SB/env.$1" ] || fail "$1's pinned chat never started"

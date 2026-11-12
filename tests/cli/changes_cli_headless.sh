@@ -174,8 +174,10 @@ reg="$(curl -s -X POST -H 'Content-Type: application/json' \
     -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$REPO")" \
     "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
 case "$reg" in *"$REPO"*) ok "workspace registered" ;; *) fail "register: $reg" ;; esac
+# A new server's first pinned chat waits for a harness pick (409
+# harness_choice_needed): pick claude, the shim, as the Chat tab would.
 resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
-    -H 'Content-Type: application/json' --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$REPO")")"
+    -H 'Content-Type: application/json' --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1], "harness": "claude"}))' "$REPO")")"
 case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
 for _ in $(seq 1 100); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"

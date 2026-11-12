@@ -192,7 +192,9 @@ for ws in "$A" "$B"; do
         "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
     case "$reg" in *'"error"'*) fail "register $ws: $reg" ;; *"$ws"*) ;; *) fail "register $ws: $reg" ;; esac
 done
-resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" -H 'Content-Type: application/json' --data-raw "$(body project "$B")" || true)"
+# A new server's first pinned chat waits for a harness pick (409
+# harness_choice_needed): pick claude, the shim, as the Chat tab would.
+resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" -H 'Content-Type: application/json' --data-raw "$(body project "$B" harness claude)" || true)"
 case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
 for _ in $(seq 1 400); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
 PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"

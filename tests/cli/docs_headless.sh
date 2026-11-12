@@ -197,8 +197,10 @@ ok "workspaces alpha + beta registered"
 # the new daemon serves its cell socket again.
 get_passport() {
     local resp
+    # A new server's first pinned chat waits for a harness pick (409
+    # harness_choice_needed): pick claude, the shim, as the Chat tab would.
     resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
-        -H 'Content-Type: application/json' --data-raw "$(json project "$B")" || true)"
+        -H 'Content-Type: application/json' --data-raw "$(json project "$B" harness claude)" || true)"
     case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
     for _ in $(seq 1 400); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
     [ -s "$SB/claude.env" ] || fail "the pinned chat's harness never started (no claude.env after 20 s): $resp"

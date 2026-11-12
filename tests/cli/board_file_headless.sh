@@ -152,8 +152,10 @@ for ws in "$A" "$B"; do
         "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
     case "$reg" in *'"error"'*) fail "register $ws: $reg" ;; *"$ws"*) ;; *) fail "register $ws: $reg" ;; esac
 done
+# A new server's first pinned chat waits for a harness pick (409
+# harness_choice_needed): pick claude, the shim, as the Chat tab would.
 resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" -H 'Content-Type: application/json' \
-    --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1]}))' "$B")" || true)"
+    --data-raw "$(python3 -c 'import json,sys; print(json.dumps({"project": sys.argv[1], "harness": "claude"}))' "$B")" || true)"
 case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
 # A busy node can take a while to start the pinned chat: a minute, then fail.
 # Until the shim's env dump holds the socket line: a read mid-write saw none.

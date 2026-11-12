@@ -339,8 +339,9 @@ function useDashboardBar(
     const update = (): void => {
       const h = host.clientHeight
       if (h <= 0) return
-      // The bar's own place in the content (right under General).
-      const at = lead.getBoundingClientRect().bottom - host.getBoundingClientRect().top + host.scrollTop
+      // The bar's own place in the content (right under General). The rects
+      // are on-screen px; scrollTop and clientHeight are CSS px.
+      const at = clientToCssPx(lead.getBoundingClientRect().bottom - host.getBoundingClientRect().top) + host.scrollTop
       const barH = bar.offsetHeight
       const stickBottom = at + barH <= h
       const y = at - host.scrollTop

@@ -474,6 +474,32 @@ describe('sheet round 2: rows read first, failures say what next, the bar never 
     expect(field.className).not.toContain('ml-auto')
   })
 
+  it('at 150% app zoom, the bar measures General in CSS px: one that fits the half still lets it stick to the bottom', async () => {
+    // General is 560 CSS px (840 on screen); the half is 600 CSS px tall.
+    applyAppZoomForTest(1.5)
+    const rect = Element.prototype.getBoundingClientRect
+    Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
+      if (this.firstElementChild?.getAttribute('aria-label') === 'General') {
+        return { width: 600, height: 840, top: 0, left: 0, right: 600, bottom: 840, x: 0, y: 0, toJSON: () => ({}) } as DOMRect
+      }
+      return rect.call(this)
+    }
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.dataset?.testid === 'project-settings-left' ? 600 : 0
+      },
+    })
+    try {
+      await renderReady()
+      expect(screen.getByTestId('dashboard-selector').className).toContain('bottom-0')
+    } finally {
+      delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight
+      Element.prototype.getBoundingClientRect = rect
+      resetAppZoomForTest()
+    }
+  })
+
   it('in a half too short for General and the bar together, the bar sticks to the top only', async () => {
     const fit = { h: 600, leadBottom: 700 }
     const rect = Element.prototype.getBoundingClientRect

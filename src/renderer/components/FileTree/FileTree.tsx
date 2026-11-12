@@ -33,6 +33,7 @@ import {
 import { MiddleEllipsisName } from './MiddleEllipsisName'
 import { resourceNameSlotWidth, treeNameSlotWidth } from './middleEllipsis'
 import { revealInFileManagerLabel, trashName } from '@/lib/reveal-label'
+import { isEditableTarget } from '@/lib/editable-target'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -1581,9 +1582,8 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
         return
       }
 
-      // Don't intercept keys when an input or textarea is focused (e.g., search box, rename input)
-      const tag = (document.activeElement as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      // Don't intercept keys while typing (search box, rename input).
+      if (isEditableTarget(document.activeElement)) return
 
       const selection = useFileSelectionStore.getState()
       const paths = selection.getSelectedPaths()

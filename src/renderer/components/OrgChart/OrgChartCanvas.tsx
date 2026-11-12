@@ -27,6 +27,7 @@ import { bucketAt, BUCKET_TITLE_H, type OrgLayout } from './org-layout'
 import type { OrgAgent, OrgChart, OrgLineKind, OrgRef } from './org-api'
 import { checkLine, wireKind } from './org-rules'
 import { orgOfAgent } from './org-ops'
+import { isEditableTarget } from '@/lib/editable-target'
 
 export type OrgGesture =
   | { type: 'join'; org: string; agent: string; from: string | null }
@@ -242,8 +243,7 @@ export function OrgChartCanvas(props: Props): React.JSX.Element {
   useEffect(() => {
     if (!selectedLine || !canManage) return
     const key = (e: KeyboardEvent): void => {
-      const t = e.target as HTMLElement | null
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      if (isEditableTarget(e.target)) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         onGesture({ type: 'unline', id: selectedLine })

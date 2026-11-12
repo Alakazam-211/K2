@@ -32,6 +32,7 @@ import type { DesktopOs } from '@/lib/desktop-chrome'
 import { zenLocalScope } from './zen-api'
 import { ZEN_CHORD_LABEL } from './zen-shortcut'
 import { ZenPageParseError, parseZenThemeEntries, type ZenThemeEntry, type ZenThemeScope } from './zen-page'
+import { isEditableTarget } from '@/lib/editable-target'
 
 export { ZEN_SHORTCUTS_MENU_EVENT, dispatchZenShortcutsMenu } from './zen-shortcut'
 
@@ -105,16 +106,10 @@ export function zenThemeCycleDir(e: ZenKeyLike, os: DesktopOs): 1 | -1 | null {
   return e.shiftKey ? -1 : 1
 }
 
-function isEditable(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null
-  if (!el || typeof el.closest !== 'function') return false
-  return el.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]') !== null
-}
-
 /** `?` outside a text field, or ⌃⌘/ (Ctrl+Alt+/) anywhere. */
 export function isZenCheatSheetKey(e: ZenKeyLike & { target?: EventTarget | null }, os: DesktopOs): boolean {
   if (e.code === 'Slash' && !e.shiftKey && chordMods(e, os)) return true
-  return e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditable(e.target ?? null)
+  return e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)
 }
 
 /** Install the theme-cycle and cheat-sheet keys (capture phase). */

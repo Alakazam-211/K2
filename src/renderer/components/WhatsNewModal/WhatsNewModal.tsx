@@ -8,6 +8,7 @@ import k2Logo from '../../assets/k2-logo.png'
 import { primaryScope } from '@/kessel/server-scope'
 import { markZenNewsSeen } from '@/lib/zen/zen-sync'
 import { ZenGardenNewsCard } from './ZenGardenNewsCard'
+import { isEditableTarget } from '@/lib/editable-target'
 
 const GITHUB_REPO_URL = 'https://github.com/Alakazam-211/K2'
 
@@ -211,6 +212,8 @@ export default function WhatsNewModal({
   useEffect(() => {
     if (!visible) return
     const onKey = (e: KeyboardEvent): void => {
+      // A key typed into a field (the dialog's or one under it) stays there.
+      if (isEditableTarget(e.target)) return
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
         goPrev()

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useRoom } from '@/components/Room/RoomContext'
 import * as pdfjsLib from 'pdfjs-dist'
+import { isEditableTarget } from '@/lib/editable-target'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -32,6 +33,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null)
 
   // Load PDF document
@@ -138,9 +140,15 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
     setZoom(DEFAULT_ZOOM)
   }, [])
 
-  // Keyboard navigation
+  // Keyboard navigation. The listener is on the window, so it hears keys
+  // meant for anything else: a key typed into a text field stays there, and
+  // a viewer that isn't showing (a hidden tab, the workspace under
+  // Settings) takes no keys at all.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
+      if (e.defaultPrevented || isEditableTarget(e.target)) return
+      const root = rootRef.current
+      if (!root || root.getClientRects().length === 0) return
       if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
         e.preventDefault()
         goToPage(currentPage - 1)
@@ -189,7 +197,7 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-full w-full flex-col bg-[var(--color-bg)]">
+    <div ref={rootRef} className="flex h-full w-full flex-col bg-[var(--color-bg)]">
       {/* Controls bar */}
       <div className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-bg-stripe)] px-3 py-1 flex-shrink-0">
         {/* Page navigation */}

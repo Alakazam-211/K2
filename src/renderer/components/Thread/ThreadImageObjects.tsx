@@ -36,6 +36,7 @@ import {
   type ThreadImage,
   type ThreadImageRef,
 } from '@/lib/thread-image-thumbs'
+import { isEditableTarget } from '@/lib/editable-target'
 
 /** Where a chat's attachments are read from: the server they live on and
  *  the door. A Thread names its address (`addr`, the Thread door); a
@@ -185,10 +186,6 @@ function useViewerThumb(ref: ThreadImageRef): ThreadImage | null {
 }
 
 const FOCUSABLE = 'button:not([disabled]), [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-
-function isTypingTarget(t: EventTarget | null): boolean {
-  return t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
-}
 
 /** The picture shown: the whole image once it came, else the thumbnail. */
 function ViewerPicture({ image, full, failed }: { image: ThreadViewerImage; full: string | null; failed: boolean }): JSX.Element {
@@ -357,7 +354,7 @@ export function ThreadImageViewer({
     const onKey = (e: KeyboardEvent): void => {
       if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.isComposing) return
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-      if (isTypingTarget(e.target)) return
+      if (isEditableTarget(e.target)) return
       e.preventDefault()
       go(e.key === 'ArrowLeft' ? -1 : 1)
     }

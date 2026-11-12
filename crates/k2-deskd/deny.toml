@@ -4,7 +4,8 @@
 # (scripts/test/deskd-checks.sh deny). Kessel Steward ruling R27: x11rb,
 # zbus and objc2 only, all already in Cargo.lock; no new crate, no new licence.
 # Ruling R32 (D8b): kessel-video's `linux` feature brings x11rb 0.14 (shm,
-# damage, xfixes) beside deskd's own 0.13 on Linux; same crate, same licence.
+# damage, xfixes). deskd's own x11rb is 0.14 too (Steward: xtest, xinput,
+# screensaver), so deskd's Linux tree has one x11rb.
 
 [graph]
 targets = [
@@ -29,10 +30,11 @@ confidence-threshold = 0.9
 [bans]
 multiple-versions = "allow"
 
-# Pure-Rust X connection only (Steward R27): no libxcb bindings.
+# Pure-Rust X connection only (Steward R27): no libxcb bindings and no
+# Xcursor theme loader (as crates/kessel-video/deny.toml).
 [[bans.features]]
 crate = "x11rb"
-deny = ["allow-unsafe-code", "dl-libxcb"]
+deny = ["allow-unsafe-code", "dl-libxcb", "cursor"]
 
 [advisories]
 ignore = [

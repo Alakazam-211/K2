@@ -95,5 +95,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 # with shm, damage and xfixes, Steward ruling R32) and software VP8 (its
 # `vp8` feature: the in-tree vp8-encoder). JPEG is deskd's own (src/jpeg.rs).
 kessel-video = { path = "../kessel-video", default-features = false, features = ["linux", "vp8"] }
-x11rb = { version = "0.13", default-features = false, features = ["xtest", "xinput", "screensaver"] }
+# x11rb 0.14, the same version as kessel-video's (one x11rb in deskd's Linux
+# tree). Steward: the pure-Rust connection, and xtest, xinput and
+# screensaver only (deny.toml bans dl-libxcb, allow-unsafe-code, cursor).
+x11rb = { version = "0.14", default-features = false, features = ["xtest", "xinput", "screensaver"] }
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }

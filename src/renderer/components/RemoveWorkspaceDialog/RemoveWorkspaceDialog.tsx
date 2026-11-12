@@ -122,7 +122,7 @@ export default function RemoveWorkspaceDialog(): React.JSX.Element | null {
       style={{ backdropFilter: 'blur(4px)' }}
     >
       <div
-        {...floatMaterial('dialog')} className="w-[560px] max-h-[85vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[560px] max-h-[calc(var(--k2-vh)*0.85)] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         {...cancel}
       >
         {/* Header */}

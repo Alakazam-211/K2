@@ -191,7 +191,7 @@ export default function RemoteFolderPicker(): React.JSX.Element | null {
     >
       <BrowserOverlayClaim />
       <div
-        {...floatMaterial('dialog')} className="w-[560px] max-h-[80vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[560px] max-h-[calc(var(--k2-vh)*0.8)] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         {...dialogCancel}
       >
         {/* Header */}

@@ -105,7 +105,7 @@ export default function AddToHomeDialog(): React.JSX.Element | null {
           <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
             {everyHomeHasIt ? 'It is already on every Home.' : 'Pick the Homes to add it to.'}
           </p>
-          <ul className="mt-3 flex flex-col max-h-[50vh] overflow-y-auto" aria-label="Homes">
+          <ul className="mt-3 flex flex-col max-h-[calc(var(--k2-vh)*0.5)] overflow-y-auto" aria-label="Homes">
             {homes.map((h) => {
               const has = already.has(h.id)
               const ref = !has && firstEnabled ? firstBox : undefined

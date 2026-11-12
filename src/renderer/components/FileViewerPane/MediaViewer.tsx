@@ -176,7 +176,7 @@ export function MediaViewer({ filePath, kind }: MediaViewerProps): React.JSX.Ele
           controls
           playsInline
           src={objectUrl}
-          className="max-h-[min(70vh,720px)] w-full max-w-4xl bg-black"
+          className="max-h-[min(calc(var(--k2-vh)*0.7),720px)] w-full max-w-4xl bg-black"
           preload="metadata"
         >
           Your browser does not support video playback.

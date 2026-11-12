@@ -250,7 +250,7 @@ export default function CommandPalette(): React.JSX.Element | null {
   return (
     <DialogScrim
       zIndex={9999}
-      className="flex items-start justify-center pt-[15vh] no-drag"
+      className="flex items-start justify-center pt-[calc(var(--k2-vh)*0.15)] no-drag"
       style={{ backdropFilter: 'blur(8px)' }}
       onKeyDown={handleKeyDown}
     >
@@ -258,7 +258,7 @@ export default function CommandPalette(): React.JSX.Element | null {
         {...cancel}
         role2="surface"
         {...floatMaterial('palette')}
-        className="w-[560px] max-h-[60vh] flex flex-col overflow-hidden [box-shadow:0_24px_48px_rgba(0,0,0,0.5)]"
+        className="w-[560px] max-h-[calc(var(--k2-vh)*0.6)] flex flex-col overflow-hidden [box-shadow:0_24px_48px_rgba(0,0,0,0.5)]"
         style={{ '--k2-menu-origin': 'top center' } as React.CSSProperties}
       >
         {/* Search input */}

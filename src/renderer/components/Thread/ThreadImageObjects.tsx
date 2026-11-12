@@ -417,7 +417,7 @@ export function ThreadImageViewer({
         onCancel={cancel}
         closeButton="inline"
         className="flex flex-col overflow-hidden"
-        style={{ width: 'min(86vw, 1440px)', height: 'min(86vh, 1000px)' }}
+        style={{ width: 'min(calc(var(--k2-vw)*0.86), 1440px)', height: 'min(calc(var(--k2-vh)*0.86), 1000px)' }}
       >
         <div
           ref={boxRef}

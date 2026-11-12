@@ -543,7 +543,7 @@ function ChatHeader({
           <div
             role="listbox"
             data-testid="pinned-session-list"
-            className="max-h-[60vh] overflow-y-auto border-t border-[var(--color-border)] py-1"
+            className="max-h-[calc(var(--k2-vh)*0.6)] overflow-y-auto border-t border-[var(--color-border)] py-1"
           >
           {historySessions.length === 0 ? (
             <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">

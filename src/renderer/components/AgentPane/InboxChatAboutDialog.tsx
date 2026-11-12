@@ -183,8 +183,8 @@ export function InboxChatAboutDialog({
         closeButton="inline"
         style={{
           width: 420,
-          maxWidth: 'calc(100vw - 48px)',
-          maxHeight: 'calc(100vh - 96px)',
+          maxWidth: 'calc(var(--k2-vw) - 48px)',
+          maxHeight: 'calc(var(--k2-vh) - 96px)',
           display: 'flex',
           flexDirection: 'column',
         }}

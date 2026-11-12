@@ -332,8 +332,8 @@ export default function WhatsNewModal({
           left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
-          width: 'min(620px, 90vw)',
-          maxHeight: '78vh',
+          width: 'min(620px, calc(var(--k2-vw)*0.9))',
+          maxHeight: 'calc(var(--k2-vh)*0.78)',
         }}
         {...cancel}
       >
@@ -344,7 +344,7 @@ export default function WhatsNewModal({
           position: 'relative',
           zIndex: 2,
           width: '100%',
-          maxHeight: '78vh',
+          maxHeight: 'calc(var(--k2-vh)*0.78)',
           display: 'flex',
           flexDirection: 'column',
           boxShadow:

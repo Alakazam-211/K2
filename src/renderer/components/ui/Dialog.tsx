@@ -57,8 +57,8 @@ export interface DialogFrameProps extends React.HTMLAttributes<HTMLDivElement> {
 
 /** Where a `placement="top"` dialog's top edge sits; the frame's children
  *  read it as `--dialog-top` to cap their height
- *  (`max-h-[calc(100vh-var(--dialog-top)-1rem)]`). */
-const DIALOG_TOP = 'clamp(1.25rem, 6vh, 4rem)'
+ *  (`max-h-[calc(var(--k2-vh)-var(--dialog-top)-1rem)]`). */
+const DIALOG_TOP = 'clamp(1.25rem, calc(var(--k2-vh)*0.06), 4rem)'
 
 /** Centered modal frame: surface + border + radius.box + dialog elevation
  *  (ring + shadow.5), exactly the historical ConfirmDialog treatment.

@@ -248,7 +248,7 @@ function KesselFrame({
         aria-describedby={intro ? introId : undefined}
         aria-busy={busy || undefined}
         data-testid="kessel-sheet"
-        className={`w-[min(36rem,calc(100vw-2.5rem))] ${tall ? 'min-h-[min(24.25rem,calc(100vh-2.5rem))]' : 'min-h-[min(22.25rem,calc(100vh-2.5rem))]'} max-h-[calc(100vh-2.5rem)] flex flex-col`}
+        className={`w-[min(36rem,calc(var(--k2-vw)-2.5rem))] ${tall ? 'min-h-[min(24.25rem,calc(var(--k2-vh)-2.5rem))]' : 'min-h-[min(22.25rem,calc(var(--k2-vh)-2.5rem))]'} max-h-[calc(var(--k2-vh)-2.5rem)] flex flex-col`}
       >
         <div className="flex-shrink-0 px-5 pt-5 pb-4 pr-10">
           {step ? (

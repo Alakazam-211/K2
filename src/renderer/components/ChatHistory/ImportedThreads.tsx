@@ -177,7 +177,7 @@ export function ImportedThreadViewer({
         role="dialog"
         aria-label={importedTitle(row)}
         data-testid="imported-thread-viewer"
-        className="w-[640px] max-w-[calc(100vw-32px)] h-[70vh] flex flex-col"
+        className="w-[640px] max-w-[calc(var(--k2-vw)-32px)] h-[calc(var(--k2-vh)*0.7)] flex flex-col"
       >
         <div className="flex items-center gap-2 px-4 py-2 border-b border-[var(--color-border)]">
           <div className="min-w-0 flex-1">

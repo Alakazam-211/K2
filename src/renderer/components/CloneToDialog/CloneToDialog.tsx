@@ -108,7 +108,7 @@ export default function CloneToDialog(): React.JSX.Element | null {
         onCancel={close}
         cancelHeld={!isClosable}
         cancelHeldReason="Can’t close while the workspace clones"
-        className="w-[560px] max-w-[calc(100vw-32px)] max-h-[85vh] flex flex-col"
+        className="w-[560px] max-w-[calc(var(--k2-vw)-32px)] max-h-[calc(var(--k2-vh)*0.85)] flex flex-col"
         data-testid="clone-dialog"
         role="dialog"
         aria-modal="true"

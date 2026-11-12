@@ -83,7 +83,7 @@ export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
             <div
               ref={menu.menuRef}
               style={menu.style}
-              className="max-h-[70vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-2 shadow-xl"
+              className="max-h-[calc(var(--k2-vh)*0.7)] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-2 shadow-xl"
               role="menu"
               data-mobile-device-menu=""
             >

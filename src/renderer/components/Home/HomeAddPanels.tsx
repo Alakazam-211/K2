@@ -111,7 +111,7 @@ function pickerRow(
 // The Agents sidebar's dropdown look (FocusGroupDropdown), opening upward
 // from the bottom bar. A column, so the list body scrolls under its search.
 const panelClass =
-  'absolute bottom-full left-3 right-3 z-50 mb-0.5 max-h-[60vh] flex flex-col bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl py-0.5'
+  'absolute bottom-full left-3 right-3 z-50 mb-0.5 max-h-[calc(var(--k2-vh)*0.6)] flex flex-col bg-[var(--color-bg)] border border-[var(--color-border)] shadow-xl py-0.5'
 const itemClass =
   'no-drag w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors cursor-pointer text-[var(--color-text-secondary)] hover:bg-[var(--color-wash-1)] hover:text-[var(--color-text-primary)]'
 const headClass = 'px-3 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]'

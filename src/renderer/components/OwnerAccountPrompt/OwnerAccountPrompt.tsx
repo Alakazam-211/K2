@@ -366,7 +366,7 @@ export default function OwnerAccountPrompt(): React.JSX.Element | null {
         aria-labelledby="owner-account-prompt-title"
         data-testid="owner-account-prompt"
         data-mode={view.mode}
-        style={{ width: 'min(440px, calc(100vw - 32px))', padding: '16px 18px' }}
+        style={{ width: 'min(440px, calc(var(--k2-vw) - 32px))', padding: '16px 18px' }}
         onCancel={required ? undefined : () => setClosedForNow(true)}
         cancelHeld={busy}
       >

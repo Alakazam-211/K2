@@ -242,7 +242,7 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
       <div className="fixed inset-0 z-[10000] flex flex-col bg-[var(--color-bg)] text-[var(--color-text-primary)]">
         <GateChrome />
         <div className="flex-1 min-h-0 flex items-center justify-center">
-          <div className="w-[360px] max-w-[90vw] flex flex-col gap-3.5 p-7 border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
+          <div className="w-[360px] max-w-[calc(var(--k2-vw)*0.9)] flex flex-col gap-3.5 p-7 border border-[var(--color-border)] bg-[var(--color-bg-surface)]">
             <div className="flex items-center gap-1 text-[12px] text-[var(--color-text-muted)] font-mono">
               {host.secure && <IconLock className="w-3 h-3 flex-shrink-0" />}
               {rotation.host.username ? `${rotation.host.username}@` : ''}
@@ -281,7 +281,7 @@ export function RemoteSignIn({ host }: { host: ConnectHost }): React.JSX.Element
           e.preventDefault()
           void submit()
         }}
-        className="w-[360px] max-w-[90vw] flex flex-col gap-3.5 p-7 border border-[var(--color-border)] bg-[var(--color-bg-surface)]"
+        className="w-[360px] max-w-[calc(var(--k2-vw)*0.9)] flex flex-col gap-3.5 p-7 border border-[var(--color-border)] bg-[var(--color-bg-surface)]"
       >
         <div className="flex flex-col gap-1">
           <div className="text-[15px] font-semibold text-[var(--color-text-primary)]">

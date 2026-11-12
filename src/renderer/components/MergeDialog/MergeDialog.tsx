@@ -167,7 +167,7 @@ export default function MergeDialog(): React.JSX.Element | null {
   return (
     <DialogScrim zIndex={50} className="flex items-center justify-center">
       <div
-        {...floatMaterial('dialog')} className="bg-[var(--color-bg-surface)] border border-[var(--color-border)] w-[520px] max-h-[80vh] flex flex-col shadow-2xl"
+        {...floatMaterial('dialog')} className="bg-[var(--color-bg-surface)] border border-[var(--color-border)] w-[520px] max-h-[calc(var(--k2-vh)*0.8)] flex flex-col shadow-2xl"
         {...cancel}
       >
         {/* Header */}

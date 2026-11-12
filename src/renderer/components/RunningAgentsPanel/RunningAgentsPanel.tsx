@@ -351,7 +351,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
 
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-start justify-center pt-[15vh] no-drag"
+      className="fixed inset-0 z-[9999] flex items-start justify-center pt-[calc(var(--k2-vh)*0.15)] no-drag"
       data-scrim=""
       style={{ background: 'rgba(0, 0, 0, 0.6)', backdropFilter: 'blur(8px)' }}
       onKeyDown={handleKeyDown}
@@ -360,7 +360,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       <Surface
         {...cancel}
         role2="surface" material="tile"
-        className="w-[600px] max-h-[60vh] flex flex-col overflow-hidden"
+        className="w-[600px] max-h-[calc(var(--k2-vh)*0.6)] flex flex-col overflow-hidden"
         style={{ boxShadow: '0 24px 48px rgba(0, 0, 0, 0.5)' }}
       >
         {/* Search input */}

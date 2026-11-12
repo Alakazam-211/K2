@@ -281,7 +281,7 @@ export function HeartbeatSessionPicker({
             left: menuBox.left,
             zIndex: menuBox.zIndex,
           }}
-          {...floatMaterial('menu')} className="w-[36ch] max-h-[40vh] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
+          {...floatMaterial('menu')} className="w-[36ch] max-h-[calc(var(--k2-vh)*0.4)] overflow-y-auto bg-[var(--color-bg)] border border-[var(--color-border)] shadow-2xl py-1"
         >
           {/* 1 — Pinned chat: the prominent, visually-distinct first
               entry (accent + pin mark, separated from the rest). */}

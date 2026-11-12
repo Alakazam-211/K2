@@ -1878,8 +1878,8 @@ function ConnectingOverlay({
   return (
     <div
       style={{
-        width: '100vw',
-        height: '100vh',
+        width: 'var(--k2-vw)',
+        height: 'var(--k2-vh)',
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--color-bg, #0a0a0a)',

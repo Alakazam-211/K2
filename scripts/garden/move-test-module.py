@@ -109,6 +109,8 @@ def main():
     dry = "--dry-run" in flags
     if not path.endswith(".rs"):
         sys.exit("move-test-module: not a .rs file: " + path)
+    if not os.path.isfile(path):
+        sys.exit("move-test-module: no such file: " + path)
     with open(path, encoding="utf-8", newline="") as f:
         src = f.read()
     if "\r" in src:

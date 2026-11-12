@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { applyAppZoomForTest, resetAppZoomForTest, setScreenRect, setWindowSize } from '@/test-utils/app-zoom'
 import { menuLayerForTrigger, SaveError, SaveNote, SETTING_ROW_HINT, SETTING_SERVER_REASON, SettingDropdown, SettingRow, SettingsGroup, SettingsLoadState, useSaveStatus } from './SettingControls'
 
 function triggerUnder(...layers: Array<{ zIndex?: string; position?: string }>): HTMLElement {
@@ -154,6 +155,38 @@ describe('SettingRow stack', () => {
     const slot = screen.getByTestId('row').querySelector('[data-setting-row-control="stack"]') as HTMLElement
     expect(slot.className).toContain('w-60')
   })
+})
+
+// Under the app zoom the trigger's rect and the window are window px; the
+// menu's fixed top/right are CSS px, which the zoom scales. The voice list's
+// device pickers and every Settings dropdown open from here.
+describe('SettingDropdown under the app zoom', () => {
+  afterEach(() => {
+    resetAppZoomForTest()
+    setWindowSize(1024, 768)
+  })
+
+  for (const z of [1, 1.25, 1.5]) {
+    it(`at ${z * 100}%: opens just under the trigger, right edges lined up`, () => {
+      setWindowSize(1000, 800)
+      applyAppZoomForTest(z)
+      render(<WorkspaceDropdown zIndex={1} />)
+      const button = screen.getByRole('button', { name: 'Workspace' })
+      const wrap = button.parentElement as HTMLElement
+      const trig = { left: 700, top: 120 * z, width: 160 * z, height: 28 * z }
+      setScreenRect(wrap, trig)
+      fireEvent.click(button)
+      const menu = screen.getByTestId('setting-dropdown-menu')
+      const px = (v: string): number => {
+        if (!v.endsWith('px')) throw new Error(`not px: "${v}"`)
+        return Number(v.slice(0, -2))
+      }
+      // On screen: top = top × z; right edge = window − right × z.
+      expect(px(menu.style.top) * z).toBeCloseTo(trig.top + trig.height + 2 * z, 5)
+      expect(1000 - px(menu.style.right) * z).toBeCloseTo(trig.left + trig.width, 5)
+      expect(px(menu.style.minWidth) * z).toBeCloseTo(trig.width, 5)
+    })
+  }
 })
 
 describe('SettingDropdown Esc (0.46.3)', () => {

@@ -22,6 +22,7 @@ import { createPortal } from 'react-dom'
 import { Surface } from '@/components/ui/Surface'
 import { Spinner } from '@/components/ui/Spinner'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { clientRectToCss, cssViewport } from '@/lib/app-zoom'
 
 /** Set inside a card group, so a row paints the card's padding and leaves its
  *  divider to the card. */
@@ -510,7 +511,10 @@ export function SettingDropdown({
     const place = (): void => {
       const trigger = containerRef.current
       if (!trigger) return
-      const rect = trigger.getBoundingClientRect()
+      // The rect and the window are window px; the menu's fixed edges are
+      // CSS px, which the app zoom scales (lib/app-zoom).
+      const rect = clientRectToCss(trigger.getBoundingClientRect())
+      const view = cssViewport()
       const up =
         menuPlacement === 'up'
           ? true
@@ -522,11 +526,11 @@ export function SettingDropdown({
         zIndex: menuLayerForTrigger(trigger),
         chamfer: trigger.closest('[data-zen-root], [data-k2-thread-zen]') === null,
         ...(up
-          ? { bottom: window.innerHeight - rect.top + 2 }
+          ? { bottom: view.height - rect.top + 2 }
           : { top: rect.bottom + 2 }),
         ...(menuAlign === 'left'
           ? { left: rect.left }
-          : { right: window.innerWidth - rect.right }),
+          : { right: view.width - rect.right }),
       })
     }
     place()

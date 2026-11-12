@@ -192,6 +192,10 @@ pub const K2_UNIT_FAMILIES: &[(&str, Option<&str>)] = &[
     // a second daemon's k2-daemon-b, …); daemon.toml names them at call
     // time, and this family keeps a box's own name out even when it isn't.
     ("k2-daemon-", None),
+    // The GPU memory proof's transient root units (k2-s6-proof-<pid>-<n>,
+    // scripts/node/spikes/s6-gpu-mem-proof.sh): they run test loads as a
+    // compute job's user, so no credential is ever bound to one.
+    ("k2-s6-proof-", None),
 ];
 
 /// Core system units, by exact name or `prefix*`. The allow list is the
@@ -615,6 +619,7 @@ mod tests {
         assert_eq!(deny_reason("ops-daemon-two.service", &daemons), Some("a K2 daemon unit (daemon.toml)"));
         assert_eq!(deny_reason("ops-daemon-two.service", &[]), None);
         assert!(deny_reason("k2-daemon-acme.service", &[]).is_some(), "a hosted box's daemon unit");
+        assert_eq!(deny_reason("k2-s6-proof-4242-1.service", &[]), Some("a unit K2 generates"), "the GPU proof's transient units");
     }
 
     /// Review A-H2 / B-M1: fail closed. No allow list, or a unit off it, is

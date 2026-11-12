@@ -31,6 +31,13 @@ fn ptyd_bin() -> PathBuf {
     exe.parent().and_then(|d| d.parent()).map(|d| d.join("k2-ptyd")).expect("target dir")
 }
 
+/// macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
+#[cfg(target_os = "macos")]
+fn parent_pid(pid: i32) -> i32 {
+    k2_core::mac_proc::bsd_info(pid).unwrap_or_else(|| panic!("ppid of {pid}: no bsd info")).ppid
+}
+
+#[cfg(not(target_os = "macos"))]
 fn parent_pid(pid: i32) -> i32 {
     let out = std::process::Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().expect("ps");
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or_else(|_| panic!("ppid of {pid}: {:?}", out))

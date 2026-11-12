@@ -200,7 +200,20 @@ fn pid_alive(pid: i32) -> bool {
         assert!(n >= 0, "poll(pidfd {pid}): {}", std::io::Error::last_os_error());
         n == 0 // readable = the thread group has exited
     }
-    #[cfg(not(target_os = "linux"))]
+    // macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
+    #[cfg(target_os = "macos")]
+    {
+        match k2_core::mac_proc::bsd_info(pid) {
+            Some(info) => !info.zombie,
+            None => {
+                // Reaped since the kill(0) above. Anything else is a failed read.
+                // SAFETY: existence probe only.
+                assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "libproc can't read live pid {pid}");
+                false
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let out = Command::new("ps")
             .args(["-o", "stat=", "-p", &pid.to_string()])

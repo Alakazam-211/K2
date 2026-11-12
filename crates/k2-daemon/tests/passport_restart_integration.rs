@@ -63,10 +63,36 @@ fn alive(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
-    let out = Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().expect("ps");
-    !String::from_utf8_lossy(&out.stdout).trim_start().starts_with('Z')
+    !is_zombie(pid)
 }
 
+/// macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
+#[cfg(target_os = "macos")]
+fn is_zombie(pid: i32) -> bool {
+    match k2_core::mac_proc::bsd_info(pid) {
+        Some(info) => info.zombie,
+        None => {
+            // Reaped since the kill(0) above. Anything else is a failed read.
+            // SAFETY: existence probe only.
+            assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "libproc can't read live pid {pid}");
+            true
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_zombie(pid: i32) -> bool {
+    let out = Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().expect("ps");
+    String::from_utf8_lossy(&out.stdout).trim_start().starts_with('Z')
+}
+
+/// macOS: libproc, not `ps` (setuid, so it can't run under a sandbox).
+#[cfg(target_os = "macos")]
+fn parent_pid(pid: i32) -> i32 {
+    k2_core::mac_proc::bsd_info(pid).unwrap_or_else(|| panic!("ppid of {pid}: no bsd info")).ppid
+}
+
+#[cfg(not(target_os = "macos"))]
 fn parent_pid(pid: i32) -> i32 {
     let out = Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().expect("ps");
     String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or_else(|_| panic!("ppid of {pid}: {out:?}"))

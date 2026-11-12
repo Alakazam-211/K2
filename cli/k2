@@ -98833,7 +98833,7 @@ _doc_tool() {
     for ((i = 0; i < n - 1; i++)); do argv+=("${_DOC_ARGS[$i]}"); done
     path="$(_doc_path "$path")"
     _doc_tmp
-    python3 -c "$_DOC_TOOL_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$path" "${argv[@]}" >"$_DOC_TMPD/tool.json" || exit $?
+    python3 -c "$_DOC_TOOL_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$path" ${argv[@]+"${argv[@]}"} >"$_DOC_TMPD/tool.json" || exit $?
     _doc_call_file POST /cli/docs/tool "" "$_DOC_TMPD/tool.json"
     _doc_print_tool
 }
@@ -98875,10 +98875,10 @@ _doc_blob_tool() {
     case "$budget" in *[!0-9]*) _doc_die usage "--read-budget takes a number of bytes (at least 16384)" ;; esac
     local path="${toks[$last]}"
     unset 'toks[last]'
-    _doc_parse "${k2args[@]}"
+    _doc_parse ${k2args[@]+"${k2args[@]}"}
     path="$(_doc_path "$path")"
     local argv
-    argv="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$verb" "${toks[@]}")"
+    argv="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$verb" ${toks[@]+"${toks[@]}"})"
     _doc_tmp
     if [ -n "$budget" ]; then
         _doc_body "$path" argv "$argv" readBudget "@int:$budget" >"$_DOC_TMPD/tool.json" </dev/null
@@ -98909,7 +98909,7 @@ print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
             *) args+=("$1"); shift ;;
         esac
     done
-    _doc_blob_tool claim "${args[@]}"
+    _doc_blob_tool claim ${args[@]+"${args[@]}"}
 }
 
 # The owner's comment purge and participant erasure on an any-file doc.
@@ -98929,7 +98929,7 @@ _doc_owner_purge() {
         esac
     done
     case "$n" in *[!0-9]*) _doc_die usage "--n takes a comment number" ;; esac
-    _doc_parse "${rest[@]}"
+    _doc_parse ${rest[@]+"${rest[@]}"}
     _doc_one_path "$verb"; local path="$_DOC_PATH"
     local -a kv=()
     if [ "$verb" = purge-comments ]; then
@@ -98938,7 +98938,7 @@ _doc_owner_purge() {
         [ -n "$text" ] && kv+=(text "$text")
         [ "$all" = 1 ] && kv+=(all "@true")
         [ ${#kv[@]} -gt 0 ] || _doc_die usage "k2 doc purge-comments --thread ann-N [--n N] | --text \"...\" | --all <file>"
-        _doc_call POST /cli/docs/comments/purge "$(_doc_body "$path" "${kv[@]}" </dev/null)"
+        _doc_call POST /cli/docs/comments/purge "$(_doc_body "$path" ${kv[@]+"${kv[@]}"} </dev/null)"
     else
         [ -n "$who" ] && [ -n "$pseudo" ] || _doc_die usage "k2 doc erase-participant --participant P --pseudonym NAME <file>"
         _doc_call POST /cli/docs/erase "$(_doc_body "$path" participant "$who" pseudonym "$pseudo" </dev/null)"
@@ -99154,7 +99154,7 @@ _doc_history() {
         esac
     done
     case "$ver" in *[!0-9]*) _doc_die usage "--version takes a version id (k2 doc versions)" ;; esac
-    _doc_parse "${rest[@]}"
+    _doc_parse ${rest[@]+"${rest[@]}"}
     local path change=""
     if [ "$verb" = revert ]; then
         [ ${#_DOC_ARGS[@]} -eq 2 ] || _doc_die usage "k2 doc revert <change> [--partial] <file.md>"
@@ -99267,7 +99267,7 @@ _doc_history_diff() {
         esac
     done
     case "$from$to$ctx" in *[!0-9]*) _doc_die usage "--version, --to and -U take numbers" ;; esac
-    _doc_parse "${rest[@]}"
+    _doc_parse ${rest[@]+"${rest[@]}"}
     _doc_one_path diff; local path="$_DOC_PATH"
     _doc_call GET /cli/docs/diff "$(_doc_query "$path" fromVersion "$from" toVersion "$to" context "$ctx")"
     if [ "${_DOC_JSON:-0}" = "1" ]; then
@@ -99304,7 +99304,7 @@ _doc_export() {
         esac
     done
     case "$ver" in *[!0-9]*) _doc_die usage "--version takes a version id (the first column of k2 doc versions <file>)" ;; esac
-    _doc_parse "${rest[@]}"
+    _doc_parse ${rest[@]+"${rest[@]}"}
     _doc_one_path export; local path="$_DOC_PATH"
     if [ "$list" = 1 ]; then
         [ -z "$to$ver$out" ] && [ ${#opts[@]} -eq 0 ] || _doc_die usage "k2 doc export --list <file> takes no other export flags"
@@ -99352,7 +99352,7 @@ if not w.get("available"):
         fi
     fi
     _doc_tmp
-    python3 - "$_DOC_WS" "$_DOC_OB" "$path" "$to" "$ver" "$send_out" "$([ "$remote" = 1 ] && [ -n "$out" ] && echo 1 || echo 0)" "$node" "${opts[@]}" >"$_DOC_TMPD/export.json" <<'PY' || _doc_die usage "couldn't build the request"
+    python3 - "$_DOC_WS" "$_DOC_OB" "$path" "$to" "$ver" "$send_out" "$([ "$remote" = 1 ] && [ -n "$out" ] && echo 1 || echo 0)" "$node" ${opts[@]+"${opts[@]}"} >"$_DOC_TMPD/export.json" <<'PY' || _doc_die usage "couldn't build the request"
 import json, sys
 ws, ob, path, to, ver, out, fetch, node, opts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7] == "1", sys.argv[8], sys.argv[9:]
 # A short first wait: the poll loop (where Ctrl-C / SIGTERM cancel) takes over.
@@ -99675,7 +99675,7 @@ _doc_board() {
     if [ -n "$host" ]; then
         _apply_remote_host "$host" "$token" || exit 1
     fi
-    cmd_board "$verb" "${rest[@]}"
+    cmd_board "$verb" ${rest[@]+"${rest[@]}"}
 }
 
 cmd_doc() {
@@ -99731,12 +99731,12 @@ cmd_doc() {
                 esac
             done
             if [ "$has_reg" = 1 ]; then
-                _doc_parse "${rest[@]}"
+                _doc_parse ${rest[@]+"${rest[@]}"}
                 _doc_one_path view; local path="$_DOC_PATH"
                 _doc_call POST /cli/docs/view "$(_doc_body "$path" region "$reg")"
                 _doc_print_json_or 'import json,sys; v=json.load(sys.stdin); print("viewing %s in %s" % (v.get("region") or "nothing in particular", v["doc"]["path"]))'
             else
-                _doc_tool view "${rest[@]}"
+                _doc_tool view ${rest[@]+"${rest[@]}"}
             fi ;;
         lease|lock|unlock)
             # Any-file docs (tier 0): one holder at a time; the others'
@@ -99764,7 +99764,7 @@ if not m or int(m.group(1)) == 0:
 print(int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)])
 ' "$ttl")" || _doc_die usage "--ttl takes a duration: 90, 90s, 5m, 1h (at most 1h)"
             fi
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path "$verb"; local path="$_DOC_PATH"
             if [ -n "$secs" ]; then
                 _doc_call POST /cli/docs/lease "$(_doc_body "$path" action "$action" ttlSecs "@int:$secs")"
@@ -99829,7 +99829,7 @@ if not m or int(m.group(1)) == 0:
 print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
 ' "$ttl")" || _doc_die usage "--ttl takes a duration: 30s, 5m, or milliseconds (at most 10m)"
             fi
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path claim; local path="$_DOC_PATH"
             if [ "$action" = take ] && [ -z "$lines" ]; then
                 _doc_die usage "k2 doc claim --lines a,b [--ttl 2m] [--note \"what for\"] [--hold] <file.md>"
@@ -99840,7 +99840,7 @@ print(int(m.group(1)) * {None: 1, "ms": 1, "s": 1000, "m": 60000}[m.group(2)])
             [ -n "$note" ] && kv+=(note "$note")
             [ -n "$hold" ] && kv+=(hold "$hold")
             [ -n "$id" ] && kv+=(id "$id")
-            _doc_call POST /cli/docs/claim "$(_doc_body "$path" "${kv[@]}")"
+            _doc_call POST /cli/docs/claim "$(_doc_body "$path" ${kv[@]+"${kv[@]}"})"
             _doc_print_json_or '
 import json, sys, time
 v = json.load(sys.stdin)
@@ -99866,7 +99866,7 @@ print("%s lines %s-%s of %s as %s for %ds%s%s" % ("claimed" if a == "take" else 
                 esac
             done
             case "$n" in *[!0-9]*) _doc_die usage "-n needs a number" ;; esac
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path activity; local path="$_DOC_PATH"
             _doc_call GET /cli/docs/activity "$(_doc_query "$path" n "$n")"
             if [ "${_DOC_JSON:-0}" = "1" ]; then printf '%s\n' "$_DOC_BODY"; return 0; fi
@@ -99883,7 +99883,7 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
             if [ "$f" = 1 ]; then
                 local -a rest=()
                 for a in "$@"; do case "$a" in -f|--follow) ;; *) rest+=("$a") ;; esac; done
-                _doc_parse "${rest[@]}"
+                _doc_parse ${rest[@]+"${rest[@]}"}
                 _doc_watch
             else
                 _doc_tool tail "$@"
@@ -99905,7 +99905,7 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
                 esac
             done
             [ -n "$at" ] || _doc_die usage "k2 doc cursor --at L:C [--to L:C] <file.md>"
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path cursor; local path="$_DOC_PATH"
             if [ -n "$to" ]; then
                 _doc_call POST /cli/docs/cursor "$(_doc_body "$path" at "$at" to "$to")"
@@ -99925,7 +99925,7 @@ sys.stdout.write(v.get("rendered") or "No activity.\n")
                 esac
             done
             [ -n "$base" ] || _doc_die usage "k2 doc write --base <version>|live <file.md> < text (read the doc first: k2 doc cat)"
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path write; local path="$_DOC_PATH"
             if [ "$_DOC_TEXT_SET" != 1 ] && [ -z "$_DOC_FILE" ] && [ -t 0 ]; then
                 _doc_die usage "k2 doc write reads the whole new content from stdin, --file or --text"
@@ -99974,7 +99974,7 @@ if a:
                 esac
             done
             case "$steps" in ''|*[!0-9]*) _doc_die usage "--steps needs a number" ;; esac
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path "$verb"; local path="$_DOC_PATH"
             _doc_call POST "/cli/docs/$verb" "$(_doc_body "$path" steps "@int:$steps" mode "$mode" forPerson "$for_p")"
             _doc_print_undo "$verb" ;;
@@ -100004,7 +100004,7 @@ mult = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[m.group(2)]
 print(int((time.time() - int(m.group(1)) * mult) * 1000))
 ' "$since")" || _doc_die usage "--since takes a duration: 30m, 2h, 7d"
             fi
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path log; local path="$_DOC_PATH"
             _doc_call GET /cli/docs/log "$(_doc_query "$path" by "$by" sinceMs "$since_ms" n "$n" pending "$([ "$pend" = @true ] && echo 1 || echo 0)" forPerson "$for_p")"
             _doc_print_json_or '
@@ -100107,7 +100107,7 @@ else:
                     *) rest+=("$1"); shift ;;
                 esac
             done
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path approvals; local path="$_DOC_PATH"
             _doc_call GET /cli/docs/approvals "$(_doc_query "$path" pending "${pend:-0}" mine "${mine:-0}" forPerson "$for_p")"
             _doc_print_json_or '
@@ -100148,7 +100148,7 @@ if v.get("hint"):
                     *) rest+=("$1"); shift ;;
                 esac
             done
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             [ -n "$with" ] || _doc_die usage "k2 doc $verb <file-or-folder> --with <workspace> -w <its workspace>"
             [ -n "$_DOC_WS" ] || _doc_die usage "name the workspace the file is in: -w <workspace>"
             [ ${#_DOC_ARGS[@]} -eq 1 ] || _doc_die usage "k2 doc $verb <file-or-folder> --with <workspace> -w <ws>"
@@ -100175,7 +100175,7 @@ print("%s %s (%s) · %s" % (what, s.get("path") or ".", "folder" if s.get("folde
                     *) rest+=("$1"); shift ;;
                 esac
             done
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_call GET /cli/docs/shares "$(_doc_query "" with "$with")"
             _doc_print_json_or '
 import json, sys
@@ -100199,7 +100199,7 @@ for s in rows:
             done
             case "$range" in ''|[0-9]*,[0-9]*|[0-9]*) ;; *) _doc_die usage "-L takes a,b (line numbers)" ;; esac
             case "$range" in *[!0-9,]*) _doc_die usage "-L takes a,b (line numbers)" ;; esac
-            _doc_parse "${rest[@]}"
+            _doc_parse ${rest[@]+"${rest[@]}"}
             _doc_one_path blame; local path="$_DOC_PATH"
             _doc_call GET /cli/docs/blame "$(_doc_query "$path" lines "$range")"
             if [ "${_DOC_JSON:-0}" = "1" ]; then printf '%s\n' "$_DOC_BODY"; return 0; fi

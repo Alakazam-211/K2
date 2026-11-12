@@ -48,7 +48,7 @@ import {
   mapPointer,
   splitText,
 } from './desktop-input'
-import { desktopDataFromSerializedBrowser, serializeDesktopItem } from './desktop-serialize'
+import { desktopDataFromSerializedBrowser, desktopTabTitle, isServerDesktop, sameDesktop, serializeDesktopItem } from './desktop-serialize'
 import { cardFor, openDesktopIsForMe, STATE_CARDS, tabState, type DesktopStatus } from './desktop-state'
 
 const REPO = join(__dirname, '../../../..')
@@ -275,6 +275,35 @@ describe('desktop-serialize', () => {
     expect(desktopDataFromSerializedBrowser({ id: 'x', type: 'browser', desktop: {} })).toBeNull()
     expect(desktopDataFromSerializedBrowser({ id: 'x', type: 'terminal', desktop: { v: 1 } })).toBeNull()
     expect(desktopDataFromSerializedBrowser({ id: 'x', type: 'browser', desktop: { v: 1, fit: 'zoom' } })).toEqual({ desktopId: 'console' })
+  })
+
+  it('keeps any desktop id and its agent name; a bad id restores as This server (`console`)', () => {
+    const s = serializeDesktopItem('i1', { desktopId: 'virtual:w-9_a', name: 'scout' })
+    expect(s.title).toBe('Desktop: scout')
+    expect(s.desktop).toEqual({ v: 1, desktopId: 'virtual:w-9_a', name: 'scout' })
+    expect(desktopDataFromSerializedBrowser(JSON.parse(JSON.stringify(s)))).toEqual({ desktopId: 'virtual:w-9_a', name: 'scout' })
+    // Not yet picked: saved as This server.
+    expect(serializeDesktopItem('i2', {}).desktop).toEqual({ v: 1, desktopId: 'console' })
+    for (const bad of ['', 'Virtual', 'virtual/../x', 'a'.repeat(65), 7]) {
+      expect(desktopDataFromSerializedBrowser({ id: 'x', type: 'browser', desktop: { v: 1, desktopId: bad } })).toEqual({ desktopId: 'console' })
+    }
+  })
+
+  it('titles: "Desktop" for This server, "Desktop: <agent>" for an agent’s', () => {
+    expect(desktopTabTitle({})).toBe('Desktop')
+    expect(desktopTabTitle({ desktopId: 'console' })).toBe('Desktop')
+    expect(desktopTabTitle({ desktopId: 'virtual' })).toBe('Desktop')
+    expect(desktopTabTitle({ desktopId: 'virtual:w9', name: 'scout' })).toBe('Desktop: scout')
+    // An agent's desktop whose name isn't known yet.
+    expect(desktopTabTitle({ desktopId: 'virtual:w9' })).toBe('Desktop')
+    expect(isServerDesktop(undefined)).toBe(true)
+    expect(isServerDesktop('console')).toBe(true)
+    expect(isServerDesktop('virtual')).toBe(true)
+    expect(isServerDesktop('virtual:w9')).toBe(false)
+    expect(sameDesktop('console', 'virtual')).toBe(true)
+    expect(sameDesktop('virtual:a', 'virtual:a')).toBe(true)
+    expect(sameDesktop('virtual:a', 'virtual:b')).toBe(false)
+    expect(sameDesktop('virtual:a', 'virtual')).toBe(false)
   })
 })
 

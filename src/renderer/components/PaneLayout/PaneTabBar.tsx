@@ -12,6 +12,7 @@ import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
 import { FEATURE_ICONS } from '@/components/icons/feature-icons'
 import { MonitorIcon } from '@/components/icons/K2Icons'
+import { desktopTabTitle } from '@/components/Desktop/desktop-serialize'
 import { useStore } from 'zustand'
 import { TAB_SLOT_PX, TabSlotRest, terminalsStatus, type StatusTerminal } from '@/components/TabBar/TabStatus'
 
@@ -50,9 +51,10 @@ interface MobileItemData {
   deviceType?: string
 }
 
-/** Desktop tab (prd-remote-desktop-tab-v1 §8): the machine's `console`. */
+/** Desktop tab (prd-linux-virtual-desktop-v1 §6): which desktop it shows. */
 interface DesktopItemData {
-  desktopId: 'console'
+  desktopId?: string
+  name?: string
 }
 
 interface Item {
@@ -91,7 +93,7 @@ function getTabLabel(item: Item): string {
     return 'Mobile'
   }
   if (item.type === 'desktop') {
-    return 'Desktop'
+    return desktopTabTitle(item.data as DesktopItemData)
   }
   if (item.type === 'browser') {
     const data = item.data as BrowserItemData

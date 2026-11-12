@@ -595,7 +595,8 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
         return
       }
       if (picked === 'desktop') {
-        // One machine per server: focus its Desktop tab, or open one.
+        // A new Desktop tab every time (prd-linux-virtual-desktop-v1 §6):
+        // its pane picks the first desktop it shows.
         room.tabs.getState().openDesktopTab(group)
         return
       }

@@ -45,8 +45,8 @@ import {
   type Tab,
 } from './tabs'
 
-function fire(scopeId: string, forField: string, display: string | null = null): void {
-  for (const fn of bus.handlers.get(scopeId) ?? []) fn({ kind: 'open_desktop', desktop: 'console', display, for: forField })
+function fire(scopeId: string, forField: string, display: string | null = null, desktop = 'console'): void {
+  for (const fn of bus.handlers.get(scopeId) ?? []) fn({ kind: 'open_desktop', desktop, display, for: forField })
 }
 
 function items(tabs: Tab[] = useTabsStore.getState().tabs): Array<{ id: string; type: string; data: unknown }> {
@@ -72,17 +72,40 @@ afterEach(() => {
 })
 
 describe('openDesktopTab', () => {
-  it('opens one Desktop tab, then focuses it instead of opening another', () => {
+  it('"+" → Desktop twice gives two Desktop tabs (several, like Design)', () => {
     const a = useTabsStore.getState().openDesktopTab()
     useTabsStore.getState().addTab('/srv/alpha')
-    expect(useTabsStore.getState().activeTabId).not.toBe(a)
     const b = useTabsStore.getState().openDesktopTab()
     const s = useTabsStore.getState()
-    expect(b).toBe(a)
-    expect(s.activeTabId).toBe(a)
-    expect(desktopTabs()).toHaveLength(1)
+    expect(b).not.toBe(a)
+    expect(s.activeTabId).toBe(b)
+    expect(desktopTabs()).toHaveLength(2)
     expect(s.tabs.find((t) => t.id === a)?.title).toBe('Desktop')
-    expect(items(desktopTabs()).map((i) => i.data)).toEqual([{ desktopId: 'console' }])
+    // A new tab has no desktop yet: the pane picks the first one it shows.
+    expect(items(desktopTabs()).map((i) => i.data)).toEqual([{}, {}])
+  })
+
+  it('opens on the desktop asked for, titled after its agent', () => {
+    const id = useTabsStore.getState().openDesktopTab(0, { desktopId: 'virtual:w9', name: 'scout' })
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === id)!
+    expect(tab.title).toBe('Desktop: scout')
+    expect(items([tab])[0].data).toEqual({ desktopId: 'virtual:w9', name: 'scout' })
+  })
+
+  it('setDesktopItemState moves the tab to another desktop and retitles it', () => {
+    const tabId = useTabsStore.getState().openDesktopTab()
+    const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)!
+    const [pgId, pg] = Array.from(tab.paneGroups.entries())[0]
+    useTabsStore.getState().setDesktopItemState(tabId, pgId, pg.items[0].id, { desktopId: 'virtual:w2', name: 'ada', displayId: '1' })
+    let t = useTabsStore.getState().tabs.find((x) => x.id === tabId)!
+    expect(t.title).toBe('Desktop: ada')
+    expect(items([t])[0].data).toEqual({ desktopId: 'virtual:w2', name: 'ada', displayId: '1' })
+    // Back to This server: the agent's name goes, and so does the display
+    // picked on the other desktop.
+    useTabsStore.getState().setDesktopItemState(tabId, pgId, pg.items[0].id, { desktopId: 'virtual', name: undefined, displayId: undefined })
+    t = useTabsStore.getState().tabs.find((x) => x.id === tabId)!
+    expect(t.title).toBe('Desktop')
+    expect(items([t])[0].data).toEqual({ desktopId: 'virtual' })
   })
 
   it('setDesktopItemState stamps the item; the same value changes nothing', () => {
@@ -91,7 +114,7 @@ describe('openDesktopTab', () => {
     const [pgId, pg] = Array.from(tab.paneGroups.entries())[0]
     useTabsStore.getState().setDesktopItemState(tabId, pgId, pg.items[0].id, { displayId: '2', fit: '1:1' })
     const after = useTabsStore.getState().tabs
-    expect(items(after)[0].data as DesktopItemData).toEqual({ desktopId: 'console', displayId: '2', fit: '1:1' })
+    expect(items(after)[0].data as DesktopItemData).toEqual({ displayId: '2', fit: '1:1' })
     useTabsStore.getState().setDesktopItemState(tabId, pgId, pg.items[0].id, { fit: '1:1' })
     expect(useTabsStore.getState().tabs).toBe(after)
   })
@@ -99,7 +122,7 @@ describe('openDesktopTab', () => {
 
 describe('serialization (§8 mixed-version guard)', () => {
   it('saves as an empty Browser item plus the marker and restores as Desktop', () => {
-    const tabId = useTabsStore.getState().openDesktopTab()
+    const tabId = useTabsStore.getState().openDesktopTab(0, { desktopId: 'console' })
     const tab = useTabsStore.getState().tabs.find((t) => t.id === tabId)!
     const [pgId, pg] = Array.from(tab.paneGroups.entries())[0]
     const itemId = pg.items[0].id
@@ -118,6 +141,27 @@ describe('serialization (§8 mixed-version guard)', () => {
     expect(restored[0].id).toBe(itemId)
     expect(restored[0].type).toBe('desktop')
     expect(restored[0].data).toEqual({ desktopId: 'console', displayId: '1', viewOnly: true })
+  })
+
+  it("a tab on an agent's desktop restores on that desktop, with its title", () => {
+    useTabsStore.getState().openDesktopTab(0, { desktopId: 'virtual:w9', name: 'scout' })
+    const layout = JSON.parse(JSON.stringify(useTabsStore.getState().serializeCurrentLayout())) as SerializedLayout
+    const saved = layout.tabs.flatMap((t) => Object.values(t.paneGroups).flatMap((g) => g.items))
+    expect((saved[0] as { desktop?: unknown }).desktop).toEqual({ v: 1, desktopId: 'virtual:w9', name: 'scout' })
+    useTabsStore.setState({ tabs: [], activeTabId: null })
+    useTabsStore.getState().restoreLayout(layout, '/srv/alpha')
+    expect(items()[0].data).toEqual({ desktopId: 'virtual:w9', name: 'scout' })
+    expect(useTabsStore.getState().tabs[0].title).toBe('Desktop: scout')
+  })
+
+  it('a tab saved before it picked, and an older marker, restore as This server (`console`)', () => {
+    useTabsStore.getState().openDesktopTab()
+    const layout = JSON.parse(JSON.stringify(useTabsStore.getState().serializeCurrentLayout())) as SerializedLayout
+    const saved = layout.tabs.flatMap((t) => Object.values(t.paneGroups).flatMap((g) => g.items))
+    expect((saved[0] as { desktop?: unknown }).desktop).toEqual({ v: 1, desktopId: 'console' })
+    useTabsStore.setState({ tabs: [], activeTabId: null })
+    useTabsStore.getState().restoreLayout(layout, '/srv/alpha')
+    expect(items()[0].data).toEqual({ desktopId: 'console' })
   })
 
   it('the saved item is a plain empty Browser item to an older client, and its re-save restores as an empty Browser tab', () => {
@@ -154,6 +198,25 @@ describe('open_desktop (k2 desktop open)', () => {
     expect(items(desktopTabs())[0].data).toEqual({ desktopId: 'console', displayId: '2' })
     fire(id, 'owner')
     expect(desktopTabs()).toHaveLength(1)
+    off()
+  })
+
+  it('focuses a tab already on the named desktop, or opens one on it', () => {
+    noteServerVersion('local', '0.46.12', ['remote-desktop-v1'])
+    const off = initOpenDesktopTabs()
+    const id = primaryScope().id
+    fire(id, 'owner', null, 'virtual:w9')
+    expect(items(desktopTabs()).map((i) => (i.data as DesktopItemData).desktopId)).toEqual(['virtual:w9'])
+    const first = useTabsStore.getState().activeTabId
+    useTabsStore.getState().addTab('/srv/alpha')
+    fire(id, 'owner', null, 'virtual:w9')
+    expect(desktopTabs()).toHaveLength(1)
+    expect(useTabsStore.getState().activeTabId).toBe(first)
+    fire(id, 'owner', null, 'virtual')
+    expect(items(desktopTabs()).map((i) => (i.data as DesktopItemData).desktopId)).toEqual(['virtual:w9', 'virtual'])
+    // This server's tab answers for `console` too (an older marker).
+    fire(id, 'owner', null, 'console')
+    expect(desktopTabs()).toHaveLength(2)
     off()
   })
 

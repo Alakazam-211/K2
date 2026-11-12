@@ -78,6 +78,9 @@ import {
 } from '@/components/Mobile/mobile-serialize'
 import {
   desktopDataFromSerializedBrowser,
+  desktopTabTitle,
+  isServerDesktop,
+  sameDesktop,
   serializeDesktopItem,
   type DesktopItemData,
   type SerializedDesktopItem,
@@ -1036,22 +1039,29 @@ export interface TabsState {
    *  (any column) is focused; else a NEW one opens in column `groupIndex`
    *  (0 / omitted = primary). Returns its tab id. */
   openMobileTab: (groupIndex?: number) => string
-  /** Desktop tab (prd-remote-desktop-tab-v1 §8, + menu → Desktop (Beta),
-   *  `open_desktop`): one machine per server, so an open Desktop tab (any
-   *  column) is focused; else a NEW one opens in column `groupIndex`
-   *  (0 / omitted = primary). `displayId` is the display to ask for first.
+  /** Desktop tab (+ menu → Desktop (Beta); prd-linux-virtual-desktop-v1
+   *  §6, LD-35): always a NEW Desktop tab in column `groupIndex` (0 /
+   *  omitted = primary); many are allowed, two may show the same desktop.
+   *  `opts.desktopId` is the desktop to show; left out, the pane picks the
+   *  first one (its workspace's agent desktop, else This server).
    *  Returns its tab id. */
-  openDesktopTab: (groupIndex?: number, displayId?: string) => string
+  openDesktopTab: (groupIndex?: number, opts?: { desktopId?: string; name?: string; displayId?: string }) => string
+  /** `open_desktop` (`k2 desktop open [--desktop <id>]`): focus a tab
+   *  already on that desktop (any column), else open one in column
+   *  `groupIndex`. Returns its tab id. */
+  showDesktopTab: (groupIndex: number | undefined, desktopId: string, displayId?: string) => string
   /** Remember the device profile a Mobile tab last picked (its chooser's
    *  default next time). A same-value stamp changes nothing. */
   setMobileItemDevice: (tabId: string, paneGroupId: string, itemId: string, deviceType: string) => void
-  /** Stamp a Desktop item's view choices (display, fit, view only) so they
-   *  survive a restore. A same-value stamp changes nothing (no save). */
+  /** Stamp a Desktop item's desktop (the picker; the tab is retitled) and
+   *  view choices (display, fit, view only) so they survive a restore. A
+   *  key set to `undefined` is dropped. A same-value stamp changes nothing
+   *  (no save). */
   setDesktopItemState: (
     tabId: string,
     paneGroupId: string,
     itemId: string,
-    patch: Partial<Omit<DesktopItemData, 'desktopId'>>,
+    patch: Partial<DesktopItemData>,
   ) => void
   /** Keep the room's pinned Design tab in line with the workspace's
    *  "Design mode" setting (late decision Q-F2): on → exactly one
@@ -1924,12 +1934,13 @@ function makeMobileTab(data: MobileItemData = {}, extra: Partial<Tab> = {}): Tab
   }
 }
 
-/** A new Desktop tab (title "Desktop", one Desktop item; §8). */
-function makeDesktopTab(data: DesktopItemData = { desktopId: 'console' }, extra: Partial<Tab> = {}): Tab {
+/** A new Desktop tab (one Desktop item; titled "Desktop" or
+ *  "Desktop: <agent>", prd-linux-virtual-desktop-v1 §6). */
+function makeDesktopTab(data: DesktopItemData = {}, extra: Partial<Tab> = {}): Tab {
   const paneGroupId = crypto.randomUUID()
   return {
     id: crypto.randomUUID(),
-    title: 'Desktop',
+    title: desktopTabTitle(data),
     mosaicTree: paneGroupId,
     paneGroups: new Map([
       [paneGroupId, { id: paneGroupId, items: [{ id: crypto.randomUUID(), type: 'desktop', data }], activeItemIndex: 0 }],
@@ -1938,17 +1949,21 @@ function makeDesktopTab(data: DesktopItemData = { desktopId: 'console' }, extra:
   }
 }
 
-/** The room's Desktop tab in its live strips (one machine per server), or
- *  null. */
-export function findDesktopTab(state: {
-  tabs: Tab[]
-  extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
-}): { groupIndex: number; tabId: string } | null {
+/** The room's first Desktop tab on `desktopId` in its live strips, or
+ *  null. This server's `console` and `virtual` are one desktop. */
+export function findDesktopTab(
+  state: {
+    tabs: Tab[]
+    extraGroups: Array<{ tabs: Tab[]; activeTabId: string | null }>
+  },
+  desktopId: string,
+): { groupIndex: number; tabId: string } | null {
   const columns = [state.tabs, ...state.extraGroups.map((g) => g.tabs)]
   for (let gi = 0; gi < columns.length; gi++) {
     for (const tab of columns[gi]) {
       for (const pg of tab.paneGroups.values()) {
-        if (pg.items.some((item) => item.type === 'desktop')) return { groupIndex: gi, tabId: tab.id }
+        const on = (item: Item): boolean => item.type === 'desktop' && sameDesktop((item.data as DesktopItemData).desktopId, desktopId)
+        if (pg.items.some(on)) return { groupIndex: gi, tabId: tab.id }
       }
     }
   }
@@ -5084,16 +5099,24 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       return tab.id
     },
 
-    openDesktopTab: (groupIndex?: number, displayId?: string) => {
-      const existing = findDesktopTab(get())
+    openDesktopTab: (groupIndex, opts = {}) => {
+      const data: DesktopItemData = {}
+      if (opts.desktopId) data.desktopId = opts.desktopId
+      if (opts.name && !isServerDesktop(opts.desktopId)) data.name = opts.name
+      if (opts.displayId) data.displayId = opts.displayId
+      const tab = makeDesktopTab(data)
+      set((state) => placedTab(state, groupIndex ?? 0, tab))
+      return tab.id
+    },
+
+    showDesktopTab: (groupIndex, desktopId, displayId) => {
+      const existing = findDesktopTab(get(), desktopId)
       if (existing) {
         get().setActiveTabInGroup(existing.groupIndex, existing.tabId)
         get().setActiveGroup(existing.groupIndex)
         return existing.tabId
       }
-      const tab = makeDesktopTab({ desktopId: 'console', ...(displayId ? { displayId } : {}) })
-      set((state) => placedTab(state, groupIndex ?? 0, tab))
-      return tab.id
+      return get().openDesktopTab(groupIndex, { desktopId, ...(displayId ? { displayId } : {}) })
     },
 
     setMobileItemDevice: (tabId, paneGroupId, itemId, deviceType) => {
@@ -5131,19 +5154,33 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
             const pg = tab.paneGroups.get(paneGroupId)
             if (!pg) return tab
             let mine = false
+            let title: string | null = null
             const items = pg.items.map((item) => {
               if (item.id !== itemId || item.type !== 'desktop') return item
               const prev = item.data as DesktopItemData
-              const next: DesktopItemData = { ...prev, ...patch, desktopId: 'console' }
-              if (next.displayId === prev.displayId && next.fit === prev.fit && next.viewOnly === prev.viewOnly) return item
+              const merged: DesktopItemData = { ...prev, ...patch }
+              const next: DesktopItemData = {}
+              for (const k of ['desktopId', 'name', 'displayId', 'fit', 'viewOnly'] as const) {
+                if (merged[k] !== undefined) (next as Record<string, unknown>)[k] = merged[k]
+              }
+              if (isServerDesktop(next.desktopId)) delete next.name
+              if (
+                next.desktopId === prev.desktopId &&
+                next.name === prev.name &&
+                next.displayId === prev.displayId &&
+                next.fit === prev.fit &&
+                next.viewOnly === prev.viewOnly
+              )
+                return item
               mine = true
+              if (next.desktopId !== prev.desktopId || next.name !== prev.name) title = desktopTabTitle(next)
               return { ...item, data: next }
             })
             if (!mine) return tab
             changed = true
             const paneGroups = new Map(tab.paneGroups)
             paneGroups.set(paneGroupId, { ...pg, items })
-            return { ...tab, paneGroups }
+            return { ...tab, paneGroups, ...(title !== null ? { title } : {}) }
           })
         const tabs = stamp(state.tabs)
         const extraGroups = state.extraGroups.map((g) => ({ ...g, tabs: stamp(g.tabs) }))
@@ -7945,7 +7982,8 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       try {
         const st = store.getState()
         const display = typeof e.display === 'string' && e.display ? e.display : undefined
-        st.openDesktopTab(st.activeGroupIndex, display)
+        const desktop = typeof e.desktop === 'string' && e.desktop ? e.desktop : 'console'
+        st.showDesktopTab(st.activeGroupIndex, desktop, display)
       } catch (err) {
         console.warn('[tabs] open_desktop tab surface failed:', err)
       }

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Owned corpus: SmartArt and OLE kept as XML, audio and video bookmarks and trims, a section with a
 //! hidden slide, slide-number and date fields, ink, 3-D models, and animation repeat, bounce and triggers.
 //!
@@ -292,7 +293,7 @@ fn with_parts(parts: &[(&str, Vec<u8>)], edit: impl Fn(&str, String) -> String) 
     let o = zip::write::SimpleFileOptions::default();
     for i in 0..z.len() {
         let mut f = z.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         if parts.iter().any(|(n, _)| *n == name) {
             continue;
         }

@@ -68,6 +68,9 @@ exclude = [
     "vendor/k2-mpc-markdown",
     "vendor/k2-mpc-psd",
     "vendor/k2-mpc-text",
+    # deckcraft (git subtree, vendor/deckcraft/VENDORED.md): its pptx and render crates are
+    # path dependencies of k2-deckrender, never members.
+    "vendor/deckcraft",
 ]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.

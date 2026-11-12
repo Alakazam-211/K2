@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Equations whose math namespace is declared above the equation: on the slide root or on a wrapper.
 
 use std::io::{Cursor, Read, Write};
@@ -15,7 +16,7 @@ fn entries(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
             let mut f = z.by_index(i).expect("entry");
             let mut d = vec![];
             f.read_to_end(&mut d).expect("read");
-            (f.name().to_string(), d)
+            (f.name().expect("entry name").to_string(), d)
         })
         .collect()
 }

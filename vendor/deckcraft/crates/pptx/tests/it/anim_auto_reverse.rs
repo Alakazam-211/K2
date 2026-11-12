@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! "Auto-reverse" is written by PowerPoint on the behaviour time nodes, not on the effect node.
 
 use std::io::{Cursor, Read, Write};
@@ -17,7 +18,7 @@ fn deck_with(effect: &str, behaviour: &str) -> Vec<bool> {
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut d = vec![];
         f.read_to_end(&mut d).expect("read");
         if name == "ppt/slides/slide1.xml" {

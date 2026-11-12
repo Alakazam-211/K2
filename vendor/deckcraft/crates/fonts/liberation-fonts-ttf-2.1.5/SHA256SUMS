@@ -1,0 +1,14 @@
+# Added by Alakazam Labs (see ../../../VENDORED.md): the pins for this folder.
+# Source: https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5
+# Tarball: liberation-fonts-ttf-2.1.5.tar.gz
+#   https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz
+#   sha256 7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0
+# Every file below is the tarball's own, unmodified and whole (its README.md, TODO and the
+# Liberation Serif and Mono faces are left out). Check with: shasum -a 256 -c SHA256SUMS
+76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8  LiberationSans-Regular.ttf
+788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173  LiberationSans-Bold.ttf
+e5bae5c4cde31f22142753855f4f8fb86da6ff39955ed3c0a11248b0d16948b0  LiberationSans-Italic.ttf
+698da70fc191cc5f33ad4d6d3fe830fe4624b898ea2e3169955928b7c491f1ee  LiberationSans-BoldItalic.ttf
+93fed46019c38bbe566b479d22148e2e8a1e85ada614accb0211c37b2c61c19b  LICENSE
+b627404917ef824675cb24c32e2facd0b57650627955f3fc3d8a8863c5d0adfc  AUTHORS
+97d9c0c8ae7418fcb8f0f7711be28c92d6fe117895b3019ed455b0631451000a  ChangeLog

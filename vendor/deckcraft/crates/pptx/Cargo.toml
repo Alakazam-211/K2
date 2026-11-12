@@ -1,3 +1,4 @@
+# Changed by Alakazam Labs (see VENDORED.md): the deckcraft-engine dev-dependency is removed (not vendored); zip comes from the workspace at 9.
 [package]
 name = "deckcraft-pptx"
 version.workspace = true
@@ -18,7 +19,6 @@ thiserror = { workspace = true }
 log = { workspace = true }
 
 [dev-dependencies]
-deckcraft-engine = { workspace = true }
 serde_json = { workspace = true }
 deckcraft-color = { workspace = true }
 deckcraft-geom = { workspace = true }

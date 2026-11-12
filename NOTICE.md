@@ -359,6 +359,144 @@ never writes a file. Vendored beside the kit from its public cut, which has no
 
 Update these sections on every kit bump.
 
+## Third-party: deckcraft v0.18.1, for .pptx previews (MIT OR Apache-2.0, vendored)
+
+K2 draws previews of `.pptx` slides with the PPTX reader and the CPU renderer of
+**DeckCraft**, vendored (a `git subtree`, squashed), run only inside the separate
+`k2-deckrender` process.
+
+| | |
+|--|--|
+| **What** | `vendor/deckcraft`: the crates deckcraft-pptx and deckcraft-render and the in-repo crates they need (anim, color, fonts, geom, metafile, model, text), with upstream's `NOTICE` (trimmed) and `VENDORED.md` |
+| **Upstream** | `storytold/deckcraft v0.18.1 (7cc73ab)`: [storytold/deckcraft](https://github.com/storytold/deckcraft), tag `v0.18.1`, commit `7cc73ab1895ed2e30c8afbcada20c70b9ea0a440` |
+| **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 ArtCraft Team and the DeckCraft contributors), full texts in `vendor/deckcraft/LICENSE-MIT` and `vendor/deckcraft/LICENSE-APACHE` |
+| **Local changes** | Listed in `vendor/deckcraft/VENDORED.md`, and each changed file says so on its first line: the last-resort font is Liberation Sans 2.1.5 (below) in place of `epaint_default_fonts`, and craft-fonts input is refused; zip 9 in place of zip 3; the workspace keeps only these crates, with no git sources and no `[patch]`; the tests that need deckcraft-engine (not vendored) are removed |
+| **Not included** | deckcraft-engine, the CLI and app, deckcraft-media and the codec crates, and every asset and brand file. K2 is not affiliated with or endorsed by the ArtCraft Team |
+| **K2 code** | Is **MIT**. The vendored crates do **not** relicense the product. |
+
+## Third-party: Liberation Sans 2.1.5 (SIL Open Font License 1.1)
+
+The `.pptx` previews' last-resort font, compiled into `k2-deckrender` (through the vendored
+deckcraft-fonts): the four Liberation Sans styles of liberation-fonts **2.1.5**, unmodified and
+whole.
+
+| | |
+|--|--|
+| **What** | `vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/` (`LiberationSans-Regular.ttf`, `-Bold.ttf`, `-Italic.ttf`, `-BoldItalic.ttf`, with upstream's `LICENSE`, `AUTHORS` and `ChangeLog`; every file pinned by sha256 in `SHA256SUMS` there) |
+| **Upstream** | [liberationfonts/liberation-fonts](https://github.com/liberationfonts/liberation-fonts), release 2.1.5 (`liberation-fonts-ttf-2.1.5.tar.gz`, sha256 `7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0`) |
+| **Copyright** | Digitized data copyright (c) 2010 Google Corporation, with Reserved Font Arimo, Tinos and Cousine. Copyright (c) 2012 Red Hat, Inc., with Reserved Font Name Liberation. |
+| **License** | **SIL Open Font License, Version 1.1**, full text in `vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/LICENSE` and below. The fonts are not renamed, subset or modified; "Liberation" is a Reserved Font Name |
+| **K2 code** | Is **MIT**. The font files keep their own licence and do **not** relicense the product. |
+
+<details>
+<summary>SIL Open Font License, Version 1.1</summary>
+
+```
+Digitized data copyright (c) 2010 Google Corporation
+	with Reserved Font Arimo, Tinos and Cousine.
+Copyright (c) 2012 Red Hat, Inc.
+	with Reserved Font Name Liberation.
+
+This Font Software is licensed under the SIL Open Font License,
+Version 1.1.
+
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+
+PREAMBLE The goals of the Open Font License (OFL) are to stimulate
+worldwide development of collaborative font projects, to support the font
+creation efforts of academic and linguistic communities, and to provide
+a free and open framework in which fonts may be shared and improved in
+partnership with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves.
+The fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works.  The fonts and derivatives,
+however, cannot be released under any other type of license.  The
+requirement for fonts to remain under this license does not apply to
+any document created using the fonts or their derivatives.
+
+ 
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such.
+This may include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components
+as distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting ? in part or in whole ?
+any of the components of the Original Version, by changing formats or
+by porting the Font Software to a new environment.
+
+"Author" refers to any designer, engineer, programmer, technical writer
+or other person who contributed to the Font Software.
+
+
+PERMISSION & CONDITIONS
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,in
+   Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+   redistributed and/or sold with any software, provided that each copy
+   contains the above copyright notice and this license. These can be
+   included either as stand-alone text files, human-readable headers or
+   in the appropriate machine-readable metadata fields within text or
+   binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+   Name(s) unless explicit written permission is granted by the
+   corresponding Copyright Holder. This restriction only applies to the
+   primary font name as presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+   Software shall not be used to promote, endorse or advertise any
+   Modified Version, except to acknowledge the contribution(s) of the
+   Copyright Holder(s) and the Author(s) or with their explicit written
+   permission.
+
+5) The Font Software, modified or unmodified, in part or in whole, must
+   be distributed entirely under this license, and must not be distributed
+   under any other license. The requirement for fonts to remain under
+   this license does not apply to any document created using the Font
+   Software.
+
+
+ 
+TERMINATION
+This license becomes null and void if any of the above conditions are not met.
+
+ 
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT.  IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM OTHER
+DEALINGS IN THE FONT SOFTWARE.
+```
+
+</details>
+
 ## Third-party: jmap-webmail, in the mail reader (MIT)
 
 The Mail tab's reader views (`sdk/mail-reader`, bundled into the app) are adapted from **jmap-webmail** by root-fr, by way of Alakazam Labs' adaptation of it. Which files, and what changed: `sdk/mail-reader/UPSTREAM.md`.

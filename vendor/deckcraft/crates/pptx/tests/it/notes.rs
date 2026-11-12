@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Speaker notes keep their run and paragraph formatting: a bold heading, indented points with
 //! custom bullets, plain lines.
 
@@ -25,7 +26,7 @@ fn deck() -> Vec<u8> {
     let mut found = false;
     for i in 0..src.len() {
         let mut f = src.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut data = vec![];
         f.read_to_end(&mut data).expect("read");
         if name == NOTES {

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result; an entry whose name can't be decoded is skipped like an unreadable one.
 //! Open Packaging Conventions: the zip container, part names, relationships and content types.
 
 use std::collections::HashMap;
@@ -70,7 +71,14 @@ impl Package {
             if f.is_dir() {
                 continue;
             }
-            let name = f.name().trim_start_matches('/').to_string();
+            // zip 9: a name that can't be decoded is an error, skipped like an unreadable entry.
+            let name = match f.name() {
+                Ok(n) => n.trim_start_matches('/').to_string(),
+                Err(e) => {
+                    log::warn!("pptx: skipping zip entry {i} with an unreadable name: {e}");
+                    continue;
+                }
+            };
             let declared = f.size();
             if declared > max_part {
                 log::warn!("pptx: skipping oversized part {name} ({declared} bytes)");

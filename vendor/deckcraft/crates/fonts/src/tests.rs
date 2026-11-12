@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): the tests use the repository's own fixtures and Liberation Sans instead of epaint_default_fonts' Hack and Ubuntu Light.
 use super::*;
 
 fn any_face() -> std::sync::Arc<FontFace> {
@@ -90,7 +91,7 @@ fn concurrent_lookups_all_find_an_installed_family() {
     // laid out in different fonts depending on timing.
     let dir = std::env::temp_dir().join(format!("deckcraft-fonts-concurrent-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("Hack-Regular.ttf"), epaint_default_fonts::HACK_REGULAR).unwrap();
+    std::fs::write(dir.join("legacy-regular.ttf"), include_bytes!("../tests/fixtures/legacy-regular.ttf")).unwrap();
     for _ in 0..20 {
         let db = FontDb::with_font_dirs(vec![dir.clone()]);
         db.set_system_fallback(false);
@@ -100,13 +101,13 @@ fn concurrent_lookups_all_find_an_installed_family() {
                 .map(|_| {
                     s.spawn(|| {
                         start.wait();
-                        db.face("Hack", "Regular").family.clone()
+                        db.face("DeckCraft Legacy", "Regular").family.clone()
                     })
                 })
                 .collect();
             threads.into_iter().map(|t| t.join().unwrap()).collect()
         });
-        assert!(got.iter().all(|f| f == "Hack"), "{got:?}");
+        assert!(got.iter().all(|f| f == "DeckCraft Legacy"), "{got:?}");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -389,7 +390,7 @@ fn wrap_eot(font: &[u8], version: u32) -> Vec<u8> {
 
 #[test]
 fn embedded_open_type_yields_the_font() {
-    let font = epaint_default_fonts::UBUNTU_LIGHT;
+    let font = fontdb::LIBERATION_SANS_REGULAR;
     assert_eq!(embedded_sfnt(font), Some(font));
     assert_eq!(embedded_sfnt(&wrap_eot(font, 0x0002_0001)), Some(font));
     assert_eq!(embedded_sfnt(&wrap_eot(font, 0x0001_0000)), Some(font));

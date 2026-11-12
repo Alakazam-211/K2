@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Owned corpus of more deck kinds: tables, charts, animations, media, sections, masters and layouts.
 //!
 //! Each package is built here. The check is open → save → reopen: text in the package and the
@@ -228,7 +229,7 @@ impl Pkg {
             if f.is_dir() {
                 continue;
             }
-            let name = f.name().trim_start_matches('/').to_string();
+            let name = f.name().expect("entry name").trim_start_matches('/').to_string();
             let mut data = vec![];
             f.read_to_end(&mut data).expect("read");
             parts.insert(name, data);

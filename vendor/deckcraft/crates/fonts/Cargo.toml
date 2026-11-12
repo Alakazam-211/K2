@@ -1,3 +1,4 @@
+# Changed by Alakazam Labs (see VENDORED.md): epaint_default_fonts is removed; the last-resort face is Liberation Sans 2.1.5 from liberation-fonts-ttf-2.1.5/.
 [package]
 name = "deckcraft-fonts"
 version.workspace = true
@@ -14,5 +15,3 @@ skrifa = { workspace = true }
 harfrust = { workspace = true }
 unicode-bidi = { workspace = true }
 log = { workspace = true }
-# Last-resort face only (Ubuntu Light); no UI code.
-epaint_default_fonts = "0.37"

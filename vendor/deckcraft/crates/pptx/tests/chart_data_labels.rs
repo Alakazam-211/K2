@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`); the one test that drives deckcraft-engine (not vendored) is removed.
 //! Series-level data labels: `c:dLbls/c:showVal` on a series overrides the chart-wide setting,
 //! and a bare `<c:showVal/>` (no `val` attribute) means true, as the schema's default (#868).
 
@@ -34,7 +35,7 @@ fn reimport(bytes: &[u8], f: impl Fn(&str) -> String) -> Presentation {
     let opts = zip::write::SimpleFileOptions::default();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).expect("entry");
-        let name = entry.name().to_string();
+        let name = entry.name().expect("entry name").to_string();
         let mut data = vec![];
         entry.read_to_end(&mut data).expect("read");
         if name.starts_with("ppt/charts/chart") && name.ends_with(".xml") && !name.contains("_rels") {
@@ -153,23 +154,3 @@ fn a_combo_chart_keeps_each_groups_own_label_setting() {
     assert!(c.series_data_labels(&c.series[1]), "the line takes the chart-wide on");
 }
 
-/// Turning Data Labels on through `chart.options` shows the labels of series that the file
-/// switched off one by one.
-#[test]
-fn chart_options_data_labels_on_overrides_series_off() {
-    use deckcraft_engine::Session;
-    let p = reimport(&bar_chart_pptx(), |xml| xml.replace("<c:cat>", r#"<c:dLbls><c:showVal val="0"/></c:dLbls><c:cat>"#));
-    assert!(chart_of(&p).series.iter().all(|s| !chart_of(&p).series_data_labels(s)), "every series starts quiet");
-    let path = std::env::temp_dir().join("deckcraft_series_labels_off.pptx");
-    std::fs::write(&path, deckcraft_pptx::export(&p).expect("export")).expect("write");
-    let mut s = Session::with_new();
-    s.execute("file.open", &serde_json::json!({"path": path.to_string_lossy()})).expect("open");
-    let doc = s.doc().unwrap().doc.clone();
-    let id = doc.slides[0].shapes.iter().find(|sh| matches!(sh.kind, ShapeKind::Chart(_))).expect("chart").id.0;
-    assert!(chart_of(&doc).series.iter().all(|x| !chart_of(&doc).series_data_labels(x)));
-    s.execute("chart.options", &serde_json::json!({"id": id, "dataLabels": true})).expect("options");
-    let doc = s.doc().unwrap().doc.clone();
-    let c = chart_of(&doc);
-    assert!(c.series.iter().all(|x| c.series_data_labels(x)), "every series shows its labels");
-    let _ = std::fs::remove_file(path);
-}

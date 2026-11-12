@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`); the ten tests that drive deckcraft-engine (not vendored) are removed.
 //! Round trips of decks built in code: model → PPTX → model.
 
 use std::sync::Arc;
@@ -1175,7 +1176,7 @@ fn wordart_warps_and_their_adjusts_round_trip() {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut data = vec![];
         std::io::Read::read_to_end(&mut f, &mut data).expect("read");
         if name == "ppt/slides/slide1.xml" {
@@ -1309,7 +1310,7 @@ fn transition_defaults_read_like_powerpoint() {
         let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         for i in 0..zip.len() {
             let mut f = zip.by_index(i).expect("entry");
-            let name = f.name().to_string();
+            let name = f.name().expect("entry name").to_string();
             let mut data = vec![];
             std::io::Read::read_to_end(&mut f, &mut data).expect("read");
             if name == "ppt/slides/slide1.xml" {
@@ -1474,7 +1475,7 @@ fn an_embedded_font_list_already_in_the_package_is_read() {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut data = vec![];
         std::io::Read::read_to_end(&mut f, &mut data).expect("read");
         if name == "ppt/presentation.xml" {
@@ -1515,22 +1516,6 @@ fn an_embedded_font_list_already_in_the_package_is_read() {
     assert_eq!(p.media(f.bold.expect("bold")).expect("media").data.as_slice(), font);
 }
 
-/// Text transparency (#32) is `a:alpha` on the run's colour, and survives a save.
-#[test]
-fn text_transparency_round_trips() {
-    use deckcraft_engine::Session;
-    let mut s = Session::with_new();
-    s.execute("shape.insert", &serde_json::json!({"preset": "rect", "rect": [100, 100, 200, 100], "text": "Hi"})).unwrap();
-    s.execute("format.color", &serde_json::json!({"color": "#336699"})).unwrap();
-    s.execute("format.textTransparency", &serde_json::json!({"value": 0.4})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    let bytes = deckcraft_pptx::export(&doc).unwrap();
-    let back = deckcraft_pptx::import(&bytes).unwrap();
-    let sh = back.slides[0].shapes.iter().find(|sh| sh.text.as_ref().is_some_and(|t| t.text().contains("Hi"))).unwrap();
-    let Some(deckcraft_model::Fill::Solid { color }) = &sh.text.as_ref().unwrap().paragraphs[0].runs[0].props.fill else { panic!() };
-    assert!((color.alpha() - 0.6).abs() < 1e-9, "{color:?}");
-}
-
 /// A tiny 8 kHz mono 16-bit WAV of `n` silent samples.
 fn wav(n: u32) -> Vec<u8> {
     let mut v = Vec::new();
@@ -1550,67 +1535,6 @@ fn wav(n: u32) -> Vec<u8> {
     v
 }
 
-/// Transitions › Sound: a chosen sound is embedded, saved as `p:sndAc`, read back, and No Sound
-/// removes it; a file that isn't audio is refused.
-#[test]
-fn transition_sound_is_set_saved_and_removed() {
-    use deckcraft_engine::Session;
-    use serde_json::json;
-    let b64 = deckcraft_engine::cmd::base64_encode(&wav(800));
-    let mut s = Session::with_new();
-    s.execute("transition.set", &json!({"kind": "fade"})).unwrap();
-    let r = s.execute("transition.sound", &json!({"data": b64, "name": "chime.wav"})).unwrap();
-    assert_eq!(r["playable"], true, "{r}");
-    let doc = s.doc().unwrap().doc.clone();
-    let m = doc.slides[0].transition.as_ref().and_then(|t| t.sound).expect("sound set");
-    assert_eq!(doc.media(m).map(|i| i.name.as_str()), Some("chime.wav"));
-    let bytes = deckcraft_pptx::export(&doc).unwrap();
-    let back = deckcraft_pptx::import(&bytes).unwrap();
-    let t = back.slides[0].transition.as_ref().expect("transition");
-    assert_eq!(t.kind, "fade");
-    let m = t.sound.expect("sound survives the save");
-    assert_eq!(back.media(m).map(|i| i.data.len()), Some(wav(800).len()));
-    s.execute("transition.sound", &json!({"none": true})).unwrap();
-    assert!(s.doc().unwrap().doc.slides[0].transition.as_ref().is_some_and(|t| t.sound.is_none()));
-    let not_audio = deckcraft_engine::cmd::base64_encode(b"hello, not a sound");
-    assert!(s.execute("transition.sound", &json!({"data": not_audio, "name": "notes.txt"})).is_err());
-}
-
-/// Built-in transition sounds, Loop Until Next Sound and [Stop Previous Sound] are set, saved as
-/// PowerPoint writes them (`p:stSnd loop="1"`, `p:endSnd`) and read back.
-#[test]
-fn transition_sound_options_round_trip() {
-    use deckcraft_engine::Session;
-    use serde_json::json;
-    let mut s = Session::with_new();
-    s.execute("slide.new", &json!({})).unwrap();
-    s.execute("slide.new", &json!({})).unwrap();
-    s.execute("transition.sound", &json!({"builtin": "chime", "loop": true, "index": 0})).unwrap();
-    s.execute("transition.sound", &json!({"builtin": "Chime", "index": 1})).unwrap();
-    s.execute("transition.sound", &json!({"stopPrevious": true, "index": 2})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    assert_eq!(doc.media.len(), 1, "the same built-in sound is embedded once");
-    assert_eq!(doc.media[0].name, "Chime.wav");
-    let bytes = deckcraft_pptx::export(&doc).unwrap();
-    let slide1 = {
-        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-        let mut x = String::new();
-        std::io::Read::read_to_string(&mut z.by_name("ppt/slides/slide1.xml").unwrap(), &mut x).unwrap();
-        x
-    };
-    assert!(slide1.contains(r#"<p:stSnd loop="1">"#) && slide1.contains(r#"name="Chime.wav""#), "{slide1}");
-    let back = deckcraft_pptx::import(&bytes).unwrap();
-    let t: Vec<_> = back.slides.iter().map(|s| s.transition.clone().unwrap_or_default()).collect();
-    assert!(t[0].sound.is_some() && t[0].sound_loop && !t[0].stop_sound);
-    assert!(t[1].sound.is_some() && !t[1].sound_loop);
-    assert!(t[2].sound.is_none() && t[2].stop_sound, "{:?}", t[2]);
-    // Turning the loop off alone keeps the sound.
-    s.execute("transition.sound", &json!({"loop": false, "index": 0})).unwrap();
-    let t0 = s.doc().unwrap().doc.slides[0].transition.clone().unwrap();
-    assert!(t0.sound.is_some() && !t0.sound_loop);
-    assert!(s.execute("transition.sound", &json!({"builtin": "foghorn"})).is_err());
-}
-
 /// Replace `from` with `to` in every slide part of an exported deck.
 fn patch_slides(bytes: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
     use std::io::{Read, Write};
@@ -1618,7 +1542,7 @@ fn patch_slides(bytes: Vec<u8>, from: &str, to: &str) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut data = vec![];
         f.read_to_end(&mut data).expect("read");
         if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
@@ -1767,7 +1691,7 @@ fn repack(pkg: &[u8], edit: impl Fn(&str, String) -> String, extra: &[(&str, &[u
     let opts = zip::write::SimpleFileOptions::default();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut data = vec![];
         f.read_to_end(&mut data).unwrap();
         if name.ends_with(".xml") || name.ends_with(".rels") {
@@ -1788,314 +1712,6 @@ const WATERFALL_CX: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 
 /// A waterfall frame as PowerPoint writes it: the chart in a `cx1` choice, a text box fallback.
 const WATERFALL_FRAME: &str = r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice xmlns:cx1="http://schemas.microsoft.com/office/drawing/2015/9/8/chartex" Requires="cx1"><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="90" name="Waterfall 1"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="914400" y="914400"/><a:ext cx="6096000" cy="4064000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/drawing/2014/chartex"><cx:chart xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" r:id="rIdCx"/></a:graphicData></a:graphic></p:graphicFrame></mc:Choice><mc:Fallback><p:sp><p:nvSpPr><p:cNvPr id="90" name="Waterfall 1"/><p:cNvSpPr><a:spLocks noTextEdit="1"/></p:cNvSpPr><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="6096000" cy="4064000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:t>This chart isn't available in your version of PowerPoint.</a:t></a:r></a:p></p:txBody></p:sp></mc:Fallback></mc:AlternateContent>"#;
-
-/// Office 2016 charts (`chartEx`): a waterfall reads as a waterfall chart with its data, not as
-/// the "isn't available" fallback text, and an unchanged one is written back as itself with a
-/// plain chart fallback; an edited one is written as a plain chart.
-#[test]
-fn chartex_waterfall_reads_and_round_trips() {
-    use deckcraft_engine::Session;
-    let mut s = Session::with_new();
-    s.execute("slide.new", &serde_json::json!({"layout": "blank"})).unwrap();
-    let base = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
-    let slide = (1..=9).map(|i| format!("ppt/slides/slide{i}.xml")).find(|n| pkg_part(&base, n).is_some()).unwrap();
-    let slide_rels = slide.replace("slides/", "slides/_rels/") + ".rels";
-    let cx_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/Microsoft_Excel_Worksheet.xlsx"/></Relationships>"#;
-    let pptx = repack(
-        &base,
-        |name, x| {
-            if name == slide {
-                x.replacen("</p:spTree>", &format!("{WATERFALL_FRAME}</p:spTree>"), 1)
-            } else if name == slide_rels {
-                x.replace("</Relationships>", r#"<Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="../charts/chartEx1.xml"/></Relationships>"#)
-            } else if name == "[Content_Types].xml" {
-                x.replace(
-                    "</Types>",
-                    r#"<Override PartName="/ppt/charts/chartEx1.xml" ContentType="application/vnd.ms-office.chartex+xml"/></Types>"#,
-                )
-            } else {
-                x
-            }
-        },
-        &[("ppt/charts/chartEx1.xml", WATERFALL_CX.as_bytes()), ("ppt/charts/_rels/chartEx1.xml.rels", cx_rels.as_bytes())],
-    );
-    let doc = deckcraft_pptx::import(&pptx).unwrap();
-    let chart = |d: &Presentation| -> Option<Chart> {
-        d.slides.iter().flat_map(|s| s.shapes.iter()).find_map(|sh| match &sh.kind {
-            ShapeKind::Chart(c) => Some((**c).clone()),
-            _ => None,
-        })
-    };
-    let c = chart(&doc).expect("the waterfall is a chart, not the fallback text");
-    assert_eq!(c.kind, ChartType::Waterfall);
-    assert_eq!(c.title.as_deref(), Some("Cash flow"));
-    assert_eq!(c.categories, ["Start", "Sales", "Costs", "End"]);
-    assert_eq!(c.series.len(), 1);
-    assert_eq!(c.series[0].name, "Amount");
-    assert_eq!(c.series[0].values, [Some(100.0), Some(40.0), Some(-25.0), Some(115.0)]);
-    assert!(c.data_labels);
-    assert_eq!(c.legend.as_deref(), Some("b"));
-    let no_fallback_text = doc.slides.iter().flat_map(|s| s.shapes.iter()).all(|sh| !format!("{:?}", sh.kind).contains("isn't available"));
-    assert!(no_fallback_text);
-
-    // Unchanged: chartEx back in a cx1 choice, a plain chart as fallback, no workbook link.
-    let out = deckcraft_pptx::export(&doc).unwrap();
-    let ex = String::from_utf8(pkg_part(&out, "ppt/charts/chartEx1.xml").expect("chartEx part")).unwrap();
-    assert!(ex.contains(r#"layoutId="waterfall""#) && !ex.contains("externalData"), "{ex}");
-    let types = String::from_utf8(pkg_part(&out, "[Content_Types].xml").unwrap()).unwrap();
-    assert!(types.contains("application/vnd.ms-office.chartex+xml"));
-    let sx = String::from_utf8(pkg_part(&out, &slide).unwrap()).unwrap();
-    assert!(sx.contains(r#"Requires="cx1""#) && sx.contains("mc:Fallback") && sx.contains("c:chart "), "{sx}");
-    let srels = String::from_utf8(pkg_part(&out, &slide_rels).unwrap()).unwrap();
-    assert!(srels.contains("relationships/chartEx") && srels.contains("relationships/chart\""), "{srels}");
-    assert!(pkg_part(&out, "ppt/charts/chart1.xml").is_some());
-    let again = deckcraft_pptx::import(&out).unwrap();
-    assert_eq!(chart(&again).map(|c| (c.kind, c.categories, c.series.len())), Some((ChartType::Waterfall, c.categories.clone(), 1)));
-
-    // Edited: the kept part no longer matches, so a chartEx part is written from the model,
-    // still a waterfall with the new value.
-    let mut edited = doc.clone();
-    for sl in &mut edited.slides {
-        for sh in &mut Arc::make_mut(sl).shapes {
-            if let ShapeKind::Chart(ch) = &mut sh.kind {
-                ch.series[0].values[1] = Some(55.0);
-            }
-        }
-    }
-    let out = deckcraft_pptx::export(&edited).unwrap();
-    let ex = String::from_utf8(pkg_part(&out, "ppt/charts/chartEx1.xml").expect("a written chartEx part")).unwrap();
-    assert!(ex.contains(r#"layoutId="waterfall""#), "{ex}");
-    assert!(String::from_utf8(pkg_part(&out, &slide).unwrap()).unwrap().contains("cx1"));
-    let again = chart(&deckcraft_pptx::import(&out).unwrap()).unwrap();
-    assert_eq!(again.kind, ChartType::Waterfall);
-    assert_eq!(again.series[0].values[1], Some(55.0));
-    assert_eq!(again.subtotals, c.subtotals);
-}
-
-/// New Office 2016 charts made in DeckCraft are written as chartEx parts that read back as the
-/// same type, data and options.
-#[test]
-fn chartex_new_charts_save_as_their_own_type() {
-    use deckcraft_engine::Session;
-    for (ty, kind) in [
-        ("waterfall", ChartType::Waterfall),
-        ("funnel", ChartType::Funnel),
-        ("treemap", ChartType::Treemap),
-        ("sunburst", ChartType::Sunburst),
-        ("histogram", ChartType::Histogram),
-        ("pareto", ChartType::Pareto),
-        ("boxwhisker", ChartType::BoxWhisker),
-    ] {
-        let chart = |d: &Presentation| -> Option<Chart> {
-            d.slides.iter().flat_map(|s| s.shapes.iter()).find_map(|sh| match &sh.kind {
-                ShapeKind::Chart(c) => Some((**c).clone()),
-                _ => None,
-            })
-        };
-        let mut s = Session::with_new();
-        s.execute("slide.new", &serde_json::json!({"layout": "blank"})).unwrap();
-        s.execute("insert.chart", &serde_json::json!({"type": ty})).unwrap();
-        let id = s.doc().unwrap().selection.shapes[0].0;
-        let opts = match kind {
-            ChartType::Histogram | ChartType::Pareto => serde_json::json!({"id": id, "binCount": 4, "title": "T"}),
-            ChartType::Waterfall => serde_json::json!({"id": id, "subtotals": [3], "title": "T"}),
-            _ => serde_json::json!({"id": id, "title": "T"}),
-        };
-        s.execute("chart.options", &opts).unwrap();
-        let doc = &s.doc().unwrap().doc;
-        let before = chart(doc).unwrap();
-        let out = deckcraft_pptx::export(doc).unwrap();
-        assert!(pkg_part(&out, "ppt/charts/chartEx1.xml").is_some(), "{ty}: no chartEx part");
-        assert!(pkg_part(&out, "ppt/charts/chart1.xml").is_some(), "{ty}: no fallback chart");
-        let after = chart(&deckcraft_pptx::import(&out).unwrap()).unwrap();
-        assert_eq!(after.kind, kind, "{ty}");
-        assert_eq!(after.title.as_deref(), Some("T"), "{ty}");
-        assert_eq!(after.categories, before.categories, "{ty}");
-        let n = if matches!(kind, ChartType::BoxWhisker) { before.series.len() } else { 1 };
-        assert_eq!(after.series.len(), n, "{ty}");
-        assert_eq!(after.series[0].values, before.series[0].values, "{ty}");
-        assert_eq!((after.bin_count, after.subtotals.clone()), (before.bin_count, before.subtotals.clone()), "{ty}");
-    }
-}
-
-/// A two-level treemap keeps its parent level, and a box chart its inclusive quartiles, through
-/// a save and reopen.
-#[test]
-fn chartex_levels_and_quartiles_round_trip() {
-    use deckcraft_engine::Session;
-    let chart = |d: &Presentation| -> Option<Chart> {
-        d.slides.iter().flat_map(|s| s.shapes.iter()).find_map(|sh| match &sh.kind {
-            ShapeKind::Chart(c) => Some((**c).clone()),
-            _ => None,
-        })
-    };
-    for ty in ["treemap", "sunburst", "boxwhisker"] {
-        let mut s = Session::with_new();
-        s.execute("slide.new", &serde_json::json!({"layout": "blank"})).unwrap();
-        s.execute("insert.chart", &serde_json::json!({"type": ty})).unwrap();
-        let id = s.doc().unwrap().selection.shapes[0].0;
-        if ty == "boxwhisker" {
-            s.execute("chart.options", &serde_json::json!({"id": id, "quartiles": "inclusive"})).unwrap();
-        } else {
-            s.execute(
-                "chart.data",
-                &serde_json::json!({"id": id, "levels": [["Q1", "", "", "Q2", "", "", "Q3", ""], ["H1", "", "", "", "", "", "H2", ""]]}),
-            )
-            .unwrap();
-        }
-        let before = chart(&s.doc().unwrap().doc).unwrap();
-        let out = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
-        let after = chart(&deckcraft_pptx::import(&out).unwrap()).unwrap();
-        assert_eq!(after.category_levels, before.category_levels, "{ty}");
-        assert_eq!(after.inclusive_quartiles, before.inclusive_quartiles, "{ty}");
-        assert_eq!(after.category_tree(), before.category_tree(), "{ty}");
-        // Unchanged since import, the part is written back as read.
-        let again = deckcraft_pptx::export(&deckcraft_pptx::import(&out).unwrap()).unwrap();
-        assert_eq!(chart(&deckcraft_pptx::import(&again).unwrap()).unwrap().category_levels, before.category_levels, "{ty}");
-    }
-}
-
-/// Radar, stock (with and without up/down bars) and combo charts keep their own plot groups
-/// through a save and reopen, written as PowerPoint writes them.
-#[test]
-fn radar_stock_and_combo_round_trip() {
-    use deckcraft_engine::Session;
-    let chart = |d: &Presentation| -> Option<Chart> {
-        d.slides.iter().flat_map(|s| s.shapes.iter()).find_map(|sh| match &sh.kind {
-            ShapeKind::Chart(c) => Some((**c).clone()),
-            _ => None,
-        })
-    };
-    for (ty, bars) in [("radar", false), ("filledradar", false), ("stock", false), ("stock", true), ("combo", false)] {
-        let mut s = Session::with_new();
-        s.execute("slide.new", &serde_json::json!({"layout": "blank"})).unwrap();
-        s.execute("insert.chart", &serde_json::json!({"type": ty})).unwrap();
-        let id = s.doc().unwrap().selection.shapes[0].0;
-        if bars {
-            s.execute("chart.options", &serde_json::json!({"id": id, "upDownBars": true})).unwrap();
-        }
-        let before = chart(&s.doc().unwrap().doc).unwrap();
-        let out = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap();
-        let after = chart(&deckcraft_pptx::import(&out).unwrap()).unwrap();
-        assert_eq!(after.kind, before.kind, "{ty}");
-        assert_eq!(after.up_down_bars, bars, "{ty}");
-        assert_eq!(after.series.len(), before.series.len(), "{ty}");
-        let kinds: Vec<_> = after.series.iter().map(|x| after.series_kind(x)).collect();
-        let want: Vec<_> = before.series.iter().map(|x| before.series_kind(x)).collect();
-        assert_eq!(kinds, want, "{ty}");
-        for (a, b) in after.series.iter().zip(&before.series) {
-            assert_eq!(a.values, b.values, "{ty}");
-        }
-    }
-}
-
-/// Home › New Slide › Reuse Slides: slides from another .pptx land after the current slide with
-/// their pictures (fresh media ids, same bytes) and animations on the renumbered shapes. By
-/// default they take a destination layout; Keep Source Formatting brings the source master.
-#[test]
-fn reuse_slides_from_another_presentation() {
-    use deckcraft_engine::Session;
-    use serde_json::json;
-    let b64 = deckcraft_engine::cmd::base64_encode;
-    // Source: three slides, a picture with an animation on the second.
-    let mut src = Session::with_new();
-    src.execute("slide.new", &json!({})).unwrap();
-    let pic = png(8, 8, [10, 200, 30]);
-    src.execute("insert.picture", &json!({"data": b64(&pic), "name": "green.png"})).unwrap();
-    src.execute("animation.add", &json!({"effect": "fade"})).unwrap();
-    src.execute("slide.new", &json!({})).unwrap();
-    let src_bytes = deckcraft_pptx::export(&src.doc().unwrap().doc).unwrap();
-
-    let mut s = Session::with_new();
-    // Media ids in the two decks overlap; the destination's own picture must stay its own.
-    let red = png(4, 4, [200, 0, 0]);
-    s.execute("insert.picture", &json!({"data": b64(&red), "name": "red.png"})).unwrap();
-    let r = s.execute("slide.reuse", &json!({"data": b64(&src_bytes), "name": "src.pptx", "slides": [1]})).unwrap();
-    assert_eq!(r["slides"], 1, "{r}");
-    let doc = s.doc().unwrap().doc.clone();
-    assert_eq!(doc.slides.len(), 2);
-    assert_eq!(s.doc().unwrap().selection.slide, 1, "the reused slide is selected");
-    let pictures = |sl: &deckcraft_model::Slide| {
-        let mut v = vec![];
-        deckcraft_model::walk(&sl.shapes, &mut |sh, _| {
-            if let deckcraft_model::ShapeKind::Picture { fill } = &sh.kind {
-                v.push(fill.media);
-            }
-        });
-        v
-    };
-    let mine = pictures(&doc.slides[0]);
-    let reused = pictures(&doc.slides[1]);
-    assert_eq!(doc.media(mine[0]).map(|m| m.data.as_slice() == red.as_slice()), Some(true), "own picture untouched");
-    assert_eq!(doc.media(reused[0]).map(|m| m.data.as_slice() == pic.as_slice()), Some(true), "reused picture copied");
-    let anim = &doc.slides[1].animations[0];
-    assert!(doc.slides[1].shapes.iter().any(|sh| sh.id == anim.shape), "animation follows its shape");
-    assert!(doc.layout(doc.slides[1].layout).is_some(), "uses a destination layout");
-    assert_eq!(doc.masters.len(), 1);
-    // The result saves and reopens.
-    let back = deckcraft_pptx::import(&deckcraft_pptx::export(&doc).unwrap()).unwrap();
-    assert_eq!(back.slides.len(), 2);
-
-    // Keep Source Formatting: every slide, and the source master comes along.
-    let r = s.execute("slide.reuse", &json!({"data": b64(&src_bytes), "name": "src.pptx", "keepFormatting": true, "at": 0})).unwrap();
-    assert_eq!(r["slides"], 3);
-    let doc = s.doc().unwrap().doc.clone();
-    assert_eq!(doc.slides.len(), 5);
-    assert_eq!(doc.masters.len(), 2);
-    for sl in &doc.slides[..3] {
-        assert_eq!(doc.layout(sl.layout).map(|(m, _)| m.id), Some(doc.masters[1].id), "source master");
-    }
-    // One undo removes the whole reuse.
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().doc.slides.len(), 2);
-    assert!(s.execute("slide.reuse", &json!({"data": b64(&src_bytes), "name": "src.pptx", "slides": [7]})).is_err());
-    assert!(s.execute("slide.reuse", &json!({"data": b64(&[0u8, 159, 146, 150]), "name": "x.bin"})).is_err());
-}
-
-/// Picture Format › Compress Pictures: a big picture shown small is downsampled, its original
-/// goes when nothing else uses it, the saved file shrinks, a copy that wasn't compressed keeps
-/// the original, and undo brings everything back.
-#[test]
-fn compress_pictures_shrinks_the_file_and_keeps_shared_originals() {
-    use deckcraft_engine::Session;
-    use serde_json::json;
-    let b64 = deckcraft_engine::cmd::base64_encode;
-    // A noisy 1600 × 1600 picture (doesn't compress away on its own).
-    let big = {
-        let img = image::RgbImage::from_fn(1600, 1600, |x, y| image::Rgb([(x * 31 % 251) as u8, (y * 17 % 253) as u8, ((x * y) % 255) as u8]));
-        let mut out = std::io::Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgb8(img).write_to(&mut out, image::ImageFormat::Png).unwrap();
-        out.into_inner()
-    };
-    let mut s = Session::with_new();
-    s.execute("insert.picture", &json!({"data": b64(&big), "name": "noise.png"})).unwrap();
-    s.execute("shape.resize", &json!({"w": 144, "h": 144})).unwrap();
-    let size_before = deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap().len();
-    let r = s.execute("picture.compress", &json!({"ppi": 150})).unwrap();
-    assert_eq!(r["pictures"], 1, "{r}");
-    let doc = s.doc().unwrap().doc.clone();
-    assert_eq!(doc.media.len(), 1, "the original is gone");
-    let img = image::load_from_memory(&doc.media[0].data).unwrap();
-    assert_eq!((img.width(), img.height()), (300, 300), "2 in at 150 ppi");
-    let size_after = deckcraft_pptx::export(&doc).unwrap().len();
-    assert!(size_after * 4 < size_before, "{size_before} → {size_after}");
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().doc.media[0].data.len(), big.len(), "undo restores the original");
-
-    // A duplicate that isn't compressed still needs the original.
-    s.execute("edit.duplicate", &json!({})).unwrap();
-    let copy = s.doc().unwrap().selection.shapes.clone();
-    let first: Vec<_> = s.doc().unwrap().doc.slides[0].shapes.iter().map(|sh| sh.id).filter(|id| !copy.contains(id)).collect();
-    s.execute("picture.compress", &json!({"ppi": 150, "ids": [first.last().unwrap().0]})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    assert_eq!(doc.media.len(), 2);
-    assert!(doc.media.iter().any(|m| m.data.len() == big.len()), "the copy keeps the original");
-    // All pictures: the copy gets compressed too, and the original goes.
-    s.execute("picture.compress", &json!({"ppi": 150, "all": true})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    assert!(doc.media.iter().all(|m| m.data.len() < big.len() / 4));
-    assert!(s.execute("picture.compress", &json!({"ppi": 5, "all": true})).is_err());
-}
 
 /// #203: SmartArt we can't draw kept its XML but lost its diagram parts on save.
 #[test]
@@ -2153,65 +1769,6 @@ fn legacy_ole_object_is_written_in_the_fallback_form() {
     assert!(xml.contains("<p:pic>") && !xml.contains("spid"), "{xml}");
     assert!(preview.is_some(), "the preview picture is kept");
     assert!(parts.iter().any(|(_, k, _)| k.ends_with("/oleObject")), "the embedding is kept: {parts:?}");
-}
-
-/// Insert › Zoom: slide, section and summary zooms are linked pictures of their targets, with
-/// Return to Zoom on section and summary zooms; a summary zoom makes its own slide; all of it is
-/// one undo step and saves as linked pictures.
-#[test]
-fn zoom_inserts_linked_slide_pictures() {
-    use deckcraft_engine::Session;
-    use deckcraft_model::text::Action;
-    use serde_json::json;
-    let mut s = Session::with_new();
-    for t in ["Intro", "Plan", "Budget", "Risks"] {
-        s.execute("slide.new", &json!({"title": t})).unwrap();
-    }
-    // Slides: 0 title, 1 Intro, 2 Plan, 3 Budget, 4 Risks.
-    s.execute("slide.go", &json!({"index": 0})).unwrap();
-    let r = s.execute("insert.zoom", &json!({"slides": [2]})).unwrap();
-    assert_eq!(r["returnToZoom"], false);
-    let doc = s.doc().unwrap().doc.clone();
-    let zoom = doc.slides[0].shapes.iter().find(|sh| sh.name.starts_with("Slide Zoom")).expect("slide zoom");
-    let link = zoom.click.as_ref().unwrap();
-    assert_eq!(link.action, Action::Slide { slide: doc.slides[2].id });
-    assert_eq!(link.zoom_return, None);
-    assert_eq!(link.tooltip, "Plan");
-    let ShapeKind::Picture { fill } = &zoom.kind else { panic!() };
-    assert!(doc.media(fill.media).is_some_and(|m| m.data.starts_with(b"\x89PNG")));
-
-    // Section zoom: back after the section's last slide.
-    s.execute("section.add", &json!({"name": "Start", "at": 0})).unwrap();
-    s.execute("section.add", &json!({"name": "Money", "at": 3})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    let money = doc.sections.iter().position(|x| x.name == "Money").unwrap();
-    s.execute("slide.go", &json!({"index": 0})).unwrap();
-    s.execute("insert.zoom", &json!({"kind": "section", "sections": [money]})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    let sec = doc.slides[0].shapes.iter().find(|sh| sh.name.starts_with("Section Zoom")).unwrap();
-    let last = *doc.sections[money].slides.last().unwrap();
-    assert_eq!(sec.click.as_ref().unwrap().zoom_return, Some(last));
-
-    // Summary zoom on slides 1 and 3: a new slide in front, parts 1–2 and 3–4.
-    let before = doc.slides.len();
-    s.execute("insert.zoom", &json!({"kind": "summary", "slides": [1, 3]})).unwrap();
-    let doc = s.doc().unwrap().doc.clone();
-    assert_eq!(doc.slides.len(), before + 1);
-    let sum = &doc.slides[1];
-    assert!(sum.title().contains("Summary"));
-    let tiles: Vec<_> = sum.shapes.iter().filter_map(|sh| sh.click.as_ref()).collect();
-    assert_eq!(tiles.len(), 2);
-    assert_eq!(tiles[0].zoom_return, Some(doc.slides[3].id), "part one runs to the slide before part two");
-    assert_eq!(tiles[1].zoom_return, Some(doc.slides.last().unwrap().id));
-    s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(s.doc().unwrap().doc.slides.len(), before, "one undo step");
-
-    // Saved as linked pictures.
-    let back = deckcraft_pptx::import(&deckcraft_pptx::export(&s.doc().unwrap().doc).unwrap()).unwrap();
-    let z = back.slides[0].shapes.iter().find(|sh| matches!(sh.kind, ShapeKind::Picture { .. }) && sh.click.is_some()).unwrap();
-    assert!(matches!(z.click.as_ref().unwrap().action, Action::Slide { .. }));
-    assert!(s.execute("insert.zoom", &json!({"slides": [42]})).is_err());
-    assert!(s.execute("insert.zoom", &json!({"kind": "slide"})).is_err());
 }
 
 #[test]

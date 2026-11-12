@@ -1,4 +1,4 @@
-mod anchor;
+// Changed by Alakazam Labs (see VENDORED.md): the modules anchor, kept_parts, sample, smartart, sniff and tags (they need deckcraft-engine, not vendored) are removed.
 mod anim_auto_reverse;
 mod chart_embed;
 mod comments;
@@ -11,7 +11,6 @@ mod corpus_style;
 mod corpus_themes;
 mod export_scale;
 mod fills;
-mod kept_parts;
 mod locks;
 mod malformed;
 mod math_ns;
@@ -22,10 +21,6 @@ mod ole_vml;
 mod parent_delays;
 mod placeholders;
 mod roundtrip;
-mod sample;
-mod smartart;
-mod sniff;
 mod table_styles;
-mod tags;
 mod transition_xml;
 mod trigger_steps;

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Media settings PowerPoint keeps in the timing tree, spliced into an exported deck and read back.
 
 use std::io::{Cursor, Read, Write};
@@ -40,13 +41,13 @@ fn clips(nodes: impl Fn(u32, u32) -> String) -> Vec<MediaClip> {
         let mut f = z.by_index(i).expect("entry");
         let mut d = vec![];
         f.read_to_end(&mut d).expect("read");
-        if f.name() == "ppt/slides/slide1.xml" {
+        if f.name().expect("entry name") == "ppt/slides/slide1.xml" {
             let s = String::from_utf8(d).expect("utf8");
             assert!(!s.contains("<p:timing"));
             let end = s.rfind("</p:sld>").expect("end");
             d = format!("{}{timing}{}", &s[..end], &s[end..]).into_bytes();
         }
-        out.start_file(f.name(), zip::write::SimpleFileOptions::default()).expect("start");
+        out.start_file(f.name().expect("entry name"), zip::write::SimpleFileOptions::default()).expect("start");
         out.write_all(&d).expect("write");
     }
     let q = deckcraft_pptx::import(&out.finish().expect("finish").into_inner()).expect("import");

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): the test that opens a file through deckcraft-engine (not vendored) is removed.
 //! Just enough of the Compound File Binary (CFB/OLE2) container to tell a password-protected
 //! presentation apart: PowerPoint wraps an encrypted `.pptx` in a CFB holding `EncryptionInfo`
 //! and `EncryptedPackage` streams (ECMA-376 / [MS-OFFCRYPTO]) instead of a zip. Every read is
@@ -169,17 +170,5 @@ mod tests {
         // A directory chain that loops back on itself stops at the bound.
         b[516..520].copy_from_slice(&1u32.to_le_bytes());
         assert!(!is_encrypted(&b));
-    }
-
-    /// #346: opening a password-protected presentation says so instead of failing as an unknown
-    /// file.
-    #[test]
-    fn a_password_protected_presentation_is_named_as_such() {
-        let locked = build(&["EncryptionInfo", "EncryptedPackage"]);
-        let err = deckcraft_engine::cmd::file::open_presentation("Locked.pptx", &locked).unwrap_err().to_string();
-        assert!(err.contains("Locked.pptx is password-protected"), "{err}");
-        let ppt = build(&["PowerPoint Document", "Current User"]);
-        let err = deckcraft_engine::cmd::file::open_presentation("Old.ppt", &ppt).unwrap_err().to_string();
-        assert!(!err.contains("password"), "{err}");
     }
 }

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): the last-resort face is Liberation Sans 2.1.5 (four styles compiled in from liberation-fonts-ttf-2.1.5/), not epaint_default_fonts' Ubuntu Light; FontDb::init_global and FontDb::add_static_font are added.
 //! Font database: bundled OFL fonts, user fonts, the installed system fonts (cataloged the first
 //! time a lookup needs them, native only), outline cache.
 
@@ -15,15 +16,25 @@ use skrifa::{GlyphId, MetadataProvider};
 /// The family used when a requested family is unknown and has no substitute.
 pub const FALLBACK_FAMILY: &str = "Inter";
 
-/// The always-available last-resort face (Ubuntu Light, compiled in through
-/// `epaint_default_fonts`; licence in ATTRIBUTION.md).
-pub const LAST_RESORT_FAMILY: &str = "Ubuntu";
+/// The always-available last-resort face: Liberation Sans 2.1.5 Regular (SIL Open Font
+/// License 1.1), compiled in with the family's other three styles from
+/// `liberation-fonts-ttf-2.1.5/` (unmodified files, pinned in its `SHA256SUMS`).
+pub const LAST_RESORT_FAMILY: &str = "Liberation Sans";
 
-/// Compiled-in font files: the craft-fonts faces (Latin presentation fonts, then Japanese;
-/// empty without `CRAFT_FONTS_DIR`), then the last-resort face.
+/// Liberation Sans 2.1.5, Regular: the last-resort face.
+pub const LIBERATION_SANS_REGULAR: &[u8] = include_bytes!("../liberation-fonts-ttf-2.1.5/LiberationSans-Regular.ttf");
+/// Liberation Sans 2.1.5, Bold.
+pub const LIBERATION_SANS_BOLD: &[u8] = include_bytes!("../liberation-fonts-ttf-2.1.5/LiberationSans-Bold.ttf");
+/// Liberation Sans 2.1.5, Italic.
+pub const LIBERATION_SANS_ITALIC: &[u8] = include_bytes!("../liberation-fonts-ttf-2.1.5/LiberationSans-Italic.ttf");
+/// Liberation Sans 2.1.5, Bold Italic.
+pub const LIBERATION_SANS_BOLD_ITALIC: &[u8] = include_bytes!("../liberation-fonts-ttf-2.1.5/LiberationSans-BoldItalic.ttf");
+
+/// Compiled-in font files: the craft-fonts faces (empty: this copy refuses `CRAFT_FONTS_DIR`,
+/// see `build.rs`), then Liberation Sans in four styles, Regular (the last-resort face) first.
 pub fn bundled() -> Vec<&'static [u8]> {
     let mut v: Vec<&'static [u8]> = crate::CRAFT_FONTS.iter().map(|f| f.bytes).collect();
-    v.push(epaint_default_fonts::UBUNTU_LIGHT);
+    v.extend([LIBERATION_SANS_REGULAR, LIBERATION_SANS_BOLD, LIBERATION_SANS_ITALIC, LIBERATION_SANS_BOLD_ITALIC]);
     v
 }
 
@@ -805,7 +816,7 @@ pub(crate) fn last_resort_face() -> Arc<FontFace> {
         // The font is compiled in (`include_bytes!`), so parsing it can't depend on input; the
         // `last_resort_face_parses` test proves it on every run.
         #[allow(clippy::expect_used)]
-        let face = make_face(FontBytes::Static(epaint_default_fonts::UBUNTU_LIGHT), 0, LAST_RESORT_FAMILY.into(), "Regular".into(), Vec::new())
+        let face = make_face(FontBytes::Static(LIBERATION_SANS_REGULAR), 0, LAST_RESORT_FAMILY.into(), "Regular".into(), Vec::new())
             .expect("the compiled-in last-resort face parses");
         Arc::new(face)
     })
@@ -935,6 +946,9 @@ fn style_italic(style: &str) -> bool {
     s.contains("italic") || s.contains("oblique") || s == "it"
 }
 
+/// The process-wide database ([`FontDb::global`], [`FontDb::init_global`]).
+static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
+
 impl FontDb {
     /// A database holding the bundled fonts, then the craft-fonts Japanese faces (Mincho first,
     /// so they are the fallback for Japanese text after the requested and bundled fonts; empty
@@ -991,8 +1005,34 @@ impl FontDb {
     /// first time a lookup by family name needs them (or ahead of time by
     /// [`FontDb::scan_in_background`]).
     pub fn global() -> &'static FontDb {
-        static DB: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
-        DB.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+        GLOBAL.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+    }
+
+    /// Alakazam Labs: make `db` the process-wide database, before anything has used
+    /// [`FontDb::global`] (a host that must not read the system's fonts passes one made with no
+    /// font folders). `false`: the global database already exists and `db` is dropped.
+    pub fn init_global(db: FontDb) -> bool {
+        GLOBAL.set(db).is_ok()
+    }
+
+    /// Alakazam Labs: [`FontDb::add_font`] for bytes compiled into the program (no copy).
+    /// Returns the number of faces added.
+    pub fn add_static_font(&self, data: &'static [u8]) -> usize {
+        let mut new = Vec::new();
+        for (i, family, style, coords) in enumerate_faces(data) {
+            if let Some(f) = make_face(FontBytes::Static(data), i, family, style, coords) {
+                new.push(Arc::new(f));
+            }
+        }
+        let mut faces = self.faces.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut added = 0;
+        for f in new {
+            if !faces.iter().any(|g| g.family.eq_ignore_ascii_case(&f.family) && g.style.eq_ignore_ascii_case(&f.style)) {
+                faces.push(f);
+                added += 1;
+            }
+        }
+        added
     }
 
     pub(crate) fn read_faces(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<FontFace>>> {

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`); `fuzz_mutations` mutates a new deck (`deckcraft_model::defaults::new_presentation`) instead of the engine's sample deck, which isn't vendored.
 //! Hostile input: the importer must return `Err` or a usable presentation, never panic.
 
 use std::io::{Cursor, Write};
@@ -26,7 +27,7 @@ fn entries(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
             let mut f = z.by_index(i).expect("entry");
             let mut d = vec![];
             std::io::Read::read_to_end(&mut f, &mut d).expect("read");
-            (f.name().to_string(), d)
+            (f.name().expect("entry name").to_string(), d)
         })
         .collect()
 }
@@ -163,11 +164,7 @@ fn relationship_cycles_and_bad_targets() {
 /// Fixed-seed random byte mutations of a valid export (inside the zip entries, so the XML is hit).
 #[test]
 fn fuzz_mutations() {
-    let p = {
-        let mut s = deckcraft_engine::Session::new();
-        deckcraft_engine::sample::open_sample(&mut s).expect("sample");
-        s.doc().expect("doc").doc.as_ref().clone()
-    };
+    let p = deckcraft_model::defaults::new_presentation(None);
     let es = entries(&deckcraft_pptx::export(&p).expect("export"));
     let mut seed = 0x5eed_u64;
     let mut rnd = |n: usize| {

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Fills and styles read from decks written by other tools.
 
 use std::io::{Cursor, Read, Write};
@@ -40,7 +41,7 @@ fn table_deck() -> Vec<u8> {
         let mut f = z.by_index(i).expect("entry");
         let mut d = vec![];
         f.read_to_end(&mut d).expect("read");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         if name == "ppt/tableStyles.xml" {
             d = style_xml().into_bytes();
         } else if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {

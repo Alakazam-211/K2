@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): CRAFT_FONTS_DIR and CRAFT_FONTS_REQUIRED are refused (a build error), so CRAFT_FONTS is always empty.
 //! Optional craft-fonts build input (https://github.com/storytold/craft-fonts, recipe from its
 //! `docs/integration.md`). With `CRAFT_FONTS_DIR=<checkout>` the fonts in its
 //! `fonts/latin-manifest.txt` (presentation fonts) and `fonts/manifest.txt` are embedded as
@@ -49,8 +50,13 @@ fn main() {
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
     let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
-    let dir = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from);
-    let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
+    // Alakazam Labs: this copy ships Liberation Sans alone (the Kessel Steward's ruling of
+    // 2026-11-11), so a craft-fonts input is refused, never embedded.
+    if std::env::var_os("CRAFT_FONTS_DIR").is_some_and(|d| !d.is_empty()) || std::env::var_os("CRAFT_FONTS_REQUIRED").is_some() {
+        println!("cargo::error=this vendored deckcraft-fonts embeds no craft-fonts: unset CRAFT_FONTS_DIR and CRAFT_FONTS_REQUIRED (vendor/deckcraft/VENDORED.md)");
+    }
+    let dir: Option<PathBuf> = None;
+    let required = false;
     let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     match input_fonts(dir.as_deref(), wasm, required) {
         Ok(entries) => src.push_str(&entries),

@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! PowerPoint places an effect at the sum of its enclosing time nodes' delays, so a file can list
 //! effects out of time order. The BNI meeting-deck generator writes a 1 s countdown chain first,
 //! then "swap to the visual at 5 s" effects placed only by their parent `p:par` delay: read in file
@@ -41,7 +42,7 @@ fn import_with_timing(build: impl Fn(&[u32]) -> String) -> Vec<(String, AnimStar
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).expect("entry");
-        let name = f.name().to_string();
+        let name = f.name().expect("entry name").to_string();
         let mut d = vec![];
         f.read_to_end(&mut d).expect("read");
         if name == "ppt/slides/slide1.xml" {

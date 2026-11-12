@@ -1,3 +1,4 @@
+// Changed by Alakazam Labs (see VENDORED.md): zip 9's `ZipFile::name()` returns a Result (`.expect("entry name")`).
 //! Owned corpus: decks this repository authors, then open → save → reopen.
 //!
 //! Each package is built here (nothing from another product). The check compares the text in the
@@ -127,7 +128,7 @@ impl Pkg {
             if f.is_dir() {
                 continue;
             }
-            let name = f.name().trim_start_matches('/').to_string();
+            let name = f.name().expect("entry name").trim_start_matches('/').to_string();
             let mut data = vec![];
             f.read_to_end(&mut data).expect("read");
             parts.insert(name, data);

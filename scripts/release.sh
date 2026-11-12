@@ -1053,6 +1053,14 @@ if [ ! -f "WHATS_NEW.md" ]; then
     echo "  Create it before releasing — see existing entries for format." >&2
     exit 1
 fi
+# What's New from fragments (scripts/whatsnew.sh): a version that has a
+# whatsnew.d/<version> folder is checked and joined into WHATS_NEW.md
+# here. A version with no folder is hand-written in WHATS_NEW.md, as before.
+if [ -d "whatsnew.d/${VERSION}" ]; then
+    echo "  whatsnew.d/${VERSION}: checking the fragments and writing the section..."
+    bash scripts/whatsnew.sh check "${VERSION}"
+    bash scripts/whatsnew.sh build "${VERSION}"
+fi
 if ! grep -qE "^## ${VERSION//./\\.} " WHATS_NEW.md; then
     echo "  ERROR: WHATS_NEW.md has no '## ${VERSION} — ...' section." >&2
     echo "" >&2

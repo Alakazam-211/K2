@@ -5,10 +5,10 @@
 #      short status line every K2_WAIT_STATUS_SECS — not a line per poll
 #      (scripts/lib/wait-progress.sh; used by release.sh, linux-sums.sh and
 #      the sign-* scripts). Driven with a fake clock (a `date` stub).
-#  (b) release.sh Step 0.5's pre-flight runs with the shared mac build env:
+#  (b) release.sh Step 0.5's local pre-flight runs with the shared mac build env:
 #      SDKROOT from xcrun, CMAKE_POLICY_VERSION_MINIMUM, and half-configured
-#      cmake dirs cleared before `cargo check`. The Step 0.5 block is cut out
-#      of release.sh as written and run against stubs (xcrun, cargo, bun,
+#      cmake dirs cleared before `cargo check`. k2rg_local_all (the local
+#      gates, scripts/lib/release-gates.sh) is run against stubs (xcrun, cargo, bun,
 #      bunx) that record what they were given.
 #
 # Run with: bash tests/packaging/release-wait-and-preflight.sh
@@ -146,8 +146,14 @@ check "linux-sums ticks instead of logging each poll" '! grep -q "log \"waiting"
 check "release.sh verify_manifest ticks" 'sed -n "/^verify_manifest()/,/^}/p" "$ROOT/scripts/release.sh" | grep -q k2_wait_tick'
 
 echo "== release.sh Step 0.5 runs with the shared mac build env =="
-block="$(awk '/^echo "Step 0\.5: Pre-flight gates/{on=1} on{print} on && /Pre-flight gates passed\./{exit}' "$ROOT/scripts/release.sh")"
-check "found the Step 0.5 block" '[ -n "$block" ] && printf "%s" "$block" | grep -q "cargo check"'
+# The local gates (K2_RELEASE_GATES=local, or compute unreachable) are
+# k2rg_local_all in scripts/lib/release-gates.sh; the macOS cargo check of
+# the compute path is its k2rg_local cargo-macos. Run as written.
+step05="$(awk '/^echo "Step 0\.5: Pre-flight gates/{on=1} on{print} on && /^    echo "  Pre-flight gates passed\."/{exit}' "$ROOT/scripts/release.sh")"
+check "release.sh Step 0.5 runs k2rg_local_all on the local path" 'printf "%s\n" "$step05" | grep -qx "    k2rg_local_all"'
+check "release.sh Step 0.5 runs the mac check here with k2rg_local" 'printf "%s\n" "$step05" | grep -qx "        k2rg_local cargo-macos"'
+block="source \"$ROOT/scripts/lib/release-gates.sh\"; k2rg_local_all"
+check "the local gates hold the cargo check" 'sed -n "/^k2rg_local() {/,/^}/p" "$ROOT/scripts/lib/release-gates.sh" | grep -q "cargo check"'
 proj="$tmp/proj"
 stubs="$tmp/stubs"
 mkdir -p "$proj" "$stubs"

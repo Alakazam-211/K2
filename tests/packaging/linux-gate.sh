@@ -22,7 +22,7 @@ trap 'rm -rf "$tmp"' EXIT
 co="$tmp/co"
 mkdir -p "$co/scripts/lib"
 cp "$ROOT/scripts/linux-build-gate.sh" "$co/scripts/"
-cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$co/scripts/lib/"
+cp "$ROOT/scripts/lib/rust-pin.sh" "$ROOT/scripts/lib/compute-tier.sh" "$ROOT/scripts/lib/linux-gate-spec.sh" "$co/scripts/lib/"
 printf '[toolchain]\nchannel = "1.98.7"\n' > "$co/rust-toolchain.toml"
 git -C "$co" init -q
 git -C "$co" add -A

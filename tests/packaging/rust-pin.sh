@@ -136,7 +136,8 @@ python3 - "$ROOT/scripts/release.sh" <<'PY' && pass "release.sh runs the check (
 import sys
 s = open(sys.argv[1]).read()
 i = s.index("\nk2_rust_pin_check\n")
-assert i < s.index('RUSTFLAGS="-D warnings" cargo check --workspace'), "order"
+# Step 0.5's cargo (here or as K2 Compute jobs: scripts/lib/release-gates.sh)
+assert i < s.index('echo "Step 0.5: Pre-flight gates'), "order"
 assert s.index('source "$PROJECT_DIR/scripts/lib/rust-pin.sh"') < i
 PY
 

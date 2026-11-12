@@ -57,6 +57,7 @@ part_web() {
     step "Rust pin (rust-toolchain.toml)";         bash tests/packaging/rust-pin.sh
     step "release.sh compute mode (stubbed)";      bash tests/packaging/release-compute-mode.sh
     step "Linux build gate on K2 Compute (stubbed)"; bash tests/packaging/linux-gate.sh
+    step "Release gates on K2 Compute (stubbed)";  bash tests/packaging/release-gates.sh
     step "release.sh waits + Step 0.5 env (stubbed)"; bash tests/packaging/release-wait-and-preflight.sh
     step "macOS sidecars build once (stubbed)";    bash tests/packaging/build-once.sh
     step "bun install";                            bun install --frozen-lockfile

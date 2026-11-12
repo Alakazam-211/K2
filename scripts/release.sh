@@ -135,11 +135,43 @@
 #   aarch64 stays on GitHub until the ARM Linux VM node exists
 #   (K2_COMPUTE_ARM_NODE, plan G10).
 #
+# Pre-flight gates (Step 0.5 + the Linux gate of 0.6), switch K2_RELEASE_GATES:
+#   compute (default)  every gate is its own K2 Compute job at HEAD (plus
+#                      uncommitted changes), all at once: cargo check -D
+#                      warnings on Linux, full vitest on k2n1-m4,
+#                      typecheck:web and vite:build:web on Linux nodes; the
+#                      macOS cargo check runs here beside them. One pass/fail
+#                      line per gate with its job id; a failed gate stops the
+#                      release with the job's --failures summary. Compute
+#                      unreachable: the old local path, and it says so. A
+#                      node problem on one gate: that gate runs here.
+#   local              the old path: the gates one after another on this
+#                      Mac, then Step 0.6's own Linux job.
+#   Settings: scripts/lib/release-gates.sh.
+#
 # Usage:
 #   ./scripts/release.sh <version>
 #   Example: ./scripts/release.sh 0.25.0
+#   ./scripts/release.sh --gates-only [<commit>]   only the pre-flight gates,
+#       at <commit> (default HEAD): no lock, no signing, no version, nothing
+#       published. For trying the gates without a release.
 
 set -euo pipefail
+
+if [ "${1:-}" = "--gates-only" ]; then
+    _k2_gates_dir="$(cd "$(dirname "$0")" && pwd)"
+    cd "$_k2_gates_dir/.."
+    # shellcheck source=scripts/lib/rust-pin.sh
+    source "$_k2_gates_dir/lib/rust-pin.sh"
+    # shellcheck source=scripts/lib/compute-tier.sh
+    source "$_k2_gates_dir/lib/compute-tier.sh"
+    # shellcheck source=scripts/lib/linux-gate-spec.sh
+    source "$_k2_gates_dir/lib/linux-gate-spec.sh"
+    # shellcheck source=scripts/lib/release-gates.sh
+    source "$_k2_gates_dir/lib/release-gates.sh"
+    k2rg_gates_only "${2:-HEAD}"
+    exit $?
+fi
 
 # Staple with retry: after `notarytool --wait` reports Accepted, the ticket
 # can take a minute to propagate to CloudKit — a premature staple fails with
@@ -248,6 +280,13 @@ source "$PROJECT_DIR/scripts/lib/compute-release.sh"
 # The Rust pin (rust-toolchain.toml; Step 0.4 and the compute jobs' needs).
 # shellcheck source=scripts/lib/rust-pin.sh
 source "$PROJECT_DIR/scripts/lib/rust-pin.sh"
+# The pre-flight gates on K2 Compute (K2_RELEASE_GATES; Step 0.5).
+# shellcheck source=scripts/lib/compute-tier.sh
+source "$PROJECT_DIR/scripts/lib/compute-tier.sh"
+# shellcheck source=scripts/lib/linux-gate-spec.sh
+source "$PROJECT_DIR/scripts/lib/linux-gate-spec.sh"
+# shellcheck source=scripts/lib/release-gates.sh
+source "$PROJECT_DIR/scripts/lib/release-gates.sh"
 # Wait loops: one line, then dots, a status line every few minutes.
 # shellcheck source=scripts/lib/wait-progress.sh
 source "$PROJECT_DIR/scripts/lib/wait-progress.sh"
@@ -605,6 +644,7 @@ k2_arch_gate_on_exit() {
     if k2_compute_on; then
         k2cr_cancel_open || true
     fi
+    k2rg_cancel_open || true
     k2_release_lock_release
     exit "$rc"
 }
@@ -654,18 +694,52 @@ fi
 if [ "$SKIP_BUILD" = 0 ]; then
 echo ""
 echo "Step 0.5: Pre-flight gates (cargo -D warnings, typecheck:web (tsc-rs), vitest, vite:build:web)..."
-# The same mac build env as the release build (scripts/lib/build-binaries.sh):
+# The local commands (k2rg_local in scripts/lib/release-gates.sh) use the
+# same mac build env as the release build (scripts/lib/build-binaries.sh):
 # SDKROOT from xcrun, the cmake policy floor, and no half-configured cmake
 # dirs. Without it the check build's vendored cmake (llama-cpp-sys) picked
 # the Command Line Tools' default SDK, which on macOS 27 the Xcode 26.5 ld
 # rejects ("tapi: unknown architecture"): 0.46.3 attempt 1 died here.
-k2_mac_build_env
-k2_clear_failed_cmake_dirs
-RUSTFLAGS="-D warnings" cargo check --workspace --all-targets
-bun run typecheck:web
-bunx vitest run --reporter=dot
-bun run vite:build:web
-echo "  Pre-flight gates passed."
+K2_GATES_WHERE="$(k2rg_mode)"
+if [ "$K2_GATES_WHERE" = compute ] && ! k2rg_reachable; then
+    echo "  K2 Compute is unreachable ($K2RG_WHY):"
+    echo "  running the gates here, one after another (the old path, K2_RELEASE_GATES=local)."
+    K2_GATES_WHERE=local
+fi
+if [ "$K2_GATES_WHERE" = local ]; then
+    k2rg_local_all
+else
+    k2rg_begin "$(git rev-parse HEAD)" release
+    if ! k2rg_submit_all; then
+        k2rg_cancel_open
+        echo "  K2 Compute refused a gate job (above): running the gates here, one after another (the old path)."
+        K2_GATES_WHERE=local
+        k2rg_local_all
+    fi
+fi
+if [ "$K2_GATES_WHERE" = compute ]; then
+    if [ "$(_k2rg_mac_where)" = local ]; then
+        echo "  cargo-macos: here, beside the jobs (cargo check -D warnings)..."
+        k2rg_local cargo-macos
+        echo "  ✓ cargo-macos      here"
+    fi
+    echo "  waiting for the gate jobs (each prints a line as it ends)..."
+    K2_GATES_RC=0
+    k2rg_wait_all || K2_GATES_RC=$?
+    if [ "$K2_GATES_RC" != 0 ]; then
+        k2rg_summary
+        echo "FATAL: a pre-flight gate failed (above). Nothing was bumped or built." >&2
+        exit 1
+    fi
+    for _k2_gate in $K2RG_INFRA; do
+        echo "  $_k2_gate: a node problem on K2 Compute, so it runs here instead..."
+        k2rg_local "$_k2_gate"
+        if [ "$_k2_gate" = cargo-linux ]; then K2RG_LINUX_OK=1; K2RG_LINUX_JOB=here; fi
+        echo "  ✓ $_k2_gate here"
+    done
+    k2rg_summary
+    echo "  Pre-flight gates passed."
+fi
 
 # ── Step 0.55: Root-helper signing preflight (prd-k2-root-helper-v1 §9.1) ──
 # The helper is signed after CI builds it (Step 10.5) with the SEPARATE
@@ -712,7 +786,11 @@ fi
 # No GitHub runner is involved. Escape: K2_SKIP_LINUX_GATE=1 (loud).
 echo ""
 echo "Step 0.6: Linux build gate..."
+if [ "${K2RG_LINUX_OK:-0}" = 1 ]; then
+    echo "  passed in Step 0.5 (cargo-linux, job ${K2RG_LINUX_JOB})."
+else
 "$PROJECT_DIR/scripts/linux-build-gate.sh"
+fi
 
 # ── Step 1: Bump version ──
 echo ""

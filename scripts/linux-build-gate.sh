@@ -42,10 +42,11 @@ if [ "${K2_SKIP_LINUX_GATE:-0}" = "1" ]; then
     exit 0
 fi
 
-# The check itself, the same in both modes. fetch-frpc.sh auto-detects the
-# Linux triple; the k2 crate's build script hard-requires the staged
-# sidecar even for `cargo check`.
-GATE_CMD="./scripts/fetch-frpc.sh && RUSTFLAGS='-D warnings' cargo check --workspace --all-targets"
+# The check itself, the same in both modes, and its needs: shared with
+# the release's parallel gates (scripts/lib/release-gates.sh).
+# shellcheck source=scripts/lib/linux-gate-spec.sh
+source "$PROJECT_DIR/scripts/lib/linux-gate-spec.sh"
+GATE_CMD="$K2_LINUX_GATE_CMD"
 
 case "$MODE" in
     compute)
@@ -56,10 +57,7 @@ case "$MODE" in
         K2="${K2_BIN:-k2}"
         head_sha="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
         rust="$(K2_RUST_PIN_REPO="$PROJECT_DIR" k2_rust_need "$head_sha")"
-        # The k2 crate's build scripts find GTK/WebKit (and the voice stack's
-        # ALSA) through pkg-config, as the Linux app build does.
-        needs="$rust,cmake@3,sys:pkg-config,sys:zlib1g-dev,sys:libssl-dev,sys:libasound2-dev"
-        needs="$needs,sys:libwebkit2gtk-4.1-dev,sys:libgtk-3-dev,sys:libayatana-appindicator3-dev,sys:librsvg2-dev,sys:libxdo-dev"
+        needs="$(k2_linux_gate_needs "$rust")"
         args=(compute run --any --os linux --arch x86_64 --sha "$head_sha")
         while IFS= read -r t; do [ -n "$t" ] && args+=("$t"); done < <(K2_BIN="$K2" k2_compute_tier_args "${K2_LINUX_GATE_TIER:-ci}")
         while IFS= read -r t; do [ -n "$t" ] && args+=("$t"); done < <(K2_BIN="$K2" k2_compute_avoid_args)

@@ -43,9 +43,9 @@ export interface DesktopToolbarProps {
   onPickDesktop?(id: string): void
   /** An agent's desktop: the daemon's label ("Separate, not private"). */
   label?: string | null
-  /** The agent session holding this desktop (its K2 address), and until
-   *  when (Unix ms). */
-  hold?: { agent: string; untilMs: number } | null
+  /** Who holds this desktop awake: the agent's name, its session's K2
+   *  address (on hover), and until when (Unix ms). */
+  hold?: { agent: string; address?: string; untilMs: number } | null
   /** Close desktop (an Owner or Admin on a virtual desktop). */
   onCloseDesktop?(): void
   displays: Display[]
@@ -240,7 +240,7 @@ export function DesktopToolbar(props: DesktopToolbarProps): React.JSX.Element {
       ) : null}
     </div>
     {props.hold ? (
-      <div className="flex flex-shrink-0 items-center gap-2 px-2 pb-1.5 text-[var(--color-text-muted)]" data-desktop-hold="">
+      <div className="flex flex-shrink-0 items-center gap-2 px-2 pb-1.5 text-[var(--color-text-muted)]" data-desktop-hold="" title={props.hold.address}>
         <span>
           {props.hold.agent} is working here until {holdUntilText(props.hold.untilMs)}.
         </span>

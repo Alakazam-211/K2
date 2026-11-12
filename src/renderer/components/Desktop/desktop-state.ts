@@ -99,11 +99,14 @@ export interface VirtualDesktopInfo {
   present?: Array<{ viewer: string; user: string }>
   /** The agent session holding it awake (its K2 address) and until when
    *  (Unix seconds); null when none. */
-  hold?: { by: string; until: number } | null
+  hold?: { by: string; name?: string; until: number } | null
   nextSleepAt?: number | null
   nextCloseAt?: number | null
   /** false: this server closes a desktop instead of pausing it. */
   canSleep?: boolean
+  /** Whether a browser is installed on the server (false: it opens with
+   *  no apps, LD-20). */
+  hasBrowser?: boolean
   /** K2 Screen's own state on that display. */
   screen?: string
   /** Queued for an awake slot. */
@@ -329,6 +332,7 @@ export function cardFor(state: Exclude<TabState, 'ready'>, mayManage: boolean, m
   return allowed && action ? { message, action } : { message }
 }
 
+export const NO_APPS_LINE = 'Opens with no apps. Agents can put a browser on it.'
 export const NO_SLEEP_LINE = "This server can't pause a desktop, so it closes when nobody is viewing it."
 export const AGENT_SWITCH_OFF_LINE = 'This agent isn’t allowed a desktop yet. Turn on “Allow a virtual desktop” in its workspace settings.'
 
@@ -359,6 +363,7 @@ export function cardText(
     case 'closed': {
       const agentOff = status?.kind === 'agent' && status.agentsAllowed === false
       if (agentOff) notes.push(AGENT_SWITCH_OFF_LINE)
+      if (mayStart && !agentOff && v?.hasBrowser === false) notes.push(NO_APPS_LINE)
       if (mayStart && v?.canSleep === false) notes.push(NO_SLEEP_LINE)
       const out: CardText = { line: base, notes }
       if (agentOff) out.action = null

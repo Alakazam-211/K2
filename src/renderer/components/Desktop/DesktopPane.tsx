@@ -514,7 +514,7 @@ function DesktopView(props: DesktopViewProps): React.JSX.Element {
         desktopId={pickedId}
         onPickDesktop={props.onPick}
         label={isServerDesktop(props.desktopId) ? null : (status.virtual?.label ?? listLabel ?? null)}
-        hold={hold && hold.by ? { agent: hold.by, untilMs: hold.until * 1000 } : null}
+        hold={hold && hold.by ? { agent: hold.name || hold.by, address: hold.by, untilMs: hold.until * 1000 } : null}
         onCloseDesktop={
           isVirtual && ready && mayStart
             ? () => post('Couldn’t close the desktop', () => stopDesktop(scope, target), false)

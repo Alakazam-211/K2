@@ -74,7 +74,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 
 import { DesktopPane } from './DesktopPane'
 import { CLOSE_DESKTOP_CONFIRM, SEPARATE_NOT_PRIVATE } from './DesktopToolbar'
-import { AGENT_SWITCH_OFF_LINE, NO_SLEEP_LINE, STATE_CARDS, type DesktopStatus, type VirtualState } from './desktop-state'
+import { AGENT_SWITCH_OFF_LINE, NO_APPS_LINE, NO_SLEEP_LINE, STATE_CARDS, type DesktopStatus, type VirtualState } from './desktop-state'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
@@ -250,6 +250,23 @@ describe('virtual states and their actions', () => {
     daemon.status = { virtual: { ...base, virtual: { ...base.virtual, canSleep: false } } }
     await render({ desktopId: 'virtual' })
     expect(notes()).toContain(NO_SLEEP_LINE)
+  })
+
+  it('the Start card says it opens with no apps when the server has no browser (LD-20)', async () => {
+    const base = vstatus('virtual', { state: 'closed' })
+    daemon.status = { virtual: { ...base, virtual: { ...base.virtual, hasBrowser: false } } }
+    await render({ desktopId: 'virtual' })
+    expect(notes()).toContain(NO_APPS_LINE)
+    cleanup()
+    daemon.status = { virtual: { ...base, virtual: { ...base.virtual, hasBrowser: true } } }
+    await render({ desktopId: 'virtual' })
+    expect(notes()).not.toContain(NO_APPS_LINE)
+    cleanup()
+    // A Member can't start it: no line about what it opens with.
+    const member = vstatus('virtual', { state: 'closed', you: MEMBER })
+    daemon.status = { virtual: { ...member, virtual: { ...member.virtual, hasBrowser: false } } }
+    await render({ desktopId: 'virtual' })
+    expect(notes()).not.toContain(NO_APPS_LINE)
   })
 
   it('an agent’s desktop whose switch is off has no Start, and says why', async () => {
@@ -430,13 +447,24 @@ describe('an agent’s desktop', () => {
     daemon.list = LIST3
     const until = Date.UTC(2026, 10, 11, 23, 5) / 1000
     const base = vstatus(AGENT, { state: 'asleep', you: MEMBER })
-    daemon.status = { [AGENT]: { ...base, virtual: { ...base.virtual, hold: { by: 'k2/scout', until } } } }
+    daemon.status = { [AGENT]: { ...base, virtual: { ...base.virtual, hold: { by: 'k2/scout', name: 'scout (reviewer)', until } } } }
     await render({ desktopId: AGENT, name: 'scout' })
     expect(document.querySelector('[data-desktop-separate]')?.textContent).toBe(SEPARATE_NOT_PRIVATE)
-    const hold = document.querySelector('[data-desktop-hold]')?.textContent ?? ''
+    const el = document.querySelector<HTMLElement>('[data-desktop-hold]')!
     const time = new Date(until * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-    expect(hold).toContain(`k2/scout is working here until ${time}.`)
-    expect(hold).toContain('You and k2/scout can both move the pointer.')
+    // The name in the line; the session's address on hover.
+    expect(el.textContent).toContain(`scout (reviewer) is working here until ${time}.`)
+    expect(el.textContent).toContain('You and scout (reviewer) can both move the pointer.')
+    expect(el.textContent).not.toContain('k2/scout')
+    expect(el.title).toBe('k2/scout')
+  })
+
+  it('a hold with no name (an older daemon) shows the address', async () => {
+    daemon.list = LIST3
+    const base = vstatus(AGENT, { state: 'asleep', you: MEMBER })
+    daemon.status = { [AGENT]: { ...base, virtual: { ...base.virtual, hold: { by: 'k2/scout', until: 1731301800 } } } }
+    await render({ desktopId: AGENT, name: 'scout' })
+    expect(document.querySelector('[data-desktop-hold]')?.textContent).toContain('k2/scout is working here until')
   })
 
   it('This server has no label and no hold line', async () => {

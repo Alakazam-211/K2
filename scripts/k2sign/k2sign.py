@@ -84,6 +84,7 @@ POLICY_KEYS = {
     "github_api", "daemon_workflow", "release_commit_files", "apple_team",
     "compute_assets", "compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env",
     "compute_secret_env_optional", "compute_dual_names", "compute_receipt_max_hours",
+    "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64",
 }
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
@@ -519,18 +520,19 @@ def load_policy(ctx):
     for k in ("session_hours", "challenge_minutes", "max_stdin_mb", "compute_receipt_max_hours"):
         if not re.match(r"^[1-9][0-9]{0,4}$", pol[k]):
             raise Refused("policy: %s must be a positive number" % k)
-    for k in ("compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env", "compute_dual_names"):
+    for k in ("compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env", "compute_dual_names",
+              "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64"):
         if not pol[k].split():
             raise Refused("policy: %s must not be empty" % k)
-    dual = set(pol["compute_dual_names"].split())
     for a in pol["compute_assets"].split():
         if a not in LINUX_DAEMONS:
             raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
         # A file signed from compute must have been built twice, on two
         # nodes: one node alone could get anything signed.
-        if a not in dual:
-            raise Refused("policy: compute asset %s is not in compute_dual_names: a compute-built file is signed only "
-                          "when V1 reproduced it byte for byte" % a)
+        build, verify, _, _, dual_key = COMPUTE_PAIRS[LINUX_DAEMONS[a]]
+        if a not in pol[dual_key].split():
+            raise Refused("policy: compute asset %s is not in %s: a compute-built file is signed only "
+                          "when %s reproduced %s's build byte for byte" % (a, dual_key, verify, build))
     return pol
 
 
@@ -1171,7 +1173,17 @@ def pe_evidence(asset, path):
 
 COMPUTE_PINS = "compute-pins"
 COMPUTE_DOMAIN = b"k2-compute-receipt-v1"
-COMPUTE_LABELS = ("L1", "V1")
+# One build and one verify job per arch, each pair with its own command,
+# needs and dual-built names in the policy. x86_64 (L1, V1) is in every
+# bundle; aarch64 (L2, V2: cross-compiled on x86_64 nodes with zig) only
+# when the release built it on compute. An aarch64 daemon signs from
+# compute only on a registered bundle with L2 and V2; without them it
+# takes the GitHub path (check_evidence).
+COMPUTE_PAIRS = {
+    "x86_64": ("L1", "V1", "compute_argv", "compute_needs", "compute_dual_names"),
+    "aarch64": ("L2", "V2", "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64"),
+}
+COMPUTE_LABELS = ("L1", "V1", "L2", "V2")
 COMPUTE_SKEW_SECS = 600
 COMPUTE_BUNDLE_MAX = 4 << 20
 FP_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1289,20 +1301,30 @@ def compute_state_path(ctx, version):
     return os.path.join(ctx.state, "compute", version + ".json")
 
 
+def bundle_arches(bundle):
+    """The arches a bundle carries builds for: x86_64 always (L1 and V1 are
+    required), aarch64 when it has an L2 or a V2 receipt."""
+    recs = (bundle.get("receipts") if isinstance(bundle, dict) else None) or {}
+    if not isinstance(recs, dict):
+        return ["x86_64"]
+    return ["x86_64"] + (["aarch64"] if "L2" in recs or "V2" in recs else [])
+
+
 def compute_bundle_receipts(bundle):
-    """The (label, body text, signature, plan) of L1 and V1 from a bundle;
-    any shape problem is a refusal."""
+    """The (label, body text, signature, plan) of every build in a bundle
+    (L1 and V1, then L2 and V2 when it has aarch64); any shape problem is a
+    refusal."""
     if not isinstance(bundle, dict) or bundle.get("v") != 1:
         raise Refused("the compute evidence is not a v1 bundle")
     recs = bundle.get("receipts")
     if not isinstance(recs, dict):
         raise Refused("the compute evidence has no receipts")
     out = []
-    for label in COMPUTE_LABELS:
+    for label in (lab for arch in bundle_arches(bundle) for lab in COMPUTE_PAIRS[arch][:2]):
         r = recs.get(label)
         if r is None:
-            if label == "V1":
-                raise Refused("no V1 receipt: the dual build on a second node is required for compute builds")
+            if label in ("V1", "V2"):
+                raise Refused("no %s receipt: the dual build on a second node is required for compute builds" % label)
             raise Refused("no %s receipt" % label)
         if not isinstance(r, dict) or not isinstance(r.get("signature"), str):
             raise Refused("%s: not a receipt (k2 compute receipt <job> --json)" % label)
@@ -1468,10 +1490,8 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None, 
         except Exception:
             raise Refused("the bundle's commit_object is not base64")
         commit_obj = parse_commit_object(raw)
-    argv = pol["compute_argv"].split()
-    want_argv = hashlib.sha256(canonical_json(argv).encode()).hexdigest()
+    label_arch = {lab: arch for arch, pair in COMPUTE_PAIRS.items() for lab in pair[:2]}
     env_ok = set(COMPUTE_PLAN_ENV)
-    want_needs = [n.replace("{rust_pin}", pin) for n in pol["compute_needs"].split()]
     now = ctx.now()
     if session is not None:
         not_before = int(session.get("opened", session["approved"])) - COMPUTE_SKEW_SECS
@@ -1482,6 +1502,10 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None, 
     oldest = now - int(pol["compute_receipt_max_hours"]) * 3600
     seen, out = {}, {}
     for label, body, sig, plan in compute_bundle_receipts(bundle):
+        _, _, argv_key, needs_key, _ = COMPUTE_PAIRS[label_arch[label]]
+        argv = pol[argv_key].split()
+        want_argv = hashlib.sha256(canonical_json(argv).encode()).hexdigest()
+        want_needs = [n.replace("{rust_pin}", pin) for n in pol[needs_key].split()]
         try:
             rc = json.loads(body)
         except ValueError:
@@ -1548,30 +1572,41 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None, 
         seen[label] = (rc, receipt_artifacts(label, rc), name)
         out[label] = {"job": rc.get("job_id"), "node": name, "node_fp": fp, "receipt": rid,
                       "ended": iso(ended), "tools_used": rc.get("tools_used") or {}}
-    (l1, a1, n1), (v1, av, nv) = seen["L1"], seen["V1"]
-    if l1.get("node_fp") == v1.get("node_fp"):
-        raise Refused("V1 ran on the same node as L1 (%s): the dual build needs a second node" % n1)
-    if l1.get("job_id") == v1.get("job_id"):
-        raise Refused("V1 is the same job as L1")
-    if sorted(l1.get("secret_env") or []) != sorted(v1.get("secret_env") or []):
-        raise Refused("V1 got other vault secrets than L1: the two builds are not the same build")
-    for n in pol["compute_dual_names"].split():
-        k = "dist/" + n
-        if k not in a1:
-            raise Refused("V1 match: L1's receipt lists no %s" % n)
-        if k not in av:
-            raise Refused("V1 match missing: V1's receipt lists no %s (the dual build must reproduce it)" % n)
-        if a1[k]["sha256"] != av[k]["sha256"] or a1[k]["bytes"] != av[k]["bytes"]:
-            raise Refused("V1 mismatch: %s differs between L1 on %s (%s…) and V1 on %s (%s…)"
-                          % (n, n1, a1[k]["sha256"][:12], nv, av[k]["sha256"][:12]))
-    summary = {"tag_commit": t, "tree": t_tree, "base": base, "built_commit": l1["src"]["commit"], "rust": pin, "jobs": out}
+    jobs = [rc.get("job_id") for rc, _, _ in seen.values()]
+    if len(set(jobs)) != len(jobs):
+        raise Refused("one job is offered as two builds (%s)" % ", ".join(sorted(seen)))
+    arches = bundle_arches(bundle)
+    for arch in arches:
+        lab, vlab, _, _, dual_key = COMPUTE_PAIRS[arch]
+        (l1, a1, n1), (v1, av, nv) = seen[lab], seen[vlab]
+        if l1.get("node_fp") == v1.get("node_fp"):
+            raise Refused("%s ran on the same node as %s (%s): the dual build needs a second node" % (vlab, lab, n1))
+        if sorted(l1.get("secret_env") or []) != sorted(v1.get("secret_env") or []):
+            raise Refused("%s got other vault secrets than %s: the two builds are not the same build" % (vlab, lab))
+        for n in pol[dual_key].split():
+            k = "dist/" + n
+            if k not in a1:
+                raise Refused("%s match: %s's receipt lists no %s" % (vlab, lab, n))
+            if k not in av:
+                raise Refused("%s match missing: %s's receipt lists no %s (the dual build must reproduce it)" % (vlab, vlab, n))
+            if a1[k]["sha256"] != av[k]["sha256"] or a1[k]["bytes"] != av[k]["bytes"]:
+                raise Refused("%s mismatch: %s differs between %s on %s (%s…) and %s on %s (%s…)"
+                              % (vlab, n, lab, n1, a1[k]["sha256"][:12], vlab, nv, av[k]["sha256"][:12]))
+    l1 = seen["L1"][0]
+    summary = {"tag_commit": t, "tree": t_tree, "base": base, "built_commit": l1["src"]["commit"], "rust": pin,
+               "arches": arches, "jobs": out}
     if asset is not None:
+        arch = LINUX_DAEMONS.get(asset)
+        if arch not in arches:
+            raise Refused("%s: the compute evidence has no %s build" % (asset, arch))
+        lab = COMPUTE_PAIRS[arch][0]
+        a1 = seen[lab][1]
         k = "dist/" + asset
         if k not in a1:
-            raise Refused("%s is not an artifact in L1's signed receipt" % asset)
+            raise Refused("%s is not an artifact in %s's signed receipt" % (asset, lab))
         sha = sha256_file(path)
         if a1[k]["sha256"] != sha or a1[k]["bytes"] != os.path.getsize(path):
-            raise Refused("%s: these bytes (%s…) are not L1's signed artifact (%s…)" % (asset, sha[:12], a1[k]["sha256"][:12]))
+            raise Refused("%s: these bytes (%s…) are not %s's signed artifact (%s…)" % (asset, sha[:12], lab, a1[k]["sha256"][:12]))
     return summary
 
 
@@ -1585,6 +1620,15 @@ def compute_session(ctx, pol, version):
     if ctx.now() > sess["expires"]:
         raise Refused("the signing session for %s expired at %s; re-approve (release.sh asks)" % (version, hhmm(sess["expires"])))
     return sess
+
+
+def compute_covers(ctx, version, asset):
+    """Registered compute evidence for this version that has a build of
+    this asset's arch (x86_64 always; aarch64 only with L2 and V2)."""
+    p = compute_state_path(ctx, version)
+    if not os.path.exists(p):
+        return False
+    return LINUX_DAEMONS.get(asset) in bundle_arches(read_json(p).get("bundle"))
 
 
 def compute_evidence(ctx, pol, asset, version, path, session, d):
@@ -1665,9 +1709,9 @@ def verb_compute_evidence(ctx, args):
         audit(ctx, version, "COMPUTE-EVIDENCE-AGAIN" if again else "COMPUTE-EVIDENCE",
               detail="bundle %s; tree %s; %s" % (bundle_sha[:16], summary["tree"], jobs))
     print(json.dumps({"ok": True, "version": version, "again": again, "summary": summary}, sort_keys=True))
-    say("compute evidence for %s %s: L1 on %s, V1 on %s, tree %s"
+    say("compute evidence for %s %s: %s, tree %s"
         % (version, "already registered (the same bundle, checked again)" if again else "registered",
-           summary["jobs"]["L1"]["node"], summary["jobs"]["V1"]["node"], summary["tree"][:12]))
+           "; ".join("%s on %s" % (k, summary["jobs"][k]["node"]) for k in COMPUTE_LABELS if k in summary["jobs"]), summary["tree"][:12]))
 
 
 def verb_compute_rehearse(ctx, args):
@@ -1699,8 +1743,8 @@ def verb_compute_rehearse(ctx, args):
         audit(ctx, "rehearsal", "COMPUTE-REHEARSAL", detail="bundle %s; tree %s; %s" % (bundle_sha[:16], summary["tree"], "; ".join(
             "%s job %s on %s" % (k, v["job"], v["node"]) for k, v in sorted(summary["jobs"].items()))))
     print(json.dumps({"ok": True, "rehearsal": True, "summary": summary}, sort_keys=True))
-    say("rehearsal passed: L1 on %s and V1 on %s verify with the pinned keys and controller, and every dual-built file "
-        "matches (nothing was registered or signed)" % (summary["jobs"]["L1"]["node"], summary["jobs"]["V1"]["node"]))
+    say("rehearsal passed: %s verify with the pinned keys and controller, and every dual-built file "
+        "matches (nothing was registered or signed)" % "; ".join("%s on %s" % (k, summary["jobs"][k]["node"]) for k in COMPUTE_LABELS if k in summary["jobs"]))
 
 
 def verb_compute_pins(ctx, args):
@@ -1718,8 +1762,9 @@ def check_evidence(ctx, pol, slot, asset, version, path, session, d):
     """Every real file needs its own evidence; an approval alone never signs."""
     if ctx.test_evidence_accept():
         return
-    if asset in pol["compute_assets"].split() and os.path.exists(compute_state_path(ctx, version)):
-        # Registered compute evidence decides this asset: no fallback.
+    if asset in pol["compute_assets"].split() and compute_covers(ctx, version, asset):
+        # Registered compute evidence with a build of this arch decides
+        # this asset: no fallback.
         compute_evidence(ctx, pol, asset, version, path, session, d)
     elif asset in LINUX_DAEMONS:
         linux_evidence(ctx, pol, asset, version, path, session, d)

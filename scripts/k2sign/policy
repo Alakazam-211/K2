@@ -33,16 +33,27 @@ release_commit_files = package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock 
 apple_team = 36B8R93HXV
 # K2 Compute builds (S3b; release.sh K2_LINUX_BUILDS=compute). The signer
 # signs these assets from our own nodes only on node-signed receipts it
-# checks itself: L1 and V1 on two nodes pinned in compute-pins (k2sign-admin
-# pin-compute-node), sent by the pinned controller, at the tag's tree.
-compute_assets = k2-daemon-linux-x86_64
+# checks itself: a build and a verify job on two nodes pinned in
+# compute-pins (k2sign-admin pin-compute-node), sent by the pinned
+# controller, at the tag's tree. x86_64: L1 and V1 (the lines without a
+# suffix). aarch64: L2 and V2, cross-compiled on x86_64 nodes with zig (the
+# _aarch64 lines); an aarch64 daemon signs from compute only when the
+# registered evidence has L2 and V2, else it takes the GitHub path.
+compute_assets = k2-daemon-linux-x86_64 k2-daemon-linux-aarch64
 # The release build command both jobs must have run (compute-release.sh L1/V1).
 compute_argv = bash scripts/ci/build-linux-bins.sh x86_64
+compute_argv_aarch64 = bash scripts/ci/build-linux-bins.sh aarch64
 # Exactly what the plan of a release build job needs ({rust_pin}: the
 # channel rust-toolchain.toml pins at the tag, read from GitHub; the job's
 # rustc must be that version too). compute-release.sh's bins_needs; a test
 # keeps the two equal. Its sys: names are the only packages a plan may list.
 compute_needs = rust@{rust_pin} cmake@3 sys:pkg-config sys:zlib1g-dev
+# aarch64: no rust@ need (an explicit one would drop rust-toolchain.toml's
+# aarch64 target, which a job can't add itself); the node installs the
+# file's channel and targets, and the receipt's rustc must still be the pin.
+# zig and cargo-zigbuild are scripts/ci/cross-pins.sh's versions (a test
+# keeps the two equal; build-linux-bins.sh refuses any other).
+compute_needs_aarch64 = cmake@3 sys:pkg-config sys:zlib1g-dev zig@0.15.2 cargo:cargo-zigbuild@0.23.4
 # The artifact globs the plan collects (compute-release.sh --artifact).
 compute_artifacts = dist/*
 # The OAuth values come only from the vault, as these names (secret mode).
@@ -60,5 +71,6 @@ compute_secret_env_optional = BUILD_MICROSOFT_CLIENT_ID
 # and every compute_assets entry (the signer refuses a policy whose
 # compute asset isn't here: one node alone must never get a file signed).
 compute_dual_names = k2-root-helper-linux-x86_64 k2-node-linux-x86_64 k2-app-engine-linux-x86_64 k2-daemon-linux-x86_64
+compute_dual_names_aarch64 = k2-root-helper-linux-aarch64 k2-node-linux-aarch64 k2-app-engine-linux-aarch64 k2-daemon-linux-aarch64
 # A receipt older than this is refused, even with the approval off.
 compute_receipt_max_hours = 24

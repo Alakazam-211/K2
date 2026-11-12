@@ -240,14 +240,18 @@ got="$(python3 "$PY" argv-sha256 bash scripts/ci/build-linux-bins.sh x86_64)"
 [ "$got" = "$want" ] && pass "argv_sha256 is sha256 of the canonical JSON array" || fail "argv_sha256" "$got != $want"
 
 echo "happy path (the defaults: secret OAuth, V1 on, --tier ci, the pin):"
-unset STUB_TAMPER K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE K2_COMPUTE_ARM_NODE GEN_TAMPER GEN_SALT K2_COMPUTE_OAUTH K2_COMPUTE_OAUTH_SECRETS K2_COMPUTE_RUST K2_COMPUTE_TIER K2_LINUX_BUILDS
+unset STUB_TAMPER K2_COMPUTE_X86_NODE K2_COMPUTE_VERIFY_NODE K2_COMPUTE_ARM_NODE GEN_TAMPER GEN_SALT K2_COMPUTE_OAUTH K2_COMPUTE_OAUTH_SECRETS K2_COMPUTE_RUST K2_COMPUTE_TIER K2_LINUX_BUILDS K2_COMPUTE_CPUS
+# The x86_64 sections below keep aarch64 off compute (K2_COMPUTE_ARM=github);
+# "aarch64 on compute" further down covers L2 and V2.
+export K2_COMPUTE_ARM=github
 # This Mac's .env values: they must never reach argv (secret mode).
 export K2_GMAIL_CLIENT_ID="gm-id-VALUE-1234.apps.example" K2_GMAIL_CLIENT_SECRET="gm-SECRET-VALUE-5678" K2_MICROSOFT_CLIENT_ID="ms-ID-VALUE-9012"
 rc="$(run_case ok)"
 [ "$rc" = 0 ] && pass "collect verifies L1, L3 and V1" || fail "collect rc=$rc" "$(cat "$tmp/ok.collect")"
 [ "$(cut -f1,3 "$tmp/ok/jobs.tsv" | tr '\t\n' ': ')" = "L1:k2n7-vin L3:k2n8-vin V1:k2n9-vin " ] \
     && pass "three jobs: L1 k2n7, L3 k2n8, V1 k2n9 (the Ryzen nodes)" || fail "jobs.tsv" "$(cat "$tmp/ok/jobs.tsv")"
-grep -q 'L2 aarch64: no ARM node yet' "$tmp/ok.submit" && pass "aarch64 seam is named" || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
+grep -q 'L2/V2 aarch64: not on compute (K2_COMPUTE_ARM=github' "$tmp/ok.submit" && pass "K2_COMPUTE_ARM=github: no L2/V2, and it says GitHub builds aarch64" \
+    || fail "aarch64 note" "$(cat "$tmp/ok.submit")"
 run_line="$(grep -m1 'k2 compute run k2n7-vin' "$tmp/calls-ok" || true)"
 for want in "--sha $COMMIT" "--tier ci" "--detach" "--artifact dist/*" "--env BUILD_COMMIT=$COMMIT" "--needs rust@1.98.7," "--mem 20G" "--queue-timeout 2h" \
     "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--secret K2_GMAIL_CLIENT_SECRET=BUILD_GMAIL_CLIENT_SECRET" \
@@ -369,6 +373,95 @@ unset K2_COMPUTE_REQUIRE_BAKED_OAUTH
 export K2_LINUX_BUILDS=compute; check_tamper t-oauth-compute "compute mode always requires baked OAuth" "oauth 'placeholder'"
 unset K2_LINUX_BUILDS
 
+
+echo "aarch64 on compute (L2 + V2, cross-compiled with zig):"
+# A release commit with the cross pins (what k2cr_arm_needs reads at it).
+repo_arm="$tmp/repo-arm"
+mkdir -p "$repo_arm/scripts/ci"
+git -C "$repo_arm" init -q
+printf '[toolchain]\nchannel = "1.98.7"\ntargets = ["aarch64-unknown-linux-gnu"]\n' > "$repo_arm/rust-toolchain.toml"
+cp "$ROOT/scripts/ci/cross-pins.sh" "$repo_arm/scripts/ci/cross-pins.sh"
+git -C "$repo_arm" add -A
+git -C "$repo_arm" -c user.email=t@t -c user.name=t commit -q -m release
+COMMIT_ARM="$(git -C "$repo_arm" rev-parse HEAD)"
+TREE_ARM="$(git -C "$repo_arm" rev-parse 'HEAD^{tree}')"
+ZIG="$(sed -n 's/^K2_CROSS_ZIG="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
+ZB="$(sed -n 's/^K2_CROSS_ZIGBUILD="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
+# run_arm <name> [setup snippet]: init, submit, wait, collect at COMMIT_ARM;
+# echoes "<collect rc> <K2CR_X86_OK> <K2CR_ARM_OK> <K2CR_ARM_SUBMIT_OK>".
+run_arm() {
+    local name="$1" setup="${2:-}"
+    export STUB_DIR="$tmp/stub-$name" STUB_CALLS="$tmp/calls-$name" STUB_COMMIT="$COMMIT_ARM" STUB_TREE="$TREE_ARM"
+    rm -rf "${STUB_DIR:?}" "${tmp:?}/$name" "${tmp:?}/$name-files"
+    mkdir -p "$STUB_DIR"
+    : > "$STUB_CALLS"
+    (
+        cd "$repo_arm"
+        source "$ROOT/scripts/lib/compute-release.sh"
+        eval "$setup"
+        k2cr_init "$VERSION" "$COMMIT_ARM" "$tmp/$name" "$tmp/$name-files"
+        k2cr_submit_release_set >"$tmp/$name.submit" 2>&1 || true
+        k2cr_wait 1 >/dev/null
+        rc=0
+        k2cr_collect >"$tmp/$name.collect" 2>&1 || rc=$?
+        k2cr_stage "$tmp/$name-dist" >"$tmp/$name.stage" 2>&1 || true
+        echo "$rc ${K2CR_X86_OK:-x} ${K2CR_ARM_OK:-x} ${K2CR_ARM_SUBMIT_OK:-x}"
+    )
+}
+export K2_COMPUTE_ARM=compute
+out="$(run_arm arm)"
+[ "$out" = "0 1 1 1" ] && pass "five jobs submitted, x86_64 and aarch64 both verified" || fail "arm happy path" "$out $(cat "$tmp/arm.submit" "$tmp/arm.collect")"
+[ "$(cut -f1,3,5 "$tmp/arm/jobs.tsv" | tr '\t\n' ': ')" = "L1:k2n7-vin:x86_64 L3:k2n8-vin:x86_64 V1:k2n9-vin:x86_64 L2:k2n10-vin:aarch64 V2:k2n11-vin:aarch64 " ] \
+    && pass "L2 on k2n10-vin, V2 on k2n11-vin (the defaults)" || fail "arm jobs.tsv" "$(cat "$tmp/arm/jobs.tsv")"
+for lab_node in k2n10-vin k2n11-vin; do
+    line="$(grep -m1 "k2 compute run $lab_node " "$tmp/calls-arm" || true)"
+    for want in "--needs cmake@3,sys:pkg-config,sys:zlib1g-dev,zig@$ZIG,cargo:cargo-zigbuild@$ZB " "--exclusive --why " \
+        "--secret K2_GMAIL_CLIENT_ID=BUILD_GMAIL_CLIENT_ID" "--env BUILD_COMMIT=$COMMIT_ARM" "--cpus 8 " "-- bash scripts/ci/build-linux-bins.sh aarch64"; do
+        [[ "$line" == *"$want"* ]] && pass "$lab_node aarch64 submit has $want" || fail "$lab_node aarch64 submit lacks $want" "$line"
+    done
+    [[ "$line" != *"rust@"* ]] && pass "$lab_node: no rust@ need (the node installs rust-toolchain.toml's channel AND its aarch64 target)" \
+        || fail "$lab_node rust need" "$line"
+done
+grep -q 'L2 on k2n10-vin and V2 on k2n11-vin: two nodes' "$tmp/arm.collect" && grep -q 'identical in both builds: .*k2-daemon-linux-aarch64' "$tmp/arm.collect" \
+    && pass "collect: V2 came from another node key and matches L2's daemon, root helper, node and engine" || fail "arm dual" "$(cat "$tmp/arm.collect")"
+python3 - "$tmp/arm-dist" "$tmp/arm/staged.txt" <<'PYS' && pass "staged: both arches' binaries + .sha256, and the x86_64 packages" || fail "arm staged set" "$(ls "$tmp/arm-dist")"
+import os, sys
+d, staged = sys.argv[1], open(sys.argv[2]).read().split()
+want = {f"{b}-linux-{a}{x}" for a in ("x86_64", "aarch64") for b in ("k2-daemon", "k2-node", "k2-root-helper", "k2-app-engine") for x in ("", ".sha256")}
+want |= {"K2_9.9.9_amd64.deb", "K2-9.9.9-1.x86_64.rpm", "K2_9.9.9_amd64.AppImage", "SHA256SUMS-linux-x86_64.txt"}
+assert set(os.listdir(d)) == want, sorted(set(os.listdir(d)) ^ want)
+assert set(staged) == want, staged
+PYS
+# V2 builds other bytes: the stub's 5th run (V2) gets a salted daemon.
+cat > "$tmp/salt-v2.sh" <<'SALT'
+k2cr_k2() {
+    if [ "${1:-} ${2:-} ${3:-}" = "compute run k2n11-vin" ]; then GEN_DAEMON_SALT=other "${K2_BIN:-k2}" "$@"; else "${K2_BIN:-k2}" "$@"; fi
+}
+SALT
+out="$(run_arm arm-v2diff "source '$tmp/salt-v2.sh'")"
+[ "$out" = "1 1 0 1" ] && grep -q 'k2-daemon-linux-aarch64: the two builds differ' "$tmp/arm-v2diff.collect" \
+    && pass "V2's aarch64 daemon differing from L2's: aarch64 fails, x86_64 still verified" || fail "V2 diff" "$out $(cat "$tmp/arm-v2diff.collect")"
+python3 - "$tmp/arm-v2diff-dist" <<'PYS' && pass "…and only x86_64 is staged" || fail "arm fallback staging" "$(ls "$tmp/arm-v2diff-dist")"
+import os, sys
+names = os.listdir(sys.argv[1])
+assert "k2-daemon-linux-x86_64" in names and not any("aarch64" in n for n in names), names
+PYS
+out="$(K2_COMPUTE_ARM_VERIFY_NODE=k2n10-vin run_arm arm-same)"
+[ "${out%% *}" = 0 ] && [ "$(wc -l < "$tmp/arm-same/jobs.tsv" | tr -d ' ')" = 0 ] && grep -q 'L2 and V2 are both on k2n10-vin' "$tmp/arm-same.submit" \
+    && pass "L2 and V2 on one node: refused before anything is submitted" || fail "arm same node" "$out $(cat "$tmp/arm-same.submit")"
+out="$(K2_COMPUTE_ARM_VERIFY_NODE=none run_arm arm-nov2)"
+grep -q 'aarch64 on compute needs V2 on a second node' "$tmp/arm-nov2.submit" && pass "V2 off: refused (no aarch64 compute build without the dual build)" \
+    || fail "arm no V2" "$out $(cat "$tmp/arm-nov2.submit")"
+out="$(K2_COMPUTE_ARM_NODE=none run_arm arm-none)"
+[ "$out" = "0 1 x x" ] && ! grep -q 'build-linux-bins.sh aarch64' "$tmp/calls-arm-none" && pass "K2_COMPUTE_ARM_NODE=none: no aarch64 jobs" \
+    || fail "arm none" "$out"
+# A release commit without the cross pins: aarch64 isn't submitted, x86_64 goes on.
+export STUB_COMMIT="$COMMIT" STUB_TREE="$TREE"
+rc="$(K2_COMPUTE_ARM=compute run_case arm-nopins)"
+[ "$rc" = 0 ] && grep -q 'no scripts/ci/cross-pins.sh at' "$tmp/arm-nopins.submit" && ! grep -q 'aarch64' "$tmp/arm-nopins/jobs.tsv" \
+    && pass "no cross pins at the release commit: no aarch64 jobs, x86_64 unaffected" || fail "arm no pins" "rc=$rc $(cat "$tmp/arm-nopins.submit")"
+export K2_COMPUTE_ARM=github
+
 echo "dual build (V1, G12):"
 rc="$(run_case v-same)"
 [ "$rc" = 0 ] && grep -q 'identical in both builds' "$tmp/v-same.collect" && pass "V1 identical to L1 passes" \
@@ -468,7 +561,12 @@ rc="$(run_case one-node-nov1)"
 [ "$rc" = 0 ] && [ "$(grep -c 'k2 compute run k2n9-vin ' "$tmp/calls-one-node-nov1")" = 2 ] \
     && pass "with V1 off, one node for L1 and L3 is fine" || fail "one node, no V1" "rc=$rc $(cat "$tmp/calls-one-node-nov1")"
 unset K2_COMPUTE_NODE K2_COMPUTE_VERIFY_NODE
-! grep -q -- '--cpus' "$tmp/calls-ok" && pass "no --cpus unless K2_COMPUTE_CPUS is set" || fail "default cpus" "$(cat "$tmp/calls-ok")"
+[ "$(grep -c -- '--cpus 8 ' "$tmp/calls-ok")" = 3 ] && pass "every job asks for 8 CPUs by default (z3mbpZ's share; the node default is 4)" \
+    || fail "default cpus" "$(cat "$tmp/calls-ok")"
+export K2_COMPUTE_CPUS=default
+rc="$(run_case cpudef)"
+! grep -q -- '--cpus' "$tmp/calls-cpudef" && pass "K2_COMPUTE_CPUS=default: no --cpus (the node's default)" || fail "cpus default" "$(cat "$tmp/calls-cpudef")"
+unset K2_COMPUTE_CPUS
 export K2_COMPUTE_QUEUE_TIMEOUT=3h K2_COMPUTE_CPUS=8
 rc="$(run_case qt)"
 [ "$(grep -c -- '--queue-timeout 3h' "$tmp/calls-qt")" = 3 ] && pass "K2_COMPUTE_QUEUE_TIMEOUT reaches every job" || fail "queue timeout" "$(cat "$tmp/calls-qt")"
@@ -659,11 +757,30 @@ out="$(bash "$ROOT/scripts/ci/build-linux-bins.sh" sparc 2>&1 || true)"
 if [ "$(uname -s)" != "Linux" ]; then
     out="$(bash "$ROOT/scripts/ci/build-linux-bins.sh" x86_64 2>&1 || true)"
     [[ "$out" == *"builds Linux binaries on Linux"* ]] && pass "build-linux-bins refuses a non-Linux host" || fail "host check" "$out"
+elif [ "$(uname -m)" = aarch64 ]; then
+    out="$(bash "$ROOT/scripts/ci/build-linux-bins.sh" x86_64 2>&1 || true)"
+    [[ "$out" == *"Build x86_64 natively"* ]] && pass "build-linux-bins refuses x86_64 on an aarch64 host" || fail "cross check" "$out"
 else
-    other=aarch64; [ "$(uname -m)" = aarch64 ] && other=x86_64
-    out="$(bash "$ROOT/scripts/ci/build-linux-bins.sh" "$other" 2>&1 || true)"
-    [[ "$out" == *"Build each arch natively"* ]] && pass "build-linux-bins refuses cross builds" || fail "cross check" "$out"
+    # aarch64 on x86_64 is the zig cross build: it refuses a zig or
+    # cargo-zigbuild that isn't cross-pins.sh's, before any cargo runs.
+    fake="$tmp/fakezig"; mkdir -p "$fake"
+    printf '#!/bin/sh\necho 0.0.1\n' > "$fake/zig"
+    printf '#!/bin/sh\necho "cargo-zigbuild 0.0.1"\n' > "$fake/cargo-zigbuild"
+    chmod +x "$fake/zig" "$fake/cargo-zigbuild"
+    out="$(env -u K2_GMAIL_CLIENT_ID -u K2_GMAIL_CLIENT_SECRET -u K2_MICROSOFT_CLIENT_ID PATH="$fake:$PATH" BUILD_OAUTH=placeholder \
+        bash "$ROOT/scripts/ci/build-linux-bins.sh" aarch64 --out "$tmp/xout" 2>&1 || true)"
+    [[ "$out" == *"zig is 0.0.1; scripts/ci/cross-pins.sh pins"* ]] && [[ "$out" != *Compiling* ]] \
+        && pass "build-linux-bins: the aarch64 cross build refuses an unpinned zig before any cargo" || fail "cross pin check" "$out"
 fi
+python3 - "$ROOT/scripts/ci/build-linux-bins.sh" <<'PY2' && pass "build-linux-bins: cross mode only for aarch64 on x86_64; cargo build → cargo zigbuild <triple>.<glibc>; C path maps in CFLAGS_<triple>" || fail "cross wiring" ""
+import sys
+s = open(sys.argv[1]).read()
+assert 'if [ "$HOST_ARCH" = "x86_64" ] && [ "$ARCH" = "aarch64" ]; then\n        CROSS=1' in s
+assert 'source "$ROOT/scripts/ci/cross-pins.sh"' in s
+assert 'a+=(--target "$TRIPLE.$CROSS_GLIBC")' in s and 'command cargo zigbuild "${a[@]}"' in s
+assert '$K2_REPRO_CFLAGS' in s
+assert s.index('k2_repro_build_env "$ROOT"') < s.index('if [ "$CROSS" = 1 ]; then') < s.index('k2_ptyd_build_for_embed "$TRIPLE"')
+PY2
 
 echo ""
 echo "compute-release: $pass passed, $fail failed"

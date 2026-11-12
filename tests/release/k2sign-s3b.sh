@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # k2sign-s3b.sh — prd-signing-user-v1 S3b acceptance: the signing user signs
-# a K2 Compute-built x86 daemon only on node-signed receipts it checks
-# itself. Test mode (macOS, throwaway keys, a fake GitHub API on 127.0.0.1,
+# a K2 Compute-built Linux daemon (x86_64: L1 + V1; aarch64: L2 + V2,
+# cross-compiled) only on node-signed receipts it checks itself. Test mode (macOS, throwaway keys, a fake GitHub API on 127.0.0.1,
 # P-256 node keys made with /usr/bin/openssl, a real git repo for the
 # commits). No K2SIGN_TEST_EVIDENCE: every signature below passed the real
 # compute evidence code.
@@ -93,7 +93,7 @@ for arch, mach in (("x86_64", 62), ("aarch64", 183)):
     open(p, "wb").write(body)
     open(p + ".sha256", "w").write("%s  %s\n" % (hashlib.sha256(body).hexdigest(), os.path.basename(p)))
     open(os.path.join(d, "k2-app-engine-linux-" + arch), "wb").write(b"engine-" + arch.encode() + os.urandom(64))
-for n in ("k2-root-helper-linux-x86_64", "k2-node-linux-x86_64"):
+for n in ("k2-root-helper-linux-x86_64", "k2-node-linux-x86_64", "k2-root-helper-linux-aarch64", "k2-node-linux-aarch64"):
     open(os.path.join(d, n), "wb").write(n.encode() + os.urandom(64))
 PY
 }
@@ -105,7 +105,8 @@ unset K2_MICROSOFT_CLIENT_ID || true
 # signed with the node's key over the k2 receipt domain bytes (openssl).
 # Overrides: any receipt field; "src.<f>"; "drop_art"/"set_art" {name: sha};
 # "fp" (claim another node's fp); "tamper" (edit the body after signing);
-# "no_body" (an older daemon: only the parsed receipt). The plan (what the
+# "no_body" (an older daemon: only the parsed receipt); "arch": "aarch64"
+# (the L2/V2 build: its command and needs, no rust@). The plan (what the
 # route returns since the S3b review, H1) follows the receipt; "plan.<k>"
 # sets a plan field (null drops it), "plan_tamper" edits the plan after the
 # digest went into the receipt, "no_plan" leaves it out.
@@ -114,6 +115,10 @@ mkrcpt() {
 import base64, hashlib, json, os, struct, subprocess, sys
 out, key, files, over, commit, tree, ctl, started, ended = sys.argv[1:10]
 over = json.loads(over)
+arch = over.pop("arch", "x86_64")
+ARGV = ["bash", "scripts/ci/build-linux-bins.sh", arch]
+NEEDS = (["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"] if arch == "x86_64"
+         else ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev", "zig@0.15.2", "cargo:cargo-zigbuild@0.23.4"])
 der = subprocess.run(["/usr/bin/openssl", "ec", "-in", key, "-pubout", "-outform", "DER"],
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True).stdout
 def canonical(v):
@@ -135,7 +140,7 @@ for n, sha in over.pop("set_art", {}).items():
 job = hashlib.sha256(os.urandom(16)).hexdigest()[:32]
 r = {"v": 1, "job_id": job, "attempt": 1, "generation": 1, "plan_digest": "sha256:" + "ab" * 32,
      "node_fp": hashlib.sha256(der).hexdigest(), "controller_fp": ctl, "workspace_id": "ws-release",
-     "argv_sha256": hashlib.sha256(canonical(["bash", "scripts/ci/build-linux-bins.sh", "x86_64"]).encode()).hexdigest(),
+     "argv_sha256": hashlib.sha256(canonical(ARGV).encode()).hexdigest(),
      "env_names": ["BUILD_COMMIT", "BUILD_TREE", "CARGO_HOME", "CI", "HOME", "K2_COMPUTE_JOB", "K2_NODE_OS", "PATH"],
      "secret_env": ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"],
      "src": {"commit": commit, "tree": tree, "dirty_sha256": None, "slot": None, "warmth": "private"},
@@ -155,11 +160,11 @@ for k, v in over.items():
     else:
         r[k] = v
 plan = {"job_id": r["job_id"], "node_id": "node-1", "workspace_id": "ws-release", "workspace_label": "release",
-        "requested_by": "release", "argv": ["bash", "scripts/ci/build-linux-bins.sh", "x86_64"],
+        "requested_by": "release", "argv": ARGV,
         "env": {"BUILD_COMMIT": r["src"]["commit"], "BUILD_TREE": r["src"]["tree"]}, "cwd": None,
         "limits": {"max_secs": 7200, "cpu_millis": 4000}, "exclusive": True, "created_at": int(started) - 30,
         "src": {"project_key": "pk-release", "remote_url": None, "commit": r["src"]["commit"], "dirty": None, "slots": 1},
-        "needs": ["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"], "artifacts": ["dist/*"],
+        "needs": NEEDS, "artifacts": ["dist/*"],
         "packages": ["pkg-config", "zlib1g-dev"], "secret_env": list(r["secret_env"]), "tier": "ci"}
 for k, v in plan_over.items():
     if v is None:
@@ -196,6 +201,19 @@ bundle() {
     mkrcpt "$s/L1/receipt.json" "${3:-build-a}" "$files" "${4:-$NOOVER}"
     [ "${5:-build-b}" = none ] || mkrcpt "$s/V1/receipt.json" "${5:-build-b}" "${7:-$files}" "${6:-$NOOVER}"
     python3 -I "$PY_CR" evidence-bundle --state "$s" --git "$G" > "$s/bundle.json" || fail "evidence-bundle $name" ""
+}
+# bundle_arm <name> <files dir> [L2 overrides] [V2 overrides] [V2 node] [V2 files dir]:
+# L1 and V1 as above, plus L2 (on build-b) and V2 (on build-a by default),
+# then evidence-bundle --arches x86_64,aarch64.
+bundle_arm() {
+    local name="$1" files="$2" s="$tmp/$1"
+    rm -rf "$s"; mkdir -p "$s"
+    mkrcpt "$s/L1/receipt.json" build-a "$files"
+    mkrcpt "$s/V1/receipt.json" build-b "$files"
+    mkrcpt "$s/L2/receipt.json" build-b "$files" "$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["arch"]="aarch64"; print(json.dumps(o))' "${3:-$NOOVER}")"
+    [ "${5:-build-a}" = none ] || mkrcpt "$s/V2/receipt.json" "${5:-build-a}" "${6:-$files}" \
+        "$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["arch"]="aarch64"; print(json.dumps(o))' "${4:-$NOOVER}")"
+    python3 -I "$PY_CR" evidence-bundle --state "$s" --git "$G" --arches x86_64,aarch64 > "$s/bundle.json" || fail "evidence-bundle $name" ""
 }
 # edit_bundle <name> <python on b>: change the bundle itself
 edit_bundle() {
@@ -245,7 +263,7 @@ assert not m.receipt_signature_ok(Ctx(), der, v["body"].replace('"code":0', '"co
 PY
 
 echo "== sessions (Touch ID, at NOW0) =="
-for v in 0.47.1 0.47.2 0.47.3 0.47.4 0.47.5 0.47.6; do
+for v in 0.47.1 0.47.2 0.47.3 0.47.4 0.47.5 0.47.6 0.47.7 0.47.8; do
     open_session "$v" "${ASSETS[@]}"
     release_routes "$v"
     mkset "$v" "$tmp/set-$v"
@@ -513,7 +531,39 @@ register "S3b-8 a bundle whose receipts list no daemon: refused at registration 
     "V1 match: L1's receipt lists no k2-daemon-linux-x86_64" 0.47.5 noart
 bundle good5 "$S5"
 register "0.47.5's good bundle registers" 0 '"ok": true' 0.47.5 good5
-refuses "aarch64 is never a compute asset: GitHub's attestation is still required" "$S5/k2-daemon-linux-aarch64" u2 k2-daemon-linux-aarch64 0.47.5 "no build attestation"
+refuses "a bundle without L2/V2: the aarch64 daemon goes the GitHub way (attestation needed)" "$S5/k2-daemon-linux-aarch64" u2 k2-daemon-linux-aarch64 0.47.5 "no build attestation"
+
+echo "== aarch64 from compute: L2 + V2 (cross-compiled with zig on x86_64 nodes) =="
+S7="$tmp/set-0.47.7"
+A7="$S7/k2-daemon-linux-aarch64"
+bundle_arm armnov2 "$S7" '{}' '{}' none
+register "L2 without V2: refused (the aarch64 dual build is required)" 3 "no V2 receipt: the dual build on a second node is required" 0.47.7 armnov2
+bundle_arm armsame "$S7" '{}' '{}' build-b
+register "V2 on L2's node: refused" 3 "V2 ran on the same node as L2 (build-b)" 0.47.7 armsame
+bundle_arm armv2diff "$S7" '{}' "{\"set_art\": {\"k2-daemon-linux-aarch64\": \"$(printf 'c%.0s' $(seq 64))\"}}"
+register "V2 mismatch on the aarch64 daemon: refused" 3 "V2 mismatch: k2-daemon-linux-aarch64 differs between L2 on build-b" 0.47.7 armv2diff
+bundle_arm armv2node "$S7" '{}' '{"drop_art": ["k2-node-linux-aarch64"]}'
+register "V2 did not build the aarch64 k2-node: refused" 3 "V2 match missing: V2's receipt lists no k2-node-linux-aarch64" 0.47.7 armv2node
+bundle_arm armargv "$S7" "{\"argv_sha256\": \"$(printf '0%.0s' $(seq 64))\"}"
+register "L2 ran another command: refused" 3 "L2: the job did not run the release build command (bash scripts/ci/build-linux-bins.sh aarch64)" 0.47.7 armargv
+bundle_arm armneeds "$S7" '{"plan.needs": ["rust@1.99.1", "cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]}'
+register "L2's plan has the x86_64 needs (no zig): refused" 3 "the release build needs cmake@3 sys:pkg-config sys:zlib1g-dev zig@0.15.2 cargo:cargo-zigbuild@0.23.4" 0.47.7 armneeds
+bundle_arm armrustc "$S7" '{"tools_used": {"rustc": "1.98.0"}}'
+register "L2's rustc is not the tag's pin (no rust@ need, still checked): refused" 3 "L2: the job's rustc was 1.98.0, the tag pins 1.99.1" 0.47.7 armrustc
+bundle_arm armrogue "$S7" '{}' '{}' rogue
+register "V2 from an unpinned node: refused" 3 "V2: the receipt is from node ${FP_R:0:16}…, which is not pinned" 0.47.7 armrogue
+bundle_arm armexcl "$S7" '{"plan.exclusive": false}'
+register "L2 not exclusive: refused" 3 "L2: the job was not exclusive" 0.47.7 armexcl
+bundle_arm armgood "$S7"
+register "the good bundle with L2 and V2 registers" 0 '"ok": true' 0.47.7 armgood
+grep -q '"arches": \["x86_64", "aarch64"\]' "$tmp/out" && grep -q '"L2": {' "$tmp/out" && grep -q '"V2": {' "$tmp/out" \
+    && pass "the summary names both arches and the L2/V2 jobs" || fail "arm summary" "$(cat "$tmp/out")"
+mkset 0.47.7 "$tmp/other-0.47.7"
+refuses "other aarch64 bytes than L2's signed artifact: refused (before anything signs: one sha per asset)" "$tmp/other-0.47.7/k2-daemon-linux-aarch64" u2 k2-daemon-linux-aarch64 0.47.7 "are not L2's signed artifact"
+refuses "the x86_64 daemon's bytes offered as aarch64: refused" "$S7/k2-daemon-linux-x86_64" u2 k2-daemon-linux-aarch64 0.47.7 "are not L2's signed artifact"
+signs "the compute-built aarch64 daemon signs (u2)" "$A7" u2 k2-daemon-linux-aarch64 0.47.7
+signs "…and u1 (the bridge)" "$A7" u1 k2-daemon-linux-aarch64 0.47.7
+signs "the x86_64 daemon from the same evidence signs too" "$S7/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.7
 
 echo "== N1: root never writes through a symlink the signing user planted =="
 printf "root's file\n" > "$tmp/root-target"
@@ -614,6 +664,25 @@ bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" k2-daemon-linux-x86_64 "$4"' _ "$T
     && pass "the x86 .sig2 verifies the way 0.46.6+ installs check" || fail "x86 sig2" ""
 grep -q "\"sha256\": \"$(shasum -a 256 "$S6/k2-daemon-linux-x86_64" | awk '{print $1}')\"" "$tmp/sd/daemon-latest.json" \
     && pass "daemon-latest.json lists the compute-built x86 daemon" || fail "manifest" "$(cat "$tmp/sd/daemon-latest.json")"
+V8=0.47.8 S8="$tmp/set-0.47.8"
+printf '## %s — Test\n- a line\n' "$V8" > "$tmp/WHATS_NEW8.md"
+bash -c "source '$REPO/scripts/daemon-manifest.sh'; k2_daemon_manifest $V8 2026-11-06T00:00:00Z '$(printf '%s' "$ARTS" | sed "s/0.47.6/$V8/g")' '$tmp/WHATS_NEW8.md'" > "$tmp/daemon-latest8.json"
+bundle_arm audit8 "$S8"
+python3 -I - "$S8" "$tmp/audit8" <<'PY'
+import hashlib, json, os, sys
+d, out = sys.argv[1:3]
+for label, arch in (("L1", "x86_64"), ("L2", "aarch64")):
+    n = "k2-daemon-linux-" + arch
+    files = {"dist/" + n: {"sha256": hashlib.sha256(open(os.path.join(d, n), "rb").read()).hexdigest(), "bytes": 1}}
+    json.dump({"label": label, "ok": True, "files": files, "problems": []}, open(os.path.join(out, label + ".verdict.json"), "w"))
+PY
+rc=0
+bash "$REPO/scripts/sign-daemon.sh" "$V8" --dry --from-dir "$S8" --compute-verdict "$tmp/audit8" \
+    --manifest "$tmp/daemon-latest8.json" --out "$tmp/sd8" > "$tmp/sd8.log" 2>&1 || rc=$?
+[ "$rc" = 0 ] && pass "sign-daemon.sh --dry signs BOTH compute-built daemons through the signer (L2/V2 in the bundle)" || fail "sign-daemon dry arm" "rc=$rc $(tail -15 "$tmp/sd8.log")"
+grep -q '"L2": {' "$tmp/audit8/k2sign-compute-evidence.json" && pass "…the signer registered L2 and V2 too" || fail "arm registration" "$(cat "$tmp/audit8/k2sign-compute-evidence.json")"
+bash -c 'source "$1"; k2u_verify_u2 "$2" "$3" k2-daemon-linux-aarch64 "$4"' _ "$TREE/scripts/lib/sign-updater.sh" "$S8/k2-daemon-linux-aarch64" "$tmp/sd8/k2-daemon-linux-aarch64.sig2" "$V8" \
+    && pass "the aarch64 .sig2 verifies the way 0.46.6+ installs check" || fail "arm sig2" ""
 unset K2_SIGNER K2_SIGN_SOURCE_DIR
 
 echo "== the policy: every compute asset is dual-built (review H1) =="
@@ -631,22 +700,43 @@ register "a policy whose compute asset is not dual-built does not load" 3 \
     "policy: compute asset k2-daemon-linux-x86_64 is not in compute_dual_names" 0.47.4 good4
 refuses "…and nothing signs under it" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4 "is not in compute_dual_names"
 cp "$tmp/policy.bak" "$POL"
+python3 -I - "$POL" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s, n = re.subn(r"^(compute_dual_names_aarch64 = .*) k2-daemon-linux-aarch64$", r"\1", s, flags=re.M)
+assert n == 1, "the policy's compute_dual_names_aarch64 has no daemon to drop"
+open(p, "w").write(s)
+PY
+check "repin the edited policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+refuses "a policy whose aarch64 compute asset is not dual-built does not load" "$A7" u2 k2-daemon-linux-aarch64 0.47.7 \
+    "policy: compute asset k2-daemon-linux-aarch64 is not in compute_dual_names_aarch64"
+cp "$tmp/policy.bak" "$POL"
 check "repin the reviewed policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
 signs "the reviewed policy back: 0.47.4's daemon signs again" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4
 
 echo "== policy drift =="
-python3 -I - "$REPO/scripts/lib/compute-release.sh" "$REPO/scripts/k2sign/policy" <<'PY' && pass "policy compute_dual_names == k2cr_dual_names; compute_argv == the L1/V1 command" || fail "compute policy drift"
+python3 -I - "$REPO/scripts/lib/compute-release.sh" "$REPO/scripts/k2sign/policy" "$REPO/scripts/ci/cross-pins.sh" <<'PY' && pass "policy compute_dual_names(_aarch64) == k2cr_dual_names; compute_argv(_aarch64) == the L1/V1 and L2/V2 commands; compute_needs_aarch64 == k2cr_arm_needs with cross-pins.sh" || fail "compute policy drift"
 import re, sys
 s, pol = open(sys.argv[1]).read(), {}
 for line in open(sys.argv[2]).read().splitlines():
     if "=" in line and not line.startswith("#"):
         k, v = line.split("=", 1)
         pol[k.strip()] = v.strip()
-dual = re.search(r'k2cr_dual_names\(\) \{\n\s*printf .%s. "([^"]+)"', s).group(1).split(",")
-assert dual == pol["compute_dual_names"].split(), (dual, pol["compute_dual_names"])
+pins = dict(re.findall(r'^(K2_CROSS_\w+)="([^"]*)"$', open(sys.argv[3]).read(), re.M))
+tmpl = re.search(r'k2cr_dual_names\(\) \{\n\s*local a="\$\{1:-x86_64\}"\n\s*printf .%s. "([^"]+)"', s).group(1)
+for arch, key in (("x86_64", "compute_dual_names"), ("aarch64", "compute_dual_names_aarch64")):
+    dual = tmpl.replace("$a", arch).split(",")
+    assert dual == pol[key].split(), (dual, pol[key])
 for label in ("L1", "V1"):
     m = re.search(r'k2cr_submit %s .*? -- (bash scripts/ci/build-linux-bins\.sh x86_64)' % label, s)
     assert m and m.group(1) == pol["compute_argv"], label
+for label in ("L2", "V2"):
+    m = re.search(r'k2cr_submit %s .*? -- (bash scripts/ci/build-linux-bins\.sh aarch64)' % label, s)
+    assert m and m.group(1) == pol["compute_argv_aarch64"], label
+arm = re.search(r'printf \'%s\' "(cmake@3,[^"]+)"', s).group(1)
+arm = arm.replace("$zig", pins["K2_CROSS_ZIG"]).replace("$zb", pins["K2_CROSS_ZIGBUILD"]).split(",")
+assert arm == pol["compute_needs_aarch64"].split(), (arm, pol["compute_needs_aarch64"])
+assert not any(n.startswith("rust@") for n in arm), "an explicit rust@ need drops rust-toolchain.toml's aarch64 target"
 needs = re.search(r'local bins_needs="\$rust,([^"]+)"', s).group(1).split(",")
 assert ["rust@{rust_pin}"] + needs == pol["compute_needs"].split(), (needs, pol["compute_needs"])
 assert re.search(r"--artifact '([^']+)'", s).group(1) == pol["compute_artifacts"]

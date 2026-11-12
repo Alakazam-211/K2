@@ -312,8 +312,14 @@ fi
 # this Mac's controller, the tag's tree on the approved base, the build
 # command, the V1 match) and refuses anything else; then each compute-built
 # x86 daemon signs only if its bytes are L1's signed artifact.
+# The aarch64 pair (L2, V2) goes in only when the aarch64 daemon came from
+# compute too: release.sh staged it and the audit dir has L2's receipt
+# (else it takes the GitHub path, and an L2 that fell back must not stop
+# the x86 evidence).
 if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/k2-daemon-linux-x86_64" ] && [ "$(k2u_backend)" = k2sign ]; then
-    python3 -I "$ROOT/scripts/ci/compute_release.py" evidence-bundle --state "$VERDICTS" --git "$SRC_DIR" \
+    bundle_arches="x86_64"
+    [ -f "$FROM_DIR/k2-daemon-linux-aarch64" ] && [ -f "$VERDICTS/L2/receipt.json" ] && bundle_arches="x86_64,aarch64"
+    python3 -I "$ROOT/scripts/ci/compute_release.py" evidence-bundle --state "$VERDICTS" --git "$SRC_DIR" --arches "$bundle_arches" \
         > "$WORK/compute-evidence.json" || die "can't build the K2 Compute evidence bundle from $VERDICTS (above) — not signing"
     k2u_compute_evidence "$VERSION" "$WORK/compute-evidence.json" \
         || die "the signing user refused the K2 Compute evidence (above) — not signing"

@@ -8,10 +8,12 @@
 # (in shadow mode nothing does: GitHub stays the source of truth).
 #
 #   k2cr_init <version> <commit> <state-dir> <files-dir>
-#   k2cr_submit_release_set      L1 x86 bins, L3 app, V1 verify, [L2 arm]
+#   k2cr_submit_release_set      L1 x86 bins, L3 app, V1 verify, L2 + V2 aarch64
 #   k2cr_submit <label> <node> <kind> <arch> <needs> -- <argv…>
 #   k2cr_wait <minutes>          every submitted job ends (or time is up)
-#   k2cr_collect                 fetch + verify each job (verdicts in state dir)
+#   k2cr_collect                 fetch + verify each job (verdicts in state dir);
+#                                sets K2CR_X86_OK / K2CR_ARM_OK (1, 0, or
+#                                empty: that arch wasn't built here)
 #   k2cr_compare_github <tag>    shadow report vs the GitHub-built assets
 #   k2cr_stage <dist-dir>        compute mode: copy the verified x86 files
 #                                where release.sh signs and publishes them
@@ -50,11 +52,22 @@
 #                                        and collect checks the receipts'
 #                                        node_fp. "none" = no V1 (loud in
 #                                        compute mode)
-#   K2_COMPUTE_ARM_NODE      (unset)     L2: aarch64, natively. Unset until the
-#                                        ARM Linux VM exists (G10); GitHub still
-#                                        builds aarch64 then.
+#   K2_COMPUTE_ARM           compute     compute: L2 and V2 build the Linux
+#                                        aarch64 set on two x86_64 nodes,
+#                                        cross-compiled with zig (build-linux-
+#                                        bins.sh; versions in scripts/ci/
+#                                        cross-pins.sh). github: GitHub's
+#                                        daemon-binaries.yml builds aarch64
+#                                        after the tag (the fallback).
+#   K2_COMPUTE_ARM_NODE      k2n10-vin   L2: the aarch64 set. "none" = github.
+#   K2_COMPUTE_ARM_VERIFY_NODE k2n11-vin V2: the aarch64 set again on another
+#                                        node; daemon, root helper, k2-node and
+#                                        engine must equal L2's byte for byte.
+#                                        Never L2's node. Not optional: the
+#                                        signing user signs an aarch64 daemon
+#                                        from compute only with V2.
 #   K2_COMPUTE_RELEASE_NODES "k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin"
-#                                        (+ the ARM node): a receipt from any
+#                                        (+ the ARM nodes): a receipt from any
 #                                        other node fails. Debian-based Ryzens
 #                                        only: k2-arch is Arch (no apt sys:
 #                                        packages) and k2n12 is the fuzz node.
@@ -74,8 +87,10 @@
 #                                        at least 20G (job 96d5148c, 11-03)
 #   K2_COMPUTE_WORKSPACE     (unset)     --workspace for k2 compute run (z3mbpZ's
 #                                        release checkout: pod-leader)
-#   K2_COMPUTE_CPUS          (unset)     --cpus per job (unset: the node's default,
-#                                        4 on the Ryzens; z3mbpZ's share allows 8)
+#   K2_COMPUTE_CPUS          8           --cpus per job (z3mbpZ's share allows 8;
+#                                        the node's own default is 4 on the
+#                                        Ryzens, which roughly doubles a build).
+#                                        "default" = the node's default.
 #   K2_COMPUTE_OAUTH         secret      secret: the Gmail/MS OAuth values come
 #                                        from the vault via --secret, sealed to
 #                                        the node, names only in the plan
@@ -139,9 +154,25 @@ k2cr_init() {
 }
 
 k2cr_release_nodes() {
-    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin}"
-    [ -n "${K2_COMPUTE_ARM_NODE:-}" ] && n="$n,$K2_COMPUTE_ARM_NODE"
+    local n="${K2_COMPUTE_RELEASE_NODES:-k2n7-vin,k2n8-vin,k2n9-vin,k2n10-vin,k2n11-vin}" a
+    for a in "$(k2cr_arm_node)" "$(k2cr_arm_verify_node)"; do
+        [ -n "$a" ] && case ",$n," in *",$a,"*) ;; *) n="$n,$a" ;; esac
+    done
     printf '%s' "$n"
+}
+
+# L2's and V2's nodes; empty when aarch64 isn't built on compute
+# (K2_COMPUTE_ARM=github, or a node set to none).
+k2cr_arm_on() {
+    [ "${K2_COMPUTE_ARM:-compute}" = compute ] && [ "${K2_COMPUTE_ARM_NODE-k2n10-vin}" != none ] \
+        && [ -n "${K2_COMPUTE_ARM_NODE-k2n10-vin}" ]
+}
+k2cr_arm_node() { k2cr_arm_on && printf '%s' "${K2_COMPUTE_ARM_NODE-k2n10-vin}"; return 0; }
+k2cr_arm_verify_node() {
+    k2cr_arm_on || return 0
+    local v="${K2_COMPUTE_ARM_VERIFY_NODE-k2n11-vin}"
+    [ "$v" = none ] && v=""
+    printf '%s' "$v"
 }
 
 # k2cr_submit <label> <node> <kind> <arch> <needs> -- <argv…>
@@ -162,7 +193,10 @@ k2cr_submit() {
         --artifact 'dist/*' --needs "$needs" --mem "$mem" --queue-timeout "${K2_COMPUTE_QUEUE_TIMEOUT:-2h}" --retries 1
         --env "BUILD_COMMIT=$K2CR_COMMIT" --env "BUILD_TREE=$K2CR_TREE")
     [ -n "${K2_COMPUTE_WORKSPACE:-}" ] && args+=(--workspace "$K2_COMPUTE_WORKSPACE")
-    [ -n "${K2_COMPUTE_CPUS:-}" ] && args+=(--cpus "$K2_COMPUTE_CPUS")
+    case "${K2_COMPUTE_CPUS:-8}" in
+        default) ;;
+        *) args+=(--cpus "${K2_COMPUTE_CPUS:-8}") ;;
+    esac
     if [ "$kind" = "linux-bins" ]; then
         if [ "${K2_COMPUTE_OAUTH:-secret}" = "env" ]; then
             [ -n "${K2_GMAIL_CLIENT_ID:-}" ] && [ -n "${K2_GMAIL_CLIENT_SECRET:-}" ] \
@@ -233,17 +267,50 @@ k2cr_verify_node() {
 k2cr_x86_node() { printf '%s' "${K2_COMPUTE_X86_NODE:-${K2_COMPUTE_NODE:-k2n7-vin}}"; }
 
 # V1 is a second build only on a second node. 0 = V1 is off, or on another
-# node than L1.
+# node than L1. The same for L2 and V2 (aarch64), where V2 is required.
 k2cr_check_dual_nodes() {
     local l1 v1
     l1="$(k2cr_x86_node)"
     v1="$(k2cr_verify_node)"
-    [ -n "$v1" ] || return 0
-    if [ "$l1" = "$v1" ]; then
+    if [ -n "$v1" ] && [ "$l1" = "$v1" ]; then
         echo "  ✗ L1 and V1 are both on $l1: the dual build needs two nodes. Set K2_COMPUTE_VERIFY_NODE to another" >&2
         echo "    release node (or move K2_COMPUTE_X86_NODE / K2_COMPUTE_NODE off $v1). Nothing was submitted." >&2
         return 1
     fi
+    k2cr_check_arm_nodes
+}
+
+# 0 = aarch64 is off, or L2 and V2 are on two nodes.
+k2cr_check_arm_nodes() {
+    k2cr_arm_on || return 0
+    local l2 v2
+    l2="$(k2cr_arm_node)"
+    v2="$(k2cr_arm_verify_node)"
+    if [ -z "$v2" ]; then
+        echo "  ✗ K2_COMPUTE_ARM_VERIFY_NODE=none: aarch64 on compute needs V2 on a second node (the signing user" >&2
+        echo "    signs an aarch64 daemon from compute only with it). Name a node, or K2_COMPUTE_ARM=github." >&2
+        return 1
+    fi
+    if [ "$l2" = "$v2" ]; then
+        echo "  ✗ L2 and V2 are both on $l2: the aarch64 dual build needs two nodes. Set K2_COMPUTE_ARM_VERIFY_NODE" >&2
+        echo "    to another release node, or K2_COMPUTE_ARM=github." >&2
+        return 1
+    fi
+}
+
+# The aarch64 jobs' needs, from scripts/ci/cross-pins.sh AT THE RELEASE
+# COMMIT (what build-linux-bins.sh there will check). No rust@: an explicit
+# one makes the node ignore rust-toolchain.toml, whose `targets` line is the
+# only way the job gets the aarch64 standard library; the channel still
+# comes from that file (and the signing user checks the receipt's rustc).
+k2cr_arm_needs() {
+    local pins zig zb
+    pins="$(git show "${K2CR_COMMIT}:scripts/ci/cross-pins.sh" 2>/dev/null)" \
+        || { echo "  ✗ no scripts/ci/cross-pins.sh at ${K2CR_COMMIT:0:12}" >&2; return 1; }
+    zig="$(printf '%s\n' "$pins" | sed -n 's/^K2_CROSS_ZIG="\([0-9.]*\)"$/\1/p')"
+    zb="$(printf '%s\n' "$pins" | sed -n 's/^K2_CROSS_ZIGBUILD="\([0-9.]*\)"$/\1/p')"
+    [ -n "$zig" ] && [ -n "$zb" ] || { echo "  ✗ scripts/ci/cross-pins.sh at ${K2CR_COMMIT:0:12} names no zig / cargo-zigbuild version" >&2; return 1; }
+    printf '%s' "cmake@3,sys:pkg-config,sys:zlib1g-dev,zig@$zig,cargo:cargo-zigbuild@$zb"
 }
 
 k2cr_submit_release_set() {
@@ -266,10 +333,18 @@ k2cr_submit_release_set() {
     if [ -n "$verify" ]; then
         k2cr_submit V1 "$verify" linux-bins x86_64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh x86_64 || rc=1
     fi
-    if [ -n "${K2_COMPUTE_ARM_NODE:-}" ]; then
-        k2cr_submit L2 "$K2_COMPUTE_ARM_NODE" linux-bins aarch64 "$bins_needs" -- bash scripts/ci/build-linux-bins.sh aarch64 || rc=1
+    K2CR_ARM_SUBMIT_OK=""
+    if k2cr_arm_on; then
+        local arm_needs arm_rc=0
+        if arm_needs="$(k2cr_arm_needs)"; then
+            k2cr_submit L2 "$(k2cr_arm_node)" linux-bins aarch64 "$arm_needs" -- bash scripts/ci/build-linux-bins.sh aarch64 || arm_rc=1
+            k2cr_submit V2 "$(k2cr_arm_verify_node)" linux-bins aarch64 "$arm_needs" -- bash scripts/ci/build-linux-bins.sh aarch64 || arm_rc=1
+        else
+            arm_rc=1
+        fi
+        K2CR_ARM_SUBMIT_OK=$(( 1 - arm_rc ))
     else
-        echo "  L2 aarch64: no ARM node yet (K2_COMPUTE_ARM_NODE unset, plan G10); GitHub builds aarch64." | tee -a "$K2CR_STATE/summary.txt"
+        echo "  L2/V2 aarch64: not on compute (K2_COMPUTE_ARM=${K2_COMPUTE_ARM:-compute}, node ${K2_COMPUTE_ARM_NODE-k2n10-vin}); GitHub builds aarch64." | tee -a "$K2CR_STATE/summary.txt"
     fi
     return "$rc"
 }
@@ -330,19 +405,46 @@ k2cr_collect() {
             bad=1
         fi
     done < "$K2CR_STATE/jobs.tsv"
-    # G12: the verify build must come from another node than L1 and equal
-    # L1 for every dual-built file (the daemon and the root-key assets).
-    if [ -s "$K2CR_STATE/V1.verdict.json" ] && [ -s "$K2CR_STATE/L1.verdict.json" ]; then
-        # PIPESTATUS, not the pipeline's status: this lib sets no shell
-        # options, and without pipefail tee's 0 would hide a failure.
-        if python3 "$K2CR_PY" dual-nodes --a "$K2CR_STATE/L1.verdict.json" --b "$K2CR_STATE/V1.verdict.json" \
-            | tee -a "$K2CR_STATE/summary.txt"; [ "${PIPESTATUS[0]}" = 0 ]; then :; else bad=1; fi
-        if python3 "$K2CR_PY" same-files --a "$K2CR_FILES/L1/dist" --b "$K2CR_FILES/V1/dist" \
-            --names "$(k2cr_dual_names)" \
-            | tee -a "$K2CR_STATE/summary.txt"; [ "${PIPESTATUS[0]}" = 0 ]; then :; else bad=1; fi
-    fi
+    # G12: the verify build must come from another node than the build it
+    # checks and equal it for every dual-built file (the daemon and the
+    # root-key assets): V1 for L1 (x86_64), V2 for L2 (aarch64).
+    local pair a b arch pair_bad
+    K2CR_X86_OK="" K2CR_ARM_OK=""
+    for pair in L1:V1:x86_64 L2:V2:aarch64; do
+        IFS=: read -r a b arch <<< "$pair"
+        grep -q "^$a	" "$K2CR_STATE/jobs.tsv" || continue
+        pair_bad=0
+        k2cr_verdict_ok "$a" || pair_bad=1
+        if grep -q "^$b	" "$K2CR_STATE/jobs.tsv"; then
+            k2cr_verdict_ok "$b" || pair_bad=1
+        elif [ "$arch" = aarch64 ]; then
+            echo "  ✗ L2 ran without V2: no aarch64 dual build" | tee -a "$K2CR_STATE/summary.txt" >&2
+            pair_bad=1
+        fi
+        if [ -s "$K2CR_STATE/$b.verdict.json" ] && [ -s "$K2CR_STATE/$a.verdict.json" ]; then
+            # PIPESTATUS, not the pipeline's status: this lib sets no shell
+            # options, and without pipefail tee's 0 would hide a failure.
+            if python3 "$K2CR_PY" dual-nodes --a "$K2CR_STATE/$a.verdict.json" --b "$K2CR_STATE/$b.verdict.json" \
+                | tee -a "$K2CR_STATE/summary.txt"; [ "${PIPESTATUS[0]}" = 0 ]; then :; else pair_bad=1; fi
+            if python3 "$K2CR_PY" same-files --a "$K2CR_FILES/$a/dist" --b "$K2CR_FILES/$b/dist" \
+                --names "$(k2cr_dual_names "$arch")" \
+                | tee -a "$K2CR_STATE/summary.txt"; [ "${PIPESTATUS[0]}" = 0 ]; then :; else pair_bad=1; fi
+        fi
+        if [ "$arch" = x86_64 ]; then
+            if grep -q "^L3	" "$K2CR_STATE/jobs.tsv"; then k2cr_verdict_ok L3 || pair_bad=1; fi
+            K2CR_X86_OK=$(( 1 - pair_bad ))
+        else
+            K2CR_ARM_OK=$(( 1 - pair_bad ))
+        fi
+        [ "$pair_bad" = 0 ] || bad=1
+    done
     K2CR_COLLECTED=1
     return "$bad"
+}
+
+# 0 = <label>'s verdict exists and says ok.
+k2cr_verdict_ok() {
+    python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["ok"] else 1)' "$K2CR_STATE/$1.verdict.json" 2>/dev/null
 }
 
 # The files V1 must reproduce byte for byte: the root-key assets (they
@@ -351,7 +453,8 @@ k2cr_collect() {
 # compute_dual_names, which a test keeps equal to this list). The daemons
 # reproduce since 0.46.9's shadow run.
 k2cr_dual_names() {
-    printf '%s' "k2-root-helper-linux-x86_64,k2-node-linux-x86_64,k2-app-engine-linux-x86_64,k2-daemon-linux-x86_64"
+    local a="${1:-x86_64}"
+    printf '%s' "k2-root-helper-linux-$a,k2-node-linux-$a,k2-app-engine-linux-$a,k2-daemon-linux-$a"
 }
 
 # Compute mode (stage 1): copy every verified x86 file into <dist-dir>,
@@ -369,12 +472,21 @@ k2cr_stage() {
     done
     mkdir -p "$dist" || return 1
     : > "$K2CR_STATE/staged.txt"
-    local bins="$K2CR_FILES/L1/dist" app="$K2CR_FILES/L3/dist" b
-    for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
-        f="$b-linux-x86_64"
-        [ -s "$bins/$f" ] && [ -s "$bins/$f.sha256" ] || { echo "  ✗ stage: $f missing from L1" >&2; return 1; }
-        cp "$bins/$f" "$bins/$f.sha256" "$dist/" || return 1
-        printf '%s\n%s\n' "$f" "$f.sha256" >> "$K2CR_STATE/staged.txt"
+    local bins="$K2CR_FILES/L1/dist" app="$K2CR_FILES/L3/dist" b arches="x86_64" arch lab
+    # aarch64 only when L2 and V2 verified and matched (K2CR_ARM_OK=1) and
+    # the caller still wants it (a fallback sets K2_COMPUTE_ARM=github).
+    if [ "${K2CR_ARM_OK:-}" = 1 ] && [ "${K2_COMPUTE_ARM:-compute}" = compute ]; then
+        arches="x86_64 aarch64"
+    fi
+    for arch in $arches; do
+        lab=L1; [ "$arch" = aarch64 ] && lab=L2
+        bins="$K2CR_FILES/$lab/dist"
+        for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+            f="$b-linux-$arch"
+            [ -s "$bins/$f" ] && [ -s "$bins/$f.sha256" ] || { echo "  ✗ stage: $f missing from $lab" >&2; return 1; }
+            cp "$bins/$f" "$bins/$f.sha256" "$dist/" || return 1
+            printf '%s\n%s\n' "$f" "$f.sha256" >> "$K2CR_STATE/staged.txt"
+        done
     done
     local sums="$app/app-linux.sums"
     [ -s "$sums" ] && [ "$(grep -c . "$sums")" = 3 ] || { echo "  ✗ stage: L3's app-linux.sums is not 3 lines" >&2; return 1; }
@@ -388,10 +500,12 @@ k2cr_stage() {
     # The copies must still be the verified bytes.
     (cd "$dist" && sha256sum -c --quiet SHA256SUMS-linux-x86_64.txt 2>/dev/null || shasum -a 256 -c --quiet SHA256SUMS-linux-x86_64.txt) \
         || { echo "  ✗ stage: staged packages don't match L3's sums" >&2; return 1; }
-    for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
-        f="$b-linux-x86_64"
-        (cd "$dist" && { sha256sum -c --quiet "$f.sha256" 2>/dev/null || shasum -a 256 -c --quiet "$f.sha256"; }) \
-            || { echo "  ✗ stage: $f doesn't match its .sha256" >&2; return 1; }
+    for arch in $arches; do
+        for b in k2-daemon k2-node k2-root-helper k2-app-engine; do
+            f="$b-linux-$arch"
+            (cd "$dist" && { sha256sum -c --quiet "$f.sha256" 2>/dev/null || shasum -a 256 -c --quiet "$f.sha256"; }) \
+                || { echo "  ✗ stage: $f doesn't match its .sha256" >&2; return 1; }
+        done
     done
     echo "  staged $(grep -c . "$K2CR_STATE/staged.txt") compute-built files in $dist" | tee -a "$K2CR_STATE/summary.txt"
 }
@@ -419,6 +533,16 @@ print("\n".join(sorted(names)))' "$K2CR_STATE"); do
     done
     python3 "$K2CR_PY" compare --compute "$K2CR_FILES" --github "$gh_dir" --out "$K2CR_STATE/shadow-report.json" \
         | tee -a "$K2CR_STATE/summary.txt"
+}
+
+# Stop the aarch64 jobs (L2, V2) nobody will read: release.sh's fallback
+# to GitHub for aarch64.
+k2cr_cancel_arm() {
+    [ -n "${K2CR_STATE:-}" ] && [ -s "$K2CR_STATE/jobs.tsv" ] || return 0
+    local label job
+    while IFS=$'\t' read -r label job _; do
+        case "$label" in L2|V2) k2cr_k2 compute cancel "$job" --force >/dev/null 2>&1 || true ;; esac
+    done < "$K2CR_STATE/jobs.tsv"
 }
 
 # Release aborted before collect: stop jobs nobody will read.

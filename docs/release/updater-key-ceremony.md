@@ -219,15 +219,24 @@ A failure in (a) or (b) switches the approval to the passphrase fallback
 
 ### K2 Compute builds (S3b)
 
-With `K2_LINUX_BUILDS=compute`, the x86 Linux files are built on our own
-nodes: L1 (the binaries) and V1 (the same binaries again, on a second node).
-The signer signs the daemon only on the jobs' **node-signed receipts**,
-which it checks itself against keys **root pinned** in
+With `K2_LINUX_BUILDS=compute` (release.sh's default since 0.46.12), the
+Linux files are built on our own nodes: L1 (the x86_64 binaries) and V1 (the
+same again, on a second node); L2 (the aarch64 binaries, cross-compiled with
+zig on an x86_64 node) and V2 (L2 again, on another node); L3 (the x86_64
+packages). The signer signs a daemon only on the jobs' **node-signed
+receipts**, which it checks itself against keys **root pinned** in
 `/usr/local/etc/k2sign/compute-pins` (in `pins.sha256`, like
-`approver.pem`): the pinned controller sent both jobs, L1 and V1 ran on two
-different pinned nodes, both were exclusive secret jobs, and V1 rebuilt the
-daemon, root helper, k2-node and App engine byte for byte. The full rule
-list is in `docs/ci-on-k2-compute.md` ("Signing").
+`approver.pem`): the pinned controller sent the jobs, each build and its
+verify job ran on two different pinned nodes, all were exclusive secret
+jobs, and the verify job rebuilt the daemon, root helper, k2-node and App
+engine byte for byte. An aarch64 daemon signs from compute only when the
+registered evidence has L2 and V2; otherwise it takes the GitHub path. The
+full rule list is in `docs/ci-on-k2-compute.md` ("Signing").
+
+Default nodes: L1 k2n7-vin, V1 k2n9-vin, L3 k2n8-vin, L2 k2n10-vin, V2
+k2n11-vin (`scripts/lib/compute-release.sh`). Every node below is pinned and
+granted; one that isn't makes release.sh fall back to GitHub for its arch,
+with a banner (never silently).
 
 **The sitting (z3mbpZ, once, and again when a release node gets a new
 key).** At z3mbpZ in a GUI terminal (iTerm), as the release user, in the
@@ -258,7 +267,7 @@ Then share both with each release node, as the env names the build reads
 
 ```
 WS=pod-leader
-for N in k2n7-vin k2n8-vin k2n9-vin; do
+for N in k2n7-vin k2n9-vin k2n10-vin k2n11-vin; do
   k2 vault grant K2_GMAIL_CLIENT_ID --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_ID
   k2 vault grant K2_GMAIL_CLIENT_SECRET --scope "ws:$WS" --to "compute:$WS/$N" --as env --env-name BUILD_GMAIL_CLIENT_SECRET
 done
@@ -268,8 +277,9 @@ done
 `BUILD_MICROSOFT_CLIENT_ID`.) Copy some other text afterwards so the secret
 isn't left on the clipboard.
 
-**3. On each release node, at its own console** (k2n7-vin = L1 and
-k2n9-vin = V1; k2n8-vin too if it may stand in): its keyboard and screen,
+**3. On each release node, at its own console** (k2n7-vin = L1,
+k2n9-vin = V1, k2n10-vin = L2, k2n11-vin = V2; k2n8-vin too if it may stand
+in): its keyboard and screen,
 or ssh from a machine that is **not** z3mbpZ. Never copy these numbers from
 `k2 compute nodes` or anything else on z3mbpZ: the pins guard against
 z3mbpZ's own user.
@@ -294,7 +304,7 @@ Check:
   (`z3thon.k2.dev`) is a tenant on the Ryzens, whose owner server is
   rosson.k2.dev, and its share there has `exclusive: false` (11-07). On
   rosson.k2.dev, from a terminal outside K2:
-  `for N in k2n7-vin k2n8-vin k2n9-vin; do k2 compute node servers "$N" limits z3thon.k2.dev exclusive=true; done`
+  `for N in k2n7-vin k2n8-vin k2n9-vin k2n10-vin k2n11-vin; do k2 compute node servers "$N" limits z3thon.k2.dev exclusive=true; done`
   Each is a widening, so it is held: approve each with
   `k2 compute node admin approve <id>` (Touch ID or the vault password;
   `k2 compute node admin list` lists the ids), or Settings → Compute →
@@ -310,17 +320,17 @@ refuses a fingerprint that isn't its own:
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <z3mbpZ's fingerprint from step 3> "$HOME/.k2/tunnel-key.pem"
 ```
 
-**5. A shadow build of this commit** (L1, L3, V1 on the nodes; nothing is
-tagged, signed or published):
+**5. A shadow build of this commit** (L1, L3, V1, L2, V2 on the nodes;
+nothing is tagged, signed or published):
 
 ```
 SHA="$(git rev-parse HEAD)"; A="$HOME/k2-release-audit/shadow-$(printf %s "$SHA" | cut -c1-12)/compute"
 K2_COMPUTE_WORKSPACE=pod-leader bash scripts/lib/compute-release.sh --shadow-only "$SHA"
-python3 -c 'import json,sys; [print(l, "missing:", [k for k in ("body", "plan", "node_public_key_pem") if k not in json.load(open(sys.argv[1] + "/" + l + "/receipt.json"))] or "none") for l in ("L1", "V1")]' "$A"
+python3 -c 'import json,sys; [print(l, "missing:", [k for k in ("body", "plan", "node_public_key_pem") if k not in json.load(open(sys.argv[1] + "/" + l + "/receipt.json"))] or "none") for l in ("L1", "V1", "L2", "V2")]' "$A"
 ```
 
 It must end with every job verified (`two nodes`, `identical in both
-builds`), and both lines must say `missing: none`. `missing: [...]` means
+builds`), and all four lines must say `missing: none`. `missing: [...]` means
 z3mbpZ's running K2 is older than this commit's receipt route: install a
 K2 built from this commit first.
 
@@ -332,8 +342,12 @@ whose fingerprint differs.
 mkdir -p ~/k2-pins
 python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L1/receipt.json" > ~/k2-pins/k2n7-vin.pem
 python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V1/receipt.json" > ~/k2-pins/k2n9-vin.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/L2/receipt.json" > ~/k2-pins/k2n10-vin.pem
+python3 -c 'import json,sys; sys.stdout.write(json.load(open(sys.argv[1]))["node_public_key_pem"])' "$A/V2/receipt.json" > ~/k2-pins/k2n11-vin.pem
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n7-vin "$HOME/k2-pins/k2n7-vin.pem" <k2n7-vin's node_fp from step 3>
 sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n9-vin "$HOME/k2-pins/k2n9-vin.pem" <k2n9-vin's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n10-vin "$HOME/k2-pins/k2n10-vin.pem" <k2n10-vin's node_fp from step 3>
+sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n11-vin "$HOME/k2-pins/k2n11-vin.pem" <k2n11-vin's node_fp from step 3>
 ```
 
 **7. Check the pins:**
@@ -342,8 +356,8 @@ sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node k2n9-vin "$HOME/k2-
 (cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-pins)
 ```
 
-It lists the controller from step 4 and k2n7-vin and k2n9-vin with the
-fingerprints you wrote down.
+It lists the controller from step 4 and k2n7-vin, k2n9-vin, k2n10-vin and
+k2n11-vin with the fingerprints you wrote down.
 
 **8. A dry signing pass** (this commit's signer, with throwaway keys in a
 temp dir, as you; no sudo; needs `minisign` 0.11+ from Homebrew). It must
@@ -358,11 +372,11 @@ bash tests/release/k2sign-s3b.sh 2>&1 | grep -E 'sign-daemon.sh|passed'
 registered or signed). First the shadow build from step 5, which must pass:
 
 ```
-python3 scripts/ci/compute_release.py evidence-bundle --state "$A" --git . > /tmp/k2-rehearse.json
+python3 scripts/ci/compute_release.py evidence-bundle --state "$A" --git . --arches x86_64,aarch64 > /tmp/k2-rehearse.json
 (cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-rehearse) < /tmp/k2-rehearse.json
 ```
 
-It must print `rehearsal passed: L1 on k2n7-vin and V1 on k2n9-vin …`.
+It must print `rehearsal passed: L1 on k2n7-vin; V1 on k2n9-vin; L2 on k2n10-vin; V2 on k2n11-vin …`.
 Then the same with V1's receipt tampered (one byte of its signed body),
 which must be refused (exit 3, `V1: the receipt's signature does not
 verify with node k2n9-vin's pinned key`):
@@ -370,7 +384,7 @@ verify with node k2n9-vin's pinned key`):
 ```
 T="$(mktemp -d)"; cp -R "$A"/. "$T"/
 python3 -c 'import json,sys; p = sys.argv[1] + "/V1/receipt.json"; r = json.load(open(p)); assert "\"code\":0" in r["body"]; r["body"] = r["body"].replace("\"code\":0", "\"code\":1", 1); json.dump(r, open(p, "w"))' "$T"
-python3 scripts/ci/compute_release.py evidence-bundle --state "$T" --git . > /tmp/k2-rehearse-bad.json
+python3 scripts/ci/compute_release.py evidence-bundle --state "$T" --git . --arches x86_64,aarch64 > /tmp/k2-rehearse-bad.json
 (cd / && sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign compute-rehearse) < /tmp/k2-rehearse-bad.json; echo "exit $?"
 ```
 
@@ -388,7 +402,8 @@ for the same version (the jobs were re-run) needs root first:
 (audited as `COMPUTE-EVIDENCE-CLEARED-BY-ADMIN`).
 
 **Falling back to GitHub for a version that already has compute evidence.**
-Once evidence is registered, that version's x86 daemon signs only on it.
+Once evidence is registered, that version's x86 daemon (and its aarch64
+daemon, when the evidence has L2 and V2) signs only on it.
 To use GitHub's build instead (the fallback in `docs/ci-on-k2-compute.md`):
 the same `clear-compute-evidence <version>`. An x86 daemon already signed
 for that version stays the only bytes it signs (one sha per asset).

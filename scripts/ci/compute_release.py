@@ -36,7 +36,7 @@ never runs a fetched binary.
       Dual build (G12): the two jobs ran on different nodes, by name and
       by node key (each signed receipt's node_fp). Exit 1 when not.
 
-  compute_release.py evidence-bundle --state DIR --git DIR
+  compute_release.py evidence-bundle --state DIR --git DIR [--arches x86_64,aarch64]
       The JSON the signing user's `k2sign compute-evidence` reads (S3b):
       <state>/L1 and V1 receipt.json as fetched, plus L1's commit object
       from the git checkout. The signer trusts none of it unchecked.
@@ -395,17 +395,26 @@ def dual_nodes(a):
 def evidence_bundle(a):
     """The bundle the signing user's `k2sign compute-evidence` reads: L1's
     and V1's signed receipts exactly as `k2 compute receipt --json` printed
-    them, and the git commit object L1 built (release.sh's preview commit:
-    the tag's tree on the approved base). Nothing here is trusted by the
-    signer: it checks the node signatures and hashes the commit itself."""
+    them (plus L2's and V2's with --arches x86_64,aarch64: the aarch64
+    daemon is signed from compute only then), and the git commit object L1
+    built (release.sh's preview commit: the tag's tree on the approved
+    base). Nothing here is trusted by the signer: it checks the node
+    signatures and hashes the commit itself."""
+    arches = [x for x in (a.arches or "x86_64").split(",") if x]
+    labels = {"x86_64": ("L1", "V1"), "aarch64": ("L2", "V2")}
+    if "x86_64" not in arches or any(x not in labels for x in arches):
+        sys.stderr.write("evidence-bundle: --arches is x86_64 or x86_64,aarch64 (got %s)\n" % a.arches)
+        return 2
     recs = {}
-    for label in ("L1", "V1"):
-        p = os.path.join(a.state, label, "receipt.json")
-        if os.path.isfile(p):
-            recs[label] = load(p)
-    if "L1" not in recs:
-        sys.stderr.write("evidence-bundle: no L1/receipt.json in %s\n" % a.state)
-        return 1
+    for arch in arches:
+        for label in labels[arch]:
+            p = os.path.join(a.state, label, "receipt.json")
+            if os.path.isfile(p):
+                recs[label] = load(p)
+    for arch in arches:
+        if labels[arch][0] not in recs:
+            sys.stderr.write("evidence-bundle: no %s/receipt.json in %s\n" % (labels[arch][0], a.state))
+            return 1
     r = recs["L1"]
     body = json.loads(r["body"]) if isinstance(r.get("body"), str) else (r.get("receipt") or {})
     commit = (body.get("src") or {}).get("commit") or ""
@@ -448,6 +457,7 @@ def main():
     s = sub.add_parser("evidence-bundle")
     s.add_argument("--state", required=True)
     s.add_argument("--git", required=True)
+    s.add_argument("--arches", default="x86_64")
     s = sub.add_parser("dual-nodes")
     s.add_argument("--a", required=True)
     s.add_argument("--b", required=True)

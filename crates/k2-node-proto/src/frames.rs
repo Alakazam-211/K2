@@ -99,14 +99,15 @@ use crate::crypto::{self, SigningKey};
 /// offering `receipt-v2`. A protocol-8 peer sees exactly 0.46.9's frames.
 ///
 /// 10 = cache generations and boxes (prd-compute-blacksmith-class-v1 §6,
-/// BK-19; [`crate::gens`], [`crate::boxes`]). Defined as [`PROTOCOL_GENS`];
-/// `PROTOCOL` itself moves to 10 in the commit that makes k2-node offer the
-/// first of [`crate::gens::FEATURES`] (one node release carries them all).
-/// Until then the formats exist and nothing sends them, so protocol 9 is
-/// exactly today's. Protocol 10 is for the new frames only (`box_up`,
-/// `box_run`, `box_down`, `box_state`, `lineage_status`); the new plan and
-/// result fields need their feature, not the bump.
-pub const PROTOCOL: u32 = 9;
+/// BK-19; [`crate::gens`], [`crate::boxes`]). Defined as [`PROTOCOL_GENS`].
+/// In force since k2-node offers the first of [`crate::gens::FEATURES`]
+/// (`cpu-burst`, slice R2; one node release carries them all). Additive: a
+/// node offers a protocol-10 feature only to a server that said ≥ 10, so a
+/// protocol-9 peer sees exactly 0.46.12's frames. Protocol 10 is for the
+/// new frames only (`box_up`, `box_run`, `box_down`, `box_state`,
+/// `lineage_status`); the new plan and result fields need their feature,
+/// not the bump.
+pub const PROTOCOL: u32 = PROTOCOL_GENS;
 
 /// The first protocol with the box and lineage-status frames. Additive: a
 /// node offers a [`crate::gens::FEATURES`] entry only to a server that said
@@ -2598,8 +2599,7 @@ mod tests {
         assert_eq!(crate::gens::missing_feature(&q, &offered), Some("setup-snapshots"));
         let back: Plan = serde_json::from_str(&serde_json::to_string(&q).unwrap()).unwrap();
         assert_eq!(back, q);
-        // Protocol 10 is defined, not in force: today's nodes and servers
-        // still say 9 (the bump rides the k2-node release that offers it).
-        const { assert!(PROTOCOL == PROTOCOL_CI && PROTOCOL_GENS == PROTOCOL + 1) };
+        // Protocol 10 is in force (R2 offers `cpu-burst`): one bump past 9.
+        const { assert!(PROTOCOL == PROTOCOL_GENS && PROTOCOL_GENS == PROTOCOL_CI + 1) };
     }
 }

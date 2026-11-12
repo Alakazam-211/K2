@@ -1779,6 +1779,10 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Toolchains / system packages the job needs (compute polish v1).
     let needs = needs_from(&v)?;
     let (cpu_millis, mem_bytes) = job_resources(&v)?;
+    // `--cpus N+M` (prd-compute-blacksmith-class-v1 R2, §4.4.4): placed and
+    // admitted on N (`cpu_millis`); M rides the job's controller options
+    // and reaches only a node offering `cpu-burst` (`fit_plan`).
+    let cpus_burst = crate::compute_rightsize::cpus_burst_from(v, cpu_millis)?;
     // `--mem auto[:G]` (prd-compute-blacksmith-class-v1 R1, §4.4.3): the
     // number comes from this command's (or CI check's) finished runs, at
     // least 1.5 × the peak of its last `mem_cap` end; the fallback when it
@@ -1951,6 +1955,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         let e = effective.get_or_insert_with(|| serde_json::json!({}));
         let asked = e.get("mem").and_then(|m| m.get("from")).and_then(|f| f.as_str()).unwrap_or("flag").to_string();
         e["mem"] = serde_json::json!({"value": crate::compute_place::mem_words(*b), "bytes": b, "from": from, "asked": asked});
+    }
+    // R2: `effective.cpus` says the guarantee and the burst (`4+8`).
+    if let (Some(b), Some(c)) = (cpus_burst, cpu_millis) {
+        let e = effective.get_or_insert_with(|| serde_json::json!({}));
+        let from = e.get("cpus").and_then(|m| m.get("from")).and_then(|f| f.as_str()).unwrap_or("flag").to_string();
+        e["cpus"] = serde_json::json!({"value": crate::compute_rightsize::cpus_words(c, b), "guaranteed": c as f64 / 1000.0, "burst": b as f64 / 1000.0, "from": from});
     }
     // The default `--mem` never asks more than a small node has, nor more
     // than this server's share on a shared node allows per job.
@@ -2258,6 +2268,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if let Some((b, from)) = mem_auto.as_ref() {
         warnings.push(format!("--mem auto: {} — {from}", crate::compute_place::mem_words(*b)));
     }
+    // R2: a node that won't use idle cores runs the job held to N; say so.
+    if let (Some(b), Some(c)) = (cpus_burst, cpu_millis) {
+        if let Some(m) = crate::compute_rightsize::burst_note(&node.name, &node_features(&node), c, b) {
+            warnings.push(m);
+        }
+    }
     // 0.46.8 (advisory): no --cpus reserves the node's CPUs ÷ its slots,
     // used or not; the next job waits for unreserved CPUs even while they
     // sit idle (11-03: k2n10 at 0/12 unreserved, ~12 idle).
@@ -2400,6 +2416,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         effective: effective.clone(),
         cpu_hints,
         tag: tag.clone(),
+        cpus_burst,
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);

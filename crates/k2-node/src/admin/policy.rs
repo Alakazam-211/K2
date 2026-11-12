@@ -37,6 +37,7 @@ pub const FIELDS: &[&str] = &[
     "gate_reserved_slots",
     "toolchain_budget_gb",
     "tenant_git_access",
+    "cpu_burst",
 ];
 
 fn bad(m: impl Into<String>) -> AdminRefusal {
@@ -192,6 +193,10 @@ pub fn widened(old: &Policy, new: &Policy) -> Vec<&'static str> {
     // Other servers' jobs getting git tokens here again.
     if !old.tenant_git_access && new.tenant_git_access {
         w.push("tenant_git_access");
+    }
+    // Jobs using idle cores past their --cpus again (R2).
+    if !old.cpu_burst && new.cpu_burst {
+        w.push("cpu_burst");
     }
     w
 }
@@ -353,6 +358,23 @@ mod tests {
         assert_eq!(show(&l, &m, &NodeLimits::default())["policy"]["tenant_git_access"], json!(false));
         assert_eq!(class(&l, &m, json!({"tenant_git_access": true})), Class::Privileged);
         assert_eq!(class(&l, &m, json!({"tenant_git_access": null})), Class::Privileged, "back to the default widens too");
+    }
+
+    /// R2 (prd-compute-blacksmith-class-v1 §4.4.4): idle cores are on by
+    /// default and the default policy JSON doesn't show it; turning them off
+    /// narrows at once (no person needed), on again widens.
+    #[test]
+    fn cpu_burst_off_narrows_and_on_again_widens() {
+        let (l, m) = rig();
+        let default = Policy::resolve(&PolicyFile::default(), &m).unwrap();
+        assert!(default.cpu_burst, "on by default");
+        assert!(serde_json::to_value(&default).unwrap().get("cpu_burst").is_none(), "the default policy reads as before");
+        assert_eq!(class(&l, &m, json!({"cpu_burst": false})), Class::Operate);
+        apply_set_with(&l, &json!({"cpu_burst": false}), &m).unwrap();
+        assert_eq!(config::read_policy_file(&l.policy()).unwrap().cpu_burst, Some(false));
+        assert_eq!(show(&l, &m, &NodeLimits::default())["policy"]["cpu_burst"], json!(false));
+        assert_eq!(class(&l, &m, json!({"cpu_burst": true})), Class::Privileged);
+        assert_eq!(class(&l, &m, json!({"cpu_burst": null})), Class::Privileged, "back to the default widens too");
     }
 
     /// Without the job wall `network = "none"` isn't enforced: policy.set

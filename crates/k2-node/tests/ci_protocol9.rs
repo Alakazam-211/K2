@@ -71,9 +71,9 @@ async fn a_protocol_8_server_sees_the_0469_node() {
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Failed, Some(k2_node::node::ci::RECEIPT_V_UNKNOWN)));
     let t = n.node.owner();
     assert!(t.ledger.lock().unwrap().get("old2", 1).unwrap().is_none(), "no ledger row");
-    // The node itself still speaks 9 (its build marker and status say so).
+    // The node itself speaks protocol 10 now (its build marker and status say so; R2).
     assert_eq!(k2_node::status::read(&n.layout.status()).unwrap().protocol, frames::PROTOCOL);
-    assert_eq!(frames::PROTOCOL, frames::PROTOCOL_CI);
+    assert_eq!(frames::PROTOCOL, frames::PROTOCOL_GENS);
 }
 
 #[tokio::test(flavor = "multi_thread")]

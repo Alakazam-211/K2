@@ -48,9 +48,10 @@ MEMORY FROM HISTORY (.k2/ci.toml version = 2)
   argv = ["cargo", "nextest", "run"]
   mem_gb = 8            # the size for its first runs
   mem_auto = true       # then: p95 peak × 1.25, at least 1.5 × a mem_cap
+  cpus_burst = 8        # with cpus = 4: 4 guaranteed, up to 8 on idle cores
   Needs version = 2 at the top (a version 1 file refuses it by name). The
   check's job note says what it picked; k2 compute rightsize --check unit
-  shows the numbers (k2 study compute, RIGHTSIZE).
+  shows the numbers (k2 study compute, RIGHTSIZE and IDLE CORES).
 
 WHEN IT SAYS NO (exit 2 usage, 3 refused, 4 not found)
   ci_monitor_invalid    a bad name, kind, --over, --count, --cooldown or --to

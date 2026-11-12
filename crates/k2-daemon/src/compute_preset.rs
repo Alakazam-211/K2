@@ -70,6 +70,9 @@ pub struct Settings {
     /// sized from the command's history at submit.
     pub mem_auto: bool,
     pub cpus: Option<f64>,
+    /// `cpus = "4+8"` (prd-compute-blacksmith-class-v1 R2): the 8, the most
+    /// it may use while cores are free (`cpus` is the 4).
+    pub cpus_burst: Option<f64>,
     pub needs: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub timeout_secs: Option<i64>,
@@ -213,12 +216,27 @@ fn section(text: &str, name: Option<&str>, t: &toml::Table) -> Result<Settings, 
                 _ => out.mem_bytes = Some(parse_bytes(v).ok_or_else(|| bad("a size like \"8G\" or \"512M\", or \"auto\" / \"auto:8G\""))?),
             },
             "cpus" => {
+                let in_range = |c: f64| c > 0.0 && c <= 1024.0;
                 let c = match v {
                     toml::Value::Integer(n) => *n as f64,
                     toml::Value::Float(f) => *f,
-                    _ => return Err(bad("a number of CPUs (e.g. 4 or 0.5)")),
+                    // R2: "4+8" = 4 guaranteed, up to 8 while cores are free.
+                    toml::Value::String(s) => {
+                        let words = "a number of CPUs (4 or 0.5), or \"4+8\" (4 guaranteed, up to 8 while cores are free)";
+                        let (n, m) = s.trim().split_once('+').ok_or_else(|| bad(words))?;
+                        let (n, m) = (n.trim().parse::<f64>().map_err(|_| bad(words))?, m.trim().parse::<f64>().map_err(|_| bad(words))?);
+                        if !in_range(n) || !in_range(m) {
+                            return Err(bad("between 0 and 1024"));
+                        }
+                        if m <= n {
+                            return Err(bad("\"N+M\": M, the most it may use, must be above N (\"4+8\")"));
+                        }
+                        out.cpus_burst = Some(m);
+                        n
+                    }
+                    _ => return Err(bad("a number of CPUs (e.g. 4 or 0.5), or \"4+8\"")),
                 };
-                if !(c > 0.0 && c <= 1024.0) {
+                if !in_range(c) {
                     return Err(bad("between 0 and 1024"));
                 }
                 out.cpus = Some(c);
@@ -485,11 +503,21 @@ pub fn apply(v: &mut Value, loaded: Option<&Loaded>, preset: Option<&str>) -> Re
         }
         Some((Some((None, false)), _)) | None => Value::Null,
     };
-    eff["cpus"] = match pick(has(v, "cpus"), p.and_then(|s| s.cpus).as_ref(), defaults.cpus.as_ref()) {
+    // cpus, with its burst (R2, `cpus = "4+8"`): one setting, so a
+    // `--cpus` flag replaces both and a preset's pair never mixes with the
+    // defaults'.
+    let cpus_of = |s: &Settings| s.cpus.map(|c| (c, s.cpus_burst));
+    eff["cpus"] = match pick(has(v, "cpus"), p.and_then(cpus_of).as_ref(), cpus_of(defaults).as_ref()) {
         Some((None, f)) => json!({"value": v["cpus"].clone(), "from": f}),
-        Some((Some(c), f)) => {
+        Some((Some((c, burst)), f)) => {
             v["cpus"] = json!(c);
-            json!({"value": c, "from": f})
+            match burst {
+                Some(m) => {
+                    v["cpusBurst"] = json!(m);
+                    json!({"value": format!("{c}+{m}"), "from": f})
+                }
+                None => json!({"value": c, "from": f}),
+            }
         }
         None => Value::Null,
     };
@@ -724,6 +752,27 @@ needs = ["rust@1.99.1", "cmake@3", "bun@1"]
         assert_eq!((e["mem"]["value"].as_str(), e["mem"]["from"].as_str(), v.get("memBytes")), (Some("auto:4G"), Some("flag"), None));
         let err = parse("[defaults]\nmem = \"auto:lots\"\n").unwrap_err();
         assert!(err.contains("\"auto:8G\""), "{err}");
+    }
+
+    /// R2 (§4.4.4): `cpus = "4+8"` sends `cpus: 4` and `cpusBurst: 8`; a
+    /// `--cpus` flag replaces both; a bad pair names the rule.
+    #[test]
+    fn a_preset_cpus_may_burst() {
+        let l = loaded("[defaults]\ncpus = 2\n[presets.ci]\ncpus = \"4+8\"\n");
+        let mut v = json!({"argv": ["true"]});
+        let e = apply(&mut v, Some(&l), Some("ci")).unwrap();
+        assert_eq!((v["cpus"].as_f64(), v["cpusBurst"].as_f64()), (Some(4.0), Some(8.0)));
+        assert_eq!(e["cpus"], json!({"value": "4+8", "from": "preset"}));
+        let mut v = json!({"cpus": 3});
+        let e = apply(&mut v, Some(&l), Some("ci")).unwrap();
+        assert_eq!((e["cpus"]["from"].as_str(), v.get("cpusBurst")), (Some("flag"), None), "the flag replaces the pair");
+        let mut v = json!({});
+        apply(&mut v, Some(&l), None).unwrap();
+        assert_eq!((v["cpus"].as_f64(), v.get("cpusBurst")), (Some(2.0), None));
+        for (bad, why) in [("\"8+4\"", "above N"), ("\"4+\"", "4+8"), ("\"4\"", "4+8"), ("\"0+8\"", "between")] {
+            let err = parse(&format!("[defaults]\ncpus = {bad}\n")).unwrap_err();
+            assert!(err.contains(why), "{bad}: {err}");
+        }
     }
 
     /// An unknown preset lists the ones there are; a preset without a file

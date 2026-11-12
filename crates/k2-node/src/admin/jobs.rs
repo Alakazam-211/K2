@@ -331,6 +331,36 @@ pub struct JobStart {
     /// start whose answer has no `gpu` (never a job without its GPU).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gpu: Option<k2_node_proto::gpu::GpuAsk>,
+    /// prd-compute-blacksmith-class-v1 R2 (§4.4.4): the unit's
+    /// `CPUWeight` (100 per guaranteed core, [`job_cpu_weight`]), so jobs
+    /// that may burst past their `--cpus` still leave every job its own
+    /// `--cpus` on a full node. Root clamps it to systemd's 1–10000 inside
+    /// the slot's slice (whose own weight keeps servers apart). Sent only when `Ready`
+    /// said `cpu_weight`; absent = no weight (today's unit, byte for byte).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_weight: Option<u64>,
+}
+
+/// systemd's `CPUWeight` range.
+pub const CPU_WEIGHT_MIN: u64 = 1;
+pub const CPU_WEIGHT_MAX: u64 = 10_000;
+
+/// A job's `CPUWeight`: its guaranteed CPUs (thousandths of a core) as 100
+/// per core, within systemd's range (4 CPUs = 400). The guarantee alone,
+/// never the tier (K2, 11-11): with the sum of guarantees within the
+/// node's CPUs, weights in proportion to the guarantees give every busy job
+/// at least its own `--cpus` on a full node; spare cores are shared the
+/// same way. Tiers decide only queue order.
+pub fn job_cpu_weight(guarantee_millis: u64) -> u64 {
+    (guarantee_millis / 10).clamp(CPU_WEIGHT_MIN, CPU_WEIGHT_MAX)
+}
+
+/// What a full node's kernel gives each busy job by weight (thousandths of
+/// a core): `cap × w / Σw` (cgroup v2 `cpu.weight` sharing among siblings
+/// that all want more than they get).
+pub fn weighted_shares(cap_millis: u64, weights: &[u64]) -> Vec<u64> {
+    let total: u64 = weights.iter().sum::<u64>().max(1);
+    weights.iter().map(|w| cap_millis.saturating_mul(*w) / total).collect()
 }
 
 /// `RuntimeMaxSec` is the job's limit plus this: while a node runs, it
@@ -384,6 +414,13 @@ pub enum JobAnswer {
         /// the node then keeps no generations.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         gens_wall: bool,
+        /// prd-compute-blacksmith-class-v1 R2: this executor gives a job
+        /// unit the `CPUWeight` its start asks ([`JobStart::cpu_weight`]).
+        /// An older one omits it (false): the node then holds every job to
+        /// its `--cpus` (no burst), since a burst without weights could
+        /// take another job's guarantee.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        cpu_weight: bool,
     },
     Started {
         unit: String,
@@ -665,6 +702,8 @@ pub struct UnitPlan {
     pub network: Network,
     pub mem_bytes: Option<u64>,
     pub cpu_millis: Option<u64>,
+    /// R2: `CPUWeight` (already clamped), or none.
+    pub cpu_weight: Option<u64>,
     pub stop_grace_secs: u64,
     /// The installed `k2-node` (its `job-exec` shim).
     pub binary: PathBuf,
@@ -802,6 +841,9 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
     if let Some(c) = p.cpu_millis.filter(|c| *c > 0) {
         // thousandths of a core → percent of one core (≥ 1%).
         prop(format!("CPUQuota={}%", (c / 10).max(1)));
+    }
+    if let Some(w) = p.cpu_weight {
+        prop(format!("CPUWeight={}", w.clamp(CPU_WEIGHT_MIN, CPU_WEIGHT_MAX)));
     }
     match p.network {
         Network::None => {
@@ -1252,6 +1294,7 @@ impl Executor {
                     gpus: self.gpu_ready(),
                     gpu_usage: cfg!(target_os = "linux"),
                     gens_wall: true,
+                    cpu_weight: cfg!(target_os = "linux"),
                 })
             }
             // No job starts while an owner change is unfinished (its trees
@@ -1422,6 +1465,7 @@ impl Executor {
             network,
             mem_bytes: s.mem_bytes,
             cpu_millis: s.cpu_millis,
+            cpu_weight: s.cpu_weight.map(|w| w.clamp(CPU_WEIGHT_MIN, CPU_WEIGHT_MAX)),
             stop_grace_secs: s.stop_grace_secs,
             binary: self.paths.binary.clone(),
             slice: slice_name(s.tenant),
@@ -1726,6 +1770,7 @@ mod tests {
             network: Network::On,
             mem_bytes: Some(2 << 30),
             cpu_millis: Some(4000),
+            cpu_weight: None,
             stop_grace_secs: 10,
             binary: PathBuf::from("/usr/local/libexec/k2-node"),
             slice: slice_name(0),
@@ -1790,6 +1835,36 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         assert_eq!(systemd_run_argv(&plan()), want);
+    }
+
+    /// R2 (§4.4.4): a `--cpus 4+8` unit gets `CPUQuota` at the burst and a
+    /// `CPUWeight` from its guarantee; root never writes a weight outside
+    /// systemd's range. A start without a weight is today's unit.
+    #[test]
+    fn a_burst_unit_has_its_quota_at_the_burst_and_a_weight() {
+        let mut p = plan();
+        p.cpu_millis = Some(8000);
+        p.cpu_weight = Some(job_cpu_weight(4000));
+        let a = systemd_run_argv(&p);
+        let props: Vec<&String> = a.iter().filter(|x| x.starts_with("CPU")).collect();
+        assert_eq!(props, ["CPUQuota=800%", "CPUWeight=400"], "{a:?}");
+        p.cpu_weight = Some(50_000);
+        assert!(systemd_run_argv(&p).iter().any(|x| x == "CPUWeight=10000"), "clamped to systemd's range");
+        p.cpu_weight = None;
+        assert!(!systemd_run_argv(&p).iter().any(|x| x.starts_with("CPUWeight")));
+        // The weight: 100 per guaranteed core, whatever the tier.
+        assert_eq!(job_cpu_weight(4000), 400);
+        assert_eq!(job_cpu_weight(2000), 200);
+        assert_eq!(job_cpu_weight(500), 50);
+        assert_eq!(job_cpu_weight(1), 1, "never 0");
+        assert_eq!(job_cpu_weight(1_024_000), 10_000);
+        // The wire: absent unless asked; an older executor's Ready says no.
+        let s = JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: Some(8000), stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: Some(400) };
+        assert!(serde_json::to_string(&JobOp::Start(s.clone())).unwrap().contains(r#""cpu_weight":400"#));
+        let none = JobStart { cpu_weight: None, ..s };
+        assert!(!serde_json::to_string(&JobOp::Start(none)).unwrap().contains("cpu_weight"));
+        let old: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job","stdin":true,"gpu_usage":true}"#).unwrap();
+        assert!(matches!(old, JobAnswer::Ready { cpu_weight: false, .. }));
     }
 
     fn gpu_unit(mode: super::super::gpu::DeviceMode) -> super::super::gpu::GpuUnit {
@@ -2281,9 +2356,9 @@ mod tests {
     fn ops_round_trip_on_the_wire() {
         let ops = [
             JobOp::Ready,
-            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None }),
-            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None }),
-            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)) }),
+            JobOp::Start(JobStart { key: "j-g1".into(), root: "/r".into(), rw: vec![], network_none: true, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 2, no_lan: true, stdin: false, max_secs: Some(60), job_uid: false, gpu: None, cpu_weight: None }),
+            JobOp::Start(JobStart { key: "j-g2".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 0, no_lan: false, stdin: true, max_secs: None, job_uid: true, gpu: None, cpu_weight: None }),
+            JobOp::Start(JobStart { key: "j-g3".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: Some(1), cpu_millis: None, stop_grace_secs: 10, tenant: 1, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: Some(k2_node_proto::gpu::GpuAsk::one(k2_node_proto::gpu::GpuVendor::Amd)), cpu_weight: None }),
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: Some("--dev".into()) },
             JobOp::KeyTaint { node_fp: "a".repeat(64), mark: None },
             JobOp::Tenants,
@@ -2304,18 +2379,18 @@ mod tests {
         let JobOp::Start(s) = old else { panic!() };
         assert_eq!((s.tenant, s.no_lan, s.stdin), (0, false, false));
         // A start without stdin is the 0.46.3 wire, byte for byte.
-        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None });
+        let plain = JobOp::Start(JobStart { key: "k".into(), root: "/r".into(), rw: vec![], network_none: false, mem_bytes: None, cpu_millis: None, stop_grace_secs: 1, tenant: 0, no_lan: false, stdin: false, max_secs: None, job_uid: false, gpu: None, cpu_weight: None });
         let text = serde_json::to_string(&plain).unwrap();
         assert!(!text.contains("stdin") && !text.contains("job_uid") && !text.contains("gpu"), "{text}");
         // An older executor's Ready (no stdin) reads as "can't relay stdin",
         // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false });
         // GPU jobs S6: a newer executor says it reads a job's GPU memory; a
         // Ready without it is 0.46.10's bytes.
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false, cpu_weight: false };
         assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"answer":"ready","job_user":"k2job","stdin":true}"#);
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false, cpu_weight: false };
         let back: JobAnswer = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
         let u = JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes: 3 << 30, gtt_bytes: 3 << 30, clients: 1, pids: 2, ..Default::default() });

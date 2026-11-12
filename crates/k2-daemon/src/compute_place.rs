@@ -1836,6 +1836,10 @@ pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], caps: Option<Grant
     if !has(FEATURE_STALL) {
         p.stall_secs = None;
     }
+    // prd-compute-blacksmith-class-v1 R2 (§4.4.4): `--cpus N+M`'s M only to
+    // a node offering `cpu-burst`; any other node keeps N (its plan and
+    // digest as before). From the row, so a move to a newer node gets it.
+    p.cpus_burst = j.ctl.cpus_burst.filter(|_| has(k2_core::compute::proto::gens::FEATURE_CPU_BURST));
     (p != *plan).then_some(p)
 }
 
@@ -3310,6 +3314,33 @@ mod tests {
         assert_eq!(awake_since(1_005), 1_000, "a normal tick keeps the start");
         note_tick(5_000);
         assert_eq!(awake_since(5_000), 5_000, "a gap over a minute = slept");
+    }
+
+    /// R2 (§4.4.4, BK-13): `--cpus 4+8` reaches a node offering `cpu-burst`
+    /// as `cpus_burst` (the guarantee stays `limits.cpu_millis`); a node
+    /// without it gets today's plan and digest; a move back to a newer node
+    /// gets it again.
+    #[test]
+    fn the_burst_follows_the_nodes_features() {
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "job_id": "j1", "node_id": "n1", "workspace_id": "w1", "workspace_label": "k2", "requested_by": "owner",
+            "argv": ["true"], "env": {}, "cwd": null,
+            "limits": {"max_secs": 60, "cpu_millis": 4000, "mem_bytes": null, "disk_bytes": 1, "log_cap_bytes": 1},
+            "src": null, "exclusive": false, "created_at": 1
+        }))
+        .expect("a plan");
+        let mut job = JobRow { id: "j1".into(), tier: "normal".into(), ..Default::default() };
+        job.ctl.cpus_burst = Some(8000);
+        let new_node = vec![k2_core::compute::proto::gens::FEATURE_CPU_BURST.to_string()];
+        let burst = fit_plan(&plan, &job, &new_node, None).expect("a cpu-burst node gets the burst");
+        assert_eq!((burst.cpus_burst, burst.limits.cpu_millis), (Some(8000), Some(4000)));
+        assert_ne!(burst.digest().unwrap(), plan.digest().unwrap());
+        assert_eq!(fit_plan(&burst, &job, &new_node, None), None, "already fits");
+        let back = fit_plan(&burst, &job, &[], None).expect("an older node loses it");
+        assert_eq!((back.cpus_burst, back.digest().unwrap()), (None, plan.digest().unwrap()), "today's digest, byte for byte");
+        assert_eq!(fit_plan(&plan, &job, &[], None), None, "no feature: as it is");
+        job.ctl.cpus_burst = None;
+        assert_eq!(fit_plan(&plan, &job, &new_node, None), None, "no burst asked: nothing to send");
     }
 
     /// Job tiers T11, T17 (mixed versions): a tiered plan sent to a node

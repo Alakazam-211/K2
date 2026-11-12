@@ -153,7 +153,8 @@ Agents:
                                 it is refused (mem_auto_no_history, exit 2). The
                                 run's note says what it picked; k2 compute
                                 rightsize shows the numbers (preview: ciPreview)
-                 [--env K=V]... [--cpus N]
+                 [--env K=V]... [--cpus N | N+M]  N+M: N guaranteed, up to M on idle cores
+                                (every job always gets its --cpus; k2 study compute: IDLE CORES)
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
                                 node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
@@ -761,6 +762,13 @@ if row and os.environ.get("K2_RF_JSON") != "1":
 }
 
 # GET/POST and fail on a refusal; the body lands in _CP_BODY.
+# Print a reader route's answer: its JSON with --json, else the lines the
+# daemon wrote for people (`text`).
+_compute_text() {
+    [ "${1:-0}" = "1" ] && { printf '%s\n' "$_CP_BODY"; return; }
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin).get("text") or ["(this server sent no text: k2 update)"]))'
+}
+
 _compute_call() {
     local raw
     raw="$(_compute_send "$@")"
@@ -1443,7 +1451,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
-    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb=""
+    local preset="" now=0 tag="" same_node="" distro="" receipt_v="" gpu="" gpu_mem="" mem_auto="" mem_auto_fb="" cpus_burst=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=() avoids=() onlys=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -1530,7 +1538,8 @@ sys.exit(0 if ok else 1)'; then
             --no-source) nosrc=1; shift ;;
             --env) envs+=("${2:-}"); shift 2 ;;
             --needs|--need) needs+=("${2:-}"); shift 2 ;;
-            --cpus) cpus="${2:-}"; shift 2 ;;
+            --cpus) cpus="${2:-}"; cpus_burst=""; shift 2  # N+M (Blacksmith R2): cpus + cpusBurst
+                if [[ "$cpus" == *+* ]]; then [[ "$cpus" =~ ^[0-9]+(\.[0-9]+)?\+[0-9]+(\.[0-9]+)?$ ]] || { echo "usage: --cpus N or --cpus N+M (4+8: 4 guaranteed, up to 8 on idle cores)" >&2; exit 2; }; cpus_burst="${cpus#*+}"; cpus="${cpus%%+*}"; fi ;;
             # --mem auto[:8G] (Blacksmith class R1): sized from this
             # command's finished runs; the size after : is the fallback.
             --mem)
@@ -1724,7 +1733,7 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_labels_j="$labels_json" K2_CJ_env_j="$env_json" K2_CJ_argv_j="$argv_json" K2_CJ_needs_j="$needs_json" \
         K2_CJ_artifacts_j="$artifacts_json" K2_CJ_secrets_j="$secrets_json" K2_CJ_queueTimeoutSecs_n="$qtimeout" K2_CJ_retries_n="$retries" K2_CJ_stallSecs_n="$stall" K2_CJ_shards_n="$nshards" K2_CJ_plan_b="$plan" \
         K2_CJ_detach_b="$detach" K2_CJ_dirty_b="$dirty" K2_CJ_sha="$sha" K2_CJ_noSource_b="$nosrc" \
-        K2_CJ_cpus_n="$cpus" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
+        K2_CJ_cpus_n="$cpus" K2_CJ_cpusBurst_n="$cpus_burst" K2_CJ_memBytes_n="$mem" K2_CJ_memAuto_b="$mem_auto" K2_CJ_memAutoFallbackBytes_n="$mem_auto_fb" K2_CJ_timeoutSecs_n="$timeout" \
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
@@ -2360,45 +2369,7 @@ ws, check, tag, argv, days = sys.argv[1:6]
 o = {k: v for k, v in (("workspace", ws), ("check", check), ("tag", tag), ("argv", argv), ("days", days)) if v}
 print(urllib.parse.urlencode(o))' "$(_compute_ws "$ws")" "$check" "$tag" "$argv_json" "$days")"
     _compute_call GET /cli/compute/rightsize "$q"
-    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
-    printf '%s' "$_CP_BODY" | python3 -c '
-import json, sys
-v = json.load(sys.stdin)
-k = v["key"]
-def g(b):
-    if b is None: return "?"
-    x = b / float(1 << 30)
-    return ("%dG" % round(x)) if abs(x - round(x)) < 0.05 else ("%.1fG" % x)
-what = {"argv": "command: " + " ".join(k["value"]) if isinstance(k["value"], list) else "", "check": "CI check " + str(k["value"]), "tag": "tag " + str(k["value"])}[k["kind"]]
-print("rightsize · %s · %s · last %d days · %d runs (%d finished) · confidence %s" % (v["workspace"], what[:160], v["days"], v["runs"], v["finished"], v["confidence"]))
-m, c = v["mem"], v["cpus"]
-if not v["runs"]:
-    print("  no finished runs of it in that window: run it once with a generous --mem, then ask again;")
-    print("  or submit with --mem auto:<size> (that size until it has history)")
-    sys.exit(0)
-if m["samples"]:
-    line = "memory: peak p50 %s · p95 %s · max %s" % (g(m["p50Bytes"]), g(m["p95Bytes"]), g(m["maxBytes"]))
-else:
-    line = "memory: no peak reported (an older k2-node, or no finished run)"
-if m.get("askedBytes"): line += " · asked %s" % g(m["askedBytes"])
-if m["memCapEnds"]: line += " · %d stopped at their limit (mem_cap; last peak %s)" % (m["memCapEnds"], g(m["lastMemCapPeakBytes"]))
-print(line)
-if m.get("suggest"):
-    why = "p95 × 1.25, rounded up" + ("; never below 1.5 × the last mem_cap peak" if m.get("floorBytes") else "")
-    print("  suggest: %s   (%s)" % (m["suggest"], why))
-    a = m.get("auto")
-    if a: print("  or: --mem auto   (it would ask %s now: %s)" % (a["value"], a["from"]))
-if c.get("samples"):
-    line = "cpus: used %.1f on average (p95 %.1f)" % (c["avgUsed"], c["p95Used"] or c["avgUsed"])
-    line += (" of --cpus %g" % c["asked"]) if c.get("asked") else " (no --cpus asked)"
-    if c.get("pinnedRuns"): line += " · held at its limit in %d of %d runs" % (c["pinnedRuns"], c["samples"])
-    print(line)
-    if c.get("suggest") is not None:
-        print("  suggest: --cpus %g   (%s)" % (c["suggest"], c.get("why") or ""))
-else:
-    print("cpus: no CPU time reported")
-if v["confidence"] == "low":
-    print("  (fewer than 5 finished runs: a first guess; it firms up as runs finish)")'
+    _compute_text "$as_json"
 }
 
 # k2 compute logs --search 'TEXT' … (prd-compute-blacksmith-class-v1 O1):

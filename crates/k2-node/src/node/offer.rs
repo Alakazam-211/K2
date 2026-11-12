@@ -271,6 +271,11 @@ impl Node {
         if self.offers_gpu_mem(t) && !f.iter().any(|x| x == k2_node_proto::gpu::FEATURE_GPU_MEM) {
             f.push(k2_node_proto::gpu::FEATURE_GPU_MEM.to_string());
         }
+        // prd-compute-blacksmith-class-v1 R2 (protocol 10): `--cpus N+M`
+        // (`Plan.cpus_burst`), while the owner's `cpu_burst` is on.
+        if self.offers_cpu_burst(t) && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_CPU_BURST) {
+            f.push(k2_node_proto::gens::FEATURE_CPU_BURST.to_string());
+        }
         // Compute easy mode (protocol 6, same release): only to a server
         // that speaks it, the only one the node does that work for.
         if t.speaks_easy() {
@@ -415,5 +420,26 @@ mod secret_env_tests {
         // The offer itself (owner) lists the feature beside the others.
         let off = n.offer(&owner);
         assert!(off.features.iter().any(|f| f == FEATURE_SECRET_ENV), "{:?}", off.features);
+    }
+
+    /// R2 (prd-compute-blacksmith-class-v1 §4.4.4): `cpu-burst` only to a
+    /// protocol-10 server, and only while the owner's `cpu_burst` is on.
+    #[tokio::test]
+    async fn cpu_burst_is_offered_to_protocol_10_while_the_owner_allows_it() {
+        let d = crate::util::temp_dir("offer-burst");
+        let mut o = NodeOptions::new(crate::paths::Layout::new(d.join("home"), d.join("cfg")));
+        o.dev = true;
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        let n = Node::open(o).await.unwrap();
+        let owner = n.owner();
+        let has = |n: &Node, t: &crate::node::tenant::Tenant| n.session_features(t).iter().any(|f| f == k2_node_proto::gens::FEATURE_CPU_BURST);
+        owner.protocol.store(k2_node_proto::frames::PROTOCOL_CI, Ordering::SeqCst);
+        assert!(!has(&n, &owner), "a protocol-9 server never sees it");
+        owner.protocol.store(k2_node_proto::frames::PROTOCOL_GENS, Ordering::SeqCst);
+        assert!(has(&n, &owner));
+        n.local.lock().unwrap().policy.cpu_burst = false;
+        assert!(!has(&n, &owner), "the owner turned idle cores off");
     }
 }

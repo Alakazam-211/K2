@@ -103,6 +103,8 @@ const POLICY_KEYS: &[(&str, &str)] = &[
     ("repo_toolchains", "bool"),
     ("toolchain_budget_gb", "int"),
     ("tenant_git_access", "bool"),
+    // prd-compute-blacksmith-class-v1 R2: idle cores for `--cpus N+M`.
+    ("cpu_burst", "bool"),
 ];
 
 fn enum_ok(key: &str, v: &str) -> bool {

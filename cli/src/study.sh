@@ -783,9 +783,10 @@ MEMORY FROM HISTORY (.k2/ci.toml version = 2)
   argv = ["cargo", "nextest", "run"]
   mem_gb = 8            # the size for its first runs
   mem_auto = true       # then: p95 peak × 1.25, at least 1.5 × a mem_cap
+  cpus_burst = 8        # with cpus = 4: 4 guaranteed, up to 8 on idle cores
   Needs version = 2 at the top (a version 1 file refuses it by name). The
   check's job note says what it picked; k2 compute rightsize --check unit
-  shows the numbers (k2 study compute, RIGHTSIZE).
+  shows the numbers (k2 study compute, RIGHTSIZE and IDLE CORES).
 
 WHEN IT SAYS NO (exit 2 usage, 3 refused, 4 not found)
   ci_monitor_invalid    a bad name, kind, --over, --count, --cooldown or --to
@@ -7193,6 +7194,15 @@ RIGHTSIZE (what a command really needs; preview: ciPreview)
   is refused (mem_auto_no_history, exit 2): add :<size>. Presets take
   mem = "auto:8G"; a .k2/ci.toml check takes mem_auto = true with mem_gb
   as the fallback (needs version = 2 in that file; k2 study ci-stats).
+
+IDLE CORES (--cpus N+M; preview: ciPreview)
+  k2 compute run --cpus 4+8 --mem 16G -- sh -c 'cargo build -j $K2_JOB_CPUS_MAX'
+  Placed and started on 4; uses up to 8 while the node's cores are idle.
+  Every job always gets its --cpus; spare cores are shared by --cpus (the
+  tier orders the queue only). Env: K2_JOB_CPUS=4 (CARGO_BUILD_JOBS too),
+  K2_JOB_CPUS_MAX=8. Linux nodes on protocol 10; macOS: env only. An older
+  k2-node or cpu_burst = false holds it to 4 (the run's note says so).
+  Preset: cpus = "4+8". .k2/ci.toml (version 2): cpus = 4, cpus_burst = 8.
 
 SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2 compute run --secret GMAIL_CLIENT_SECRET -- make release

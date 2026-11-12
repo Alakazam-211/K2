@@ -701,6 +701,13 @@ pub struct JobCtl {
     /// so it is sent once per attempt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_warned_gen: Option<i64>,
+    /// `--cpus N+M`'s M in thousandths of a core
+    /// (prd-compute-blacksmith-class-v1 R2, §4.4.4). Placement and
+    /// admission count only N (`limits.cpu_millis`); the plan carries M
+    /// (`Plan.cpus_burst`) only to a node offering `cpu-burst`, so a job
+    /// that moves keeps it and an older node sees today's plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpus_burst: Option<u64>,
 }
 
 /// CE-5: an end heard more than this long after the node's own time is

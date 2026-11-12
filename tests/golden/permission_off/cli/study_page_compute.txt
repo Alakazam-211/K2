@@ -421,6 +421,15 @@ RIGHTSIZE (what a command really needs; preview: ciPreview)
   mem = "auto:8G"; a .k2/ci.toml check takes mem_auto = true with mem_gb
   as the fallback (needs version = 2 in that file; k2 study ci-stats).
 
+IDLE CORES (--cpus N+M; preview: ciPreview)
+  k2 compute run --cpus 4+8 --mem 16G -- sh -c 'cargo build -j $K2_JOB_CPUS_MAX'
+  Placed and started on 4; uses up to 8 while the node's cores are idle.
+  Every job always gets its --cpus; spare cores are shared by --cpus (the
+  tier orders the queue only). Env: K2_JOB_CPUS=4 (CARGO_BUILD_JOBS too),
+  K2_JOB_CPUS_MAX=8. Linux nodes on protocol 10; macOS: env only. An older
+  k2-node or cpu_burst = false holds it to 4 (the run's note says so).
+  Preset: cpus = "4+8". .k2/ci.toml (version 2): cpus = 4, cpus_burst = 8.
+
 SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2 compute run --secret GMAIL_CLIENT_SECRET -- make release
   k2 compute run --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test

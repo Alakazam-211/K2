@@ -53,6 +53,50 @@ pub(crate) fn mem_auto_from(v: &Value) -> R<Option<Option<u64>>> {
     }
 }
 
+/// `--cpus N+M` in a run body (slice R2, §4.4.4, BK-13): `cpus: N` and a
+/// separate `cpusBurst: M`, so an older daemon keeps N and ignores M.
+/// `Ok(None)`: not asked. `Ok(Some(millis))`: M in thousandths of a core,
+/// above N (which it needs), at most 1024 CPUs.
+pub(crate) fn cpus_burst_from(v: &Value, cpu_millis: Option<u64>) -> R<Option<u64>> {
+    let Some(x) = v.get("cpusBurst").filter(|x| !x.is_null()) else { return Ok(None) };
+    ci_gate("--cpus N+M")?;
+    let b = x
+        .as_f64()
+        .filter(|b| *b > 0.0 && *b <= 1024.0)
+        .ok_or_else(|| no(BAD, 400, "--cpus N+M: M is the most CPUs it may use, a number up to 1024 (--cpus 4+8)"))?;
+    let b = (b * 1000.0) as u64;
+    k2_core::compute::proto::gens::check_cpus_burst(cpu_millis, Some(b)).map_err(|_| {
+        no(
+            BAD,
+            400,
+            match cpu_millis {
+                None => "--cpus N+M needs N, the CPUs it is guaranteed (--cpus 4+8: 4 guaranteed, up to 8 while cores are free)",
+                Some(_) => "--cpus N+M: M, the most it may use, must be above N, its guarantee (--cpus 4+8)",
+            },
+        )
+    })?;
+    Ok(Some(b))
+}
+
+/// `N+M` for `effective.cpus` and notes (whole numbers without a dot).
+pub(crate) fn cpus_words(cpu_millis: u64, burst_millis: u64) -> String {
+    let w = |m: u64| if m % 1000 == 0 { (m / 1000).to_string() } else { format!("{}", m as f64 / 1000.0) };
+    format!("{}+{}", w(cpu_millis), w(burst_millis))
+}
+
+/// The run's note when its node won't use idle cores (an older k2-node, or
+/// its owner turned `cpu_burst` off): it runs held to N there.
+pub(crate) fn burst_note(node: &str, features: &[String], cpu_millis: u64, burst_millis: u64) -> Option<String> {
+    if features.iter().any(|f| f == k2_core::compute::proto::gens::FEATURE_CPU_BURST) {
+        return None;
+    }
+    Some(format!(
+        "--cpus {}: {node} doesn't take idle cores now (its k2-node is older than protocol 10, or its owner set cpu_burst = false): it runs held to {} there",
+        cpus_words(cpu_millis, burst_millis),
+        cpus_words(cpu_millis, cpu_millis).split('+').next().unwrap_or_default()
+    ))
+}
+
 /// The history a run body's `--mem auto` reads: a CI check's (`tag`
 /// `ci:<check>`), else the exact command.
 pub(crate) fn auto_key(v: &Value, argv: &[String]) -> Key {
@@ -123,7 +167,7 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<Value> {
     let mem = rs::mem_facts(&runs);
     let cpus = rs::cpu_facts(&runs);
     let auto = rs::auto_mem(&runs.iter().take(rs::AUTO_RUNS as usize).cloned().collect::<Vec<_>>(), None);
-    Ok(json!({
+    let mut out = json!({
         "workspace": ws.handle,
         "key": key.json(),
         "days": days,
@@ -144,12 +188,152 @@ pub(crate) fn handle(who: &Who, params: &HashMap<String, String>) -> R<Value> {
             "auto": auto.map(|(b, from)| json!({"bytes": b, "value": rs::gib_words(b), "from": from})),
         },
         "cpus": cpus,
-    }))
+    });
+    // The lines `k2 compute rightsize` prints (the CLI only prints them).
+    out["text"] = json!(text(&out));
+    Ok(out)
+}
+
+/// `k2 compute rightsize`'s plain answer, from the route's JSON.
+pub(crate) fn text(v: &Value) -> Vec<String> {
+    let g = |b: &Value| match b.as_f64() {
+        None => "?".to_string(),
+        Some(b) => {
+            let x = b / (1u64 << 30) as f64;
+            if (x - x.round()).abs() < 0.05 {
+                format!("{}G", x.round() as i64)
+            } else {
+                format!("{x:.1}G")
+            }
+        }
+    };
+    let s = |x: &Value| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string());
+    let (k, m, c) = (&v["key"], &v["mem"], &v["cpus"]);
+    let what = match k["kind"].as_str() {
+        Some("argv") => format!("command: {}", k["value"].as_array().map(|a| a.iter().map(s).collect::<Vec<_>>().join(" ")).unwrap_or_default()),
+        Some("check") => format!("CI check {}", s(&k["value"])),
+        _ => format!("tag {}", s(&k["value"])),
+    };
+    let what: String = what.chars().take(160).collect();
+    let n = |x: &Value| x.as_u64().unwrap_or(0);
+    let mut out = vec![format!(
+        "rightsize · {} · {what} · last {} days · {} runs ({} finished) · confidence {}",
+        s(&v["workspace"]),
+        n(&v["days"]),
+        n(&v["runs"]),
+        n(&v["finished"]),
+        s(&v["confidence"])
+    )];
+    if n(&v["runs"]) == 0 {
+        out.push("  no finished runs of it in that window: run it once with a generous --mem, then ask again;".into());
+        out.push("  or submit with --mem auto:<size> (that size until it has history)".into());
+        return out;
+    }
+    let mut line = if n(&m["samples"]) > 0 {
+        format!("memory: peak p50 {} · p95 {} · max {}", g(&m["p50Bytes"]), g(&m["p95Bytes"]), g(&m["maxBytes"]))
+    } else {
+        "memory: no peak reported (an older k2-node, or no finished run)".to_string()
+    };
+    if n(&m["askedBytes"]) > 0 {
+        line += &format!(" · asked {}", g(&m["askedBytes"]));
+    }
+    if n(&m["memCapEnds"]) > 0 {
+        line += &format!(" · {} stopped at their limit (mem_cap; last peak {})", n(&m["memCapEnds"]), g(&m["lastMemCapPeakBytes"]));
+    }
+    out.push(line);
+    if let Some(sug) = m["suggest"].as_str() {
+        let floor = if n(&m["floorBytes"]) == 0 { "" } else { "; never below 1.5 × the last mem_cap peak" };
+        out.push(format!("  suggest: {sug}   (p95 × 1.25, rounded up{floor})"));
+        if m["auto"].is_object() {
+            out.push(format!("  or: --mem auto   (it would ask {} now: {})", s(&m["auto"]["value"]), s(&m["auto"]["from"])));
+        }
+    }
+    if n(&c["samples"]) > 0 {
+        let avg = c["avgUsed"].as_f64().unwrap_or(0.0);
+        let mut line = format!("cpus: used {avg:.1} on average (p95 {:.1})", c["p95Used"].as_f64().unwrap_or(avg));
+        line += &match c["asked"].as_f64() {
+            Some(a) => format!(" of --cpus {a}"),
+            None => " (no --cpus asked)".to_string(),
+        };
+        if n(&c["pinnedRuns"]) > 0 {
+            line += &format!(" · held at its limit in {} of {} runs", n(&c["pinnedRuns"]), n(&c["samples"]));
+        }
+        out.push(line);
+        if let Some(sug) = c["suggest"].as_f64() {
+            out.push(format!("  suggest: --cpus {sug}   ({})", c["why"].as_str().unwrap_or_default()));
+        }
+    } else {
+        out.push("cpus: no CPU time reported".into());
+    }
+    if v["confidence"] == "low" {
+        out.push("  (fewer than 5 finished runs: a first guess; it firms up as runs finish)".into());
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plain answer the CLI prints (it was rendered in `cli/k2`
+    /// before; the CLI now only prints these lines).
+    #[test]
+    fn rightsize_text_lines() {
+        let g = 1u64 << 30;
+        let v = json!({"workspace": "proj", "key": {"kind": "check", "value": "unit", "tag": "ci:unit"},
+            "days": 30, "runs": 6, "finished": 5, "confidence": "medium",
+            "mem": {"samples": 5, "p50Bytes": 9 * g, "p95Bytes": 10 * g, "maxBytes": 10 * g, "memCapEnds": 1, "lastMemCapPeakBytes": 16 * g,
+                    "floorBytes": 24 * g, "askedBytes": 16 * g, "suggestBytes": 24 * g, "suggest": "--mem 24G",
+                    "auto": {"bytes": 24 * g, "value": "24G", "from": "auto (p95 10G of 5 runs)"}},
+            "cpus": {"samples": 5, "avgUsed": 3.9, "p95Used": 4.0, "asked": 4.0, "pinnedRuns": 5, "suggest": 8.0, "why": "speed: held"}});
+        assert_eq!(
+            text(&v),
+            vec![
+                "rightsize · proj · CI check unit · last 30 days · 6 runs (5 finished) · confidence medium",
+                "memory: peak p50 9G · p95 10G · max 10G · asked 16G · 1 stopped at their limit (mem_cap; last peak 16G)",
+                "  suggest: --mem 24G   (p95 × 1.25, rounded up; never below 1.5 × the last mem_cap peak)",
+                "  or: --mem auto   (it would ask 24G now: auto (p95 10G of 5 runs))",
+                "cpus: used 3.9 on average (p95 4.0) of --cpus 4 · held at its limit in 5 of 5 runs",
+                "  suggest: --cpus 8   (speed: held)",
+            ]
+        );
+        let argv = json!({"workspace": "proj", "key": {"kind": "argv", "value": ["cargo", "test"]}, "days": 14, "runs": 0, "finished": 0, "confidence": "low", "mem": {}, "cpus": {}});
+        let t = text(&argv);
+        assert_eq!(t[0], "rightsize · proj · command: cargo test · last 14 days · 0 runs (0 finished) · confidence low");
+        assert!(t[1].starts_with("  no finished runs of it"), "{t:?}");
+        let low = json!({"workspace": "p", "key": {"kind": "tag", "value": "fuzz"}, "days": 14, "runs": 2, "finished": 2, "confidence": "low",
+            "mem": {"samples": 2, "p50Bytes": 1_610_612_736u64, "p95Bytes": g, "maxBytes": g, "memCapEnds": 0}, "cpus": {"samples": 0}});
+        let t = text(&low);
+        assert_eq!(t[1], "memory: peak p50 1.5G · p95 1G · max 1G");
+        assert_eq!(t[2], "cpus: no CPU time reported");
+        assert_eq!(t[3], "  (fewer than 5 finished runs: a first guess; it firms up as runs finish)");
+    }
+
+    /// R2 (§4.4.4, BK-13): `cpusBurst` is above `cpus`, which it needs;
+    /// behind the CI preview like the rest of the arc.
+    #[test]
+    fn cpus_burst_body_rules() {
+        let _env = k2_core::test_env::lock();
+        let _c = k2_core::test_env::EnvVar::set("K2_COMPUTE", "1");
+        let _ci = k2_core::test_env::EnvVar::set(k2_core::compute::CI_ENV, "1");
+        assert_eq!(cpus_burst_from(&json!({"cpus": 4}), Some(4000)).unwrap(), None);
+        assert_eq!(cpus_burst_from(&json!({"cpus": 4, "cpusBurst": 8}), Some(4000)).unwrap(), Some(8000));
+        assert_eq!(cpus_burst_from(&json!({"cpus": 0.5, "cpusBurst": 1.5}), Some(500)).unwrap(), Some(1500));
+        let e = cpus_burst_from(&json!({"cpusBurst": 8}), None).unwrap_err();
+        assert!(e.code == BAD && e.hint.contains("needs N"), "{e:?}");
+        let e = cpus_burst_from(&json!({"cpus": 8, "cpusBurst": 8}), Some(8000)).unwrap_err();
+        assert!(e.hint.contains("must be above N"), "{e:?}");
+        assert_eq!(cpus_burst_from(&json!({"cpus": 4, "cpusBurst": 2000}), Some(4000)).unwrap_err().code, BAD);
+        assert_eq!(cpus_burst_from(&json!({"cpus": 4, "cpusBurst": "8"}), Some(4000)).unwrap_err().code, BAD);
+        assert_eq!(cpus_words(4000, 8000), "4+8");
+        assert_eq!(cpus_words(500, 1500), "0.5+1.5");
+        let old = vec!["stall".to_string()];
+        assert!(burst_note("k2n7", &old, 4000, 8000).unwrap().contains("held to 4"));
+        assert_eq!(burst_note("k2n7", &[k2_core::compute::proto::gens::FEATURE_CPU_BURST.to_string()], 4000, 8000), None);
+        let _off = k2_core::test_env::EnvVar::set(k2_core::compute::CI_ENV, "off");
+        assert_eq!(cpus_burst_from(&json!({"cpus": 4, "cpusBurst": 8}), Some(4000)).unwrap_err().code, k2_core::compute::CI_PREVIEW_OFF);
+        assert_eq!(cpus_burst_from(&json!({"cpus": 4}), Some(4000)).unwrap(), None, "a plain --cpus is untouched");
+    }
 
     #[test]
     fn auto_reads_a_check_by_its_tag_else_the_command() {

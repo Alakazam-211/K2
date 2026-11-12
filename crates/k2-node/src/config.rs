@@ -79,6 +79,12 @@ pub struct PolicyFile {
     /// `false` and the node never offers `git-access` to them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tenant_git_access: Option<bool>,
+    /// prd-compute-blacksmith-class-v1 R2 (§4.4.4): may a job asked with
+    /// `--cpus N+M` use idle cores up to M here (its unit's `CPUQuota` at
+    /// M, its `CPUWeight` from N and its tier)? Default on; `false` holds
+    /// every job to its N and the node stops offering `cpu-burst`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_burst: Option<bool>,
 }
 
 /// The default tool-cache cap: 15% of the disk budget, 1–60 GB.
@@ -121,6 +127,10 @@ pub struct Policy {
     /// so the default policy reads as it did).
     #[serde(skip_serializing_if = "is_true")]
     pub tenant_git_access: bool,
+    /// Idle cores for `--cpus N+M` jobs (R2; default on, shown only when
+    /// off).
+    #[serde(skip_serializing_if = "is_true")]
+    pub cpu_burst: bool,
 }
 
 fn is_true(b: &bool) -> bool {
@@ -191,6 +201,7 @@ impl Policy {
                 None => default_toolchain_budget_bytes(f.disk_budget_gb.unwrap_or(150) * GIB),
             },
             tenant_git_access: f.tenant_git_access.unwrap_or(true),
+            cpu_burst: f.cpu_burst.unwrap_or(true),
         })
     }
 

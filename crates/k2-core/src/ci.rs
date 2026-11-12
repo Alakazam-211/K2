@@ -664,6 +664,11 @@ pub fn job_body(run_id: &str, index: usize, name: &str, c: &CheckJob, sha: &str,
     if let Some(cpus) = c.cpus {
         v["cpus"] = serde_json::json!(cpus);
     }
+    // Version 2 `cpus_burst` (prd-compute-blacksmith-class-v1 R2, §4.4.4):
+    // its own field beside `cpus` (BK-13), so an older daemon keeps `cpus`.
+    if let Some(b) = c.cpus_burst.filter(|_| c.cpus.is_some()) {
+        v["cpusBurst"] = serde_json::json!(b);
+    }
     if c.mem_auto == Some(true) {
         // Version 2 (prd-compute-blacksmith-class-v1 R1, §4.4.3): sized from
         // this check's history at submit (its `ci:<name>` jobs); `mem_gb`
@@ -919,6 +924,10 @@ mod tests {
         assert!(manual.get("supersede").is_none(), "a run on no branch replaces nothing");
         assert_eq!(manual["tier"], "normal");
         assert!(v.get("memAuto").is_none() && v.get("effective").is_none());
+        assert!(v.get("cpusBurst").is_none());
+        // Version 2 `cpus_burst` (R2): its own field beside cpus.
+        let burst = job_body("r1", 0, "unit", &CheckJob { cpus_burst: Some(8), ..c.clone() }, &sha, Some("main"), "ci");
+        assert_eq!((burst["cpus"].as_u64(), burst["cpusBurst"].as_u64()), (Some(4), Some(8)));
         // Version 2 `mem_auto` (Blacksmith class R1): auto, mem_gb the fallback.
         let auto = job_body("r1", 0, "unit", &CheckJob { mem_auto: Some(true), ..c.clone() }, &sha, Some("main"), "ci");
         assert_eq!((auto["memAuto"].as_bool(), auto["memAutoFallbackBytes"].as_u64(), auto.get("memBytes")), (Some(true), Some(8 << 30), None));

@@ -64,11 +64,16 @@ impl Cgroups {
         self.base.join(format!("job-{job_key}"))
     }
 
-    /// Make the job's leaf and write its limits.
-    pub fn create_leaf(&self, job_key: &str, cpu_millis: Option<u64>, mem_bytes: Option<u64>) -> Result<Leaf, String> {
+    /// Make the job's leaf and write its limits. `cpu_millis` is its
+    /// ceiling (the burst, R2); `cpu_weight` its share when the unit's jobs
+    /// compete (none: the kernel's default, today's leaf).
+    pub fn create_leaf(&self, job_key: &str, cpu_millis: Option<u64>, cpu_weight: Option<u64>, mem_bytes: Option<u64>) -> Result<Leaf, String> {
         let dir = self.leaf(job_key);
         std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
         write(&dir.join("cpu.max"), &cpu_max(cpu_millis))?;
+        if let Some(w) = cpu_weight {
+            write(&dir.join("cpu.weight"), &w.clamp(crate::admin::jobs::CPU_WEIGHT_MIN, crate::admin::jobs::CPU_WEIGHT_MAX).to_string())?;
+        }
         write(&dir.join("memory.max"), &mem_bytes.map(|m| m.to_string()).unwrap_or_else(|| "max".into()))?;
         write(&dir.join("pids.max"), &PIDS_MAX.to_string())?;
         Leaf::new(dir)
@@ -154,8 +159,14 @@ mod tests {
         // A restart inside supervisor/ resolves to the same base.
         let again = Cgroups::setup(&root, "/system.slice/k2-node.service/supervisor", 4243).unwrap();
         assert_eq!(again.base, cg.base);
-        let leaf = cg.create_leaf("j1-g1", Some(4000), Some(1 << 30)).unwrap();
+        let leaf = cg.create_leaf("j1-g1", Some(4000), None, Some(1 << 30)).unwrap();
         assert_eq!(std::fs::read_to_string(leaf.dir.join("cpu.max")).unwrap(), "400000 100000");
+        assert!(!leaf.dir.join("cpu.weight").exists(), "no weight asked: the kernel's default, as before");
+        // R2: a `--cpus 2+8` leaf: its ceiling at the burst, its weight
+        // from the guarantee.
+        let burst = cg.create_leaf("j2-g1", Some(8000), Some(200), Some(1 << 30)).unwrap();
+        assert_eq!(std::fs::read_to_string(burst.dir.join("cpu.max")).unwrap(), "800000 100000");
+        assert_eq!(std::fs::read_to_string(burst.dir.join("cpu.weight")).unwrap(), "200");
         assert_eq!(std::fs::read_to_string(leaf.dir.join("memory.max")).unwrap(), (1u64 << 30).to_string());
         assert_eq!(std::fs::read_to_string(leaf.dir.join("pids.max")).unwrap(), "8192");
         // Not delegated: no subtree_control → soft caps.

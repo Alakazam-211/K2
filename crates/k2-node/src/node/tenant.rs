@@ -386,6 +386,15 @@ impl Tenant {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_CI
     }
 
+    /// Does this session get the protocol-10 features
+    /// ([`k2_node_proto::frames::PROTOCOL_GENS`]): `cpu-burst` and
+    /// `job-stats` (prd-compute-blacksmith-class-v1 R2, O2), and with them
+    /// `K2_JOB_CPUS_MAX`, per-job CPU weights and `Outputs.stats`? A
+    /// protocol-9 server sees 0.46.12's node.
+    pub fn speaks_gens(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_GENS
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

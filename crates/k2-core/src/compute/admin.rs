@@ -556,6 +556,10 @@ pub const POLICY_KEYS: &[&str] = &[
     // 0.46.9 (git access, GH#78): other servers' jobs may get git tokens
     // on the node. An older node refuses it (`unknown policy field`).
     "tenant_git_access",
+    // prd-compute-blacksmith-class-v1 R2: `--cpus N+M` jobs may use idle
+    // cores here (default on). An older node refuses it (`unknown policy
+    // field`).
+    "cpu_burst",
 ];
 /// Policy keys where a bigger number gives jobs more.
 pub const POLICY_BIGGER_IS_WIDER: &[&str] = &["cpu_cap_percent", "mem_cap_gb", "disk_budget_gb", "max_parallel", "toolchain_budget_gb"];

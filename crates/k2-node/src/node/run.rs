@@ -259,17 +259,24 @@ pub fn with_host_env(mut env: Vec<(String, String)>, h: &k2_node_proto::host::Ho
 
 /// CE-15 + loopback ports (0.46.7): the job's CPUs as thread-count hints
 /// (each only when the plan's env doesn't set it: a caller's `--env` or a
-/// controller's hint wins), `K2_JOB_CPUS`, and its own port block.
+/// controller's hint wins), `K2_JOB_CPUS`, and its own port block. R2
+/// (protocol 10): `K2_JOB_CPUS_MAX`, the most CPUs it may use (its burst,
+/// else the same as `K2_JOB_CPUS`); the hints stay the guarantee.
 pub fn with_job_hints(
     mut env: Vec<(String, String)>,
     plan_env: &std::collections::BTreeMap<String, String>,
     cpus: u64,
+    cpus_max: Option<u64>,
     port_block: Option<u16>,
 ) -> Vec<(String, String)> {
     use k2_node_proto::env as e;
+    use k2_node_proto::gens::ENV_JOB_CPUS_MAX;
     let cpus = cpus.max(1).to_string();
-    env.retain(|(k, _)| k != e::ENV_JOB_CPUS && k != e::ENV_JOB_PORT_BASE && k != e::ENV_JOB_PORT_COUNT);
+    env.retain(|(k, _)| k != e::ENV_JOB_CPUS && k != ENV_JOB_CPUS_MAX && k != e::ENV_JOB_PORT_BASE && k != e::ENV_JOB_PORT_COUNT);
     env.push((e::ENV_JOB_CPUS.into(), cpus.clone()));
+    if let Some(m) = cpus_max {
+        env.push((ENV_JOB_CPUS_MAX.into(), m.max(1).to_string()));
+    }
     for v in e::CPU_HINT_VARS {
         if !plan_env.contains_key(*v) {
             env.retain(|(k, _)| k != v);
@@ -879,8 +886,10 @@ impl Node {
         let easy = t.speaks_easy();
         // CE-15 + its own loopback ports.
         let job_cpus = self.job_cpus(&t, &a);
+        // R2: `--cpus N+M` (protocol 10 only).
+        let cpu_plan = self.cpu_plan(&t, &a, unit_mode);
         let port_block = self.jobs.lock().unwrap().get(&(t.slot, job.clone())).and_then(|j| j.port_block);
-        let env = if easy { with_job_hints(env, &a.plan.env, job_cpus, port_block) } else { env };
+        let env = if easy { with_job_hints(env, &a.plan.env, job_cpus, cpu_plan.max_cpus, port_block) } else { env };
         // Protocol 7 (§4.5): K2_NODE_OS / _DISTRO / _DISTRO_VERSION / _PKG.
         let env = if t.speaks_host() { with_host_env(env, &self.host.lock().unwrap()) } else { env };
         if easy {
@@ -889,6 +898,9 @@ impl Node {
                 format!("; ports {base}-{} (K2_JOB_PORT_BASE, K2_JOB_PORT_COUNT)", base + k2_node_proto::env::JOB_PORT_BLOCK - 1)
             });
             sys(&mut journal, &format!("cpus: {job_cpus} (K2_JOB_CPUS; CARGO_BUILD_JOBS and the other thread counts unless its env sets them){}", ports.unwrap_or_default()));
+            if let Some(line) = super::cpu::burst_line(&a.plan, &cpu_plan) {
+                sys(&mut journal, &line);
+            }
         }
         // CE-4: what the job's PATH really resolves to, before it starts.
         let mut tools_used = std::collections::BTreeMap::new();
@@ -1591,8 +1603,11 @@ impl Node {
     fn start_local(&self, t: &Tenant, a: &Assign, cwd: &Path, env: &[(String, String)], network: Network) -> Result<(Proc, Option<OutPipe>, Option<OutPipe>), String> {
         let argv = self.local_argv(t, a, network)?;
         let key = t.job_key(&a.fence.job_id, a.fence.generation);
+        // R2: the ceiling is the burst where it applies; the weight keeps
+        // every other leaf its guarantee.
+        let cpu = self.cpu_plan(t, a, false);
         let leaf: Option<Leaf> = self.cgroups.as_ref().and_then(|cg| {
-            cg.create_leaf(&key, a.plan.limits.cpu_millis, a.plan.limits.mem_bytes).map_err(|e| crate::nlog!("cgroup leaf for {key}: {e}")).ok()
+            cg.create_leaf(&key, cpu.quota_millis, cpu.weight, a.plan.limits.mem_bytes).map_err(|e| crate::nlog!("cgroup leaf for {key}: {e}")).ok()
         });
         match runner::spawn(&argv, env, cwd, leaf.as_ref()) {
             Ok(runner::Spawned { mut child, pgid }) => {
@@ -1662,13 +1677,17 @@ impl Node {
                 k2_redact::wipe(&mut body);
             }
         }
+        // R2: `CPUQuota` at the burst where it applies, and a `CPUWeight`
+        // (only to an executor that sets it: else no burst either).
+        let cpu = self.cpu_plan(t, a, true);
         let start = JobStart {
             key,
             root: dirs.root.clone(),
             rw,
             network_none: network == Network::None,
             mem_bytes: Some(mem_limit),
-            cpu_millis: a.plan.limits.cpu_millis,
+            cpu_millis: cpu.quota_millis,
+            cpu_weight: cpu.weight.filter(|_| self.exec_cpu_weight.load(Ordering::SeqCst)),
             stop_grace_secs: self.opts.cancel_grace.as_secs().max(1),
             tenant: t.slot,
             no_lan: network == Network::NoLan,
@@ -2034,7 +2053,7 @@ impl Node {
     /// The CPUs a job may use (CE-15): its `--cpus` rounded up, else the
     /// node's default share for its server (`caps.cpu ÷ parallel_max`, the
     /// reservation `used` counts), at least 1.
-    fn job_cpus(&self, t: &Tenant, a: &Assign) -> u64 {
+    pub(super) fn job_cpus(&self, t: &Tenant, a: &Assign) -> u64 {
         if let Some(m) = a.plan.limits.cpu_millis.filter(|m| *m > 0) {
             return m.div_ceil(1000).max(1);
         }
@@ -2945,7 +2964,7 @@ pub(super) mod tests {
         std::fs::create_dir_all(&unit).unwrap();
         std::fs::write(unit.join("cgroup.subtree_control"), "").unwrap();
         let cg = Cgroups::setup(&root, "/system.slice/k2-node.service", 1).unwrap();
-        let leaf = cg.create_leaf("j-g1", None, Some(1 << 20)).unwrap();
+        let leaf = cg.create_leaf("j-g1", None, None, Some(1 << 20)).unwrap();
         let child = tokio::process::Command::new("/usr/bin/true").spawn().unwrap();
         std::fs::write(leaf.dir.join("memory.events"), "low 0\nhigh 0\nmax 3\noom 1\noom_kill 0\n").unwrap();
         let p = Proc::Local { child, pgid: 0, leaf: Some(leaf) };
@@ -3000,15 +3019,20 @@ pub(super) mod tests {
         let mut plan_env = std::collections::BTreeMap::new();
         plan_env.insert("CARGO_BUILD_JOBS".to_string(), "2".to_string());
         let base = vec![("CARGO_BUILD_JOBS".to_string(), "2".to_string()), ("PATH".to_string(), "/bin".to_string())];
-        let env = with_job_hints(base, &plan_env, 4, Some(3));
+        let env = with_job_hints(base, &plan_env, 4, None, Some(3));
         let get = |k: &str| env.iter().filter(|(ek, _)| ek == k).map(|(_, v)| v.as_str()).collect::<Vec<_>>();
         assert_eq!(get("CARGO_BUILD_JOBS"), vec!["2"], "the caller's --env wins");
         for k in ["RUST_TEST_THREADS", "NEXTEST_TEST_THREADS", "OMP_NUM_THREADS", "K2_JOB_CPUS"] {
             assert_eq!(get(k), vec!["4"], "{k}");
         }
         assert_eq!((get("K2_JOB_PORT_BASE"), get("K2_JOB_PORT_COUNT")), (vec!["20300"], vec!["100"]));
-        let none = with_job_hints(vec![], &Default::default(), 0, None);
+        let none = with_job_hints(vec![], &Default::default(), 0, None, None);
         assert!(none.iter().any(|(k, v)| k == "K2_JOB_CPUS" && v == "1") && !none.iter().any(|(k, _)| k == "K2_JOB_PORT_BASE"));
+        assert!(!env.iter().chain(none.iter()).any(|(k, _)| k == "K2_JOB_CPUS_MAX"), "an older server's job never gets it");
+        // R2 (protocol 10): the burst as K2_JOB_CPUS_MAX; the hints stay 4.
+        let burst = with_job_hints(vec![("K2_JOB_CPUS_MAX".into(), "99".into())], &Default::default(), 4, Some(8), None);
+        let get = |k: &str| burst.iter().filter(|(ek, _)| ek == k).map(|(_, v)| v.as_str()).collect::<Vec<_>>();
+        assert_eq!((get("K2_JOB_CPUS"), get("K2_JOB_CPUS_MAX"), get("CARGO_BUILD_JOBS")), (vec!["4"], vec!["8"], vec!["4"]));
         // The pool stays below Linux's ephemeral ports.
         let last = u32::from(k2_node_proto::env::JOB_PORT_FIRST) + u32::from(k2_node_proto::env::JOB_PORT_BLOCKS) * u32::from(k2_node_proto::env::JOB_PORT_BLOCK);
         assert!(last <= 32768, "{last}");

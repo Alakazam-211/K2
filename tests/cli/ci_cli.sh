@@ -149,7 +149,14 @@ class H(BaseHTTPRequestHandler):
                                "mem": {"samples": 5, "p50Bytes": 9 * g, "p95Bytes": 10 * g, "maxBytes": 10 * g, "memCapEnds": 1, "lastMemCapPeakBytes": 16 * g,
                                        "floorBytes": 24 * g, "askedBytes": 16 * g, "suggestBytes": 24 * g, "suggest": "--mem 24G",
                                        "auto": {"bytes": 24 * g, "value": "24G", "from": "auto (p95 10G of 5 runs; at least 1.5 × the 16G peak of a mem_cap end)"}},
-                               "cpus": {"samples": 5, "avgUsed": 3.9, "p95Used": 4.0, "asked": 4.0, "pinnedRuns": 5, "suggest": 8.0, "why": "speed: it was held at its --cpus 4 in 5 of 5 runs; a bigger --cpus may finish sooner"}})
+                               "cpus": {"samples": 5, "avgUsed": 3.9, "p95Used": 4.0, "asked": 4.0, "pinnedRuns": 5, "suggest": 8.0, "why": "speed: it was held at its --cpus 4 in 5 of 5 runs; a bigger --cpus may finish sooner"},
+                               # The daemon writes the plain lines (compute_rightsize::text, tested there).
+                               "text": ["rightsize · proj · CI check unit · last 30 days · 6 runs (5 finished) · confidence medium",
+                                        "memory: peak p50 9G · p95 10G · max 10G · asked 16G · 1 stopped at their limit (mem_cap; last peak 16G)",
+                                        "  suggest: --mem 24G   (p95 × 1.25, rounded up; never below 1.5 × the last mem_cap peak)",
+                                        "  or: --mem auto   (it would ask 24G now: auto (p95 10G of 5 runs; at least 1.5 × the 16G peak of a mem_cap end))",
+                                        "cpus: used 3.9 on average (p95 4.0) of --cpus 4 · held at its limit in 5 of 5 runs",
+                                        "  suggest: --cpus 8   (speed: it was held at its --cpus 4 in 5 of 5 runs; a bigger --cpus may finish sooner)"]})
         if path == "/cli/compute/jobs/logs":
             if q.get("cursor") == "0":
                 return self.reply({"cursor": 1, "chunks": [{"data": base64.b64encode(b"hello from unit\n").decode()}]})
@@ -406,6 +413,33 @@ has "auto: the note" "$(cat "$WORK/err")" "[k2 compute] note: --mem auto: 8G —
 rc "--mem auto, no history" 2 compute run --plan --mem auto -- cargo test
 has "auto: the refusal" "$(cat "$WORK/err")" "mem_auto_no_history"
 eq "bare auto sends no fallback" "$(field "$(last /cli/compute/run)" memAutoFallbackBytes)" "null"
+
+echo "== --cpus N+M (compute Blacksmith class R2) =="
+has "help: --cpus N+M" "$("$K2" compute --help)" "[--cpus N | N+M]  N+M: N guaranteed, up to M on idle cores"
+has "help: a real guarantee" "$("$K2" compute --help)" "(every job always gets its --cpus; k2 study compute: IDLE CORES)"
+sc="$("$K2" study compute)"
+has "study compute: IDLE CORES" "$sc" "IDLE CORES (--cpus N+M; preview: ciPreview)"
+has "study compute: build with the max" "$sc" "sh -c 'cargo build -j \$K2_JOB_CPUS_MAX'"
+has "study compute: the env" "$sc" "K2_JOB_CPUS_MAX=8."
+has "study compute: a real guarantee" "$sc" "Every job always gets its --cpus; spare cores are shared by --cpus"
+has "study compute: tiers order the queue only" "$sc" "tier orders the queue only"
+if grep -Fq "Batch ×¼" <<<"$sc"; then bad "study compute: no tier factor on CPU shares"; else ok "study compute: no tier factor on CPU shares"; fi
+has "study ci-stats: cpus_burst" "$("$K2" study ci-stats)" "cpus_burst = 8        # with cpus = 4: 4 guaranteed, up to 8 on idle cores"
+before="$(wc -l <"$REQ_LOG")"
+rc "--cpus 4+ (no M)" 2 compute run --plan --cpus 4+ -- true
+has "--cpus N+M usage" "$(cat "$WORK/err")" "usage: --cpus N or --cpus N+M"
+rc "--cpus a+8" 2 compute run --plan --cpus a+8 -- true
+rc "--cpus 4+8+16" 2 compute run --plan --cpus 4+8+16 -- true
+eq "--cpus usage errors sent nothing" "$(wc -l <"$REQ_LOG")" "$before"
+rc "--cpus 4+8" 0 compute run --plan --cpus 4+8 -- cargo build
+b="$(last /cli/compute/run)"
+eq "burst: cpus is the guarantee" "$(field "$b" cpus)" "4"
+eq "burst: cpusBurst is its own field" "$(field "$b" cpusBurst)" "8"
+rc "--cpus 0.5+1.5" 0 compute run --plan --cpus 0.5+1.5 -- true
+b="$(last /cli/compute/run)"
+eq "burst: fractions" "$(field "$b" cpus) $(field "$b" cpusBurst)" "0.5 1.5"
+rc "a plain --cpus" 0 compute run --plan --cpus 4 -- true
+eq "plain: no burst" "$(field "$(last /cli/compute/run)" cpusBurst)" "null"
 
 echo "== stats, monitors, log search (compute Blacksmith class O1) =="
 help="$("$K2" ci --help)"

@@ -917,6 +917,7 @@ fn no_unit_reaches_the_cache_generations() {
         network: k2_node_proto::share::Network::On,
         mem_bytes: None,
         cpu_millis: None,
+        cpu_weight: None,
         stop_grace_secs: 10,
         binary: PathBuf::from("/usr/local/bin/k2-node"),
         slice: "k2jobs.slice".into(),

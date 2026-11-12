@@ -224,6 +224,17 @@ function SavingNote({ on }: { on: boolean }): React.JSX.Element | null {
   )
 }
 
+/** A longer wait in words with a spinner, in the control's place or beside
+ *  it ("Uploading…", "Deleting…"): readable, unlike a disabled button. */
+function BusyNote({ text }: { text: string }): React.JSX.Element {
+  return (
+    <span role="status" className="inline-flex items-center gap-1.5 type-control text-[var(--color-text-secondary)] whitespace-nowrap">
+      <Spinner />
+      {text}
+    </span>
+  )
+}
+
 /** Width of an element, live (ResizeObserver). `fallback` until the
  *  first measurement, or forever where ResizeObserver doesn't exist. */
 function useElementWidth(fallback: number): [React.RefObject<HTMLDivElement | null>, number] {
@@ -1527,7 +1538,8 @@ export function ProjectSettingsDetail({
   const icon = useGroupIcon(detail.id, detail.iconKey)
   const hostKey = activeHostKey(useConnectHostStore((s) => s.activeHost))
   const [, setIconSaves] = useState(0)
-  const [iconBusy, setIconBusy] = useState(false)
+  /** A picture write in flight: an upload or a removal. */
+  const [iconBusy, setIconBusy] = useState<'upload' | 'remove' | null>(null)
   const [cropImage, setCropImage] = useState<string | null>(null)
   const iconInputRef = useRef<HTMLInputElement>(null)
   const pictureSave = useSaveStatus()
@@ -1550,7 +1562,7 @@ export function ProjectSettingsDetail({
 
   const saveIcon = useCallback(
     async (dataUrl: string | null): Promise<void> => {
-      setIconBusy(true)
+      setIconBusy(dataUrl === null ? 'remove' : 'upload')
       setPictureFailure(null)
       pictureSave.reset()
       try {
@@ -1567,7 +1579,7 @@ export function ProjectSettingsDetail({
       } catch (err) {
         setPictureFailure({ reason: errorMessage(err), dataUrl })
       } finally {
-        setIconBusy(false)
+        setIconBusy(null)
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1674,7 +1686,7 @@ export function ProjectSettingsDetail({
             ) : undefined
           }
         >
-          <SavingNote on={iconBusy} />
+          {iconBusy && <BusyNote text={iconBusy === 'remove' ? 'Removing…' : 'Uploading…'} />}
           <SaveNote state={iconBusy ? 'idle' : pictureSave.state} />
           <span
             data-k2-chamfer="control"
@@ -1700,9 +1712,9 @@ export function ProjectSettingsDetail({
                     setCropImage,
                   })
                 }
-                disabled={iconBusy}
+                disabled={iconBusy !== null}
               >
-                {iconBusy ? 'Uploading…' : 'Upload'}
+                Upload
               </Button>
               <input
                 ref={iconInputRef}
@@ -1715,7 +1727,7 @@ export function ProjectSettingsDetail({
                 <Button
                   variant="quiet"
                   onClick={() => void saveIcon(null)}
-                  disabled={iconBusy}
+                  disabled={iconBusy !== null}
                   title="Remove the picture"
                 >
                   Remove
@@ -1839,22 +1851,18 @@ export function ProjectSettingsDetail({
             ) : undefined
           }
         >
-          <Button
-            variant="quiet"
-            disabled={!caps.canDelete || deleting}
-            title={caps.canDelete ? undefined : 'Only the owner or an admin can delete a project'}
-            onClick={() => setConfirmDelete(true)}
-            className="inline-flex items-center gap-1.5"
-          >
-            {deleting ? (
-              <>
-                <Spinner />
-                Deleting…
-              </>
-            ) : (
-              'Delete project'
-            )}
-          </Button>
+          {deleting ? (
+            <BusyNote text="Deleting…" />
+          ) : (
+            <Button
+              variant="quiet"
+              disabled={!caps.canDelete}
+              title={caps.canDelete ? undefined : 'Only the owner or an admin can delete a project'}
+              onClick={() => setConfirmDelete(true)}
+            >
+              Delete project
+            </Button>
+          )}
         </SettingRow>
       </SettingsGroup>
     </section>

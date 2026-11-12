@@ -316,7 +316,7 @@ export function AccessAuditSection(): React.JSX.Element {
             </Callout>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3" data-testid="audit-filters">
+          <div data-k2-line="" className="flex flex-wrap items-center justify-between gap-3" data-testid="audit-filters">
             <Segmented<FilterMode>
               aria-label="Show"
               value={filter}

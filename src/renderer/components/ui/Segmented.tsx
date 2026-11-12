@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { clientToCssPx } from '@/lib/app-zoom'
 import { cx } from './cx'
-import { fitSegmented } from './segmented-fit'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import { labelText, segmentedLine, segmentedNeedsMenu } from './segmented-fit'
 import { usePressSpring } from './usePressSpring'
 
 export interface SegmentedOption<T extends string> {
@@ -44,6 +45,9 @@ export function Segmented<T extends string>({
   const group = useRef<HTMLDivElement>(null)
   const thumb = useRef<HTMLSpanElement>(null)
   const usable = options.filter((o) => !o.disabled && !disabled)
+  // Too wide for its line even on a line of its own: a dropdown instead
+  // (segmented-fit.ts). The group stays laid out, hidden, to be measured.
+  const [menu, setMenu] = useState(false)
 
   // Measured, because segment widths follow their labels. Sliding only starts
   // after the first placement, so the indicator doesn't animate in on mount.
@@ -52,9 +56,12 @@ export function Segmented<T extends string>({
     const indicator = thumb.current
     if (!root || !indicator) return
     const place = (): void => {
-      // Fill the line first when the labels don't fit it: that moves the
-      // options the thumb is measured from.
-      fitSegmented(root)
+      const need = segmentedNeedsMenu(root)
+      if (need !== null && need !== menu) {
+        setMenu(need)
+        return
+      }
+      if (menu) return
       const on = root.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
       indicator.hidden = !on
       if (!on) return
@@ -73,11 +80,12 @@ export function Segmented<T extends string>({
     const frame = requestAnimationFrame(() => {
       indicator.dataset.ready = ''
     })
-    // Its own size, and its line's: a narrower card or window can make it
-    // fill the line, a wider one can give the labels back.
+    // Its own size, and its line's: a narrower card or window can turn it
+    // into a dropdown, a wider one back into side-by-side options.
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place)
     observer?.observe(root)
-    if (root.parentElement) observer?.observe(root.parentElement)
+    const line = segmentedLine(root)
+    if (line) observer?.observe(line)
     let live = true
     void document.fonts?.ready.then(() => {
       if (live) place()
@@ -87,7 +95,7 @@ export function Segmented<T extends string>({
       cancelAnimationFrame(frame)
       observer?.disconnect()
     }
-  }, [value, options])
+  }, [value, options, menu])
 
   function move(from: T, step: 1 | -1): void {
     const at = usable.findIndex((o) => o.value === from)
@@ -99,7 +107,7 @@ export function Segmented<T extends string>({
       ?.focus()
   }
 
-  return (
+  const radios = (
     <div
       ref={group}
       role="radiogroup"
@@ -142,6 +150,28 @@ export function Segmented<T extends string>({
         )
       })}
     </div>
+  )
+
+  if (!menu) return radios
+  // The same choice as a Settings dropdown: same options, same onChange, same
+  // accessible name, placed by SettingDropdown at any app zoom.
+  return (
+    <>
+      <span className="k2-segmented-probe" aria-hidden="true" inert>
+        {radios}
+      </span>
+      <SettingDropdown
+        value={value ?? ''}
+        placeholder={value === null ? 'Choose' : undefined}
+        options={options.map((o) => ({ value: o.value, label: labelText(o.label), disabled: o.disabled }))}
+        onChange={(next) => onChange(next as T)}
+        ariaLabel={ariaLabel}
+        disabled={disabled}
+        menuAlign="left"
+        className="max-w-full"
+        triggerData={{ 'data-k2-segmented-menu': ariaLabel, ...(testId ? { 'data-testid': `${testId}-menu` } : {}) }}
+      />
+    </>
   )
 }
 

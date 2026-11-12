@@ -630,7 +630,7 @@ function Everyone({
       ) : null}
       <section data-testid="people-overview">
         {/* The picker drops under the heading when they don't fit one line. */}
-        <div className="mb-2 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+        <div data-k2-line="" className="mb-2 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
           <div className={SETTING_ROW_LABEL_MIN}>
             <h3 className="flex items-center min-h-[1.5rem] type-heading text-[var(--color-text-primary)]">
               {view === 'people' ? 'People' : 'Apps'}

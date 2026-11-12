@@ -724,7 +724,7 @@ export function TokenUsageSection(): React.JSX.Element {
     <div ref={rootRef} className="w-full" data-usage-page="" data-usage-layout={columns ? 'two-column' : 'one-column'}>
       <div className={`w-full ${columns ? WIDE_CONTENT_WIDTH : CONTENT_WIDTH} space-y-6 pb-6`}>
         {/* The server picker drops under the title when they don't fit one line. */}
-        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <header data-k2-line="" className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className={SETTING_ROW_LABEL_MIN}>
             <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
               Usage
@@ -759,7 +759,7 @@ export function TokenUsageSection(): React.JSX.Element {
 
             <section className="space-y-6" data-testid="usage-tokens" aria-busy={report.loading}>
               <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-3" data-testid="usage-filters">
+                <div data-k2-line="" className="flex flex-wrap items-center justify-between gap-3" data-testid="usage-filters">
                   <Segmented
                     aria-label="Range"
                     value={range}

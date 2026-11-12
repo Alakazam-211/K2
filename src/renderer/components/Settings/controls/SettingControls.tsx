@@ -112,6 +112,7 @@ export function SettingRow({
         {hint && <div className={SETTING_ROW_HINT}>{hint}</div>}
         <div
           data-setting-row-control="stack"
+          data-k2-line=""
           className={field ? `mt-2 ${SETTING_FIELD_WIDTH} max-w-full` : 'mt-2 flex flex-wrap items-center gap-2'}
         >
           {children}
@@ -135,7 +136,7 @@ export function SettingRow({
   if (inCard || hint !== undefined || below !== undefined) {
     return (
       <div className={inCard ? 'px-4 py-3' : 'py-2 border-b border-[var(--color-border)]'} data-settings-id={settingId} data-testid={testId}>
-        <div className={`${ROW_WRAP} ${hint ? 'items-start' : 'items-center'}`}>
+        <div data-k2-line="" className={`${ROW_WRAP} ${hint ? 'items-start' : 'items-center'}`}>
           <div className={SETTING_ROW_LABEL_MIN}>
             <div className={SETTING_ROW_LABEL}>{label}</div>
             {hint && <div className={SETTING_ROW_HINT}>{hint}</div>}
@@ -349,7 +350,7 @@ export function SettingsGroup({
         {(title !== undefined || hint || action) && (
         <div className="mb-2">
           {/* The action drops under the title when they don't fit one line. */}
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-h-[1.5rem]">
+          <div data-k2-line="" className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-h-[1.5rem]">
             <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
               <span>{title}</span>
               {badge}

@@ -510,6 +510,11 @@ where
             let _ = tx.send(Frame::NodeRoster(d)).await;
         }
     }
+    // Protocol 10 (cache generations): this server's lineages, so its
+    // placement knows which node holds which head.
+    if let Some(s) = node.lineage_status_for(&tenant) {
+        let _ = tx.send(Frame::LineageStatus(s)).await;
+    }
     // Tell the owner server how the last self-update ended (it dedups).
     if owner {
         let (n, t) = (node.clone(), tx.clone());

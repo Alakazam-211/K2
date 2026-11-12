@@ -159,7 +159,10 @@ impl Node {
                 };
                 if t.is_owner() {
                     match git.fetch_remote_auth(&mirror, url, cred.as_ref()).await {
-                        Ok(()) => sys(format!("fetched history from {url}")),
+                        Ok(()) => {
+                            self.note_own_fetch(t, a, project_key);
+                            sys(format!("fetched history from {url}"))
+                        }
                         Err(e) => sys(format!("couldn't fetch from the remote ({e}); asking the controller{hint}")),
                     }
                 } else {
@@ -169,7 +172,10 @@ impl Node {
                     // job's wall). Otherwise its server sends a bundle.
                     match self.job_network(t) {
                         Ok(k2_node_proto::share::Network::On) => match git.fetch_public_auth(&mirror, url, cred.as_ref()).await {
-                            Ok(at) => sys(format!("fetched history over https from {at}")),
+                            Ok(at) => {
+                                self.note_own_fetch(t, a, project_key);
+                                sys(format!("fetched history over https from {at}"))
+                            }
                             Err(e) => sys(format!("not fetching this remote ({e}); asking the controller for a bundle")),
                         },
                         Ok(n) => sys(format!("this server's network is {}: bundles only; asking the controller", n.as_str())),

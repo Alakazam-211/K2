@@ -200,14 +200,16 @@ pub fn parse_lineage(s: &str) -> Result<(LineageKind, &str), String> {
 }
 
 /// The plan's cache fields agree: `cache_ref` is a ref for `scratch`, a
-/// build name for `release`, absent for `trusted` and `none`.
+/// build name for `release`, the verified branch (a plain branch name, no
+/// `wt:`) or nothing for `trusted`, absent for `none`.
 pub fn check_plan_cache(commit: Option<CacheCommit>, cache_ref: Option<&str>) -> Result<(), String> {
     match (commit, cache_ref) {
         (None, None) => Ok(()),
         (None, Some(_)) => Err("plan: cache_ref without cache_commit".into()),
         (Some(CacheCommit::Trusted | CacheCommit::None), None) => Ok(()),
+        (Some(CacheCommit::Trusted), Some(b)) if valid_ref(b) && !b.starts_with(WORKTREE_REF_PREFIX) => Ok(()),
         (Some(c @ (CacheCommit::Trusted | CacheCommit::None)), Some(_)) => {
-            Err(format!("plan: cache_commit {} takes no cache_ref", c.as_str()))
+            Err(format!("plan: cache_commit {} takes no cache_ref (trusted: only a branch name)", c.as_str()))
         }
         (Some(CacheCommit::Scratch), Some(r)) if valid_ref(r) => Ok(()),
         (Some(CacheCommit::Release), Some(b)) if crate::ci::is_name(b) => Ok(()),
@@ -545,7 +547,9 @@ mod tests {
         check_plan_cache(Some(CacheCommit::Scratch), Some("wt:x")).unwrap();
         check_plan_cache(Some(CacheCommit::Release), Some("linux-x86_64")).unwrap();
         assert!(check_plan_cache(None, Some("main")).is_err());
-        assert!(check_plan_cache(Some(CacheCommit::Trusted), Some("main")).is_err(), "trusted never names a branch on the plan");
+        check_plan_cache(Some(CacheCommit::Trusted), Some("main")).unwrap();
+        assert!(check_plan_cache(Some(CacheCommit::Trusted), Some("wt:x")).is_err(), "trusted names a branch, never a worktree");
+        assert!(check_plan_cache(Some(CacheCommit::None), Some("main")).is_err());
         assert!(check_plan_cache(Some(CacheCommit::Scratch), None).is_err());
         assert!(check_plan_cache(Some(CacheCommit::Release), Some("Linux")).is_err());
         assert_eq!(serde_json::to_string(&CacheCommit::None).unwrap(), "\"none\"");

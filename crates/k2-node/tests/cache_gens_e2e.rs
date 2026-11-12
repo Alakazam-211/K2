@@ -78,6 +78,8 @@ struct Ran {
     state: JobState,
     warmth: Option<String>,
     cache: Option<CacheResult>,
+    /// The last `lineage_status` frame seen while the job ran.
+    lineage: Option<k2_node_proto::gens::LineageStatus>,
 }
 
 /// Run one job at `commit` with the plan's cache fields; send the bundle
@@ -105,6 +107,10 @@ async fn run(c: &mut Conn, n: &TestNode, repo: &std::path::Path, job: &str, comm
         state: last.state,
         warmth: states.iter().rev().find_map(|s| s.src.clone()).and_then(|s| s.warmth),
         cache: last.outputs.and_then(|o| o.cache),
+        lineage: fr.iter().rev().find_map(|f| match f {
+            Frame::LineageStatus(l) => Some(l.clone()),
+            _ => None,
+        }),
     }
 }
 
@@ -139,6 +145,11 @@ async fn trusted_checks_never_see_a_pr_jobs_writes() {
     let cr = t1.cache.expect("Outputs.cache");
     assert!(cr.committed && cr.commit_lineage.as_deref() == Some("trusted"), "{cr:?}");
     assert!(t1.sys.contains("target dir: gen cold"), "{}", t1.sys);
+    // Protocol 10: the head move reaches the server as lineage_status.
+    let ls = t1.lineage.expect("a lineage_status frame after the commit");
+    ls.check().unwrap();
+    let tr = ls.lineages.iter().find(|l| l.lineage == "trusted").expect("trusted in lineage_status");
+    assert_eq!((tr.head_seq, tr.head_commit.as_str(), tr.key.as_str()), (1, second.as_str(), PK));
 
     let pr = run(&mut c, &n, &repo, "pr1", &second, CacheCommit::Scratch, Some("pr-1"), PLANT).await;
     assert!(pr.out.starts_with("good"), "the PR job starts from trusted #1: {}", pr.out);

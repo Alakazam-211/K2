@@ -616,6 +616,10 @@ pub struct Ended<'a> {
     pub secret: bool,
     pub producer: k2_node_proto::ci::CacheProducer,
     pub ref_checked: Option<k2_node_proto::ci::RefChecked>,
+    /// Rule 5 (§4.1.4): when the node fetched the remote itself, whether the
+    /// commit is on `origin/<trusted branch>` after that fetch; `None` when
+    /// the node didn't fetch it (the controller's word stands).
+    pub on_branch: Option<Result<bool, String>>,
     /// `git merge-base --is-ancestor <a> <b>` in the node's mirror.
     pub is_ancestor: &'a (dyn Fn(&str, &str) -> Result<bool, String> + Sync),
     pub now: i64,
@@ -823,6 +827,11 @@ impl Gens {
             if end.dirty || end.with_repos {
                 return discard(res, "not saved: --dirty or --with never saves the trusted copy".into());
             }
+            match &end.on_branch {
+                None | Some(Ok(true)) => {}
+                Some(Ok(false)) => return discard(res, "not saved: the node's own fetch doesn't have this commit on the trusted branch".into()),
+                Some(Err(e)) => return discard(res, format!("not saved: can't check the trusted branch after the node's fetch ({e})")),
+            }
         } else if end.cancelled {
             return discard(res, "not saved: cancelled".into());
         }
@@ -870,7 +879,14 @@ impl Gens {
             gen_digest,
             parent_digest,
             producer: end.producer.clone(),
-            ref_checked: if trusted { end.ref_checked } else { None },
+            ref_checked: if trusted {
+                match end.on_branch {
+                    Some(Ok(true)) => Some(k2_node_proto::ci::RefChecked::Node),
+                    _ => end.ref_checked,
+                }
+            } else {
+                None
+            },
             base_trusted: if trusted { seq } else { fork.base_trusted },
             at: end.now,
             bytes,
@@ -1280,6 +1296,7 @@ mod lineage_tests {
             secret: false,
             producer: producer("j1", commit),
             ref_checked: Some(k2_node_proto::ci::RefChecked::Controller),
+            on_branch: None,
             is_ancestor: anc,
             now: 200,
         }
@@ -1432,6 +1449,27 @@ mod lineage_tests {
         let err = |_: &str, _: &str| -> Result<bool, String> { Err("no such commit in the mirror".into()) };
         let r = done(&g, unknown, &ok_end(&sha('c'), &err));
         assert!(!r.committed && r.why.contains("can't tell"), "{r:?}");
+    }
+
+    /// Rule 5: a node that fetched the remote itself checks the commit is on
+    /// `origin/<branch>`; on it, the head says `ref_checked: node`; off it
+    /// (or unknown), nothing is saved. Without its own fetch the
+    /// controller's word stands (`controller`).
+    #[test]
+    fn rule_5_the_nodes_own_fetch_decides_ref_checked() {
+        use k2_node_proto::ci::RefChecked;
+        let (_root, g, set) = setup("gens-rule5");
+        let rc = || read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().gen.unwrap().ref_checked;
+        done(&g, fork(&g, &set, CacheCommit::Trusted, Some("main"), "a"), &ok_end(&sha('a'), &yes));
+        assert_eq!(rc(), Some(RefChecked::Controller));
+        let r = done(&g, fork(&g, &set, CacheCommit::Trusted, Some("main"), "b"), &Ended { on_branch: Some(Ok(true)), ..ok_end(&sha('b'), &yes) });
+        assert!(r.committed);
+        assert_eq!(rc(), Some(RefChecked::Node));
+        let r = done(&g, fork(&g, &set, CacheCommit::Trusted, Some("main"), "c"), &Ended { on_branch: Some(Ok(false)), ..ok_end(&sha('c'), &yes) });
+        assert!(!r.committed && r.why.contains("trusted branch"), "{r:?}");
+        let r = done(&g, fork(&g, &set, CacheCommit::Trusted, Some("main"), "d"), &Ended { on_branch: Some(Err("no ref".into())), ..ok_end(&sha('d'), &yes) });
+        assert!(!r.committed, "{r:?}");
+        assert_eq!(read_head(&set.lineage_dir("trusted").unwrap()).unwrap().unwrap().seq, 2);
     }
 
     /// §10: two jobs of one project fork at once and both start warm; the

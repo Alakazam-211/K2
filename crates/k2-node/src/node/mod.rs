@@ -501,6 +501,9 @@ pub struct Node {
     pub gens: Option<Arc<crate::gens::Gens>>,
     /// The fork each running attempt holds, by (slot, job, gen).
     gens_forks: Mutex<HashMap<(Slot, String, u32), crate::gens::Fork>>,
+    /// Trusted attempts whose main repo the node fetched from its remote
+    /// itself (rule 5), by (slot, job, gen).
+    own_fetches: Mutex<std::collections::HashSet<(Slot, String, u32)>>,
 }
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
@@ -671,6 +674,7 @@ impl Node {
             ci_runs: Mutex::new(HashMap::new()),
             gens,
             gens_forks: Mutex::new(HashMap::new()),
+            own_fetches: Mutex::new(Default::default()),
             opts,
         });
         node.hold_lingering(OWNER_SLOT, lingering);

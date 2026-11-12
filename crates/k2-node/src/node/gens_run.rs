@@ -207,6 +207,14 @@ impl Node {
         let commit = src.as_ref().map(|s| s.commit.clone()).unwrap_or_default();
         let mirror = src.as_ref().map(|s| t.paths.mirror(&s.project_key));
         let git = crate::sync::Git::find(&self.layout().git_home(), &crate::util::base_path(&self.layout().home));
+        // Rule 5: the node fetched this repo's remote itself (its refs are
+        // the remote's, not the controller's): the commit must be on
+        // origin/<branch> there.
+        let own_fetch = self.own_fetches.lock().unwrap().remove(&(t.slot, job.clone(), gen));
+        let on_branch = match (a.plan.cache_commit, a.plan.cache_ref.as_deref(), own_fetch, &git, &mirror) {
+            (Some(CacheCommit::Trusted), Some(b), true, Some(g), Some(m)) => Some(git_on_branch(g, m, &commit, b)),
+            _ => None,
+        };
         let ended = (
             ok,
             state == JobState::Cancelled,
@@ -233,6 +241,7 @@ impl Node {
                 secret: ended.6,
                 producer: ended.7,
                 ref_checked: Some(k2_node_proto::ci::RefChecked::Controller),
+                on_branch,
                 is_ancestor: &anc,
                 now: ended.8,
             };
@@ -244,8 +253,31 @@ impl Node {
         remove_later(doomed);
         if res.committed {
             self.gens_evict(&t.paths.root());
+            self.send_lineage_status(t);
         }
         Some(res)
+    }
+
+    /// Remember that `a`'s main repo came from the node's own fetch of its
+    /// remote (rule 5).
+    pub(super) fn note_own_fetch(&self, t: &Tenant, a: &Assign, project_key: &str) {
+        if a.plan.src.as_ref().is_some_and(|s| s.project_key == project_key) && a.plan.cache_commit == Some(CacheCommit::Trusted) {
+            self.own_fetches.lock().unwrap().insert((t.slot, a.fence.job_id.clone(), a.fence.generation));
+        }
+    }
+
+    /// The `lineage_status` frame for `t` (protocol 10, `cache-gens`), or
+    /// `None` when `t`'s jobs don't use generations.
+    pub fn lineage_status_for(&self, t: &Tenant) -> Option<k2_node_proto::gens::LineageStatus> {
+        let g = self.gens_for(t)?;
+        Some(g.status(&t.paths.root(), self.now()))
+    }
+
+    /// Send `t` its lineages (a head moved, or its session started).
+    pub fn send_lineage_status(&self, t: &Tenant) {
+        if let Some(s) = self.lineage_status_for(t) {
+            t.hub.send(k2_node_proto::frames::Frame::LineageStatus(s));
+        }
     }
 
     /// The eviction limits now (§4.1.3): generations get the warm budget
@@ -361,4 +393,27 @@ fn remove_later(doomed: Vec<PathBuf>) {
             }
         }
     });
+}
+
+/// Rule 5: is `commit` on `refs/remotes/origin/<branch>` in the mirror the
+/// node fetched itself? A missing ref is an error (never a yes).
+pub fn git_on_branch(g: &crate::sync::Git, mirror: &std::path::Path, commit: &str, branch: &str) -> Result<bool, String> {
+    if !crate::gens::is_commit(commit) || !k2_node_proto::gens::valid_ref(branch) || branch.starts_with(k2_node_proto::gens::WORKTREE_REF_PREFIX) {
+        return Err("not a commit and branch".into());
+    }
+    let r = format!("refs/remotes/origin/{branch}");
+    let out = std::process::Command::new(&g.program)
+        .env_clear()
+        .envs(g.env.iter().cloned())
+        .arg("--git-dir")
+        .arg(mirror)
+        .args(["merge-base", "--is-ancestor", commit, &r])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
+    match out.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(format!("git merge-base {r}: {}", String::from_utf8_lossy(&out.stderr).trim())),
+    }
 }

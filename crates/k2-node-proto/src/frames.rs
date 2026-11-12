@@ -844,8 +844,10 @@ pub struct Plan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_commit: Option<crate::gens::CacheCommit>,
     /// The scratch ref (`main`, `wt:<worktree>`) for `cache_commit:
-    /// scratch`, or the release build name for `release`
-    /// ([`crate::gens::check_plan_cache`]). Same feature, same rule.
+    /// scratch`, the release build name for `release`, or, for `trusted`,
+    /// the trusted branch the server verified the commit on (a node that
+    /// fetched the remote itself checks it again: rule 5, `ref_checked:
+    /// node`) ([`crate::gens::check_plan_cache`]). Same feature, same rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_ref: Option<String>,
     /// Setup snapshots (§4.7): the `[setup.*]` steps to fork or run before

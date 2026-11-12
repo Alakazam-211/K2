@@ -4618,6 +4618,7 @@ dependencies = [
 name = "k2-deskd"
 version = "0.1.0"
 dependencies = [
+ "image",
  "k2-deskd-proto",
  "kessel-video",
  "libc",

@@ -551,3 +551,135 @@ fn the_capture_thread_runs_the_engine() {
     c.reset();
     drop(c);
 }
+
+// ── codecs: VP8 and JPEG (Linux X11, D8b) ─────────────────────────────
+
+fn spec(id: u8, codec: Codec, max_width: u32, fps: u32) -> LayerSpec {
+    LayerSpec { id, codec, max_width, fps, bitrate: 4_000_000, quality: None, on: true }
+}
+
+fn t_with(codecs: &[Codec]) -> T {
+    let mut t = t();
+    t.engine = Engine::with_codecs(FakeOpener(t.script.clone()), FakeBackend::new(FakeConfig::default()), kessel_video::no_wake(), codecs);
+    t
+}
+
+#[test]
+fn the_software_codecs_keep_their_ceilings() {
+    assert_eq!(capped_width(Codec::Vp8, 0), 1920, "as captured, at most 1920");
+    assert_eq!(capped_width(Codec::Vp8, 2560), 1920);
+    assert_eq!(capped_width(Codec::Jpeg, 1280), 1280);
+    assert_eq!(capped_width(Codec::H264, 0), 0, "H.264 as asked");
+    assert_eq!(capped_width(Codec::H264, 3024), 3024);
+    assert_eq!(capped_fps(Codec::Vp8, 60, 1080), 15, "1080p: 15");
+    assert_eq!(capped_fps(Codec::Vp8, 60, 0), 15, "not known yet: the larger picture's");
+    assert_eq!(capped_fps(Codec::Vp8, 60, 720), 30, "720p and below: 30");
+    assert_eq!(capped_fps(Codec::Vp8, 10, 1080), 10, "below the ceiling: as asked");
+    assert_eq!(capped_fps(Codec::Jpeg, 30, 720), 15);
+    assert_eq!(capped_fps(Codec::H264, 60, 2160), 60);
+    // The plan of a VP8 layer with no width: the display, at most 1920.
+    let plan = capture_plan_for(&[spec(0, Codec::Vp8, 0, 15)], VP8_JPEG, 1, (2560, 1440));
+    assert_eq!(plan, Some(Plan { display: 1, width: 1920, fps: 15 }));
+    // The capture reads no faster than a layer encodes: VP8 at 1080p
+    // asking 60 runs at 15, at 720p at 30; JPEG at 15.
+    let plan = |l: &[LayerSpec], native| capture_plan_for(l, VP8_JPEG, 1, native).map(|p| p.fps);
+    assert_eq!(plan(&[spec(0, Codec::Vp8, 1920, 60)], (1920, 1080)), Some(15));
+    assert_eq!(plan(&[spec(0, Codec::Vp8, 1280, 60)], (1920, 1080)), Some(30));
+    assert_eq!(plan(&[spec(0, Codec::Vp8, 1920, 60), spec(1, Codec::Jpeg, 1280, 30)], (1920, 1080)), Some(15));
+    assert_eq!(capture_plan_for(&[spec(0, Codec::H264, 0, 15)], VP8_JPEG, 1, (2560, 1440)), None, "no H.264 here");
+}
+
+#[test]
+fn a_layer_in_a_codec_the_platform_doesnt_make_fails_at_once() {
+    let mut t = t_with(VP8_JPEG);
+    t.layers(&[h264(0, 1920, 30)]);
+    match t.out.events().as_slice() {
+        [Event::LayerFailed { layer: 0, code, error }] => {
+            assert_eq!(code, codes::UNSUPPORTED);
+            assert!(error.contains("h264"), "{error}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(t.opens().is_empty(), "no capture for a failed layer");
+    assert_eq!(t.engine.codecs(), VP8_JPEG);
+}
+
+/// A JPEG-only viewer's layer: every unit is a key, a whole JPEG, in its
+/// own codec, at the layer's width. Runs on every OS (the encoder is
+/// deskd's own).
+#[test]
+fn a_jpeg_layer_gives_jpeg_units_and_every_one_is_a_key() {
+    let mut t = t_with(&[Codec::Jpeg]);
+    t.layers(&[LayerSpec { quality: Some(60), ..spec(3, Codec::Jpeg, 1280, 8) }]);
+    assert_eq!(t.opens(), vec![Plan { display: 1, width: 1280, fps: 8 }]);
+    t.frame();
+    t.pump(1);
+    t.advance_ms(130);
+    t.frame();
+    t.pump(1);
+    let _ = t.out.take();
+    t.advance_ms(130);
+    t.frame();
+    let t0 = Instant::now();
+    let unit = loop {
+        t.engine.step(t.now, &t.out);
+        if let Some(u) = t.out.units.lock().unwrap().pop() {
+            break u;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(5), "no JPEG unit");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let (h, data) = unit;
+    assert_eq!((h.codec, h.layer, h.width, h.height, h.seq), (Codec::Jpeg, 3, 1280, 720, 2));
+    assert!(h.key && !h.source_start, "a key, not a new source: {h:?}");
+    assert!(data.starts_with(&[0xff, 0xd8]) && data.ends_with(&[0xff, 0xd9]), "a whole JPEG");
+    let img = image::load_from_memory_with_format(&data, image::ImageFormat::Jpeg).expect("a JPEG that decodes");
+    assert_eq!((img.width(), img.height()), (1280, 720));
+}
+
+/// Linux's set: a VP8 layer and a JPEG layer off one capture, each in its
+/// own codec; the VP8 layer at 1080p runs at 15 fps whatever it asked.
+#[cfg(target_os = "linux")]
+#[test]
+fn vp8_and_jpeg_layers_share_one_capture_each_in_its_codec() {
+    let mut t = t_with(VP8_JPEG);
+    t.layers(&[spec(0, Codec::Vp8, 1920, 60), LayerSpec { bitrate: 0, ..spec(1, Codec::Jpeg, 1280, 8) }]);
+    assert_eq!(t.opens(), vec![Plan { display: 1, width: 1920, fps: 15 }], "one capture, at the rate VP8 runs at 1080p");
+    t.frame();
+    let first = t.pump(2);
+    assert!(first.iter().all(|h| h.key && h.source_start), "{first:?}");
+    // One more frame; look at the bytes this time.
+    t.advance_ms(140);
+    t.frame();
+    let t0 = Instant::now();
+    while t.out.units.lock().unwrap().len() < 2 {
+        t.engine.step(t.now, &t.out);
+        assert!(t0.elapsed() < Duration::from_secs(5), "wanted a unit per layer");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let units = std::mem::take(&mut *t.out.units.lock().unwrap());
+    let by = |l: u8| units.iter().find(|u| u.0.layer == l).cloned().expect("a unit per layer");
+    let (v, vdata) = by(0);
+    assert_eq!((v.codec, v.width, v.height, v.seq), (Codec::Vp8, 1920, 1080, 1));
+    assert!(!v.key, "a VP8 delta after the start key: {v:?}");
+    assert!(!vdata.is_empty());
+    let (j, jdata) = by(1);
+    assert_eq!((j.codec, j.width, j.height), (Codec::Jpeg, 1280, 720));
+    assert!(j.key && jdata.starts_with(&[0xff, 0xd8]));
+    // 60 asked, 15 kept: a frame 20 ms later isn't due on the VP8 layer.
+    t.advance_ms(20);
+    t.frame();
+    assert!(t.settle().iter().all(|h| h.layer != 0), "VP8 at 1080p is held to 15 fps");
+}
+
+/// The first VP8 unit is a key with `source start`: a viewer of a display
+/// that was just woken gets a picture at once.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_vp8_layer_starts_with_a_key_that_starts_the_source() {
+    let mut t = t_with(VP8_JPEG);
+    t.layers(&[spec(0, Codec::Vp8, 0, 15)]);
+    t.frame();
+    let u = t.pump(1);
+    assert!(u[0].key && u[0].source_start && u[0].codec == Codec::Vp8, "{:?}", u[0]);
+}

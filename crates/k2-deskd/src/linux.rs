@@ -3,6 +3,11 @@
 //! The daemon passes the session's `DISPLAY`, `XAUTHORITY`,
 //! `WAYLAND_DISPLAY` and `DBUS_SESSION_BUS_ADDRESS`. No TCC.
 //!
+//! On X11 (D8b) deskd captures and encodes: kessel-video's X11 source into
+//! software VP8, and JPEG for viewers that decode no video
+//! ([`capture::VP8_JPEG`], listed in `hello.codecs`). Wayland waits for
+//! the portal slice (D9): there every layer fails as unsupported.
+//!
 //! stdout is the link: nothing else in deskd may print to it.
 
 use std::os::fd::FromRawFd;
@@ -11,6 +16,7 @@ use std::sync::{Arc, OnceLock};
 use k2_deskd_proto::msg::{codes, Display, FramesVia, ReleaseReason, Tcc};
 use k2_deskd_proto::wire;
 
+use crate::capture;
 use crate::hold::LocalHold;
 use crate::inject::{Injector, Post, PostError, Poster, Pressed};
 use crate::notify::NotifyBanner;
@@ -73,6 +79,22 @@ impl Host for LinuxHost {
     }
 }
 
+/// kessel-video's backend (its X11 source and VP8) behind the engine.
+/// Without it deskd still serves input, and every layer fails as
+/// unsupported.
+fn start_x11_capture(deskd: &Deskd<LinuxHost>, x: &X11) {
+    match kessel_video::system(kessel_video::SystemConfig::default()) {
+        Ok(backend) => {
+            let encoder = capture::probe_encoder_for(&*backend, k2_deskd_proto::link::Codec::Vp8);
+            let opener = crate::x11::capture::X11Opener::new(Arc::clone(&backend), Arc::clone(&x.conn), x.root, x.screen);
+            if let Err(e) = deskd.start_capture_with(opener, backend, encoder, capture::VP8_JPEG) {
+                eprintln!("k2-deskd: capture: {e}");
+            }
+        }
+        Err(e) => eprintln!("k2-deskd: no video backend: {e}"),
+    }
+}
+
 fn fd3_open() -> bool {
     // SAFETY: F_GETFD only reads the descriptor's flags.
     unsafe { libc::fcntl(3, libc::F_GETFD) >= 0 }
@@ -117,6 +139,10 @@ pub fn run() -> ! {
     let host = Arc::new(LinuxHost { backend, x, banner });
     let deskd = Arc::new(Deskd::new(host, injector, hold));
     let _ = cell.set(Arc::clone(&deskd));
+    // D8b: X11 capture into VP8 and JPEG, before hello (it lists them).
+    if let Some(x) = deskd.host.x.as_ref() {
+        start_x11_capture(&deskd, x);
+    }
     deskd.spawn_watchers();
     let d = Arc::clone(&deskd);
     crate::signals::on_sigterm(move || d.shutdown(ReleaseReason::Sigterm));

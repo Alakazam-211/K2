@@ -13,13 +13,16 @@
 //! It takes no arguments that change what it does (`--version` and
 //! `--tcc-probe` only print), and never writes frames to disk.
 //!
-//! Capture and encode: [`capture`] (D5 on macOS; D8b adds X11), driven by
-//! protocol 4's `layers`, `keyframe` and `rate` through [`server::Deskd`].
+//! Capture and encode: [`capture`] (D5 on macOS: ScreenCaptureKit and
+//! VideoToolbox H.264; D8b on Linux X11: kessel-video's X11 source,
+//! software VP8 and [`jpeg`]), driven by protocol 4's `layers`, `keyframe`
+//! and `rate` through [`server::Deskd`].
 
 pub mod capture;
 pub mod clipboard;
 pub mod hold;
 pub mod inject;
+pub mod jpeg;
 pub mod server;
 
 #[cfg(unix)]

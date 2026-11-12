@@ -2,8 +2,8 @@
 //! events, and runs the 5 s TCC re-check and the local-hold watcher. The
 //! OS end is a [`Host`] (TCC, displays, idle, banner) plus the
 //! [`Injector`]'s [`crate::inject::Poster`], and, where capture is built
-//! (macOS, D5), a [`Capture`] that answers protocol 4's `layers`,
-//! `keyframe` and `rate` and writes units to the frames pipe.
+//! (macOS, D5; Linux X11, D8b), a [`Capture`] that answers protocol 4's
+//! `layers`, `keyframe` and `rate` and writes units to the frames pipe.
 //!
 //! One link at a time. When it closes (the daemon quit, restarted or
 //! crashed) deskd releases everything held, hides the banner and stops
@@ -169,8 +169,13 @@ impl<H: Host> Deskd<H> {
     /// Starts capture and encode on `opener` with `backend`'s encoders.
     /// `encoder` is what [`capture::probe_encoder`] found (`hello.encoder`).
     pub fn start_capture<O: Opener>(&self, opener: O, backend: Arc<dyn kessel_video::VideoBackend>, encoder: LinkEncoder) -> io::Result<()> {
+        self.start_capture_with(opener, backend, encoder, capture::H264_ONLY)
+    }
+
+    /// [`Deskd::start_capture`] encoding `codecs` (`hello.codecs`).
+    pub fn start_capture_with<O: Opener>(&self, opener: O, backend: Arc<dyn kessel_video::VideoBackend>, encoder: LinkEncoder, codecs: &[k2_deskd_proto::link::Codec]) -> io::Result<()> {
         let out = Arc::new(LinkOut { out: Arc::clone(&self.out), frames: Arc::clone(&self.frames) });
-        let c = Capture::spawn(opener, backend, out, encoder)?;
+        let c = Capture::spawn_with(opener, backend, out, encoder, codecs)?;
         self.capture.set(c).map_err(|_| io::Error::other("capture already started"))
     }
 
@@ -196,7 +201,8 @@ impl<H: Host> Deskd<H> {
         })
     }
 
-    /// Protocol 4's `layers` where nothing captures (Linux until D8b):
+    /// Protocol 4's `layers` where nothing captures (Wayland until D9, an
+    /// X11 session whose backend didn't start):
     /// every layer that's on fails at once, so the daemon's hub moves its
     /// viewers instead of waiting.
     fn no_capture(&self, layers: &[k2_deskd_proto::link::LayerSpec]) {
@@ -686,7 +692,7 @@ mod tests {
         assert!(h2.clock_ns >= before && h2.clock_ns >= h.clock_ns, "the clock of every unit's times, read now");
     }
 
-    /// Where nothing captures (Linux until D8b), each layer that's on fails
+    /// Where nothing captures (Wayland until D9), each layer that's on fails
     /// at once instead of leaving the hub's viewers waiting.
     #[test]
     fn layers_without_capture_fail_each_layer_thats_on() {

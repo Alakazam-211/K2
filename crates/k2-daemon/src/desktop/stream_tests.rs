@@ -805,3 +805,9 @@ fn a_mac_viewer_whose_picture_fails_ends_on_the_reason_card() {
         assert_eq!(closed(&mut o, Duration::from_secs(3)).await, (4410, "deskd_ended".into()));
     });
 }
+
+// ── live, on Linux X11 (L2 / D8b) ────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+#[path = "stream_live_tests.rs"]
+mod live;

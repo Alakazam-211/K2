@@ -15,6 +15,12 @@
 #   x11     kessel-video's X11 capture against Xvfb (each test starts its
 #           own; xrandr for the size change) and the crate's other lib
 #           tests, Linux virtual desktop L1
+#   live    L2 / RD D8b through the daemon: builds k2-deskd and its
+#           x11_animate example (release), then the daemon's live desktop
+#           stream tests one at a time (VP8, JPEG-only, 1080p15 on one
+#           core, a just-thawed display); the banner test runs twice, with
+#           a session bus that has no notification server
+#           (dbus-run-session) and with no bus at all
 #   deny    cargo deny --all-features (licences + bans), Steward R27 and
 #           R32 (kessel-video's x11rb)
 #
@@ -125,6 +131,24 @@ case "$mode" in
         step "kessel-video X11 capture (Xvfb, the ignored ones)" \
             test_env cargo test -p kessel-video --lib --no-fail-fast -- --include-ignored linux::x11::
         ;;
+    live)
+        step "build k2-deskd + x11_animate (release)" cargo build --release -p k2-deskd --bin k2-deskd --example x11_animate
+        # Cargo's target folder (compute nodes set their own).
+        tdir="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+        tdir="${tdir:-$PWD/target}"
+        live_env() {
+            test_env DESKD_LIVE_BIN="$tdir/release/k2-deskd" DESKD_LIVE_ANIMATE="$tdir/release/examples/x11_animate" "$@"
+        }
+        live_filter='test(/desktop::stream::tests::live::/)'
+        if command -v dbus-run-session >/dev/null 2>&1; then
+            step "live desktop stream (session bus, no notification server)" \
+                live_env dbus-run-session -- cargo nextest run -p k2-daemon --lib --run-ignored only --no-fail-fast -j 1 --no-capture -E "$live_filter"
+        else
+            echo "dbus-run-session not installed: the bus case is not run"
+        fi
+        step "live desktop stream (no session bus)" \
+            live_env env -u DBUS_SESSION_BUS_ADDRESS cargo nextest run -p k2-daemon --lib --run-ignored only --no-fail-fast -j 1 --no-capture -E "$live_filter"
+        ;;
     deny)
         # One run covers macOS and Linux: crates/k2-deskd/deny.toml lists both
         # targets. Then the lockfile: the only new packages may be our own.
@@ -149,7 +173,7 @@ case "$mode" in
         diff <(echo "$before") <(echo "$after")
         ;;
     *)
-        echo "usage: $0 linux|linux-unit|macos|macos-daemon|xvfb|x11|deny|lock" >&2
+        echo "usage: $0 linux|linux-unit|macos|macos-daemon|xvfb|x11|live|deny|lock" >&2
         exit 2
         ;;
 esac

@@ -4,9 +4,18 @@
 //! support shows the text with no button; dismissing it is allowed.
 //!
 //! zbus on its blocking API (Steward R27).
+//!
+//! **It never fails or holds up the link** (Linux virtual desktop LD-7): a
+//! virtual desktop has no notification server, and often no session bus.
+//! The D-Bus calls run on the banner's own thread; [`NotifyBanner::set`]
+//! waits for them at most [`SET_WAIT`] (so a close on shutdown still goes
+//! out), and a missing bus or server is one line on stderr. The viewer
+//! list in the tab and the access log carry who is watching instead.
 
 use std::collections::HashMap;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use zbus::blocking::{Connection, MessageIterator};
 use zbus::zvariant::Value;
@@ -16,6 +25,8 @@ const DEST: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 pub const ACTION: &str = "disconnect";
 pub const SUMMARY: &str = "Remote desktop";
+/// The longest [`NotifyBanner::set`] waits for the D-Bus calls.
+pub const SET_WAIT: Duration = Duration::from_secs(1);
 
 struct State {
     conn: Option<Connection>,
@@ -24,9 +35,16 @@ struct State {
     listening: bool,
 }
 
+/// The banner thread's queue: the text, and where to say it's done.
+type BannerQueue = mpsc::Sender<(Option<String>, mpsc::Sender<()>)>;
+
 pub struct NotifyBanner {
     state: Mutex<State>,
     on_disconnect: Arc<dyn Fn() + Send + Sync>,
+    /// The session bus to use; `None`: the session's own
+    /// (`DBUS_SESSION_BUS_ADDRESS`).
+    address: Option<String>,
+    worker: Mutex<Option<BannerQueue>>,
 }
 
 /// Is this signal our notification's Disconnect? (Pure, for tests.)
@@ -36,21 +54,60 @@ pub fn is_our_disconnect(member: &str, id: u32, action: &str, current: u32) -> b
 
 impl NotifyBanner {
     pub fn new(on_disconnect: Arc<dyn Fn() + Send + Sync>) -> Arc<Self> {
-        Arc::new(NotifyBanner { state: Mutex::new(State { conn: None, id: 0, listening: false }), on_disconnect })
+        Self::with_address(on_disconnect, None)
     }
 
-    fn conn(st: &mut State) -> Result<Connection, String> {
+    /// A banner on the bus at `address` (tests); `None`: the session's.
+    pub fn with_address(on_disconnect: Arc<dyn Fn() + Send + Sync>, address: Option<String>) -> Arc<Self> {
+        Arc::new(NotifyBanner { state: Mutex::new(State { conn: None, id: 0, listening: false }), on_disconnect, address, worker: Mutex::new(None) })
+    }
+
+    fn conn(&self, st: &mut State) -> Result<Connection, String> {
         if let Some(c) = &st.conn {
             return Ok(c.clone());
         }
-        let c = Connection::session().map_err(|e| format!("session bus: {e}"))?;
+        let c = match &self.address {
+            Some(a) => zbus::blocking::connection::Builder::address(a.as_str()).and_then(|b| b.build()),
+            None => Connection::session(),
+        }
+        .map_err(|e| format!("session bus: {e}"))?;
         st.conn = Some(c.clone());
         Ok(c)
     }
 
+    /// Shows (`Some`) or hides (`None`) the banner. Never fails, and
+    /// returns within [`SET_WAIT`] whatever the bus does.
     pub fn set(self: &Arc<Self>, text: Option<String>) {
-        if let Err(e) = self.try_set(text) {
-            eprintln!("k2-deskd: banner: {e}");
+        let (done_tx, done_rx) = mpsc::channel();
+        let queued = {
+            let mut w = self.worker.lock().unwrap();
+            if w.is_none() {
+                *w = self.spawn_worker();
+            }
+            w.as_ref().is_some_and(|tx| tx.send((text, done_tx)).is_ok())
+        };
+        if queued {
+            let _ = done_rx.recv_timeout(SET_WAIT);
+        }
+    }
+
+    fn spawn_worker(self: &Arc<Self>) -> Option<BannerQueue> {
+        let (tx, rx) = mpsc::channel::<(Option<String>, mpsc::Sender<()>)>();
+        let me = Arc::clone(self);
+        let spawned = std::thread::Builder::new().name("k2-deskd-banner".into()).spawn(move || {
+            while let Ok((text, done)) = rx.recv() {
+                if let Err(e) = me.try_set(text) {
+                    eprintln!("k2-deskd: banner: {e}");
+                }
+                let _ = done.send(());
+            }
+        });
+        match spawned {
+            Ok(_) => Some(tx),
+            Err(e) => {
+                eprintln!("k2-deskd: banner thread: {e}");
+                None
+            }
         }
     }
 
@@ -58,7 +115,7 @@ impl NotifyBanner {
         let mut st = self.state.lock().unwrap();
         match text {
             Some(body) => {
-                let conn = Self::conn(&mut st)?;
+                let conn = self.conn(&mut st)?;
                 if !st.listening {
                     self.listen(conn.clone())?;
                     st.listening = true;
@@ -75,7 +132,7 @@ impl NotifyBanner {
             None => {
                 if st.id != 0 {
                     let id = std::mem::take(&mut st.id);
-                    let conn = Self::conn(&mut st)?;
+                    let conn = self.conn(&mut st)?;
                     let _ = conn.call_method(Some(DEST), PATH, Some(DEST), "CloseNotification", &(id,));
                 }
             }
@@ -125,6 +182,20 @@ impl NotifyBanner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// LD-7: no session bus, or a bus with no notification server: `set`
+    /// comes back at once (well inside the 5 s the daemon allows a call),
+    /// every time, and nothing panics.
+    #[test]
+    fn a_missing_bus_or_server_never_holds_up_the_caller() {
+        let b = NotifyBanner::with_address(Arc::new(|| {}), Some("unix:path=/nonexistent/k2-deskd-test-bus".into()));
+        for text in [Some("Ann is watching this screen".to_string()), Some("Ann is controlling this screen".to_string()), None] {
+            let t0 = std::time::Instant::now();
+            b.set(text);
+            assert!(t0.elapsed() <= SET_WAIT + Duration::from_millis(500), "{:?}", t0.elapsed());
+        }
+        assert_eq!(b.state.lock().unwrap().id, 0, "nothing shown");
+    }
 
     #[test]
     fn only_our_notifications_disconnect_counts() {

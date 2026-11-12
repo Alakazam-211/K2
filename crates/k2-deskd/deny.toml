@@ -1,8 +1,10 @@
 # cargo-deny policy for k2-deskd (K2 Screen) and, through it, k2-deskd-proto:
 #   cargo deny --manifest-path crates/k2-deskd/Cargo.toml --all-features \
-#       check --config crates/k2-deskd/deny.toml licenses bans advisories
+#       --config crates/k2-deskd/deny.toml check licenses bans advisories
 # (scripts/test/deskd-checks.sh deny). Kessel Steward ruling R27: x11rb,
 # zbus and objc2 only, all already in Cargo.lock; no new crate, no new licence.
+# Ruling R32 (D8b): kessel-video's `linux` feature brings x11rb 0.14 (shm,
+# damage, xfixes) beside deskd's own 0.13 on Linux; same crate, same licence.
 
 [graph]
 targets = [
@@ -17,6 +19,9 @@ exclude-dev = true
 allow = [
     "MIT",
     "Apache-2.0",
+    # D8b: K2's own vp8-encoder and vp8-decoder (through kessel-video's
+    # `vp8` feature on Linux) are "(MIT OR Apache-2.0) AND BSD-3-Clause".
+    "BSD-3-Clause",
     "Unicode-3.0",
 ]
 confidence-threshold = 0.9

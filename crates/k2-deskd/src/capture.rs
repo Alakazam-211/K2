@@ -1,9 +1,17 @@
-//! Capture and encode (PRD remote desktop §3.5, slice D5): one OS capture
-//! per desktop, one encode per layer, protocol-4 units out through the
-//! frames pipe. Platform-neutral: the OS end is an [`Opener`] (macOS:
-//! ScreenCaptureKit through kessel-video, `mac::capture`), the encoders come
-//! from a kessel-video backend (VideoToolbox on macOS), and the tests drive
-//! it with fakes on any OS.
+//! Capture and encode (PRD remote desktop §3.5, slices D5 and D8b): one OS
+//! capture per desktop, one encode per layer, protocol-4 units out through
+//! the frames pipe. Platform-neutral: the OS end is an [`Opener`] (macOS:
+//! ScreenCaptureKit through kessel-video, `mac::capture`; Linux: X11
+//! through kessel-video, `x11::capture`), the encoders come from a
+//! kessel-video backend (VideoToolbox H.264 on macOS, software VP8 on
+//! Linux) or, for JPEG, from [`crate::jpeg`], and the tests drive it with
+//! fakes on any OS.
+//!
+//! **Codecs** are the platform's set, given at spawn ([`H264_ONLY`] on
+//! macOS, [`VP8_JPEG`] on Linux) and listed in `hello.codecs`. A layer in
+//! another codec fails at once (`layer_failed`, `unsupported`). The
+//! software codecs keep their ceilings whatever the layer asks
+//! ([`capped_width`], [`capped_fps`]).
 //!
 //! **Layers** come from the daemon's `layers` request (the engine's hub:
 //! the `full` layer for this machine and the LAN, the `remote` one for
@@ -44,7 +52,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use kessel_video::{fit_within, ContentHint, EncodeOptions, EncoderConfig, Implementation, Rates, SourceEvent, VideoBackend, VideoEncoder, VideoError, VideoFrame, Wake};
+use kessel_video::{fit_within, CodecConfig, ContentHint, EncodeOptions, EncoderConfig, Implementation, Rates, SourceEvent, VideoBackend, VideoEncoder, VideoError, VideoFrame, Wake};
 
 use k2_deskd_proto::link::{Codec, Encoder as LinkEncoder, LayerSpec, UnitHeader};
 use k2_deskd_proto::msg::{codes, Event};
@@ -130,20 +138,69 @@ pub trait Out: Send + Sync + 'static {
     fn event(&self, e: &Event);
 }
 
-/// The codecs the engine encodes (macOS VideoToolbox: H.264). VP8 comes
-/// with the X11 slice (D8b), JPEG with the JPEG-viewer slice.
+/// macOS: VideoToolbox H.264 (the default set).
+pub const H264_ONLY: &[Codec] = &[Codec::H264];
+/// Linux X11: software VP8, and JPEG for viewers that decode no video.
+pub const VP8_JPEG: &[Codec] = &[Codec::Vp8, Codec::Jpeg];
+
+/// The widest picture the software codecs make (RD §3.5).
+pub const SOFTWARE_MAX_WIDTH: u32 = 1920;
+/// VP8's rate above 720 lines, and at or below them.
+pub const VP8_FPS_ABOVE_720: u32 = 15;
+pub const VP8_FPS_UP_TO_720: u32 = 30;
+/// JPEG's highest rate.
+pub const JPEG_MAX_FPS: u32 = 15;
+
+/// Does the default (macOS) set encode `codec`?
 pub fn encodes(codec: Codec) -> bool {
-    codec == Codec::H264
+    H264_ONLY.contains(&codec)
+}
+
+/// A layer's widest picture (0 = as captured) within its codec's ceiling:
+/// VP8 and JPEG at most [`SOFTWARE_MAX_WIDTH`]; H.264 as asked.
+pub fn capped_width(codec: Codec, max_width: u32) -> u32 {
+    match codec {
+        Codec::H264 => max_width,
+        Codec::Vp8 | Codec::Jpeg if max_width == 0 => SOFTWARE_MAX_WIDTH,
+        Codec::Vp8 | Codec::Jpeg => max_width.min(SOFTWARE_MAX_WIDTH),
+    }
+}
+
+/// A layer's rate within its codec's ceiling for pictures `height` lines
+/// tall (0 = not known yet: the larger picture's ceiling).
+pub fn capped_fps(codec: Codec, fps: u32, height: u32) -> u32 {
+    let cap = match codec {
+        Codec::H264 => MAX_FPS,
+        Codec::Vp8 if height == 0 || height > 720 => VP8_FPS_ABOVE_720,
+        Codec::Vp8 => VP8_FPS_UP_TO_720,
+        Codec::Jpeg => JPEG_MAX_FPS,
+    };
+    fps.clamp(1, cap)
+}
+
+/// The capture for `layers` on `display` (own size `native`) with the
+/// default (macOS) codecs: see [`capture_plan_for`].
+pub fn capture_plan(layers: &[LayerSpec], display: u32, native: (u32, u32)) -> Option<Plan> {
+    capture_plan_for(layers, H264_ONLY, display, native)
 }
 
 /// The capture for `layers` on `display` (own size `native`): the widest
-/// layer, at most the display's width, and the highest rate. `None` when no
-/// layer the engine encodes is on.
-pub fn capture_plan(layers: &[LayerSpec], display: u32, native: (u32, u32)) -> Option<Plan> {
-    let on: Vec<&LayerSpec> = layers.iter().filter(|l| l.on && encodes(l.codec)).collect();
+/// layer, at most the display's width, and the highest rate a layer runs
+/// at. `None` when no layer in `codecs` is on.
+pub fn capture_plan_for(layers: &[LayerSpec], codecs: &[Codec], display: u32, native: (u32, u32)) -> Option<Plan> {
+    let on: Vec<&LayerSpec> = layers.iter().filter(|l| l.on && codecs.contains(&l.codec)).collect();
     let nw = native.0.max(16);
-    let width = on.iter().map(|l| if l.max_width == 0 { nw } else { l.max_width.min(nw) }).max()?.max(16);
-    let fps = on.iter().map(|l| l.fps).max()?.clamp(1, MAX_FPS);
+    let width = on
+        .iter()
+        .map(|l| match capped_width(l.codec, l.max_width) {
+            0 => nw,
+            w => w.min(nw),
+        })
+        .max()?
+        .max(16);
+    // Each layer's rate within its codec's ceiling at the size it will
+    // encode: the capture never reads faster than some layer encodes.
+    let fps = on.iter().map(|l| capped_fps(l.codec, l.fps, layer_size(native, capped_width(l.codec, l.max_width)).1)).max()?.clamp(1, MAX_FPS);
     Some(Plan { display, width, fps })
 }
 
@@ -166,17 +223,35 @@ pub fn link_encoder(i: Implementation) -> LinkEncoder {
 /// Opens a small H.264 session to see what the OS gives (`hello.encoder`,
 /// R9), and closes it. `Unknown` when none opens.
 pub fn probe_encoder(backend: &dyn VideoBackend) -> LinkEncoder {
-    match backend.encoder(encoder_config((1280, 720), 30, 2_000_000), kessel_video::no_wake()) {
+    probe_encoder_for(backend, Codec::H264)
+}
+
+/// [`probe_encoder`] for `codec`'s encoder (JPEG: deskd's own, software).
+pub fn probe_encoder_for(backend: &dyn VideoBackend, codec: Codec) -> LinkEncoder {
+    match open_encoder(backend, codec, (1280, 720), 30, 2_000_000, None, kessel_video::no_wake()) {
         Ok(e) => link_encoder(e.implementation()),
         Err(_) => LinkEncoder::Unknown,
     }
 }
 
-fn encoder_config(size: (u32, u32), fps: u32, bitrate: u32) -> EncoderConfig {
-    let mut c = EncoderConfig::h264(size.0, size.1, fps.clamp(1, MAX_FPS), bitrate.max(10_000));
+fn encoder_config(codec: Codec, size: (u32, u32), fps: u32, bitrate: u32) -> EncoderConfig {
+    let (fps, bitrate) = (fps.clamp(1, MAX_FPS), bitrate.max(10_000));
+    let mut c = match codec {
+        Codec::Vp8 => EncoderConfig::new(CodecConfig::Vp8, size.0, size.1, fps, bitrate),
+        _ => EncoderConfig::h264(size.0, size.1, fps, bitrate),
+    };
     // Text and UI: keep detail, lower the frame rate first.
     c.content = ContentHint::Screen;
     c
+}
+
+/// A layer's encoder: JPEG is deskd's own ([`crate::jpeg`]); video comes
+/// from the backend.
+fn open_encoder(backend: &dyn VideoBackend, codec: Codec, size: (u32, u32), fps: u32, bitrate: u32, quality: Option<u8>, wake: Wake) -> Result<Box<dyn VideoEncoder>, VideoError> {
+    match codec {
+        Codec::Jpeg => crate::jpeg::encoder(size.0, size.1, fps, quality.unwrap_or(crate::jpeg::DEFAULT_QUALITY), wake),
+        video => backend.encoder(encoder_config(video, size, fps, bitrate), wake),
+    }
 }
 
 fn error_code(e: &VideoError) -> &'static str {
@@ -262,8 +337,14 @@ impl Run {
         }
     }
 
+    /// The rate it runs at: the layer's, within its codec's ceiling for
+    /// the size it encodes.
+    fn fps(&self) -> u32 {
+        capped_fps(self.spec.codec, self.spec.fps, self.size.map_or(0, |s| s.1))
+    }
+
     fn interval_us(&self) -> u64 {
-        1_000_000 / self.spec.fps.clamp(1, MAX_FPS) as u64
+        1_000_000 / self.fps().clamp(1, MAX_FPS) as u64
     }
 
     fn due_at(&self) -> u64 {
@@ -297,6 +378,8 @@ pub struct Engine<O: Opener> {
     opener: O,
     backend: Arc<dyn VideoBackend>,
     wake: Wake,
+    /// What it encodes ([`H264_ONLY`], [`VP8_JPEG`]).
+    codecs: Vec<Codec>,
     runs: Vec<Run>,
     /// Layers on in the list that can't run (reported once).
     failed: HashSet<u8>,
@@ -310,8 +393,19 @@ pub struct Engine<O: Opener> {
 }
 
 impl<O: Opener> Engine<O> {
+    /// An engine for the default (macOS) codecs.
     pub fn new(opener: O, backend: Arc<dyn VideoBackend>, wake: Wake) -> Engine<O> {
-        Engine { opener, backend, wake, runs: Vec::new(), failed: HashSet::new(), chosen: None, source: None, last: None, retry_at_us: None, stats: Stats::default() }
+        Engine::with_codecs(opener, backend, wake, H264_ONLY)
+    }
+
+    /// An engine that encodes `codecs`.
+    pub fn with_codecs(opener: O, backend: Arc<dyn VideoBackend>, wake: Wake, codecs: &[Codec]) -> Engine<O> {
+        Engine { opener, backend, wake, codecs: codecs.to_vec(), runs: Vec::new(), failed: HashSet::new(), chosen: None, source: None, last: None, retry_at_us: None, stats: Stats::default() }
+    }
+
+    /// What it encodes.
+    pub fn codecs(&self) -> &[Codec] {
+        &self.codecs
     }
 
     pub fn stats(&self) -> Stats {
@@ -338,17 +432,20 @@ impl<O: Opener> Engine<O> {
                 failed.insert(spec.id);
                 continue;
             }
-            if !encodes(spec.codec) {
+            if !self.codecs.contains(&spec.codec) {
                 out.event(&Event::LayerFailed { layer: spec.id, code: codes::UNSUPPORTED.into(), error: format!("K2 Screen can't encode {} here", spec.codec.as_str()) });
                 failed.insert(spec.id);
                 continue;
             }
-            match self.runs.iter().position(|r| r.spec.id == spec.id && r.spec.codec == spec.codec) {
+            // A JPEG layer's quality is set when its encoder opens: a new
+            // quality is a new layer.
+            match self.runs.iter().position(|r| r.spec.id == spec.id && r.spec.codec == spec.codec && r.spec.quality == spec.quality) {
                 Some(i) => {
                     let mut r = self.runs.swap_remove(i);
                     if (r.spec.fps, r.spec.bitrate) != (spec.fps, spec.bitrate) {
+                        let fps = capped_fps(spec.codec, spec.fps, r.size.map_or(0, |s| s.1));
                         if let Some(e) = r.enc.as_mut() {
-                            let _ = e.set_rates(Rates::new(spec.bitrate.max(10_000), spec.fps.clamp(1, MAX_FPS)));
+                            let _ = e.set_rates(Rates::new(spec.bitrate.max(10_000), fps));
                         }
                     }
                     // A new width shows at the next frame (a size change: a key).
@@ -377,8 +474,9 @@ impl<O: Opener> Engine<O> {
         let Some(r) = self.runs.iter_mut().find(|r| r.spec.id == layer) else { return };
         r.spec.fps = fps;
         r.spec.bitrate = bitrate;
+        let fps = r.fps();
         if let Some(e) = r.enc.as_mut() {
-            let _ = e.set_rates(Rates::new(bitrate.max(10_000), fps.clamp(1, MAX_FPS)));
+            let _ = e.set_rates(Rates::new(bitrate.max(10_000), fps));
         }
         self.reconcile(now_us, out);
     }
@@ -441,7 +539,7 @@ impl<O: Opener> Engine<O> {
             return;
         };
         let specs: Vec<LayerSpec> = self.runs.iter().map(|r| r.spec).collect();
-        let Some(plan) = capture_plan(&specs, display, native) else {
+        let Some(plan) = capture_plan_for(&specs, &self.codecs, display, native) else {
             self.source = None;
             return;
         };
@@ -556,16 +654,18 @@ impl<O: Opener> Engine<O> {
             return;
         }
         let Some((frame, display)) = r.pending.take() else { return };
-        let size = layer_size((frame.width, frame.height), r.spec.max_width);
+        let size = layer_size((frame.width, frame.height), capped_width(r.spec.codec, r.spec.max_width));
+        let codec = r.spec.codec;
         if r.enc.is_none() {
-            match backend.encoder(encoder_config(size, r.spec.fps, r.spec.bitrate), wake) {
+            let fps = capped_fps(codec, r.spec.fps, size.1);
+            match open_encoder(&*backend, codec, size, fps, r.spec.bitrate, r.spec.quality, wake) {
                 Ok(e) => {
                     r.enc = Some(e);
                     r.size = Some(size);
                     r.start_owed = true;
                     r.start_key_in = false;
                 }
-                Err(e) => return self.fail(i, codes::ENCODER_FAILED, format!("no H.264 encoder for {}x{}: {e}", size.0, size.1), true, now_us, out),
+                Err(e) => return self.fail(i, codes::ENCODER_FAILED, format!("no {} encoder for {}x{}: {e}", codec.as_str(), size.0, size.1), true, now_us, out),
             }
         } else if r.size != Some(size) {
             if let Some(Err(e)) = r.enc.as_mut().map(|enc| enc.set_size(size.0, size.1)) {
@@ -574,6 +674,11 @@ impl<O: Opener> Engine<O> {
             r.size = Some(size);
             r.start_owed = true;
             r.start_key_in = false;
+            // A new height can move the codec's rate ceiling.
+            let fps = r.fps();
+            if let Some(e) = r.enc.as_mut() {
+                let _ = e.set_rates(Rates::new(r.spec.bitrate.max(10_000), fps));
+            }
         }
         if r.display != Some(display) {
             r.display = Some(display);
@@ -640,7 +745,7 @@ impl<O: Opener> Engine<O> {
             }
             r.failures = 0;
             let h = UnitHeader {
-                codec: Codec::H264,
+                codec: r.spec.codec,
                 key: ef.keyframe,
                 source_start,
                 discardable: false,
@@ -706,8 +811,15 @@ pub struct Capture {
 }
 
 impl Capture {
-    /// Starts the thread. `encoder` is what [`probe_encoder`] found.
+    /// Starts the thread for the default (macOS) codecs. `encoder` is what
+    /// [`probe_encoder`] found.
     pub fn spawn<O: Opener>(opener: O, backend: Arc<dyn VideoBackend>, out: Arc<dyn Out>, encoder: LinkEncoder) -> std::io::Result<Capture> {
+        Capture::spawn_with(opener, backend, out, encoder, H264_ONLY)
+    }
+
+    /// Starts the thread for `codecs` (`hello.codecs`).
+    pub fn spawn_with<O: Opener>(opener: O, backend: Arc<dyn VideoBackend>, out: Arc<dyn Out>, encoder: LinkEncoder, codecs: &[Codec]) -> std::io::Result<Capture> {
+        let list = codecs.to_vec();
         let (tx, rx) = mpsc::channel::<Cmd>();
         let wake_tx = tx.clone();
         let wake: Wake = Arc::new(move || {
@@ -715,7 +827,7 @@ impl Capture {
         });
         let thread = std::thread::Builder::new().name("k2-deskd-capture".into()).spawn(move || {
             realtime_qos();
-            let mut engine = Engine::new(opener, backend, wake);
+            let mut engine = Engine::with_codecs(opener, backend, wake, &list);
             let mut wait = IDLE_STEP;
             loop {
                 let first = match rx.recv_timeout(wait) {
@@ -743,7 +855,7 @@ impl Capture {
                 wait = engine.step(now_us(), &*out);
             }
         })?;
-        Ok(Capture { tx, encoder, codecs: vec![Codec::H264], thread: Some(thread) })
+        Ok(Capture { tx, encoder, codecs: codecs.to_vec(), thread: Some(thread) })
     }
 
     /// `hello.codecs`.

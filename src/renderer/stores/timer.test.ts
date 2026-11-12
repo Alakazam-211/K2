@@ -129,6 +129,9 @@ describe('timer store — Plan B host-aware migration', () => {
 
   it('updateTimerSetting resolves false and puts the value back when the save fails', async () => {
     const settings = await import('@/lib/daemon-settings')
+    // A save is held back until the first load has landed (the app's boot
+    // does it; importing the store no longer does).
+    await useTimerStore.getState().initFromSettings()
     useTimerStore.setState({ skipMemo: false })
     vi.mocked(settings.settingsUpdate).mockRejectedValueOnce(new Error('read-only'))
     expect(await useTimerStore.getState().updateTimerSetting('skipMemo', true)).toBe(false)

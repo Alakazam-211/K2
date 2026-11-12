@@ -10,8 +10,10 @@
  */
 import { bootPanels } from './stores/panels'
 import { bootSidebar } from './stores/sidebar'
+import { bootTimer } from './stores/timer'
 
 export function bootAppStores(): void {
   bootPanels()
   bootSidebar()
+  bootTimer()
 }

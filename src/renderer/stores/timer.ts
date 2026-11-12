@@ -475,16 +475,21 @@ export const useTimerStore = create<TimerState>((set, get) => ({
   },
 }))
 
-// Initialize on import
-useTimerStore.getState().initFromSettings()
-
-// Phase 2.5 fix (finding #547): retry the load when the daemon
-// (re)connects, if the initial fetch on import failed. Steady-state
-// no-op once the baseline is loaded.
-onDaemonConnected(() => {
-  if (hasLoadedFromDaemon) return
+/** The first load, and its retry when the daemon (re)connects.
+ *  `bootAppStores()` (boot-app-stores.ts) calls this once at
+ *  app start. It does not run at import: a test that imports this store
+ *  fires no fetch. */
+export function bootTimer(): void {
   useTimerStore.getState().initFromSettings()
-})
+
+  // Phase 2.5 fix (finding #547): retry the load when the daemon
+  // (re)connects, if the initial fetch on import failed. Steady-state
+  // no-op once the baseline is loaded.
+  onDaemonConnected(() => {
+    if (hasLoadedFromDaemon) return
+    useTimerStore.getState().initFromSettings()
+  })
+}
 
 // #625 — on a real active-host CHANGE, drop the load gate and re-init
 // timer settings from the NEW host's daemon. `initFromSettings()` uses

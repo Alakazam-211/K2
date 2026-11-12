@@ -99,7 +99,7 @@ export function AccessSheet({
         aria-modal="true"
         aria-labelledby={titleId}
         data-testid={testId}
-        className="w-[min(36rem,calc(100vw-2.5rem))] max-h-[calc(100vh-2.5rem)] flex flex-col"
+        className="w-[min(36rem,calc(var(--k2-vw)-2.5rem))] max-h-[calc(var(--k2-vh)-2.5rem)] flex flex-col"
       >
         {/* The title stays put beside the frame's ×; the body scrolls. */}
         <div className={`flex-shrink-0 px-5 pt-5 pb-3 pr-10 border-b ${edge(body.edges.top)}`} data-testid="dialog-head">

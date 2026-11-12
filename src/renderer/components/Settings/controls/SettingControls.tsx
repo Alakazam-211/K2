@@ -379,12 +379,13 @@ function clipRectFor(el: HTMLElement): DOMRect {
 }
 
 function shouldOpenMenuUp(trigger: HTMLElement, optionCount: number): boolean {
-  const t = trigger.getBoundingClientRect()
-  const clip = clipRectFor(trigger)
+  // The menu's size is CSS px; the rects and the window are window px.
+  const t = clientRectToCss(trigger.getBoundingClientRect())
+  const clip = clientRectToCss(clipRectFor(trigger))
   const gap = 4
   const menuMax = 240
   const estimated = Math.min(menuMax, Math.max(optionCount, 1) * 28)
-  const spaceBelow = Math.min(window.innerHeight, clip.bottom) - t.bottom - gap
+  const spaceBelow = Math.min(cssViewport().height, clip.bottom) - t.bottom - gap
   const spaceAbove = t.top - Math.max(0, clip.top) - gap
   return spaceBelow < estimated && spaceAbove > spaceBelow
 }

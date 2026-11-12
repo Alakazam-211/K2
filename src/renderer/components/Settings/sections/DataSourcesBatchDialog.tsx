@@ -197,7 +197,7 @@ export function DataSourcesBatchDialog({
   const cancel = useDialogCancel(onClose)
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/40" data-testid="sources-batch" role="dialog" aria-modal="true" aria-label="Review pending">
-      <div {...cancel} className="bg-[var(--color-bg)] border border-[var(--color-border)] w-[560px] max-w-[95vw] max-h-[85vh] flex flex-col">
+      <div {...cancel} className="bg-[var(--color-bg)] border border-[var(--color-border)] w-[560px] max-w-[calc(var(--k2-vw)*0.95)] max-h-[calc(var(--k2-vh)*0.85)] flex flex-col">
         {/* The title and × stay put while the list scrolls. */}
         <div className="flex flex-shrink-0 items-start justify-between gap-2 px-3 pt-3 pb-2">
           <p className="type-name text-[var(--color-text-primary)]">

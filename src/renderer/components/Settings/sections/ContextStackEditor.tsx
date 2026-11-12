@@ -775,7 +775,7 @@ function BrowseDefaultsModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="context-catalog-title"
-        className="w-[min(calc(44rem+100px),calc(100vw-2.5rem))] h-[min(calc(36rem+150px),calc(100vh-3rem))] max-h-[calc(100vh-3rem)] flex flex-col overflow-hidden"
+        className="w-[min(calc(44rem+100px),calc(var(--k2-vw)-2.5rem))] h-[min(calc(36rem+150px),calc(var(--k2-vh)-3rem))] max-h-[calc(var(--k2-vh)-3rem)] flex flex-col overflow-hidden"
         style={{
           padding: 0,
           fontFamily:

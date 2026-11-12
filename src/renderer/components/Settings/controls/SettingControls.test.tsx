@@ -189,6 +189,28 @@ describe('SettingDropdown under the app zoom', () => {
   }
 })
 
+describe('SettingDropdown flip under the app zoom', () => {
+  afterEach(() => {
+    resetAppZoomForTest()
+    setWindowSize(1024, 768)
+  })
+
+  it('at 150%, opens up when the menu (CSS px) would not fit below on screen', () => {
+    const z = 1.5
+    setWindowSize(1000, 800)
+    applyAppZoomForTest(z)
+    render(<WorkspaceDropdown zIndex={1} />)
+    const button = screen.getByRole('button', { name: 'Workspace' })
+    // 70 window px below the trigger: room for 46 CSS px, and the two-row
+    // menu is about 56 CSS px (84 on screen).
+    setScreenRect(button.parentElement as HTMLElement, { left: 700, top: 800 - 70 - 28 * z, width: 160 * z, height: 28 * z })
+    fireEvent.click(button)
+    const menu = screen.getByTestId('setting-dropdown-menu')
+    expect(menu.style.top).toBe('')
+    expect(menu.style.bottom).not.toBe('')
+  })
+})
+
 describe('SettingDropdown Esc (0.46.3)', () => {
   it('Esc closes only the open menu: the Settings panel listener never sees it', () => {
     // Stands in for Settings.tsx: a bubble-phase window listener that

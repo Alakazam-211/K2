@@ -527,7 +527,7 @@ export function CodeEditorSettingsSection(): React.JSX.Element {
             </div>
             <p className={SETTING_ROW_HINT}>A sample file, with changed lines marked.</p>
           </div>
-          <Surface chamfer material="tile" className="h-[calc(100vh-13rem)] min-h-[20rem] overflow-hidden">
+          <Surface chamfer material="tile" className="h-[calc(var(--k2-vh)-13rem)] min-h-[20rem] overflow-hidden">
             <CodeEditor code={PREVIEW_CODE} filePath="preview.tsx" onSave={() => {}} onChange={() => {}} readOnly demoLineChanges={DEMO_CHANGES} />
           </Surface>
         </section>

@@ -75,11 +75,11 @@ export function SettingsSearchModal({ entries, onPick, onClose, gardensPage = fa
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--color-scrim)] pt-[10vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-[var(--color-scrim)] pt-[calc(var(--k2-vh)*0.1)]"
       onKeyDown={onKeyDown}
       tabIndex={-1}
     >
-      <div {...floatMaterial('dialog')} {...cancel} className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[70vh]">
+      <div {...floatMaterial('dialog')} {...cancel} className="w-full max-w-xl mx-4 bg-[var(--color-bg-surface)] border border-[var(--color-border)] shadow-2xl flex flex-col max-h-[calc(var(--k2-vh)*0.7)]">
         {/* Input */}
         {/* Escape closes the palette here, so it doesn't clear the text. */}
         <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--color-border)] flex-shrink-0">

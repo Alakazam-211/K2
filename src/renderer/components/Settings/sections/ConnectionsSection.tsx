@@ -638,7 +638,7 @@ function ServerFormDialog({
         role="dialog"
         aria-modal="true"
         aria-label={draft.id ? 'Edit server' : 'Add server'}
-        className="w-[26rem] max-w-[90vw] p-5"
+        className="w-[26rem] max-w-[calc(var(--k2-vw)*0.9)] p-5"
       >
         <h3 className="type-heading pr-6 text-[var(--color-text-primary)] mb-3">{draft.id ? 'Edit server' : 'Add server'}</h3>
         {rotation ? (

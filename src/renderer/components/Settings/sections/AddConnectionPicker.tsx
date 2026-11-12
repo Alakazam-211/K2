@@ -76,7 +76,7 @@ type Note = { tone: 'error' | 'muted'; text: string }
 /** Avatar color for an agent on another server (Home's muted color). */
 const OTHER_SERVER_COLOR = 'var(--color-text-muted)'
 
-const panelClass = 'border border-[var(--color-border)] bg-[var(--color-bg-elevated)] mb-2 flex flex-col max-h-[60vh]'
+const panelClass = 'border border-[var(--color-border)] bg-[var(--color-bg-elevated)] mb-2 flex flex-col max-h-[calc(var(--k2-vh)*0.6)]'
 const listClass = 'flex-1 min-h-0 overflow-y-auto py-1'
 
 /** The host a connection to `s` is recorded under (`agent::host`). */

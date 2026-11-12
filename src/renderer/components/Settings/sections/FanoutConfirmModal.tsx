@@ -109,7 +109,7 @@ export function FanoutConfirmModal({
         role="dialog"
         aria-modal="true"
         aria-label="Set up canonical harness fan-out"
-        {...floatMaterial('dialog')} className="w-[820px] max-w-[92vw] max-h-[90vh] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
+        {...floatMaterial('dialog')} className="w-[820px] max-w-[calc(var(--k2-vw)*0.92)] max-h-[calc(var(--k2-vh)*0.9)] flex flex-col border border-[var(--color-border)] bg-[var(--color-bg-surface)] shadow-2xl"
         {...cancel}
       >
         {/* Header: the title and × stay put while the rest scrolls. */}

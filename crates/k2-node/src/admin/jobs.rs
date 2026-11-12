@@ -378,6 +378,12 @@ pub enum JobAnswer {
         /// never offers `gpu-mem` and can't watch a GPU job's budget.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         gpu_usage: bool,
+        /// Cache generations (BK-2): every unit this executor starts has
+        /// its slot's `gens/` (and the owner's) in `InaccessiblePaths`
+        /// ([`Executor::gone_for`]). An older executor omits it (false):
+        /// the node then keeps no generations.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        gens_wall: bool,
     },
     Started {
         unit: String,
@@ -1245,6 +1251,7 @@ impl Executor {
                     job_uid: self.job_uid_ready().is_ok(),
                     gpus: self.gpu_ready(),
                     gpu_usage: cfg!(target_os = "linux"),
+                    gens_wall: true,
                 })
             }
             // No job starts while an owner change is unfinished (its trees
@@ -1328,10 +1335,16 @@ impl Executor {
         let layout = crate::paths::Layout::new(home, &self.paths.config_dir);
         let mut gone = vec![home.join("state"), home.join("run"), self.paths.config_dir.clone(), self.paths.state_dir.clone()];
         let troot = layout.tenants_root();
+        // Cache generations (prd-compute-blacksmith-class-v1 §4.1.3, BK-2):
+        // no job of any slot reaches a generation; it gets a fork. Always
+        // listed (a missing path is skipped), so turning the switch on
+        // never depends on a unit restart.
         if slot == OWNER_SLOT {
+            gone.push(crate::gens::gens_root(home));
             gone.push(troot);
             return gone;
         }
+        gone.push(crate::gens::gens_root(&layout.tenant(slot).root()));
         if let Ok(rd) = std::fs::read_dir(home) {
             let mut names: Vec<_> = rd.flatten().map(|e| e.file_name()).filter(|n| n != "toolchains").collect();
             names.sort();
@@ -2297,12 +2310,12 @@ mod tests {
         // An older executor's Ready (no stdin) reads as "can't relay stdin",
         // and as "no per-job uids" (C2).
         let a: JobAnswer = serde_json::from_str(r#"{"answer":"ready","job_user":"k2job"}"#).unwrap();
-        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false });
+        assert_eq!(a, JobAnswer::Ready { job_user: "k2job".into(), stdin: false, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false });
         // GPU jobs S6: a newer executor says it reads a job's GPU memory; a
         // Ready without it is 0.46.10's bytes.
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: false, gens_wall: false };
         assert_eq!(serde_json::to_string(&r).unwrap(), r#"{"answer":"ready","job_user":"k2job","stdin":true}"#);
-        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true };
+        let r = JobAnswer::Ready { job_user: "k2job".into(), stdin: true, job_uid: false, gpus: vec![], gpu_usage: true, gens_wall: false };
         let back: JobAnswer = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
         let u = JobAnswer::GpuUsage(k2_node_proto::gpu::GpuMemUsage { bytes: 3 << 30, gtt_bytes: 3 << 30, clients: 1, pids: 2, ..Default::default() });

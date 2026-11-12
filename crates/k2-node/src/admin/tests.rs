@@ -881,3 +881,72 @@ fn the_job_uid_pool_is_off_until_the_machine_owner_turns_it_on() {
         assert_ne!(e.message, super::jobpool::JOB_UID_POOL_OFF, "the opt-in is read");
     }
 }
+
+/// Cache generations, walls first (prd-compute-blacksmith-class-v1
+/// §4.1.3, BK-2): every unit of every slot has its own server's `gens/`
+/// (and the owner's has the node home's) in `InaccessiblePaths`, the
+/// executor says so in `Ready`, and no job may ask for a generation as a
+/// writable folder or a reclaim target, directly or through a link.
+#[test]
+fn no_unit_reaches_the_cache_generations() {
+    use super::jobs::{check_paths, check_reclaim, systemd_run_argv, JobAnswer, JobOp};
+    use k2_node_proto::share::MAX_SLOTS;
+    let r = Rig::new("full");
+    let home = r.exec.paths.home.clone();
+    let layout = crate::paths::Layout::new(&home, &r.exec.paths.config_dir);
+    for slot in 0..MAX_SLOTS {
+        let t = layout.tenant(slot);
+        for d in [t.root(), t.jobs(), t.cache(), t.tmp(), t.root().join("gens")] {
+            std::fs::create_dir_all(&d).unwrap();
+        }
+    }
+    let owner = r.exec.gone_for(0);
+    assert!(owner.contains(&home.join("gens")), "the owner's units: {owner:?}");
+    for slot in 1..MAX_SLOTS {
+        let g = r.exec.gone_for(slot);
+        assert!(g.contains(&layout.tenant(slot).root().join("gens")), "slot {slot}'s own gens/: {g:?}");
+        assert!(g.contains(&home.join("gens")), "slot {slot}: the node home's gens/: {g:?}");
+    }
+    let plan = super::jobs::UnitPlan {
+        unit: "k2job-j1-g1.service".into(),
+        job_uid: 990,
+        group_gid: 991,
+        root: home.join("jobs/j1-g1"),
+        rw: vec![],
+        gone: owner,
+        network: k2_node_proto::share::Network::On,
+        mem_bytes: None,
+        cpu_millis: None,
+        stop_grace_secs: 10,
+        binary: PathBuf::from("/usr/local/bin/k2-node"),
+        slice: "k2jobs.slice".into(),
+        protect_proc: true,
+        private_ipc: true,
+        lan_extra: vec![],
+        no_core: false,
+        restrict_userns: false,
+        runtime_max_secs: None,
+        gpu: None,
+    };
+    let argv = systemd_run_argv(&plan);
+    let line = argv.iter().find(|a| a.starts_with("InaccessiblePaths=")).expect("an InaccessiblePaths property");
+    assert!(line.contains(&format!("-{}", home.join("gens").display())), "{line}");
+    for slot in 0..MAX_SLOTS {
+        let t = layout.tenant(slot);
+        let root = t.jobs().join("j-g1");
+        std::fs::create_dir_all(&root).unwrap();
+        let gens = t.root().join("gens");
+        let e = check_paths(&home, slot, &root, std::slice::from_ref(&gens)).unwrap_err();
+        assert_eq!(e.code, code::BAD_ARGS, "slot {slot}: gens/ as a writable folder: {}", e.message);
+        let e = check_reclaim(&home, &gens, slot).unwrap_err();
+        assert_eq!(e.code, code::BAD_ARGS, "slot {slot}: gens/ as a reclaim target: {}", e.message);
+        // Through a link a job planted in its cache: refused too.
+        let link = t.cache().join("to-gens");
+        std::os::unix::fs::symlink(&gens, &link).unwrap();
+        assert!(check_paths(&home, slot, &root, std::slice::from_ref(&link)).is_err(), "slot {slot}: a link into gens/");
+        assert!(check_reclaim(&home, &link.join("x"), slot).is_err(), "slot {slot}: reclaim through a link into gens/");
+    }
+    if let JobAnswer::Ready { gens_wall, .. } = r.exec.handle_job(&JobOp::Ready, vec![]) {
+        assert!(gens_wall, "this executor hides gens/ from every unit");
+    }
+}

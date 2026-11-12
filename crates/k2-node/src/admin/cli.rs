@@ -156,6 +156,39 @@ pub fn ci_opt_in(config_dir: &Path, which: &str, on: bool) -> Result<String, Str
     ))
 }
 
+/// `admin cache-gens on|off` (prd-compute-blacksmith-class-v1 §4.1, off by
+/// default): the machine owner's switch, in its own root file
+/// (`cache-gens.toml`, BK-16). `on` is refused on a machine that can't
+/// wall jobs (`cache_gens_needs_wall`, BK-2): Linux needs the job user set
+/// up (`jobs.toml`), macOS needs Seatbelt.
+pub fn cache_gens(config_dir: &Path, on: bool) -> Result<String, String> {
+    need_root("admin cache-gens")?;
+    cache_gens_unchecked(config_dir, on, crate::wall::network_none_supported(config_dir))
+}
+
+/// [`cache_gens`] without the root check (`walled`: this machine can wall
+/// jobs).
+pub fn cache_gens_unchecked(config_dir: &Path, on: bool, walled: bool) -> Result<String, String> {
+    if on && !walled {
+        return Err(format!(
+            "{}: this machine has no job wall, so a job could reach the shared build copies. Set it up first (sudo k2-node setup; Linux: sudo k2-node admin job-user k2job)",
+            k2_node_proto::gens::codes::CACHE_GENS_NEEDS_WALL
+        ));
+    }
+    let mut f = crate::gens::read_switch(config_dir);
+    let was = std::mem::replace(&mut f.on, on);
+    crate::gens::write_switch(config_dir, &f)?;
+    let _ = super::store::Audit::new(&config::default_state_dir().join("audit.log")).append(
+        super::store::AuditEntry { event: "cache_gens".into(), detail: serde_json::json!({"from": was, "to": on, "by": "local"}), ..Default::default() },
+        crate::util::now(),
+    );
+    Ok(format!(
+        "cache generations: {} → {}. Restart k2-node for it to take effect (systemctl restart k2-node, or the launchd equivalent).",
+        if was { "on" } else { "off" },
+        if on { "on" } else { "off" }
+    ))
+}
+
 /// `admin audit`: check the chain, print the tail.
 pub fn audit(state_dir: &Path, tail: usize, json: bool) -> Result<(), String> {
     let lines = super::store::Audit::new(&state_dir.join("audit.log")).verify()?;

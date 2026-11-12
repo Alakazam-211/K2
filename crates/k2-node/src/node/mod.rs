@@ -115,6 +115,12 @@ pub struct NodeOptions {
     /// Does the executor read a job's own GPU memory (`Ready.gpu_usage`,
     /// GPU jobs S6)? `None` = ask it with `exec_stdin` (tests set it).
     pub exec_gpu_usage: Option<bool>,
+    /// Does the executor hide `gens/` from every unit (`Ready.gens_wall`,
+    /// BK-2)? `None` = ask it with `exec_stdin` (tests set it).
+    pub exec_gens_wall: Option<bool>,
+    /// The machine owner's `cache-gens` switch (`/etc/k2-node/cache-gens.toml`,
+    /// read at start; tests set it).
+    pub cache_gens: Option<crate::gens::SwitchFile>,
     /// How long a job waits for its secret env (SE18; tests shorten it).
     pub secret_wait: Duration,
     /// The `k2-node` binary that runs `job-hold` (§5.2): set, jobs not
@@ -189,6 +195,8 @@ impl NodeOptions {
             exec_job_uid: None,
             exec_gpus: None,
             exec_gpu_usage: None,
+            exec_gens_wall: None,
+            cache_gens: None,
             secret_wait: Duration::from_secs(k2_node_proto::secret::NEED_TIMEOUT_SECS),
             job_holder: default_job_holder(),
             tenant_adopt_wait: adopt::TENANT_ADOPT_WAIT,
@@ -219,6 +227,8 @@ pub struct ExecCaps {
     pub gpus: Vec<crate::admin::gpu::ReadyGpu>,
     /// Reads a job's own GPU memory (GPU jobs S6).
     pub gpu_usage: bool,
+    /// Hides `gens/` from every unit (cache generations, BK-2).
+    pub gens_wall: bool,
 }
 
 /// What the executor's `Ready` says it can do. An older one says none of
@@ -230,7 +240,7 @@ pub async fn probe_exec_caps(admin_socket: &Path) -> ExecCaps {
     })
     .await;
     match r {
-        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, gpu_usage, .. })) => ExecCaps { stdin, job_uid, gpus, gpu_usage },
+        Ok(Ok(crate::admin::jobs::JobAnswer::Ready { stdin, job_uid, gpus, gpu_usage, gens_wall, .. })) => ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall },
         _ => ExecCaps::default(),
     }
 }
@@ -449,6 +459,10 @@ pub struct Node {
     /// GPU jobs S6: the executor reads a job's own GPU memory
     /// (`Ready.gpu_usage`; asked with `exec_stdin`).
     pub exec_gpu_usage: std::sync::atomic::AtomicBool,
+    /// Cache generations (BK-2): the executor hides `gens/` from every unit
+    /// (`Ready.gens_wall`; asked with `exec_stdin`). macOS needs no answer:
+    /// the node writes the Seatbelt deny itself.
+    pub exec_gens_wall: std::sync::atomic::AtomicBool,
     /// Job caches running jobs hold (module `job_cache`).
     job_caches_busy: Mutex<job_cache::Busy>,
     /// Which running attempt holds which job cache, by (slot, job, gen):
@@ -578,6 +592,10 @@ impl Node {
         let exec_job_uid = opts.exec_job_uid.unwrap_or(probed.job_uid);
         let exec_gpus = opts.exec_gpus.clone().unwrap_or(probed.gpus);
         let exec_gpu_usage = opts.exec_gpu_usage.unwrap_or(probed.gpu_usage);
+        let exec_gens_wall = opts.exec_gens_wall.unwrap_or(probed.gens_wall);
+        if opts.cache_gens.is_none() {
+            opts.cache_gens = Some(crate::gens::read_switch(&opts.layout.config));
+        }
         let facts = opts.facts.clone().unwrap_or_else(|| machine_facts(&layout));
         let policy = Policy::resolve(&config::PolicyFile::default(), &facts)?;
         let cgroups = if opts.use_cgroups { Cgroups::detect() } else { None };
@@ -620,6 +638,7 @@ impl Node {
             exec_job_uid: std::sync::atomic::AtomicBool::new(exec_job_uid),
             exec_gpus: Mutex::new(exec_gpus),
             exec_gpu_usage: std::sync::atomic::AtomicBool::new(exec_gpu_usage),
+            exec_gens_wall: std::sync::atomic::AtomicBool::new(exec_gens_wall),
             job_caches_busy: Mutex::new(job_cache::Busy::default()),
             job_cache_holds: Mutex::new(HashMap::new()),
             git_helpers: Mutex::new(HashMap::new()),
@@ -687,7 +706,7 @@ impl Node {
         if self.opts.exec_stdin.is_some() || !matches!(self.wall, Wall::JobUser { .. }) {
             return false;
         }
-        let ExecCaps { stdin, job_uid, gpus, gpu_usage } = probe_exec_caps(&self.opts.admin_socket).await;
+        let ExecCaps { stdin, job_uid, gpus, gpu_usage, gens_wall } = probe_exec_caps(&self.opts.admin_socket).await;
         let mut changed = self.exec_stdin.swap(stdin, std::sync::atomic::Ordering::SeqCst) != stdin;
         if self.opts.exec_job_uid.is_none() {
             changed |= self.exec_job_uid.swap(job_uid, std::sync::atomic::Ordering::SeqCst) != job_uid;
@@ -703,6 +722,9 @@ impl Node {
         }
         if self.opts.exec_gpu_usage.is_none() {
             changed |= self.exec_gpu_usage.swap(gpu_usage, std::sync::atomic::Ordering::SeqCst) != gpu_usage;
+        }
+        if self.opts.exec_gens_wall.is_none() {
+            changed |= self.exec_gens_wall.swap(gens_wall, std::sync::atomic::Ordering::SeqCst) != gens_wall;
         }
         changed
     }

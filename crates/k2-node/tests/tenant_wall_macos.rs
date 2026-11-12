@@ -608,3 +608,47 @@ echo "sysroot=$(rustc --print sysroot)"
     assert!(got.out.contains(&format!("sysroot={}", real.display())), "rustc ran from the node home's toolchains: {}", got.out);
     assert!(got.out.contains(&format!("cargo={}", tools.join("bin/cargo").display())), "cargo ran from the node home's toolchains: {}", got.out);
 }
+
+/// W12, cache generations (prd-compute-blacksmith-class-v1 §4.1.3, BK-2,
+/// BK-22): on a Mac every job runs as the node user, so the Seatbelt deny
+/// is the whole wall. No job of any server (the owner's, or a tenant's,
+/// whose profile allows its own root) can list, read or write a
+/// generation, its own server's or another's. Controls: the test process
+/// reads each, and each slot lists its own `cache/`.
+#[tokio::test(flavor = "multi_thread")]
+async fn w12_no_job_reaches_a_cache_generation() {
+    let m = mac("mac-w12", OWN2, true).await;
+    let n = &m.n;
+    let l = &n.layout;
+    let mut gens = Vec::new();
+    for s in [0u8, 1, 2] {
+        let g = k2_node::gens::gens_root(&l.tenant(s).root());
+        k2_node::gens::ensure_closed(&g).unwrap();
+        let f = g.join("pk/target/trusted/g1/target/debug/app");
+        put(&f, &format!("GEN-{s}"));
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), format!("GEN-{s}"), "control: the node reads it");
+        gens.push((s, g, f));
+    }
+    for b in [0u8, 1, 2] {
+        let mut items = Vec::new();
+        for (_, g, f) in &gens {
+            items.push(f.display().to_string());
+            items.push(format!("+{}", g.display()));
+            items.push(format!(">{}", f.display()));
+            items.push(format!(">{}", g.join("planted").display()));
+        }
+        items.push(format!("+{}", l.tenant(b).cache().display()));
+        let got = run(n, b, &format!("gens{b}"), &strs(&probe(&items))).await;
+        for (a, g, f) in &gens {
+            let (fs, gs) = (f.display().to_string(), g.display().to_string());
+            assert!(!line_ok(&got.out, "R", &fs), "slot {b} read slot {a}'s generation:\n{}", got.out);
+            assert!(!line_ok(&got.out, "L", &gs), "slot {b} listed slot {a}'s gens/:\n{}", got.out);
+            assert!(!line_ok(&got.out, "W", &fs), "slot {b} wrote slot {a}'s generation:\n{}", got.out);
+            assert!(!line_ok(&got.out, "W", &g.join("planted").display().to_string()), "slot {b} planted in slot {a}'s gens/");
+            assert!(!got.out.contains(&format!("GEN-{a}")), "slot {a}'s generation leaked to slot {b}");
+            assert_eq!(std::fs::read_to_string(f).unwrap(), format!("GEN-{a}"), "unchanged");
+            assert!(!g.join("planted").exists());
+        }
+        assert!(line_ok(&got.out, "L", &l.tenant(b).cache().display().to_string()), "control: slot {b} lists its own cache:\n{}", got.out);
+    }
+}

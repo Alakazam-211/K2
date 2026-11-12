@@ -98,6 +98,9 @@ Remote admin (prd-k2-node-admin-v1; root, at this machine):
   sudo k2-node admin lane-secrets on|off         CI on compute (preview, off by default): secret env for a
                                                  server on a lane in root's lanes file (not only trust own)
                                                  Both: restart k2-node-admin and k2-node afterwards
+  sudo k2-node admin cache-gens on|off           keep cache generations (off by default): each job starts
+                                                 from a copy of the last good build and never writes the
+                                                 shared copy. Needs the job wall. Restart k2-node afterwards
   sudo k2-node admin gpu on [--device <pci>|all] [--server <server>]...
                                                  GPU jobs (off by default; Linux, job wall): a job that asks
                                                  --gpu gets one GPU's render node, alone. Every supported GPU
@@ -1243,8 +1246,19 @@ fn cmd_admin(a: &Args) -> Result<(), String> {
         }
         // GPU jobs (0.46.11): the machine owner's switch, gpu.toml.
         Some("gpu") => cmd_admin_gpu(a, &config_dir, &state, &home),
-        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets, gpu")),
-        None => Err("admin: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets, gpu".into()),
+        // Cache generations (prd-compute-blacksmith-class-v1 §4.1, off by
+        // default): the machine owner's switch, its own file.
+        Some("cache-gens") => {
+            let on = match a.positional.get(2).map(String::as_str) {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err("admin cache-gens on|off".into()),
+            };
+            println!("{}", cli::cache_gens(&config_dir, on)?);
+            Ok(())
+        }
+        Some(o) => Err(format!("admin {o:?}: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets, gpu, cache-gens")),
+        None => Err("admin: use level, pin, audit, status, serve, job-user, homes, job-uid, lane-secrets, gpu, cache-gens".into()),
     }
 }
 

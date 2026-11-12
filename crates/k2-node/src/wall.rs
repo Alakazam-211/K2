@@ -222,6 +222,19 @@ pub fn seatbelt_tenant_profile(deny_dirs: &[PathBuf], deny_sockets: &[PathBuf], 
         // test tools. Other jobs' processes stay visible on a Mac in
         // 0.46.3 (one uid; own servers only).
     }
+    // Cache generations (prd-compute-blacksmith-class-v1 §4.1.3, BK-2):
+    // no job of any server reads or writes a generation (it gets a fork).
+    // After every allow above (Seatbelt takes the last match), so a
+    // tenant's allow of its own root never reopens its `gens/`. The same
+    // uid runs the node, so this deny is the whole wall on a Mac (BK-22).
+    let mut gens = vec![crate::gens::gens_root(&real_path(&t.home))];
+    if t.slot != k2_node_proto::share::OWNER_SLOT {
+        gens.push(crate::gens::gens_root(&troot.join(t.slot.to_string())));
+    }
+    for g in &gens {
+        rw(&mut p, "deny", g);
+        p.push_str(&format!("(deny network-outbound (subpath {}))\n", sb_str(g)));
+    }
     // The node's own sockets (the executor) stay closed whatever the
     // allows above say: after them, so they win.
     for s in deny_sockets {
@@ -1202,6 +1215,28 @@ mod tests {
 
     fn at(p: &str, line: &str) -> usize {
         p.find(line).unwrap_or_else(|| panic!("missing {line} in:\n{p}"))
+    }
+
+    /// Cache generations (BK-2): every server's profile denies the node
+    /// home's `gens/`, and a tenant's also its own root's, after the allow
+    /// of that root (Seatbelt takes the last match, so an earlier deny
+    /// would do nothing), and no later rule opens it again.
+    #[test]
+    fn every_profile_denies_the_cache_generations_last() {
+        let owner = tenant_profile(0, "/nonexistent-k2/k2node");
+        let home_gens = "(deny file-read* file-write* (subpath \"/nonexistent-k2/k2node/gens\"))";
+        at(&owner, home_gens);
+        at(&owner, "(deny network-outbound (subpath \"/nonexistent-k2/k2node/gens\"))");
+        let t = tenant_profile(3, "/nonexistent-k2/k2node");
+        let own = at(&t, "(allow file-read* file-write* (subpath \"/nonexistent-k2/k2node-t/3\"))");
+        let own_gens = at(&t, "(deny file-read* file-write* (subpath \"/nonexistent-k2/k2node-t/3/gens\"))");
+        assert!(own < own_gens, "the deny comes after the allow of the tenant's root:\n{t}");
+        assert!(at(&t, home_gens) > own);
+        assert!(at(&t, "(allow network-outbound (subpath \"/nonexistent-k2/k2node-t/3\"))") < at(&t, "(deny network-outbound (subpath \"/nonexistent-k2/k2node-t/3/gens\"))"));
+        for p in [&owner, &t] {
+            let last_gens = p.rfind("/gens\"))").unwrap();
+            assert!(!p[last_gens..].contains("(allow file-"), "nothing after the gens denies opens a file path:\n{p}");
+        }
     }
 
     /// A tenant's job may stat the tenants root and the node home, exactly

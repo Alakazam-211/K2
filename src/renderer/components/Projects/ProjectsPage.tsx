@@ -39,7 +39,7 @@ import K2MarkButton from '@/components/TopBar/K2MarkButton'
 import TopBarUtilities from '@/components/TopBar/TopBarUtilities'
 import AnimatedDrawer from '@/components/Layout/AnimatedDrawer'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
-import { Surface } from '@/components/ui'
+import { Button, Surface } from '@/components/ui'
 import ProjectNav, { CreateProjectForm, ProjectNavRail } from './ProjectNav'
 import ProjectDashboard from './ProjectDashboard'
 import DashboardPresetsMenu from './DashboardPresetsMenu'
@@ -237,6 +237,7 @@ export default function ProjectsPage(): React.JSX.Element | null {
   // prd-zen-gardens-v1 G4/G49: under Zen the page's terminals park.
   const zenShown = useZenShown()
   const groups = useProjectGroupsStore((s) => s.groups)
+  const groupsError = useProjectGroupsStore((s) => s.groupsError)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const revision = useProjectGroupsStore((s) => s.revision)
   // §6.7.1 / §6.7.3 — the two per-client persisted toggles.
@@ -389,7 +390,25 @@ export default function ProjectsPage(): React.JSX.Element | null {
         )}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          {groups === null ? (
+          {groups === null && groupsError ? (
+            /* The list fetch failed before any list arrived: say so with
+               Try again, never an endless "Loading projects…". */
+            <div className="flex-1 flex items-center justify-center px-8">
+              <div role="alert" className="w-full max-w-sm text-center" data-projects-list-error>
+                <p className="type-heading text-[var(--color-text-primary)]">Couldn't load your projects</p>
+                <p className="type-row text-[var(--color-text-secondary)] mt-1">
+                  K2 couldn't get the project list from the server. Your agents are fine.
+                </p>
+                <p className="type-hint text-[var(--color-text-muted)] mt-2 break-words">{groupsError}</p>
+                <Button
+                  className="mt-4"
+                  onClick={() => void useProjectGroupsStore.getState().fetchGroups()}
+                >
+                  Try again
+                </Button>
+              </div>
+            </div>
+          ) : groups === null ? (
             <div className="flex-1 flex items-center justify-center">
               <p className="text-sm text-[var(--color-text-muted)]">Loading projects…</p>
             </div>

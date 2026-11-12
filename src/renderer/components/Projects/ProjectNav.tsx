@@ -1269,6 +1269,7 @@ export default function ProjectNav({
   pocWorkspaceId: string | null
 }): React.JSX.Element {
   const groups = useProjectGroupsStore((s) => s.groups)
+  const groupsError = useProjectGroupsStore((s) => s.groupsError)
   const selectedGroupId = useProjectGroupsStore((s) => s.selectedGroupId)
   const selectGroup = useProjectGroupsStore((s) => s.selectGroup)
 
@@ -1373,7 +1374,9 @@ export default function ProjectNav({
         )}
         {groups === null && (
           <div className="px-3 py-6 text-center">
-            <p className="text-xs text-[var(--color-text-muted)]">Loading projects…</p>
+            <p className="type-row text-[var(--color-text-muted)]">
+              {groupsError ? "Couldn't load projects" : 'Loading projects…'}
+            </p>
           </div>
         )}
       </div>

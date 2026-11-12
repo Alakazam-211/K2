@@ -591,15 +591,16 @@ impl Runtime {
         let Some(blobs) = self.blobs() else { return true };
         match blobs.purge_space_key(space) {
             Ok(r) => {
-                // Index rows hold layer names and text: when some went and
-                // the kit's rewrite failed, their bytes stay in freed pages.
-                // Try the rewrite once more and say what happened.
+                // Since kit v0.15.0 the kit rewrites the store file after
+                // every purge that destroyed a key, so the key's bytes (and
+                // the index rows', which hold layer names and text) leave it.
+                // When that rewrite failed, try once more and say so.
                 let mut rewritten = r.store_rewritten;
-                if r.index_rows_removed > 0 && !rewritten {
+                if rewrite_again(&r) {
                     match self.store().map(|st| st.rewrite_file()) {
                         Some(Ok(_)) => rewritten = true,
                         Some(Err(e)) => log_debug!(
-                            "[docs] WARN: {space}'s index rows were removed but the store file wasn't rewritten ({e}); their bytes stay in freed pages until a later rewrite"
+                            "[docs] WARN: {space}'s blob key was destroyed but the store file wasn't rewritten ({e}); its bytes stay in freed pages until a later rewrite"
                         ),
                         None => {}
                     }
@@ -631,6 +632,13 @@ impl Runtime {
             log_debug!("[docs] WARN: blob gc: {e}");
         }
     }
+}
+
+/// Whether a removed workspace's purge left the store file unrewritten with
+/// something in it to scrub: the destroyed key (kit v0.15.0 always rewrites
+/// then, so `store_rewritten` false means that rewrite failed) or index rows.
+fn rewrite_again(r: &k2_mpc_base::blob::PurgeReport) -> bool {
+    (r.key_destroyed || r.index_rows_removed > 0) && !r.store_rewritten
 }
 
 /// Pool stats for status and doctor: `{running, loaded, estimatedBytes,
@@ -675,6 +683,27 @@ mod tests {
         // store 0.46.7 writes stays format 5 (WHATS_NEW says so).
         assert_eq!(k2_mpc_base::store::STORE_FORMAT, 6, "0.46.7 reads up to store format 6");
         assert_eq!(k2_mpc_base::store::STORE_FORMAT_BASE, 5, "0.46.7 writes store format 5");
+    }
+
+    /// Kit v0.15.0: a purge that destroyed a key rewrites the store file
+    /// itself; K2 rewrites again only when that failed (the key's or the
+    /// index rows' bytes would stay in freed pages).
+    #[test]
+    fn a_purge_is_rewritten_again_only_when_the_kits_rewrite_failed() {
+        use k2_mpc_base::blob::PurgeReport;
+        let report = |key_destroyed: bool, index_rows_removed: u64, store_rewritten: bool| {
+            let mut r = PurgeReport::default();
+            r.key_destroyed = key_destroyed;
+            r.index_rows_removed = index_rows_removed;
+            r.store_rewritten = store_rewritten;
+            r
+        };
+        assert!(rewrite_again(&report(true, 0, false)), "a destroyed key the kit's rewrite didn't scrub");
+        assert!(rewrite_again(&report(true, 3, false)));
+        assert!(rewrite_again(&report(false, 3, false)), "index rows alone");
+        assert!(!rewrite_again(&report(true, 0, true)), "the kit rewrote the file");
+        assert!(!rewrite_again(&report(true, 3, true)));
+        assert!(!rewrite_again(&report(false, 0, false)), "the space had no key: nothing to scrub");
     }
 
     #[test]

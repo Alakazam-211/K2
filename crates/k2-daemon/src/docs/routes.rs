@@ -1001,11 +1001,24 @@ fn session_error_body(e: &SessionError) -> CliResponse {
              (k2 doc cat can't help: make it with your own tools), then comment on this one naming it: \
              k2 doc comment --doc --body \"what I changed and why\" --proposal <new file> <file>",
         )),
+        // Kit v0.15.0 (MPC-E822): a live keyed doc that isn't a table (a
+        // deck, a board) is at its size limit, and the change would grow it.
+        // Nothing was applied. Plain words for whoever made the change.
+        SessionError::AtLimit { what: "elements and fields", limit, .. } => kit_report(e, Some(&keyed_at_limit_hint(*limit))),
         // Every other kit refusal (the structure index, comments, claims by
         // node, annotation limits, and any a later kit adds): the kit's
         // report, its name as the code, with what to do next.
         other => kit_report(other, None),
     }
+}
+
+/// What `MPC-E822` (`keyed_at_limit`) tells the person or agent.
+pub(super) fn keyed_at_limit_hint(limit: usize) -> String {
+    format!(
+        "this file is too big to change live: it is at its limit of {limit} parts (its items and their fields, \
+         counting deleted items until they are cleared away). Nothing was changed. Read it (k2 doc cat), remove \
+         parts it no longer needs, then make the change again"
+    )
 }
 
 /// HTTP status for a kit exit code (the CLI exits with `error.exit`).

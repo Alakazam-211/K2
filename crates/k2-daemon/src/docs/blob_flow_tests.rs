@@ -297,6 +297,7 @@ fn every_new_kit_refusal_maps_to_its_id_name_and_exit() {
         ),
         (SessionError::IndexPending { version: 4, retry_after_ms: 500 }, "MPC-E713", "index_pending", 1, "409"),
         (SessionError::AgentWriteRefused, "MPC-E715", "agent_write_refused", 2, "400"),
+        (SessionError::AtLimit { what: "elements and fields", limit: 25_000, would_be: 25_001 }, "MPC-E822", "keyed_at_limit", 2, "400"),
     ];
     for (e, id, code, exit, status) in cases {
         let r = routes::session_error(&e);
@@ -321,6 +322,24 @@ fn every_new_kit_refusal_maps_to_its_id_name_and_exit() {
     use k2_mpc_base::errors::Refusal;
     assert_eq!(k2_mpc_base::index::IndexJobError::BadResult("x".into()).report().id(), "MPC-E714");
     assert_eq!(k2_mpc_base::index::IndexJobError::Stale { version: 1, reason: "purged" }.report().id(), "MPC-E717");
+}
+
+/// Kit v0.15.0 (MPC-E822): a change that would grow a live keyed doc (a
+/// deck, a board) past its size limit reaches the person or agent in plain
+/// words: the limit, that nothing changed, and what to do. A table's own
+/// limit keeps the kit's text.
+#[test]
+fn a_keyed_doc_at_its_limit_answers_in_plain_words() {
+    let e = SessionError::AtLimit { what: "elements and fields", limit: 25_000, would_be: 25_001 };
+    let err = error_of(&routes::session_error(&e));
+    let hint = err["hint"].as_str().expect("hint");
+    assert_eq!(hint, routes::keyed_at_limit_hint(25_000), "{err}");
+    assert!(hint.contains("25000 parts") && hint.contains("Nothing was changed"), "{hint}");
+    assert!(!hint.contains("MPC-") && !hint.contains("keyed_max_entries"), "no kit jargon: {hint}");
+    let rows = SessionError::AtLimit { what: "rows", limit: 10, would_be: 11 };
+    let err = error_of(&routes::session_error(&rows));
+    assert_eq!(err["id"], json!("MPC-E802"), "{err}");
+    assert!(err["hint"].as_str().expect("hint").contains("rows drop-deleted"), "a table keeps the kit's words: {err}");
 }
 
 /// Purge and erasure are the doc owner's: K2 refuses an agent and a

@@ -16,7 +16,8 @@
 //! `{client, cursor, label?}` a connection) and every `cursor` event its
 //! `client`, so the file scenarios' client IDs are rewritten too (the kit's
 //! numbers by pid), and `roster_events_devices.json` pins one person on three
-//! connections.
+//! connections. Kit v0.15.0: the goldens are wire 3; K2 speaks wire 2, so the
+//! fields wire 3 adds are taken out of the golden side first ([`wire2`]).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -276,10 +277,10 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
     let final_text = f.text(ada);
     let evs = drain(&changes);
     assert_eq!(evs.len(), 3, "{evs:?}");
-    same("change_events.json", CHANGE_EVENTS, &changes_file(&evs, v0, &text0, v_end, &final_text, &mut st));
+    same("change_events.json", &wire2(CHANGE_EVENTS), &changes_file(&evs, v0, &text0, v_end, &final_text, &mut st));
     let evs_app = drain(&changes_app);
     assert_eq!(evs_app.len(), 3);
-    same("change_events_app.json", CHANGE_EVENTS_APP, &changes_file(&evs_app, v0, &text0, v_end, &final_text, &mut st));
+    same("change_events_app.json", &wire2(CHANGE_EVENTS_APP), &changes_file(&evs_app, v0, &text0, v_end, &final_text, &mut st));
 
     let ros = drain(&roster);
     let ros_app = drain(&roster_app);
@@ -303,8 +304,8 @@ fn k2s_live_encoder_writes_the_kits_golden_json() {
     let app_file = lens("Widget", &ros_app, &end_app, &mut st);
     // A roster's members are a set (WIRE.md v0.9.8.2): compared by handle,
     // never by position. Every other byte as is.
-    same("roster_events.json", &members_by_handle(ROSTER_EVENTS), &members_by_handle(&ada_file));
-    same("roster_events_app.json", &members_by_handle(ROSTER_EVENTS_APP), &members_by_handle(&app_file));
+    same("roster_events.json", &members_by_handle(&wire2(ROSTER_EVENTS)), &members_by_handle(&ada_file));
+    same("roster_events_app.json", &members_by_handle(&wire2(ROSTER_EVENTS_APP)), &members_by_handle(&app_file));
 
     let got = file(Value::obj(errors.iter().map(|(n, r)| (n.to_string(), r.to_value())).collect::<Vec<_>>()));
     // Errors are keyed on their id, never on their `next`: that is the
@@ -540,6 +541,37 @@ fn snapshot_entries_take_the_live_events_shape() {
 
 /// Pretty JSON without its `"next": …` lines (each is one line: JSON strings
 /// hold no raw line break).
+/// A kit golden file as wire 2. Since kit v0.15.0 the kit's goldens are
+/// wire 3, which only adds fields: a change's `turn` and `verb`, and a claim
+/// event's `actor`, `started_ms`, `at_ms` and `at_rev`. K2's Live socket
+/// still speaks wire 2 (its welcome has no `wire`, so a client 0.15.0 reads
+/// those as absent), so they are taken out before comparing; every other
+/// byte is the kit's.
+fn wire2(pretty: &str) -> String {
+    fn strip(v: &mut Value) {
+        match v {
+            Value::Obj(pairs) => {
+                let change = pairs.iter().any(|(k, _)| k == "hunks");
+                let claim = pairs
+                    .iter()
+                    .any(|(k, val)| k == "kind" && matches!(val.as_str(), Some(kind) if kind.starts_with("claim_")));
+                pairs.retain(|(k, _)| {
+                    let wire3_change = change && matches!(k.as_str(), "turn" | "verb");
+                    let wire3_claim = claim && matches!(k.as_str(), "actor" | "started_ms" | "at_ms" | "at_rev");
+                    !wire3_change && !wire3_claim
+                });
+                pairs.iter_mut().for_each(|(_, val)| strip(val));
+            }
+            Value::List(items) => items.iter_mut().for_each(strip),
+            Value::Null | Value::Bool(_) | Value::Int(_) | Value::UInt(_) | Value::Float(_) | Value::Str(_) => {}
+            other => panic!("wire2: a kit errors::Value variant this test doesn't know: {other:?}"),
+        }
+    }
+    let InOrder(mut v) = serde_json::from_str(pretty).expect("golden file JSON");
+    strip(&mut v);
+    file(v)
+}
+
 fn without_next(pretty: &str) -> String {
     pretty.lines().filter(|l| !l.trim_start().starts_with("\"next\": ")).map(|l| format!("{l}\n")).collect()
 }

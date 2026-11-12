@@ -778,6 +778,8 @@ pub enum SessionEvent {
     /// Tier 0 (kit v0.14.0): another program's save replaced a version
     /// (an agent's write, or one saved under someone's lease); both are
     /// kept, the replaced one as a conflict copy (`docs/conflicts.rs`).
+    /// Since kit v0.15.0 also a live keyed doc (a deck, a board) saved over
+    /// the kit's write; `current` and `kept` are then its live versions.
     /// Sent once per copy. A client with that file open (`workspace` +
     /// `rel`) shows `text` once as a notice; the same line goes to the
     /// workspace's Thread. File names and version numbers only.

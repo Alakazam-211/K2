@@ -57,7 +57,8 @@ pub const AUDIT_LEASE_BROKEN: &str = "doc-lease-broken";
 /// Tier 0: another program saved a file under someone's lease, over a
 /// version the file never got, or (kit v0.14.0) over a version the kit
 /// wrote (an agent's write, a restore, a merge): the save is current, the
-/// replaced content is a version and a conflict copy.
+/// replaced content is a version and a conflict copy. Since kit v0.15.0
+/// also a live keyed doc's save over the kit's write.
 pub const AUDIT_CONFLICT: &str = "doc-conflict";
 /// A purge (owner only; not on `k2 doc`): scope and counts, never content.
 pub const AUDIT_PURGED: &str = "doc-purged";
@@ -257,11 +258,12 @@ impl Host for K2Host {
         conflict_dir_for(file)
     }
 
-    /// Kit v0.14.0: the copy of an agent's replaced write is named after
-    /// the agent (`notes (Ada's version).md`); anything else keeps the
-    /// kit's name ([`super::conflicts::copy_name_for`]).
-    fn conflict_copy_name(&self, file_name: &str, _at_ms: u64, who: &str) -> Option<String> {
-        super::conflicts::copy_name_for(file_name, who, super::conflicts::is_agent_name)
+    /// Kit v0.14.0 (tier 0) and v0.15.0 (live keyed docs): the copy of an
+    /// agent's replaced write is named after the agent (`notes (Ada's
+    /// version).md`); anything else keeps the kit's name, with a person's
+    /// name where the kit gave a pid ([`super::conflicts::copy_name`]).
+    fn conflict_copy_name(&self, file_name: &str, at_ms: u64, who: &str) -> Option<String> {
+        super::conflicts::copy_name(file_name, at_ms, who, &super::conflicts::K2Names)
     }
 
     fn on_event(&self, ev: &AuditEvent) {
@@ -349,9 +351,10 @@ impl Host for K2Host {
                         lease_holder.as_deref().unwrap_or("-")
                     ),
                 );
-                // The kit emits it once per copy: the person is told once
-                // (a tab notice and a Thread line) and the agents get an
-                // inbox note (K-T0-3), off the session lock.
+                // The kit emits it once per copy (tier 0, and since kit
+                // v0.15.0 a live keyed doc): the person is told once (a tab
+                // notice and a Thread line) and the agents get an inbox note
+                // (K-T0-3), off the session lock.
                 super::conflicts::notify(super::conflicts::Conflict {
                     key: key.clone(),
                     current: *current,

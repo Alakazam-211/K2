@@ -1215,7 +1215,7 @@ impl Host for RealHost {
 
     fn spawn_detached(&self, argv: &[String]) -> io::Result<u32> {
         let (prog, rest) = argv.split_first().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty command"))?;
-        let mut c = std::process::Command::new(prog);
+        let mut c = k2_core::bg_proc::command(prog);
         c.args(rest).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
         #[cfg(unix)]
         {

@@ -114,16 +114,22 @@ export const useCustomThemesStore = create<CustomThemesStore>((set, get) => ({
   },
 }))
 
-// Phase 2.5 fix (finding #547): retry the load when the daemon
-// (re)connects, if the initial fetch (kicked off from settings.ts'
-// dynamic import) failed because the daemon's HTTP listener
-// wasn't bound yet. The store doesn't write-on-default so the
-// only risk pre-fix was "no custom themes appear in the picker
-// until the user reloads the app."
-onDaemonConnected(() => {
-  if (hasLoadedFromDaemon) return
+/** The first load of the custom editor themes (~/.k2so/themes/), and its
+ *  retry when the daemon (re)connects. `bootStores()` (boot-stores.ts)
+ *  calls this once at app start; nothing here runs at import. */
+export function bootCustomThemes(): void {
   useCustomThemesStore.getState().loadCustomThemes()
-})
+
+  // Phase 2.5 fix (finding #547): retry the load when the daemon
+  // (re)connects, if the initial fetch failed because the daemon's HTTP
+  // listener wasn't bound yet. The store doesn't write-on-default so the
+  // only risk pre-fix was "no custom themes appear in the picker until
+  // the user reloads the app."
+  onDaemonConnected(() => {
+    if (hasLoadedFromDaemon) return
+    useCustomThemesStore.getState().loadCustomThemes()
+  })
+}
 
 // #625 — on a real active-host CHANGE, drop the load gate and reload the
 // theme list from the NEW host's `~/.k2so/themes/`. `loadCustomThemes()`

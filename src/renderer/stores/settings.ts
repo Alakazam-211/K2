@@ -1181,8 +1181,3 @@ export function bootSettings(): void {
 onActiveHostChange(() => {
   void useSettingsStore.getState().fetchSettings()
 })
-
-// Load custom editor themes from ~/.k2so/themes/ after settings are ready
-import('./custom-themes').then(({ useCustomThemesStore }) => {
-  useCustomThemesStore.getState().loadCustomThemes()
-}).catch(() => {})

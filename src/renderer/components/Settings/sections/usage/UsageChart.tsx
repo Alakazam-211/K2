@@ -64,7 +64,9 @@ export function UsageChart({
   useLayoutEffect(() => {
     const el = box.current
     if (!el) return
-    const read = (): void => setWidth(Math.round(el.getBoundingClientRect().width))
+    // clientWidth is CSS px, like the SVG's width and the tooltip's offset;
+    // a rect is on-screen px, which the app zoom scales (lib/app-zoom).
+    const read = (): void => setWidth(el.clientWidth)
     read()
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read)
     ro?.observe(el)

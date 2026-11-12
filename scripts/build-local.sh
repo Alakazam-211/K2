@@ -91,7 +91,10 @@ sed -i '' "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" src-tauri/Cargo.to
 sed -i '' "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/k2-daemon/Cargo.toml
 sed -i '' "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/k2-core/Cargo.toml
 sed -i '' "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" crates/k2-menubar/Cargo.toml
-sed -i '' "s/K2_CLI_VERSION=\"[^\"]*\"/K2_CLI_VERSION=\"${VERSION}\"/" cli/k2
+# cli/k2 is built from cli/src (scripts/build-cli.sh): the version line is
+# in the prelude part, and the join puts it into cli/k2.
+sed -i '' "s/K2_CLI_VERSION=\"[^\"]*\"/K2_CLI_VERSION=\"${VERSION}\"/" cli/src/prelude.sh
+bash scripts/build-cli.sh
 echo "  Done."
 
 # ── Step 2: Build ──

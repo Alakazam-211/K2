@@ -14,6 +14,7 @@ crates/k2-core/src/tunnel/connector.rs :: .k2so/bin
 
 # CLI fallback for a machine whose home migration has not run yet.
 cli/k2 :: K2_HOME="${HOME}/.k2so"
+cli/src/prelude.sh :: K2_HOME="${HOME}/.k2so"
 
 # Clean-VM pairing smoke: deliberately asserts the ~/.k2so → ~/.k2
 # compat symlink still works (0.40.33/34 regression class). Not app code.

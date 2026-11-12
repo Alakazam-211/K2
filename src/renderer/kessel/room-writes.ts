@@ -84,6 +84,13 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'board/file/held/mine': 'a held edit of a deleted object keeps the whole object on B',
   'board/file/verb': 'one friendly board verb on a .k5board on B, as an agent sends it',
   'board/file/merge': 'merging a returned copy into a .k5board on B',
+  // The any-file panel beside a file tab (a .dxf, .obj, .psd … on B). B
+  // stamps the login as the participant and its kit checks each right:
+  // restore needs history and edit, the lock edit, a decision only the
+  // person the change was made for. Sharing and erasing stay off this list.
+  'docs/restore': 'Restore on a version in the file tab’s panel makes it current again on B, as a new version',
+  'docs/approve': 'Approve / Decline on a change made for you, in the file tab’s panel on B',
+  'docs/lease': 'Take the lock, its renewal while the tab is open, and Release, from the file tab’s panel on B',
   'fs/upload-binary': 'a file dropped on B’s terminal is uploaded to B',
   'fs/upload-chunk': 'a large file dropped on B’s terminal is uploaded to B',
   'fs/compress': 'compress in B’s workspace',

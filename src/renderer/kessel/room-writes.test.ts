@@ -26,6 +26,7 @@ import {
   __resetServerScopesForTests,
 } from '@/kessel/server-scope'
 import { daemonCliPost } from '@/lib/daemon-cli'
+import { fetchTier0Versions, postTier0Decision, postTier0Lease, postTier0Restore } from '@/lib/docs-tier0'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { LOCAL_ONLY_ACTIONS, mayRunLocalActions, roomMayRun } from '@/lib/local-only-actions'
 import { createPinnedRoom } from '@/stores/room'
@@ -130,6 +131,11 @@ describe('the room write allowlist', () => {
       'themes/delete',
       'agents/save-agent-md',
       'sandbox/open',
+      // A doc's sharing and erasure are server management (Admin floor on B).
+      'docs/share',
+      'docs/unshare',
+      'docs/comments/purge',
+      'docs/erase',
     ]) {
       expect([route, ROOM_WRITE_ROUTES.has(route)]).toEqual([route, false])
     }
@@ -267,6 +273,70 @@ describe('the usable remote-room scope', () => {
     } finally {
       fetchSpy.mockRestore()
     }
+  })
+
+  // An any-file doc tab (a .dxf or .obj with versions) in a Home remote
+  // room: Restore was refused before any request ("docs/restore is not
+  // something a room sends"), and so were the lock and approve / decline.
+  it('a remote room restores a version, decides a change and takes the lock of an any-file doc on its own server', async () => {
+    const room = remoteRoomScope(scopeForHost(B))
+    const calls: { url: string; method: string; body: string }[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      calls.push({ url: String(input), method: String(init?.method ?? 'GET'), body: String(init?.body ?? '') })
+      const path = new URL(String(input)).pathname
+      const body =
+        path === '/cli/docs/versions'
+          ? { ok: true, versions: [] }
+          : path === '/cli/docs/restore'
+            ? { ok: true, restored: 2, result: { changed: true, written: true } }
+            : path === '/cli/docs/approve'
+              ? { ok: true, restoreTo: 3, later: [] }
+              : { ok: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    const file = '/srv/acme/drawings/plan.dxf'
+    try {
+      expect(await fetchTier0Versions(room, file)).toEqual([])
+      expect(await postTier0Restore(room, file, 2)).toEqual({ changed: true, written: true })
+      expect(await postTier0Decision(room, file, 4, 'declined')).toEqual({ restoreTo: 3, later: [] })
+      await postTier0Lease(room, file, 'acquire')
+      await postTier0Lease(room, file, 'renew')
+      await postTier0Lease(room, file, 'release')
+      expect(calls.map((c) => [c.method, new URL(c.url).pathname])).toEqual([
+        ['GET', '/cli/docs/versions'],
+        ['POST', '/cli/docs/restore'],
+        ['POST', '/cli/docs/approve'],
+        ['POST', '/cli/docs/lease'],
+        ['POST', '/cli/docs/lease'],
+        ['POST', '/cli/docs/lease'],
+      ])
+      for (const c of calls) {
+        const url = new URL(c.url)
+        expect(url.port).toBe(String(B.port))
+        expect(url.searchParams.get('token')).toBe('tok-b')
+      }
+      expect(JSON.parse(calls[1].body)).toEqual({ path: file, version: 2 })
+      expect(JSON.parse(calls[2].body)).toEqual({ path: file, change: 4, state: 'declined' })
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('every docs/* write the renderer sends is on the room list', () => {
+    const sent = new Set<string>()
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const f = join(dir, e.name)
+        if (e.isDirectory()) walk(f)
+        else if (/\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) {
+          for (const m of readFileSync(f, 'utf8').matchAll(/daemonCliPost\w*(?:<[^>]*>)?\(\s*[\w.()]+,\s*'(docs\/[^']+)'/g)) sent.add(m[1])
+        }
+      }
+    }
+    walk(RENDERER)
+    // The scan finds the any-file panel's writes (the regex still matches).
+    expect([...sent]).toEqual(expect.arrayContaining(['docs/approve', 'docs/lease', 'docs/restore']))
+    for (const route of sent) expect([route, ROOM_WRITE_ROUTES.has(route)]).toEqual([route, true])
   })
 
   it('assertScopeMayWrite / scopeMayWrite: room list for a usable room, keep-alive only for view-only, open elsewhere', () => {

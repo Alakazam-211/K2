@@ -243,7 +243,9 @@ describe('the Thread box before the session is ready', () => {
     fireEvent.keyDown(box(), { key: 'Enter' })
     await waitFor(() => expect(screen.getByTestId('compose-thread-addr-error').textContent).toBe('The agent is not taking messages.'))
     expect(box().value).toBe('are you there')
-    expect(localStorage.getItem(draftKey())).toBe('are you there')
+    // The save is an effect of the same render that shows the error: it
+    // runs just after the paint this test woke on, so wait for it.
+    await waitFor(() => expect(localStorage.getItem(draftKey())).toBe('are you there'))
   })
 
   it('a start that fails keeps the draft: the box comes back with it', () => {

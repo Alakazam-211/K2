@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.8 (2026-11-11)
+
+Pairs with kit v0.15.0 (`07a2fa63`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's additions are additive or provided methods with defaults (turns, the pack verb on a change, focus and range, `Pack::container_of`, the carrier hook, host cache keys), and the bridge uses none of them.
+
 ## v0.1.7 (2026-11-11)
 
 Pairs with kit v0.14.0 (`30ddf8fc`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's additions are provided methods with defaults (`Pack::check_merged`, `Host::conflict_copy_name`) and person-writer reuse, off by default, and the bridge uses none of them. The kit's tier-0 change (an app's save over an agent's write keeps both, with a conflict copy) reaches a board file a host serves through the kit's blob sessions, with no change here. `scripts/private-allow.txt`'s header says what `scripts/check-private.sh` skips (only the allowlist itself), and v0.1.6's line names the kit tag alone.

@@ -679,6 +679,33 @@ fn adopt_takes_back_an_awake_and_an_asleep_desktop() {
 }
 
 #[test]
+fn an_agents_hold_survives_a_daemon_restart() {
+    // L9 on a live box: after `systemctl restart k2-daemon` the working
+    // agent's 30-minute hold was gone, so a sidecar of its workspace took
+    // the desktop, and with nobody viewing it would sleep under the agent
+    // 10 minutes after the restart.
+    let r = Rig::new(true, true);
+    r.m.start("virtual:w1", Asker::Agent, None).unwrap();
+    let h = r.m.hold("virtual:w1", "w1").expect("the hold");
+    let r2 = r.restarted();
+    r2.clock.0.store(r.m.now() + 60, Ordering::SeqCst);
+    r2.m.adopt();
+    assert_eq!(r2.m.state("virtual:w1"), State::Ready);
+    assert_eq!(r2.m.hold("virtual:w1", "w1/helper").expect_err("still held by w1"), h, "the sidecar is told who holds it until when");
+    assert_eq!(r2.m.status("virtual:w1").hold, Some(h.clone()));
+    // No viewer: the hold, not the restart, decides when it may sleep.
+    r2.advance(vd::SLEEP_AFTER + 60);
+    r2.m.tick();
+    assert_eq!(r2.m.state("virtual:w1"), State::Ready, "held: no sleep 10 minutes after the restart");
+    // A release before the restart is kept too.
+    assert!(r2.m.release("virtual:w1", "w1"));
+    let r3 = r2.restarted();
+    r3.clock.0.store(r2.m.now() + 1, Ordering::SeqCst);
+    r3.m.adopt();
+    assert!(r3.m.hold("virtual:w1", "w1/helper").is_ok(), "released: free after the restart");
+}
+
+#[test]
 fn a_state_file_whose_units_are_gone_reads_as_closed_and_is_cleaned() {
     let r = Rig::new(true, true);
     r.m.start("virtual", Asker::Person, None).unwrap();

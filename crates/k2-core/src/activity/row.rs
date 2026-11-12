@@ -393,6 +393,13 @@ pub struct Row {
     pub(crate) latch: Option<Latch>,
     pub(crate) pending_cancel: Option<PendingCancel>,
     pub turn_started_at: Option<i64>,
+    /// How many turns started in this registration: bumped by
+    /// [`Row::start_turn`], the one turn-start point, so `(session,
+    /// registered_at, turn_seq)` names one agent turn. 0: no turn seen yet.
+    /// The docs' turn id (rendering-data contract Item 2) is derived from
+    /// it in the daemon; core stays deterministic (no clock, no random).
+    #[serde(default)]
+    pub turn_seq: u64,
     /// This turn's lead tool calls; reset by [`Row::start_turn`].
     pub(crate) turn: TurnCounts,
     /// Recently counted `tool_use_id`s (dedupe, [`SEEN_TOOL_IDS_CAP`]).
@@ -463,6 +470,7 @@ impl Row {
             latch: None,
             pending_cancel: None,
             turn_started_at: None,
+            turn_seq: 0,
             turn: TurnCounts::default(),
             seen_tool_ids: VecDeque::new(),
             lead_idle_since: Some(now),
@@ -665,10 +673,12 @@ impl Row {
         self.turn
     }
 
-    /// A new turn starts at `now`: `turnStartedAt` moves and the per-turn
-    /// counts go back to zero. Every turn start goes through here.
+    /// A new turn starts at `now`: `turnStartedAt` moves, `turnSeq` counts
+    /// it, and the per-turn counts go back to zero. Every turn start goes
+    /// through here.
     pub(crate) fn start_turn(&mut self, now: i64) {
         self.turn_started_at = Some(now);
+        self.turn_seq = self.turn_seq.saturating_add(1);
         self.turn = TurnCounts::default();
     }
 
@@ -776,6 +786,7 @@ impl Row {
                 "commands": self.turn.commands,
             },
             "turnStartedAt": self.turn_started_at,
+            "turnSeq": self.turn_seq,
             "evidenceAt": self.evidence_at,
             "evidenceSource": self.evidence_source.map(EvidenceSource::as_str),
             "reason": self.reason.as_str(),
@@ -856,6 +867,28 @@ mod tests {
             row.thread_child_counts(),
             ThreadChildCounts { subagent: 2, shell: 1, monitor: 1, task: 1 }
         );
+    }
+
+    /// The docs' turn id rests on this: every turn start counts once, from
+    /// 1, and the count rides the row JSON and a hand-off's saved row (an
+    /// older saved row without it reads as no turn yet).
+    #[test]
+    fn every_turn_start_counts_once_and_rides_the_row() {
+        let mut row = Row::new(RowFacts { session_id: "s".into(), ..Default::default() }, 1_000);
+        assert_eq!(row.turn_seq, 0, "no turn seen yet");
+        assert_eq!(row.to_json()["turnSeq"], 0);
+        row.start_turn(2_000);
+        assert_eq!((row.turn_seq, row.turn_started_at), (1, Some(2_000)));
+        row.start_turn(3_000);
+        assert_eq!(row.turn_seq, 2);
+        assert_eq!(row.to_json()["turnSeq"], 2);
+        let saved = serde_json::to_value(&row).expect("save");
+        let back: Row = serde_json::from_value(saved.clone()).expect("restore");
+        assert_eq!(back.turn_seq, 2, "a hand-off keeps the count");
+        let mut old = saved;
+        old.as_object_mut().expect("row object").remove("turn_seq");
+        let back: Row = serde_json::from_value(old).expect("a row saved before turnSeq");
+        assert_eq!(back.turn_seq, 0);
     }
 
     #[test]

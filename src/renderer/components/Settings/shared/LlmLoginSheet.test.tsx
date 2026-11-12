@@ -324,28 +324,39 @@ describe('Add a token: choose, sign in or paste, then done or failed', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     seedDoc()
     h.addLogin.mockImplementation(async () => ({ account: { id: 'acc_new' }, login: login({ label: 'work' }) }))
-    h.loginStatus.mockImplementation(async () => login({ label: 'work', state: 'failed', done: true, error: 'the sign-in did not finish' }))
+    // The server's answer is the test's to change: still waiting until the
+    // link is on screen, then failed. A fixed "failed" answer let a poll
+    // on a slow run end the sign-in before the link was seen.
+    let failed = false
+    h.loginStatus.mockImplementation(async () =>
+      failed ? login({ label: 'work', state: 'failed', done: true, error: 'the sign-in did not finish' }) : login({ label: 'work' }),
+    )
     const { onDone } = openNew()
     fireEvent.click(screen.getByRole('radio', { name: /^Claude/ }))
     fireEvent.change(screen.getByTestId('llm-login-label'), { target: { value: 'work' } })
     fireEvent.click(screen.getByTestId('llm-login-start'))
     await screen.findByTestId('llm-login-link')
+    failed = true
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600)
     })
-    expect(screen.getByRole('dialog', { name: 'Sign-in didn’t finish' })).toBeTruthy()
+    expect(await screen.findByRole('dialog', { name: 'Sign-in didn’t finish' })).toBeTruthy()
     const note = screen.getByTestId('dialog-error')
     expect(note.textContent).toContain('K2 couldn’t sign in to Claude.')
     expect(note.textContent).toContain('Try again, or paste an API token instead.')
     expect(note.textContent).toContain('The server said: the sign-in did not finish.')
     expect(onDone).not.toHaveBeenCalled()
     // A failed new sign-in leaves nothing saved: Try again adds it again.
+    failed = false
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() => expect(h.addLogin).toHaveBeenCalledTimes(2))
+    // The new sign-in is up (its link shows) before it is failed too.
+    await screen.findByTestId('llm-login-link')
+    failed = true
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1600)
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Paste an API token instead' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Paste an API token instead' }))
     expect(screen.getByRole('dialog', { name: 'Add a token' })).toBeTruthy()
     expect((screen.getByRole('radio', { name: 'Paste an API token' }) as HTMLInputElement).checked).toBe(true)
     expect((screen.getByTestId('llm-login-label') as HTMLInputElement).value).toBe('work')

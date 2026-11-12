@@ -249,7 +249,13 @@ fn a_sidecar_shares_its_parents_desktop_one_holder_at_a_time() {
     let (s, r) = env_call(&side, json!({}));
     assert_eq!((s, code(&r)), (403, "desktop_in_use"), "{r}");
     assert_eq!(r["holder"], json!({"by": "scientist", "name": "scientist", "until": until}), "{r}");
-    assert!(r["error"]["hint"].as_str().unwrap().contains("scientist"), "{r}");
+    let hint = r["error"]["hint"].as_str().unwrap();
+    assert!(hint.contains("scientist"), "{r}");
+    // In plain words (L9: the box said "until 1794491163 (Unix time)" and
+    // "alpha (alpha)"): a clock time and how long.
+    assert!(hint.contains("(in 30 min)"), "{hint}");
+    assert!(!hint.contains("Unix time") && !hint.contains(&until.to_string()), "{hint}");
+    assert!(!hint.contains("scientist (scientist)"), "{hint}");
     assert!(audit_lines().iter().any(|l| l["event"] == "agent_hold" && l["outcome"] == "refused_in_use" && l["who"] == "agent:scientist/helper"));
     // A release lets it in, on the same desktop.
     let (_, r) = env_call(&main, json!({"release": true}));

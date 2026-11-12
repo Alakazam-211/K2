@@ -16,6 +16,7 @@
 //! | [`cores`] | Settings → Cores → Multiplayer: the per-core switches, the `core_off` gate, turning a core on or off |
 //! | [`routes`] | `/cli/docs/*` (K2) |
 //! | [`tier0`] | the same routes on any other file: presence, a lease, versions and restore (tier 0) |
+//! | [`versions`] | a tier-0 doc's new version, told to every client (`doc_version_changed`) |
 //! | [`export`] | `k2 doc export`: the kit's export verb (P24), jobs, placement, audit |
 //! | [`export_worker`] | the `k2-export` worker: which binary, its hello, limits, slots |
 //! | [`live`] | `WS /cli/docs/live`: the Live view's socket (plan L2), one person's tab joined to the kit's session |
@@ -68,6 +69,7 @@ pub mod shares;
 pub mod target;
 pub mod tier0;
 pub mod turn;
+pub mod versions;
 pub mod watch;
 
 use std::collections::{HashMap, HashSet};

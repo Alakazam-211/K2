@@ -435,6 +435,9 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             let bytes = body_bytes(c)?;
             let j = join(s, c, Stay::UntilIdle)?;
             let w = s.write_bytes_with(j.conn, &bytes, base, &blob_write_options(c))?;
+            if w.changed {
+                super::versions::announce(&t.key(), w.version);
+            }
             on_behalf_reply(s, c, j.conn, json!({ "result": write_json(&w) }), w.changed.then_some(w.version))
         }
         routes::VERSIONS => {
@@ -480,6 +483,9 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             let v = version_param(c, "version", "a version id from k2 doc versions")?;
             let j = join(s, c, Stay::UntilIdle)?;
             let w = s.restore_with(j.conn, v, &blob_write_options(c))?;
+            if w.changed {
+                super::versions::announce(&t.key(), w.version);
+            }
             on_behalf_reply(s, c, j.conn, json!({ "restored": v, "result": write_json(&w) }), w.changed.then_some(w.version))
         }
         routes::NAME => {

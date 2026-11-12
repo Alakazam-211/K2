@@ -760,6 +760,9 @@ pub(crate) fn event_scope_path(event: &SessionEvent) -> Option<&str> {
         // Like DocStructureChanged: a client with that file open matches
         // workspace and rel, and shows the notice once.
         SessionEvent::DocConflictCopy { .. } => None,
+        // Like DocConflictCopy: a client with that file open matches
+        // workspace and rel, and re-reads the file's bytes.
+        SessionEvent::DocVersionChanged { .. } => None,
         // prd-app-tickets-websocket-v1 — APP-LEVEL like FeedbackChanged.
         // The desktop board ignores it (it refetches on feedback_changed);
         // the app activity socket maps it per room on projectId.
@@ -1203,6 +1206,12 @@ mod tests {
                 kept: 3,
                 copy: Some(".k2/conflicts/notes (Ada's version).md".into()),
                 text: "Someone saved over Ada's change to notes.md. Both are kept: .k2/conflicts/notes (Ada's version).md".into(),
+            },
+            SessionEvent::DocVersionChanged {
+                project_id: "p".into(),
+                workspace: "/x/foo".into(),
+                rel: "models/house.obj".into(),
+                version: 4,
             },
             SessionEvent::TicketChanged {
                 project_id: "p".into(),

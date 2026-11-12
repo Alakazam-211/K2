@@ -796,6 +796,22 @@ pub enum SessionEvent {
         copy: Option<String>,
         text: String,
     },
+    /// Tier 0: an any-file doc has a new version (`docs/versions.rs`): a
+    /// write or restore through `/cli/docs/*`, or another program's save
+    /// that became a version. Sent once per version, whoever wrote it. A
+    /// client with that file open (`workspace` + `rel`) re-reads its bytes
+    /// (3D model, image, PDF and the other any-file previews). File name
+    /// and version number only.
+    /// Wire: `{ "kind": "doc_version_changed", "projectId": "<workspace
+    /// id>", "workspace": "<absolute root>", "rel": "<path in it>",
+    /// "version": n }`.
+    DocVersionChanged {
+        #[serde(rename = "projectId")]
+        project_id: String,
+        workspace: String,
+        rel: String,
+        version: u64,
+    },
 
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
     /// once per stored ticket mutation from `feedback_routes.rs`, next to
@@ -1272,6 +1288,7 @@ impl SessionEvent {
             SessionEvent::BoardFileChanged { .. } => "board_file_changed",
             SessionEvent::DocStructureChanged { .. } => "doc_structure_changed",
             SessionEvent::DocConflictCopy { .. } => "doc_conflict_copy",
+            SessionEvent::DocVersionChanged { .. } => "doc_version_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",

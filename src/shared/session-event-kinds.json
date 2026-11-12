@@ -35,6 +35,7 @@
   "board_file_changed": "app",
   "doc_structure_changed": "app",
   "doc_conflict_copy": "app",
+  "doc_version_changed": "app",
   "ticket_changed": "app",
   "mail_changed": "app",
   "sew_changed": "app",

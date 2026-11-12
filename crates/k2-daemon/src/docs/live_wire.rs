@@ -734,6 +734,12 @@ pub enum ClientFrame {
     /// (`overwritten`), so they're delivered (`Session::take_notes`) and no
     /// later snapshot or verb repeats them. No reply.
     TakeNotes,
+    /// `watch` (the keyed watch, feature `keyed_watch`): open the watch if
+    /// there is none, then a fresh snapshot ([`super::live_watch`]).
+    Watch,
+    /// `report {seq}`: the last watch frame the client applied (taken,
+    /// unused on this engine).
+    Report { seq: u64 },
 }
 
 /// Why a client frame was refused: its `op` when it had one (the reply is
@@ -823,6 +829,8 @@ pub fn parse(text: &str) -> Result<ClientFrame, BadFrame> {
         },
         "hello" => ClientFrame::Hello,
         "take_notes" => ClientFrame::TakeNotes,
+        "watch" => ClientFrame::Watch,
+        "report" => ClientFrame::Report { seq: u64_field(o, "seq").map_err(bad)? },
         other => return Err(bad(format!("unknown frame type `{other}`"))),
     })
 }
@@ -881,6 +889,9 @@ mod tests {
         assert_eq!(parse(r#"{"type":"view","first":2,"last":9}"#), Ok(ClientFrame::View { root: None, first: 2, last: 9 }));
         assert_eq!(parse(r#"{"type":"hello","root":"source","resume":4}"#), Ok(ClientFrame::Hello));
         assert_eq!(parse(r#"{"type":"take_notes"}"#), Ok(ClientFrame::TakeNotes));
+        assert_eq!(parse(r#"{"type":"watch"}"#), Ok(ClientFrame::Watch));
+        assert_eq!(parse(r#"{"type":"report","seq":64}"#), Ok(ClientFrame::Report { seq: 64 }));
+        assert!(parse(r#"{"type":"report"}"#).is_err(), "a report names its seq");
 
         let b = parse(r#"{"type":"edit","op":8,"root":"source","base":1,"hunks":[[0,0,"x"]]}"#).expect_err("array hunk");
         assert_eq!(b.op, Some(8), "refused with its op");

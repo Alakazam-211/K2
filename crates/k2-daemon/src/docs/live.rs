@@ -52,6 +52,10 @@
 //! - `visible` (and the Thread's `{"t":"viewing","visible"}`) →
 //!   `set_visible`; `view` → `set_view`; `hello` is ignored (the URL carries
 //!   root and resume).
+//! - `watch` / `report` (a deck whose welcome lists `keyed_watch`): the
+//!   kit's keyed watch ([`super::live_watch`]): a snapshot in pages, then
+//!   one `ops_change` per change in place of the bare `change` frames.
+//!   Anywhere else, `error` with `MPC-E113`.
 //!
 //! The kit's `tick` (every 250 ms, `docs/mod.rs`) also flushes rosters, so
 //! carets arrive without a timer of our own.
@@ -346,6 +350,9 @@ struct Opened {
     changes: Receiver<ChangeEvent>,
     roster: Receiver<RosterEvent>,
     welcome: Value,
+    /// What the welcome listed in `features` (`keyed_watch` for a deck the
+    /// kit can watch by key; none for a text doc).
+    features: Vec<&'static str>,
     /// A live deck (watched; the preview service follows its changes).
     deck: bool,
     rel: String,
@@ -508,8 +515,14 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             t.tier.family(),
             &t.rel,
         );
+        // The keyed watch (kit v0.16): listed only for a doc the kit can
+        // watch by key, never a text doc or a table.
+        let features = super::live_watch::features(&session);
         if let Value::Obj(o) = &mut welcome {
             o.extend(super::live_deck::welcome_extras(&t, &session, conn));
+            if !features.is_empty() {
+                o.push(("features".into(), super::live_watch::features_value(&features)));
+            }
         }
         return Ok(Opened {
             session,
@@ -522,6 +535,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             changes,
             roster,
             welcome,
+            features,
             deck: true,
             rel: t.rel.clone(),
             events,
@@ -563,6 +577,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         changes,
         roster,
         welcome,
+        features: Vec::new(),
         deck: false,
         rel: t.rel.clone(),
         events,
@@ -917,6 +932,8 @@ struct Worker {
     events: super::host_events::Subscription,
     /// Turns this doc's changes carried (a `turn_end` is sent only for those).
     turns: super::live_deck::Turns,
+    /// The keyed watch, once the client sends `watch` ([`super::live_watch`]).
+    watch: super::live_watch::SocketWatch,
 }
 
 /// However the worker ends (a spawn that failed included), its connection
@@ -958,6 +975,7 @@ impl Worker {
             rel: o.rel,
             events: o.events,
             turns: super::live_deck::Turns::default(),
+            watch: super::live_watch::SocketWatch::new(&o.features),
         }
     }
 
@@ -1094,6 +1112,10 @@ impl Worker {
             return Ok(());
         }
         self.own.retain(|v| *v >= e.version);
+        if self.watch.open() {
+            // The keyed watch carries this change as `ops_change`.
+            return Ok(());
+        }
         let t = wire::change_frame(&e).to_json();
         if t.len() > wire::FRAME_MAX {
             // Withheld: the client sees the version gap and asks `since`.
@@ -1114,6 +1136,13 @@ impl Worker {
             }
             let e = self.peeked.take().expect("peeked");
             self.forward(e)?;
+        }
+        // The keyed watch's change frames, and a fresh snapshot when it
+        // needs one (nothing before the client's `watch`).
+        if !self.changes_gone {
+            for t in self.watch.pump(&self.session) {
+                self.send_text(t)?;
+            }
         }
         loop {
             match self.roster.try_recv() {
@@ -1267,7 +1296,12 @@ impl Worker {
         // only the last tick. Carets and view hints wait for the next poll.
         let touches_doc = matches!(
             f,
-            ClientFrame::Edit { .. } | ClientFrame::Since { .. } | ClientFrame::Undo { .. } | ClientFrame::Redo { .. } | ClientFrame::Snapshot { .. }
+            ClientFrame::Edit { .. }
+                | ClientFrame::Since { .. }
+                | ClientFrame::Undo { .. }
+                | ClientFrame::Redo { .. }
+                | ClientFrame::Snapshot { .. }
+                | ClientFrame::Watch
         );
         if touches_doc && !self.login.valid_now() {
             return Err(Stop::Close(self.signed_out()));
@@ -1310,6 +1344,21 @@ impl Worker {
                 let _ = self.session.set_visible(self.conn, v);
                 Ok(())
             }
+            // The keyed watch: a snapshot, then its change frames from the
+            // pump. Not listed in this socket's welcome: `MPC-E113`.
+            ClientFrame::Watch => match self.watch.on_watch(&self.session, self.conn) {
+                Ok(frames) => {
+                    for t in frames {
+                        self.send_text(t)?;
+                    }
+                    Ok(())
+                }
+                Err(n) => self.send(wire::error_frame(&wire::report("MPC-E113", n.0))),
+            },
+            ClientFrame::Report { .. } => match self.watch.on_report() {
+                Ok(()) => Ok(()),
+                Err(n) => self.send(wire::error_frame(&wire::report("MPC-E113", n.0))),
+            },
             ClientFrame::Hello => Ok(()),
             // The app showed the removed-text notes: delivered, so no later
             // snapshot repeats them. No reply; a refusal (no read right) is

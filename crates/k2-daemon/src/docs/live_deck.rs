@@ -19,18 +19,20 @@
 //!   (only for a turn this doc's changes carried), comment and anchor
 //!   events.
 //!
-//! **What it takes:** `since`, `visible`, `hello`. Every frame that writes
-//! or reads text (`edit`, `undo`, `redo`, `snapshot`, `cursor`, `view`,
-//! `take_notes`) is refused, `MPC-E113`, with its `op` when it has one.
+//! **What it takes:** `since`, `visible`, `hello`, and the keyed watch's
+//! `watch` and `report`. Every frame that writes or reads text (`edit`,
+//! `undo`, `redo`, `snapshot`, `cursor`, `view`, `take_notes`) is refused,
+//! `MPC-E113`, with its `op` when it has one.
 //!
-//! **Plugging in the keyed watch** (the kit's next tag: `keyed_snapshot`,
-//! `keyed_page`, `ops_change`, `watch_refused`): the welcome's `previews`
-//! block becomes the `keyed_snapshot`'s schema and containers, `ops_change`
-//! replaces the deck's bare `change` frames (its `render_hashes` and
-//! `containers` say which slides to re-request), and the client frames
-//! `watch`, `select`, `focus` and `pointer` are added here, listed in
-//! `welcome.features`. The host events and the preview service stay as
-//! they are.
+//! **The keyed watch** (kit v0.16, [`super::live_watch`]): the welcome
+//! lists `"keyed_watch"` in `features` when the deck's session is keyed
+//! watchable. A client that sends `watch` gets `keyed_snapshot` and its
+//! `keyed_page`s, then one `ops_change` per change (its `render_hashes` and
+//! `containers` say which slides to re-request); its socket stops sending
+//! the bare `change` frames. A client that never sends `watch` (an older
+//! build) keeps this path as it was: the welcome's `previews`, `change`
+//! frames and `preview_ready`. The host events and the preview service stay
+//! as they are for both.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -117,7 +119,9 @@ pub fn refuse(f: &ClientFrame) -> Option<Value> {
         ClientFrame::Cursor { .. } => (None, "cursor"),
         ClientFrame::View { .. } => (None, "view"),
         ClientFrame::TakeNotes => (None, "take_notes"),
-        ClientFrame::Since { .. } | ClientFrame::Visible(_) | ClientFrame::Hello => return None,
+        ClientFrame::Since { .. } | ClientFrame::Visible(_) | ClientFrame::Hello | ClientFrame::Watch | ClientFrame::Report { .. } => {
+            return None
+        }
     };
     let e = wire::unreadable(&format!("`{what}` isn't taken on a deck: people watch a live deck, agents change it with k2 doc"));
     Some(match op {
@@ -216,7 +220,7 @@ mod tests {
         assert!(r.contains("k2 doc"), "{r}");
         let r = refuse(&ClientFrame::Cursor { root: "source".into(), version: 1, anchor: 0, head: 0 }).expect("refused").to_json();
         assert!(r.starts_with(r#"{"type":"error","error":{"id":"MPC-E113""#), "{r}");
-        for ok in [ClientFrame::Since { op: 1, version: 2 }, ClientFrame::Visible(true), ClientFrame::Hello] {
+        for ok in [ClientFrame::Since { op: 1, version: 2 }, ClientFrame::Visible(true), ClientFrame::Hello, ClientFrame::Watch, ClientFrame::Report { seq: 3 }] {
             assert!(refuse(&ok).is_none(), "{ok:?}");
         }
         assert!(root_ok(None) && root_ok(Some("slides")) && !root_ok(Some("source")));

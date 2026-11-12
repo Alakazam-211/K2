@@ -20,6 +20,7 @@
 //! | [`export_worker`] | the `k2-export` worker: which binary, its hello, limits, slots |
 //! | [`live`] | `WS /cli/docs/live`: the Live view's socket (plan L2), one person's tab joined to the kit's session |
 //! | [`live_wire`] | that socket's JSON frames (wire 3) |
+//! | [`live_watch`] | that socket's keyed watch (a deck): `keyed_snapshot`, `keyed_page`, `ops_change` |
 //! | [`live_deck`] | that socket on a live deck: watched, with previews and host events |
 //! | [`blob_packs`] | which pack a tier-0 file opens with (PSD/PSB files: the PSD pack, with a layer index) and its verbs |
 //! | [`indexer`] | the structure indexer (jobs in the `k2-export` worker) and the blob-doc change events |
@@ -57,6 +58,7 @@ pub mod host_events;
 pub mod indexer;
 pub mod live;
 pub mod live_deck;
+pub mod live_watch;
 pub mod live_wire;
 pub mod preview;
 pub mod routes;

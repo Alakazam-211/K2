@@ -166,13 +166,18 @@ renamed `*.old-<time>`), installs the new public key with
 `sudo /usr/local/libexec/k2sign/k2sign-admin set-approver ~/.k2-release-approve/approver.pem`,
 then proves Touch ID, the password, and (hands off) that an SSH-started request with nobody answering the sheet makes no approval.
 
-**Approving on the phone (prd-signed-approvals-v1 S1).** The policy line
-`require = biometric device` asks for Face ID or Touch ID on the phone.
-Once the phone app has made its keys and shows their six fingerprint words,
-pin its Face ID key at the build Mac, typing the words from the phone's
-screen:
-`sudo /usr/local/libexec/k2sign/k2sign-admin add-approver rosson-iphone-bio /abs/path/bio.pem --person <K2 login> --check biometric --view device --words "<six words>"`
-(`--person` is the K2 login the approval card goes to). From then on Step
+**Approving on the phone (prd-signed-approvals-v1 S1).** The policy lines
+`require = biometric device` and `require_attest = production` ask for
+Face ID or Touch ID on the phone, from an App Store or TestFlight build
+whose keys App Attest vouched for. At the build Mac:
+`sudo /usr/local/libexec/k2sign/k2sign-admin enrol-challenge` prints a
+challenge for the phone's enrol screen; the phone returns an enrolment file
+(App Attest over the challenge and its two keys); then
+`sudo /usr/local/libexec/k2sign/k2sign-admin add-approver rosson-iphone --attest /abs/path/enrolment.json --person <K2 login> --words "<six words from the phone>"`
+checks it once (Apple's leaf lasts three days; the result is stored) and
+pins `rosson-iphone-bio` (biometric, device) and `rosson-iphone-passcode`
+(credential, device) with the environment (`--person` is the K2 login the
+approval card goes to). From then on Step
 1.55 asks the phone (`k2 approve request … --wait`, a K2 approval card) and
 the Mac's K2 Release Approve key (`mac-legacy`, credential host) no longer
 opens sessions; `remove-approver` puts it back. `list-approvers` shows every

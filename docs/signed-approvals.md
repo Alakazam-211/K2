@@ -69,6 +69,13 @@ words) or `page` (a web page). You pin these yourself when you add the key;
 compare the six fingerprint words the device shows with
 `k2 approve key-id <name>.pem`.
 
+An optional fifth column, **attest**, says how the key was proven when you
+pinned it: `production` or `development` (the K2 phone app's App Attest
+attestation, checked once at enrolment: Apple's leaf certificate lasts three
+days, so you store the result, not the certificate) or `none` (the default:
+you compared the words). `--attest production` refuses any key that wasn't
+attested by an App Store or TestFlight build (`not_attested`).
+
 ## With the k2 CLI
 
 ```

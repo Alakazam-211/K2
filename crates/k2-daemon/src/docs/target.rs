@@ -55,7 +55,9 @@ const DESIGN_EXTENSIONS: &[&str] = &[
     "psb", "ai", "indd", "xcf", "kra", "sketch", "afdesign", "afphoto",
     // CAD
     "dwg", "dxf", "dgn", "step", "stp", "iges", "igs", "sat", "sldprt", "sldasm", "slddrw", "ipt", "iam", "idw", "f3d", "f3z",
-    "3dm", "skp", "fcstd", "catpart", "catproduct", "x_t", "x_b", "rvt", "rfa", "ifc",
+    "3dm", "skp", "fcstd", "catpart", "catproduct", "x_t", "x_b", "rvt", "rfa", "ifc", "ifczip", "p21",
+    // electronics design (KiCad's text formats: live text merges could duplicate entity ids)
+    "kicad_sch", "kicad_pcb", "kicad_sym", "kicad_mod",
     // 3D models and scenes
     "stl", "obj", "ply", "gltf", "fbx", "dae", "usd", "usda", "usdc", "usdz", "abc", "3ds", "c4d", "max", "ma", "mb", "lwo",
     "blend1",
@@ -693,7 +695,8 @@ mod tests {
         for p in [
             "art/poster.psd", "art/big.PSB", "scene.blend", "scene.blend1", "part.dwg", "plan.DXF", "gear.step", "gear.stp",
             "gear.iges", "bracket.sldprt", "body.f3d", "house.skp", "print.stl", "mesh.obj", "mesh.ply", "model.fbx",
-            "model.glb", "model.gltf", "print.3mf", "stage.usdz",
+            "model.glb", "model.gltf", "print.3mf", "stage.usdz", "board.kicad_pcb", "sheet.kicad_sch", "lib.kicad_sym",
+            "fp.kicad_mod", "part.p21", "site.ifczip",
         ] {
             assert_eq!(Tier::of(p), Tier::Blob, "{p}");
         }

@@ -1025,3 +1025,21 @@ fn an_agent_desktop_id_maps_back_to_its_workspace_even_when_hashed() {
     assert_eq!(s, 200, "{st}");
     assert_eq!((st["name"].as_str(), st["workspaceId"].as_str()), (Some("legacy"), Some("Legacy.ID")), "{st}");
 }
+
+/// The Settings row and `k2 desktop allow` read an agent's switch by its
+/// workspace (project id, handle or path), not by a desktop id they would
+/// have to compute (LD-38).
+#[test]
+fn status_by_workspace_names_the_agents_desktop_and_its_switch() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    let (s, st) = get_q(&owner, "/cli/desktop/status", &[("workspace", "w1")]);
+    assert_eq!(s, 200, "{st}");
+    assert_eq!((st["desktop"].as_str(), st["agentsAllowed"].as_bool()), (Some("virtual:w1"), Some(true)), "{st}");
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("workspace", "/tmp/w2")]);
+    assert_eq!((st["desktop"].as_str(), st["agentsAllowed"].as_bool()), (Some("virtual:w2"), Some(false)), "a path works too: {st}");
+    let (s, r) = get_q(&owner, "/cli/desktop/status", &[("workspace", "nope")]);
+    assert_eq!((s, code(&r)), (404, "workspace_not_found"), "{r}");
+    let (s, r) = get_q(&owner, "/cli/desktop/status", &[("workspace", "w1"), ("desktop", "virtual")]);
+    assert_eq!((s, code(&r)), (400, "bad_request"), "one or the other: {r}");
+}

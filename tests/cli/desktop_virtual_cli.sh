@@ -85,6 +85,9 @@ class H(BaseHTTPRequestHandler):
         if path == "/cli/desktop/setup" and os.path.exists(os.path.join(work, "setup_async")):
             open(os.path.join(work, "setup_polls"), "w").write("2")
             return self._reply(200, {"ok": True, "state": "setting_up", "message": "Installing the desktop packages\u2026"})
+        if path == "/cli/agent-access/set":
+            b = json.loads(body)
+            return self._reply(200, {"ok": True, "workspace": "scientist", "toggle": b.get("toggle"), "agentsCanUseDesktop": b.get("value")})
         if path == "/cli/desktop/setup":
             return self._reply(409, {"ok": False, "error": {"code": "setup_manual", "hint": "Run this, then try again: sudo apt-get update && sudo apt-get install --no-install-recommends xvfb icewm fonts-dejavu-core"}, "manual": "sudo apt-get update"})
         return self._reply(404, {"ok": False, "error": {"code": "not_found", "hint": path}})
@@ -167,6 +170,26 @@ set +e
 k2 status --no-wait >/dev/null 2>&1; rc=$?
 set -e
 [ "$rc" = "2" ] && pass "--no-wait only goes with setup" || bad "status --no-wait exit $rc"
+
+# "Allow a virtual desktop" for one agent (LD-38): agent-access/set with
+# toggle desktop; no on/off reads it from status by workspace.
+out="$(k2 allow on --workspace /ws/scientist)"
+case "$(last_req)" in *"POST /cli/agent-access/set?"*'"workspace": "/ws/scientist"'*'"toggle": "desktop"'*'"value": true'*) pass "allow on posts toggle desktop" ;; *) bad "allow on request: $(last_req)" ;; esac
+case "$out" in *"Allow a virtual desktop is on for scientist."*"k2 desktop env"*) pass "allow on says so" ;; *) bad "allow on: $out" ;; esac
+out="$(k2 allow off --workspace /ws/scientist)"
+case "$out" in *"Allow a virtual desktop is off for scientist."*) pass "allow off" ;; *) bad "allow off: $out" ;; esac
+case "$(last_req)" in *'"value": false'*) pass "allow off sends false" ;; *) bad "allow off request: $(last_req)" ;; esac
+out="$(k2 allow --workspace ws1)"
+case "$(last_req)" in "GET /cli/desktop/status?workspace=ws1 ") pass "allow reads status by workspace" ;; *) bad "allow request: $(last_req)" ;; esac
+case "$out" in *"Allow a virtual desktop is"*"for scientist."*) pass "allow shows it" ;; *) bad "allow: $out" ;; esac
+set +e
+k2 status --workspace ws1 >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" = "2" ] && pass "--workspace only goes with allow" || bad "status --workspace exit $rc"
+set +e
+k2 allow maybe >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" = "2" ] && pass "allow takes on or off" || bad "allow maybe exit $rc"
 
 [ "$fail" = "0" ] || exit 1
 echo "desktop_virtual_cli: ok"

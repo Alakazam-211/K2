@@ -389,7 +389,7 @@ pub(crate) fn workspace_by_id(id: &str) -> Option<Workspace> {
     })
 }
 
-fn workspace_by_token(token: &str) -> Option<Workspace> {
+pub(crate) fn workspace_by_token(token: &str) -> Option<Workspace> {
     let token = token.trim();
     if token.is_empty() {
         return None;

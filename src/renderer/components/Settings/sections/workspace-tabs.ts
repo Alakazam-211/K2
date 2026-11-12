@@ -54,6 +54,7 @@ const PERMISSION_SETTINGS = new Set([
   'projects.agents-can-use-compute',
   'projects.agents-can-operate-compute',
   'projects.agents-can-manage-compute',
+  'projects.agents-can-use-desktop',
   'projects.agents-can-upgrade-postgres',
   'projects.db-agent-create',
   'projects.agents-can-manage-projects',

@@ -118,7 +118,8 @@ ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
   gone (its agent's workspace was removed).
 
   An agent's desktop: a person turns on "Allow a virtual desktop" for that
-  agent (Settings → Workspaces → <agent> → Agent). Each agent's desktop is
+  agent (Settings → Workspaces → <agent> → Agent → Desktop, or
+  k2 desktop allow on --workspace <agent>; an Owner or Admin). Each agent's desktop is
   separate, not private: until agent isolation (0.49) every desktop runs as
   this server's K2 user, so one agent could reach another's. There is no
   terminal on these desktops, and a k2 command run by a program on one

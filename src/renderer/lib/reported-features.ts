@@ -90,6 +90,11 @@ export const REPORTED_FEATURES = {
    *  Desktop, Settings has no Remote Desktop page, and a saved Desktop tab
    *  says to update K2 on that computer instead of dialling. */
   'remote-desktop-v1': 'remote-desktop-v1',
+  /** prd-linux-virtual-desktop-v1 LD-16 (0.46.12): a Linux daemon with the
+   *  virtual desktop routes (start, stop, setup, list, env). Without it the
+   *  Desktop tab shows no Start, Set up or picker, and Settings has no
+   *  "Allow a virtual desktop" row. */
+  'virtual-desktop-v1': 'virtual-desktop-v1',
   /** thread-read-v1 (0.46.1): per-person unread counts for Threads and
    *  project chats. `GET /cli/thread/unread`, `POST /cli/thread/read`,
    *  `POST /cli/project-group/read`, `POST /cli/thread/mute`, the

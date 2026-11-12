@@ -70,6 +70,7 @@ import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspaceP
 import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
 import { primaryScope } from '@/kessel/server-scope'
+import { VIRTUAL_DESKTOP_FEATURE } from '@/components/Desktop/desktop-state'
 import { RemoteInstructToggle } from '../shared/RemoteInstructToggle'
 import { BetaTag, Button, Callout, Input, OverflowMenu, SearchField, Spinner, Surface, Tag, Toggle } from '@/components/ui'
 import { WorkspaceLlmTokens } from '../shared/LlmLoginPicker'
@@ -82,6 +83,7 @@ import { AgentAppsAccess } from './AgentAppsAccess'
 import { AgentPermissionCardsRow, AskedChip, PermissionAsksProvider } from './PermissionCardsSection'
 import { AgentsManageOrgChartToggle } from './AgentsManageOrgChartToggle'
 import { AgentsReadTranscriptsToggle } from './AgentsReadTranscriptsToggle'
+import { AgentsVirtualDesktopToggle } from './AgentsVirtualDesktopToggle'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { WorkspaceSettingsPage } from './WorkspaceSettingsPage'
 import {
@@ -132,6 +134,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.agents-can-refresh-chat', section: 'projects', label: 'Let this agent refresh its pinned chat', description: 'It can start a fresh pinned chat when its chat goes stale; the old chat stays in Chat history. Off: it asks you first', keywords: ['can refresh its own pinned chat', 'agents_can_refresh_chat', 'chat_refresh', 'refresh', 'pinned chat', 'new chat', 'k2 agent refresh', 'chat.refresh', 'stale'] },
   { id: 'projects.agents-can-operate-compute', section: 'projects', label: 'Let this agent operate compute nodes', description: 'It can pause, resume, update and restart your compute machines without asking; changes that need full control of a machine still ask you', keywords: ['allow this agent to operate compute nodes', 'agents_can_operate_compute', 'compute_operate', 'operate', 'compute', 'compute nodes', 'node', 'machines', 'pause', 'update', 'k2 compute', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-projects', section: 'projects', label: 'Let this agent manage K2 projects', description: 'It can create, rename and delete K2 projects and change their members. Off: it can still read them and post in its project chat', keywords: ['manage k2 projects', 'agents_can_manage_projects', 'projects_manage', 'project', 'projects', 'k2 project', 'members', 'project chat', 'passport', 'agent'] },
+  { id: 'projects.agents-can-use-desktop', section: 'projects', label: 'Allow a virtual desktop', description: 'On a Linux server: it can start a desktop of its own and put windows on it, such as a browser, so you can watch and help in a Desktop tab. Separate, not private', keywords: ['allow a virtual desktop', 'virtual desktop', 'desktop', 'xvfb', 'screen', 'browser', 'windows', 'agents_can_use_desktop', 'desktop.use', 'k2 desktop env', 'linux', 'agent'] },
   { id: 'projects.agents-can-read-transcripts', section: 'projects', label: 'Read call transcripts', description: "It can read the transcripts of recorded calls in this server's voice rooms; every read is logged and each person's notice says agents may read it. Only the owner turns it on; shown while voice rooms are on", keywords: ['read call transcripts', 'transcripts', 'recording', 'recordings', 'voice', 'calls', 'voice_transcripts', 'voice.transcripts-read', 'k2 voice transcript', 'agent'] },
   { id: 'projects.agents-can-manage-org-chart', section: 'projects', label: 'Manage the org chart', description: 'It can make and change orgs, members, heads and lines on the Org Chart; it can make itself an org head. Only the owner turns it on; shown while the Org Chart is on', keywords: ['manage the org chart', 'org chart', 'organization', 'orgs', 'org head', 'bulletin', 'org_chart_manage', 'organization.manage', 'k2 organization', 'passport', 'agent'] },
   { id: 'projects.agents-can-manage-gardens', section: 'projects', label: 'Let this agent manage Gardens and data sources', description: 'It can approve and pause data sources, turn on triggers and edit Gardens without asking; every act is logged', keywords: ['manage gardens and data sources', 'agents_can_manage_gardens', 'gardens_manage', 'gardens', 'garden', 'zen', 'widgets', 'data sources', 'sources', 'triggers', 'approve', 'k2 sources', 'k2 zen', 'passport', 'agent'] },
@@ -1834,6 +1837,13 @@ function ProjectDetail({
                   <AgentsOperateComputeToggle project={project} />
                   <AgentsManageComputeToggle project={project} />
                 </SettingsGroup>
+                {/* Virtual desktops (prd-linux-virtual-desktop-v1 LD-38): only on a
+                    Linux server that has them; the row hides itself elsewhere. */}
+                {primaryScope().serverSupports(VIRTUAL_DESKTOP_FEATURE) ? (
+                  <SettingsGroup title="Desktop" card>
+                    <AgentsVirtualDesktopToggle project={project} scope={primaryScope()} />
+                  </SettingsGroup>
+                ) : null}
                 <SettingsGroup title="Database" card>
                   <DbAgentCreateToggle project={project} />
                   <AgentsManagePostgresToggle project={project} />

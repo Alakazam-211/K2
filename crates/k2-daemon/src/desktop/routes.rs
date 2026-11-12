@@ -300,6 +300,21 @@ pub fn current_desktop() -> String {
 /// The desktop a request names, checked; or [`current_desktop`].
 fn resolve_desktop(req: &Req<'_>, body: &Value) -> Result<String, CliResponse> {
     let asked = if req.is_post { str_field(body, "desktop").map(str::to_string) } else { req.params.get("desktop").map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) };
+    // GET `?workspace=<project id, handle or path>`: that agent's desktop
+    // (the Settings row and `k2 desktop allow` read its switch this way).
+    let ws = if req.is_post { None } else { req.params.get("workspace").map(|s| s.trim()).filter(|s| !s.is_empty()) };
+    if let Some(ws) = ws {
+        if asked.is_some() {
+            return Err(refuse(400, "bad_request", "send desktop or workspace, not both"));
+        }
+        if !linux_here() {
+            return Err(linux_only());
+        }
+        let Some(w) = crate::sidecar_routes::workspace_by_token(ws) else {
+            return Err(refuse(404, "workspace_not_found", format!("no workspace '{ws}'")));
+        };
+        return vd::agent_desktop(&w.id).ok_or_else(|| refuse(404, "workspace_not_found", format!("no workspace '{ws}'")));
+    }
     let Some(id) = asked else { return Ok(current_desktop()) };
     if !vd::valid_id(&id) || !(id == CONSOLE || vd::is_virtual(&id)) {
         return Err(refuse(400, "bad_desktop", "desktop is console, virtual, or virtual:<workspace id>"));

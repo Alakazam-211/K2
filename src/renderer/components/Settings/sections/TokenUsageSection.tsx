@@ -74,7 +74,7 @@ import {
 } from './usage/usage-page'
 import { Button, Segmented, Surface } from '@/components/ui'
 import { useElementWidth } from '@/hooks/useElementWidth'
-import { SETTING_ROW_HINT, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
+import { SETTING_ROW_HINT, SETTING_ROW_LABEL_MIN, SettingsGroup, SettingsLoadState, SETTING_LIST_ROW_HOVER } from '../controls/SettingControls'
 
 export const TOKEN_USAGE_MANIFEST: SettingEntry[] = [
   {
@@ -714,8 +714,9 @@ export function TokenUsageSection(): React.JSX.Element {
   return (
     <div ref={rootRef} className="w-full" data-usage-page="" data-usage-layout={columns ? 'two-column' : 'one-column'}>
       <div className={`w-full ${columns ? WIDE_CONTENT_WIDTH : CONTENT_WIDTH} space-y-6 pb-6`}>
-        <header className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+        {/* The server picker drops under the title when they don't fit one line. */}
+        <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+          <div className={SETTING_ROW_LABEL_MIN}>
             <h2 className="type-title text-[var(--color-text-primary)]" data-testid="usage-title">
               Usage
             </h2>

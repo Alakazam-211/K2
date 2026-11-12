@@ -105,6 +105,63 @@ describe('Segmented', () => {
     }
   })
 
+  describe('wider than its line', () => {
+    // Each label is 80 CSS px in full; the line is `room` wide. A cut label
+    // shows 40 of its 80.
+    const layout = (room: number) => {
+      const sw = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('k2-segment-label') ? 80 : 0
+      })
+      const cw = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.testid === 'line') return room
+        return this.classList.contains('k2-segment-label') ? (room < 240 ? 40 : 80) : 0
+      })
+      return () => {
+        sw.mockRestore()
+        cw.mockRestore()
+      }
+    }
+    const pick = [
+      { value: 'a', label: 'Alpha' },
+      { value: 'b', label: 'Bravo', buttonProps: { title: 'Kept' } },
+      { value: 'c', label: 'Charlie' },
+    ] as const
+
+    it('fills the line with equal options, never two lines, and titles each cut label', () => {
+      const restore = layout(150)
+      try {
+        render(
+          <div data-testid="line">
+            <Segmented aria-label="Pick" value="a" onChange={() => {}} options={pick} />
+          </div>,
+        )
+        const group = screen.getByRole('radiogroup', { name: 'Pick' })
+        expect(group.hasAttribute('data-fill')).toBe(true)
+        expect(screen.getByRole('radio', { name: 'Alpha' }).title).toBe('Alpha')
+        expect(screen.getByRole('radio', { name: 'Charlie' }).title).toBe('Charlie')
+        // A caller's own title stays.
+        expect(screen.getByRole('radio', { name: 'Bravo' }).title).toBe('Kept')
+      } finally {
+        restore()
+      }
+    })
+
+    it('keeps its natural width, labels whole and untitled, when the line has room', () => {
+      const restore = layout(400)
+      try {
+        render(
+          <div data-testid="line">
+            <Segmented aria-label="Pick" value="a" onChange={() => {}} options={pick} />
+          </div>,
+        )
+        expect(screen.getByRole('radiogroup', { name: 'Pick' }).hasAttribute('data-fill')).toBe(false)
+        expect(screen.getByRole('radio', { name: 'Alpha' }).hasAttribute('title')).toBe(false)
+      } finally {
+        restore()
+      }
+    })
+  })
+
   it('arrow keys skip disabled segments and wrap', () => {
     const onChange = vi.fn()
     render(<Segmented aria-label="Pick" value="a" onChange={onChange} options={options} />)

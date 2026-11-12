@@ -327,7 +327,7 @@ export function AccessAuditSection(): React.JSX.Element {
               options={FILTERS.map((f) => ({ value: f.mode, label: f.label, buttonProps: { 'data-testid': `audit-filter-${f.mode}` } }))}
             />
             <SearchField
-              className="w-60"
+              className="w-60 max-w-full"
               value={userFilter}
               onChange={(e) => setUserFilter(e.target.value)}
               placeholder="Filter by person"

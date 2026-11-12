@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import { clientToCssPx } from '@/lib/app-zoom'
 import { cx } from './cx'
+import { fitSegmented } from './segmented-fit'
 import { usePressSpring } from './usePressSpring'
 
 export interface SegmentedOption<T extends string> {
@@ -51,6 +52,9 @@ export function Segmented<T extends string>({
     const indicator = thumb.current
     if (!root || !indicator) return
     const place = (): void => {
+      // Fill the line first when the labels don't fit it: that moves the
+      // options the thumb is measured from.
+      fitSegmented(root)
       const on = root.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')
       indicator.hidden = !on
       if (!on) return
@@ -69,9 +73,17 @@ export function Segmented<T extends string>({
     const frame = requestAnimationFrame(() => {
       indicator.dataset.ready = ''
     })
+    // Its own size, and its line's: a narrower card or window can make it
+    // fill the line, a wider one can give the labels back.
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(place)
     observer?.observe(root)
+    if (root.parentElement) observer?.observe(root.parentElement)
+    let live = true
+    void document.fonts?.ready.then(() => {
+      if (live) place()
+    })
     return () => {
+      live = false
       cancelAnimationFrame(frame)
       observer?.disconnect()
     }
@@ -125,7 +137,7 @@ export function Segmented<T extends string>({
             {...o.buttonProps}
             className={cx('k2-segment no-drag', o.buttonProps?.className)}
           >
-            {o.label}
+            <span className="k2-segment-label">{o.label}</span>
           </SegmentButton>
         )
       })}

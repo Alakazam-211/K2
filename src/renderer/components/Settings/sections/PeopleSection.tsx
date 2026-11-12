@@ -23,6 +23,7 @@ import { useSettingsStore } from '@/stores/settings'
 import {
   SETTING_FIELD_WIDTH,
   SETTING_ROW_HINT,
+  SETTING_ROW_LABEL_MIN,
   SaveError,
   SaveNote,
   SettingDropdown,
@@ -625,8 +626,9 @@ function Everyone({
         </SettingsLoadState>
       ) : null}
       <section data-testid="people-overview">
-        <div className="mb-2 flex items-end justify-between gap-4">
-          <div className="min-w-0">
+        {/* The picker drops under the heading when they don't fit one line. */}
+        <div className="mb-2 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+          <div className={SETTING_ROW_LABEL_MIN}>
             <h3 className="flex items-center min-h-[1.5rem] type-heading text-[var(--color-text-primary)]">
               {view === 'people' ? 'People' : 'Apps'}
             </h3>

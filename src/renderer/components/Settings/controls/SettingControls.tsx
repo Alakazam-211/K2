@@ -32,6 +32,16 @@ const SettingsCardContext = createContext(false)
  *  and buttons keep their own width on the same right edge. */
 export const SETTING_FIELD_WIDTH = 'w-60'
 
+/** A row's label column before its control wraps under it. A label and a
+ *  control share a line while the label keeps this much room (10rem); past
+ *  that the control drops under the label and hint, left-aligned at its own
+ *  width, as a stacked row does (a narrow window, the app zoomed in). Flex
+ *  wrapping, so it follows the row's real width at any app zoom, not a
+ *  breakpoint. Pair with `ROW_WRAP` on the row. */
+export const SETTING_ROW_LABEL_MIN = 'grow basis-40 min-w-0'
+/** The row of a label beside a control that may wrap under it. */
+export const ROW_WRAP = 'flex flex-wrap justify-between gap-x-6 gap-y-2'
+
 /** Rounds an avatar in Glass (Terminal's `--radius-field` is 0, so the cut
  *  stays). Wrap the avatar, so other surfaces keep theirs. */
 export const AVATAR_ROUND = 'inline-flex flex-shrink-0 overflow-hidden rounded-[var(--radius-field)]'
@@ -125,12 +135,17 @@ export function SettingRow({
   if (inCard || hint !== undefined || below !== undefined) {
     return (
       <div className={inCard ? 'px-4 py-3' : 'py-2 border-b border-[var(--color-border)]'} data-settings-id={settingId} data-testid={testId}>
-        <div className={`flex justify-between gap-6 ${hint ? 'items-start' : 'items-center'}`}>
-          <div className="flex-1 min-w-0">
+        <div className={`${ROW_WRAP} ${hint ? 'items-start' : 'items-center'}`}>
+          <div className={SETTING_ROW_LABEL_MIN}>
             <div className={SETTING_ROW_LABEL}>{label}</div>
             {hint && <div className={SETTING_ROW_HINT}>{hint}</div>}
           </div>
-          <div className={field ? `${SETTING_FIELD_WIDTH} flex-shrink-0` : 'flex items-center gap-2 flex-shrink-0'}>{children}</div>
+          <div
+            data-setting-row-control="side"
+            className={field ? `${SETTING_FIELD_WIDTH} max-w-full flex-shrink-0` : 'flex flex-wrap items-center gap-2 flex-shrink-0 max-w-full'}
+          >
+            {children}
+          </div>
         </div>
         {below && <div className="mt-2">{below}</div>}
       </div>
@@ -333,7 +348,8 @@ export function SettingsGroup({
       <section data-settings-id={settingId} data-testid={testId}>
         {(title !== undefined || hint || action) && (
         <div className="mb-2">
-          <div className="flex items-center justify-between gap-4 min-h-[1.5rem]">
+          {/* The action drops under the title when they don't fit one line. */}
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-h-[1.5rem]">
             <h3 className="type-heading text-[var(--color-text-primary)] flex items-center gap-2">
               <span>{title}</span>
               {badge}

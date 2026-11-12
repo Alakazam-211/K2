@@ -281,10 +281,29 @@ k2_daemon_helper_sign() {
 # copy the daemon writes keeps that signature. Call it after Step 3. The
 # app-bundled daemon is untouched: it was copied into K2 Daemon.app and
 # signed before this rebuild, embeds nothing, and keeps using the nested
-# k2-ptyd beside it. Only target/release/k2-daemon is rebuilt (the
-# k2-daemon crate relinks; build.rs reruns on the env change).
+# k2-ptyd beside it.
+#
+# What this rebuild costs: every other crate is reused (only k2-daemon
+# compiles), but it is NOT a cheap relink. The embed is include_bytes! in
+# the k2-daemon LIBRARY (ptyd_status.rs, docs/export_worker.rs) and build.rs
+# reruns on the K2_PTYD_EMBED change, so the whole k2-daemon crate
+# recompiles, and with `lto = true` + `codegen-units = 1` its link is a
+# whole-program, single-threaded LLVM run: the 15–18 min on z3mbpZ.
+# release.sh therefore runs it in the background during the notarization
+# waits (k2_standalone_macos_daemon_start after Step 3,
+# k2_standalone_macos_daemon_finish at Step 8.5); a resumed run
+# (K2_RELEASE_RESUME) still calls this one in the foreground.
 k2_build_standalone_macos_daemon() {
-    local app="$1" out="$2" project="${3:-$PWD}" ptyd pinfo exp einfo
+    local app="$1" out="$2" project="${3:-$PWD}"
+    _k2_standalone_embeds_signed "$app" || return 1
+    _k2_standalone_cargo "$(k2_daemon_helper_ptyd "$app")" "$(k2_daemon_helper_export "$app")" "$out" "$project" || return 1
+    echo "  ✓ Standalone macOS daemon embeds the signed k2-ptyd and k2-export: $out"
+}
+
+# The nested k2-ptyd and k2-export in APP are validly signed with their
+# identifiers; nothing else is ever embedded.
+_k2_standalone_embeds_signed() {
+    local app="$1" ptyd pinfo exp einfo
     ptyd="$(k2_daemon_helper_ptyd "$app")"
     exp="$(k2_daemon_helper_export "$app")"
     [ -x "$ptyd" ] || { echo "FATAL: no signed k2-ptyd at $ptyd (sign the app first)" >&2; return 1; }
@@ -302,13 +321,18 @@ k2_build_standalone_macos_daemon() {
         || { echo "FATAL: codesign -dv $exp failed: $einfo" >&2; return 1; }
     grep -q "^Identifier=dev.k2.app.export\$" <<<"$einfo" \
         || { echo "FATAL: $exp is not dev.k2.app.export; refusing to embed it" >&2; return 1; }
+}
+
+# _k2_standalone_cargo PTYD EXPORT OUT PROJECT: the embed build itself.
+_k2_standalone_cargo() {
+    local ptyd="$1" exp="$2" out="$3" project="$4"
     (
         cd "$project" || exit 1
         # shellcheck source=linux-ptyd-embed.sh
         . "$project/scripts/linux-ptyd-embed.sh"
         # The same environment and package set as Step 2's build
         # (K2_MAC_SIDECAR_CARGO_ARGS), so only the embed differs: k2-core
-        # and every other crate are fresh, only k2-daemon relinks.
+        # and every other crate are reused; k2-daemon recompiles and links.
         if declare -F k2_mac_build_env >/dev/null; then k2_mac_build_env; fi
         K2_PTYD_EMBED="$ptyd"
         K2_REQUIRE_PTYD_EMBED=1
@@ -323,8 +347,115 @@ k2_build_standalone_macos_daemon() {
             assert_daemon_oauth_not_placeholder "${CARGO_TARGET_DIR:-target}/release/k2-daemon" || exit 1
         fi
         cp "${CARGO_TARGET_DIR:-target}/release/k2-daemon" "$out" || exit 1
+    )
+}
+
+# ── The standalone daemon in the background (release.sh, 0.46.13) ──
+# k2_standalone_macos_daemon_start APP STAGE_DIR [PROJECT_DIR]
+#   Right after Step 3: the same signature checks as the foreground build,
+#   then COPIES the signed k2-ptyd and k2-export to STAGE_DIR/embed/ (so
+#   nothing that happens to the app later can change what gets embedded)
+#   and starts the embed build in the background: the daemon lands at
+#   STAGE_DIR/k2-daemon, the build's output in STAGE_DIR/build.log. Sets
+#   K2_STANDALONE_PID. STAGE_DIR must be absolute.
+# k2_standalone_macos_daemon_poll STAGE_DIR
+#   Between steps: 0 while it runs or after it succeeded; 1 (with the log's
+#   tail) once it has failed, so the release stops before the next wait.
+# k2_standalone_macos_daemon_finish APP STAGE_DIR OUT
+#   Step 8.5: waits for it, then checks the daemon against the k2-ptyd and
+#   k2-export that SHIP (the stapled app's: the embedded copies must be the
+#   same bytes) and copies it to OUT. Fatal on any mismatch.
+# k2_standalone_macos_daemon_kill
+#   For the release's EXIT trap: stop a build nobody will collect.
+# The background build never touches K2.app or anything Steps 3.5–8 read:
+# it writes target/release/{k2-daemon,k2-power-helper,deps,…} and
+# STAGE_DIR. No other cargo runs in those steps, so the target dir is its.
+_K2_HELPER_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Stop a background job and everything it started (cargo → rustc; bun →
+# tauri → cargo). bash 3.2-safe: walks pgrep -P, children first. Also used
+# by scripts/lib/build-binaries.sh.
+k2_kill_tree() {
+    local pid="$1" kid
+    for kid in $(pgrep -P "$pid" 2>/dev/null); do k2_kill_tree "$kid"; done
+    kill "$pid" 2>/dev/null || true
+}
+
+K2_STANDALONE_PID=""
+K2_STANDALONE_RC=""
+k2_standalone_macos_daemon_start() {
+    local app="$1" stage="$2" project="${3:-$PWD}"
+    case "$stage" in /*) ;; *) echo "FATAL: k2_standalone_macos_daemon_start: STAGE_DIR must be absolute ($stage)" >&2; return 1 ;; esac
+    _k2_standalone_embeds_signed "$app" || return 1
+    rm -rf "$stage"
+    mkdir -p "$stage/embed" || return 1
+    cp -p "$(k2_daemon_helper_ptyd "$app")" "$stage/embed/k2-ptyd" || return 1
+    cp -p "$(k2_daemon_helper_export "$app")" "$stage/embed/k2-export" || return 1
+    K2_STANDALONE_RC=""
+    _k2_standalone_cargo "$stage/embed/k2-ptyd" "$stage/embed/k2-export" "$stage/k2-daemon" "$project" \
+        > "$stage/build.log" 2>&1 &
+    K2_STANDALONE_PID=$!
+    echo "  Standalone macOS daemon (Step 8.5's) now builds in the background (pid ${K2_STANDALONE_PID}; log $stage/build.log)."
+}
+
+_k2_standalone_reap() {
+    local stage="$1" rc=0
+    [ -n "$K2_STANDALONE_PID" ] || return 0
+    wait "$K2_STANDALONE_PID" || rc=$?
+    K2_STANDALONE_PID=""
+    K2_STANDALONE_RC="$rc"
+    if [ "$rc" != 0 ]; then
+        echo "FATAL: the background standalone daemon build failed (exit $rc). Last lines of $stage/build.log:" >&2
+        tail -40 "$stage/build.log" >&2
+    fi
+    return 0
+}
+
+k2_standalone_macos_daemon_poll() {
+    local stage="$1"
+    if [ -n "$K2_STANDALONE_PID" ] && ! kill -0 "$K2_STANDALONE_PID" 2>/dev/null; then
+        _k2_standalone_reap "$stage"
+    fi
+    [ -z "$K2_STANDALONE_RC" ] || [ "$K2_STANDALONE_RC" = 0 ]
+}
+
+k2_standalone_macos_daemon_finish() {
+    local app="$1" stage="$2" out="$3" t0
+    t0="$(date +%s)"
+    if [ -n "$K2_STANDALONE_PID" ]; then
+        echo "  waiting for the background standalone daemon build..."
+        _k2_standalone_reap "$stage"
+        echo "  (waited $(( $(date +%s) - t0 ))s at Step 8.5)"
+    fi
+    [ "$K2_STANDALONE_RC" = 0 ] \
+        || { echo "FATAL: no standalone daemon (background build exit: ${K2_STANDALONE_RC:-never started})" >&2; return 1; }
+    grep -E '^ *(Compiling|Finished) ' "$stage/build.log" | sed 's/^ */  build: /' || true
+    # What is embedded must be what ships: the stapled app's signed files.
+    cmp -s "$stage/embed/k2-ptyd" "$(k2_daemon_helper_ptyd "$app")" \
+        || { echo "FATAL: the k2-ptyd embedded in the standalone daemon is not the one in the shipped app" >&2; return 1; }
+    cmp -s "$stage/embed/k2-export" "$(k2_daemon_helper_export "$app")" \
+        || { echo "FATAL: the k2-export embedded in the standalone daemon is not the one in the shipped app" >&2; return 1; }
+    _k2_standalone_embeds_signed "$app" || return 1
+    (
+        # shellcheck source=linux-ptyd-embed.sh
+        . "$_K2_HELPER_SCRIPTS_DIR/linux-ptyd-embed.sh"
+        K2_PTYD_EMBED="$(k2_daemon_helper_ptyd "$app")"
+        K2_EXPORT_EMBED="$(k2_daemon_helper_export "$app")"
+        assert_daemon_embeds_ptyd "$stage/k2-daemon" || exit 1
+        assert_daemon_embeds_export "$stage/k2-daemon" || exit 1
+        if declare -F assert_daemon_oauth_not_placeholder >/dev/null; then
+            assert_daemon_oauth_not_placeholder "$stage/k2-daemon" || exit 1
+        fi
     ) || return 1
-    echo "  ✓ Standalone macOS daemon embeds the signed k2-ptyd and k2-export: $out"
+    cp "$stage/k2-daemon" "$out" || return 1
+    echo "  ✓ Standalone macOS daemon embeds the shipped, signed k2-ptyd and k2-export: $out"
+}
+
+k2_standalone_macos_daemon_kill() {
+    [ -n "$K2_STANDALONE_PID" ] || return 0
+    k2_kill_tree "$K2_STANDALONE_PID"
+    wait "$K2_STANDALONE_PID" 2>/dev/null || true
+    K2_STANDALONE_PID=""
 }
 
 # k2_daemon_helper_verify_shipped_ptyd APP

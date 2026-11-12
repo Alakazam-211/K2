@@ -247,6 +247,10 @@ notary_auth_args() {
     fi
 }
 
+# Overlapped notarization (k2-node beside the app; Steps 4 and 8.55).
+# shellcheck source=scripts/lib/notary.sh
+source "$PROJECT_DIR/scripts/lib/notary.sh"
+
 # rustup installs cargo at ~/.cargo/bin, which interactive shells source
 # via .zshrc / .bashrc. `bun run tauri build` spawns a non-interactive
 # subshell that does NOT source those, so cargo appears missing. Prepend
@@ -830,10 +834,12 @@ k2_shadow_report() {
     return 0
 }
 
-# EXIT trap: stop shadow jobs nobody will read and drop the release lock.
+# EXIT trap: stop shadow jobs nobody will read, a background standalone
+# daemon build nobody will collect (Step 3.6), and drop the release lock.
 # (The name is left over from the pre-tag Arch gate.)
 k2_arch_gate_on_exit() {
     local rc=$?
+    k2_standalone_macos_daemon_kill || true
     if k2_compute_on; then
         k2cr_cancel_open || true
     fi
@@ -1074,11 +1080,14 @@ k2_shadow_start
 #
 # One shared build step for dev-build.sh, build-app.sh and release.sh:
 # scripts/lib/build-binaries.sh. It runs `tauri build` (frontend + the `k2`
-# Tauri crate + bundle), then builds k2-daemon + k2-power-helper, k2-ptyd,
-# k2-node and k2-menubar in release mode, in ONE cargo call
+# Tauri crate + bundle, in its own target dir target/tauri) AT THE SAME
+# TIME as the build of k2-daemon + k2-power-helper, k2-ptyd, k2-export,
+# k2-node, k2-menubar and k2-deskd in release mode, in ONE cargo call
 # (K2_MAC_SIDECAR_CARGO_ARGS: one feature resolution, so the shared crates
 # compile once; Step 8.5 reuses them), and copies them in: `tauri build`
-# copies only its own primary bin into the bundle.
+# copies only its own primary bin into the bundle. The sidecars are the
+# long pole (17–21 min); the tauri build (4–7.5) runs inside that.
+# K2_MAC_BUILD_PARALLEL=0 runs them one after the other as before.
 #
 # k2-daemon is a peer binary to the main Tauri app that owns the
 # persistent-agent runtime (launched by launchd, outlives the Tauri
@@ -1200,9 +1209,54 @@ else
     echo "  ✓ App exec exited rc=$SMOKE_RC (not SIGKILL) — launchable past AMFI."
 fi
 
+# ── Step 3.6: Start what can run during the notarization waits (0.46.13) ──
+# Steps 4–7.5 are mostly waiting on Apple (three notarizations, 3–5 min
+# each) with the CPU idle, so:
+#  - Step 8.5's standalone daemon (k2-daemon recompiled with the k2-ptyd and
+#    k2-export Step 3 signed embedded, then its fat-LTO link: 15–18 min)
+#    builds in the background from here, from copies of those signed files.
+#    Step 8.5 waits for it and checks the copies are byte for byte the ones
+#    in the shipped (stapled) app. Polled after Steps 4 and 7, so a failed
+#    build stops the release early. K2_STANDALONE_DAEMON_EARLY=0 builds it
+#    at Step 8.5 in the foreground as before.
+#  - k2-node's own notarization (Step 8.55) is submitted at Step 4 beside
+#    the app's (below) and collected at Step 8.55.
+# Nothing here signs or publishes anything; the order of every signing,
+# notarizing and approval step is unchanged.
+STANDALONE_STAGE="$PROJECT_DIR/target/release/standalone-daemon"
+if [ "${K2_STANDALONE_DAEMON_EARLY:-1}" = "1" ]; then
+    echo ""
+    echo "Step 3.6: Standalone daemon build in the background..."
+    k2_standalone_macos_daemon_start "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$STANDALONE_STAGE" "$PROJECT_DIR" || exit 1
+fi
+
 # ── Step 4: Notarize app via ZIP ──
 echo ""
 echo "Step 4: Notarizing app..."
+# k2-node (Step 8.55's standalone asset) goes in first, without waiting: it
+# is the binary Step 3 signed inside K2.app, checked the way Step 8.55
+# checks it, from a copy Step 8.55 compares byte for byte before it uses
+# the result. K2_SKIP_NODE_NOTARIZE=1 skips it, as before.
+NODE_MAC_ASSET="k2-node-macos-aarch64"
+NODE_NOTARY_ID=""
+NODE_NOTARY_COPY="$PROJECT_DIR/target/release/node-notary/$NODE_MAC_ASSET"
+if [ "${K2_SKIP_NODE_NOTARIZE:-0}" != "1" ]; then
+    rm -rf "$(dirname "$NODE_NOTARY_COPY")"
+    mkdir -p "$(dirname "$NODE_NOTARY_COPY")"
+    cp "$PROJECT_DIR/target/release/bundle/macos/K2.app/Contents/MacOS/k2-node" "$NODE_NOTARY_COPY"
+    chmod 0755 "$NODE_NOTARY_COPY"
+    codesign --verify --strict \
+        -R '=anchor apple generic and certificate leaf[subject.OU] = "36B8R93HXV"' \
+        "$NODE_NOTARY_COPY" \
+        || { echo "  FATAL: k2-node in K2.app is not signed with K2's Developer ID" >&2; exit 1; }
+    bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --check "$NODE_NOTARY_COPY" macos aarch64 "$VERSION" >/dev/null
+    NODE_ZIP="/tmp/k2-node-macos-aarch64_${VERSION}.zip"
+    rm -f "$NODE_ZIP"
+    ditto -c -k "$NODE_NOTARY_COPY" "$NODE_ZIP"
+    NODE_NOTARY_ID="$(k2_notary_submit_nowait "$NODE_ZIP")" || exit 1
+    rm -f "$NODE_ZIP"
+    echo "  k2-node submitted for notarization (${NODE_NOTARY_ID}); collected at Step 8.55."
+fi
 cd target/release/bundle/macos
 ditto -c -k --keepParent "K2.app" "/tmp/K2_${VERSION}.zip"
 NOTARY_AUTH=()
@@ -1217,6 +1271,8 @@ k2_daemon_helper_verify_shipped_ptyd "K2.app"
 k2_daemon_helper_verify_shipped_export "K2.app"
 # K2 Screen (remote desktop): signed, nested and notarized with the app.
 k2_screen_helper_verify_shipped "K2.app"
+# The background standalone daemon build (Step 3.6): stop now if it failed.
+k2_standalone_macos_daemon_poll "$STANDALONE_STAGE" || exit 1
 
 # ── Step 5: Create update bundle (tar.gz) from notarized app + sign it ──
 echo ""
@@ -1291,6 +1347,7 @@ xcrun notarytool submit "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" \
     "${NOTARY_AUTH[@]}" --wait
 staple_with_retry "target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg"
 echo "  DMG notarized and stapled."
+k2_standalone_macos_daemon_poll "$STANDALONE_STAGE" || exit 1
 fi # SKIP_BUILD
 
 # ── Step 7.5: Clean-VM new-user pairing smoke (0.40.33/34 regression class) ──
@@ -1398,8 +1455,18 @@ mkdir -p "$DIST_DIR"
 # Linux daemons do), because the standalone install and the daemon
 # self-update fetch only `k2-daemon`. The app's own nested daemon was
 # already copied and signed and is NOT changed by this rebuild.
+# It is not a relink: build.rs reruns on the embed, the whole k2-daemon
+# crate recompiles and fat LTO re-optimizes the program (15–18 min on
+# z3mbpZ). Since 0.46.13 it builds in the background from Step 3.6, during
+# the notarization waits; here it is collected and checked against the
+# shipped app. A resumed run (K2_RELEASE_RESUME, no Step 3.6) or
+# K2_STANDALONE_DAEMON_EARLY=0 builds it here in the foreground.
 MAC_ASSET="k2-daemon-macos-aarch64"
+if [ -n "$K2_STANDALONE_PID" ] || [ -n "$K2_STANDALONE_RC" ]; then
+k2_standalone_macos_daemon_finish "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$STANDALONE_STAGE" "$DIST_DIR/$MAC_ASSET" || exit 1
+else
 k2_build_standalone_macos_daemon "$PROJECT_DIR/target/release/bundle/macos/K2.app" "$DIST_DIR/$MAC_ASSET" "$PROJECT_DIR"
+fi
 
 # Sign with the update key. The daemon self-updater and plain minisign
 # read the RAW minisig text (Shape B e2e finding, 2026-07-06; the app
@@ -1451,9 +1518,11 @@ echo "  daemon-latest.json generated at $DIST_DIR/daemon-latest.json (with notes
 # checks it and sends the bytes to the node). It is the SAME binary that
 # Step 3 codesigned inside K2.app (Developer ID + hardened runtime, the
 # Team ID the node's executor requires). Step 4 already notarized it as
-# part of the app; it is ALSO submitted on its own here (a zip holding the
+# part of the app; it is ALSO submitted on its own (a zip holding the
 # bare binary; a bare Mach-O can't be stapled, so Gatekeeper finds the
-# ticket online by cdhash). The minisign .sig is added at Step 10.5 by
+# ticket online by cdhash): at Step 4 beside the app since 0.46.13, and
+# collected here (must end Accepted); a resumed run submits it here and
+# waits, as before. The minisign .sig is added at Step 10.5 by
 # sign-k2-node.sh with the root-helper key. Escape for a resumed or
 # offline run: K2_SKIP_NODE_NOTARIZE=1 (the app's notarization still
 # covers the same cdhash).
@@ -1474,6 +1543,12 @@ codesign --verify --strict \
 bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --check "$DIST_DIR/$NODE_MAC_ASSET" macos aarch64 "$VERSION" >/dev/null
 if [ "${K2_SKIP_NODE_NOTARIZE:-0}" = "1" ]; then
     echo "  WARNING: K2_SKIP_NODE_NOTARIZE=1 — standalone k2-node not submitted on its own (the app's ticket covers it)." >&2
+elif [ -n "${NODE_NOTARY_ID:-}" ]; then
+    # Submitted at Step 4 (0.46.13): the bytes it notarized must be these.
+    cmp -s "$NODE_NOTARY_COPY" "$DIST_DIR/$NODE_MAC_ASSET" \
+        || { echo "  FATAL: the k2-node submitted at Step 4 is not the k2-node staged here" >&2; exit 1; }
+    k2_notary_wait_accepted "$NODE_NOTARY_ID" "k2-node" || exit 1
+    echo "  k2-node notarized (bare Mach-O: no staple; ticket is online)."
 else
     NODE_ZIP="/tmp/k2-node-macos-aarch64_${VERSION}.zip"
     rm -f "$NODE_ZIP"

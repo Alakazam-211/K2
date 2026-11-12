@@ -1811,6 +1811,15 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
   border: 1px solid var(--color-control-edge);
   border-radius: var(--radius-pill);
 }
+/* A top bar too narrow for its items gives way a step at a time
+   (TopBar/top-bar-fit.ts): compact, the server switcher keeps its icon and
+   status light; tight, the Usage pill keeps its agent marks or its gauge. */
+[data-top-bar-glyph] { display: none; }
+:is([data-top-bar-fit="compact"], [data-top-bar-fit="tight"]) [data-top-bar-label="server"] { display: none; }
+:is([data-top-bar-fit="compact"], [data-top-bar-fit="tight"]) [data-server-switcher] { width: auto; }
+[data-top-bar-fit="tight"] [data-top-bar-label="usage"] { display: none; }
+[data-top-bar-fit="tight"] [data-top-bar-glyph] { display: inline-flex; }
+
 /* A Settings row's button on a line of its own that is still wider than the
    line (a narrow pane, the app zoomed in): its label wraps rather than
    running off the card. Where there's room it keeps to one line, as every

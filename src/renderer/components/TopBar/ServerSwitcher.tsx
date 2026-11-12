@@ -428,12 +428,13 @@ export default function ServerSwitcher({
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div
+          data-server-switcher=""
           className={`${SERVER_SWITCHER_WIDTH_CLASS} ${SERVER_CHIP_BASE_CLASS} ${SERVER_CHIP_REST_CLASS} flex items-center gap-1.5 h-6 px-1.5 text-[11px]`}
           title={`${activeLabel} — ${ind.title}`}
           aria-label={`Connected host: ${activeLabel} — ${ind.title}`}
         >
           <ServerIcon ledColor={ind.color} size={SERVER_ICON_PX} label={ind.title} />
-          <span className="min-w-0 flex-1 truncate">{activeLabel}</span>
+          <span className="min-w-0 flex-1 truncate" data-top-bar-label="server">{activeLabel}</span>
         </div>
       </div>
     )
@@ -469,13 +470,14 @@ export default function ServerSwitcher({
           data-nav-picker=""
           data-follows-room={roomServer !== null ? 'true' : undefined}
           aria-expanded={open}
+          data-server-switcher=""
           className={`${SERVER_SWITCHER_WIDTH_CLASS} ${serverChipClass({ open })} ${triggerHidden ? 'absolute left-0 top-1/2 -translate-y-1/2 ' : ''}flex items-center justify-start gap-1.5 h-6 px-1.5 text-[11px] no-drag`}
           title={`${activeLabel} — ${ind.title} (⌘L)`}
           aria-label={`${shownServer} — ${ind.title}`}
           aria-keyshortcuts="Meta+L"
         >
           <ServerIcon ledColor={ind.color} size={SERVER_ICON_PX} />
-          <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label">
+          <span className="min-w-0 flex-1 truncate text-left" data-testid="server-switcher-label" data-top-bar-label="server">
             {shownServer}
           </span>
           <svg className="shrink-0" width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

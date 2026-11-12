@@ -186,22 +186,25 @@ export default function UsageButton(): React.JSX.Element {
         {/* Rosson 2026-10-16: no server name here any more; the top bar's
             centre breadcrumb names a remote room's server. The tooltip and
             the menu still say whose usage this is. */}
+        {/* A top bar too narrow for its items (top-bar-fit.ts) hides the
+            words and percentages: the agent marks, or the gauge, stay. */}
         {serverState === 'offline' ? (
-          <span data-testid="usage-server-state">offline</span>
+          <span data-testid="usage-server-state" data-top-bar-label="usage">offline</span>
         ) : serverState === 'signin' ? (
-          <span data-testid="usage-server-state">Sign in</span>
+          <span data-testid="usage-server-state" data-top-bar-label="usage">Sign in</span>
         ) : airgap ? (
-          <span data-testid="usage-airgap">Off (air-gap)</span>
+          <span data-testid="usage-airgap" data-top-bar-label="usage">Off (air-gap)</span>
         ) : chips.length > 0 ? (
           chips.map((chip) => (
             <span key={chip.harness} className="flex items-center gap-1" data-testid={`usage-chip-${chip.harness}`}>
               <AgentIcon agent={chip.harness} size={14} />
-              <span>{chip.used}%</span>
+              <span data-top-bar-label="usage">{chip.used}%</span>
             </span>
           ))
         ) : (
-          'Usage'
+          <span data-top-bar-label="usage">Usage</span>
         )}
+        {chips.length > 0 && serverState !== 'offline' && serverState !== 'signin' && !airgap ? null : <UsageGauge />}
         {warn ? (
           <span data-testid="usage-warning" aria-label="Usage check needs attention" className="text-amber-400">
             ⚠
@@ -345,5 +348,19 @@ function MenuRowState({
         {live ? ` · ${live}` : ''}
       </p>
     </div>
+  )
+}
+
+/** The Usage pill's mark when the top bar is too narrow for its word: three
+ *  rising bars, in the text colour. */
+function UsageGauge(): React.JSX.Element {
+  return (
+    <span data-top-bar-glyph="usage" aria-hidden="true" className="items-center">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+        <rect x="1.5" y="8" width="2.5" height="4.5" rx="0.5" />
+        <rect x="5.75" y="5" width="2.5" height="7.5" rx="0.5" />
+        <rect x="10" y="2" width="2.5" height="10.5" rx="0.5" />
+      </svg>
+    </span>
   )
 }

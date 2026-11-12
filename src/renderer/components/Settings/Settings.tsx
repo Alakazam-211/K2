@@ -89,6 +89,7 @@ import { webFeatures } from '@/web/features'
 import { isAirgap } from '@/lib/airgap'
 import { escOwnedByDialog } from './settings-esc'
 import { useAppApprovalsStore } from '@/stores/app-approvals'
+import { useTopBarFit } from '@/components/TopBar/top-bar-fit'
 
 // ── Section nav ──────────────────────────────────────────────────────
 // Top-level items, then titled groups with indented children.
@@ -330,6 +331,7 @@ export function settingsNav({
 // `useSettingsStore.setState({ activeSection: '<id>' })` — the section
 // IDs here are the stable contract.
 export default function Settings(): React.JSX.Element {
+  const topBar = useTopBarFit()
   const activeSection = useSettingsStore((s) => s.activeSection)
   // 0.46.4: held App requests waiting on this server (the nav badge).
   const appApprovalsPending = useAppApprovalsStore((s) => s.pending)
@@ -517,6 +519,7 @@ export default function Settings(): React.JSX.Element {
           Projects / Tickets stay reachable (settings cog is the
           selected tab). */}
       <Surface
+        ref={topBar.bar}
         role2="surface" data-chrome="bar"
         bordered={false}
         className="flex items-center justify-between border-b border-[var(--color-border)] px-3 select-none flex-shrink-0"
@@ -526,6 +529,7 @@ export default function Settings(): React.JSX.Element {
         style={{ height: TOPBAR_HEIGHT_CSS, minHeight: TOPBAR_HEIGHT_CSS }}
       >
         <div
+          ref={topBar.left}
           className="flex items-center [&>*]:shrink-0"
           style={{ minWidth: topBarLeftClusterMinWidth(), gap: TRAFFIC_LIGHT_CLUSTER_GAP_PX }}
         >
@@ -535,9 +539,13 @@ export default function Settings(): React.JSX.Element {
           {/* K2 server switcher (Local / saved servers / add) */}
           <ServerSwitcher />
         </div>
-        <DesktopChromeRight>
-          <TopBarUtilities />
-        </DesktopChromeRight>
+        {/* Narrow (a small window, zoomed in), the bar gives way before
+            the clusters overlap (TopBar/top-bar-fit). */}
+        <div ref={topBar.right} className="flex-shrink-0 self-stretch flex items-center">
+          <DesktopChromeRight>
+            <TopBarUtilities />
+          </DesktopChromeRight>
+        </div>
       </Surface>
 
       <div data-settings-shell="" className="flex flex-1 w-full min-h-0">

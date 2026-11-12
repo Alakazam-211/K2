@@ -37,7 +37,8 @@
 //!   composed `.k2/AGENTS.md` for a fresh test workspace (the k2-cli skill must
 //!   be byte-identical in every state, PRD §11.4).
 //! - **boot_status.txt**: the `/boot-status` key names and the `features` list
-//!   (no `permission-cards-v1` while off).
+//!   (no `permission-cards-v1` while off). `virtual-desktop-v1` is listed on
+//!   Linux only: asserted per OS and left out of the capture.
 //!
 //! Normalizer (documented; it replaces values, never drops a field or line):
 //! the temp `$HOME`, workspace ids and paths, session ids, passports, the
@@ -1058,6 +1059,13 @@ async fn permission_cards_off_is_today_byte_for_byte() {
         .map(|f| f.as_str().unwrap_or_else(|| panic!("feature not a string: {f}")))
         .collect();
     assert!(!features.contains(&"permission-cards-v1"), "the feature key is listed while off");
+    // The one key that depends on the OS, not on cards: virtual desktops are
+    // listed on Linux only (prd-linux-virtual-desktop-v1 LD-16). Asserted for
+    // this OS here and left out of the capture, so one golden holds for the
+    // Linux gate and the macOS lane alike.
+    let virtual_key = k2_core::desktop::VIRTUAL_FEATURE_KEY;
+    assert_eq!(features.contains(&virtual_key), cfg!(target_os = "linux"), "{virtual_key} is listed on Linux only");
+    let features: Vec<&str> = features.into_iter().filter(|f| *f != virtual_key).collect();
     let text = format!(
         "{}\ncontent-type: {}\nkeys: {}\nfeatures:\n{}\n",
         r.status_line,

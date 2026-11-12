@@ -532,7 +532,7 @@ pub(crate) fn set_live_profile(profile: &Value) -> Result<bool, WalletError> {
         write_with_mode(&path, new_text.as_bytes(), mode).map_err(|e| WalletError::Io(e.to_string()))?;
         return Ok(true);
     }
-    Err(WalletError::LockBusy("Claude (.claude.json kept changing)".into()))
+    Err(WalletError::LockBusy { tool: "Claude".into(), holder: Some("Claude kept rewriting .claude.json while K2 wrote it".into()) })
 }
 
 #[cfg(unix)]

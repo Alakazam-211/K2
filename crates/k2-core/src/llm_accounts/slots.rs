@@ -574,7 +574,7 @@ pub fn sync_to_vault(entries: &[Entry], removed: &[Entry]) -> SyncReport {
         if e.state == super::state::SIGNING_IN || e.removed_at.is_some() {
             continue;
         }
-        let Ok(_tl) = store::lock_tool(tool, PASS_LOCK_WAIT) else {
+        let Ok(_tl) = store::lock_tool_as(tool, PASS_LOCK_WAIT, "saving logins to the vault") else {
             r.busy += 1;
             continue;
         };
@@ -701,7 +701,7 @@ pub fn export_to_files(entries: &[Entry]) -> ExportReport {
         if e.state == super::state::SIGNING_IN || e.removed_at.is_some() {
             continue;
         }
-        let Ok(_tl) = store::lock_tool(tool, PASS_LOCK_WAIT) else {
+        let Ok(_tl) = store::lock_tool_as(tool, PASS_LOCK_WAIT, "writing saved logins back to files") else {
             r.busy += 1;
             continue;
         };

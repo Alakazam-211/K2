@@ -201,7 +201,13 @@ fn view_of(l: &Login, full: bool) -> LoginView {
         screen: if full { l.screen.clone() } else { Vec::new() },
         started_at: l.started_at,
         done: is_done(&l.state),
-        banner: (l.method == wallet::LoginMethod::LiveSwap).then(|| LIVE_SWAP_BANNER.to_string()),
+        // A sign-in still under way with something to say (macOS is asking
+        // to let K2 read the new login: answer the keychain dialog) shows
+        // it as its banner, word for word.
+        banner: match (&l.error, is_done(&l.state)) {
+            (Some(e), false) => Some(e.clone()),
+            _ => (l.method == wallet::LoginMethod::LiveSwap).then(|| LIVE_SWAP_BANNER.to_string()),
+        },
         offer_make_active: l.offer_make_active,
     }
 }
@@ -728,7 +734,7 @@ pub fn start_login(
     store::ensure_private_dir(&slot).map_err(|e| WalletError::Io(e.to_string()))?;
 
     let ticket = if method == wallet::LoginMethod::LiveSwap {
-        let t = with_tool_db(tool, ROUTE_TOOL_WAIT, |conn| wallet::begin_live_swap(conn, tool, &entry.id, Some(started_by)))?;
+        let t = with_tool_db(tool, ROUTE_TOOL_WAIT, "starting a sign-in", |conn| wallet::begin_live_swap(conn, tool, &entry.id, Some(started_by)))?;
         notice_adopted(&t.adopted);
         Some(t)
     } else {
@@ -761,7 +767,7 @@ pub fn start_login(
         Ok(p) => p,
         Err(e) => {
             if let Some(t) = &ticket {
-                let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
+                let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, "putting the previous login back after a sign-in", |conn| wallet::live_swap_abort(conn, t));
             } else if new_entry {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
@@ -912,6 +918,39 @@ fn live_or_default(tool: Tool, id: &str) -> bool {
         || wallet_core::live_owner(&conn, tool).ok().flatten().as_deref() == Some(id)
 }
 
+/// How long a finished sign-in waits for the person to answer a macOS
+/// keychain dialog about the new login before it gives up.
+pub const KEYCHAIN_DIALOG_PATIENCE: Duration = Duration::from_secs(300);
+
+/// [`wallet::finalize_read`] for a sign-in watcher: while macOS holds the
+/// read on a dialog, the sign-in says so (its `error` carries the hint,
+/// state stays `verifying`) and asks again, with no lock held, until the
+/// person answers, cancels, or [`KEYCHAIN_DIALOG_PATIENCE`] runs out.
+fn finalize_read_waiting(login_id: &str, tool: Tool, account_id: &str) -> Result<wallet::SignInRead, WalletError> {
+    let started = Instant::now();
+    let mut told = false;
+    loop {
+        match wallet::finalize_read(tool, account_id) {
+            Err(WalletError::KeychainPrompt(hint)) => {
+                let cancelled = lock_logins().get(login_id).is_none_or(|l| l.cancel);
+                if cancelled || started.elapsed() > KEYCHAIN_DIALOG_PATIENCE {
+                    return Err(WalletError::KeychainPrompt(hint));
+                }
+                if !told {
+                    if let Some(l) = lock_logins().get_mut(login_id) {
+                        l.state = "verifying".into();
+                        l.error = Some(hint.clone());
+                    }
+                    emit(Some(tool));
+                    told = true;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            other => return other,
+        }
+    }
+}
+
 fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
     loop {
         std::thread::sleep(Duration::from_millis(400));
@@ -971,7 +1010,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
         // Live-swap: the live store changed → capture + restore.
         if let Some(t) = &ticket {
             if let Ok(Some(bytes)) = wallet::live_swap_poll(t) {
-                let res = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_complete(conn, t, &bytes, None));
+                let res = with_tool_db(tool, LOGIN_TOOL_WAIT, "saving a new sign-in", |conn| wallet::live_swap_complete(conn, t, &bytes, None));
                 drop(bytes);
                 match res {
                     Ok(_) => {
@@ -979,7 +1018,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                         finish(&id, "signed_in", None, offer);
                     }
                     Err(e) => {
-                        let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
+                        let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, "putting the previous login back after a sign-in", |conn| wallet::live_swap_abort(conn, t));
                         finish(&id, "failed", Some(e.to_string()), false);
                     }
                 }
@@ -1010,7 +1049,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
         if let Some((st, err)) = give_up {
             pty.kill();
             if let Some(t) = &ticket {
-                let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
+                let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, "putting the previous login back after a sign-in", |conn| wallet::live_swap_abort(conn, t));
             } else {
                 restore_entry_state(&account_id, tool, &prev_state, new_entry);
             }
@@ -1032,7 +1071,7 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                     let res = wallet::live_swap_poll(t);
                     match res {
                         Ok(Some(bytes)) => {
-                            let r = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_complete(conn, t, &bytes, None));
+                            let r = with_tool_db(tool, LOGIN_TOOL_WAIT, "saving a new sign-in", |conn| wallet::live_swap_complete(conn, t, &bytes, None));
                             match r {
                                 Ok(_) => {
                                     let offer = !active_is(tool, &account_id);
@@ -1042,16 +1081,24 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                             }
                         }
                         _ => {
-                            let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::live_swap_abort(conn, t));
+                            let _ = with_tool_db(tool, LOGIN_TOOL_WAIT, "putting the previous login back after a sign-in", |conn| wallet::live_swap_abort(conn, t));
                             finish(&id, "failed", Some("the sign-in did not finish".into()), false);
                         }
                     }
                 }
                 (None, _) => {
-                    let res = with_tool_db(tool, LOGIN_TOOL_WAIT, |conn| wallet::finalize_login(conn, &account_id, None));
+                    // Read what the sign-in wrote with no lock and no
+                    // database held, then save it under the locks.
+                    let res = finalize_read_waiting(&id, tool, &account_id).and_then(|read| {
+                        with_tool_db(tool, LOGIN_TOOL_WAIT, "saving a new sign-in", |conn| {
+                            wallet::finalize_login_with(conn, &account_id, None, read)
+                        })
+                    });
                     match res {
-                        Ok(_) => {
-                            let offer = !active_is(tool, &account_id);
+                        Ok(saved) => {
+                            // `saved` may be the account's existing token
+                            // (one row per account): offer that one.
+                            let offer = !active_is(tool, &saved.id);
                             finish(&id, "signed_in", None, offer);
                         }
                         Err(WalletError::Moved(hint, adopted)) => {
@@ -1663,7 +1710,7 @@ pub(crate) fn adopt_live_logins() {
         if store::validate_cred(tool, &bytes).is_err() {
             continue;
         }
-        match with_tool_db(tool, BG_TOOL_WAIT, |conn| wallet::import_live_bytes(conn, tool, Some("usage"), bytes)) {
+        match with_tool_db(tool, BG_TOOL_WAIT, "saving the CLI's own sign-in", |conn| wallet::import_live_bytes(conn, tool, Some("usage"), bytes)) {
             Ok(Some(e)) => {
                 k2_core::log_debug!("[llm-accounts] {}: adopted the live sign-in as {}", tool.as_str(), e.id);
                 emit(Some(tool));
@@ -1743,13 +1790,17 @@ impl wallet::DbAccess for SharedDb {
 
 /// `tool`'s lock (waited for up to `wait`, outside the database), then
 /// the database for `f`. The wallet code `f` calls takes the tool lock
-/// again for free (re-entrant). A hold over 2 s logs a warning.
+/// again for free (re-entrant). A hold over 2 s logs a warning. `what`
+/// names the task for anyone told `busy` meanwhile ("saving a new
+/// sign-in"). No keychain read, child wait or vendor call belongs in `f`:
+/// read first, then call this for the write.
 pub fn with_tool_db<T>(
     tool: Tool,
     wait: Duration,
+    what: &str,
     f: impl FnOnce(&rusqlite::Connection) -> Result<T, WalletError>,
 ) -> Result<T, WalletError> {
-    let _tool_lock = store::lock_tool(tool, wait)?;
+    let _tool_lock = store::lock_tool_as(tool, wait, what)?;
     let db = k2_core::db::shared();
     let conn = db.lock();
     f(&conn)
@@ -1763,6 +1814,18 @@ pub fn reconcile_tool(tool: Tool, mirror: bool) -> Vec<wallet::Adopted> {
     reconcile_tool_with(tool, mirror, Some(&DaemonRefresher))
 }
 
+/// Read the live sign-in (no lock held) and ask the vendor about it. A
+/// read macOS holds on a dialog ends here, before any lock is taken; any
+/// other read failure leaves the answer empty, as before.
+fn live_answer(tool: Tool, vendor: Option<&dyn wallet::Refresher>) -> Result<Option<wallet::LiveAnswer>, WalletError> {
+    match store::read_live(tool) {
+        Ok(Some(live)) => Ok(wallet::LiveAnswer::ask_about(tool, &live, vendor)),
+        Ok(None) => Ok(None),
+        Err(e @ WalletError::KeychainPrompt(_)) => Err(e),
+        Err(_) => Ok(None),
+    }
+}
+
 /// [`reconcile_tool`] that says why it didn't run (`busy`: another task
 /// holds the tool's lock longer than `wait`). Its notices go out here.
 pub fn try_reconcile_tool(
@@ -1774,8 +1837,8 @@ pub fn try_reconcile_tool(
     if !tool.subscription_supported() {
         return Ok(Vec::new());
     }
-    let answer = wallet::LiveAnswer::ask(tool, vendor);
-    let a = with_tool_db(tool, wait, |conn| wallet::reconcile_live(conn, tool, answer.as_ref(), mirror))?;
+    let answer = live_answer(tool, vendor)?;
+    let a = with_tool_db(tool, wait, "checking who is signed in to the CLI", |conn| wallet::reconcile_live(conn, tool, answer.as_ref(), mirror))?;
     notice_adopted(&a);
     Ok(a)
 }
@@ -1785,8 +1848,14 @@ pub fn reconcile_tool_with(tool: Tool, mirror: bool, vendor: Option<&dyn wallet:
     if !tool.subscription_supported() {
         return Vec::new();
     }
-    let answer = wallet::LiveAnswer::ask(tool, vendor);
-    let res = with_tool_db(tool, BG_TOOL_WAIT, |conn| wallet::reconcile_live(conn, tool, answer.as_ref(), mirror));
+    let answer = match live_answer(tool, vendor) {
+        Ok(a) => a,
+        Err(e) => {
+            k2_core::log_debug!("[llm-accounts] reconcile {}: {}", tool.as_str(), e.code());
+            return Vec::new();
+        }
+    };
+    let res = with_tool_db(tool, BG_TOOL_WAIT, "checking who is signed in to the CLI", |conn| wallet::reconcile_live(conn, tool, answer.as_ref(), mirror));
     match res {
         Ok(a) => {
             notice_adopted(&a);
@@ -1829,7 +1898,23 @@ pub fn boot_import() {
         }
     }
     for tool in Tool::ALL {
-        let r = with_tool_db(tool, BG_TOOL_WAIT, |conn| wallet::import_live(conn, tool, Some("boot")));
+        // The live store is read with no lock and no database held (a
+        // keychain read can wait on a macOS dialog), then saved under them.
+        let has_active = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            matches!(wallet_core::active_id(&conn, tool), Ok(Some(_)))
+        };
+        if has_active {
+            continue;
+        }
+        let r = match store::read_live(tool) {
+            Ok(Some(bytes)) => with_tool_db(tool, BG_TOOL_WAIT, "saving the CLI's own sign-in at start", |conn| {
+                wallet::import_live_bytes(conn, tool, Some("boot"), bytes)
+            }),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        };
         match r {
             Ok(Some(_)) => emit(Some(tool)),
             Ok(None) => {}
@@ -2497,6 +2582,18 @@ mod tests {
         assert_eq!(full["urlHost"], "claude.ai");
         let hidden = login_json(&view_of(&l, false));
         assert!(hidden["url"].is_null() && hidden["urlHost"].is_null(), "{hidden}");
+        assert!(full["banner"].is_null(), "{full}");
+
+        // Waiting on a macOS keychain dialog: the sheet's banner says so,
+        // word for word; once the sign-in is over it is the error instead.
+        let mut waiting = l;
+        waiting.state = "verifying".into();
+        waiting.error = Some(store::KEYCHAIN_PROMPT_HINT.into());
+        assert_eq!(login_json(&view_of(&waiting, true))["banner"], store::KEYCHAIN_PROMPT_HINT);
+        waiting.state = "failed".into();
+        let failed = login_json(&view_of(&waiting, true));
+        assert!(failed["banner"].is_null(), "{failed}");
+        assert_eq!(failed["error"], store::KEYCHAIN_PROMPT_HINT);
     }
 
     #[test]

@@ -167,13 +167,14 @@ pub mod keychain {
     };
 
     /// Read a generic password. `Ok(None)` = no such item (or empty).
+    /// Waits at most [`super::keychain_read_wait`]: a read macOS holds on
+    /// a dialog keeps waiting in the background and this answers an error
+    /// ([`super::bounded_keychain_read`]).
     #[cfg(target_os = "macos")]
     pub fn read(service: &str, account: &str) -> Result<Option<Vec<u8>>, String> {
-        match crate::macos_keychain::read(service, account, None) {
-            Ok(Some(b)) if b.is_empty() => Ok(None),
-            Ok(v) => Ok(v),
-            Err(e) => Err(e.to_string()),
-        }
+        super::bounded_keychain_read(service, account, super::macos_reader())
+            .map(|v| v.filter(|b| !b.is_empty()))
+            .map_err(|e| e.to_string())
     }
 
     /// Does the item exist? Attributes only: no prompt, readable or not.
@@ -222,6 +223,242 @@ pub mod keychain {
     #[cfg(not(target_os = "macos"))]
     pub fn delete(_service: &str, _account: &str) -> Result<(), String> {
         Err("the keychain is macOS-only".into())
+    }
+}
+
+// ── Bounded keychain reads ──────────────────────────────────────────
+//
+// A keychain read is a `/usr/bin/security` child. When macOS shows a
+// dialog for it ("… wants to use your confidential information stored in
+// Claude Code-credentials"), the child waits until the person answers,
+// and a dialog behind other windows waits forever. K2 used to wait with
+// it, under the tool lock and often the database, so every later Claude
+// task answered "busy" until the daemon was killed. Now a read runs on its
+// own thread and the caller waits at most [`keychain_read_wait`]: past
+// that it gets [`KeychainReadError::Pending`] (said to the person as
+// "answer the keychain dialog, then try again") while the read keeps
+// waiting for the dialog. Reads of one item share one child (no stack of
+// dialogs), and an answer that comes after its caller gave up is handed
+// to the next read of that item within [`LATE_ANSWER_KEEP`].
+
+/// Why a keychain read gave no answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeychainReadError {
+    /// Not answered within the wait: macOS is most likely showing a
+    /// dialog for it. The read goes on in the background.
+    Pending { waited: Duration },
+    /// The person declined the macOS dialog.
+    Declined,
+    Failed(String),
+}
+
+impl std::fmt::Display for KeychainReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeychainReadError::Pending { waited } => write!(
+                f,
+                "macOS has not answered the keychain read after {} s (a keychain dialog may be open)",
+                waited.as_secs()
+            ),
+            KeychainReadError::Declined => write!(f, "the macOS keychain dialog was declined"),
+            KeychainReadError::Failed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// Reads one keychain item: `(service, account)` → its data.
+pub type KeychainReader = dyn Fn(&str, &str) -> Result<Option<Vec<u8>>, KeychainReadError> + Send + Sync;
+
+static KEYCHAIN_READ_WAIT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(5_000);
+
+/// How long a caller waits for a keychain read before it answers
+/// [`KeychainReadError::Pending`].
+pub fn keychain_read_wait() -> Duration {
+    Duration::from_millis(KEYCHAIN_READ_WAIT_MS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(any(test, feature = "test-util"))]
+pub fn set_keychain_read_wait(d: Duration) {
+    KEYCHAIN_READ_WAIT_MS.store(d.as_millis() as u64, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// An answer that came after its caller stopped waiting is kept this long
+/// for the next read of the same item (the person answered the dialog,
+/// then pressed Try again).
+pub const LATE_ANSWER_KEEP: Duration = Duration::from_secs(120);
+
+type ReadResult = Result<Option<Vec<u8>>, KeychainReadError>;
+
+struct Flight {
+    service: String,
+    state: Mutex<FlightState>,
+    cv: std::sync::Condvar,
+}
+
+struct FlightState {
+    started: Instant,
+    result: Option<ReadResult>,
+    done_at: Option<Instant>,
+    delivered: bool,
+}
+
+type FlightMap = std::collections::HashMap<String, std::sync::Arc<Flight>>;
+
+fn flights() -> &'static Mutex<FlightMap> {
+    static F: std::sync::OnceLock<Mutex<FlightMap>> = std::sync::OnceLock::new();
+    F.get_or_init(|| Mutex::new(FlightMap::new()))
+}
+
+/// Read `(service, account)` with `reader`, waiting at most
+/// [`keychain_read_wait`] (see the section note above).
+pub fn bounded_keychain_read(service: &str, account: &str, reader: std::sync::Arc<KeychainReader>) -> ReadResult {
+    use std::sync::Arc;
+    // The reader is part of the key: a test's fake never joins a real read.
+    let key = format!("{service}\u{0}{account}\u{0}{:p}", Arc::as_ptr(&reader) as *const ());
+    let flight = {
+        let mut map = flights().lock().unwrap_or_else(|p| p.into_inner());
+        let reuse = map
+            .get(&key)
+            .filter(|f| {
+                let st = f.state.lock().unwrap_or_else(|p| p.into_inner());
+                match (&st.result, st.done_at) {
+                    (None, _) => true,
+                    (Some(_), Some(at)) => !st.delivered && at.elapsed() < LATE_ANSWER_KEEP,
+                    _ => false,
+                }
+            })
+            .cloned();
+        match reuse {
+            Some(f) => f,
+            None => {
+                let f = Arc::new(Flight {
+                    service: service.to_string(),
+                    state: Mutex::new(FlightState { started: Instant::now(), result: None, done_at: None, delivered: false }),
+                    cv: std::sync::Condvar::new(),
+                });
+                map.insert(key.clone(), f.clone());
+                let (w, svc, acct) = (f.clone(), service.to_string(), account.to_string());
+                let spawned = std::thread::Builder::new().name("keychain-read".into()).spawn(move || {
+                    let r = reader(&svc, &acct);
+                    let mut st = w.state.lock().unwrap_or_else(|p| p.into_inner());
+                    st.result = Some(r);
+                    st.done_at = Some(Instant::now());
+                    w.cv.notify_all();
+                });
+                if let Err(e) = spawned {
+                    map.remove(&key);
+                    return Err(KeychainReadError::Failed(format!("could not start the keychain read: {e}")));
+                }
+                f
+            }
+        }
+    };
+    let st = flight.state.lock().unwrap_or_else(|p| p.into_inner());
+    let (mut st, _) = flight
+        .cv
+        .wait_timeout_while(st, keychain_read_wait(), |s| s.result.is_none())
+        .unwrap_or_else(|p| p.into_inner());
+    let Some(r) = st.result.clone() else {
+        let waited = st.started.elapsed();
+        crate::log_debug!(
+            "[llm-accounts] keychain read of \"{service}\" not answered after {} ms (a macOS dialog may be open); K2 stopped waiting",
+            waited.as_millis()
+        );
+        return Err(KeychainReadError::Pending { waited });
+    };
+    st.delivered = true;
+    drop(st);
+    let mut map = flights().lock().unwrap_or_else(|p| p.into_inner());
+    if map.get(&key).is_some_and(|f| Arc::ptr_eq(f, &flight)) {
+        map.remove(&key);
+    }
+    r
+}
+
+/// Keychain reads still waiting on macOS (a dialog, most likely): the
+/// item and how long, for the status route and busy answers.
+pub fn pending_keychain_reads() -> Vec<(String, Duration)> {
+    let map = flights().lock().unwrap_or_else(|p| p.into_inner());
+    map.values()
+        .filter_map(|f| {
+            let st = f.state.lock().unwrap_or_else(|p| p.into_inner());
+            st.result.is_none().then(|| (f.service.clone(), st.started.elapsed()))
+        })
+        .collect()
+}
+
+/// The real reader: `/usr/bin/security` through [`crate::macos_keychain`].
+#[cfg(target_os = "macos")]
+fn macos_reader() -> std::sync::Arc<KeychainReader> {
+    static R: std::sync::OnceLock<std::sync::Arc<KeychainReader>> = std::sync::OnceLock::new();
+    R.get_or_init(|| {
+        std::sync::Arc::new(|service: &str, account: &str| match crate::macos_keychain::read(service, account, None) {
+            Ok(Some(b)) if b.is_empty() => Ok(None),
+            Ok(v) => Ok(v),
+            Err(crate::macos_keychain::KeychainError::Status { status: Some(-128), .. }) => Err(KeychainReadError::Declined),
+            Err(e) => Err(KeychainReadError::Failed(e.to_string())),
+        })
+    })
+    .clone()
+}
+
+#[cfg(any(test, feature = "test-util"))]
+static TEST_READER: std::sync::RwLock<Option<std::sync::Arc<KeychainReader>>> = std::sync::RwLock::new(None);
+
+/// Tests: read Claude's items (the live one, a slot's) with `reader`
+/// instead of the keychain until the guard drops. Hold the test env lock.
+#[cfg(any(test, feature = "test-util"))]
+pub fn use_test_keychain_reader(reader: std::sync::Arc<KeychainReader>) -> TestKeychainReader {
+    *TEST_READER.write().unwrap_or_else(|p| p.into_inner()) = Some(reader);
+    TestKeychainReader(())
+}
+
+#[cfg(any(test, feature = "test-util"))]
+pub struct TestKeychainReader(());
+
+#[cfg(any(test, feature = "test-util"))]
+impl Drop for TestKeychainReader {
+    fn drop(&mut self) {
+        *TEST_READER.write().unwrap_or_else(|p| p.into_inner()) = None;
+    }
+}
+
+/// Who reads Claude's keychain items here: a test's fake, else the
+/// keychain when K2 may use it ([`keychain_enabled`]), else nobody.
+fn claude_reader() -> Option<std::sync::Arc<KeychainReader>> {
+    #[cfg(any(test, feature = "test-util"))]
+    if let Some(r) = TEST_READER.read().unwrap_or_else(|p| p.into_inner()).clone() {
+        return Some(r);
+    }
+    #[cfg(target_os = "macos")]
+    if keychain_enabled() {
+        return Some(macos_reader());
+    }
+    None
+}
+
+/// What the person reads when macOS holds a read of Claude's login on a
+/// dialog.
+pub const KEYCHAIN_PROMPT_HINT: &str = "macOS is asking to let K2 read Claude's login. Answer the keychain dialog (it may be behind other windows), then try again.";
+/// What the person reads when they declined that dialog.
+pub const KEYCHAIN_DECLINED_HINT: &str =
+    "macOS didn't let K2 read Claude's login (the keychain dialog was declined). Try again and choose Allow or Always Allow.";
+
+/// One of Claude's keychain items (the live one, a slot's), waiting at
+/// most [`keychain_read_wait`]. `Ok(None)`: no such item, or K2 doesn't
+/// use the keychain here. A read macOS holds on a dialog is
+/// [`WalletError::KeychainPrompt`], never a wait.
+pub(crate) fn read_claude_item(service: &str, account: &str) -> Result<Option<Vec<u8>>, WalletError> {
+    let Some(reader) = claude_reader() else { return Ok(None) };
+    match bounded_keychain_read(service, account, reader) {
+        Ok(v) => Ok(v.filter(|b| !b.is_empty())),
+        Err(KeychainReadError::Pending { .. }) => Err(WalletError::KeychainPrompt(KEYCHAIN_PROMPT_HINT.into())),
+        Err(KeychainReadError::Declined) => Err(WalletError::KeychainPrompt(KEYCHAIN_DECLINED_HINT.into())),
+        // The error says "unlock" only when the keychain really is locked
+        // (macos_keychain maps the status codes).
+        Err(KeychainReadError::Failed(e)) => {
+            Err(WalletError::LiveStoreUnavailable(format!("could not read Claude's keychain item: {e}")))
+        }
     }
 }
 
@@ -473,16 +710,9 @@ pub fn read_live(tool: Tool) -> Result<Option<Vec<u8>>, WalletError> {
     if !tool.subscription_supported() {
         return Ok(None);
     }
-    if tool == Tool::Claude && keychain_enabled() {
-        let svc = claude_live_keychain_service();
-        match keychain::read(&svc, &claude_keychain_account()) {
-            Ok(Some(b)) => return Ok(Some(b)),
-            Ok(None) => {}
-            // The error says "unlock" only when the keychain really is
-            // locked (macos_keychain maps the status codes).
-            Err(e) => return Err(WalletError::LiveStoreUnavailable(format!(
-                "could not read Claude's keychain item: {e}"
-            ))),
+    if tool == Tool::Claude {
+        if let Some(b) = read_claude_item(&claude_live_keychain_service(), &claude_keychain_account())? {
+            return Ok(Some(b));
         }
     }
     read_nonempty(&live_cred_path(tool))
@@ -527,7 +757,7 @@ pub(crate) fn write_live_expecting(tool: Tool, bytes: &[u8], expect: Option<Opti
         let (home, _) = live_home(tool);
         Some(
             FileLock::acquire(&home.join("auth.json.lock"), Duration::from_secs(10))
-                .map_err(|_| WalletError::LockBusy("Grok (auth.json.lock)".into()))?,
+                .map_err(|_| WalletError::LockBusy { tool: "Grok".into(), holder: Some("Grok holds its own auth.json.lock".into()) })?,
         )
     } else {
         None
@@ -654,7 +884,7 @@ fn write_live_raw(tool: Tool, bytes: &[u8]) -> Result<(), WalletError> {
         Tool::Grok => {
             let (home, _) = live_home(tool);
             let _grok_lock = FileLock::acquire(&home.join("auth.json.lock"), Duration::from_secs(10))
-                .map_err(|_| WalletError::LockBusy("Grok (auth.json.lock)".into()))?;
+                .map_err(|_| WalletError::LockBusy { tool: "Grok".into(), holder: Some("Grok holds its own auth.json.lock".into()) })?;
             write_private(&live_cred_path(tool), bytes).map_err(|e| WalletError::Io(e.to_string()))
         }
     }
@@ -686,6 +916,7 @@ impl FileLock {
                 use std::os::unix::io::AsRawFd;
                 let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
                 if rc == 0 {
+                    note_pid(&file);
                     return Ok(FileLock { file });
                 }
             }
@@ -693,7 +924,10 @@ impl FileLock {
             #[cfg(not(unix))]
             {
                 match file.try_lock() {
-                    Ok(()) => return Ok(FileLock { file }),
+                    Ok(()) => {
+                        note_pid(&file);
+                        return Ok(FileLock { file });
+                    }
                     Err(std::fs::TryLockError::WouldBlock) => {}
                     Err(std::fs::TryLockError::Error(e)) => return Err(e),
                 }
@@ -704,6 +938,118 @@ impl FileLock {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+/// Write this process's id into a lock file it just locked. Information
+/// only (who to name in a busy answer): the lock is the flock, which the
+/// kernel drops when the holder exits or is killed, so a stale id left in
+/// the file never locks anything.
+fn note_pid(file: &fs::File) {
+    let mut f = file;
+    let _ = file.set_len(0);
+    let _ = std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(0));
+    let _ = writeln!(f, "{}", std::process::id());
+}
+
+/// The process id a lock file names (see [`note_pid`]).
+pub fn lock_file_pid(path: &Path) -> Option<u32> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+// ── Who holds a lock ────────────────────────────────────────────────
+
+struct Holder {
+    task: String,
+    since: Instant,
+}
+
+fn holders() -> &'static Mutex<std::collections::HashMap<String, Holder>> {
+    static H: std::sync::OnceLock<Mutex<std::collections::HashMap<String, Holder>>> = std::sync::OnceLock::new();
+    H.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+thread_local! {
+    /// What this thread is doing, for busy answers ("finishing a sign-in").
+    static TASK: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Name what this thread does until the guard drops; a lock it takes
+/// meanwhile is reported as held by that task.
+pub fn task(label: &str) -> TaskGuard {
+    let prev = TASK.with(|t| t.replace(Some(label.to_string())));
+    TaskGuard { prev }
+}
+
+pub struct TaskGuard {
+    prev: Option<String>,
+}
+
+impl Drop for TaskGuard {
+    fn drop(&mut self) {
+        let prev = self.prev.take();
+        TASK.with(|t| *t.borrow_mut() = prev);
+    }
+}
+
+fn current_task() -> String {
+    TASK.with(|t| t.borrow().clone()).unwrap_or_else(|| {
+        let th = std::thread::current();
+        format!("K2 thread \"{}\"", th.name().unwrap_or("unnamed"))
+    })
+}
+
+fn note_holder(key: &str) {
+    holders()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(key.to_string(), Holder { task: current_task(), since: Instant::now() });
+}
+
+fn clear_holder(key: &str) {
+    holders().lock().unwrap_or_else(|p| p.into_inner()).remove(key);
+}
+
+/// "3 s", "2 min 5 s", "1 h 4 min".
+pub fn plain_duration(d: Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{s} s")
+    } else if s < 3600 {
+        format!("{} min {} s", s / 60, s % 60)
+    } else {
+        format!("{} h {} min", s / 3600, (s % 3600) / 60)
+    }
+}
+
+/// What holds lock `key` in this process ("finishing a sign-in, for
+/// 4 s"), else, when the lock file is held by another process, which one.
+fn holder_text(key: &str, lock_file: &Path) -> Option<String> {
+    if let Some(h) = holders().lock().unwrap_or_else(|p| p.into_inner()).get(key) {
+        return Some(format!("{}, for {}", h.task, plain_duration(h.since.elapsed())));
+    }
+    match lock_file_pid(lock_file) {
+        Some(pid) if pid != std::process::id() => Some(format!(
+            "another K2 process (pid {pid}) holds {}; if it is stuck, quit it",
+            lock_file.display()
+        )),
+        _ => None,
+    }
+}
+
+/// Every lock held in this process now and what holds it, plus keychain
+/// reads still waiting on macOS: for the status route.
+pub fn lock_report() -> serde_json::Value {
+    let locks: Vec<serde_json::Value> = holders()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .map(|(k, h)| serde_json::json!({"lock": k, "task": h.task, "heldForSecs": h.since.elapsed().as_secs()}))
+        .collect();
+    let reads: Vec<serde_json::Value> = pending_keychain_reads()
+        .into_iter()
+        .map(|(svc, d)| serde_json::json!({"item": svc, "waitingForSecs": d.as_secs()}))
+        .collect();
+    serde_json::json!({"locks": locks, "keychainReadsWaiting": reads})
 }
 
 static TOOL_MUTEX: [Mutex<()>; 4] = [Mutex::new(()), Mutex::new(()), Mutex::new(()), Mutex::new(())];
@@ -793,6 +1139,7 @@ impl Drop for ToolLock {
     fn drop(&mut self) {
         note_held(self.tool, false);
         if self.held.is_some() {
+            clear_holder(self.tool.as_str());
             let held = self.since.elapsed();
             if held > TOOL_LOCK_WARN_AFTER {
                 let thread = std::thread::current();
@@ -807,6 +1154,13 @@ impl Drop for ToolLock {
     }
 }
 
+/// [`lock_tool`] for a named task (what a busy answer to someone else
+/// says holds it).
+pub fn lock_tool_as(tool: Tool, timeout: Duration, what: &str) -> Result<ToolLock, WalletError> {
+    let _t = task(what);
+    lock_tool(tool, timeout)
+}
+
 pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError> {
     if held_here(tool) > 0 {
         note_held(tool, true);
@@ -815,11 +1169,16 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
     // Never wait for it while holding the database: one try, then busy.
     let under_db = db_held_here();
     let timeout = if under_db { Duration::ZERO } else { timeout };
+    let lock_file = tool_dir(tool).join(".lock");
     let busy = || {
-        if under_db {
-            crate::log_debug!("[llm-accounts] {}: busy (its lock is taken; not waiting while holding the database)", tool.as_str());
-        }
-        WalletError::LockBusy(tool.display().into())
+        let holder = holder_text(tool.as_str(), &lock_file);
+        crate::log_debug!(
+            "[llm-accounts] {}: busy{} ({})",
+            tool.as_str(),
+            if under_db { ", not waiting while holding the database" } else { "" },
+            holder.as_deref().unwrap_or("holder unknown")
+        );
+        WalletError::LockBusy { tool: tool.display().into(), holder }
     };
     let deadline = Instant::now() + timeout;
     let guard = loop {
@@ -838,8 +1197,9 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
     let dir = tool_dir(tool);
     ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
     let left = deadline.saturating_duration_since(Instant::now());
-    let file = FileLock::acquire(&dir.join(".lock"), left).map_err(|_| busy())?;
+    let file = FileLock::acquire(&lock_file, left).map_err(|_| busy())?;
     note_held(tool, true);
+    note_holder(tool.as_str());
     Ok(ToolLock { tool, held: Some((guard, file)), since: Instant::now() })
 }
 
@@ -849,8 +1209,16 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
 /// its vendor call (never the tool lock or the database). While the
 /// database is held it is waited for at most [`SLOT_WAIT_UNDER_DB`].
 pub struct SlotLock {
-    _guard: std::sync::MutexGuard<'static, ()>,
+    // Field order = drop order: the file lock, then the mutex.
     _file: Option<FileLock>,
+    _guard: std::sync::MutexGuard<'static, ()>,
+    key: String,
+}
+
+impl Drop for SlotLock {
+    fn drop(&mut self) {
+        clear_holder(&self.key);
+    }
 }
 
 /// Move a slot's folder away (to `.removed/`) while its [`SlotLock`] is
@@ -880,6 +1248,9 @@ fn slot_mutex(tool: Tool, id: &str) -> &'static Mutex<()> {
 pub fn lock_slot(tool: Tool, id: &str, timeout: Duration) -> Result<SlotLock, WalletError> {
     let timeout = if db_held_here() { timeout.min(SLOT_WAIT_UNDER_DB) } else { timeout };
     let deadline = Instant::now() + timeout;
+    let key = format!("{}/{}", tool.as_str(), id);
+    let lock_file = slot_dir(tool, id).join(".lock");
+    let busy = || WalletError::LockBusy { tool: tool.display().into(), holder: holder_text(&key, &lock_file) };
     let m = slot_mutex(tool, id);
     let guard = loop {
         match m.try_lock() {
@@ -887,7 +1258,7 @@ pub fn lock_slot(tool: Tool, id: &str, timeout: Duration) -> Result<SlotLock, Wa
             Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => {
                 if Instant::now() >= deadline {
-                    return Err(WalletError::LockBusy(tool.display().into()));
+                    return Err(busy());
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
@@ -896,9 +1267,9 @@ pub fn lock_slot(tool: Tool, id: &str, timeout: Duration) -> Result<SlotLock, Wa
     let dir = slot_dir(tool, id);
     ensure_private_dir(&dir).map_err(|e| WalletError::Io(e.to_string()))?;
     let left = deadline.saturating_duration_since(Instant::now());
-    let file = FileLock::acquire(&dir.join(".lock"), left)
-        .map_err(|_| WalletError::LockBusy(tool.display().into()))?;
-    Ok(SlotLock { _guard: guard, _file: Some(file) })
+    let file = FileLock::acquire(&lock_file, left).map_err(|_| busy())?;
+    note_holder(&key);
+    Ok(SlotLock { _file: Some(file), _guard: guard, key })
 }
 
 // ── API keys ────────────────────────────────────────────────────────

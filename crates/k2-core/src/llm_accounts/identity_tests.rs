@@ -939,3 +939,223 @@ fn grok_names_its_account_from_auth_json_and_an_outside_login_is_adopted() {
     assert_eq!(fs::read(store::slot_cred_path(Tool::Grok, &a.id)).unwrap(), auth("g-a", "a@example.test", 1), "A untouched");
     assert_eq!(fs::read(store::slot_cred_path(Tool::Grok, &out.adopted[0].id)).unwrap(), auth("g-c", "c@example.test", 1));
 }
+
+// ── One row per account, and keychain reads that wait on macOS ──────
+
+/// A sign-in K2 ran into a new token: its slot holds `tag`'s credential
+/// and the `.claude.json` that sign-in wrote names `uuid`/`email`.
+fn k2_sign_in(conn: &Connection, label: &str, tag: &str, uuid: &str, email: &str) -> Entry {
+    let e = wallet::begin_new(conn, Tool::Claude, label, None).unwrap();
+    store::write_slot(Tool::Claude, &e.id, &cred(tag)).unwrap();
+    fs::write(store::slot_dir(Tool::Claude, &e.id).join(".claude.json"), json!({"oauthAccount": profile(uuid, email)}).to_string()).unwrap();
+    wallet::finalize_login(conn, &e.id, None).unwrap()
+}
+
+fn claude_rows(conn: &Connection) -> Vec<Entry> {
+    list_for(conn, Tool::Claude).unwrap()
+}
+
+/// Field report: Claude Code signed in from the terminal (account A),
+/// then the same account added in K2 while K2 had not saved the
+/// terminal's sign-in (its read was stuck). The K2 sign-in isn't made
+/// the default (the CLI is signed in); then the CLI's sign-in is saved.
+/// One row for A, now the default, holding the live sign-in.
+#[test]
+fn a_k2_sign_in_then_the_clis_own_sign_in_of_the_same_account_is_one_row() {
+    let h = Home::new();
+    let conn = db();
+    write_live(&h, "terminal");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-a", "a@example.test"))).unwrap();
+    let added = k2_sign_in(&conn, "Work", "k2", "uuid-a", "a@example.test");
+    assert_eq!(added.state, state::SIGNED_IN);
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap(), None, "the CLI is signed in: the new token isn't made the default");
+
+    let e = wallet::import_live(&conn, Tool::Claude, Some("boot")).unwrap().expect("the live sign-in is saved");
+
+    let rows = claude_rows(&conn);
+    assert_eq!(rows.len(), 1, "one row for the account: {:?}", rows.iter().map(|r| &r.label).collect::<Vec<_>>());
+    assert_eq!(e.id, added.id, "the account's existing token took it");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(added.id.as_str()));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &added.id)).unwrap(), cred("terminal"), "it holds the live sign-in");
+    let trash = fs::read_dir(store::removed_root()).unwrap().count();
+    assert_eq!(trash, 1, "the K2 sign-in it replaced is kept in Trash");
+}
+
+/// The other order: the CLI's sign-in was saved as "Default" first, then
+/// the same account's sign-in in K2 finishes. Still one row.
+#[test]
+fn the_clis_sign_in_then_a_k2_sign_in_of_the_same_account_is_one_row() {
+    let h = Home::new();
+    let conn = db();
+    write_live(&h, "terminal");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-a", "a@example.test"))).unwrap();
+    let default = wallet::import_live(&conn, Tool::Claude, Some("boot")).unwrap().expect("imported");
+
+    let kept = k2_sign_in(&conn, "Work", "k2", "uuid-a", "a@example.test");
+
+    assert_eq!(kept.id, default.id, "the sign-in is the default token's account");
+    let rows = claude_rows(&conn);
+    assert_eq!(rows.len(), 1, "one row: {:?}", rows.iter().map(|r| &r.label).collect::<Vec<_>>());
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &default.id)).unwrap(), cred("terminal"), "the default keeps its live sign-in");
+    assert_eq!(live_bytes(&h), cred("terminal"), "the live store is untouched");
+    assert_eq!(fs::read_dir(store::removed_root()).unwrap().count(), 1, "the K2 sign-in is kept in Trash");
+    // Another account still gets its own token.
+    let b = k2_sign_in(&conn, "Other", "b", "uuid-b", "b@example.test");
+    assert_ne!(b.id, default.id);
+    assert_eq!(claude_rows(&conn).len(), 2);
+}
+
+/// A keychain read macOS holds on a dialog for as long as `gate` stays
+/// closed. Counts its reads; signals each one that starts.
+struct DialogKeychain {
+    gate: Mutex<bool>,
+    cv: std::sync::Condvar,
+    reads: std::sync::atomic::AtomicUsize,
+    started: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    live: Vec<u8>,
+}
+
+impl DialogKeychain {
+    fn reader(me: &std::sync::Arc<Self>) -> std::sync::Arc<store::KeychainReader> {
+        let me = me.clone();
+        std::sync::Arc::new(move |service: &str, _account: &str| {
+            if service != store::claude_keychain_service(None) {
+                return Ok(None); // a slot's item: none
+            }
+            me.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let Some(tx) = me.started.lock().unwrap().as_ref() {
+                let _ = tx.send(());
+            }
+            let open = me.gate.lock().unwrap();
+            let (open, _) = me.cv.wait_timeout_while(open, std::time::Duration::from_secs(60), |o| !*o).unwrap();
+            assert!(*open, "the test never answered the dialog");
+            Ok(Some(me.live.clone()))
+        })
+    }
+    fn answer(&self) {
+        *self.gate.lock().unwrap() = true;
+        self.cv.notify_all();
+    }
+}
+
+struct ReadWait;
+impl Drop for ReadWait {
+    fn drop(&mut self) {
+        store::set_keychain_read_wait(std::time::Duration::from_secs(5));
+    }
+}
+
+/// Field bug: a keychain read of Claude's login that macOS held on a
+/// dialog held the Claude lock for good, so every later Claude task
+/// answered "Another Claude account task is running". Now the read holds
+/// no lock, a caller waits a bounded time and is told to answer the
+/// dialog (not "busy"), reads share one dialog, and the answer that comes
+/// late is used by the next try.
+#[test]
+fn a_keychain_read_held_on_a_macos_dialog_holds_no_lock_and_says_to_answer_it() {
+    let h = Home::new();
+    let conn = db();
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-a", "a@example.test"))).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let kc = std::sync::Arc::new(DialogKeychain {
+        gate: Mutex::new(false),
+        cv: std::sync::Condvar::new(),
+        reads: std::sync::atomic::AtomicUsize::new(0),
+        started: Mutex::new(Some(tx)),
+        live: cred("terminal"),
+    });
+    let _reader = store::use_test_keychain_reader(DialogKeychain::reader(&kc));
+    let _wait = ReadWait;
+    store::set_keychain_read_wait(std::time::Duration::from_millis(400));
+
+    // A sign-in finishing in K2 reads what it wrote (and the live store).
+    let added = wallet::begin_new(&conn, Tool::Claude, "Work", None).unwrap();
+    store::write_slot(Tool::Claude, &added.id, &cred("k2")).unwrap();
+    fs::write(store::slot_dir(Tool::Claude, &added.id).join(".claude.json"), json!({"oauthAccount": profile("uuid-a", "a@example.test")}).to_string()).unwrap();
+    let id = added.id.clone();
+    let reading = std::thread::spawn(move || wallet::finalize_read(Tool::Claude, &id));
+    rx.recv_timeout(std::time::Duration::from_secs(10)).expect("the live read started");
+
+    // While macOS holds that read, the Claude lock is free.
+    let t0 = std::time::Instant::now();
+    let lock = store::lock_tool(Tool::Claude, std::time::Duration::from_millis(200));
+    assert!(lock.is_ok(), "the Claude lock is held during a keychain read: {:?}", lock.err());
+    assert!(t0.elapsed() < std::time::Duration::from_millis(500));
+    drop(lock);
+
+    // A concurrent add of the CLI's own sign-in is told to answer the
+    // dialog, within the bounded wait, and is not "busy".
+    let t1 = std::time::Instant::now();
+    let err = wallet::import_live(&conn, Tool::Claude, Some("boot")).unwrap_err();
+    let took = t1.elapsed();
+    assert_eq!(err.code(), "keychain_prompt", "{err}");
+    assert_eq!(err.to_string(), store::KEYCHAIN_PROMPT_HINT);
+    assert!(took < std::time::Duration::from_secs(3), "waited {took:?}");
+
+    // The sign-in itself still finishes; with the live store unknown it is
+    // never made the default on its own.
+    let read = reading.join().expect("reader thread").expect("the slot was read");
+    let saved = wallet::finalize_login_with(&conn, &added.id, None, read).unwrap();
+    assert_eq!(saved.state, state::SIGNED_IN);
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap(), None);
+    assert_eq!(kc.reads.load(std::sync::atomic::Ordering::SeqCst), 1, "one dialog for every read of the item");
+
+    // The person answers the dialog; the next try uses that answer (no
+    // second dialog) and the account ends up as one row, the default.
+    kc.answer();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let e = wallet::import_live(&conn, Tool::Claude, Some("boot")).unwrap().expect("saved after the answer");
+    assert_eq!(kc.reads.load(std::sync::atomic::Ordering::SeqCst), 1, "the late answer was used");
+    assert_eq!(e.id, added.id);
+    assert_eq!(claude_rows(&conn).len(), 1);
+    assert!(store::pending_keychain_reads().is_empty());
+}
+
+/// "busy" names what holds the lock and for how long.
+#[test]
+fn busy_names_the_task_that_holds_the_lock() {
+    let _h = Home::new();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _l = store::lock_tool_as(Tool::Claude, std::time::Duration::from_secs(1), "finishing a sign-in").expect("free");
+        let _s = store::lock_slot(Tool::Claude, "acc_held", std::time::Duration::from_secs(1)).expect("free");
+        held_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(std::time::Duration::from_secs(60));
+    });
+    held_rx.recv_timeout(std::time::Duration::from_secs(10)).expect("held");
+    let err = store::lock_tool(Tool::Claude, std::time::Duration::from_millis(100)).err().expect("busy");
+    let slot_err = store::lock_slot(Tool::Claude, "acc_held", std::time::Duration::from_millis(100)).err().expect("busy");
+    let report = store::lock_report();
+    drop(release);
+    holder.join().unwrap();
+
+    assert_eq!(err.code(), "busy");
+    let text = err.to_string();
+    assert!(
+        text.starts_with("Another Claude account task is running (finishing a sign-in, for ") && text.ends_with("); try again in a moment."),
+        "{text}"
+    );
+    match &slot_err {
+        WalletError::LockBusy { holder: Some(h), .. } => assert!(h.starts_with("K2 thread "), "{h}"),
+        other => panic!("slot busy names no holder: {other:?}"),
+    }
+    let locks = report["locks"].as_array().unwrap();
+    assert!(locks.iter().any(|l| l["lock"] == "claude" && l["task"] == "finishing a sign-in"), "{report}");
+    // Released: free again, and the report forgets it.
+    assert!(store::lock_tool(Tool::Claude, std::time::Duration::from_millis(100)).is_ok());
+    assert!(!store::lock_report()["locks"].as_array().unwrap().iter().any(|l| l["lock"] == "claude"));
+}
+
+/// The lock is the flock, not the file: a lock file left behind by a
+/// process that died (it names that process) locks nothing.
+#[test]
+fn a_lock_file_left_by_a_dead_holder_locks_nothing() {
+    let _h = Home::new();
+    let dir = store::tool_dir(Tool::Claude);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".lock"), "999999\n").unwrap();
+    let l = store::lock_tool(Tool::Claude, std::time::Duration::from_millis(200)).expect("a stale lock file locks nothing");
+    assert_eq!(store::lock_file_pid(&dir.join(".lock")), Some(std::process::id()), "the file names the holder now");
+    drop(l);
+}

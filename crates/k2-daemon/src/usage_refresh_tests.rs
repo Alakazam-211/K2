@@ -577,7 +577,19 @@ fn a_login_made_after_boot_is_adopted_then_its_reading_lands() {
         assert_eq!(wallet::active_id(&conn, Tool::Claude).expect("active"), None);
     }
 
+    let mut events = crate::session_events::subscribe();
     crate::llm_accounts_runtime::adopt_live_logins();
+    // The open Subs / Tokens page re-reads on this event: the adopted row
+    // shows at once, not after a relaunch.
+    let mut told = false;
+    loop {
+        match events.try_recv() {
+            Ok(crate::session_events::SessionEvent::LlmAccountsChanged { tool }) if tool.as_deref() == Some("claude") => told = true,
+            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    assert!(told, "adopting the live sign-in emits llm_accounts_changed");
 
     let id = {
         let db = k2_core::db::shared();

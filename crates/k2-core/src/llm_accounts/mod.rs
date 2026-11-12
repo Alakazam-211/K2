@@ -204,7 +204,14 @@ pub enum WalletError {
     /// its login in the OS keyring).
     LiveStoreUnavailable(String),
     AirGap,
-    LockBusy(String),
+    /// Another task holds the tool's (or a token's) lock. `tool`: what is
+    /// locked ("Claude"); `holder`: what holds it and for how long, when
+    /// K2 knows ("finishing a sign-in, for 4 s").
+    LockBusy { tool: String, holder: Option<String> },
+    /// macOS holds a read of Claude's keychain item on a dialog (or the
+    /// person declined it). Distinct from busy: the person has to answer
+    /// the dialog, not wait.
+    KeychainPrompt(String),
     /// A rule refusal with its own code (409): `login_pinned`,
     /// `pinned_active`, `api_key_login`, …
     Conflict(&'static str, String),
@@ -242,9 +249,13 @@ impl std::fmt::Display for WalletError {
             ),
             WalletError::LiveStoreUnavailable(why) => write!(f, "{why}"),
             WalletError::AirGap => write!(f, "{}", crate::airgap::TEACHING),
-            WalletError::LockBusy(t) => {
-                write!(f, "Another {t} account task is running; try again in a moment.")
+            WalletError::LockBusy { tool, holder: None } => {
+                write!(f, "Another {tool} account task is running; try again in a moment.")
             }
+            WalletError::LockBusy { tool, holder: Some(h) } => {
+                write!(f, "Another {tool} account task is running ({h}); try again in a moment.")
+            }
+            WalletError::KeychainPrompt(hint) => write!(f, "{hint}"),
             WalletError::VaultUnavailable(why) => write!(f, "{why}"),
             WalletError::Conflict(_, hint) | WalletError::Moved(hint, _) => write!(f, "{hint}"),
             WalletError::Io(e) => write!(f, "io: {e}"),
@@ -260,6 +271,10 @@ impl From<rusqlite::Error> for WalletError {
 }
 
 impl WalletError {
+    /// `busy` for `tool` with nothing known about the holder.
+    pub fn busy(tool: &str) -> WalletError {
+        WalletError::LockBusy { tool: tool.to_string(), holder: None }
+    }
     pub fn code(&self) -> &'static str {
         match self {
             WalletError::UnknownTool(_) => "unknown_tool",
@@ -270,7 +285,8 @@ impl WalletError {
             WalletError::ActiveLogin => "active_login",
             WalletError::LiveStoreUnavailable(_) => "live_store_unavailable",
             WalletError::AirGap => "airgap",
-            WalletError::LockBusy(_) => "busy",
+            WalletError::LockBusy { .. } => "busy",
+            WalletError::KeychainPrompt(_) => "keychain_prompt",
             WalletError::Conflict(code, _) => code,
             WalletError::VaultUnavailable(_) => "vault_unavailable",
             WalletError::Moved(..) => "account_moved",
@@ -283,7 +299,8 @@ impl WalletError {
             WalletError::DuplicateLabel(_)
             | WalletError::ActiveLogin
             | WalletError::NotSignedIn(_)
-            | WalletError::LockBusy(_)
+            | WalletError::LockBusy { .. }
+            | WalletError::KeychainPrompt(_)
             | WalletError::Conflict(..)
             | WalletError::Moved(..) => "409 Conflict",
             WalletError::NotFound(_) => "404 Not Found",

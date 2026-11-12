@@ -437,9 +437,24 @@ async fn wallet_routes_end_to_end() {
     assert_eq!(r.status, 403);
 
     // The starter pastes the code.
+    let mut events = k2_daemon::session_events::subscribe();
     let r = post(port, "/cli/llm/accounts/login/input", &member, json!({"loginId": login_id, "text": PASTED}));
     assert_eq!(r.status, 200, "{}", r.body);
     let st = poll_login(port, &login_id, |l| l["done"] == true);
+    // An open Subs / Tokens page re-reads on llm_accounts_changed: the
+    // finished sign-in emits it (after its write), so the new token shows
+    // at once.
+    // (The watcher marks the sign-in done, then emits: wait a moment.)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut told = false;
+    while !told && std::time::Instant::now() < deadline {
+        match events.try_recv() {
+            Ok(k2_daemon::session_events::SessionEvent::LlmAccountsChanged { tool }) if tool.as_deref() == Some("claude") => told = true,
+            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    }
+    assert!(told, "a finished sign-in emits llm_accounts_changed");
     assert_eq!(st["state"], "signed_in", "{st}");
     assert_eq!(st["offerMakeActive"], true);
     assert_eq!(std::fs::read_to_string(env.log.join("claude-received-code")).unwrap(), PASTED);

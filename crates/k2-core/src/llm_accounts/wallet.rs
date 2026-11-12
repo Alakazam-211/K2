@@ -562,6 +562,13 @@ impl LiveAnswer {
         let live = store::read_live(tool).ok().flatten().filter(|b| store::validate_cred(tool, b).is_ok())?;
         Some(LiveAnswer { fp: fingerprint(&live), who: refresher.and_then(|r| r.identify(tool, &live)) })
     }
+
+    /// [`LiveAnswer::ask`] about live bytes the caller already read
+    /// (so a read macOS holds on a dialog is seen before any lock).
+    pub fn ask_about(tool: Tool, live: &[u8], refresher: Option<&dyn Refresher>) -> Option<LiveAnswer> {
+        store::validate_cred(tool, live).ok()?;
+        Some(LiveAnswer { fp: fingerprint(live), who: refresher.and_then(|r| r.identify(tool, live)) })
+    }
 }
 
 /// Settle the live sign-in now (LT-A5): when it is another account than
@@ -678,7 +685,7 @@ pub fn resolve_unverified_with(db: &dyn DbAccess, tool: Tool, refresher: &dyn Re
         let ident = |t: Tool, b: &[u8]| refresher.identify(t, b);
         let who = identity::actual_identity(tool, &bytes, Some(&ident), false);
         let asked = t0.elapsed();
-        let Ok(tl) = store::lock_tool(tool, COMMIT_WAIT) else {
+        let Ok(tl) = store::lock_tool_as(tool, COMMIT_WAIT, "naming a token K2 is checking") else {
             crate::log_debug!("[llm-accounts] {}: checking token {}: busy, next time", tool.as_str(), e.id);
             continue;
         };
@@ -889,9 +896,16 @@ fn unique_label(conn: &Connection, tool: Tool, base: &str) -> Result<String, Wal
 /// Import the tool's live login as the active wallet entry when nothing
 /// is active yet (boot, first run). Returns the new entry, or `None`
 /// when a login is already active or the tool is signed out.
+/// The live store is read first, with no lock held (a keychain read can
+/// wait on a macOS dialog); the tool lock is taken for the write only.
 pub fn import_live(conn: &Connection, tool: Tool, by: Option<&str>) -> Result<Option<Entry>, WalletError> {
-    let _lock = store::lock_tool(tool, LOCK_WAIT)?;
-    import_live_locked(conn, tool, by, "Default")
+    if active_id(conn, tool)?.is_some() {
+        return Ok(None);
+    }
+    let Some(bytes) = store::read_live(tool)? else {
+        return Ok(None);
+    };
+    import_live_bytes(conn, tool, by, bytes)
 }
 
 fn import_live_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &str) -> Result<Option<Entry>, WalletError> {
@@ -921,11 +935,35 @@ fn import_bytes_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &
         crate::log_debug!("[llm-accounts] {}: live login not imported ({why})", tool.as_str());
         return Ok(None);
     }
-    let label = unique_label(conn, tool, label)?;
-    let e = super::create(conn, tool, &label, by)?;
     // The account it names now (Claude: its own ~/.claude.json, written by
     // Claude, since K2 has written none yet) is its record from here on.
     let who = identity::actual_identity(tool, &bytes, None, true);
+    // One row per account: when a token already holds this account (or
+    // this very sign-in), it becomes the default instead of a new
+    // "Default" row (a sign-in added in K2 while the CLI was signed in to
+    // the same account left nothing active).
+    if let Some(m) = token_for_live(conn, tool, who.as_ref().map(|w| &w.0), &bytes)? {
+        let _slot = store::lock_slot(tool, &m.id, LOCK_WAIT)?;
+        let old = slots::read_slot(tool, &m.id)?;
+        if old.as_deref() != Some(bytes.as_slice()) {
+            if let Some(o) = old.as_deref().filter(|o| !identity::same_grant(tool, o, &bytes)) {
+                store::set_aside_slot_cred(tool, &m.id, o, "replaced")?;
+            }
+            file_bytes(tool, &m.id, Some(&m), &bytes, Incoming::of(who.as_ref()), identity::origin::IMPORT)?;
+        }
+        let meta = store::parse_meta(tool, &bytes);
+        update_meta(conn, &m.id, &MetaUpdate {
+            expires_at: Some(meta.expires_at),
+            state: Some(state::SIGNED_IN.into()),
+            detail: Some(None),
+            ..Default::default()
+        })?;
+        set_active(conn, tool, &m.id, by)?;
+        crate::log_debug!("[llm-accounts] {}: the live sign-in is token {}'s account; made it the default (no new row)", tool.as_str(), m.id);
+        return get(conn, &m.id)?.ok_or(WalletError::NotFound(m.id)).map(Some);
+    }
+    let label = unique_label(conn, tool, label)?;
+    let e = super::create(conn, tool, &label, by)?;
     file_bytes(tool, &e.id, Some(&e), &bytes, Incoming::of(who.as_ref()), identity::origin::IMPORT)?;
     if tool == Tool::Claude {
         // The live profile names the account at import (the moment K2
@@ -937,12 +975,68 @@ fn import_bytes_locked(conn: &Connection, tool: Tool, by: Option<&str>, label: &
         }
     }
     let mut m = store::parse_meta(tool, &bytes);
-    let live = store::live_meta(tool).unwrap_or_default();
-    m.email = m.email.or(live.email);
-    m.org = m.org.or(live.org);
+    // Labels from the bytes in hand and Claude's config file: no second
+    // keychain read under the lock.
+    if tool == Tool::Claude {
+        let (email, org) = store::claude_account_labels(&store::claude_live_global_config());
+        m.email = m.email.or(email);
+        m.org = m.org.or(org);
+    }
     update_meta(conn, &e.id, &meta_update_from(&m, state::SIGNED_IN))?;
     set_active(conn, tool, &e.id, by)?;
     get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id)).map(Some)
+}
+
+/// A token (not an API key, not mid-sign-in) firmly on record as `who`'s
+/// account (not only by its email label, which [`file_bytes`] wouldn't
+/// trust for a write), other than `exclude`.
+fn same_account_token(conn: &Connection, tool: Tool, who: &AccountIdentity, exclude: &str) -> Result<Option<Entry>, WalletError> {
+    for x in list_for(conn, tool)? {
+        if x.id == exclude || x.is_api_key() || x.state == state::SIGNING_IN || x.removed_at.is_some() {
+            continue;
+        }
+        if identity::recorded_identity(tool, &x).is_some_and(|(r, src)| src != Source::Label && r.same_account(who) == Some(true)) {
+            return Ok(Some(x));
+        }
+    }
+    Ok(None)
+}
+
+/// Is the tool's CLI signed in to `who` right now, by what it wrote itself
+/// (Claude: `~/.claude.json`; Codex, Grok: the credential file)? No
+/// keychain read: this runs under the tool lock.
+fn live_names(tool: Tool, who: &AccountIdentity) -> bool {
+    let live = match tool {
+        Tool::Claude => identity::live_profile().as_ref().and_then(AccountIdentity::from_oauth_account),
+        _ => std::fs::read(store::live_cred_path(tool)).ok().and_then(|b| identity::cred_identity(tool, &b)),
+    };
+    live.is_some_and(|l| l.same_account(who) == Some(true))
+}
+
+/// The token a live sign-in belongs to when nothing is active: the one on
+/// record as its account, else the one holding the same sign-in (same
+/// refresh token). Pinned or in-use tokens are left alone.
+fn token_for_live(conn: &Connection, tool: Tool, who: Option<&AccountIdentity>, live: &[u8]) -> Result<Option<Entry>, WalletError> {
+    if !tool.subscription_supported() {
+        return Ok(None);
+    }
+    let by_account = match who {
+        Some(w) => same_account_token(conn, tool, w, "")?,
+        None => None,
+    };
+    let found = match by_account {
+        Some(m) => Some(m),
+        None => list_for(conn, tool)?.into_iter().find(|x| {
+            !x.is_api_key()
+                && x.state != state::SIGNING_IN
+                && x.removed_at.is_none()
+                && matches!(slots::read_slot(tool, &x.id), Ok(Some(b)) if identity::same_grant(tool, &b, live))
+        }),
+    };
+    match found {
+        Some(m) if !slot_busy(conn, &m.id)? => Ok(Some(m)),
+        _ => Ok(None),
+    }
 }
 
 /// Start a new login: the row (state `signing_in`) and its private slot
@@ -994,25 +1088,65 @@ fn begin_relogin_inner(conn: &Connection, id: &str) -> Result<Entry, WalletError
     get(conn, &e.id)?.ok_or(WalletError::NotFound(e.id))
 }
 
+/// What a finished sign-in left behind, read with NO lock held (a
+/// keychain read can wait on a macOS dialog): Claude's per-slot keychain
+/// item, and whether the tool's live store is signed out.
+#[derive(Debug, Clone, Default)]
+pub struct SignInRead {
+    /// Claude's per-slot item (service, account, data), when it has one.
+    keychain_item: Option<(String, String, Vec<u8>)>,
+    /// `Some(true)`: the live store is signed out; `None`: K2 couldn't
+    /// tell (then the new login is never made the default on its own).
+    live_signed_out: Option<bool>,
+}
+
+/// Phase 1 of [`finalize_login`]: read what the sign-in wrote. Takes no
+/// lock and not the database. A read macOS holds on a dialog answers
+/// [`WalletError::KeychainPrompt`] after [`store::keychain_read_wait`]
+/// (the read goes on; call again once the person answered).
+pub fn finalize_read(tool: Tool, id: &str) -> Result<SignInRead, WalletError> {
+    let mut out = SignInRead::default();
+    if tool == Tool::Claude {
+        let svc = store::claude_keychain_service(Some(&store::slot_dir(tool, id)));
+        let acct = store::claude_keychain_account();
+        if let Some(bytes) = store::read_claude_item(&svc, &acct)? {
+            out.keychain_item = Some((svc, acct, bytes));
+        }
+    }
+    out.live_signed_out = match store::read_live(tool) {
+        Ok(v) => Some(v.is_none()),
+        Err(_) => None,
+    };
+    Ok(out)
+}
+
 /// After the login command exits: move a macOS keychain item Claude made
 /// for the slot into the slot file (then delete that temporary item),
 /// tighten modes, record metadata. When the tool has no active login and
-/// its live store is empty, the new login becomes the active one.
+/// its live store is empty, the new login becomes the active one. When
+/// the account already has a token, the sign-in goes there and this new
+/// row is dropped (one row per account). Returns the token that holds it.
+///
+/// Reads first with no lock ([`finalize_read`]), then takes the tool
+/// lock. The daemon calls the two phases itself so the database isn't
+/// held across the read.
 pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<Entry, WalletError> {
+    let e = lookup(conn, None, id)?;
+    let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
+    let read = finalize_read(tool, &e.id)?;
+    finalize_login_with(conn, id, by, read)
+}
+
+/// Phase 2 of [`finalize_login`]: under the tool lock (and the caller's
+/// database), with what phase 1 read.
+pub fn finalize_login_with(conn: &Connection, id: &str, by: Option<&str>, read: SignInRead) -> Result<Entry, WalletError> {
     let e = lookup(conn, None, id)?;
     let tool = e.tool().ok_or_else(|| WalletError::UnknownTool(e.tool.clone()))?;
     let _lock = store::lock_tool(tool, LOCK_WAIT)?;
     let dir = store::slot_dir(tool, &e.id);
     // The CLI's own sign-in: Claude's per-slot keychain item (macOS), else
     // the file the CLI wrote into the slot.
-    let mut keychain_item = None;
-    if tool == Tool::Claude && store::keychain_enabled() {
-        let svc = store::claude_keychain_service(Some(&dir));
-        let acct = store::claude_keychain_account();
-        if let Ok(Some(bytes)) = store::keychain::read(&svc, &acct) {
-            keychain_item = Some((svc, acct, bytes));
-        }
-    }
+    let keychain_item = read.keychain_item;
     let fresh = match &keychain_item {
         Some((_, _, b)) => Some(b.clone()),
         None => slots::read_slot(tool, &e.id)?,
@@ -1078,6 +1212,39 @@ pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<E
             return Err(WalletError::Moved(hint, vec![a]));
         }
     }
+    // A first sign-in of an account that already has a token (the same
+    // account signed in again, or saved from the CLI's own sign-in while
+    // this one ran): one row per account, and this new row goes away.
+    // - An idle token takes the new sign-in (its older one goes to Trash).
+    // - The live token keeps its own, live sign-in when the CLI really is
+    //   signed in to that account now; this one is set aside in Trash.
+    //   When the live store names someone else (a `/login` outside K2),
+    //   this stays its own token: re-adding is how that gets repaired.
+    // - A token that is pinned or in use can't take it: a second token.
+    if let (None, Some(w)) = (&record, &who) {
+        if let Some(m) = same_account_token(conn, tool, &w.0, &e.id)? {
+            let is_live = live_owner(conn, tool)?.as_deref() == Some(m.id.as_str());
+            if !slot_busy(conn, &m.id)? && (!is_live || live_names(tool, &w.0)) {
+                if is_live {
+                    store::set_aside_slot_cred(tool, &e.id, &fresh, "duplicate")?;
+                } else {
+                    adopt_sign_in(conn, tool, &fresh, w, profile.as_ref(), Some(&e), None, false, "sign_in", false)?;
+                }
+                if let Some((svc, acct, _)) = &keychain_item {
+                    store::keychain::delete(svc, acct).map_err(WalletError::Io)?;
+                }
+                discard_unfinished(conn, &e.id)?;
+                crate::log_debug!(
+                    "[llm-accounts] {}: sign-in for new token {} is {}'s token {}; kept one row",
+                    tool.as_str(),
+                    e.id,
+                    w.0.describe(),
+                    m.id
+                );
+                return get(conn, &m.id)?.ok_or(WalletError::NotFound(m.id));
+            }
+        }
+    }
     file_bytes(tool, &e.id, Some(&e), &fresh, Incoming::of(who.as_ref()), identity::origin::K2_SIGN_IN)?;
     if let Some((svc, acct, _)) = &keychain_item {
         store::keychain::delete(svc, acct).map_err(WalletError::Io)?;
@@ -1093,7 +1260,7 @@ pub fn finalize_login(conn: &Connection, id: &str, by: Option<&str>) -> Result<E
     u.detail = Some(None);
     u.refreshed_at = Some(now());
     update_meta(conn, &e.id, &u)?;
-    if active_id(conn, tool)?.is_none() && store::read_live(tool)?.is_none() {
+    if active_id(conn, tool)?.is_none() && read.live_signed_out == Some(true) {
         let bytes = slots::read_slot(tool, &e.id)?.ok_or_else(|| WalletError::NotSignedIn(e.id.clone()))?;
         store::write_live(tool, &bytes)?;
         set_active(conn, tool, &e.id, by)?;
@@ -2106,7 +2273,7 @@ fn warm_one(
     };
     let vendor_ms = t0.elapsed().as_millis();
     // Phase 3: the tool lock, then the database, briefly.
-    let tl = match store::lock_tool(tool, COMMIT_WAIT) {
+    let tl = match store::lock_tool_as(tool, COMMIT_WAIT, "saving an idle token's refresh") {
         Ok(l) => l,
         Err(err) => {
             crate::log_debug!("[llm-accounts] keep-warm {}/{}: end (not recorded: {}), vendor {vendor_ms} ms", tool.as_str(), e.id, err.code());
@@ -2238,7 +2405,7 @@ pub fn claude_refresh_slot(
     // The write: under the tool lock. The caller's slot lock already keeps
     // every other writer off this slot, so when the tool lock can't be had
     // the rotated sign-in is still written (never lost) under the slot lock.
-    let _tl = match store::lock_tool(Tool::Claude, COMMIT_WAIT) {
+    let _tl = match store::lock_tool_as(Tool::Claude, COMMIT_WAIT, "saving a refreshed token") {
         Ok(l) => Some(l),
         Err(_) => {
             crate::log_debug!("[llm-accounts] WARN claude: refresh of {id} written under its slot lock only (tool lock busy)");

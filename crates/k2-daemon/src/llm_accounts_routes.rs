@@ -165,7 +165,7 @@ fn refuse(code: u16, err_code: &str, hint: impl Into<String>) -> CliResponse {
 
 fn wallet_err(e: WalletError) -> CliResponse {
     let code: u16 = e.http_status()[..3].parse().unwrap_or(500);
-    if let WalletError::LockBusy(_) = e {
+    if let WalletError::LockBusy { .. } = e {
         // Another task for that tool holds its lock for a moment (a
         // refresh's write, a sign-in): try again shortly.
         return CliResponse {
@@ -347,7 +347,7 @@ fn switch_two_phase(
     // write, a sign-in) is running. Nothing waits on the database meanwhile.
     let phase0 = match rt::try_reconcile_tool(tool, false, None, rt::ROUTE_TOOL_WAIT) {
         Ok(a) => a,
-        Err(e @ WalletError::LockBusy(_)) => return Err(e),
+        Err(e @ (WalletError::LockBusy { .. } | WalletError::KeychainPrompt(_))) => return Err(e),
         Err(e) => {
             k2_core::log_debug!("[llm-accounts] reconcile {}: {}", tool.as_str(), e.code());
             Vec::new()
@@ -363,7 +363,7 @@ fn switch_two_phase(
         ));
     }
     let pre = wallet::precheck(tool, &target, gen, Some(vendor))?;
-    let (mut out, warnings) = rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, |conn| -> Result<_, WalletError> {
+    let (mut out, warnings) = rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, "switching the server default", |conn| -> Result<_, WalletError> {
         // A warning, never a refusal: the person may still want it.
         let warnings = wallet_core::get(conn, &target.id)?.map(|e| exhausted_warnings(&e)).unwrap_or_default();
         Ok((wallet::switch_prechecked(conn, tool, &target.id, Some(key), &pre)?, warnings))
@@ -514,7 +514,7 @@ fn with_conn<T>(f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
 /// database, `busy` after a short wait), then the database.
 fn with_token_tool<T>(id: &str, f: impl FnOnce(&rusqlite::Connection) -> Result<T, WalletError>) -> Result<T, WalletError> {
     match with_conn(|conn| wallet_core::lookup(conn, None, id))?.tool() {
-        Some(tool) => rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, f),
+        Some(tool) => rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, "changing a token", f),
         None => with_conn(f),
     }
 }
@@ -580,6 +580,9 @@ fn list_doc(human: bool, who_key: Option<&str>, default_blocked: Option<&str>) -
         "tools": tools,
         "logins": logins,
         "keychainRepairs": keychain_repairs,
+        // What holds a wallet lock now (and for how long), and keychain
+        // reads still waiting on a macOS dialog: why a task answers busy.
+        "busy": k2_core::llm_accounts::store::lock_report(),
         "airgap": k2_core::airgap::enabled(),
         "switchNote": rt::SWITCH_NOTE,
         // May THIS caller change the server default (switch / next)?
@@ -1108,7 +1111,7 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Ok(t) => t,
                 Err(r) => return r,
             };
-            match rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, |conn| wallet::clear_default(conn, tool, Some(&key))) {
+            match rt::with_tool_db(tool, rt::ROUTE_TOOL_WAIT, "clearing the server default", |conn| wallet::clear_default(conn, tool, Some(&key))) {
                 Ok(out) => {
                     if out.cleared.is_some() {
                         let line = format!(
@@ -1888,11 +1891,41 @@ mod tests {
 
     #[test]
     fn a_busy_answer_is_409_with_a_retry_hint() {
-        let r = wallet_err(WalletError::LockBusy("Claude".into()));
+        let r = wallet_err(WalletError::busy("Claude"));
         assert_eq!(r.status, "409 Conflict");
         let v: Value = serde_json::from_str(&r.body).unwrap();
         assert_eq!(v["error"]["code"], "busy", "{v}");
         assert_eq!(v["error"]["retryAfterSecs"], json!(3), "{v}");
         assert_eq!(v["error"]["hint"], json!("Another Claude account task is running; try again in a moment."), "{v}");
+    }
+
+    #[test]
+    fn a_busy_answer_names_what_holds_the_lock() {
+        let r = wallet_err(WalletError::LockBusy { tool: "Claude".into(), holder: Some("saving a new sign-in, for 4 s".into()) });
+        assert_eq!(r.status, "409 Conflict");
+        let v: Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(v["error"]["code"], "busy", "{v}");
+        assert_eq!(
+            v["error"]["hint"],
+            json!("Another Claude account task is running (saving a new sign-in, for 4 s); try again in a moment."),
+            "{v}"
+        );
+    }
+
+    /// macOS holding a read of Claude's login on a dialog is its own
+    /// answer, with the words shown as they are, never `busy`.
+    #[test]
+    fn a_keychain_dialog_answer_is_its_own_code_with_the_hint_as_is() {
+        let r = wallet_err(WalletError::KeychainPrompt(store::KEYCHAIN_PROMPT_HINT.into()));
+        assert_eq!(r.status, "409 Conflict");
+        let v: Value = serde_json::from_str(&r.body).unwrap();
+        assert_eq!(
+            v,
+            json!({"error": {
+                "code": "keychain_prompt",
+                "hint": "macOS is asking to let K2 read Claude's login. Answer the keychain dialog (it may be behind other windows), then try again."
+            }}),
+            "{v}"
+        );
     }
 }

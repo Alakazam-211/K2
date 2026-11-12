@@ -1,0 +1,33 @@
+[package]
+name = "k2-deckrender-fuzz"
+version = "0.0.0"
+license = "MIT"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for k2-deckrender's parse path (the vendored deckcraft-pptx reader and the slide list) and a small render. A panic, a fault, a hang or an allocation past libFuzzer's limit is a finding."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repository's, so a normal build
+# doesn't pull libFuzzer, and nothing here ships.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+libfuzzer-sys = "0.4"
+k2-deckrender = { path = ".." }
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "render"
+path = "fuzz_targets/render.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,67 @@
+[package]
+name = "k2-deckrender"
+# The worker has its own version line, independent of the K2 release (like
+# k2-export and k2-ptyd): the host checks the protocol in each response
+# (proto::PROTO), not this number. release.sh does not bump it.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "K2's .pptx slide renderer: one process per render draws a slide to PNG with the vendored deckcraft (vendor/deckcraft), with time, memory and network limits. The lib holds the wire and the host-side runner; the bin is the worker."
+
+# The worker parses hostile bytes, so it holds no tokens, no DB and no OS
+# integration: it never links k2-core or k2-daemon (like k2-export).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-deckrender"
+path = "src/main.rs"
+
+[features]
+# TEST ONLY: the worker honours the request's `hostile` field (sleep, spin,
+# allocate without bound, abort, try the network, report its environment),
+# to prove every limit (tests/limits.rs). Release builds never enable it;
+# the packaging checks refuse a k2-deckrender carrying its marker.
+test-hostile = []
+
+[dependencies]
+# The vendored deckcraft v0.18.1 (vendor/deckcraft/VENDORED.md): the reader,
+# the CPU renderer, and the crates whose types they hand back.
+deckcraft-pptx = { path = "../../vendor/deckcraft/crates/pptx" }
+deckcraft-render = { path = "../../vendor/deckcraft/crates/render" }
+deckcraft-model = { path = "../../vendor/deckcraft/crates/model" }
+deckcraft-fonts = { path = "../../vendor/deckcraft/crates/fonts" }
+deckcraft-geom = { path = "../../vendor/deckcraft/crates/geom" }
+deckcraft-text = { path = "../../vendor/deckcraft/crates/text" }
+# The geometry types deckcraft uses (the same version, unified).
+kurbo = "0.13"
+# The package's slide list (`p:sldId` → slide part), read without deckcraft's
+# model; the same zip deckcraft-pptx links.
+zip = { version = "9", default-features = false, features = ["deflate"] }
+# WebP lossless (image-webp, pure Rust) and PNG encoders; already in deckcraft's tree.
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+
+[dev-dependencies]
+# The Liberation Sans pins (already in the tree).
+sha2 = "0.10"
+
+[[test]]
+name = "render"
+path = "tests/render.rs"
+
+[[test]]
+name = "limits"
+path = "tests/limits.rs"
+required-features = ["test-hostile"]
+
+[[test]]
+name = "fonts"
+path = "tests/fonts.rs"
+
+[[test]]
+name = "licences"
+path = "tests/licences.rs"

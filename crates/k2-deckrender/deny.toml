@@ -1,0 +1,54 @@
+# cargo-deny policy for k2-deckrender (the .pptx renderer) and, through it,
+# the vendored deckcraft crates (vendor/deckcraft/VENDORED.md):
+#   cargo deny --manifest-path crates/k2-deckrender/Cargo.toml \
+#       check --config crates/k2-deckrender/deny.toml licenses bans advisories sources
+# Kessel Steward ruling of 2026-11-11: permissive licences only, no git
+# sources, zip 9 (the zip 3 advisories are not ignored: they don't apply).
+# tests/licences.rs checks the licences and sources on every cargo test.
+# Liberation Sans (OFL-1.1) is font data compiled in, not a crate.
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+exclude-dev = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+deny = [
+    # The fonts the Steward ruled out (Ubuntu Font Licence, Bitstream Vera, egui's icons).
+    { name = "epaint_default_fonts" },
+    # MPL-2.0, through deckcraft-media (not vendored).
+    { name = "symphonia" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[advisories]
+ignore = [
+    # The same entry as K2's audit ledger (osv-scanner.toml, .cargo/audit.toml): crossbeam-epoch
+    # 0.9.18 is already in K2's Cargo.lock, here through rayon under vello_cpu. The bad deref is
+    # only in the fmt::Pointer impl for Atomic/Shared, which neither deckcraft nor vello_cpu
+    # formats. The fix is a lockfile-only bump to 0.9.20+; drop this line with that bump.
+    { id = "RUSTSEC-2026-0204", reason = "fmt::Pointer of crossbeam-epoch Atomic/Shared only, never formatted; K2's ledger ignores it until 2026-12-05 pending the lockfile bump to 0.9.20" },
+]

@@ -30,6 +30,9 @@ members = [
     "crates/k2-term-grid",
     "crates/k2-term-wire",
     "crates/k2-export",
+    # The .pptx slide renderer: one process per render, on the vendored deckcraft
+    # (vendor/deckcraft); its fuzz/ is a workspace of its own.
+    "crates/k2-deckrender",
     # Voice audio pipeline (devices, AEC/NS/AGC, Opus, jitter buffers);
     # MIT OR Apache-2.0, Kessel family.
     "crates/kessel-audio",

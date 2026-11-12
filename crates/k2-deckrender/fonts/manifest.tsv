@@ -1,0 +1,12 @@
+# K2's bundled fonts for k2-deckrender: the ONLY fonts the renderer loads (never the system's).
+# One row per file, tab-separated. Every file is the upstream file, byte for byte; tests/fonts.rs
+# checks each against its sha256, and that its licence files sit beside it. Adding a family needs
+# the Kessel Steward first (vendor/deckcraft/VENDORED.md, NOTICE.md).
+#   compiled_in: deckcraft = compiled in by the vendored deckcraft-fonts (its last-resort family);
+#                k2-deckrender = compiled in by this crate's build.rs from `file`.
+#   file and licence_files: relative to crates/k2-deckrender (licence files: to the font's folder).
+#family	style	file	sha256	version	source	licence	licence_files	reserved_font_names	compiled_in
+Liberation Sans	Regular	../../vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/LiberationSans-Regular.ttf	76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8	2.1.5	https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz	OFL-1.1	LICENSE,AUTHORS,ChangeLog	Liberation; Arimo, Tinos, Cousine (Google's digitized data)	deckcraft
+Liberation Sans	Bold	../../vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/LiberationSans-Bold.ttf	788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173	2.1.5	https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz	OFL-1.1	LICENSE,AUTHORS,ChangeLog	Liberation; Arimo, Tinos, Cousine (Google's digitized data)	deckcraft
+Liberation Sans	Italic	../../vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/LiberationSans-Italic.ttf	e5bae5c4cde31f22142753855f4f8fb86da6ff39955ed3c0a11248b0d16948b0	2.1.5	https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz	OFL-1.1	LICENSE,AUTHORS,ChangeLog	Liberation; Arimo, Tinos, Cousine (Google's digitized data)	deckcraft
+Liberation Sans	Bold Italic	../../vendor/deckcraft/crates/fonts/liberation-fonts-ttf-2.1.5/LiberationSans-BoldItalic.ttf	698da70fc191cc5f33ad4d6d3fe830fe4624b898ea2e3169955928b7c491f1ee	2.1.5	https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz	OFL-1.1	LICENSE,AUTHORS,ChangeLog	Liberation; Arimo, Tinos, Cousine (Google's digitized data)	deckcraft

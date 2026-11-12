@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.2.21 (2026-11-12): pairs with kit v0.15.1
+
+**Requires `k2-mpc-base` v0.15.1**. This pack's code and tests are unchanged from v0.2.20.
+
+- Pairs with kit v0.15.1. Its changes are speed on keyed docs that aren't tables (a structured
+  read, field verbs and a one-element list change cost what they touch; an untouched open
+  renders nothing) and the pack contract's carrier row for a pack that keeps a carrier; this
+  pack's text docs keep no carrier, so its merges, its JSON guard and its docs behave as in
+  v0.2.20. No kit API, wire or error id changed.
+- `Cargo.lock`: k2-mpc-base 0.15.1 (only the kit's crate version moves); the crate version.
+
 ## v0.2.20 (2026-11-11): pairs with kit v0.15.0
 
 **Requires `k2-mpc-base` v0.15.0**. This pack's code and tests are unchanged from v0.2.19.

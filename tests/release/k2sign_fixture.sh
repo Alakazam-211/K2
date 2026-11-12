@@ -8,7 +8,7 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD K2_SIGN_APPROVE_CMD K2_SIGN_APPROVE_APP \
-    K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SIGN_TEST_NOW \
+    K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SA_PHONE_CMD K2_SIGN_APPROVE_TO K2SIGN_TEST_NOW \
     K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE K2SIGN_TEST_ROOT K2_SIGNER K2SIGN_TEST_GITHUB_API \
     K2SIGN_TEST_ANCHOR K2SIGN_TEST_NOTARIZED || true
 
@@ -20,6 +20,9 @@ finish() {
     # The open stub must never have been reached (no test opens the app).
     if [ -s "$tmp/open.calls" ]; then
         fail "a test reached the approval app's open (stubbed): $(head -3 "$tmp/open.calls")"
+    fi
+    if [ -s "$tmp/phone.calls" ]; then
+        fail "a test reached the phone request stub it didn't set up: $(head -3 "$tmp/phone.calls")"
     fi
     echo
     echo "$(basename "$0"): $npass passed, $nfail failed"
@@ -132,8 +135,14 @@ echo "open \$*" >> "$tmp/open.calls"
 echo "open stub: a test tried to open the approval app" >&2
 exit 1
 SH
-chmod +x "$tmp/approve-stub.sh" "$tmp/open-stub.sh"
-export K2SA_HELPER="$tmp/approve-stub.sh" K2SA_OPEN="$tmp/open-stub.sh"
+cat > "$tmp/phone-stub.sh" <<SH
+#!/bin/sh
+echo "k2 \$*" >> "$tmp/phone.calls"
+echo "phone stub: a test asked the phone without setting K2SA_PHONE_CMD" >&2
+exit 1
+SH
+chmod +x "$tmp/approve-stub.sh" "$tmp/open-stub.sh" "$tmp/phone-stub.sh"
+export K2SA_HELPER="$tmp/approve-stub.sh" K2SA_OPEN="$tmp/open-stub.sh" K2SA_PHONE_CMD="$tmp/phone-stub.sh"
 K="$TROOT/usr/local/libexec/k2sign/k2sign"
 ADM="$TROOT/usr/local/libexec/k2sign/k2sign-admin"
 AUDIT="$TROOT/var/k2sign/audit"

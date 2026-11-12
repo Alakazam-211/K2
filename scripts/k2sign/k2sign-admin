@@ -9,6 +9,11 @@
 #   sudo /usr/local/libexec/k2sign/k2sign-admin import u1 ~/.tauri/k2so-updater.key
 #   sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>... [--windows] [--reapprove]
 #   sudo /usr/local/libexec/k2sign/k2sign-admin repin
+#   sudo /usr/local/libexec/k2sign/k2sign-admin add-approver <name> /abs/key.pem --person <who> --check biometric --view device [--words "<six words>"]
+#        (a signed-approval key, prd-signed-approvals-v1: prints its key id and six
+#        fingerprint words to compare with the device's enrol screen)
+#   sudo /usr/local/libexec/k2sign/k2sign-admin remove-approver <name>
+#   sudo /usr/local/libexec/k2sign/k2sign-admin list-approvers
 #   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-controller <fp read on a node> /Users/<release user>/.k2/tunnel-key.pem   (S3b)
 #   sudo /usr/local/libexec/k2sign/k2sign-admin pin-compute-node <name> /abs/node.pem <fp read on the node>
 #   sudo /usr/local/libexec/k2sign/k2sign-admin clear-compute-evidence <version>

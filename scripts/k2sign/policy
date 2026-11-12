@@ -11,6 +11,12 @@ approval = on
 session_hours = 12
 # An issued challenge must be approved within this many minutes, once.
 challenge_minutes = 15
+# What a release approval needs (prd-signed-approvals-v1 Question 1): the
+# check and view of the approver key that signs it, as pinned by
+# k2sign-admin add-approver. "biometric device": Face ID or Touch ID on the
+# phone. The Mac's K2 Release Approve key (mac-legacy) is credential host: it
+# keeps opening sessions only until a key that meets this is enrolled.
+require = biometric device
 # The biggest file the signer accepts on stdin (K2.app.tar.gz is ~300 MB).
 max_stdin_mb = 1024
 # What each key may sign ({version} is the release version). The Windows

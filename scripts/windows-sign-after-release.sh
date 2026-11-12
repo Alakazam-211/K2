@@ -57,7 +57,7 @@ say() { printf '[win-after-release] %s\n' "$*" >&2; }
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: $0 <version> [setup.exe]"
 [ "$(uname -s)" = Darwin ] || die "run this on z3mbpZ (macOS), where the signer lives"
 [ -z "${K2_SIGN_APPROVE_CMD:-}" ] || die "K2_SIGN_APPROVE_CMD is for tests only"
-for _v in K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do
+for _v in K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SA_PHONE_CMD; do
     [ -z "${!_v:-}" ] || die "$_v is for tests only"
 done
 [ -z "${K2SIGN_TEST_ROOT:-}" ] || die "K2SIGN_TEST_ROOT is for tests only"

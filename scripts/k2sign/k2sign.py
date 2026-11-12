@@ -18,7 +18,10 @@ Signer verbs (the whole surface; anything else exits 2):
   challenge <version> <base-commit> <asset>... [--windows] [--reapprove | --replace]   -> challenge JSON
               (--replace: a new base or asset list for a version whose earlier approval
                signed nothing; still one Touch ID, the old session is kept aside)
-  approve <nonce>                       (DER approval signature on stdin)  -> session id
+  challenge ... --format sa1            -> the signed-approval payload (K2-SIGNED-APPROVAL-1,
+              prd-signed-approvals-v1) for the enrolled approver keys that meet `require`
+  approve <nonce> [--record]            (on stdin: K2 Release Approve's DER signature, or with
+                                         --record a signed-approval record)              -> session id
   sign <u1|u2> <asset> <version> raw|b64   (file bytes on stdin)           -> signature
   status <version>                                                         -> JSON
   compute-evidence <version>   (L1+V1 signed receipts + commit object on stdin, S3b)
@@ -31,6 +34,8 @@ Admin verbs (root):
   pin-compute-controller <fp> <key>    pin-compute-node <name> <pem> <fp>    unpin-compute-node <name>
   clear-compute-evidence <version>
   cancel-session <version> [--restore-last-version <x.y.z>]   (only a session that signed nothing)
+  add-approver <name> <pem> --person P --check C --view V [--words "..."]
+  remove-approver <name>    list-approvers
 
 Exit codes: 0 ok; 2 usage; 3 refused (one red line saying why); 4 internal.
 
@@ -49,6 +54,7 @@ compute-evidence verb never takes it).
 """
 
 import base64
+import calendar
 import errno
 import fcntl
 import grp
@@ -85,8 +91,12 @@ POLICY_KEYS = {
     "compute_assets", "compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env",
     "compute_secret_env_optional", "compute_dual_names", "compute_receipt_max_hours",
     "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64",
-    "compute_aarch64_zig_sha256", "compute_aarch64_zigbuild_sha256",
+    "compute_aarch64_zig_sha256", "compute_aarch64_zigbuild_sha256", "require",
 }
+# Policy keys a policy file older than them may leave out: the strictest value.
+# require: the check and view a release approval needs (prd-signed-approvals-v1
+# Question 1: the face or fingerprint, on the phone).
+POLICY_DEFAULTS = {"require": "biometric device"}
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
 # K2 Screen.app, the remote desktop helper (prd-remote-desktop-tab-v1 D3):
@@ -450,6 +460,11 @@ def pinned_files(ctx):
         p = os.path.join(ctx.etc, n)
         if os.path.exists(p):
             files.append(("etc/" + n, p))
+    # Signed-approval keys (k2sign-admin add-approver): every file in the folder.
+    ad = os.path.join(ctx.etc, APPROVERS)
+    if os.path.isdir(ad):
+        for n in sorted(os.listdir(ad)):
+            files.append(("etc/%s/%s" % (APPROVERS, n), os.path.join(ad, n)))
     return files
 
 
@@ -468,6 +483,8 @@ def check_pins(ctx):
         raise Refused("no pins.sha256 (re-run scripts/k2sign/install.sh)")
     for d in (ctx.libexec, ctx.etc):
         check_root_owned(ctx, d)
+    if os.path.lexists(os.path.join(ctx.etc, APPROVERS)):
+        check_root_owned(ctx, os.path.join(ctx.etc, APPROVERS))
     check_root_owned(ctx, pins_path)
     want = {}
     for line in open(pins_path).read().splitlines():
@@ -513,9 +530,12 @@ def load_policy(ctx):
         if k not in POLICY_KEYS:
             raise Refused("policy: unknown key %r" % k)
         pol[k] = v
+    for k, v in POLICY_DEFAULTS.items():
+        pol.setdefault(k, v)
     missing = POLICY_KEYS - set(pol)
     if missing:
         raise Refused("policy: missing %s" % ", ".join(sorted(missing)))
+    parse_require(pol["require"])
     if pol["approval"] not in ("on", "off"):
         raise Refused("policy: approval must be on or off")
     for k in ("session_hours", "challenge_minutes", "max_stdin_mb", "compute_receipt_max_hours"):
@@ -1977,19 +1997,536 @@ def check_new_session(ctx, pol, version, base, assets, windows, reapprove, repla
         raise Refused("%s is not newer than %s" % (version, last))
 
 
+# ── signed approvals: K2-SIGNED-APPROVAL-1 (prd-signed-approvals-v1 S1) ──
+#
+# The wire format of crates/k2-approve (the Rust relying party) and the
+# phone app. crates/k2-approve/fixtures/sa1 holds the shared fixtures, and
+# tests/release/k2sign-sa1.sh checks this reader reaches the same verdict
+# on every one. k2sign is the relying party: `challenge --format sa1` writes
+# the payload once and keeps it; `approve <nonce> --record` checks a record
+# against the keys pinned in etc/approvers/ and the bytes it kept. An
+# approval's check and view are the pinned key's, never the record's (SA-5).
+
+SA1_PREFIX = b"K2-SIGNED-APPROVAL-1\x00"
+SA1_MAX = 16384
+SA1_RECORD_MAX = 32768
+SA1_MAX_INT = 9007199254740991
+SA1_ISSUED_SKEW = 300
+SA1_FIELDS = ("kind", "kind_v", "rp", "approver", "approver_keys", "nonce", "issued", "answer_by", "body")
+SA1_RELEASE_FIELDS = ("version", "base_commit", "assets", "slots", "windows", "reapproval", "replacement",
+                      "replaces_base", "max_signatures", "session_until")
+SA1_RECORD_FIELDS = ("v", "payload_b64", "key_id", "alg", "sig_b64")
+SA1_KIND_RE = re.compile(r"^[a-z0-9]+(\.[a-z0-9-]+)+$")
+SA1_BODY_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+SA1_UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+SA1_INT_RE = re.compile(r"^-?(0|[1-9][0-9]*)$")
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+SLOT_RE = re.compile(r"^[a-z0-9]{1,8}$")
+APPROVER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+APPROVERS = "approvers"  # etc/approvers/approvers.tsv + <name>.pem (the same layout as `k2 approve verify --keys`)
+CHECKS = ("credential", "biometric")  # weakest first
+VIEWS = ("page", "host", "device")  # weakest first
+# The Mac's K2 Release Approve key (etc/approver.pem): Touch ID OR the login
+# password, from a helper any same-user program can run (SA-19).
+LEGACY_NAME, LEGACY_CHECK, LEGACY_VIEW = "mac-legacy", "credential", "host"
+# The fingerprint words (crates/k2-approve/fixtures/sa1/wordlist.txt; a test keeps them equal).
+WORDS = """
+    acid acorn actor adult agent alarm album alley amber angle ankle apple apron arena armor arrow
+    atlas attic award bacon badge bagel baker banjo barn basil basin beach beard bench berry bison
+    blade blank bloom board boat bonus boots brain brick bride broom brush bucket buddy cabin cable
+    cactus camel candy canoe canvas cargo carrot castle cedar chalk chart cheek chess chief cider
+    cinema circle citrus clamp cliff clock cloud clover coast cobra cocoa comet coral cotton couch
+    crane crayon creek crown cube daisy dancer delta denim desert diary dime dinner diver dock
+    dollar donkey dragon drum duck eagle easel echo elbow elder ember engine equator fabric falcon
+    farmer feast fence ferry fiddle finch flag flute forest fossil fox frost galaxy garden garlic
+    gecko giant ginger glacier globe goat gravel guitar hammer harbor hazel helmet hiker honey
+    hornet igloo island ivory jacket jaguar jelly jewel jockey judge jungle kayak kettle kiosk
+    kitten koala ladder lagoon lantern laser lemon lentil lilac lion lizard lobster locket lotus
+    magnet mango maple marble meadow melon meteor mirror mitten monkey mosaic motor muffin napkin
+    nectar needle nickel noodle nutmeg oasis ocean olive onion orbit orchid otter oyster paddle
+    panda parrot peach pebble pepper piano pickle pilot pirate planet plum pocket poet potato prism
+    pumpkin puzzle quartz quilt rabbit radar raven ribbon rocket saddle salmon sandal scarf shovel
+    silver skate sparrow spider sponge statue summit sunset tablet tango teapot tiger toast tomato
+    tractor trumpet tulip tunnel turtle umbrella unicorn valley velvet violin volcano wagon walnut
+    walrus whale willow window wizard yogurt zebra
+""".split()
+
+
+class Sa1Refused(Refused):
+    """A signed-approval refusal with the contract's code."""
+
+    def __init__(self, code, detail):
+        Refused.__init__(self, "%s: %s" % (code, detail))
+        self.code = code
+
+
+def sa1_forbidden(cp):
+    return (cp <= 0x1F or 0x7F <= cp <= 0x9F
+            or cp in (0xAD, 0x34F, 0x61C, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFEFF, 0xFFA0)
+            or 0x180B <= cp <= 0x180F or 0x200B <= cp <= 0x200F or 0x2028 <= cp <= 0x202E
+            or 0x2060 <= cp <= 0x206F or 0xD800 <= cp <= 0xDFFF or 0xFDD0 <= cp <= 0xFDEF
+            or 0xFE00 <= cp <= 0xFE0F or 0xFFF0 <= cp <= 0xFFFB or 0x1BCA0 <= cp <= 0x1BCA3
+            or 0x1D173 <= cp <= 0x1D17A or 0xE0000 <= cp <= 0xE0FFF or (cp & 0xFFFE) == 0xFFFE)
+
+
+def sa1_check_text(s):
+    for ch in s:
+        if sa1_forbidden(ord(ch)):
+            raise Sa1Refused("forbidden_char", "a string holds U+%04X, which is not allowed in a signed approval" % ord(ch))
+
+
+class Sa1Obj(list):
+    """A JSON object from the strict reader: its (key, value) pairs, in order."""
+
+
+def sa1_json(text):
+    """The strict JSON form: the contract's codes for repeated keys, forbidden
+    characters and non-whole numbers. Objects come back as Sa1Obj."""
+    def pairs(items):
+        seen = set()
+        for k, _ in items:
+            sa1_check_text(k)
+            if k in seen:
+                raise Sa1Refused("duplicate_key", "the key %r appears twice in one object" % k)
+            seen.add(k)
+        return Sa1Obj(items)
+
+    def num(tok):
+        raise Sa1Refused("not_integer", "%s is not a whole number (money is a string: \"125.00 USD\")" % tok)
+
+    def whole(tok):
+        if not SA1_INT_RE.match(tok) or tok == "-0":
+            raise Sa1Refused("not_integer", "%s is not allowed (write whole numbers; 0, not -0)" % tok)
+        n = int(tok)
+        if not -SA1_MAX_INT <= n <= SA1_MAX_INT:
+            raise Sa1Refused("not_integer", "%s is outside +-(2^53 - 1)" % tok)
+        return n
+
+    def const(tok):
+        raise Sa1Refused("json", "%s is not JSON" % tok)
+
+    try:
+        v = json.loads(text, object_pairs_hook=pairs, parse_float=num, parse_int=whole, parse_constant=const,
+                       strict=False)
+    except Sa1Refused:
+        raise
+    except (ValueError, RecursionError) as e:
+        raise Sa1Refused("json", "not JSON (%s)" % e)
+
+    def walk(x, depth):
+        if depth >= 8:
+            raise Sa1Refused("json", "nested too deep")
+        if isinstance(x, str):
+            sa1_check_text(x)
+        elif isinstance(x, Sa1Obj):
+            for _, it in x:
+                walk(it, depth + 1)
+        elif isinstance(x, list):
+            for it in x:
+                walk(it, depth + 1)
+    walk(v, 0)
+    return v
+
+
+def sa1_type(v):
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true/false"
+    if isinstance(v, int):
+        return "a whole number"
+    if isinstance(v, str):
+        return "a string"
+    return "an object" if isinstance(v, Sa1Obj) else "a list"
+
+
+def sa1_utc(s):
+    if not SA1_UTC_RE.match(s):
+        return None
+    try:
+        t = time.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    if not 2000 <= t.tm_year <= 9999 or t.tm_sec > 59:
+        return None
+    return calendar.timegm(t)
+
+
+def sa1_parse_payload(b):
+    """Every rule of the contract (contract-signed-approvals-wire-v1 §2-4), in
+    its order. Returns a dict of the fields with body as a list of pairs."""
+    if len(b) > SA1_MAX:
+        raise Sa1Refused("too_large", "%d bytes; a payload is at most %d" % (len(b), SA1_MAX))
+    if not b.startswith(SA1_PREFIX):
+        raise Sa1Refused("prefix", "the bytes do not start with K2-SIGNED-APPROVAL-1 and a zero byte")
+    try:
+        text = b[len(SA1_PREFIX):].decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise Sa1Refused("utf8", "not UTF-8 (%s)" % e.reason)
+    v = sa1_json(text)
+    if not isinstance(v, Sa1Obj):
+        raise Sa1Refused("not_object", "the JSON is not one object")
+    top = dict(v)
+    for k, _ in v:
+        if k not in SA1_FIELDS:
+            raise Sa1Refused("unknown_field", "unknown field %r" % k)
+    for f in SA1_FIELDS:
+        if f not in top:
+            raise Sa1Refused("missing_field", "missing field %s" % f)
+
+    def want_str(f):
+        x = top[f]
+        if not isinstance(x, str):
+            raise Sa1Refused("field_type", "%s must be a string, not %s" % (f, sa1_type(x)))
+        return x
+
+    def want_name(f):
+        s = want_str(f)
+        if not 1 <= len(s.encode("utf-8")) <= 128:
+            raise Sa1Refused("field_format", "%s must be 1 to 128 bytes" % f)
+        return s
+
+    def want_time(f):
+        s = want_str(f)
+        t = sa1_utc(s)
+        if t is None:
+            raise Sa1Refused("field_format", "%s must be a UTC time like 2026-11-11T14:00:00Z, not %r" % (f, s))
+        return s, t
+
+    p = {}
+    p["kind"] = want_str("kind")
+    if len(p["kind"]) > 64 or not SA1_KIND_RE.match(p["kind"]):
+        raise Sa1Refused("field_format", "kind %r must look like k2.release or com.example.refund" % p["kind"])
+    kv = top["kind_v"]
+    if isinstance(kv, bool) or not isinstance(kv, int):
+        raise Sa1Refused("field_type", "kind_v must be a whole number, not %s" % sa1_type(kv))
+    if not 1 <= kv <= 65535:
+        raise Sa1Refused("field_format", "kind_v must be 1 to 65535")
+    p["kind_v"] = kv
+    p["rp"] = want_name("rp")
+    p["approver"] = want_name("approver")
+    ak = top["approver_keys"]
+    if not isinstance(ak, list) or isinstance(ak, Sa1Obj):
+        raise Sa1Refused("field_type", "approver_keys must be a list, not %s" % sa1_type(ak))
+    keys = []
+    for it in ak:
+        if not isinstance(it, str):
+            raise Sa1Refused("field_type", "approver_keys holds %s, not a key id" % sa1_type(it))
+        if not HEX64_RE.match(it):
+            raise Sa1Refused("field_format", "approver_keys: %r is not a key id (64 lowercase hex)" % it)
+        if it in keys:
+            raise Sa1Refused("field_format", "approver_keys lists %s twice" % it)
+        keys.append(it)
+    if not 1 <= len(keys) <= 16:
+        raise Sa1Refused("field_format", "approver_keys must list 1 to 16 keys")
+    p["approver_keys"] = keys
+    p["nonce"] = want_str("nonce")
+    if not NONCE_RE.match(p["nonce"]):
+        raise Sa1Refused("field_format", "nonce must be 32 lowercase hex")
+    p["issued"], p["issued_at"] = want_time("issued")
+    p["answer_by"], p["answer_by_at"] = want_time("answer_by")
+    body = top["body"]
+    if not isinstance(body, Sa1Obj):
+        raise Sa1Refused("field_type", "body must be an object, not %s" % sa1_type(body))
+    if len(body) > 64:
+        raise Sa1Refused("field_format", "body has more than 64 fields")
+    out = []
+    for k, x in body:
+        if not SA1_BODY_KEY_RE.match(k):
+            raise Sa1Refused("field_format", "body field name %r must be lowercase letters, digits and _ (starting with a letter)" % k)
+        if isinstance(x, str) or isinstance(x, bool) or isinstance(x, int):
+            out.append((k, x))
+        elif isinstance(x, list) and not isinstance(x, Sa1Obj):
+            for it in x:
+                if not isinstance(it, str):
+                    raise Sa1Refused("body_value", "body.%s lists %s; a body list holds strings only" % (k, sa1_type(it)))
+            if len(x) > 256:
+                raise Sa1Refused("field_format", "body.%s lists more than 256 items" % k)
+            out.append((k, list(x)))
+        else:
+            raise Sa1Refused("body_value", "body.%s is %s; body is flat" % (k, sa1_type(x)))
+    p["body"] = out
+    if p["answer_by_at"] <= p["issued_at"]:
+        raise Sa1Refused("times", "answer_by must be after issued")
+    if p["kind"] == "k2.release":
+        sa1_check_release(p)
+    return p
+
+
+def sa1_check_release(p):
+    def shape(d):
+        raise Sa1Refused("shape", "k2.release: %s" % d)
+    if p["kind_v"] != 1:
+        shape("version %d is not one this reader knows (1)" % p["kind_v"])
+    b = dict(p["body"])
+    for k, _ in p["body"]:
+        if k not in SA1_RELEASE_FIELDS:
+            shape("unexpected body field %s" % k)
+    for f in SA1_RELEASE_FIELDS:
+        if f not in b:
+            shape("body field %s is missing" % f)
+    if not isinstance(b["version"], str) or not VERSION_RE.match(b["version"]):
+        shape("version must be like 0.46.13")
+    if not isinstance(b["base_commit"], str) or not HEX40_RE.match(b["base_commit"]):
+        shape("base_commit must be 40 lowercase hex")
+    a = b["assets"]
+    if not isinstance(a, list) or not a or not all(ASSET_RE.match(x) for x in a) or len(set(a)) != len(a):
+        shape("assets must list one or more file names, each once")
+    if not isinstance(b["slots"], list) or not b["slots"] or not all(SLOT_RE.match(x) for x in b["slots"]):
+        shape("slots must list one or more key slots")
+    if not all(isinstance(b[f], bool) for f in ("windows", "reapproval", "replacement")):
+        shape("windows, reapproval and replacement must be true or false")
+    rb = b["replaces_base"]
+    if not (rb == "" or (b["replacement"] is True and isinstance(rb, str) and HEX40_RE.match(rb))):
+        shape('replaces_base must be "" or, for a replacement, 40 lowercase hex')
+    if b["replacement"] is True and b["reapproval"] is True:
+        shape("replacement and reapproval are not both true")
+    ms = b["max_signatures"]
+    if isinstance(ms, bool) or not isinstance(ms, int) or not 1 <= ms <= 100000:
+        shape("max_signatures must be a whole number from 1")
+    if not isinstance(b["session_until"], str) or sa1_utc(b["session_until"]) is None:
+        shape("session_until must be a UTC time")
+
+
+def sa1_parse_record(b):
+    def bad(d):
+        raise Sa1Refused("record", d)
+    if len(b) > SA1_RECORD_MAX:
+        bad("the record is over %d bytes" % SA1_RECORD_MAX)
+    try:
+        text = b.decode("utf-8")
+    except UnicodeDecodeError:
+        bad("the record is not UTF-8")
+    try:
+        v = sa1_json(text)
+    except Sa1Refused as e:
+        bad("the record is not strict JSON (%s)" % e)
+    if not isinstance(v, Sa1Obj):
+        bad("the record is not a JSON object")
+    for k, _ in v:
+        if k not in SA1_RECORD_FIELDS:
+            bad("unknown record field %r" % k)
+    r = dict(v)
+    if type(r.get("v")) is not int or r["v"] != 1:
+        bad("the record's v must be 1")
+    for f in ("payload_b64", "key_id", "alg", "sig_b64"):
+        if not isinstance(r.get(f), str):
+            bad("the record's %s is missing or not a string" % f)
+
+    def b64(f, mx):
+        s = r[f]
+        try:
+            raw = base64.b64decode(s, validate=True)
+        except Exception:
+            bad("%s is not standard base64" % f)
+        if base64.b64encode(raw).decode() != s:
+            bad("%s is not in standard base64 form" % f)
+        if not 1 <= len(raw) <= mx:
+            bad("%s is empty or too long" % f)
+        return raw
+    payload = b64("payload_b64", SA1_MAX)
+    if not HEX64_RE.match(r["key_id"]):
+        bad("the record's key_id is not 64 lowercase hex")
+    if r["alg"] not in ("ES256", "RS256"):
+        bad("unknown alg %r" % r["alg"])
+    sig = b64("sig_b64", 1024)
+    return {"payload": payload, "key_id": r["key_id"], "alg": r["alg"], "sig": sig}
+
+
+def key_words(key_id):
+    assert len(WORDS) == 256 and len(set(WORDS)) == 256
+    return " ".join(WORDS[x] for x in bytes.fromhex(key_id)[:6])
+
+
+def parse_require(s):
+    parts = s.split()
+    if len(parts) != 2 or parts[0] not in CHECKS or parts[1] not in VIEWS:
+        raise Refused("policy: require must be '<check> <view>' (check: %s; view: %s), not %r"
+                      % ("/".join(CHECKS), "/".join(VIEWS), s))
+    return parts[0], parts[1]
+
+
+def meets(check, view, req):
+    return CHECKS.index(check) >= CHECKS.index(req[0]) and VIEWS.index(view) >= VIEWS.index(req[1])
+
+
+def approvers_dir(ctx):
+    return os.path.join(ctx.etc, APPROVERS)
+
+
+def load_approvers(ctx):
+    """etc/approvers/approvers.tsv (name, person, check, view; tabs) and a
+    P-256 <name>.pem per line. Missing folder: no approvers."""
+    d = approvers_dir(ctx)
+    tsv = os.path.join(d, "approvers.tsv")
+    if not os.path.isfile(tsv):
+        return []
+    out = []
+    for n, line in enumerate(open(tsv, encoding="utf-8").read().split("\n"), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) != 4:
+            raise Refused("approvers.tsv line %d: want name, person, check, view (tab-separated)" % n)
+        name, person, check, view = cols
+        if not APPROVER_NAME_RE.match(name) or name == LEGACY_NAME:
+            raise Refused("approvers.tsv line %d: bad name %r" % (n, name))
+        if not 1 <= len(person.encode("utf-8")) <= 128 or any(sa1_forbidden(ord(c)) for c in person):
+            raise Refused("approvers.tsv line %d: bad person %r" % (n, person))
+        if check not in CHECKS or view not in VIEWS:
+            raise Refused("approvers.tsv line %d: check is %s, view is %s" % (n, "/".join(CHECKS), "/".join(VIEWS)))
+        pem = os.path.join(d, name + ".pem")
+        der = spki_from_pem(open(pem).read())
+        kid = hashlib.sha256(der).hexdigest()
+        if any(a["name"] == name or a["key_id"] == kid for a in out):
+            raise Refused("approvers.tsv line %d: %s (or its key) is listed twice" % (n, name))
+        out.append({"name": name, "person": person, "check": check, "view": view, "pem": pem, "key_id": kid})
+    return out
+
+
+def release_require(pol):
+    return parse_require(pol["require"])
+
+
+def sa1_approvers(ctx, pol):
+    """The enrolled approver keys that meet the policy's require line."""
+    req = release_require(pol)
+    return [a for a in load_approvers(ctx) if meets(a["check"], a["view"], req)]
+
+
+def legacy_open(ctx, pol):
+    """The Mac's K2 Release Approve key may open a session: it is enrolled, and
+    either it meets the policy or no key that meets it is enrolled yet (until
+    the phone is enrolled, today's Mac Touch ID keeps working)."""
+    if not os.path.isfile(os.path.join(ctx.etc, "approver.pem")):
+        return False
+    return meets(LEGACY_CHECK, LEGACY_VIEW, release_require(pol)) or not sa1_approvers(ctx, pol)
+
+
+def rp_name():
+    host = re.sub(r"[^A-Za-z0-9-]", "-", os.uname().nodename.split(".")[0])[:63] or "mac"
+    return "k2sign@" + host
+
+
+def sa1_payload(ctx, pol, keys, version, base, assets, windows, reapprove, replace, replaces_base, nonce, now):
+    persons = sorted({a["person"] for a in keys})
+    if len(persons) != 1:
+        raise Refused("the approver keys that meet require (%s) belong to %s: one person approves a release; "
+                      "remove the others (k2sign-admin remove-approver) or ask for one"
+                      % (pol["require"], ", ".join(persons)))
+    obj = {
+        "kind": "k2.release", "kind_v": 1, "rp": rp_name(), "approver": persons[0],
+        "approver_keys": [a["key_id"] for a in keys], "nonce": nonce,
+        "issued": iso(now), "answer_by": iso(now + int(pol["challenge_minutes"]) * 60),
+        "body": {
+            "version": version, "base_commit": base, "assets": assets, "slots": ["u1", "u2"],
+            "windows": windows, "reapproval": reapprove, "replacement": replace,
+            "replaces_base": replaces_base or "", "max_signatures": len(assets) * 2 + 4,
+            "session_until": iso(now + int(pol["session_hours"]) * 3600),
+        },
+    }
+    payload = SA1_PREFIX + json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    sa1_parse_payload(payload)  # never issue bytes a device would refuse
+    return payload
+
+
+def sa1_check(ctx, approvers, r, stored, need, d):
+    """The relying party's check (PRD §7, contract §9) in its order. need:
+    rp, kind, nonce (None skips one), check and view (the weakest accepted),
+    now. stored: the bytes this relying party kept (None: the record's own).
+    Returns (payload, approver)."""
+    if stored is not None and r["payload"] != stored:
+        raise Sa1Refused("payload_mismatch", "the record's bytes are not the ones issued for this request")
+    data_bytes = stored if stored is not None else r["payload"]
+    p = sa1_parse_payload(data_bytes)
+    k = next((a for a in approvers if a["key_id"] == r["key_id"]), None)
+    if k is None:
+        raise Sa1Refused("unknown_key", "key %s is not an enrolled approver (k2sign-admin list-approvers)" % r["key_id"])
+    if r["alg"] != "ES256":
+        raise Sa1Refused("alg_mismatch", "the record says %s but %s is a P-256 (ES256) key" % (r["alg"], k["name"]))
+    data, sig = os.path.join(d, "payload.bin"), os.path.join(d, "sig.der")
+    write_file(ctx, data, data_bytes)
+    write_file(ctx, sig, r["sig"])
+    rc, out, err = run([OPENSSL, "dgst", "-sha256", "-verify", k["pem"], "-signature", sig, data])
+    for f in (data, sig):
+        os.unlink(f)
+    if not (rc == 0 and out.strip() == b"Verified OK"):
+        raise Sa1Refused("bad_signature", "the signature does not verify with key %s" % k["name"])
+    if k["key_id"] not in p["approver_keys"]:
+        raise Sa1Refused("key_not_listed", "key %s is not in the payload's approver_keys" % k["name"])
+    if p["approver"] != k["person"]:
+        raise Sa1Refused("wrong_approver", "key %s is %s's, but the payload asks %s" % (k["name"], k["person"], p["approver"]))
+    if need["rp"] is not None and p["rp"] != need["rp"]:
+        raise Sa1Refused("wrong_rp", "the payload is for %s, not %s" % (p["rp"], need["rp"]))
+    if need["kind"] is not None and p["kind"] != need["kind"]:
+        raise Sa1Refused("wrong_kind", "the payload is a %s, not a %s" % (p["kind"], need["kind"]))
+    if CHECKS.index(k["check"]) < CHECKS.index(need["check"]):
+        raise Sa1Refused("weak_check", "key %s is a %s key; %s is required" % (k["name"], k["check"], need["check"]))
+    if VIEWS.index(k["view"]) < VIEWS.index(need["view"]):
+        raise Sa1Refused("weak_view", "key %s has view %s; %s is required" % (k["name"], k["view"], need["view"]))
+    if p["issued_at"] > need["now"] + SA1_ISSUED_SKEW:
+        raise Sa1Refused("issued_future", "issued %s is ahead of this clock" % p["issued"])
+    if need["now"] > p["answer_by_at"]:
+        raise Sa1Refused("expired", "answer_by %s has passed" % p["answer_by"])
+    if need["nonce"] is not None and p["nonce"] != need["nonce"]:
+        raise Sa1Refused("wrong_nonce", "the payload's nonce is %s, not %s" % (p["nonce"], need["nonce"]))
+    return p, k
+
+
+def sa1_verify(ctx, pol, r, stored, nonce, d):
+    """k2sign's own check: its keys, its name, k2.release, the policy's
+    require line, its clock, the challenge's nonce, the bytes it kept."""
+    req = release_require(pol)
+    need = {"rp": rp_name(), "kind": "k2.release", "check": req[0], "view": req[1], "now": ctx.now(), "nonce": nonce}
+    return sa1_check(ctx, load_approvers(ctx), r, stored, need, d)
+
+
 def verb_challenge(ctx, args):
+    # --format sa1: a signed-approval payload (K2-SIGNED-APPROVAL-1) for the
+    # enrolled approver keys that meet the policy's require line; otherwise
+    # the legacy challenge K2 Release Approve signs (mac-legacy).
+    fmt = "legacy"
+    if "--format" in args:
+        i = args.index("--format")
+        if i + 1 >= len(args) or args[i + 1] != "sa1" or args.count("--format") > 1:
+            raise Usage("challenge: --format takes sa1")
+        fmt = "sa1"
+        args = args[:i] + args[i + 2:]
     version, base, assets, windows, reapprove, replace = parse_approval_args(args, "challenge")
     check_pins(ctx)
     pol = load_policy(ctx)
     if pol["approval"] != "on":
         raise Refused("approval is off in the policy: there is nothing to approve")
-    if not os.path.isfile(os.path.join(ctx.etc, "approver.pem")):
-        raise Refused("no approver key enrolled (k2sign-admin set-approver)")
+    if fmt == "sa1":
+        keys = sa1_approvers(ctx, pol)
+        if not keys:
+            raise Refused("no enrolled approver key meets the policy (require = %s): enrol one with "
+                          "k2sign-admin add-approver (k2sign-admin list-approvers shows them)" % pol["require"])
+    else:
+        if not os.path.isfile(os.path.join(ctx.etc, "approver.pem")):
+            raise Refused("no approver key enrolled (k2sign-admin set-approver)")
+        if not legacy_open(ctx, pol):
+            raise Refused("the Mac approval (%s: %s, %s) does not meet the policy (require = %s), and a key that "
+                          "does is enrolled: approve on that device (challenge --format sa1)"
+                          % (LEGACY_NAME, LEGACY_CHECK, LEGACY_VIEW, pol["require"]))
     with Locked(ctx):
         state_dirs(ctx)
         check_new_session(ctx, pol, version, base, assets, windows, reapprove, replace)
         now = ctx.now()
         nonce = secrets.token_hex(16)
+        old_base = None
+        if replace:
+            old = load_session(ctx, version)
+            old_base = old["base_commit"] if old is not None else None
+        if fmt == "sa1":
+            payload = sa1_payload(ctx, pol, keys, version, base, assets, windows, reapprove, replace, old_base,
+                                  nonce, now)
+            rec = {"format": "sa1", "payload_b64": base64.b64encode(payload).decode(), "issued": now, "used": False}
+            write_file(ctx, os.path.join(ctx.state, "challenges", nonce + ".json"), json.dumps(rec))
+            sys.stdout.flush()
+            sys.stdout.buffer.write(payload)
+            return
         challenge = {
             "v": 1, "kind": "k2-release-approval", "version": version, "base_commit": base,
             "assets": assets, "slots": ["u1", "u2"], "windows": windows, "reapproval": reapprove,
@@ -2000,9 +2537,8 @@ def verb_challenge(ctx, args):
         if replace:
             # Signed with the rest: the sheet shows it, and approve checks the
             # session it replaces is still this one.
-            old = load_session(ctx, version)
             challenge["replacement"] = True
-            challenge["replaces_base"] = old["base_commit"] if old is not None else None
+            challenge["replaces_base"] = old_base
         text = json.dumps(challenge, sort_keys=True, separators=(",", ":"))
         rec = {"challenge": text, "issued": now, "used": False}
         write_file(ctx, os.path.join(ctx.state, "challenges", nonce + ".json"), json.dumps(rec))
@@ -2015,7 +2551,9 @@ def openssl_verify(ctx, data_path, sig_path):
     return rc == 0 and out.strip() == b"Verified OK"
 
 
-def write_session(ctx, pol, challenge, by):
+def write_session(ctx, pol, challenge, by, expires=None):
+    """expires: the session's end (a signed approval's session_until, which
+    the person read on their screen); default now + session_hours."""
     now = ctx.now()
     version = challenge["version"]
     # "opened": this version's FIRST approval. A re-approval keeps it, so
@@ -2028,7 +2566,8 @@ def write_session(ctx, pol, challenge, by):
     sess = {
         "version": version, "base_commit": challenge["base_commit"], "assets": challenge["assets"],
         "windows": challenge["windows"], "max_signatures": challenge["max_signatures"],
-        "approved": now, "opened": opened, "expires": now + int(pol["session_hours"]) * 3600,
+        "approved": now, "opened": opened,
+        "expires": expires if expires is not None else now + int(pol["session_hours"]) * 3600,
         "nonce": challenge["nonce"], "reapproval": challenge["reapproval"], "by": by,
         "count": 0, "signed": [],
     }
@@ -2069,16 +2608,66 @@ def write_session(ctx, pol, challenge, by):
             if prev is not None else "no session file (moved aside by hand); no signatures"))
     if last is None or vtuple(version) > vtuple(last):
         write_file(ctx, os.path.join(ctx.state, "last_version"), version + "\n")
-    audit(ctx, version, "APPROVED-BY-ADMIN" if by == "admin" else "APPROVED", detail="base %s; %s; expires %s%s" % (
+    audit(ctx, version, "APPROVED-BY-ADMIN" if by == "admin" else "APPROVED", detail="base %s; %s; expires %s%s%s" % (
         challenge["base_commit"], " ".join(challenge["assets"]), iso(sess["expires"]),
-        "; reapproval" if challenge["reapproval"] else ""))
+        "; reapproval" if challenge["reapproval"] else "", "" if by == "admin" else "; by %s" % by))
     return sess
 
 
+def approve_legacy(ctx, pol, rec, nonce, d):
+    """K2 Release Approve's DER signature over the legacy challenge (mac-legacy)."""
+    if not legacy_open(ctx, pol):
+        raise Refused("the Mac approval (%s: %s, %s) does not meet the policy (require = %s), and a key that does "
+                      "is enrolled: approve on that device" % (LEGACY_NAME, LEGACY_CHECK, LEGACY_VIEW, pol["require"]))
+    sig = os.path.join(d, "approval.der")
+    n = read_stdin_to(ctx, sig, 1024)
+    if n == 0:
+        raise Refused("no approval signature on stdin")
+    data = os.path.join(d, "challenge.json")
+    write_file(ctx, data, rec["challenge"])
+    challenge = json.loads(rec["challenge"])
+    if not openssl_verify(ctx, data, sig):
+        audit(ctx, challenge["version"], "REFUSED-APPROVAL", detail="signature does not verify; nonce %s" % nonce)
+        raise Refused("approval signature does not verify")
+    return challenge, "%s:%s:%s" % (LEGACY_NAME, LEGACY_CHECK, LEGACY_VIEW), None
+
+
+def approve_sa1(ctx, pol, rec, nonce, d):
+    """A signed-approval record (stdin) over the payload k2sign issued."""
+    stored = base64.b64decode(rec["payload_b64"])
+    issued = sa1_parse_payload(stored)
+    version = dict(issued["body"])["version"]
+    path = os.path.join(d, "record.json")
+    try:
+        n = read_stdin_to(ctx, path, SA1_RECORD_MAX)
+    except Refused:
+        raise Sa1Refused("record", "the record is over %d bytes" % SA1_RECORD_MAX)
+    if n == 0:
+        raise Refused("no approval record on stdin")
+    try:
+        r = sa1_parse_record(open(path, "rb").read())
+        p, k = sa1_verify(ctx, pol, r, stored, nonce, d)
+    except Sa1Refused as e:
+        audit(ctx, version, "REFUSED-APPROVAL", detail="%s; nonce %s" % (e, nonce))
+        raise
+    b = dict(p["body"])
+    challenge = {
+        "version": b["version"], "base_commit": b["base_commit"], "assets": b["assets"], "windows": b["windows"],
+        "reapproval": b["reapproval"], "max_signatures": b["max_signatures"], "nonce": p["nonce"],
+    }
+    if b["replacement"]:
+        challenge["replacement"] = True
+        challenge["replaces_base"] = b["replaces_base"] or None
+    return challenge, "%s:%s:%s" % (k["name"], k["check"], k["view"]), sa1_utc(b["session_until"])
+
+
 def verb_approve(ctx, args):
-    if len(args) != 1 or not NONCE_RE.match(args[0]):
-        raise Usage("approve <nonce>   (the DER approval signature on stdin)")
-    nonce = args[0]
+    record = args.count("--record")
+    rest = [a for a in args if a != "--record"]
+    if record > 1 or len(rest) != 1 or not NONCE_RE.match(rest[0]):
+        raise Usage("approve <nonce> [--record]   (on stdin: K2 Release Approve's DER signature; with --record, "
+                    "a signed-approval record for a challenge --format sa1)")
+    nonce = rest[0]
     check_pins(ctx)
     pol = load_policy(ctx)
     if pol["approval"] != "on":
@@ -2093,16 +2682,16 @@ def verb_approve(ctx, args):
             raise Refused("challenge already used")
         if ctx.now() > rec["issued"] + int(pol["challenge_minutes"]) * 60:
             raise Refused("challenge expired")
-        sig = os.path.join(d, "approval.der")
-        n = read_stdin_to(ctx, sig, 1024)
-        if n == 0:
-            raise Refused("no approval signature on stdin")
-        data = os.path.join(d, "challenge.json")
-        write_file(ctx, data, rec["challenge"])
-        challenge = json.loads(rec["challenge"])
-        if not openssl_verify(ctx, data, sig):
-            audit(ctx, challenge["version"], "REFUSED-APPROVAL", detail="signature does not verify; nonce %s" % nonce)
-            raise Refused("approval signature does not verify")
+        sa1 = rec.get("format") == "sa1"
+        if sa1 and not record:
+            raise Refused("challenge %s is a signed-approval challenge: send its record (approve %s --record)"
+                          % (nonce, nonce))
+        if record and not sa1:
+            raise Refused("challenge %s is a K2 Release Approve challenge: send its DER signature (no --record)" % nonce)
+        if sa1:
+            challenge, by, until = approve_sa1(ctx, pol, rec, nonce, d)
+        else:
+            challenge, by, until = approve_legacy(ctx, pol, rec, nonce, d)
         rec["used"] = True
         write_file(ctx, cpath, json.dumps(rec))
         # The world may have moved since the challenge (another session).
@@ -2114,9 +2703,9 @@ def verb_approve(ctx, args):
             if (cur["base_commit"] if cur is not None else None) != challenge.get("replaces_base"):
                 raise Refused("%s's session changed since this replacement challenge was issued: run again"
                               % challenge["version"])
-        sess = write_session(ctx, pol, challenge, "touchid")
+        sess = write_session(ctx, pol, challenge, by, until)
     print(sess["nonce"])
-    say("signing session for %s approved until %s" % (sess["version"], hhmm(sess["expires"])))
+    say("signing session for %s approved until %s (by %s)" % (sess["version"], hhmm(sess["expires"]), by))
 
 
 def verb_keys(ctx, args):
@@ -2150,6 +2739,11 @@ def verb_status(ctx, args):
     # Nothing signed under this version and no compute evidence: a new base
     # or asset list may replace its approval (challenge --replace).
     out["unused"] = not unused_problems(ctx, version, sess)
+    # Which approvals can open a session now (sign-approve.sh starts each):
+    # sa1 = the signed-approval keys that meet require; legacy = the Mac's
+    # K2 Release Approve key (until a key that meets require is enrolled).
+    out["approvers"] = {"require": pol["require"], "sa1": [a["name"] for a in sa1_approvers(ctx, pol)],
+                        "legacy": legacy_open(ctx, pol)}
     cpath = compute_state_path(ctx, version)
     out["compute"] = read_json(cpath)["summary"] if os.path.exists(cpath) else None
     print(json.dumps(out, sort_keys=True))
@@ -2255,6 +2849,136 @@ def admin_set_approver(ctx, args):
         os.rename(tmp, dest)
     repin(ctx)
     say("approver key installed: sha256 %s" % sha256_file(os.path.join(ctx.etc, "approver.pem")))
+
+
+def write_etc_file(path, data, mode=0o644):
+    """An admin write under etc: a temp file renamed over the old one."""
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.chmod(tmp, mode)
+    os.rename(tmp, path)
+
+
+TSV_HEADER = "# name\tperson\tcheck\tview   (k2sign-admin add-approver / remove-approver; pinned in pins.sha256)\n"
+
+
+def approver_lines(ctx):
+    tsv = os.path.join(approvers_dir(ctx), "approvers.tsv")
+    if not os.path.isfile(tsv):
+        return []
+    return [l for l in open(tsv, encoding="utf-8").read().split("\n") if l.strip() and not l.startswith("#")]
+
+
+def admin_add_approver(ctx, args):
+    usage = ("add-approver <name> </absolute/key.pem> --person <who> --check biometric|credential "
+             "--view device|host|page [--words \"<the six words the device shows>\"]")
+    opts, pos, i = {}, [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--person", "--check", "--view", "--words"):
+            if i + 1 >= len(args) or a[2:] in opts:
+                raise Usage(usage)
+            opts[a[2:]] = args[i + 1]
+            i += 2
+        elif a.startswith("--"):
+            raise Usage("add-approver: unknown flag %s\n  %s" % (a, usage))
+        else:
+            pos.append(a)
+            i += 1
+    if len(pos) != 2 or not {"person", "check", "view"} <= set(opts):
+        raise Usage(usage)
+    name, src = pos
+    if not APPROVER_NAME_RE.match(name) or name == LEGACY_NAME:
+        raise Usage("the name is lowercase letters, digits, '.', '_' and '-' (%s is the Mac's set-approver key)"
+                    % LEGACY_NAME)
+    if not os.path.isabs(src):
+        raise Usage("add-approver needs an absolute path to the key (the wrapper runs from /)")
+    person, check, view = opts["person"], opts["check"], opts["view"]
+    if check not in CHECKS or view not in VIEWS:
+        raise Usage("--check is %s; --view is %s" % (" or ".join(CHECKS), ", ".join(VIEWS)))
+    if (not 1 <= len(person.encode("utf-8")) <= 128 or "\t" in person
+            or any(sa1_forbidden(ord(c)) for c in person)):
+        raise Usage("--person is the name the device shows (1 to 128 bytes, no tabs or hidden characters)")
+    check_pins(ctx)
+    data = open(src, "rb").read(4097)
+    try:
+        if len(data) > 4096:
+            raise Refused("too long")
+        der = spki_from_pem(data.decode("ascii"))
+    except (UnicodeDecodeError, Refused):
+        raise Refused("%s is not a P-256 public key (PEM): only P-256 (ES256) keys can approve releases for now" % src)
+    kid = hashlib.sha256(der).hexdigest()
+    words = key_words(kid)
+    if "words" in opts and " ".join(opts["words"].lower().split()) != words:
+        raise Refused("the words you typed (%s) are not this key's (%s): this is not the key the device made; "
+                      "nothing was added" % (" ".join(opts["words"].split()), words))
+    for a in load_approvers(ctx):
+        if a["name"] == name:
+            raise Refused("there is already an approver named %s (remove-approver first)" % name)
+        if a["key_id"] == kid:
+            raise Refused("this key is already approver %s" % a["name"])
+    d = approvers_dir(ctx)
+    if not os.path.isdir(d):
+        os.mkdir(d, 0o755)
+    os.chmod(d, 0o755)
+    write_etc_file(os.path.join(d, name + ".pem"), pem_of_spki(der).encode())
+    lines = approver_lines(ctx) + ["\t".join((name, person, check, view))]
+    write_etc_file(os.path.join(d, "approvers.tsv"), (TSV_HEADER + "\n".join(lines) + "\n").encode("utf-8"))
+    repin(ctx)
+    pol = load_policy(ctx)
+    ok = meets(check, view, release_require(pol))
+    print("approver %s added: %s, check %s, view %s" % (name, person, check, view))
+    print("key id: %s" % kid)
+    print("words:  %s" % words)
+    if ok:
+        say("releases: this key can approve them (policy require = %s)%s" % (
+            pol["require"], "" if meets(LEGACY_CHECK, LEGACY_VIEW, release_require(pol))
+            else "; the Mac's K2 Release Approve key no longer can"))
+    else:
+        say("releases: this key can NOT approve them (policy require = %s)" % pol["require"])
+    if "words" not in opts:
+        say("compare the six words with the device's enrol screen; if they differ, remove it now: "
+            "sudo /usr/local/libexec/k2sign/k2sign-admin remove-approver %s" % name)
+
+
+def admin_remove_approver(ctx, args):
+    if len(args) != 1:
+        raise Usage("remove-approver <name>")
+    name = args[0]
+    check_pins(ctx)
+    found = [a for a in load_approvers(ctx) if a["name"] == name]
+    if not found:
+        raise Refused("no approver named %s (k2sign-admin list-approvers)" % name)
+    d = approvers_dir(ctx)
+    lines = [l for l in approver_lines(ctx) if l.split("\t")[0] != name]
+    write_etc_file(os.path.join(d, "approvers.tsv"), (TSV_HEADER + "".join(l + "\n" for l in lines)).encode("utf-8"))
+    os.unlink(os.path.join(d, name + ".pem"))
+    repin(ctx)
+    print("approver %s removed (key id %s)" % (name, found[0]["key_id"]))
+
+
+def admin_list_approvers(ctx, args):
+    if args:
+        raise Usage("list-approvers")
+    check_pins(ctx)
+    pol = load_policy(ctx)
+    req = release_require(pol)
+    print("policy: require = %s" % pol["require"])
+    rows = load_approvers(ctx)
+    for a in rows:
+        print("%s\t%s\t%s %s\t%s\t%s\t%s" % (a["name"], a["person"], a["check"], a["view"],
+                                             "approves releases" if meets(a["check"], a["view"], req) else "not for releases",
+                                             a["key_id"], key_words(a["key_id"])))
+    lp = os.path.join(ctx.etc, "approver.pem")
+    if os.path.isfile(lp):
+        kid = hashlib.sha256(spki_from_pem(open(lp).read())).hexdigest()
+        print("%s\t(the Mac's K2 Release Approve key)\t%s %s\t%s\t%s\t%s" % (
+            LEGACY_NAME, LEGACY_CHECK, LEGACY_VIEW,
+            "approves releases" if legacy_open(ctx, pol) else "not for releases (a key that meets require is enrolled)",
+            kid, key_words(kid)))
+    if not rows and not os.path.isfile(lp):
+        print("no approvers")
 
 
 def admin_approve(ctx, args):
@@ -2742,7 +3466,8 @@ ADMIN_VERBS = {"set-approver": admin_set_approver, "repin": admin_repin, "approv
                "generate-u2": admin_generate_u2, "import": admin_import, "set-gh-token": admin_set_gh_token,
                "pin-compute-controller": admin_pin_compute_controller, "pin-compute-node": admin_pin_compute_node,
                "unpin-compute-node": admin_unpin_compute_node, "clear-compute-evidence": admin_clear_compute_evidence,
-               "cancel-session": admin_cancel_session}
+               "cancel-session": admin_cancel_session, "add-approver": admin_add_approver,
+               "remove-approver": admin_remove_approver, "list-approvers": admin_list_approvers}
 
 
 def main(argv):

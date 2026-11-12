@@ -359,6 +359,13 @@ fi
     for f in policy pubkeys approver.pem compute-pins; do
         [ -f "$ETC/$f" ] && printf '%s  etc/%s\n' "$(sha256 "$ETC/$f")" "$f"
     done
+    # Signed-approval keys (k2sign-admin add-approver), every file, sorted
+    # as k2sign.py's pinned_files lists them.
+    if [ -d "$ETC/approvers" ]; then
+        for f in $(cd "$ETC/approvers" && LC_ALL=C ls); do
+            printf '%s  etc/approvers/%s\n' "$(sha256 "$ETC/approvers/$f")" "$f"
+        done
+    fi
 } > "$WORK/pins"
 /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0644 "$WORK/pins" "$ETC/pins.sha256"
 say "installed. Hashes (K2 checks these against the branch):"

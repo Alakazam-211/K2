@@ -61,7 +61,7 @@ s = d["session"]
 assert s["assets"] == ["K2.app.tar.gz", "k2-daemon-linux-aarch64", "k2-daemon-linux-x86_64", "k2-daemon-macos-aarch64"]
 exp = calendar.timegm(time.strptime(s["expires"], "%Y-%m-%dT%H:%M:%SZ"))
 assert exp == int(sys.argv[2]) + 12 * 3600, (exp, sys.argv[2])
-assert d["last_version"] == "0.46.6" and s["by"] == "touchid"
+assert d["last_version"] == "0.46.6" and s["by"] == "mac-legacy:credential:host"
 PY
 grep -q $'\tAPPROVED\t' "$AUDIT/0.46.6/signatures.tsv" && pass "APPROVED is in the audit log" || fail "approved audit"
 

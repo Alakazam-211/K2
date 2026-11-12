@@ -1,0 +1,677 @@
+{
+ "keys": "keys",
+ "cases": [
+  {
+   "name": "ok-release-phone-bio",
+   "record": "records/ok-release-phone-bio.json",
+   "stored_payload": "records/ok-release-phone-bio.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device"
+   }
+  },
+  {
+   "name": "ok-release-no-stored-copy",
+   "record": "records/ok-release-no-stored-copy.json",
+   "stored_payload": null,
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device"
+   }
+  },
+  {
+   "name": "ok-release-phone-cred-everyday",
+   "record": "records/ok-release-phone-cred-everyday.json",
+   "stored_payload": "records/ok-release-phone-cred-everyday.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-cred",
+    "person": "alex",
+    "key_id": "91ac1312245d73df57fe662bd9502777017b542cf30a9d9569957841c5f58a19",
+    "check": "credential",
+    "view": "device"
+   }
+  },
+  {
+   "name": "ok-generic-refund",
+   "record": "records/ok-generic-refund.json",
+   "stored_payload": "records/ok-generic-refund.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "com.example.refund",
+    "check": "credential",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-cred",
+    "person": "alex",
+    "key_id": "91ac1312245d73df57fe662bd9502777017b542cf30a9d9569957841c5f58a19",
+    "check": "credential",
+    "view": "device"
+   }
+  },
+  {
+   "name": "ok-generic-pretty",
+   "record": "records/ok-generic-pretty.json",
+   "stored_payload": "records/ok-generic-pretty.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "com.example.refund",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device"
+   }
+  },
+  {
+   "name": "ok-mac-host-when-allowed",
+   "record": "records/ok-mac-host-when-allowed.json",
+   "stored_payload": "records/ok-mac-host-when-allowed.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "host",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-mac-legacy",
+    "person": "alex",
+    "key_id": "b993519f773f2fbbd2a12b15891547824241c46797fb8d648b58625b89cdb6af",
+    "check": "credential",
+    "view": "host"
+   }
+  },
+  {
+   "name": "ok-rs256-host-when-allowed",
+   "record": "records/ok-rs256-host-when-allowed.json",
+   "stored_payload": "records/ok-rs256-host-when-allowed.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "host",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-win-hello",
+    "person": "alex",
+    "key_id": "392a86d0d9a5186675e6037d1d12cf82532b950586436e8d6bbd471f5ac596ba",
+    "check": "credential",
+    "view": "host"
+   }
+  },
+  {
+   "name": "ok-no-optional-checks",
+   "record": "records/ok-no-optional-checks.json",
+   "stored_payload": "records/ok-no-optional-checks.stored.bin",
+   "require": {
+    "rp": null,
+    "kind": null,
+    "check": "credential",
+    "view": "page",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": null
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device"
+   }
+  },
+  {
+   "name": "refuse-one-byte-changed",
+   "record": "records/refuse-one-byte-changed.json",
+   "stored_payload": null,
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "bad_signature"
+   }
+  },
+  {
+   "name": "refuse-bytes-not-the-stored-ones",
+   "record": "records/refuse-bytes-not-the-stored-ones.json",
+   "stored_payload": "records/refuse-bytes-not-the-stored-ones.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "payload_mismatch"
+   }
+  },
+  {
+   "name": "refuse-signature-byte-flipped",
+   "record": "records/refuse-signature-byte-flipped.json",
+   "stored_payload": "records/refuse-signature-byte-flipped.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "bad_signature"
+   }
+  },
+  {
+   "name": "refuse-signed-by-other-key-same-id",
+   "record": "records/refuse-signed-by-other-key-same-id.json",
+   "stored_payload": "records/refuse-signed-by-other-key-same-id.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "bad_signature"
+   }
+  },
+  {
+   "name": "refuse-untrusted-key",
+   "record": "records/refuse-untrusted-key.json",
+   "stored_payload": "records/refuse-untrusted-key.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "unknown_key"
+   }
+  },
+  {
+   "name": "refuse-alg-mismatch",
+   "record": "records/refuse-alg-mismatch.json",
+   "stored_payload": "records/refuse-alg-mismatch.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "alg_mismatch"
+   }
+  },
+  {
+   "name": "refuse-key-not-listed",
+   "record": "records/refuse-key-not-listed.json",
+   "stored_payload": "records/refuse-key-not-listed.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "key_not_listed"
+   }
+  },
+  {
+   "name": "refuse-key-of-another-person",
+   "record": "records/refuse-key-of-another-person.json",
+   "stored_payload": "records/refuse-key-of-another-person.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "wrong_approver"
+   }
+  },
+  {
+   "name": "refuse-wrong-rp",
+   "record": "records/refuse-wrong-rp.json",
+   "stored_payload": "records/refuse-wrong-rp.stored.bin",
+   "require": {
+    "rp": "k2sign@other-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "wrong_rp"
+   }
+  },
+  {
+   "name": "refuse-wrong-kind",
+   "record": "records/refuse-wrong-kind.json",
+   "stored_payload": "records/refuse-wrong-kind.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.delete",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "wrong_kind"
+   }
+  },
+  {
+   "name": "refuse-credential-for-release",
+   "record": "records/refuse-credential-for-release.json",
+   "stored_payload": "records/refuse-credential-for-release.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "weak_check"
+   }
+  },
+  {
+   "name": "refuse-mac-legacy-for-release",
+   "record": "records/refuse-mac-legacy-for-release.json",
+   "stored_payload": "records/refuse-mac-legacy-for-release.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "weak_check"
+   }
+  },
+  {
+   "name": "refuse-host-view-for-release",
+   "record": "records/refuse-host-view-for-release.json",
+   "stored_payload": "records/refuse-host-view-for-release.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "weak_view"
+   }
+  },
+  {
+   "name": "refuse-expired",
+   "record": "records/refuse-expired.json",
+   "stored_payload": "records/refuse-expired.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:15:01Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "expired"
+   }
+  },
+  {
+   "name": "ok-at-answer-by",
+   "record": "records/ok-at-answer-by.json",
+   "stored_payload": "records/ok-at-answer-by.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:15:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device"
+   }
+  },
+  {
+   "name": "refuse-issued-in-future",
+   "record": "records/refuse-issued-in-future.json",
+   "stored_payload": "records/refuse-issued-in-future.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T13:54:59Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "issued_future"
+   }
+  },
+  {
+   "name": "ok-issued-within-skew",
+   "record": "records/ok-issued-within-skew.json",
+   "stored_payload": "records/ok-issued-within-skew.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T13:55:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device"
+   }
+  },
+  {
+   "name": "refuse-wrong-nonce",
+   "record": "records/refuse-wrong-nonce.json",
+   "stored_payload": "records/refuse-wrong-nonce.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "ffeeddccbbaa99887766554433221100"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "wrong_nonce"
+   }
+  },
+  {
+   "name": "refuse-nonce-used",
+   "record": "records/refuse-nonce-used.json",
+   "stored_payload": "records/refuse-nonce-used.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [
+    "00112233445566778899aabbccddeeff"
+   ],
+   "expect": {
+    "ok": false,
+    "code": "nonce_used"
+   }
+  },
+  {
+   "name": "refuse-signed-duplicate-key",
+   "record": "records/refuse-signed-duplicate-key.json",
+   "stored_payload": "records/refuse-signed-duplicate-key.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "duplicate_key"
+   }
+  },
+  {
+   "name": "refuse-signed-hidden-char",
+   "record": "records/refuse-signed-hidden-char.json",
+   "stored_payload": "records/refuse-signed-hidden-char.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "com.example.x",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "forbidden_char"
+   }
+  },
+  {
+   "name": "refuse-signed-release-bad-shape",
+   "record": "records/refuse-signed-release-bad-shape.json",
+   "stored_payload": "records/refuse-signed-release-bad-shape.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "shape"
+   }
+  },
+  {
+   "name": "refuse-record-claims-a-check",
+   "record": "records/refuse-record-claims-a-check.json",
+   "stored_payload": "records/refuse-record-claims-a-check.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "record"
+   }
+  },
+  {
+   "name": "refuse-record-duplicate-field",
+   "record": "records/refuse-record-duplicate-field.json",
+   "stored_payload": "records/refuse-record-duplicate-field.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "record"
+   }
+  },
+  {
+   "name": "refuse-record-v2",
+   "record": "records/refuse-record-v2.json",
+   "stored_payload": "records/refuse-record-v2.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "record"
+   }
+  },
+  {
+   "name": "refuse-record-base64-spaces",
+   "record": "records/refuse-record-base64-spaces.json",
+   "stored_payload": "records/refuse-record-base64-spaces.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "record"
+   }
+  },
+  {
+   "name": "refuse-record-unknown-alg",
+   "record": "records/refuse-record-unknown-alg.json",
+   "stored_payload": "records/refuse-record-unknown-alg.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "record"
+   }
+  }
+ ]
+}

@@ -1,0 +1,29 @@
+[package]
+name = "k2-approve"
+# Not the product version: release.sh does not bump this crate. The wire
+# format is versioned by its prefix (K2-SIGNED-APPROVAL-1), not by this.
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Signed approvals (prd-signed-approvals-v1): the K2-SIGNED-APPROVAL-1 payload, its strict JSON form, approval records and the relying party's verify (ES256; RS256 behind a type for Windows Hello). No daemon dependency."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-approve"
+path = "src/main.rs"
+required-features = ["verify"]
+
+[features]
+default = ["verify"]
+# Signature checks (aws-lc-rs). Without it the crate still parses payloads
+# and records, checks the strict form, makes key ids and fingerprint words,
+# and writes the display text: what a device needs before it signs.
+verify = ["dep:aws-lc-rs"]
+
+[dependencies]
+base64 = "0.22"
+sha2 = "0.10"
+aws-lc-rs = { version = "1", optional = true }

@@ -1,0 +1,16 @@
+K2 has no built-in wording for this kind. Every field is shown below.
+Kind: com.example.refund (version 2)
+amount: 125.00 USD
+balance_change: -125
+count: 3
+items:
+  - blue mug
+  - tea set
+note: Ünïcode is fine 😀
+notify_customer: true
+order: A-1042
+tags: (none)
+
+Who will act: k2sign@build-mac
+Asked: alex
+Answer by: 2026-11-11 14:15:00 UTC

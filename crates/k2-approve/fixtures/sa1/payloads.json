@@ -1,0 +1,326 @@
+{
+ "valid": [
+  {
+   "name": "release",
+   "payload": "payloads/valid/release.bin",
+   "display": "payloads/valid/release.txt"
+  },
+  {
+   "name": "release-reapprove-windows",
+   "payload": "payloads/valid/release-reapprove-windows.bin",
+   "display": "payloads/valid/release-reapprove-windows.txt"
+  },
+  {
+   "name": "generic-refund",
+   "payload": "payloads/valid/generic-refund.bin",
+   "display": "payloads/valid/generic-refund.txt"
+  },
+  {
+   "name": "generic-refund-pretty",
+   "payload": "payloads/valid/generic-refund-pretty.bin",
+   "display": "payloads/valid/generic-refund-pretty.txt"
+  },
+  {
+   "name": "generic-escapes",
+   "payload": "payloads/valid/generic-escapes.bin",
+   "display": "payloads/valid/generic-escapes.txt"
+  }
+ ],
+ "invalid": [
+  {
+   "name": "prefix-missing",
+   "payload": "payloads/invalid/prefix-missing.bin",
+   "code": "prefix"
+  },
+  {
+   "name": "prefix-version-2",
+   "payload": "payloads/invalid/prefix-version-2.bin",
+   "code": "prefix"
+  },
+  {
+   "name": "prefix-no-zero-byte",
+   "payload": "payloads/invalid/prefix-no-zero-byte.bin",
+   "code": "prefix"
+  },
+  {
+   "name": "too-large",
+   "payload": "payloads/invalid/too-large.bin",
+   "code": "too_large"
+  },
+  {
+   "name": "utf8-bad-byte",
+   "payload": "payloads/invalid/utf8-bad-byte.bin",
+   "code": "utf8"
+  },
+  {
+   "name": "json-trailing-text",
+   "payload": "payloads/invalid/json-trailing-text.bin",
+   "code": "json"
+  },
+  {
+   "name": "json-cut-short",
+   "payload": "payloads/invalid/json-cut-short.bin",
+   "code": "json"
+  },
+  {
+   "name": "json-bom",
+   "payload": "payloads/invalid/json-bom.bin",
+   "code": "json"
+  },
+  {
+   "name": "json-nan",
+   "payload": "payloads/invalid/json-nan.bin",
+   "code": "json"
+  },
+  {
+   "name": "not-object",
+   "payload": "payloads/invalid/not-object.bin",
+   "code": "not_object"
+  },
+  {
+   "name": "duplicate-top-key",
+   "payload": "payloads/invalid/duplicate-top-key.bin",
+   "code": "duplicate_key"
+  },
+  {
+   "name": "duplicate-key-by-escape",
+   "payload": "payloads/invalid/duplicate-key-by-escape.bin",
+   "code": "duplicate_key"
+  },
+  {
+   "name": "duplicate-body-key",
+   "payload": "payloads/invalid/duplicate-body-key.bin",
+   "code": "duplicate_key"
+  },
+  {
+   "name": "char-rlo-raw",
+   "payload": "payloads/invalid/char-rlo-raw.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-rlo-escaped",
+   "payload": "payloads/invalid/char-rlo-escaped.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-zero-width-in-approver",
+   "payload": "payloads/invalid/char-zero-width-in-approver.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-newline-escaped",
+   "payload": "payloads/invalid/char-newline-escaped.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-newline-raw",
+   "payload": "payloads/invalid/char-newline-raw.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-lone-surrogate",
+   "payload": "payloads/invalid/char-lone-surrogate.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-in-key",
+   "payload": "payloads/invalid/char-in-key.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-variation-selector",
+   "payload": "payloads/invalid/char-variation-selector.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "char-tag",
+   "payload": "payloads/invalid/char-tag.bin",
+   "code": "forbidden_char"
+  },
+  {
+   "name": "int-fraction",
+   "payload": "payloads/invalid/int-fraction.bin",
+   "code": "not_integer"
+  },
+  {
+   "name": "int-exponent",
+   "payload": "payloads/invalid/int-exponent.bin",
+   "code": "not_integer"
+  },
+  {
+   "name": "int-minus-zero",
+   "payload": "payloads/invalid/int-minus-zero.bin",
+   "code": "not_integer"
+  },
+  {
+   "name": "int-too-big",
+   "payload": "payloads/invalid/int-too-big.bin",
+   "code": "not_integer"
+  },
+  {
+   "name": "int-kind-v-1.0",
+   "payload": "payloads/invalid/int-kind-v-1.0.bin",
+   "code": "not_integer"
+  },
+  {
+   "name": "unknown-field",
+   "payload": "payloads/invalid/unknown-field.bin",
+   "code": "unknown_field"
+  },
+  {
+   "name": "missing-answer-by",
+   "payload": "payloads/invalid/missing-answer-by.bin",
+   "code": "missing_field"
+  },
+  {
+   "name": "type-kind-v-string",
+   "payload": "payloads/invalid/type-kind-v-string.bin",
+   "code": "field_type"
+  },
+  {
+   "name": "type-approver-keys-string",
+   "payload": "payloads/invalid/type-approver-keys-string.bin",
+   "code": "field_type"
+  },
+  {
+   "name": "type-body-list",
+   "payload": "payloads/invalid/type-body-list.bin",
+   "code": "field_type"
+  },
+  {
+   "name": "type-rp-null",
+   "payload": "payloads/invalid/type-rp-null.bin",
+   "code": "field_type"
+  },
+  {
+   "name": "format-kind-capitals",
+   "payload": "payloads/invalid/format-kind-capitals.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-kind-one-part",
+   "payload": "payloads/invalid/format-kind-one-part.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-nonce-uppercase",
+   "payload": "payloads/invalid/format-nonce-uppercase.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-issued-fraction",
+   "payload": "payloads/invalid/format-issued-fraction.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-issued-offset",
+   "payload": "payloads/invalid/format-issued-offset.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-answer-by-feb-30",
+   "payload": "payloads/invalid/format-answer-by-feb-30.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-approver-keys-empty",
+   "payload": "payloads/invalid/format-approver-keys-empty.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-approver-keys-17",
+   "payload": "payloads/invalid/format-approver-keys-17.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-approver-keys-twice",
+   "payload": "payloads/invalid/format-approver-keys-twice.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-approver-key-short",
+   "payload": "payloads/invalid/format-approver-key-short.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-approver-empty",
+   "payload": "payloads/invalid/format-approver-empty.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-rp-too-long",
+   "payload": "payloads/invalid/format-rp-too-long.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "format-body-key",
+   "payload": "payloads/invalid/format-body-key.bin",
+   "code": "field_format"
+  },
+  {
+   "name": "body-object",
+   "payload": "payloads/invalid/body-object.bin",
+   "code": "body_value"
+  },
+  {
+   "name": "body-list-of-ints",
+   "payload": "payloads/invalid/body-list-of-ints.bin",
+   "code": "body_value"
+  },
+  {
+   "name": "body-null",
+   "payload": "payloads/invalid/body-null.bin",
+   "code": "body_value"
+  },
+  {
+   "name": "times-answer-by-equals-issued",
+   "payload": "payloads/invalid/times-answer-by-equals-issued.bin",
+   "code": "times"
+  },
+  {
+   "name": "times-answer-by-before-issued",
+   "payload": "payloads/invalid/times-answer-by-before-issued.bin",
+   "code": "times"
+  },
+  {
+   "name": "release-kind-v-2",
+   "payload": "payloads/invalid/release-kind-v-2.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-extra-field",
+   "payload": "payloads/invalid/release-extra-field.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-missing-session-until",
+   "payload": "payloads/invalid/release-missing-session-until.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-short-base",
+   "payload": "payloads/invalid/release-short-base.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-bad-asset-name",
+   "payload": "payloads/invalid/release-bad-asset-name.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-asset-twice",
+   "payload": "payloads/invalid/release-asset-twice.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-windows-string",
+   "payload": "payloads/invalid/release-windows-string.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-version-leading-zero",
+   "payload": "payloads/invalid/release-version-leading-zero.bin",
+   "code": "shape"
+  }
+ ]
+}

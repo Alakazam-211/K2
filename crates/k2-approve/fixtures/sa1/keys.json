@@ -1,0 +1,38 @@
+{
+ "alex-mac-legacy": {
+  "alg": "ES256",
+  "key_id": "b993519f773f2fbbd2a12b15891547824241c46797fb8d648b58625b89cdb6af",
+  "trusted": true,
+  "words": "ocean jungle crown lilac frost cinema"
+ },
+ "alex-phone-bio": {
+  "alg": "ES256",
+  "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+  "trusted": true,
+  "words": "citrus crane fiddle velvet potato spider"
+ },
+ "alex-phone-cred": {
+  "alg": "ES256",
+  "key_id": "91ac1312245d73df57fe662bd9502777017b542cf30a9d9569957841c5f58a19",
+  "trusted": true,
+  "words": "jockey mirror bacon award boat dollar"
+ },
+ "alex-win-hello": {
+  "alg": "RS256",
+  "key_id": "392a86d0d9a5186675e6037d1d12cf82532b950586436e8d6bbd471f5ac596ba",
+  "trusted": true,
+  "words": "chalk broom helmet pumpkin saddle magnet"
+ },
+ "sam-phone-bio": {
+  "alg": "ES256",
+  "key_id": "7e70d98b9c7db23d4399b580832df327a046c9f48fc1b3a8947cd869153bb7aa",
+  "trusted": true,
+  "words": "glacier fiddle saddle island laser ginger"
+ },
+ "untrusted": {
+  "alg": "ES256",
+  "key_id": "2779c87afef243950fd75fc59fbc7c5bf85c299141bf5e3f67856a5c3d29bda4",
+  "trusted": false,
+  "words": "brain garden pilot garlic yogurt unicorn"
+ }
+}

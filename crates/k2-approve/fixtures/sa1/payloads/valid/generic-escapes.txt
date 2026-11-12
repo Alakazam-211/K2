@@ -1,0 +1,7 @@
+K2 has no built-in wording for this kind. Every field is shown below.
+Kind: com.example.note (version 1)
+text: café "quoted" a/b \ 😀
+
+Who will act: k2sign@build-mac
+Asked: alex
+Answer by: 2026-11-11 14:15:00 UTC

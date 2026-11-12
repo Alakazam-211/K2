@@ -1,0 +1,8 @@
+RE-APPROVE: Approve K2 release 0.46.13 at base commit 0123456789abcdef0123456789abcdef01234567.
+Sign: K2.app.tar.gz, K2_0.46.13_x64-setup.exe.
+Windows setup: yes, with no independent check.
+Signing stays open until 2026-11-12 02:00:00 UTC.
+
+Who will act: k2sign@build-mac
+Asked: alex
+Answer by: 2026-11-11 14:15:00 UTC

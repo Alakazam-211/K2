@@ -54,6 +54,10 @@ members = [
     # runs as the `_k2sign` role user beside k2sign; checks evidence
     # bundles v2 and signs minisign/Tauri updater files.
     "crates/k2-signer",
+    # Signed approvals (prd-signed-approvals-v1): the K2-SIGNED-APPROVAL-1
+    # payload, records and the relying party's verify; shared fixtures for
+    # the phone app and k2sign. No daemon dependency.
+    "crates/k2-approve",
     # The remote desktop helper "K2 Screen" (prd-remote-desktop-tab-v1
     # D3/D4) and its wire, which the daemon links (no platform code).
     "crates/k2-deskd-proto",

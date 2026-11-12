@@ -1,0 +1,6 @@
+# name	person	check	view  (TEST KEYS: the private halves are in private/)
+alex-phone-bio	alex	biometric	device
+alex-phone-cred	alex	credential	device
+alex-mac-legacy	alex	credential	host
+alex-win-hello	alex	credential	host
+sam-phone-bio	sam	biometric	device

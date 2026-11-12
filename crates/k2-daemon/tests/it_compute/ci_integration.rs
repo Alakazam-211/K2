@@ -786,20 +786,20 @@ async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
     let local = git(&ws.path, &["rev-parse", "HEAD"]);
     let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": local, "ref": "main", "checks": ["unit"]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let job = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
-    let plan = row(&job).plan().expect("plan");
+    let job_local = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
+    let plan = row(&job_local).plan().expect("plan");
     assert_eq!((plan.cache_commit, plan.cache_ref.as_deref()), (Some(CacheCommit::Scratch), Some("main")), "a local commit never saves trusted");
     assert_eq!(git(&ws.path, &["rev-parse", "refs/k2-ci/main"]), sha1, "the remote's main, in K2's own ref");
     // The same commit once pushed: trusted.
     git(&ws.path, &["push", "-q", "origin", "main"]);
     let r = post(d.port, "/cli/ci/run", &agent, json!({"rev": local, "ref": "main", "checks": ["unit"]})).await;
     assert_eq!(r.status, 200, "{}", r.body);
-    let job = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
-    assert_eq!(row(&job).plan().unwrap().cache_commit, Some(CacheCommit::Trusted), "pushed to main: trusted");
+    let job_pushed = check(&j(&r)["run"], "unit")["job"].as_str().unwrap().to_string();
+    assert_eq!(row(&job_pushed).plan().unwrap().cache_commit, Some(CacheCommit::Trusted), "pushed to main: trusted");
 
     // A plain run at main saves only scratch/main (its argv is the
     // caller's); a body naming the trusted cache is not read.
-    let r = post(d.port, "/cli/compute/run", &agent, json!({"argv": ["true"], "sha": "main", "node": "k2g7", "cacheCommit": "trusted"})).await;
+    let r = post(d.port, "/cli/compute/run", &agent, json!({"argv": ["true"], "sha": "main", "node": "k2g7", "cacheCommit": "trusted", "clientJobId": "b2-plain-run-at-main-01"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let plan = row(&job).plan().unwrap();
@@ -827,4 +827,19 @@ async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
     let r = get(d.port, "/cli/compute/cache/lineages", &agent, "lineage=trusted").await;
     assert_eq!(j(&r)["nodes"][0]["lineages"].as_array().unwrap().len(), 1, "{}", r.body);
     assert_eq!(j(&r)["nodes"][0]["lineages"][0]["headSeq"], 3);
+
+    // Every run of this workspace ends here (its [ci] messages never land
+    // in a later test's sink), and the watch goes off.
+    let lint = check(&run, "lint")["job"].as_str().expect("lint job").to_string();
+    for jb in [&unit, &lint, &job_local, &job_pushed] {
+        // A newer run on main superseded some (cancelled): those have ended.
+        if !matches!(row(jb).state.as_str(), "done" | "failed" | "cancelled" | "timeout" | "interrupted") {
+            finish_job(jb, 0);
+        }
+    }
+    tick().await;
+    let r = post(d.port, "/cli/ci/watch", &agent, json!({"on": false})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let runs = j(&get(d.port, "/cli/ci/status", &agent, "").await)["runs"].clone();
+    assert!(runs.as_array().unwrap().iter().all(|r| r["state"] != "running"), "{runs}");
 }

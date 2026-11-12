@@ -5,6 +5,7 @@ import { asArray } from '@/lib/as-array'
 import { useRunningAgentsStore } from '@/stores/running-agents'
 import { useTabsStore } from '@/stores/tabs'
 import { useProjectsStore } from '@/stores/projects'
+import { openAgent } from '@/lib/page-selection'
 import { useActiveAgentsStore } from '@/stores/active-agents'
 import { agentUnseenOutcome, rowForAgentName, useActivity } from '@/stores/activity'
 import { sessionsStatus, type AgentStatusView } from '@/lib/agent-status'
@@ -205,6 +206,13 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
     [close, filtered, selectedIndex, sendingTo]
   )
 
+  /** The tab is in the workspace on screen: make sure the page shows it
+   *  (from Home, an agent that is not a Home row opens on Agents). */
+  const showActiveWorkspace = (): void => {
+    const { activeProjectId, activeWorkspaceId } = useProjectsStore.getState()
+    if (activeProjectId) openAgent(activeProjectId, activeWorkspaceId)
+  }
+
   const navigateToTerminal = (agent: RunningAgentInfo) => {
     const { terminalId, cwd } = agent
     const tabsState = useTabsStore.getState()
@@ -215,6 +223,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       for (const [, pg] of tab.paneGroups) {
         const match = pg.items.find((item) => itemMatchesAgent(item, agent))
         if (match) {
+          showActiveWorkspace()
           useTabsStore.setState({ activeTabId: tab.id })
           return
         }
@@ -227,6 +236,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
         for (const [, pg] of tab.paneGroups) {
           const match = pg.items.find((item) => itemMatchesAgent(item, agent))
           if (match) {
+            showActiveWorkspace()
             useTabsStore.setState({ activeTabId: tab.id })
             return
           }
@@ -244,7 +254,7 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
             // key format is "projectId:workspaceId"
             const [projectId, workspaceId] = key.split(':')
             if (projectId && workspaceId) {
-              useProjectsStore.getState().setActiveWorkspace(projectId, workspaceId)
+              openAgent(projectId, workspaceId)
               // After workspace restore, the tab should be active
               setTimeout(() => useTabsStore.setState({ activeTabId: tab.id }), 100)
             }
@@ -262,9 +272,9 @@ export default function RunningAgentsPanel(): React.JSX.Element | null {
       if (cwd.startsWith(project.path)) {
         const ws = project.workspaces.find((w) => cwd.startsWith(w.worktreePath || project.path))
         if (ws) {
-          useProjectsStore.getState().setActiveWorkspace(project.id, ws.id)
+          openAgent(project.id, ws.id)
         } else if (project.workspaces[0]) {
-          useProjectsStore.getState().setActiveWorkspace(project.id, project.workspaces[0].id)
+          openAgent(project.id, project.workspaces[0].id)
         }
         // Create a tab for this running terminal so the user can see it
         setTimeout(() => {

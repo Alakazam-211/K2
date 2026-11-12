@@ -2,7 +2,8 @@
 // item 4): after a successful clone, "Open on <host>" jumps into the freshly-
 // cloned workspace on the still-active destination host. It must select the
 // project (and dismiss the modal), fetching the project list first only if the
-// post-clone refresh hasn't landed yet.
+// post-clone refresh hasn't landed yet. It opens through `openAgent`, so from
+// Home (or any page but Agents) the new agent shows on the Agents page.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -10,16 +11,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 // side effect), so mock it before importing the store under test. Lazy arrow
 // wrappers dodge the vi.mock hoisting TDZ.
 const fetchProjects = vi.fn()
-const setActiveProject = vi.fn()
+const openAgent = vi.fn()
 let projectsList: { id: string }[] = []
 vi.mock('@/stores/projects', () => ({
   useProjectsStore: {
     getState: () => ({
       projects: projectsList,
       fetchProjects: (...a: unknown[]) => fetchProjects(...a),
-      setActiveProject: (...a: unknown[]) => setActiveProject(...a),
     }),
   },
+}))
+vi.mock('@/lib/page-selection', () => ({
+  openAgent: (...a: unknown[]) => openAgent(...a),
 }))
 
 import { useCloneToDialogStore } from './clone-to-dialog'
@@ -28,7 +31,7 @@ const RESULT = { project: { id: 'p1', name: 'ws' }, dest_path: '/home/x/ws' }
 
 beforeEach(() => {
   fetchProjects.mockReset().mockResolvedValue(undefined)
-  setActiveProject.mockReset()
+  openAgent.mockReset()
   projectsList = []
   useCloneToDialogStore.getState().close()
 })
@@ -41,7 +44,7 @@ describe('clone-to-dialog openResult', () => {
     await useCloneToDialogStore.getState().openResult()
 
     expect(fetchProjects).not.toHaveBeenCalled()
-    expect(setActiveProject).toHaveBeenCalledWith('p1')
+    expect(openAgent).toHaveBeenCalledWith('p1')
     expect(useCloneToDialogStore.getState().isOpen).toBe(false) // modal dismissed
   })
 
@@ -52,7 +55,7 @@ describe('clone-to-dialog openResult', () => {
     await useCloneToDialogStore.getState().openResult()
 
     expect(fetchProjects).toHaveBeenCalledTimes(1)
-    expect(setActiveProject).toHaveBeenCalledWith('p1')
+    expect(openAgent).toHaveBeenCalledWith('p1')
     expect(useCloneToDialogStore.getState().isOpen).toBe(false)
   })
 
@@ -65,7 +68,7 @@ describe('clone-to-dialog openResult', () => {
 
     await useCloneToDialogStore.getState().openResult()
 
-    expect(setActiveProject).not.toHaveBeenCalled()
+    expect(openAgent).not.toHaveBeenCalled()
     expect(useCloneToDialogStore.getState().isOpen).toBe(false)
   })
 })

@@ -97,7 +97,7 @@ function rowAgentLabel(row: ActivityRow): string | null {
  * the *current* workspace's tab list, so a finish toast for a background
  * agent never left the foreground workspace.
  */
-function navigateToRow(row: ActivityRow): void {
+export function navigateToRow(row: ActivityRow): void {
   const select = (): boolean => {
     const hit = findTabForRow(row)
     if (!hit) return false
@@ -111,13 +111,18 @@ function navigateToRow(row: ActivityRow): void {
 
   void (async () => {
     const ps = useProjectsStore.getState()
-    if (row.projectId && row.projectId !== ps.activeProjectId) {
-      const project = ps.projects.find((p) => p.id === row.projectId)
-      const ws = project?.workspaces?.[0]
-      if (project && ws) {
-        // Same gesture as the Active bar row click — stash current tabs,
-        // restore this workspace's layout (async).
-        ps.setActiveWorkspace(project.id, ws.id)
+    const project = row.projectId ? ps.projects.find((p) => p.id === row.projectId) : undefined
+    const ws = project?.workspaces?.[0]
+    if (project && ws) {
+      const switching = project.id !== ps.activeProjectId
+      // openAgent: shows the agent from any page. On Home, an agent that is
+      // not a Home row opens on Agents (selecting it under Home showed
+      // nothing). Loaded on use: this store sits under many test mocks.
+      const { openAgent } = await import('@/lib/page-selection')
+      // A different workspace: its first one (stash current tabs, restore
+      // its layout, async). The same one: keep the workspace on screen.
+      openAgent(project.id, switching ? ws.id : ps.activeWorkspaceId)
+      if (switching) {
         for (let i = 0; i < 40; i++) {
           if (findTabForRow(row)) break
           await new Promise((r) => setTimeout(r, 50))

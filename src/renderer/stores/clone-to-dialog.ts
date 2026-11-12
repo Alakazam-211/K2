@@ -458,7 +458,10 @@ export const useCloneToDialogStore = create<CloneToDialogState>((set, get) => ({
           console.warn('[clone-to] refresh before open failed:', e)
         }
       }
-      useProjectsStore.getState().setActiveProject(id)
+      // openAgent: from Home (or any page but Agents) the new agent opens
+      // on Agents; selecting it under Home showed nothing.
+      const { openAgent } = await import('@/lib/page-selection')
+      openAgent(id)
     }
     set({ ...RESET })
   },

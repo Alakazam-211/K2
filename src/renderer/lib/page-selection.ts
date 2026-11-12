@@ -16,8 +16,10 @@
 //     Wiki, Settings) change nothing: the room still belongs to the last
 //     room page.
 //   - Home only selects its own rows. A workspace on screen that is not a
-//     row of the selected Home was picked for Agents (palette, rail,
-//     notification) and stays for Agents.
+//     row of the selected Home was picked for Agents and stays for Agents.
+//     Gestures that name one agent from anywhere (palette, toast View,
+//     running agents) go through `openAgent`, which takes any other agent
+//     to the Agents page rather than selecting it under Home.
 //   - Home's remote rooms (`stores/home-rooms`) are Home's alone already:
 //     Agents never shows them and they stay open across pages.
 //   - A remembered workspace that is gone (deleted, another server) is
@@ -30,6 +32,7 @@
 import { usePageViewStore, isRoomPage } from '@/stores/page-view'
 import { useProjectsStore } from '@/stores/projects'
 import { useGrokBotsStore, type GrokChatTarget } from '@/stores/grokbots'
+import { homeRooms } from '@/stores/home-rooms'
 import { useHomesStore, selectedHome } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
@@ -137,6 +140,51 @@ export function openOnAgentsPage(projectId: string, workspaceId?: string | null)
   // Already Agents' room (from Agents, or a page in between): select here.
   selectWorkspace({ projectId, workspaceId: workspaceId ?? null })
   setGrok(null)
+}
+
+/** Select `projectId` here, on the page the window is on. A workspace id
+ *  picks that workspace; none picks the project's first (`setActiveProject`,
+ *  which also re-shows and re-focuses the agent when it is already active). */
+function selectHere(projectId: string, workspaceId: string | null): void {
+  const ps = useProjectsStore.getState()
+  const project = ps.projects.find((p) => p.id === projectId)
+  if (!project) return
+  if (workspaceId && project.workspaces.some((w) => w.id === workspaceId)) ps.setActiveWorkspace(project.id, workspaceId)
+  else ps.setActiveProject(project.id)
+}
+
+/** Where `openAgent` showed the agent. */
+export type OpenAgentPage = RoomPage
+
+/** Open one agent from a gesture that names it (the Cmd+K palette, a
+ *  toast's View, the running-agents list, a finished clone): the person
+ *  lands on that agent's room, whatever page the window is on.
+ *
+ *   - On Home, a row of the selected Home opens on Home, as clicking the
+ *     row does: a remote room or a Grok Bot chat on screen gives way.
+ *   - On Home, any other agent opens on the Agents page. Selecting it on
+ *     Home would show nothing (Home shows only its own rows).
+ *   - On Agents it is selected there (a Grok Bot chat on screen closes).
+ *   - Any other page (Projects, Tickets, Wiki…) goes to Agents with it.
+ *
+ *  Settings is an overlay, not a page; callers that want it closed close
+ *  it themselves. */
+export function openAgent(projectId: string, workspaceId?: string | null): OpenAgentPage {
+  const page = usePageViewStore.getState().page
+  const ws = workspaceId ?? null
+  if (page === 'home' && isHomeRowWorkspace(projectId)) {
+    homeRooms.showPrimary()
+    setGrok(null)
+    selectHere(projectId, ws)
+    return 'home'
+  }
+  if (page !== 'agents') {
+    openOnAgentsPage(projectId, ws)
+    return 'agents'
+  }
+  setGrok(null)
+  selectHere(projectId, ws)
+  return 'agents'
 }
 
 /** The room page that owns the window's active workspace (tests). */

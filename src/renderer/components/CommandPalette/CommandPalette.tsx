@@ -6,6 +6,7 @@ import { useProjectsStore } from '../../stores/projects'
 import { useFocusGroupsStore } from '../../stores/focus-groups'
 import { useSidebarStore } from '../../stores/sidebar'
 import { focusedRoom } from '../../stores/window-room'
+import { openAgent } from '@/lib/page-selection'
 import { webFeatures } from '@/web/features'
 import ProjectAvatar from '../Sidebar/ProjectAvatar'
 
@@ -60,8 +61,6 @@ export default function CommandPalette(): React.JSX.Element | null {
   const close = useCommandPaletteStore((s) => s.close)
 
   const projects = useProjectsStore((s) => s.projects)
-  const setActiveProject = useProjectsStore((s) => s.setActiveProject)
-  const setActiveWorkspace = useProjectsStore((s) => s.setActiveWorkspace)
 
   const focusGroups = useFocusGroupsStore((s) => s.focusGroups)
   const focusGroupsEnabled = useFocusGroupsStore((s) => s.focusGroupsEnabled)
@@ -180,12 +179,9 @@ export default function CommandPalette(): React.JSX.Element | null {
         setActiveFocusGroup(result.id, { autoActivate: false })
         // Find first project in this group
         const firstProject = projects.find((p) => p.focusGroupId === result.id)
-        if (firstProject) {
-          setActiveProject(firstProject.id)
-          if (firstProject.workspaces[0]) {
-            setActiveWorkspace(firstProject.id, firstProject.workspaces[0].id)
-          }
-        }
+        // openAgent: on Home an agent that is not a Home row opens on
+        // Agents (Home would not show it); a Home row opens on Home.
+        if (firstProject) openAgent(firstProject.id)
       } else {
         // Project
         if (result.focusGroupId && focusGroupsEnabled) {
@@ -193,16 +189,12 @@ export default function CommandPalette(): React.JSX.Element | null {
           // explicitly below (double-switch race otherwise).
           setActiveFocusGroup(result.focusGroupId, { autoActivate: false })
         }
-        setActiveProject(result.id)
-        const project = projects.find((p) => p.id === result.id)
-        if (project?.workspaces[0]) {
-          setActiveWorkspace(project.id, project.workspaces[0].id)
-        }
+        openAgent(result.id)
       }
       expand()
       close()
     },
-    [projects, focusGroupsEnabled, setActiveFocusGroup, setActiveProject, setActiveWorkspace, expand, close]
+    [projects, focusGroupsEnabled, setActiveFocusGroup, expand, close]
   )
 
   // Esc, the × and a press outside close it (useDialogCancel).

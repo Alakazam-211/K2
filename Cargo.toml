@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/opc"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# Our own dev and test builds. Cargo applies a workspace's profiles only when that workspace
+# is the one being built, so a pack that depends on this repo keeps its own. Release builds
+# are unchanged.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

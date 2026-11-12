@@ -101,9 +101,30 @@ WHEN IT SAYS NO (exit 2 usage, 3 refused, 4 not found, 1 failed)
   ci_remote_unreachable  git ls-remote failed (this machine's git login)
   ci_watch_invalid       remote, branches, poll, tier or max out of range
   compute_off            your "Allow compute nodes" switch is off
+  cache_trust_needs_person  adding a trusted branch is a person's (the
+                         owner or an Admin, from a terminal outside K2);
+                         you may only remove one
   A check "not submitted: ci_not_allowed" = the grant lacks --ci (use
   --tier standard, or ask for --ci); "not_granted" = no node granted.
   A run is skipped when its commit has no .k2/ci.toml.
+
+TRUSTED CACHE (nodes with cache generations; k2 study compute)
+  Every job on such a node starts from a copy of the last good build. Only
+  CI checks of a TRUSTED branch save the shared copy, and only when the
+  commit is verified on that branch: a watched push to it, or a k2 ci run
+  whose commit the remote's branch has (the daemon fetches it into
+  refs/k2-ci/<branch> to check; --ref alone is just a label). A check of
+  any other branch, a local commit, or any plain k2 compute run saves only
+  its own scratch copy. Trusted branches are server state, never read from
+  .k2/ci.toml (a PR could name its own branch there). The shared copy is
+  also pinned to the git remote a person's change saw (its URL after any
+  insteadOf): if the remote is repointed, checks save only scratch until a
+  person sets the branches again. Nothing is recorded until a person sets
+  them (or turns the watch on):
+    k2 ci cache trust                the list and the recorded remote
+    k2 ci cache trust --remove B     yours to do
+    k2 ci cache trust --add B        a person's (cache_trust_needs_person;
+                                     ask with the k2 permission request line)
 
 ALSO
   k2 ci freeze --until 3d --why "0.9 release": a release freeze (K2 moves

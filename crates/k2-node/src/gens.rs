@@ -638,6 +638,12 @@ struct Inflight {
     forks: std::collections::HashMap<PathBuf, u32>,
 }
 
+/// A generation picked to fork: its lineage, seq and record.
+pub type Source = (String, u64, GenRecord);
+/// [`Gens::pick`]: the source (none: cold), where it may save, and why it
+/// never saves when it may not.
+pub type Picked = (Option<Source>, Option<String>, Option<String>);
+
 /// What a fork asks for.
 pub struct ForkAsk<'a> {
     pub set: &'a SetId,
@@ -671,7 +677,7 @@ impl Gens {
     /// else `trusted`, and saves to `scratch/<ref>`; a secret job under its
     /// own uid (`none`) forks `trusted` and saves nothing. Release builds
     /// keep no lineage in this release (B3): cold, nothing saved.
-    pub fn pick(&self, set: &SetId, commit: k2_node_proto::gens::CacheCommit, cache_ref: Option<&str>) -> Result<(Option<(String, u64, GenRecord)>, Option<String>, Option<String>), String> {
+    pub fn pick(&self, set: &SetId, commit: k2_node_proto::gens::CacheCommit, cache_ref: Option<&str>) -> Result<Picked, String> {
         use k2_node_proto::gens::{check_plan_cache, CacheCommit, LINEAGE_SCRATCH, LINEAGE_TRUSTED};
         check_plan_cache(Some(commit), cache_ref)?;
         let gen_of = |l: &str| self.head_of(set, l).and_then(|(_, h)| h.gen.map(|g| (l.to_string(), h.seq, g)));

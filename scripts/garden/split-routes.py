@@ -82,6 +82,47 @@ const fn path_lt(a: &str, b: &str) -> bool {
 '''
 
 
+IMPORT = "use Floor::{Admin, Member, NoLogin, Owner, Public, VoiceChat};\n"
+
+
+def bare_uses(text):
+    """The floor names `text` uses without a path (`Member`, not `Floor::Member`)."""
+    # Code only: the Rust lexer of move-test-module.py marks every byte of
+    # a comment or a string literal (they may span lines).
+    import importlib.util
+    sys.dont_write_bytecode = True
+    spec = importlib.util.spec_from_file_location(
+        "move_test_module", os.path.join(os.path.dirname(os.path.abspath(__file__)), "move-test-module.py"))
+    lexer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lexer)
+    kinds = lexer.lex(text)
+    code = "".join(c if kinds[i] == 0 or c == "\n" else " " for i, c in enumerate(text))
+    return [f for f in FLOORS if re.search(r"(?<![:\w])%s\b" % f, code)]
+
+
+def fix_floor_import(src):
+    """With the rows gone, the file's own code may no longer use the short
+    floor names the table needed. Keep the import for what still uses it:
+    the names the code uses, and in the test module the names only the
+    tests use. An unused import fails the build under -D warnings."""
+    if src.count(IMPORT) != 1:
+        sys.exit("split-routes: the `use Floor::{...}` line is not as expected")
+    cut = src.index("\n#[cfg(test)]\nmod tests {\n")
+    lib, tests = src[:cut].replace(IMPORT, ""), src[cut:]
+    # The enum's own declaration names its variants; that is not a use.
+    lib = re.sub(r"(?s)\benum Floor \{.*?\n\}\n", "", lib, count=1)
+    in_lib = bare_uses(lib)
+    in_tests = [f for f in bare_uses(tests) if f not in in_lib]
+    src = src.replace(IMPORT + "\n", "use Floor::{%s};\n\n" % ", ".join(in_lib) if in_lib else "")
+    if in_tests:
+        anchor = "\n#[cfg(test)]\nmod tests {\n    use super::*;\n"
+        if src.count(anchor) != 1:
+            sys.exit("split-routes: the test module does not start with `use super::*;`")
+        one = "{%s}" % ", ".join(in_tests) if len(in_tests) > 1 else in_tests[0]
+        src = src.replace(anchor, anchor + "    use super::Floor::%s;\n" % one)
+    return src
+
+
 def main():
     flags = sys.argv[1:]
     if any(f != "--dry-run" for f in flags):
@@ -155,6 +196,7 @@ def main():
         "total": " + ".join("rows_%s::ROWS.len()" % a for a in names),
     }
     new_src = src[:start] + block + src[close + len("\n];\n"):]
+    new_src = fix_floor_import(new_src)
 
     for a in names:
         print("split-routes: %-8s %4d rows -> %s/%s.rs" % (a, count[a], OUT, a))

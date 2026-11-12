@@ -17,6 +17,11 @@ challenge_minutes = 15
 # phone. The Mac's K2 Release Approve key (mac-legacy) is credential host: it
 # keeps opening sessions only until a key that meets this is enrolled.
 require = biometric device
+# How the key must have been proven when it was pinned: App Attest's
+# environment, checked once at enrolment (k2sign-admin add-approver --attest).
+# production = an App Store or TestFlight build of the K2 phone app. A key
+# pinned on the fingerprint words alone is "none".
+require_attest = production
 # The biggest file the signer accepts on stdin (K2.app.tar.gz is ~300 MB).
 max_stdin_mb = 1024
 # What each key may sign ({version} is the release version). The Windows

@@ -35,6 +35,7 @@ Admin verbs (root):
   clear-compute-evidence <version>
   cancel-session <version> [--restore-last-version <x.y.z>]   (only a session that signed nothing)
   add-approver <name> <pem> --person P --check C --view V [--words "..."]
+  add-approver <name> --attest <phone enrolment bundle> --person P [--words "..."]   enrol-challenge
   remove-approver <name>    list-approvers
 
 Exit codes: 0 ok; 2 usage; 3 refused (one red line saying why); 4 internal.
@@ -91,12 +92,12 @@ POLICY_KEYS = {
     "compute_assets", "compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env",
     "compute_secret_env_optional", "compute_dual_names", "compute_receipt_max_hours",
     "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64",
-    "compute_aarch64_zig_sha256", "compute_aarch64_zigbuild_sha256", "require",
+    "compute_aarch64_zig_sha256", "compute_aarch64_zigbuild_sha256", "require", "require_attest",
 }
 # Policy keys a policy file older than them may leave out: the strictest value.
 # require: the check and view a release approval needs (prd-signed-approvals-v1
 # Question 1: the face or fingerprint, on the phone).
-POLICY_DEFAULTS = {"require": "biometric device"}
+POLICY_DEFAULTS = {"require": "biometric device", "require_attest": "production"}
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
 # K2 Screen.app, the remote desktop helper (prd-remote-desktop-tab-v1 D3):
@@ -536,6 +537,8 @@ def load_policy(ctx):
     if missing:
         raise Refused("policy: missing %s" % ", ".join(sorted(missing)))
     parse_require(pol["require"])
+    if pol["require_attest"] not in ("none", "development", "production"):
+        raise Refused("policy: require_attest must be none, development or production")
     if pol["approval"] not in ("on", "off"):
         raise Refused("policy: approval must be on or off")
     for k in ("session_hours", "challenge_minutes", "max_stdin_mb", "compute_receipt_max_hours"):
@@ -2367,9 +2370,12 @@ def load_approvers(ctx):
         if not line.strip() or line.startswith("#"):
             continue
         cols = line.split("\t")
-        if len(cols) != 4:
-            raise Refused("approvers.tsv line %d: want name, person, check, view (tab-separated)" % n)
-        name, person, check, view = cols
+        if len(cols) not in (4, 5):
+            raise Refused("approvers.tsv line %d: want name, person, check, view[, attest] (tab-separated)" % n)
+        name, person, check, view = cols[:4]
+        attest = cols[4] if len(cols) == 5 else "none"
+        if attest not in ("none",) + ENVS:
+            raise Refused("approvers.tsv line %d: attest is none, development or production" % n)
         if not APPROVER_NAME_RE.match(name) or name == LEGACY_NAME:
             raise Refused("approvers.tsv line %d: bad name %r" % (n, name))
         if not 1 <= len(person.encode("utf-8")) <= 128 or any(sa1_forbidden(ord(c)) for c in person):
@@ -2381,7 +2387,8 @@ def load_approvers(ctx):
         kid = hashlib.sha256(der).hexdigest()
         if any(a["name"] == name or a["key_id"] == kid for a in out):
             raise Refused("approvers.tsv line %d: %s (or its key) is listed twice" % (n, name))
-        out.append({"name": name, "person": person, "check": check, "view": view, "pem": pem, "key_id": kid})
+        out.append({"name": name, "person": person, "check": check, "view": view, "attest": attest, "pem": pem,
+                    "key_id": kid})
     return out
 
 
@@ -2390,9 +2397,11 @@ def release_require(pol):
 
 
 def sa1_approvers(ctx, pol):
-    """The enrolled approver keys that meet the policy's require line."""
+    """The enrolled approver keys that meet the policy's require and
+    require_attest lines (releases: an App Attest production key)."""
     req = release_require(pol)
-    return [a for a in load_approvers(ctx) if meets(a["check"], a["view"], req)]
+    return [a for a in load_approvers(ctx)
+            if meets(a["check"], a["view"], req) and env_rank(a["attest"]) >= env_rank(pol["require_attest"])]
 
 
 def legacy_open(ctx, pol):
@@ -2433,8 +2442,8 @@ def sa1_payload(ctx, pol, keys, version, base, assets, windows, reapprove, repla
 
 def sa1_check(ctx, approvers, r, stored, need, d):
     """The relying party's check (PRD §7, contract §9) in its order. need:
-    rp, kind, nonce (None skips one), check and view (the weakest accepted),
-    now. stored: the bytes this relying party kept (None: the record's own).
+    rp, kind, nonce (None skips one), check, view and attest (the weakest
+    accepted; attest None or "none" takes any key), now. stored: the bytes this relying party kept (None: the record's own).
     Returns (payload, approver)."""
     if stored is not None and r["payload"] != stored:
         raise Sa1Refused("payload_mismatch", "the record's bytes are not the ones issued for this request")
@@ -2465,6 +2474,9 @@ def sa1_check(ctx, approvers, r, stored, need, d):
         raise Sa1Refused("weak_check", "key %s is a %s key; %s is required" % (k["name"], k["check"], need["check"]))
     if VIEWS.index(k["view"]) < VIEWS.index(need["view"]):
         raise Sa1Refused("weak_view", "key %s has view %s; %s is required" % (k["name"], k["view"], need["view"]))
+    if env_rank(k.get("attest")) < env_rank(need.get("attest")):
+        raise Sa1Refused("not_attested", "key %s was attested as %s; %s is required"
+                         % (k["name"], k.get("attest") or "none", need.get("attest") or "none"))
     if p["issued_at"] > need["now"] + SA1_ISSUED_SKEW:
         raise Sa1Refused("issued_future", "issued %s is ahead of this clock" % p["issued"])
     if need["now"] > p["answer_by_at"]:
@@ -2478,8 +2490,303 @@ def sa1_verify(ctx, pol, r, stored, nonce, d):
     """k2sign's own check: its keys, its name, k2.release, the policy's
     require line, its clock, the challenge's nonce, the bytes it kept."""
     req = release_require(pol)
-    need = {"rp": rp_name(), "kind": "k2.release", "check": req[0], "view": req[1], "now": ctx.now(), "nonce": nonce}
+    need = {"rp": rp_name(), "kind": "k2.release", "check": req[0], "view": req[1], "attest": pol["require_attest"],
+            "now": ctx.now(), "nonce": nonce}
     return sa1_check(ctx, load_approvers(ctx), r, stored, need, d)
+
+
+# ── App Attest at enrolment (prd-signed-approvals-v1 SA-7; the S0 result) ──
+#
+# The same check as crates/k2-approve/src/attest.rs, once, when a phone's
+# keys are pinned (the leaf certificate lasts three days; the result is
+# stored in approvers.tsv's attest column and never re-checked).
+
+K2_PHONE_APP_ID = "36B8R93HXV.com.alakazamlabs.k2so.companion"
+ENROL_PREFIX = b"K2-APPROVER-ENROL-1\x00"
+ENROL_CHALLENGE_HOURS = 24
+ENVS = ("development", "production")  # weakest first; "none" is below both
+# Apple App Attestation Root CA (crates/k2-approve/fixtures/sa1/apple-app-attest-root.pem;
+# a test keeps the two equal). SHA-256 of its DER: 1cb9823b...6242c932.
+APPLE_APP_ATTEST_ROOT = """-----BEGIN CERTIFICATE-----
+MIICITCCAaegAwIBAgIQC/O+DvHN0uD7jG5yH2IXmDAKBggqhkjOPQQDAzBSMSYw
+JAYDVQQDDB1BcHBsZSBBcHAgQXR0ZXN0YXRpb24gUm9vdCBDQTETMBEGA1UECgwK
+QXBwbGUgSW5jLjETMBEGA1UECAwKQ2FsaWZvcm5pYTAeFw0yMDAzMTgxODMyNTNa
+Fw00NTAzMTUwMDAwMDBaMFIxJjAkBgNVBAMMHUFwcGxlIEFwcCBBdHRlc3RhdGlv
+biBSb290IENBMRMwEQYDVQQKDApBcHBsZSBJbmMuMRMwEQYDVQQIDApDYWxpZm9y
+bmlhMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAERTHhmLW07ATaFQIEVwTtT4dyctdh
+NbJhFs/Ii2FdCgAHGbpphY3+d8qjuDngIN3WVhQUBHAoMeQ/cLiP1sOUtgjqK9au
+Yen1mMEvRq9Sk3Jm5X8U62H+xTD3FE9TgS41o0IwQDAPBgNVHRMBAf8EBTADAQH/
+MB0GA1UdDgQWBBSskRBTM72+aEH/pwyp5frq5eWKoTAOBgNVHQ8BAf8EBAMCAQYw
+CgYIKoZIzj0EAwMDaAAwZQIwQgFGnByvsiVbpTKwSga0kP0e8EeDS4+sQmTvb7vn
+53O5+FRXgeLhpJ06ysC5PrOyAjEAp5U4xDgEgllF7En3VcE3iexZZtKeYnpqtijV
+oyFraWVIyd/dganmrduC1bmTBGwD
+-----END CERTIFICATE-----
+"""
+APPLE_APP_ATTEST_ROOT_SHA256 = "1cb9823ba28ba6ad2d33a006941de2ae4f513ef1d4e831b9f7e0fa7b6242c932"
+OID_AA_NONCE = bytes.fromhex("2a864886f763640802")
+OID_ECDSA_SHA256 = bytes.fromhex("2a8648ce3d040302")
+OID_ECDSA_SHA384 = bytes.fromhex("2a8648ce3d040303")
+OID_P256 = bytes.fromhex("2a8648ce3d030107")
+
+
+def env_rank(e):
+    return -1 if e in (None, "none") else ENVS.index(e)
+
+
+def aa_cbor(b, i=0, depth=0):
+    if depth > 8:
+        raise Refused("attestation: CBOR nested too deep")
+    if i >= len(b):
+        raise Refused("attestation: CBOR cut short")
+    ib = b[i]
+    mt, ai = ib >> 5, ib & 31
+    i += 1
+    if ai < 24:
+        n = ai
+    elif ai <= 27:
+        ln = 1 << (ai - 24)
+        if i + ln > len(b):
+            raise Refused("attestation: CBOR cut short")
+        n = int.from_bytes(b[i:i + ln], "big")
+        i += ln
+    else:
+        raise Refused("attestation: indefinite CBOR lengths are not read")
+    if mt == 0:
+        return n, i
+    if mt in (2, 3):
+        if i + n > len(b):
+            raise Refused("attestation: CBOR cut short")
+        v = b[i:i + n]
+        return (v if mt == 2 else v.decode("utf-8")), i + n
+    if mt in (4, 5):
+        if n > 64:
+            raise Refused("attestation: CBOR too long")
+        if mt == 4:
+            out = []
+            for _ in range(n):
+                x, i = aa_cbor(b, i, depth + 1)
+                out.append(x)
+            return out, i
+        out = {}
+        for _ in range(n):
+            k, i = aa_cbor(b, i, depth + 1)
+            x, i = aa_cbor(b, i, depth + 1)
+            out[k] = x
+        return out, i
+    raise Refused("attestation: a CBOR type it never holds")
+
+
+def aa_der(b, i):
+    """(tag, contents, whole element, next index)."""
+    if i + 2 > len(b):
+        raise Refused("certificate: DER cut short")
+    start, tag, first = i, b[i], b[i + 1]
+    i += 2
+    if first < 0x80:
+        ln = first
+    else:
+        nb = first & 0x7F
+        if nb == 0 or nb > 3 or i + nb > len(b):
+            raise Refused("certificate: DER length")
+        ln = int.from_bytes(b[i:i + nb], "big")
+        i += nb
+    if i + ln > len(b):
+        raise Refused("certificate: DER cut short")
+    return tag, b[i:i + ln], b[start:i + ln], i + ln
+
+
+def aa_der_all(b):
+    out, i = [], 0
+    while i < len(b):
+        t, v, w, i = aa_der(b, i)
+        out.append((t, v, w))
+    return out
+
+
+def aa_time(tag, v):
+    s = v.decode("ascii")
+    if tag == 0x17 and len(s) == 13:
+        s = ("20" if int(s[:2]) < 50 else "19") + s
+    elif not (tag == 0x18 and len(s) == 15):
+        raise Refused("certificate: time format")
+    if not s.endswith("Z"):
+        raise Refused("certificate: time is not UTC")
+    return calendar.timegm(time.strptime(s, "%Y%m%d%H%M%SZ"))
+
+
+def aa_cert(b):
+    items = aa_der_all(b)
+    if len(items) != 1 or items[0][0] != 0x30:
+        raise Refused("certificate: not one DER certificate")
+    tbs_t, tbs_body, tbs, alg, sigbits = None, None, None, None, None
+    parts = aa_der_all(items[0][1])
+    if len(parts) != 3 or parts[0][0] != 0x30 or parts[2][0] != 0x03 or parts[2][1][:1] != b"\x00":
+        raise Refused("certificate: shape")
+    tbs_body, tbs = parts[0][1], parts[0][2]
+    alg = aa_der_all(parts[1][1])[0][1]
+    sig = parts[2][1][1:]
+    f = aa_der_all(tbs_body)
+    off = 1 if f[0][0] == 0xA0 else 0
+    validity = aa_der_all(f[off + 3][1])
+    spki_parts = aa_der_all(f[off + 5][1])
+    curve = aa_der_all(spki_parts[0][1])[1][1]
+    bits = spki_parts[1][1]
+    if spki_parts[1][0] != 0x03 or bits[:2] != b"\x00\x04":
+        raise Refused("certificate: the key is not an uncompressed EC point")
+    exts = {}
+    for t, v, _ in f[off + 6:]:
+        if t != 0xA3:
+            continue
+        for _, one, _ in aa_der_all(aa_der_all(v)[0][1]):
+            e = aa_der_all(one)
+            exts[e[0][1]] = e[-1][1]
+    return {"tbs": tbs, "alg": alg, "sig": sig, "spki": f[off + 5][2], "curve": curve, "point": bits[1:],
+            "not_before": aa_time(validity[0][0], validity[0][1]), "not_after": aa_time(validity[1][0], validity[1][1]),
+            "exts": exts}
+
+
+def aa_signed_by(ctx, child, parent, d, name):
+    digest = {OID_ECDSA_SHA256: "-sha256", OID_ECDSA_SHA384: "-sha384"}.get(child["alg"])
+    if digest is None:
+        raise Refused("attestation: the %s's signature algorithm is not ECDSA SHA-256/384" % name)
+    pub, tbs, sig = (os.path.join(d, "%s.%s" % (name, x)) for x in ("pub.pem", "tbs.der", "sig.der"))
+    write_file(ctx, pub, pem_of_spki(parent["spki"]))
+    write_file(ctx, tbs, child["tbs"])
+    write_file(ctx, sig, child["sig"])
+    rc, out, err = run([OPENSSL, "dgst", digest, "-verify", pub, "-signature", sig, tbs])
+    if not (rc == 0 and out.strip() == b"Verified OK"):
+        raise Refused("attestation: the %s certificate's signature does not verify" % name)
+
+
+def verify_app_attest(ctx, attestation, client_data, key_id_b64, app_id, now, d):
+    """Returns {"environment", "verified_at", "leaf_not_after"}; raises Refused."""
+    try:
+        key_id = base64.b64decode(key_id_b64, validate=True)
+    except Exception:
+        raise Refused("the App Attest key id is not base64")
+    if len(key_id) != 32:
+        raise Refused("the App Attest key id is not 32 bytes")
+    try:
+        top, end = aa_cbor(attestation)
+    except (UnicodeDecodeError, IndexError):
+        raise Refused("attestation: not CBOR")
+    if end != len(attestation) or not isinstance(top, dict):
+        raise Refused("attestation: not one CBOR map")
+    if top.get("fmt") != "apple-appattest":
+        raise Refused("attestation: fmt is not apple-appattest")
+    auth, stmt = top.get("authData"), top.get("attStmt")
+    if not isinstance(auth, bytes) or not isinstance(stmt, dict) or not isinstance(stmt.get("x5c"), list):
+        raise Refused("attestation: no authData or x5c")
+    x5c = stmt["x5c"]
+    if len(x5c) != 2 or not all(isinstance(c, bytes) for c in x5c):
+        raise Refused("attestation: x5c must be the leaf and Apple's intermediate")
+    m = re.search(r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----", APPLE_APP_ATTEST_ROOT, re.S)
+    root_der = base64.b64decode("".join(m.group(1).split()))
+    if hashlib.sha256(root_der).hexdigest() != APPLE_APP_ATTEST_ROOT_SHA256:
+        raise Refused("internal: the pinned Apple root does not match its hash")
+    try:
+        root, leaf, inter = aa_cert(root_der), aa_cert(x5c[0]), aa_cert(x5c[1])
+    except (IndexError, ValueError, UnicodeDecodeError):
+        raise Refused("attestation: a certificate is malformed")
+    aa_signed_by(ctx, inter, root, d, "intermediate")
+    aa_signed_by(ctx, leaf, inter, d, "leaf")
+    for name, c in (("root", root), ("intermediate", inter), ("leaf", leaf)):
+        if not c["not_before"] <= now <= c["not_after"]:
+            raise Refused("attestation: the %s certificate is not valid now (the leaf lasts 3 days: attest again)" % name)
+    if leaf["curve"] != OID_P256 or len(leaf["point"]) != 65:
+        raise Refused("attestation: the leaf key is not P-256")
+    ext = leaf["exts"].get(OID_AA_NONCE)
+    if ext is None:
+        raise Refused("attestation: no nonce extension")
+    try:
+        seq = aa_der_all(ext)[0][1]
+        tagged = aa_der_all(seq)[0]
+        inner = aa_der_all(tagged[1])[0]
+    except (IndexError, Refused):
+        raise Refused("attestation: the nonce extension is malformed")
+    if tagged[0] != 0xA1 or inner[0] != 0x04 or len(inner[1]) != 32:
+        raise Refused("attestation: the nonce extension is malformed")
+    if inner[1] != hashlib.sha256(auth + hashlib.sha256(client_data).digest()).digest():
+        raise Refused("attestation: the nonce is not SHA-256(authData || SHA-256(clientData)): it was made for other data")
+    if hashlib.sha256(leaf["point"]).digest() != key_id:
+        raise Refused("attestation: the leaf's key is not the App Attest key named")
+    if len(auth) < 87:
+        raise Refused("attestation: authData is too short")
+    if auth[:32] != hashlib.sha256(app_id.encode()).digest():
+        raise Refused("attestation: rpIdHash is not SHA-256(%s): another app made it" % app_id)
+    if auth[33:37] != b"\x00\x00\x00\x00":
+        raise Refused("attestation: signCount is not 0")
+    aaguid = auth[37:53]
+    if aaguid == b"appattestdevelop":
+        env = "development"
+    elif aaguid == b"appattest" + b"\x00" * 7:
+        env = "production"
+    else:
+        raise Refused("attestation: unknown AAGUID")
+    if int.from_bytes(auth[53:55], "big") != 32 or auth[55:87] != key_id:
+        raise Refused("attestation: credentialId is not the App Attest key id")
+    return {"environment": env, "verified_at": now, "leaf_not_after": leaf["not_after"]}
+
+
+def parse_enrol_client_data(cd):
+    if not cd.startswith(ENROL_PREFIX):
+        raise Refused("enrolment data does not start with K2-APPROVER-ENROL-1 and a zero byte")
+    rest = cd[len(ENROL_PREFIX):]
+    if len(rest) != 32 + 91 + 91:
+        raise Refused("enrolment data must be the 32-byte challenge and two P-256 public keys")
+    bio, pas = rest[32:123], rest[123:]
+    for name, k in (("biometric", bio), ("passcode", pas)):
+        try:
+            p256_spki(k)
+        except Refused:
+            raise Refused("enrolment data: the %s key is not a P-256 public key" % name)
+    if bio == pas:
+        raise Refused("enrolment data: the two keys are the same key")
+    return rest[:32], bio, pas
+
+
+def enrol_dir(ctx):
+    return os.path.join(ctx.state, "enrol-challenges")
+
+
+def admin_enrol_challenge(ctx, args):
+    """A fresh 32-byte challenge for a phone's enrolment (single use)."""
+    if args:
+        raise Usage("enrol-challenge")
+    check_pins(ctx)
+    c = secrets.token_bytes(32)
+    mkdirs(ctx, enrol_dir(ctx))
+    write_file(ctx, os.path.join(enrol_dir(ctx), c.hex() + ".json"), json.dumps({"issued": ctx.now(), "used": False}))
+    print(c.hex())
+    say("give this challenge to the phone's enrol screen; it is good for %d hours, once" % ENROL_CHALLENGE_HOURS)
+
+
+def take_enrol_challenge(ctx, challenge):
+    path = os.path.join(enrol_dir(ctx), challenge.hex() + ".json")
+    if not os.path.isfile(path):
+        raise Refused("the enrolment's challenge is not one k2sign-admin enrol-challenge issued")
+    rec = read_json(path)
+    if rec["used"]:
+        raise Refused("the enrolment's challenge was already used")
+    if ctx.now() > rec["issued"] + ENROL_CHALLENGE_HOURS * 3600:
+        raise Refused("the enrolment's challenge expired (k2sign-admin enrol-challenge for a new one)")
+    rec["used"] = True
+    write_file(ctx, path, json.dumps(rec))
+
+
+def read_enrol_bundle(path):
+    """The phone's enrolment bundle: {attest_key_id, client_data_b64, attestation_b64}."""
+    if not os.path.isabs(path):
+        raise Usage("--attest needs an absolute path (the wrapper runs from /)")
+    raw = open(path, "rb").read(65537)
+    if len(raw) > 65536:
+        raise Refused("%s is too large for an enrolment bundle" % path)
+    try:
+        b = json.loads(raw)
+        return (b["attest_key_id"], base64.b64decode(b["client_data_b64"], validate=True),
+                base64.b64decode(b["attestation_b64"], validate=True))
+    except (ValueError, KeyError, TypeError):
+        raise Refused("%s is not an enrolment bundle (attest_key_id, client_data_b64, attestation_b64)" % path)
 
 
 def verb_challenge(ctx, args):
@@ -2501,8 +2808,9 @@ def verb_challenge(ctx, args):
     if fmt == "sa1":
         keys = sa1_approvers(ctx, pol)
         if not keys:
-            raise Refused("no enrolled approver key meets the policy (require = %s): enrol one with "
-                          "k2sign-admin add-approver (k2sign-admin list-approvers shows them)" % pol["require"])
+            raise Refused("no enrolled approver key meets the policy (require = %s, require_attest = %s): enrol one "
+                          "with k2sign-admin add-approver (k2sign-admin list-approvers shows them)"
+                          % (pol["require"], pol["require_attest"]))
     else:
         if not os.path.isfile(os.path.join(ctx.etc, "approver.pem")):
             raise Refused("no approver key enrolled (k2sign-admin set-approver)")
@@ -2742,7 +3050,8 @@ def verb_status(ctx, args):
     # Which approvals can open a session now (sign-approve.sh starts each):
     # sa1 = the signed-approval keys that meet require; legacy = the Mac's
     # K2 Release Approve key (until a key that meets require is enrolled).
-    out["approvers"] = {"require": pol["require"], "sa1": [a["name"] for a in sa1_approvers(ctx, pol)],
+    out["approvers"] = {"require": pol["require"], "require_attest": pol["require_attest"],
+                        "sa1": [a["name"] for a in sa1_approvers(ctx, pol)],
                         "legacy": legacy_open(ctx, pol)}
     cpath = compute_state_path(ctx, version)
     out["compute"] = read_json(cpath)["summary"] if os.path.exists(cpath) else None
@@ -2870,13 +3179,39 @@ def approver_lines(ctx):
     return [l for l in open(tsv, encoding="utf-8").read().split("\n") if l.strip() and not l.startswith("#")]
 
 
+def add_approver_rows(ctx, rows):
+    """rows: (name, person, check, view, attest, spki der). Checks names and
+    keys against the set, writes the PEMs and approvers.tsv, repins."""
+    have = load_approvers(ctx)
+    for name, _, _, _, _, der in rows:
+        kid = hashlib.sha256(der).hexdigest()
+        for a in have:
+            if a["name"] == name:
+                raise Refused("there is already an approver named %s (remove-approver first)" % name)
+            if a["key_id"] == kid:
+                raise Refused("this key is already approver %s" % a["name"])
+    d = approvers_dir(ctx)
+    if not os.path.isdir(d):
+        os.mkdir(d, 0o755)
+    os.chmod(d, 0o755)
+    lines = approver_lines(ctx)
+    for name, person, check, view, attest, der in rows:
+        write_etc_file(os.path.join(d, name + ".pem"), pem_of_spki(der).encode())
+        cols = (name, person, check, view) + ((attest,) if attest != "none" else ())
+        lines.append("\t".join(cols))
+    write_etc_file(os.path.join(d, "approvers.tsv"), (TSV_HEADER + "\n".join(lines) + "\n").encode("utf-8"))
+    repin(ctx)
+
+
 def admin_add_approver(ctx, args):
     usage = ("add-approver <name> </absolute/key.pem> --person <who> --check biometric|credential "
-             "--view device|host|page [--words \"<the six words the device shows>\"]")
+             "--view device|host|page [--words \"<six words>\"]\n"
+             "       add-approver <name> --attest </absolute/enrolment.json> --person <who> [--words \"<six words>\"]\n"
+             "       (the phone's enrolment, checked with App Attest: adds <name>-bio and <name>-passcode)")
     opts, pos, i = {}, [], 0
     while i < len(args):
         a = args[i]
-        if a in ("--person", "--check", "--view", "--words"):
+        if a in ("--person", "--check", "--view", "--words", "--attest"):
             if i + 1 >= len(args) or a[2:] in opts:
                 raise Usage(usage)
             opts[a[2:]] = args[i + 1]
@@ -2886,60 +3221,77 @@ def admin_add_approver(ctx, args):
         else:
             pos.append(a)
             i += 1
-    if len(pos) != 2 or not {"person", "check", "view"} <= set(opts):
+    attested = "attest" in opts
+    if attested:
+        if len(pos) != 1 or "person" not in opts or "check" in opts or "view" in opts:
+            raise Usage(usage)
+    elif len(pos) != 2 or not {"person", "check", "view"} <= set(opts):
         raise Usage(usage)
-    name, src = pos
-    if not APPROVER_NAME_RE.match(name) or name == LEGACY_NAME:
+    name = pos[0]
+    if not APPROVER_NAME_RE.match(name) or name == LEGACY_NAME or (attested and len(name) > 50):
         raise Usage("the name is lowercase letters, digits, '.', '_' and '-' (%s is the Mac's set-approver key)"
                     % LEGACY_NAME)
-    if not os.path.isabs(src):
-        raise Usage("add-approver needs an absolute path to the key (the wrapper runs from /)")
-    person, check, view = opts["person"], opts["check"], opts["view"]
-    if check not in CHECKS or view not in VIEWS:
-        raise Usage("--check is %s; --view is %s" % (" or ".join(CHECKS), ", ".join(VIEWS)))
+    person = opts["person"]
     if (not 1 <= len(person.encode("utf-8")) <= 128 or "\t" in person
             or any(sa1_forbidden(ord(c)) for c in person)):
         raise Usage("--person is the name the device shows (1 to 128 bytes, no tabs or hidden characters)")
     check_pins(ctx)
-    data = open(src, "rb").read(4097)
-    try:
-        if len(data) > 4096:
-            raise Refused("too long")
-        der = spki_from_pem(data.decode("ascii"))
-    except (UnicodeDecodeError, Refused):
-        raise Refused("%s is not a P-256 public key (PEM): only P-256 (ES256) keys can approve releases for now" % src)
-    kid = hashlib.sha256(der).hexdigest()
-    words = key_words(kid)
-    if "words" in opts and " ".join(opts["words"].lower().split()) != words:
-        raise Refused("the words you typed (%s) are not this key's (%s): this is not the key the device made; "
-                      "nothing was added" % (" ".join(opts["words"].split()), words))
-    for a in load_approvers(ctx):
-        if a["name"] == name:
-            raise Refused("there is already an approver named %s (remove-approver first)" % name)
-        if a["key_id"] == kid:
-            raise Refused("this key is already approver %s" % a["name"])
-    d = approvers_dir(ctx)
-    if not os.path.isdir(d):
-        os.mkdir(d, 0o755)
-    os.chmod(d, 0o755)
-    write_etc_file(os.path.join(d, name + ".pem"), pem_of_spki(der).encode())
-    lines = approver_lines(ctx) + ["\t".join((name, person, check, view))]
-    write_etc_file(os.path.join(d, "approvers.tsv"), (TSV_HEADER + "\n".join(lines) + "\n").encode("utf-8"))
-    repin(ctx)
-    pol = load_policy(ctx)
-    ok = meets(check, view, release_require(pol))
-    print("approver %s added: %s, check %s, view %s" % (name, person, check, view))
-    print("key id: %s" % kid)
-    print("words:  %s" % words)
-    if ok:
-        say("releases: this key can approve them (policy require = %s)%s" % (
-            pol["require"], "" if meets(LEGACY_CHECK, LEGACY_VIEW, release_require(pol))
-            else "; the Mac's K2 Release Approve key no longer can"))
+    if attested:
+        key_id, cd, att = read_enrol_bundle(opts["attest"])
+        challenge, bio, pas = parse_enrol_client_data(cd)
+        with Scratch(ctx) as d:
+            res = verify_app_attest(ctx, att, cd, key_id, K2_PHONE_APP_ID, ctx.now(), d)
+        bio_id = hashlib.sha256(bio).hexdigest()
+        if "words" in opts and " ".join(opts["words"].lower().split()) != key_words(bio_id):
+            raise Refused("the words you typed (%s) are not the phone's Face ID key's (%s): nothing was added"
+                          % (" ".join(opts["words"].split()), key_words(bio_id)))
+        with Locked(ctx):
+            take_enrol_challenge(ctx, challenge)
+        env = res["environment"]
+        rows = [(name + "-bio", person, "biometric", "device", env, bio),
+                (name + "-passcode", person, "credential", "device", env, pas)]
+        add_approver_rows(ctx, rows)
+        print("phone enrolment checked with App Attest: %s (verified %s; Apple's leaf ended %s, it is not "
+              "checked again)" % (env, iso(res["verified_at"]), iso(res["leaf_not_after"])))
+        for n, _, c, v, _, der in rows:
+            kid = hashlib.sha256(der).hexdigest()
+            print("approver %s added: %s, check %s, view %s, attest %s" % (n, person, c, v, env))
+            print("  key id: %s" % kid)
+            print("  words:  %s" % key_words(kid))
     else:
-        say("releases: this key can NOT approve them (policy require = %s)" % pol["require"])
-    if "words" not in opts:
-        say("compare the six words with the device's enrol screen; if they differ, remove it now: "
-            "sudo /usr/local/libexec/k2sign/k2sign-admin remove-approver %s" % name)
+        src = pos[1]
+        check, view = opts["check"], opts["view"]
+        if check not in CHECKS or view not in VIEWS:
+            raise Usage("--check is %s; --view is %s" % (" or ".join(CHECKS), ", ".join(VIEWS)))
+        if not os.path.isabs(src):
+            raise Usage("add-approver needs an absolute path to the key (the wrapper runs from /)")
+        data = open(src, "rb").read(4097)
+        try:
+            if len(data) > 4096:
+                raise Refused("too long")
+            der = spki_from_pem(data.decode("ascii"))
+        except (UnicodeDecodeError, Refused):
+            raise Refused("%s is not a P-256 public key (PEM): only P-256 (ES256) keys can approve releases for now"
+                          % src)
+        kid = hashlib.sha256(der).hexdigest()
+        words = key_words(kid)
+        if "words" in opts and " ".join(opts["words"].lower().split()) != words:
+            raise Refused("the words you typed (%s) are not this key's (%s): this is not the key the device made; "
+                          "nothing was added" % (" ".join(opts["words"].split()), words))
+        add_approver_rows(ctx, [(name, person, check, view, "none", der)])
+        print("approver %s added: %s, check %s, view %s, attest none" % (name, person, check, view))
+        print("key id: %s" % kid)
+        print("words:  %s" % words)
+        if "words" not in opts:
+            say("compare the six words with the device's enrol screen; if they differ, remove it now: "
+                "sudo /usr/local/libexec/k2sign/k2sign-admin remove-approver %s" % name)
+    pol = load_policy(ctx)
+    ok = [a["name"] for a in sa1_approvers(ctx, pol)]
+    say("releases (require = %s, require_attest = %s): %s%s" % (
+        pol["require"], pol["require_attest"],
+        ("approved by " + ", ".join(ok)) if ok else "no key approves them yet",
+        "" if not ok or meets(LEGACY_CHECK, LEGACY_VIEW, release_require(pol))
+        else "; the Mac's K2 Release Approve key no longer can"))
 
 
 def admin_remove_approver(ctx, args):
@@ -2964,12 +3316,13 @@ def admin_list_approvers(ctx, args):
     check_pins(ctx)
     pol = load_policy(ctx)
     req = release_require(pol)
-    print("policy: require = %s" % pol["require"])
+    print("policy: require = %s; require_attest = %s" % (pol["require"], pol["require_attest"]))
     rows = load_approvers(ctx)
     for a in rows:
-        print("%s\t%s\t%s %s\t%s\t%s\t%s" % (a["name"], a["person"], a["check"], a["view"],
-                                             "approves releases" if meets(a["check"], a["view"], req) else "not for releases",
-                                             a["key_id"], key_words(a["key_id"])))
+        ok = meets(a["check"], a["view"], req) and env_rank(a["attest"]) >= env_rank(pol["require_attest"])
+        print("%s\t%s\t%s %s\t%s\t%s\t%s\t%s" % (a["name"], a["person"], a["check"], a["view"], "attest " + a["attest"],
+                                                 "approves releases" if ok else "not for releases",
+                                                 a["key_id"], key_words(a["key_id"])))
     lp = os.path.join(ctx.etc, "approver.pem")
     if os.path.isfile(lp):
         kid = hashlib.sha256(spki_from_pem(open(lp).read())).hexdigest()
@@ -3467,7 +3820,8 @@ ADMIN_VERBS = {"set-approver": admin_set_approver, "repin": admin_repin, "approv
                "pin-compute-controller": admin_pin_compute_controller, "pin-compute-node": admin_pin_compute_node,
                "unpin-compute-node": admin_unpin_compute_node, "clear-compute-evidence": admin_clear_compute_evidence,
                "cancel-session": admin_cancel_session, "add-approver": admin_add_approver,
-               "remove-approver": admin_remove_approver, "list-approvers": admin_list_approvers}
+               "remove-approver": admin_remove_approver, "list-approvers": admin_list_approvers,
+               "enrol-challenge": admin_enrol_challenge}
 
 
 def main(argv):

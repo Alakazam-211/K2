@@ -14,7 +14,7 @@ FIX="$REPO/crates/k2-approve/fixtures/sa1"
 
 echo "== A. the shared fixtures, read by k2sign =="
 if python3 -I - "$TREE/scripts/k2sign/k2sign.py" "$FIX" > "$tmp/a.out" 2>&1 <<'PY'
-import importlib.util, json, os, shutil, sys, tempfile, types
+import hashlib, importlib.util, json, os, shutil, sys, tempfile, types
 src, fix = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("k2sign_under_test", src)
 k = importlib.util.module_from_spec(spec)
@@ -78,19 +78,46 @@ for c in cases:
             continue
         stored = open(os.path.join(fix, c["stored_payload"]), "rb").read() if c["stored_payload"] else None
         q = c["require"]
-        need = {"rp": q["rp"], "kind": q["kind"], "check": q["check"], "view": q["view"],
+        need = {"rp": q["rp"], "kind": q["kind"], "check": q["check"], "view": q["view"], "attest": q["attest"],
                 "now": k.sa1_utc(q["now"]), "nonce": q["nonce"]}
         p, a = k.sa1_check(ctx, approvers, r, stored, need, scratch)
         got = "nonce_used" if p["nonce"] in c["used_nonces"] else "ok"
         if got == "ok":
             e = c["expect"]
-            want((a["name"], a["person"], a["key_id"], a["check"], a["view"])
-                 == (e["key_name"], e["person"], e["key_id"], e["check"], e["view"]), "%s: the key" % c["name"])
+            want((a["name"], a["person"], a["key_id"], a["check"], a["view"], None if a["attest"] == "none" else a["attest"])
+                 == (e["key_name"], e["person"], e["key_id"], e["check"], e["view"], e["attest"]), "%s: the key" % c["name"])
     except k.Sa1Refused as e:
         got = e.code
     want(got == want_v, "case %s: got %s, want %s" % (c["name"], got, want_v))
 want(skipped == ["ok-rs256-host-when-allowed"], "skipped %r" % skipped)
 want(len(cases) - len(skipped) >= 30, "too few cases")
+
+# The S0 iPhone's App Attest attestation (real-device fixtures).
+import base64
+want(open(os.path.join(fix, "apple-app-attest-root.pem")).read() == k.APPLE_APP_ATTEST_ROOT, "the pinned Apple root differs")
+exp = json.load(open(os.path.join(fix, "real-device", "expect.json")))["attest"]
+s0 = json.load(open(os.path.join(fix, "real-device", "s0-attest.json")))
+att, cd = base64.b64decode(s0["attestation_b64"]), base64.b64decode(s0["client_data_b64"])
+r = k.verify_app_attest(ctx, att, cd, s0["attest_key_id"], exp["app_id"], k.sa1_utc(exp["check_at"]), scratch)
+want(r["environment"] == exp["environment"] and r["leaf_not_after"] == k.sa1_utc(exp["leaf_not_after"]), "S0 attest %r" % r)
+for what, args in (("leaf expired", (att, cd, s0["attest_key_id"], exp["app_id"], k.sa1_utc(exp["refused_at"]))),
+                   ("other app", (att, cd, s0["attest_key_id"], "36B8R93HXV.com.example.other", k.sa1_utc(exp["check_at"]))),
+                   ("other data", (att, cd[:-1] + bytes([cd[-1] ^ 1]), s0["attest_key_id"], exp["app_id"], k.sa1_utc(exp["check_at"]))),
+                   ("other key id", (att, cd, "A" * 43 + "=", exp["app_id"], k.sa1_utc(exp["check_at"])))):
+    try:
+        k.verify_app_attest(ctx, *args, scratch)
+        want(False, "S0 attest with %s was accepted" % what)
+    except k.Refused:
+        want(True, what)
+try:
+    k.parse_enrol_client_data(cd)
+    want(False, "the spike clientData passed as an enrolment")
+except k.Refused as e:
+    want("K2-APPROVER-ENROL-1" in str(e), str(e))
+ch = bytes(range(32))
+c2, bio, pas = k.parse_enrol_client_data(k.ENROL_PREFIX + ch + cd)
+want((c2, bio, pas) == (ch, cd[:91], cd[91:]), "the enrolment form splits")
+want(hashlib.sha256(bio).hexdigest() == s0["biometric_key_id"], "biometric key id")
 print("%d checks, %d failed" % (n, len(bad)))
 for b in bad:
     print("  " + b)
@@ -102,6 +129,12 @@ echo "== B. k2sign as the relying party =="
 ready
 NOW="$(date +%s)"
 export K2SIGN_TEST_NOW="$NOW"
+POL="$TROOT/usr/local/etc/k2sign/policy"
+grep -qx "require_attest = production" "$POL" && pass "the installed policy needs a production-attested key for releases" || fail "require_attest" "$(cat "$POL")"
+check "status: require_attest production, nothing approves but the Mac" 0 '"require_attest": "production", "sa1": []' "$K" status 0.46.20
+# These tests pin openssl keys (no App Attest): the policy takes unattested keys.
+sed -i '' 's/^require_attest = production$/require_attest = none/' "$POL"
+"$ADM" repin >/dev/null 2>&1
 ASSETS=(K2.app.tar.gz k2-daemon-linux-x86_64)
 for n in phone-bio phone-cred other-person rogue; do
     /usr/bin/openssl ecparam -name prime256v1 -genkey -noout -out "$tmp/keys/$n.key" 2>/dev/null
@@ -134,7 +167,7 @@ d = json.loads(b[len(p):]); v = d
 for k in sys.argv[2].split("."): v = v[k]
 print(json.dumps(v) if not isinstance(v, str) else v)' "$1" "$2"; }
 
-check "status: only the Mac can approve (no signed-approval key yet)" 0 '"approvers": {"legacy": true, "require": "biometric device", "sa1": []}' "$K" status 0.46.20
+check "status: only the Mac can approve (no signed-approval key yet)" 0 '"approvers": {"legacy": true, "require": "biometric device", "require_attest": "none", "sa1": []}' "$K" status 0.46.20
 check "challenge --format sa1 with no key that meets require" 3 "no enrolled approver key meets the policy (require = biometric device)" \
     "$K" challenge 0.46.20 "$B1" "${ASSETS[@]}" --format sa1
 check "challenge --format takes sa1 only" 2 "--format takes sa1" "$K" challenge 0.46.20 "$B1" "${ASSETS[@]}" --format cbor
@@ -162,7 +195,7 @@ check "add the phone's Face ID key, with the words from its screen" 0 "words:  $
     "$ADM" add-approver phone-bio "$tmp/keys/phone-bio.pem" --person alex --check biometric --view device --words "$(words "$BIO_ID")"
 grep -qF "key id: $BIO_ID" "$tmp/out" && pass "it prints the key id" || fail "key id printout" "$(cat "$tmp/out")"
 grep -qF "the Mac's K2 Release Approve key no longer can" "$tmp/out" && pass "it says the Mac key no longer approves releases" || fail "legacy note" "$(cat "$tmp/out")"
-check "add the phone's passcode key (not for releases)" 0 "this key can NOT approve them" \
+check "add the phone's passcode key (not for releases)" 0 "approved by phone-bio" \
     "$ADM" add-approver phone-cred "$tmp/keys/phone-cred.pem" --person alex --check credential --view device
 check "the same name twice" 3 "already an approver named phone-bio" \
     "$ADM" add-approver phone-bio "$tmp/keys/other-person.pem" --person alex --check biometric --view device
@@ -172,8 +205,8 @@ check "the approver files are pinned (status runs)" 0 '"sa1": ["phone-bio"]' "$K
 grep -qF '"legacy": false' "$tmp/out" && pass "status: the Mac no longer approves releases" || fail "status legacy" "$(cat "$tmp/out")"
 grep -qF "etc/approvers/approvers.tsv" "$TROOT/usr/local/etc/k2sign/pins.sha256" && grep -qF "etc/approvers/phone-bio.pem" "$TROOT/usr/local/etc/k2sign/pins.sha256" \
     && pass "pins.sha256 covers approvers.tsv and each key" || fail "pins" "$(cat "$TROOT/usr/local/etc/k2sign/pins.sha256")"
-check "list-approvers" 0 "phone-bio	alex	biometric device	approves releases	$BIO_ID	$(words "$BIO_ID")" "$ADM" list-approvers
-grep -qF "phone-cred	alex	credential device	not for releases" "$tmp/out" && grep -qF "mac-legacy	(the Mac's K2 Release Approve key)	credential host	not for releases" "$tmp/out" \
+check "list-approvers" 0 "phone-bio	alex	biometric device	attest none	approves releases	$BIO_ID	$(words "$BIO_ID")" "$ADM" list-approvers
+grep -qF "phone-cred	alex	credential device	attest none	not for releases" "$tmp/out" && grep -qF "mac-legacy	(the Mac's K2 Release Approve key)	credential host	not for releases" "$tmp/out" \
     && pass "list-approvers: the passcode key and mac-legacy are not for releases" || fail "list" "$(cat "$tmp/out")"
 cp "$TROOT/usr/local/etc/k2sign/approvers/approvers.tsv" "$tmp/tsv.bak"
 printf 'rogue\talex\tbiometric\tdevice\n' >> "$TROOT/usr/local/etc/k2sign/approvers/approvers.tsv"
@@ -182,6 +215,19 @@ cp "$tmp/tsv.bak" "$TROOT/usr/local/etc/k2sign/approvers/approvers.tsv"
 cp "$tmp/keys/rogue.pem" "$TROOT/usr/local/etc/k2sign/approvers/rogue.pem"
 check "a key file dropped in by hand breaks the pins" 3 "pins mismatch: approvers/rogue.pem (not pinned)" "$K" status 0.46.21
 rm "$TROOT/usr/local/etc/k2sign/approvers/rogue.pem"
+
+echo "-- App Attest: a release key must be production-attested --"
+sed -i '' 's/^require_attest = none$/require_attest = production/' "$POL"
+"$ADM" repin >/dev/null 2>&1
+check "require_attest = production: the unattested phone key doesn't approve releases" 0 '"sa1": []' "$K" status 0.46.21
+check "enrol-challenge prints a 32-byte challenge" 0 "" "$ADM" enrol-challenge
+grep -qE '^[0-9a-f]{64}$' "$tmp/out" && pass "64 hex" || fail "enrol-challenge" "$(cat "$tmp/out")"
+check "the S0 spike attestation is not an enrolment (no K2-APPROVER-ENROL-1 form)" 3 "K2-APPROVER-ENROL-1" \
+    "$ADM" add-approver phone2 --attest "$FIX/real-device/s0-attest.json" --person alex
+check "--attest takes no --check" 2 "add-approver <name>" \
+    "$ADM" add-approver phone2 --attest "$FIX/real-device/s0-attest.json" --person alex --check biometric
+sed -i '' 's/^require_attest = production$/require_attest = none/' "$POL"
+"$ADM" repin >/dev/null 2>&1
 
 echo "-- challenge --format sa1 and approve --record --"
 check "the Mac's challenge is refused once the phone is enrolled" 3 "approve on that device" "$K" challenge 0.46.21 "$B1" "${ASSETS[@]}"
@@ -237,7 +283,6 @@ echo "-- the policy decides: answer_by, require --"
 "$K" challenge 0.46.22 "$B1" "${ASSETS[@]}" --format sa1 > "$tmp/p3.bin" 2>"$tmp/e" || fail "sa1 challenge 3" "$(cat "$tmp/e")"
 record "$tmp/p3.bin" "$tmp/keys/phone-bio.key" "$BIO_ID" "$tmp/late.json"
 K2SIGN_TEST_NOW=$((NOW + 15 * 60 + 1)) check_in "16 minutes later" "$tmp/late.json" 3 "challenge expired" "$K" approve "$(pfield "$tmp/p3.bin" nonce)" --record
-POL="$TROOT/usr/local/etc/k2sign/policy"
 sed -i '' 's/^require = biometric device$/require = biometric/' "$POL"
 "$ADM" repin >/dev/null 2>&1
 check "a bad require line is refused" 3 "policy: require must be" "$K" status 0.46.22

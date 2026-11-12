@@ -138,7 +138,7 @@ row marked `@file` that names it, and those of the parser's usage refusals (`MPC
 ## The kit
 
 The kit is a path dependency, its checkout beside this repo's (`../../k2-mpc-base` from here),
-at the kit's `v0.13.1` (`6ef688e4`). `Cargo.lock` here records that resolve; it moves with
+at the kit's `v0.14.0` (`30ddf8fc`). `Cargo.lock` here records that resolve; it moves with
 the pin, by `cargo update -p k2-mpc-base`. The kit's optional engine crates aren't in it.
 
 ## Licence

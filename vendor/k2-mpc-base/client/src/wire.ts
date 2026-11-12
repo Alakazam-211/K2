@@ -24,6 +24,17 @@ export interface ChangeEvent {
   /** What kind of change it is (the kit's `ChangeKind`, kit v0.10.1; absent from an older
    * host). An undo and a redo say so here. */
   kind?: "edit" | "undo" | "redo" | "revert" | "restore" | "external" | "import";
+  /** The host-given turn of the agent step that made it (rendering-data contract gap 8):
+   * opaque, at most 64 bytes, compared only for equality, to group one agent run's changes.
+   * `null` for a person's change, an outside save, and any call the host gave none; absent
+   * from a host before wire 3. An App viewer always gets `null`. */
+  turn?: string | null;
+  /** The id of the pack verb that made it (rendering-data contract gap 9), as the pack names it
+   * (`shape move`, `replace-section`), at most 64 bytes. `null` for a raw write, a kit tool
+   * (`sed -i`, `append`), an outside save, an undo, a redo, a revert, a restore and the import;
+   * absent from a host before it (wire 3, kit after v0.14.0). `via` stays the client (`cli`),
+   * never the verb. */
+  verb?: string | null;
 }
 
 /** What to run next, as data (the kit's `NextStep`, K-PAR-10): a kit verb by its registry
@@ -91,6 +102,28 @@ export interface ElemSelection {
   keys: string[];
 }
 
+/** The version of `WIRE.md` this client speaks ("Wire versions"). A `welcome` without `wire` is
+ * from a wire-2 host. */
+export const WIRE_VERSION = 3;
+
+/** The container a connection has in view (wire 3; the kit's `ElemFocus`): an element of a list
+ * root, by key (a slide). */
+export interface ElemFocus {
+  root: string;
+  key: string;
+}
+
+/** A caret or selection inside one element's text field (wire 3; the kit's `ElemRange`): `field`
+ * of element `key` of `root`. `anchor` and `head` are **UTF-8 bytes** of the field's text, as on
+ * every offset on the wire (`rangeToUtf16` converts). The kit drops it when the field changes. */
+export interface ElemRange {
+  root: string;
+  key: string;
+  field: string;
+  anchor: number;
+  head: number;
+}
+
 /** A place in the doc's own coordinates; finite numbers. The kit doesn't interpret them. */
 export interface Point {
   x: number;
@@ -115,6 +148,18 @@ export interface ElemClaim {
   note: string | null;
   hold: boolean;
   expires_ms: number;
+  /** When it was taken, on the host's clock (wire 3; absent from an older host). */
+  started_ms?: number;
+}
+
+/** Who holds a claim, as its events carry it (wire 3; the kit's `ClaimActor`, with `id` the
+ * event's `who`), so a view needs no roster lookup, even after the claimant left. */
+export interface ClaimActor {
+  id: Handle;
+  name: string;
+  /** `ParticipantKind` in lower case (`person`, `agent`, ...). */
+  kind: string;
+  colour: string;
 }
 
 /**
@@ -150,7 +195,12 @@ export type RosterEvent =
   | { kind: "selection"; who: Handle; selection: ElemSelection | null; client?: number }
   | { kind: "pointer"; who: Handle; pointer: Point | null; client?: number }
   | { kind: "viewport"; who: Handle; viewport: Rect | null; client?: number }
-  | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; [k: string]: unknown }
+  /** A connection's focus (the container in view) or text range (wire 3), as `selection`. A
+   * range goes (`null`) when its field changed or its element went: never moved. */
+  | { kind: "focus"; who: Handle; focus: ElemFocus | null; client?: number }
+  | { kind: "range"; who: Handle; range: ElemRange | null; client?: number }
+  /** `actor` and `started_ms`: wire 3, absent from an older host. */
+  | { kind: "claim_started"; who: Handle; claim: string; lines: LineSpan; version: number; actor?: ClaimActor; started_ms?: number; [k: string]: unknown }
   /** A claim on elements of a list root: it has no lines, so it has its own kind. It ends with
    * `claim_ended` (`how: "deleted"` when none of its elements is live). */
   | {
@@ -163,8 +213,14 @@ export type RosterEvent =
       hold: boolean;
       expires_ms: number;
       version: number;
+      /** Who holds it (wire 3; absent from an older host). */
+      actor?: ClaimActor;
+      /** When it was taken, on the host's clock (wire 3). */
+      started_ms?: number;
     }
-  | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; [k: string]: unknown }
+  /** `actor`, `at_ms` (when it ended, the host's clock) and `at_rev` (the change that ended it:
+   * `edited`, `deleted`; else `null`): wire 3, absent from an older host. */
+  | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; actor?: ClaimActor; at_ms?: number; at_rev?: number | null; [k: string]: unknown }
   | { kind: "note"; to: Handle; from: Handle; [k: string]: unknown }
   | {
       kind: "overwritten";
@@ -210,6 +266,9 @@ export interface Device {
   selection?: ElemSelection | null;
   pointer?: Point | null;
   viewport?: Rect | null;
+  /** This connection's focus and text range (wire 3); absent or `null` when it has none. */
+  focus?: ElemFocus | null;
+  range?: ElemRange | null;
 }
 
 /** One participant as the host shows them (from the kit's `RosterMember`). */
@@ -234,6 +293,10 @@ export interface RosterEntry {
   selection?: ElemSelection | null;
   pointer?: Point | null;
   viewport?: Rect | null;
+  /** The most active connection's focus and text range that has one (wire 3); absent from an
+   * older host. */
+  focus?: ElemFocus | null;
+  range?: ElemRange | null;
   /** The participant's live claims on elements, so a late subscriber sees who holds what.
    * Present only when they hold some. */
   elem_claims?: ElemClaim[];
@@ -303,6 +366,8 @@ export interface Welcome {
    * and ignores names it doesn't know. Absent from an older host, which takes none (WIRE.md,
    * Feature names). */
   features?: string[];
+  /** The wire version the host speaks (`WIRE_VERSION`; WIRE.md, Wire versions). Absent: 2. */
+  wire?: number;
 }
 
 /** Frames the client sends. */
@@ -330,6 +395,10 @@ export type ClientFrame =
   | { type: "select"; req: number; selection: ElemSelection | null }
   | { type: "pointer"; req: number; point: Point | null }
   | { type: "viewport"; req: number; rect: Rect | null }
+  /** This connection's focus or text range (wire 3; `null`: clear), sent only when the host
+   * lists `"focus"` or `"range"`. Answered only when refused. */
+  | { type: "focus"; req: number; focus: ElemFocus | null }
+  | { type: "range"; req: number; range: ElemRange | null }
   /** Claim elements of a list root (`Session::claim_elems`). `req` is the channel's own request
    * number, never an `op` (WIRE.md, Claim frames). Answered by `claimed` or `presence_refused`. */
   | { type: "claim"; req: number; root: string; keys: string[]; ttl_ms?: number; note?: string; hold?: boolean }

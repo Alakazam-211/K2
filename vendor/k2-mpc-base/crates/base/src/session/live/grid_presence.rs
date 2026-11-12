@@ -807,6 +807,8 @@ impl Session {
             id: ClaimId::fresh(),
             pid: pid.clone(),
             name: m.p.name.clone(),
+            kind: m.p.kind,
+            colour: m.p.colour.clone(),
             conn: m.conn,
             root: table::CELLS.to_owned(),
             s: 0,
@@ -822,6 +824,7 @@ impl Session {
             elems: None,
         };
         let info = Self::grid_claim_info(&g, &claim, now);
+        let actor = claim.actor();
         st.aware.claims.push(claim);
         // the roster push (K5) tells subscribers, as a line claim's start is told
         st.roster.record(
@@ -834,6 +837,8 @@ impl Session {
                 for_edit,
                 expires_ms: info.expires_ms,
                 version: st.version,
+                actor,
+                started_ms: now,
             },
             self.config.roster_queue,
         );

@@ -15,6 +15,11 @@
 //! (no cross-space equality leaks), and a small file can't be brute-forced from its id.
 //! [`BlobStore::purge_space_key`] destroys the key and the space's blobs.
 //!
+//! **Host cache keys.** [`BlobStore::host_cache_key`] derives a key from a space's key and a
+//! purpose label, for a host to encrypt its own caches of the space's content (previews, for
+//! one) at rest. The kit never stores it; destroying the space key ends it
+//! ([`BlobStore::host_cache_key_at`] then refuses, `MPC-E603`).
+//!
 //! **Every read is verified.** [`BlobReader`] re-computes the HMAC as it streams and fails
 //! the read that reaches the end if it doesn't match (or the length differs). A caller that
 //! forwards a stream must treat only a clean end as success: the kit's own copies (write-back,
@@ -28,8 +33,13 @@
 //! ([`BlobId::parse_ref`], `DocStore::blob_refs`), or by [`BlobStore::retain`]. An
 //! unreferenced blob is removed by [`BlobStore::gc`] once it has been unreferenced for
 //! [`BlobConfig::gc_grace_ms`], so a blob just put and about to be referenced is never
-//! collected under its writer.
+//! collected under its writer. A removal **at once** (a purge's, a replaced carrier's) never
+//! takes a blob a put is waiting to reference either: each put is **waiting** until its
+//! writer has taken its reference (the kit's own writers say so) or the grace has run out, and
+//! a waiting blob stays (it is reported as shared). So a writer never finds the bytes it just
+//! put gone when it references them.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -39,6 +49,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::hash::{hex, HmacSha256};
 use crate::store::{DocStore, SpaceKey, StoreError};
+
+mod host_cache;
+pub use host_cache::HostCacheKey;
 
 const BUF: usize = 64 << 10;
 const TMP: &str = "tmp";
@@ -188,6 +201,11 @@ pub enum BlobError {
     /// No randomness source for a space key (the kit reads `/dev/urandom`).
     #[error("no randomness source: {0}")]
     NoRandom(String),
+    /// The space key a host cache key of `generation` was derived from is destroyed
+    /// ([`BlobStore::purge_space_key`]): no key for that generation is given again, and the
+    /// host drops every cache entry sealed under it ([`BlobStore::host_cache_key_at`]).
+    #[error("the space key of cache generation {generation} was destroyed")]
+    CacheKeyDestroyed { generation: u64 },
 }
 
 fn io_err(what: &str, e: impl fmt::Display) -> BlobError {
@@ -214,6 +232,17 @@ pub struct GcReport {
     pub orphan_files: usize,
 }
 
+/// The planted fault [`crate::differential::KeyedMutant::RemovalIgnoresWaitingPuts`].
+fn planted_ignores_waiting() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::RemovalIgnoresWaitingPuts)
+    {
+        return true;
+    }
+    false
+}
+
 /// Returned by [`BlobStore::purge_space_key`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -222,12 +251,13 @@ pub struct PurgeReport {
     pub key_destroyed: bool,
     pub blobs_removed: usize,
     pub bytes_removed: u64,
-    /// Structure-index rows of the space's blobs removed with them. When there were any, the
-    /// store file is rewritten so their content leaves the file too (`store_rewritten`).
+    /// Structure-index rows of the space's blobs removed with them (their content leaves the
+    /// file with the rewrite, `store_rewritten`).
     pub index_rows_removed: u64,
-    /// Whether the store file was rewritten after removing index rows (K-PURGE-2). `false`
-    /// when none were removed, or when the rewrite failed (the rows are gone from the store,
-    /// their old bytes stay in freed pages until a later rewrite).
+    /// Whether the store file was rewritten after destroying the key (K-PURGE-2), so the key's
+    /// bytes and any index rows' leave the file. `false` when the space had no key, or when
+    /// the rewrite failed (the key and rows are gone from the store, their old bytes stay in
+    /// freed pages until a later rewrite).
     pub store_rewritten: bool,
 }
 
@@ -254,6 +284,9 @@ pub struct BlobStore {
     /// Serialises "file in place + index row" against GC, so GC never removes a file a put
     /// is about to index.
     lock: Mutex<()>,
+    /// Puts waiting for their reference: `(space no, id)` -> (how many, when the last was
+    /// put). Read and written under `lock`. Removal at once leaves these blobs.
+    waiting: Mutex<HashMap<(u64, BlobId), (u32, u64)>>,
 }
 
 /// 32 random bytes from the OS.
@@ -283,6 +316,7 @@ impl BlobStore {
             config,
             clock,
             lock: Mutex::new(()),
+            waiting: Mutex::new(HashMap::new()),
         })
     }
 
@@ -320,7 +354,8 @@ impl BlobStore {
     /// Store the bytes `src` yields in `space`, streaming (constant memory). Returns their
     /// id; storing the same bytes again in the same space returns the same id (`new: false`).
     /// A new blob has no references: reference it (a blob-doc version, or
-    /// [`BlobStore::retain`]) within [`BlobConfig::gc_grace_ms`].
+    /// [`BlobStore::retain`]) within [`BlobConfig::gc_grace_ms`]. Until then the put is
+    /// **waiting**: neither GC nor a removal at once (a purge's) takes the blob.
     pub fn put(&self, space: &str, src: &mut dyn Read) -> Result<BlobInfo, BlobError> {
         static N: AtomicU64 = AtomicU64::new(0);
         let k = self.key(space)?;
@@ -382,7 +417,13 @@ impl BlobStore {
             return Err(io_err("placing the blob", e));
         }
         // a crash here leaves a file without a row: gc sweeps it
-        let new = self.docs.blob_index(k.no, &id, size, (self.clock)())?;
+        let now = (self.clock)();
+        let new = self.docs.blob_index(k.no, &id, size, now)?;
+        // waiting for its reference: a removal at once leaves it (under the lock it takes)
+        let mut waiting = self.waiting();
+        let e = waiting.entry((k.no, id)).or_insert((0, now));
+        e.0 = e.0.saturating_add(1);
+        e.1 = now;
         Ok(BlobInfo { id, size, new })
     }
 
@@ -475,6 +516,27 @@ impl BlobStore {
         }
     }
 
+    fn waiting(&self) -> MutexGuard<'_, HashMap<(u64, BlobId), (u32, u64)>> {
+        self.waiting.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The writer of a put of `id` in `space` has taken its reference (or given up on it): the
+    /// put no longer waits. The kit's own writers call it after the transaction that references
+    /// what they put; a put nobody settles stops waiting after [`BlobConfig::gc_grace_ms`].
+    pub(crate) fn settle(&self, space: &str, id: &BlobId) {
+        let Ok(Some(k)) = self.docs.blob_space(space) else {
+            return;
+        };
+        let _g = self.guard();
+        let mut waiting = self.waiting();
+        if let Some(e) = waiting.get_mut(&(k.no, *id)) {
+            e.0 = e.0.saturating_sub(1);
+            if e.0 == 0 {
+                waiting.remove(&(k.no, *id));
+            }
+        }
+    }
+
     /// Take a reference on a blob for something other than a blob-doc version or a doc value
     /// a pack declares ([`crate::session::Pack::blob_ref_roots`]), so GC keeps it. One durable
     /// transaction.
@@ -540,7 +602,9 @@ impl BlobStore {
     /// recomputed, and the same bytes stored again get an unrelated id) and remove every
     /// blob stored under it, index and files. Blob docs in the space keep their history
     /// records, but their content is gone ([`BlobError::NotFound`]); the host deletes or
-    /// re-imports them. Audit it as metadata only.
+    /// re-imports them. Every host cache key derived from the key goes with it
+    /// ([`BlobStore::host_cache_key_at`] refuses its generation from now on). The store file
+    /// is rewritten, so the key's bytes leave it. Audit it as metadata only.
     pub fn purge_space_key(&self, space: &str) -> Result<PurgeReport, BlobError> {
         let _g = self.guard();
         let Some((no, rows, index_rows_removed)) = self.docs.blob_purge_space(space)? else {
@@ -552,8 +616,9 @@ impl BlobStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_err("removing the space's blobs", e)),
         }
-        // index rows hold names and text: their bytes must leave the file, as a purge's do
-        let store_rewritten = index_rows_removed > 0 && self.docs.rewrite_file().is_ok();
+        // the key's own bytes must leave the file (a key read back from a freed page would
+        // re-derive every host cache key of the space), and so must index rows' names and text
+        let store_rewritten = self.docs.rewrite_file().is_ok();
         Ok(PurgeReport {
             key_destroyed: true,
             blobs_removed: rows.len(),
@@ -571,7 +636,17 @@ impl BlobStore {
         rows: &[(u64, BlobId, u64)],
     ) -> Result<(u64, u64), BlobError> {
         let _g = self.guard();
-        let gone = self.docs.blob_remove_unreferenced(rows)?;
+        // a put waiting for its reference keeps its blob (it lapses after the grace)
+        let waiting = {
+            let now = (self.clock)();
+            let grace = self.config.gc_grace_ms;
+            let mut waiting = self.waiting();
+            waiting.retain(|_, (_, at)| now.saturating_sub(*at) < grace);
+            waiting.clone()
+        };
+        let keep =
+            |no: u64, id: &BlobId| !planted_ignores_waiting() && waiting.contains_key(&(no, *id));
+        let gone = self.docs.blob_remove_unreferenced_but(rows, &keep)?;
         let (mut n, mut bytes) = (0, 0);
         for (no, id, size) in &gone {
             match fs::remove_file(self.path_of(*no, id)) {

@@ -815,8 +815,12 @@ impl Session {
         };
         let partial = req.mode == UndoMode::Partial;
         let mut taken = Vec::new();
-        let out =
-            self.reverse_records(st, i, changes, partial, kind, None, Some(&mut taken), now)?;
+        // every step's change gets the call's turn; none is left for a later change when the
+        // reversal stops before committing (a conflict, a refusal)
+        st.next_turn = req.turn;
+        let out = self.reverse_records(st, i, changes, partial, kind, None, Some(&mut taken), now);
+        st.next_turn = None;
+        let out = out?;
         if let UndoOutcome::Applied { .. } = &out {
             let consumed = Self::take_batches(st, &pid, origin, &picked[..taken.len()]);
             for (made, b) in taken.into_iter().zip(consumed) {

@@ -18,6 +18,30 @@ encodings](#json-encodings)).
 - Clients key on error ids (`error.id`, `MPC-E…`), never on `next` or on message text: those
   are for people and may change.
 
+## Wire versions
+
+**This spec is wire 3** (the kit's `session::WIRE_VERSION`, the client's `WIRE_VERSION`). A host
+says which it speaks in `welcome.wire`; a welcome without it is wire 2.
+
+| Wire | Kits | What it added |
+|---|---|---|
+| 2 | v0.9.8 to v0.14.0 | the frames below without the wire-3 items (K2 pins its frames to this one) |
+| 3 | after v0.14.0 | every addition is a field, a roster event kind, a client frame behind a feature name, or a welcome field: a change's `turn` and `verb`; the roster's `focus` and `range` (event kinds, and fields on entries and devices); the claim events' `actor` and times (`started_ms`; `at_ms` and `at_rev` on `claim_ended`); the client frames `focus` and `range` (features `focus` and `range`); `welcome.wire` |
+
+**N−1, both ways.** Nothing in wire 3 changes or removes a wire-2 field, frame or meaning:
+
+- **A wire-2 client on a wire-3 host** keeps working as before. It ignores the fields and roster
+  kinds it doesn't know ([the rule above](#the-hunk-channels-frames)); it never sends `focus` or
+  `range`, and a host never needs them. It shows no focus or range, groups nothing by turn, and
+  names no verb.
+- **A wire-3 client on a wire-2 host** (no `welcome.wire`, no `focus` or `range` in
+  `welcome.features`): it sends no `focus` or `range` frame (the setters record the value, and
+  send it on a later connection whose host lists the feature, as for `presence`); a change event
+  without `turn` or `verb` has none (`undefined`, read as `null`); a claim event without `actor` is
+  attributed from the roster (`joined`); `started_ms`, `at_ms` and `at_rev` are absent.
+- Both are pinned by rows: the kit's goldens (wire 3) read by the client's wire-2 code
+  (`tools/n1/n1.sh wire`), and the client's wire-3 code on wire-2 goldens (the same job).
+
 ## Connecting
 
 The kit expects nothing first on the wire. Everything before the first frame is the host's:
@@ -44,6 +68,8 @@ interface Welcome {
   prevEnded?: number; // Joined.prev_ended: a reconnect that didn't keep it: when its lease ended
   self: string;      // this participant as the roster names them (pid; an App viewer's handle)
   rights: "edit" | "read" | "none";
+  features?: string[]; // the frame families this host takes (Feature names)
+  wire?: number;     // the wire version the host speaks (Wire versions); absent: 2
 }
 ```
 
@@ -143,18 +169,36 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `select` | `req`, `selection`: `{root, keys}` or `null` | only when refused |
 | `pointer` | `req`, `point`: `{x, y}` or `null` | only when refused |
 | `viewport` | `req`, `rect`: `{x, y, w, h}` or `null` | only when refused |
+| `focus` (wire 3) | `req`, `focus`: `{root, key}` or `null` | only when refused |
+| `range` (wire 3) | `req`, `range`: `{root, key, field, anchor, head}` or `null` | only when refused |
 
 | Frame | Session call |
 |---|---|
 | `select` | `set_selection(conn, selection)` |
 | `pointer` | `set_pointer(conn, point)`, from `Point::new(x, y)` |
 | `viewport` | `set_viewport(conn, rect)`, from `Rect::new(x, y, w, h)` |
+| `focus` | `set_focus(conn, focus)`, from `ElemFocus::new(root, key)` |
+| `range` | `set_range(conn, range)`, from `ElemRange::new(root, key, field, anchor, head)` |
+
+- **`focus`** (rendering-data contract Item 3): the container this connection has in view (a
+  slide), an element of a MovableList root, live (`MPC-E114` otherwise). Needs read. It leaves
+  when its element stops being live.
+- **`range`**: a caret or selection inside one element's text field: `field` of element `key`
+  of `root`, whose text is the string at `<key>\x1f<field>` in the root's composite map.
+  `anchor` and `head` are **UTF-8 bytes** of that text, on character boundaries (`MPC-E114`
+  otherwise); a client converts from its UTF-16. Needs edit, as a caret. **Setting a range sets
+  the focus** to its element's container (the pack's `container_of`). A range is **never
+  moved**: when its field changes (anyone's change) or its element stops being live, the kit
+  drops it (`range: null` on the roster), and the client sends a new one.
+- Keys are the live store's own today; the contract's addresses (`@sld:256`) arrive with its
+  gap 2, converted by the kit at its edge.
 
 - `keys` are element keys of `root`, a MovableList root: at most 256 (`MPC-E310`), each live
   (`MPC-E114`, which also covers a root that isn't a list). No keys means clear. Coordinates are
   finite numbers in the doc's own space, which the kit doesn't interpret; `w` and `h` aren't
   negative (`MPC-E114`).
-- All three need read. A reader may send them; a watcher is refused (`MPC-E305`).
+- `select`, `pointer`, `viewport` and `focus` need read; `range` needs edit. A reader may send
+  the first four; **a watcher is refused all five** (`MPC-E305`), and has no roster row.
 - A tier 0 doc (`BlobSession`) has none of the three calls, so a host lists no `"presence"` on a
   connection to one.
 - The host answers a refused one with `presence_refused {req, error}` and changes nothing. It may
@@ -196,6 +240,8 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 |---|---|
 | `presence` | `select`, `pointer`, `viewport` |
 | `claims` | `claim`, `release` |
+| `focus` (wire 3) | `focus` |
+| `range` (wire 3) | `range` |
 
 ## Claim frames
 
@@ -531,10 +577,13 @@ a frame over it, and the host refuses one cleanly:
   participant: {name, colour, kind, via}, rights}`, `left {who, reason}`, `rights {who,
   rights}`, `role {who, role}`, `away {who, away}`, `cursor {who, cursor, version, client?}`,
   `selection {who, selection, client?}`, `pointer {who, pointer, client?}`, `viewport {who,
-  viewport, client?}` ([below](#selection-pointer-and-viewport-in-the-roster)),
-  `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version}`,
-  `claim_started_elems {who, claim, root, keys, note, hold, expires_ms, version}`,
-  `claim_ended {who, claim, how, lines, version}`, `note {to, from, note, lines, claim}`,
+  viewport, client?}`, `focus {who, focus, client?}` and `range {who, range, client?}` (wire 3)
+  ([below](#selection-pointer-and-viewport-in-the-roster)),
+  `claim_started {who, claim, lines, note, hold, for_edit, expires_ms, version, actor,
+  started_ms}`, `claim_started_elems {who, claim, root, keys, note, hold, expires_ms, version,
+  actor, started_ms}`, `claim_ended {who, claim, how, lines, version, actor, at_ms, at_rev}`
+  (`actor`, `started_ms`, `at_ms` and `at_rev`: wire 3, [below](#claim-events-wire-3)),
+  `note {to, from, note, lines, claim}`,
   `overwritten` ([below](#the-overwritten-event)), `watching {count}`, `closed {reason}` (the
   host closed the doc's live session, `SessionManager::close`: the last event, then the
   subscription ends; `reason` is the host's code). Claims, notes, `overwritten` and rights reach
@@ -562,12 +611,37 @@ a frame over it, and the host refuses one cleanly:
   the host puts it inside the caret object too. Without one, the client takes its own version
   when the frame arrives. The client maps it to its text through the changes between.
 
+### Claim events (wire 3)
+
+The rendering-data contract's claim events (Item 4) are the roster's own claim kinds, with
+the actor and the times added, so a view draws a claim and words it without a roster lookup,
+even after the claimant left:
+
+- **`actor`** `{id, name, kind, colour}` on every claim event: `id` is the event's `who`; the
+  name, kind and colour are the claimant's when they took it (`colour` exactly as the host
+  stamped it on the participant).
+- **`started_ms`** on `claim_started` and `claim_started_elems`: when it was taken (host clock);
+  also on a snapshot's `elem_claims`.
+- **`at_ms`** on `claim_ended`: when it ended; **`at_rev`**: the change (the doc's version) that
+  ended it when one did (`how: "edited"` or `"deleted"`), else `null`.
+- **An agent's claim on elements moves its presence:** at the same flush, after the claim's
+  start, its `focus` goes to the claim's first container in document order and its
+  `selection` is **replaced** by the claimed keys (in the order it gave them). A person's claim
+  leaves their presence alone. Later calls override both.
+- The contract's `scope` and `container` fields come with its view schema (gap 1); keys are the
+  live store's own until its addresses (gap 2).
+
 ### Selection, pointer and viewport in the roster
 
-- A roster entry and a `devices` element gain `selection`, `pointer` and `viewport`, each left out
-  when there is none. The entry's are the most active connection's that has one; a `devices`
-  element's are that connection's own.
-- A `selection`, `pointer` or `viewport` event carries the value or `null` (gone). The kit sends
+- A roster entry and a `devices` element gain `selection`, `pointer` and `viewport`, and (wire 3)
+  `focus` and `range`, each left out when there is none. The entry's are the most active
+  connection's that has one; a `devices` element's are that connection's own.
+- Within a flush, a participant's `focus` comes before their `selection`, then `range`,
+  `pointer` and `viewport`: a view moves to the container before it draws what is selected there.
+- A `range` is `null` after its field changed or its element went: the kit dropped it. A `focus`
+  is `null` after its element went.
+- A `selection`, `pointer`, `viewport`, `focus` or `range` event carries the value or `null`
+  (gone). The kit sends
   one per connection per flush, the last value, by the rule for `cursor`: the connection's own
   with its `client`; when the last of those isn't the participant's value (a connection left, or
   cleared, while another still has one), one more with no `client` carrying the participant's.
@@ -585,7 +659,7 @@ the kit's own final roster.
 
 | Value | Encoding |
 |---|---|
-| `ChangeEvent` | `{version, pid, client, via, kind, root, hunks: [{start, end, insert}], at_ms, on_behalf_of}`; `on_behalf_of` is `null` when absent, never left out; `kind` (kit v0.10.1) = `ChangeKind::as_str()`: `"edit"` \| `"undo"` \| `"redo"` \| `"revert"` \| `"restore"` \| `"external"` \| `"import"`, always present (a host on an older kit sends none) |
+| `ChangeEvent` | `{version, pid, client, via, kind, root, hunks: [{start, end, insert}], at_ms, on_behalf_of, turn, verb}`; `on_behalf_of` is `null` when absent, never left out; `kind` (kit v0.10.1) = `ChangeKind::as_str()`: `"edit"` \| `"undo"` \| `"redo"` \| `"revert"` \| `"restore"` \| `"external"` \| `"import"`, always present (a host on an older kit sends none); `turn` (wire 3) = `ChangeEvent::turn` as its string, the host-given turn of the agent step that made it (at most 64 bytes, printable ASCII), or `null`: a person's change, an outside save, a call the host gave none, and always for an App viewer; never left out (a host before wire 3 sends none); `verb` (wire 3, kit after v0.14.0) = `ChangeEvent::verb`, the id of the pack verb that made it as the pack names it (`shape move`, `replace-section`; at most 64 bytes), or `null`: a raw write, a kit tool, an outside save, an undo, a redo, a revert, a restore and the import; shown to an App viewer too (it names a verb, not a person); never left out (an older host sends none). `via` stays the participant's client, never the verb |
 | `client` | the 53-bit client ID as a JSON number (`MAX_CLIENT_ID` = 2^53 − 1 = `Number.MAX_SAFE_INTEGER`, exact in JS) |
 | strings | JSON escapes: `"` `\` and control characters escaped (`\n`, `\t`, `\r`, else `\u00XX`); everything else as UTF-8 |
 | `who`, `pid`, `handle`, `on_behalf_of` | `Who`'s `Display`: the pid for a person's or agent's connection; for an App viewer's (`ParticipantKind::App`), the opaque per-doc handle (`p1`, `p2`...), its own included. One lens per connection, as the kit applies it; the client treats them as opaque and compares them with `welcome.self` |
@@ -598,11 +672,16 @@ the kit's own final roster.
 | `claim` | `claim-N` (`ClaimId`'s `Display`) |
 | `lines` | `{root, first, last}`, 1-based, inclusive. For a claim on elements (`claim_ended`), the list root and the live positions of its first and last live elements (`1, 1` with none live), for display only |
 | a caret (`CursorAt`) | `{root, anchor, head, version, anchor_lc, head_lc}`: `anchor`/`head` bytes at `version`; `anchor_lc`/`head_lc` the kit's `LineCol` as `"line:col"`, both 1-based, the column counted in characters (Unicode scalar values), for display only |
-| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights`; then `devices` (v0.10.1) only when `entry.devices` isn't empty: one `{client, cursor, label}` per `Device`, `cursor` at the snapshot's version or `null`, `label` left out when `None`; `selection`, `pointer` and `viewport`, on the entry and on each `Device`, left out when `None`; then `elem_claims` only when the member holds claims on elements (`ClaimSpan::Elems` in `entry.claims`): one `{claim, root, keys, note, hold, expires_ms}` a claim |
+| `RosterMember` → entry | `handle` = `who`; `name`, `colour`, `kind` from `entry.participant`; `role`, `away` from `entry`; `cursor` = `entry.cursor` at the snapshot's version, or `null`; `rights` = `rights`; then `devices` (v0.10.1) only when `entry.devices` isn't empty: one `{client, cursor, label}` per `Device`, `cursor` at the snapshot's version or `null`, `label` left out when `None`; `selection`, `pointer` and `viewport`, on the entry and on each `Device`, left out when `None`; then `elem_claims` only when the member holds claims on elements (`ClaimSpan::Elems` in `entry.claims`): one `{claim, root, keys, note, hold, expires_ms, started_ms}` a claim (`started_ms` = `ClaimInfo::taken_ms`, wire 3) |
+| `ClaimActor` (wire 3) | `actor` = `{id, name, kind, colour}`: `id` = the event's `who` (`Who`'s `Display`), `kind` as `ParticipantKind` in lower case |
+| claim times (wire 3) | `started_ms`, `at_ms` as JSON numbers (host clock); `at_rev` a JSON number or `null` |
 | `RosterEvent::Cursor` → `cursor` | `{kind: "cursor", who, cursor, version}`, then `client` (v0.10.1) only when the event's `client` is `Some`: the connection's client ID |
 | `ElemSelection` | `{root, keys}`: `keys` as `Key`'s text, in the order given, no repeats |
 | `Point`, `Rect` | `{x, y}`, `{x, y, w, h}`, as JSON numbers (`Point::x()` and so on), never `-0`. Coordinates may have fractions. The golden files hold whole numbers only; parity cases and the client's tests cover fractions, and a host encodes them with its own writer or the kit's (`errors::Value::float`) |
 | `RosterEvent::Selection`, `Pointer`, `Viewport` | `{kind: "selection" \| "pointer" \| "viewport", who, <kind>: value or null}`, then `client` only when the event's `client` is `Some` |
+| `ElemFocus` (wire 3) | `{root, key}`: `key` as `Key`'s text |
+| `ElemRange` (wire 3) | `{root, key, field, anchor, head}`: `anchor` and `head` as JSON numbers, UTF-8 bytes of the field's text |
+| `RosterEvent::Focus`, `Range` (wire 3) | `{kind: "focus" \| "range", who, <kind>: value or null}`, then `client` only when the event's `client` is `Some` |
 | `ErrorReport` | exactly `ErrorReport::to_json()`: `{id, exit, message, next, next_step, rule, details}`, `next_step` = `{verb, args, why}`, absent when there is nothing to run (and before kit v0.10.1). Clients key on `id`; `message`, `next` and `next_step` are for people (a host renders `next_step` in its own syntax) |
 | `RosterEvent::Overwritten {to, overwrite}` → `overwritten` | `{kind: "overwritten", to, change, version, restore_from, source, rule, row, line, cells, more, not_shown, withheld, no_history, message}`, every field always present: `to` = `to` (`Who`'s `Display`, the subscriber's own, since the kit sends it only to its author's subscriptions); `change`, `source`, `rule`, `more`, `not_shown`, `withheld`, `no_history` = the `Overwrite`'s fields of those names; `version`, `restore_from`, `row`, `line` = the `Overwrite`'s `Option`s, `null` when `None`; `cells` (below); `message` = the `Overwrite`'s `Display` (`to_string()`), which holds the person's text |
 | `cells` | in order: first `{region, col, yours, file, cut}` from the `Overwrite`'s own top-level `region`, `col`, `yours`, `file`, `cut` (its first place), then one `{region, col, yours, file, cut}` per entry of `also` (an `OverwriteCell`, same fields), in `also`'s order. `col` is `null` when `None`. A roll-up (`rule: "rollup"`, `Overwrite::is_rollup`) has no place: `cells: []` (its `region` is empty; don't send it) |

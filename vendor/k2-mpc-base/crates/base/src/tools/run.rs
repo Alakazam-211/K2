@@ -156,6 +156,9 @@ pub struct ToolOptions {
     /// CLI may consume before the verb sees it); the verb's `--json` does the same. The page
     /// and its cursor are the same either way.
     pub json: bool,
+    /// The host-given turn of this call ([`crate::turn`]; default `None`): stored on the
+    /// change an edit verb makes and carried on its events. Read verbs ignore it.
+    pub turn: Option<crate::turn::Turn>,
 }
 
 impl Default for ToolOptions {
@@ -165,6 +168,7 @@ impl Default for ToolOptions {
             positional: PositionalMode::default(),
             read_budget: crate::index::READ_BUDGET,
             json: false,
+            turn: None,
         }
     }
 }
@@ -198,6 +202,13 @@ impl ToolOptions {
         self.positional = mode;
         self
     }
+
+    /// The host-given turn of this call ([`crate::session::EditOptions::turn`]): every
+    /// change an edit verb makes carries it. The kit never invents one.
+    pub fn turn(mut self, turn: crate::turn::Turn) -> Self {
+        self.turn = Some(turn);
+        self
+    }
 }
 
 /// What an edit verb is checked against under the session lock: the host's claim policy and
@@ -206,6 +217,10 @@ impl ToolOptions {
 struct Guard {
     policy: ClaimPolicy,
     if_version: Option<Seq>,
+    turn: Option<crate::turn::Turn>,
+    /// The pack verb's id when a pack's own verb runs ([`crate::store::ChangeInfo::verb`]);
+    /// `None` for the kit's tools.
+    verb: Option<&'static str>,
 }
 
 enum Stop {
@@ -291,6 +306,8 @@ impl Session {
             let doc = name.clone();
             let guard = Guard {
                 policy: opts.policy,
+                turn: opts.turn,
+                verb: Some(v.name()),
                 if_version,
             };
             let mut out = self.run_edit(conn, root, &name, guard, &verb, move |live| {
@@ -379,6 +396,8 @@ impl Session {
                 };
                 let guard = Guard {
                     policy: opts.policy,
+                    turn: opts.turn,
+                    verb: None,
                     if_version: tool.if_version(),
                 };
                 let mut out = self.run_edit(conn, root, &name, guard, &verb, |live| {
@@ -461,6 +480,9 @@ impl Session {
         let mut eo = crate::session::EditOptions::new().policy(opts.policy);
         eo.if_version = if_version;
         eo.base = base;
+        eo.turn = opts.turn;
+        // the change records the pack verb that made it (rendering-data contract gap 9)
+        eo.verb = Some(v.name());
         let mut report: Option<(Vec<u8>, u8)> = None;
         let mut own: Option<&'static crate::errors::ErrorEntry> = None;
         let res = self.edit_ops_verb(conn, &eo, verb, at_base, |view, at, hist| {
@@ -534,6 +556,7 @@ impl Session {
         let (pack, codec) = self.pack_and_codec()?;
         let mut eo = crate::session::EditOptions::new().policy(opts.policy);
         eo.if_version = tool.if_version();
+        eo.turn = opts.turn;
         let mut report: Option<EditOutput> = None;
         let mut applied = true;
         let res = self.edit_ops_verb(conn, &eo, verb, false, |view, _, _| {
@@ -629,6 +652,8 @@ impl Session {
             guard.if_version,
             Some(verb),
             None,
+            guard.turn,
+            guard.verb,
             |live| {
                 let mut o = f(live).map_err(Stop::Tool)?;
                 let text = o.text.take();

@@ -1,0 +1,27 @@
+MPC-E415 declined_live_too_large (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (live_too_large)
+next:     The file holds more elements and fields than a live doc of its type may hold (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.
+step:     cat; why: The file is over the live size limit, so it stays at tier 0 (or 0.5) and opens the ordinary way; read it there, and change it with its file verbs or ordinary file tools.
+rule:     K-PACK-4, K-DISK-8, K-CSV-7
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E415",
+  "name": "declined_live_too_large",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (live_too_large)",
+  "next": "The file holds more elements and fields than a live doc of its type may hold (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "The file is over the live size limit, so it stays at tier 0 (or 0.5) and opens the ordinary way; read it there, and change it with its file verbs or ordinary file tools."
+  },
+  "rule": "K-PACK-4, K-DISK-8, K-CSV-7",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

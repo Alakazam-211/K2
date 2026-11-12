@@ -337,6 +337,9 @@ pub struct GridWriteOptions {
     /// claim (or a reservation handed to someone else) is refused, exit 5, nothing applied,
     /// as for every other edit (A10).
     pub policy: ClaimPolicy,
+    /// The host-given turn of this call ([`crate::turn`]; default `None`): stored on the
+    /// change it makes and carried on its events.
+    pub turn: Option<crate::turn::Turn>,
 }
 
 impl GridWriteOptions {
@@ -348,6 +351,12 @@ impl GridWriteOptions {
     /// The claim policy ([`ClaimPolicy::Respect`]: `--respect-claims`).
     pub fn policy(mut self, policy: ClaimPolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// The host-given turn of this call ([`crate::session::EditOptions::turn`]).
+    pub fn turn(mut self, turn: crate::turn::Turn) -> Self {
+        self.turn = Some(turn);
         self
     }
 }
@@ -671,14 +680,95 @@ fn push_root(roots: &mut Vec<ElemRoot>, root: &str, list: bool, ops: Vec<ElemOpR
     }
 }
 
+/// [`SessionError::AtLimit`]'s `what` for a keyed doc that isn't a table
+/// ([`Config::keyed_max_entries`]).
+pub(super) const KEYED_ENTRIES: &str = "elements and fields";
+
+/// The planted fault [`crate::differential::KeyedMutant::ReadEncodes`].
+fn planted_read_encodes() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant() == Some(crate::differential::KeyedMutant::ReadEncodes) {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::KeyedMutant::LimitNotApplied`].
+fn keyed_limit_skipped() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::LimitNotApplied)
+    {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::KeyedMutant::OutsideSaveAppliedSilently`].
+fn keyed_save_applied_silently() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::OutsideSaveAppliedSilently)
+    {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::KeyedMutant::MergeWriteNotRecorded`].
+fn merge_write_not_recorded() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::MergeWriteNotRecorded)
+    {
+        return true;
+    }
+    false
+}
+
+/// The decline of a keyed doc that isn't a table, past [`Config::keyed_max_entries`] with `n`
+/// elements and fields (`MPC-E415`): it isn't live, and stays at tier 0 (or 0.5).
+fn keyed_too_large(config: &Config, n: Option<usize>) -> Declined {
+    let max = config.keyed_max_entries;
+    Declined {
+        code: "live_too_large",
+        message: match n {
+            Some(n) => format!(
+                "this file has {n} elements and fields, past the live limit ({max}), so it stays \
+                 at tier 0"
+            ),
+            None => format!(
+                "the file now holds more than the live limit ({max} elements and fields), so it \
+                 stays at tier 0"
+            ),
+        },
+    }
+}
+
 /// A table import over the size limits is declined `too_large` (K-CSV-7): the host falls
-/// back to the next pack (live text).
+/// back to the next pack (live text). A keyed import that isn't a table, over
+/// [`Config::keyed_max_entries`] elements and fields (its list elements plus its map entries),
+/// is declined `live_too_large` (`MPC-E415`): the host opens the file at tier 0 (or 0.5).
 pub(super) fn check_import_size(
     config: &Config,
     schema: &Schema,
     ordered: &[(String, Neutral)],
 ) -> Result<()> {
     if !table::is_table(schema) {
+        if keyed_limit_skipped() {
+            return Ok(());
+        }
+        let n: usize = ordered
+            .iter()
+            .map(|(_, n)| match n {
+                Neutral::List(l) => l.len(),
+                Neutral::Map(m) => m.len(),
+                Neutral::Text(_) => 0,
+            })
+            .sum();
+        if n > config.keyed_max_entries {
+            return Err(SessionError::Declined(keyed_too_large(config, Some(n))));
+        }
         return Ok(());
     }
     let count = |root: &str| {
@@ -1330,8 +1420,57 @@ impl Session {
         Ok(n)
     }
 
+    /// A keyed doc's elements (live or deleted, until dropped) and map entries, every root's,
+    /// counted on first need ([`Config::keyed_max_entries`]).
+    fn keyed_size(&self, st: &mut State) -> Result<usize> {
+        if let Some(n) = st.keyed_size {
+            return Ok(n);
+        }
+        let k = st.doc.keyed_state()?;
+        let n = k
+            .roots
+            .iter()
+            .map(|(_, x)| match x {
+                KeyedRoot::List { live, hidden, .. } => live.len() + hidden.len(),
+                KeyedRoot::Map(m) => m.len(),
+                KeyedRoot::Text(_) => 0,
+            })
+            .sum();
+        st.keyed_size = Some(n);
+        Ok(n)
+    }
+
     /// Keep the counted size in step with a change's stream.
     pub(super) fn grid_size_after(&self, st: &mut State, stream: &[ElemApplied]) {
+        if let Some(mut n) = st.keyed_size {
+            for a in stream {
+                match a {
+                    ElemApplied::Map { ops, .. } => {
+                        for o in ops {
+                            match (o.kind, &o.before, &o.after) {
+                                (MapOpKind::Set, None, Some(_)) => n += 1,
+                                (MapOpKind::Delete, Some(_), None) => n = n.saturating_sub(1),
+                                _ => {}
+                            }
+                        }
+                    }
+                    ElemApplied::List { ops, .. } => {
+                        for o in ops
+                            .iter()
+                            .filter(|o| !matches!(o.effect, Effect::None { .. }))
+                        {
+                            match o.kind {
+                                ListOpKind::Insert => n += 1,
+                                ListOpKind::Drop => n = n.saturating_sub(1),
+                                _ => {}
+                            }
+                        }
+                    }
+                    ElemApplied::Text { .. } => {}
+                }
+            }
+            st.keyed_size = Some(n);
+        }
         let Some((mut cells, mut cols, mut rows)) = st.grid_size else {
             return;
         };
@@ -1373,7 +1512,7 @@ impl Session {
     /// a change that doesn't grow it always passes, so nothing is ever trapped.
     fn check_limits(&self, st: &mut State, edits: &[Edit]) -> Result<()> {
         if !table::is_table(&self.schema) {
-            return Ok(());
+            return self.check_keyed_limits(st, edits);
         }
         // a value or name past the limit (C1k: `Config::grid_max_value_len`)
         let max = self.config.grid_max_value_len;
@@ -1441,6 +1580,53 @@ impl Session {
         }
         if let Some(e) = over("rows", n, rows, self.config.grid_max_rows) {
             return Err(e);
+        }
+        Ok(())
+    }
+
+    /// [`Session::check_limits`] for a keyed doc that isn't a table: refuse a change that takes
+    /// its elements and fields past [`Config::keyed_max_entries`] and grows them there; a change
+    /// that doesn't grow them always passes, so nothing is ever trapped.
+    fn check_keyed_limits(&self, st: &mut State, edits: &[Edit]) -> Result<()> {
+        if keyed_limit_skipped() {
+            return Ok(());
+        }
+        let before = self.keyed_size(st)?;
+        let mut n = before as i64;
+        let mut present: HashMap<(&str, &str), bool> = HashMap::new();
+        for e in edits {
+            match e {
+                Edit::Map { root, ops } => {
+                    for o in ops {
+                        let at = (root.as_str(), o.key());
+                        let was = match present.get(&at) {
+                            Some(p) => *p,
+                            None => st.doc.map_get(root, o.key())?.is_some(),
+                        };
+                        let now = matches!(o, MapOp::Set { .. });
+                        n += i64::from(now) - i64::from(was);
+                        present.insert(at, now);
+                    }
+                }
+                Edit::List { ops, .. } => {
+                    for o in ops {
+                        match o {
+                            ListOp::Insert { .. } => n += 1,
+                            ListOp::Drop { .. } => n -= 1,
+                            _ => {}
+                        }
+                    }
+                }
+                Edit::Text { .. } => {}
+            }
+        }
+        let limit = self.config.keyed_max_entries;
+        if n > limit as i64 && n > before as i64 {
+            return Err(SessionError::AtLimit {
+                what: KEYED_ENTRIES,
+                limit,
+                would_be: n.max(0) as usize,
+            });
         }
         Ok(())
     }
@@ -1729,6 +1915,7 @@ impl Session {
                 }
             }
         }
+        st.next_turn = opts.turn;
         self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
@@ -1816,6 +2003,8 @@ impl Session {
         if let Some(v) = verb {
             st.verb_hint = Some(v.to_owned());
         }
+        st.next_turn = opts.turn;
+        st.next_verb = opts.verb;
         let v = st.version;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         let notes = match &touched {
@@ -1834,12 +2023,22 @@ impl Session {
         verb: &str,
         for_edit: Option<Option<u64>>,
         f: impl FnOnce(&View, &dyn VerbHistory) -> (R, Option<ClaimSpan>, bool),
-    ) -> Result<(ReadResult, R, Notes, Option<awareness::ForEdit>)> {
+    ) -> Result<(ReadHead, R, Notes, Option<awareness::ForEdit>)> {
         let now = self.now();
         let mut guard = self.lock()?;
         let st = &mut *guard;
         let i = self.admit(st, conn, Need::Read, Action::Read, now)?;
-        let read = self.read_unmarked(st, i)?;
+        // a table's read verbs print and take line numbers, positions in its rendered file:
+        // they read the file, and fail when it can't be rendered. Any other keyed doc's read
+        // is the keyed state only: no content copy, no rendering, no "does the file hold the
+        // doc" check; a failure the last rendering found at this version is reported from the
+        // session's state
+        if self.is_grid() || planted_read_encodes() {
+            self.read_unmarked(st, i)?;
+        } else if let Some(e) = Self::render_failure(st) {
+            return Err(e);
+        }
+        let read = Self::read_head(st, i);
         let view = View::new(st.doc.keyed_state()?)
             .with_codec(&st.codec)
             .with_max_value(self.config.grid_max_value_len);
@@ -2166,6 +2365,7 @@ impl Session {
                 .filter(|k| !held.contains(&k))
                 .collect()
         };
+        st.next_turn = opts.turn;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         Ok(GridWriteReport {
             outcome: GridWrite::Applied(res),
@@ -2247,6 +2447,7 @@ impl Session {
         st.verb_hint = Some("write --base live".to_owned());
         st.next_row_marks = marks;
         st.next_col_remap = !rec.cols_exact;
+        st.next_turn = opts.turn;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         Ok(report(GridWrite::Applied(res)))
     }
@@ -2315,6 +2516,7 @@ impl Session {
         st.next_note_rows = plan.note_rows();
         st.next_row_marks = kept_not_exact(&base_t, &ours_t, &rec.exact_rows, rec.cols_exact);
         st.next_col_remap = !rec.cols_exact;
+        st.next_turn = opts.turn;
         let res = self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, versions)?;
         self.finish_overrides(st, overridden, plan, before, before + 1)?;
         Ok(GridWriteReport {
@@ -3293,6 +3495,12 @@ impl Session {
     /// ([`Session::grid_replica_to_file`]). The replica's elements are never merged into the
     /// doc, so a change that moved no byte (a header switch, an empty cell unset,
     /// `drop-deleted`), written back or not, can't misplace the save.
+    ///
+    /// A keyed doc that isn't a table has no such merge: the file's edits apply by key, and
+    /// when the kit wrote the file since the last outside save, the save keeps both
+    /// ([`DiskCheck::Conflict`]: the kit's version as a version and a conflict copy, one
+    /// [`AuditEvent::BlobConflict`]; `docs/SESSIONS.md`, "Outside saves on a keyed doc that
+    /// isn't a table").
     pub(super) fn ingest_structured(
         &self,
         st: &mut State,
@@ -3442,6 +3650,7 @@ impl Session {
             // their save, not an echo (v0.9.5, as for text)
             d.own.clear();
             d.echoed = None;
+            d.kit_wrote = Some(false);
             if was_declined {
                 st.declined = None;
                 self.emit(AuditEvent::FileRestored {
@@ -3479,6 +3688,9 @@ impl Session {
             return Ok(DiskCheck::Unchanged);
         }
         if self.check_limits(st, &edits).is_err() {
+            if !is_table {
+                return self.decline(st, keyed_too_large(&self.config, None));
+            }
             return self.decline(
                 st,
                 Declined {
@@ -3498,12 +3710,25 @@ impl Session {
             Some(t) => self.overridden(st, t, &overrides)?,
             None => Vec::new(),
         };
-        let client = self.external_client(st)?;
-        let before_seq = st.version;
-        let before_snap = match st.last_version_seq != st.version {
-            true => Some(self.snapshot(st)?),
+        // an outside save over the kit's own write (as tier 0 since v0.14.0): the kit wrote the
+        // file since the last outside save, so an app that opened it before that write may be
+        // saving over it, and nothing says which. A keyed doc that isn't a table has no merge
+        // of its own, so the save keeps both: it becomes the live doc as below, and the kit's
+        // version (the live doc now) is kept as a version (cut below unless one holds it) and
+        // as a conflict copy, with one `BlobConflict`. Decided from the store until this
+        // session synced the file (`kit_wrote_file`): a restart changes nothing
+        let over_kit = !is_table && !keyed_save_applied_silently() && self.kit_wrote_file(st)?;
+        let kept_copy = match over_kit {
+            true => Some(self.keep_kit_version(st, now)?),
             false => None,
         };
+        let client = self.external_client(st)?;
+        let before_seq = st.version;
+        let before_snap =
+            match st.last_version_seq != st.version || (over_kit && !self.has_version_at(st)?) {
+                true => Some(self.snapshot(st)?),
+                false => None,
+            };
         let befores = befores_of(&st.doc, &edits)?;
         // the merge, by key, on the live doc as the external participant; then the replica
         // takes the file's grid
@@ -3590,12 +3815,21 @@ impl Session {
         st.codec = rec.codec;
         let snap = self.snapshot(st);
         let (content, _) = self.reload_on_failure(st, snap)?;
+        // a keyed doc that isn't a table, left holding changes the file doesn't have (the save
+        // landed on unwritten changes, merged by key): the kit writes that merge next, so the
+        // save's version names the kit's merge as an author (`MERGE_PID`, tier 0's author of
+        // its merges). `kit_wrote_file` reads it from the store after a restart: the next save
+        // over that write keeps both
+        let mut authors = vec![EXTERNAL_PID.to_owned()];
+        if !is_table && !held && !merge_write_not_recorded() {
+            authors.push(crate::session::MERGE_PID.to_owned());
+        }
         versions.push(Version {
             seq,
             at_ms: now,
             reason: VersionReason::External,
             name: None,
-            authors: vec![EXTERNAL_PID.to_owned()],
+            authors,
             content,
             codec: Some(st.codec.clone()),
         });
@@ -3644,6 +3878,8 @@ impl Session {
                         Vec::new()
                     },
                     kind: change.info.kind,
+                    turn: None,
+                    verb: None,
                 },
             );
         }
@@ -3652,7 +3888,7 @@ impl Session {
         st.last_change_ms = now;
         st.version = seq;
         self.grid_presence_after(st, None, &a.stream, now);
-        Self::elem_presence_after(st);
+        self.elem_presence_after(st, Some(&a.stream));
         st.log_entries += 1;
         st.log_bytes += entry.body.yrs_len();
         st.state_bytes += entry.body.yrs_len();
@@ -3667,6 +3903,7 @@ impl Session {
         // as above (v0.9.5)
         d.own.clear();
         d.echoed = None;
+        d.kit_wrote = Some(false);
         if was_declined {
             st.declined = None;
             self.emit(AuditEvent::FileRestored {
@@ -3701,9 +3938,40 @@ impl Session {
                 version: None,
             });
         }
+        // the save kept both: one event for the copy, and the host sees the conflict
+        let out = match kept_copy {
+            Some((copy, copy_path)) => {
+                let store = self.store(st)?.clone();
+                let kept = self.version_before(&store, before_seq).unwrap_or_default();
+                let current = store
+                    .version_infos(self.doc_id)?
+                    .into_iter()
+                    .filter(|v| v.seq == seq && v.reason == VersionReason::External)
+                    .map(|v| v.id)
+                    .max()
+                    .unwrap_or_default();
+                // recorded, so `tick` removes it after its keep (`live/copies.rs`)
+                if let Some(rec) = &copy {
+                    self.record_live_copy(st, current, kept, rec.clone(), now);
+                }
+                self.emit(AuditEvent::BlobConflict {
+                    key: st.key.clone(),
+                    current,
+                    kept,
+                    copy,
+                    lease_holder: None,
+                });
+                DiskCheck::Conflict {
+                    version: seq,
+                    kept,
+                    copy: copy_path,
+                }
+            }
+            None => DiskCheck::Ingested { version: seq },
+        };
         self.settle_saved(st, now)?;
         self.maybe_compact(st);
-        Ok(DiskCheck::Ingested { version: seq })
+        Ok(out)
     }
 
     /// `r`, reloading the doc first if it failed: the doc took an outside save that won't reach
@@ -3721,9 +3989,116 @@ impl Session {
         r
     }
 
-    /// Whether the live doc, rendered with `codec`, is the file's `bytes`.
+    /// Whether the kit wrote the file since the last outside save (a keyed doc's outside-save
+    /// rule in [`Session::ingest_structured`]). What this session saw once it synced the file
+    /// (a write-back, or an outside save taken in); before that, from the store, by the change
+    /// the file was last synced at (`synced_seq`):
+    /// - the import: no;
+    /// - an outside save: only if its version names the kit's merge as an author (the save
+    ///   landed on changes the file didn't have, and the kit writes the merge: `MERGE_PID`);
+    /// - any other change: yes (a participant's, an undo, a restore...).
+    ///
+    /// Whatever can't be read counts as the kit's write (keeping both is the side that loses
+    /// nothing): a sync point with no change record left, or an outside save with no version.
+    fn kit_wrote_file(&self, st: &State) -> Result<bool> {
+        let d = st.disk.as_ref().expect("has disk");
+        if let Some(w) = d.kit_wrote {
+            return Ok(w);
+        }
+        if d.synced_seq == 0 {
+            return Ok(false);
+        }
+        let store = self.store(st)?;
+        Ok(match store.change(self.doc_id, d.synced_seq)? {
+            Some(c) if matches!(c.kind, ChangeKind::Import) => false,
+            Some(c) if matches!(c.kind, ChangeKind::External) => store
+                .version_infos(self.doc_id)?
+                .into_iter()
+                .filter(|v| v.seq == d.synced_seq && v.reason == VersionReason::External)
+                .max_by_key(|v| v.id)
+                .map_or(true, |v| {
+                    v.authors.iter().any(|a| a == crate::session::MERGE_PID)
+                }),
+            Some(_) | None => true,
+        })
+    }
+
+    /// Whether a stored version holds the doc at its current version.
+    fn has_version_at(&self, st: &State) -> Result<bool> {
+        Ok(self
+            .store(st)?
+            .version_infos(self.doc_id)?
+            .iter()
+            .any(|v| v.seq == st.version))
+    }
+
+    /// The display name of who last wrote the kit's version the file holds (the last author up
+    /// to the sync point that isn't the kit's own): the participant's name while connected,
+    /// else their id; empty when none is known (the copy's name then says `someone`).
+    fn kit_writer_name(&self, st: &State) -> String {
+        let synced = st.disk.as_ref().map_or(st.version, |d| d.synced_seq);
+        let pid = st
+            .authors
+            .iter()
+            .rev()
+            .filter(|(s, _)| *s <= synced)
+            .map(|(_, a)| a)
+            .find(|a| !a.starts_with(RESERVED_PID_PREFIX));
+        match pid {
+            Some(pid) => st
+                .members
+                .iter()
+                .find(|m| m.pres.p.pid == *pid)
+                .map_or_else(|| pid.clone(), |m| m.pres.p.name.clone()),
+            None => String::new(),
+        }
+    }
+
+    /// The kit's version of a keyed doc (the live doc, rendered) an outside save is about to
+    /// replace, written as a conflict copy beside the file or in the host's folder
+    /// ([`super::super::tier0::place_conflict_copy`]: the host's name first, then the kit's).
+    /// Returns its record (relative to the file's folder) and path; `(None, None)` when it
+    /// couldn't be written (a disk error is reported; the version holds it either way).
+    fn keep_kit_version(&self, st: &State, now: u64) -> Result<(Option<String>, Option<PathBuf>)> {
+        let ours = self.render(st)?;
+        let who = self.kit_writer_name(st);
+        let d = st.disk.as_ref().expect("has disk");
+        let real = match disk::probe(&d.path, &d.root) {
+            Ok(Probe::File { real, .. }) => real,
+            _ => return Ok((None, None)),
+        };
+        let file_name = real
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_owned();
+        let placed = super::super::tier0::place_conflict_copy(
+            &*self.host,
+            &crate::session::conflict_copy_name,
+            &real,
+            &file_name,
+            &who,
+            now,
+            |f| std::io::Write::write_all(f, &ours),
+        );
+        let rec = match placed {
+            Ok(r) => r,
+            Err((what, e)) => {
+                self.disk_error(st, &what, e);
+                None
+            }
+        };
+        let path = match (&rec, real.parent()) {
+            (Some(r), Some(base)) => Some(super::super::tier0::resolve_copy(base, r)),
+            _ => None,
+        };
+        Ok((rec, path))
+    }
+
+    /// Whether the live doc, rendered with `codec`, is the file's `bytes` (for a pack that keeps
+    /// a carrier, spliced into those bytes, which become it: K1).
     fn holds_file(&self, st: &State, bytes: &[u8], codec: &[u8]) -> Result<bool> {
-        Ok(self.pack.encode(&self.content(st)?, codec)? == bytes)
+        self.renders_as(&self.content(st)?, bytes, codec)
     }
 
     /// After an outside save is merged into a structured doc: the disk replica takes the

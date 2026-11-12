@@ -1108,6 +1108,10 @@ pub(crate) struct Claim {
     pub id: ClaimId,
     pub pid: String,
     pub name: String,
+    /// The claimant's kind and colour when they took it, for its events' actor
+    /// ([`super::roster::ClaimActor`]).
+    pub kind: ParticipantKind,
+    pub colour: String,
     pub conn: ConnId,
     pub root: String,
     /// Byte span, carried: start `Bias::Before`, end `Bias::After`; `s <= e`.
@@ -1196,6 +1200,15 @@ impl GridSpan {
 }
 
 impl Claim {
+    /// Who holds it, as its events carry it.
+    pub fn actor(&self) -> super::roster::ClaimActor {
+        super::roster::ClaimActor {
+            name: self.name.clone(),
+            kind: self.kind,
+            colour: self.colour.clone(),
+        }
+    }
+
     pub fn remaining(&self, now: u64) -> u64 {
         self.expires_ms.saturating_sub(now)
     }

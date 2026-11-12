@@ -1424,6 +1424,16 @@ fn every_table_is_listed_once() {
         "annot_log".to_owned(),
         "annot_thread_log".to_owned(),
         "annot_changed".to_owned(),
+        // a live doc's conflict copies, with its first
+        "live_copies".to_owned(),
+        // host-given turns, with the first change (or tier-0 version) that has one
+        "change_turns".to_owned(),
+        "blob_turns".to_owned(),
+        // the pack verb of a live change, with the first change a pack verb made
+        "change_verbs".to_owned(),
+        // a live doc's carrier and its versions' (K1), with the first
+        "live_carriers".to_owned(),
+        "version_carriers".to_owned(),
     ];
     let eager: Vec<String> = listed
         .iter()

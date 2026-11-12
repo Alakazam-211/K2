@@ -9,6 +9,11 @@
 //! independent between viewers (one viewer's `p2` says nothing about another's). The kit's
 //! own markers (`kit:import`, `kit:external`, `kit:unknown`, an erased participant's
 //! pseudonym) are not participants and pass unchanged.
+//!
+//! A change's host-given turn ([`crate::turn`]) is withheld from an App viewer (`None` on its
+//! change events, log and versions): the host's turn ids are the same in every doc, so they
+//! would link an agent's run across docs where its handles can't. A change's pack verb
+//! ([`crate::store::ChangeInfo::verb`]) is shown: it names the pack's verb, not a participant.
 
 use std::collections::HashMap;
 
@@ -141,6 +146,7 @@ impl Lens<'_> {
     pub fn change(&mut self, mut c: ChangeEvent) -> ChangeEvent {
         c.pid = self.pid(&c.pid);
         c.on_behalf_of = self.opt(c.on_behalf_of.take());
+        c.turn = None;
         for h in &mut c.hidden {
             h.relabel(|p| self.pid(p));
         }
@@ -160,6 +166,7 @@ impl Lens<'_> {
             LogItem::Change { mut info, approval } => {
                 info.author = self.pid(&info.author);
                 info.on_behalf_of = self.opt(info.on_behalf_of.take());
+                info.turn = None;
                 LogItem::Change { info, approval }
             }
             LogItem::Version(mut v) => {
@@ -239,6 +246,7 @@ impl Lens<'_> {
     pub fn blob_version(&mut self, mut v: crate::store::BlobVersion) -> crate::store::BlobVersion {
         v.author = self.pid(&v.author);
         v.on_behalf_of = self.opt(v.on_behalf_of.take());
+        v.turn = None;
         v
     }
 
@@ -248,6 +256,7 @@ impl Lens<'_> {
     ) -> super::tier0::BlobLogEntry {
         e.author = self.pid(&e.author);
         e.on_behalf_of = self.opt(e.on_behalf_of.take());
+        e.turn = None;
         e
     }
 
@@ -396,6 +405,16 @@ impl Lens<'_> {
                 selection,
                 client,
             },
+            RosterEvent::Focus { who, focus, client } => RosterEvent::Focus {
+                who: self.who(who),
+                focus,
+                client,
+            },
+            RosterEvent::Range { who, range, client } => RosterEvent::Range {
+                who: self.who(who),
+                range,
+                client,
+            },
             RosterEvent::Pointer {
                 who,
                 pointer,
@@ -423,6 +442,8 @@ impl Lens<'_> {
                 for_edit,
                 expires_ms,
                 version,
+                actor,
+                started_ms,
             } => RosterEvent::ClaimStarted {
                 who: self.who(who),
                 claim,
@@ -432,6 +453,8 @@ impl Lens<'_> {
                 for_edit,
                 expires_ms,
                 version,
+                actor,
+                started_ms,
             },
             RosterEvent::ClaimStartedElems {
                 who,
@@ -442,6 +465,8 @@ impl Lens<'_> {
                 hold,
                 expires_ms,
                 version,
+                actor,
+                started_ms,
             } => RosterEvent::ClaimStartedElems {
                 who: self.who(who),
                 claim,
@@ -451,6 +476,8 @@ impl Lens<'_> {
                 hold,
                 expires_ms,
                 version,
+                actor,
+                started_ms,
             },
             RosterEvent::ClaimEnded {
                 who,
@@ -458,12 +485,18 @@ impl Lens<'_> {
                 how,
                 lines,
                 version,
+                actor,
+                at_ms,
+                at_rev,
             } => RosterEvent::ClaimEnded {
                 who: self.who(who),
                 claim,
                 how,
                 lines,
                 version,
+                actor,
+                at_ms,
+                at_rev,
             },
             RosterEvent::Note {
                 to,

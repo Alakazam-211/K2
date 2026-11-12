@@ -232,6 +232,66 @@ impl ElemSelection {
     }
 }
 
+/// The container a connection has in view (rendering-data contract Item 3, `focus`): an
+/// element of a MovableList root, by key (a slide of a deck's `slides`). Set by the host for a
+/// person ([`super::Session::set_focus`]), and by the kit for an agent when it takes a claim
+/// ([`super::Session::claim_elems`]); a text range sets it too
+/// ([`super::Session::set_range`]). It leaves when its element stops being live.
+///
+/// TODO(contract gap 2): the wire carries addresses (`@sld:256`), which the kit converts to
+/// and from keys at its edge; until then the key is the live store's own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ElemFocus {
+    pub root: String,
+    pub key: crate::elem::Key,
+}
+
+impl ElemFocus {
+    pub fn new(root: impl Into<String>, key: crate::elem::Key) -> Self {
+        Self {
+            root: root.into(),
+            key,
+        }
+    }
+}
+
+/// A caret or a selection inside one element's text field (rendering-data contract Item 3,
+/// `range`): `field` of element `key` of the MovableList root `root`, whose text is the string
+/// value of the [composite](super::Pack::composite) map key `<key>\x1f<field>`. `anchor` stays
+/// put while `head` moves (equal for a bare caret), in **UTF-8 bytes** of that text (a client
+/// shows UTF-16). It is never moved: when the field changes, or the element stops being live,
+/// it is dropped, and its owner sends a new one ([`super::Session::set_range`]).
+///
+/// TODO(contract gap 2): addresses on the wire, as for [`ElemFocus`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ElemRange {
+    pub root: String,
+    pub key: crate::elem::Key,
+    pub field: String,
+    pub anchor: usize,
+    pub head: usize,
+}
+
+impl ElemRange {
+    pub fn new(
+        root: impl Into<String>,
+        key: crate::elem::Key,
+        field: impl Into<String>,
+        anchor: usize,
+        head: usize,
+    ) -> Self {
+        Self {
+            root: root.into(),
+            key,
+            field: field.into(),
+            anchor,
+            head,
+        }
+    }
+}
+
 /// A place in the doc's own coordinates, which the kit doesn't interpret. Always finite, and
 /// never `-0.0`, so it compares and encodes one way.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -365,6 +425,11 @@ pub struct RosterEntry {
     pub pointer: Option<Point>,
     /// The most active connection's viewport that has one ([`super::Session::set_viewport`]).
     pub viewport: Option<Rect>,
+    /// The most active connection's focus that has one: the container in view
+    /// ([`super::Session::set_focus`]).
+    pub focus: Option<ElemFocus>,
+    /// The most active connection's text range that has one ([`super::Session::set_range`]).
+    pub range: Option<ElemRange>,
 }
 
 /// One connection of a participant, on a text doc's roster ([`RosterEntry::devices`]): the
@@ -388,6 +453,10 @@ pub struct Device {
     pub pointer: Option<Point>,
     /// This connection's viewport, if it has one.
     pub viewport: Option<Rect>,
+    /// This connection's focus, if it has one.
+    pub focus: Option<ElemFocus>,
+    /// This connection's text range, if it has one.
+    pub range: Option<ElemRange>,
 }
 
 /// At most this many characters of a connection's label

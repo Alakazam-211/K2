@@ -27,11 +27,15 @@ mod blob_struct;
 mod delete;
 pub(crate) mod enc;
 mod history;
+mod live_carrier;
+mod live_copies;
 mod promote;
 mod purge;
 mod rewrite;
 mod scan;
 mod structured;
+mod turns;
+mod verbs;
 
 pub(crate) use annot::{AnnotFail, Committed, Observed};
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
@@ -46,6 +50,8 @@ pub(crate) use history::{
 pub use history::{ChangeInfo, ChangeKind, RootHunks, VersionInfo};
 #[cfg(test)]
 pub(crate) use history::{CommitInterrupt, INTERRUPT_COMMIT};
+pub(crate) use live_carrier::Released;
+pub use live_copies::LiveCopyRow;
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
 pub(crate) use promote::FAIL_BEFORE_COMMIT as FAIL_PROMOTE_BEFORE_COMMIT;
@@ -142,6 +148,15 @@ use enc::{R, W};
 ///   A kit from v0.10.2 to v0.13.x reuses only rows equal to the agent kind's one byte and
 ///   draws fresh IDs only where no owner row is, so it never hands out such an ID; it copies
 ///   the rows as bytes on a rewrite and erases them with their doc.
+///
+///   Two more on the same terms (after v0.14.0), `change_turns` and `blob_turns` (the
+///   host-given turn of a live change and of a tier-0 version; `turns.rs`), created lazily by
+///   the first change with a turn. A store without them reads as "no turn". An older kit's
+///   changes get no rows; it refuses a rewrite, and so a purge or an erasure, before changing
+///   anything, and leaves a deleted doc's rows, which every open here removes.
+///
+///   One more on the same terms (after v0.14.0), `change_verbs` (the pack verb that made a live
+///   change; `verbs.rs`), created lazily by the first change a pack verb made.
 ///
 ///   One more on the same terms, `doc_blob_refs` (the blobs a doc's values name; `blob_refs.rs`),
 ///   created lazily by the first name. Its counts are in `blobs`, so an older kit's blob GC
@@ -328,6 +343,30 @@ pub(super) const ADDITIVE_TABLES: &[Additive] = &[
         on_orphan: None,
     },
     Additive {
+        rows: DocRows::Pair(live_copies::LIVE_COPIES),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(turns::CHANGE_TURNS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(turns::BLOB_TURNS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::Pair(verbs::CHANGE_VERBS),
+        on_orphan: None,
+    },
+    Additive {
+        rows: DocRows::One(live_carrier::LIVE_CARRIERS),
+        on_orphan: Some(live_carrier::release_orphan),
+    },
+    Additive {
+        rows: DocRows::Pair(live_carrier::VERSION_CARRIERS),
+        on_orphan: Some(live_carrier::release_orphan_versions),
+    },
+    Additive {
         rows: DocRows::Named(blob_refs::DOC_BLOB_REFS),
         on_orphan: Some(blob_refs::release_orphan),
     },
@@ -488,6 +527,12 @@ pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
     (DocRows::Pair(annot::ANNOT_LOG), Erase::Range),
     (DocRows::Clock(annot::ANNOT_THREAD_LOG), Erase::Range),
     (DocRows::Pair(annot::ANNOT_CHANGED), Erase::Range),
+    (DocRows::Pair(live_copies::LIVE_COPIES), Erase::Range),
+    (DocRows::Pair(turns::CHANGE_TURNS), Erase::Range),
+    (DocRows::Pair(turns::BLOB_TURNS), Erase::Range),
+    (DocRows::Pair(verbs::CHANGE_VERBS), Erase::Range),
+    (DocRows::One(live_carrier::LIVE_CARRIERS), Erase::Blob),
+    (DocRows::Pair(live_carrier::VERSION_CARRIERS), Erase::Blob),
 ];
 
 /// The tables not keyed by doc id: `meta` (the store's own), `paths` (key → doc: a delete
@@ -1559,11 +1604,15 @@ fn put_versions(
     if versions.iter().any(is_typed) {
         structured::upgrade(w)?;
     }
+    let mut new = Vec::with_capacity(versions.len());
     for v in versions {
         last += 1;
         t.insert((id, last), enc_version(v).as_slice())?;
+        new.push((last, v.seq));
     }
-    Ok(())
+    drop(t);
+    // each takes the live carrier (K1), if the doc has one
+    live_carrier::carry_new_versions(w, id, &new)
 }
 
 fn enc_snapshot(seq: Seq, state: &[u8]) -> Vec<u8> {
@@ -2213,6 +2262,7 @@ impl DocStore {
             t.insert((id, last + 1), enc_version(v).as_slice())?;
             last + 1
         };
+        live_carrier::carry_new_versions(&w, id, &[(vid, v.seq)])?;
         w.commit()?;
         Ok(vid)
     }
@@ -2267,6 +2317,7 @@ impl DocStore {
             }
             t.remove((id, vid))?;
         }
+        live_carrier::drop_versions_in(&w, id, &[vid], None)?;
         w.commit()?;
         Ok(())
     }

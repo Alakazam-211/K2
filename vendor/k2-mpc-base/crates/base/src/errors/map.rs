@@ -90,6 +90,9 @@ impl Refusal for SessionError {
             S::Held { reason } => rep(&r::HELD_BACKLOG, msg).with("reason", *reason),
             S::RevertTooOld { seq } => rep(&r::REVERT_TOO_OLD, msg).with("seq", *seq),
             S::NoSuchChange(n) => rep(&r::NO_SUCH_CHANGE, msg).with("seq", *n),
+            S::VersionNoCarrier { version } => {
+                rep(&r::VERSION_NO_CARRIER, msg).with("version", *version)
+            }
             S::Disk(_) => rep(&r::DISK, msg),
             S::SaveMismatch { size, file_size } => rep(&r::SAVE_MISMATCH, msg)
                 .with("size", *size)
@@ -219,10 +222,18 @@ impl Refusal for SessionError {
                 what,
                 limit,
                 would_be,
-            } => rep(&r::AT_LIMIT, msg)
-                .with("what", *what)
-                .with("limit", *limit)
-                .with("would_be", *would_be),
+            } => rep(
+                // a keyed doc that isn't a table has its own row (its limit, its next step)
+                if *what == "elements and fields" {
+                    &r::KEYED_AT_LIMIT
+                } else {
+                    &r::AT_LIMIT
+                },
+                msg,
+            )
+            .with("what", *what)
+            .with("limit", *limit)
+            .with("would_be", *would_be),
             S::FacetConflict(cs) => rep(&r::FACET_CONFLICT, msg)
                 .with("count", cs.len())
                 .with(
@@ -281,6 +292,7 @@ fn bad_claim(m: &str, msg: String) -> ErrorReport {
 fn declined(d: &Declined, msg: String) -> ErrorReport {
     let entry = match d.code {
         "too_large" => &r::DECLINED_TOO_LARGE,
+        "live_too_large" => &r::DECLINED_LIVE_TOO_LARGE,
         "not_utf8" => &r::DECLINED_NOT_UTF8,
         "binary" => &r::DECLINED_BINARY,
         "mixed_line_endings" => &r::DECLINED_MIXED_EOL,
@@ -359,6 +371,9 @@ fn blob(e: &BlobError, msg: String) -> ErrorReport {
         B::Io(_) => rep(&r::BLOB_IO, msg),
         B::Store(s) => store(s, msg),
         B::NoRandom(_) => rep(&r::BLOB_NO_RANDOM, msg),
+        B::CacheKeyDestroyed { generation } => {
+            rep(&r::CACHE_KEY_DESTROYED, msg).with("generation", *generation)
+        }
     }
 }
 

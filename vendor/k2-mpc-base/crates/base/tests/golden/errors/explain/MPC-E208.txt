@@ -1,0 +1,27 @@
+MPC-E208 version_no_carrier (history and undo)
+exit:     4
+message:  version {version} has no copy of its file's own bytes (version_no_carrier)
+next:     This file type is written back by splicing into the file's own bytes, and the kit keeps those bytes with each version it cuts. This version has none: it was cut before the doc kept them (by an older kit, or before this build), or a purge erased them. Its file can't be rebuilt exactly, so none is given. Its content is still there: read it with show --version; for the file as it is now, read the file.
+step:     log; why: This version's file can't be rebuilt exactly; its content is still readable, and a later version or the file now may serve instead.
+rule:     K1 (carrier bytes)
+verbs:    show --version; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E208",
+  "name": "version_no_carrier",
+  "area": "history and undo",
+  "exit": 4,
+  "message": "version {version} has no copy of its file's own bytes (version_no_carrier)",
+  "next": "This file type is written back by splicing into the file's own bytes, and the kit keeps those bytes with each version it cuts. This version has none: it was cut before the doc kept them (by an older kit, or before this build), or a purge erased them. Its file can't be rebuilt exactly, so none is given. Its content is still there: read it with show --version; for the file as it is now, read the file.",
+  "next_step": {
+    "verb": "log",
+    "args": [],
+    "why": "This version's file can't be rebuilt exactly; its content is still readable, and a later version or the file now may serve instead."
+  },
+  "rule": "K1 (carrier bytes)",
+  "verbs": ["show --version", "(host)"],
+  "returned_by": ["show --version"],
+  "status": "live",
+  "since_or_until": null
+}

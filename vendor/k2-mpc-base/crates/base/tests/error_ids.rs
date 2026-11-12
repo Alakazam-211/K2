@@ -348,8 +348,8 @@ fn board_rows_name_the_boards_verbs() {
         host_only, BOARD_HOST_ONLY,
         "the rows only a host call returns"
     );
-    // the reserved and free ids hold nothing yet
-    for n in (822..=829).chain(860..=869) {
+    // the reserved and free ids hold nothing yet (822 is a keyed doc's size limit)
+    for n in (823..=829).chain(860..=869) {
         assert!(
             errors::lookup(&n.to_string()).is_none(),
             "MPC-E{n} is taken"
@@ -721,6 +721,35 @@ impl Pack for RefItems {
     }
 }
 
+/// [`Items`] as a pack that keeps a carrier (K1): its versions' files are spliced into the
+/// carrier as of each version.
+struct CarrierItems;
+
+impl Pack for CarrierItems {
+    fn schema(&self) -> k2_mpc_base::Schema {
+        k2_mpc_base::Schema {
+            name: "carrier-items",
+            roots: &[("items", k2_mpc_base::Kind::MovableList)],
+        }
+    }
+    fn decode(
+        &self,
+        b: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        Items.decode(b)
+    }
+    fn encode(
+        &self,
+        c: &[(String, k2_mpc_base::Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        Items.encode(c, codec)
+    }
+    fn wants_carrier(&self) -> bool {
+        true
+    }
+}
+
 fn insert_item(key: &str) -> Vec<Edit> {
     vec![Edit::List {
         root: "items".into(),
@@ -970,6 +999,15 @@ fn walk() -> Seen {
         .unwrap();
     seen.report(o.refusal().expect("blocked"), o.exit()); // E202
     seen.res(s.revert(a, 9_999, false)); // E205
+    {
+        // a pack that keeps a carrier, opened without its file: its import version has none
+        let c = f
+            .mgr
+            .open(Arc::new(CarrierItems), &key("c.items"), Some(b"x\n"))
+            .unwrap();
+        let p = f.person(&c, "a", Rights::full());
+        seen.res(c.file_at(p, 1)); // E208
+    }
     s.clear_undo_history().unwrap();
     let o = s.undo(a, 1).unwrap();
     seen.report(o.refusal().expect("cleared"), o.exit()); // E207
@@ -1058,6 +1096,22 @@ fn walk() -> Seen {
         std::fs::write(&p, bytes).unwrap();
         seen.res(f.mgr.open_file(Arc::new(pack), &key(name), &p, &f.ws())); // E401–E404
     }
+    // a keyed file over the live size limit (`keyed_max_entries`): it stays at tier 0
+    let f2 = fx("disk-keyed", |c| c.keyed_max_entries = 2);
+    let p = f2.ws().join("deck.items");
+    std::fs::write(&p, b"a\nb\nc\n").unwrap();
+    seen.res(
+        f2.mgr
+            .open_file(Arc::new(RefItems), &key("deck.items"), &p, &f2.ws()),
+    ); // E415
+
+    // a live keyed doc at the same limit: growing it is refused
+    let s = f2
+        .mgr
+        .open(Arc::new(RefItems), &key("small.items"), Some(b"a\nb\n"))
+        .unwrap();
+    let kp = f2.person(&s, "kp", Rights::full());
+    seen.res(s.edit(kp, insert_item("c"), None)); // E822
     seen.res(f.mgr.open_file(Arc::new(MD), &key("ws"), &f.ws(), &f.ws())); // E411
                                                                            // a file with two names (a hard link) isn't opened live (K9)
     let one = f.ws().join("linked.md");
@@ -1130,6 +1184,22 @@ fn walk() -> Seen {
         Config::default(),
     );
     seen.res(plain.open_blob(Arc::new(AnyFile), &key("x.pdf"), Some(&mut &b"x"[..]))); // E708
+
+    // a host cache key whose space key was destroyed
+    let blobs = BlobStore::open(
+        Arc::new(DocStore::open(f.dir.join("cache.redb")).unwrap()),
+        f.dir.join("cache-blobs"),
+        BlobConfig::default(),
+        Arc::new(|| 0),
+    )
+    .unwrap();
+    let label = b"host-cache/previews/v1";
+    let g = blobs.host_cache_key("ws", label).unwrap().generation();
+    blobs.purge_space_key("ws").unwrap();
+    let e = blobs.host_cache_key_at("ws", label, g).unwrap_err();
+    let r = k2_mpc_base::errors::Refusal::report(&e);
+    let code = r.exit();
+    seen.report(r, code); // E603
     let f = fx("life", |_| {});
     let s = f.open("d.md", b"d\n");
     let x = f.agent(&s, "x", Rights::editor());

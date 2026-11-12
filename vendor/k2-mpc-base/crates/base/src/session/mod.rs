@@ -54,8 +54,16 @@ pub mod test_support {
     pub use super::view::import_edits;
 }
 
+/// The version of the live wire this kit speaks (`client/WIRE.md`, "Wire versions"): what a
+/// host puts in `welcome.wire`. 3 adds, to version 2, a change's `turn`, the roster's `focus` and
+/// `range` (kinds, and fields on entries and devices), the claim events' actor and times, and the
+/// `focus` and `range` client frames. All additive: a version-2 client ignores what it doesn't
+/// know, and a version-3 client sends the new frames only to a host that lists their feature.
+pub const WIRE_VERSION: u32 = 3;
+
 pub use crate::store::{Approval, ApprovalState};
 pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
+pub use crate::turn::Turn;
 pub(crate) use awareness::pair_text;
 pub use awareness::{
     ActivityEntry, ActivityKind, ClaimEnd, ClaimId, ClaimInfo, ClaimPolicy, ClaimSpan, ForEdit,
@@ -79,10 +87,10 @@ pub use live::{
 };
 pub use live::{
     Blame, BlameLine, ChangeEvent, CursorAtVersion, CursorDrop, DeviceKey, DiffOutput, EditAtBase,
-    EditOptions, EditResult, FileBytes, FileCodec, FileCopy, JoinOptions, Joined, LogItem,
-    LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange,
-    Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
-    WriteReport, WriterLease, DEVICE_KEY_MAX,
+    EditOptions, EditResult, FileBytes, FileCodec, FileCopy, HistoryOptions, JoinOptions, Joined,
+    LogItem, LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult,
+    RightsChange, Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome, UndoRequest,
+    WriteOptions, WriteOutcome, WriteReport, WriterLease, DEVICE_KEY_MAX,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{
@@ -90,17 +98,18 @@ pub use pack::{
     TextFilePack,
 };
 pub use participant::{
-    CellCursor, ConnId, CursorAt, Device, ElemSelection, Participant, ParticipantKind, Point, Rect,
-    Role, RosterEntry, Stay, DEVICE_LABEL_MAX, ELEM_SELECTION_MAX, EXTERNAL_PID, IMPORT_PID,
-    RESERVED_PID_PREFIX, UNKNOWN_PID,
+    CellCursor, ConnId, CursorAt, Device, ElemFocus, ElemRange, ElemSelection, Participant,
+    ParticipantKind, Point, Rect, Role, RosterEntry, Stay, DEVICE_LABEL_MAX, ELEM_SELECTION_MAX,
+    EXTERNAL_PID, IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
-pub use roster::{RosterEvent, RosterMember, Who};
+pub use roster::{ClaimActor, RosterEvent, RosterMember, Who};
 pub use tier0::{
     conflict_copy_name, AgentWrites, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry,
-    BlobLogKind, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteResult,
-    ConflictCopy, IndexInput, IndexJob, LeaseInfo, NotRecorded, Promoted, Promotion, SaveTicket,
-    INDEX_ADDRS_MAX, MERGE_PID, NODE_CLAIM_ROOT, REGION_MAX_BYTES, SAVE_TICKETS_KEPT,
+    BlobLogKind, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteOptions,
+    BlobWriteResult, ConflictCopy, IndexInput, IndexJob, LeaseInfo, NotRecorded, Promoted,
+    Promotion, SaveTicket, INDEX_ADDRS_MAX, MERGE_PID, NODE_CLAIM_ROOT, REGION_MAX_BYTES,
+    SAVE_TICKETS_KEPT,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 pub use view::View;

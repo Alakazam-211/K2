@@ -483,6 +483,8 @@ impl Session {
             id: ClaimId::fresh(),
             pid: pid.clone(),
             name: m.p.name.clone(),
+            kind: m.p.kind,
+            colour: m.p.colour.clone(),
             conn: m.conn,
             root: root.to_owned(),
             s,
@@ -498,6 +500,7 @@ impl Session {
             elems: None,
         };
         let info = claim.info(text, now);
+        let actor = claim.actor();
         st.aware.claims.push(claim);
         st.roster.record(
             RosterEvent::ClaimStarted {
@@ -509,6 +512,8 @@ impl Session {
                 for_edit,
                 expires_ms: info.expires_ms,
                 version: st.version,
+                actor,
+                started_ms: now,
             },
             self.config.roster_queue,
         );
@@ -546,6 +551,7 @@ impl Session {
         } else {
             self.lines_now(st, &c.root, c.s, c.e)
         };
+        let actor = c.actor();
         let waiters: Vec<(ConnId, String)> = c.waiters.into_iter().collect();
         st.roster.record(
             RosterEvent::ClaimEnded {
@@ -554,6 +560,10 @@ impl Session {
                 how,
                 lines: lines.clone(),
                 version: st.version,
+                actor,
+                at_ms: now,
+                // the change that ended it, when one did
+                at_rev: matches!(how, ClaimEnd::Edited | ClaimEnd::Deleted).then_some(st.version),
             },
             self.config.roster_queue,
         );

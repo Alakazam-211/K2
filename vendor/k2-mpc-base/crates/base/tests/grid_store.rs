@@ -91,6 +91,53 @@ impl Pack for Lite {
 
 const MD: TextFilePack = TextFilePack::new("markdown", 1 << 20);
 
+/// `MD` with one verb of its own, `shout` (uppercase the doc): tools/n1's change with a pack verb
+/// (`change_verbs`, after v0.14.0).
+struct ShoutMd;
+
+impl Pack for ShoutMd {
+    fn schema(&self) -> Schema {
+        MD.schema()
+    }
+    fn decode(&self, b: &[u8]) -> Result<PackContent, Declined> {
+        MD.decode(b)
+    }
+    fn encode(&self, c: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError> {
+        MD.encode(c, codec)
+    }
+    fn normalize_input<'a>(&self, root: &str, text: &'a str) -> std::borrow::Cow<'a, str> {
+        MD.normalize_input(root, text)
+    }
+    fn verbs(&self) -> &'static [k2_mpc_base::tools::PackVerb] {
+        SHOUT_VERBS
+    }
+}
+
+fn shout(args: &[String]) -> Result<k2_mpc_base::tools::PackEdit, k2_mpc_base::tools::ToolError> {
+    if !args.is_empty() {
+        return Err(k2_mpc_base::tools::ToolError::unsupported(
+            args.join(" "),
+            "shout",
+        ));
+    }
+    Ok(Box::new(|_, text, _| {
+        Ok(k2_mpc_base::tools::EditOutput::new(
+            Some(text.to_uppercase()),
+            Vec::new(),
+            0,
+        ))
+    }))
+}
+
+const SHOUT_VERBS: &[k2_mpc_base::tools::PackVerb] = &[k2_mpc_base::tools::PackVerb::edit(
+    "shout",
+    "shout",
+    &[k2_mpc_base::parity::PersonAction::Format],
+    &[0],
+    shout,
+)
+.positions(&[])];
+
 // ---------- harness ----------
 
 struct TestHost {
@@ -1188,7 +1235,16 @@ fn n1_producer() {
             .join(participant("p", ParticipantKind::Person), Stay::Held)
             .unwrap()
             .conn;
-        s.replace_text(c, TextFilePack::ROOT, "one\ntwo\n").unwrap();
+        // tools/n1 `layout-both` (after v0.14.0): the change carries a host-given turn, so the
+        // store holds `change_turns` (a table a build before it doesn't know) for the other
+        // build to open, write and refuse to rewrite, and its delete of a.md leaves the row
+        let turns = std::env::var("K2MB_N1_TURNS").is_ok();
+        let mut wo = k2_mpc_base::session::WriteOptions::new();
+        if turns {
+            wo = wo.turn(k2_mpc_base::Turn::new("t:n1.1").unwrap());
+        }
+        s.replace_text_with_options(c, TextFilePack::ROOT, "one\ntwo\n", &wo)
+            .unwrap();
         s.name_version(c, "n1", None).unwrap();
         s.revert(c, 2, false).unwrap();
         // tools/n1 `layout-both` (v0.10.1): revert the revert too, so the store holds restored
@@ -1267,6 +1323,40 @@ fn n1_producer() {
             }
             std::fs::write(out.join(format!("persons-{name}")), lines).unwrap();
             println!("{name}: person-device writers in a.md and keep.md (persons-{name})");
+        }
+        // a doc the consumer leaves alone: its turn must outlive the other build
+        if turns {
+            let d = mgr
+                .open(Arc::new(MD), &key("turns.md"), Some(b"turns\n"))
+                .unwrap();
+            let a = d
+                .join(participant("bot", ParticipantKind::Agent), Stay::Held)
+                .unwrap();
+            d.replace_text_with_options(
+                a.conn,
+                TextFilePack::ROOT,
+                "turns\nbot\n",
+                &k2_mpc_base::session::WriteOptions::new()
+                    .turn(k2_mpc_base::Turn::new("t:n1.2").unwrap()),
+            )
+            .unwrap();
+            println!("{name}: turns in a.md (t:n1.1) and turns.md (t:n1.2)");
+        }
+        // tools/n1 `layout-both` (after v0.14.0): a pack verb's change, so the store holds
+        // `change_verbs` (a table a build before it doesn't know) for the other build to open,
+        // write and refuse to rewrite; this build's `n1_verbs_after` reads the verb back
+        if std::env::var("K2MB_N1_VERBS").is_ok() {
+            let d = mgr
+                .open(Arc::new(ShoutMd), &key("verbs.md"), Some(b"verbs\n"))
+                .unwrap();
+            let a = d
+                .join(participant("bot", ParticipantKind::Agent), Stay::Held)
+                .unwrap();
+            let out = d
+                .run_tool(a.conn, TextFilePack::ROOT, &["shout".to_owned()], b"")
+                .unwrap();
+            assert!(out.changed.is_some(), "shout changed verbs.md");
+            println!("{name}: a pack verb's change in verbs.md (shout)");
         }
         if grid {
             let g = mgr
@@ -1430,6 +1520,183 @@ fn n1_persons_after() {
         );
         mgr.release().unwrap();
         println!("{name}: person-device writers taken back after the other build");
+    }
+}
+
+/// `change_turns` rows as `(doc, seq)`, read without opening a `DocStore` (an open sweeps
+/// them): (rows of deleted docs, rows of docs that exist).
+fn raw_turns(store: &std::path::Path) -> (KindRows, KindRows) {
+    use redb::{Database, TableDefinition};
+    const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
+    const TURNS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("change_turns");
+    let d = Database::open(store).unwrap();
+    let r = d.begin_read().unwrap();
+    let docs = r.open_table(DOCS).unwrap();
+    let turns = match r.open_table(TURNS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return (Vec::new(), Vec::new()),
+        Err(e) => panic!("{e}"),
+    };
+    let (mut gone, mut live) = (Vec::new(), Vec::new());
+    for kv in redb::ReadableTable::iter(&turns).unwrap() {
+        let (k, _) = kv.unwrap();
+        if docs.get(k.value().0).unwrap().is_some() {
+            live.push(k.value());
+        } else {
+            gone.push(k.value());
+        }
+    }
+    (gone, live)
+}
+
+/// `change_verbs` rows as `(doc, seq)`, read without opening a `DocStore` (an open sweeps
+/// them): (rows of deleted docs, rows of docs that exist).
+fn raw_verbs(store: &std::path::Path) -> (KindRows, KindRows) {
+    use redb::{Database, TableDefinition};
+    const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
+    const VERBS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("change_verbs");
+    let d = Database::open(store).unwrap();
+    let r = d.begin_read().unwrap();
+    let docs = r.open_table(DOCS).unwrap();
+    let verbs = match r.open_table(VERBS) {
+        Ok(t) => t,
+        Err(redb::TableError::TableDoesNotExist(_)) => return (Vec::new(), Vec::new()),
+        Err(e) => panic!("{e}"),
+    };
+    let (mut gone, mut live) = (Vec::new(), Vec::new());
+    for kv in redb::ReadableTable::iter(&verbs).unwrap() {
+        let (k, _) = kv.unwrap();
+        if docs.get(k.value().0).unwrap().is_some() {
+            live.push(k.value());
+        } else {
+            gone.push(k.value());
+        }
+    }
+    (gone, live)
+}
+
+/// tools/n1 `node-both` (after v0.14.0), after the other build's consumer opened, wrote and
+/// tried to rewrite the stores of `K2MB_N1_OUT` (and after `n1_turns_after`'s open): verbs.md's
+/// pack verb outlived the other build, its row is the store's only one, and the log reads it
+/// back. A producer before verbs wrote none: then nothing is checked.
+#[test]
+#[ignore = "tools/n1: reads the stores another build's consumer left"]
+fn n1_verbs_after() {
+    let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
+    for name in ["text.redb", "grid.redb"] {
+        let path = out.join(name);
+        let (gone, live) = raw_verbs(&path);
+        if gone.is_empty() && live.is_empty() {
+            println!("{name}: no verbs (the producer predates them)");
+            continue;
+        }
+        println!(
+            "{name}: change_verbs as the other build left it: {} of deleted docs, {} of live",
+            gone.len(),
+            live.len()
+        );
+        let store = Arc::new(DocStore::open(&path).unwrap());
+        drop(store);
+        let (gone, live) = raw_verbs(&path);
+        assert!(
+            gone.is_empty(),
+            "{name}: an open leaves no deleted doc's verbs: {gone:?}"
+        );
+        assert_eq!(live.len(), 1, "{name}: verbs.md's row stays");
+        let store = Arc::new(DocStore::open(&path).unwrap());
+        let host = Arc::new(TestHost {
+            now: AtomicU64::new(5_000_000),
+            rights: Mutex::new(HashMap::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        host.rights
+            .lock()
+            .unwrap()
+            .insert("p".into(), Rights::full());
+        let mgr = SessionManager::new(store, host, config());
+        let s = mgr.open(Arc::new(ShoutMd), &key("verbs.md"), None).unwrap();
+        let c = s
+            .join(participant("p", ParticipantKind::Person), Stay::Held)
+            .unwrap()
+            .conn;
+        let verbs: Vec<String> = s
+            .log(c, &Default::default())
+            .unwrap()
+            .into_iter()
+            .filter_map(|i| match i {
+                LogItem::Change { info, .. } => info.verb,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(verbs, ["shout"], "{name}: verbs.md's verb, read back");
+        mgr.release().unwrap();
+        println!("{name}: verbs.md's verb read back after the other build");
+    }
+}
+
+/// tools/n1 `node-both` (after v0.14.0), after the other build's consumer opened, wrote, tried
+/// to rewrite, and deleted a.md in the stores of `K2MB_N1_OUT`: this build reads the file as the
+/// other build left it, opens it, and requires that a.md's turn rows (which the other build can't
+/// erase) are gone after the open, and that turns.md's turn outlived the other build, read back
+/// through the log. A producer before turns wrote none: then nothing is checked.
+#[test]
+#[ignore = "tools/n1: reads the stores another build's consumer left"]
+fn n1_turns_after() {
+    let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
+    for name in ["text.redb", "grid.redb"] {
+        let path = out.join(name);
+        let (gone, live) = raw_turns(&path);
+        if gone.is_empty() && live.is_empty() {
+            println!("{name}: no turns (the producer predates them)");
+            continue;
+        }
+        println!(
+            "{name}: change_turns as the other build left it: {} of deleted docs, {} of live",
+            gone.len(),
+            live.len()
+        );
+        assert!(
+            !gone.is_empty(),
+            "{name}: a.md's turn row, left by the delete"
+        );
+        let store = Arc::new(DocStore::open(&path).unwrap());
+        drop(store);
+        let (gone, live) = raw_turns(&path);
+        assert!(
+            gone.is_empty(),
+            "{name}: an open removes a deleted doc's turns: {gone:?}"
+        );
+        assert_eq!(live.len(), 1, "{name}: turns.md's row stays");
+        let store = Arc::new(DocStore::open(&path).unwrap());
+        let host = Arc::new(TestHost {
+            now: AtomicU64::new(5_000_000),
+            rights: Mutex::new(HashMap::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        host.rights
+            .lock()
+            .unwrap()
+            .insert("p".into(), Rights::full());
+        let mgr = SessionManager::new(store, host, config());
+        let s = mgr.open(Arc::new(MD), &key("turns.md"), None).unwrap();
+        let c = s
+            .join(participant("p", ParticipantKind::Person), Stay::Held)
+            .unwrap()
+            .conn;
+        let turns: Vec<String> = s
+            .log(c, &Default::default())
+            .unwrap()
+            .into_iter()
+            .filter_map(|i| match i {
+                k2_mpc_base::session::LogItem::Change { info, .. } => {
+                    info.turn.map(|t| t.to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(turns, ["t:n1.2"], "{name}: turns.md's turn, read back");
+        mgr.release().unwrap();
+        println!("{name}: deleted doc's turns swept at open; turns.md's turn read back");
     }
 }
 

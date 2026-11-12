@@ -56,8 +56,8 @@ pub struct TickReport {
     pub errors: Vec<(DocKey, SessionError)>,
     /// Tier 0: leases that ran out, with their holder.
     pub leases_expired: Vec<(DocKey, String)>,
-    /// Tier 0: outside saves that conflicted (doc, the new current version, the conflict
-    /// copy written, if any).
+    /// Tier 0, and a live keyed doc that isn't a table: outside saves that conflicted (doc,
+    /// the new current version, the conflict copy written, if any).
     pub conflicts: Vec<(DocKey, Seq, Option<PathBuf>)>,
     /// Versions cut after quiet following edits (K-HIST-4).
     pub versions_cut: Vec<(DocKey, VersionId)>,
@@ -65,9 +65,9 @@ pub struct TickReport {
     pub versions_thinned: usize,
     /// Revert records that left the revert window (K-HIST-23), over every doc.
     pub reverts_dropped: u64,
-    /// Tier 0: conflict copies deleted after [`super::Config::conflict_copy_keep_ms`]
-    /// (K-A11Y-5): only copies the kit recorded, still holding exactly their version's
-    /// bytes, whose version isn't named.
+    /// Tier 0, and a live keyed doc that isn't a table: conflict copies deleted after
+    /// [`super::Config::conflict_copy_keep_ms`] (K-A11Y-5): only copies the kit recorded,
+    /// still holding exactly their version's bytes, whose version isn't named.
     pub conflict_copies_removed: Vec<(DocKey, PathBuf)>,
 }
 
@@ -306,11 +306,29 @@ impl SessionManager {
             };
             match disk {
                 Ok((check, written)) => {
-                    if let Some(DiskCheck::Ingested { version }) = check {
-                        rep.ingested.push((k.clone(), version));
+                    match check {
+                        Some(DiskCheck::Ingested { version }) => {
+                            rep.ingested.push((k.clone(), version))
+                        }
+                        // a keyed doc's outside save over the kit's write: kept both
+                        Some(DiskCheck::Conflict { version, copy, .. }) => {
+                            rep.ingested.push((k.clone(), version));
+                            rep.conflicts.push((k.clone(), version, copy));
+                        }
+                        _ => {}
                     }
                     if written {
-                        rep.written.push(k);
+                        rep.written.push(k.clone());
+                    }
+                }
+                Err(SessionError::Unloaded | SessionError::Released) => {}
+                Err(e) => rep.errors.push((k.clone(), e)),
+            }
+            // a keyed doc's conflict copies past their keep (as tier 0's below)
+            match s.copies_tick() {
+                Ok(removed) => {
+                    for p in removed {
+                        rep.conflict_copies_removed.push((k.clone(), p));
                     }
                 }
                 Err(SessionError::Unloaded | SessionError::Released) => {}
@@ -380,7 +398,10 @@ impl SessionManager {
         }
         let src = initial.ok_or_else(|| SessionError::NotFound(key.clone()))?;
         let info = blobs.put(&key.space, src)?;
-        self.import_blob(pack, key, info, None)
+        let out = self.import_blob(pack, key, info, None);
+        // the put no longer waits: referenced by the doc's first version, or given up
+        blobs.settle(&key.space, &info.id);
+        out
     }
 
     fn loaded_or_stored_blob(
@@ -498,7 +519,10 @@ impl SessionManager {
                     }
                     Err(e) => return Err(e.into()),
                 };
-                self.import_blob(pack, key, info, Some(stat))?
+                let out = self.import_blob(pack, key, info, Some(stat));
+                // the put no longer waits: referenced by the doc's first version, or given up
+                blobs.settle(&key.space, &info.id);
+                out?
             }
         };
         s.attach_file(path, &root)?;

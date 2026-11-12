@@ -399,6 +399,11 @@ pub enum AuditEvent {
     /// relative to the file's folder: a plain file name when beside it, or a path into
     /// [`Host::conflict_dir`]'s folder; `None` if writing it failed). `lease_holder` is who
     /// held the lease, if anyone. Tell both parties.
+    ///
+    /// Also a live keyed doc that isn't a table: an outside save over a file the kit wrote
+    /// since the last outside save. `current` is the version holding the save, `kept` the one
+    /// holding the kit's version (the live doc before the save, also in the copy), and
+    /// `lease_holder` is `None`. Emitted once per such save.
     BlobConflict {
         key: DocKey,
         current: crate::store::VersionId,

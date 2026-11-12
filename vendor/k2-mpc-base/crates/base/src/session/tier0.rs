@@ -287,6 +287,30 @@ pub struct BlobRead {
     pub reader: BlobReader,
 }
 
+/// The host's choices for one tier-0 write ([`BlobSession::write_with`],
+/// [`BlobSession::write_bytes_with`], [`BlobSession::restore_with`]): the host-given turn.
+/// `#[non_exhaustive]`: start from [`BlobWriteOptions::default`] (or `new`) and use the
+/// setters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobWriteOptions {
+    /// The host-given turn of this call ([`crate::turn`]; default `None`): stored with the
+    /// version it records ([`BlobVersion::turn`]).
+    pub turn: Option<crate::turn::Turn>,
+}
+
+impl BlobWriteOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The host-given turn of this call ([`crate::session::EditOptions::turn`]).
+    pub fn turn(mut self, turn: crate::turn::Turn) -> Self {
+        self.turn = Some(turn);
+        self
+    }
+}
+
 /// Returned by [`BlobSession::write`] and [`BlobSession::restore`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -471,6 +495,8 @@ pub struct BlobLogEntry {
     /// The approval state of a version an agent wrote on someone's behalf (`log --pending`
     /// lists the `Pending` ones; [`BlobSession::set_approval`] settles them).
     pub approval: Option<ApprovalState>,
+    /// The host-given turn of the call that set it ([`BlobVersion::turn`]).
+    pub turn: Option<crate::turn::Turn>,
 }
 
 /// Returned by [`BlobSession::status`]. Metadata only.
@@ -588,6 +614,83 @@ struct BState {
 
 const OWN_WRITES_KEPT: usize = 8;
 
+/// Write a conflict copy of the file at `real` (its name `file_name`), filled by `fill`
+/// (atomic, never over an existing file), beside the file or in [`Host::conflict_dir`]'s
+/// folder (created if missing). Its name: the host's ([`Host::conflict_copy_name`]) first,
+/// then `pack_name`'s, then the kit's ([`conflict_copy_name`]); a name with a path separator,
+/// or `.`/`..`, is passed over, and ` 2`, ` 3`... are added while the name is taken. Tier 0
+/// writes a blob version this way, and a keyed live doc the kit's version an outside save
+/// replaced. Returns the copy's record (its path relative to the file's folder: a plain file
+/// name when beside it), `None` when it wasn't written (no folder, no free name), or what
+/// failed, for the caller's disk error.
+pub(super) fn place_conflict_copy(
+    host: &dyn Host,
+    pack_name: &dyn Fn(&str, u64, &str) -> String,
+    real: &Path,
+    file_name: &str,
+    who: &str,
+    now: u64,
+    fill: impl FnOnce(&mut File) -> io::Result<()>,
+) -> std::result::Result<Option<String>, (String, String)> {
+    let Some(base) = real.parent() else {
+        return Ok(None);
+    };
+    let dir = match host.conflict_dir(real) {
+        None => base.to_owned(),
+        Some(d) => {
+            let made = fs::create_dir_all(&d).and_then(|()| fs::canonicalize(&d));
+            match made {
+                Ok(d) => d,
+                Err(e) => {
+                    return Err((
+                        format!("the conflict-copy folder {}", d.display()),
+                        e.to_string(),
+                    ))
+                }
+            }
+        }
+    };
+    let usable = |n: &String| !(n.is_empty() || n == "." || n == ".." || n.contains(['/', '\\']));
+    let name = match host.conflict_copy_name(file_name, now, who) {
+        Some(n) if usable(&n) => n,
+        _ => {
+            let n = pack_name(file_name, now, who);
+            if usable(&n) {
+                n
+            } else {
+                conflict_copy_name(file_name, now, who)
+            }
+        }
+    };
+    let (stem, ext) = split_ext(&name);
+    let mut chosen = None;
+    for n in 1..=99 {
+        let candidate = if n == 1 {
+            name.clone()
+        } else {
+            format!("{stem} {n}{ext}")
+        };
+        if fs::symlink_metadata(dir.join(&candidate)).is_err() {
+            chosen = Some(candidate);
+            break;
+        }
+    }
+    let Some(chosen) = chosen else {
+        return Ok(None);
+    };
+    let target = dir.join(&chosen);
+    let Some(rec) = relative_path(base, &target).to_str().map(str::to_owned) else {
+        return Err((
+            "the conflict copy's path".into(),
+            "not UTF-8: not written".into(),
+        ));
+    };
+    match disk::atomic_write_with(&target, fill) {
+        Ok(_) => Ok(Some(rec)),
+        Err(e) => Err(("writing the conflict copy".into(), e.to_string())),
+    }
+}
+
 /// `target` relative to `base` (both absolute and canonical): `..` up to their common
 /// prefix, then down.
 fn relative_path(base: &Path, target: &Path) -> PathBuf {
@@ -663,6 +766,7 @@ pub(super) fn blob_log(
                 mtime_ms: v.mtime_ms,
                 conflict_copy,
                 approval: approvals.get(&id).copied(),
+                turn: v.turn,
             }
         })
         .collect())
@@ -1607,7 +1711,19 @@ impl BlobSession {
         src: &mut dyn Read,
         base: VersionId,
     ) -> Result<BlobWriteResult> {
-        let out = self.write_inner(conn, src, base);
+        self.write_with(conn, src, base, &BlobWriteOptions::new())
+    }
+
+    /// [`BlobSession::write`] with the host's [`BlobWriteOptions`]: the version it records
+    /// carries the host-given turn.
+    pub fn write_with(
+        &self,
+        conn: ConnId,
+        src: &mut dyn Read,
+        base: VersionId,
+        opts: &BlobWriteOptions,
+    ) -> Result<BlobWriteResult> {
+        let out = self.write_inner(conn, src, base, opts);
         self.for_viewer(conn, out, |_, v| v)
     }
 
@@ -1616,6 +1732,7 @@ impl BlobSession {
         conn: ConnId,
         src: &mut dyn Read,
         base: VersionId,
+        opts: &BlobWriteOptions,
     ) -> Result<BlobWriteResult> {
         let now = self.now();
         let (space, pid, auto) = {
@@ -1637,10 +1754,15 @@ impl BlobSession {
             (st.key.space.clone(), pid, auto)
         };
         let put = self.blobs.put(&space, src);
+        let put_id = put.as_ref().ok().map(|i| i.id);
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
-        let out = self.commit_write(st, conn, put, base, now);
+        let out = self.commit_write(st, conn, put, base, opts, now);
+        // the put no longer waits: referenced by the version, or given up
+        if let Some(id) = put_id {
+            self.blobs.settle(&space, &id);
+        }
         if auto && st.lease.as_ref().is_some_and(|l| l.auto && l.pid == pid) {
             self.end_lease(st, LeaseEnd::Released);
         }
@@ -1654,7 +1776,18 @@ impl BlobSession {
         bytes: &[u8],
         base: VersionId,
     ) -> Result<BlobWriteResult> {
-        let out = self.write_bytes_inner(conn, bytes, base);
+        self.write_bytes_with(conn, bytes, base, &BlobWriteOptions::new())
+    }
+
+    /// [`BlobSession::write_bytes`] with the host's [`BlobWriteOptions`].
+    pub fn write_bytes_with(
+        &self,
+        conn: ConnId,
+        bytes: &[u8],
+        base: VersionId,
+        opts: &BlobWriteOptions,
+    ) -> Result<BlobWriteResult> {
+        let out = self.write_bytes_inner(conn, bytes, base, opts);
         self.for_viewer(conn, out, |_, v| v)
     }
 
@@ -1663,8 +1796,9 @@ impl BlobSession {
         conn: ConnId,
         bytes: &[u8],
         base: VersionId,
+        opts: &BlobWriteOptions,
     ) -> Result<BlobWriteResult> {
-        self.write(conn, &mut &bytes[..], base)
+        self.write_with(conn, &mut &bytes[..], base, opts)
     }
 
     fn commit_write(
@@ -1673,6 +1807,7 @@ impl BlobSession {
         conn: ConnId,
         put: std::result::Result<BlobInfo, BlobError>,
         base: VersionId,
+        opts: &BlobWriteOptions,
         now: u64,
     ) -> Result<BlobWriteResult> {
         let info = put?;
@@ -1706,6 +1841,7 @@ impl BlobSession {
             BlobReason::Write,
         );
         v.on_behalf_of = p.on_behalf_of.clone();
+        v.turn = opts.turn;
         self.commit_own(st, i, v, now)
     }
 
@@ -1972,13 +2108,16 @@ impl BlobSession {
             blob: t.blob,
             stat: seen.persisted(),
         };
-        let vid = Self::store(st)?.commit_blob_versions(
+        let committed = Self::store(st)?.commit_blob_versions(
             self.doc_id,
             &space,
             st.vid,
             std::slice::from_ref(&v),
             Some(&sync),
-        )?[0];
+        );
+        // the ticket's put no longer waits: referenced by the save's version, or given up
+        self.blobs.settle(&space, &t.blob);
+        let vid = committed?[0];
         st.vid = vid;
         st.cur = v;
         self.want_index(st, st.vid, st.cur.blob, st.cur.size);
@@ -2034,11 +2173,27 @@ impl BlobSession {
     /// [`BlobReason::Restore`]. Needs edit and history; the lease rule applies as for a
     /// write (deliberate, so no base).
     pub fn restore(&self, conn: ConnId, vid: VersionId) -> Result<BlobWriteResult> {
-        let out = self.restore_inner(conn, vid);
+        self.restore_with(conn, vid, &BlobWriteOptions::new())
+    }
+
+    /// [`BlobSession::restore`] with the host's [`BlobWriteOptions`]: the version it records
+    /// carries the host-given turn.
+    pub fn restore_with(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        opts: &BlobWriteOptions,
+    ) -> Result<BlobWriteResult> {
+        let out = self.restore_inner(conn, vid, opts);
         self.for_viewer(conn, out, |_, v| v)
     }
 
-    fn restore_inner(&self, conn: ConnId, vid: VersionId) -> Result<BlobWriteResult> {
+    fn restore_inner(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        opts: &BlobWriteOptions,
+    ) -> Result<BlobWriteResult> {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -2075,6 +2230,7 @@ impl BlobSession {
         );
         v.on_behalf_of = p.on_behalf_of.clone();
         v.restored_from = Some(vid);
+        v.turn = opts.turn;
         self.commit_own(st, i, v, now)
     }
 
@@ -2980,6 +3136,22 @@ impl BlobSession {
             Ok(v) => v,
             Err(e) => return Err(self.disk_error(st, &real.display().to_string(), e)),
         };
+        let space = st.key.space.clone();
+        let out = self.ingest_stored(st, real, info, stat, now);
+        // the put no longer waits: referenced by the save's version, or given up
+        self.blobs.settle(&space, &info.id);
+        out
+    }
+
+    /// [`BlobSession::ingest`] once the file's bytes are stored (`info`).
+    fn ingest_stored(
+        &self,
+        st: &mut BState,
+        real: &Path,
+        info: BlobInfo,
+        stat: FileStat,
+        now: u64,
+    ) -> Result<DiskCheck> {
         let store = Self::store(st)?;
         self.expire_lease(st, now);
         let holder = st.lease.clone();
@@ -3133,13 +3305,16 @@ impl BlobSession {
             BlobReason::Merged,
         );
         // the file holds theirs until the merge is written back
-        let vids = store.commit_blob_versions(
+        let committed = store.commit_blob_versions(
             self.doc_id,
             &space,
             st.vid,
             &[theirs.clone(), merged.clone()],
             Some(sync),
-        )?;
+        );
+        // the put no longer waits: referenced by the merge's version, or given up
+        self.blobs.settle(&space, &info.id);
+        let vids = committed?;
         self.want_index(st, vids[0], theirs.blob, theirs.size);
         st.vid = vids[1];
         st.cur = merged;
@@ -3173,64 +3348,23 @@ impl BlobSession {
         who: &str,
         now: u64,
     ) -> Option<String> {
-        let base = real.parent()?;
-        let dir = match self.host.conflict_dir(real) {
-            None => base.to_owned(),
-            Some(d) => {
-                let made = fs::create_dir_all(&d).and_then(|()| fs::canonicalize(&d));
-                match made {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let what = format!("the conflict-copy folder {}", d.display());
-                        self.disk_error(st, &what, e);
-                        return None;
-                    }
-                }
-            }
-        };
-        // the host's name first, then the pack's, then the kit's; a name with a path
-        // separator, or `.`/`..`, is passed over
-        let usable =
-            |n: &String| !(n.is_empty() || n == "." || n == ".." || n.contains(['/', '\\']));
-        let name = match self.host.conflict_copy_name(file_name, now, who) {
-            Some(n) if usable(&n) => n,
-            _ => {
-                let n = self.pack.conflict_copy_name(file_name, now, who);
-                if usable(&n) {
-                    n
-                } else {
-                    conflict_copy_name(file_name, now, who)
-                }
-            }
-        };
-        let (stem, ext) = split_ext(&name);
-        let mut chosen = None;
-        for n in 1..=99 {
-            let candidate = if n == 1 {
-                name.clone()
-            } else {
-                format!("{stem} {n}{ext}")
-            };
-            if fs::symlink_metadata(dir.join(&candidate)).is_err() {
-                chosen = Some(candidate);
-                break;
-            }
-        }
-        let chosen = chosen?;
-        let target = dir.join(&chosen);
-        let Some(rec) = relative_path(base, &target).to_str().map(str::to_owned) else {
-            self.disk_error(st, "the conflict copy's path", "not UTF-8: not written");
-            return None;
-        };
         let space = st.key.space.clone();
-        let written = disk::atomic_write_with(&target, |f| {
-            self.blobs.copy_to(&space, &ours.blob, f).map_err(blob_io)?;
-            Ok(())
-        });
-        match written {
-            Ok(_) => Some(rec),
-            Err(e) => {
-                self.disk_error(st, "writing the conflict copy", e);
+        let placed = place_conflict_copy(
+            &*self.host,
+            &|f, at, w| self.pack.conflict_copy_name(f, at, w),
+            real,
+            file_name,
+            who,
+            now,
+            |f| {
+                self.blobs.copy_to(&space, &ours.blob, f).map_err(blob_io)?;
+                Ok(())
+            },
+        );
+        match placed {
+            Ok(rec) => rec,
+            Err((what, e)) => {
+                self.disk_error(st, &what, e);
                 None
             }
         }

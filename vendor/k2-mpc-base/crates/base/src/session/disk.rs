@@ -46,6 +46,11 @@ pub enum DiskCheck {
     /// had a version the file didn't have yet. The file's content is now version `version`;
     /// what was current before is version `kept` and was written to the conflict copy `copy`
     /// (beside the file; `None` if that failed). Nothing is lost.
+    ///
+    /// Also a live keyed doc that isn't a table, when the kit wrote the file since the last
+    /// outside save: the save is the doc's change `version` (a doc version, as
+    /// [`DiskCheck::Ingested`]'s) and `kept` is the id of the stored version holding the kit's
+    /// version, which the copy holds too.
     Conflict {
         version: Seq,
         kept: Seq,

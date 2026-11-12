@@ -1048,9 +1048,13 @@ impl DocStore {
                 }
             }
             c.attributions += rows.len() as u64;
+            // their versions' turns go: a turn links changes into one agent run
+            let theirs: Vec<u64> = rows.iter().map(|(vid, _)| *vid).collect();
             for (vid, b) in rows {
                 t.insert((doc, vid), b.as_slice())?;
             }
+            drop(t);
+            super::turns::erase_in(&w, super::turns::BLOB_TURNS, doc, &theirs)?;
         }
         {
             let mut t = w.open_table(BLOB_APPROVALS)?;

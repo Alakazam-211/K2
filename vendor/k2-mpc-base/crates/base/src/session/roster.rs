@@ -20,7 +20,8 @@ use super::awareness::{ClaimEnd, ClaimId, NoteKind, Overwrite};
 use super::handles::Handles;
 use super::host::{LeaveReason, Rights};
 use super::participant::{
-    CellCursor, ConnId, CursorAt, ElemSelection, Participant, Point, Rect, Role, RosterEntry,
+    CellCursor, ConnId, CursorAt, ElemFocus, ElemRange, ElemSelection, Participant, Point, Rect,
+    Role, RosterEntry,
 };
 use super::position::LineRange;
 use crate::doc::ClientId;
@@ -69,6 +70,18 @@ impl fmt::Display for Who {
             Who::Pid(p) | Who::Handle(p) => f.write_str(p),
         }
     }
+}
+
+/// Who holds a claim, as its events carry it (rendering-data contract Item 4): the claimant's
+/// name, kind and colour when they took it, so a view never joins a claim event against the
+/// roster (the claimant may have left by the time it ends). Their id is the event's `who`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ClaimActor {
+    pub name: String,
+    pub kind: super::ParticipantKind,
+    /// As the host stamped it on the participant ([`Participant::colour`]).
+    pub colour: String,
 }
 
 /// One participant in a [`RosterEvent::Snapshot`]: the [`super::Session::roster`] row, with
@@ -176,6 +189,20 @@ pub enum RosterEvent {
         viewport: Option<Rect>,
         client: Option<ClientId>,
     },
+    /// Their focus, the container in view ([`RosterEntry::focus`]), or gone. As
+    /// [`RosterEvent::Selection`] (wire 3).
+    Focus {
+        who: Who,
+        focus: Option<ElemFocus>,
+        client: Option<ClientId>,
+    },
+    /// Their text range inside one element's field ([`RosterEntry::range`]), or gone (cleared,
+    /// or dropped because the field changed). As [`RosterEvent::Selection`] (wire 3).
+    Range {
+        who: Who,
+        range: Option<ElemRange>,
+        client: Option<ClientId>,
+    },
     /// A claim was taken (explicitly or by a read's `--for-edit`). Never coalesced.
     ClaimStarted {
         who: Who,
@@ -187,6 +214,10 @@ pub enum RosterEvent {
         expires_ms: u64,
         /// The doc's version when it was taken.
         version: Seq,
+        /// Who holds it (wire 3).
+        actor: ClaimActor,
+        /// When it was taken, on the host's clock (wire 3).
+        started_ms: u64,
     },
     /// A claim on elements of a list root was taken ([`super::Session::claim_elems`]). Its own
     /// kind, because it has no lines. Never coalesced. It ends with [`RosterEvent::ClaimEnded`].
@@ -201,6 +232,10 @@ pub enum RosterEvent {
         expires_ms: u64,
         /// The doc's version when it was taken.
         version: Seq,
+        /// Who holds it (wire 3).
+        actor: ClaimActor,
+        /// When it was taken, on the host's clock (wire 3).
+        started_ms: u64,
     },
     /// A claim ended, and how. Never coalesced.
     ClaimEnded {
@@ -211,6 +246,13 @@ pub enum RosterEvent {
         lines: LineRange,
         /// The doc's version when it ended.
         version: Seq,
+        /// Who held it (wire 3).
+        actor: ClaimActor,
+        /// When it ended, on the host's clock (wire 3).
+        at_ms: u64,
+        /// The change that ended it ([`ClaimEnd::Edited`], [`ClaimEnd::Deleted`]), else `None`
+        /// (wire 3).
+        at_rev: Option<Seq>,
     },
     /// A heads-up note was delivered to `to` (on a read or an edit): `from` is viewing,
     /// edited, claimed, or has a caret or selection on lines `to` touched.
@@ -251,6 +293,8 @@ struct Told {
     selection: ToldKind<ElemSelection>,
     pointer: ToldKind<Point>,
     viewport: ToldKind<Rect>,
+    focus: ToldKind<ElemFocus>,
+    range: ToldKind<ElemRange>,
 }
 
 /// One presence kind as subscribers were last told it: the participant's value (what a consumer
@@ -444,6 +488,8 @@ impl RosterHub {
                             selection: ToldKind::default(),
                             pointer: ToldKind::default(),
                             viewport: ToldKind::default(),
+                            focus: ToldKind::default(),
+                            range: ToldKind::default(),
                         });
                     }
                     RosterEvent::Left { who, .. } => self.told.retain(|t| &t.who != who),
@@ -474,6 +520,8 @@ impl RosterHub {
                             selection: ToldKind::default(),
                             pointer: ToldKind::default(),
                             viewport: ToldKind::default(),
+                            focus: ToldKind::default(),
+                            range: ToldKind::default(),
                         });
                         self.told.len() - 1
                     }
@@ -584,7 +632,29 @@ fn told(r: &Row) -> Told {
             top: r.entry.viewport,
             conns: viewports(&r.entry),
         },
+        focus: ToldKind {
+            top: r.entry.focus.clone(),
+            conns: focuses(&r.entry),
+        },
+        range: ToldKind {
+            top: r.entry.range.clone(),
+            conns: ranges(&r.entry),
+        },
     }
+}
+
+fn focuses(e: &RosterEntry) -> Vec<(ClientId, Option<ElemFocus>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.focus.clone()))
+        .collect()
+}
+
+fn ranges(e: &RosterEntry) -> Vec<(ClientId, Option<ElemRange>)> {
+    e.devices
+        .iter()
+        .map(|d| (d.client, d.range.clone()))
+        .collect()
 }
 
 fn selections(e: &RosterEntry) -> Vec<(ClientId, Option<ElemSelection>)> {
@@ -636,12 +706,27 @@ fn kind_events<T: Clone + PartialEq>(
     }
 }
 
-/// One participant's `Selection`, `Pointer` and `Viewport` events for a flush.
+/// One participant's `Focus`, `Selection`, `Range`, `Pointer` and `Viewport` events for a flush
+/// (focus first: a view moves to the container before it draws what is selected there).
 fn elem_events(t: &mut Told, who: &Who, e: &RosterEntry, batch: &mut Vec<RosterEvent>) {
+    kind_events(&mut t.focus, &e.focus, focuses(e), |x, c| {
+        batch.push(RosterEvent::Focus {
+            who: who.clone(),
+            focus: x,
+            client: c,
+        })
+    });
     kind_events(&mut t.selection, &e.selection, selections(e), |x, c| {
         batch.push(RosterEvent::Selection {
             who: who.clone(),
             selection: x,
+            client: c,
+        })
+    });
+    kind_events(&mut t.range, &e.range, ranges(e), |x, c| {
+        batch.push(RosterEvent::Range {
+            who: who.clone(),
+            range: x,
             client: c,
         })
     });

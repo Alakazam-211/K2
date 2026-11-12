@@ -142,8 +142,12 @@ fn main() {
         let check = store.check_rewritable();
         println!("{file}: check_rewritable: {check:?}");
         match check {
-            // a newer kit's table (client_kinds, after v0.10.2) this build doesn't know
-            Err(StoreError::NewerData { table }) if table == "client_kinds" => {
+            // a newer kit's table this build doesn't know (client_kinds, after v0.10.2;
+            // change_turns and change_verbs, after v0.14.0)
+            Err(StoreError::NewerData { table })
+                if ["client_kinds", "change_turns", "blob_turns", "change_verbs"]
+                    .contains(&table.as_str()) =>
+            {
                 println!("{file}: rewrite refused before any change (table {table:?})");
             }
             other => {

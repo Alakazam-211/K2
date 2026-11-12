@@ -111,7 +111,8 @@ impl PurgeRequest {
 pub enum NotReached {
     /// The doc's file wasn't rewritten (missing, declined, unwritable, not attached to this
     /// session, or the pack couldn't render the doc): it, and the sync replica of it the kit
-    /// keeps, still hold its text as last written. Attach and flush the file, then purge again.
+    /// keeps (and, for a pack that keeps one, its carrier: the file's bytes as last written,
+    /// K1), still hold its text as last written. Attach and flush the file, then purge again.
     File,
     /// This many targeted changes had already left the revert window: the text they changed
     /// is unknown, so copies of it elsewhere couldn't be found. Purge by text, or the whole
@@ -705,11 +706,16 @@ impl Session {
                 .collect();
             store.set_overwrite_notes(self.doc_id, &rows)?;
         }
+        // a keyed doc's conflict copies, with what each kept version renders before the purge
+        let copies = self.copies_before_purge(st)?;
+        let whole_versions = purge.versions.clone();
         let (mut counts, released) = store.purge_doc(self.doc_id, &purge)?;
         counts.undo_batches = undo_batches;
         counts.read_bases = read_bases;
         // memory follows the store
         st.doc = doc;
+        // counted again on next need (the re-encoded doc's deleted elements may differ)
+        st.keyed_size = None;
         st.hash_key = key;
         st.reverts = None;
         // the re-encoded doc keeps every live element's ID; rebuilt on next need anyway
@@ -736,6 +742,17 @@ impl Session {
         // a doc promoted from tier 0 (v0.9.2): the tier-0 versions it kept are history too
         let whole = matches!(req.scope, PurgeScope::History);
         self.purge_kept_tier0(st, &store, whole, now, &mut counts, &mut not_reached)?;
+        // the conflict copies holding content the purge erased (`live/copies.rs`)
+        self.purge_live_copies(st, copies, &mut counts, &mut not_reached)?;
+        // the carriers of the versions it erased (K1, `live/carrier.rs`)
+        self.purge_version_carriers(
+            st,
+            &whole_versions,
+            &needles,
+            now,
+            &mut counts,
+            &mut not_reached,
+        )?;
         self.remove_released_refs(&released, &mut counts, &mut not_reached)?;
         let rewrite = match store.rewrite_file() {
             Ok(r) => Some(r),

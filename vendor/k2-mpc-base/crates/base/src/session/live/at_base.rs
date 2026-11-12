@@ -213,6 +213,8 @@ impl Session {
                         on_behalf_of: info.on_behalf_of.clone(),
                         hidden: Vec::new(),
                         kind: info.kind,
+                        turn: info.turn,
+                        verb: info.verb.clone(),
                     },
                     elems,
                     deleted,
@@ -413,6 +415,7 @@ impl Session {
             Edit::List { .. } | Edit::Map { .. } => unreachable!("a text edit"),
         };
         st.group_hint = opts.group;
+        st.next_turn = opts.turn;
         let v = st.version;
         let result = self
             .commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())

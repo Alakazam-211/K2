@@ -157,7 +157,14 @@
       "hold": false,
       "for_edit": false,
       "expires_ms": 1700000090929,
-      "version": 4
+      "version": 4,
+      "actor": {
+        "id": "p2",
+        "name": "Helper",
+        "kind": "agent",
+        "colour": "#0ea5e9"
+      },
+      "started_ms": 1700000060929
     },
     {
       "kind": "claim_ended",
@@ -169,7 +176,15 @@
         "first": 1,
         "last": 2
       },
-      "version": 4
+      "version": 4,
+      "actor": {
+        "id": "p2",
+        "name": "Helper",
+        "kind": "agent",
+        "colour": "#0ea5e9"
+      },
+      "at_ms": 1700000061229,
+      "at_rev": null
     },
     {
       "kind": "rights",

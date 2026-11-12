@@ -136,6 +136,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::Declined(_)
         | SessionError::PackMismatch { .. }
         | SessionError::NoSuchChange(_)
+        | SessionError::VersionNoCarrier { .. }
         | SessionError::NoApproval { .. }
         | SessionError::NoBlobStore
         | SessionError::NotIndexed { .. }
@@ -144,6 +145,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NoClaim(_)
         | SessionError::UnknownElem { .. }
         | SessionError::BlobRefUnknown { .. }
+        | SessionError::Blob(BlobError::CacheKeyDestroyed { .. })
         | SessionError::Blob(BlobError::NotFound(_) | BlobError::TooLarge { .. }) => {
             exit::NOT_FOUND
         }
@@ -242,6 +244,7 @@ mod tests {
                 3,
             ),
             (SessionError::NoSuchChange(9), 4),
+            (SessionError::VersionNoCarrier { version: 9 }, 4),
             (SessionError::Deleted, 4),
             (SessionError::NoBlobStore, 4),
             (SessionError::RateLimited { retry_after_ms: 1 }, 2),
@@ -295,6 +298,10 @@ mod tests {
             (SessionError::Blob(BlobError::Damaged("ab".into())), 1),
             (SessionError::Blob(BlobError::Io("x".into())), 1),
             (SessionError::Blob(BlobError::NoRandom("x".into())), 1),
+            (
+                SessionError::Blob(BlobError::CacheKeyDestroyed { generation: 3 }),
+                4,
+            ),
             // amendment 13: claims
             (
                 SessionError::Claimed {

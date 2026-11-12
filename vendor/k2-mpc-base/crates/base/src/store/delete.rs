@@ -4,9 +4,10 @@
 //! `snapshots`, `updates`, `clients`, `client_kinds`, `versions`, `approvals`, `sync` (the
 //! disk replica), `doc_keys` (its hash key), the history tables (`changes`, `reverts`, `revert_index`,
 //! `revert_carry`, `revert_stats`, `authored`, `change_clocks`, `provenance`) and the
-//! tier-0 tables (`blob_versions`, `blob_sync`, `blob_approvals`), and `doc_blob_refs`. A blob
-//! doc's versions each held a reference on their blob in `blobs`, and a doc holds one on each
-//! blob its values name: those references are released (the blob's grace starts then), so
+//! tier-0 tables (`blob_versions`, `blob_sync`, `blob_approvals`), `doc_blob_refs` and
+//! `live_carriers`. A blob doc's versions each held a reference on their blob in `blobs`, a doc
+//! holds one on each blob its values name and one on its carrier (K1): those references are
+//! released (the blob's grace starts then), so
 //! [`crate::blob::BlobStore::gc`] removes a blob nothing else references once the grace runs
 //! out.
 //!
@@ -46,7 +47,8 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
             t.erase(w, id)?;
         }
     }
-    // the tier-0 tables and doc_blob_refs: their blob references are released first
+    // the tier-0 tables, doc_blob_refs and live_carriers: their blob references are released
+    // first
     blob::delete_rows(w, id, &key.space, now)?;
     Ok(key)
 }

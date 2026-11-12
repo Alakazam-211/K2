@@ -170,6 +170,18 @@ pub(crate) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
     m.finish()
 }
 
+/// HKDF-SHA256 (RFC 5869) with a 32-byte output: extract `ikm` under the public `salt`, then
+/// expand one block with `info`. A secret goes in as `ikm`, the **message** of the extract,
+/// never as an HMAC key: `HMAC(space key, bytes)` is a blob's id, which any writer gets back
+/// for bytes of their choosing, so nothing keyed directly by a space key may be a secret.
+pub(crate) fn hkdf32(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; 32] {
+    let prk = hmac(salt, ikm);
+    let mut m = HmacSha256::new(&prk);
+    m.update(info);
+    m.update(&[1]);
+    m.finish()
+}
+
 /// First byte of a keyed file hash ([`file_hash`]).
 const KEYED_FILE_HASH: u8 = 1;
 
@@ -292,6 +304,21 @@ mod tests {
         assert_eq!(
             hex(&m.finish()),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// RFC 5869 test case 1 (SHA-256): the PRK, and the first 32 bytes of the OKM (T(1)).
+    #[test]
+    fn hkdf_rfc_5869_case_1() {
+        let salt: Vec<u8> = (0x00..=0x0c).collect();
+        let info: Vec<u8> = (0xf0..=0xf9).collect();
+        assert_eq!(
+            hex(&hmac(&salt, &[0x0b; 22])),
+            "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"
+        );
+        assert_eq!(
+            hex(&hkdf32(&salt, &[0x0b; 22], &info)),
+            "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf"
         );
     }
 

@@ -244,6 +244,17 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   color: var(--color-text-primary);
 }
 
+/* Selected text in a Terminal field (any <input>, <textarea> or editable
+   box): the accent button's pair, the accent fill under on-accent text,
+   which control-contrast.test pins at 4.5:1 or more in every palette. The
+   browser's own highlight read 3.78:1 in Charcoal (#e4e4e7 on #51759c).
+   Gardens keep theirs. */
+html[data-style="terminal"] :is(input, textarea, [contenteditable="true"]):not([data-zen-root] *)::selection,
+html[data-style="terminal"] [contenteditable="true"]:not([data-zen-root] *) *::selection {
+  background: var(--color-accent-fill);
+  color: var(--color-on-accent);
+}
+
 /* ── CodeMirror overrides ─────────────────────────────────────────── */
 /* All CM styles in @layer cm-overrides so they beat Tailwind (@layer   */
 /* tw) but lose to CodeMirror's unlayered runtime style-mod styles.    */

@@ -1,8 +1,12 @@
 # Changelog
 
+## v0.1.7 (2026-11-11)
+
+Pairs with kit v0.14.0 (`30ddf8fc`, the public cut). The bridge's lock and kit pin text move to it; the pack's code doesn't change. The kit's additions are provided methods with defaults (`Pack::check_merged`, `Host::conflict_copy_name`) and person-writer reuse, off by default, and the bridge uses none of them. The kit's tier-0 change (an app's save over an agent's write keeps both, with a conflict copy) reaches a board file a host serves through the kit's blob sessions, with no change here. `scripts/private-allow.txt`'s header says what `scripts/check-private.sh` skips (only the allowlist itself), and v0.1.6's line names the kit tag alone.
+
 ## v0.1.6 (2026-11-10)
 
-Pairs with kit v0.13.1 (`6ef688e4`, the public cut; no kit API change since v0.13.0). The bridge's lock and kit pin text move to it; the pack's code doesn't change. `scripts/check-private.sh` is the kit's (k2-mpc-base `tools/check-private.sh`): its patterns are no longer in the tree. It reads them from `MPC_PRIVATE_PATTERNS`, else the file `MPC_PRIVATE_PATTERNS_FILE` names, else `~/.config/k2-mpc/private-patterns.txt`, and with none it exits 2; `scripts/private-allow.txt` works as before.
+Pairs with kit v0.13.1 (no kit API change since v0.13.0). The bridge's lock and kit pin text move to it; the pack's code doesn't change. `scripts/check-private.sh` is the kit's (k2-mpc-base `tools/check-private.sh`): its patterns are no longer in the tree. It reads them from `MPC_PRIVATE_PATTERNS`, else the file `MPC_PRIVATE_PATTERNS_FILE` names, else `~/.config/k2-mpc/private-patterns.txt`, and with none it exits 2; `scripts/private-allow.txt` works as before.
 
 ## v0.1.5 (2026-11-10)
 

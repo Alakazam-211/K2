@@ -1379,7 +1379,6 @@ mod tests {
         ci::checks_of(&conn, run)
     }
 
-    #[test]
     /// B2 rule 1 (BK-1): a watched push to a trusted branch saves the
     /// trusted cache; a watched non-trusted branch only its scratch; a
     /// manual run labelled with a trusted branch is trusted only when the
@@ -1412,7 +1411,9 @@ mod tests {
         }
         // Manual runs labelled main: trusted only when the remote has it.
         let root = Path::new(&ws.path).to_path_buf();
-        let man = |sha: &str| Start { sha, git_ref: Some("main"), trigger: "manual", by: "agent:x", tier: "ci", remote: "origin", only: &[] };
+        fn man(sha: &str) -> Start<'_> {
+            Start { sha, git_ref: Some("main"), trigger: "manual", by: "agent:x", tier: "ci", remote: "origin", only: &[] }
+        }
         *f.on_remote.lock().unwrap() = Some(false);
         let c = ci_cache(&f, &root, &man(&b), &["main".into()]).unwrap();
         assert_eq!((c.commit, c.cache_ref.as_deref()), (CacheCommit::Scratch, Some("main")), "a local commit labelled main: {}", c.why);

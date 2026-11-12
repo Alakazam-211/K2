@@ -298,13 +298,22 @@ PY
 ok "the ticket is resolved and the ask is closed and told"
 
 echo "== the night (Denver) =="
-set_now "2026-11-12T01:05:00-07:00"
+# Each org's head is due at its own stable time between runAt (01:00) and
+# the spread's end (a hash of the org id): read Billing's from the queue
+# and move the clock there.
+set_now "2026-11-12T01:00:00-07:00"
+night="$(api GET /cli/organization/night)"
+due="$(python3 -c 'import json,sys
+j = json.loads(sys.argv[1])
+print(next(o["due"] for o in j["orgs"] if o["head"]["handle"] == "billing"))' "$night")" || fail "billing's due time: $night"
+case "$due" in 0[1-3]:[0-5][0-9]) ;; *) fail "billing's due time $due is outside 01:00-04:00: $night" ;; esac
+set_now "2026-11-12T$due:59-07:00"  # due is HH:MM; its seconds are within the minute
 for _ in $(seq 1 90); do
     grep -q "Night run 11-12: you are Billing's head." "$SB/typed.billing" 2>/dev/null && break
     sleep 1
 done
-grep -q "Night run 11-12: you are Billing's head." "$SB/typed.billing" || fail "the night run never reached billing: $(cat "$SB/typed.billing" 2>/dev/null)"
-ok "01:05: the night run reached the head's session"
+grep -q "Night run 11-12: you are Billing's head." "$SB/typed.billing" || fail "the night run never reached billing at $due: $(cat "$SB/typed.billing" 2>/dev/null)"
+ok "$due (Billing's turn): the night run reached the head's session"
 [ "$(grep -c "Night run" "$SB/typed.helpdesk" 2>/dev/null || true)" = 0 ] || fail "a member got the night run"
 agent_env helpdesk
 cli "${AE[@]}" -- organization update "Refund queue is empty."

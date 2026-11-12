@@ -709,7 +709,7 @@ echo "== MCS2: a >3 MB attachment is refused before anything is audited =="
 python3 -c 'import sys; open(sys.argv[1], "wb").write(b"\0" * (3 * 1024 * 1024 + 1))' "$REPO/big.bin"
 before="$(sql "SELECT COUNT(*) FROM mail_outbound")"
 run agent mail send carol@dest.example --subject "big" --body "x" --from "$MS" --attach big.bin
-want_rc 1 "oversize attachment"
+want_rc 2 "oversize attachment"  # attachment_too_large is a usage refusal (exit 2) since hosted attachments
 has "$ERR" "attachment_too_large" "code attachment_too_large"
 [ "$(sql "SELECT COUNT(*) FROM mail_outbound")" = "$before" ] || fail "no audit row for a refused send"
 jok "$(fake_log)" 'len(j["sent"]) == 2' "nothing more was sent"

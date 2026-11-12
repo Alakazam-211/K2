@@ -91,7 +91,7 @@
   App.fitTo = (b, opts) => {
     if (!b) return
     const r = rect(); const pad = (opts && opts.pad) != null ? opts.pad : 80
-    const top = (opts && opts.top) != null ? opts.top : 12   // the top bars' inset; a tab has no chrome above them
+    const top = (opts && opts.top) != null ? opts.top : 60
     const availW = Math.max(100, r.width - pad * 2); const availH = Math.max(100, r.height - pad * 2 - top)
     const s = Math.min(opts && opts.max != null ? opts.max : 2, availW / Math.max(b.w, 1), availH / Math.max(b.h, 1))
     App.animateTo({ s, x: r.width / 2 - (b.x + b.w / 2) * s, y: top / 2 + r.height / 2 - (b.y + b.h / 2) * s }, opts && opts.instant ? 0 : 320)

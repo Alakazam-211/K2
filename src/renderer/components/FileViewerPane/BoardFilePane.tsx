@@ -1,4 +1,4 @@
-// A `.k5board` in a K2 tab (prd-board-tab-v1 §4; board-tab-b3-interface.md). The canvas is `k2:board-file@1` in a sealed
+// A `.k5board` in a K2 tab (prd-board-tab-v1 §4; board-tab-b3-interface.md). The canvas is `k2:board-file@2` in a sealed
 // frame; everything around it (the chip, the banners, the cards) is K2's own DOM, because a file can come from anyone.
 // The truth lives in the daemon, and what can't reach it yet lives in the session (lib/board-file), not in this pane.
 //

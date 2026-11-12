@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Board</title>
+    <link rel="stylesheet" href="board.css">
+  </head>
+  <body>
+    <div id="app" class="app">
+      <div id="viewport" class="viewport" tabindex="0" role="application" aria-roledescription="whiteboard" aria-label="Board canvas">
+        <div id="world" class="world"></div>
+      </div>
+      <div id="overlay" class="overlay"></div>
+      <div id="topleft" class="bar topleft"></div>
+      <div id="topright" class="bar topright"></div>
+      <div id="hud" class="hud"></div>
+      <div id="toolbar" class="bar toolbar"></div>
+      <div id="ctx" class="bar ctx" hidden></div>
+      <div id="bottomright" class="bottomright">
+        <canvas id="minimap" class="minimap" width="440" height="280" hidden></canvas>
+        <div id="zoombar" class="bar zoombar"></div>
+      </div>
+      <div id="present" class="bar present" hidden></div>
+      <div id="pop" class="pop" hidden></div>
+      <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+      <div id="announce" class="sr" aria-live="polite"></div>
+    </div>
+    <script src="schema.js"></script>
+    <script src="host.js"></script>
+    <script src="store.js"></script>
+    <script src="model.js"></script>
+    <script src="geom.js"></script>
+    <script src="icons.js"></script>
+    <script src="render.js"></script>
+    <script src="app.js"></script>
+    <script src="export.js"></script>
+    <script src="ui.js"></script>
+  </body>
+</html>

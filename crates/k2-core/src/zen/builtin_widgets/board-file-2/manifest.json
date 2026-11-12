@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "Board",
+  "description": "A .k5board file in a K2 tab: an infinite whiteboard you and your agents build together, saved in the file.",
+  "entry": "index.html",
+  "caps": [
+    "store:read",
+    "store:write",
+    "links:open",
+    "downloads:save",
+    "uploads:pick"
+  ],
+  "reasons": {
+    "store:read": "to load this board file, and see changes as you and your agents make them",
+    "store:write": "to save your changes in this board file",
+    "links:open": "to open a link on the board in your browser when you click Open",
+    "downloads:save": "to save a picture of this board to your Downloads",
+    "uploads:pick": "to add pictures to this board from your files"
+  },
+  "requires": {
+    "libs": ["k2-png@1"]
+  }
+}

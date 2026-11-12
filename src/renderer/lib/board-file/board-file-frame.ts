@@ -1,6 +1,6 @@
 // What a board file's sealed frame needs from a tab that isn't a Garden (prd-board-tab-v1 BT-18, BT-22).
 
-export const BOARD_FILE_WIDGET = 'k2:board-file@1'
+export const BOARD_FILE_WIDGET = 'k2:board-file@2'
 
 /** Link sites and download consent are keyed by a Garden id on the local daemon; a tab uses this reserved one. It fits
  *  `valid_garden_id`, and no Garden can hold it (Garden ids are minted as `g-…`). */

@@ -77,13 +77,16 @@ pub const REVIEW_WIDGET: &str = "k2:review@1";
 /// (`data:k2:board`), which agents change through `k2 board`. A Beta behind
 /// the Board core: `board-1.toml` places it beside K2's Conversation.
 pub const BOARD_WIDGET: &str = "k2:board@1";
-/// A `.k5board` in a K2 tab (prd-board-tab-v1 BT-17). Dark behind `board_file_preview`.
-pub const BOARD_FILE_WIDGET: &str = "k2:board-file@1";
+/// A `.k5board` in a K2 tab (prd-board-tab-v1 BT-17). Dark behind `board_file_preview`. The tab runs the newest:
+/// `@2` (0.46.12) starts the board under the tab bar (12px, not board-1's 60px Garden band) and leaves the file's
+/// name to K2's own DOM over the top-left corner, so the tab can rename the file.
+pub const BOARD_FILE_WIDGET: &str = "k2:board-file@2";
 
 /// What a Garden placing a built-in that only runs in K2's own tab frame is told, or None for any other widget. Its
 /// `boardFile.*` verbs answer `verb_unavailable` in a Garden frame, so a placement could only ever show a broken card.
+/// Every version of `k2:board-file` is tab-only.
 pub fn tab_only_refusal(widget: &str) -> Option<String> {
-    (widget == BOARD_FILE_WIDGET || widget == "k2:board-file")
+    (widget == "k2:board-file" || widget.starts_with("k2:board-file@"))
         .then(|| format!("'{widget}' runs only in a board file's tab; a Garden places Board as {BOARD_WIDGET}"))
 }
 
@@ -483,6 +486,28 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("ui.js", include_str!("board-file-1/ui.js")),
         ],
     },
+    // @1 with the board under the tab bar (top bars, hud and popovers 12px down, fitTo's top 12) and the file's name
+    // left to K2's DOM over the corner (`--zen-board-name-w`, `--zen-board-name-host`; without them the board shows
+    // its own name). The fold with board-1 is a later version.
+    BuiltinWidget {
+        name: "board-file",
+        version: 2,
+        files: &[
+            ("manifest.json", include_str!("board-file-2/manifest.json")),
+            ("index.html", include_str!("board-file-2/index.html")),
+            ("board.css", include_str!("board-file-2/board.css")),
+            ("schema.js", include_str!("board-file-2/schema.js")),
+            ("host.js", include_str!("board-file-2/host.js")),
+            ("store.js", include_str!("board-file-2/store.js")),
+            ("model.js", include_str!("board-file-2/model.js")),
+            ("geom.js", include_str!("board-file-2/geom.js")),
+            ("icons.js", include_str!("board-file-2/icons.js")),
+            ("render.js", include_str!("board-file-2/render.js")),
+            ("app.js", include_str!("board-file-2/app.js")),
+            ("export.js", include_str!("board-file-2/export.js")),
+            ("ui.js", include_str!("board-file-2/ui.js")),
+        ],
+    },
     // The canvas (the Compute Garden, Rosson 2026-11-03): the host and its
     // registry (canvas.js), then one script and style per tile, then
     // start.js, in index.html's order.
@@ -547,6 +572,7 @@ pub const BUILTIN_WIDGET_HASHES: &[(&str, &str)] = &[
     ("k2:board@1", "66ec65e385a4c95f08adbb54e476bbf08531116a84d8a193baaeb354999492cc"),
     ("k2:board-file@1", "310db4a193a9e0e347ce257cb3cfdd8f6e2a3bf91492ae32f173aba080ae057c"),
     ("k2:canvas@1", "32e8a13b33965aa7fa93e4b590c5591a48d0b804d5401b5f195495328bb52aaa"),
+    ("k2:board-file@2", "852372827244c9a42f154f16336c8b89a6e492d0f70f002a98c598f0a15f7682"),
 ];
 
 /// The hash [`BUILTIN_WIDGET_HASHES`] pins.
@@ -1412,12 +1438,24 @@ mod tests {
     /// custom widget in readable source, loaded in its build order; only the
     /// prd-board-tab-v1 BT-17: the tab's Board is as clean as the Garden's. Only host.js and store.js call `k2.*`, only
     /// catalog verbs or runtime members; the frame never sees a file's bytes and never saves a whole board.
+    /// Every released version stays clean; the tab runs the newest, and no version can be placed in a Garden.
     #[test]
     fn the_board_file_is_a_clean_readable_widget() {
-        let w = builtin_widget(&parse_widget_ref(BOARD_FILE_WIDGET).expect("parses")).expect("k2:board-file@1 ships");
+        for id in ["k2:board-file@1", BOARD_FILE_WIDGET] {
+            clean_board_file(builtin_widget(&parse_widget_ref(id).expect("parses")).unwrap_or_else(|| panic!("{id} ships")));
+        }
+        let latest = builtin_widget(&parse_widget_ref("k2:board-file").expect("parses")).map(|w| w.id());
+        assert_eq!(latest.as_deref(), Some(BOARD_FILE_WIDGET), "the tab runs the newest board-file");
+        assert_eq!(tab_only_refusal(BOARD_WIDGET), None);
+        for id in ["k2:board-file", "k2:board-file@1", BOARD_FILE_WIDGET] {
+            assert!(tab_only_refusal(id).is_some(), "a Garden can't place {id}");
+        }
+    }
+
+    fn clean_board_file(w: &'static BuiltinWidget) {
         let files: std::collections::BTreeMap<String, Vec<u8>> =
             w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
-        let c = crate::zen::widgets::check_files("k2", "board-file-1", &files);
+        let c = crate::zen::widgets::check_files("k2", &format!("{}-{}", w.name, w.version), &files);
         assert!(c.errors.is_empty(), "{:?}", c.errors);
         assert!(c.bundle.is_some(), "it bundles");
         assert!(!c.warnings.iter().any(|d| d.message.starts_with("this widget is large")), "{:?}", c.warnings);
@@ -1466,8 +1504,6 @@ mod tests {
         for needed in ["k2.boardFile.submit(", "k2.boardFile.open()", "k2.boardFile.events(", "k2.boardFile.hold(", "k2.boardFile.flush()"] {
             assert!(store.contains(needed), "store.js lost {needed}");
         }
-        assert_eq!(tab_only_refusal(BOARD_WIDGET), None);
-        assert!(tab_only_refusal(BOARD_FILE_WIDGET).is_some(), "a Garden can't place it");
     }
 
     /// two adapters (host.js, store.js) call `k2.*`, and only catalog verbs,

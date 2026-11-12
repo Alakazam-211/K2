@@ -91,7 +91,7 @@ The Board Garden's whiteboard widget is **Board by Baden Ballard (MIT)**.
 
 | | |
 |--|--|
-| **What** | `crates/k2-core/src/zen/builtin_widgets/board-1/` (the `k2:board@1` built-in widget) and `crates/k2-core/src/zen/builtin_widgets/board-file-1/` (the Board tab for `.k5board` files), ported from Board's own widget; and Board code used by the Org Chart in `src/renderer/components/OrgChart/`: `org-camera.ts` and `OrgMinimap.tsx` (adapted from Board's camera and minimap) and `board-geom.ts` (which loads Board's `board-file-1/geom.js`) |
+| **What** | `crates/k2-core/src/zen/builtin_widgets/board-1/` (the `k2:board@1` built-in widget) and `crates/k2-core/src/zen/builtin_widgets/board-file-1/` and `board-file-2/` (the Board tab for `.k5board` files), ported from Board's own widget; and Board code used by the Org Chart in `src/renderer/components/OrgChart/`: `org-camera.ts` and `OrgMinimap.tsx` (adapted from Board's camera and minimap) and `board-geom.ts` (which loads Board's `board-file-1/geom.js`) |
 | **Author** | Baden Ballard |
 | **License** | **MIT** (granted to K2 in writing by the author, 2026-11-01) |
 

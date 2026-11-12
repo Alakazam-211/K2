@@ -56,9 +56,59 @@ fn running_check_does_not_read_token_files_or_status() {
     assert!(!quit.contains("app.exit"));
     let main_src = read_repo("crates/k2-menubar/src/main.rs");
     let handler = arm_between(&main_src, "fn handle_quit_daemon", "fn main");
-    assert!(!handler.contains("process::exit"));
     assert!(!handler.contains("app.exit"));
-    assert!(handler.contains("quit_daemon"));
+    // Daemon first. Only when it stopped: unload the helper's own job,
+    // then exit. A failed daemon quit returns before either.
+    let quit_at = handler.find("quit_daemon()").expect("handler quits the daemon");
+    let bail_at = handler.find("if !stopped").expect("failed quit returns early");
+    let retire_at = handler.find("retire_helper()").expect("handler retires the helper");
+    let exit_at = handler.find("process::exit(0)").expect("handler exits");
+    assert!(quit_at < bail_at, "{handler}");
+    assert!(bail_at < retire_at, "{handler}");
+    assert!(retire_at < exit_at, "{handler}");
+    assert_eq!(handler.matches("process::exit").count(), 1, "{handler}");
+}
+
+#[test]
+fn helper_retire_unloads_only_its_own_label() {
+    let lib = read_repo("crates/k2-menubar/src/lib.rs");
+    let retire = arm_between(&lib, "pub fn retire_helper", "fn current_uid");
+    assert!(retire.contains("helper_plist_path()"));
+    assert!(!retire.contains("daemon_plist_path"));
+    assert!(retire.contains("unload_launchctl_args"));
+    // launchd ends this process (and its process group) on the unload;
+    // launchctl must be in a group of its own to finish.
+    assert!(retire.contains("process_group(0)"), "{retire}");
+}
+
+/// Opening K2 after a menu-bar Quit daemon brings back both the daemon and
+/// the icon: both go through `ensure_loaded`, whose `load -w` undoes the
+/// `unload -w`, and neither is gated on the daemon already running.
+#[test]
+fn app_open_loads_both_daemon_and_helper() {
+    let src = read_repo("src-tauri/src/lib.rs");
+    let setup = arm_between(&src, "startup_ensure_daemon_loaded", "Phase 2 Unit 4");
+    let daemon_at = setup
+        .find("wake::ensure_loaded(&plist)")
+        .expect("daemon plist is loaded on open");
+    assert!(setup[..daemon_at].contains("DaemonPlist::canonical"));
+    let helper_at = setup
+        .find("install_menu_bar_helper();")
+        .expect("helper plist is loaded on open");
+    assert!(daemon_at < helper_at);
+    let helper = arm_between(&src, "fn install_menu_bar_helper", "pub fn run");
+    assert!(helper.contains("DaemonPlist::menu_bar_helper"));
+    assert!(helper.contains("wake::ensure_loaded(&plist)"));
+    let wake = read_repo("crates/k2-client/src/wake.rs");
+    let ensure = arm_between(&wake, "pub fn ensure_loaded", "pub fn uninstall");
+    assert!(ensure.contains("launchctl_load(&target)"));
+    let load = arm_between(&wake, "pub fn launchctl_load_args", "pub fn launchctl_load(");
+    assert!(load.contains("\"-w\""), "{load}");
+    // `k2 daemon start` loads the helper's existing plist too.
+    let cli = read_repo("cli/src/daemon.sh");
+    let start = arm_between(&cli, "cmd_daemon_start() {", "\n}\n");
+    assert!(start.contains("dev.k2.menubar.plist"), "{start}");
+    assert!(start.contains("launchctl load -w \"$helper_plist\""), "{start}");
 }
 
 #[test]
@@ -126,13 +176,24 @@ fn headless_installers_do_not_install_the_helper() {
             "{rel} must not install the helper"
         );
         assert!(
-            !text.contains("dev.k2.menubar"),
-            "{rel} must not reference the helper label"
-        );
-        assert!(
             !text.contains("install_menu_bar_helper"),
             "{rel} must not call the helper installer"
         );
+    }
+    let installer = read_repo("scripts/install-daemon.sh");
+    assert!(
+        !installer.contains("dev.k2.menubar"),
+        "install-daemon.sh must not reference the helper label"
+    );
+    // The CLI names the label once: `k2 daemon start` re-loads a plist the
+    // desktop app already wrote, behind an existence check. It never writes one.
+    let cli = read_repo("cli/k2");
+    assert_eq!(cli.matches("dev.k2.menubar").count(), 1, "one mention, in daemon start");
+    let start = arm_between(&cli, "cmd_daemon_start() {", "\n}\n");
+    assert!(start.contains("dev.k2.menubar.plist"));
+    assert!(start.contains("if [ -f \"$helper_plist\" ]"), "{start}");
+    for write in ["cat >", "cp ", "tee ", "> \"$helper_plist\""] {
+        assert!(!start.contains(write), "daemon start must not write the helper plist: {write}");
     }
 }
 

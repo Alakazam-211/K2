@@ -222,6 +222,12 @@ cmd_daemon_start() {
     # we swallow.
     local err
     err=$(launchctl load -w "$_daemon_plist" 2>&1) || true
+    # The menu-bar icon's Quit daemon also unloads the icon's own job. Load
+    # it again when the desktop app installed it on this Mac (never installs).
+    local helper_plist="$HOME/Library/LaunchAgents/dev.k2.menubar.plist"
+    if [ -f "$helper_plist" ]; then
+        launchctl load -w "$helper_plist" >/dev/null 2>&1 || true
+    fi
     if echo "$err" | grep -q "service already loaded\|Load failed: 37"; then
         echo "Daemon already running."
         return 0

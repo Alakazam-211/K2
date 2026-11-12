@@ -2,7 +2,9 @@
 //!
 //! Running is a non-zero pid from `launchctl print gui/<uid>/dev.k2.daemon`
 //! AND an HTTP 2xx from loopback `/boot-status`. No token. Quit unloads
-//! `~/Library/LaunchAgents/dev.k2.daemon.plist` and does not exit this process.
+//! `~/Library/LaunchAgents/dev.k2.daemon.plist`, then this helper's own
+//! `dev.k2.menubar.plist` (so launchd's KeepAlive does not bring the icon
+//! back), and the helper exits. Opening K2 loads both again.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -15,12 +17,15 @@ use std::time::Duration;
 pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 pub const DAEMON_LABEL: &str = "dev.k2.daemon";
+/// This helper's own LaunchAgent (written by the desktop app).
+pub const HELPER_LABEL: &str = "dev.k2.menubar";
 pub const STATUS_RUNNING: &str = "Daemon: Running";
 pub const STATUS_NOT_RUNNING: &str = "Daemon: Not running";
 pub const QUIT_LABEL: &str = "Quit daemon";
 
-/// Quit never ends the helper. The icon stays and the row flips.
-pub const QUIT_EXITS_HELPER: bool = false;
+/// A successful Quit daemon also ends the helper: the icon goes away with
+/// the daemon. A failed quit keeps the helper and its icon.
+pub const QUIT_EXITS_HELPER: bool = true;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DaemonState {
@@ -174,6 +179,17 @@ pub fn daemon_plist_path_under(home: &Path) -> PathBuf {
         .join(format!("{DAEMON_LABEL}.plist"))
 }
 
+pub fn helper_plist_path() -> Option<PathBuf> {
+    home_dir().map(|home| helper_plist_path_under(&home))
+}
+
+pub fn helper_plist_path_under(home: &Path) -> PathBuf {
+    home.join("Library/LaunchAgents")
+        .join(format!("{HELPER_LABEL}.plist"))
+}
+
+/// `launchctl unload -w <plist>`: stops the job and keeps it from starting
+/// at login. `launchctl load -w` (the desktop app's start path) undoes it.
 pub fn unload_launchctl_args(plist: &Path) -> Vec<String> {
     vec![
         "unload".to_string(),
@@ -183,7 +199,7 @@ pub fn unload_launchctl_args(plist: &Path) -> Vec<String> {
 }
 
 /// Already stopped (`Could not find` / `No such`, or the plist is gone)
-/// is success. The helper still does not exit.
+/// is success.
 pub fn unload_succeeded(exit_ok: bool, stderr: &str) -> bool {
     exit_ok || stderr.contains("Could not find") || stderr.contains("No such")
 }
@@ -200,26 +216,22 @@ pub fn interpret_quit(
     exit_ok: bool,
     stderr: &str,
 ) -> QuitEffect {
-    if !plist_existed {
-        return QuitEffect {
-            ok: true,
-            exit_helper: QUIT_EXITS_HELPER,
-        };
-    }
-    if !spawned {
-        return QuitEffect {
-            ok: false,
-            exit_helper: QUIT_EXITS_HELPER,
-        };
-    }
+    let ok = if !plist_existed {
+        true
+    } else if !spawned {
+        false
+    } else {
+        unload_succeeded(exit_ok, stderr)
+    };
     QuitEffect {
-        ok: unload_succeeded(exit_ok, stderr),
-        exit_helper: QUIT_EXITS_HELPER,
+        ok,
+        exit_helper: ok && QUIT_EXITS_HELPER,
     }
 }
 
 /// Unload `dev.k2.daemon`. Missing plist and already-stopped are `Ok`.
-/// Does not exit the process and does not unload `dev.k2.menubar`.
+/// Does not touch `dev.k2.menubar`; the caller retires the helper after
+/// this returns `Ok` (see [`retire_helper`]).
 ///
 /// k2-ptyd (PRD prd-k2-ptyd-v1 L2, P53): "Quit daemon" ENDS the agents,
 /// unlike a restart. launchd's SIGTERM looks the same for both, so a stop
@@ -280,6 +292,47 @@ pub fn quit_daemon_plist(path: &Path) -> Result<(), String> {
     }
     Err(format!(
         "launchctl unload failed (exit {}): {}",
+        output.status.code().unwrap_or(-1),
+        stderr.trim()
+    ))
+}
+
+/// After a successful daemon quit: unload this helper's own LaunchAgent
+/// (`unload -w`, so KeepAlive does not relaunch the icon and login does not
+/// start it). A missing plist or a job that is not loaded is `Ok`: nothing
+/// would bring the helper back, so it can just exit.
+///
+/// launchd answers the unload by sending SIGTERM to this process, and on a
+/// job's exit it also kills the rest of the job's process group. So
+/// launchctl runs in its own process group and finishes the unload even
+/// when this process is ended first.
+#[cfg(unix)]
+pub fn retire_helper() -> Result<(), String> {
+    let Some(path) = helper_plist_path() else {
+        return Ok(());
+    };
+    quit_helper_plist(&path)
+}
+
+#[cfg(unix)]
+pub fn quit_helper_plist(path: &Path) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    if !path.exists() {
+        return Ok(());
+    }
+    let args = unload_launchctl_args(path);
+    let output = Command::new("launchctl")
+        .args(&args)
+        .stdin(std::process::Stdio::null())
+        .process_group(0)
+        .output()
+        .map_err(|e| format!("launchctl: {e}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if unload_succeeded(output.status.success(), &stderr) {
+        return Ok(());
+    }
+    Err(format!(
+        "launchctl unload {HELPER_LABEL} failed (exit {}): {}",
         output.status.code().unwrap_or(-1),
         stderr.trim()
     ))
@@ -433,7 +486,7 @@ gui/501/dev.k2.daemon = {\n\
     }
 
     #[test]
-    fn quit_unloads_daemon_plist_and_does_not_exit() {
+    fn quit_unloads_daemon_plist_and_exits() {
         let home = Path::new("/Users/example");
         let plist = daemon_plist_path_under(home);
         assert_eq!(
@@ -449,15 +502,38 @@ gui/501/dev.k2.daemon = {\n\
                 plist.display().to_string(),
             ]
         );
-        assert!(!QUIT_EXITS_HELPER);
+        assert!(QUIT_EXITS_HELPER);
         assert_eq!(QUIT_LABEL, "Quit daemon");
     }
 
     #[test]
-    fn already_stopped_is_success_and_helper_stays() {
+    fn helper_unload_targets_its_own_plist_with_w() {
+        let home = Path::new("/Users/example");
+        let plist = helper_plist_path_under(home);
+        assert_eq!(
+            plist,
+            PathBuf::from("/Users/example/Library/LaunchAgents/dev.k2.menubar.plist")
+        );
+        assert_eq!(HELPER_LABEL, "dev.k2.menubar");
+        assert_ne!(HELPER_LABEL, DAEMON_LABEL);
+        assert_ne!(plist, daemon_plist_path_under(home));
+        // `-w` keeps login from starting the icon again; without the
+        // unload, KeepAlive relaunches the helper as soon as it exits.
+        assert_eq!(
+            unload_launchctl_args(&plist),
+            vec![
+                "unload".to_string(),
+                "-w".to_string(),
+                "/Users/example/Library/LaunchAgents/dev.k2.menubar.plist".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn already_stopped_is_success_and_helper_exits() {
         let missing = interpret_quit(false, false, false, "");
         assert!(missing.ok);
-        assert!(!missing.exit_helper);
+        assert!(missing.exit_helper);
 
         let could_not = interpret_quit(
             true,
@@ -466,16 +542,19 @@ gui/501/dev.k2.daemon = {\n\
             "Unload failed: Could not find specified service\n",
         );
         assert!(could_not.ok);
-        assert!(!could_not.exit_helper);
+        assert!(could_not.exit_helper);
 
         let no_such = interpret_quit(true, true, false, "No such file or directory");
         assert!(no_such.ok);
-        assert!(!no_such.exit_helper);
+        assert!(no_such.exit_helper);
 
         let clean = interpret_quit(true, true, true, "");
         assert!(clean.ok);
-        assert!(!clean.exit_helper);
+        assert!(clean.exit_helper);
+    }
 
+    #[test]
+    fn failed_quit_keeps_the_helper() {
         let real_err = interpret_quit(true, true, false, "Load failed: 5: Input/output error");
         assert!(!real_err.ok);
         assert!(!real_err.exit_helper);
@@ -499,6 +578,7 @@ gui/501/dev.k2.daemon = {\n\
         #[cfg(unix)]
         {
             quit_daemon_plist(&missing).expect("missing plist is success");
+            quit_helper_plist(&missing).expect("missing helper plist is success");
         }
         assert!(!missing.exists());
     }

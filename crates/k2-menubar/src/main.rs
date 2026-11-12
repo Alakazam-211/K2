@@ -13,8 +13,8 @@ mod macos {
     use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
     use k2_menubar::{
-        probe_live, quit_daemon, status_label, DaemonState, POLL_INTERVAL, QUIT_LABEL,
-        STATUS_NOT_RUNNING,
+        probe_live, quit_daemon, retire_helper, status_label, DaemonState, POLL_INTERVAL,
+        QUIT_LABEL, STATUS_NOT_RUNNING,
     };
 
     const QUIT_ID: &str = "k2.menubar.quit-daemon";
@@ -36,7 +36,7 @@ mod macos {
         }
         app.finishLaunching();
 
-        let (status, _tray) = build_tray()?;
+        let (status, tray) = build_tray()?;
         let shared = Arc::new(Shared {
             epoch: AtomicU64::new(0),
             result: Mutex::new(None),
@@ -56,7 +56,9 @@ mod macos {
             }
             while let Ok(event) = MenuEvent::receiver().try_recv() {
                 if event.id().as_ref() == QUIT_ID {
-                    if let Some(state) = handle_quit_daemon(&status, &shared, &gate, &kick_tx) {
+                    if let Some(state) =
+                        handle_quit_daemon(&status, &tray, &shared, &gate, &kick_tx)
+                    {
                         shown = state;
                     }
                 }
@@ -118,9 +120,14 @@ mod macos {
             .expect("spawn probe");
     }
 
-    /// Unload `dev.k2.daemon`. Does not exit this process.
+    /// Unload `dev.k2.daemon`, then this helper's own `dev.k2.menubar` job,
+    /// and exit: the icon goes away with the daemon. If the daemon quit
+    /// fails, the helper stays as it was. If only the helper's unload
+    /// fails, the icon comes back showing Not running (exiting then would
+    /// just have launchd relaunch it).
     fn handle_quit_daemon(
         status: &MenuItem,
+        tray: &TrayIcon,
         shared: &Shared,
         gate: &Mutex<()>,
         kick_tx: &mpsc::Sender<()>,
@@ -140,6 +147,14 @@ mod macos {
         let _ = kick_tx.send(());
         if !stopped {
             return None;
+        }
+        let _ = tray.set_visible(false);
+        match retire_helper() {
+            Ok(()) => std::process::exit(0),
+            Err(e) => {
+                eprintln!("k2-menubar: unload the menu-bar helper: {e}");
+                let _ = tray.set_visible(true);
+            }
         }
         let state = DaemonState::NotRunning;
         status.set_text(status_label(state));

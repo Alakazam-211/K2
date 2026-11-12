@@ -17,7 +17,9 @@
 //!    wake a sleeping machine to run it. This is how Time Machine
 //!    handles battery-powered hourly backups.
 //! 3. **Menu-bar helper** (`dev.k2.menubar`): macOS status item for this
-//!    Mac's daemon. Own label. Quit-daemon unloads `dev.k2.daemon` only.
+//!    Mac's daemon. Own label. Its Quit daemon unloads `dev.k2.daemon`,
+//!    then its own label (`unload -w`), and exits. Opening K2 loads both
+//!    again ([`ensure_loaded`] uses `load -w`, which undoes the `-w`).
 //!
 //! Scope for this module: plist XML generation + file writes + launchctl
 //! invocation. The orchestration ("on first launch of 0.33.0, install
@@ -80,7 +82,8 @@ impl DaemonPlist {
     /// Menu-bar helper plist. `program` is the staged `~/.k2/bin/k2-menubar`
     /// copy, never a path inside `K2.app/Contents/MacOS` (that bundle id is
     /// `dev.k2.app`). `RunAtLoad` so login shows the icon without opening
-    /// the window. Quit-daemon must not unload this label.
+    /// the window. The helper's Quit daemon unloads this label after the
+    /// daemon's, so `KeepAlive` does not bring the icon back.
     pub fn menu_bar_helper(program: PathBuf) -> Self {
         let k2_dir = crate::paths::home_dir()
             .map(|h| h.join(".k2"))
@@ -165,14 +168,19 @@ impl DaemonPlist {
     }
 }
 
+/// Arguments for [`launchctl_load`]. `-w` clears a disabled state left by
+/// `launchctl unload -w` (the menu-bar Quit daemon, the red-close stop),
+/// so opening K2 starts a job that was quit that way.
+pub fn launchctl_load_args(plist_path: &std::path::Path) -> Vec<std::ffi::OsString> {
+    vec!["load".into(), "-w".into(), plist_path.as_os_str().to_owned()]
+}
+
 /// `launchctl load -w <plist>`. `-w` persists the enable state so the
 /// agent survives login cycles. Returns stderr on non-zero exit for
 /// caller to surface.
 pub fn launchctl_load(plist_path: &PathBuf) -> Result<(), String> {
     let out = crate::bg_proc::command("launchctl")
-        .arg("load")
-        .arg("-w")
-        .arg(plist_path)
+        .args(launchctl_load_args(plist_path))
         .output()
         .map_err(|e| format!("launchctl: {e}"))?;
     if !out.status.success() {
@@ -428,6 +436,23 @@ mod tests {
         );
         assert!(p.stdout_path.ends_with(".k2/menubar.stdout.log"));
         assert!(p.stderr_path.ends_with(".k2/menubar.stderr.log"));
+    }
+
+    #[test]
+    fn load_uses_w_so_a_quit_job_comes_back() {
+        let plist = PathBuf::from("/Users/x/Library/LaunchAgents/dev.k2.menubar.plist");
+        let args: Vec<String> = launchctl_load_args(&plist)
+            .into_iter()
+            .map(|a| a.into_string().expect("utf-8 arg"))
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "load".to_string(),
+                "-w".to_string(),
+                "/Users/x/Library/LaunchAgents/dev.k2.menubar.plist".to_string(),
+            ]
+        );
     }
 
     #[test]

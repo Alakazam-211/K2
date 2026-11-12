@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.2.23 (2026-11-12): pairs with kit v0.17.0
+
+**Requires `k2-mpc-base` v0.17.0** for the host rule below. The pack's code is unchanged.
+
+- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the rule below), the
+  carrier's pairing (K1b, opt-in), the live grid (wire 3, additive), and an outside save on
+  unwritten changes keeping both on a keyed doc that isn't a table. This pack's text docs keep
+  no carrier and declare no grid. `Cargo.lock`: k2-mpc-base 0.17.0 (only the kit's crate
+  version moves); the crate version.
+
+- **A doc already live as text under a name that is now not-text is demoted by the kit.** When
+  a tier-0 open is `PackMismatch` with `stored` `text`, the host calls
+  `SessionManager::demote_text_file(PACK, AnyFile, &key, path, root)` once, then opens the
+  file at tier 0. This replaces the interim rule of v0.2.22 (close, move the text doc with its
+  history to a key no file has, import the file). The doc keeps its key. Every text version
+  becomes a tier-0 version. The last live state, with any change the file never got, becomes
+  current and is written to the file. An outside save since the last sync keeps both, with a
+  conflict copy. The change log stays readable through `BlobSession::live_log`.
+  `docs/HOST-INTEGRATION.md` ("A name that becomes not-text") has the rule.
+- `tests/engineering_files.rs` runs the demote instead of the interim rule. Each way the
+  text doc can be left (open with an unwritten change, closed, closed with a change the file
+  never got, open after an outside save) checks the same key, the versions, the live state
+  in the current version and the file, the live log, the old handle closed as `demoted`, a
+  second demote that changes nothing, a tier-0 open afterwards, and a text open refused.
+
 ## v0.2.22 (2026-11-12): pairs with kit v0.16.0
 
 **Requires `k2-mpc-base` v0.16.0**. CAD, BIM and circuit-board files move to the not-text list

@@ -44,21 +44,28 @@ A pack release can move an extension to `NOT_TEXT`. For example, CAD, BIM and ci
 files (`.ifc`, `.step`, `.dxf`, `.obj` and others) used to open as live text of unknown type,
 and are now tier 0. A doc already stored as text under such a name is still a text doc in
 the kit's store. A tier-0 open of it is `PackMismatch { stored: "text", pack: "kit:blob" }`,
-and nothing changes. The kit has no text-to-tier-0 path of its own. The host's rule loses no
-change, and `tests/engineering_files.rs` runs it:
+and nothing changes. The host then **demotes** the doc with the kit (k2-mpc-base v0.17.0;
+its `docs/SESSIONS.md`, "Text → tier 0"), and `tests/engineering_files.rs` runs it:
 
-1. `SessionManager::close(&key, reason)`. Any pending write-back is written first. If the doc
-   isn't loaded, nothing happens.
-2. `SessionManager::rekey(&key, history_key)`. This moves the text doc, with its whole
-   history, to a key no file can have (the host chooses it). It still opens there with
-   `PACK` (`open`, no file), for its versions and its last state. That last state includes a
-   change the file never got (one made before a crash, before write-back).
-3. `SessionManager::open_blob_file(Arc::new(AnyFile), &key, path, root)`. This imports the
-   file, as the text doc last wrote it, as the tier-0 doc's first version. Later opens stay
-   tier 0.
+1. `SessionManager::demote_text_file(Arc::new(PACK), Arc::new(AnyFile), &key, path, root)`,
+   once. `PACK` is the pack the doc is stored under (`stored` is `text`); `AnyFile` is the
+   blob pack, until the type has its own.
+2. Open the file at tier 0 as usual (`open_blob_file`). A second demote is a no-op
+   (`Demotion::already`).
 
-The rule never opens the file as text again, so no outside save is merged by lines on the
-way out.
+Nothing is lost, and the doc keeps its key:
+
+- Every text version becomes a tier-0 version, with the bytes its `file_at` gave.
+- The live doc's final state becomes the current version and is written to the file. That
+  includes a change the file never got (not written back yet, or left by a crash).
+- If another program saved the file since the last sync, the kit keeps both, as tier 0 does.
+  The save becomes current. The live state is kept as a version and as a conflict copy
+  (`Demotion::conflict_copy`). Nothing is merged by lines.
+- The change log stays readable through `BlobSession::live_log`.
+
+The text session closes. Every later call on its old handle fails with
+`SessionError::Closed { reason: "demoted" }` (`MPC-E519`). Tell the people and agents in
+`Demotion::connections` to reopen the file at tier 0. Later text opens are `PackMismatch`.
 
 ## 2. Family names
 
@@ -161,7 +168,8 @@ there. It applies to every type.
   and guard) until it is reloaded. Renaming to another pack's type, such as `.md`, is
   `PackMismatch` on the next open. The host decides whether to re-import there.
 - **Not-text files** (`NotText`, or a refusal) open the host's non-live way. They should not
-  open as an empty, editable buffer.
+  open as an empty, editable buffer. A doc already stored as text under a name that is now
+  not-text is demoted first: see [A name that becomes not-text](#a-name-that-becomes-not-text).
 
 ## 6. Agents
 
@@ -190,4 +198,6 @@ Two notes for the host's CLI:
 - [ ] The editor binding keeps `\n` line breaks (no custom separator) and binds to `source`.
 - [ ] The watcher calls `file_changed()` and ignores `is_write_temp` names.
 - [ ] `rekey` and `file_moved` on renames.
+- [ ] A tier-0 open that is `PackMismatch` with `stored` `text`: `demote_text_file` once,
+      then open at tier 0.
 - [ ] The CLI applies the host's secret policy (the kit strips a leading BOM from `write` bodies itself, since base v0.9.1).

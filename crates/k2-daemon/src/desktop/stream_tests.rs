@@ -667,21 +667,26 @@ fn only_the_controller_switches_display_and_it_moves_everyone() {
         say(&mut a, json!({"t": "display", "id": "9"})).await;
         assert_eq!(t_is(&mut a, "error").await["code"], "desktop_no_such_display");
         say(&mut a, json!({"t": "display", "id": "2"})).await;
-        for c in [&mut a, &mut o] {
-            let d = text_where(c, "displays", |v| v["t"] == "displays").await;
-            assert_eq!(d["display"], "2");
+        let d = text_where(&mut a, "displays", |v| v["t"] == "displays").await;
+        assert_eq!(d["display"], "2");
+        // The viewer's `displays` message and the new display's first frame
+        // come in either order, so both are looked for in one pass: a wait
+        // for the message alone could read past that first frame.
+        let (mut told, mut first): (Option<Value>, Option<VideoHeader>) = (None, None);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while told.is_none() || first.is_none() {
+            match next(&mut o, deadline.saturating_duration_since(Instant::now())).await {
+                Some(Got::Text(v)) if v["t"] == "displays" => told = Some(v),
+                Some(Got::Frame(h)) if first.is_none() && (h.width_px, h.height_px) == (1920, 1080) => first = Some(h),
+                Some(Got::Text(_)) | Some(Got::Frame(_)) => {}
+                Some(Got::Closed(f)) => panic!("closed ({f:?}) waiting for the display switch"),
+                None => panic!("no displays message ({}) or frame from display 2 ({}) within 5 s", told.is_some(), first.is_some()),
+            }
         }
+        assert_eq!(told.expect("displays")["display"], "2");
+        assert!(first.expect("frame").key, "the new display starts on a key");
         assert_eq!(*e.fake.selects.lock().unwrap(), vec![2]);
         assert!(e.fake.releases.lock().unwrap().contains(&ReleaseReason::DisplaySwitch));
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            let h = frame(&mut o).await;
-            if (h.width_px, h.height_px) == (1920, 1080) {
-                assert!(h.key, "the new display starts on a key");
-                break;
-            }
-            assert!(Instant::now() < deadline, "frames from display 2");
-        }
         say(&mut a, json!({"t": "pointer", "x": 5, "y": 6})).await;
         let fake = e.fake.clone();
         wait_for("a pointer on display 2", || fake.injects.lock().unwrap().iter().any(|i| *i == InputEvent::Pointer { display: 2, x: 5.0, y: 6.0 })).await;

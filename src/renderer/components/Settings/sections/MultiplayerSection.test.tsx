@@ -65,6 +65,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { failedWriteBackLine, openNowLine, parseDocCores, plainCore, turnOffMessage, turnOffTitle } from './multiplayer-cores-api'
 import { searchManifest, SECTION_LABELS } from '../searchManifest'
 
+/** The page's own switches: the live workbook preview's (a per-computer key, its own tests) is left out. */
+const coreSwitches = (): HTMLElement[] => screen.getAllByRole('switch').filter((s) => !s.closest('[data-testid="multiplayer-live-workbook"]'))
+
 function core(id: string, name: string, over: Json = {}): Json {
   return {
     id,
@@ -110,7 +113,7 @@ async function mount(): Promise<void> {
       <ConfirmDialog />
     </>,
   )
-  await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(3))
+  await waitFor(() => expect(coreSwitches()).toHaveLength(3))
 }
 
 async function settle(): Promise<void> {
@@ -149,7 +152,7 @@ describe('Settings → Cores → Multiplayer', () => {
     // The rows are the daemon's, not a hard-coded list.
     // Known cores read as plain kinds of file; one this client doesn't know
     // keeps the daemon's name.
-    expect(screen.getAllByRole('switch').map((s) => s.getAttribute('aria-label'))).toEqual([
+    expect(coreSwitches().map((s) => s.getAttribute('aria-label'))).toEqual([
       'Markdown files',
       'Text and code files',
       'Extra core',
@@ -170,7 +173,7 @@ describe('Settings → Cores → Multiplayer', () => {
   it('Member: switches visible but disabled, plus the line; a click writes nothing', async () => {
     h.cores = answer({ canChange: false })
     await mount()
-    for (const s of screen.getAllByRole('switch')) expect((s as HTMLButtonElement).disabled).toBe(true)
+    for (const s of coreSwitches()) expect((s as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText("Only the server's owner or an Admin can change these.")).toBeTruthy()
     fireEvent.click(sw('Markdown files'))
     await settle()
@@ -309,7 +312,7 @@ describe('Settings → Cores → Multiplayer', () => {
     expect(alert.textContent).not.toContain('docs/cores')
     h.cores = answer()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(3))
+    await waitFor(() => expect(coreSwitches()).toHaveLength(3))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
@@ -379,7 +382,7 @@ describe('Settings → Cores → Multiplayer: while a switch saves', () => {
 describe('Settings → Cores → Multiplayer: Board files in a tab', () => {
   async function mountWith(n: number): Promise<void> {
     render(<MultiplayerSection />)
-    await waitFor(() => expect(screen.getAllByRole('switch')).toHaveLength(n))
+    await waitFor(() => expect(coreSwitches()).toHaveLength(n))
   }
 
   it('shows the switch with the server value, posts the setting, and reads it back', async () => {

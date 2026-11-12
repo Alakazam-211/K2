@@ -62,6 +62,7 @@ import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { useLiveDocCore } from '@/lib/live-doc-core'
 import { Button } from '@/components/ui'
 import { AnyFileDocPanel } from './AnyFileDocPanel'
+import { LiveWorkbookEntry } from '@/components/LiveView/LiveWorkbookEntry'
 import { DeckPreviewPane } from './DeckPreviewPane'
 import { DocConflictNotice } from './DocConflictNotice'
 
@@ -1049,6 +1050,8 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
       {/* Content, with the any-file panel beside it */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* An owner's preview key: .xlsx tabs offer "Watch live (preview)" (sample data). Off: just the content. */}
+      <LiveWorkbookEntry filePath={filePath}>
       {category === 'pdf' ? (
         <div className="flex-1 overflow-hidden">
           <Suspense fallback={<div className="p-4 text-xs text-[var(--color-text-muted)]">Loading PDF…</div>}>
@@ -1233,6 +1236,7 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
           </div>
         </>
       )}
+      </LiveWorkbookEntry>
       </div>
       {anyFile && (
         <AnyFileDocPanel

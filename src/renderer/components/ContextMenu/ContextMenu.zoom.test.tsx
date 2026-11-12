@@ -22,13 +22,28 @@ afterEach(() => {
   setWindowSize(1024, 768)
 })
 
+/** The menu's box: the panel, or the float wrapper that holds it (the cut
+ *  edge). Both measure the same size. */
+function isMenuBox(el: HTMLElement): boolean {
+  return el.hasAttribute('data-context-menu') || el.querySelector(':scope > [data-context-menu]') !== null
+}
+
+/** The element the menu is placed by: the panel itself or the nearest
+ *  ancestor of it with position: fixed (the float wrapper). */
+function placedBox(panel: HTMLElement): HTMLElement {
+  for (let el: HTMLElement | null = panel; el; el = el.parentElement) {
+    if (el.style.position === 'fixed') return el
+  }
+  throw new Error('the context menu has no fixed box')
+}
+
 function openAt(z: number, client: { x: number; y: number }): HTMLElement {
   setWindowSize(WIN.width, WIN.height)
   applyAppZoomForTest(z)
   // jsdom has no layout: the menu measures MENU drawn at zoom z.
   const real = HTMLElement.prototype.getBoundingClientRect
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (!this.hasAttribute('data-context-menu')) return real.call(this)
+    if (!isMenuBox(this)) return real.call(this)
     const r = { left: 0, top: 0, x: 0, y: 0, width: MENU.width * z, height: MENU.height * z, right: MENU.width * z, bottom: MENU.height * z }
     return { ...r, toJSON: () => r } as DOMRect
   })
@@ -36,9 +51,9 @@ function openAt(z: number, client: { x: number; y: number }): HTMLElement {
   act(() => {
     void useContextMenuStore.getState().show(client.x, client.y, [{ id: 'a', label: 'Copy' }])
   })
-  const menu = document.querySelector('[data-context-menu]')
-  if (!(menu instanceof HTMLElement)) throw new Error('no open context menu')
-  return menu
+  const panel = document.querySelector('[data-context-menu]')
+  if (!(panel instanceof HTMLElement)) throw new Error('no open context menu')
+  return placedBox(panel)
 }
 
 describe('ContextMenu under the app zoom', () => {

@@ -680,6 +680,25 @@ fn only_the_first_candidate_block_is_read() {
 }
 
 #[test]
+fn a_layer_keyed_block_the_depth_never_reads_loses_nothing() {
+    let psb = false;
+    let bad = 1i16.to_be_bytes().to_vec();
+    for (depth, key) in [(32, b"Lr16"), (32, b"Layr"), (16, b"Lr32"), (16, b"Layr")] {
+        let lm = section(psb, &[], &[], &block(key, &bad, &[0; 2]));
+        let file = hand_file(psb, depth, &[], &lm);
+        let full = PsdFile::from_bytes(&file).expect("check: the full reader reads the file");
+        assert!(full.layer_info.is_none(), "check: depth {depth}");
+        assert!(
+            full.unreadable_layer_block().is_none(),
+            "depth {depth}: lost layers reported from a block never read for them"
+        );
+        let w = walk(&file).expect("check: the walk reads the file");
+        assert!(w.unreadable.is_none(), "depth {depth}: the walk");
+        assert_full_agrees(&file);
+    }
+}
+
+#[test]
 fn an_8_bit_file_reads_a_layer_block_only_when_the_section_has_no_layers() {
     let psb = false;
     let empty_li = 0i16.to_be_bytes().to_vec();

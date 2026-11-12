@@ -27,6 +27,7 @@ A copy of the `crates/psd` crate of PhotoCraft, version 0.9.0.
 | `src/layer.rs` | `LayerRecord::read` is `pub(crate)`, for `records.rs`. |
 | `src/tagged.rs` | `is_sig` is `pub(crate)`, for `records.rs`. |
 | `src/descriptor.rs` | From upstream commit `a7301f1db89b2f24b0fb6d1334b424da898faf0b`, newer than the one above, only its `UnFl` change: a descriptor's `UnitFloats` count reserves at most 4,096 entries up front (`vec_for_count`), as the other counts already do, so a large declared count can't abort on allocation. The rest of that commit is not taken. |
+| `src/file.rs` | `PsdFile::unreadable_layer_block` looks only at the block `from_bytes` reads the layers from: `Lr16` in a 16-bit file, `Lr32` in a 32-bit one, else the first `Layr`, `Lr16` or `Lr32`. Upstream looks at the first block with any of the three keys, so a malformed block the depth never reads (an `Lr16` in a 32-bit file) reported layers lost from a flat file, and a readable one before the real block hid a real loss. Found by this repository's `index_draft` fuzz target. |
 | `src/records.rs` | New file, ours: the records-only streaming walker. Its sink also receives every global tagged block other than the layers' (begin, bytes, end), for a reader that wants a few of them. |
 
 `records.rs` copies one rule rather than sharing it, to keep upstream's function untouched: the

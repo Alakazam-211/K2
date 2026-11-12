@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.1.4 (2026-11-12): pairs with kit v0.17.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.17.0** (its cut `0a78505a`) and **`k2-mpc-ooxml` v0.1.1**
+(`k2-mpc-opc` 0.1.1, unchanged), each checked out beside this repo. The pack's behaviour is
+unchanged from v0.1.3. As for v0.1.3, the tag is a cut commit that leaves out the fuzz crate
+(`fuzz/`).
+
+- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the host's call
+  for a text doc whose type now routes to tier 0), the carrier's pairing (K1b, opt-in by
+  `Pack::wants_pairing`, new error `MPC-E521`), the live grid (wire 3, additive), and an
+  outside save on unwritten changes keeping both on a keyed doc that isn't a table. This pack doesn't pair (its shape ids are the file's own), so its decks render as in
+  v0.1.3. One kit rule reaches a deck: an outside save while the deck holds changes the file
+  doesn't now keeps both (the save becomes the live deck; the kit's state a version and a
+  conflict copy), where v0.1.3's kit merged it by key.
+- The deck's view schema (`live::view_schema::VIEW`) ends with `..ViewSchema::NONE`, so it
+  builds with kit v0.17.0's two new `ViewSchema` fields (`field_class_prefix`, `grid`) at
+  their defaults, and with fields the kit adds later. No behaviour change.
+- Two internal labels in doc comments and this changelog are now plain words.
+- `Cargo.toml`'s comment and the README name the kit's tag and its cut. `Cargo.lock` and
+  `fuzz/Cargo.lock`: k2-mpc-base 0.17.0 and the crate version 0.1.4 (only those versions move).
+
 ## v0.1.3 (2026-11-12): pairs with kit v0.16.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.16.0** (its cut `d2245444`: the view schema, addresses and view
@@ -81,7 +102,7 @@ that leaves out the fuzz crate (`fuzz/`).
     its style's and first run's format's once the store changed its text, the layout's
     defaults for a shape the file doesn't hold yet;
   - render hashes: the carrier's render digest for a slide the store didn't change as drawn
-    (the written bytes' digest, contract Q2), else a digest over the carrier's id and the slide
+    (the written bytes' digest, as the rendering contract specifies), else a digest over the carrier's id and the slide
     as the store holds it, which changes with every change to the drawing.
   The rule: the live store wins, and the carrier supplies only what the store doesn't model.
 - **`view` in two phases:** `view::read_open` reads a file into a `DeckRead` (each shape as the

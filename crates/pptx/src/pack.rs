@@ -51,7 +51,7 @@ impl PptxPack {
     /// - A clash (both sides changed one shape, or one deleted what the other changed) is a
     ///   whole-file conflict too, while [`HOLD_CLASHES`] is off.
     ///
-    /// The kit's outside-save bridge (S0a) replaces both guards with its base test: it hands
+    /// The kit's planned outside-save bridge replaces both guards with its base test: it hands
     /// over the version the app's save was made on, and plugs in here.
     pub fn merge3_since(&self, base: &[u8], ours: &[u8], theirs: &[u8], since: Since) -> BlobMerge {
         if base == ours && ours != theirs && !mutant::active("pack_no_stale_guard") {

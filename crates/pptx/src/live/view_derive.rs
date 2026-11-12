@@ -27,7 +27,7 @@
 //!   store changed keeps its style's and its first run's format (what `shape text` writes); a
 //!   shape the carrier doesn't hold (a text box added live, a new slide's placeholder) takes its
 //!   layout's defaults;
-//! - **the render hash** (contract Q2: the written bytes): a slide the store didn't change as
+//! - **the render hash** (as the rendering contract specifies: over the written bytes): a slide the store didn't change as
 //!   drawn (its shapes, hidden and layout; its position too when it shows a slide number) has
 //!   the carrier's render digest, which is the written bytes' (the splice leaves its closure
 //!   untouched); any other is hashed over the carrier's id and the slide as the store holds it,

@@ -112,6 +112,7 @@ pub const VIEW: ViewSchema = ViewSchema {
         placeholder_idx: NodeSrc::Attr("idx"),
         ..BlobView::NONE
     }),
+    ..ViewSchema::NONE
 };
 
 /// A file id as a key or address writes it: digits, no sign, no leading zero.

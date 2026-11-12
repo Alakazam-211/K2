@@ -3275,6 +3275,12 @@
    },
    {
     "noun": "admin",
+    "usage": "sudo k2-node admin cache-gens on|off from a copy of the last good build and never writes the shared copy. Needs the job wall. Restart k2-node afterwards",
+    "note": "keep cache generations (off by default): each job starts",
+    "section": "Remote admin"
+   },
+   {
+    "noun": "admin",
     "usage": "sudo k2-node admin gpu on [--device <pci>|all] [--server <server>]... GPU jobs (off by default; Linux, job wall): a job that asks --gpu gets one GPU's render node, alone. Every supported GPU unless --device. It is on for your own server at once; name each other server with --server (its label from k2-node servers list, e.g. acme.k2.dev; repeatable). On every server, agents also need a grant with --gpu (k2 compute grant <node> --workspace <ws> --gpu, by that server's owner or an Admin). Runs a self-test, and warns that a GPU fault can end the desktop session. Never a display (card) node or /dev/kfd; NVIDIA isn't supported yet. On an APU a GPU job's --gpu-mem (default 2G) is reserved beside its --mem, and root reads its own GPU memory (DRM fdinfo) so the node stops it above that (failed/gpu_mem_cap)",
     "note": "",
     "section": "Remote admin"

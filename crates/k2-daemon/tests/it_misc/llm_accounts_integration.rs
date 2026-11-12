@@ -474,8 +474,28 @@ async fn wallet_routes_end_to_end() {
     assert_eq!(std::fs::read_to_string(&live).unwrap(), refreshed, "a refused switch changes nothing");
     // An Admin can. Switch: outgoing saved back, target swapped in.
     let admin = admin_login(port, "admin1");
+    let mut events = k2_daemon::session_events::subscribe();
     let r = post(port, "/cli/llm/accounts/switch", &admin, json!({"id": work_id}));
     assert_eq!(r.status, 200, "switch: {}", r.body);
+    // Every client hears it at once: the list (llm_accounts_changed) and
+    // the top-bar chip (subscription_usage_changed, source "switch").
+    let (mut saw_list, mut saw_usage) = (false, false);
+    loop {
+        match events.try_recv() {
+            Ok(k2_daemon::session_events::SessionEvent::LlmAccountsChanged { tool }) if tool.as_deref() == Some("claude") => {
+                saw_list = true
+            }
+            Ok(k2_daemon::session_events::SessionEvent::SubscriptionUsageChanged { tool, source, .. })
+                if tool.as_deref() == Some("claude") && source == "switch" =>
+            {
+                saw_usage = true
+            }
+            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => break,
+        }
+    }
+    assert!(saw_list, "a switch emits llm_accounts_changed");
+    assert!(saw_usage, "a switch tells the usage chip to re-read");
     assert!(!r.body.contains(MARKER));
     let v = js(&r);
     assert_eq!(v["switch"]["savedOutgoing"], true);

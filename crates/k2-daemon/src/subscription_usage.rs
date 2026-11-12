@@ -856,7 +856,7 @@ fn probe_and_write(io: &dyn UsageIo) -> Result<SubscriptionFile, String> {
 /// under the DB lock: a switch holds that lock from its live write to its
 /// pointer update, so the same answer before and after a probe means no
 /// switch happened in between. `None` without a wallet entry.
-fn wallet_generation(harness: &str) -> Option<(String, i64)> {
+pub(crate) fn wallet_generation(harness: &str) -> Option<(String, i64)> {
     use k2_core::llm_accounts as w;
     let tool = w::Tool::parse(harness)?;
     let db = k2_core::db::try_shared()?;
@@ -2775,11 +2775,11 @@ pub(crate) mod tests {
         r#"{"five_hour":{"utilization":10,"resets_at":"2026-09-26T20:00:00Z"},"seven_day":{"utilization":31,"resets_at":"2026-10-03T00:00:00Z"},"seven_day_oauth_apps":null,"limits":[{"kind":"weekly_scoped","percent":12,"resets_at":"2026-10-03T00:00:00Z","scope":{"model":{"display_name":"Opus","id":"claude-opus"}}}]}"#.into()
     }
 
-    fn future_reset(now: DateTime<Utc>) -> String {
+    pub(crate) fn future_reset(now: DateTime<Utc>) -> String {
         (now + chrono::Duration::days(2)).to_rfc3339()
     }
 
-    fn harness(name: &str, windows: Vec<UsageWindow>, status: &str, checked: &str) -> HarnessUsage {
+    pub(crate) fn harness(name: &str, windows: Vec<UsageWindow>, status: &str, checked: &str) -> HarnessUsage {
         HarnessUsage {
             error: None,
             account_id: None,
@@ -3395,7 +3395,7 @@ pub(crate) mod tests {
     }
 
     /// Insert two Claude wallet tokens; `active` is the server default.
-    fn seed_wallet(active: &str, idle: &str) {
+    pub(crate) fn seed_wallet(active: &str, idle: &str) {
         let db = k2_core::db::shared();
         let conn = db.lock();
         for (i, id) in [active, idle].iter().enumerate() {

@@ -945,6 +945,13 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                             out.verified_by.map(|s| s.describe()).unwrap_or("no")
                         );
                         audit("llm_accounts.switch", &key, &line, ingress);
+                        // The top-bar chip shows the new default's numbers
+                        // now, not the old token's until the re-check
+                        // lands (the single-record path reads the live
+                        // token on every GET already).
+                        if crate::usage_store::single_record_on() || crate::usage_switch::follow_live_owner(tool.as_str()) {
+                            crate::session_events::emit_subscription_usage_changed(Some(tool.as_str()), None, "switch");
+                        }
                         recheck_after_switch(tool, out.from.clone());
                     }
                     crate::session_events::emit_llm_accounts_changed(Some(tool.as_str()));

@@ -17,7 +17,7 @@ catalog = ["wiki:index", "wiki:hygiene", "connections:roster", "manager:pack", "
 
 [permissions]
 cards = true
-suggest = ["agents.manage", "connections.create", "projects.manage"]
+suggest = ["agents.hire", "agents.manage", "connections.create", "projects.manage"]
 
 [params]
 about = { label = "What should it focus on?", max = 500, required = false }

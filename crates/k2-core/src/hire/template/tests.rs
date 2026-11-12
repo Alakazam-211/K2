@@ -289,7 +289,12 @@ fn template_dry_run_writes_nothing_and_matches_the_apply() {
     assert!(!Path::new(&path).exists(), "a dry run writes nothing");
     assert_eq!(statuses(&plan, "folder"), vec!["write"]);
     assert_eq!(statuses(&plan, "role"), vec!["write"]);
-    assert_eq!(statuses(&plan, "permission"), vec!["suggest"; 4], "cards + three switches: {:?}", plan.rows);
+    assert_eq!(statuses(&plan, "permission"), vec!["suggest"; 5], "cards + four switches: {:?}", plan.rows);
+    // Since the hire/sidecars split, a lead needs hiring as well as
+    // managing its sidecars.
+    for want in ["agents.hire", "agents.manage"] {
+        assert!(plan.rows.iter().any(|x| x.step == "permission" && x.target == want), "lead suggests {want}: {:?}", plan.rows);
+    }
     assert!(plan.charter.contains("You lead a small team of agents"));
     r.dry_run = false;
     let done = apply(&r, &HireCaller::Owner).expect("apply");

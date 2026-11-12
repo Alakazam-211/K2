@@ -113,6 +113,7 @@ import { solidity } from '@replit/codemirror-lang-solidity'
 import { elixir } from 'codemirror-lang-elixir'
 import { svelte } from '@replit/codemirror-lang-svelte'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
+import { zoomAwareTooltips } from './zoom-tooltips'
 
 // ── Language detection ──────────────────────────────────────────────
 
@@ -1265,6 +1266,8 @@ export function CodeEditor({ code, filePath, scope, onSave, onChange, onCursorCh
       indentGuidesCompartment.of(es.indentGuides ? indentationMarkers({ highlightActiveBlock: true, hideFirstIndent: false }) : []),
       foldCompartment.of(es.foldGutter ? [codeFolding(), foldGutter({ openText: '▾', closedText: '▸' })] : []),
       autocompleteCompartment.of(es.autocomplete ? autocompletion({ activateOnTyping: true, maxRenderedOptions: 30 }) : []),
+      // The completion list and hovers stay under the caret at any app zoom.
+      zoomAwareTooltips(),
       lineNumbersCompartment.of(es.lineNumbers ? lineNumbers() : []),
       activeLineCompartment.of(es.highlightActiveLine ? [highlightActiveLine(), highlightActiveLineGutter()] : []),
       bracketCompartment.of(es.bracketMatching ? bracketMatching() : []),

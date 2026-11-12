@@ -745,7 +745,7 @@ async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
     k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let (ws, _bare) = seed_repo_ws(&env, "trustapp", Some(CI_TOML));
     let sha1 = git(&ws.path, &["rev-parse", "HEAD"]);
-    active_node("gn-1", "k2n7", &ws, true);
+    active_node("gn-1", "k2g7", &ws, true);
     let mut gens_offer = offer();
     gens_offer.protocol = 10;
     gens_offer.features.extend(["cache-gens".to_string(), "job-uid".to_string()]);
@@ -799,7 +799,7 @@ async fn the_trusted_cache_is_only_for_verified_trusted_branch_checks() {
 
     // A plain run at main saves only scratch/main (its argv is the
     // caller's); a body naming the trusted cache is not read.
-    let r = post(d.port, "/cli/compute/run", &agent, json!({"argv": ["true"], "sha": "main", "node": "k2n7", "cacheCommit": "trusted"})).await;
+    let r = post(d.port, "/cli/compute/run", &agent, json!({"argv": ["true"], "sha": "main", "node": "k2g7", "cacheCommit": "trusted"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let plan = row(&job).plan().unwrap();

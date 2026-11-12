@@ -38,6 +38,28 @@ specific to plain-text files.
 An unknown name (`Lookup::Unknown`) is opened like the others, with `PACK`. It becomes live
 only if it passes the strict guard. A host may show "opened as plain text" for it.
 
+### A name that becomes not-text
+
+A pack release can move an extension to `NOT_TEXT`. For example, CAD, BIM and circuit-board
+files (`.ifc`, `.step`, `.dxf`, `.obj` and others) used to open as live text of unknown type,
+and are now tier 0. A doc already stored as text under such a name is still a text doc in
+the kit's store. A tier-0 open of it is `PackMismatch { stored: "text", pack: "kit:blob" }`,
+and nothing changes. The kit has no text-to-tier-0 path of its own. The host's rule loses no
+change, and `tests/engineering_files.rs` runs it:
+
+1. `SessionManager::close(&key, reason)`. Any pending write-back is written first. If the doc
+   isn't loaded, nothing happens.
+2. `SessionManager::rekey(&key, history_key)`. This moves the text doc, with its whole
+   history, to a key no file can have (the host chooses it). It still opens there with
+   `PACK` (`open`, no file), for its versions and its last state. That last state includes a
+   change the file never got (one made before a crash, before write-back).
+3. `SessionManager::open_blob_file(Arc::new(AnyFile), &key, path, root)`. This imports the
+   file, as the text doc last wrote it, as the tier-0 doc's first version. Later opens stay
+   tier 0.
+
+The rule never opens the file as text again, so no outside save is merged by lines on the
+way out.
+
 ## 2. Family names
 
 `Family::name()` gives one of these stable strings. A host can use them to choose an editor

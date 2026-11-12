@@ -142,7 +142,15 @@ JSON, and no parser for them is among the dependencies, so they stay unguarded. 
 (`.jsonl`, `.ndjson`) merge as whole lines, so each line stays the value someone wrote.
 
 **Not text (opened some other way, e.g. tier 0):**
-`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.ico` `.icns` `.heic` `.heif` `.avif` `.tif` `.tiff` `.psd` `.svgz` `.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac` `.opus` `.mp4` `.webm` `.mov` `.mkv` `.avi` `.m4v` `.pdf` `.doc` `.docx` `.xls` `.xlsx` `.ppt` `.pptx` `.odt` `.ods` `.odp` `.key` `.pages` `.numbers` `.epub` `.zip` `.gz` `.tgz` `.bz2` `.xz` `.zst` `.7z` `.rar` `.tar` `.jar` `.war` `.apk` `.ipa` `.dmg` `.iso` `.k5board` `.wasm` `.bin` `.exe` `.dll` `.so` `.dylib` `.class` `.o` `.a` `.lib` `.pyc` `.pyo` `.pdb` `.woff` `.woff2` `.ttf` `.otf` `.eot` `.sqlite` `.sqlite3` `.db` `.glb` `.3mf` `.blend`
+`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.ico` `.icns` `.heic` `.heif` `.avif` `.tif` `.tiff` `.psd` `.svgz` `.mp3` `.wav` `.ogg` `.flac` `.m4a` `.aac` `.opus` `.mp4` `.webm` `.mov` `.mkv` `.avi` `.m4v` `.pdf` `.doc` `.docx` `.xls` `.xlsx` `.ppt` `.pptx` `.odt` `.ods` `.odp` `.key` `.pages` `.numbers` `.epub` `.zip` `.gz` `.tgz` `.bz2` `.xz` `.zst` `.7z` `.rar` `.tar` `.jar` `.war` `.apk` `.ipa` `.dmg` `.iso` `.k5board` `.wasm` `.bin` `.exe` `.dll` `.so` `.dylib` `.class` `.o` `.a` `.lib` `.pyc` `.pyo` `.pdb` `.woff` `.woff2` `.ttf` `.otf` `.eot` `.sqlite` `.sqlite3` `.db` `.glb` `.3mf` `.blend` `.ifc` `.ifczip` `.step` `.stp` `.p21` `.dxf` `.kicad_sch` `.kicad_pcb` `.kicad_sym` `.kicad_mod` `.iges` `.igs` `.obj`
+
+CAD, BIM and circuit-board files (the last thirteen) are often text, but their lines carry ids
+and references to each other (`#12=` entities, handles, uuids, vertex numbers). A whole-line
+merge could write the same id twice, or keep a reference that a renumbering app save made point
+at the wrong thing, while the file still parses. They open at tier 0 until each type has its own
+pack. G-code (`.gcode`) and ASCII STL (`.stl`) have no ids or references between lines and stay
+text (unknown names, the strict guard). A doc already live as text under one of these names
+keeps all its content when it moves to tier 0: see `docs/HOST-INTEGRATION.md`.
 
 Files another pack serves (`.md` and `.markdown` for Markdown, ...) aren't listed here: a
 host asks the more specific pack first, and this pack is the fallback. `.csv` and `.tsv` are

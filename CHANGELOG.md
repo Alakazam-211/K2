@@ -1,5 +1,40 @@
 # Changelog
 
+## v0.2.22 (2026-11-12): pairs with kit v0.16.0
+
+**Requires `k2-mpc-base` v0.16.0**. CAD, BIM and circuit-board files move to the not-text list
+(below); otherwise the pack behaves as in v0.2.21.
+
+- Pairs with kit v0.16.0. Its changes are additive: the view schema, addresses and view
+  index, the keyed watch (new frames behind the feature `keyed_watch`; wire still 3) with view
+  deltas, roster addresses, and the structure index's row format 2. The pack hooks it adds
+  (`Pack::view_schema`, `view_derive`, `address_of` / `key_of`, `watch_extras`) are provided
+  methods with defaults, and this pack declares none of them: its text docs have no view
+  schema and no keyed watch (the hunk channel). No new error id.
+- `Cargo.lock`: k2-mpc-base 0.16.0 (only the kit's crate version moves); the crate version.
+- **CAD, BIM and circuit-board files open as shared files (tier 0), no longer as live text,
+  until their own packs exist.** These are `.ifc`, `.ifczip`, `.step`, `.stp`, `.p21`, `.dxf`,
+  `.kicad_sch`, `.kicad_pcb`, `.kicad_sym`, `.kicad_mod`, `.iges`, `.igs` and `.obj`. They are
+  now on the not-text list, as `.k5board` is. Before, a small one passed the text guard and
+  opened as live text. That was unsafe, because their lines point at each other by id or by
+  number. Two agents adding an entity could write the same id, and a merge across an app's
+  save that renumbered ids could still parse while pointing at the wrong things. At tier 0
+  they are shared files with versions, and a clashing save keeps both copies.
+- **G-code (`.gcode`) and ASCII STL (`.stl`) stay live text.** Neither has ids or references
+  between lines.
+- **A doc already live as text under one of these names keeps all its content.** The kit has
+  no text-to-tier-0 path, and a tier-0 open of the stored text doc is refused with
+  `PackMismatch`, changing nothing. `docs/HOST-INTEGRATION.md` ("A name that becomes
+  not-text") gives the host's rule, and `tests/engineering_files.rs` runs it:
+  1. Close the doc (a pending write-back is written first).
+  2. Move the text doc, with its history, to a key no file has.
+  3. Open the file at tier 0: its first version is the file as the text doc last wrote it.
+
+  A change the file never got (a crash before write-back) stays in the moved text doc.
+- **For a host with its own list of design extensions:** `lookup` now answers `NotText`, no
+  longer `Unknown`, for these thirteen. A host check that expects `Unknown` for one of them
+  fails. Drop the extension from the host's list, because the pack now covers it.
+
 ## v0.2.21 (2026-11-12): pairs with kit v0.15.1
 
 **Requires `k2-mpc-base` v0.15.1**. This pack's code and tests are unchanged from v0.2.20.

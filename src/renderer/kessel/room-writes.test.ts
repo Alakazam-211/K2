@@ -3,7 +3,7 @@
 // routes on the list; this computer's commands stay off in it (MS57/MS67).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -55,7 +55,12 @@ beforeEach(() => {
 
 /** `/cli/<route>` → [method kind, floor] from the daemon's route policy table. */
 function routePolicy(): Map<string, { kind: string; floor: string }> {
-  const src = readFileSync(join(REPO, 'crates/k2-daemon/src/routes/route_policy.rs'), 'utf8')
+  // The rows are in route_policy.rs, or in routes/policy/*.rs once the
+  // table is split by area.
+  const routes = join(REPO, 'crates/k2-daemon/src/routes')
+  const policy = join(routes, 'policy')
+  const files = [join(routes, 'route_policy.rs'), ...(existsSync(policy) ? readdirSync(policy).map((f) => join(policy, f)) : [])]
+  const src = files.map((f) => readFileSync(f, 'utf8')).join('\n')
   const out = new Map<string, { kind: string; floor: string }>()
   for (const m of src.matchAll(/^\s*(get|post|both)\("\/cli\/([^"]+)",\s*(\w+)\)/gm)) {
     out.set(m[2], { kind: m[1], floor: m[3] })

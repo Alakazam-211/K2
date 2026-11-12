@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-psd"
-version = "0.1.1"
+version = "0.1.2"
 description = "Reads PSD and PSB files: a type pack for the multiplayer kit."
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,7 @@ differential = []
 photocraft-psd = { path = "../../vendor/photocraft-psd" }
 # The kit (k2-mpc-base), by path: its checkout sits beside this repo's (a host vendors both side
 # by side: vendor/k2-mpc-base beside vendor/k2-mpc-psd), at the kit release CHANGELOG.md names,
-# v0.13.1. Run `cargo update -p k2-mpc-base` and commit the lock when it moves.
+# v0.14.0. Run `cargo update -p k2-mpc-base` and commit the lock when it moves.
 k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
 
 [dev-dependencies]

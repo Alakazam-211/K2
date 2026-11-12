@@ -342,7 +342,7 @@ beside the kit.
 | **Credit** | Parts of this crate come from Board, Copyright (c) 2026 Baden Ballard, MIT: the schema tables, the templates, the verbs' rules, the parity list, and the shapes the widget conversion pairs describe. See `THIRD-PARTY-NOTICES.md` for which files, and the licence. |
 | **Dependencies** | miniz_oxide (MIT OR Zlib OR Apache-2.0), sha2 (MIT OR Apache-2.0); its `bridge/` adds the kit (k2-mpc-base, above) |
 
-## Multiplayer kit: k2-mpc-psd v0.1.1 (vendored)
+## Multiplayer kit: k2-mpc-psd v0.1.2 (vendored)
 
 The kit's pack that reads PSD and PSB files: each version is read into the
 kit's structure index (a tree of layers), streaming, never holding pixels; it
@@ -352,9 +352,9 @@ never writes a file. Vendored beside the kit from its public cut, which has no
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-psd` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-psd`, tag `v0.1.1` (the cut `1dd73e3`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-psd`, tag `v0.1.2` (the cut `c9e2b52`) |
 | **License** | **MIT OR Apache-2.0** (Copyright (c) 2026 Alakazam Labs), full texts in the vendored repo's `LICENSE-MIT` and `LICENSE-APACHE` |
-| **Credit** | Its file reader is a copy of the PSD crate of PhotoCraft 0.9.0 (Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors, MIT OR Apache-2.0), with the changes listed in `vendor/k2-mpc-psd/vendor/photocraft-psd/VENDORED.md`; its licence texts and `NOTICE` are beside it |
+| **Credit** | Its file reader is a copy of the PSD crate of PhotoCraft 0.9.0 (Copyright (c) 2026 ArtCraft Team and the PhotoCraft contributors, MIT OR Apache-2.0), with the changes listed in `vendor/k2-mpc-psd/vendor/photocraft-psd/VENDORED.md` (since v0.1.2 also one change from upstream commit `a7301f1d`: the `UnFl` count's reservation cap); its licence texts and `NOTICE` are beside it |
 | **Dependencies** | flate2 (MIT OR Apache-2.0, with miniz_oxide: MIT OR Zlib OR Apache-2.0), thiserror (MIT OR Apache-2.0), and the kit (above) |
 
 Update these sections on every kit bump.

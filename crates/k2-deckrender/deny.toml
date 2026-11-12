@@ -45,10 +45,4 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [advisories]
-ignore = [
-    # The same entry as K2's audit ledger (osv-scanner.toml, .cargo/audit.toml): crossbeam-epoch
-    # 0.9.18 is already in K2's Cargo.lock, here through rayon under vello_cpu. The bad deref is
-    # only in the fmt::Pointer impl for Atomic/Shared, which neither deckcraft nor vello_cpu
-    # formats. The fix is a lockfile-only bump to 0.9.20+; drop this line with that bump.
-    { id = "RUSTSEC-2026-0204", reason = "fmt::Pointer of crossbeam-epoch Atomic/Shared only, never formatted; K2's ledger ignores it until 2026-12-05 pending the lockfile bump to 0.9.20" },
-]
+ignore = []

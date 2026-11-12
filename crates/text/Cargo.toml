@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-text"
-version = "0.2.18"
+version = "0.2.19"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,6 +10,9 @@ description = "Plain-text type pack for the K2 multiplayer kit: code, config, ma
 [dependencies]
 # The kit. Repos are checked out side by side (here and in a host's vendor/ directory).
 k2-mpc-base = { path = "../../../k2-mpc-base/crates/base" }
+# Strict JSON, for the merges of JSON types (`Syntax::Json`): MIT OR Apache-2.0, and already in
+# the lock through the kit (its own dependencies too)
+serde_json = "1"
 
 [dev-dependencies]
 proptest = "1"

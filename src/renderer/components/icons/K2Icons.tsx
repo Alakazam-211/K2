@@ -5,11 +5,12 @@
 //
 //   Home, Agents, Projects, Tickets, Wiki, Server, Admin, Run, Drawer,
 //   Clock, Mug, Help, Pin, PinOff, Palette, Board, Smartphone, SmartphoneOff,
-//   Pencil, Trash, ArrowUp, Feedback, OrgChart, Mail, Close
+//   Pencil, Trash, ArrowUp, ArrowDown, Feedback, OrgChart, Mail, Close
 //     Lucide 1.58 (`house`, `bot`, `layout-dashboard`, `ticket`, `library`,
 //     `server`, `circle-user`, `play`, `panel-left`, `clock`, `coffee`,
 //     `circle-help`, `pin`, `pin-off`, `palette`, `presentation`,
-//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `message-square`, `mail`,
+//     `smartphone`, `pencil`, `trash-2`, `arrow-up`, `arrow-down`,
+//     `message-square`, `mail`,
 //     `list-todo` (Checklist), `x` (Close); SmartphoneOff is
 //     `smartphone` plus the bell's 2,2 → 22,22 slash),
 //     corners squared: square caps, mitred joins, no corner radius (true
@@ -427,6 +428,17 @@ export function ArrowUpIcon(props: K2IconProps = {}): React.JSX.Element {
     <svg {...iconProps('arrow-up', props)}>
       <path d="M12 19V5" />
       <path d="M5 12l7-7 7 7" />
+    </svg>
+  )
+}
+
+/** Jump to the newest (the Thread's "Jump to bottom" pill): Lucide
+ *  `arrow-down`, squared (square caps, a mitred head). */
+export function ArrowDownIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('arrow-down', props)}>
+      <path d="M12 5v14" />
+      <path d="M19 12l-7 7-7-7" />
     </svg>
   )
 }

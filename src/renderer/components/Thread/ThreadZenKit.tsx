@@ -57,6 +57,7 @@ import {
   type ThreadMessageMenuArgs,
 } from './ThreadMessageMenu'
 
+import { THREAD_JUMP_PILL_CSS } from './ThreadJumpPill'
 import {
   CHAMFER_CUT,
   THREAD_CHAMFER_CSS,
@@ -86,6 +87,13 @@ export const THREAD_ZEN_DESKTOP_TOKENS = {
   '--zen-text-muted': 'var(--color-text-muted)',
   '--zen-accent': 'var(--color-accent)',
   '--zen-accent-text': 'var(--color-on-accent)',
+  // The accent as a fill under on-accent text (4.5:1), the control edge
+  // (3:1 on the page), the shared focus ring and the small type size: the
+  // Jump to bottom pill (ThreadJumpPill). A Garden falls back to its own.
+  '--zen-accent-fill': 'var(--color-accent-fill, var(--color-accent))',
+  '--zen-control-edge': 'var(--color-control-edge, var(--color-border))',
+  '--zen-focus-ring': 'var(--color-accent-text, var(--color-accent))',
+  '--zen-type-sm': 'var(--type-sm, 0.8em)',
   '--zen-bubble-me': 'var(--color-accent)',
   '--zen-bubble-me-text': 'var(--color-on-accent)',
   '--zen-bubble-agent': 'var(--color-bubble-agent, var(--color-bg-elevated))',
@@ -342,7 +350,7 @@ export function ThreadFooterFade({ top }: { top?: number | null }): JSX.Element 
 }
 
 export function ThreadZenStyles(): JSX.Element {
-  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS}</style>
+  return <style data-thread-zen-styles="">{THREAD_ZEN_CSS + THREAD_CHAMFER_CSS + THREAD_TAIL_CSS + THREAD_FOOTER_FADE_CSS + THREAD_SENDER_CSS + THREAD_JUMP_PILL_CSS}</style>
 }
 
 /** The message list's padding and the space between messages (the

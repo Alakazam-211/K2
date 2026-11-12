@@ -563,7 +563,7 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
   /** Does the chamfer rule (the cut-shape layers) apply to `e`? */
   const cut = (e: HTMLElement): boolean => e.matches(`${CHAMFER_SCOPE} [data-chamfer]`)
 
-  it('bubbles, the field, Send, the drawer\'s tab and Stop, "Earlier messages", and the "+", "/" and stash buttons carry the chamfer', () => {
+  it('bubbles, the field, Send, the drawer\'s tab and Stop, "Earlier messages", the "+", "/" and stash buttons, and Jump to bottom carry the chamfer', () => {
     renderThread()
     const named = Array.from(document.querySelectorAll('[data-chamfer]')).map((e) =>
       e.hasAttribute('data-zen-bubble')
@@ -584,9 +584,11 @@ describe('chamfered corners in K2\'s Terminal Style', () => {
                       ? 'slash'
                       : e.hasAttribute('data-stash-button')
                         ? 'stash'
-                        : e.outerHTML.slice(0, 60),
+                        : e.hasAttribute('data-thread-jump-pill')
+                          ? 'jump'
+                          : e.outerHTML.slice(0, 60),
     )
-    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'plus', 'send', 'slash', 'stash', 'stop'])
+    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'jump', 'plus', 'send', 'slash', 'stash', 'stop'])
     // Rosson 2026-10-31: their backdrop (hover, held, on) is a square, never a
     // circle or an oval: a 3px cut, transparent until hovered.
     for (const small of [screen.getByTestId('compose-plus'), screen.getByTestId('compose-slash-button'), screen.getByTestId('stash-button')]) {

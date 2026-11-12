@@ -41,6 +41,7 @@ import {
   zenEmptyThreadText,
 } from '@/components/Thread/ThreadZenKit'
 import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
+import { THREAD_JUMP_BOTTOM_PX, THREAD_JUMP_PILL_GAP, ThreadJumpPill } from '@/components/Thread/ThreadJumpPill'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import {
   ThreadSenderAvatarContext,
@@ -330,13 +331,58 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
   const isTabVisibleRef = useRef(isTabVisible)
   isTabVisibleRef.current = isTabVisible
 
+  // The Jump to bottom pill (ThreadJumpPill): shown while scrolled up; the
+  // messages from others that arrived meanwhile, and whether the person
+  // sent (a send never moves a list they scrolled up). Both reset at the
+  // bottom.
+  const [away, setAway] = useState(false)
+  const [unseen, setUnseen] = useState(0)
+  const [sentAway, setSentAway] = useState(false)
+  const awayRef = useRef(false)
+  const noteBottom = useCallback((atBottom: boolean) => {
+    if (awayRef.current === !atBottom) return
+    awayRef.current = !atBottom
+    setAway(!atBottom)
+    if (atBottom) {
+      setUnseen(0)
+      setSentAway(false)
+    }
+  }, [])
+
   useEffect(() => {
     didInitialScroll.current = false
     pinBottomRef.current = true
     prevHeightRef.current = null
     savedScrollTopRef.current = null
     lastClientHeightRef.current = 0
-  }, [addr])
+    noteBottom(true)
+  }, [addr, noteBottom])
+
+  // Arrivals while scrolled up: the rows after the newest one seen last
+  // time (an older page lands before it, so it never counts), not this
+  // viewer's own posts. Another Thread's rows never match the last key.
+  const lastKeyRef = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    const prev = lastKeyRef.current
+    lastKeyRef.current = items.length > 0 ? items[items.length - 1].id : null
+    if (prev === null || pinBottomRef.current) return
+    const at = items.findIndex((it) => it.id === prev)
+    if (at < 0) return
+    let fresh = 0
+    for (const it of items.slice(at + 1)) {
+      if (!isVoidedHitl(it.doc) && !isOwnThreadPost(it.doc, viewer)) fresh += 1
+    }
+    if (fresh > 0) setUnseen((n) => n + fresh)
+  }, [items, viewer])
+
+  // The person's own send while scrolled up: the pill says "Sent".
+  const outboxKeysRef = useRef<ReadonlySet<string>>(new Set())
+  useLayoutEffect(() => {
+    const known = outboxKeysRef.current
+    const fresh = outbox.some((it) => !known.has(it.id))
+    outboxKeysRef.current = new Set(outbox.map((it) => it.id))
+    if (fresh && !pinBottomRef.current) setSentAway(true)
+  }, [outbox])
 
   const syncListScrollRef = useRef<(el: HTMLElement) => void>(() => {})
   syncListScrollRef.current = (el: HTMLElement) => {
@@ -494,6 +540,28 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     void loadOlder()
   }
 
+  // The pill's click: smoothly to the bottom (a jump under reduced
+  // motion); arriving there pins the list and hides the pill (onScroll).
+  // Read far back, the newest rows aren't drawn: the window comes back to
+  // them and lands at the bottom at once.
+  const drawsNewest = win.drawsNewest
+  const toNewest = win.toNewest
+  const jumpToBottom = useCallback(() => {
+    const el = listRef.current
+    if (!el) return
+    if (!drawsNewest) {
+      pinBottomRef.current = true
+      noteBottom(true)
+      toNewest(true)
+      return
+    }
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: el.scrollHeight, behavior: reducedMotion ? 'instant' : 'smooth' })
+    } else {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [drawsNewest, toNewest, reducedMotion, noteBottom])
+
   const scope = threadZenScopeProps(editorFontSize)
   return (
     <div
@@ -504,6 +572,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
       <ThreadZenStyles />
       {/* 0.46.1: the agent's open clone proposals (Owner/Admin), Review / Deny. */}
       <CloneProposalsBanner addr={addr} refreshKey={visible.length - outbox.length} />
+      {/* The list and the Jump to bottom pill floating over its foot. */}
+      <div className="relative flex-1 min-h-0 flex flex-col" data-testid="thread-overlay-list-frame">
       <div
         ref={listRef}
         data-testid="thread-overlay-list"
@@ -528,7 +598,8 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
           }
           if (el.scrollTop <= 16) requestOlder()
           pinBottomRef.current =
-            el.scrollHeight - el.scrollTop - el.clientHeight <= 32
+            el.scrollHeight - el.scrollTop - el.clientHeight <= THREAD_JUMP_BOTTOM_PX
+          noteBottom(pinBottomRef.current)
           savedScrollTopRef.current = el.scrollTop
           win.onScroll()
         }}
@@ -591,6 +662,15 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
         </ThreadFileActionsProvider>
         </ThreadSenderAvatarContext.Provider>
         </ThreadAttachmentSourceProvider>
+      </div>
+      <ThreadJumpPill
+        shown={away && fill === 'some'}
+        unseen={unseen}
+        sent={sentAway}
+        reducedMotion={reducedMotion}
+        onJump={jumpToBottom}
+        bottom={bottomInset + THREAD_JUMP_PILL_GAP}
+      />
       </div>
       {/* TW12: live only, never stored (TW13). With a message box the
           column draws it on the box's top edge (`onTurn`). */}

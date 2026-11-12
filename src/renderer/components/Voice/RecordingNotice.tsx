@@ -53,7 +53,7 @@ export default function RecordingNotice({ call, agentReaders, onAnswer }: Record
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="recording-notice-title"
-        className="w-[min(420px,calc(100vw-32px))] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 text-[var(--color-text-primary)] outline-none"
+        className="w-[min(420px,calc(var(--k2-vw)-32px))] border border-[var(--color-border)] bg-[var(--color-bg-elevated)] p-4 text-[var(--color-text-primary)] outline-none"
       >
         <div className="mb-2 flex items-center gap-2">
           <span aria-hidden className="inline-block h-2.5 w-2.5 rounded-[var(--radius-pill)] bg-[var(--color-status-error)]" />

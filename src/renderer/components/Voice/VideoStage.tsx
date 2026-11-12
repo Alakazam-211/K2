@@ -110,8 +110,8 @@ export default function VideoStage({ ctl, people, title, footerStart, footer, on
       role="region"
       aria-label={`Video in ${title}`}
       data-testid="video-stage"
-      className={`fixed bottom-3 right-3 z-40 flex max-h-[80vh] flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg ${
-        wide ? 'w-[min(720px,calc(100vw-24px))]' : 'w-[min(380px,calc(100vw-24px))]'
+      className={`fixed bottom-3 right-3 z-40 flex max-h-[calc(var(--k2-vh)*0.8)] flex-col border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg ${
+        wide ? 'w-[min(720px,calc(var(--k2-vw)-24px))]' : 'w-[min(380px,calc(var(--k2-vw)-24px))]'
       }`}
       style={noDrag}
     >

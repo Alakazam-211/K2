@@ -61,6 +61,7 @@ import { reduceMotion, useCornerDrag, useFadeIn } from './useCornerDrag'
 import VideoTile, { MEDIA_LABEL } from './VideoTile'
 import { ExpandIcon, ScreenShareIcon } from '@/components/icons/K2Icons'
 import { TOPBAR_HEIGHT } from '../../../shared/constants'
+import { clientRectToCss, clientToCssPx, cssViewport } from '@/lib/app-zoom'
 
 /** The tile's first width (px); the picture is 16:9 inside it. The person
  *  resizes it from its inward edges (remembered per client, call-view.ts). */
@@ -131,8 +132,10 @@ export function useCallDuration(startedAt: number | null): string | null {
   return startedAt === null ? null : callDuration(startedAt, now)
 }
 
+/** All of the tile's geometry is CSS px: it's placed with a translate, which
+ *  the app zoom scales. Rects and the window are converted (lib/app-zoom). */
 function rectOf(el: Element): Rect {
-  const r = el.getBoundingClientRect()
+  const r = clientRectToCss(el.getBoundingClientRect())
   return { left: r.left, top: r.top, width: r.width, height: r.height }
 }
 
@@ -163,7 +166,7 @@ export function measureCallTileArea(): Bounds {
     const side = (el as HTMLElement).dataset.drawerSide
     if (side === 'left' || side === 'right') drawers.push({ side, rect: rectOf(el) })
   }
-  return freeArea({ width: window.innerWidth, height: window.innerHeight }, { content, drawers, tabs: visibleRects(CALL_TILE_TABS, null) })
+  return freeArea(cssViewport(), { content, drawers, tabs: visibleRects(CALL_TILE_TABS, null) })
 }
 
 /** A drawer opened, closed or was resized (the panels store): look again once
@@ -211,7 +214,7 @@ export interface CallTileProps {
  *  and the strip under the picture. */
 function measureRoom(strip: HTMLElement | null): TileRoom {
   const area = measureCallTileArea()
-  const view = { width: window.innerWidth, height: window.innerHeight }
+  const view = cssViewport()
   const left = Math.max(0, area.left) + CALL_TILE_INSETS.side
   const right = Math.min(view.width, area.right) - CALL_TILE_INSETS.side
   const top = Math.max(CALL_TILE_INSETS.top, area.top + CALL_TILE_INSETS.gap)
@@ -280,7 +283,7 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
     const el = ref.current
     const size = { width: el?.offsetWidth || widthRef.current, height: el?.offsetHeight || 0 }
     return cornerSpots(
-      { width: window.innerWidth, height: window.innerHeight },
+      cssViewport(),
       size,
       CALL_TILE_INSETS,
       visibleRects(CALL_TILE_AVOID, el),
@@ -357,12 +360,12 @@ function Card({ call, video, actions }: CallTileProps): React.JSX.Element {
     } catch {
       // A synthetic pointer.
     }
-    resize.current = { id: e.pointerId, x: e.clientX, y: e.clientY, from: widthRef.current, handle }
+    resize.current = { id: e.pointerId, x: clientToCssPx(e.clientX), y: clientToCssPx(e.clientY), from: widthRef.current, handle }
   }
   const onResizeMove = (e: React.PointerEvent): void => {
     const r = resize.current
     if (!r || r.id !== e.pointerId) return
-    const next = resizedWidth(r.from, e.clientX - r.x, e.clientY - r.y, r.handle, inwardEdges(corner))
+    const next = resizedWidth(r.from, clientToCssPx(e.clientX) - r.x, clientToCssPx(e.clientY) - r.y, r.handle, inwardEdges(corner))
     setWanted(clampTileWidth(next, measureRoom(stripRef.current)))
   }
   const onResizeEnd = (e: React.PointerEvent): void => {

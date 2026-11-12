@@ -21,6 +21,7 @@ import {
   type RefObject,
 } from 'react'
 import { beginBrowserMotion } from '@/lib/browser-overlay'
+import { clientToCssPx } from '@/lib/app-zoom'
 import {
   CORNERS,
   DEFAULT_CORNER,
@@ -123,6 +124,12 @@ export interface CornerDrag {
     onPointerCancel(e: ReactPointerEvent): void
     onClickCapture(e: ReactMouseEvent): void
   }
+}
+
+/** The pointer in CSS px: the tile moves by a translate, which the app zoom
+ *  scales, so a window-px pointer delta would outrun the pointer. */
+function pointerCss(e: { clientX: number; clientY: number }): { x: number; y: number } {
+  return { x: clientToCssPx(e.clientX), y: clientToCssPx(e.clientY) }
 }
 
 export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDragOptions): CornerDrag {
@@ -286,21 +293,23 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
       // Caught on its way: it stops under the pointer.
       stop()
     }
+    const at = pointerCss(e)
     press.current = {
       id: e.pointerId,
-      x: e.clientX,
-      y: e.clientY,
+      x: at.x,
+      y: at.y,
       from: pose.current,
       moved: false,
-      samples: [{ t: now(), x: e.clientX, y: e.clientY }],
+      samples: [{ t: now(), ...at }],
       target: e.target instanceof Element ? e.target : null,
     }
   }
   const onPointerMove = (e: ReactPointerEvent): void => {
     const p = press.current
     if (!p || p.id !== e.pointerId) return
-    const dx = e.clientX - p.x
-    const dy = e.clientY - p.y
+    const at = pointerCss(e)
+    const dx = at.x - p.x
+    const dy = at.y - p.y
     if (!p.moved && Math.hypot(dx, dy) < TAP_SLOP) return
     if (!p.moved) {
       p.moved = true
@@ -310,7 +319,7 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
       beginMotion()
       lift()
     }
-    p.samples.push({ t: now(), x: e.clientX, y: e.clientY })
+    p.samples.push({ t: now(), ...at })
     if (p.samples.length > 16) p.samples.shift()
     draw({ x: p.from.x + dx, y: p.from.y + dy, s: pose.current.s })
   }
@@ -324,7 +333,7 @@ export function useCornerDrag(ref: RefObject<HTMLElement | null>, opts: CornerDr
       return
     }
     dragged.current = true
-    p.samples.push({ t: now(), x: e.clientX, y: e.clientY })
+    p.samples.push({ t: now(), ...pointerCss(e) })
     snap(releaseVelocity(p.samples))
   }
   const onPointerCancel = (e: ReactPointerEvent): void => {

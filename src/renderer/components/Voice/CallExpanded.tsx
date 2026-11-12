@@ -84,7 +84,7 @@ function View({ call, video, actions }: CallExpandedProps): React.JSX.Element {
         aria-label={`Video call in ${call.roomName}, expanded`}
         data-testid="call-expanded"
         className="flex flex-col overflow-hidden"
-        style={{ width: `calc(100vw - ${CALL_EXPAND_MARGIN * 2}px)`, height: `calc(100vh - ${CALL_EXPAND_MARGIN * 2}px)`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        style={{ width: `calc(var(--k2-vw) - ${CALL_EXPAND_MARGIN * 2}px)`, height: `calc(var(--k2-vh) - ${CALL_EXPAND_MARGIN * 2}px)`, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         onKeyDown={keepFocusIn}
       >
         <header className="flex flex-shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">

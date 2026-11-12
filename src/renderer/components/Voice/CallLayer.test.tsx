@@ -152,6 +152,7 @@ import { useCallScreen } from '@/stores/call-screen'
 import { fakeTrack } from '@/lib/voice/fake-video-engine'
 import { overlayClaims, resetBrowserOverlaysForTest } from '@/lib/browser-overlay'
 import { usePanelsStore } from '@/stores/panels'
+import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
 
 const list: VoiceRoomsList = {
   hosting: { state: 'ok', line: 'Voice rooms are on.', detail: null },
@@ -521,6 +522,43 @@ describe('motion', () => {
     }
   })
 
+  // The app zoom (CSS zoom on <html>): rects, the window size and the
+  // pointer are window px; the tile's left/top and translate are CSS px,
+  // which the zoom scales. At 150 % the tile rested past the window's
+  // right and bottom edges and ran ahead of the pointer.
+  describe('under the app zoom (150 %)', () => {
+    const Z = 1.5
+    afterEach(() => resetAppZoomForTest())
+
+    it("rests in the window's bottom-right corner, inside the window", async () => {
+      applyAppZoomForTest(Z)
+      await inCall()
+      const tile = await cameraOn()
+      expect(tile.dataset.corner).toBe('bottom-right')
+      const left = Number.parseFloat(tile.style.left)
+      expect(Math.abs(left - (1024 / Z - 12 - 240))).toBeLessThan(0.5)
+      // On screen: the right edge 12 CSS px in from the window's.
+      expect(Math.abs((left + 240) * Z - (1024 - 12 * Z))).toBeLessThan(1)
+    })
+
+    it('follows the pointer while held: a 150 px drag on screen moves it 150 px on screen', async () => {
+      applyAppZoomForTest(Z)
+      await inCall()
+      await cameraOn()
+      const tile = screen.getByTestId('call-tile')
+      const picture = screen.getByTestId('call-tile-picture')
+      fireEvent.pointerDown(picture, { clientX: 900, clientY: 700, pointerId: 1, button: 0 })
+      step(16)
+      fireEvent.pointerMove(picture, { clientX: 750, clientY: 550, pointerId: 1 })
+      const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(tile.style.transform)
+      if (!m) throw new Error(`no translate in "${tile.style.transform}"`)
+      // The translate is CSS px: 100 of them draw 150 window px.
+      expect(Number(m[1]) * Z).toBeCloseTo(-150, 0)
+      expect(Number(m[2]) * Z).toBeCloseTo(-150, 0)
+      fireEvent.pointerUp(picture, { clientX: 750, clientY: 550, pointerId: 1 })
+    })
+  })
+
   it('the corner comes back for this window next time', async () => {
     localStorage.setItem(`${CORNER_KEY_PREFIX}main`, 'top-right')
     localStorage.setItem(`${CORNER_KEY_PREFIX}focus-1`, 'bottom-left')
@@ -681,8 +719,8 @@ describe('expand: the call over K2, inside the app', () => {
     expect(view.getAttribute('role')).toBe('dialog')
     expect(view.getAttribute('aria-modal')).toBe('true')
     // A margin all round, inside the window; over the scrim.
-    expect(view.style.width).toBe(`calc(100vw - ${CALL_EXPAND_MARGIN * 2}px)`)
-    expect(view.style.height).toBe(`calc(100vh - ${CALL_EXPAND_MARGIN * 2}px)`)
+    expect(view.style.width).toBe(`calc(var(--k2-vw) - ${CALL_EXPAND_MARGIN * 2}px)`)
+    expect(view.style.height).toBe(`calc(var(--k2-vh) - ${CALL_EXPAND_MARGIN * 2}px)`)
     expect(screen.getByTestId('call-expanded-scrim').dataset.scrim).toBe('')
     expect(fsCalls).toEqual([])
     // The tile gives way; the video is drawn once, in the view.

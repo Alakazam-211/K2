@@ -1,0 +1,33 @@
+[package]
+name = "k2-scenerender-fuzz"
+version = "0.0.0"
+license = "MIT"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for k2-scenerender: the K2SCENE1 decoder (and the listing's digests) and a small render. A panic, a fault, a hang or an allocation past libFuzzer's limit is a finding."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the repository's, so a normal build
+# doesn't pull libFuzzer, and nothing here ships.
+[workspace]
+
+[dependencies]
+# MIT OR Apache-2.0 with libFuzzer's NCSA: test tooling only, never shipped.
+libfuzzer-sys = "0.4"
+k2-scenerender = { path = ".." }
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "render"
+path = "fuzz_targets/render.rs"
+test = false
+doc = false
+bench = false

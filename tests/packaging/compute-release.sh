@@ -49,11 +49,15 @@ def elf(extra):
     return bytes(head) + extra
 files = {}
 ptyd = hashlib.sha256(b"ptyd").hexdigest()
-# The daemon embeds k2-export too (build-linux-bins.sh records its hash).
+# The daemon embeds k2-export and k2-deskd too (build-linux-bins.sh records
+# their hashes; compute_release.py looks for each one in the daemon).
 export = hashlib.sha256(b"export").hexdigest()
+deskd = hashlib.sha256(b"deskd").hexdigest()
 v = "1.0.0" if tamper == "marker_version" else version
 if kind == "linux-bins":
-    files[f"k2-daemon-linux-{arch}"] = elf(b"daemon " + ptyd.encode() + b" " + export.encode())
+    embeds = {"ptyd": ptyd, "export": export, "deskd": deskd}
+    files[f"k2-daemon-linux-{arch}"] = elf(b"daemon " + b" ".join(
+        h.encode() for k, h in embeds.items() if tamper != "no_" + k))
     node = b"node K2_NODE_BUILD v=%s proto=3 os=linux arch=%s;" % (v.encode(), arch.encode())
     if tamper == "test_keys":
         node += b" K2_NODE_TEST_KEYS_ENABLED"
@@ -86,7 +90,7 @@ if sums:
 info = {"kind": kind, "version": "0.0.1" if tamper == "info_version" else version, "arch": arch,
         "commit": commit, "tree": tree, "files": meta}
 if kind == "linux-bins":
-    info.update(oauth="placeholder", ptyd_sha256=ptyd, export_sha256=export)
+    info.update(oauth="placeholder", ptyd_sha256=ptyd, export_sha256=export, deskd_sha256=deskd)
 json.dump(info, open(os.path.join(out, "dist", "build-info.json"), "w"))
 PY
 
@@ -354,6 +358,9 @@ unset STUB_TAMPER
 export GEN_TAMPER=test_keys;      check_tamper t-keys "a test-keys k2-node" "test-keys"
 export GEN_TAMPER=marker_version; check_tamper t-marker "build marker of another version" "build marker says"
 export GEN_TAMPER=info_version;   check_tamper t-info "build-info of another version" "build-info version"
+export GEN_TAMPER=no_ptyd;        check_tamper t-ptyd "a daemon without k2-ptyd" "does not embed k2-ptyd"
+export GEN_TAMPER=no_export;      check_tamper t-export "a daemon without k2-export" "does not embed k2-export"
+export GEN_TAMPER=no_deskd;       check_tamper t-deskd "a daemon without k2-deskd" "does not embed k2-deskd"
 unset GEN_TAMPER
 export K2_COMPUTE_X86_NODE=stranger-1; check_tamper t-node "a node off the release list" "not a release node"
 unset K2_COMPUTE_X86_NODE

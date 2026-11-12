@@ -43,6 +43,7 @@ NOW_OK = "2026-11-11T14:05:00Z"
 RP = "k2sign@build-mac"
 NONCE = "00112233445566778899aabbccddeeff"
 BASE = "0123456789abcdef0123456789abcdef01234567"
+OLD_BASE = "fedcba9876543210fedcba9876543210fedcba98"
 
 
 def run(*argv, data=None):
@@ -95,6 +96,7 @@ def payload_obj(ids, **over):
             "version": "0.46.13", "base_commit": BASE,
             "assets": ["K2.app.tar.gz", "K2_0.46.13_aarch64.dmg", "k2-daemon-linux-x86_64"],
             "slots": ["u1", "u2"], "windows": False, "reapproval": False,
+            "replacement": False, "replaces_base": "",
             "max_signatures": 10, "session_until": "2026-11-12T02:00:00Z",
         },
     }
@@ -126,6 +128,22 @@ def valid_payloads(ids):
         "RE-APPROVE: Approve K2 release 0.46.13 at base commit %s.\n"
         "Sign: K2.app.tar.gz, K2_0.46.13_x64-setup.exe.\n"
         "Windows setup: yes, with no independent check.\n"
+        "Signing stays open until 2026-11-12 02:00:00 UTC.\n" % BASE + FOOTER)
+    o = payload_obj(ids)
+    o["body"] = dict(o["body"], replacement=True, replaces_base=OLD_BASE)
+    out["release-replacement"] = (enc(o),
+        "RE-APPROVE for new code: the earlier approval for base commit %s was never used.\n"
+        "Approve K2 release 0.46.13 at base commit %s.\n"
+        "Sign: K2.app.tar.gz, K2_0.46.13_aarch64.dmg, k2-daemon-linux-x86_64.\n"
+        "Windows setup: no.\n"
+        "Signing stays open until 2026-11-12 02:00:00 UTC.\n" % (OLD_BASE, BASE) + FOOTER)
+    o = payload_obj(ids)
+    o["body"] = dict(o["body"], replacement=True)
+    out["release-replacement-old-base-unknown"] = (enc(o),
+        "RE-APPROVE for new code: an earlier approval of 0.46.13 was never used.\n"
+        "Approve K2 release 0.46.13 at base commit %s.\n"
+        "Sign: K2.app.tar.gz, K2_0.46.13_aarch64.dmg, k2-daemon-linux-x86_64.\n"
+        "Windows setup: no.\n"
         "Signing stays open until 2026-11-12 02:00:00 UTC.\n" % BASE + FOOTER)
     refund = payload_obj(ids, kind="com.example.refund", kind_v=2,
                          approver_keys=[ids["alex-phone-cred"], ids["alex-phone-bio"]],
@@ -222,6 +240,10 @@ def invalid_payloads(ids):
         ("release-asset-twice", o(body=body(assets=["K2.app.tar.gz", "K2.app.tar.gz"])), "shape"),
         ("release-windows-string", o(body=body(windows="no")), "shape"),
         ("release-version-leading-zero", o(body=body(version="0.046.13")), "shape"),
+        ("release-replacement-and-reapproval", o(body=body(replacement=True, reapproval=True)), "shape"),
+        ("release-replaces-base-without-replacement", o(body=body(replaces_base=OLD_BASE)), "shape"),
+        ("release-replaces-base-short", o(body=body(replacement=True, replaces_base="fedcba9")), "shape"),
+        ("release-missing-replacement", o(body={k: v for k, v in body().items() if k != "replacement"}), "shape"),
     ]
     names = [c[0] for c in cases]
     assert len(names) == len(set(names))

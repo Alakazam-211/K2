@@ -11,6 +11,16 @@
    "display": "payloads/valid/release-reapprove-windows.txt"
   },
   {
+   "name": "release-replacement",
+   "payload": "payloads/valid/release-replacement.bin",
+   "display": "payloads/valid/release-replacement.txt"
+  },
+  {
+   "name": "release-replacement-old-base-unknown",
+   "payload": "payloads/valid/release-replacement-old-base-unknown.bin",
+   "display": "payloads/valid/release-replacement-old-base-unknown.txt"
+  },
+  {
    "name": "generic-refund",
    "payload": "payloads/valid/generic-refund.bin",
    "display": "payloads/valid/generic-refund.txt"
@@ -320,6 +330,26 @@
   {
    "name": "release-version-leading-zero",
    "payload": "payloads/invalid/release-version-leading-zero.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-replacement-and-reapproval",
+   "payload": "payloads/invalid/release-replacement-and-reapproval.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-replaces-base-without-replacement",
+   "payload": "payloads/invalid/release-replaces-base-without-replacement.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-replaces-base-short",
+   "payload": "payloads/invalid/release-replaces-base-short.bin",
+   "code": "shape"
+  },
+  {
+   "name": "release-missing-replacement",
+   "payload": "payloads/invalid/release-missing-replacement.bin",
    "code": "shape"
   }
  ]

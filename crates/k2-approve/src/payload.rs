@@ -218,7 +218,18 @@ pub fn parse(bytes: &[u8]) -> Result<Payload> {
 pub const KNOWN_KINDS: [&str; 1] = ["k2.release"];
 
 /// k2.release v1's body, in display order.
-pub const RELEASE_FIELDS: [&str; 8] = ["version", "base_commit", "assets", "slots", "windows", "reapproval", "max_signatures", "session_until"];
+pub const RELEASE_FIELDS: [&str; 10] = [
+    "version",
+    "base_commit",
+    "assets",
+    "slots",
+    "windows",
+    "reapproval",
+    "replacement",
+    "replaces_base",
+    "max_signatures",
+    "session_until",
+];
 
 fn version_ok(s: &str) -> bool {
     let parts: Vec<&str> = s.split('.').collect();
@@ -272,8 +283,20 @@ pub fn check_known(p: &Payload) -> Result<()> {
         Some(sl) if !sl.is_empty() && sl.iter().all(|x| !x.is_empty() && x.len() <= 8 && x.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())) => {}
         _ => return shape("slots must list one or more key slots".into()),
     }
-    if !boolean("windows") || !boolean("reapproval") {
-        return shape("windows and reapproval must be true or false".into());
+    if !boolean("windows") || !boolean("reapproval") || !boolean("replacement") {
+        return shape("windows, reapproval and replacement must be true or false".into());
+    }
+    // A replacement takes the place of an earlier approval of this version
+    // that signed nothing; replaces_base is that approval's base commit, or
+    // "" when it is not known. Not a replacement: "".
+    let yes = |f: &str| matches!(p.body_field(f), Some(BodyValue::Bool(true)));
+    match s("replaces_base") {
+        Some("") => {}
+        Some(b) if yes("replacement") && is_hex_lower(b, 40) => {}
+        _ => return shape("replaces_base must be \"\" or, for a replacement, 40 lowercase hex".into()),
+    }
+    if yes("replacement") && yes("reapproval") {
+        return shape("replacement and reapproval are not both true".into());
     }
     match p.body_field("max_signatures") {
         Some(BodyValue::Int(n)) if (1..=100_000).contains(n) => {}

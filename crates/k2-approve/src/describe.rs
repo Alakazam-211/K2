@@ -43,6 +43,14 @@ fn release(p: &Payload, out: &mut Vec<String>) {
         Some(BodyValue::List(l)) => l.join(", "),
         _ => String::new(),
     };
+    if yes("replacement") {
+        let old = s("replaces_base");
+        if old.is_empty() {
+            out.push(format!("RE-APPROVE for new code: an earlier approval of {} was never used.", s("version")));
+        } else {
+            out.push(format!("RE-APPROVE for new code: the earlier approval for base commit {old} was never used."));
+        }
+    }
     let re = if yes("reapproval") { "RE-APPROVE: " } else { "" };
     out.push(format!("{re}Approve K2 release {} at base commit {}.", s("version"), s("base_commit")));
     out.push(format!("Sign: {assets}."));

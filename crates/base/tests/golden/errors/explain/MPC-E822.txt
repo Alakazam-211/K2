@@ -1,0 +1,27 @@
+MPC-E822 keyed_at_limit (structured and CSV)
+exit:     2
+message:  this doc is at its live size limit ({limit} {what}, deleted elements included); nothing was applied
+next:     The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.
+step:     cat; why: The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again.
+rule:     K-CSV-7 (keyed docs)
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E822",
+  "name": "keyed_at_limit",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "this doc is at its live size limit ({limit} {what}, deleted elements included); nothing was applied",
+  "next": "The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.",
+  "next_step": {
+    "verb": "cat",
+    "args": [],
+    "why": "The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again."
+  },
+  "rule": "K-CSV-7 (keyed docs)",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

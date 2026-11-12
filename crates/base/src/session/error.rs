@@ -115,6 +115,11 @@ pub enum SessionError {
     /// No change at that log position (`revert`), or no such version. Exit 4.
     #[error("no change or version {0} in this doc")]
     NoSuchChange(u64),
+    /// `file_at` of a version of a pack that keeps a carrier (K1), when the version has none
+    /// (cut by an older kit or before this build, or a purge erased it): its file can't be
+    /// rebuilt exactly, so none is given. Exit 4 (`MPC-E208`).
+    #[error("version {version} has no copy of its file's own bytes (version_no_carrier)")]
+    VersionNoCarrier { version: u64 },
     /// A cell write ([`super::Session::edit_ops`]) under a row or a column the table doesn't
     /// know: dropped by `rows drop-deleted` (`dropped`: the drop's change and who ran it, while
     /// the store still holds its record), or never in it. Its cell could never be seen,
@@ -278,7 +283,10 @@ pub enum SessionError {
     /// and nothing already in the table is dropped. Exit 2. `what` is `cells`, `columns` or
     /// `rows` (blank rows included);
     /// or `value bytes` for a cell value or column name longer than
-    /// `Config::grid_max_value_len` (C1k; `would_be` is its length).
+    /// `Config::grid_max_value_len` (C1k; `would_be` is its length);
+    /// or `elements and fields` for a keyed doc that isn't a table, past
+    /// `Config::keyed_max_entries` (its list elements, deleted ones included, plus its map
+    /// entries).
     #[error("{}", at_limit(what, *limit, *would_be))]
     AtLimit {
         what: &'static str,
@@ -376,6 +384,12 @@ fn save_mismatch_text(size: u64, file_size: Option<u64>) -> String {
 fn at_limit(what: &str, limit: usize, would_be: usize) -> String {
     if what == "value bytes" {
         return format!("a value or name is {would_be} bytes; the limit is {limit} bytes");
+    }
+    if what == "elements and fields" {
+        return format!(
+            "this doc is at its live size limit ({limit} elements and fields, deleted elements \
+             included); nothing was applied"
+        );
     }
     format!("this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted`")
 }

@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { LiveText, type Rejection } from "../src/live";
-import type { ElemSelection, Point, Rect, CaretAt, ChangeEvent, ErrorReport, RosterEntry, RosterEvent, ServerFrame, Transport } from "../src/wire";
+import type { ClaimActor, ElemFocus, ElemRange, ElemSelection, Point, Rect, CaretAt, ChangeEvent, ErrorReport, RosterEntry, RosterEvent, ServerFrame, Transport } from "../src/wire";
 import { runrec } from "./runrec";
 
 const load = (name: string) => JSON.parse(readFileSync(new URL(`./golden/${name}`, import.meta.url), "utf8"));
@@ -30,13 +30,15 @@ const keys = (o: object) => Object.keys(o).sort();
 
 /** Exactly the fields `ChangeEvent` names, with their types. */
 function checkChange(e: ChangeEvent) {
-  expect(keys(e)).toEqual(["at_ms", "client", "hunks", "kind", "on_behalf_of", "pid", "root", "version", "via"]);
+  expect(keys(e)).toEqual(["at_ms", "client", "hunks", "kind", "on_behalf_of", "pid", "root", "turn", "verb", "version", "via"]);
   expect(["edit", "undo", "redo", "revert", "restore", "external", "import"]).toContain(e.kind);
   expect(isInt(e.version) && isInt(e.client) && isInt(e.at_ms)).toBe(true);
   expect(typeof e.pid).toBe("string");
   expect(typeof e.via).toBe("string");
   expect(typeof e.root).toBe("string");
   expect(e.on_behalf_of === null || typeof e.on_behalf_of === "string").toBe(true);
+  expect(e.turn === null || (typeof e.turn === "string" && e.turn.length > 0 && e.turn.length <= 64)).toBe(true);
+  expect(e.verb === null || (typeof e.verb === "string" && e.verb.length > 0 && e.verb.length <= 64)).toBe(true);
   for (const h of e.hunks) {
     expect(keys(h)).toEqual(["end", "insert", "start"]);
     expect(isInt(h.start) && isInt(h.end) && typeof h.insert === "string").toBe(true);
@@ -88,7 +90,7 @@ const KINDS = ["person", "agent", "app", "external", "restore", "import"];
 function checkDevices(m: RosterEntry) {
   expect(Array.isArray(m.devices) && m.devices.length > 0).toBe(true);
   for (const d of m.devices!) {
-    const optional = ["label", "selection", "pointer", "viewport"].filter((k) => (d as unknown as Record<string, unknown>)[k] !== undefined);
+    const optional = ["label", "selection", "pointer", "viewport", "focus", "range"].filter((k) => (d as unknown as Record<string, unknown>)[k] !== undefined);
     expect(keys(d)).toEqual(["client", "cursor", ...optional].sort());
     expect(isInt(d.client)).toBe(true);
     checkCaret(d.cursor);
@@ -98,6 +100,15 @@ function checkDevices(m: RosterEntry) {
   expect(new Set(m.devices!.map((d) => d.client)).size).toBe(m.devices!.length);
   // the participant's caret is one of its connections' (the most active)
   if (m.cursor) expect(m.devices!.map((d) => d.cursor)).toContainEqual(m.cursor);
+}
+
+/** A claim event's actor (wire 3): `{id, name, kind, colour}`, `id` the event's `who`. */
+function checkActor(a: ClaimActor | undefined, who: string) {
+  expect(a).toBeDefined();
+  expect(keys(a!)).toEqual(["colour", "id", "kind", "name"]);
+  expect(a!.id).toBe(who);
+  expect(KINDS).toContain(a!.kind);
+  expect(a!.colour).toMatch(/^#[0-9a-f]{6}$/);
 }
 
 function checkElemClaim(c: { claim: string; root: string; keys: string[]; note: string | null; hold: boolean; expires_ms: number }) {
@@ -113,14 +124,14 @@ function checkElemClaim(c: { claim: string; root: string; keys: string[]; note: 
 
 function checkEntry(m: RosterEntry) {
   const fields = ["away", "colour", "cursor", "handle", "kind", "name", "rights", "role"];
-  const optional = ["devices", "selection", "pointer", "viewport", "elem_claims"].filter((k) => (m as unknown as Record<string, unknown>)[k] !== undefined);
+  const optional = ["devices", "selection", "pointer", "viewport", "focus", "range", "elem_claims"].filter((k) => (m as unknown as Record<string, unknown>)[k] !== undefined);
   expect(keys(m)).toEqual([...fields, ...optional].sort());
   if (m.devices !== undefined) checkDevices(m);
   checkElemValues(m);
   if (m.elem_claims !== undefined) {
     expect(m.elem_claims.length).toBeGreaterThan(0);
     for (const c of m.elem_claims) {
-      expect(keys(c)).toEqual(["claim", "expires_ms", "hold", "keys", "note", "root"]);
+      expect(keys(c)).toEqual(["claim", "expires_ms", "hold", "keys", "note", "root", "started_ms"]);
       checkElemClaim(c);
     }
   }
@@ -224,8 +235,17 @@ function checkOverwrittenGrid(e: Overwritten) {
 /** How many places a note speaks for (the kit's `Overwrite::cells`). */
 const places = (o: Overwritten) => (o.rule === "rollup" ? 0 : o.cells.length) + o.more;
 
-/** A selection, pointer or viewport: `{root, keys}`, `{x, y}`, `{x, y, w, h}`, or absent. */
-function checkElemValues(v: { selection?: ElemSelection | null; pointer?: Point | null; viewport?: Rect | null }) {
+/** A selection, pointer, viewport, focus or range: `{root, keys}`, `{x, y}`, `{x, y, w, h}`,
+ * `{root, key}`, `{root, key, field, anchor, head}`, or absent. */
+function checkElemValues(v: { selection?: ElemSelection | null; pointer?: Point | null; viewport?: Rect | null; focus?: ElemFocus | null; range?: ElemRange | null }) {
+  if (v.focus) {
+    expect(keys(v.focus)).toEqual(["key", "root"]);
+    expect(typeof v.focus.key === "string" && v.focus.key.length > 0).toBe(true);
+  }
+  if (v.range) {
+    expect(keys(v.range)).toEqual(["anchor", "field", "head", "key", "root"]);
+    expect(isInt(v.range.anchor) && isInt(v.range.head)).toBe(true);
+  }
   if (v.selection) {
     expect(keys(v.selection)).toEqual(["keys", "root"]);
     expect(v.selection.keys.length).toBeGreaterThan(0);
@@ -240,7 +260,7 @@ function checkElemValues(v: { selection?: ElemSelection | null; pointer?: Point 
 }
 
 /** These kinds sit outside the doc's numbering: no `seq` and no `version`. */
-function checkElemEvent(e: Extract<RosterEvent, { kind: "selection" | "pointer" | "viewport" }>) {
+function checkElemEvent(e: Extract<RosterEvent, { kind: "selection" | "pointer" | "viewport" | "focus" | "range" }>) {
   expect(keys(e)).toEqual((e.client === undefined ? ["kind", "who", e.kind] : ["client", "kind", "who", e.kind]).sort());
   if (e.client !== undefined) expect(isInt(e.client)).toBe(true);
   checkElemValues(e);
@@ -251,6 +271,8 @@ function checkRoster(e: RosterEvent) {
     case "selection":
     case "pointer":
     case "viewport":
+    case "focus":
+    case "range":
       return checkElemEvent(e);
     case "snapshot":
       // `overwritten` only when this subscriber has waiting notes
@@ -289,14 +311,23 @@ function checkRoster(e: RosterEvent) {
     case "claim_started":
       expect(e.claim).toMatch(/^claim-\d+$/);
       expect(isInt(e.lines.first) && isInt(e.lines.last) && isInt(e.version)).toBe(true);
+      checkActor(e.actor, e.who);
+      expect(isInt(e.started_ms)).toBe(true);
       return;
     case "claim_ended":
       expect(["released", "edited", "expired", "left", "reset", "deleted"]).toContain(e.how);
+      checkActor(e.actor, e.who);
+      expect(isInt(e.at_ms)).toBe(true);
+      // the change that ended it, exactly when one did
+      if (e.how === "edited" || e.how === "deleted") expect(isInt(e.at_rev)).toBe(true);
+      else expect(e.at_rev).toBeNull();
       return;
     case "claim_started_elems":
-      expect(keys(e)).toEqual(["claim", "expires_ms", "hold", "keys", "kind", "note", "root", "version", "who"]);
+      expect(keys(e)).toEqual(["actor", "claim", "expires_ms", "hold", "keys", "kind", "note", "root", "started_ms", "version", "who"]);
       checkElemClaim(e);
       expect(isInt(e.version)).toBe(true);
+      checkActor(e.actor, e.who);
+      expect(isInt(e.started_ms)).toBe(true);
       return;
     case "overwritten":
       checkOverwritten(e);
@@ -315,7 +346,7 @@ function checkRoster(e: RosterEvent) {
 }
 
 describe("golden wire JSON written by the Rust kit", () => {
-  for (const name of ["change_events.json", "change_events_app.json"]) {
+  for (const name of ["change_events.json", "change_events_app.json", "change_events_verb.json"]) {
     it(`${name}: change events parse and replay to the kit's text`, () => {
       const g = load(name);
       const events = g.events as ChangeEvent[];
@@ -331,12 +362,26 @@ describe("golden wire JSON written by the Rust kit", () => {
     });
   }
 
+  it("change_events_verb.json: a pack verb's change names its verb; a kit tool's and a person's name none; via stays the client", () => {
+    const g = load("change_events_verb.json");
+    const events = g.events as ChangeEvent[];
+    expect(events.map((e) => e.verb)).toEqual(["shout", null, null]);
+    expect(events.map((e) => e.via)).toEqual(["cli", "cli", "tab"]);
+    // the other wire goldens have no pack verb: every change there names none
+    for (const name of ["change_events.json", "change_events_app.json"]) {
+      for (const e of load(name).events as ChangeEvent[]) expect(e.verb).toBeNull();
+    }
+  });
+
   it("change_events.json: a 53-bit client ID survives; the agent's change names its person; escapes round-trip", () => {
     const g = load("change_events.json");
     const events = g.events as ChangeEvent[];
     expect(events[0].client).toBe(Number.MAX_SAFE_INTEGER); // MAX_CLIENT_ID = 2^53 - 1
     const agent = events.find((e) => e.on_behalf_of !== null)!;
     expect(agent.on_behalf_of).toBe("ada");
+    // the host-given turn rides on the agent's change as given; the people's changes have none
+    expect(agent.turn).toBe("t:1a2b3c4d5e6f7a8b.12");
+    expect(events.filter((e) => e !== agent).every((e) => e.turn === null)).toBe(true);
     expect(agent.hunks.map((h) => h.insert).join("")).toContain('say "hi"\t\\ café 😀\u0001\n');
     // the undo comes back as a change by the same participant and client
     expect(events[2].pid).toBe(events[0].pid);
@@ -355,6 +400,8 @@ describe("golden wire JSON written by the Rust kit", () => {
     for (const e of g.events as ChangeEvent[]) {
       expect(e.pid).toMatch(/^p\d+$/);
       if (e.on_behalf_of !== null) expect(e.on_behalf_of).toMatch(/^p\d+$/);
+      // the host's turn ids are the same in every doc: withheld from an App viewer
+      expect(e.turn).toBeNull();
     }
   });
 
@@ -366,6 +413,7 @@ describe("golden wire JSON written by the Rust kit", () => {
     "roster_events_devices.json",
     "roster_events_elem_presence.json",
     "roster_events_claims_elems.json",
+    "roster_events_focus_range.json",
   ]) {
     it(`${name}: roster events parse and fold to the kit's own final roster`, () => {
       const g = load(name);
@@ -401,7 +449,8 @@ describe("golden wire JSON written by the Rust kit", () => {
       // re-sort on a role change, so the order agrees only where no role change reorders it
       const byHandle = (a: { handle: string }, b: { handle: string }) => (a.handle < b.handle ? -1 : 1);
       expect([...got].sort(byHandle)).toEqual([...want].sort(byHandle));
-      if (!name.startsWith("roster_events_overwritten")) expect(got).toEqual(want);
+      // (and where a person's first write makes them an editor ahead of one who joined earlier)
+      if (!name.startsWith("roster_events_overwritten") && name !== "roster_events_focus_range.json") expect(got).toEqual(want);
       runrec(`client_golden_${name.replace(".json", "")}`, { events: events.length, members: want.length });
     });
   }

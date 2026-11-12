@@ -1,5 +1,292 @@
 # Changelog
 
+## v0.15.0 (2026-11-11)
+
+A host release on v0.14.0. The crate version is `0.15.0`; the client's is `0.15.0`. Pairs with
+the markdown, text, board, csv and psd pack tags of this release, and with the pptx pack's
+first tag. The store format is the same (`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7,
+`STORE_FORMAT_BASE` 5) and no store needs a migration; six new tables come without a format
+bump (below). The live wire is version 3, every addition optional. Four error ids are new:
+`MPC-E208`, `MPC-E415`, `MPC-E603` and `MPC-E822`.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.14.0 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it).
+
+For a host, in short (details below):
+
+- **Behaviour changes:**
+  - **Keyed docs that aren't tables (a deck, a board): an app's save over the kit's own write
+    keeps both,** the rule tier 0 took in v0.14.0. The save becomes the live doc, and the kit's
+    version is kept as a version and as a conflict copy. You see `DiskCheck::Conflict` and one
+    `AuditEvent::BlobConflict` where you saw `DiskCheck::Ingested` and
+    `AuditEvent::ExternalEdit` alone (`ExternalEdit` still comes). Such copies are removed on
+    `tick` and reached by a purge, as tier 0's are.
+  - **A size limit for keyed docs that aren't tables** (`Config::keyed_max_entries`, default
+    25,000). A file over it doesn't open live: `open_file` declines it with `live_too_large`
+    (`MPC-E415`), so open it at tier 0 as any declined file. A change that would grow a live doc
+    past it is refused, nothing applied (`MPC-E822`).
+  - **An agent's verbs and claims move its presence:** its focus goes to the container it last
+    touched or claimed, its selection to the elements. A person's never do.
+  - **`purge_space_key` always rewrites the store file,** so the destroyed key's bytes leave it.
+  - **A structured read never renders the file** (faster on large decks); it reports the last
+    rendering's failure while the doc is at that version.
+  - **A blob a put is waiting to reference is never removed at once** by a purge or a replaced
+    carrier; a purge reports it as `NotReached::SharedBlobs`.
+- **New, additive APIs:**
+  - **Turns:** pass a host turn id (`Turn`) on every write call (`ToolOptions`, `EditOptions`,
+    `UndoRequest`, `GridWriteOptions`, the new `WriteOptions` and `BlobWriteOptions`, and the
+    new `revert_with` and `restore_with`); it shows on `ChangeEvent::turn`, `ChangeInfo::turn`,
+    `BlobVersion::turn` and `BlobLogEntry::turn`.
+  - **The pack verb on a change:** `ChangeEvent::verb` and `ChangeInfo::verb`, set by the kit.
+  - **Focus and range:** `Session::set_focus` and `Session::set_range`, `Pack::container_of`,
+    `RosterEntry::focus` and `range`, `RosterEvent::Focus` and `RosterEvent::Range`.
+  - **Claim events carry who and when** (`ClaimActor`, `started_ms`, `at_ms`, `at_rev`); the
+    watcher count (`RosterEvent::Watching`) is pinned.
+  - **Host cache keys:** `BlobStore::host_cache_key` and `host_cache_key_at`, for a host's own
+    caches of a space's content (`MPC-E603` once the space key is destroyed).
+  - **The carrier (K1):** `Pack::wants_carrier` and `Pack::encode_from`, for a pack that writes
+    the file back by splicing (the pptx pack); a version without its carrier is refused with
+    `MPC-E208`. `DocStore::live_copies` lists a live doc's conflict copies.
+- **The live wire is version 3.** Everything new is additive. An older client on this host
+  ignores what it doesn't know; a new client on an older host (no `welcome.wire`) sends no
+  `focus` or `range`. K2's own wire goldens pin wire 2 and change only where K2 adds the new
+  fields.
+- **New error ids:** `MPC-E208 version_no_carrier`, `MPC-E415 declined_live_too_large`,
+  `MPC-E603 cache_key_destroyed`, `MPC-E822 keyed_at_limit`.
+- **Going back to v0.14.0:** no store format constant changes. Six new tables come without a
+  bump: `change_turns`, `blob_turns`, `change_verbs`, `live_copies`, `live_carriers` and
+  `version_carriers`. v0.14.0 opens, reads and writes such a store as before, but refuses a
+  store-file rewrite (and so a purge or an erasure) with `MPC-E502` once one of them holds a
+  row; it keeps the carriers through GC and never removes live conflict copies (they stay,
+  nothing is lost), and what it leaves behind this release sweeps on its next open.
+  `tools/n1` checks both ways (`node-both`, `node-wire`, `node-carrier`).
+- **Client 0.15.0:** wire 3 (`turn`, `verb`, focus and range, claims, the watcher count); with
+  a wire-2 host it behaves as 0.14.0.
+
+In detail:
+
+- **A live revert and restore take the host's turn** (new, additive; K2's ask, rendering-data
+  contract gap 8). `Session::revert_with(conn, change, partial, &HistoryOptions)` and
+  `Session::restore_with(conn, vid, &HistoryOptions)` record the host-given turn
+  (`HistoryOptions::turn`) on the change they make, on text and keyed docs, so the activity line
+  credits the right turn. `revert` and `restore` are unchanged and record none. Tier 0's
+  `BlobSession::restore_with` already took one.
+- **An agent's verbs now move its presence** (rendering-data contract gap 11; a behaviour
+  change, no new API). When a pack's verb run through `run_tool` changes elements of a keyed doc
+  that isn't a table, the kit sets the acting agent's focus to the container
+  (`Pack::container_of`) of the last element the change touched (the last container touched
+  wins), and its selection to the live elements it touched in that element's list. A verb that
+  touches no element moves nothing, and a raw write, an undo, a redo, a revert or a restore is
+  no verb. A person's own verb never moves their presence. The roster carries the new focus and
+  selection as usual. Details: `docs/SESSIONS.md`, "Presence".
+- **The pack verb on a change** (new, additive; rendering-data contract gap 9). A change a
+  pack's own verb made (`run_tool` running a structured verb such as `shape move`, or a text
+  pack's verb such as `replace-section`) now carries the verb's id: `ChangeEvent::verb` (the
+  push and `events_since`) and `ChangeInfo::verb` (the log).
+  - It is `None` for a raw write (`edit_ops`, `replace_text`, `write --base`), the kit's own
+    tools, an outside save, an undo, a redo, a revert, a restore and the import.
+  - `ChangeEvent::via` keeps meaning the participant's client (`cli`), never the verb.
+  - The kit sets it, never a host. An App viewer sees it too: it names a verb, not a person.
+  - A participant's erasure removes the verbs of their changes, and of those made on their
+    behalf, as it removes their turns. A content purge leaves them.
+  - The store keeps verbs in a new table, `change_verbs`, with no format bump, on the terms of
+    `change_turns`: an older kit refuses a store-file rewrite with `MPC-E502` once a change has a
+    verb. Details: `docs/SESSIONS.md`, "Verbs".
+- **The watcher count, pinned** (rendering-data contract gap 30). The roster's
+  `RosterEvent::Watching { count }` (`watching {count}` on the wire) comes whenever the number
+  of participants watching past `Config::participants_max` changes, and a snapshot carries it.
+  A watcher gets no roster row, no `Joined` or `Left`, and no presence. New rows pin this; the
+  kit's behaviour is unchanged.
+- **Claim events carry who and when** (additive; rendering-data contract gap 27). The roster's
+  `ClaimStarted` and `ClaimStartedElems` gain `actor` (the new `ClaimActor`: name, kind and
+  colour; the id is `who`) and `started_ms`. `ClaimEnded` gains `actor`, `at_ms`, and `at_rev`,
+  the change that ended it (`Edited`, `Deleted`) or `None`. On the wire, the claim events and a
+  snapshot's `elem_claims` carry them (wire 3). A host that matches these variants with `..`
+  builds as is.
+- **An agent's claim on elements now moves its presence.** `claim_elems` by an agent replaces
+  its selection with the claimed keys, and sets its focus to the claim's first container in
+  document order (by `Pack::container_of`). A person's claim leaves their presence alone. This
+  is a behaviour change: before, an agent's claim left its selection as it was.
+- **Focus and range** (new, additive; rendering-data contract gap 10, the kit's side).
+  - `Session::set_focus(conn, Option<ElemFocus>)`: the container a connection has in view (a
+    deck's slide). Needs read. It goes when its element stops being live.
+  - `Session::set_range(conn, Option<ElemRange>)`: a caret or selection inside one element's
+    text field, in UTF-8 bytes. Needs edit, as a caret does. Setting a range also sets the
+    focus to the element's container, through the new `Pack::container_of` (default: the
+    element itself). A range is never moved: when its field changes, or its element goes, the
+    kit drops it, and the owner sends a new one.
+  - A watcher is refused both (`MPC-E305`), as every element setter.
+  - The roster carries them: `RosterEntry::focus` and `range` (and the same on `Device`), and the
+    new `RosterEvent::Focus` and `RosterEvent::Range`.
+  - Keys are the live store's own for now; the contract's addresses come with its gap 2.
+- **The live wire is version 3** (`session::WIRE_VERSION`; `client/WIRE.md`, "Wire versions").
+  Everything new is additive: a change's `turn`, the roster's `focus` and `range`, the claim
+  events' actor and times, the client frames `focus` and `range` behind the features of the
+  same names, and `welcome.wire` for a host to say which version it speaks.
+  - **An older client on a new host** ignores what it doesn't know and works as before.
+  - **A new client on an older host** (no `welcome.wire`) sends no `focus` or `range`, and reads
+    the missing fields as absent.
+  - K2's own wire goldens pin wire 2. They change only where K2 adds the new fields.
+- **Turns** (new, additive; rendering-data contract gap 8). A host can now pass a turn id, the
+  id of one agent step, on every write call, so a view can group one agent run's changes.
+  - The kit never makes one up and never reads one from a client. `None` is the default, and a
+    call without one records none. The type is `Turn` (`Turn::new`: 1 to 64 bytes of printable
+    ASCII, no spaces).
+  - Where to pass it: `ToolOptions::turn`, `EditOptions::turn`, `UndoRequest::turn`,
+    `GridWriteOptions::turn`, and the new `WriteOptions` (with the new
+    `replace_text_with_options` and `write_base_with_options`). At tier 0, the new
+    `BlobWriteOptions`, with the new `write_with`, `write_bytes_with` and `restore_with`. The old
+    calls are unchanged and record no turn.
+  - Where it shows: `ChangeEvent::turn` (the push and `events_since`), `ChangeInfo::turn` (the
+    log), `BlobVersion::turn` and `BlobLogEntry::turn`. On the wire, a change event's `turn`
+    (`client/WIRE.md`). An App viewer always gets none: turn ids would link an agent's run across
+    docs.
+  - **A participant's erasure removes the turns** of their changes and of the changes an agent
+    made on their behalf. A content purge leaves turns, as it leaves authors and times.
+  - The store keeps turns in two new tables, `change_turns` and `blob_turns`, with no format
+    bump. An older kit reads and writes the store as before, but refuses a store-file rewrite
+    (and so a purge or an erasure) with `MPC-E502` once a change has a turn. Details:
+    `docs/SESSIONS.md`, "Turns".
+- **Host cache keys** (new, additive). A host can now encrypt its own caches of a space's
+  content (rendered previews, for one) under a key the kit derives from the space's key, so
+  that destroying the space key leaves those caches unreadable too.
+  - `BlobStore::host_cache_key(space, label)` gives the key for sealing new entries, and
+    `BlobStore::host_cache_key_at(space, label, generation)` gives it for opening entries
+    sealed earlier. `label` is the host's name for the use, e.g. `b"host-cache/previews/v1"`.
+  - The same space and label always give the same key, across restarts; another label or
+    space gives an unrelated one. The kit never stores the key, and `HostCacheKey`'s `Debug`
+    prints only its generation.
+  - Record the key's `generation()` beside what you seal. Once the space key is destroyed
+    (`purge_space_key`), opening with that generation refuses with the new id
+    **`MPC-E603 cache_key_destroyed`** (exit 4): drop that cache. It never hands out a key for
+    a destroyed generation, even after the space gets a new key.
+  - The kit has no cipher of its own: seal with your own, under `secret_bytes()`.
+  - Details: `docs/SESSIONS.md`, "Host cache keys".
+- **A behaviour change: `purge_space_key` always rewrites the store file,** so the destroyed
+  key's bytes leave it. Before, it rewrote the file only when structure-index rows went with
+  the space; otherwise the old key could stay in a freed page. `PurgeReport::store_rewritten`
+  is now `true` after any purge that destroyed a key, unless the rewrite failed. A rewrite
+  copies the whole store file, and other store calls wait while it runs.
+- New error id `MPC-E603` (above); new variant `BlobError::CacheKeyDestroyed` (the enum is
+  `#[non_exhaustive]`, so a host's code builds as is).
+- **A size limit for keyed docs that aren't tables** (a deck, a board). Until now such a doc
+  had no size limit in a live session. `Config::keyed_max_entries` (new; default 25,000,
+  the CSV grid's measured cap until a measurement on a deck-shaped doc sets it) bounds its
+  elements and fields: every list element, deleted ones included until dropped, plus every
+  map entry. A file over it doesn't open live: `open_file` returns
+  `SessionError::Declined` with code `live_too_large`, the new id **`MPC-E415`
+  `declined_live_too_large`** (exit 4), and nothing is stored, so the host opens the file at
+  tier 0 (or 0.5) as it does for any declined file. A change that would grow a live doc past
+  it is refused, nothing applied: `AtLimit { what: "elements and fields" }`, with its own new
+  id **`MPC-E822` `keyed_at_limit`** (exit 2; its next step reads the doc and removes
+  elements or fields, not the table's `rows drop-deleted`). An outside save past it declines the file (`DiskCheck::Declined`, code
+  `live_too_large`); the file is never written over. Tables keep their own limits, as
+  before. `capabilities` lists the new limit.
+- **A behaviour change for keyed docs that aren't tables: an app's save over the kit's own
+  write keeps both,** the rule tier 0 took in v0.14.0. Until now an outside save of such a
+  doc was applied straight onto the live doc by key, with no merge, no note and no audit
+  event, so an app that still had the file open from before the kit's write could undo an
+  agent's change unseen. Now, when the kit has written the file since the last outside save
+  (decided from the store, so a restart between the write and the save changes nothing), an
+  outside save that differs keeps both: the save becomes the live doc as before, and the
+  kit's version is kept as a version and as a **conflict copy** beside the file (or in the
+  host's conflict folder; named by `Host::conflict_copy_name`, then the kit's default, after
+  the kit version's last writer). The host sees `DiskCheck::Conflict { version, kept, copy }`
+  (`version`: the doc version the save made; `kept`: the id of the version holding the kit's
+  version) and **one** `AuditEvent::BlobConflict { current, kept, copy, lease_holder: None }`
+  (both ids are version ids) where it saw `DiskCheck::Ingested` and
+  `AuditEvent::ExternalEdit` alone; `ExternalEdit` is still emitted. When the kit wrote
+  nothing since the last outside save, the save applies as before; a save of exactly what
+  the kit wrote is still nothing; tables keep their own three-way merge, unchanged.
+  The kit's write of a merge counts too, across a restart: an outside save that lands while
+  the doc holds changes the file doesn't is applied by key as before, and its version (by
+  `kit:external`) also names **`kit:merge`** among its authors (tier 0's author of its
+  merges): the kit writes that merge next, so the app's next stale save keeps both. A host
+  that lists a version's authors shows it there. Whatever the store can't say counts as the
+  kit's write (keep both). One noisy case stays: after a restart, a save of the kit's content
+  in other bytes still reads as the kit's write, so the app's next differing save keeps both
+  (an extra copy, never a loss).
+- **A live keyed doc's conflict copies are removed on `tick`,** as tier 0's are: after
+  `Config::conflict_copy_keep_ms`, only a copy still holding exactly its kept version's
+  content, never one a person edited or whose version is named or purged. They are listed in
+  `TickReport::conflict_copies_removed`, and a live doc's conflicting save in
+  `TickReport::conflicts` too. The kit records each copy in a new per-doc table,
+  `live_copies`, created with the first copy, **without a format bump** (the terms of
+  `client_kinds` and `doc_blob_refs`): a previous release reads and writes such a store as
+  before and never removes these copies (they stay; nothing is lost), refuses a rewrite and
+  so a purge before changing anything (`MPC-E502`, naming the table), and leaves the rows of
+  a doc it deletes, which this release's open removes. `DocStore::live_copies(doc)` (new,
+  read only) lists a doc's recorded copies.
+- **A purge of a live doc reaches its conflict copies,** as tier 0's purge does: a copy still
+  holding exactly its kept version's content, when the purge erased that content (the
+  version's content redacted or gone), is deleted with its record and counted in
+  `PurgeCounts::conflict_copies`; a copy whose bytes are anything else (a person edited it)
+  may hold erased content the kit can't vouch for, so it is left and reported as
+  `NotReached::ConflictCopies`; a copy holding nothing the purge erased stays. A doc without
+  its file reports its recorded copies as `NotReached::File`.
+- **The carrier (K1; new, additive): a pack that models its format only in part can write the
+  file back by splicing.** Two new `Pack` methods, both with defaults, so a pack that doesn't
+  opt in builds and behaves as before:
+  - `wants_carrier(&self) -> bool` (default `false`): opt in.
+  - `encode_from(&self, carrier: &[u8], content: &[(String, Neutral)], codec: &[u8]) ->
+    Result<Vec<u8>, PackError>` (default: `encode`, ignoring the carrier). For a pack that opts
+    in, the kit calls it instead of `encode` wherever it renders the live doc as a file (the
+    write-back, the checks of whether the file holds the doc, `read`'s bytes, `file_now`, a
+    conflict copy of the kit's version), passing exactly the bytes it last read from the file
+    or wrote to it, and wherever it renders a version, with that version's own carrier.
+    Untouched must be byte for byte; the pack decodes the carrier itself.
+  - The kit takes the carrier at every read of the file at the sync point and every kit
+    write, keeps it as a blob in the doc's space (a blob store is needed for it to survive a
+    reload; without one it is kept in memory) and holds one count on it, so blob GC keeps it.
+    A carrier it replaces is removed at once when nothing else references it, so **a purge's
+    write-back leaves no erased byte in the blob folder**; a doc delete gives the count back.
+  - **Each version keeps its carrier** (the file's bytes as of that version), so
+    `Session::file_at` of such a pack is that version's file byte for byte, also after later
+    edits and an app's save that changed the opaque bytes. A version with none (cut by an older
+    kit or before the doc had a carrier, or erased by a purge) is refused with the new id
+    **`MPC-E208` `version_no_carrier`** (exit 4; new variant `SessionError::VersionNoCarrier`),
+    never `encode`'s partial file. A version's carrier goes with the version (retention, a doc
+    delete); a purge drops the carriers of the versions it erased and of any whose bytes hold a
+    purged text, and removes their blobs at once.
+  - **Conflict copies** of such a pack are compared, on `tick` and by a purge, with what the kit
+    wrote (the kept version spliced into its carrier): an untouched copy is removed after its
+    keep, and a purge removes one holding erased content, as for any pack.
+    On reload a carrier that doesn't hash to the sync point (an older kit wrote the file
+    since) is dropped and the file's next read becomes the carrier.
+  - Two new per-doc tables, `live_carriers` and `version_carriers`, created with the first
+    carrier, **without a format bump**: a previous release reads and writes such a store as
+    before (its GC keeps the carriers; its writes leave the live carrier stale, which this
+    release drops; its retention leaves version rows, which this release's next load sweeps;
+    the versions it cuts have no carrier), refuses a rewrite and so a purge before changing
+    anything (`MPC-E502`, naming the table), and leaves the rows and counts of a doc it
+    deletes, which this release's open gives back. `NotReached::File` now
+    also covers the carrier when the file can't be written back. `Status::estimated_bytes`
+    counts the carrier's bytes. Details: `docs/SESSIONS.md`, "The carrier (K1)"; pack authors:
+    `docs/PACK_TEMPLATE.md`. `tools/n1/n1.sh layout-carrier` checks N−1 both ways.
+
+- **A removal at once never takes a blob a put is waiting to reference** (a behaviour change
+  for the blob store, additive in the API). A purge, and now a replaced carrier, remove a blob
+  that has no reference left at once instead of after GC's grace. Before, another writer that
+  had just put the same bytes in the same space, and not yet referenced them, could then find
+  them gone (`NoBlob`). Now every put is *waiting* until its writer has taken its reference
+  (the kit's own writers settle it: tier-0 writes, saves, merges, imports, carriers) or
+  `BlobConfig::gc_grace_ms` has run out; a removal at once leaves a waiting blob, which a
+  purge reports as `NotReached::SharedBlobs`. A host that puts a blob and names it in a value
+  keeps the existing rule: reference it within the grace.
+
+- **A structured read never renders the file** (a performance fix; no API change). A pack's
+  structured read verb (`PackVerb::structured_read`) read the doc's whole content and encoded
+  the file on every call, though it reads the keyed state only (the pptx pack measured 125 ms
+  a read at 2,500 shapes). On a keyed doc that isn't a table it now reads the keyed state and
+  the version only: no `encode`, no `encode_from`, no check of whether the file holds the doc.
+  A failure the last rendering of the doc found (at a write-back, a sync check, a flush) is
+  kept with the doc's version, and such a read reports it while the doc is at that version.
+  `read`, `file_now`, `file_at`, the text read verbs and a table's read verbs (they print and
+  take the file's line numbers) still render the file. And a `flush` renders the
+  doc once, not twice: its hash is the file's when the doc is clean. Edits never rendered the
+  file; the write-back does, once per sync point (the durability promise is unchanged: a
+  change is in the store when its call returns, the file follows at the next write-back).
+
 ## v0.14.0 (2026-11-11)
 
 A host release on v0.13.1. The crate version is `0.14.0`; the client's is `0.14.0`. Pairs with

@@ -174,6 +174,12 @@ impl Session {
     /// settings; exact for the latest content). Reads only: no version, change, lease, claim
     /// or read base. Needs history, like `show`; an unknown `vid` is
     /// [`SessionError::NoSuchChange`].
+    ///
+    /// For a pack that keeps a carrier (K1) it is the version's content spliced into the
+    /// carrier as of that version, the file then byte for byte; a version with no carrier (cut
+    /// by an older kit or before this build, or one a purge erased) is refused,
+    /// [`SessionError::VersionNoCarrier`] (`MPC-E208`), never `encode`'s file without its
+    /// opaque bytes.
     pub fn file_at(&self, conn: ConnId, vid: VersionId) -> Result<FileBytes> {
         let now = self.now();
         let mut st = self.lock()?;
@@ -182,6 +188,16 @@ impl Session {
             .store(&st)?
             .version(self.doc_id, vid)
             .map_err(no_version(vid))?;
+        if self.pack.wants_carrier() && !planted_file_at_uses_encode() {
+            return match self.version_file(&st, vid, &v, false)? {
+                Some(bytes) => Ok(FileBytes {
+                    bytes,
+                    version: v.seq,
+                    codec: FileCodec::Exact,
+                }),
+                None => Err(SessionError::VersionNoCarrier { version: vid }),
+            };
+        }
         let (bytes, codec) = match &v.codec {
             // a structured doc's version holds the codec settings it was cut with (format 6,
             // C1): the file then, exactly
@@ -486,6 +502,18 @@ impl Session {
     /// is (K-HIST-8). The restore is the caller's batch: their `undo` reverses it. Needs
     /// edit and history.
     pub fn restore(&self, conn: ConnId, vid: VersionId) -> Result<EditResult> {
+        self.restore_with(conn, vid, &HistoryOptions::new())
+    }
+
+    /// [`Session::restore`] with the host's [`HistoryOptions`]: the change it makes carries the
+    /// host-given turn ([`ChangeInfo::turn`], [`ChangeEvent::turn`]).
+    pub fn restore_with(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        opts: &HistoryOptions,
+    ) -> Result<EditResult> {
+        let turn = history_turn(opts);
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Restore, now)?;
@@ -496,8 +524,12 @@ impl Session {
             .version(self.doc_id, vid)
             .map_err(no_version(vid))?;
         if self.structured {
-            // by identity: revive, delete, move, set (C1c)
-            return self.restore_structured(&mut st, i, target, vid, now);
+            // by identity: revive, delete, move, set (C1c). Its change takes the call's turn;
+            // none is left for a later change when it stops before committing
+            st.next_turn = turn;
+            let out = self.restore_structured(&mut st, i, target, vid, now);
+            st.next_turn = None;
+            return out;
         }
         let mut edits = Vec::new();
         for (root, live) in &st.texts {
@@ -530,6 +562,7 @@ impl Session {
                 now,
             ));
         }
+        st.next_turn = turn;
         self.commit_edit(
             &mut st,
             i,
@@ -556,6 +589,19 @@ impl Session {
     /// applies), and what it puts back records the roots it restores. A record written
     /// before store format 5, or of an outside edit, has no roots: it is reverted as in v1.7.
     pub fn revert(&self, conn: ConnId, change: Seq, partial: bool) -> Result<UndoOutcome> {
+        self.revert_with(conn, change, partial, &HistoryOptions::new())
+    }
+
+    /// [`Session::revert`] with the host's [`HistoryOptions`]: the change it makes carries the
+    /// host-given turn ([`ChangeInfo::turn`], [`ChangeEvent::turn`]).
+    pub fn revert_with(
+        &self,
+        conn: ConnId,
+        change: Seq,
+        partial: bool,
+        opts: &HistoryOptions,
+    ) -> Result<UndoOutcome> {
+        let turn = history_turn(opts);
         timed!(Revert);
         let now = self.now();
         let mut st = self.lock()?;
@@ -585,8 +631,12 @@ impl Session {
             });
         }
         if !rec.elems.is_empty() || self.structured {
-            // by key, from the record's ops (v3): no carrying (C1c)
-            return self.revert_structured(st, i, change, rec, partial, now);
+            // by key, from the record's ops (v3): no carrying (C1c). Its change takes the call's
+            // turn; none is left for a later change when it stops before committing
+            st.next_turn = turn;
+            let out = self.revert_structured(st, i, change, rec, partial, now);
+            st.next_turn = None;
+            return out;
         }
         let edges = self
             .revert_index(st)?
@@ -651,7 +701,8 @@ impl Session {
                 }
             },
         };
-        // what it puts back records the roots it restores (U23)
+        // what it puts back records the roots it restores (U23); it takes the call's turn
+        st.next_turn = turn;
         let result = self.commit_edit_restoring(
             st,
             i,
@@ -799,6 +850,18 @@ impl Session {
     }
 }
 
+/// The turn a revert or restore gives its change: the host's ([`HistoryOptions::turn`]), or none
+/// under the planted fault [`crate::differential::ContractMutant::RevertDropsTurn`].
+fn history_turn(opts: &HistoryOptions) -> Option<crate::turn::Turn> {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::contract_mutant()
+        == Some(crate::differential::ContractMutant::RevertDropsTurn)
+    {
+        return None;
+    }
+    opts.turn
+}
+
 fn copy_file(f: FileBytes, out: &mut dyn std::io::Write) -> Result<FileCopy> {
     out.write_all(&f.bytes)
         .and_then(|()| out.flush())
@@ -810,4 +873,15 @@ fn copy_file(f: FileBytes, out: &mut dyn std::io::Write) -> Result<FileCopy> {
         bytes: f.bytes.len() as u64,
         codec: f.codec,
     })
+}
+
+/// The planted fault [`crate::differential::KeyedMutant::FileAtUsesEncode`].
+fn planted_file_at_uses_encode() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::keyed_mutant()
+        == Some(crate::differential::KeyedMutant::FileAtUsesEncode)
+    {
+        return true;
+    }
+    false
 }

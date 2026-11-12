@@ -3,6 +3,35 @@
 The client's own history. The kit's `CHANGELOG.md` has each release in full; the client ships
 with the kit's tags.
 
+## 0.15.0 (kit tag v0.15.0)
+
+The client for kit v0.15.0's wire 3 (`WIRE_VERSION` 3). Every addition is optional: with a
+wire-2 host (no `welcome.wire`) the client behaves exactly as 0.14.0.
+
+- **`ChangeEvent.verb`** (`wire.ts`): the id of the pack verb that made a change (`shape move`,
+  `replace-section`), or `null` (a raw write, a kit tool, an outside save, undo, redo, revert,
+  restore). Absent from an older host. Additive within wire 3: `WIRE_VERSION` stays 3.
+- **An agent's verbs move its presence** (kit side, contract gap 11): they arrive as the usual
+  `focus` and `selection` roster events, so nothing new to fold.
+- **`PresenceChannel.watching` and `onWatching`**: how many watch past the host's participant
+  cap (the roster's `watching`), for a view's "+1 watching".
+- **`PresenceChannel.claims()` and `onClaims`**: the live claims on elements, folded from the
+  roster (a snapshot's `elem_claims`, `claim_started_elems`, `claim_ended`), each a `ClaimView`
+  with its `actor` and `startedMs`. From a wire-2 host the actor comes from the claimant's roster
+  row and `startedMs` is `null`. The claim events' `actor`, `started_ms`, `at_ms` and `at_rev`
+  are typed (`ClaimActor`; wire 3).
+- **Wire 3** (`WIRE_VERSION`, `Welcome.wire`; WIRE.md, "Wire versions"). With a wire-2 host
+  (no `welcome.wire`) the client behaves as before.
+- **Focus and range** on `PresenceChannel`: `setFocus({root, key} | null)` and
+  `setRange({root, key, field, anchor, head} | null, text)`, with UTF-16 offsets into the field's
+  text sent as UTF-8 bytes. They go out only when the host lists the `focus` or `range` feature
+  (`FOCUS_FEATURE`, `RANGE_FEATURE`; `focusSupported`, `rangeSupported`); otherwise they are
+  recorded and sent on a later connection that does, the focus first. `PresencePeer` gains
+  `focus` and `range` (UTF-8, as sent; `rangeToUtf16(range, text)` converts). The roster's
+  `focus` and `range` events and entry fields are typed (`ElemFocus`, `ElemRange`).
+- **`ChangeEvent.turn`** (`wire.ts`): the host-given turn of the agent step that made a change,
+  or `null`. Absent from an older host. A client groups an agent run's changes by it.
+
 ## 0.14.0 (kit tag v0.14.0)
 
 The client for kit v0.14.0's person-writer reuse (`Config::reuse_person_writers`, off by

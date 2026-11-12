@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -1035,6 +1035,12 @@
       "status": "live"
     },
     {
+      "id": "MPC-E208",
+      "name": "version_no_carrier",
+      "exit": 4,
+      "status": "live"
+    },
+    {
       "id": "MPC-E301",
       "name": "claimed",
       "exit": 5,
@@ -1152,6 +1158,12 @@
       "id": "MPC-E414",
       "name": "save_ticket_invalid",
       "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E415",
+      "name": "declined_live_too_large",
+      "exit": 4,
       "status": "live"
     },
     {
@@ -1283,6 +1295,12 @@
     {
       "id": "MPC-E602",
       "name": "purged_version",
+      "exit": 4,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E603",
+      "name": "cache_key_destroyed",
       "exit": 4,
       "status": "live"
     },
@@ -1445,6 +1463,12 @@
     {
       "id": "MPC-E821",
       "name": "key_space_full",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E822",
+      "name": "keyed_at_limit",
       "exit": 2,
       "status": "live"
     },

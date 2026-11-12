@@ -11,7 +11,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 mod at_base;
 mod blame;
 mod blob_refs;
+mod carrier;
 mod claims;
+mod copies;
 mod elem_claims;
 mod elem_presence;
 mod grid;
@@ -72,6 +74,7 @@ use crate::store::{
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
 use crate::text::merge::{self, Conflict, Merge};
+use crate::turn::Turn;
 
 /// Returned by [`Session::join`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +301,15 @@ pub struct ReadResult {
     pub contributors_since_last_read: Vec<String>,
 }
 
+/// A structured read's head ([`Session::read_view_with`]): the version read and who else changed
+/// the doc since the caller's previous read, as [`ReadResult`] has them, without the content or
+/// the file's bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReadHead {
+    pub version: Seq,
+    pub contributors_since_last_read: Vec<String>,
+}
+
 /// Returned by an applied edit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -358,6 +370,12 @@ pub struct EditOptions {
     pub seen: Option<Seq>,
     /// The undo group token's hash ([`EditOptions::group`]; default `None`: its own step).
     pub(crate) group: Option<u64>,
+    /// The host-given turn of this call ([`crate::turn`]; default `None`): stored on the
+    /// change and carried on its events.
+    pub turn: Option<Turn>,
+    /// The pack verb this edit runs for ([`ChangeInfo::verb`]): set by the kit's own verb
+    /// runner (`run_tool`), never by a host, so a host's edit is never a verb's.
+    pub(crate) verb: Option<&'static str>,
 }
 
 impl EditOptions {
@@ -387,6 +405,14 @@ impl EditOptions {
     /// The structured edit's base version (K-BR-12: checked per element facet).
     pub fn base(mut self, v: Seq) -> Self {
         self.base = Some(v);
+        self
+    }
+
+    /// The host-given turn of this call ([`crate::turn`]): stored on the change it makes
+    /// ([`ChangeInfo::turn`]) and carried on its events ([`ChangeEvent::turn`]). The kit
+    /// never invents one: without it the change has none.
+    pub fn turn(mut self, turn: Turn) -> Self {
+        self.turn = Some(turn);
         self
     }
 
@@ -430,6 +456,60 @@ pub struct WriteReport {
     pub conflict_notes: Vec<(usize, awareness::Note)>,
     /// For an applied write: heads-up notes on the lines it changed.
     pub notes: Notes,
+}
+
+/// The host's choices for one whole-text write ([`Session::replace_text_with_options`],
+/// [`Session::write_base_with_options`]): the claim policy and the host-given turn.
+/// `#[non_exhaustive]`: start from [`WriteOptions::default`] (or `new`) and use the setters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WriteOptions {
+    /// What an agent's write does about others' claims (default [`ClaimPolicy::Ignore`]).
+    pub policy: ClaimPolicy,
+    /// The host-given turn of this call ([`EditOptions::turn`]).
+    pub turn: Option<Turn>,
+}
+
+impl WriteOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The claim policy, as [`EditOptions::policy`].
+    pub fn policy(mut self, policy: ClaimPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// The host-given turn, as [`EditOptions::turn`].
+    pub fn turn(mut self, turn: Turn) -> Self {
+        self.turn = Some(turn);
+        self
+    }
+}
+
+/// The host's choices for one revert or restore ([`Session::revert_with`],
+/// [`Session::restore_with`]): the host-given turn, so the change it makes is credited to the
+/// agent step that asked for it. `#[non_exhaustive]`: start from [`HistoryOptions::default`] (or
+/// `new`) and use the setters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HistoryOptions {
+    /// The host-given turn of this call ([`EditOptions::turn`]; default `None`): stored on the
+    /// change the revert or restore makes and carried on its events.
+    pub turn: Option<Turn>,
+}
+
+impl HistoryOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The host-given turn, as [`EditOptions::turn`].
+    pub fn turn(mut self, turn: Turn) -> Self {
+        self.turn = Some(turn);
+        self
+    }
 }
 
 impl WriteReport {
@@ -503,6 +583,8 @@ pub struct UndoRequest {
     pub mode: UndoMode,
     /// `--for <person>`: only batches made on that person's behalf (an assistant, U2).
     pub for_person: Option<String>,
+    /// The host-given turn of this call ([`EditOptions::turn`]): on every change it makes.
+    pub turn: Option<Turn>,
 }
 
 impl Default for UndoRequest {
@@ -511,6 +593,7 @@ impl Default for UndoRequest {
             steps: 1,
             mode: UndoMode::All,
             for_person: None,
+            turn: None,
         }
     }
 }
@@ -528,6 +611,13 @@ impl UndoRequest {
     pub fn for_person(self, pid: impl Into<String>) -> Self {
         Self {
             for_person: Some(pid.into()),
+            ..self
+        }
+    }
+    /// The host-given turn of this call ([`EditOptions::turn`]).
+    pub fn turn(self, turn: Turn) -> Self {
+        Self {
+            turn: Some(turn),
             ..self
         }
     }
@@ -609,6 +699,15 @@ pub struct ChangeEvent {
     /// undo, a redo, a revert, a restore, an outside save or the import. On the wire,
     /// [`ChangeKind::as_str`].
     pub kind: ChangeKind,
+    /// The host-given turn of the call that made it ([`crate::turn`]), as its change record
+    /// holds it ([`ChangeInfo::turn`]): `None` for a person's, an outside save, and any call
+    /// the host gave none.
+    pub turn: Option<Turn>,
+    /// The id of the pack verb that made it (rendering-data contract gap 9), as its change
+    /// record holds it ([`ChangeInfo::verb`]): `shape move`, `replace-section`. `None` for a raw
+    /// write, a kit tool, an outside save, an undo, a redo, a revert, a restore and the import.
+    /// [`ChangeEvent::via`] stays the participant's client (`cli`), never the verb.
+    pub verb: Option<String>,
 }
 
 /// An outside save that changed only the file's codec settings (a re-save with a BOM, CRLF or
@@ -846,6 +945,20 @@ struct State {
     /// A table's present cells (live or hidden), columns and rows (live or deleted), counted
     /// on first need and kept in step by every change (the size limits, K-CSV-7).
     grid_size: Option<(usize, usize, usize)>,
+    /// A keyed doc's elements (live or deleted) and map entries, every root's, counted on
+    /// first need and kept in step by every change (`Config::keyed_max_entries`).
+    keyed_size: Option<usize>,
+    /// When `copies_tick` last looked at the recorded conflict copies (throttled like the
+    /// history tick), and the copies it found edited (left alone while their stat holds).
+    last_copy_cleanup_ms: Option<u64>,
+    copies_edited: HashMap<PathBuf, disk::Seen>,
+    /// The carrier (K1, `live/carrier.rs`): the bytes the kit last read from the file or wrote
+    /// to it, for a pack that opts in. `None` until the store's is loaded or the file is read.
+    carrier: Option<Arc<[u8]>>,
+    /// The last rendering of the live doc as its file that failed, with the version it was
+    /// at (the pack's error), cleared by one that succeeds: a read that renders nothing reports
+    /// it while the doc is still at that version.
+    render_failed: std::cell::RefCell<Option<(Seq, SessionError)>>,
     /// A grid's axes and line map as the roster last read them, with the doc's version and
     /// codec they were read at (the roster push's flush reads them for every caret: O(doc)
     /// to build, so built once per change, not once per flush; v0.10.0).
@@ -861,6 +974,12 @@ struct State {
     next_note_rows: Vec<(String, Vec<u8>)>,
     /// The edit about to commit came through [`Session::check_blob_refs`].
     next_refs_strict: bool,
+    /// The host-given turn of the change about to commit ([`EditOptions::turn`]): set right
+    /// before the commit by the entry that admitted the call, taken by it (as `verb_hint`).
+    next_turn: Option<Turn>,
+    /// The pack verb of the change about to commit ([`EditOptions::verb`]): set right before
+    /// the commit by the verb's entry, taken by it (as `next_turn`).
+    next_verb: Option<&'static str>,
     /// Conformance only: outside saves record their writes with no identity, as a write
     /// merged in from elsewhere whose writer the engine doesn't report (KC7, Yrs only).
     #[cfg(feature = "conformance")]
@@ -933,6 +1052,11 @@ struct Disk {
     /// cleared by a purge (the key changes) and by every outside save taken in (v0.9.5: a
     /// write of ours from before a person's save, back again, is that person's save).
     own: VecDeque<(Vec<u8>, u64)>,
+    /// Whether the kit wrote the file since the last outside save (a keyed doc's outside-save
+    /// rule, `Session::kit_wrote_file`), as this session saw it: `Some(true)` after a
+    /// write-back, `Some(false)` after an outside save taken in, `None` until either (read from
+    /// the store then: the change at `synced_seq`).
+    kit_wrote: Option<bool>,
     /// The echo last reported (`AuditEvent::EchoSuppressed`), so a write-back's own check of
     /// the same file doesn't report it again; cleared by a write or an outside save.
     echoed: Option<Vec<u8>>,
@@ -1421,12 +1545,19 @@ impl Session {
                 aware: Aware::default(),
                 verb_hint: None,
                 grid_size: None,
+                keyed_size: None,
+                last_copy_cleanup_ms: None,
+                copies_edited: HashMap::new(),
+                carrier: None,
+                render_failed: std::cell::RefCell::new(None),
                 grid_now: std::cell::RefCell::new(None),
                 no_stack: false,
                 next_row_marks: Vec::new(),
                 next_col_remap: false,
                 next_note_rows: Vec::new(),
                 next_refs_strict: false,
+                next_turn: None,
+                next_verb: None,
                 #[cfg(feature = "conformance")]
                 outside_without_identity: false,
                 group_hint: None,
@@ -2342,6 +2473,8 @@ impl Session {
                     selection: None,
                     pointer: None,
                     viewport: None,
+                    focus: None,
+                    range: None,
                 })
                 .collect();
             // the planted fault (test-only): every connection shows the most active one's caret
@@ -2742,6 +2875,28 @@ impl Session {
     /// The doc as a read gives it, and who changed it since the caller last read. Nothing moves
     /// until [`Session::mark_read`], so a verb that then fails leaves no trace.
     fn read_unmarked(&self, st: &State, i: usize) -> Result<ReadResult> {
+        let ReadHead {
+            version,
+            contributors_since_last_read: contributors,
+        } = Self::read_head(st, i);
+        let content = self.content(st)?;
+        let bytes = self.encode_live(st, &content, &st.codec)?;
+        Ok(ReadResult {
+            bytes,
+            text_by_root: content
+                .iter()
+                .filter_map(|(r, n)| Some((r.clone(), n.as_text()?.to_owned())))
+                .collect(),
+            content,
+            version,
+            contributors_since_last_read: contributors,
+        })
+    }
+
+    /// A read's version and who changed the doc since the caller last read, without the doc's
+    /// content or file bytes: what a structured read verb needs (it reads the keyed state, and
+    /// never renders the file). O(authors kept).
+    fn read_head(st: &State, i: usize) -> ReadHead {
         let pid = st.members[i].p.pid.as_str();
         let since = st.hist.get(pid).and_then(|h| h.last_read);
         let mut contributors: Vec<String> = Vec::new();
@@ -2754,19 +2909,10 @@ impl Session {
                 contributors.push(a.clone());
             }
         }
-        let version = st.version;
-        let content = self.content(st)?;
-        let bytes = self.pack.encode(&content, &st.codec)?;
-        Ok(ReadResult {
-            bytes,
-            text_by_root: content
-                .iter()
-                .filter_map(|(r, n)| Some((r.clone(), n.as_text()?.to_owned())))
-                .collect(),
-            content,
-            version,
+        ReadHead {
+            version: st.version,
             contributors_since_last_read: contributors,
-        })
+        }
     }
 
     /// The caller has read the doc at `version`: the next read counts from here, and `version`
@@ -2940,7 +3086,7 @@ impl Session {
         policy: ClaimPolicy,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_with_impl(conn, root, policy, None, None, None, f)
+        self.edit_with_impl(conn, root, policy, None, None, None, None, None, f)
             .map(|(r, _)| r)
     }
 
@@ -2969,6 +3115,8 @@ impl Session {
             opts.if_version,
             None,
             opts.group,
+            opts.turn,
+            opts.verb,
             f,
         )
         .map(|(r, _)| r)
@@ -2990,7 +3138,8 @@ impl Session {
 
     /// `edit_with` with a policy, an `if_version` guard (as [`Session::edit`]'s, amendment
     /// 14: `run_tool`'s `--if-version`), the verb for the activity ring, a person's undo
-    /// group token ([`EditOptions::group`]), and the heads-up notes on the lines it changed.
+    /// group token ([`EditOptions::group`]), the host-given turn, the pack verb's id (a pack's
+    /// own text verb: [`ChangeInfo::verb`]), and the heads-up notes on the lines it changed.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn edit_with_impl<E>(
         &self,
@@ -3000,6 +3149,8 @@ impl Session {
         if_version: Option<Seq>,
         verb: Option<&str>,
         group: Option<u64>,
+        turn: Option<Turn>,
+        pack_verb: Option<&'static str>,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         prof!("session.edit_with");
@@ -3043,6 +3194,8 @@ impl Session {
         }];
         st.verb_hint = verb.map(str::to_owned);
         st.group_hint = group;
+        st.next_turn = turn;
+        st.next_verb = pack_verb;
         let res = self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
         // a verb returns its notes; the host's own edit calls return only the result, so they
         // leave waiting notes where they are (taken, they'd be lost)
@@ -3101,6 +3254,19 @@ impl Session {
         new_text: &str,
         policy: ClaimPolicy,
     ) -> Result<EditResult> {
+        self.replace_text_with_options(conn, root, new_text, &WriteOptions::new().policy(policy))
+    }
+
+    /// [`Session::replace_text`] with the host's [`WriteOptions`]: the claim policy (as
+    /// [`Session::replace_text_with`]) and the host-given turn ([`WriteOptions::turn`]).
+    pub fn replace_text_with_options(
+        &self,
+        conn: ConnId,
+        root: &str,
+        new_text: &str,
+        opts: &WriteOptions,
+    ) -> Result<EditResult> {
+        let policy = opts.policy;
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
@@ -3115,6 +3281,7 @@ impl Session {
             root: root.to_owned(),
             hunks,
         }];
+        st.next_turn = opts.turn;
         self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
@@ -3159,6 +3326,26 @@ impl Session {
         new_text: &str,
         policy: ClaimPolicy,
     ) -> Result<WriteReport> {
+        self.write_base_with_options(
+            conn,
+            root,
+            base,
+            new_text,
+            &WriteOptions::new().policy(policy),
+        )
+    }
+
+    /// [`Session::write_base`] with the host's [`WriteOptions`]: the claim policy (as
+    /// [`Session::write_base_with`]) and the host-given turn ([`WriteOptions::turn`]).
+    pub fn write_base_with_options(
+        &self,
+        conn: ConnId,
+        root: &str,
+        base: Seq,
+        new_text: &str,
+        opts: &WriteOptions,
+    ) -> Result<WriteReport> {
+        let policy = opts.policy;
         timed!(WriteBase);
         let now = self.now();
         let mut st = self.lock()?;
@@ -3245,6 +3432,7 @@ impl Session {
                     hunks: c.hunks,
                 }];
                 st.verb_hint = Some("write --base".to_owned());
+                st.next_turn = opts.turn;
                 let res =
                     self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
                 let notes = self.edit_notes(st, i, &res, now, true);
@@ -3379,6 +3567,7 @@ impl Session {
                 }
             })
             .collect();
+        st.next_turn = req.turn;
         let (result, done) = self.commit(st, i, commit_steps, now, Vec::new())?;
         let consumed = Self::take_batches(st, &pid, origin, &picked[..n]);
         for ((inv, d), b) in inverses.into_iter().zip(done).zip(consumed) {
@@ -3719,6 +3908,8 @@ impl Session {
             false => std::mem::take(&mut st.next_refs_strict),
         };
         let n_steps = steps.len();
+        let turn = st.next_turn.take();
+        let pack_verb = st.next_verb.take();
         let verb = st.verb_hint.take().unwrap_or_else(|| {
             kind_verb(steps.first().map_or(ChangeKind::Edit, |s| s.kind)).to_owned()
         });
@@ -3746,6 +3937,14 @@ impl Session {
         let orig_snap = match agent_cut && self.structured && lists {
             true => Some(self.snapshot(st)?),
             false => None,
+        };
+        // a pack verb's change moves the acting agent's presence (contract gap 11): what it
+        // names, in order, read before the edits are applied
+        let verb_named = match pack_verb {
+            Some(_) if n_steps == 1 && self.structured => {
+                elem_presence::touched_in_order(self.pack.composite(), &steps[0].edits)
+            }
+            _ => Vec::new(),
         };
         let version_before = st.version;
         let mut applied: Vec<Applied> = Vec::new();
@@ -3873,6 +4072,8 @@ impl Session {
                     lines_added: a.added as u64,
                     lines_removed: a.removed as u64,
                     elems: a.counts.clone(),
+                    turn,
+                    verb: pack_verb.map(str::to_owned),
                     ..ChangeInfo::new(a.kind, &pid, &via, now)
                 },
                 record: RevertRecord {
@@ -3958,6 +4159,8 @@ impl Session {
                     },
                     hidden: Vec::new(),
                     kind: a.kind,
+                    turn,
+                    verb: pack_verb.map(str::to_owned),
                 };
                 Self::broadcast(st, &ev);
             }
@@ -3978,6 +4181,8 @@ impl Session {
                         Vec::new()
                     },
                     kind: a.kind,
+                    turn,
+                    verb: pack_verb.map(str::to_owned),
                 };
                 Self::broadcast(st, &ev);
             }
@@ -3995,7 +4200,8 @@ impl Session {
         st.version = *seqs.last().expect("one seq per entry");
         Self::mark_dirty(st, now);
         self.grid_presence_after(st, Some(i), &streams, now);
-        Self::elem_presence_after(st);
+        self.elem_presence_after(st, Some(&streams));
+        self.verb_presence(st, i, &verb_named, &streams);
         // a grid change that re-identified elements (rows or columns inserted, deleted,
         // restored or dropped; a header switch) and left the doc rendering the synced bytes:
         // the replica becomes the doc now, so an outside save merged later, after more
@@ -4679,7 +4885,8 @@ impl Session {
                 st.doc = doc;
                 st.texts = texts;
                 st.version = version;
-                Self::elem_presence_after(st);
+                // reloaded: any field may differ from what a range was set on
+                self.elem_presence_after(st, None);
                 st.log_entries = loaded.updates.len() as u64;
                 st.log_bytes = loaded.updates.iter().map(|(_, e)| e.body.yrs_len()).sum();
                 for m in &mut st.members {
@@ -4705,6 +4912,7 @@ impl Session {
                 st.reverts = None;
                 st.prov = None;
                 st.grid_size = None;
+                st.keyed_size = None;
                 self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
@@ -5231,9 +5439,21 @@ impl Session {
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Flush, now)?;
         let written = self.write_back(&mut st, now)?;
+        // clean: the file holds the doc, so its keyed hash is the doc's (no second encode at
+        // this sync point); otherwise the doc's own rendering
+        let synced = st
+            .disk
+            .as_ref()
+            .filter(|d| d.synced_hash.len() == 33)
+            .filter(|_| matches!(Self::disk_state(&st), Some(DiskState::Clean)))
+            .map(|d| hex(&d.synced_hash[1..]));
+        let hash = match synced {
+            Some(h) => h,
+            None => hex(&hmac(&st.hash_key, &self.render(&st)?)),
+        };
         Ok(FlushOutcome {
             written,
-            hash: hex(&hmac(&st.hash_key, &self.render(&st)?)),
+            hash,
             disk: Self::disk_state(&st),
         })
     }
@@ -5552,6 +5772,20 @@ impl Session {
             }
         };
         let key = st.hash_key;
+        let on_disk = match disk::probe(path, root) {
+            Ok(Probe::File { real, .. }) => {
+                disk::clean_temps(&real);
+                match disk::read(&real, self.config.disk_read_max_bytes) {
+                    Ok(ReadFile::Bytes(b, _)) => Some(b),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        // the file as last synced is the carrier (K1), before anything renders the doc
+        if let Some(b) = on_disk.as_deref().filter(|b| file_hash(&key, b) == hash) {
+            self.keep_carrier(st, b, seq, now);
+        }
         // in step only if the stored state is the live doc's: synced at its version, and the
         // doc renders the synced bytes. Equal versions alone don't say so: an outside save
         // merged while the doc held unwritten changes stores the replica (the file's text, a
@@ -5576,6 +5810,7 @@ impl Session {
             synced_hash: hash,
             synced_seq: seq,
             own: VecDeque::new(),
+            kit_wrote: None,
             echoed: None,
             stat: None,
             missing: false,
@@ -5587,16 +5822,6 @@ impl Session {
             writebacks: 0,
             caught_up: 0,
             step_from_store: in_step,
-        };
-        let on_disk = match disk::probe(path, root) {
-            Ok(Probe::File { real, .. }) => {
-                disk::clean_temps(&real);
-                match disk::read(&real, self.config.disk_read_max_bytes) {
-                    Ok(ReadFile::Bytes(b, _)) => Some(b),
-                    _ => None,
-                }
-            }
-            _ => None,
         };
         // does `stored` (keyed, or a format-2 plain hash) name the file's bytes?
         let names_file = |stored: &[u8]| {
@@ -5682,8 +5907,27 @@ impl Session {
             && self.pack.check_merged(root, theirs).is_ok()
     }
 
+    /// The doc as file bytes: spliced into the carrier for a pack that opts in (K1,
+    /// `live/carrier.rs`), else the pack's encoding.
     fn render(&self, st: &State) -> Result<Vec<u8>> {
-        Ok(self.pack.encode(&self.content(st)?, &st.codec)?)
+        let r = self.encode_live(st, &self.content(st)?, &st.codec);
+        // what a read that renders nothing reports (`render_failure`)
+        *st.render_failed.borrow_mut() = match &r {
+            Ok(_) => None,
+            Err(e) => Some((st.version, e.clone())),
+        };
+        r
+    }
+
+    /// The doc's file can't be rendered at its current version, as the last rendering found
+    /// (at a write-back, a sync check, a flush): the pack's error, reported by a read that
+    /// renders nothing itself. `None` when the last rendering at this version succeeded, or none
+    /// was made since the doc changed.
+    fn render_failure(st: &State) -> Option<SessionError> {
+        match &*st.render_failed.borrow() {
+            Some((v, e)) if *v == st.version => Some(e.clone()),
+            _ => None,
+        }
     }
 
     /// Every root's content, in schema order: text from the session's texts, structured
@@ -5716,6 +5960,7 @@ impl Session {
     fn estimate(&self, st: &State) -> u64 {
         (st.state_bytes + st.disk.as_ref().map_or(0, |d| d.replica_bytes))
             * self.config.memory_factor
+            + st.carrier.as_ref().map_or(0, |c| c.len() as u64)
     }
 
     fn mark_dirty(st: &mut State, now: u64) {
@@ -5787,6 +6032,9 @@ impl Session {
             if was_missing || st.declined.is_some() {
                 self.restored(st)?;
             }
+            // the file as last synced: the carrier (K1), if the session doesn't hold it yet
+            let seq = st.disk.as_ref().map_or(st.version, |d| d.synced_seq);
+            self.keep_carrier(st, &bytes, seq, now);
             return Ok(DiskCheck::Unchanged);
         }
         let ttl = self.config.own_write_ttl_ms;
@@ -5810,7 +6058,17 @@ impl Session {
                 key: st.key.clone(),
             });
         }
-        self.ingest(st, &bytes, h, now)
+        let out = self.ingest(st, &bytes, h.clone(), now)?;
+        // the save taken in is the sync point: the carrier (K1); a declined one is not
+        if let Some(seq) = st
+            .disk
+            .as_ref()
+            .filter(|d| d.synced_hash == h)
+            .map(|d| d.synced_seq)
+        {
+            self.keep_carrier(st, &bytes, seq, now);
+        }
+        Ok(out)
     }
 
     fn set_missing(&self, st: &mut State) -> DiskCheck {
@@ -6032,6 +6290,7 @@ impl Session {
             // their save, not an echo (v0.9.5)
             d.own.clear();
             d.echoed = None;
+            d.kit_wrote = Some(false);
             st.codec = content.codec;
             if was_declined {
                 st.declined = None;
@@ -6386,6 +6645,8 @@ impl Session {
                     },
                     hidden: Vec::new(),
                     kind: change.info.kind,
+                    turn: None,
+                    verb: None,
                 },
             );
         }
@@ -6413,6 +6674,7 @@ impl Session {
         // save, not an echo (v0.9.5)
         d.own.clear();
         d.echoed = None;
+        d.kit_wrote = Some(false);
         if was_declined {
             st.declined = None;
             self.emit(AuditEvent::FileRestored {
@@ -6701,12 +6963,17 @@ impl Session {
         d.synced_hash = h.clone();
         d.synced_seq = st.version;
         d.own.push_back((h, now));
+        d.kit_wrote = Some(true);
         d.echoed = None;
         while d.own.len() > OWN_WRITES_KEPT {
             d.own.pop_front();
         }
         d.stat = Some(disk::Seen::now(stat));
         d.dirty_since = None;
+        // the bytes written are the carrier (K1)
+        if !carrier::planted_carrier_stale() {
+            self.keep_carrier(st, &bytes, st.version, now);
+        }
         replica?;
         Ok(true)
     }
@@ -6828,6 +7095,8 @@ impl Session {
                 d.replica_bytes = s.state.len() as u64;
                 d.synced_hash = s.hash;
                 d.synced_seq = s.seq;
+                // read from the store again: the sync point is the stored one
+                d.kit_wrote = None;
             }
         }
     }

@@ -1,6 +1,6 @@
 //! No kit type that holds key material prints it in `Debug`. One row per type with a `Debug`
-//! and a key: a blob space's key here, and under feature `native` the engine's two keys and
-//! the kit types that carry them. Each key is built from known bytes; every spelling of them
+//! and a key: a blob space's key and a host cache key here, and under feature `native` the
+//! engine's two keys and the kit types that carry them. Each key is built from known bytes; every spelling of them
 //! that a `Debug` could print is looked for, and then the output is held to the exact layout,
 //! so a spelling this file doesn't know still fails the row.
 
@@ -130,4 +130,26 @@ fn the_key_byte_search_finds_every_spelling() {
 fn space_key_debug_prints_no_key_bytes() {
     let k = SpaceKey { no: 7, key: DIGEST };
     assert_no_key_bytes(&k, "SpaceKey { no: 7, key: <secret> }", &[&DIGEST]);
+}
+
+/// Row 5 of the host cache key (`blob::host_cache`): its `Debug` prints the generation, never
+/// the key; nor does a refusal of its generation (`MPC-E603`) in any form a host logs. The kit
+/// has no logger: what a host logs is these.
+#[test]
+fn host_cache_key_debug_prints_no_key_bytes() {
+    use crate::blob::{BlobError, HostCacheKey};
+    use crate::errors::Refusal;
+    let k = HostCacheKey::for_tests(7, SECRET);
+    assert_eq!(k.secret_bytes(), &SECRET, "the row's key is the key");
+    assert_no_key_bytes(
+        &k,
+        "HostCacheKey { generation: 7, key: <secret> }",
+        &[&SECRET],
+    );
+    let e = BlobError::CacheKeyDestroyed { generation: 7 };
+    let r = e.report();
+    for printed in [e.to_string(), format!("{e:?}"), r.plain(), r.to_json()] {
+        let found = leak(&printed, &SECRET);
+        assert!(found.is_none(), "key bytes ({found:?}) in `{printed}`");
+    }
 }

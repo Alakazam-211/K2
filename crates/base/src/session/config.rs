@@ -338,6 +338,17 @@ pub struct Config {
     /// values already in the doc are never touched. Raise or lower it; the table ops of an
     /// edit closure's view follow it. Default 64 KiB ([`crate::table::DEFAULT_MAX_VALUE_LEN`]).
     pub grid_max_value_len: usize,
+
+    // --- keyed docs that aren't tables (a deck, a board): the live size limit ---
+    /// A keyed doc that isn't a table holds at most this many elements and fields: every
+    /// element of its list roots (live or deleted, until dropped) plus every entry of its map
+    /// roots. A file with more doesn't open live: it is declined `live_too_large`
+    /// (`MPC-E415`) and stays at tier 0 (or 0.5), opened the ordinary way. A change that would
+    /// grow the doc past it is refused ([`super::SessionError::AtLimit`], `elements and
+    /// fields`, `MPC-E822`, exit 2); nothing in the doc is ever dropped. Default 25,000: the
+    /// CSV grid's measured cap ([`Config::grid_max_cells`]), borrowed until a deck-shaped
+    /// measurement sets it.
+    pub keyed_max_entries: usize,
 }
 
 impl Config {
@@ -429,6 +440,7 @@ impl Config {
             grid_max_cols,
             grid_max_rows,
             grid_max_value_len,
+            keyed_max_entries,
         } = self;
         vec![
             ("editor_window_ms", *editor_window_ms),
@@ -517,6 +529,7 @@ impl Config {
             ("grid_max_cols", *grid_max_cols as u64),
             ("grid_max_rows", *grid_max_rows as u64),
             ("grid_max_value_len", *grid_max_value_len as u64),
+            ("keyed_max_entries", *keyed_max_entries as u64),
         ]
     }
 }
@@ -619,6 +632,9 @@ impl Default for Config {
             grid_max_cols: 1_024,
             grid_max_rows: 100_000,
             grid_max_value_len: crate::table::DEFAULT_MAX_VALUE_LEN,
+            // the CSV grid's measured cap (`grid_max_cells`, K-CSV-7) until a deck-shaped
+            // measurement (the pptx plan's M1) sets this one
+            keyed_max_entries: 25_000,
         }
     }
 }

@@ -1,14 +1,30 @@
-//! A connection's element selection, pointer and viewport. A child of `live`, so it works on the
-//! session's own state.
+//! A connection's element selection, pointer, viewport, focus and text range. A child of
+//! `live`, so it works on the session's own state.
 //!
-//! All three need read only and stay outside the doc's numbering: nothing here takes or moves a
-//! version, writes to the store, or marks the doc dirty. Subscribers see them through the roster
-//! ([`RosterEvent::Selection`](super::roster::RosterEvent::Selection) and its two siblings), one
-//! event per connection per flush, the last value.
+//! All five stay outside the doc's numbering: nothing here takes or moves a version, writes to
+//! the store, or marks the doc dirty. Subscribers see them through the roster
+//! ([`RosterEvent::Selection`](super::roster::RosterEvent::Selection) and its siblings), one
+//! event per connection per flush, the last value. A watcher (past
+//! [`Config::participants_max`]) is refused every one of them ([`SessionError::Watching`]).
+//!
+//! **Focus and range** (rendering-data contract Item 3, wire 3): the focus is the container in
+//! view (a slide); a range is a caret or selection inside one element's text field. Setting a
+//! range sets the connection's focus to that element's container ([`Pack::container_of`]), so a
+//! range is never shown on a container nobody has in view. A range is never moved: it is dropped
+//! when its field changes, by anyone, or its element stops being live.
+//!
+//! **An agent's verbs move its presence** (contract Item 3, gap 11): when a pack's verb changes
+//! elements, the kit sets the acting agent's focus to the container of the last element it
+//! touched (the last container touched wins) and its selection to the elements it touched. A
+//! person's presence is never moved by the kit: people set their own.
+
+use std::collections::BTreeMap;
 
 use super::*;
-use crate::elem::{ElemState, Key};
-use crate::session::participant::{ElemSelection, Point, Rect, ELEM_SELECTION_MAX};
+use crate::elem::{Applied as ElemApplied, Effect, ElemState, Key};
+use crate::session::participant::{
+    ElemFocus, ElemRange, ElemSelection, Point, Rect, ELEM_SELECTION_MAX,
+};
 
 /// One connection's values.
 #[derive(Default)]
@@ -16,6 +32,31 @@ pub(super) struct ElemPresence {
     selection: Option<ElemSelection>,
     pointer: Option<Point>,
     viewport: Option<Rect>,
+    focus: Option<ElemFocus>,
+    range: Option<ElemRange>,
+}
+
+impl ElemPresence {
+    /// An agent's verb changed elements ([`Session::verb_presence`]): its focus moves to `focus`
+    /// (when a touched element has a live container), and its selection is replaced by
+    /// `selection` (`None`: none of what it touched is live).
+    fn verb_touched(&mut self, focus: Option<ElemFocus>, selection: Option<ElemSelection>) {
+        if focus.is_some() {
+            self.focus = focus;
+        }
+        self.selection = selection;
+    }
+
+    /// An agent took a claim ([`Session::claim_elems`]): its focus moves to `focus` (when the
+    /// claim has a container), and its selection is replaced by `selection` (when given).
+    pub(super) fn claimed(&mut self, focus: Option<ElemFocus>, selection: Option<ElemSelection>) {
+        if focus.is_some() {
+            self.focus = focus;
+        }
+        if selection.is_some() {
+            self.selection = selection;
+        }
+    }
 }
 
 /// Fill a roster row from its connections, most active first.
@@ -23,13 +64,65 @@ pub(super) fn fold(conns: &[&Member], entry: &mut RosterEntry) {
     entry.selection = conns.iter().find_map(|m| m.elem.selection.clone());
     entry.pointer = conns.iter().find_map(|m| m.elem.pointer);
     entry.viewport = conns.iter().find_map(|m| m.elem.viewport);
+    entry.focus = conns.iter().find_map(|m| m.elem.focus.clone());
+    entry.range = conns.iter().find_map(|m| m.elem.range.clone());
     for d in &mut entry.devices {
         if let Some(m) = conns.iter().find(|m| m.client == d.client) {
             d.selection = m.elem.selection.clone();
             d.pointer = m.elem.pointer;
             d.viewport = m.elem.viewport;
+            d.focus = m.elem.focus.clone();
+            d.range = m.elem.range.clone();
         }
     }
+}
+
+/// The composite map root holding the fields of `list`'s elements ([`Pack::composite`]).
+fn fields_root(composites: &[(&'static str, &'static str)], list: &str) -> Option<&'static str> {
+    composites.iter().find(|(_, l)| *l == list).map(|(m, _)| *m)
+}
+
+/// The map key of `field` of element `key` (`<key>\x1f<field>`, [`Pack::composite`]).
+fn field_key(key: &Key, field: &str) -> String {
+    format!("{key}{}{field}", crate::table::CELL_SEP)
+}
+
+/// The elements a change names, in the order of its ops, each once at its last place: a list
+/// op's key, and a map op's key mapped to its element through the pack's composite roots
+/// ([`elem_of_map_key`](crate::session::pack::elem_of_map_key)). What a pack verb's change moves
+/// an agent's presence to ([`Session::verb_presence`]), before it applies.
+pub(super) fn touched_in_order(
+    composites: &[(&'static str, &'static str)],
+    edits: &[Edit],
+) -> Vec<(String, Key)> {
+    let mut last: BTreeMap<(String, Key), usize> = BTreeMap::new();
+    let mut at = 0usize;
+    let mut put = |root: &str, key: Key| {
+        last.insert((root.to_owned(), key), at);
+        at += 1;
+    };
+    for e in edits {
+        match e {
+            Edit::List { root, ops } => {
+                for o in ops {
+                    put(root, o.key().clone());
+                }
+            }
+            Edit::Map { root, ops } => {
+                for o in ops {
+                    if let Some((list, k)) =
+                        crate::session::pack::elem_of_map_key(composites, root, o.key())
+                    {
+                        put(list, k);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out: Vec<((String, Key), usize)> = last.into_iter().collect();
+    out.sort_by_key(|(_, at)| *at);
+    out.into_iter().map(|(e, _)| e).collect()
 }
 
 impl Session {
@@ -88,6 +181,156 @@ impl Session {
         Ok(())
     }
 
+    /// Set the container this connection has in view (rendering-data contract Item 3), or
+    /// clear it with `None`. Needs read. The root must be a MovableList and the key a live
+    /// element of it ([`SessionError::BadPosition`] otherwise; the focus stays as it was). A
+    /// watcher is refused ([`SessionError::Watching`]). It leaves when its element stops being
+    /// live. An agent's focus is also set by its claims ([`Session::claim_elems`]); a range sets
+    /// it too ([`Session::set_range`]).
+    pub fn set_focus(&self, conn: ConnId, focus: Option<ElemFocus>) -> Result<Option<ElemFocus>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let i = self.admit(st, conn, Need::Read, Action::View, now)?;
+        self.refuse_watcher(st, i)?;
+        if let Some(f) = &focus {
+            self.check_live_elem(st, &f.root, &f.key)?;
+        }
+        st.members[i].elem.focus = focus.clone();
+        Ok(focus)
+    }
+
+    /// Set this connection's caret or selection inside one element's text field (rendering-data
+    /// contract Item 3), or clear it with `None`. Needs edit, as a text caret does
+    /// ([`Session::set_cursor`]); a watcher is refused ([`SessionError::Watching`]). Refused
+    /// with [`SessionError::BadPosition`], the range as it was, unless: the root is a
+    /// MovableList with a [composite](Pack::composite) map, the key is a live element of it, the
+    /// field (`<key>\x1f<field>` in that map) holds a string, and both offsets are character
+    /// boundaries of it (UTF-8 bytes).
+    ///
+    /// **It sets the focus** to the element's container ([`Pack::container_of`]), so a range is
+    /// never shown on a container out of view. It is never moved: when the field changes (by
+    /// anyone) or the element stops being live, it is dropped (`None`), and the owner sends a
+    /// new one.
+    pub fn set_range(&self, conn: ConnId, range: Option<ElemRange>) -> Result<Option<ElemRange>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let i = self.admit(st, conn, Need::Edit, Action::Cursor, now)?;
+        self.refuse_watcher(st, i)?;
+        let Some(r) = range else {
+            st.members[i].elem.range = None;
+            return Ok(None);
+        };
+        self.check_live_elem(st, &r.root, &r.key)?;
+        let bad = |m: String| Err(SessionError::BadPosition(m));
+        let Some(map) = fields_root(self.pack.composite(), &r.root) else {
+            return bad(format!("{:?} has no fields to hold a text range", r.root));
+        };
+        let text = match st.doc.map_get(map, &field_key(&r.key, &r.field))? {
+            Some(crate::elem::Value::Str(s)) => s,
+            _ => {
+                return bad(format!(
+                    "{} {:?} is not a text field of element {}",
+                    r.root, r.field, r.key
+                ))
+            }
+        };
+        for (what, at) in [("anchor", r.anchor), ("head", r.head)] {
+            if !text.is_char_boundary(at) {
+                return bad(format!(
+                    "the range's {what} {at} is not a character boundary of {:?} ({} bytes)",
+                    r.field,
+                    text.len()
+                ));
+            }
+        }
+        let focus = self.container_focus(st, &r.root, &r.key);
+        let m = &mut st.members[i];
+        m.last_cursor_ms = Some(now);
+        if !planted_range_keeps_focus() {
+            if let Some(f) = focus {
+                m.elem.focus = Some(f);
+            }
+        }
+        m.elem.range = Some(r.clone());
+        Ok(Some(r))
+    }
+
+    /// After a pack verb's change by member `i` landed (contract Item 3, gap 11; `named`: what
+    /// the change named, in order, [`touched_in_order`]; `stream`: what it applied): an
+    /// **agent's** presence follows what the verb touched.
+    ///
+    /// - Its **focus** goes to the container ([`Pack::container_of`]) of the last element the
+    ///   change touched whose container is live: the last container touched wins.
+    /// - Its **selection** is replaced by the elements the change touched in the list root of the
+    ///   last one, in order, live ones only (a deleted element can't be selected; none live:
+    ///   no selection), at most [`ELEM_SELECTION_MAX`] (the last ones).
+    /// - What touched means: an op that landed (`landed_elems`); an op with no
+    ///   effect touches nothing, and a change that touched no element moves nothing.
+    ///
+    /// A person's presence is never moved (people set their own), nor a watcher's (it has
+    /// none), nor any on a table (a table's presence is its own: `grid_presence`). Set on the
+    /// verb's connection, so the roster carries it at its next flush. Later calls override it.
+    pub(super) fn verb_presence(
+        &self,
+        st: &mut State,
+        i: usize,
+        named: &[(String, Key)],
+        stream: &[ElemApplied],
+    ) {
+        let m = &st.members[i];
+        let agent = m.p.kind == ParticipantKind::Agent || planted_verb_moves_person();
+        if !agent || m.watcher || self.is_grid() || named.is_empty() {
+            return;
+        }
+        let landed = super::elem_claims::landed_elems(self.pack.composite(), stream);
+        let touched: Vec<&(String, Key)> = named
+            .iter()
+            .filter(|(r, k)| landed.get(r.as_str()).is_some_and(|s| s.contains(k)))
+            .collect();
+        let Some((root, _)) = touched.last() else {
+            return;
+        };
+        let focus = touched
+            .iter()
+            .rev()
+            .find_map(|(r, k)| self.container_focus(st, r, k));
+        let mut keys: Vec<Key> = touched
+            .iter()
+            .filter(|(r, k)| r == root && matches!(st.doc.elem(r, k), Ok(ElemState::Live(_))))
+            .map(|(_, k)| k.clone())
+            .collect();
+        if keys.len() > ELEM_SELECTION_MAX {
+            keys.drain(..keys.len() - ELEM_SELECTION_MAX);
+        }
+        let selection = (!keys.is_empty()).then(|| ElemSelection::new(root.clone(), keys));
+        st.members[i].elem.verb_touched(focus, selection);
+    }
+
+    /// `key` is a live element of the MovableList root `root`, or [`SessionError::BadPosition`].
+    fn check_live_elem(&self, st: &State, root: &str, key: &Key) -> Result<()> {
+        if self.schema.kind_of(root) != Some(Kind::MovableList) {
+            return Err(SessionError::BadPosition(format!(
+                "{root:?} is not a list of elements in this doc"
+            )));
+        }
+        if !matches!(st.doc.elem(root, key), Ok(ElemState::Live(_))) {
+            return Err(SessionError::BadPosition(format!(
+                "element {key} of {root:?} is not live (unknown or deleted)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The focus on the container of element `key` of `root` ([`Pack::container_of`]), when the
+    /// pack names one that is a live element of a list root.
+    pub(super) fn container_focus(&self, st: &State, root: &str, key: &Key) -> Option<ElemFocus> {
+        let (croot, ckey) = self.pack.container_of(root, key)?;
+        self.check_live_elem(st, &croot, &ckey).ok()?;
+        Some(ElemFocus::new(croot, ckey))
+    }
+
     fn refuse_watcher(&self, st: &State, i: usize) -> Result<()> {
         if st.members[i].watcher {
             return Err(SessionError::Watching {
@@ -130,24 +373,85 @@ impl Session {
         Ok(ElemSelection::new(s.root, keys))
     }
 
-    /// After anything that changed the doc: every selection drops the keys of elements that
-    /// aren't live now, and a selection left with none is gone.
-    pub(super) fn elem_presence_after(st: &mut State) {
-        if planted_selection_keeps_deleted() {
-            return;
-        }
+    /// After anything that changed the doc (`changed`: what it applied; `None`: anything may
+    /// have, a reload): every selection drops the keys of elements that aren't live now, and a
+    /// selection left with none is gone; a focus on an element that isn't live is gone; a range
+    /// is gone when its element isn't live, or `changed` wrote its field (or is `None`).
+    pub(super) fn elem_presence_after(&self, st: &mut State, changed: Option<&[ElemApplied]>) {
+        let written = changed.map(written_fields);
+        let composites = self.pack.composite();
         let State { members, doc, .. } = st;
+        let live = |root: &str, k: &Key| matches!(doc.elem(root, k), Ok(ElemState::Live(_)));
         for m in members.iter_mut() {
-            let Some(s) = m.elem.selection.as_mut() else {
-                continue;
-            };
-            let ElemSelection { root, keys } = s;
-            keys.retain(|k| matches!(doc.elem(root, k), Ok(ElemState::Live(_))));
-            if keys.is_empty() {
-                m.elem.selection = None;
+            if !planted_selection_keeps_deleted() {
+                if let Some(s) = m.elem.selection.as_mut() {
+                    let ElemSelection { root, keys } = s;
+                    keys.retain(|k| live(root, k));
+                    if keys.is_empty() {
+                        m.elem.selection = None;
+                    }
+                }
+            }
+            if let Some(f) = &m.elem.focus {
+                if !live(&f.root, &f.key) {
+                    m.elem.focus = None;
+                }
+            }
+            if let Some(r) = &m.elem.range {
+                let gone = !live(&r.root, &r.key)
+                    || match &written {
+                        None => true,
+                        Some(w) => fields_root(composites, &r.root).is_some_and(|map| {
+                            w.contains(&(map.to_owned(), field_key(&r.key, &r.field)))
+                        }),
+                    };
+                if gone {
+                    m.elem.range = None;
+                }
             }
         }
     }
+}
+
+/// The map fields a change wrote: every map op with an effect, as `(map root, key)`.
+fn written_fields(changed: &[ElemApplied]) -> std::collections::HashSet<(String, String)> {
+    let mut out = std::collections::HashSet::new();
+    for a in changed {
+        if let ElemApplied::Map { root, ops } = a {
+            for o in ops {
+                if !matches!(o.effect, Effect::None { .. }) {
+                    out.insert((root.clone(), o.key.clone()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Planted ([`crate::differential::ContractMutant::VerbMovesPersonPresence`]): a person's verb
+/// moves their presence as an agent's does. Without the `differential` feature: `false`.
+#[cfg(any(test, feature = "differential"))]
+fn planted_verb_moves_person() -> bool {
+    crate::differential::contract_mutant()
+        == Some(crate::differential::ContractMutant::VerbMovesPersonPresence)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_verb_moves_person() -> bool {
+    false
+}
+
+/// Planted ([`crate::differential::ContractMutant::RangeDoesNotSetFocus`]): a range leaves the
+/// focus where it was. Without the `differential` feature there is no hook: `false`.
+#[cfg(any(test, feature = "differential"))]
+fn planted_range_keeps_focus() -> bool {
+    crate::differential::contract_mutant()
+        == Some(crate::differential::ContractMutant::RangeDoesNotSetFocus)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_range_keeps_focus() -> bool {
+    false
 }
 
 /// Planted ([`crate::differential::SelectionMutant::KeepsDeleted`]): selections keep every key.

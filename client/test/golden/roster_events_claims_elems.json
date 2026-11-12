@@ -50,7 +50,32 @@
       "note": "moving",
       "hold": false,
       "expires_ms": 1700000030000,
-      "version": 1
+      "version": 1,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "started_ms": 1700000000000
+    },
+    {
+      "kind": "focus",
+      "who": "bot",
+      "focus": {
+        "root": "items",
+        "key": "i1"
+      },
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "bot",
+      "selection": {
+        "root": "items",
+        "keys": ["i2", "i1"]
+      },
+      "client": 5
     },
     {
       "kind": "claim_started_elems",
@@ -61,7 +86,32 @@
       "note": null,
       "hold": true,
       "expires_ms": 1700000005300,
-      "version": 1
+      "version": 1,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "started_ms": 1700000000300
+    },
+    {
+      "kind": "focus",
+      "who": "bot",
+      "focus": {
+        "root": "items",
+        "key": "i3"
+      },
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "bot",
+      "selection": {
+        "root": "items",
+        "keys": ["i3"]
+      },
+      "client": 5
     },
     {
       "kind": "claim_ended",
@@ -73,12 +123,32 @@
         "first": 1,
         "last": 1
       },
-      "version": 2
+      "version": 2,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "at_ms": 1700000000600,
+      "at_rev": 2
     },
     {
       "kind": "role",
       "who": "ada",
       "role": "editor"
+    },
+    {
+      "kind": "focus",
+      "who": "bot",
+      "focus": null,
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "bot",
+      "selection": null,
+      "client": 5
     },
     {
       "kind": "claim_ended",
@@ -90,7 +160,15 @@
         "first": 1,
         "last": 2
       },
-      "version": 2
+      "version": 2,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "at_ms": 1700000000900,
+      "at_rev": null
     },
     {
       "kind": "claim_started_elems",
@@ -101,7 +179,32 @@
       "note": null,
       "hold": true,
       "expires_ms": 1700000031200,
-      "version": 2
+      "version": 2,
+      "actor": {
+        "id": "bot",
+        "name": "Bot",
+        "kind": "agent",
+        "colour": "#0891b2"
+      },
+      "started_ms": 1700000001200
+    },
+    {
+      "kind": "focus",
+      "who": "bot",
+      "focus": {
+        "root": "items",
+        "key": "i4"
+      },
+      "client": 5
+    },
+    {
+      "kind": "selection",
+      "who": "bot",
+      "selection": {
+        "root": "items",
+        "keys": ["i4"]
+      },
+      "client": 5
     }
   ],
   "final": {
@@ -136,9 +239,25 @@
         "devices": [
           {
             "client": 5,
-            "cursor": null
+            "cursor": null,
+            "selection": {
+              "root": "items",
+              "keys": ["i4"]
+            },
+            "focus": {
+              "root": "items",
+              "key": "i4"
+            }
           }
         ],
+        "selection": {
+          "root": "items",
+          "keys": ["i4"]
+        },
+        "focus": {
+          "root": "items",
+          "key": "i4"
+        },
         "elem_claims": [
           {
             "claim": "claim-3",
@@ -146,7 +265,8 @@
             "keys": ["i4"],
             "note": null,
             "hold": true,
-            "expires_ms": 1700000031200
+            "expires_ms": 1700000031200,
+            "started_ms": 1700000001200
           }
         ]
       }

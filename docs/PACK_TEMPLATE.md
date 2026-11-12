@@ -63,6 +63,28 @@ tier) and only checks rows of other tiers if the list has them.
   `Person`, the agent path through `Agent::verb`). Include a negative control: the registry
   `without` the pack's verb must report it missing.
 
+## A format the pack models only in part: the carrier (K1)
+
+A pack whose doc holds only part of the file (a deck: slides and shapes; masters, media and
+charts opaque) opts in to the **carrier** and writes the file back by splicing, never by
+rebuilding it from the doc:
+
+- `Pack::wants_carrier()` returns `true`. The kit then keeps the bytes it last read from the
+  file or wrote to it (a blob, with the store's lifecycle: reload, purge, delete) and calls
+  `Pack::encode_from(carrier, content, codec)` instead of `encode` wherever it renders the live
+  doc as a file.
+- `encode_from` decodes `carrier` itself and splices only what differs from `content`, copying
+  every other byte. Untouched is byte for byte: when `content` is what `carrier` decodes to, it
+  returns `carrier` exactly. The result decodes to `content`. If it can't splice, it returns
+  `PackError` (the file is left as it was).
+- Keep `encode` working on its own: the kit calls it for the live doc when it holds no carrier
+  (a doc never synced with its file). It may return `PackError` when the format can't be built
+  from the doc alone. A past version's file (`file_at`) is that version spliced into its own
+  carrier; a version without one is refused (`MPC-E208`), never built with `encode`.
+- Required tests: **untouched is byte for byte** through `encode_from` over the corpus, and a
+  small edit changes only the spliced part (`tests/live_carrier.rs` in the kit is a worked
+  example with a toy pack). `docs/SESSIONS.md`, "The carrier (K1)", has the kit's side.
+
 ## Rules every pack follows (checked)
 
 - **Engine-free.** A pack never depends on or imports a CRDT engine, in Rust or JS (`yrs`, `yjs`,

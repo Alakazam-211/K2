@@ -174,6 +174,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         },
         S::RevertTooOld { seq: 3 },
         S::NoSuchChange(3),
+        S::VersionNoCarrier { version: 3 },
         S::Disk(x.into()),
         S::SaveMismatch {
             size: 3,
@@ -228,6 +229,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
         S::Blob(BlobError::Damaged("ab".into())),
         S::Blob(BlobError::Io(x.into())),
         S::Blob(BlobError::NoRandom(x.into())),
+        S::Blob(BlobError::CacheKeyDestroyed { generation: 3 }),
         S::NoBlobStore,
         S::IndexUnsupported,
         S::NotIndexed {
@@ -308,6 +310,11 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
             limit: 65_536,
             would_be: 70_000,
         },
+        S::AtLimit {
+            what: "elements and fields",
+            limit: 25_000,
+            would_be: 25_001,
+        },
         S::FacetConflict(vec![crate::session::FacetConflict {
             root: "rows".into(),
             key: "r3".into(),
@@ -320,6 +327,7 @@ fn session_errors_with(x: &str) -> Vec<SessionError> {
     ];
     for code in [
         "too_large",
+        "live_too_large",
         "not_utf8",
         "binary",
         "mixed_line_endings",
@@ -596,7 +604,7 @@ fn every_live_id_has_a_path() {
         .id(),
     );
     seen.extend(outcomes().iter().map(ErrorReport::id));
-    for code in ["too_large", "hard_linked", "x"] {
+    for code in ["too_large", "live_too_large", "hard_linked", "x"] {
         seen.insert(
             Declined {
                 code,

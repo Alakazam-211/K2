@@ -330,6 +330,27 @@ describe("the kit's roster streams", () => {
   };
   const sameRows = (ps: readonly PresencePeer[]) => [...ps].sort((a, b) => `${a.handle}:${a.client}`.localeCompare(`${b.handle}:${b.client}`));
 
+  it("roster_events_focus_range.json (wire 3) folds to the kit's final roster: a range moved the focus, then went", () => {
+    const g = JSON.parse(readFileSync(join(GOLDEN, "roster_events_focus_range.json"), "utf8")) as Golden & { refused: string };
+    const got = fold(g.self, g.client!, g.events).peers();
+    const want = fold(g.self, g.client!, [g.final]).peers();
+    expect(sameRows(got)).toEqual(sameRows(want));
+    // Ada's focus was i1, then the range's element i2, then gone with i2; her range was dropped
+    type FocusOrRange = Extract<RosterEvent, { kind: "focus" | "range" }>;
+    const ada = g.events.filter((e): e is FocusOrRange => (e.kind === "focus" || e.kind === "range") && e.who === g.self && e.client !== undefined);
+    expect(ada.map((e) => (e.kind === "focus" ? `focus:${e.focus?.key ?? null}` : `range:${e.range ? e.range.key : null}`))).toEqual([
+      "focus:i1",
+      "focus:i2",
+      "range:i2",
+      "range:null",
+      "focus:null",
+    ]);
+    // the watcher: counted, no row, refused
+    expect(g.events.some((e) => e.kind === "watching" && e.count === 1)).toBe(true);
+    expect(got.some((p) => p.handle === "kai")).toBe(false);
+    expect(g.refused).toBe("MPC-E305");
+  });
+
   it("roster_events_elem_presence.json folds to the kit's final roster", () => {
     const g = JSON.parse(readFileSync(join(GOLDEN, "roster_events_elem_presence.json"), "utf8")) as Golden;
     const got = fold(g.self, g.client!, g.events).peers();

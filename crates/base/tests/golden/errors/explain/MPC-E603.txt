@@ -1,0 +1,21 @@
+MPC-E603 cache_key_destroyed (erasure)
+exit:     4
+message:  the space key of cache generation {generation} was destroyed
+next:     The space's key was destroyed (its blobs were purged), so nothing sealed under a key derived from it can be read again, and no key of that generation is given again. Drop the cache: delete every entry sealed under that generation (details.generation), then seal new entries under the space's current key.
+rule:     K-PURGE-13
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E603",
+  "name": "cache_key_destroyed",
+  "area": "erasure",
+  "exit": 4,
+  "message": "the space key of cache generation {generation} was destroyed",
+  "next": "The space's key was destroyed (its blobs were purged), so nothing sealed under a key derived from it can be read again, and no key of that generation is given again. Drop the cache: delete every entry sealed under that generation (details.generation), then seal new entries under the space's current key.",
+  "rule": "K-PURGE-13",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

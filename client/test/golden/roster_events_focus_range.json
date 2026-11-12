@@ -1,0 +1,137 @@
+{
+  "about": "Focus and range (wire 3): a range moves the focus to its element's container; a change to the range's field drops the range, never moves it; a deleted element drops the focus; a watcher past the cap is counted (`watching`), has no row, and is refused (`refused`, its error id).",
+  "self": "ada",
+  "client": 9007199254740991,
+  "events": [
+    {
+      "kind": "snapshot",
+      "version": 2,
+      "members": [
+        {
+          "handle": "bob",
+          "name": "Bob",
+          "colour": "#16a34a",
+          "kind": "person",
+          "role": "editor",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 6,
+              "cursor": null
+            }
+          ]
+        },
+        {
+          "handle": "ada",
+          "name": "Ada",
+          "colour": "#7c3aed",
+          "kind": "person",
+          "role": "viewer",
+          "away": false,
+          "cursor": null,
+          "rights": "edit",
+          "devices": [
+            {
+              "client": 9007199254740991,
+              "cursor": null
+            }
+          ]
+        }
+      ],
+      "watching": 0
+    },
+    {
+      "kind": "focus",
+      "who": "ada",
+      "focus": {
+        "root": "items",
+        "key": "i1"
+      },
+      "client": 9007199254740991
+    },
+    {
+      "kind": "role",
+      "who": "ada",
+      "role": "editor"
+    },
+    {
+      "kind": "focus",
+      "who": "ada",
+      "focus": {
+        "root": "items",
+        "key": "i2"
+      },
+      "client": 9007199254740991
+    },
+    {
+      "kind": "range",
+      "who": "ada",
+      "range": {
+        "root": "items",
+        "key": "i2",
+        "field": "title",
+        "anchor": 0,
+        "head": 18
+      },
+      "client": 9007199254740991
+    },
+    {
+      "kind": "range",
+      "who": "ada",
+      "range": null,
+      "client": 9007199254740991
+    },
+    {
+      "kind": "focus",
+      "who": "ada",
+      "focus": null,
+      "client": 9007199254740991
+    },
+    {
+      "kind": "watching",
+      "count": 1
+    }
+  ],
+  "final": {
+    "kind": "snapshot",
+    "version": 4,
+    "members": [
+      {
+        "handle": "ada",
+        "name": "Ada",
+        "colour": "#7c3aed",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 9007199254740991,
+            "cursor": null
+          }
+        ]
+      },
+      {
+        "handle": "bob",
+        "name": "Bob",
+        "colour": "#16a34a",
+        "kind": "person",
+        "role": "editor",
+        "away": false,
+        "cursor": null,
+        "rights": "edit",
+        "devices": [
+          {
+            "client": 6,
+            "cursor": null
+          }
+        ]
+      }
+    ],
+    "watching": 1
+  },
+  "refused": "MPC-E305"
+}

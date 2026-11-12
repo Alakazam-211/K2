@@ -1,0 +1,71 @@
+{
+  "root": "source",
+  "version": 1,
+  "text": "# Notes\n\none\n",
+  "events": [
+    {
+      "version": 2,
+      "pid": "agent-7",
+      "client": 2,
+      "via": "cli",
+      "kind": "edit",
+      "root": "source",
+      "hunks": [
+        {
+          "start": 3,
+          "end": 7,
+          "insert": "OTES"
+        },
+        {
+          "start": 9,
+          "end": 12,
+          "insert": "ONE"
+        }
+      ],
+      "at_ms": 1700000000007,
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": "shout"
+    },
+    {
+      "version": 3,
+      "pid": "agent-7",
+      "client": 2,
+      "via": "cli",
+      "kind": "edit",
+      "root": "source",
+      "hunks": [
+        {
+          "start": 13,
+          "end": 13,
+          "insert": "two\n"
+        }
+      ],
+      "at_ms": 1700000000014,
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null
+    },
+    {
+      "version": 4,
+      "pid": "ada",
+      "client": 1,
+      "via": "tab",
+      "kind": "edit",
+      "root": "source",
+      "hunks": [
+        {
+          "start": 17,
+          "end": 17,
+          "insert": "three\n"
+        }
+      ],
+      "at_ms": 1700000000021,
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null
+    }
+  ],
+  "final_version": 4,
+  "final_text": "# NOTES\n\nONE\ntwo\nthree\n"
+}

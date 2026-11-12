@@ -85,6 +85,43 @@ pub trait Pack: Send + Sync {
     /// [`Pack::decode`]). An untouched file must round-trip byte for byte.
     fn encode(&self, content: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError>;
 
+    /// Whether the kit keeps this pack's **carrier** (K1): for a format the pack models only in
+    /// part (a deck: slides and shapes modelled, the rest of the file opaque), the bytes the kit
+    /// last read from the file or wrote to it, so that the doc is written back by splicing its
+    /// content into them ([`Pack::encode_from`]) and every byte the pack doesn't model stays
+    /// out of the engine. `docs/SESSIONS.md`, "The carrier (K1)". Default: `false`, and the kit
+    /// keeps nothing and calls [`Pack::encode`], as before.
+    fn wants_carrier(&self) -> bool {
+        false
+    }
+
+    /// Doc content back to file bytes **by splicing it into `carrier`**, the bytes the kit last
+    /// read from the file or wrote to it, exactly (K1). Called instead of [`Pack::encode`] for a
+    /// live doc whenever [`Pack::wants_carrier`] is `true` and the kit holds a carrier for it;
+    /// with no carrier held (a doc never synced with its file, or one whose carrier couldn't be
+    /// kept) the kit calls [`Pack::encode`]. The carrier never leaves the kit but to this hook.
+    ///
+    /// The pack decodes `carrier` itself (the content to diff against is the carrier's, never
+    /// another copy) and splices only what differs from `content`; every other byte is copied.
+    /// The rules, which the kit relies on:
+    /// - **untouched is byte for byte:** when `content` is what `carrier` decodes to, the
+    ///   result is `carrier` itself (so it is idempotent: splicing the same content into what
+    ///   it returned changes nothing);
+    /// - **it decodes to the content:** [`Pack::decode`] of the result gives `content`;
+    /// - a pack that can't splice returns [`PackError`] (the write-back fails, the file is left
+    ///   as it was).
+    ///
+    /// Default: [`Pack::encode`], ignoring the carrier.
+    fn encode_from(
+        &self,
+        carrier: &[u8],
+        content: &[(String, Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, PackError> {
+        let _ = carrier;
+        self.encode(content, codec)
+    }
+
     /// Normalise text an editor or agent is inserting into `root` (e.g. `\r\n` to `\n`).
     /// Applied to every inserted string and to `write` bodies before merging.
     fn normalize_input<'a>(&self, root: &str, text: &'a str) -> Cow<'a, str> {
@@ -225,6 +262,19 @@ pub trait Pack: Send + Sync {
     /// appears once: the first pair naming it is the one read. Default: none.
     fn composite(&self) -> &'static [(&'static str, &'static str)] {
         &[]
+    }
+
+    /// The container element `key` of the list root `root` sits in, as `(list root, key)`
+    /// (rendering-data contract Item 3: `focus` is the container in view). The kit asks it when
+    /// a text range is set ([`super::Session::set_range`]: the range's element's container) and
+    /// when an agent takes a claim on elements ([`super::Session::claim_elems`]: the first
+    /// container in document order). It reads no doc: a container is named by the element's key
+    /// alone (a deck's shape `s256-7` is on slide `s256`). Default: every element is its own
+    /// container. `None`: the element is in no container, and focus is left as it was.
+    ///
+    /// TODO(contract gap 1): the view schema's `unit_container_field` supplies this.
+    fn container_of(&self, root: &str, key: &Key) -> Option<(String, Key)> {
+        Some((root.to_owned(), key.clone()))
     }
 
     /// The list and map roots whose values may name a blob ([`crate::blob::BlobId::parse_ref`]:

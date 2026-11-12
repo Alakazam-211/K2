@@ -484,6 +484,69 @@ pub fn with_tier0_mutant<R>(mutant: Tier0Mutant, f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A fault planted in a keyed doc that isn't a table (a deck, a board) on the live path, so the
+/// rows that should catch it (`tests/keyed_live.rs`) can show they do, by name. Installed per
+/// thread by [`with_keyed_mutant`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyedMutant {
+    /// "keyed limit not applied": `Config::keyed_max_entries` is skipped, at import, for a
+    /// change and for an outside save, as before the limit existed.
+    LimitNotApplied,
+    /// "keyed outside save applied silently": an outside save over a file the kit wrote since
+    /// the last outside save is applied straight onto the live doc, the old way: no conflict
+    /// copy, no version kept on purpose, no event.
+    OutsideSaveAppliedSilently,
+    /// "merge write not recorded": an outside save taken in while the doc held changes the
+    /// file didn't (the kit then writes the merge) leaves no mark on its version, so after a
+    /// restart the next stale save over that write is applied plainly, the old way.
+    MergeWriteNotRecorded,
+    /// "purge skips live copies": a purge of a live doc leaves its recorded conflict copies
+    /// on disk and in `live_copies`, unreported, whatever they hold.
+    PurgeSkipsLiveCopies,
+    /// "carrier stale" (K1): a kit write doesn't become the carrier, so `Pack::encode_from` is
+    /// handed the bytes from one write earlier.
+    CarrierStale,
+    /// "purge keeps carrier" (K1): the carrier a write replaces is left for blob GC (its count
+    /// given back, its bytes in the blob folder until the grace runs out) instead of removed
+    /// at once, so a purge's write-back leaves the erased bytes behind.
+    PurgeKeepsCarrier,
+    /// "copy compared with encode" (K1): a live conflict copy of a pack that keeps a carrier is
+    /// compared, on `tick` and by a purge, with `Pack::encode` of its kept version instead of
+    /// what the kit wrote (the version spliced into its carrier), so it never matches.
+    CopyComparedWithEncode,
+    /// "file_at uses encode" (K1): `Session::file_at` of a pack that keeps a carrier renders the
+    /// version with `Pack::encode`, without its opaque bytes.
+    FileAtUsesEncode,
+    /// "removal ignores waiting puts": a removal at once (a purge's, a replaced carrier's)
+    /// takes an unreferenced blob even while a put of it waits for its writer's reference, as
+    /// before (the writer's reference then fails, `NoBlob`).
+    RemovalIgnoresWaitingPuts,
+    /// "read encodes": a structured read verb renders the file (the doc's content, then the
+    /// pack's encoding) on every read, as before, though it reads the keyed state only.
+    ReadEncodes,
+}
+
+thread_local! {
+    static KEYED_MUTANT: std::cell::Cell<Option<KeyedMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The keyed fault planted on this thread, if any.
+pub fn keyed_mutant() -> Option<KeyedMutant> {
+    KEYED_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` panics.
+pub fn with_keyed_mutant<R>(mutant: KeyedMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<KeyedMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            KEYED_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(KEYED_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
 /// A fault planted in a merge, so the tests that should catch it can show they do. Installed per
 /// thread by [`with_merge_mutant`]. Two families share it:
 /// - `write --base`'s text merge (v0.9.8), caught by the trace classes ((i) and (ii) below;
@@ -689,6 +752,52 @@ pub fn with_selection_mutant<R>(mutant: SelectionMutant, f: impl FnOnce() -> R) 
         }
     }
     let _back = Back(SELECTION_MUTANT.with(|m| m.replace(Some(mutant))));
+    f()
+}
+
+/// A fault in the rendering-data contract's kit items (the turn, claim events, focus and
+/// range, the verb), so their tests can show they catch it (`tests/contract_presence.rs`,
+/// `tests/contract_verbs.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ContractMutant {
+    /// A participant's erasure leaves the turns of their changes in place.
+    TurnNotClearedOnErase,
+    /// A claim's start leaves the claimant's selection as it was (Q19 says: replaced by the
+    /// claimed keys).
+    ClaimDoesNotReplaceSelection,
+    /// Setting a text range leaves the participant's focus where it was (r1.3 says: the range's
+    /// container).
+    RangeDoesNotSetFocus,
+    /// A change a pack verb made is stored without its verb (gap 9 says: on the change record,
+    /// so history and a reload show it).
+    VerbNotRecorded,
+    /// A pack verb's change moves the presence of a person who ran it too (gap 11 says: the kit
+    /// moves an agent's focus and selection only; a person sets their own).
+    VerbMovesPersonPresence,
+    /// A live revert or restore leaves the host-given turn off the change it makes (K2's ask:
+    /// they take the host's turn, as every other write entry does).
+    RevertDropsTurn,
+}
+
+thread_local! {
+    static CONTRACT_MUTANT: std::cell::Cell<Option<ContractMutant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The contract fault planted on this thread, if any.
+pub fn contract_mutant() -> Option<ContractMutant> {
+    CONTRACT_MUTANT.with(|m| m.get())
+}
+
+/// Run `f` with `mutant` planted on this thread; removed afterwards, even if `f` unwinds.
+pub fn with_contract_mutant<R>(mutant: ContractMutant, f: impl FnOnce() -> R) -> R {
+    struct Back(Option<ContractMutant>);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            CONTRACT_MUTANT.with(|m| m.set(self.0));
+        }
+    }
+    let _back = Back(CONTRACT_MUTANT.with(|m| m.replace(Some(mutant))));
     f()
 }
 

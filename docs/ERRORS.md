@@ -581,6 +581,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E205` | `no_such_change` | 4 | K-HIST-19, K-HIST-9 | `revert`, `restore`, `show --version`, `diff --version`, `version --name` | live |
 | `MPC-E206` | `history_lost` | 0 | U6, U18, K-HIST-17 | `undo`, `redo`, `undo --partial`, `undo --drop` | live |
 | `MPC-E207` | `cleared_by_purge` | 0 | U19, K-PURGE-4 | `undo`, `redo`, `undo --partial`, `undo --drop` | live |
+| `MPC-E208` | `version_no_carrier` | 4 | K1 (carrier bytes) | `show --version`, `(host)` | live |
 
 ### MPC-E201 `undo_conflict`
 
@@ -637,6 +638,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next step:** `log`. A purge cleared every undo history; find the change in the log and revert it, or edit the text by hand.
 - **Rule:** U19, K-PURGE-4
 - **Exit:** 0
+
+### MPC-E208 `version_no_carrier`
+
+- **Message:** `version {version} has no copy of its file's own bytes (version_no_carrier)`
+- **Next:** This file type is written back by splicing into the file's own bytes, and the kit keeps those bytes with each version it cuts. This version has none: it was cut before the doc kept them (by an older kit, or before this build), or a purge erased them. Its file can't be rebuilt exactly, so none is given. Its content is still there: read it with show --version; for the file as it is now, read the file.
+- **Next step:** `log`. This version's file can't be rebuilt exactly; its content is still readable, and a later version or the file now may serve instead.
+- **Rule:** K1 (carrier bytes)
+- **Exit:** 4
 
 ## 3xx: presence and claims
 
@@ -730,6 +739,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E412` | `declined_hard_linked` | 4 | K-DISK-14 (K9) | `(host)` | live |
 | `MPC-E413` | `save_mismatch` | 1 | K-T0-5, K-DISK-2 | `(host)` | live |
 | `MPC-E414` | `save_ticket_invalid` | 2 | K-T0-5 | `(host)` | live |
+| `MPC-E415` | `declined_live_too_large` | 4 | K-PACK-4, K-DISK-8, K-CSV-7 | `*` | live |
 
 ### MPC-E401 `declined_too_large`
 
@@ -819,6 +829,14 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** A host bug: a save ticket is good for one record_saved, by the connection that asked for it, on the doc that issued it. This one was already recorded (or refused), is another connection's, or isn't this doc's (or is too old to be remembered). Nothing was recorded. A lapsed, replaced or reloaded ticket is not this: it returns with not_recorded set.
 - **Rule:** K-T0-5
 - **Exit:** 2
+
+### MPC-E415 `declined_live_too_large`
+
+- **Message:** `live editing is off: {reason} (live_too_large)`
+- **Next:** The file holds more elements and fields than a live doc of its type may hold (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.
+- **Next step:** `cat`. The file is over the live size limit, so it stays at tier 0 (or 0.5) and opens the ordinary way; read it there, and change it with its file verbs or ordinary file tools.
+- **Rule:** K-PACK-4, K-DISK-8, K-CSV-7
+- **Exit:** 4
 
 ## 5xx: store
 
@@ -1010,6 +1028,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 |---|---|---|---|---|---|
 | `MPC-E601` | `purge_current_version` | 2 | K-T0-9, K-PURGE-1 | `purge` | live |
 | `MPC-E602` | `purged_version` | 4 | K-PURGE-4 | `show --version`, `restore` | live |
+| `MPC-E603` | `cache_key_destroyed` | 4 | K-PURGE-13 | `(host)` | live |
 
 ### MPC-E601 `purge_current_version`
 
@@ -1025,6 +1044,13 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** An owner purged that version; its content is gone for good. Pick another version (log).
 - **Next step:** `log`. That version was purged for good; pick another version.
 - **Rule:** K-PURGE-4
+- **Exit:** 4
+
+### MPC-E603 `cache_key_destroyed`
+
+- **Message:** `the space key of cache generation {generation} was destroyed`
+- **Next:** The space's key was destroyed (its blobs were purged), so nothing sealed under a key derived from it can be read again, and no key of that generation is given again. Drop the cache: delete every entry sealed under that generation (details.generation), then seal new entries under the space's current key.
+- **Rule:** K-PURGE-13
 - **Exit:** 4
 
 ## 7xx: tier 0 and blobs
@@ -1206,6 +1232,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 | `MPC-E807` | `header_only_row_blank` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
 | `MPC-E820` | `key_not_own` | 2 | structured live, slice 1 | `@change` | live |
 | `MPC-E821` | `key_space_full` | 2 | structured live, slice 1 | `(host)` | live |
+| `MPC-E822` | `keyed_at_limit` | 2 | K-CSV-7 (keyed docs) | `@change` | live |
 | `MPC-E830` | `conflict` | 1 | board file: object revs | `@file`, `update`, `delete`, `resolve`, `lock`, `check-set`, `check-remove`, `table-cell`, `table-remove-row`, `table-remove-column`, `move`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `apply`, `inverse` | live |
 | `MPC-E831` | `exists` | 1 | board file: unique ids | `@file`, `put-back`, `apply`, `inverse` | live |
 | `MPC-E832` | `busy` | 1 | board file: the save guard | `@file`, `add`, `update`, `delete`, `put-back`, `connect`, `react`, `vote`, `comment`, `reply`, `resolve`, `meta`, `lock`, `check-add`, `check-set`, `check-remove`, `table-cell`, `table-add-row`, `table-remove-row`, `table-add-column`, `table-remove-column`, `move`, `order`, `frame-order`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `duplicate`, `paste`, `connected-copy`, `mind-child`, `template`, `clear-blob`, `apply`, `inverse` | live |
@@ -1305,6 +1332,14 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `no key fits 24 bytes for prefix {prefix} and tag {tag}`
 - **Next:** Every key of this prefix and writer tag that fits a list key's 24 bytes is taken. Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter prefix (the pack's fix).
 - **Rule:** structured live, slice 1
+- **Exit:** 2
+
+### MPC-E822 `keyed_at_limit`
+
+- **Message:** `this doc is at its live size limit ({limit} {what}, deleted elements included); nothing was applied`
+- **Next:** The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.
+- **Next step:** `cat`. The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again.
+- **Rule:** K-CSV-7 (keyed docs)
 - **Exit:** 2
 
 ### MPC-E830 `conflict`

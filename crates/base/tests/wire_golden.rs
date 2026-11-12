@@ -25,10 +25,10 @@ use std::sync::{Arc, Mutex};
 use k2_mpc_base::elem::ListOp;
 use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
-    At, AuditEvent, ChangeEvent, ClaimSpan, Config, ConnId, CursorAt, EditOptions, ElemSelection,
-    Host, JoinOptions, LeaveReason, LineRange, Overwrite, Participant, ParticipantKind, Point,
-    Rect, Rights, Role, RosterEvent, RosterMember, Session, SessionManager, Stay, TextFilePack,
-    Who, OVERWRITE_PENDING_MAX,
+    At, AuditEvent, ChangeEvent, ClaimSpan, Config, ConnId, CursorAt, EditOptions, ElemFocus,
+    ElemRange, ElemSelection, Host, JoinOptions, LeaveReason, LineRange, Overwrite, Participant,
+    ParticipantKind, Point, Rect, Rights, Role, RosterEvent, RosterMember, Session, SessionError,
+    SessionManager, Stay, TextFilePack, Who, OVERWRITE_PENDING_MAX,
 };
 use k2_mpc_base::store::{DocKey, DocStore, Seq};
 use k2_mpc_base::text::diff::Hunk;
@@ -146,6 +146,13 @@ fn change(e: &ChangeEvent, st: &Stable) -> Value {
             "on_behalf_of",
             e.on_behalf_of.as_deref().map_or(Value::Null, Value::from),
         ),
+        (
+            "turn",
+            e.turn
+                .as_ref()
+                .map_or(Value::Null, |t| Value::from(t.as_str())),
+        ),
+        ("verb", e.verb.as_deref().map_or(Value::Null, Value::from)),
     ])
 }
 
@@ -260,6 +267,8 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
         &m.entry.selection,
         &m.entry.pointer,
         &m.entry.viewport,
+        &m.entry.focus,
+        &m.entry.range,
     );
     if let Some(Value::List(devices)) = fields
         .iter_mut()
@@ -269,7 +278,14 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
         for (o, d) in devices.iter_mut().zip(&m.entry.devices) {
             let Value::Obj(o) = o else { continue };
             let mut more = Vec::new();
-            elem_fields(&mut more, &d.selection, &d.pointer, &d.viewport);
+            elem_fields(
+                &mut more,
+                &d.selection,
+                &d.pointer,
+                &d.viewport,
+                &d.focus,
+                &d.range,
+            );
             o.extend(more.into_iter().map(|(k, v)| (k.to_owned(), v)));
         }
     }
@@ -285,6 +301,7 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
                 ("note", c.note.as_deref().map_or(Value::Null, Value::from)),
                 ("hold", Value::from(c.hold)),
                 ("expires_ms", Value::from(c.expires_ms)),
+                ("started_ms", Value::from(c.taken_ms)),
             ])),
             _ => None,
         })
@@ -293,6 +310,16 @@ fn member(m: &RosterMember, version: Seq, st: &mut Stable) -> Value {
         fields.push(("elem_claims", Value::List(elem_claims)));
     }
     Value::obj(fields)
+}
+
+/// A claim event's `actor` (wire 3): `{id, name, kind, colour}`, `id` the event's `who`.
+fn actor(w: &Who, a: &k2_mpc_base::session::ClaimActor) -> Value {
+    Value::obj([
+        ("id", who(w)),
+        ("name", Value::from(a.name.as_str())),
+        ("kind", Value::from(kind(a.kind))),
+        ("colour", Value::from(a.colour.as_str())),
+    ])
 }
 
 fn keys_value(keys: &[k2_mpc_base::Key]) -> Value {
@@ -328,12 +355,32 @@ fn rect(r: &Rect) -> Value {
     ])
 }
 
-/// The element presence fields of a roster entry or a device, each left out when `None`.
+fn focus(f: &ElemFocus) -> Value {
+    Value::obj([
+        ("root", Value::from(f.root.as_str())),
+        ("key", Value::from(f.key.as_str())),
+    ])
+}
+
+fn range(r: &ElemRange) -> Value {
+    Value::obj([
+        ("root", Value::from(r.root.as_str())),
+        ("key", Value::from(r.key.as_str())),
+        ("field", Value::from(r.field.as_str())),
+        ("anchor", Value::from(r.anchor)),
+        ("head", Value::from(r.head)),
+    ])
+}
+
+/// The element presence fields of a roster entry or a device, each left out when `None`
+/// (`focus` and `range`: wire 3).
 fn elem_fields(
     fields: &mut Vec<(&'static str, Value)>,
     s: &Option<ElemSelection>,
     p: &Option<Point>,
     r: &Option<Rect>,
+    f: &Option<ElemFocus>,
+    g: &Option<ElemRange>,
 ) {
     if let Some(s) = s {
         fields.push(("selection", selection(s)));
@@ -343,6 +390,12 @@ fn elem_fields(
     }
     if let Some(r) = r {
         fields.push(("viewport", rect(r)));
+    }
+    if let Some(f) = f {
+        fields.push(("focus", focus(f)));
+    }
+    if let Some(g) = g {
+        fields.push(("range", range(g)));
     }
 }
 
@@ -519,6 +572,30 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             client,
             st,
         ),
+        RosterEvent::Focus {
+            who: w,
+            focus: f,
+            client,
+            ..
+        } => elem_event(
+            "focus",
+            w,
+            f.as_ref().map_or(Value::Null, focus),
+            client,
+            st,
+        ),
+        RosterEvent::Range {
+            who: w,
+            range: g,
+            client,
+            ..
+        } => elem_event(
+            "range",
+            w,
+            g.as_ref().map_or(Value::Null, range),
+            client,
+            st,
+        ),
         RosterEvent::Pointer {
             who: w,
             pointer: p,
@@ -552,6 +629,8 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             for_edit,
             expires_ms,
             version,
+            actor: a,
+            started_ms,
             ..
         } => Value::obj([
             ("kind", Value::from("claim_started")),
@@ -563,6 +642,8 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             ("for_edit", Value::from(*for_edit)),
             ("expires_ms", Value::from(*expires_ms)),
             ("version", Value::from(*version)),
+            ("actor", actor(w, a)),
+            ("started_ms", Value::from(*started_ms)),
         ]),
         RosterEvent::ClaimStartedElems {
             who: w,
@@ -573,6 +654,8 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             hold,
             expires_ms,
             version,
+            actor: a,
+            started_ms,
             ..
         } => Value::obj([
             ("kind", Value::from("claim_started_elems")),
@@ -584,6 +667,8 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             ("hold", Value::from(*hold)),
             ("expires_ms", Value::from(*expires_ms)),
             ("version", Value::from(*version)),
+            ("actor", actor(w, a)),
+            ("started_ms", Value::from(*started_ms)),
         ]),
         RosterEvent::ClaimEnded {
             who: w,
@@ -591,6 +676,9 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             how,
             lines: l,
             version,
+            actor: a,
+            at_ms,
+            at_rev,
             ..
         } => Value::obj([
             ("kind", Value::from("claim_ended")),
@@ -599,6 +687,9 @@ fn roster_event(e: &RosterEvent, st: &mut Stable, me: &Value) -> Value {
             ("how", Value::from(how.as_str())),
             ("lines", lines(l)),
             ("version", Value::from(*version)),
+            ("actor", actor(w, a)),
+            ("at_ms", Value::from(*at_ms)),
+            ("at_rev", at_rev.map_or(Value::Null, Value::from)),
         ]),
         RosterEvent::Note {
             to,
@@ -697,9 +788,18 @@ impl Fx {
             .1
     }
     fn edit(&self, c: ConnId, base: Seq, hunks: Vec<Hunk>) -> Result<Vec<Hunk>, ErrorReport> {
+        self.edit_with(c, base, hunks, &EditOptions::new())
+    }
+    fn edit_with(
+        &self,
+        c: ConnId,
+        base: Seq,
+        hunks: Vec<Hunk>,
+        opts: &EditOptions,
+    ) -> Result<Vec<Hunk>, ErrorReport> {
         self.host.now.fetch_add(7, Ordering::SeqCst);
         self.s
-            .edit_at_base(c, ROOT, base, hunks, &EditOptions::new())
+            .edit_at_base(c, ROOT, base, hunks, opts)
             .map(|r| r.hunks)
     }
 }
@@ -770,8 +870,15 @@ fn the_wire_json_is_golden() {
     // ada types a line at a base; the agent edits at the same (now stale) base
     let mut errors: Vec<(&str, ErrorReport)> = Vec::new();
     f.edit(ada, v0, vec![h(9, 9, "zero\n")]).unwrap();
+    // with the host's turn (rendering-data contract gap 8): on the change event as given
+    let turn = k2_mpc_base::Turn::new("t:1a2b3c4d5e6f7a8b.12").unwrap();
     let applied = f
-        .edit(agent, v0, vec![h(13, 17, ""), h(23, 23, TRICKY)])
+        .edit_with(
+            agent,
+            v0,
+            vec![h(13, 17, ""), h(23, 23, TRICKY)],
+            &EditOptions::new().turn(turn),
+        )
         .unwrap();
     assert_eq!(applied, vec![h(18, 22, ""), h(28, 28, TRICKY)]);
     // ada replaces "two", which the agent deleted since her base: a write conflict
@@ -2102,4 +2209,307 @@ fn element_claims_are_golden() {
         kinds,
         ["started", "started", "deleted", "released", "started"]
     );
+}
+
+// ---------- focus and range (wire 3; rendering-data contract Item 3, gap 10) ----------
+
+/// Ada (a person) subscribes; she focuses `i1`, then sets a range in `i2`'s `title`, which moves
+/// her focus to `i2` (the range's container: here every element is its own); Bob rewrites that
+/// title, so her range is dropped (`null`), never moved, and her focus stays; Bob deletes `i2`,
+/// so her focus goes too. Kai joins past the participant cap: a watcher, counted
+/// (`watching`), with no row, and his focus is refused (`MPC-E305`), with no event.
+///
+/// `roster_events_focus_range.json`: `about`, `self`, `client`, the stream, `final` (a later
+/// subscription's snapshot) and `refused`, the watcher's refusal id.
+#[test]
+fn focus_and_range_are_golden() {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-focus-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _dir = TmpDir(dir.clone());
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_700_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mut config = Config::default();
+    config.participants_max = 2;
+    let mgr = SessionManager::new(store, host.clone(), config);
+    let s = mgr
+        .open(
+            Arc::new(ItemsLite),
+            &DocKey {
+                space: "ws".into(),
+                path: "a.items".into(),
+            },
+            Some(b"i1\ni2\ni3\n"),
+        )
+        .unwrap();
+    let tick = || {
+        host.now.fetch_add(300, Ordering::SeqCst);
+        mgr.flush_rosters();
+    };
+    let person = |pid: &str, name: &str, colour: &str| {
+        s.join(
+            Participant::new(pid, name, colour, ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap()
+    };
+    let set_title = |c: ConnId, text: &str| {
+        s.edit_ops(
+            c,
+            vec![Edit::Map {
+                root: "props".into(),
+                ops: vec![k2_mpc_base::elem::MapOp::Set {
+                    key: "i2\u{1f}title".into(),
+                    value: k2_mpc_base::Value::Str(text.into()),
+                }],
+            }],
+            &EditOptions::new(),
+        )
+        .unwrap();
+    };
+    let ada = person("ada", "Ada", "#7c3aed");
+    let bob = person("bob", "Bob", "#16a34a");
+    let mut st = Stable::default();
+    st.clients.insert(ada.client, MAX_CLIENT_ID);
+    st.clients.insert(bob.client, 6);
+    set_title(bob.conn, "Hire two engineers");
+    let roster = s.subscribe_roster(ada.conn).unwrap();
+    tick();
+    s.set_focus(ada.conn, Some(ElemFocus::new("items", key_of("i1"))))
+        .unwrap();
+    tick();
+    // a range sets the focus to its element's container
+    s.set_range(
+        ada.conn,
+        Some(ElemRange::new("items", key_of("i2"), "title", 0, 18)),
+    )
+    .unwrap();
+    tick();
+    // the field changes: the range is dropped, the focus stays
+    set_title(bob.conn, "Hire three engineers");
+    tick();
+    // the element goes: the focus goes with it
+    delete_item(&s, bob.conn, "i2");
+    tick();
+    // a watcher: counted, no row, and refused
+    let kai = person("kai", "Kai", "#b0577a");
+    st.clients.insert(kai.client, 7);
+    let refused = s
+        .set_focus(kai.conn, Some(ElemFocus::new("items", key_of("i1"))))
+        .unwrap_err();
+    assert!(
+        matches!(refused, SessionError::Watching { .. }),
+        "{refused:?}"
+    );
+    tick();
+    let ros = drain(&roster);
+    let late = drain(&s.subscribe_roster(ada.conn).unwrap());
+    let me = self_in(&late[0], "Ada");
+    golden(
+        &golden_dir().join("roster_events_focus_range.json"),
+        &file(Value::obj([
+            (
+                "about",
+                Value::from(
+                    "Focus and range (wire 3): a range moves the focus to its element's container; \
+                     a change to the range's field drops the range, never moves it; a deleted \
+                     element drops the focus; a watcher past the cap is counted (`watching`), \
+                     has no row, and is refused (`refused`, its error id).",
+                ),
+            ),
+            ("self", me.clone()),
+            ("client", Value::from(st.client(ada.client))),
+            (
+                "events",
+                Value::List(ros.iter().map(|e| roster_event(e, &mut st, &me)).collect()),
+            ),
+            ("final", roster_event(&late[0], &mut st, &me)),
+            ("refused", Value::from(refused.report().id())),
+        ])),
+    );
+    // the scenario did what the file says: ada's focus i1, i2 (with the range), then gone
+    let ada_focus: Vec<Option<String>> = ros
+        .iter()
+        .filter_map(|e| match e {
+            RosterEvent::Focus {
+                who, focus, client, ..
+            } if who.pid() == Some("ada") && client.is_some() => {
+                Some(focus.as_ref().map(|f| f.key.to_string()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ada_focus,
+        [Some("i1".to_owned()), Some("i2".to_owned()), None]
+    );
+    let ada_range: Vec<bool> = ros
+        .iter()
+        .filter_map(|e| match e {
+            RosterEvent::Range {
+                who, range, client, ..
+            } if who.pid() == Some("ada") && client.is_some() => Some(range.is_some()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ada_range, [true, false]);
+    assert!(ros
+        .iter()
+        .any(|e| matches!(e, RosterEvent::Watching { count: 1 })));
+}
+
+// ---------- the pack verb on a change event (rendering-data contract gap 9) ----------
+
+/// A text pack with one verb of its own, `shout` (uppercase the doc), for `change_events_verb.json`.
+struct ShoutPack;
+
+const SHOUT_TEXT: TextFilePack = TextFilePack::new("markdown", 4 << 20);
+
+impl k2_mpc_base::session::Pack for ShoutPack {
+    fn schema(&self) -> k2_mpc_base::schema::Schema {
+        SHOUT_TEXT.schema()
+    }
+    fn decode(
+        &self,
+        bytes: &[u8],
+    ) -> Result<k2_mpc_base::session::PackContent, k2_mpc_base::session::Declined> {
+        SHOUT_TEXT.decode(bytes)
+    }
+    fn encode(
+        &self,
+        content: &[(String, k2_mpc_base::doc::Neutral)],
+        codec: &[u8],
+    ) -> Result<Vec<u8>, k2_mpc_base::session::PackError> {
+        SHOUT_TEXT.encode(content, codec)
+    }
+    fn normalize_input<'a>(&self, root: &str, text: &'a str) -> std::borrow::Cow<'a, str> {
+        SHOUT_TEXT.normalize_input(root, text)
+    }
+    fn verbs(&self) -> &'static [k2_mpc_base::tools::PackVerb] {
+        SHOUT_VERBS
+    }
+}
+
+fn shout(args: &[String]) -> Result<k2_mpc_base::tools::PackEdit, k2_mpc_base::tools::ToolError> {
+    if !args.is_empty() {
+        return Err(k2_mpc_base::tools::ToolError::unsupported(
+            args.join(" "),
+            "shout",
+        ));
+    }
+    Ok(Box::new(|_, text, _| {
+        Ok(k2_mpc_base::tools::EditOutput::new(
+            Some(text.to_uppercase()),
+            Vec::new(),
+            0,
+        ))
+    }))
+}
+
+const SHOUT_VERBS: &[k2_mpc_base::tools::PackVerb] = &[k2_mpc_base::tools::PackVerb::edit(
+    "shout",
+    "shout",
+    &[k2_mpc_base::parity::PersonAction::Format],
+    &[0],
+    shout,
+)
+.positions(&[])];
+
+/// `change_events_verb.json`: an agent's pack verb (`shout`) carries its id on its change event;
+/// the agent's kit tool (`append`) and a person's write carry none (`verb: null`).
+#[test]
+fn the_verb_wire_json_is_golden() {
+    let dir = std::env::temp_dir().join(format!("k2mb-wire-golden-verb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _tmp = TmpDir(dir.clone());
+    let host = Arc::new(TestHost {
+        now: AtomicU64::new(1_700_000_000_000),
+        rights: Mutex::new(HashMap::new()),
+    });
+    let mut config = Config::default();
+    config.edit_rate_per_s = 1_000_000;
+    config.edit_burst = 1_000_000;
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let mgr = SessionManager::new(store, host.clone(), config);
+    let s = mgr
+        .open(
+            Arc::new(ShoutPack),
+            &DocKey {
+                space: "ws".into(),
+                path: "verbs.md".into(),
+            },
+            Some(b"# Notes\n\none\n"),
+        )
+        .unwrap();
+    let ada = s
+        .join(
+            Participant::new("ada", "Ada", "#7c3aed", ParticipantKind::Person, "tab"),
+            Stay::Held,
+        )
+        .unwrap();
+    let agent = s
+        .join(
+            Participant::new(
+                "agent-7",
+                "Helper",
+                "#0ea5e9",
+                ParticipantKind::Agent,
+                "cli",
+            ),
+            Stay::Held,
+        )
+        .unwrap();
+    let mut st = Stable::default();
+    st.clients.insert(ada.client, 1);
+    st.clients.insert(agent.client, 2);
+    let (ada, agent) = (ada.conn, agent.conn);
+    let changes = s.subscribe(ada).unwrap();
+    let v0 = s.status().unwrap().version;
+    let text = |c: ConnId| {
+        s.read(c)
+            .unwrap()
+            .text_by_root
+            .into_iter()
+            .find(|(r, _)| r == ROOT)
+            .unwrap()
+            .1
+    };
+    let text0 = text(ada);
+    let step = || host.now.fetch_add(7, Ordering::SeqCst);
+    step();
+    let out = s.run_tool(agent, ROOT, &["shout".to_owned()], b"").unwrap();
+    assert!(out.changed.is_some(), "shout changed the doc");
+    step();
+    let out = s
+        .run_tool(agent, ROOT, &["append".to_owned()], b"two\n")
+        .unwrap();
+    assert!(out.changed.is_some(), "append changed the doc");
+    step();
+    s.replace_text(ada, ROOT, "# NOTES\n\nONE\ntwo\nthree\n")
+        .unwrap();
+    let evs = drain(&changes);
+    let verbs: Vec<Option<&str>> = evs.iter().map(|e| e.verb.as_deref()).collect();
+    assert_eq!(verbs, [Some("shout"), None, None]);
+    assert!(evs.iter().all(|e| e.via != "shout"), "via stays the client");
+    let final_text = text(ada);
+    golden(
+        &golden_dir().join("change_events_verb.json"),
+        &file(Value::obj([
+            ("root", Value::from(ROOT)),
+            ("version", Value::from(v0)),
+            ("text", Value::from(text0.as_str())),
+            (
+                "events",
+                Value::List(evs.iter().map(|e| change(e, &st)).collect()),
+            ),
+            ("final_version", Value::from(s.status().unwrap().version)),
+            ("final_text", Value::from(final_text.as_str())),
+        ])),
+    );
+    drop(s);
+    mgr.release().unwrap();
 }

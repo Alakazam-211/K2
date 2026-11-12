@@ -6,9 +6,9 @@
 // string index use), not the UTF-8 bytes the wire and `carets()` use.
 
 import type { OpId, Presence } from "./live";
-import { utf8Len } from "./hunk";
+import { byteToIndex, indexToByte, utf8Len } from "./hunk";
 import { ERR } from "./wire";
-import type { ClientFrame, ElemSelection, ErrorReport, Handle, Point, Rect, RosterEntry, RosterEvent, ServerFrame, Transport, Welcome } from "./wire";
+import type { ClaimActor, ClientFrame, ElemFocus, ElemRange, ElemSelection, ErrorReport, Handle, Point, Rect, RosterEntry, RosterEvent, ServerFrame, Transport, Welcome } from "./wire";
 
 /**
  * A participant's kind, stable for a host to switch on. The roster's `kind` (the kit's
@@ -137,7 +137,30 @@ export interface PresencePeer {
   selection: ElemSelection | null;
   pointer: Point | null;
   viewport: Rect | null;
+  /** The container in view (wire 3), or `null`. */
+  focus: ElemFocus | null;
+  /** A caret or selection inside one element's text field (wire 3), in **UTF-8 bytes** of the
+   * field's text as the host sent it (`rangeToUtf16` converts), or `null`. */
+  range: ElemRange | null;
   away: boolean;
+}
+
+/**
+ * A live claim on elements, as `PresenceChannel.claims()` folds the roster (rendering-data
+ * contract Item 4): from a snapshot's `elem_claims`, `claim_started_elems` and `claim_ended`.
+ */
+export interface ClaimView {
+  /** `claim-N`. */
+  claim: string;
+  /** Who holds it: the event's `actor` (wire 3), or from their roster row (a wire-2 host). */
+  actor: ClaimActor;
+  root: string;
+  keys: string[];
+  note: string | null;
+  hold: boolean;
+  /** When it was taken (host clock); `null` from a wire-2 host. */
+  startedMs: number | null;
+  expiresMs: number;
 }
 
 /** A presence frame the host refused, by the `req` the channel sent it with. */
@@ -148,10 +171,27 @@ export interface PresenceRefusal {
 }
 
 /** The frames a `PresenceChannel` sends, each refusable. */
-export type PresenceFrameType = "select" | "pointer" | "viewport" | "claim" | "release";
+export type PresenceFrameType = "select" | "pointer" | "viewport" | "focus" | "range" | "claim" | "release";
 
 /** The name a host lists in `welcome.features` when it takes the presence frames. */
 export const PRESENCE_FEATURE = "presence";
+
+/** The name a host lists in `welcome.features` when it takes the `focus` frame (wire 3). */
+export const FOCUS_FEATURE = "focus";
+
+/** The name a host lists in `welcome.features` when it takes the `range` frame (wire 3). */
+export const RANGE_FEATURE = "range";
+
+/**
+ * A range's offsets (UTF-8 bytes on the wire) as UTF-16 indexes into `text`, the field's text,
+ * or `null` when either isn't a character boundary of it (the text isn't the one the range was
+ * set on). Contract case A: `Café plan` with bytes 0..5 is 0..4.
+ */
+export function rangeToUtf16(range: Pick<ElemRange, "anchor" | "head">, text: string): Range16 | null {
+  const anchor = byteToIndex(text, range.anchor);
+  const head = byteToIndex(text, range.head);
+  return anchor < 0 || head < 0 ? null : { anchor, head };
+}
 
 /** The name a host lists in `welcome.features` when it takes the claim frames. */
 export const CLAIMS_FEATURE = "claims";
@@ -258,10 +298,12 @@ interface Values {
   selection: ElemSelection | null;
   pointer: Point | null;
   viewport: Rect | null;
+  focus: ElemFocus | null;
+  range: ElemRange | null;
 }
 
-const noValues = (): Values => ({ selection: null, pointer: null, viewport: null });
-const hasValue = (v: Values) => v.selection !== null || v.pointer !== null || v.viewport !== null;
+const noValues = (): Values => ({ selection: null, pointer: null, viewport: null, focus: null, range: null });
+const hasValue = (v: Values) => v.selection !== null || v.pointer !== null || v.viewport !== null || v.focus !== null || v.range !== null;
 
 /** What the host would refuse (`MPC-E304`) about a claim, in its words. */
 function claimProblem(keys: readonly string[], opts: ClaimOptions): string | null {
@@ -304,11 +346,19 @@ export class PresenceChannel {
   private selection: ElemSelection | null = null;
   private pointer: Point | null = null;
   private viewport: Rect | null = null;
+  private focus: ElemFocus | null = null;
+  private range: ElemRange | null = null;
   /** What is waiting for the next batch. */
   private pointerDue = false;
   private viewportDue = false;
   private batching = false;
   private folded: Folded[] = [];
+  /** The live claims on elements, in the order they were taken. */
+  private claimed: ClaimView[] = [];
+  /** How many watch past the host's participant cap (the roster's `watching`). */
+  private watchers = 0;
+  private readonly watchingCbs = new Set<(count: number) => void>();
+  private readonly claimCbs = new Set<(claims: readonly ClaimView[]) => void>();
   private readonly changeCbs = new Set<(peers: readonly PresencePeer[]) => void>();
   private readonly refusedCbs = new Set<(r: PresenceRefusal) => void>();
 
@@ -331,6 +381,56 @@ export class PresenceChannel {
   get claimsSupported(): boolean {
     const f = this.welcome.features;
     return Array.isArray(f) && f.includes(CLAIMS_FEATURE);
+  }
+
+  /** The connection's `welcome.features` lists `"focus"` (wire 3). While false, `setFocus` only
+   * records the value. */
+  get focusSupported(): boolean {
+    const f = this.welcome.features;
+    return Array.isArray(f) && f.includes(FOCUS_FEATURE);
+  }
+
+  /** The connection's `welcome.features` lists `"range"` (wire 3). While false, `setRange` only
+   * records the value. */
+  get rangeSupported(): boolean {
+    const f = this.welcome.features;
+    return Array.isArray(f) && f.includes(RANGE_FEATURE);
+  }
+
+  /** The wire version of this connection's host (`welcome.wire`; absent: 2). */
+  get wire(): number {
+    return typeof this.welcome.wire === "number" ? this.welcome.wire : 2;
+  }
+
+  /** Set the container in view (wire 3; `Session::set_focus`), or clear it with `null`. Goes at
+   * once when the host lists `"focus"`; else recorded and sent on a later connection that does.
+   * The host refuses a key that isn't live (`MPC-E114`) and a watcher (`MPC-E305`). */
+  setFocus(focus: ElemFocus | null): void {
+    const next = focus && { root: focus.root, key: focus.key };
+    if (JSON.stringify(next) === JSON.stringify(this.focus)) return;
+    this.focus = next;
+    this.sendFocus();
+  }
+
+  /**
+   * Set a caret or selection inside one element's text field (wire 3; `Session::set_range`), or
+   * clear it with `null`. `anchor` and `head` are UTF-16 indexes into `text`, the field's text as
+   * this client has it; they go out as UTF-8 bytes. The host also moves this connection's focus to
+   * the element's container. The host drops a range when the field changes: send a new one then.
+   * Offsets outside `text` are refused here (`onRefused`, `MPC-E114`), unsent.
+   */
+  setRange(range: (Omit<ElemRange, "anchor" | "head"> & Range16) | null, text = ""): void {
+    let next: ElemRange | null = null;
+    if (range) {
+      const ok = (i: number) => Number.isSafeInteger(i) && i >= 0 && i <= text.length;
+      if (!ok(range.anchor) || !ok(range.head)) {
+        return this.refuse("range", { id: ERR.BAD_POSITION, message: "bad position: the range is not inside the field's text" });
+      }
+      next = { root: range.root, key: range.key, field: range.field, anchor: indexToByte(text, range.anchor), head: indexToByte(text, range.head) };
+    }
+    if (JSON.stringify(next) === JSON.stringify(this.range)) return;
+    this.range = next;
+    this.sendRange();
   }
 
   /**
@@ -434,6 +534,8 @@ export class PresenceChannel {
           selection: v.selection,
           pointer: v.pointer,
           viewport: v.viewport,
+          focus: v.focus,
+          range: v.range,
           away: f.away,
         };
       };
@@ -446,6 +548,33 @@ export class PresenceChannel {
       for (const [client, v] of rows) out.push(peer(client, v));
     }
     return out;
+  }
+
+  /** The live claims on elements, in the order they were taken (oldest first), each with its
+   * actor and times: who holds what, for a view's claim marks and its activity line. */
+  claims(): readonly ClaimView[] {
+    return this.claimed.map((c) => ({ ...c, actor: { ...c.actor }, keys: [...c.keys] }));
+  }
+
+  /** `claims()` changed (a claim started or ended, or a snapshot came). Returns an unsubscribe. */
+  onClaims(cb: (claims: readonly ClaimView[]) => void): () => void {
+    this.claimCbs.add(cb);
+    return () => this.claimCbs.delete(cb);
+  }
+
+  /**
+   * How many are watching past the host's participant cap (rendering-data contract gap 30): the
+   * roster's `watching`, from its snapshot and its `watching {count}` events. Watchers have no
+   * row in `peers()` and send no presence; a view shows them as this count ("+1 watching").
+   */
+  get watching(): number {
+    return this.watchers;
+  }
+
+  /** `watching` changed. Returns an unsubscribe. */
+  onWatching(cb: (count: number) => void): () => void {
+    this.watchingCbs.add(cb);
+    return () => this.watchingCbs.delete(cb);
   }
 
   /** `peers()` changed. Returns an unsubscribe. */
@@ -472,6 +601,9 @@ export class PresenceChannel {
     );
     this.folded = [];
     this.emitChange();
+    // the focus before the range: a range moves the focus to its container on the host
+    if (this.focus) this.sendFocus();
+    if (this.range) this.sendRange();
     if (this.selection) this.sendSelection();
     if (this.pointer) this.pointerDue = true;
     if (this.viewport) this.viewportDue = true;
@@ -538,6 +670,16 @@ export class PresenceChannel {
     this.send("select", (req) => ({ type: "select", req, selection: this.selection }));
   }
 
+  private sendFocus(): void {
+    if (this.closed || !this.focusSupported) return;
+    this.t.send({ type: "focus", req: this.number("focus"), focus: this.focus });
+  }
+
+  private sendRange(): void {
+    if (this.closed || !this.rangeSupported) return;
+    this.t.send({ type: "range", req: this.number("range"), range: this.range });
+  }
+
   private send(kind: PresenceFrameType, frame: (req: number) => ClientFrame): void {
     if (this.closed || !this.supported) return;
     this.t.send(frame(this.number(kind)));
@@ -575,12 +717,18 @@ export class PresenceChannel {
         if (kind === "select" && this.latest.select === f.req) this.selection = null;
         if (kind === "pointer" && this.latest.pointer === f.req) this.pointer = null;
         if (kind === "viewport" && this.latest.viewport === f.req) this.viewport = null;
+        if (kind === "focus" && this.latest.focus === f.req) this.focus = null;
+        if (kind === "range" && this.latest.range === f.req) this.range = null;
         return this.refuse(kind, f.error);
       }
       case "roster":
         this.folded = f.entries.map(foldEntry);
+        this.claimed = f.entries.flatMap(claimsOf);
+        this.emitClaims();
         return this.emitChange();
       case "roster_event":
+        this.foldWatching(f.event);
+        if (this.foldClaim(f.event)) this.emitClaims();
         if (this.foldEvent(f.event)) this.emitChange();
         return;
       default:
@@ -632,9 +780,59 @@ export class PresenceChannel {
         return set(e.who, e.client, { pointer: e.pointer });
       case "viewport":
         return set(e.who, e.client, { viewport: e.viewport });
+      case "focus":
+        return set(e.who, e.client, { focus: e.focus });
+      case "range":
+        return set(e.who, e.client, { range: e.range });
       default:
         return false;
     }
+  }
+
+  /** A snapshot's `watching` or a `watching` event; told when the count changes. */
+  private foldWatching(e: RosterEvent): void {
+    const n = e.kind === "snapshot" ? (e.watching ?? 0) : e.kind === "watching" ? e.count : this.watchers;
+    if (n === this.watchers) return;
+    this.watchers = n;
+    for (const cb of [...this.watchingCbs]) cb(n);
+  }
+
+  /** A claim event or a snapshot, into `claimed`; whether it changed. */
+  private foldClaim(e: RosterEvent): boolean {
+    switch (e.kind) {
+      case "snapshot":
+        this.claimed = e.members.flatMap(claimsOf);
+        return true;
+      case "claim_started_elems": {
+        const row = this.folded.find((r) => r.handle === e.who);
+        const actor: ClaimActor = e.actor ?? { id: e.who, name: row?.name ?? e.who, kind: row?.rawKind ?? "", colour: row?.colour ?? "" };
+        this.claimed = this.claimed.filter((c) => c.claim !== e.claim);
+        this.claimed.push({
+          claim: e.claim,
+          actor,
+          root: e.root,
+          keys: [...e.keys],
+          note: e.note,
+          hold: e.hold,
+          startedMs: typeof e.started_ms === "number" ? e.started_ms : null,
+          expiresMs: e.expires_ms,
+        });
+        return true;
+      }
+      case "claim_ended": {
+        const before = this.claimed.length;
+        this.claimed = this.claimed.filter((c) => c.claim !== e.claim);
+        return this.claimed.length !== before;
+      }
+      default:
+        return false;
+    }
+  }
+
+  private emitClaims(): void {
+    if (this.claimCbs.size === 0) return;
+    const claims = this.claims();
+    for (const cb of [...this.claimCbs]) cb(claims);
   }
 
   private emitChange(): void {
@@ -644,10 +842,30 @@ export class PresenceChannel {
   }
 }
 
+/** A roster entry's live claims on elements, its own row giving the actor. */
+function claimsOf(m: RosterEntry): ClaimView[] {
+  return (m.elem_claims ?? []).map((c) => ({
+    claim: c.claim,
+    actor: { id: m.handle, name: m.name, kind: m.kind, colour: m.colour },
+    root: c.root,
+    keys: [...c.keys],
+    note: c.note,
+    hold: c.hold,
+    startedMs: typeof c.started_ms === "number" ? c.started_ms : null,
+    expiresMs: c.expires_ms,
+  }));
+}
+
 function foldEntry(m: RosterEntry): Folded {
   const conns = new Map<number, Values>();
   for (const d of m.devices ?? []) {
-    conns.set(d.client, { selection: d.selection ?? null, pointer: d.pointer ?? null, viewport: d.viewport ?? null });
+    conns.set(d.client, {
+      selection: d.selection ?? null,
+      pointer: d.pointer ?? null,
+      viewport: d.viewport ?? null,
+      focus: d.focus ?? null,
+      range: d.range ?? null,
+    });
   }
   return {
     handle: m.handle,
@@ -655,7 +873,7 @@ function foldEntry(m: RosterEntry): Folded {
     colour: m.colour,
     rawKind: m.kind,
     away: m.away,
-    top: { selection: m.selection ?? null, pointer: m.pointer ?? null, viewport: m.viewport ?? null },
+    top: { selection: m.selection ?? null, pointer: m.pointer ?? null, viewport: m.viewport ?? null, focus: m.focus ?? null, range: m.range ?? null },
     conns,
     perConn: conns.size > 0,
   };

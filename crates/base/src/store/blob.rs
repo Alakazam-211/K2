@@ -8,6 +8,7 @@
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
 
 use super::enc::{R, W};
+use super::turns;
 use super::{
     dec_approval, enc_approval, Approval, DocId, DocMeta, DocStore, StoreError, VersionId, DOCS,
     META, PATHS,
@@ -63,6 +64,7 @@ fn put_version(
 ) -> Result<(), StoreError> {
     w.open_table(BLOB_VERSIONS)?
         .insert((id, vid), enc_version(v).as_slice())?;
+    super::turns::put_in(w, super::turns::BLOB_TURNS, id, vid, v.turn.as_ref())?;
     if let Some(p) = &v.on_behalf_of {
         w.open_table(BLOB_APPROVALS)?.insert(
             (id, vid),
@@ -237,6 +239,10 @@ pub struct BlobVersion {
     /// A purge removed this version's content (format 3): the entry stays (who, when, why,
     /// `size`), `blob` is the zero id, and reading or restoring it fails.
     pub redacted: bool,
+    /// The host-given turn of the call that set it ([`crate::turn`]; the `blob_turns` table,
+    /// not this record): `None` for a person's, a shell's, the kit's own, a version made before
+    /// turns, and after an erasure of its author (or of the person it was set for).
+    pub turn: Option<crate::turn::Turn>,
 }
 
 impl BlobVersion {
@@ -264,6 +270,7 @@ impl BlobVersion {
             restored_from: None,
             conflict_copy: None,
             redacted: false,
+            turn: None,
         }
     }
 }
@@ -281,6 +288,17 @@ fn r_opt_u64(r: &mut R<'_>) -> Result<Option<u64>, StoreError> {
         1 => Ok(Some(r.u64()?)),
         _ => Err(StoreError::Corrupt("blob version")),
     }
+}
+
+/// `v` with its turn from `tt` (the `blob_turns` table, if the store has one).
+fn with_turn(
+    tt: &turns::ReadTurns,
+    id: DocId,
+    vid: VersionId,
+    mut v: BlobVersion,
+) -> Result<BlobVersion, StoreError> {
+    v.turn = turns::get(tt, id, vid)?;
+    Ok(v)
 }
 
 /// Blob version record 2: record 1 plus the `redacted` flag at the end.
@@ -322,6 +340,7 @@ pub(super) fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
         restored_from: r_opt_u64(&mut r)?,
         conflict_copy: r.opt_str()?,
         redacted: ver >= 2 && r.u8()? != 0,
+        turn: None,
     };
     r.end()?;
     Ok(v)
@@ -436,6 +455,7 @@ pub(super) fn delete_rows(
         .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;
     w.open_table(BLOB_APPROVALS)?
         .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
+    super::live_carrier::delete_rows(w, id, now)?;
     super::blob_refs::delete_rows(w, id, now)
 }
 
@@ -579,12 +599,22 @@ impl DocStore {
         &self,
         rows: &[(u64, BlobId, u64)],
     ) -> Result<Vec<(u64, BlobId, u64)>, StoreError> {
+        self.blob_remove_unreferenced_but(rows, &|_, _| false)
+    }
+
+    /// [`DocStore::blob_remove_unreferenced`], leaving the blobs `keep` names (a put still
+    /// waiting for its reference); every row still gets its named claims.
+    pub(crate) fn blob_remove_unreferenced_but(
+        &self,
+        rows: &[(u64, BlobId, u64)],
+        keep: &dyn Fn(u64, &BlobId) -> bool,
+    ) -> Result<Vec<(u64, BlobId, u64)>, StoreError> {
         let w = self.begin_write()?;
         super::blob_refs::claim_named(&w, rows)?;
         let mut gone = Vec::new();
         {
             let mut t = w.open_table(BLOBS)?;
-            for (no, id, size) in rows {
+            for (no, id, size) in rows.iter().filter(|(no, id, _)| !keep(*no, id)) {
                 let k = (*no, id.as_bytes().as_slice());
                 let row = t.get(k)?.map(|v| dec_row(v.value())).transpose()?;
                 if row.is_some_and(|r| r.refs == 0) {
@@ -730,13 +760,15 @@ impl DocStore {
     /// Every version of a blob doc, oldest first.
     pub fn blob_versions(&self, id: DocId) -> Result<Vec<(VersionId, BlobVersion)>, StoreError> {
         let r = self.begin_read()?;
+        let tt = turns::open_read(&r, turns::BLOB_TURNS)?;
         let mut out = Vec::new();
         for kv in r
             .open_table(BLOB_VERSIONS)?
             .range((id, 0)..=(id, u64::MAX))?
         {
             let (k, v) = kv?;
-            out.push((k.value().1, dec_version(v.value())?));
+            let vid = k.value().1;
+            out.push((vid, with_turn(&tt, id, vid, dec_version(v.value())?)?));
         }
         Ok(out)
     }
@@ -744,17 +776,20 @@ impl DocStore {
     pub fn blob_version(&self, id: DocId, vid: VersionId) -> Result<BlobVersion, StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(BLOB_VERSIONS)?;
+        let tt = turns::open_read(&r, turns::BLOB_TURNS)?;
         let v = t.get((id, vid))?.ok_or(StoreError::NoVersion(id, vid))?;
-        dec_version(v.value())
+        with_turn(&tt, id, vid, dec_version(v.value())?)
     }
 
     /// The latest version of a blob doc: its current content.
     pub fn blob_current(&self, id: DocId) -> Result<(VersionId, BlobVersion), StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(BLOB_VERSIONS)?;
+        let tt = turns::open_read(&r, turns::BLOB_TURNS)?;
         let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;
         let (k, v) = last.ok_or(StoreError::NoDoc(id))?;
-        Ok((k.value().1, dec_version(v.value())?))
+        let vid = k.value().1;
+        Ok((vid, with_turn(&tt, id, vid, dec_version(v.value())?)?))
     }
 
     /// Name (or rename) a blob doc's version.
@@ -808,6 +843,7 @@ impl DocStore {
                 return Err(StoreError::NamedVersion(id, vid));
             }
             t.remove((id, vid))?;
+            turns::remove_in(&w, turns::BLOB_TURNS, id, &[vid])?;
             #[cfg(any(test, feature = "differential"))]
             let keep_keys = crate::differential::index_mutant()
                 == Some(crate::differential::IndexMutant::DeleteKeepsKeys);

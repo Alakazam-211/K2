@@ -30,7 +30,9 @@
 //!   flight is dropped.
 //! - **Hash key**: replaced, so every earlier keyed hash of this doc means nothing.
 //! - **Participant erasure**: the pid is replaced by the pseudonym in the log, changes,
-//!   revert records, approvals, versions' authors and the client table.
+//!   revert records, approvals, versions' authors and the client table, and the turns and
+//!   verbs of the changes they made or that were made on their behalf are removed (`turns.rs`,
+//!   `verbs.rs`).
 //! - **Blob references** (`doc_blob_refs`): recomputed from what's left once the above is done.
 //!   A blob no record names any more loses the doc's row (a blob id is a digest of the content)
 //!   and its count; the session then removes it if nothing else references it.
@@ -438,7 +440,13 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
         st.insert(id, enc_stats(&stats).as_slice())?;
     }
     redact_authored(w, id, p)?;
-    if er.is_some() {
+    if let Some((pid, _)) = er {
+        // the turns of the erased participant's changes (and of those made on their behalf)
+        // go: a turn links changes into one agent run. Their verbs go with them, on the same
+        // terms. Found before the summaries are renamed
+        let theirs = super::turns::changes_of(w, id, pid)?;
+        super::turns::erase_in(w, super::turns::CHANGE_TURNS, id, &theirs)?;
+        super::turns::remove_in(w, super::verbs::CHANGE_VERBS, id, &theirs)?;
         c.attributions += rename_rows(w, id, er)?;
     }
     // comment threads a promoted doc kept from tier 0 (v0.9.2 keeps the doc id): bodies and

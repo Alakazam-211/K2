@@ -47,7 +47,21 @@
 #                                                with K2MB_N1_PERSONS (v0.14.0) it also leaves
 #                                                person-device writers (persons-<store>): the
 #                                                consumer never hands one out, and this build's
-#                                                `n1_persons_after` takes keep.md's back
+#                                                `n1_persons_after` takes keep.md's back; with
+#                                                K2MB_N1_TURNS (after v0.14.0) a.md's change and
+#                                                a third doc's (turns.md) carry host-given turns
+#                                                (`change_turns`): a build that doesn't know the
+#                                                table reports its rewrite refused (NewerData),
+#                                                and this build's `n1_turns_after` finds a.md's
+#                                                rows gone after its open and reads turns.md's
+#                                                turn back; with K2MB_N1_VERBS (after v0.14.0) a
+#                                                fourth doc (verbs.md) has a pack verb's change
+#                                                (`change_verbs`), refused the same way, and this
+#                                                build's `n1_verbs_after` reads its verb back
+#   tools/n1/n1.sh node-wire <dir>               the live wire's N-1 (wire 3, after v0.14.0), from
+#                                                the same dir, node only: the previous client
+#                                                reads this kit's goldens, this client the
+#                                                previous goldens (client/test/n1-wire.test.ts)
 #
 # The blob references (after v0.10.2), both the case that holds and the documented limit:
 #
@@ -65,12 +79,30 @@
 #                                                what's still there and reports what isn't.
 #                                                The last line is `N-1 REFS OK`.
 #
+# The carrier (K1, after v0.14.0), both ways:
+#
+#   tools/n1/n1.sh layout-carrier <previous tag> <dir>   no cargo: <dir>/old is the previous
+#                                                release's kit, <dir>/carrier the consumer
+#                                                (tools/n1/consumer-carrier)
+#   tools/n1/n1.sh node-carrier <dir>            on a build node, from the repo root: this
+#                                                build's `n1_carrier_producer` writes three live
+#                                                docs with a carrier each; the previous release
+#                                                keeps them past its GC's grace (HELD), writes
+#                                                one with its own encode, refuses a rewrite,
+#                                                deletes one (row and count left) and writes a
+#                                                store of its own; this build's
+#                                                `n1_carrier_after` then drops the stale carrier
+#                                                and takes the file, reads the untouched one from
+#                                                the store, gives back the deleted doc's count,
+#                                                and opens the older store with the file as the
+#                                                carrier. The last line is `N-1 CARRIER OK`.
+#
 # A previous release older than v0.10.1 has no K2MB_N1_RESTORE: `layout-both` adds the
 # revert of the revert to its copy of the producer (python3), and stops if it can't. Ship the
 # laid-out dir with the job (an untracked dir in the checkout: `--dirty`). The job prints
 # `N-1 OK` once per direction, then `N-1 BOTH OK`.
 set -eu
-MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | layout-refs <tag> <dir> | node-refs <dir>}
+MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir>}
 case $MODE in
   layout)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -143,9 +175,17 @@ PY
       set -- $pair
       echo "== $1: the $2 build writes, the $3 build reads"
       (cd "$OUT/$2/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_RESTORE=1 K2MB_N1_AGENTS=1 \
-        K2MB_N1_PERSONS=1 cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
+        K2MB_N1_PERSONS=1 K2MB_N1_TURNS=1 K2MB_N1_VERBS=1 \
+        cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
       ls -l "$OUT/$1/text.redb" "$OUT/$1/grid.redb"
       (cd "$OUT/$1" && cargo run -q)
+      # after v0.14.0: a.md's turns (deleted by the other build) swept, turns.md's read back.
+      # First: it reads the file as the other build left it, before any open here sweeps it
+      (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
+        cargo test -p k2-mpc-base --test grid_store n1_turns_after -- --ignored --nocapture)
+      # after v0.14.0: verbs.md's pack verb read back after the other build
+      (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
+        cargo test -p k2-mpc-base --test grid_store n1_verbs_after -- --ignored --nocapture)
       (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" \
         cargo test -p k2-mpc-base --test grid_store n1_kinds_after_delete -- --ignored --nocapture)
       # v0.14.0: keep.md's person-device writers, taken back by this build after the other's
@@ -153,6 +193,22 @@ PY
         cargo test -p k2-mpc-base --test grid_store n1_persons_after -- --ignored --nocapture)
     done
     echo "N-1 BOTH OK"
+    ;;
+  node-wire)
+    # The live wire's N-1, both ways (client/WIRE.md, "Wire versions"; after v0.14.0, wire 3),
+    # from `layout-both`'s dir (no cargo: node only): the previous release's client code and
+    # goldens go to client/test/n1-prev/, where client/test/n1-wire.test.ts finds them, and the
+    # previous client reads this kit's goldens while this client reads the previous ones.
+    # It prints `N-1 WIRE OK`.
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$ROOT/client/test/n1-prev"
+    mkdir -p "$ROOT/client/test/n1-prev"
+    cp -R "$OUT/prev/kit/client/src" "$ROOT/client/test/n1-prev/src"
+    cp -R "$OUT/prev/kit/client/test/golden" "$ROOT/client/test/n1-prev/golden"
+    (cd "$ROOT/client" && npm ci --no-audit --no-fund && npx vitest run test/n1-wire.test.ts)
+    echo "N-1 WIRE OK"
     ;;
   layout-refs)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -175,6 +231,28 @@ PY
     echo "== this build again"
     K2MB_N1_OUT="$OUT/refs" cargo test -p k2-mpc-base --test blob_refs n1_refs_after -- --ignored --nocapture
     echo "N-1 REFS OK"
+    ;;
+  layout-carrier)
+    TAG=${2:?previous release tag}; OUT=${3:?dir}
+    ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+    rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/carrier"
+    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
+    rm "$OUT/old/Cargo.toml.bak"
+    cp -R "$ROOT/tools/n1/consumer-carrier/." "$OUT/carrier/"
+    cp "$OUT/old/Cargo.lock" "$OUT/carrier/Cargo.lock"
+    echo "laid out: $OUT (old = $TAG)"
+    ;;
+  node-carrier)
+    OUT=${2:?dir}
+    OUT=$(cd "$OUT" && pwd)
+    echo "== this build writes the carriers"
+    K2MB_N1_OUT="$OUT/carrier" cargo test -p k2-mpc-base --test live_carrier n1_carrier_producer -- --ignored --nocapture
+    echo "== the previous release"
+    (cd "$OUT/carrier" && cargo run -q)
+    echo "== this build again"
+    K2MB_N1_OUT="$OUT/carrier" cargo test -p k2-mpc-base --test live_carrier n1_carrier_after -- --ignored --nocapture
+    echo "N-1 CARRIER OK"
     ;;
   *) echo "n1.sh: unknown mode $MODE" >&2; exit 2 ;;
 esac

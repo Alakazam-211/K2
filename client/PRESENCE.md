@@ -148,6 +148,42 @@ There is one row for each connection that has a value, one for a participant wit
 connection's row. The self row holds what the host last reported, so it lags the setters: the host
 draws its own selection from its own state.
 
+## Focus and range (wire 3)
+
+The rendering-data contract's `focus` (the container in view, a slide) and `range` (a caret or
+selection inside one element's text field). Both need a wire-3 host that lists their feature.
+
+```ts
+presence.setFocus({ root: "slides", key: "s259" });           // null: clear
+presence.setRange(
+  { root: "shapes", key: "s259-3", field: "text", anchor: 0, head: 4 }, // UTF-16 into `text`
+  fieldText,                                                    // the field's text you show
+);
+```
+
+- **Frames go out only when the host takes them:** `focusSupported` and `rangeSupported` are
+  whether `welcome.features` lists `"focus"` and `"range"`. Otherwise the setters record the value,
+  and `reconnected` sends it (the focus before the range) if a later connection lists them. A
+  wire-2 host (no `welcome.wire`; `presence.wire` is 2) takes neither.
+- **Offsets:** `setRange` takes UTF-16 indexes into the field's text and sends UTF-8 bytes, as
+  every offset on the wire. A peer's `range` is in UTF-8 as the host sent it:
+  `rangeToUtf16(range, text)` gives UTF-16 indexes into the text you show, or `null` when that text
+  isn't the one the range was set on.
+- **The host moves your focus with your range** (to the element's container), and **drops a range**
+  (`range: null` on the roster) when its field changes: send a new one then. It is never moved.
+- **Refusals:** the host refuses a key that isn't live (`MPC-E114`), offsets off the field's text
+  (`MPC-E114`), a reader's range (`MPC-E102`), and a watcher's focus or range (`MPC-E305`). The
+  channel refuses itself, unsent, offsets outside the text it was given (`MPC-E114`). A refused
+  value isn't sent again on a reconnect.
+
+`peers()` gains `focus` (`{root, key}` or `null`) and `range` (`{root, key, field, anchor, head}`
+or `null`, UTF-8).
+
+**Watchers.** Past the host's participant cap a connection watches: it has no row in `peers()`,
+and the host refuses its presence frames (`MPC-E305`). `presence.watching` is how many are
+watching (the roster's snapshot `watching` and its `watching {count}` events), and
+`onWatching(cb)` says when it changes, so a view shows "+1 watching".
+
 ## Claims on elements
 
 `PresenceChannel` also claims elements of a list root, so others know to keep off them while you
@@ -185,6 +221,18 @@ if (presence.claimsSupported) {
   when the connection ends for good.
 - **Who holds what** comes from the roster: `claim_started_elems` and `claim_ended` through
   `LiveText.onRosterEvent` or your own `roster_event` handling, and a snapshot's `elem_claims`.
+  `presence.claims()` folds them for you (`onClaims` says when they change): one `ClaimView` a
+  live claim, `{claim, actor: {id, name, kind, colour}, root, keys, note, hold, startedMs,
+  expiresMs}`. A wire-3 host's events carry the actor; from a wire-2 host it comes from the
+  claimant's roster row, and `startedMs` is `null`.
+- **An agent's claim moves its presence** (wire 3): its focus goes to the claim's first
+  container, and its selection becomes the claimed keys, on the roster right after the claim's
+  start.
+- **An agent's verbs move its presence too** (contract gap 11): each pack verb an agent runs that
+  changes elements sets its focus to the container of the last element it touched (the last
+  container touched wins) and its selection to the live elements it touched. They arrive as the
+  usual `focus` and `selection` roster events: nothing new to fold. A person's presence is never
+  moved by the host, so `isSelf`'s own focus and selection stay the client's.
 
 A selection is by key, so it needs no mapping through changes. A key whose element stops being live
 leaves it, for everyone, and doesn't come back if the element does.

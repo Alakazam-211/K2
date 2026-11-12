@@ -18,6 +18,8 @@ impl Session {
     /// Let this session read and purge its tier-0 history (the manager's blob store).
     pub(crate) fn set_blob_store(&self, blobs: Arc<crate::blob::BlobStore>) {
         let _ = self.blobs.set(blobs);
+        // the stored carrier (K1), checked against the sync point
+        self.load_carrier();
     }
 
     fn blob_store(&self) -> Result<&Arc<crate::blob::BlobStore>> {
@@ -25,7 +27,7 @@ impl Session {
     }
 
     /// The file's folder (conflict copies recorded on tier-0 versions resolve against it).
-    fn copy_base(st: &State) -> Option<PathBuf> {
+    pub(super) fn copy_base(st: &State) -> Option<PathBuf> {
         let d = st.disk.as_ref()?;
         match disk::probe(&d.path, &d.root) {
             Ok(Probe::File { real, .. }) => real.parent().map(Path::to_owned),

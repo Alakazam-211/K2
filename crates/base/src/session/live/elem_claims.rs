@@ -30,6 +30,7 @@ use crate::session::awareness::{
 };
 use crate::session::error::ElemsClaim;
 use crate::session::pack::elem_of_map_key;
+use crate::session::participant::{ElemFocus, ElemSelection};
 
 /// Elements by list root: what a change is about.
 pub(super) type Touched = BTreeMap<String, BTreeSet<Key>>;
@@ -73,8 +74,11 @@ fn touched_elems(composites: &[(&'static str, &'static str)], edits: &[Edit]) ->
 
 /// The elements a change that applied really touched, from its applied stream: an op with no
 /// effect (a restore of a live element, a delete of an absent key) touches nothing. What ends a
-/// claim.
-fn landed_elems(composites: &[(&'static str, &'static str)], stream: &[ElemApplied]) -> Touched {
+/// claim, and what a pack verb's change moves an agent's presence to (`elem_presence`).
+pub(super) fn landed_elems(
+    composites: &[(&'static str, &'static str)],
+    stream: &[ElemApplied],
+) -> Touched {
     let landed = |e: &Effect| !matches!(e, Effect::None { .. });
     let mut out = Touched::new();
     for a in stream {
@@ -273,6 +277,8 @@ impl Session {
             id: awareness::ClaimId::fresh(),
             pid: pid.clone(),
             name: m.p.name.clone(),
+            kind: m.p.kind,
+            colour: m.p.colour.clone(),
             conn: m.conn,
             root: root.to_owned(),
             s: 0,
@@ -288,6 +294,7 @@ impl Session {
             elems: Some(span),
         };
         let info = Self::elem_claim_info(st, &claim, now);
+        let actor = claim.actor();
         st.aware.claims.push(claim);
         st.roster.record(
             RosterEvent::ClaimStartedElems {
@@ -302,9 +309,14 @@ impl Session {
                 hold,
                 expires_ms: info.expires_ms,
                 version: st.version,
+                actor,
+                started_ms: now,
             },
             self.config.roster_queue,
         );
+        if st.members[i].p.kind == ParticipantKind::Agent {
+            self.claimant_presence(st, i, root, keys);
+        }
         self.emit(AuditEvent::ClaimTaken {
             key: st.key.clone(),
             claim: info.id,
@@ -325,6 +337,43 @@ impl Session {
             Some(info.id),
         );
         Ok(info)
+    }
+
+    /// An agent's presence on taking a claim on elements (rendering-data contract Item 3, Q19):
+    /// its **selection is replaced** by the claimed keys (in the order given, a repeat once),
+    /// and its **focus** goes to the claim's first container in document order (each key's
+    /// container by [`Pack::container_of`]; the earliest by its position in its list). Later
+    /// changes and calls override both. People set their own; the kit does this for agents only.
+    /// Set on the claiming connection, so the roster carries them at its next flush, after the
+    /// claim's start.
+    fn claimant_presence(&self, st: &mut State, i: usize, root: &str, keys: &[Key]) {
+        let mut first: Option<(usize, String, ElemFocus)> = None;
+        for k in keys {
+            let Some(f) = self.container_focus(st, root, k) else {
+                continue;
+            };
+            let Ok(ElemState::Live(at)) = st.doc.elem(&f.root, &f.key) else {
+                continue;
+            };
+            let place = (at, f.root.clone());
+            if first
+                .as_ref()
+                .map_or(true, |(a, r, _)| place < (*a, r.clone()))
+            {
+                first = Some((place.0, place.1, f));
+            }
+        }
+        let mut chosen: Vec<Key> = Vec::with_capacity(keys.len());
+        for k in keys {
+            if !chosen.contains(k) {
+                chosen.push(k.clone());
+            }
+        }
+        let selection =
+            (!planted_claim_keeps_selection()).then(|| ElemSelection::new(root, chosen));
+        st.members[i]
+            .elem
+            .claimed(first.map(|(_, _, f)| f), selection);
     }
 
     /// The list root and the 1-based live positions of the span's first and last live elements
@@ -514,6 +563,19 @@ fn planted_map_keys_unmapped() -> bool {
 
 #[cfg(not(any(test, feature = "differential")))]
 fn planted_map_keys_unmapped() -> bool {
+    false
+}
+
+/// Planted ([`crate::differential::ContractMutant::ClaimDoesNotReplaceSelection`]): an agent's
+/// claim leaves its selection as it was.
+#[cfg(any(test, feature = "differential"))]
+fn planted_claim_keeps_selection() -> bool {
+    crate::differential::contract_mutant()
+        == Some(crate::differential::ContractMutant::ClaimDoesNotReplaceSelection)
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn planted_claim_keeps_selection() -> bool {
     false
 }
 

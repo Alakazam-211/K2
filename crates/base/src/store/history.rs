@@ -41,6 +41,7 @@ use super::{
     dec_redactions, dec_version, DocId, DocStore, Seq, StoreError, Version, VersionId,
     VersionReason,
 };
+use super::{turns, verbs};
 use crate::text::diff::Hunk;
 
 pub(super) const CHANGES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("changes");
@@ -235,6 +236,17 @@ pub struct ChangeInfo {
     pub lines_removed: u64,
     /// Per structured root it changed, its element counts (empty for a text change).
     pub elems: Vec<ElemCounts>,
+    /// The host-given turn of the call that made it ([`crate::turn`]): `None` for a person's,
+    /// a shell's, an outside save, a change made before turns, and after an erasure of its
+    /// author (or of the person it was made for).
+    pub turn: Option<crate::turn::Turn>,
+    /// The id of the pack verb that made it (rendering-data contract gap 9): the verb's name as
+    /// the pack declares it ([`crate::tools::PackVerb::name`], e.g. `shape move`), set by the kit
+    /// when a pack's verb runs through `run_tool`. `None` for a raw write (`edit_ops`,
+    /// `replace_text`, `write --base`), a kit tool, an outside save, an undo, a redo, a revert, a
+    /// restore, the import, a change made before verbs, and after an erasure of its author (or of
+    /// the person it was made for), as [`ChangeInfo::turn`].
+    pub verb: Option<String>,
 }
 
 impl ChangeInfo {
@@ -250,6 +262,8 @@ impl ChangeInfo {
             lines_added: 0,
             lines_removed: 0,
             elems: Vec::new(),
+            turn: None,
+            verb: None,
         }
     }
 }
@@ -482,6 +496,29 @@ pub(crate) struct RevertWindow {
     pub max_bytes: u64,
 }
 
+/// The additive tables a change summary's read joins: `change_turns` and `change_verbs`, each
+/// `None` when the store has none.
+struct Extras {
+    turns: turns::ReadTurns,
+    verbs: turns::ReadTurns,
+}
+
+impl Extras {
+    fn open(r: &redb::ReadTransaction) -> Result<Self, StoreError> {
+        Ok(Extras {
+            turns: turns::open_read(r, turns::CHANGE_TURNS)?,
+            verbs: turns::open_read(r, verbs::CHANGE_VERBS)?,
+        })
+    }
+}
+
+/// `info` with its turn and its verb from `x` (the additive tables, where the store has them).
+fn with_turn(x: &Extras, id: DocId, mut info: ChangeInfo) -> Result<ChangeInfo, StoreError> {
+    info.turn = turns::get(&x.turns, id, info.seq)?;
+    info.verb = verbs::get(&x.verbs, id, info.seq)?;
+    Ok(info)
+}
+
 // ----- encodings -----
 
 /// Change record 1, or 2 (format 6) with element counts after the shape.
@@ -538,6 +575,8 @@ pub(super) fn dec_change(
         lines_added: r.u64()?,
         lines_removed: r.u64()?,
         elems: Vec::new(),
+        turn: None,
+        verb: None,
     };
     let mut info = info;
     let mut shape = Vec::new();
@@ -852,7 +891,7 @@ fn dec_stats(b: &[u8]) -> Result<RevertStats, StoreError> {
 }
 
 /// The header of a stored version (everything before its content).
-fn dec_version_head(id: VersionId, b: &[u8]) -> Result<VersionInfo, StoreError> {
+pub(super) fn dec_version_head(id: VersionId, b: &[u8]) -> Result<VersionInfo, StoreError> {
     let mut r = R::new(b, "version");
     let ver = r.u8()?;
     if !(1..=3).contains(&ver) {
@@ -955,6 +994,8 @@ pub(super) fn put_changes(
         }
         let shape = c.record.shape();
         ct.insert((id, seq), enc_change(&c.info, &shape).as_slice())?;
+        super::turns::put_in(w, super::turns::CHANGE_TURNS, id, seq, c.info.turn.as_ref())?;
+        verbs::put_in(w, id, seq, c.info.verb.as_deref())?;
         if let Some(k) = c.span.filter(|k| k.end > k.start) {
             kt.insert((id, k.client, k.start), enc_pair(k.end, seq).as_slice())?;
         }
@@ -1180,8 +1221,9 @@ impl DocStore {
     pub fn change(&self, id: DocId, seq: Seq) -> Result<Option<ChangeInfo>, StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(CHANGES)?;
+        let tt = Extras::open(&r)?;
         let v = t.get((id, seq))?;
-        v.map(|v| dec_change(seq, v.value(), false).map(|x| x.0))
+        v.map(|v| with_turn(&tt, id, dec_change(seq, v.value(), false)?.0))
             .transpose()
     }
 
@@ -1271,10 +1313,14 @@ impl DocStore {
     ) -> Result<HashMap<Seq, ChangeInfo>, StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(CHANGES)?;
+        let tt = Extras::open(&r)?;
         let mut out = HashMap::with_capacity(seqs.len());
         for &seq in seqs {
             if let Some(v) = t.get((id, seq))? {
-                out.insert(seq, dec_change(seq, v.value(), false)?.0);
+                out.insert(
+                    seq,
+                    with_turn(&tt, id, dec_change(seq, v.value(), false)?.0)?,
+                );
             }
         }
         Ok(out)
@@ -1309,9 +1355,11 @@ impl DocStore {
     ) -> Result<(), StoreError> {
         let r = self.begin_read()?;
         let t = r.open_table(CHANGES)?;
+        let tt = Extras::open(&r)?;
         for kv in t.range((id, 0)..=(id, u64::MAX))?.rev() {
             let (k, v) = kv?;
-            if !f(dec_change(k.value().1, v.value(), false)?.0) {
+            let info = with_turn(&tt, id, dec_change(k.value().1, v.value(), false)?.0)?;
+            if !f(info) {
                 break;
             }
         }
@@ -1352,11 +1400,12 @@ impl DocStore {
             r.open_table(super::UPDATES)?,
         );
         let at = authored_read(&r)?;
+        let tt = Extras::open(&r)?;
         let mut out = Vec::new();
         for seq in from.saturating_add(1)..=to {
             let info = ct
                 .get((id, seq))?
-                .map(|v| dec_change(seq, v.value(), false).map(|x| x.0))
+                .map(|v| with_turn(&tt, id, dec_change(seq, v.value(), false)?.0))
                 .transpose()?;
             let record = rt
                 .get((id, seq))?
@@ -1563,6 +1612,7 @@ impl DocStore {
             return Ok(plan);
         }
         let w = self.begin_write()?;
+        let mut gone = Vec::with_capacity(plan.len());
         {
             let mut t = w.open_table(super::VERSIONS)?;
             for &vid in &plan {
@@ -1573,9 +1623,12 @@ impl DocStore {
                 };
                 if !named {
                     t.remove((id, vid))?;
+                    gone.push(vid);
                 }
             }
         }
+        // their carriers (K1) give their counts back
+        super::live_carrier::drop_versions_in(&w, id, &gone, Some(now))?;
         w.commit()?;
         Ok(plan)
     }

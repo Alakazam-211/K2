@@ -768,6 +768,18 @@ CLEARED_BY_PURGE = e("MPC-E207", "cleared_by_purge", History, 0, "U19, K-PURGE-4
         "A purge cleared every undo history; find the change in the log and revert it, or edit \
          the text by hand.");
 
+VERSION_NO_CARRIER = e("MPC-E208", "version_no_carrier", History, 4, "K1 (carrier bytes)",
+    &["show --version", "(host)"],
+    "version {version} has no copy of its file's own bytes (version_no_carrier)",
+    "This file type is written back by splicing into the file's own bytes, and the kit keeps \
+     those bytes with each version it cuts. This version has none: it was cut before the doc \
+     kept them (by an older kit, or before this build), or a purge erased them. Its file \
+     can't be rebuilt exactly, so none is given. Its content is still there: read it with \
+     show --version; for the file as it is now, read the file.")
+    .step("log", &[],
+        "This version's file can't be rebuilt exactly; its content is still readable, and a \
+         later version or the file now may serve instead.");
+
 // ---------------------------------------------------------------- 3xx presence and claims
 
 CLAIMED = e("MPC-E301", "claimed", Presence, 5, "A13 (claims), K-PRES-12",
@@ -925,6 +937,18 @@ SAVE_TICKET_INVALID = e("MPC-E414", "save_ticket_invalid", Disk, 2, "K-T0-5", HO
      connection's, or isn't this doc's (or is too old to be remembered). Nothing was recorded. \
      A lapsed, replaced or reloaded ticket is not this: it returns with not_recorded set.");
 
+// a keyed doc that isn't a table, over its live size limit (`Config::keyed_max_entries`)
+DECLINED_LIVE_TOO_LARGE = e("MPC-E415", "declined_live_too_large", Disk, 4,
+    "K-PACK-4, K-DISK-8, K-CSV-7", ANY,
+    "live editing is off: {reason} (live_too_large)",
+    "The file holds more elements and fields than a live doc of its type may hold \
+     (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where \
+     its type merges whole files) and opens the ordinary way, so its file verbs and ordinary \
+     file tools work on it, with nothing merged live. Don't retry the live verb.")
+    .step("cat", &[],
+        "The file is over the live size limit, so it stays at tier 0 (or 0.5) and opens the \
+         ordinary way; read it there, and change it with its file verbs or ordinary file tools.");
+
 // ---------------------------------------------------------------- 5xx store
 
 STORE_FAILED = e("MPC-E501", "store_failed", Store, 6, "K-OFF-7", ANY,
@@ -1071,6 +1095,14 @@ PURGED_VERSION = e("MPC-E602", "purged_version", Erasure, 4, "K-PURGE-4",
      (log).")
     .step("log", &[],
         "That version was purged for good; pick another version.");
+
+CACHE_KEY_DESTROYED = e("MPC-E603", "cache_key_destroyed", Erasure, 4, "K-PURGE-13",
+    HOST,
+    "the space key of cache generation {generation} was destroyed",
+    "The space's key was destroyed (its blobs were purged), so nothing sealed under a key \
+     derived from it can be read again, and no key of that generation is given again. Drop \
+     the cache: delete every entry sealed under that generation (details.generation), then \
+     seal new entries under the space's current key.");
 
 // ---------------------------------------------------------------- 7xx tier 0 and blobs
 
@@ -1292,7 +1324,21 @@ KEY_SPACE_FULL = e("MPC-E821", "key_space_full", Structured, 2, "structured live
      Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter \
      prefix (the pack's fix).");
 
-// 822–829: free, for structured docs.
+// a keyed doc that isn't a table, at its live size limit (`Config::keyed_max_entries`)
+KEYED_AT_LIMIT = e("MPC-E822", "keyed_at_limit", Structured, 2, "K-CSV-7 (keyed docs)",
+    &["@change"],
+    "this doc is at its live size limit ({limit} {what}, deleted elements included); nothing \
+     was applied",
+    "The doc can't grow past its live size limit (details.limit elements and fields: every \
+     list element, deleted ones included until dropped, plus every field; capabilities shows \
+     keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove \
+     elements or fields it no longer needs, then make the change again; a change that \
+     doesn't add elements or fields always goes through.")
+    .step("cat", &[],
+        "The doc is at its live size limit; read it, remove elements or fields it no longer \
+         needs, then make the change again.");
+
+// 823–829: free, for structured docs.
 
 // 830–869: the board file type's own agent verbs (k2-mpc-board), run by its host on the file
 // itself and listed with Registry::for_file. Each row names `@file`, then the board verbs

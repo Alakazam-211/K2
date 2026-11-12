@@ -103,6 +103,7 @@ import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 import { newClientMsgId, POST_IDEMPOTENCY_FEATURE } from '@/components/SessionView/threadOutbox'
+import { clientToCssPx } from '@/lib/app-zoom'
 
 // Resize-handle hit-area thickness (px), centered on the panel's left
 // border (the dashboard's DIVIDER_HIT_PX idiom).
@@ -376,8 +377,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
     setResizing(true)
 
     const handleMove = (ev: MouseEvent): void => {
-      // Dragging LEFT widens the right-hand panel.
-      last = clampChatPanelWidth(base + (startX - ev.clientX))
+      // Dragging LEFT widens the right-hand panel. The pointer moves in
+      // on-screen px; the width is CSS px (lib/app-zoom).
+      last = clampChatPanelWidth(base + clientToCssPx(startX - ev.clientX))
       setLiveWidth(last)
     }
     const handleUp = (): void => {

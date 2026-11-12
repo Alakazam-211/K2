@@ -134,6 +134,7 @@ import { AccessSheet, ConfirmSheet, DIALOG_FIELD, FailedNote, Field } from '@/co
 import { Button, Callout, Input, OverflowMenu, SearchField, Segmented, Surface, Tag, Toggle, cx } from '@/components/ui'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
+import { clientToCssPx } from '@/lib/app-zoom'
 
 /** Below this width (px) of the detail body the two halves stack. */
 export const HALVES_MIN_WIDTH = 720
@@ -202,7 +203,8 @@ function useElementWidth(fallback: number): [React.RefObject<HTMLDivElement | nu
     const el = ref.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const measure = (): void => {
-      const w = el.getBoundingClientRect().width
+      // The rect is on-screen px; HALVES_MIN_WIDTH is CSS px (lib/app-zoom).
+      const w = clientToCssPx(el.getBoundingClientRect().width)
       if (w > 0) setWidth(w)
     }
     measure()

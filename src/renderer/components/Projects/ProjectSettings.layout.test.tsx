@@ -55,6 +55,7 @@ vi.mock('./projects-api', async () => {
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ProjectSettings, { HALVES_MIN_WIDTH, shortFolder } from './ProjectSettings'
 import * as projectsApi from './projects-api'
+import { applyAppZoomForTest, resetAppZoomForTest } from '@/test-utils/app-zoom'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useSettingsStore } from '@/stores/settings'
@@ -215,6 +216,17 @@ describe('two halves', () => {
     const right = screen.getByTestId('project-settings-right')
     expect(left.className).not.toContain('overflow-y-auto')
     expect(left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('at 150% app zoom, compares the body’s CSS width: 900 px on screen is 600 CSS px, so the halves stack', async () => {
+    applyAppZoomForTest(1.5)
+    measured.width = 900
+    try {
+      await renderReady()
+      expect(screen.getByTestId('project-settings-halves').getAttribute('data-layout')).toBe('stacked')
+    } finally {
+      resetAppZoomForTest()
+    }
   })
 })
 

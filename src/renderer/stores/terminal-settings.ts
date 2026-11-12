@@ -337,7 +337,10 @@ async function initTerminalZoomListeners(): Promise<void> {
   }
 }
 
-// Initialize listeners on import. GH#639: swallow the rejection the
-// awaited `listen()` calls produce in the headless test env so it never
-// escapes as an unhandled rejection (which flips vitest's exit code).
-void initTerminalZoomListeners().catch(() => {})
+/** Hooks the terminal zoom shortcuts. `bootStores()` (boot-stores.ts)
+ *  calls this once at app start; it does not run at import. */
+export function bootTerminalZoomListeners(): void {
+  // GH#639: swallow the rejection the awaited `listen()` calls produce
+  // where there is no Tauri, so it never escapes as an unhandled rejection.
+  void initTerminalZoomListeners().catch(() => {})
+}

@@ -26393,6 +26393,17 @@ this in v1: they can't see or drive the screen with K2, and can't ask to
                                     the device you watch from
   k2 desktop displays [--json]      the screens you can pick in the tab
 
+On a Linux server with no screen (a virtual desktop K2 starts; never on a Mac):
+  k2 desktop setup [--json]         install the packages it needs (Owner)
+  k2 desktop list [--json]          the desktops you may open, with their state
+  k2 desktop start [--size WxH] [--json]
+                                    start it, or wake it (Owners and Admins);
+                                    1280x720 to 1920x1080, default 1280x720
+  k2 desktop stop [--json]          close it; what was open on it is lost
+  --desktop <id>                    any verb above: which desktop. virtual is
+                                    This server, virtual:<workspace id> an
+                                    agent's own; default This server
+
 (Owner) means an Owner login, or the owner at this computer: a plain
 terminal or a K2 shell tab here. The owner at this computer can run every
 verb above; they just never watch from here. You watch from another device, over K2 Connect or the LAN, signed in
@@ -26431,6 +26442,8 @@ elif e is not None:
     print("k2 desktop: error: %s" % e, file=sys.stderr)
 else:
     print("k2 desktop: error: HTTP " + code, file=sys.stderr)
+if d.get("closable"):
+    print("desktops you could close: " + ", ".join(d["closable"]), file=sys.stderr)
 p = d.get("permission")
 if isinstance(p, dict) and p.get("command"):
     print("Ask with: " + p["command"], file=sys.stderr)
@@ -26453,11 +26466,51 @@ def when(ms):
         return datetime.datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M")
     except Exception:
         return "-"
-if verb == "status":
+def at(s):
+    try:
+        return datetime.datetime.fromtimestamp(s).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return "-"
+def virtual_lines(d):
+    v = d.get("virtual")
+    if not isinstance(v, dict):
+        return
+    sz = v.get("size")
+    print("size           : %s" % ("%sx%s" % (sz["width"], sz["height"]) if sz else "-"))
+    if v.get("memoryBytes") is not None:
+        print("memory held    : %d MB" % (v["memoryBytes"] // (1024 * 1024)))
+    pr = v.get("present") or []
+    print("viewing now    : %s" % (", ".join(p["user"] for p in pr) or "nobody"))
+    h = v.get("hold")
+    if h:
+        print("agent hold     : %s until %s" % (h.get("by"), at(h.get("until", 0))))
+    if v.get("nextSleepAt"):
+        print("sleeps at      : %s" % at(v["nextSleepAt"]))
+    if v.get("nextCloseAt"):
+        print("closes at      : %s (a day asleep)" % at(v["nextCloseAt"]))
+    if not v.get("canSleep"):
+        print("sleep          : this server can\x27t pause a desktop, so it closes when nobody is viewing it")
+    w = v.get("waiting")
+    if w:
+        print("waiting        : place %s; this server runs %s awake at a time" % (w.get("position"), w.get("awakeLimit")))
+    lim = v.get("limits") or {}
+    if lim:
+        print("limits         : %s/%s desktops, %s/%s awake, %d MB for all (%d MB each), %s cores" % (
+            lim["desktops"]["used"], lim["desktops"]["max"], lim["awake"]["used"], lim["awake"]["max"],
+            lim["memoryBytes"]["max"] // (1024 * 1024), lim["memoryBytes"]["each"] // (1024 * 1024), lim["cpuCores"]))
+    if v.get("label"):
+        print("note           : %s (until agent isolation, any agent on this server could reach it)" % v["label"])
+    if v.get("manual"):
+        print("to set up      : k2 desktop setup, or by hand: %s" % v["manual"])
+    if v.get("suggestRecycle"):
+        print("tip            : it has been up for a week; k2 desktop stop and start frees what it leaked")
+if verb in ("status", "start"):
     y = d.get("you") or {}
     print("remote desktop : %s on %s" % ("on" if d.get("enabled") else "off", d.get("machine") or "this computer"))
+    print("desktop        : %s (%s%s)" % (d.get("desktop"), d.get("name") or "This server", ", an agent" if d.get("kind") == "agent" else ""))
     print("state          : %s (%s)" % (d.get("state"), d.get("message") or ""))
     print("backend        : %s, lane %s" % (d.get("backend"), d.get("lane")))
+    virtual_lines(d)
     if y.get("sameMachine"):
         you = "you are on this computer: you can manage it, but you watch it from another device"
     elif y.get("mayControl"):
@@ -26466,7 +26519,7 @@ if verb == "status":
         you = "you may watch (view only)"
     else:
         you = "you have no access to this screen"
-    print("you            : %s (%s)%s" % (you, y.get("role"), "; you manage it" if y.get("mayManage") and not y.get("sameMachine") else ""))
+    print("you            : %s (%s)%s%s" % (you, y.get("role"), "; you manage it" if y.get("mayManage") and not y.get("sameMachine") else "", "; you may start and close it" if y.get("mayStart") and d.get("virtual") is not None else ""))
     if "hideApps" in d:
         print("hidden apps    : %s" % (", ".join(d["hideApps"]) or "none"))
     if "grants" in d:
@@ -26513,6 +26566,16 @@ elif verb == "audit":
         print("%s  %-20s %-18s %-8s %s %s" % (l.get("ts", "-"), l.get("event"), l.get("who", "-"), l.get("ingress", "-"), l.get("outcome", ""), extra))
 elif verb == "open":
     print("asked your K2 client to open the Desktop tab (for %s)" % d.get("for"))
+elif verb == "list":
+    ds = d.get("desktops") or []
+    if not ds:
+        print("no desktops you may open (the owner grants one: k2 desktop grant <login> --desktop <id>)")
+    for x in ds:
+        print("%-46s %-10s %-20s %s" % (x["id"], x.get("state", "-"), x.get("name", "-"), x.get("label") or ""))
+elif verb == "stop":
+    print("%s %s" % ("Closed." if d.get("closed") else "It wasn\x27t running.", d.get("message") or ""))
+elif verb == "setup":
+    print(d.get("message") or ("Installed. k2 desktop start starts it." if d.get("ok") else "Installed, but still missing: %s" % ", ".join(d.get("missing") or [])))
 elif verb == "displays":
     ds = d.get("displays") or []
     if not ds:
@@ -26522,6 +26585,15 @@ elif verb == "displays":
 '
 }
 
+# _desktop_body <json object> <desktop id or empty>: the body with "desktop".
+_desktop_body() {
+    if [ -z "${2:-}" ]; then
+        printf '%s' "$1"
+        return 0
+    fi
+    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); d["desktop"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2"
+}
+
 cmd_desktop() {
     local sub="${1:-status}"
     [ $# -gt 0 ] && shift
@@ -26529,11 +26601,15 @@ cmd_desktop() {
         help|--help|-h) _desktop_usage; return 0 ;;
         --json) sub=status; set -- --json "$@" ;;
     esac
-    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs
+    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size=""
     local args=() hides=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
+            --desktop) desk="${2:-}"; shift 2 || { echo "usage: --desktop <id> (virtual, virtual:<workspace id>, console; k2 desktop list)" >&2; exit 2; } ;;
+            --desktop=*) desk="${1#--desktop=}"; shift ;;
+            --size) size="${2:-}"; shift 2 || { echo "usage: --size WxH (1280x720 to 1920x1080)" >&2; exit 2; } ;;
+            --size=*) size="${1#--size=}"; shift ;;
             --since) since="${2:-}"; shift 2 || { echo "usage: --since 1d|2h|30m|<RFC 3339 time>" >&2; exit 2; } ;;
             --since=*) since="${1#--since=}"; shift ;;
             --limit) limit="${2:-}"; shift 2 || { echo "usage: --limit N" >&2; exit 2; } ;;
@@ -26558,15 +26634,35 @@ cmd_desktop() {
             *) args+=("$1"); shift ;;
         esac
     done
+    # --desktop: the query on GET, a body field on POST (_desktop_body).
+    local dq=""
+    [ -n "$desk" ] && dq="desktop=$(urlencode "$desk")"
+    if [ -n "$size" ] && [ "$sub" != "start" ]; then
+        echo "usage: --size goes with k2 desktop start" >&2; exit 2
+    fi
     case "$sub" in
         status)
-            raw="$(_sidecar_send GET /cli/desktop/status "")" ;;
+            raw="$(_sidecar_send GET /cli/desktop/status "$dq")" ;;
+        list)
+            raw="$(_sidecar_send GET /cli/desktop/list "")" ;;
+        start)
+            body="{}"
+            if [ -n "$size" ]; then
+                [[ "$size" =~ ^[0-9]+[xX][0-9]+$ ]] || { echo "usage: --size WxH, e.g. 1600x900 (1280x720 to 1920x1080)" >&2; exit 2; }
+                body="$(python3 -c 'import json,sys; w,h=sys.argv[1].lower().split("x"); print(json.dumps({"width": int(w), "height": int(h)}))' "$size")"
+            fi
+            raw="$(_sidecar_send POST /cli/desktop/start "$(_desktop_body "$body" "$desk")")" ;;
+        stop|close)
+            sub=stop
+            raw="$(_sidecar_send POST /cli/desktop/stop "$(_desktop_body "{}" "$desk")")" ;;
+        setup)
+            raw="$(_sidecar_send POST /cli/desktop/setup "{}")" ;;
         enable|on)
             sub=enable
-            raw="$(_sidecar_send POST /cli/desktop/enable "{}")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/enable "$(_desktop_body "{}" "$desk")")" ;;
         disable|off)
             sub=disable
-            raw="$(_sidecar_send POST /cli/desktop/disable "{}")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/disable "$(_desktop_body "{}" "$desk")")" ;;
         policy)
             if [ "$no_hide" = 1 ] && [ "${#hides[@]}" -gt 0 ]; then
                 echo "usage: --no-hide-apps or --hide-app, not both" >&2; exit 2
@@ -26579,22 +26675,22 @@ cmd_desktop() {
         grant)
             [ "${#args[@]}" -eq 1 ] || { echo "usage: k2 desktop grant <login> [--view]" >&2; exit 2; }
             body="$(python3 -c 'import json,sys; print(json.dumps({"user": sys.argv[1], "mode": sys.argv[2]}))' "${args[0]}" "$mode")"
-            raw="$(_sidecar_send POST /cli/desktop/grant "$body")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/grant "$(_desktop_body "$body" "$desk")")" ;;
         revoke)
             [ "${#args[@]}" -eq 1 ] || { echo "usage: k2 desktop revoke <login>" >&2; exit 2; }
             body="$(python3 -c 'import json,sys; print(json.dumps({"user": sys.argv[1]}))' "${args[0]}")"
-            raw="$(_sidecar_send POST /cli/desktop/revoke "$body")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/revoke "$(_desktop_body "$body" "$desk")")" ;;
         grants)
-            raw="$(_sidecar_send GET /cli/desktop/grants "")" ;;
+            raw="$(_sidecar_send GET /cli/desktop/grants "$dq")" ;;
         viewers)
-            raw="$(_sidecar_send GET /cli/desktop/viewers "")" ;;
+            raw="$(_sidecar_send GET /cli/desktop/viewers "$dq")" ;;
         kick)
             [ "${#args[@]}" -eq 1 ] || { echo "usage: k2 desktop kick <viewer-id|login> (k2 desktop viewers lists them)" >&2; exit 2; }
             case "${args[0]}" in
                 dv_*) body="$(python3 -c 'import json,sys; print(json.dumps({"viewer": sys.argv[1]}))' "${args[0]}")" ;;
                 *) body="$(python3 -c 'import json,sys; print(json.dumps({"user": sys.argv[1]}))' "${args[0]}")" ;;
             esac
-            raw="$(_sidecar_send POST /cli/desktop/kick "$body")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/kick "$(_desktop_body "$body" "$desk")")" ;;
         audit)
             if [ -n "$limit" ] && ! [[ "$limit" =~ ^[0-9]+$ ]]; then echo "usage: --limit N" >&2; exit 2; fi
             qs="limit=${limit:-50}"
@@ -26606,11 +26702,11 @@ cmd_desktop() {
             else
                 body="{}"
             fi
-            raw="$(_sidecar_send POST /cli/desktop/open "$body")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/open "$(_desktop_body "$body" "$desk")")" ;;
         displays)
-            raw="$(_sidecar_send GET /cli/desktop/displays "")" ;;
+            raw="$(_sidecar_send GET /cli/desktop/displays "$dq")" ;;
         *)
-            echo "usage: unknown desktop verb '$sub' (status|enable|disable|policy|grant|revoke|grants|viewers|kick|audit|open|displays)" >&2
+            echo "usage: unknown desktop verb '$sub' (status|enable|disable|policy|grant|revoke|grants|viewers|kick|audit|open|displays|list|start|stop|setup)" >&2
             exit 2 ;;
     esac
     _desktop_render "$as_json" "$sub" "$raw"
@@ -47321,7 +47417,7 @@ cmd_schema() {
     {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
     {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
     {"name": "sim", "usage": "k2 sim status | list-devices [--platform android|ios] | boot [--platform android|ios] [--device \"Pixel 9\"] [--no-tab] | stop | erase [--yes]", "description": "This workspace's mobile device (prd-mobile-dev-v1): one Android emulator (iOS Simulator on a Mac) owned by the daemon, shown live in the Mobile tab. status lists the lanes this server can run and the device; boot opens the Mobile tab for your human unless --no-tab; stop keeps the device's data, erase deletes it (--yes off a terminal). Agents need the workspace's \"Allow mobile devices\" switch (exit 3 + Ask with: otherwise). See k2 study sim.", "args": [], "flags": [{"name": "--platform", "arg": "android|ios", "description": "boot: the lane (default: the first this server can run)."}, {"name": "--device", "arg": "profile", "description": "boot: a profile from k2 sim list-devices."}, {"name": "--no-tab", "arg": null, "description": "boot: do not open the Mobile tab."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
-    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
+    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays | list | start [--size WxH] | stop | setup  (any verb: --desktop <id>)", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. On a Linux server with no screen K2 starts a virtual desktop instead (Xvfb + IceWM): setup installs its packages (Owner), start/stop (Owners and Admins), list shows what you may open; --desktop virtual:<workspace id> is an agent's own (Separate, not private). It sleeps 10 min after the last viewer leaves. See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays | list | start | stop | setup"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--desktop", "arg": "id", "description": "which desktop: virtual (This server on Linux), virtual:<workspace id> (an agent's), console; default This server."}, {"name": "--size", "arg": "WxH", "description": "start: the size, 1280x720 to 1920x1080 (default 1280x720); fixed until it is closed."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
     {"name": "sim tree", "usage": "k2 sim tree [--all] [--find <text>] [--boxes] [--json]", "description": "What is on the device's screen, one format for every lane: interactive elements by default with short ids (e5) tied to a snapshot (t7). Ids of elements still on screen carry over; a gone or older id fails loudly (stale_element / stale_snapshot, exit 3). Read this before acting.", "args": [], "flags": [{"name": "--all", "arg": null, "description": "Every element, not only interactive ones."}, {"name": "--find", "arg": "text", "description": "Only elements whose label, value or id contain it."}, {"name": "--boxes", "arg": null, "description": "Each element's frame in dp."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim tap", "usage": "k2 sim tap e5 | tap --at x,y · type [--into e3] \"text\" | type [--into e3] --secret <vault-name> · swipe up|down|left|right [--from e7] · key enter|backspace|tab|arrow-up|… · button home|back|lock|dev-menu|… · rotate left|right · open-url <url> · location <lat,lon> · appearance dark|light", "description": "Act on the device (POST /cli/sim/act). Each prints one line with the result and what changed: ok tap e5 · 140ms · +e9 text \"Saved\". --secret types a vault secret you never see. While a person is using the device (3 s after their tap, or Take over) an action exits 2 held: run k2 sim wait, then k2 sim tree.", "args": [{"name": "element", "required": false, "description": "An id from k2 sim tree (e5, or t7:e5)."}], "flags": [{"name": "--at", "arg": "x,y", "description": "tap: a point in dp (screens with no tree)."}, {"name": "--into", "arg": "element", "description": "type: focus this field first."}, {"name": "--secret", "arg": "vault-name", "description": "type: a vault secret instead of text."}, {"name": "--from", "arg": "element", "description": "swipe: start on this element."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim install", "usage": "k2 sim install <app.apk|App.app> · launch <package|bundleId> · terminate <id>", "description": "Install an app you built in your own terminal, then launch or stop it.", "args": [{"name": "path", "required": true, "description": "The built .apk (Android) or .app (iOS Simulator)."}], "flags": [{"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
@@ -52803,6 +52899,47 @@ STATES THE TAB SHOWS
   no screen, Allow once (Wayland), K2 Screen and K2 don't match, You're on
   this computer, unavailable (no K2 Screen in this build yet), running.
   k2 desktop status prints the machine's state and what you may do.
+
+ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
+  A Linux server nobody is logged into has no screen to show, so K2 starts
+  a small desktop on it instead: an in-memory X display (Xvfb) with a
+  taskbar (IceWM). It is the same Desktop tab and the same rules above.
+  Its desktop id is "virtual" ("This server"); a desktop of its own for an
+  agent is "virtual:<workspace id>". Pass --desktop <id> to pick one;
+  without it every verb means This server. A Mac never has these.
+
+  k2 desktop setup              install Xvfb, IceWM and a font from the
+                                distro (Owner): about 300 MB on a server
+                                with no graphics libraries yet, about 70 MB
+                                on one that has. Through the root helper,
+                                or it prints the command to run by hand
+  k2 desktop list               the desktops you may open, with their state
+  k2 desktop start [--desktop <id>] [--size 1600x900]
+                                start it (Owners and Admins). Size: 1280x720
+                                to 1920x1080, fixed until it is closed; the
+                                tab starts it at the size of its pane
+  k2 desktop stop [--desktop <id>]
+                                close it; whatever was open on it is lost
+  k2 desktop status [--desktop <id>]
+                                its state, size, who is watching, any agent
+                                holding it, when it next sleeps or closes,
+                                and this server's limits
+
+  It never starts on its own. It stays awake while someone has the tab in
+  view. Ten minutes after the last viewer leaves it goes to sleep: every
+  program on it is frozen, using no CPU, and wakes exactly where it was
+  when someone comes back (a server that can't freeze closes it instead,
+  and status says so). After a day asleep, or when the server runs low on
+  memory, it is closed. States: not set up, setting up, closed (with why),
+  waiting (for another desktop to sleep), starting, ready, asleep, waking,
+  gone (its agent's workspace was removed).
+
+  An agent's desktop: a person turns on "Allow a virtual desktop" for that
+  agent (Settings → Workspaces → <agent> → Agent). Each agent's desktop is
+  separate, not private: until agent isolation (0.49) every desktop runs as
+  this server's K2 user, so one agent could reach another's. There is no
+  terminal on these desktops, and a k2 command run by a program on one
+  never acts as the owner.
 EOF
 }
 

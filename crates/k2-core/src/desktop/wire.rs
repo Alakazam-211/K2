@@ -46,6 +46,10 @@ pub mod reason {
     /// 4410.
     pub const DESKTOP_OFF: &str = "desktop_off";
     pub const DESKD_ENDED: &str = "deskd_ended";
+    /// 4410: the virtual desktop went to sleep (wake it with a start).
+    pub const DESKTOP_ASLEEP: &str = "desktop_asleep";
+    /// 4410: the virtual desktop was closed.
+    pub const DESKTOP_CLOSED: &str = "desktop_closed";
     /// A layer K2 Screen couldn't run, with no other codec to move to (a
     /// Mac's K2 Screen sends H.264 only).
     pub const PICTURE_FAILED: &str = "picture_failed";
@@ -258,6 +262,10 @@ pub enum ViewerMsg {
     Display { id: String },
     /// Drop to view-only (`on: true`) or ask to drive again.
     View { on: bool },
+    /// The tab is shown (sent every 30 s while it is, LD-24): a viewer
+    /// counts as present while its socket is open, it is not hidden
+    /// (`fps 0`) and a `present` came in the last 90 s.
+    Present,
 }
 
 impl ViewerMsg {
@@ -385,6 +393,7 @@ mod tests {
         round_trip_viewer(ViewerMsg::Ack { seq: 9 }, json!({"t": "ack", "seq": 9}));
         round_trip_viewer(ViewerMsg::Fps { fps: 0 }, json!({"t": "fps", "fps": 0}));
         round_trip_viewer(ViewerMsg::Keyframe, json!({"t": "keyframe"}));
+        round_trip_viewer(ViewerMsg::Present, json!({"t": "present"}));
         round_trip_viewer(ViewerMsg::Pointer { x: 1.5, y: 2.0 }, json!({"t": "pointer", "x": 1.5, "y": 2.0}));
         round_trip_viewer(
             ViewerMsg::Button { button: Button::Forward, down: true },
@@ -435,6 +444,7 @@ mod tests {
             ViewerMsg::HandBack,
             ViewerMsg::Display { id: "1".into() },
             ViewerMsg::View { on: false },
+            ViewerMsg::Present,
         ];
         for m in &watch {
             assert!(!m.is_input(), "{m:?}");

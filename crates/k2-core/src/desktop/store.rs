@@ -138,10 +138,90 @@ pub fn hide_apps(desktop: &str, raw: &[String], by: &str) -> Result<Vec<String>,
     set_hide_apps(&conn, desktop, raw, by)
 }
 
+// ── the agent switch (0301) ─────────────────────────────────────────
+
+/// "Allow a virtual desktop" for this workspace (0301, LD-38; default off):
+/// its agent may have its own desktop, `virtual:<workspace id>`.
+pub fn agents_can_use_desktop(conn: &Connection, project_id: &str) -> bool {
+    conn.query_row("SELECT agents_can_use_desktop FROM projects WHERE id = ?1", params![project_id], |r| r.get::<_, i64>(0))
+        .map(|v| v != 0)
+        .unwrap_or(false)
+}
+
+pub fn set_agents_can_use_desktop(conn: &Connection, project_id: &str, on: bool) -> Result<(), String> {
+    let n = conn
+        .execute("UPDATE projects SET agents_can_use_desktop = ?2 WHERE id = ?1", params![project_id, on as i64])
+        .map_err(|e| e.to_string())?;
+    if n == 0 {
+        return Err(format!("workspace {project_id} not found"));
+    }
+    Ok(())
+}
+
+/// Workspaces with the switch on: `(id, name)`, by name.
+pub fn desktop_agents(conn: &Connection) -> Result<Vec<(String, String)>, String> {
+    let mut st = conn
+        .prepare("SELECT id, name FROM projects WHERE agents_can_use_desktop = 1 ORDER BY name COLLATE NOCASE, id")
+        .map_err(|e| e.to_string())?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+/// The workspace behind an agent's desktop id: `(project id, name)`, or
+/// `None` when no workspace has that desktop (removed, or not an agent's
+/// id). Ids are `virtual:<project id>`, or a hashed form for a project id
+/// outside the grammar (`virtual_desktop::agent_desktop`).
+pub fn desktop_workspace(conn: &Connection, desktop: &str) -> Option<(String, String)> {
+    use crate::desktop::virtual_desktop::{agent_desktop, workspace_of};
+    let tail = workspace_of(desktop)?;
+    let direct: Option<(String, String)> =
+        conn.query_row("SELECT id, name FROM projects WHERE id = ?1", params![tail], |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten();
+    if let Some(p) = direct {
+        return Some(p);
+    }
+    if !tail.starts_with('x') {
+        return None;
+    }
+    let mut st = conn.prepare("SELECT id, name FROM projects").ok()?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).ok()?;
+    let all: Vec<(String, String)> = rows.flatten().collect();
+    all.into_iter().find(|(id, _)| agent_desktop(id).as_deref() == Some(desktop))
+}
+
+/// A workspace's name, or `None` when it no longer exists.
+pub fn workspace_name(conn: &Connection, project_id: &str) -> Option<String> {
+    conn.query_row("SELECT name FROM projects WHERE id = ?1", params![project_id], |r| r.get(0)).optional().ok().flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::desktop::CONSOLE;
+
+    #[test]
+    fn the_agent_switch_defaults_off_and_round_trips() {
+        let db = crate::db::scoped_for_test();
+        let h = db.handle();
+        let conn = h.lock();
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('w1', 'scientist', '/tmp/w1'), ('w2', 'Atlas', '/tmp/w2')", []).unwrap();
+        assert!(!agents_can_use_desktop(&conn, "w1"), "off by default");
+        set_agents_can_use_desktop(&conn, "w1", true).expect("on");
+        set_agents_can_use_desktop(&conn, "w2", true).expect("on");
+        assert!(agents_can_use_desktop(&conn, "w1"));
+        assert_eq!(desktop_agents(&conn).unwrap(), vec![("w2".to_string(), "Atlas".to_string()), ("w1".to_string(), "scientist".to_string())]);
+        set_agents_can_use_desktop(&conn, "w2", false).expect("off");
+        assert_eq!(desktop_agents(&conn).unwrap().len(), 1);
+        assert!(set_agents_can_use_desktop(&conn, "nope", true).is_err());
+        assert_eq!(workspace_name(&conn, "w1").as_deref(), Some("scientist"));
+        assert_eq!(workspace_name(&conn, "gone"), None);
+        // Back from a desktop id, the plain form and the hashed one.
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('Old_ID.7', 'legacy', '/tmp/old')", []).unwrap();
+        assert_eq!(desktop_workspace(&conn, "virtual:w1"), Some(("w1".to_string(), "scientist".to_string())));
+        let odd = crate::desktop::virtual_desktop::agent_desktop("Old_ID.7").unwrap();
+        assert_eq!(desktop_workspace(&conn, &odd), Some(("Old_ID.7".to_string(), "legacy".to_string())));
+        assert_eq!(desktop_workspace(&conn, "virtual:gone"), None);
+        assert_eq!(desktop_workspace(&conn, "virtual"), None);
+    }
 
     #[test]
     fn the_switch_defaults_off_and_round_trips() {

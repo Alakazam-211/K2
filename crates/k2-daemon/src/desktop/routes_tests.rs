@@ -53,6 +53,7 @@ struct Env {
     _home: k2_core::test_env::TempHome,
     _db: k2_core::db::TestDbGuard,
     _deskd: deskd::TestDeskd,
+    _platform: PlatformGuard,
     fake: Arc<FakeDeskd>,
 }
 
@@ -61,7 +62,10 @@ fn env() -> Env {
     let db = k2_core::db::scoped_for_test();
     let fake = Arc::new(FakeDeskd { calls: Mutex::new(Vec::new()) });
     let guard = deskd::set_for_test(fake.clone());
-    Env { _home: home, _db: db, _deskd: guard, fake }
+    // The console desktop (a Mac, or a Linux box with someone at its
+    // screen); the virtual desktop tests below pick Linux with no screen.
+    let platform = platform_for_test(false, true);
+    Env { _home: home, _db: db, _deskd: guard, _platform: platform, fake }
 }
 
 fn login(name: &str, role: Role) -> Who {
@@ -167,7 +171,7 @@ fn methods_are_checked_first() {
         assert_eq!(r.status, "405 Method Not Allowed", "{path}");
     }
     assert!(!store::is_enabled(CONSOLE).unwrap());
-    assert_eq!(POST_ROUTES.len(), 8);
+    assert_eq!(POST_ROUTES.len(), 11);
 }
 
 /// Owner login over Connect: on, the card, an audit line, a push to the
@@ -237,7 +241,7 @@ fn an_admin_watches_and_drives_but_never_manages() {
     let admin = login("ann", Role::Admin);
     let (s, v) = call(&admin, "/cli/desktop/status", json!({}));
     assert_eq!(s, 200, "{v}");
-    assert_eq!(v["you"], json!({"role": "admin", "mayView": true, "mayControl": true, "mayManage": false, "sameMachine": false}));
+    assert_eq!(v["you"], json!({"role": "admin", "mayView": true, "mayControl": true, "mayManage": false, "sameMachine": false, "mayStart": false}));
     assert!(v.get("grants").is_none() && v.get("viewers").is_none() && v.get("hideApps").is_none(), "{v}");
     for path in [
         "/cli/desktop/enable",
@@ -288,7 +292,7 @@ fn a_member_needs_a_grant_and_only_watches() {
 
     let (s, v) = call(&mel, "/cli/desktop/status", json!({}));
     assert_eq!(s, 200, "{v}");
-    assert_eq!(v["you"], json!({"role": "member", "mayView": true, "mayControl": false, "mayManage": false, "sameMachine": false}));
+    assert_eq!(v["you"], json!({"role": "member", "mayView": true, "mayControl": false, "mayManage": false, "sameMachine": false, "mayStart": false}));
     assert!(v.get("grants").is_none() && v.get("viewers").is_none(), "a Member sees only itself: {v}");
 
     // Grants are for Members: an Admin needs none.
@@ -499,6 +503,7 @@ fn without_deskd_the_state_says_unavailable() {
     let _home = k2_core::test_env::TempHome::new();
     let _db = k2_core::db::scoped_for_test();
     let _d = deskd::set_for_test(Arc::new(deskd::NotBuilt));
+    let _p = platform_for_test(false, true);
     let (s, v) = call(&Who::Owner, "/cli/desktop/status", json!({}));
     assert_eq!(s, 200, "{v}");
     assert_eq!(v["state"], "unavailable");
@@ -507,4 +512,388 @@ fn without_deskd_the_state_says_unavailable() {
     assert_eq!(v["displays"], Value::Null);
     let (s, v) = call(&Who::Owner, "/cli/desktop/displays", json!({}));
     assert_eq!((s, v["displays"].clone()), (200, json!([])));
+}
+
+// ── virtual desktops (prd-linux-virtual-desktop-v1 L4) ───────────────
+
+use crate::desktop::virtual_desktop::tests::Rig;
+use crate::desktop::virtual_desktop::{self as vdm, TestManager};
+use k2_core::desktop::virtual_desktop as vd;
+
+/// A Linux server with no screen: a fake manager (fake runner and clock),
+/// fake K2 Screens for `virtual` and `virtual:w1`, two workspaces (`w1`
+/// with "Allow a virtual desktop" on, `w2` off) and the switch on.
+struct VEnv {
+    _e: Env,
+    rig: Rig,
+    _m: TestManager,
+    _p: PlatformGuard,
+    screens: Vec<(Arc<FakeDeskd>, deskd::TestDesktopDeskd)>,
+}
+
+impl VEnv {
+    fn screen(&self, i: usize) -> Vec<&'static str> {
+        self.screens[i].0.calls.lock().unwrap().clone()
+    }
+}
+
+fn venv() -> VEnv {
+    let e = env();
+    let p = platform_for_test(true, false);
+    let rig = Rig::new(true, true);
+    super::super::virtual_routes::install_hooks(&rig.m);
+    let m = vdm::set_for_test(rig.m.clone());
+    let mut screens = Vec::new();
+    for id in ["virtual", "virtual:w1"] {
+        let f = Arc::new(FakeDeskd { calls: Mutex::new(Vec::new()) });
+        let g = deskd::set_for_test_desktop(id, f.clone());
+        screens.push((f, g));
+    }
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('w1', 'scientist', '/tmp/w1'), ('w2', 'atlas', '/tmp/w2')", []).unwrap();
+        store::set_agents_can_use_desktop(&conn, "w1", true).unwrap();
+    }
+    store::enable(vd::VIRTUAL, true, "owner").unwrap();
+    VEnv { _e: e, rig, _m: m, _p: p, screens }
+}
+
+fn get_q(who: &Who, path: &str, q: &[(&str, &str)]) -> (u16, Value) {
+    let params: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let req = Req { path, is_post: false, body: b"", params: &params, ingress: "tunnel", ip: "203.0.113.7", token: "t" };
+    let r = handle(who, &req);
+    let code: u16 = r.status.split_whitespace().next().unwrap().parse().unwrap();
+    (code, serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: {e}: {}", r.body)))
+}
+
+#[test]
+fn on_a_server_with_no_screen_this_server_is_the_virtual_desktop() {
+    let _v = venv();
+    assert_eq!(current_desktop(), "virtual");
+    let owner = login("rosson", Role::Owner);
+    let (s, v) = call(&owner, "/cli/desktop/status", json!({}));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!((v["desktop"].as_str(), v["kind"].as_str(), v["name"].as_str()), (Some("virtual"), Some("server"), Some("This server")));
+    assert_eq!(v["state"], "closed", "{v}");
+    assert_eq!(v["you"]["mayStart"], true);
+    assert!(v["virtual"]["limits"]["desktops"]["max"].as_u64().is_some(), "{v}");
+    assert!(v.get("hideApps").is_none(), "the hide list is the console's");
+    let _s = platform_for_test(true, true);
+    assert_eq!(current_desktop(), "console", "someone at the screen: the real session");
+}
+
+#[test]
+fn start_returns_the_status_and_status_names_who_is_present_and_when_it_sleeps() {
+    let v = venv();
+    let owner = login("rosson", Role::Owner);
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({"desktop": "virtual", "width": 1601, "height": 901}));
+    assert_eq!(s, 200, "{r}");
+    assert_eq!((r["desktop"].as_str(), r["state"].as_str()), (Some("virtual"), Some("ready")), "{r}");
+    assert_eq!(r["virtual"]["size"], json!({"width": 1600, "height": 900}));
+    assert_eq!(audit_events(), vec!["desktop_start"]);
+    let now = v.rig.m.now();
+    v.rig.m.viewer_joined("virtual", "dv_1", "rosson", true);
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual")]);
+    assert_eq!(st["virtual"]["present"], json!([{"viewer": "dv_1", "user": "rosson"}]), "{st}");
+    assert_eq!(st["virtual"]["nextSleepAt"], Value::Null, "nobody leaves while someone watches");
+    v.rig.m.viewer_hidden("virtual", "dv_1", true);
+    v.rig.m.tick();
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual")]);
+    assert_eq!(st["virtual"]["present"], json!([]));
+    assert_eq!(st["virtual"]["nextSleepAt"], json!(now + vd::SLEEP_AFTER), "{st}");
+    // Safe to repeat: a second start returns it as it is.
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({}));
+    assert_eq!((s, r["state"].as_str()), (200, Some("ready")), "{r}");
+    assert_eq!(v.rig.runs("systemd-run").len(), 2, "started once");
+}
+
+#[test]
+fn a_hidden_viewers_desktop_sleeps_after_the_timer_and_wakes_when_a_present_viewer_returns() {
+    let v = venv();
+    let owner = login("rosson", Role::Owner);
+    call(&owner, "/cli/desktop/start", json!({}));
+    v.rig.m.viewer_joined("virtual", "dv_1", "rosson", true);
+    v.rig.m.viewer_hidden("virtual", "dv_1", true);
+    v.rig.advance(vd::SLEEP_AFTER);
+    v.rig.m.tick();
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[]);
+    assert_eq!(st["state"], "asleep", "{st}");
+    assert_eq!(st["message"], "The desktop is asleep. Everything on it is kept.");
+    assert!(v.screen(0).contains(&"disable"), "K2 Screen's link to it closed: {:?}", v.screen(0));
+    v.rig.m.viewer_present("virtual", "dv_1");
+    v.rig.m.tick();
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[]);
+    assert_eq!(st["state"], "ready", "{st}");
+    let events = audit_events();
+    assert!(events.contains(&"desktop_sleep".to_string()) && events.contains(&"desktop_wake".to_string()), "{events:?}");
+}
+
+#[test]
+fn a_member_can_not_start_or_stop_and_an_agent_is_refused() {
+    let _v = venv();
+    let mel = login("mel", Role::Member);
+    for path in ["/cli/desktop/start", "/cli/desktop/stop"] {
+        let (s, r) = call(&mel, path, json!({}));
+        assert_eq!((s, code(&r)), (403, "owner_or_admin"), "{path}: {r}");
+        let (s, r) = call(&agent(), path, json!({}));
+        assert_eq!((s, code(&r)), (403, PEOPLE_ONLY), "{path}: {r}");
+    }
+    let (s, r) = call(&mel, "/cli/desktop/setup", json!({}));
+    assert_eq!((s, code(&r)), (403, "owner_only"), "{r}");
+    let admin = login("ann", Role::Admin);
+    let (s, r) = call(&admin, "/cli/desktop/start", json!({}));
+    assert_eq!((s, r["state"].as_str()), (200, Some("ready")), "an Admin starts it: {r}");
+    let (s, r) = call(&admin, "/cli/desktop/stop", json!({}));
+    assert_eq!((s, r["closed"].as_bool()), (200, Some(true)), "{r}");
+    let (_, st) = get_q(&admin, "/cli/desktop/status", &[]);
+    assert_eq!((st["state"].as_str(), st["reason"]["code"].as_str()), (Some("closed"), Some("closed_by")), "{st}");
+    assert_eq!(st["message"], "The desktop was closed by ann.");
+}
+
+#[test]
+fn two_desktops_keep_their_own_viewers_and_k2_screen_links() {
+    let v = venv();
+    let owner = login("rosson", Role::Owner);
+    call(&owner, "/cli/desktop/start", json!({"desktop": "virtual"}));
+    call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:w1"}));
+    let a = Arc::new(FakeViewer::default());
+    let b = Arc::new(FakeViewer::default());
+    viewers::register(ViewerInfo { desktop: "virtual".into(), ..viewer("rosson", "u-r") }, a.clone());
+    viewers::register(ViewerInfo { desktop: "virtual:w1".into(), ..viewer("rosson", "u-r") }, b.clone());
+    let (_, l) = get_q(&owner, "/cli/desktop/viewers", &[("desktop", "virtual:w1")]);
+    assert_eq!(l["viewers"].as_array().unwrap().len(), 1, "{l}");
+    let (s, r) = call(&owner, "/cli/desktop/stop", json!({"desktop": "virtual:w1"}));
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(*b.0.lock().unwrap(), vec![(4410, "desktop_closed".to_string())]);
+    assert!(a.0.lock().unwrap().is_empty(), "the other desktop's viewer stays");
+    assert!(v.screen(1).contains(&"disable"), "{:?}", v.screen(1));
+    assert!(!v.screen(0).contains(&"disable"), "the other K2 Screen stays: {:?}", v.screen(0));
+    assert_eq!(v.rig.m.state("virtual"), vd::State::Ready);
+}
+
+#[test]
+fn the_list_shows_a_member_only_what_they_hold_a_grant_for() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    let mel = login("mel", Role::Member);
+    let (s, l) = get_q(&owner, "/cli/desktop/list", &[("workspace", "w1")]);
+    assert_eq!(s, 200, "{l}");
+    let ids: Vec<&str> = l["desktops"].as_array().unwrap().iter().map(|d| d["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["virtual", "virtual:w1"], "w2's switch is off: {l}");
+    assert_eq!(l["default"], "virtual:w1", "a new tab in w1's workspace opens w1's desktop");
+    assert_eq!(l["desktops"][1]["label"], vd::SEPARATE_LABEL);
+    assert_eq!(l["desktops"][1]["name"], "scientist");
+    let (_, l) = get_q(&owner, "/cli/desktop/list", &[("workspace", "w2")]);
+    assert_eq!(l["default"], "virtual", "w2 has no desktop: This server");
+
+    let (_, l) = get_q(&mel, "/cli/desktop/list", &[]);
+    assert_eq!(l["desktops"], json!([]), "no grants, nothing to open: {l}");
+    call(&owner, "/cli/desktop/grant", json!({"user": "mel", "desktop": "virtual:w1"}));
+    let (_, l) = get_q(&mel, "/cli/desktop/list", &[]);
+    let ids: Vec<&str> = l["desktops"].as_array().unwrap().iter().map(|d| d["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["virtual:w1"], "{l}");
+}
+
+#[test]
+fn a_grant_on_one_desktop_opens_only_that_one() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    let mel = login("mel", Role::Member);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_agents_can_use_desktop(&conn, "w2", true).unwrap();
+    }
+    call(&owner, "/cli/desktop/grant", json!({"user": "mel", "desktop": "virtual:w1"}));
+    let (_, st) = get_q(&mel, "/cli/desktop/status", &[("desktop", "virtual:w1")]);
+    assert_eq!(st["you"]["mayView"], true, "{st}");
+    let (_, st) = get_q(&mel, "/cli/desktop/status", &[("desktop", "virtual:w2")]);
+    assert_eq!(st["you"]["mayView"], false, "another agent's desktop: {st}");
+    let (_, st) = get_q(&mel, "/cli/desktop/status", &[("desktop", "virtual")]);
+    assert_eq!(st["you"]["mayView"], false, "nor the server's: {st}");
+    let (s, r) = call(&mel, "/cli/desktop/ticket", json!({"desktop": "virtual:w2"}));
+    assert_eq!((s, code(&r)), (403, "not_allowed"), "{r}");
+    let (s, r) = call(&mel, "/cli/desktop/ticket", json!({"desktop": "virtual:w1"}));
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(r["desktop"], "virtual:w1");
+}
+
+#[test]
+fn a_console_grant_does_not_open_virtual() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    let mel = login("mel", Role::Member);
+    call(&owner, "/cli/desktop/grant", json!({"user": "mel", "desktop": "console"}));
+    let (_, st) = get_q(&mel, "/cli/desktop/status", &[("desktop", "console")]);
+    assert_eq!(st["you"]["mayView"], true, "{st}");
+    let (_, st) = get_q(&mel, "/cli/desktop/status", &[]);
+    assert_eq!((st["desktop"].as_str(), st["you"]["mayView"].as_bool()), (Some("virtual"), Some(false)), "{st}");
+}
+
+#[test]
+fn the_virtual_switch_has_its_own_card_and_off_closes_every_virtual_desktop() {
+    let v = venv();
+    let owner = login("rosson", Role::Owner);
+    store::enable(vd::VIRTUAL, false, "owner").unwrap();
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({}));
+    assert_eq!((s, code(&r)), (409, "desktop_off"), "{r}");
+    let (s, r) = call(&owner, "/cli/desktop/enable", json!({}));
+    assert_eq!((s, r["desktop"].as_str()), (200, Some("virtual")), "{r}");
+    assert_eq!(r["card"], k2_core::desktop::VIRTUAL_ENABLE_CARD);
+    assert!(v.screen(0).is_empty(), "turning it on starts nothing: {:?}", v.screen(0));
+    call(&owner, "/cli/desktop/start", json!({}));
+    call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:w1"}));
+    let (s, r) = call(&owner, "/cli/desktop/disable", json!({"desktop": "virtual:w1"}));
+    assert_eq!((s, r["desktop"].as_str()), (200, Some("virtual")), "one switch for every virtual desktop: {r}");
+    assert_eq!((v.rig.m.state("virtual"), v.rig.m.state("virtual:w1")), (vd::State::Closed, vd::State::Closed));
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual:w1")]);
+    assert_eq!(st["reason"]["code"], "switched_off", "{st}");
+}
+
+#[test]
+fn an_agent_desktop_needs_its_workspace_and_its_switch() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:w2"}));
+    assert_eq!((s, code(&r)), (409, "agent_desktop_off"), "{r}");
+    assert!(r["error"]["hint"].as_str().unwrap().contains("Allow a virtual desktop"), "{r}");
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:gone1"}));
+    assert_eq!((s, code(&r)), (404, "desktop_gone"), "{r}");
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual:gone1")]);
+    assert_eq!((st["state"].as_str(), st["message"].as_str()), (Some("gone"), Some("This desktop no longer exists.")), "{st}");
+    let (s, r) = get_q(&owner, "/cli/desktop/status", &[("desktop", "Virtual Thing")]);
+    assert_eq!((s, code(&r)), (400, "bad_desktop"), "{r}");
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({"desktop": "console"}));
+    assert_eq!((s, code(&r)), (409, "not_virtual"), "{r}");
+}
+
+#[test]
+fn past_the_limit_start_says_which_could_close() {
+    let v = venv();
+    let owner = login("rosson", Role::Owner);
+    v.rig.host.set_facts(4, 2 << 30, 8); // two may exist
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_agents_can_use_desktop(&conn, "w2", true).unwrap();
+    }
+    call(&owner, "/cli/desktop/start", json!({}));
+    call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:w1"}));
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:w2"}));
+    assert_eq!((s, code(&r)), (409, "too_many_desktops"), "{r}");
+    assert_eq!(r["closable"], json!(["virtual", "virtual:w1"]));
+}
+
+struct FakeDoor {
+    ok: bool,
+    installs: Mutex<u32>,
+}
+
+impl super::super::virtual_routes::SetupDoor for FakeDoor {
+    fn helper_ok(&self) -> bool {
+        self.ok
+    }
+    fn install(&self) -> Result<String, String> {
+        *self.installs.lock().unwrap() += 1;
+        Ok(r#"{"installed":["xvfb","icewm","fonts-dejavu-core"]}"#.into())
+    }
+}
+
+#[test]
+fn setup_uses_the_root_helper_or_prints_the_command() {
+    let v = venv();
+    v.rig.host.programs.lock().unwrap().retain(|p| *p != "Xvfb");
+    let owner = login("rosson", Role::Owner);
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[]);
+    assert_eq!(st["state"], "not_set_up", "{st}");
+    assert!(st["virtual"]["manual"].as_str().unwrap().contains("apt-get install --no-install-recommends xvfb icewm"), "{st}");
+
+    let old = Arc::new(FakeDoor { ok: false, installs: Mutex::new(0) });
+    let g = super::super::virtual_routes::door_for_test(old.clone());
+    let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
+    assert_eq!((s, code(&r)), (409, "setup_manual"), "{r}");
+    assert!(r["manual"].as_str().unwrap().starts_with("sudo apt-get update"), "{r}");
+    assert_eq!(*old.installs.lock().unwrap(), 0, "an old helper is never asked");
+    drop(g);
+
+    let helper = Arc::new(FakeDoor { ok: true, installs: Mutex::new(0) });
+    let _g = super::super::virtual_routes::door_for_test(helper.clone());
+    let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
+    assert_eq!(s, 200, "{r}");
+    assert_eq!(*helper.installs.lock().unwrap(), 1);
+    assert!(audit_events().iter().filter(|e| *e == "desktop_setup").count() == 2, "started and the outcome");
+    v.rig.host.programs.lock().unwrap().push("Xvfb");
+    let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
+    assert_eq!((s, r["message"].as_str()), (200, Some("The desktop packages are already installed.")), "{r}");
+    assert_eq!(*helper.installs.lock().unwrap(), 1, "nothing to install");
+}
+
+#[test]
+fn on_macos_status_never_reports_a_virtual_state_and_start_or_setup_is_linux_only() {
+    let _e = env(); // a Mac: the console only
+    let owner = login("rosson", Role::Owner);
+    let (s, st) = call(&owner, "/cli/desktop/status", json!({}));
+    assert_eq!((s, st["desktop"].as_str(), st["state"].as_str()), (200, Some("console"), Some("ready")), "{st}");
+    assert!(st.get("virtual").is_none(), "{st}");
+    assert_eq!(st["you"]["mayStart"], false);
+    for (path, body) in [("/cli/desktop/start", json!({})), ("/cli/desktop/setup", json!({})), ("/cli/desktop/start", json!({"desktop": "virtual"}))] {
+        let (s, r) = call(&owner, path, body);
+        assert_eq!((s, code(&r)), (409, "linux_only"), "{path}: {r}");
+        assert!(r["error"]["hint"].as_str().unwrap().contains("Linux servers only"), "{r}");
+    }
+    let (s, r) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual")]);
+    assert_eq!((s, code(&r)), (409, "linux_only"), "{r}");
+    let (_, l) = get_q(&owner, "/cli/desktop/list", &[]);
+    assert_eq!(l["desktops"], json!([{"id": "console", "kind": "server", "name": "This server", "state": "ready"}]), "one entry: no picker");
+}
+
+#[test]
+fn open_desktop_carries_the_id() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    let mut events = crate::session_events::subscribe();
+    let (s, r) = call(&owner, "/cli/desktop/open", json!({"desktop": "virtual:w1"}));
+    assert_eq!((s, r["desktop"].as_str()), (200, Some("virtual:w1")), "{r}");
+    let mut found = false;
+    while let Ok(ev) = events.try_recv() {
+        if ev.kind_name() == "open_desktop" {
+            let j = serde_json::to_value(&ev).unwrap();
+            assert!(j.to_string().contains("virtual:w1"), "{j}");
+            found = true;
+        }
+    }
+    assert!(found, "open_desktop sent");
+}
+
+#[test]
+fn status_names_the_agent_holding_a_desktop() {
+    let v = venv();
+    let owner = login("rosson", Role::Owner);
+    call(&owner, "/cli/desktop/start", json!({"desktop": "virtual:w1"}));
+    v.rig.m.hold("virtual:w1", "scientist/helper").expect("hold");
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual:w1")]);
+    assert_eq!(st["virtual"]["hold"]["by"], "scientist/helper", "{st}");
+    assert_eq!(st["virtual"]["hold"]["name"], "scientist (helper)", "{st}");
+    assert_eq!(st["workspaceId"], "w1");
+    assert_eq!(st["agentsAllowed"], true);
+    assert_eq!(super::super::virtual_routes::hold_name("scientist"), "scientist");
+}
+
+#[test]
+fn an_agent_desktop_id_maps_back_to_its_workspace_even_when_hashed() {
+    let _v = venv();
+    let owner = login("rosson", Role::Owner);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT INTO projects (id, name, path) VALUES ('Legacy.ID', 'legacy', '/tmp/legacy')", []).unwrap();
+        store::set_agents_can_use_desktop(&conn, "Legacy.ID", true).unwrap();
+    }
+    let odd = vd::agent_desktop("Legacy.ID").unwrap();
+    let (_, l) = get_q(&owner, "/cli/desktop/list", &[("workspace", "Legacy.ID")]);
+    assert_eq!(l["default"], json!(odd), "the list returns the exact id to open: {l}");
+    let (s, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", &odd)]);
+    assert_eq!(s, 200, "{st}");
+    assert_eq!((st["name"].as_str(), st["workspaceId"].as_str()), (Some("legacy"), Some("Legacy.ID")), "{st}");
 }

@@ -1096,6 +1096,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/desktop/audit",
         "/cli/desktop/open",
         "/cli/desktop/ticket",
+        "/cli/desktop/list",
+        "/cli/desktop/start",
+        "/cli/desktop/stop",
+        "/cli/desktop/setup",
         // 0.46.4: extra subdomains of its own workspace on its App.
         "/cli/app/domains",
         "/cli/app/domain/add",

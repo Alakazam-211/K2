@@ -470,12 +470,12 @@ pub fn admit(params: &HashMap<String, String>, ingress: &str) -> Result<Admitted
     if !access.may_view {
         return Err(Refused::new(403, "not_allowed", "you don't have access to this computer's screen (the owner grants it: k2 desktop grant)"));
     }
-    match store::is_enabled(&claim.desktop) {
+    match store::is_enabled(k2_core::desktop::virtual_desktop::switch_id(&claim.desktop)) {
         Ok(true) => {}
         Ok(false) => return Err(Refused::new(409, wire::reason::DESKTOP_OFF, "Remote desktop is off on this computer")),
         Err(e) => return Err(Refused::new(500, "store_error", e)),
     }
-    let backend = super::deskd::current();
+    let backend = super::deskd::for_desktop(&claim.desktop);
     let state = backend.state();
     let unavailable = |state: &MachineState, hint: String| Refused { status: 409, code: "desktop_unavailable", hint, state: Some(state.as_wire()) };
     let Some(deskd) = backend.stream() else {
@@ -586,7 +586,7 @@ impl Ctx {
             }
             Role::VoiceChat => return Err((wire::CLOSE_AUTH_REVOKED, wire::reason::AUTH_REVOKED)),
         }
-        if !store::is_enabled(&self.desktop).unwrap_or(false) {
+        if !store::is_enabled(k2_core::desktop::virtual_desktop::switch_id(&self.desktop)).unwrap_or(false) {
             return Err((wire::CLOSE_DESKTOP_OFF, wire::reason::DESKTOP_OFF));
         }
         Ok(())
@@ -755,7 +755,7 @@ impl InputSink<ViewerMsg> for DesktopSink {
         let now = Instant::now();
         match &m {
             ViewerMsg::TakeControl | ViewerMsg::HandBack | ViewerMsg::View { .. } => return Ok(()),
-            ViewerMsg::Ack { .. } | ViewerMsg::Fps { .. } | ViewerMsg::Keyframe => return Ok(()),
+            ViewerMsg::Ack { .. } | ViewerMsg::Fps { .. } | ViewerMsg::Keyframe | ViewerMsg::Present => return Ok(()),
             _ => {}
         }
         // Again at the moment it goes: a hand-back or a lost lease since it
@@ -932,6 +932,11 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
         since: 0,
     };
     viewers::register(info, Arc::new(PushClose(push_tx.clone())));
+    // A virtual desktop counts its viewers' presence (LD-24): joining is
+    // present; an Owner's or Admin's presence wakes it.
+    if k2_core::desktop::virtual_desktop::is_virtual(&a.desktop) {
+        super::virtual_desktop::manager().viewer_joined(&a.desktop, &viewer, &a.username, matches!(a.role, Role::Owner | Role::Admin));
+    }
     let now = Instant::now();
     let took = with_session(&a.desktop, |s| {
         s.members.insert(viewer.clone(), Member { name: a.username.clone(), owner: a.role == Role::Owner, push: push_tx.clone() });
@@ -957,10 +962,10 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
     });
     ensure_pump(&a.desktop, &a.deskd);
     {
-        let (u, i) = (a.username.clone(), ingress.clone());
+        let (u, i, d) = (a.username.clone(), ingress.clone(), a.desktop.clone());
         let _ = tokio::task::spawn_blocking(move || {
             super::routes::notify_new_viewer(&u, &i);
-            super::routes::emit_state();
+            super::routes::emit_state_for(&d);
         })
         .await;
     }
@@ -1072,22 +1077,42 @@ fn hooks(
     }
 }
 
-/// The tab's shown / hidden state, from its `fps` (0 = hidden).
+/// The tab's shown / hidden state, from its `fps` (0 = hidden), and its
+/// `present` heartbeat (a virtual desktop's presence, LD-24).
 fn note_frame(ctx: &Ctx, f: &WsFrame) {
     let Some(Ok(Message::Text(t))) = f else { return };
-    if !t.contains("\"fps\"") {
+    if !t.contains("\"fps\"") && !t.contains("\"present\"") {
         return;
     }
-    if let Ok(ViewerMsg::Fps { fps }) = serde_json::from_str::<ViewerMsg>(t) {
-        let mut c = ctx.clock();
-        if fps == 0 {
-            if c.hidden_since.is_none() {
-                c.hidden_since = Some(Instant::now());
+    let virtual_desktop = k2_core::desktop::virtual_desktop::is_virtual(&ctx.desktop);
+    match serde_json::from_str::<ViewerMsg>(t) {
+        Ok(ViewerMsg::Fps { fps }) => {
+            {
+                let mut c = ctx.clock();
+                if fps == 0 {
+                    if c.hidden_since.is_none() {
+                        c.hidden_since = Some(Instant::now());
+                    }
+                } else {
+                    c.hidden_since = None;
+                }
             }
-        } else {
-            c.hidden_since = None;
+            if virtual_desktop {
+                super::virtual_desktop::manager().viewer_hidden(&ctx.desktop, &ctx.viewer, fps == 0);
+            }
         }
+        Ok(ViewerMsg::Present) if virtual_desktop => {
+            super::virtual_desktop::manager().viewer_present(&ctx.desktop, &ctx.viewer);
+        }
+        _ => {}
     }
+}
+
+/// Tell every viewer of a desktop its new state (a virtual desktop going
+/// to sleep or closing), before their sockets close.
+pub fn tell_state(desktop: &str, state: &str, message: &str) {
+    let t = text(&ServerMsg::State { state: state.into(), message: message.into() });
+    broadcast_text(desktop, t);
 }
 
 fn recheck(ctx: &Arc<Ctx>, limits: Limits) -> Verdict {
@@ -1127,6 +1152,9 @@ fn recheck(ctx: &Arc<Ctx>, limits: Limits) -> Verdict {
 /// (held input released), the access-log line, every viewer told.
 fn leave(ctx: &Arc<Ctx>) {
     viewers::unregister(&ctx.viewer);
+    if k2_core::desktop::virtual_desktop::is_virtual(&ctx.desktop) {
+        super::virtual_desktop::manager().viewer_left(&ctx.desktop, &ctx.viewer);
+    }
     let change = with_session(&ctx.desktop, |s| {
         s.members.remove(&ctx.viewer);
         s.lease.drop_viewer(&ctx.viewer)
@@ -1142,7 +1170,7 @@ fn leave(ctx: &Arc<Ctx>) {
     if let Err(e) = audit::write(&line) {
         k2_core::log_debug!("[desktop] audit write failed (disconnect): {e}");
     }
-    super::routes::emit_state();
+    super::routes::emit_state_for(&ctx.desktop);
 }
 
 #[cfg(test)]

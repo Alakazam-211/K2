@@ -69,6 +69,7 @@ part_web() {
     step "App server SDK dist is fresh";           node scripts/sdk-server-dist.mjs --check
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh
     step "k2 on a virtual desktop never acts as the owner"; bash tests/cli/virtual_desktop_owner_guard.sh
+    step "k2 desktop on a Linux server (stub daemon)"; bash tests/cli/desktop_virtual_cli.sh
     step "vite build hosted web";                  bun run vite:build:web
 }
 

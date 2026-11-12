@@ -1762,13 +1762,14 @@ fn handle_access(
         && toggle != "chat_refresh"
         && toggle != "app_users"
         && toggle != "sim"
+        && toggle != "desktop"
         && toggle != "org_chart_manage"
         && toggle != "voice_transcripts"
     {
         return Err(err(
             "bad_request",
             400,
-            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
+            "toggle must be 'agents_manage', 'app_core', 'app_review', 'apps_build', 'apps_manage_full', 'chat_manage', 'chat_refresh', 'compute', 'compute_manage', 'compute_operate', 'db_upgrade', 'desktop', 'app_users', 'gardens_manage', 'org_chart_manage', 'permission_cards', 'projects_manage', 'sim', 'vault_manage' or 'voice_transcripts'",
         ));
     }
     if toggle == "app_core" || toggle == "app_review" {
@@ -1858,6 +1859,33 @@ fn handle_access(
         return Ok((
             serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "org_chart_manage", "agentsCanManageOrgChart": value }),
             format!("ok {} org_chart_manage={value}", ws.handle),
+        ));
+    }
+    if toggle == "desktop" {
+        // Virtual desktops (prd-linux-virtual-desktop-v1 LD-38, 0301):
+        // "Allow a virtual desktop", beside "Allow mobile devices". Off by
+        // default; Owner/Admin flip it (route floor Admin); a passport never
+        // reaches here. Off leaves a running desktop alone (an Owner closes
+        // it with k2 desktop stop); the agent just can't ask for it again.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::desktop::store::set_agents_can_use_desktop(&conn, &ws.id, value).map_err(|e| err("workspace_not_found", 404, e))?;
+        }
+        let line = k2_core::desktop::audit::AuditLine::new(
+            k2_core::desktop::audit::Event::AgentSwitch,
+            &k2_core::desktop::virtual_desktop::agent_desktop(&ws.id).unwrap_or_default(),
+            &caller.audit_user(),
+        )
+        .target(&ws.handle)
+        .outcome(if value { "on" } else { "off" });
+        if let Err(e) = k2_core::desktop::audit::write(&line) {
+            k2_core::log_debug!("[desktop] audit write failed (agent switch): {e}");
+        }
+        k2_core::agent_hooks::emit(k2_core::agent_hooks::HookEvent::SyncSettings, serde_json::json!({"desktop": "agent_access"}));
+        return Ok((
+            serde_json::json!({ "ok": true, "workspace": ws.handle, "toggle": "desktop", "agentsCanUseDesktop": value }),
+            format!("ok {} desktop={value}", ws.handle),
         ));
     }
     if toggle == "sim" {

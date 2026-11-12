@@ -1,0 +1,11 @@
+-- 0301: the workspace switch "Allow a virtual desktop"
+-- (prd-linux-virtual-desktop-v1 LD-38, 0.46.12).
+--
+-- An agent on a Linux server may have its own virtual desktop
+-- (`virtual:<workspace id>`) only while this switch is on. It sits beside
+-- "Allow mobile devices" (`projects.agents_can_use_sim`, 0233) and works the
+-- same way: DEFAULT 0 (off) for every workspace, turned on by a person.
+-- Written only by POST /cli/agent-access/set {toggle: "desktop"}
+-- (Owner/Admin), never workspace/set. The Owner's server switch and the
+-- grants already key on the desktop id (0281). 0295–0300 are other arcs'.
+ALTER TABLE projects ADD COLUMN agents_can_use_desktop INTEGER NOT NULL DEFAULT 0;

@@ -258,6 +258,11 @@ impl StreamDeskd for Link {
 /// switch left on turns deskd back on.
 pub fn boot() {
     super::deskd::install(Arc::new(ManagedDeskd::new(super::deskd_link::manager().clone())));
+    // Virtual desktops (Linux, LD-22): one K2 Screen per desktop, made on
+    // first use; the manager tells K2 Screen, the viewers and the clients.
+    #[cfg(target_os = "linux")]
+    super::deskd::set_virtual_factory(Arc::new(|id: &str| Arc::new(ManagedDeskd::new(super::deskd_link::manager_for_virtual(id))) as Arc<dyn Deskd>));
+    super::virtual_routes::install_hooks(&super::virtual_desktop::manager());
     match store::is_enabled(CONSOLE) {
         Ok(true) => {
             let _ = std::thread::Builder::new().name("k2-deskd-boot".into()).spawn(|| {

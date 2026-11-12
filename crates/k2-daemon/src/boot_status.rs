@@ -1280,6 +1280,12 @@ pub fn features() -> Vec<&'static str> {
     // Remote desktop (prd-remote-desktop-tab-v1 §5): whenever the routes
     // exist, so clients show + → Desktop (Beta) and the off card.
     out.push(crate::desktop::FEATURE);
+    // Virtual desktops (prd-linux-virtual-desktop-v1 LD-16): Linux daemons
+    // start a desktop on a server with no screen; clients show Set up,
+    // Start and the picker only with this key. Never on macOS.
+    if cfg!(target_os = "linux") {
+        out.push(k2_core::desktop::VIRTUAL_FEATURE_KEY);
+    }
     // Sew 0.9.0: App roles take `voice:record` (the pin's const, on since
     // K2 0.46.11). Before the switch-gated keys, so they stay at the tail.
     if k2_core::recording::in_apps() {
@@ -1369,9 +1375,7 @@ mod tests {
         want_with_a_lane.insert(want_with_a_lane.len() - 1, k2_core::sim::BOOT_STATUS_KEY);
         assert_eq!(with_a_lane, want_with_a_lane, "a usable lane adds mobile-sim-v1 just before the tail");
         assert_eq!(k2_core::sim::BOOT_STATUS_KEY, "mobile-sim-v1");
-        assert_eq!(
-            without_lanes,
-            vec![
+        let mut want: Vec<&str> = vec![
                 "spawn-attach-only",
                 "tickets-list-all",
                 "tickets-badge-me",
@@ -1468,8 +1472,14 @@ mod tests {
                 // Sew 0.9.0's pin: voice:record in App roles.
                 "app-voice-record-v1",
                 "boot-status-views-v1"
-            ]
-        );
+            ];
+        // Virtual desktops (prd-linux-virtual-desktop-v1 LD-16): Linux only,
+        // right after remote-desktop-v1.
+        if cfg!(target_os = "linux") {
+            let at = want.iter().position(|f| *f == "remote-desktop-v1").expect("remote-desktop-v1") + 1;
+            want.insert(at, k2_core::desktop::VIRTUAL_FEATURE_KEY);
+        }
+        assert_eq!(without_lanes, want);
     }
 
     // A private BootState, never the daemon's: the process-wide one is

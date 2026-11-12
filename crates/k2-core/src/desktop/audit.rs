@@ -55,6 +55,20 @@ pub enum Event {
     /// The controller put text on the host's clipboard (Send my
     /// clipboard). Never the text.
     ClipboardWrite,
+    /// A virtual desktop started (Linux, prd-linux-virtual-desktop-v1).
+    DesktopStart,
+    /// Woken from sleep.
+    DesktopWake,
+    /// Put to sleep (frozen) with nobody viewing.
+    DesktopSleep,
+    /// Closed; `outcome` is the reason code (closed_by, asleep_too_long, …).
+    DesktopClose,
+    /// The packages step (`k2 desktop setup`).
+    DesktopSetup,
+    /// A workspace's "Allow a virtual desktop" switch; `target` is the agent.
+    AgentSwitch,
+    /// An agent's hold on its desktop (taken, renewed or released).
+    AgentHold,
 }
 
 impl Event {
@@ -78,6 +92,13 @@ impl Event {
             Event::Refused => "refused",
             Event::ClipboardRead => "clipboard_read",
             Event::ClipboardWrite => "clipboard_write",
+            Event::DesktopStart => "desktop_start",
+            Event::DesktopWake => "desktop_wake",
+            Event::DesktopSleep => "desktop_sleep",
+            Event::DesktopClose => "desktop_close",
+            Event::DesktopSetup => "desktop_setup",
+            Event::AgentSwitch => "agent_switch",
+            Event::AgentHold => "agent_hold",
         }
     }
 }

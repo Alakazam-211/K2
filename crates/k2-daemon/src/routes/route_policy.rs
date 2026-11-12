@@ -923,11 +923,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/desktop/grant", Owner),
     get("/cli/desktop/grants", Owner),
     post("/cli/desktop/kick", Owner),
+    // Virtual desktops (prd-linux-virtual-desktop-v1 L4): the picker list is
+    // Member-floor (the handler lists only what the caller may open); start
+    // and stop are Owners' and Admins'; the packages are the Owner's.
+    get("/cli/desktop/list", Member),
     post("/cli/desktop/open", Member),
     post("/cli/desktop/policy", Owner),
     post("/cli/desktop/revoke", Owner),
+    post("/cli/desktop/setup", Owner),
+    post("/cli/desktop/start", Admin),
     get("/cli/desktop/status", Member),
     get("/cli/desktop/stream", Member),
+    post("/cli/desktop/stop", Admin),
     post("/cli/desktop/ticket", Member),
     get("/cli/desktop/viewers", Owner),
     post("/cli/dns-manage", Admin),

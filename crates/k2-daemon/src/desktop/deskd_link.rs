@@ -712,6 +712,26 @@ pub fn manager() -> &'static Arc<DeskdManager> {
     M.get_or_init(|| DeskdManager::new(default_transport()))
 }
 
+/// A virtual desktop's own K2 Screen (LD-22): a child over pipes, given
+/// that desktop's `DISPLAY` and cookie while it is awake (no session
+/// otherwise, so it waits).
+#[cfg(target_os = "linux")]
+pub fn manager_for_virtual(id: &str) -> Arc<DeskdManager> {
+    let transport: Arc<dyn Transport> = match linux_binary() {
+        Ok(bin) => {
+            let id = id.to_string();
+            Arc::new(ChildTransport {
+                bin,
+                env: Box::new(move || {
+                    super::virtual_desktop::manager().screen_env(&id).map(|vars| SessionEnv { vars: vars.into_iter().collect() })
+                }),
+            })
+        }
+        Err(e) => Arc::new(Unavailable(OpenError::Failed(e))),
+    };
+    DeskdManager::new(transport)
+}
+
 fn home() -> PathBuf {
     k2_core::paths::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }

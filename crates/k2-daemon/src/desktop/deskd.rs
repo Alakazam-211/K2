@@ -7,6 +7,7 @@
 //! nothing (the switch itself is the daemon's, in `k2_core::desktop`).
 //! Tests install a fake with [`set_for_test`].
 
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use k2_core::desktop::wire::Display;
@@ -82,6 +83,65 @@ pub fn current() -> Arc<dyn Deskd> {
 /// one it replaced.
 pub fn install(d: Arc<dyn Deskd>) -> Arc<dyn Deskd> {
     std::mem::replace(&mut *slot().write().unwrap_or_else(|p| p.into_inner()), d)
+}
+
+// ── one K2 Screen per desktop (LD-22) ────────────────────────────────
+
+/// Makes the K2 Screen of a virtual desktop (boot installs the real one:
+/// a K2 Screen child per display, Linux).
+pub type Factory = Arc<dyn Fn(&str) -> Arc<dyn Deskd> + Send + Sync>;
+
+fn per_desktop() -> &'static RwLock<HashMap<String, Arc<dyn Deskd>>> {
+    static S: OnceLock<RwLock<HashMap<String, Arc<dyn Deskd>>>> = OnceLock::new();
+    S.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn factory() -> &'static RwLock<Option<Factory>> {
+    static F: OnceLock<RwLock<Option<Factory>>> = OnceLock::new();
+    F.get_or_init(|| RwLock::new(None))
+}
+
+/// Boot: how a virtual desktop's K2 Screen is made.
+pub fn set_virtual_factory(f: Factory) {
+    *factory().write().unwrap_or_else(|p| p.into_inner()) = Some(f);
+}
+
+/// The K2 Screen of a desktop: [`current`] for `console`, one per id for
+/// a virtual desktop (made on first use; [`NotBuilt`] with no factory).
+pub fn for_desktop(id: &str) -> Arc<dyn Deskd> {
+    if !k2_core::desktop::virtual_desktop::is_virtual(id) {
+        return current();
+    }
+    if let Some(d) = per_desktop().read().unwrap_or_else(|p| p.into_inner()).get(id) {
+        return d.clone();
+    }
+    let made = factory().read().unwrap_or_else(|p| p.into_inner()).clone().map_or_else(|| Arc::new(NotBuilt) as Arc<dyn Deskd>, |f| f(id));
+    per_desktop().write().unwrap_or_else(|p| p.into_inner()).entry(id.to_string()).or_insert(made).clone()
+}
+
+/// Tests: a fake K2 Screen for one virtual desktop until the guard drops.
+pub fn set_for_test_desktop(id: &str, d: Arc<dyn Deskd>) -> TestDesktopDeskd {
+    let prev = per_desktop().write().unwrap_or_else(|p| p.into_inner()).insert(id.to_string(), d);
+    TestDesktopDeskd { id: id.to_string(), prev }
+}
+
+pub struct TestDesktopDeskd {
+    id: String,
+    prev: Option<Arc<dyn Deskd>>,
+}
+
+impl Drop for TestDesktopDeskd {
+    fn drop(&mut self) {
+        let mut m = per_desktop().write().unwrap_or_else(|p| p.into_inner());
+        match self.prev.take() {
+            Some(p) => {
+                m.insert(self.id.clone(), p);
+            }
+            None => {
+                m.remove(&self.id);
+            }
+        }
+    }
 }
 
 /// [`install`] for tests, restored when the guard drops.

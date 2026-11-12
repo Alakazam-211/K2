@@ -120,6 +120,9 @@ fn audit_events() -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn desktop_routes_on_the_wire() {
     let _home = k2_core::test_env::TempHome::new();
+    // This test is about the console desktop (a Mac, or a Linux box with
+    // someone at its screen): the virtual desktop routes have their own.
+    let _platform = k2_daemon::desktop::routes::platform_for_test(false, true);
     k2_core::db::init_for_tests();
     let d = test_harness::start(OWNER).await;
     let port = d.port;
@@ -214,7 +217,7 @@ async fn desktop_routes_on_the_wire() {
     // only itself; an Admin opens without one.
     let r = send(port, "/cli/desktop/status", &member, "", true);
     assert_eq!(r.status, 200, "{}", r.raw);
-    assert_eq!(r.body["you"], json!({"role": "member", "mayView": true, "mayControl": false, "mayManage": false, "sameMachine": false}), "{}", r.raw);
+    assert_eq!(r.body["you"], json!({"role": "member", "mayView": true, "mayControl": false, "mayManage": false, "sameMachine": false, "mayStart": false}), "{}", r.raw);
     assert!(r.body.get("grants").is_none() && r.body.get("viewers").is_none(), "{}", r.raw);
     let r = send(port, "/cli/desktop/ticket", &member, "{}", true);
     assert_eq!(r.status, 200, "{}", r.raw);

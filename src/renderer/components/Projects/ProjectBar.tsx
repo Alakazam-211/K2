@@ -33,6 +33,7 @@ import { ConfirmSheet } from '@/components/Settings/sections/AccessDialogs'
 import { SettingsIcon, TicketsIcon } from '@/components/icons/K2Icons'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { primaryScope } from '@/kessel/server-scope'
+import { clientToCssPx } from '@/lib/app-zoom'
 import ProjectGroupAvatar from './ProjectGroupAvatar'
 import DashboardPresetsMenu from './DashboardPresetsMenu'
 import { memberDisplayName } from './ProjectAgentsSection'
@@ -96,7 +97,9 @@ function useBarWidth(ref: React.RefObject<HTMLDivElement | null>): number {
   useEffect(() => {
     const el = ref.current
     if (!el || typeof ResizeObserver !== 'function') return
-    const ro = new ResizeObserver(() => setWidth(el.getBoundingClientRect().width))
+    // CSS px, like COMPACT_BAR_PX and TINY_BAR_PX: a rect is on-screen px,
+    // which the app zoom scales (lib/app-zoom).
+    const ro = new ResizeObserver(() => setWidth(clientToCssPx(el.getBoundingClientRect().width)))
     ro.observe(el)
     return () => ro.disconnect()
   }, [ref])

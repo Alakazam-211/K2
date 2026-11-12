@@ -159,7 +159,7 @@ async fn hop_maps_the_upstream_local_address_while_alive() {
     }
     assert_eq!(hop_client_ip(peer), None, "forgotten when the guard drops");
     let _none = register_hop(&c, None);
-    assert_eq!(hop_client_ip(peer), None, "no client, nothing recorded");
+    assert_eq!(hop_client_ip(peer), None, "no client: no address for the throttle");
 }
 
 // ── HTTP/1.1 rewrite ─────────────────────────────────────────────────

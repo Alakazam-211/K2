@@ -832,6 +832,13 @@ fn skin_login_under_box_ceiling(trust: ClientTrust, on_link: bool) -> bool {
 /// [`crate::login_throttle::RESET_LIMIT`] per window, an App's link one
 /// bucket per App, and anonymous callers share the reset door's own
 /// failure ceiling. `Some(anonymous)` = go on; `None` = 429.
+///
+/// 0.46.12: on an App's link, the visitor the App's server names
+/// (`X-K2-Client-IP`, as on a link login) gets its own
+/// [`crate::login_throttle::RESET_LIMIT`] first; a visitor over it is
+/// refused without spending the App's bucket, so one visitor's junk resets
+/// can't use up every guest's. No visitor named (or a loopback one): only
+/// the App's bucket, never one shared visitor key.
 fn reset_door_admit(
     limiter: &crate::login_throttle::LoginLimiter,
     ingress: Ingress,
@@ -842,6 +849,14 @@ fn reset_door_admit(
     link_app: Option<&str>,
 ) -> Option<bool> {
     let now = limiter.now();
+    if let (Ingress::App, Some(app)) = (ingress, link_app) {
+        if let Some(visitor) = crate::apps::gateway::link_visitor(headers_blob) {
+            let key = crate::login_throttle::reset_link_visitor_key(app, visitor);
+            if limiter.check_and_record_with_limit(&key, crate::login_throttle::RESET_LIMIT, now) == crate::login_throttle::Verdict::Limited {
+                return None;
+            }
+        }
+    }
     let bucket = match (ingress, link_app) {
         (Ingress::App, Some(app)) => Some((crate::login_throttle::reset_link_key(app), crate::login_throttle::RESET_LINK_LIMIT)),
         (Ingress::App, None) => None,

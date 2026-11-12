@@ -45,9 +45,17 @@
 //!    can put an address in it.
 //!
 //! An App's local front port (`apps::router`) gets the same rewrite in
-//! [`Mode::Local`]: K2's own hop keeps its address; any other local caller
-//! only loses `X-K2-Client-IP` (a local reverse proxy's `X-Forwarded-For`
-//! is its own business, as today).
+//! [`Mode::Local`]: K2's own hop keeps its address, and a hop whose visitor
+//! K2 doesn't know loses every client copy; any other local caller only loses
+//! `X-K2-Client-IP` (a local reverse proxy's `X-Forwarded-For` is its own
+//! business, as today).
+//!
+//! **When the App gets no address.** K2 sets `X-K2-Client-IP` only for a
+//! visitor it knows: front443's PROXY header (the box's own :443), or
+//! frpc's once K2 Connect's relay passes the visitor's address (`k2 tunnel
+//! status`: "Visitor IPs"). Until the relay does, every tunnel connection
+//! (the k2.dev label, a custom name through the relay) reaches the App with
+//! none, and K2's own per-visitor limits wait too; the per-App ones hold.
 //!
 //! **K2's own answers on an App's host** (App phone pairing, 0.46.5):
 //! [`forward_with`] takes a [`LocalAnswer`]. A `GET`/`HEAD` with no body
@@ -201,8 +209,11 @@ pub async fn read_tunnel_preamble(
 
 // ── K2's own loopback hops ────────────────────────────────────────────
 
-fn hops() -> &'static Mutex<HashMap<SocketAddr, IpAddr>> {
-    static H: OnceLock<Mutex<HashMap<SocketAddr, IpAddr>>> = OnceLock::new();
+/// K2's own loopback hops: the hop's local address → the visitor it
+/// carries (`None`: a hop from the internet whose visitor K2 doesn't know,
+/// such as a tunnel connection before the relay passes addresses).
+fn hops() -> &'static Mutex<HashMap<SocketAddr, Option<IpAddr>>> {
+    static H: OnceLock<Mutex<HashMap<SocketAddr, Option<IpAddr>>>> = OnceLock::new();
     H.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -224,22 +235,30 @@ impl Drop for Hop {
 
 /// Record that `upstream` (a loopback connection this daemon opened for a
 /// tunnelled client) carries `ip`. Register before writing to it: the
-/// other end looks it up once request bytes arrive.
+/// other end looks it up once request bytes arrive. A hop is recorded with
+/// no visitor too (0.46.12): an App's front port then still treats it as
+/// internet traffic and drops every client copy of the forwarding headers.
 pub fn register_hop(upstream: &TcpStream, ip: Option<IpAddr>) -> Hop {
-    match (ip, upstream.local_addr()) {
-        (Some(ip), Ok(local)) => {
+    match upstream.local_addr() {
+        Ok(local) => {
             let local = canonical_addr(local);
             hops().lock().unwrap_or_else(|p| p.into_inner()).insert(local, ip);
             Hop(Some(local))
         }
-        _ => Hop(None),
+        Err(_) => Hop(None),
     }
 }
 
-/// The client behind a loopback peer, when the peer is one of K2's own
-/// hops from the tunnel.
-pub fn hop_client_ip(peer: SocketAddr) -> Option<IpAddr> {
+/// `Some(visitor)` when `peer` is one of K2's own hops (the visitor itself
+/// may be unknown), `None` for any other caller.
+fn hop_of(peer: SocketAddr) -> Option<Option<IpAddr>> {
     hops().lock().unwrap_or_else(|p| p.into_inner()).get(&canonical_addr(peer)).copied()
+}
+
+/// The client behind a loopback peer, when the peer is one of K2's own
+/// hops from the tunnel and K2 knows that client.
+pub fn hop_client_ip(peer: SocketAddr) -> Option<IpAddr> {
+    hop_of(peer).flatten()
 }
 
 // ── The HTTP/1.1 rewrite ──────────────────────────────────────────────
@@ -251,8 +270,8 @@ pub enum Mode {
     /// `Some(ip)` adds K2's own headers.
     Tunnel(Option<IpAddr>),
     /// An App's loopback front port. K2's own hop (found by `peer`) is
-    /// treated as `Tunnel(Some(ip))`; anyone else only loses
-    /// `X-K2-Client-IP`.
+    /// treated as `Tunnel(<the visitor it carries, if known>)`; anyone else
+    /// only loses `X-K2-Client-IP`.
     Local { peer: Option<SocketAddr> },
     /// The App TLS door (0.46.6, custom App names): as `Tunnel`, and K2
     /// also owns `X-Forwarded-Proto`: every request carries exactly
@@ -295,8 +314,10 @@ fn resolve(mode: Mode) -> Rule {
     match mode {
         Mode::Tunnel(ip) => Rule::Set(ip),
         Mode::Door(ip) => Rule::Https(ip),
-        Mode::Local { peer } => match peer.and_then(hop_client_ip) {
-            Some(ip) => Rule::Set(Some(ip)),
+        // K2's own hop is internet traffic, visitor known or not: every
+        // client copy goes. Anyone else on the box only loses K2's header.
+        Mode::Local { peer } => match peer.and_then(hop_of) {
+            Some(ip) => Rule::Set(ip),
             None => Rule::StripK2,
         },
     }

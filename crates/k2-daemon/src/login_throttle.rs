@@ -335,6 +335,13 @@ pub fn reset_link_key(service_id: &str) -> String {
     format!("{RESET_KEY_PREFIX}app:{service_id}")
 }
 
+/// Reset POSTs through one App's link from one visitor the App's server
+/// named (`X-K2-Client-IP`, 0.46.12): [`RESET_LIMIT`] per window, checked
+/// before the App's own bucket ([`reset_link_key`]).
+pub fn reset_link_visitor_key(service_id: &str, visitor: std::net::IpAddr) -> String {
+    format!("{RESET_KEY_PREFIX}app:{service_id}:v:{visitor}")
+}
+
 /// Skin login map key: `"skin:" + ip`. Empty aliases `-` like Connect.
 pub fn skin_ip_key(ip: &str) -> String {
     let ip = if ip.is_empty() { "-" } else { ip };

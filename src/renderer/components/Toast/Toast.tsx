@@ -190,6 +190,10 @@ function findWorkspaceToastHost(): HTMLElement | null {
 
 function resolveToastAnchor(settingsOpen: boolean, page: AppPage): ToastAnchor | null {
   if (settingsOpen) return 'settings'
+  // A modal sheet over the page (a project's settings) hosts the toasts
+  // its own changes make: under its scrim they would be hidden.
+  const sheet = firstVisible(document, '[data-toast-host="sheet"]')
+  if (sheet) return sheet
   const pageHost = PAGE_HOST[page]
   if (pageHost) {
     const el = document.querySelector(`[data-toast-host="${pageHost}"]`)
@@ -205,6 +209,16 @@ const PANE_STACK_STYLE: React.CSSProperties = {
   position: 'absolute',
   top: 12,
   right: 12,
+  zIndex: 30,
+}
+
+/** In a modal sheet: bottom centre, as over Settings, clear of the
+ *  sheet's own title-row actions. */
+const SHEET_STACK_STYLE: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 16,
+  left: '50%',
+  transform: 'translateX(-50%)',
   zIndex: 30,
 }
 
@@ -259,7 +273,13 @@ export default function Toast(): React.JSX.Element | null {
           ? 'fixed bottom-4 z-[9999] flex flex-col items-end gap-2 pointer-events-auto'
           : 'flex flex-col items-end gap-2 pointer-events-auto'
       }
-      style={live === 'settings' ? { left: '50%', transform: 'translateX(-50%)' } : PANE_STACK_STYLE}
+      style={
+        live === 'settings'
+          ? { left: '50%', transform: 'translateX(-50%)' }
+          : live.getAttribute('data-toast-host') === 'sheet'
+            ? SHEET_STACK_STYLE
+            : PANE_STACK_STYLE
+      }
     >
       {installNotice && (
         <div

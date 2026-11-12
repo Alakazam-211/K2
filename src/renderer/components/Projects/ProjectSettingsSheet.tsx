@@ -297,7 +297,15 @@ function SheetFrame({
         data-testid="project-settings-sheet"
         className="w-[min(76rem,calc(100vw-2.5rem))] h-[min(56rem,calc(100vh-2.5rem))] overflow-hidden"
       >
-        <div ref={frameRef} tabIndex={-1} onKeyDown={onKeyDown} className="h-full flex flex-col min-h-0 outline-none">
+        {/* data-toast-host: the toasts this sheet's changes make show in
+            it (bottom centre), not on the page under its scrim. */}
+        <div
+          ref={frameRef}
+          tabIndex={-1}
+          onKeyDown={onKeyDown}
+          data-toast-host="sheet"
+          className="relative h-full flex flex-col min-h-0 outline-none"
+        >
           {detailError && detailError.id === groupId ? (
             <>
               {plainHead}

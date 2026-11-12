@@ -223,4 +223,22 @@ describe('Toast stack placement', () => {
     expect(document.querySelector('[data-toast-stack]')).toBeNull()
     expect(screen.queryByText('Buried')).toBeNull()
   })
+
+  it('a modal sheet over the page hosts the toasts, at its bottom centre (not under its scrim)', () => {
+    usePageViewStore.setState({ page: 'projects' })
+    render(
+      <>
+        <div data-toast-host="projects" data-testid="page-host" />
+        <div data-toast-host="sheet" data-testid="sheet-host" />
+        <Toast />
+      </>,
+    )
+    show('Added Notes to Spring launch.')
+    const el = stack()
+    expect(el.parentElement).toBe(screen.getByTestId('sheet-host'))
+    expect(el.style.position).toBe('absolute')
+    expect(el.style.bottom).toBe('16px')
+    expect(el.style.top).toBe('')
+    expect(screen.getByTestId('page-host').contains(el)).toBe(false)
+  })
 })

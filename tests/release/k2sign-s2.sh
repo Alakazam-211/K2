@@ -301,10 +301,12 @@ approve = at('k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}
 before = [
     'k2_rust_pin_check',
     'bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"',
-    'RUSTFLAGS="-D warnings" cargo check --workspace --all-targets',
-    'bun run typecheck:web',
-    'bunx vitest run --reporter=dot',
-    'bun run vite:build:web',
+    # Step 0.5's gates (their commands live in scripts/lib/release-gates.sh):
+    # sent, the mac check here, waited for; or the local path.
+    'if ! k2rg_submit_all; then',
+    'k2rg_local cargo-macos',
+    'k2rg_wait_all || K2_GATES_RC=$?',
+    'if [ "$K2_GATES_WHERE" = local ]; then\n    k2rg_local_all',
     'bash "$PROJECT_DIR/scripts/sign-root-helper.sh" --preflight',
     'bash "$PROJECT_DIR/scripts/sign-k2-node.sh" --preflight',
     'bash "$PROJECT_DIR/scripts/sign-app-engine.sh" --preflight',

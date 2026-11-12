@@ -14,7 +14,9 @@
 #                   In a release it runs HERE, on the release Mac, beside
 #                   the jobs (its target/ is warm and Step 2 builds here
 #                   anyway); --gates-only sends it to K2_RELEASE_MAC_CHECK_NODE.
-#                   K2_RELEASE_MAC_CHECK=local|compute picks.
+#                   K2_RELEASE_MAC_CHECK=local|compute picks. On k2n1-m4
+#                   (8 GB share) it runs with CARGO_BUILD_JOBS=2
+#                   (K2_RELEASE_MAC_CHECK_JOBS): 4 went over 8 GB.
 #   vitest          the full suite on K2_RELEASE_VITEST_NODE (k2n1-m4, the
 #                   fast Mac lane): --cpus 7 --mem 8G, 6 workers.
 #   typecheck-web   bun run typecheck:web (tsc-rs) on a Linux x86 node.
@@ -211,7 +213,7 @@ k2rg_submit_all() {
                 # a check needs only a file there, so a stand-in is staged.
                 _k2rg_submit cargo-macos "macOS, cargo check -D warnings" \
                     "${K2_RELEASE_MAC_CHECK_NODE:-k2n1-m4}" ${cache[@]+"${cache[@]}"} \
-                    --needs "$rust,cmake@3" --cpus 7 --mem 8G --env CARGO_BUILD_JOBS="${K2_RELEASE_MAC_CHECK_JOBS:-4}" --timeout 90m \
+                    --needs "$rust,cmake@3" --cpus 7 --mem 8G --env CARGO_BUILD_JOBS="${K2_RELEASE_MAC_CHECK_JOBS:-2}" --timeout 90m \
                     -- "set -euo pipefail; $target; FRPC_SRC=/usr/bin/true ./scripts/fetch-frpc.sh; source scripts/lib/build-binaries.sh; k2_mac_build_env; if [ -n \"\${K2_JOB_CACHE:-}\" ]; then (cd \"\$K2_JOB_CACHE\" && k2_clear_failed_cmake_dirs); else k2_clear_failed_cmake_dirs; fi; RUSTFLAGS='-D warnings' cargo check --workspace --all-targets" || rc=1
                 ;;
             vitest)

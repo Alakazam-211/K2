@@ -84,6 +84,18 @@ describe('useLiveDocCore', () => {
     await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
   })
 
+  it('gives a live deck its preview view while the Slides core is on, and today’s view when it is off', async () => {
+    h.file = { core: 'slides', on: true, liveView: false }
+    const scope = scopeWith(['docs-cores-v1'])
+    const { result } = renderHook(() => useLiveDocCore(scope, '/w/talk.pptx'))
+    await waitFor(() => expect(result.current).toEqual({ status: 'deck' }))
+    h.file = { core: 'slides', on: false, liveView: false }
+    await act(async () => {
+      for (const fn of events.handlers) fn({ kind: 'doc_cores_changed', core: 'slides', on: false })
+    })
+    await waitFor(() => expect(result.current).toEqual({ status: 'off' }))
+  })
+
   it('keeps today’s view for a core with no live editor, an error, or an older server', async () => {
     // A scope is one object for a server's life (a new one every render
     // would be a new server every render).

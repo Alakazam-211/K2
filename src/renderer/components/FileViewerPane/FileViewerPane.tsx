@@ -62,6 +62,7 @@ import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { useLiveDocCore } from '@/lib/live-doc-core'
 import { Button } from '@/components/ui'
 import { AnyFileDocPanel } from './AnyFileDocPanel'
+import { DeckPreviewPane } from './DeckPreviewPane'
 import { DocConflictNotice } from './DocConflictNotice'
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -1098,6 +1099,11 @@ function FileViewerPaneInner({ filePath, paneId, paneGroupId, tabId, initialScro
         // into, nothing to save (see `textLock`).
         <div className="flex-1 overflow-hidden" ref={contentRef} data-testid="file-viewer-text-lock" data-reason={textLock.reason}>
           <BinaryEmptyState filePath={filePath} message={TEXT_LOCK_MESSAGES[textLock.reason]} detail={textLock.detail} />
+        </div>
+      ) : liveCore.status === 'deck' ? (
+        // A live deck (the Slides core): its slides as the daemon draws them.
+        <div className="flex-1 overflow-hidden" ref={contentRef} data-testid="file-viewer-deck">
+          <DeckPreviewPane key={`${room.scope.id}|${filePath}`} scope={room.scope} filePath={filePath} />
         </div>
       ) : liveOn && liveCore.status === 'live' && (!showViewToggle || viewMode === 'raw') ? (
         <div className="flex-1 overflow-hidden" data-testid="file-viewer-live">

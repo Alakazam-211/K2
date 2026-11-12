@@ -54,12 +54,15 @@ export type LiveDocCoreState =
   | { status: 'checking' }
   | { status: 'live'; core: string }
   | { status: 'any-file' } // today's view, with the any-file panel beside it
+  | { status: 'deck' } // a live deck (the Slides core): its slide previews
 
 function stateFor(c: LiveDocCore): LiveDocCoreState {
   if (!c.on) return { status: 'off' }
   if (c.liveView) return { status: 'live', core: c.core }
-  // Any other file has no live editor but does have the panel. The Board
-  // (also no live editor) opens as its own thing.
+  // Any other file has no live editor but does have the panel. A deck
+  // (the Slides core) shows its slide previews. The Board (also no live
+  // editor) opens as its own thing.
+  if (c.core === 'slides') return { status: 'deck' }
   return c.core === 'any-file' ? { status: 'any-file' } : { status: 'off' }
 }
 

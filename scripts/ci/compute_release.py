@@ -227,6 +227,19 @@ def check_job(a):
                 byte_checks(got["path"], n, a.version, info.get("arch") or "x86_64", info, problems)
         if not info.get("files"):
             problems.append("build-info lists no files")
+        # The aarch64 cross build: the hash-pinned zig and cargo-zigbuild
+        # (scripts/ci/cross-pins.sh at the release commit; Steward 11-11).
+        if a.kind == "linux-bins" and (a.arch or info.get("arch")) == "aarch64":
+            cross = info.get("cross") if isinstance(info.get("cross"), dict) else None
+            if not (a.cross_zig_sha256 and a.cross_zigbuild_sha256):
+                problems.append("aarch64: no cross toolchain pins to check the build against")
+            elif cross is None:
+                problems.append("aarch64: build-info has no cross toolchain hashes (built without the pinned zig/cargo-zigbuild)")
+            else:
+                if cross.get("zig_tarball_sha256") != a.cross_zig_sha256:
+                    problems.append(f"aarch64: zig tarball sha256 {cross.get('zig_tarball_sha256')} is not the pinned {a.cross_zig_sha256}")
+                if cross.get("cargo_zigbuild_crate_sha256") != a.cross_zigbuild_sha256:
+                    problems.append(f"aarch64: cargo-zigbuild crate sha256 {cross.get('cargo_zigbuild_crate_sha256')} is not the pinned {a.cross_zigbuild_sha256}")
 
     verdict = {
         "label": a.label,
@@ -241,6 +254,7 @@ def check_job(a):
         "tools": body.get("tools"),
         "oauth": (info or {}).get("oauth"),
         "oauth_microsoft": (info or {}).get("oauth_microsoft"),
+        "cross": (info or {}).get("cross"),
         "files": {n: {"sha256": v["sha256"], "bytes": v["bytes"]} for n, v in files.items()},
         "problems": problems,
     }
@@ -415,6 +429,18 @@ def evidence_bundle(a):
         if labels[arch][0] not in recs:
             sys.stderr.write("evidence-bundle: no %s/receipt.json in %s\n" % (labels[arch][0], a.state))
             return 1
+    # The aarch64 builds' build-info.json, as fetched: the signer hashes it
+    # against the signed receipt and checks the cross toolchain hashes in it.
+    build_info = {}
+    if "aarch64" in arches:
+        for label in labels["aarch64"]:
+            p = os.path.join(a.state, label, "build-info.json")
+            if label in recs and not os.path.isfile(p):
+                sys.stderr.write("evidence-bundle: no %s/build-info.json in %s (the cross toolchain hashes)\n" % (label, a.state))
+                return 1
+            if os.path.isfile(p):
+                with open(p, "rb") as f:
+                    build_info[label] = f.read().decode("utf-8")
     r = recs["L1"]
     body = json.loads(r["body"]) if isinstance(r.get("body"), str) else (r.get("receipt") or {})
     commit = (body.get("src") or {}).get("commit") or ""
@@ -428,8 +454,10 @@ def evidence_bundle(a):
         sys.stderr.write("evidence-bundle: git cat-file commit %s in %s failed: %s\n"
                          % (commit[:12], a.git, p.stderr.decode(errors="replace").strip()[:200]))
         return 1
-    json.dump({"v": 1, "commit_object": base64.b64encode(p.stdout).decode(), "receipts": recs},
-              sys.stdout, sort_keys=True)
+    out = {"v": 1, "commit_object": base64.b64encode(p.stdout).decode(), "receipts": recs}
+    if build_info:
+        out["build_info"] = build_info
+    json.dump(out, sys.stdout, sort_keys=True)
     sys.stdout.write("\n")
     return 0
 
@@ -444,6 +472,8 @@ def main():
         s.add_argument("--" + k, required=True)
     s.add_argument("--arch")
     s.add_argument("--require-oauth")
+    s.add_argument("--cross-zig-sha256")
+    s.add_argument("--cross-zigbuild-sha256")
     s = sub.add_parser("compare")
     s.add_argument("--compute", required=True)
     s.add_argument("--github", required=True)

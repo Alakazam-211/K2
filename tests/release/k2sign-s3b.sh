@@ -95,8 +95,23 @@ for arch, mach in (("x86_64", 62), ("aarch64", 183)):
     open(os.path.join(d, "k2-app-engine-linux-" + arch), "wb").write(b"engine-" + arch.encode() + os.urandom(64))
 for n in ("k2-root-helper-linux-x86_64", "k2-node-linux-x86_64", "k2-root-helper-linux-aarch64", "k2-node-linux-aarch64"):
     open(os.path.join(d, n), "wb").write(n.encode() + os.urandom(64))
+# build-info.json as build-linux-bins.sh writes it for the aarch64 cross
+# build: the hash-pinned toolchain (MKSET_CROSS: pinned | none | bad_zig |
+# bad_zb).
+import json
+mode = os.environ.get("MKSET_CROSS", "pinned")
+cross = None if mode == "none" else {
+    "host": "x86_64", "glibc": "2.28", "zig_version": "0.15.2", "cargo_zigbuild_version": "0.23.4",
+    "zig_tarball_sha256": "e" * 64 if mode == "bad_zig" else os.environ["CROSS_ZIG"],
+    "cargo_zigbuild_crate_sha256": "e" * 64 if mode == "bad_zb" else os.environ["CROSS_ZB"]}
+json.dump({"kind": "linux-bins", "version": version, "arch": "aarch64", "cross": cross},
+          open(os.path.join(d, "build-info.json"), "w"), indent=2, sort_keys=True)
 PY
 }
+# The pins the fake builds record (scripts/ci/cross-pins.sh, the same as the policy's).
+export CROSS_ZIG="$(sed -n 's/^K2_CROSS_ZIG_SHA256_X86_64="\(.*\)"$/\1/p' "$REPO/scripts/ci/cross-pins.sh")"
+export CROSS_ZB="$(sed -n 's/^K2_CROSS_ZIGBUILD_CRATE_SHA256="\(.*\)"$/\1/p' "$REPO/scripts/ci/cross-pins.sh")"
+[ "${#CROSS_ZIG}" = 64 ] && [ "${#CROSS_ZB}" = 64 ] || { echo "FAIL: no cross pins in scripts/ci/cross-pins.sh" >&2; exit 1; }
 export K2_GMAIL_CLIENT_ID="test-client-1234.apps.googleusercontent.com" K2_GMAIL_CLIENT_SECRET="GOCSPX-test-secret-5678" K2_REQUIRE_MICROSOFT_OAUTH=0
 unset K2_MICROSOFT_CLIENT_ID || true
 
@@ -213,6 +228,9 @@ bundle_arm() {
     mkrcpt "$s/L2/receipt.json" build-b "$files" "$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["arch"]="aarch64"; print(json.dumps(o))' "${3:-$NOOVER}")"
     [ "${5:-build-a}" = none ] || mkrcpt "$s/V2/receipt.json" "${5:-build-a}" "${6:-$files}" \
         "$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["arch"]="aarch64"; print(json.dumps(o))' "${4:-$NOOVER}")"
+    # What k2cr_collect keeps beside each receipt: the fetched build-info.json.
+    cp "$files/build-info.json" "$s/L2/build-info.json"
+    [ ! -d "$s/V2" ] || cp "${6:-$files}/build-info.json" "$s/V2/build-info.json"
     python3 -I "$PY_CR" evidence-bundle --state "$s" --git "$G" --arches x86_64,aarch64 > "$s/bundle.json" || fail "evidence-bundle $name" ""
 }
 # edit_bundle <name> <python on b>: change the bundle itself
@@ -295,6 +313,8 @@ printf 'not a key\n' > "$tmp/keys/junk.pem"
 check "a file that is not a P-256 key: refused" 3 "no PUBLIC KEY block" "$ADM" pin-compute-node build-c "$tmp/keys/junk.pem" "$FP_A"
 check "pin-compute-node needs an absolute path" 2 "absolute path" "$ADM" pin-compute-node build-c keys/x.pem "$FP_A"
 check "compute-pins (signer verb, read-only)" 0 "\"name\": \"build-b\"" "$K" compute-pins
+grep -q "\"zig_tarball_sha256\": \"$CROSS_ZIG\"" "$tmp/out" && grep -q "\"cargo_zigbuild_crate_sha256\": \"$CROSS_ZB\"" "$tmp/out" \
+    && pass "compute-pins names the aarch64 cross toolchain hashes the signer requires (release.sh's pre-flight reads them)" || fail "compute-pins cross" "$(cat "$tmp/out")"
 grep -q "etc/compute-pins" "$TROOT/usr/local/etc/k2sign/pins.sha256" && pass "compute-pins is in pins.sha256" || fail "compute-pins pinned" "$(cat "$TROOT/usr/local/etc/k2sign/pins.sha256")"
 cp "$TROOT/usr/local/etc/k2sign/compute-pins" "$tmp/pins.bak"
 printf 'node build-r %s %s\n' "$FP_R" "$("$OPENSSL" ec -in "$tmp/keys/rogue.key" -pubout -outform DER 2>/dev/null | base64 | tr -d '\n')" >> "$TROOT/usr/local/etc/k2sign/compute-pins"
@@ -556,6 +576,24 @@ bundle_arm armrogue "$S7" '{}' '{}' rogue
 register "V2 from an unpinned node: refused" 3 "V2: the receipt is from node ${FP_R:0:16}…, which is not pinned" 0.47.7 armrogue
 bundle_arm armexcl "$S7" '{"plan.exclusive": false}'
 register "L2 not exclusive: refused" 3 "L2: the job was not exclusive" 0.47.7 armexcl
+
+echo "== aarch64: the hash-pinned cross toolchain (Steward 11-11) =="
+bundle_arm armnobi "$S7"
+edit_bundle armnobi 'b.pop("build_info")'
+register "c: no build-info.json in the evidence: refused" 3 "L2: the evidence has no build-info.json (the cross toolchain hashes)" 0.47.7 armnobi
+bundle_arm armnobiv2 "$S7"
+edit_bundle armnobiv2 'b["build_info"].pop("V2")'
+register "c: V2's build-info.json missing: refused" 3 "V2: the evidence has no build-info.json" 0.47.7 armnobiv2
+bundle_arm armbiedit "$S7"
+edit_bundle armbiedit 'b["build_info"]["L2"] = b["build_info"]["L2"].replace(b["build_info"]["L2"][b["build_info"]["L2"].index("zig_tarball_sha256") + 22:][:8], "00000000")'
+register "c: a build-info.json other than the receipt's: refused" 3 "L2: the evidence's build-info.json is not the one in its signed receipt" 0.47.7 armbiedit
+for mode in none bad_zig bad_zb; do
+    MKSET_CROSS="$mode" mkset 0.47.7 "$tmp/set-cross-$mode"
+    bundle_arm "armcross-$mode" "$tmp/set-cross-$mode"
+done
+register "c: a receipt whose build-info has no cross toolchain hashes: refused" 3 "L2: build-info.json records no cross toolchain hashes" 0.47.7 armcross-none
+register "c: zig from another tarball than the pin: refused" 3 "L2: zig tarball sha256 eeeeeeeeeeee… is not the policy's ${CROSS_ZIG:0:12}…" 0.47.7 armcross-bad_zig
+register "c: cargo-zigbuild from another source than the pin: refused" 3 "L2: cargo-zigbuild crate sha256 eeeeeeeeeeee… is not the policy's ${CROSS_ZB:0:12}…" 0.47.7 armcross-bad_zb
 bundle_arm armgood "$S7"
 register "the good bundle with L2 and V2 registers" 0 '"ok": true' 0.47.7 armgood
 grep -q '"arches": \["x86_64", "aarch64"\]' "$tmp/out" && grep -q '"L2": {' "$tmp/out" && grep -q '"V2": {' "$tmp/out" \
@@ -716,6 +754,18 @@ cp "$tmp/policy.bak" "$POL"
 check "repin the reviewed policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
 signs "the reviewed policy back: 0.47.4's daemon signs again" "$S4/k2-daemon-linux-x86_64" u2 k2-daemon-linux-x86_64 0.47.4
 
+python3 -I - "$POL" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s, n = re.subn(r"^(compute_aarch64_zig_sha256 = ).*$", r"\1not-a-hash", s, flags=re.M)
+assert n == 1
+open(p, "w").write(s)
+PY
+check "repin the edited policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+refuses "c: a policy without a 64-hex zig pin does not load" "$A7" u2 k2-daemon-linux-aarch64 0.47.7 "policy: compute_aarch64_zig_sha256 must be a sha256"
+cp "$tmp/policy.bak" "$POL"
+check "repin the reviewed policy (admin)" 0 "pins.sha256 rewritten" "$ADM" repin
+
 echo "== policy drift =="
 python3 -I - "$REPO/scripts/lib/compute-release.sh" "$REPO/scripts/k2sign/policy" "$REPO/scripts/ci/cross-pins.sh" <<'PY' && pass "policy compute_dual_names(_aarch64) == k2cr_dual_names; compute_argv(_aarch64) == the L1/V1 and L2/V2 commands; compute_needs_aarch64 == k2cr_arm_needs with cross-pins.sh" || fail "compute policy drift"
 import re, sys
@@ -738,6 +788,8 @@ for label in ("L2", "V2"):
 arm = re.search(r'printf \'%s\' "(cmake@3,[^"]+)"', s).group(1).split(",")
 assert arm == pol["compute_needs_aarch64"].split(), (arm, pol["compute_needs_aarch64"])
 assert not any("zig" in n for n in arm), "zig and cargo-zigbuild come hash-pinned from the build, never from --needs"
+assert pol["compute_aarch64_zig_sha256"] == pins["K2_CROSS_ZIG_SHA256_X86_64"], "policy zig pin != cross-pins.sh"
+assert pol["compute_aarch64_zigbuild_sha256"] == pins["K2_CROSS_ZIGBUILD_CRATE_SHA256"], "policy cargo-zigbuild pin != cross-pins.sh"
 assert not any(n.startswith("rust@") for n in arm), "an explicit rust@ need drops rust-toolchain.toml's aarch64 target"
 needs = re.search(r'local bins_needs="\$rust,([^"]+)"', s).group(1).split(",")
 assert ["rust@{rust_pin}"] + needs == pol["compute_needs"].split(), (needs, pol["compute_needs"])

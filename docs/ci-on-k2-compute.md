@@ -362,7 +362,14 @@ L2 and V2 in place of L1 and V1):
   root helper, k2-node and App engine (V1). The signer's policy won't load
   if a compute-signed asset isn't in that list;
 - the bytes on stdin are the `dist/k2-daemon-linux-x86_64` L1's receipt
-  lists.
+  lists (aarch64: the `dist/k2-daemon-linux-aarch64` L2's lists);
+- aarch64 only: the bundle carries L2's and V2's `build-info.json`, whose
+  bytes are the `dist/build-info.json` in each node-signed receipt, and it
+  records the zig tarball and cargo-zigbuild crate sha256 the policy pins
+  (`compute_aarch64_zig_sha256`, `compute_aarch64_zigbuild_sha256`, equal
+  to `scripts/ci/cross-pins.sh`). Without them, no aarch64 daemon is
+  signed from compute; `k2sign compute-pins` names them, and the
+  pre-flight sends aarch64 to GitHub when the signer doesn't.
 
 Once a version has compute evidence, its x86 daemon signs only on it
 (no fallback to an attestation), and the evidence is never replaced: the

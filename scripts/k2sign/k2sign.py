@@ -85,6 +85,7 @@ POLICY_KEYS = {
     "compute_assets", "compute_argv", "compute_needs", "compute_artifacts", "compute_secret_env",
     "compute_secret_env_optional", "compute_dual_names", "compute_receipt_max_hours",
     "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64",
+    "compute_aarch64_zig_sha256", "compute_aarch64_zigbuild_sha256",
 }
 LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
 MAC_DAEMON = "k2-daemon-macos-aarch64"
@@ -524,6 +525,9 @@ def load_policy(ctx):
               "compute_argv_aarch64", "compute_needs_aarch64", "compute_dual_names_aarch64"):
         if not pol[k].split():
             raise Refused("policy: %s must not be empty" % k)
+    for k in ("compute_aarch64_zig_sha256", "compute_aarch64_zigbuild_sha256"):
+        if not FP_RE.match(pol[k]):
+            raise Refused("policy: %s must be a sha256 (64 lowercase hex)" % k)
     for a in pol["compute_assets"].split():
         if a not in LINUX_DAEMONS:
             raise Refused("policy: compute_assets may list only the Linux daemons (not %s)" % a)
@@ -1447,6 +1451,39 @@ def check_plan(label, plan, rc, pol, argv, want_needs):
         raise Refused("%s: the job got vault secrets the release build doesn't use: %s" % (label, ", ".join(sorted(set(sec) - req - opt))))
 
 
+def check_cross_build_info(label, bundle, arts, pol):
+    """An aarch64 build (L2, V2) is cross-compiled with zig and
+    cargo-zigbuild, which the signer trusts only by hash (Steward 11-11):
+    the bundle carries the job's build-info.json, whose bytes must be the
+    dist/build-info.json in the job's node-signed receipt, and which must
+    record the zig tarball and cargo-zigbuild crate the policy pins."""
+    bi = (bundle.get("build_info") or {}).get(label) if isinstance(bundle.get("build_info") or {}, dict) else None
+    if not isinstance(bi, str):
+        raise Refused("%s: the evidence has no build-info.json (the cross toolchain hashes): compute_release.py "
+                      "evidence-bundle from a release.sh that keeps it" % label)
+    raw = bi.encode("utf-8")
+    a = arts.get("dist/build-info.json")
+    if a is None:
+        raise Refused("%s: the signed receipt lists no dist/build-info.json" % label)
+    if hashlib.sha256(raw).hexdigest() != a["sha256"] or len(raw) != a["bytes"]:
+        raise Refused("%s: the evidence's build-info.json is not the one in its signed receipt" % label)
+    try:
+        info = json.loads(bi)
+    except ValueError:
+        raise Refused("%s: build-info.json is not JSON" % label)
+    cross = info.get("cross") if isinstance(info, dict) else None
+    if not isinstance(cross, dict) or not cross.get("zig_tarball_sha256") or not cross.get("cargo_zigbuild_crate_sha256"):
+        raise Refused("%s: build-info.json records no cross toolchain hashes: an aarch64 daemon from compute is signed "
+                      "only when it was built with the hash-pinned zig and cargo-zigbuild" % label)
+    for key, pkey, what in (("zig_tarball_sha256", "compute_aarch64_zig_sha256", "zig tarball"),
+                            ("cargo_zigbuild_crate_sha256", "compute_aarch64_zigbuild_sha256", "cargo-zigbuild crate")):
+        got = str(cross.get(key))
+        if got != pol[pkey]:
+            raise Refused("%s: %s sha256 %s… is not the policy's %s…" % (label, what, got[:12], pol[pkey][:12]))
+    return {"zig_tarball_sha256": pol["compute_aarch64_zig_sha256"],
+            "cargo_zigbuild_crate_sha256": pol["compute_aarch64_zigbuild_sha256"]}
+
+
 def rehearsal_target(bundle):
     """compute-rehearse: no tag yet, so L1's own commit, tree and rustc
     stand in for the tag's (V1 must match them); every other check runs."""
@@ -1572,6 +1609,9 @@ def compute_check(ctx, pol, version, session, bundle, d, asset=None, path=None, 
         seen[label] = (rc, receipt_artifacts(label, rc), name)
         out[label] = {"job": rc.get("job_id"), "node": name, "node_fp": fp, "receipt": rid,
                       "ended": iso(ended), "tools_used": rc.get("tools_used") or {}}
+    for label in ("L2", "V2"):
+        if label in seen:
+            out[label]["cross"] = check_cross_build_info(label, bundle, seen[label][1], pol)
     jobs = [rc.get("job_id") for rc, _, _ in seen.values()]
     if len(set(jobs)) != len(jobs):
         raise Refused("one job is offered as two builds (%s)" % ", ".join(sorted(seen)))
@@ -1752,9 +1792,14 @@ def verb_compute_pins(ctx, args):
     if args:
         raise Usage("compute-pins")
     check_pins(ctx)
+    pol = load_policy(ctx)
     controller, nodes = load_compute_pins(ctx)
+    # aarch64_cross: what an aarch64 build must record to be signed from
+    # compute (release.sh's pre-flight keeps aarch64 on GitHub without it).
     print(json.dumps({"controller": controller,
-                      "nodes": sorted(({"name": n, "fp": fp} for fp, (n, _) in nodes.items()), key=lambda x: x["name"])},
+                      "nodes": sorted(({"name": n, "fp": fp} for fp, (n, _) in nodes.items()), key=lambda x: x["name"]),
+                      "aarch64_cross": {"zig_tarball_sha256": pol["compute_aarch64_zig_sha256"],
+                                        "cargo_zigbuild_crate_sha256": pol["compute_aarch64_zigbuild_sha256"]}},
                      sort_keys=True))
 
 

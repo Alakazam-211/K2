@@ -377,9 +377,15 @@ k2cr_wait() {
 
 # Fetch and verify every job. 0 = every job verified.
 k2cr_collect() {
-    local label job node kind arch argv_json bad=0 d require=""
+    local label job node kind arch argv_json bad=0 d require="" cross=""
     [ "${K2_COMPUTE_REQUIRE_BAKED_OAUTH:-0}" = "1" ] && require="--require-oauth baked"
     [ "${K2_LINUX_BUILDS:-}" = "compute" ] && require="--require-oauth baked"
+    # The cross toolchain hashes an aarch64 build must record: the pins at
+    # the release commit (Steward 11-11).
+    local pins zsha zbsha
+    pins="$(git show "${K2CR_COMMIT}:scripts/ci/cross-pins.sh" 2>/dev/null || true)"
+    zsha="$(printf '%s\n' "$pins" | sed -n 's/^K2_CROSS_ZIG_SHA256_X86_64="\([0-9a-f]*\)"$/\1/p')"
+    zbsha="$(printf '%s\n' "$pins" | sed -n 's/^K2_CROSS_ZIGBUILD_CRATE_SHA256="\([0-9a-f]*\)"$/\1/p')"
     while IFS=$'\t' read -r label job node kind arch argv_json; do
         [ -n "$label" ] || continue
         d="$K2CR_STATE/$label"
@@ -395,10 +401,16 @@ k2cr_collect() {
         if ! k2cr_k2 compute fetch "$job" --out "$K2CR_FILES/$label" --over-relay --json > "$d/fetch.json" 2>"$d/fetch.err"; then
             echo "  ✗ $label: fetch failed: $(tail -c 300 "$d/fetch.err")" >&2; bad=1; continue
         fi
+        cross=""
+        [ "$arch" = aarch64 ] && [ -n "$zsha" ] && [ -n "$zbsha" ] && cross="--cross-zig-sha256 $zsha --cross-zigbuild-sha256 $zbsha"
+        # The fetched build-info.json, kept with the receipt: the signer
+        # checks an aarch64 build's toolchain hashes in it.
+        [ "$kind" = linux-bins ] && [ -f "$K2CR_FILES/$label/dist/build-info.json" ] \
+            && cp "$K2CR_FILES/$label/dist/build-info.json" "$d/build-info.json"
         # shellcheck disable=SC2086
         if python3 "$K2CR_PY" check-job --label "$label" --get "$d/get.json" --receipt "$d/receipt.json" \
             --fetched "$d/fetch.json" --commit "$K2CR_COMMIT" --tree "$K2CR_TREE" --argv-json "$argv_json" \
-            --nodes "$(k2cr_release_nodes)" --version "$K2CR_VERSION" --kind "$kind" --arch "$arch" $require \
+            --nodes "$(k2cr_release_nodes)" --version "$K2CR_VERSION" --kind "$kind" --arch "$arch" $require $cross \
             > "$K2CR_STATE/$label.verdict.json"; then
             echo "  ✓ $label verified (job ${job:0:8} on $node)" | tee -a "$K2CR_STATE/summary.txt"
         else

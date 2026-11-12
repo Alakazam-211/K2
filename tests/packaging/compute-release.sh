@@ -91,6 +91,15 @@ info = {"kind": kind, "version": "0.0.1" if tamper == "info_version" else versio
         "commit": commit, "tree": tree, "files": meta}
 if kind == "linux-bins":
     info.update(oauth="placeholder", ptyd_sha256=ptyd, export_sha256=export, deskd_sha256=deskd)
+    # The aarch64 cross build records the hash-pinned toolchain (the real
+    # build-linux-bins.sh writes the pins it checked; GEN_CROSS_* = those).
+    info["cross"] = None
+    if arch == "aarch64" and os.environ.get("GEN_ARM_CROSS", "pinned") != "none":
+        info["cross"] = {"host": "x86_64", "glibc": "2.28", "zig_version": "0.15.2", "cargo_zigbuild_version": "0.23.4",
+                         "zig_tarball_sha256": os.environ.get("GEN_CROSS_ZIG", ""),
+                         "cargo_zigbuild_crate_sha256": os.environ.get("GEN_CROSS_ZB", "")}
+        if os.environ.get("GEN_ARM_CROSS") == "bad_zig":
+            info["cross"]["zig_tarball_sha256"] = "e" * 64
 json.dump(info, open(os.path.join(out, "dist", "build-info.json"), "w"))
 PY
 
@@ -385,8 +394,9 @@ git -C "$repo_arm" add -A
 git -C "$repo_arm" -c user.email=t@t -c user.name=t commit -q -m release
 COMMIT_ARM="$(git -C "$repo_arm" rev-parse HEAD)"
 TREE_ARM="$(git -C "$repo_arm" rev-parse 'HEAD^{tree}')"
-ZIG="$(sed -n 's/^K2_CROSS_ZIG="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
-ZB="$(sed -n 's/^K2_CROSS_ZIGBUILD="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
+# The fake aarch64 build records the pinned cross toolchain hashes.
+export GEN_CROSS_ZIG="$(sed -n 's/^K2_CROSS_ZIG_SHA256_X86_64="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
+export GEN_CROSS_ZB="$(sed -n 's/^K2_CROSS_ZIGBUILD_CRATE_SHA256="\(.*\)"$/\1/p' "$ROOT/scripts/ci/cross-pins.sh")"
 # run_arm <name> [setup snippet]: init, submit, wait, collect at COMMIT_ARM;
 # echoes "<collect rc> <K2CR_X86_OK> <K2CR_ARM_OK> <K2CR_ARM_SUBMIT_OK>".
 run_arm() {
@@ -454,6 +464,20 @@ out="$(K2_COMPUTE_ARM_VERIFY_NODE=k2n10-vin run_arm arm-same)"
 out="$(K2_COMPUTE_ARM_VERIFY_NODE=none run_arm arm-nov2)"
 grep -q 'aarch64 on compute needs V2 on a second node' "$tmp/arm-nov2.submit" && pass "V2 off: refused (no aarch64 compute build without the dual build)" \
     || fail "arm no V2" "$out $(cat "$tmp/arm-nov2.submit")"
+[ -s "$tmp/arm/L2/build-info.json" ] && [ -s "$tmp/arm/V2/build-info.json" ] \
+    && pass "collect keeps L2's and V2's build-info.json in the audit dir (the signer's cross-toolchain evidence)" || fail "arm build-info kept" "$(ls "$tmp/arm/L2" "$tmp/arm/V2")"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); c=v["cross"]; assert c["zig_tarball_sha256"]==sys.argv[2] and c["cargo_zigbuild_crate_sha256"]==sys.argv[3], c' \
+        "$tmp/arm/L2.verdict.json" "$GEN_CROSS_ZIG" "$GEN_CROSS_ZB" \
+    && pass "L2's verdict records the cross toolchain hashes it checked" || fail "arm verdict cross" "$(cat "$tmp/arm/L2.verdict.json")"
+python3 "$PY" evidence-bundle --state "$tmp/arm" --git "$repo_arm" --arches x86_64,aarch64 > "$tmp/arm-bundle.json" 2>"$tmp/arm-bundle.err" \
+    && python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); assert set(b["build_info"]) == {"L2", "V2"}, b.get("build_info"); json.loads(b["build_info"]["L2"])["cross"]["zig_tarball_sha256"]' "$tmp/arm-bundle.json" \
+    && pass "evidence-bundle carries L2's and V2's build-info.json for the signer" || fail "bundle build_info" "$(cat "$tmp/arm-bundle.err")"
+for c in none bad_zig; do
+    out="$(GEN_ARM_CROSS=$c run_arm "arm-cross-$c")"
+    want="no cross toolchain hashes"; [ "$c" = bad_zig ] && want="zig tarball sha256 eeeeeeeeeeee"
+    [ "$out" = "1 1 0 1" ] && grep -q "$want" "$tmp/arm-cross-$c.collect" \
+        && pass "an aarch64 build-info with cross=$c: aarch64 not verified, x86_64 still is" || fail "arm cross $c" "$out $(cat "$tmp/arm-cross-$c.collect")"
+done
 out="$(K2_COMPUTE_ARM_NODE=none run_arm arm-none)"
 [ "$out" = "0 1 x x" ] && ! grep -q 'build-linux-bins.sh aarch64' "$tmp/calls-arm-none" && pass "K2_COMPUTE_ARM_NODE=none: no aarch64 jobs" \
     || fail "arm none" "$out"

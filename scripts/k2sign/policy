@@ -54,6 +54,13 @@ compute_needs = rust@{rust_pin} cmake@3 sys:pkg-config sys:zlib1g-dev
 # zig and cargo-zigbuild are not needs: build-linux-bins.sh fetches them
 # itself and refuses any bytes but scripts/ci/cross-pins.sh's hashes.
 compute_needs_aarch64 = cmake@3 sys:pkg-config sys:zlib1g-dev
+# The aarch64 cross toolchain, by hash (Steward 11-11; scripts/ci/
+# cross-pins.sh, which a test keeps equal): zig's x86_64 release tarball
+# and cargo-zigbuild's crates.io source. An aarch64 build (L2, V2) is
+# signed only when its build-info.json (whose bytes are in the job's
+# node-signed receipt) records exactly these.
+compute_aarch64_zig_sha256 = 02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239
+compute_aarch64_zigbuild_sha256 = 0b0c2fe7d5f1a782047272e3fc1cd44214c450776bbde564bf92b9776dc2d781
 # The artifact globs the plan collects (compute-release.sh --artifact).
 compute_artifacts = dist/*
 # The OAuth values come only from the vault, as these names (secret mode).

@@ -230,7 +230,9 @@ receipts**, which it checks itself against keys **root pinned** in
 verify job ran on two different pinned nodes, all were exclusive secret
 jobs, and the verify job rebuilt the daemon, root helper, k2-node and App
 engine byte for byte. An aarch64 daemon signs from compute only when the
-registered evidence has L2 and V2; otherwise it takes the GitHub path. The
+registered evidence has L2 and V2, and both recorded the zig tarball and
+cargo-zigbuild crate hashes the policy pins (`scripts/ci/cross-pins.sh`);
+otherwise it takes the GitHub path. The
 full rule list is in `docs/ci-on-k2-compute.md` ("Signing").
 
 Default nodes: L1 k2n7-vin, V1 k2n9-vin, L3 k2n8-vin, L2 k2n10-vin, V2

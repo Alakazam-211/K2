@@ -57,6 +57,17 @@ k2 ci — CI on K2 Compute: the daemon checks every push (no runner, no cron)
   k2 ci watch                   and checks each new tip of those branches
   k2 ci freeze --until <time|3d|12h> [--why "…"] | k2 ci freeze off
                                 flag a release freeze (no seat moves)
+  k2 ci cache trust [--json]    the branches whose CI checks may save the
+                                shared ("trusted") build cache every job here
+                                starts from (default: main). Only a check of
+                                a pushed commit on one of them saves it; every
+                                other job saves only its own scratch copy
+  k2 ci cache trust --remove BRANCH
+                                you (an agent) may remove a branch
+  k2 ci cache trust --add BRANCH | --set a,b
+                                a person's step (the owner or an Admin, from a
+                                terminal outside K2): an agent gets
+                                cache_trust_needs_person (exit 3)
   --workspace <name>            people: which workspace (default: the
                                 one this folder is in)
 
@@ -391,6 +402,7 @@ cmd_ci() {
     local ref="" tier="" wait=0 wait_min="" limit="" failures=0 poll="" max_inflight="" skip=0 until="" why=""
     local sha="" builds="" plan=0 out_dir="" no_files=0 tests_filter="" days=""
     local branch="" mkind="" mcount="" mover="" mcooldown="" mto="" mfor=""
+    local tadd="" tset="" tremove="" tset_given=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; have_cmd=1; argv=("$@"); break ;;
@@ -425,6 +437,12 @@ cmd_ci() {
                     --max-inflight) max_inflight="$2" ;; --until) until="$2" ;; --why) why="$2" ;;
                     --sha) sha="$2" ;; --build|--builds) builds="$2" ;; --out) out_dir="$2" ;;
                 esac
+                shift 2 ;;
+            # Blacksmith class B2: k2 ci cache trust.
+            --add|--set|--remove)
+                [ "$sub" = "cache" ] || { echo "usage: $1 goes with k2 ci cache trust" >&2; exit 2; }
+                [ -n "${2:-}" ] || { echo "usage: $1 needs a branch (k2 ci cache trust --help)" >&2; exit 2; }
+                case "$1" in --add) tadd="$2" ;; --set) tset="$2"; tset_given=1 ;; --remove) tremove="$2" ;; esac
                 shift 2 ;;
             --*) echo "usage: unknown flag '$1' (k2 ci --help)" >&2; exit 2 ;;
             *) pos+=("$1"); shift ;;
@@ -789,6 +807,33 @@ print(json.dumps(o))' "$ws" "$secs" "$why")"
             fi
             _ci_call POST freeze "$body"
             if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else _ci_render freeze; fi
+            ;;
+        cache)
+            [ "${pos[0]:-}" = "trust" ] || { echo "usage: k2 ci cache trust [--add B | --set a,b | --remove B] [--json]" >&2; exit 2; }
+            if [ -z "$tadd$tremove" ] && [ "$tset_given" = 0 ]; then
+                q="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.urlencode({"workspace": sys.argv[1]} if sys.argv[1] else {}))' "$ws")"
+                _ci_call GET cache/trust "$q"
+            else
+                body="$(python3 -c '
+import json, sys
+ws, add, st, given, rm = sys.argv[1:6]
+o = {"workspace": ws} if ws else {}
+split = lambda x: [b.strip() for b in x.split(",") if b.strip()]
+if add: o["add"] = split(add)
+if given == "1": o["set"] = split(st)
+if rm: o["remove"] = split(rm)
+print(json.dumps(o))' "$ws" "$tadd" "$tset" "$tset_given" "$tremove")"
+                _ci_call POST cache/trust/set "$body"
+            fi
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else
+                printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+b = v.get("branches") or []
+print("trusted branches (%s): %s%s" % (v.get("workspace"), ", ".join(b) or "none", " (the default)" if v.get("default") else ""))
+if v.get("by"): print("set by %s" % v["by"])
+print(v.get("note", ""))'
+            fi
             ;;
         *) echo "usage: unknown k2 ci verb '$sub' (k2 ci --help)" >&2; exit 2 ;;
     esac

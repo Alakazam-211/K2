@@ -347,7 +347,11 @@ L2 and V2 in place of L1 and V1):
 - each job was a **secret job** (the Gmail id and secret from the vault,
   plus the optional Microsoft id; the same set on L1 and V1), so it built
   in its own target with its own `CARGO_HOME` and sccache: the receipt
-  says `warmth: private`. `K2_COMPUTE_OAUTH=env` or `placeholder` builds
+  says `warmth: private`. Release builds never fork a cache generation
+  (their receipts stay `private`); with cache generations on a node, only
+  a *non-release* secret job running as a per-job uid starts from a copy
+  of the trusted cache, and it saves nothing back (k2 study compute,
+  CACHE GENERATIONS). `K2_COMPUTE_OAUTH=env` or `placeholder` builds
   are refused (the pre-flight says so first). The rustc that ran is the pin;
 - each job built the tree GitHub's tag `v<x>` has, at the tag commit or
   at a commit (hashed by the signer) with that tree whose only parent is
@@ -536,3 +540,10 @@ or GUI shell on z3mbpZ. Nothing here needs a GitHub runner.
   (Rosson 2026-10-29).
 - **Disk guard:** a CI-tier job is stopped for `disk_low` only when no
   other job is left to stop.
+- **Cache generations** (prd-compute-blacksmith-class-v1, slices B1/B2;
+  the node owner's `sudo k2-node admin cache-gens on`, protocol 10): a CI
+  check of a trusted branch (`k2 ci cache trust`, default `main`), from a
+  watched push or a commit the remote's branch has, saves the shared
+  "trusted" build cache when it passes; every other job saves only its own
+  scratch copy. Placement prefers the node whose trusted head is the
+  commit, or an ancestor within 50 commits.

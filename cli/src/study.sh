@@ -721,9 +721,25 @@ WHEN IT SAYS NO (exit 2 usage, 3 refused, 4 not found, 1 failed)
   ci_remote_unreachable  git ls-remote failed (this machine's git login)
   ci_watch_invalid       remote, branches, poll, tier or max out of range
   compute_off            your "Allow compute nodes" switch is off
+  cache_trust_needs_person  adding a trusted branch is a person's (the
+                         owner or an Admin, from a terminal outside K2);
+                         you may only remove one
   A check "not submitted: ci_not_allowed" = the grant lacks --ci (use
   --tier standard, or ask for --ci); "not_granted" = no node granted.
   A run is skipped when its commit has no .k2/ci.toml.
+
+TRUSTED CACHE (nodes with cache generations; k2 study compute)
+  Every job on such a node starts from a copy of the last good build. Only
+  CI checks of a TRUSTED branch save the shared copy, and only when the
+  commit is verified on that branch: a watched push to it, or a k2 ci run
+  whose commit the remote's branch has (the daemon fetches it into
+  refs/k2-ci/<branch> to check; --ref alone is just a label). A check of
+  any other branch, a local commit, or any plain k2 compute run saves only
+  its own scratch copy. Trusted branches are server state, never read from
+  .k2/ci.toml (a PR could name its own branch there):
+    k2 ci cache trust                the list (default: main)
+    k2 ci cache trust --remove B     yours to do
+    k2 ci cache trust --add B        a person's (cache_trust_needs_person)
 
 ALSO
   k2 ci freeze --until 3d --why "0.9 release": a release freeze (K2 moves
@@ -6978,6 +6994,26 @@ CACHES (0.46.6)
   own workspace's (k2 compute cache clear [--name NAME]); owner/admin clear
   any with k2 compute cache clear --workspace <ws> [--name NAME].
 
+CACHE GENERATIONS (nodes whose owner turned them on)
+  On such a node (k2 compute cache --lineage lists what it holds) a job
+  doesn't share one warm build folder with every other job: it starts from
+  a COPY of the last good build (target dir, CARGO_HOME and sccache
+  together) and only some jobs save their copy back:
+    - CI checks of your trusted branches (k2 ci cache trust; default main),
+      run by the daemon from a commit that is pushed there, that pass:
+      they save the shared "trusted" copy every job here starts from;
+    - any other job (a PR branch, a plain k2 compute run, --dirty): saves
+      only its own scratch copy (its branch, or wt:<worktree> for --dirty),
+      which only later runs of the same branch or worktree start from, and
+      only until the trusted copy is newer;
+    - a secret job, a release build: save nothing.
+  So nothing a PR or a plain run writes into target/ or CARGO_HOME ever
+  reaches a trusted check, and several jobs of one repo start warm at once.
+  The log's "target dir:" line says which copy a job started from;
+  k2 compute result shows cache {lineage, seq, committed, why}.
+  Plain runs never save the trusted copy, even at --sha main: their
+  command is whatever the caller typed. Only CI checks do.
+
 TIERS (queue lines, like an airport; 0.46.6)
   Which line?
     a normal build or test            no flag (Standard)
@@ -7267,6 +7303,11 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   build is cold, and it needs the network for dependencies unless they
   are vendored (cargo vendor). Split slow builds from the step that
   needs the secret when you can.
+  Exception (cache generations, CACHE GENERATIONS below): on a Linux node
+  that runs each secret job as a uid of its own (it offers job-uid) and
+  keeps cache generations, a secret job starts from a copy of the trusted
+  build cache (warm) and saves nothing back: the copy sits in its own
+  folder, owned by its own uid, and is deleted with it.
   Revoking a grant never stops a running job (it already has the value);
   the next attempt is refused (secret_not_granted). k2 vault revoke lists
   the running jobs that got it. --plan shows each secret's env name and

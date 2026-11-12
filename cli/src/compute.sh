@@ -352,6 +352,13 @@ Agents:
                  this server's --cache folders on its nodes: size, last use,
                  busy (a running job holds it; never cleared). Owner/admin,
                  or an agent allowed to manage compute nodes
+  k2 compute cache --lineage trusted|scratch|release|all [--node N] [--json]
+                 cache generations (nodes whose owner turned them on): per
+                 node, each copy of this workspace's build cache (target,
+                 CARGO_HOME, sccache): the shared one your trusted branches'
+                 CI checks save (k2 ci cache trust), each branch's or
+                 worktree's own scratch copy; its newest version (#seq,
+                 commit), size, last use, jobs running from it
   k2 compute queue <node> [--json]
                  the node's whole queue, with WHY each job waits: on a shared
                  node, other servers' jobs show only as "another server" with
@@ -1939,21 +1946,49 @@ print(j["id"] + "\t" + ("set" if v.get("shards") else "one") + "\t" + clean(line
 # k2 compute cache [list|clear] — this server's job caches on its nodes
 # (`--cache NAME`, 0.46.6).
 cmd_compute_cache() {
-    local verb="list" node="" ws="" name="" all=0 as_json=0
+    local verb="list" node="" ws="" name="" all=0 as_json=0 lineage=""
     case "${1:-}" in
         list|ls) shift ;;
         clear|rm) verb="clear"; shift ;;
     esac
     while [ $# -gt 0 ]; do
         case "$1" in
+            # Blacksmith class B2: cache generations, per lineage.
+            --lineage)
+                case "${2:-}" in trusted|scratch|release|all) lineage="$2" ;; *) echo "usage: --lineage trusted|scratch|release|all" >&2; exit 2 ;; esac
+                shift 2 ;;
             --node) node="${2:-}"; shift 2 ;;
             --workspace) ws="${2:-}"; shift 2 ;;
             --name) name="${2:-}"; shift 2 ;;
             --all) all=1; shift ;;
             --json) as_json=1; shift ;;
-            *) echo "usage: k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--json] | clear (--workspace WS | --all) [--name NAME] [--node N]" >&2; exit 2 ;;
+            *) echo "usage: k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--lineage trusted|scratch|release|all] [--json] | clear (--workspace WS | --all) [--name NAME] [--node N]" >&2; exit 2 ;;
         esac
     done
+    if [ -n "$lineage" ]; then
+        [ "$verb" = "list" ] || { echo "usage: --lineage goes with k2 compute cache list" >&2; exit 2; }
+        local q=""
+        [ -n "$node" ] && q="$q&node=$(urlencode "$node")"
+        [ -n "$ws" ] && q="$q&workspace=$(urlencode "$ws")"
+        [ "$lineage" != "all" ] && q="$q&lineage=$lineage"
+        _compute_call GET /cli/compute/cache/lineages "${q#&}"
+        if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; exit 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+nodes = v.get("nodes") or []
+if not nodes:
+    print("no cache generations of %s on any connected node (a node keeps them once its owner turns them on: sudo k2-node admin cache-gens on)" % v.get("workspace"))
+for n in nodes:
+    print("%s:" % n["node"])
+    for l in n["lineages"]:
+        age = l.get("ageSecs") or 0
+        ago = "%dm" % (age // 60) if age < 7200 else ("%dh" % (age // 3600) if age < 172800 else "%dd" % (age // 86400))
+        print("  %-28s #%-4s %s  %6.1f GB  used %s ago%s" % (l["lineage"], l["headSeq"], l["headCommit"][:10], l["bytes"] / 1073741824.0, ago, ("  (%d forks running)" % l["forks"]) if l.get("forks") else ""))
+    if n.get("truncated"):
+        print("  (more lineages than the node reports)")'
+        exit 0
+    fi
     if [ "$verb" = "clear" ]; then
         if [ -z "$ws" ] && [ "$all" = "0" ] && ! _compute_in_session; then
             echo "usage: k2 compute cache clear --workspace WS [--name NAME] (or --all for every workspace's caches)" >&2; exit 2

@@ -33,7 +33,8 @@
 //! Project chat post (`msg`) is open to every login. The
 //! `dashboard/*` mutations — and the §6.7.7 `set-icon` / `set-color`
 //! appearance mutations, and `set-default-view` (prd-projects-threads-v1
-//! §4.2: it changes the view everyone's agent tiles open in) — additionally
+//! §4.2: it changes the view everyone's agent tiles open in) and
+//! `set-member-default-view` (0302: the same, for one agent's tile) — additionally
 //! require the owner-or-admin bit
 //! (PRD §6.3 resolved Q2 — viewers see but cannot save), enforced in
 //! the dispatcher arm where the query string lives. Human chat author
@@ -54,7 +55,8 @@
 //! - `project-group:message-created` `{groupId, groupName, messageId,
 //!   author}` — every STORED chat message, emitted BEFORE the
 //!   injection so an open drawer never waits on a slow wake.
-//! - `project-group:members-changed` `{groupId}` — add/remove member.
+//! - `project-group:members-changed` `{groupId}` — add/remove member,
+//!   set-member-default-view.
 //! - `project-group:poc-changed` `{groupId, pocWorkspaceId}` —
 //!   `set-poc` + the first-member auto-PoC on `add-member`.
 //! - `project-group:layout-changed` `{groupId, dashboardId, revision}`
@@ -212,6 +214,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/project-group/set-icon"
         | "/cli/project-group/set-color"
         | "/cli/project-group/set-default-view"
+        | MEMBER_VIEW_PATH
         | "/cli/project-group/dashboard/save-layout"
         | "/cli/project-group/dashboard/rename"
         | "/cli/project-group/dashboard/create"
@@ -489,6 +492,7 @@ pub fn dispatch_post(path: &str, body: &[u8], session_author: &str) -> CliRespon
         "/cli/project-group/set-icon" => handle_set_icon(body),
         "/cli/project-group/set-color" => handle_set_color(body),
         "/cli/project-group/set-default-view" => handle_set_default_view(body),
+        MEMBER_VIEW_PATH => handle_set_member_default_view(body),
         "/cli/project-group/dashboard/save-layout" => handle_save_layout(body),
         "/cli/project-group/dashboard/rename" => handle_dashboard_rename(body),
         "/cli/project-group/dashboard/create" => handle_dashboard_create(body),
@@ -520,11 +524,16 @@ fn is_admin_only(path: &str) -> bool {
         || path == "/cli/project-group/set-icon"
         || path == "/cli/project-group/set-color"
         || path == SET_DEFAULT_VIEW_PATH
+        || path == MEMBER_VIEW_PATH
         || path == "/cli/project-group/delete"
 }
 
 /// `POST /cli/project-group/set-default-view` (prd-projects-threads-v1 §4.2).
 pub const SET_DEFAULT_VIEW_PATH: &str = "/cli/project-group/set-default-view";
+
+/// `POST /cli/project-group/set-member-default-view` (0302): the view one
+/// agent's tile opens in on the project's dashboards, for everyone.
+pub const MEMBER_VIEW_PATH: &str = "/cli/project-group/set-member-default-view";
 
 /// The refusal a Member login gets for deleting a project.
 fn delete_needs_admin() -> CliResponse {
@@ -719,6 +728,13 @@ pub fn dispatch_post_as(
                         "only the owner, an admin, or an agent with 'Manage K2 projects' can change \
                          the view a project opens its agents in (it changes it for everyone)",
                     )
+                } else if path == MEMBER_VIEW_PATH {
+                    error_response(
+                        "403 Forbidden",
+                        "forbidden",
+                        "only the owner, an admin, or an agent with 'Manage K2 projects' can change \
+                         the view an agent opens in on a project (it changes it for everyone)",
+                    )
                 } else {
                     error_response(
                         "403 Forbidden",
@@ -858,6 +874,7 @@ fn build_show_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
     };
     let members = project_groups::list_members(group_id).map_err(core_error)?;
     let dashboards = project_groups::list_dashboards(group_id).map_err(core_error)?;
+    let own_views = project_groups::member_default_views(group_id).map_err(core_error)?;
     let members_json: Vec<serde_json::Value> = members
         .iter()
         .map(|m| {
@@ -865,12 +882,23 @@ fn build_show_json(group_id: &str) -> Result<serde_json::Value, CliResponse> {
             let agent_name = path
                 .as_deref()
                 .map(k2_core::workspace::display::agent_display_name);
+            // The same answer `GET /cli/sessions/lookup-by-agent?agent=<id>`
+            // gives (the canonical session is keyed by the workspace id), so
+            // the nav needs no call per agent. A snapshot: no event moves it.
+            let live = crate::session_lookup::lookup_any(&m.workspace_id);
+            let own_view = own_views.get(&m.workspace_id);
             serde_json::json!({
                 "workspaceId": m.workspace_id,
                 "name": name,
                 "path": path,
                 "agentName": agent_name,
                 "createdAt": m.created_at,
+                "sessionAlive": live.is_some(),
+                "sessionId": live.map(|l| l.session_id().to_string()),
+                // 0302: the view this agent's tile opens in (its own, else
+                // the project's), and its own (null = follows the project).
+                "defaultView": own_view.unwrap_or(&group.default_view),
+                "ownDefaultView": own_view,
             })
         })
         .collect();
@@ -1333,6 +1361,58 @@ pub fn handle_set_default_view(body: &[u8]) -> CliResponse {
         }
         Err(e) => core_error(e),
     }
+}
+
+/// Handler for `POST /cli/project-group/set-member-default-view` (0302):
+/// `{group, workspace, view}`. `workspace` is a member's name, path or id;
+/// `view` is `terminal`, `thread` or `chatter` (that agent's own view, for
+/// everyone) or `null` (it follows the project's `defaultView` again). The
+/// key is required, so a client that forgets it never clears a view by
+/// accident. Same rule as `set-default-view` (checked in
+/// [`dispatch_post_as`]). Answers `{ok, groupId, workspaceId, defaultView,
+/// ownDefaultView}` (the member's `show` fields) and emits
+/// `project-group:members-changed`. Never injects.
+pub fn handle_set_member_default_view(body: &[u8]) -> CliResponse {
+    let v: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    let view = match v.get("view") {
+        None => {
+            return usage_error(
+                "missing 'view' (terminal, thread or chatter; null makes the agent follow the project's view)",
+            )
+        }
+        Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(other) => {
+            return usage_error(format!("view must be terminal, thread or chatter, got {other}"))
+        }
+    };
+    let (group_id, workspace_id, _) = match parse_member_body(body) {
+        Ok(t) => t,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = project_groups::set_member_default_view(&group_id, &workspace_id, view.as_deref()) {
+        return core_error(e);
+    }
+    let Some(group) = project_groups::get_group_by_id(&group_id) else {
+        return resolve_error_response(&group_id, ResolveError::NotFound);
+    };
+    emit(
+        k2_core::agent_hooks::HookEvent::ProjectGroupMembersChanged,
+        serde_json::json!({ "groupId": group_id }),
+    );
+    CliResponse::ok_json(
+        serde_json::json!({
+            "ok": true,
+            "groupId": group_id,
+            "workspaceId": workspace_id,
+            "defaultView": view.as_deref().unwrap_or(&group.default_view),
+            "ownDefaultView": view,
+        })
+        .to_string(),
+    )
 }
 
 /// `POST /cli/project-group/add-member` /
@@ -3597,6 +3677,7 @@ mod tests {
             "/cli/project-group/set-icon",
             "/cli/project-group/set-color",
             "/cli/project-group/set-default-view",
+            "/cli/project-group/set-member-default-view",
             "/cli/project-group/dashboard/save-layout",
             "/cli/project-group/dashboard/rename",
             "/cli/project-group/dashboard/create",
@@ -3829,6 +3910,186 @@ mod tests {
         assert_eq!(resp.status, "404 Not Found", "body={}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
         assert_eq!(v["error"]["code"], "not_found");
+    }
+
+    /// `show` answers, per member, what the nav used to ask once per agent
+    /// (`sessions/lookup-by-agent`): `sessionAlive` and `sessionId`, keyed by
+    /// the member's workspace id exactly like that lookup.
+    #[test]
+    fn project_group_show_members_carry_session_liveness() {
+        let name = gname("liveness");
+        let gid = create_group_via_route(&name)["id"].as_str().expect("id").to_string();
+        let (live_id, _, _) = insert_workspace("live");
+        let (idle_id, _, _) = insert_workspace("idle");
+        for ws in [&live_id, &idle_id] {
+            ok_json(post_json(
+                "/cli/project-group/add-member",
+                serde_json::json!({ "group": gid, "workspace": ws }),
+            ));
+        }
+        let member = |v: &serde_json::Value, id: &str| {
+            v["members"]
+                .as_array()
+                .expect("members")
+                .iter()
+                .find(|m| m["workspaceId"] == id)
+                .unwrap_or_else(|| panic!("{id} in {v}"))
+                .clone()
+        };
+        let before = ok_json(show(&gid));
+        for id in [&live_id, &idle_id] {
+            assert_eq!(member(&before, id)["sessionAlive"], false, "{before}");
+            assert!(member(&before, id)["sessionId"].is_null(), "{before}");
+        }
+
+        // A live session registered under the member's workspace id (the
+        // key `lookup-by-agent` and the canonical spawn use).
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio");
+        let _enter = rt.enter();
+        let session = k2_core::test_env::spawn_plain_pty(k2_core::terminal::DaemonPtyConfig {
+            program: Some("cat".to_string()),
+            cwd: Some(std::path::PathBuf::from("/tmp")),
+            ..Default::default()
+        })
+        .expect("spawn cat");
+        crate::v2_session_map::register(live_id.clone(), session.clone());
+
+        let after = ok_json(show(&gid));
+        let live = member(&after, &live_id);
+        assert_eq!(live["sessionAlive"], true, "{after}");
+        assert_eq!(live["sessionId"], session.session_id.to_string().as_str(), "{after}");
+        let idle = member(&after, &idle_id);
+        assert_eq!(idle["sessionAlive"], false, "{after}");
+        assert!(idle["sessionId"].is_null(), "{after}");
+        // The same answer the per-agent lookup gives.
+        let lookup = crate::session_lookup::lookup_any(&live_id).expect("live");
+        assert_eq!(live["sessionId"], lookup.session_id().to_string().as_str());
+
+        crate::v2_session_map::unregister(&live_id);
+        session.kill();
+        let gone = ok_json(show(&gid));
+        assert_eq!(member(&gone, &live_id)["sessionAlive"], false, "{gone}");
+        assert!(member(&gone, &live_id)["sessionId"].is_null(), "{gone}");
+    }
+
+    /// 0302: each member has its own view. `show` gives every member
+    /// `defaultView` (the view its tile opens in: its own, else the
+    /// project's) and `ownDefaultView` (its own, or null when it follows
+    /// the project). `set-member-default-view` sets one (`view` one of the
+    /// three) or clears it (`view: null`), emits members-changed, and is a
+    /// loud usage / not_a_member / not_found on anything else.
+    #[test]
+    fn project_group_member_default_view_route() {
+        install_capture_sink();
+        let name = gname("member-view");
+        let gid = create_group_via_route(&name)["id"].as_str().expect("id").to_string();
+        let (a_id, a_name, _) = insert_workspace("mv-a");
+        let (b_id, _, b_path) = insert_workspace("mv-b");
+        let (out_id, _, _) = insert_workspace("mv-out");
+        for ws in [&a_id, &b_id] {
+            ok_json(post_json(
+                "/cli/project-group/add-member",
+                serde_json::json!({ "group": gid, "workspace": ws }),
+            ));
+        }
+        let views = |id: &str| {
+            let v = ok_json(show(&gid));
+            let m = v["members"]
+                .as_array()
+                .expect("members")
+                .iter()
+                .find(|m| m["workspaceId"] == id)
+                .unwrap_or_else(|| panic!("{id} in {v}"))
+                .clone();
+            (m["defaultView"].clone(), m["ownDefaultView"].clone())
+        };
+        let s = |x: &str| serde_json::json!(x);
+        let null = serde_json::Value::Null;
+        assert_eq!(views(&a_id), (s("thread"), null.clone()), "members start on the project's view");
+
+        // Set one member (addressed by name, then by path); the other follows the project.
+        let mark = event_mark();
+        let set = ok_json(post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": name, "workspace": a_name, "view": "terminal" }),
+        ));
+        assert_eq!(set["ok"], true, "{set}");
+        assert_eq!(set["groupId"], gid.as_str(), "{set}");
+        assert_eq!(set["workspaceId"], a_id.as_str(), "{set}");
+        assert_eq!(set["defaultView"], "terminal", "{set}");
+        assert_eq!(set["ownDefaultView"], "terminal", "{set}");
+        assert_eq!(
+            events_for_group(mark, &gid).iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+            vec!["project-group:members-changed"]
+        );
+        assert_eq!(views(&a_id), (s("terminal"), s("terminal")));
+        assert_eq!(views(&b_id), (s("thread"), null.clone()));
+        ok_json(post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": gid, "workspace": b_path, "view": "chatter" }),
+        ));
+        assert_eq!(views(&b_id), (s("chatter"), s("chatter")));
+
+        // The project's view moves only the members that follow it.
+        ok_json(post_json(
+            "/cli/project-group/set-default-view",
+            serde_json::json!({ "group": gid, "view": "chatter" }),
+        ));
+        assert_eq!(views(&a_id), (s("terminal"), s("terminal")), "its own view stays");
+        let cleared = ok_json(post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": null }),
+        ));
+        assert_eq!(cleared["defaultView"], "chatter", "{cleared}");
+        assert!(cleared["ownDefaultView"].is_null(), "{cleared}");
+        assert_eq!(views(&a_id), (s("chatter"), null.clone()), "cleared: follows the project again");
+
+        // Usage (400): bad or missing view, missing group or workspace, bad JSON.
+        for body in [
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": "split" }),
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": "heartbeats" }),
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": "Thread" }),
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": "" }),
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": 3 }),
+            serde_json::json!({ "group": gid, "workspace": a_id }),
+            serde_json::json!({ "workspace": a_id, "view": "thread" }),
+            serde_json::json!({ "group": gid, "view": "thread" }),
+        ] {
+            let resp = post_json(MEMBER_VIEW_PATH, body.clone());
+            assert_eq!(resp.status, "400 Bad Request", "body={body} resp={}", resp.body);
+            let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+            assert_eq!(v["error"]["code"], "usage", "body={body}: {v}");
+        }
+        let resp = post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": gid, "workspace": a_id, "view": "split" }),
+        );
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["hint"], "view must be terminal, thread or chatter, got 'split'", "{v}");
+        let resp = post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": gid, "workspace": a_id }),
+        );
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert!(
+            v["error"]["hint"].as_str().expect("hint").contains("null"),
+            "a missing view says how to clear: {v}"
+        );
+        assert_eq!(views(&a_id), (s("chatter"), null.clone()), "refusals change nothing");
+
+        // Not a member: 403 not_a_member. Unknown project: 404 not_found.
+        let resp = post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": gid, "workspace": out_id, "view": "thread" }),
+        );
+        assert_eq!(resp.status, "403 Forbidden", "{}", resp.body);
+        let v: serde_json::Value = serde_json::from_str(&resp.body).expect("valid JSON");
+        assert_eq!(v["error"]["code"], "not_a_member", "{v}");
+        let resp = post_json(
+            MEMBER_VIEW_PATH,
+            serde_json::json!({ "group": format!("zzz-no-such-{}", uuid::Uuid::new_v4()), "workspace": a_id, "view": "thread" }),
+        );
+        assert_eq!(resp.status, "404 Not Found", "{}", resp.body);
     }
 
     // ── §4.5 — the PoC workspace-removal guard ────────────────────────
@@ -4694,6 +4955,74 @@ mod agent_switch_tests {
         assert!(is_admin_only(SET_DEFAULT_VIEW_PATH));
     }
 
+    /// 0302: one agent's own view changes what everyone's tile for it opens
+    /// in, so it follows the project view's rule: among logins the owner or
+    /// an admin (a Member gets 403 forbidden, nothing changes); an agent
+    /// follows its 'Manage K2 projects' switch; the owner token and a shell
+    /// tab may. Wiring: Admin floor, behind the switch, owner-or-admin.
+    #[test]
+    fn only_admins_and_managing_agents_set_a_members_view() {
+        let _home = crate::test_support::TempHome::new();
+        use k2_core::connect_users::{add_user, set_role, Role};
+        let member = format!("pgmm{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let admin = format!("pgma{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        add_user(&member, "password123").expect("member");
+        add_user(&admin, "password123").expect("admin");
+        set_role(&admin, Role::Admin).expect("make admin");
+        let (on_id, _, _) = insert_workspace("mview-agent-on");
+        let (off_id, _, _) = insert_workspace("mview-agent-off");
+        k2_core::workspace::settings::set_agents_can_manage_projects(&off_id, false).expect("switch off");
+
+        let name = format!("pgs-mview-{}", uuid::Uuid::new_v4());
+        let created = ok(post("/cli/project-group/create", serde_json::json!({ "name": name }), &Caller::Owner));
+        let gid = created["id"].as_str().expect("id").to_string();
+        ok(post(
+            "/cli/project-group/add-member",
+            serde_json::json!({ "group": gid, "workspace": on_id }),
+            &Caller::Owner,
+        ));
+        let set = |view: Option<&str>, caller: &Caller| {
+            post(MEMBER_VIEW_PATH, serde_json::json!({ "group": gid, "workspace": on_id, "view": view }), caller)
+        };
+        let stored = || project_groups::member_default_views(&gid).expect("views").get(&on_id).cloned();
+
+        let r = set(Some("terminal"), &Caller::Login { username: member.clone() });
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON body");
+        assert_eq!(v["error"]["code"], "forbidden", "{v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("owner, an admin, or an agent with 'Manage K2 projects'"), "{hint}");
+        assert!(hint.contains("view an agent opens in"), "{hint}");
+        refused_off(&set(Some("terminal"), &agent(&off_id)));
+        for c in [Caller::WrongCredential, Caller::Invalid] {
+            assert_eq!(set(Some("terminal"), &c).status, "403 Forbidden", "{c:?}");
+        }
+        assert_eq!(stored(), None, "refusals change nothing");
+
+        assert_eq!(ok(set(Some("terminal"), &Caller::Login { username: admin }))["ownDefaultView"], "terminal");
+        assert_eq!(ok(set(Some("chatter"), &agent(&on_id)))["ownDefaultView"], "chatter");
+        assert_eq!(ok(set(Some("thread"), &Caller::Shell { project_id: on_id.clone() }))["ownDefaultView"], "thread");
+        assert!(ok(set(None, &Caller::Owner))["ownDefaultView"].is_null());
+        assert_eq!(stored(), None);
+
+        // The refusal is audited as the Member.
+        let lines = audit_lines(&name);
+        assert!(
+            lines.iter().any(|e| e["event"] == "project-set-member-default-view"
+                && e["user"] == Caller::Login { username: member.clone() }.audit_user().as_str()
+                && e["outcome"].as_str().is_some_and(|o| o.starts_with("refused:forbidden"))),
+            "no refused set-member-default-view line for the Member: {lines:?}"
+        );
+
+        assert_eq!(
+            crate::routes::route_policy::lookup(MEMBER_VIEW_PATH).and_then(|r| r.post),
+            Some(crate::routes::route_policy::Floor::Admin)
+        );
+        assert!(crate::routes::route_policy::post_allowed(MEMBER_VIEW_PATH));
+        assert!(is_gated_mutation(MEMBER_VIEW_PATH));
+        assert!(is_admin_only(MEMBER_VIEW_PATH));
+    }
+
     /// Two clients add a pane to the same dashboard at the same time:
     /// both panes land (the old whole-layout save lost one). Remove takes
     /// one pane off, the rest stay; non-members and non-HTML files are
@@ -4869,6 +5198,7 @@ mod agent_switch_tests {
             "/cli/project-group/set-icon",
             "/cli/project-group/set-color",
             "/cli/project-group/set-default-view",
+            "/cli/project-group/set-member-default-view",
             "/cli/project-group/dashboard/save-layout",
             "/cli/project-group/dashboard/rename",
             "/cli/project-group/dashboard/create",

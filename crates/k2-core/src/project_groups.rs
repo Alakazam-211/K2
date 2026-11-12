@@ -596,6 +596,74 @@ pub fn set_group_default_view(id: &str, view: &str) -> Result<ProjectGroup, Stri
     get_group_by_id(id).ok_or_else(|| "project group vanished after default view set".to_string())
 }
 
+/// Each member's own view (0302), by workspace id: only members that have
+/// one. A member missing from the map follows the project's
+/// `default_view`. `group_id` must be a FULL id; an unknown group is an
+/// empty map (it has no members).
+pub fn member_default_views(group_id: &str) -> Result<HashMap<String, String>, String> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn
+        .prepare(
+            "SELECT workspace_id, default_view FROM project_group_members \
+             WHERE group_id = ?1 AND default_view IS NOT NULL",
+        )
+        .map_err(|e| format!("prepare: {e}"))?;
+    let rows = stmt
+        .query_map(params![group_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|e| format!("query: {e}"))?;
+    rows.collect::<Result<HashMap<_, _>, _>>().map_err(|e| format!("row: {e}"))
+}
+
+/// Set (or with `None`, clear) the view one member's tile opens in on the
+/// project's dashboards, for everyone (0302). `Some` takes one of
+/// [`DEFAULT_VIEWS`], exactly, like [`set_group_default_view`]; `None`
+/// makes the member follow the project's view again. A workspace that is
+/// not a member is `not_a_member`; an unknown group fails loudly. Bumps the
+/// group's `updated_at`. Both ids must be FULL ids.
+pub fn set_member_default_view(
+    group_id: &str,
+    workspace_id: &str,
+    view: Option<&str>,
+) -> Result<(), String> {
+    if let Some(v) = view {
+        if !DEFAULT_VIEWS.contains(&v) {
+            return Err(format!("usage: view must be terminal, thread or chatter, got '{v}'"));
+        }
+    }
+    let now = now_secs();
+    let db = crate::db::shared();
+    let conn = db.lock();
+    let group_exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) > 0 FROM project_groups WHERE id = ?1",
+            params![group_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("group read failed: {e}"))?;
+    if !group_exists {
+        return Err(format!("no project group with id {group_id}"));
+    }
+    let updated = conn
+        .execute(
+            "UPDATE project_group_members SET default_view = ?3 \
+             WHERE group_id = ?1 AND workspace_id = ?2",
+            params![group_id, workspace_id, view],
+        )
+        .map_err(|e| format!("member view update failed: {e}"))?;
+    if updated == 0 {
+        return Err(format!(
+            "not_a_member: {workspace_id} is not a member of this project — add it first"
+        ));
+    }
+    conn.execute(
+        "UPDATE project_groups SET updated_at = ?2 WHERE id = ?1",
+        params![group_id, now],
+    )
+    .map_err(|e| format!("group touch failed: {e}"))?;
+    Ok(())
+}
+
 /// Delete a group. SQL CASCADE (foreign_keys=ON at connection open)
 /// removes its members, messages, and dashboards — NEVER the workspaces
 /// themselves (locked default, PRD ledger §11). `id` must be a FULL id.
@@ -2402,6 +2470,57 @@ mod tests {
 
         // An unknown group fails loudly.
         assert!(set_group_default_view("nope", "thread").is_err());
+    }
+
+    #[test]
+    fn a_member_view_is_its_own_and_clears_back_to_the_project() {
+        let g = create_group(&gname("memberview")).expect("create");
+        let (a, b, stranger) = (wid("a"), wid("b"), wid("out"));
+        add_member(&g.id, &a).expect("add a");
+        add_member(&g.id, &b).expect("add b");
+        assert!(member_default_views(&g.id).expect("views").is_empty(), "members start following the project");
+
+        for view in DEFAULT_VIEWS {
+            set_member_default_view(&g.id, &a, Some(view)).expect("set view");
+            let views = member_default_views(&g.id).expect("views");
+            assert_eq!(views.get(&a).map(String::as_str), Some(view), "{views:?}");
+            assert!(!views.contains_key(&b), "only that member: {views:?}");
+        }
+        // The project's own view is untouched by a member's.
+        assert_eq!(get_group_by_id(&g.id).expect("get").default_view, "thread");
+
+        // A set bumps updated_at (backdate first: the clock is in seconds).
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.execute("UPDATE project_groups SET updated_at = 1 WHERE id = ?1", params![g.id])
+                .expect("backdate");
+        }
+        set_member_default_view(&g.id, &a, Some("terminal")).expect("set terminal");
+        assert!(get_group_by_id(&g.id).expect("get").updated_at > 1, "updated_at bumps");
+
+        // Anything but the three words is usage and changes nothing.
+        for bad in ["split", "heartbeats", "Thread", " thread", "", "chat"] {
+            let err = set_member_default_view(&g.id, &a, Some(bad)).expect_err("bad view must fail");
+            assert!(err.starts_with("usage: view must be terminal, thread or chatter"), "'{bad}' got: {err}");
+        }
+        assert_eq!(member_default_views(&g.id).expect("views").get(&a).map(String::as_str), Some("terminal"));
+
+        // A non-member is not_a_member; an unknown group fails loudly.
+        let err = set_member_default_view(&g.id, &stranger, Some("thread")).expect_err("stranger");
+        assert!(err.starts_with("not_a_member"), "got: {err}");
+        let err = set_member_default_view("nope", &a, Some("thread")).expect_err("unknown group");
+        assert!(err.starts_with("no project group"), "an unknown group is not a membership error: {err}");
+
+        // None clears: the member follows the project again.
+        set_member_default_view(&g.id, &a, None).expect("clear");
+        assert!(member_default_views(&g.id).expect("views").is_empty());
+
+        // The view rides the membership row: leaving the project drops it.
+        set_member_default_view(&g.id, &b, Some("chatter")).expect("set b");
+        remove_member(&g.id, &b).expect("remove b");
+        add_member(&g.id, &b).expect("re-add b");
+        assert!(member_default_views(&g.id).expect("views").is_empty(), "a re-added member starts fresh");
     }
 
     fn key<'a>(ns: &'a str, id: &'a str, at_ms: i64) -> ClientKey<'a> {

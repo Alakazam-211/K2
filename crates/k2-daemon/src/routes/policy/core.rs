@@ -912,6 +912,9 @@ pub(super) const ROWS: &[Route] = &[
     // follows its 'Manage K2 projects' switch.
     post("/cli/project-group/set-default-view", Admin),
     post("/cli/project-group/set-icon", Admin),
+    // 0302: the view one agent's tile opens in, for everyone. Same rule as
+    // set-default-view.
+    post("/cli/project-group/set-member-default-view", Admin),
     post("/cli/project-group/set-poc", Member),
     get("/cli/project-group/show", Member),
     post("/cli/project-group/sort", Member),

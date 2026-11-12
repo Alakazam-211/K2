@@ -1,0 +1,11 @@
+-- 0302: the view one agent's tile opens in on a project's dashboards
+-- (0.46.13). NULL = the agent follows the project's `default_view` (0282);
+-- 'terminal' | 'thread' | 'chatter' = its own view, for everyone, checked
+-- in k2-core (`project_groups::set_member_default_view`), not SQL, like
+-- 0282. The column rides the membership row, so removing the agent from
+-- the project (or deleting the project) drops it with the row. Every
+-- existing member starts on NULL, so nothing changes until someone sets
+-- one. 0300 and 0301 are reserved for other branches; renumber only with
+-- K2 (and edit the migration-order tests). The store is
+-- `crate::project_groups`.
+ALTER TABLE project_group_members ADD COLUMN default_view TEXT;

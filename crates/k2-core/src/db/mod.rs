@@ -1984,6 +1984,12 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // so a gap or a lower number landing later is fine. Renumber freely
         // on a slip (and edit the migration-order tests).
         ("0301_desktop_agents", include_str!("../../drizzle_sql/0301_desktop_agents.sql")),
+        // 0302 — the view one agent's tile opens in on a project's
+        // dashboards (0.46.13): `project_group_members.default_view`, NULL =
+        // follow the project's 0282 `default_view`. 0300/0301 are reserved
+        // for other branches. Renumber freely on a slip (and edit the
+        // migration-order tests). The store is `crate::project_groups`.
+        ("0302_project_group_member_view", include_str!("../../drizzle_sql/0302_project_group_member_view.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2669,7 +2675,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0301_desktop_agents",
+            last_name, "0302_project_group_member_view",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2928,6 +2934,8 @@ mod tests {
                 "0299_agents_hire",
                 // 0.46.12: "Allow a virtual desktop".
                 "0301_desktop_agents",
+                // 0.46.13: one agent's own view on a project.
+                "0302_project_group_member_view",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -3122,6 +3130,8 @@ mod tests {
                 "0299_agents_hire",
                 // 0.46.12: "Allow a virtual desktop".
                 "0301_desktop_agents",
+                // 0.46.13: one agent's own view on a project.
+                "0302_project_group_member_view",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -3394,7 +3404,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0301_desktop_agents", "0301 (0.46.12) runs last, after 0294 (0.46.11)");
+        assert_eq!(top, "0302_project_group_member_view", "0302 (0.46.13) runs last, after 0299 (0.46.12), 0295 (CI test history) and 0294 (0.46.11)");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -3478,7 +3488,10 @@ mod tests {
                 "0299_agents_hire",
                 "0301_desktop_agents"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0297 and 0299, then 0.46.12's 0301)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0295, 0297 and 0299, then 0.46.12's 0301)",
+                "0302_project_group_member_view",
+            ],
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257, then 0.46.8's 0258, 0259, 0260 and 0262, then 0.46.9's 0268, 0269, 0270 and 0271, then 0.46.9's 0272, then 0.46.10's 0273, 0274 and 0275, then 0.46.11's 0276, 0277, 0278, 0279, 0280, 0281, 0282, 0283, 0284, 0285, 0286, 0287, 0288 and 0289, then the setup checklist's 0290, then 0292, then the K5 seat's 0293, then 0294, then 0.46.12's 0295, 0297 and 0299, then 0.46.13's 0302)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -4329,8 +4342,12 @@ mod tests {
             // 0295 (CI test history) came before 0297: its record goes (its
             // tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0295_ci_test_history'", []).unwrap();
-            // 0299 (hiring and sidecars, two switches, 0.46.12) is the
+            // 0302 (one agent's own view on a project, 0.46.13) is the
             // newest: its record goes (its column re-add is skipped as a
+            // duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0302_project_group_member_view'", []).unwrap();
+            // 0299 (hiring and sidecars, two switches, 0.46.12) came before
+            // it: its record goes (its column re-add is skipped as a
             // duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0299_agents_hire'", []).unwrap();
             // 0294 (an App's database connections, 0.46.11) came before it:
@@ -4886,6 +4903,53 @@ mod tests {
         assert_eq!(both("p-0299-off"), (0, 0), "off before the split: both off");
         conn.execute("INSERT INTO projects (id, name, path) VALUES ('p-0299-new', 'new', '/tmp/p-0299-new')", []).unwrap();
         assert_eq!(both("p-0299-new"), (0, 0), "a new workspace starts with both off");
+    }
+
+    /// 0302 (0.46.13): a project member gets its own `default_view`. On a
+    /// database from before 0302 the column is absent; after the upgrade an
+    /// existing member keeps its row and reads NULL (it follows the
+    /// project's view), and a new member starts on NULL too.
+    #[test]
+    fn member_view_migration_adds_a_null_view_to_existing_members() {
+        let conn = fresh_memory();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations_through(&conn, Some("0299_agents_hire")).unwrap();
+        let cols = |conn: &Connection| -> Vec<String> {
+            conn.prepare("SELECT name FROM pragma_table_info('project_group_members')")
+                .unwrap()
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<std::result::Result<_, _>>()
+                .unwrap()
+        };
+        assert!(!cols(&conn).iter().any(|c| c == "default_view"), "before 0302 there is no member view");
+        conn.execute(
+            "INSERT INTO project_groups (id, name, created_at, updated_at) VALUES ('g-0302', 'g-0302', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO project_group_members (group_id, workspace_id, created_at) VALUES ('g-0302', 'w-old', 5)",
+            [],
+        )
+        .unwrap();
+        run_migrations(&conn).unwrap();
+        assert!(cols(&conn).iter().any(|c| c == "default_view"), "0302 adds the member view");
+        let view = |ws: &str| -> (Option<String>, i64) {
+            conn.query_row(
+                "SELECT default_view, created_at FROM project_group_members WHERE group_id = 'g-0302' AND workspace_id = ?1",
+                params![ws],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(view("w-old"), (None, 5), "an existing member keeps its row and follows the project");
+        conn.execute(
+            "INSERT INTO project_group_members (group_id, workspace_id, created_at) VALUES ('g-0302', 'w-new', 6)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(view("w-new"), (None, 6), "a new member starts following the project");
     }
 
     /// 0132 (k2 sidecar v1): the switch backfills ON only for

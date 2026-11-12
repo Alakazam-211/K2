@@ -69,8 +69,28 @@ out="$(k2 agent restart "$dir" --dry-run --json)" || fail "dry-run failed: $out"
 [ "$(grep -c . "$PIDS" || true)" = 0 ] || fail "dry-run spawned: $(cat "$PIDS")"
 ok "dry-run spawns nothing"
 
+echo "== a new server's first chat waits for a harness pick =="
+# The first pinned chat on a server that never had one asks which LLM to
+# start (409 harness_choice_needed). Restart says to rerun with --harness,
+# lists what it can take, and starts nothing.
+rhelp="$(k2 agent restart --help)"
+grep -Fq -- "--harness <harness>" <<<"$rhelp" || fail "restart --help must document --harness: $rhelp"
+rc=0; err="$(k2 agent restart "$dir" --json 2>&1 >/dev/null)" || rc=$?
+[ "$rc" = 1 ] || fail "restart with no pick must exit 1, got $rc: $err"
+[ "$(jq -r .error.code <<<"$err")" = harness_choice_needed ] || fail "refusal code: $err"
+hint="$(jq -r .error.hint <<<"$err")"
+grep -Fq -- "--harness" <<<"$hint" || fail "the hint must say to rerun with --harness: $hint"
+grep -Fq "claude (installed)" <<<"$hint" || fail "the hint must list claude as installed: $hint"
+[ "$(jq -r '[.error.harnesses[].harness] | index("claude") != null' <<<"$err")" = true ] \
+    || fail "the refusal must carry the harnesses: $err"
+[ "$(grep -c . "$PIDS" || true)" = 0 ] || fail "a refused first chat spawned: $(cat "$PIDS")"
+rc=0; err="$(k2 agent restart "$dir" --harness 2>&1)" || rc=$?
+[ "$rc" = 2 ] || fail "--harness with no value must exit 2, got $rc: $err"
+ok "no pick: harness_choice_needed (exit 1), names --harness, nothing started"
+
 echo "== first restart starts the session =="
-out="$(k2 agent restart "$dir" --json)" || fail "restart #1 failed: $out"
+out="$(k2 agent restart "$dir" --harness claude --json)" || fail "restart #1 failed: $out"
+[ "$(jq -r .provider <<<"$out")" = claude ] || fail "restart #1 provider: $out"
 s1="$(jq -r .sessionId <<<"$out")"
 [ -n "$s1" ] && [ "$s1" != null ] || fail "restart #1 sessionId: $out"
 [ "$(jq -r .oldSessionId <<<"$out")" = null ] || fail "restart #1 old id must be null: $out"

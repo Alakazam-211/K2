@@ -129,6 +129,7 @@ import {
   terminalPaneNumbers,
 } from './project-tabs'
 import {
+  memberDefaultView,
   saveDashboardLayout,
   type ProjectDefaultView,
   type ProjectGroupDashboard,
@@ -941,7 +942,9 @@ export default function ProjectDashboard({
                   <PrimaryRoom>
                     <AgentTileFrame
                       groupId={show.id}
-                      defaultView={show.defaultView}
+                      // 0302: the agent's own view for everyone, else the
+                      // project's; a personal switch still wins (tile-view.ts).
+                      defaultView={member ? memberDefaultView(member, show) : show.defaultView}
                       workspaceId={pane.workspaceId}
                       member={member}
                       dashboardId={dashboard.id}

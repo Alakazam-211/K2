@@ -46,7 +46,7 @@ import ProjectChatPanel from './ProjectChatPanel'
 import { NoDashboardState, ProjectListLoadState, ProjectLoadState, ProjectsEmptyState } from './ProjectStates'
 import ProjectSettingsSheet from './ProjectSettingsSheet'
 import { ProjectFeedbackTab } from '@/components/Feedback/ProjectFeedbackTab'
-import { fetchProjectGroupShow, partitionPinned, type ProjectGroupShow } from './projects-api'
+import { fetchProjectGroupShow, partitionPinned, pathIsMember, type ProjectGroupShow } from './projects-api'
 import {
   FEEDBACK_TAB,
   orderedDashboards,
@@ -55,6 +55,7 @@ import {
 } from './project-tabs'
 import { requestPaneShortcut } from './dashboard-dnd'
 import { primaryScope } from '@/kessel/server-scope'
+import { onSessionAddedApp, onSessionRemovedApp } from '@/stores/session-events'
 import { TOPBAR_HEIGHT_CSS } from '../../../shared/constants'
 
 const TOPBAR_HEIGHT = TOPBAR_HEIGHT_CSS
@@ -189,6 +190,9 @@ export default function ProjectsPage(): React.JSX.Element | null {
   const [showNonce, setShowNonce] = useState(0)
   // Try again in flight: the failure stays up with its button busy.
   const [showRetrying, setShowRetrying] = useState(false)
+  // Bumped when one of the project's agents starts or ends a session: the
+  // nav's awake/asleep comes from `show` (a snapshot), so read it again.
+  const [sessionsNonce, setSessionsNonce] = useState(0)
   // Stay mounted after the first visit so a remote dashboard does not
   // re-pay spawn + grid handshake on every Agents ↔ Projects switch.
   const [everOpened, setEverOpened] = useState(false)
@@ -238,7 +242,32 @@ export default function ProjectsPage(): React.JSX.Element | null {
     return () => {
       cancelled = true
     }
-  }, [isOpen, selectedGroupId, revision, showNonce])
+  }, [isOpen, selectedGroupId, revision, showNonce, sessionsNonce])
+
+  // An agent of this project woke or went to sleep: read `show` again
+  // (one call, coalesced), never one lookup per agent. The app-level
+  // session events cover every workspace.
+  const membersRef = useRef<ProjectGroupShow['members']>([])
+  membersRef.current = show?.id === selectedGroupId ? show.members : []
+  useEffect(() => {
+    if (!isOpen || !selectedGroupId) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onSession = (e: { workspace_path: string }): void => {
+      if (!pathIsMember(membersRef.current, e.workspace_path)) return
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        setSessionsNonce((n) => n + 1)
+      }, 400)
+    }
+    const offAdded = onSessionAddedApp(primaryScope(), onSession)
+    const offRemoved = onSessionRemovedApp(primaryScope(), onSession)
+    return () => {
+      if (timer !== null) clearTimeout(timer)
+      offAdded()
+      offRemoved()
+    }
+  }, [isOpen, selectedGroupId])
 
   // Read the project again (Try again, a created dashboard). A failure
   // stays up meanwhile, its Try again busy ("Trying again…").
@@ -280,7 +309,8 @@ export default function ProjectsPage(): React.JSX.Element | null {
   const selectedShow = show && show.id === selectedGroupId ? show : null
   // The login's role: who may add an agent from the nav (any login today).
   const role = useViewerRole()
-  const canAddAgents = projectSettingsCaps(role).canEdit
+  const caps = projectSettingsCaps(role)
+  const canAddAgents = caps.canEdit
   // Each project's chosen tab, kept here so the nav knows the dashboard on
   // screen (its files say "On this dashboard"). On Feedback, the first
   // dashboard: where a "Show on this dashboard" lands.
@@ -343,7 +373,13 @@ export default function ProjectsPage(): React.JSX.Element | null {
         {navCollapsed ? (
           <ProjectNavRail show={selectedShow} canAddAgents={canAddAgents} onChanged={reloadShow} />
         ) : (
-          <ProjectNav show={selectedShow} dashboard={navDashboard} canAddAgents={canAddAgents} onChanged={reloadShow} />
+          <ProjectNav
+            show={selectedShow}
+            dashboard={navDashboard}
+            canAddAgents={canAddAgents}
+            canSetAgentViews={caps.canEditLooks}
+            onChanged={reloadShow}
+          />
         )}
 
         <div className="flex-1 flex flex-col min-h-0 min-w-0">

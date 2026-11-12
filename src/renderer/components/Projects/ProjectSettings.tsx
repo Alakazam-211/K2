@@ -59,6 +59,7 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef,
 import { useProjectsStore } from '@/stores/projects'
 import {
   getCachedShow,
+  memberOwnViews,
   selectGroupRevision,
   setCachedShow,
   useProjectGroupsStore,
@@ -74,11 +75,13 @@ import {
   createProjectGroup,
   createProjectGroupDashboard,
   daemonErrorInfo,
+  daemonKnowsMemberViews,
   deleteProjectGroup,
   deleteProjectGroupDashboard,
   fetchProjectGroupResources,
   fetchProjectGroupShow,
   normalizeHexColor,
+  PROJECT_DEFAULT_VIEWS,
   partitionPinned,
   pinProjectGroup,
   projectDefaultView,
@@ -95,12 +98,21 @@ import {
   type ProjectGroup,
   type ProjectGroupDashboard,
   type ProjectGroupHtmlDoc,
+  type ProjectGroupMemberInfo,
   type ProjectGroupShow,
 } from './projects-api'
+import {
+  MEMBER_VIEW_NAME,
+  memberViewError,
+  memberViewSavedText,
+  projectDefaultLabel,
+  useMemberViews,
+  type MemberView,
+} from './member-view'
+import { ViewIcon } from '@/components/SessionView/ThreadDrawerSelector'
 import { onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
 import { pickIconImage } from '@/lib/pick-remote-image'
-import { agentDisplayName } from '@/lib/workspace-agent'
 import ProjectGroupAvatar, { GROUP_AVATAR_COLORS, groupAvatarColor, useGroupIcon } from './ProjectGroupAvatar'
 import { loadGroupIcon, setCachedGroupIcon } from './group-icon-cache'
 import IconCropDialog from '@/components/Settings/IconCropDialog'
@@ -109,6 +121,7 @@ import {
   dashboardShowsDoc,
   defaultViewLockReason,
   filterGroupsByQuery,
+  memberViewLockReason,
   projectSettingsCaps,
   readOnlyBannerText,
   removeMemberBlockedReason,
@@ -886,37 +899,12 @@ function FolderLine({ path }: { path: string }): React.JSX.Element {
   )
 }
 
-/** Agents' display names (AGENT.md), by folder, for the Add an agent list:
- *  the project's own agents show theirs (`show` carries them), so the list
- *  under them does too, not the sidebar's folder names. One GET per folder,
- *  once per host, cached here; until it lands (or when it fails) the row
- *  shows the sidebar name. The workspace list doesn't carry these names
- *  (projects/list), so they come one by one. */
-const displayNameCache = new Map<string, string>()
-const displayNameAsked = new Set<string>()
-
-function useAgentDisplayNames(paths: string[]): (path: string) => string | null {
-  const hostKey = activeHostKey(useConnectHostStore((s) => s.activeHost))
-  const [, bump] = useState(0)
-  const wanted = paths.join('\n')
-  useEffect(() => {
-    let live = true
-    for (const path of wanted ? wanted.split('\n') : []) {
-      const key = `${hostKey}|${path}`
-      if (displayNameAsked.has(key)) continue
-      displayNameAsked.add(key)
-      agentDisplayName(primaryScope(), path)
-        .then((name) => {
-          displayNameCache.set(key, name.trim())
-          if (live && name.trim()) bump((n) => n + 1)
-        })
-        .catch(() => displayNameCache.set(key, ''))
-    }
-    return () => {
-      live = false
-    }
-  }, [wanted, hostKey])
-  return (path) => displayNameCache.get(`${hostKey}|${path}`) || null
+/** An agent's name in the Add an agent list: its display name (AGENT.md),
+ *  as the project's own agents show theirs, not the sidebar's folder name.
+ *  projects/list carries it on every row (`agentDisplayName`); an older
+ *  daemon doesn't, and the row shows the sidebar name. */
+export function addableAgentLabel(w: { name: string; agentDisplayName?: string }): string {
+  return w.agentDisplayName?.trim() || w.name
 }
 
 const PLUS = (
@@ -963,8 +951,7 @@ export function AddAgentPicker({
     if (addedTimer.current) clearTimeout(addedTimer.current)
   }, [])
   const outside = useMemo(() => addableWorkspaces(registered, memberIds), [registered, memberIds])
-  const displayNameOf = useAgentDisplayNames(useMemo(() => outside.map((w) => w.path), [outside]))
-  const labelOf = (w: { name: string; path: string }): string => displayNameOf(w.path) ?? w.name
+  const labelOf = addableAgentLabel
   // The search matches what the row shows (the display name) as well as
   // the sidebar name and the folder.
   const q = query.trim().toLowerCase()
@@ -1110,6 +1097,96 @@ function DoneNote({ text }: { text: string }): React.JSX.Element {
   )
 }
 
+/** An agent row's "Opens in": the view its tile opens in for everyone,
+ *  marked "(project default)" when it follows the project, and a menu to
+ *  set it or follow the project again (member-view.ts). Read-only text,
+ *  with the reason on hover, for someone who can't change it. */
+function OpensInMenu({
+  name,
+  value,
+  projectView,
+  lockReason,
+  busy,
+  onPick,
+}: {
+  name: string
+  value: MemberView
+  projectView: ProjectDefaultView
+  lockReason: string | null
+  busy: boolean
+  onPick: (next: ProjectDefaultView | null) => void
+}): React.JSX.Element {
+  const inherited = value.own === null
+  const text = (
+    <>
+      <span className="flex-shrink-0 inline-flex [&>svg]:w-3 [&>svg]:h-3" aria-hidden="true">
+        <ViewIcon kind={value.view} />
+      </span>
+      <span className="whitespace-nowrap">
+        {MEMBER_VIEW_NAME[value.view]}
+        {inherited && <span className="text-[var(--color-text-secondary)]"> (default)</span>}
+      </span>
+    </>
+  )
+  if (lockReason) {
+    return (
+      <span
+        className="inline-flex items-center gap-1.5 type-hint text-[var(--color-text-secondary)]"
+        title={`Opens in ${MEMBER_VIEW_NAME[value.view]}${inherited ? ', the project default' : ''}. ${lockReason}`}
+        data-testid="agent-opens-in"
+        data-locked=""
+      >
+        <span className="sr-only">Opens in</span>
+        {text}
+        <span className="sr-only">. {lockReason}</span>
+      </span>
+    )
+  }
+  return (
+    <OverflowMenu
+      label={`Opens in ${MEMBER_VIEW_NAME[value.view]}${inherited ? ' (project default)' : ''}: change where ${name} opens`}
+      menuLabel="Opens in"
+      items={[
+        {
+          id: 'default',
+          label: projectDefaultLabel(projectView),
+          hint: 'Follows the project’s view.',
+          checked: inherited,
+          disabled: busy,
+          onSelect: () => onPick(null),
+        },
+        ...PROJECT_DEFAULT_VIEWS.map((v, i) => ({
+          id: v,
+          label: MEMBER_VIEW_NAME[v],
+          group: i === 0,
+          icon: <ViewIcon kind={v} />,
+          checked: value.own === v,
+          disabled: busy,
+          onSelect: () => onPick(v),
+        })),
+      ]}
+      renderTrigger={(t) => (
+        <Button
+          ref={t.ref}
+          variant="quiet"
+          size="sm"
+          aria-haspopup={t['aria-haspopup']}
+          aria-expanded={t['aria-expanded']}
+          onClick={t.onClick}
+          disabled={busy}
+          title="Where this agent’s tile opens, for everyone. Anyone can still switch their own."
+          className="inline-flex items-center gap-1.5"
+          data-testid="agent-opens-in"
+          data-own-view={value.own ?? undefined}
+        >
+          <span className="text-[var(--color-text-secondary)]">Opens in</span>
+          {text}
+        </Button>
+      )}
+    />
+  )
+}
+
 function AgentsSection({
   detail,
   caps,
@@ -1122,7 +1199,14 @@ function AgentsSection({
   const readOnly = !caps.canEdit
   const [memberBusy, setMemberBusy] = useState<string | null>(null)
   const [confirmRemove, setConfirmRemove] = useState<{ id: string; name: string } | null>(null)
-  const [failure, setFailure] = useState<{ id: string; what: string; reason: string; retry?: () => void } | null>(null)
+  const [failure, setFailure] = useState<{
+    id: string
+    what: string
+    reason: string
+    retry?: () => void
+    /** A refusal said in one sentence (trying again won't help). */
+    plain?: boolean
+  } | null>(null)
   /** What the last change did, on the row it changed, for a moment. */
   const [done, setDone] = useState<{ id: string; text: string } | null>(null)
   const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1133,6 +1217,30 @@ function AgentsSection({
     if (doneTimer.current) clearTimeout(doneTimer.current)
     setDone({ id, text })
     doneTimer.current = setTimeout(() => setDone(null), 4000)
+  }
+  // 0302: where each agent opens, for everyone (owner or admin).
+  const views = useMemberViews(detail)
+  const projectView = projectDefaultView(detail)
+  const viewLockReason = memberViewLockReason(caps.canEditLooks, daemonKnowsMemberViews(detail.members))
+  const setView = async (m: ProjectGroupMemberInfo, display: string, next: ProjectDefaultView | null): Promise<void> => {
+    setFailure(null)
+    try {
+      await views.set(m, next)
+      flash(m.workspaceId, next === null ? `Opens in ${MEMBER_VIEW_NAME[projectView]} now` : `Opens in ${MEMBER_VIEW_NAME[next]} now`)
+      useToastStore.getState().addToast(memberViewSavedText(display, next, projectView), 'success')
+    } catch (err) {
+      const e = memberViewError(err, display)
+      setFailure(
+        'plain' in e
+          ? { id: m.workspaceId, what: e.plain, reason: '', plain: true }
+          : {
+              id: m.workspaceId,
+              what: `Couldn’t change where ${display} opens.`,
+              reason: e.reason,
+              retry: () => void setView(m, display, next),
+            },
+      )
+    }
   }
   const addSearchRef = useRef<HTMLInputElement>(null)
   /** The Agents heading's "Add an agent": to the picker below, ready to type. */
@@ -1241,12 +1349,32 @@ function AgentsSection({
                 hint={m.path ? <FolderLine path={m.path} /> : 'Not on this server any more'}
                 below={
                   failure?.id === m.workspaceId ? (
-                    <ActionError what={failure.what} reason={failure.reason} onRetry={failure.retry} />
+                    failure.plain ? (
+                      <p role="alert" className="type-hint text-[var(--color-status-error-soft)] leading-relaxed max-w-[75ch]">
+                        {failure.what}
+                      </p>
+                    ) : (
+                      <ActionError what={failure.what} reason={failure.reason} onRetry={failure.retry} />
+                    )
                   ) : undefined
                 }
               >
-                {memberBusy === m.workspaceId ? <SavingNote on /> : null}
-                {done?.id === m.workspaceId && memberBusy !== m.workspaceId ? <DoneNote text={done.text} /> : null}
+                {memberBusy === m.workspaceId || views.busy === m.workspaceId ? <SavingNote on /> : null}
+                {done?.id === m.workspaceId && memberBusy !== m.workspaceId && views.busy !== m.workspaceId ? (
+                  <DoneNote text={done.text} />
+                ) : null}
+                <OpensInMenu
+                  name={display}
+                  value={views.viewOf(m)}
+                  projectView={projectView}
+                  lockReason={viewLockReason}
+                  busy={views.busy === m.workspaceId}
+                  onPick={(next) => {
+                    const cur = views.viewOf(m)
+                    if (next === cur.own) return
+                    void setView(m, display, next)
+                  }}
+                />
                 {/* Shown on the row's hover and keyboard focus only, so the
                     rows read as names first; the … menu keeps it too. */}
                 {!readOnly && !isPoc && (
@@ -1384,7 +1512,7 @@ function DefaultViewRow({
     setSaving(true)
     edit({ defaultView: next }, () => setProjectGroupDefaultView(primaryScope(), groupId, next))
       .then(() => {
-        useProjectGroupsStore.getState().dropStaleTileViews(groupId, next)
+        useProjectGroupsStore.getState().dropStaleTileViews(groupId, next, memberOwnViews(detail.members))
         if (shownId.current === groupId) save.saved()
       })
       .catch((err) => {

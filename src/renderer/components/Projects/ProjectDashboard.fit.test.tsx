@@ -6,7 +6,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 
-const h = vi.hoisted(() => ({ save: vi.fn(async () => ({ revision: 2 })) }))
+const h = vi.hoisted(() => ({
+  save: vi.fn(async () => ({ revision: 2 })),
+  /** The default each tile's view was resolved against, by agent. */
+  views: {} as Record<string, string | undefined>,
+}))
 
 vi.mock('./projects-api', async (orig) => ({
   ...(await orig<typeof import('./projects-api')>()),
@@ -25,7 +29,10 @@ vi.mock('./DashboardAgentTile', () => ({
   TileViewMenu: () => null,
   TileViewPicker: () => null,
   useAgentTileAddr: () => '',
-  useTileView: () => ['thread', () => {}],
+  useTileView: (_g: string, ws: string, dv?: string) => {
+    h.views[ws] = dv
+    return [dv ?? 'thread', () => {}]
+  },
 }))
 vi.mock('./PaneChrome', () => ({
   PaneChrome: ({ title }: { title: string }) => <div data-testid="tile">{title}</div>,
@@ -129,5 +136,30 @@ describe('a dashboard in a narrow canvas', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("each agent's tile opens in its own view", () => {
+  it("the agent's own view, else the project's (a personal switch is useTileView's, on top)", () => {
+    canvasW = 1200
+    h.views = {}
+    const withViews = {
+      ...show,
+      defaultView: 'chatter',
+      members: [
+        { ...member('a'), defaultView: 'terminal', ownDefaultView: 'terminal' },
+        { ...member('b'), defaultView: 'chatter', ownDefaultView: null },
+        // An older daemon's member row: the project's view.
+        member('c'),
+        member('d'),
+        member('e'),
+        member('f'),
+      ],
+    } as unknown as ProjectGroupShow
+    render(<ProjectDashboard show={withViews} dashboard={dashboard} />)
+    resize(1200)
+    expect(h.views.a).toBe('terminal')
+    expect(h.views.b).toBe('chatter')
+    expect(h.views.c).toBe('chatter')
   })
 })

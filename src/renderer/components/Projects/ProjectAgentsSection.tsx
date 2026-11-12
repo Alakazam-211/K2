@@ -3,9 +3,12 @@
 // list, a divider, then the project's picture and name, its agents, and
 // "Add an agent…".
 //   - each agent row: picture, name, a star for the point of contact, the view its
-//     tile shows (the picker's icon) and whether it's awake or asleep. Click
-//     opens or focuses its tile on the open dashboard; drag drops it onto
-//     the canvas (the dashboard-dnd bridge); right-click pins it to the top.
+//     tile shows (the picker's icon) and whether it's awake or asleep (from
+//     `show`'s members, read again on a member change or a session starting
+//     or ending: no call per agent). Click opens or focuses its tile on the
+//     open dashboard; drag drops it onto the canvas (the dashboard-dnd
+//     bridge); right-click pins it to the top or sets where it opens for
+//     everyone ("Opens in", member-view.ts).
 //     ⌘1–9 still focus tiles; the row shows its number on hover or focus,
 //     as the tile bar does;
 //   - the files an agent shared (Workspace Resources) nest under it, folded
@@ -22,8 +25,8 @@ import { useToastStore } from '@/stores/toast'
 import { useWindowModeStore, noteViewerInteractionBlocked } from '@/stores/window-mode'
 import { onWorkspaceResourcesChanged } from '@/stores/session-events'
 import { showContextMenu } from '@/lib/context-menu'
+import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { SetiFileIcon } from '@/lib/seti-file-icons'
-import { daemonCliGet } from '@/lib/daemon-cli'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { ViewIcon } from '@/components/SessionView/ThreadDrawerSelector'
 import { Button, Tag, cx } from '@/components/ui'
@@ -34,13 +37,26 @@ import { completeDashDrag, useDashboardDndStore, type DashDragPayload } from './
 import ProjectGroupAvatar from './ProjectGroupAvatar'
 import { useTileView } from './DashboardAgentTile'
 import type { TileView } from './tile-view'
-import { agentCountText, dashboardShowsDoc, removeMemberBlockedReason } from './project-settings'
+import { agentCountText, dashboardShowsDoc, memberViewLockReason, removeMemberBlockedReason } from './project-settings'
+import {
+  MEMBER_VIEW_NAME,
+  memberViewError,
+  memberViewSavedText,
+  memberViewSummary,
+  projectDefaultLabel,
+  useMemberViews,
+  type MemberView,
+} from './member-view'
 import {
   createErrorMessage,
+  daemonKnowsMemberViews,
   fetchProjectGroupResources,
+  PROJECT_DEFAULT_VIEWS,
+  projectDefaultView,
   removeProjectGroupMember,
   removeWorkspaceResource,
   setProjectGroupPoc,
+  type ProjectDefaultView,
   type ProjectGroupDashboard,
   type ProjectGroupHtmlDoc,
   type ProjectGroupMemberInfo,
@@ -71,32 +87,12 @@ const VIEW_NAME: Record<TileView, string> = {
 
 export type Liveness = 'awake' | 'asleep'
 
-/** Whether each agent has a live session, as the tiles ask it
- *  (`sessions/lookup-by-agent`, one per agent), on open and on project
- *  changes. Unknown (missing) while it loads or when the server can't say. */
-export function useMembersLiveness(groupId: string, workspaceIds: string[]): Record<string, Liveness> {
-  const [state, setState] = useState<Record<string, Liveness>>({})
-  const revision = useProjectGroupsStore((s) => s.revision)
-  const key = workspaceIds.join(',')
-  useEffect(() => {
-    let cancelled = false
-    setState({})
-    for (const id of workspaceIds) {
-      daemonCliGet<{ sessionAlive?: boolean }>(primaryScope(), 'sessions/lookup-by-agent', { agent: id })
-        .then((r) => {
-          if (cancelled || typeof r?.sessionAlive !== 'boolean') return
-          setState((s) => ({ ...s, [id]: r.sessionAlive ? 'awake' : 'asleep' }))
-        })
-        .catch(() => {
-          /* unknown: the row shows nothing rather than a guess */
-        })
-    }
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groupId, key, revision])
-  return state
+/** Whether an agent has a live session, from `show` (`sessionAlive`, read
+ *  with the project). Unknown (undefined) from a daemon that doesn't say:
+ *  the row shows nothing rather than a guess. */
+export function memberLiveness(m: Pick<ProjectGroupMemberInfo, 'sessionAlive'>): Liveness | undefined {
+  if (typeof m.sessionAlive !== 'boolean') return undefined
+  return m.sessionAlive ? 'awake' : 'asleep'
 }
 
 /** Press-and-move on a row starts a drag onto the dashboard (Sidebar's
@@ -159,9 +155,51 @@ function FoldChevron({ open }: { open: boolean }): React.JSX.Element {
   )
 }
 
-/** An agent's right-click menu: go to its tile, make it the point of
- *  contact, show or hide its files, pin it, and remove it from the
- *  project (after the shared confirm). */
+/** The menu id an "Opens in" pick resolves with. */
+const VIEW_PICK = 'view:'
+const VIEW_CLEAR = 'view:default'
+
+/** The "Opens in ›" row: the view the agent opens in for everyone (its own
+ *  or the project's), and a submenu to set it or follow the project again.
+ *  Shown disabled, with the reason, when this person can't change it. */
+export function opensInMenuItem(
+  v: MemberView,
+  projectView: ProjectDefaultView,
+  lockReason: string | null,
+): ContextMenuItemDef {
+  return {
+    id: 'opens-in',
+    label: 'Opens in',
+    hint: memberViewSummary(v),
+    ...(lockReason
+      ? { enabled: false, tooltip: lockReason }
+      : {
+          tooltip: 'Where this agent’s tile opens, for everyone. Anyone can still switch their own.',
+          submenu: [
+            { id: VIEW_CLEAR, label: projectDefaultLabel(projectView), checked: v.own === null },
+            { id: 'view-sep', label: '', type: 'separator' },
+            ...PROJECT_DEFAULT_VIEWS.map((view) => ({
+              id: `${VIEW_PICK}${view}`,
+              label: MEMBER_VIEW_NAME[view],
+              checked: v.own === view,
+            })),
+          ],
+        }),
+  }
+}
+
+/** A picked menu id → the view to set (null clears), or undefined when the
+ *  pick isn't an "Opens in" one. */
+export function viewFromMenuPick(picked: string | null): ProjectDefaultView | null | undefined {
+  if (picked === VIEW_CLEAR) return null
+  if (!picked?.startsWith(VIEW_PICK)) return undefined
+  const v = picked.slice(VIEW_PICK.length) as ProjectDefaultView
+  return PROJECT_DEFAULT_VIEWS.includes(v) ? v : undefined
+}
+
+/** An agent's right-click menu: go to its tile, where it opens, make it
+ *  the point of contact, show or hide its files, pin it, and remove it
+ *  from the project (after the shared confirm). */
 async function agentMenu(o: {
   name: string
   projectName: string
@@ -172,9 +210,11 @@ async function agentMenu(o: {
   folded: boolean
   canEdit: boolean
   removeBlocked: string | null
+  opensIn: ContextMenuItemDef
 }): Promise<string | null> {
   return showContextMenu([
     { id: 'go', label: 'Go to its tile', shortcut: o.paneNum !== undefined ? `⌘${o.paneNum}` : undefined },
+    o.opensIn,
     ...(o.canEdit && !o.isPoc ? [{ id: 'poc', label: 'Make point of contact' }] : []),
     ...(o.files > 0 ? [{ id: 'fold', label: o.folded ? 'Show its files' : 'Hide its files' }] : []),
     { id: 'pin', label: o.isPinned ? 'Unpin' : 'Pin to top' },
@@ -201,6 +241,9 @@ function AgentRow({
   files,
   folded,
   canEdit,
+  memberView,
+  viewLockReason,
+  onSetView,
   onFold,
   onTogglePin,
   onMakePoc,
@@ -211,6 +254,11 @@ function AgentRow({
   isPoc: boolean
   isPinned: boolean
   liveness: Liveness | undefined
+  /** Where its tile opens for everyone (its own, or the project's). */
+  memberView: MemberView
+  /** Why this person can't change it, or null. */
+  viewLockReason: string | null
+  onSetView: (next: ProjectDefaultView | null) => void
   /** This agent's files (none: no fold toggle). */
   files: number
   folded: boolean
@@ -225,7 +273,7 @@ function AgentRow({
   // carries name/path only).
   const workspace = useProjectsStore((s) => s.projects.find((p) => p.id === member.workspaceId))
   const name = memberDisplayName(member)
-  const [view] = useTileView(show.id, member.workspaceId, show.defaultView)
+  const [view] = useTileView(show.id, member.workspaceId, memberView.view)
   // ⌘N — this agent's tile number on the open dashboard.
   const paneNum = useProjectGroupsStore((s) => s.dashPaneNumbers[member.workspaceId])
   // A read-only window can still focus a tile, but never drag one in.
@@ -287,8 +335,12 @@ function AgentRow({
             folded,
             canEdit,
             removeBlocked: removeMemberBlockedReason(member.workspaceId, show.pocWorkspaceId),
+            opensIn: opensInMenuItem(memberView, projectDefaultView(show), viewLockReason),
           })
-          if (picked === 'go') open()
+          const nextView = viewFromMenuPick(picked)
+          if (nextView !== undefined) {
+            if (nextView !== memberView.own) onSetView(nextView)
+          } else if (picked === 'go') open()
           else if (picked === 'poc') onMakePoc()
           else if (picked === 'fold') onFold()
           else if (picked === 'pin') onTogglePin(member.workspaceId)
@@ -594,6 +646,7 @@ export function ProjectNavSection({
   show,
   dashboard,
   canAddAgents,
+  canSetAgentViews = true,
   onChanged,
 }: {
   show: ProjectGroupShow
@@ -602,6 +655,8 @@ export function ProjectNavSection({
   /** Who may add or remove an agent and pick the point of contact
    *  (project-settings.ts: any login). */
   canAddAgents: boolean
+  /** Who may set where an agent opens for everyone (owner or admin). */
+  canSetAgentViews?: boolean
   /** Refetch the project after a change made here. */
   onChanged: () => void
 }): React.JSX.Element {
@@ -618,8 +673,9 @@ export function ProjectNavSection({
   }, [show.id])
 
   const members = useMemo(() => sortMembersPinnedFirst(show.members, pinnedIds).sorted, [show.members, pinnedIds])
-  const liveness = useMembersLiveness(show.id, useMemo(() => show.members.map((m) => m.workspaceId), [show.members]))
   const files = useProjectFiles(show.id)
+  const views = useMemberViews(show)
+  const viewLockReason = memberViewLockReason(canSetAgentViews, daemonKnowsMemberViews(show.members))
   const filesByAgent = useMemo(() => {
     const sorted = sortResourcesPinnedThenAlpha(files.docs ?? [], pinnedKeys).sorted
     const by: Record<string, ProjectGroupHtmlDoc[]> = {}
@@ -653,6 +709,26 @@ export function ProjectNavSection({
       onChanged()
     } catch (err) {
       toast(`Couldn’t make ${name} the point of contact. Nothing changed. The server said: ${createErrorMessage(err)}`, 'error')
+    }
+  }
+
+  /** Set where an agent opens for everyone (null: the project's view). A
+   *  refusal by role says so plainly; any other failure offers Try again. */
+  const setView = async (m: ProjectGroupMemberInfo, next: ProjectDefaultView | null): Promise<void> => {
+    const name = memberDisplayName(m)
+    try {
+      await views.set(m, next)
+      toast(memberViewSavedText(name, next, projectDefaultView(show)), 'success')
+    } catch (err) {
+      const e = memberViewError(err, name)
+      if ('plain' in e) toast(e.plain, 'error')
+      else
+        useToastStore
+          .getState()
+          .addToast(`Couldn’t change where ${name} opens. Nothing changed. The server said: ${e.reason}`, 'error', 8000, {
+            label: 'Try again',
+            onClick: () => void setView(m, next),
+          })
     }
   }
 
@@ -708,10 +784,13 @@ export function ProjectNavSection({
                   member={m}
                   isPoc={m.workspaceId === show.pocWorkspaceId}
                   isPinned={pinnedIds.includes(m.workspaceId)}
-                  liveness={liveness[m.workspaceId]}
+                  liveness={memberLiveness(m)}
                   files={mine.length}
                   folded={isFolded}
                   canEdit={canAddAgents}
+                  memberView={views.viewOf(m)}
+                  viewLockReason={viewLockReason}
+                  onSetView={(next) => void setView(m, next)}
                   onFold={() => toggleFold(m.workspaceId)}
                   onTogglePin={(id) => setPinnedIds(togglePinnedMember(show.id, id))}
                   onMakePoc={() => void makePoc(m)}
@@ -803,7 +882,6 @@ export function RailAgents({
   const [adding, setAdding] = useState(false)
   const pinned = useMemo(() => loadPinnedMemberIds(show.id), [show.id])
   const members = useMemo(() => sortMembersPinnedFirst(show.members, pinned).sorted, [show.members, pinned])
-  const liveness = useMembersLiveness(show.id, useMemo(() => show.members.map((m) => m.workspaceId), [show.members]))
   const box =
     'no-drag relative flex items-center justify-center w-9 h-9 flex-shrink-0 outline-none rounded-[var(--radius-field)] select-none'
   return (
@@ -813,7 +891,7 @@ export function RailAgents({
         {members.map((m) => {
           const ws = projects.find((p) => p.id === m.workspaceId)
           const name = memberDisplayName(m)
-          const l = liveness[m.workspaceId]
+          const l = memberLiveness(m)
           return (
             <button
               key={m.workspaceId}

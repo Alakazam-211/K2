@@ -393,6 +393,7 @@ export default function ProjectNav({
   show,
   dashboard,
   canAddAgents,
+  canSetAgentViews = true,
   onChanged,
 }: {
   /** The selected project's show (null while it loads or failed). */
@@ -401,6 +402,8 @@ export default function ProjectNav({
   dashboard: ProjectGroupDashboard | null
   /** Who may add an agent (project-settings.ts: any login). */
   canAddAgents: boolean
+  /** Who may set where an agent opens for everyone (owner or admin). */
+  canSetAgentViews?: boolean
   /** Refetch the selected project after a change made in the nav. */
   onChanged: () => void
 }): React.JSX.Element {
@@ -559,6 +562,7 @@ export default function ProjectNav({
             show={show}
             dashboard={dashboard}
             canAddAgents={canAddAgents}
+            canSetAgentViews={canSetAgentViews}
             onChanged={onChanged}
           />
         </div>

@@ -12,7 +12,12 @@
 //     menu, a divider and Feedback; then Layout, ⚙, Chat;
 //   - a Member login sees no "+", no tab menu and no Layout;
 //   - with the nav as a rail, the project's name opens a switcher and the
-//     agents stay as pictures.
+//     agents stay as pictures;
+//   - awake or asleep comes from `show` (members[].sessionAlive), read again
+//     when one of the project's agents starts or ends a session: no call per
+//     agent;
+//   - an agent's right-click menu has "Opens in ›": set it, clear it to the
+//     project's, disabled for a Member, and a refusal or failure is a toast.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -23,20 +28,29 @@ vi.mock('@tauri-apps/api/event', () => ({
 }))
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => ({ label: 'main' }) }))
 const daemon = vi.hoisted(() => ({
+  gets: [] as string[],
   posts: [] as Array<{ route: string; body: Record<string, unknown> }>,
   fail: null as string | null,
+  /** A refusal for that route: [status, code]. */
+  refuse: null as { route: string; status: number; code: string } | null,
 }))
-vi.mock('@/lib/daemon-cli', () => ({
-  daemonCliGet: vi.fn(async (_s: unknown, route: string, q?: Record<string, string>) =>
-    route === 'project-group/resources'
+vi.mock('@/lib/daemon-cli', async () => {
+  const { DaemonHttpError } = await vi.importActual<typeof import('@/lib/daemon-http-error')>('@/lib/daemon-http-error')
+  return {
+  daemonCliGet: vi.fn(async (_s: unknown, route: string) => {
+    daemon.gets.push(route)
+    return route === 'project-group/resources'
       ? { ok: true, docs: [{ workspaceId: 'w1', workspaceName: 'atlas', agentName: 'Atlas', filePath: '/x/status.html', fileName: 'status.html', missing: false }] }
-      : route === 'sessions/lookup-by-agent'
-        ? { sessionAlive: q?.agent === 'w1', sessionId: q?.agent === 'w1' ? 's1' : null }
-        : {},
-  ),
+      : {}
+  }),
   daemonCliPost: vi.fn(async (_s: unknown, route: string, body: Record<string, unknown>) => {
     daemon.posts.push({ route, body })
+    if (daemon.refuse?.route === route) throw new DaemonHttpError('refused', daemon.refuse.status, daemon.refuse.code)
     if (daemon.fail === route) throw new Error('database is locked')
+    if (route === 'project-group/set-member-default-view') {
+      const view = body.view as 'terminal' | 'thread' | 'chatter' | null
+      return { ok: true, groupId: 'g1', workspaceId: body.workspace, defaultView: view ?? 'thread', ownDefaultView: view }
+    }
     if (route === 'project-group/dashboard/create') {
       const d = { id: 'd-new', groupId: 'g1', name: body.name, layoutJson: '{}', revision: 1, position: 2, createdAt: 1, updatedAt: 1 }
       state.show = { ...state.show, dashboards: [...state.show.dashboards, d as never] }
@@ -51,7 +65,30 @@ vi.mock('@/lib/daemon-cli', () => ({
     return { ok: true }
   }),
   withHostCliSlot: async <T,>(_s: unknown, fn: () => Promise<T>): Promise<T> => fn(),
+  }
+})
+const sessions = vi.hoisted(() => ({
+  added: [] as Array<(e: { workspace_path: string }) => void>,
+  removed: [] as Array<(e: { workspace_path: string }) => void>,
 }))
+vi.mock('@/stores/session-events', async () => {
+  const actual = await vi.importActual<typeof import('@/stores/session-events')>('@/stores/session-events')
+  return {
+    ...actual,
+    onSessionAddedApp: vi.fn((_s: unknown, fn: (e: { workspace_path: string }) => void) => {
+      sessions.added.push(fn)
+      return () => {
+        sessions.added = sessions.added.filter((f) => f !== fn)
+      }
+    }),
+    onSessionRemovedApp: vi.fn((_s: unknown, fn: (e: { workspace_path: string }) => void) => {
+      sessions.removed.push(fn)
+      return () => {
+        sessions.removed = sessions.removed.filter((f) => f !== fn)
+      }
+    }),
+  }
+})
 const ctxMenu = vi.hoisted(() => ({ pick: null as string | null }))
 vi.mock('@/lib/context-menu', () => ({ showContextMenu: vi.fn(async () => ctxMenu.pick) }))
 vi.mock('@/components/TopBar/TopBarUtilities', () => ({ default: () => null }))
@@ -75,7 +112,7 @@ vi.mock('./projects-api', async () => {
   }
 })
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import ProjectsPage from './ProjectsPage'
 import { showContextMenu } from '@/lib/context-menu'
 import { nextDashboardName, projectSummary } from './ProjectBar'
@@ -83,6 +120,8 @@ import { usePageViewStore } from '@/stores/page-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { useProjectsStore } from '@/stores/projects'
 import { useUnreadStore } from '@/stores/unread'
+import { useToastStore } from '@/stores/toast'
+import { fetchProjectGroupShow } from './projects-api'
 import type { ProjectGroup, ProjectGroupShow } from './projects-api'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -108,9 +147,16 @@ const dash = (id: string, name: string, position: number) => ({
 })
 const BASE_SHOW: ProjectGroupShow = {
   ...GROUP,
+  defaultView: 'thread',
   members: [
-    { workspaceId: 'w1', name: 'atlas', path: '/w/atlas', agentName: 'Atlas', createdAt: 1 },
-    { workspaceId: 'w2', name: 'web-app', path: '/w/web-app', agentName: 'Web App', createdAt: 2 },
+    {
+      workspaceId: 'w1', name: 'atlas', path: '/w/atlas', agentName: 'Atlas', createdAt: 1,
+      sessionAlive: true, sessionId: 's1', defaultView: 'thread', ownDefaultView: null,
+    },
+    {
+      workspaceId: 'w2', name: 'web-app', path: '/w/web-app', agentName: 'Web App', createdAt: 2,
+      sessionAlive: false, sessionId: null, defaultView: 'thread', ownDefaultView: null,
+    },
   ],
   dashboards: [dash('d1', 'Main', 0), dash('d2', 'Release', 1)],
 }
@@ -131,8 +177,11 @@ async function renderPage(): Promise<void> {
 
 beforeEach(() => {
   state.show = BASE_SHOW
+  daemon.gets = []
   daemon.posts = []
   daemon.fail = null
+  daemon.refuse = null
+  useToastStore.setState({ toasts: [] })
   ctxMenu.pick = null
   viewer.role = 'owner'
   usePageViewStore.setState({ page: 'projects' })
@@ -236,7 +285,7 @@ describe('the nav', () => {
     expect(atlas.textContent).toContain('Atlas')
     expect(atlas.textContent).toContain('Point of contact')
     expect(atlas.querySelector('[data-agent-poc]')!.getAttribute('title')).toContain('Point of contact')
-    // The view its tile opens in, and awake (a dot) or asleep (from the session lookup).
+    // The view its tile opens in, and awake (a dot) or asleep (from show's sessionAlive).
     expect(atlas.querySelector('[data-agent-view="thread"]')!.getAttribute('title')).toBe('Opens in Thread')
     await waitFor(() => expect(atlas.querySelector('[data-liveness="awake"]')).not.toBeNull())
     await waitFor(() =>
@@ -457,7 +506,7 @@ describe('an agent\'s right-click menu', () => {
     fireEvent.contextMenu(row)
     await waitFor(() => expect(shown).toHaveBeenCalled())
     const items = shown.mock.calls[0][0] as Array<{ id: string; label: string; shortcut?: string; type?: string }>
-    expect(items.map((i) => i.label)).toEqual(['Go to its tile', 'Make point of contact', 'Pin to top', '', 'Remove from Launch…'])
+    expect(items.map((i) => i.label)).toEqual(['Go to its tile', 'Opens in', 'Make point of contact', 'Pin to top', '', 'Remove from Launch…'])
     expect(items[0].shortcut).toBe('⌘2')
     const confirm = await screen.findByTestId('remove-agent-confirm')
     expect(daemon.posts.some((p) => p.route === 'project-group/remove-member')).toBe(false)
@@ -465,6 +514,187 @@ describe('an agent\'s right-click menu', () => {
     await waitFor(() =>
       expect(daemon.posts.find((p) => p.route === 'project-group/remove-member')!.body).toMatchObject({ group: 'g1', workspace: 'w2' }),
     )
+  })
+})
+
+describe('awake or asleep, from show', () => {
+  it('reads members[].sessionAlive, with no call per agent', async () => {
+    await renderPage()
+    const section = await waitFor(() => document.querySelector('[data-project-nav-section]') as HTMLElement)
+    await waitFor(() => expect(section.querySelector('[data-agent-row="w1"] [data-liveness="awake"]')).not.toBeNull())
+    expect(section.querySelector('[data-agent-row="w2"] [data-liveness="asleep"]')).not.toBeNull()
+    expect(daemon.gets.filter((r) => r === 'sessions/lookup-by-agent')).toEqual([])
+  })
+
+  it('an older daemon (no sessionAlive) shows neither, rather than a guess', async () => {
+    state.show = {
+      ...BASE_SHOW,
+      members: BASE_SHOW.members.map(({ sessionAlive: _a, sessionId: _b, ...m }) => m),
+    }
+    await renderPage()
+    const section = await waitFor(() => document.querySelector('[data-project-nav-section] [data-agent-row="w2"]') as HTMLElement)
+    expect(section.closest('[data-project-nav-section]')!.querySelector('[data-liveness]')).toBeNull()
+  })
+
+  it("an agent's session starting reads show again (once), and the row wakes", async () => {
+    await renderPage()
+    await waitFor(() => expect(document.querySelector('[data-agent-row="w2"] [data-liveness="asleep"]')).not.toBeNull())
+    const reads = vi.mocked(fetchProjectGroupShow)
+    reads.mockClear()
+    state.show = {
+      ...BASE_SHOW,
+      members: BASE_SHOW.members.map((m) => (m.workspaceId === 'w2' ? { ...m, sessionAlive: true, sessionId: 's2' } : m)),
+    }
+    // Another folder's session: nothing to read.
+    act(() => sessions.added.forEach((fn) => fn({ workspace_path: '/w/elsewhere' })))
+    // Two events for the project's agents: one read.
+    act(() => sessions.added.forEach((fn) => fn({ workspace_path: '/w/web-app/' })))
+    act(() => sessions.removed.forEach((fn) => fn({ workspace_path: '/w/atlas' })))
+    await waitFor(() => expect(document.querySelector('[data-agent-row="w2"] [data-liveness="awake"]')).not.toBeNull())
+    expect(reads).toHaveBeenCalledTimes(1)
+    expect(daemon.gets.filter((r) => r === 'sessions/lookup-by-agent')).toEqual([])
+  })
+})
+
+describe('"Opens in", in an agent\'s right-click menu', () => {
+  type Item = { id: string; label: string; hint?: string; enabled?: boolean; tooltip?: string; checked?: boolean; type?: string; submenu?: Item[] }
+  async function openMenu(ws: string, pick: string | null): Promise<Item> {
+    ctxMenu.pick = pick
+    const shown = vi.mocked(showContextMenu)
+    shown.mockClear()
+    const row = await waitFor(() => document.querySelector(`[data-agent-row="${ws}"] > button:last-child`) as HTMLElement)
+    fireEvent.contextMenu(row)
+    await waitFor(() => expect(shown).toHaveBeenCalled())
+    return (shown.mock.calls[0][0] as Item[]).find((i) => i.id === 'opens-in')!
+  }
+
+  it("shows the project's view as inherited, and the agent's own when it has one", async () => {
+    state.show = {
+      ...BASE_SHOW,
+      members: [BASE_SHOW.members[0], { ...BASE_SHOW.members[1], defaultView: 'terminal', ownDefaultView: 'terminal' }],
+    }
+    await renderPage()
+    const inherited = await openMenu('w1', null)
+    expect(inherited.hint).toBe('Thread (project default)')
+    expect(inherited.submenu!.map((i) => i.label)).toEqual(['Project default (Thread)', '', 'Terminal', 'Thread', 'Chatter'])
+    expect(inherited.submenu!.filter((i) => i.checked).map((i) => i.label)).toEqual(['Project default (Thread)'])
+    // Heartbeats is never a shared view.
+    expect(inherited.submenu!.some((i) => i.label === 'Heartbeats')).toBe(false)
+
+    const own = await openMenu('w2', null)
+    expect(own.hint).toBe('Terminal')
+    expect(own.submenu!.filter((i) => i.checked).map((i) => i.label)).toEqual(['Terminal'])
+    // The row's view icon is the agent's own view.
+    expect(document.querySelector('[data-agent-row="w2"] [data-agent-view]')!.getAttribute('data-agent-view')).toBe('terminal')
+  })
+
+  it('sets it through set-member-default-view, and says so', async () => {
+    await renderPage()
+    await openMenu('w2', 'view:chatter')
+    await waitFor(() =>
+      expect(daemon.posts.find((p) => p.route === 'project-group/set-member-default-view')!.body).toEqual({
+        group: 'g1',
+        workspace: 'w2',
+        view: 'chatter',
+      }),
+    )
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toContain('Web App now opens in Chatter for everyone.'),
+    )
+    // Shown at once (before show is read again).
+    await waitFor(() =>
+      expect(document.querySelector('[data-agent-row="w2"] [data-agent-view]')!.getAttribute('data-agent-view')).toBe('chatter'),
+    )
+  })
+
+  it('"Project default" clears it (view: null)', async () => {
+    state.show = {
+      ...BASE_SHOW,
+      members: [BASE_SHOW.members[0], { ...BASE_SHOW.members[1], defaultView: 'terminal', ownDefaultView: 'terminal' }],
+    }
+    await renderPage()
+    await openMenu('w2', 'view:default')
+    await waitFor(() =>
+      expect(daemon.posts.find((p) => p.route === 'project-group/set-member-default-view')!.body).toEqual({
+        group: 'g1',
+        workspace: 'w2',
+        view: null,
+      }),
+    )
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toContain(
+        'Web App opens in the project default (Thread) again.',
+      ),
+    )
+  })
+
+  it('picking the current choice saves nothing', async () => {
+    await renderPage()
+    await openMenu('w2', 'view:default')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(daemon.posts.some((p) => p.route === 'project-group/set-member-default-view')).toBe(false)
+  })
+
+  it('a Member sees it disabled, with the reason', async () => {
+    viewer.role = 'member'
+    await renderPage()
+    await waitFor(() => expect(document.querySelector('[data-project-nav-section]')).not.toBeNull())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    const item = await openMenu('w2', null)
+    expect(item.enabled).toBe(false)
+    expect(item.submenu).toBeUndefined()
+    expect(item.tooltip).toBe('Only the owner or an admin can change where an agent opens.')
+    expect(item.hint).toBe('Thread (project default)')
+  })
+
+  it('an older daemon (no per-agent view) shows it disabled: needs a newer K2', async () => {
+    state.show = {
+      ...BASE_SHOW,
+      members: BASE_SHOW.members.map(({ defaultView: _a, ownDefaultView: _b, ...m }) => m),
+    }
+    await renderPage()
+    const item = await openMenu('w1', null)
+    expect(item.enabled).toBe(false)
+    expect(item.tooltip).toBe('Needs a newer K2 on this server.')
+  })
+
+  it('a 403 is one plain sentence, no Try again, and the view rolls back', async () => {
+    daemon.refuse = { route: 'project-group/set-member-default-view', status: 403, code: 'forbidden' }
+    await renderPage()
+    await openMenu('w2', 'view:terminal')
+    await waitFor(() => expect(useToastStore.getState().toasts.length).toBe(1))
+    const t = useToastStore.getState().toasts[0]
+    expect(t.type).toBe('error')
+    expect(t.message).toBe('Couldn’t change it. Only the owner or an admin can.')
+    expect(t.action).toBeUndefined()
+    expect(document.querySelector('[data-agent-row="w2"] [data-agent-view]')!.getAttribute('data-agent-view')).toBe('thread')
+  })
+
+  it('an agent no longer in the project (403 not_a_member) says so plainly', async () => {
+    daemon.refuse = { route: 'project-group/set-member-default-view', status: 403, code: 'not_a_member' }
+    await renderPage()
+    await openMenu('w2', 'view:terminal')
+    await waitFor(() => expect(useToastStore.getState().toasts.length).toBe(1))
+    expect(useToastStore.getState().toasts[0].message).toBe('Couldn’t change it. Web App isn’t in this project any more.')
+  })
+
+  it('any other failure says so with Try again, which tries again', async () => {
+    daemon.fail = 'project-group/set-member-default-view'
+    await renderPage()
+    await openMenu('w2', 'view:terminal')
+    await waitFor(() => expect(useToastStore.getState().toasts.length).toBe(1))
+    const t = useToastStore.getState().toasts[0]
+    expect(t.type).toBe('error')
+    expect(t.message).toBe('Couldn’t change where Web App opens. Nothing changed. The server said: database is locked')
+    expect(t.action!.label).toBe('Try again')
+    daemon.fail = null
+    act(() => t.action!.onClick())
+    await waitFor(() =>
+      expect(daemon.posts.filter((p) => p.route === 'project-group/set-member-default-view')).toHaveLength(2),
+    )
+    expect(daemon.posts.at(-1)!.body).toEqual({ group: 'g1', workspace: 'w2', view: 'terminal' })
   })
 })
 

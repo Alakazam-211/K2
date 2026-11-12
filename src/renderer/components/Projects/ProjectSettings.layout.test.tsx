@@ -428,19 +428,22 @@ describe('sheet round 2: rows read first, failures say what next, the bar never 
     expect(screen.getByRole('menuitem', { name: /Make point of contact/ })).toBeTruthy()
   })
 
-  it('the Add an agent list shows display names, the folder under them, and searches them', async () => {
-    vi.mocked(daemonCli.daemonCliGet).mockImplementation((async (_s: unknown, route: string, params?: Record<string, unknown>) =>
-      route === 'workspace/agent-display-name' && params?.project === '/w/dn-ledger' ? { display_name: 'Ledger Desk' } : {}) as never)
+  it('the Add an agent list shows display names (from projects/list), the folder under them, and searches them', async () => {
     useProjectsStore.setState({
       projects: [
-        { id: 'w9', name: 'dn-ledger', path: '/w/dn-ledger' },
+        { id: 'w9', name: 'dn-ledger', path: '/w/dn-ledger', agentDisplayName: 'Ledger Desk' },
+        // An older daemon's row: no agentDisplayName.
         { id: 'w8', name: 'dn-sales', path: '/w/dn-sales' },
       ],
     } as never)
     await renderReady()
     const list = screen.getByRole('list', { name: 'Agents you can add' })
     await waitFor(() => expect(within(list).getByRole('button', { name: 'Add Ledger Desk' })).toBeTruthy())
-    // No display name (or none yet): the sidebar name.
+    // The names come with the list: no call per folder.
+    expect(
+      vi.mocked(daemonCli.daemonCliGet).mock.calls.filter(([, route]) => route === 'workspace/agent-display-name'),
+    ).toEqual([])
+    // No display name: the sidebar name.
     expect(within(list).getByRole('button', { name: 'Add dn-sales' })).toBeTruthy()
     expect(within(list).getByText('/w/dn-ledger')).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Search agents to add'), { target: { value: 'desk' } })
@@ -448,7 +451,6 @@ describe('sheet round 2: rows read first, failures say what next, the bar never 
     expect(within(list).queryByRole('button', { name: 'Add dn-sales' })).toBeNull()
     fireEvent.change(screen.getByLabelText('Search agents to add'), { target: { value: 'zebra' } })
     expect(within(list).getByText('No agents match “zebra”')).toBeTruthy()
-    vi.mocked(daemonCli.daemonCliGet).mockImplementation((async () => ({})) as never)
   })
 
   it('a failed change says what failed, then the server’s reason quietly, then Try again (which retries)', async () => {

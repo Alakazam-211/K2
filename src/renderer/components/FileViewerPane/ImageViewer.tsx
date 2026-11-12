@@ -7,6 +7,7 @@ import { isHostSwitchedError } from '@/lib/daemon-cli'
 import { isMacTmpPath, isRemoteMacTmpError } from '@/lib/remote-mac-tmp'
 import { useRoom } from '@/components/Room/RoomContext'
 import { ZoomableImage } from './ZoomableImage'
+import { useDocVersion } from './useDocVersion'
 
 interface ImageViewerProps {
   filePath: string
@@ -27,8 +28,24 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
   const [error, setError] = useState<string | null>(null)
   const [quiet, setQuiet] = useState(false)
   const [meta, setMeta] = useState<string>('')
-  // Track the live object URL for cleanup even if state is stale.
+  // Track the live object URL for cleanup even if state is stale, and the
+  // file it shows.
   const urlRef = useRef<string | null>(null)
+  const urlPathRef = useRef<string | null>(null)
+  // A new version of this file from any writer: read it again.
+  const version = useDocVersion(scope, filePath)
+
+  // Unmount: drop the object URL on screen.
+  useEffect(
+    () => () => {
+      if (urlRef.current) {
+        revokeObjectUrl(urlRef.current)
+        urlRef.current = null
+        urlPathRef.current = null
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -36,21 +53,32 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
     // The room's connection identity (follows a switch for the primary
     // room; fixed for a pinned room).
     const startedKey = scope.connectionKey
-
-    async function load(): Promise<void> {
-      setLoading(true)
-      setError(null)
-      setQuiet(false)
-      setMeta('')
-      // Drop previous URL before loading the next path.
+    // A new version of the image on screen: keep it (and the zoom) until the
+    // new bytes are in, then swap. Another path starts over.
+    const reread = urlRef.current !== null && urlPathRef.current === filePath
+    const dropUrl = (): void => {
       if (urlRef.current) {
         revokeObjectUrl(urlRef.current)
         urlRef.current = null
+        urlPathRef.current = null
       }
-      setUrl(null)
+    }
+
+    async function load(): Promise<void> {
+      if (!reread) {
+        setLoading(true)
+        setError(null)
+        setQuiet(false)
+        setMeta('')
+        // Drop previous URL before loading the next path.
+        dropUrl()
+        setUrl(null)
+      }
 
       if (scope.isRemote && isMacTmpPath(filePath)) {
         if (!cancelled) {
+          dropUrl()
+          setUrl(null)
           setQuiet(true)
           setLoading(false)
         }
@@ -72,9 +100,12 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
           if (!cancelled) setLoading(false)
           return
         }
+        dropUrl()
         urlRef.current = objectUrl
+        urlPathRef.current = filePath
         setUrl(objectUrl)
         setMeta(`${mime} · ${byteLength} bytes`)
+        setError(null)
         setLoading(false)
       } catch (err) {
         if (cancelled) return
@@ -83,6 +114,8 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
           setLoading(false)
           return
         }
+        dropUrl()
+        setUrl(null)
         if (isRemoteMacTmpError(err)) {
           setQuiet(true)
           setLoading(false)
@@ -99,12 +132,11 @@ export function ImageViewer({ filePath, alt }: ImageViewerProps): React.JSX.Elem
     return () => {
       cancelled = true
       ac.abort()
-      if (urlRef.current) {
-        revokeObjectUrl(urlRef.current)
-        urlRef.current = null
-      }
     }
-  }, [filePath])
+    // `scope` is read live, as before (the room's connection key guards a
+    // switch mid-read).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, version])
 
   if (loading) {
     return (

@@ -15,6 +15,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } fr
 import { useRoom } from '@/components/Room/RoomContext'
 import { isHostSwitchedError } from '@/lib/daemon-cli'
 import { loadHostBinary } from '@/lib/load-host-binary'
+import { useDocVersion } from './useDocVersion'
 import { ViewerNote } from './ViewerNote'
 import type { Bounds, DxfDrawing, DxfNode } from './dxfModel'
 
@@ -354,14 +355,22 @@ export function DxfHostBytesViewer({ filePath }: { filePath: string }): React.JS
   const [text, setText] = useState<string | null>(null)
   const [error, setError] = useState<{ title: string; detail: string } | null>(null)
   const [progress, setProgress] = useState<number | null>(null)
+  // The file the drawing on screen came from.
+  const shownPathRef = useRef<string | null>(null)
+  // A new version of this file from any writer: read it again (the text
+  // path gets it from FileViewerPane's own read).
+  const version = useDocVersion(scope, filePath)
 
   useEffect(() => {
     let cancelled = false
     const ac = new AbortController()
     const startedKey = scope.connectionKey
-    setText(null)
-    setError(null)
-    setProgress(null)
+    // A new version keeps the old drawing up until the new one is read.
+    if (shownPathRef.current !== filePath) {
+      setText(null)
+      setError(null)
+      setProgress(null)
+    }
     loadHostBinary(scope, filePath, {
       allowRangeAssembly: true,
       signal: ac.signal,
@@ -373,17 +382,21 @@ export function DxfHostBytesViewer({ filePath }: { filePath: string }): React.JS
         if (cancelled || scope.connectionKey !== startedKey) return
         if (bytes.byteLength > DXF_MAX_BYTES) {
           const mb = (n: number): string => `${(n / (1024 * 1024)).toFixed(1)} MB`
+          shownPathRef.current = null
           setError({
             title: 'Too large to preview',
             detail: `${mb(bytes.byteLength)} is over the ${mb(DXF_MAX_BYTES)} preview limit.`,
           })
           return
         }
+        shownPathRef.current = filePath
+        setError(null)
         setText(decodeDxfBytes(bytes))
       })
       .catch((e: unknown) => {
         if (cancelled || isHostSwitchedError(e)) return
         if (e instanceof Error && e.name === 'AbortError') return
+        shownPathRef.current = null
         setError({ title: 'Could not open the DXF', detail: e instanceof Error ? e.message : String(e) })
       })
     return () => {
@@ -391,7 +404,7 @@ export function DxfHostBytesViewer({ filePath }: { filePath: string }): React.JS
       ac.abort()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, scope.connectionKey])
+  }, [filePath, scope.connectionKey, version])
 
   if (error) return <ViewerNote tone="error" title={error.title} detail={error.detail} testId="dxf-error" />
   if (text === null) {

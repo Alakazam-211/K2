@@ -146,6 +146,9 @@ export const SESSION_EVENT_ROUTES = {
   // Tier 0 kept both versions of a file (kit v0.14.0): an open tab of it
   // shows the notice once (`DocConflictNotice`).
   doc_conflict_copy: { class: 'app', app: true },
+  // An any-file doc has a new version: an open preview of it re-reads the
+  // bytes (`useDocVersion`). Carried, so a pinned room's tab stays live too.
+  doc_version_changed: { class: 'app', app: true, carried: true },
   // Changes tab v1 (prd-changes-tab-v1): the Changes tab refetches its
   // snapshot on it. Carried, so a pinned room's tab stays live too.
   git_changed: { class: 'app', app: true, carried: true },

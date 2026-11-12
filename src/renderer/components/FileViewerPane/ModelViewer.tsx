@@ -5,6 +5,8 @@
 // Bytes come from the room's daemon through `loadHostBinary`
 // (`fs/read-binary`, ranged `fs/read-range` assembly past its 50 MB cap),
 // so remote rooms and the web client work like the other binary previews.
+// A new version of the file (`doc_version_changed`, `useDocVersion`) is read
+// again and swapped in with the camera where it was.
 // three.js and the loaders are dynamic imports (`./modelScene`, then one
 // loader chunk per format): nothing here is in the start-up bundle.
 
@@ -15,6 +17,8 @@ import { loadHostBinary } from '@/lib/load-host-binary'
 import { isRemoteMacTmpError } from '@/lib/remote-mac-tmp'
 import { getFileExtension } from './fileCategory'
 import type { ModelStats } from './modelParse'
+import type { ModelViewer as SceneViewer } from './modelScene'
+import { useDocVersion } from './useDocVersion'
 import { ViewerNote } from './ViewerNote'
 
 /** Desktop preview cap (the phone stops at the daemon's 50 MB). */
@@ -62,18 +66,44 @@ export function ModelViewer({ filePath }: { filePath: string }): React.JSX.Eleme
   const [progress, setProgress] = useState<number | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const resetRef = useRef<(() => void) | null>(null)
+  // The viewer on screen, and which file (and server) it shows.
+  const liveRef = useRef<{ key: string; viewer: SceneViewer } | null>(null)
   const ext = getFileExtension(filePath)
+  // A new version of this file from any writer: read it again.
+  const version = useDocVersion(scope, filePath)
+
+  // Unmount: free the GL context of whatever is on screen.
+  useEffect(
+    () => () => {
+      liveRef.current?.viewer.dispose()
+      liveRef.current = null
+    },
+    [],
+  )
 
   useEffect(() => {
     let cancelled = false
-    let dispose: (() => void) | null = null
     const ac = new AbortController()
     // The room's connection identity: a server switch mid-read drops it.
     const startedKey = scope.connectionKey
-    setStats(null)
-    setProgress(null)
-    setPhase({ k: 'fetching' })
-    resetRef.current = null
+    const loadKey = `${startedKey}|${filePath}`
+    // A new version of the file on screen: keep showing it (and its camera)
+    // until the new one is built. Anything else starts over.
+    const reread = liveRef.current !== null && liveRef.current.key === loadKey
+    if (!reread) {
+      liveRef.current?.viewer.dispose()
+      liveRef.current = null
+      setStats(null)
+      setProgress(null)
+      setPhase({ k: 'fetching' })
+      resetRef.current = null
+    }
+    // A failed re-read shows its note, not the old version.
+    const dropLive = (): void => {
+      liveRef.current?.viewer.dispose()
+      liveRef.current = null
+      resetRef.current = null
+    }
 
     void (async () => {
       let bytes: Uint8Array
@@ -88,6 +118,7 @@ export function ModelViewer({ filePath }: { filePath: string }): React.JSX.Eleme
       } catch (e) {
         if (cancelled || isHostSwitchedError(e)) return
         if (e instanceof Error && e.name === 'AbortError') return
+        dropLive()
         if (isRemoteMacTmpError(e)) {
           setPhase({ k: 'error', title: 'Not available on this server', detail: filePath })
           return
@@ -100,10 +131,11 @@ export function ModelViewer({ filePath }: { filePath: string }): React.JSX.Eleme
       if (cancelled || scope.connectionKey !== startedKey) return
       const tooBig = modelSizeError(bytes.byteLength)
       if (tooBig) {
+        dropLive()
         setPhase({ k: 'error', title: 'Too large to preview', detail: tooBig })
         return
       }
-      setPhase({ k: 'building' })
+      if (!reread) setPhase({ k: 'building' })
       try {
         const m = await import('./modelScene')
         const parsed = await m.parseModel(bytes, ext)
@@ -115,20 +147,26 @@ export function ModelViewer({ filePath }: { filePath: string }): React.JSX.Eleme
         const host = hostRef.current
         if (!host || !m.hasWebGL2()) {
           m.disposeObject(parsed.root)
+          dropLive()
           setPhase({ k: 'nogl' })
           return
         }
+        const before = liveRef.current
         try {
-          const viewer = m.createViewer(host, parsed.root)
-          dispose = viewer.dispose
+          // The new canvas goes in before the old one leaves: no blank frame.
+          const viewer = m.createViewer(host, parsed.root, before ? before.viewer.view() : null)
+          before?.viewer.dispose()
+          liveRef.current = { key: loadKey, viewer }
           resetRef.current = viewer.reset
           setPhase({ k: 'ready' })
         } catch {
           m.disposeObject(parsed.root)
+          dropLive()
           setPhase({ k: 'nogl' })
         }
       } catch (e) {
         if (!cancelled) {
+          dropLive()
           setPhase({ k: 'error', title: 'Could not open the model', detail: e instanceof Error ? e.message : String(e) })
         }
       }
@@ -137,12 +175,10 @@ export function ModelViewer({ filePath }: { filePath: string }): React.JSX.Eleme
     return () => {
       cancelled = true
       ac.abort()
-      resetRef.current = null
-      dispose?.()
     }
     // `scope` is read live; its connection key re-runs the load on a switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, ext, scope.connectionKey])
+  }, [filePath, ext, scope.connectionKey, version])
 
   const note =
     phase.k === 'error' ? (

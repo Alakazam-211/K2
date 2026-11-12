@@ -32,7 +32,10 @@ export type { ModelStats, ParsedModel } from './modelParse'
 /** Retina is plenty; more costs fill rate and memory on big displays. */
 export const MAX_PIXEL_RATIO = 2
 
-export type ModelViewer = { reset: () => void; dispose: () => void }
+/** Where the camera is and what it orbits, to carry over a re-read. */
+export type ModelView = { position: [number, number, number]; target: [number, number, number] }
+
+export type ModelViewer = { reset: () => void; dispose: () => void; view: () => ModelView }
 
 /** three.js r163+ is WebGL2-only. Probe on a throwaway canvas. */
 export function hasWebGL2(): boolean {
@@ -65,7 +68,12 @@ function niceSize(v: number): number {
   return 10 * p
 }
 
-export function createViewer(host: HTMLElement, model: Object3D): ModelViewer {
+/**
+ * A viewer for `model` in `host`. `keep`: the camera of the viewer this one
+ * replaces (a new version of the same file), so the view doesn't jump;
+ * Reset still goes to the fitted view of the new model.
+ */
+export function createViewer(host: HTMLElement, model: Object3D, keep?: ModelView | null): ModelViewer {
   const canvas = document.createElement('canvas')
   canvas.style.display = 'block'
   canvas.style.width = '100%'
@@ -135,6 +143,11 @@ export function createViewer(host: HTMLElement, model: Object3D): ModelViewer {
   controls.target.set(0, 0, 0)
   controls.update()
   controls.saveState()
+  if (keep) {
+    camera.position.set(...keep.position)
+    controls.target.set(...keep.target)
+    controls.update()
+  }
 
   let dirty = true
   let raf = 0
@@ -183,6 +196,10 @@ export function createViewer(host: HTMLElement, model: Object3D): ModelViewer {
   let disposed = false
   return {
     reset,
+    view: () => ({
+      position: [camera.position.x, camera.position.y, camera.position.z],
+      target: [controls.target.x, controls.target.y, controls.target.z],
+    }),
     dispose() {
       if (disposed) return
       disposed = true

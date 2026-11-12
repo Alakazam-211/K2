@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { useRoom } from '@/components/Room/RoomContext'
 import { extractArchive } from '@/lib/fs-transfer'
+import { useDocVersion } from './useDocVersion'
 
 interface ZipListEntry {
   name: string
@@ -42,6 +43,8 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [extracting, setExtracting] = useState(false)
+  // A new version of this file from any writer: list it again.
+  const version = useDocVersion(scope, filePath)
 
   const loadList = useCallback(async () => {
     setLoading(true)
@@ -83,7 +86,9 @@ export function ZipViewer({ filePath }: ZipViewerProps): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [filePath])
+    // `scope` is read live, as before; a new version of the archive lists again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, version])
 
   const handleExtract = useCallback(async () => {
     if (extracting) return

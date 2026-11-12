@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { daemonCliGet } from '@/lib/daemon-cli'
 import { openOffOriginHttp } from '@/lib/open-off-origin-http'
 import { useRoom } from '@/components/Room/RoomContext'
 import mammoth from 'mammoth'
 import { sanitizeDocxHtml } from './docxSanitize'
+import { useDocVersion } from './useDocVersion'
 
 interface DocxViewerProps {
   filePath: string
@@ -16,12 +17,21 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
   const [html, setHtml] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // The file the document on screen came from.
+  const shownPathRef = useRef<string | null>(null)
+  // A new version of this file from any writer: read it again.
+  const version = useDocVersion(scope, filePath)
 
   useEffect(() => {
     let cancelled = false
+    // A new version keeps the old text up until the new one is converted.
+    const reread = shownPathRef.current === filePath
 
     async function loadDocx(): Promise<void> {
-      setLoading(true)
+      if (!reread) {
+        shownPathRef.current = null
+        setLoading(true)
+      }
       setError(null)
 
       try {
@@ -42,6 +52,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
 
         // mammoth does not sanitize (a .docx link can be `javascript:`).
         setHtml(sanitizeDocxHtml(result.value))
+        shownPathRef.current = filePath
 
         // Log any warnings from mammoth for debugging
         if (result.messages.length > 0) {
@@ -49,6 +60,7 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
         }
       } catch (err) {
         if (cancelled) return
+        shownPathRef.current = null
         const message = err instanceof Error ? err.message : String(err)
         setError(message)
       } finally {
@@ -63,7 +75,9 @@ export function DocxViewer({ filePath }: DocxViewerProps): React.JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [filePath])
+    // `scope` is read live, as before.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, version])
 
   // Links in a document never navigate the K2 webview: http(s) opens the
   // way every other off-origin link does, mailto goes to the OS, and a

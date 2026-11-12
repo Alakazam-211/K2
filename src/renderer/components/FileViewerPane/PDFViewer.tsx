@@ -3,6 +3,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { useRoom } from '@/components/Room/RoomContext'
 import * as pdfjsLib from 'pdfjs-dist'
 import { isEditableTarget } from '@/lib/editable-target'
+import { useDocVersion } from './useDocVersion'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
@@ -35,16 +36,26 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const renderTaskRef = useRef<pdfjsLib.RenderTask | null>(null)
+  // The file the document on screen came from.
+  const shownPathRef = useRef<string | null>(null)
+  // A new version of this file from any writer: read it again.
+  const version = useDocVersion(scope, filePath)
 
   // Load PDF document
   useEffect(() => {
     let cancelled = false
+    // A new version of the PDF on screen keeps the page and zoom (the page
+    // clamped to the new length) and the old pages until the new ones are in.
+    const reread = shownPathRef.current === filePath
 
     async function loadPdf(): Promise<void> {
-      setLoading(true)
-      setError(null)
-      setPdfDoc(null)
-      setCurrentPage(1)
+      if (!reread) {
+        shownPathRef.current = null
+        setLoading(true)
+        setError(null)
+        setPdfDoc(null)
+        setCurrentPage(1)
+      }
 
       try {
         // Daemon returns base64 — decode into a Uint8Array. Browser
@@ -59,12 +70,16 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
         const doc = await pdfjsLib.getDocument({ data }).promise
 
         if (!cancelled) {
+          shownPathRef.current = filePath
           setPdfDoc(doc)
           setNumPages(doc.numPages)
+          setCurrentPage((p) => Math.max(1, Math.min(p, doc.numPages)))
+          setError(null)
           setLoading(false)
         }
       } catch (err) {
         if (!cancelled) {
+          shownPathRef.current = null
           const message = err instanceof Error ? err.message : String(err)
           setError(message)
           setLoading(false)
@@ -74,7 +89,9 @@ export function PDFViewer({ filePath }: PDFViewerProps): React.JSX.Element {
 
     loadPdf()
     return () => { cancelled = true }
-  }, [filePath])
+    // `scope` is read live, as before.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, version])
 
   // Render current page
   useEffect(() => {

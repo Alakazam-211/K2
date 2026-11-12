@@ -711,6 +711,17 @@ export interface DocConflictCopyEvent {
   text: string
 }
 
+/** APP-LEVEL: an any-file doc (tier 0) has a new version, whoever wrote it
+ *  (a `k2 doc write` / `restore`, or another program's save). A tab with
+ *  `workspace` + `rel` open re-reads the file's bytes (`useDocVersion`). */
+export interface DocVersionChangedEvent {
+  kind: 'doc_version_changed'
+  projectId: string
+  workspace: string
+  rel: string
+  version: number
+}
+
 /** APP-LEVEL — Changes tab v1 (prd-changes-tab-v1): the git state behind a
  *  workspace's Changes view may have moved (index / HEAD / refs, or a
  *  non-ignored working-tree edit). Debounced 300 ms (1 s max) per workspace
@@ -1041,6 +1052,7 @@ export type SessionEventMessage =
   | BoardFileChangedEvent
   | DocStructureChangedEvent
   | DocConflictCopyEvent
+  | DocVersionChangedEvent
   | GitChangedEvent
   | GitNotesChangedEvent
   | OpenChangesEvent
@@ -1575,6 +1587,7 @@ type NotifyPrefsChangedHandler = () => void
 type PersonPictureChangedHandler = (e: PersonPictureChangedEvent) => void
 type BoardFileChangedHandler = (e: BoardFileChangedEvent) => void
 type DocConflictCopyHandler = (e: DocConflictCopyEvent) => void
+type DocVersionChangedHandler = (e: DocVersionChangedEvent) => void
 // thread-read-v1 — the unread store's live state (`thread_read` /
 // `project_read`, the whole frame).
 export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) => void
@@ -1630,6 +1643,7 @@ interface AppBusHandlers {
   fsChanged: Set<FsChangedHandler>
   boardFileChanged: Set<BoardFileChangedHandler>
   docConflictCopy: Set<DocConflictCopyHandler>
+  docVersionChanged: Set<DocVersionChangedHandler>
   gitChanged: Set<GitChangedHandler>
   gitNotesChanged: Set<GitNotesChangedHandler>
   openChanges: Set<OpenChangesHandler>
@@ -1699,6 +1713,7 @@ function createBusState(scopeId: string): BusState {
       fsChanged: new Set(),
       boardFileChanged: new Set(),
       docConflictCopy: new Set(),
+      docVersionChanged: new Set(),
       gitChanged: new Set(),
       gitNotesChanged: new Set(),
       openChanges: new Set(),
@@ -2026,6 +2041,11 @@ export function onDocConflictCopy(scope: ServerScope, fn: DocConflictCopyHandler
   return addHandler(busFor(scope).handlers.docConflictCopy, fn)
 }
 
+/** An any-file doc has a new version (filter on `workspace` + `rel`). */
+export function onDocVersionChanged(scope: ServerScope, fn: DocVersionChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.docVersionChanged, fn)
+}
+
 /** Changes tab v1 — subscribe to APP-LEVEL `git_changed` on `scope`'s
  *  server. Filter on `workspacePath`; refetch the snapshot when `rev`
  *  differs from the one you hold. */
@@ -2314,6 +2334,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   doc_conflict_copy: (h, m) => {
     for (const fn of h.docConflictCopy) fn(m)
+  },
+  doc_version_changed: (h, m) => {
+    for (const fn of h.docVersionChanged) fn(m)
   },
   git_changed: (h, m) => {
     for (const fn of h.gitChanged) fn(m)

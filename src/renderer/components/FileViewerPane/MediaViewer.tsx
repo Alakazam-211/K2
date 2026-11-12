@@ -18,6 +18,7 @@ import {
   HostBinaryTooLargeError,
 } from '@/lib/load-host-binary'
 import { mediaMimeFromPath } from './fileCategory'
+import { useDocVersion } from './useDocVersion'
 
 export type MediaKind = 'audio' | 'video'
 
@@ -40,6 +41,8 @@ export function MediaViewer({ filePath, kind }: MediaViewerProps): React.JSX.Ele
   const [progress, setProgress] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sizeLabel, setSizeLabel] = useState<string | null>(null)
+  // A new version of this file from any writer: read it again.
+  const version = useDocVersion(scope, filePath)
 
   useEffect(() => {
     let cancelled = false
@@ -105,7 +108,9 @@ export function MediaViewer({ filePath, kind }: MediaViewerProps): React.JSX.Ele
         URL.revokeObjectURL(createdUrl)
       }
     }
-  }, [filePath])
+    // `scope` is read live, as before.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, version])
 
   // Revoke when objectUrl identity changes (path change sets a new one).
   useEffect(() => {

@@ -123,6 +123,10 @@ pub struct Want {
     pub pw: Option<u32>,
     /// It asked for `stats=1` (the hub then samples its CPU time).
     pub stats: bool,
+    /// The picture's height in pixels when the source knows it (a
+    /// desktop's display, after the 1920-wide cap): the rate table's VP8
+    /// row reads it (30 fps at 720 lines or less, else 15).
+    pub height: Option<u32>,
 }
 
 /// What a hub tells one viewer besides units.
@@ -320,7 +324,7 @@ impl Hub {
     fn attach(&self, st: &mut State, me: u64, want: Want) -> u8 {
         let kind = self.key.kind();
         let remote = want.path.remote();
-        let key = LayerKey { codec: want.codec, fps: tier_for(want.fps, rates::cap(kind, want.codec, want.path)), remote };
+        let key = LayerKey { codec: want.codec, fps: tier_for(want.fps, rates::cap_sized(kind, want.codec, want.path, want.height)), remote };
         let same = |l: &&Layer| l.key.codec == key.codec && l.key.remote == remote;
         let found = st.layers.iter().find(|l| l.key == key).map(|l| l.id).or_else(|| {
             if st.layers.len() < MAX_LAYERS {
@@ -517,7 +521,7 @@ impl Hub {
         }
         for id in movers {
             let Some(old) = st.viewers.get(&id).map(|s| s.want) else { continue };
-            let want = Want { codec: Codec::Jpeg, fps: rates::clamp_fps(kind, Codec::Jpeg, old.path, Some(old.fps)), ..old };
+            let want = Want { codec: Codec::Jpeg, fps: rates::clamp_fps_sized(kind, Codec::Jpeg, old.path, Some(old.fps), old.height), ..old };
             // Off the failed layer first, so the JPEG layer's joiner ask
             // only counts viewers already there.
             if let Some(s) = st.viewers.get_mut(&id) {
@@ -671,7 +675,7 @@ impl Subscription {
         let Some(old) = st.viewers.get(&self.id).map(|s| (s.layer, s.want)) else { return u8::MAX };
         let want = Want { fps, ..old.1 };
         let kind = self.hub.key.kind();
-        let same_tier = st.layers.iter().find(|l| l.id == old.0).is_some_and(|l| l.key.fps == tier_for(fps, rates::cap(kind, want.codec, want.path)));
+        let same_tier = st.layers.iter().find(|l| l.id == old.0).is_some_and(|l| l.key.fps == tier_for(fps, rates::cap_sized(kind, want.codec, want.path, want.height)));
         if same_tier {
             if let Some(s) = st.viewers.get_mut(&self.id) {
                 s.want = want;
@@ -776,7 +780,7 @@ mod tests {
     fn fails(key: i64, fail: Codec, codec: Codec) -> (Subscription, Arc<Mutex<Vec<Vec<LayerSpec>>>>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let src = FailsCodec { fail, failed: Vec::new(), pending: Vec::new(), seen: seen.clone() };
-        let want = Want { codec, fps: 15, path: ViewerPath::Local, pw: None, stats: false };
+        let want = Want { codec, fps: 15, path: ViewerPath::Local, pw: None, stats: false, height: None };
         let sub = join(SourceKey::Sim(key), want, move || Ok::<_, String>(Box::new(src) as Box<dyn EncodedSource>)).expect("join");
         (sub, seen)
     }

@@ -87,7 +87,7 @@ fn shut_down(b: Booted) {
 }
 
 fn want(codec: UnitCodec, fps: u32) -> Want {
-    Want { codec, fps, path: ViewerPath::Local, pw: None, stats: false }
+    Want { codec, fps, path: ViewerPath::Local, pw: None, stats: false, height: None }
 }
 
 /// The next unit off a subscription (5 s at most).

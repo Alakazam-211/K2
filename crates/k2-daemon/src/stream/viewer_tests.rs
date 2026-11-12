@@ -238,6 +238,7 @@ fn desktop_source(name: &str, gives: Vec<Codec>, ctl: Arc<Ctl>) -> Source<String
             Ok(Box::new(src) as Box<dyn EncodedSource>)
         }),
         gives,
+        height: None,
     }
 }
 
@@ -605,6 +606,7 @@ fn a_failed_jpeg_layer_sends_its_reason_before_the_close_every_time() {
                 kind: SourceKind::Desktop,
                 open: Box::new(|| Ok(Box::new(FailsLayers { fail: LinkCodec::Jpeg, pending: Vec::new(), failed: Vec::new() }) as Box<dyn EncodedSource>)),
                 gives: vec![],
+                height: None,
             };
             let mut h = hooks(Default::default(), false, Rec::default());
             h.ended = Box::new(|why: &str| Some(serde_json::json!({ "t": "state", "state": "ended", "message": why }).to_string()));

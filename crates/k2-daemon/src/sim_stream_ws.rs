@@ -358,7 +358,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         ended_reason: "device stopped".into(),
         tag: "sim",
     };
-    let source = Source { key: SourceKey::Sim(sim_id), kind: SourceKind::Sim, open: Box::new(open_source(row)), gives };
+    let source = Source { key: SourceKey::Sim(sim_id), kind: SourceKind::Sim, open: Box::new(open_source(row)), gives, height: None };
     m.viewer_joined(sim_id);
     let served = crate::stream::serve(stream, source, offer, viewer.path, hooks).await;
     m.viewer_left(sim_id);

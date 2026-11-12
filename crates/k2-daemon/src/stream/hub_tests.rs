@@ -25,7 +25,7 @@ fn hub(clock: &Arc<Mutex<Instant>>) -> Arc<Hub> {
 }
 
 fn want(fps: u32) -> Want {
-    Want { codec: Codec::H264, fps, path: ViewerPath::Local, pw: None, stats: false }
+    Want { codec: Codec::H264, fps, path: ViewerPath::Local, pw: None, stats: false, height: None }
 }
 
 fn unit(layer: u8, seq: u64, key: bool, at: Instant) -> EncodedUnit {

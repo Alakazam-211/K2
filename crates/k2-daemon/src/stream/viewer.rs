@@ -244,9 +244,9 @@ pub struct Negotiated {
 
 /// The codec (the first video codec of the offer that `gives` holds, else
 /// JPEG), the window and the fps by the rate table.
-pub fn negotiate(kind: SourceKind, offer: &Offer, gives: &[Codec], path: ViewerPath) -> Negotiated {
+pub fn negotiate(kind: SourceKind, offer: &Offer, gives: &[Codec], path: ViewerPath, height: Option<u32>) -> Negotiated {
     let codec = negotiate_with(&offer.codecs, gives);
-    Negotiated { codec, window: offer.window, fps: rates::clamp_fps(kind, unit_codec(codec), path, offer.fps), path }
+    Negotiated { codec, window: offer.window, fps: rates::clamp_fps_sized(kind, unit_codec(codec), path, offer.fps, height), path }
 }
 
 /// The source a viewer watches.
@@ -259,6 +259,9 @@ pub struct Source<E> {
     /// The video codecs it can give: a protocol-4 source's `hello.codecs`;
     /// a pixel source H.264 when the host encodes it, never VP8.
     pub gives: Vec<Codec>,
+    /// The picture's height in pixels when known before the first unit (a
+    /// desktop's display): the rate row is picked with it.
+    pub height: Option<u32>,
 }
 
 /// The route's side of [`serve`].
@@ -457,11 +460,11 @@ fn hello_text(mut fields: Map<String, Value>, n: &Negotiated) -> Message {
 /// ```
 pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, source: Source<E>, offer: Offer, path: ViewerPath, hooks: Hooks<M>) -> Result<(), ServeError<E>> {
     stream_socket_setup(stream);
-    let Source { key, kind, open, gives } = source;
+    let Source { key, kind, open, gives, height } = source;
     let Hooks { mut auth, mut limits, sink, coalesce, hello, mut push, busy, mut ended, ended_reason, tag } = hooks;
-    let neg = negotiate(kind, &offer, &gives, path);
+    let neg = negotiate(kind, &offer, &gives, path, height);
     let (mut codec, mut fps, window_max) = (neg.codec, neg.fps, neg.window);
-    let want = Want { codec: unit_codec(codec), fps, path, pw: offer.pw, stats: offer.stats };
+    let want = Want { codec: unit_codec(codec), fps, path, pw: offer.pw, stats: offer.stats, height };
     let mut sub = {
         let key = key.clone();
         match tokio::task::spawn_blocking(move || super::join(key, want, open)).await {
@@ -628,7 +631,7 @@ pub async fn serve<M: StreamMsg, E: Send + 'static>(stream: &mut TcpStream, sour
                         flow.ack(seq, Instant::now(), &sub);
                     }
                     Some(EngineMsg::Fps { fps: f }) => {
-                        fps = rates::clamp_fps(kind, unit_codec(codec), path, Some(f));
+                        fps = rates::clamp_fps_sized(kind, unit_codec(codec), path, Some(f), height);
                         flow.moved(sub.set_fps(fps));
                         let _ = write.send(text(&ServerMsg::Fps { fps })).await;
                     }

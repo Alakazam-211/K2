@@ -161,6 +161,18 @@ pub fn wire_display(d: &DeskdDisplay) -> Display {
     }
 }
 
+/// The picture's height a viewer of `display` gets: its pixel height,
+/// scaled down when the layer's 1920-wide cap shrinks it. The rate table's
+/// VP8 row reads it (30 fps at 720 lines or less, else 15).
+pub fn layer_height(list: &[DeskdDisplay], display: u32) -> Option<u32> {
+    let d = list.iter().find(|d| d.id == display)?;
+    let (w, h) = (d.width_px, d.height_px);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(if w > 1920 { (u64::from(h) * 1920 / u64::from(w)) as u32 } else { h })
+}
+
 fn first_display(list: &[DeskdDisplay]) -> u32 {
     list.iter().find(|d| d.main).or(list.first()).map_or(0, |d| d.id)
 }
@@ -878,7 +890,9 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
     // would get a JPEG layer nothing makes. Refuse it with why.
     let offer = Offer::from_params(&params);
     let gives = a.deskd.codecs();
-    let neg = crate::stream::viewer::negotiate(SourceKind::Desktop, &offer, &gives, path);
+    // Only the codec matters here; the fps is picked with the display's
+    // height once the display is known (below).
+    let neg = crate::stream::viewer::negotiate(SourceKind::Desktop, &offer, &gives, path, None);
     if neg.codec == Codec::Jpeg && !a.deskd.jpeg() {
         let have = gives.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ");
         let r = Refused::new(409, "desktop_codec", format!("this viewer can't decode what K2 Screen sends here ({have}); use the K2 desktop app or a browser that decodes H.264"));
@@ -988,6 +1002,7 @@ pub(crate) async fn serve_with(stream: &mut TcpStream, req: StreamReq, limits: L
             kind: SourceKind::Desktop,
             open: Box::new(move || deskd.source(display, &list)),
             gives,
+            height: layer_height(&a.displays, display),
         }
     };
     let served = crate::stream::serve(stream, source, offer, path, hooks).await;

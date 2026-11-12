@@ -99,6 +99,11 @@ pub fn cap(kind: SourceKind, codec: Codec, path: ViewerPath) -> u32 {
     clamp_fps(kind, codec, path, Some(u32::MAX))
 }
 
+/// [`cap`] with the picture's height, where the source knows it.
+pub fn cap_sized(kind: SourceKind, codec: Codec, path: ViewerPath, height_px: Option<u32>) -> u32 {
+    clamp_fps_sized(kind, codec, path, Some(u32::MAX), height_px)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,6 +138,9 @@ mod tests {
             assert_eq!(clamp_fps_sized(SourceKind::Desktop, Codec::Vp8, p, Some(10), Some(1080)), 10);
         }
         assert_eq!(d(Codec::Vp8, Lan, Some(1)), 2);
+        assert_eq!(cap_sized(SourceKind::Desktop, Codec::Vp8, Tunnel, Some(720)), 30, "a 720p desktop's layer may run at 30");
+        assert_eq!(cap_sized(SourceKind::Desktop, Codec::Vp8, Tunnel, Some(1080)), 15);
+        assert_eq!(cap_sized(SourceKind::Desktop, Codec::Vp8, Tunnel, None), cap(SourceKind::Desktop, Codec::Vp8, Tunnel));
         assert_eq!(d(Codec::Vp8, Local, Some(1)), 1);
         // JPEG: ≤ 15 here, 2–8 elsewhere (default 8).
         assert_eq!(d(Codec::Jpeg, Local, None), 15);

@@ -806,6 +806,24 @@ fn a_mac_viewer_whose_picture_fails_ends_on_the_reason_card() {
     });
 }
 
+/// The rate row is picked with the display's height (K2 Render's L2 note):
+/// a 720p desktop's VP8 runs at 30, a 1080p one at 15, a 4K one (shrunk
+/// to 1920 wide, 1080 lines) at 15.
+#[test]
+fn the_vp8_rate_follows_the_displays_height() {
+    use crate::stream::rates;
+    use k2_core::sim::stream::ViewerPath;
+    let list = vec![deskd_display(1, 1280.0, 720.0, true), deskd_display(2, 1920.0, 1080.0, false), deskd_display(3, 3840.0, 2160.0, false)];
+    assert_eq!(layer_height(&list, 1), Some(720));
+    assert_eq!(layer_height(&list, 3), Some(1080), "after the 1920-wide cap");
+    assert_eq!(layer_height(&list, 9), None);
+    let cap = |id| rates::cap_sized(SourceKind::Desktop, k2_core::stream::Codec::Vp8, ViewerPath::Tunnel, layer_height(&list, id));
+    assert_eq!((cap(1), cap(2), cap(3)), (30, 15, 15));
+    let offer = crate::stream::viewer::Offer::from_params(&[("codecs".to_string(), "vp8,jpeg".to_string())].into_iter().collect());
+    let neg = crate::stream::viewer::negotiate(SourceKind::Desktop, &offer, &[Codec::Vp8], ViewerPath::Tunnel, layer_height(&list, 1));
+    assert_eq!((neg.codec, neg.fps), (Codec::Vp8, 30), "720p VP8 isn't held to the 1080p row");
+}
+
 // ── live, on Linux X11 (L2 / D8b) ────────────────────────────────────
 
 #[cfg(target_os = "linux")]

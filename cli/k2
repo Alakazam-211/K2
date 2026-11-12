@@ -444,14 +444,14 @@ _cli_tool_id_for_verb() {
         # to its own workspace's device and checks its "Allow mobile
         # devices" switch), never the owner token.
         sim) echo "sim" ;;
-        # k2 desktop env (prd-linux-virtual-desktop-v1 L8) rides the locked
-        # sim tool id: inside a K2 terminal it sends the session passport
+        # k2 desktop env (prd-linux-virtual-desktop-v1 L8): its own id +
+        # locked tool, so inside a K2 terminal it sends the session passport
         # (the daemon gives the agent its own workspace's desktop and checks
         # its "Allow a virtual desktop" switch), never the owner token. The
         # other desktop verbs are people's and stay as they were.
         desktop)
             case "${2:-}" in
-                env) echo "sim" ;;
+                env) echo "desktop" ;;
                 *) echo "" ;;
             esac ;;
         # k2 doc (Markdown multiplayer v1, vs-live MI4): id + locked, so
@@ -552,7 +552,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project|organization) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|chat|migrate|docs) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -560,7 +560,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|chat|migrate|docs) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|desktop|chat|migrate|docs) return 0 ;;
         *) return 1 ;;
     esac
 }

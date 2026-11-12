@@ -59,6 +59,12 @@ class H(BaseHTTPRequestHandler):
         q = "&".join(p for p in u.query.split("&") if p and not p.startswith("token="))
         with open(os.path.join(work, "requests.log"), "a") as f:
             f.write("%s %s?%s %s\n" % (self.command, u.path, q, body))
+        # The credential it came with (query token or Bearer), for the
+        # passport checks; never in requests.log.
+        sent = [urllib.parse.unquote(p[6:]) for p in u.query.split("&") if p.startswith("token=")]
+        sent.append(self.headers.get("Authorization") or "")
+        with open(os.path.join(work, "tokens.log"), "a") as f:
+            f.write(" ".join(sent) + "\n")
         return u.path
     def do_GET(self):
         path = self._log("")
@@ -233,6 +239,35 @@ set -e
 [ "$rc" = "3" ] && pass "switch off exits 3" || bad "env off exit $rc"
 case "$err" in *"desktop_switch_off"*"Ask with: k2 permission request desktop.use"*) pass "switch off says how to ask" ;; *) bad "env off: $err" ;; esac
 rm -f "$WORK/env_off"
+
+# k2 desktop env has its own locked id tool, `desktop`: inside a K2
+# terminal it always sends the session passport, never the owner token.
+# The people's verbs stay ungoverned.
+(
+    eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
+    [ "$(_cli_tool_id_for_verb desktop env)" = "desktop" ] || { echo "  FAIL: desktop env tool id: $(_cli_tool_id_for_verb desktop env)" >&2; exit 1; }
+    [ "$(_cli_tool_default_mode desktop)" = "id" ] || { echo "  FAIL: desktop is not an id tool" >&2; exit 1; }
+    _cli_tool_is_locked desktop || { echo "  FAIL: desktop is not locked" >&2; exit 1; }
+    [ -z "$(_cli_tool_id_for_verb desktop status)" ] || { echo "  FAIL: desktop status got a tool id" >&2; exit 1; }
+) && pass "catalog: desktop env is its own locked id tool" || bad "catalog: desktop env tool"
+mkdir -p "$WORK/cell/.k2"
+printf 'owner-secret-token' > "$WORK/cell/.k2/daemon.token"
+printf 'owner-secret-token' > "$WORK/cell/.k2/heartbeat.token"
+cell() {
+    env -i PATH="$PATH" HOME="$WORK/cell" K2_PORT="$(cat "$WORK/port")" K2_HOOK_SOCK="$WORK/no-such.sock" "$@" "$K2_CLI" desktop env
+}
+before="$(wc -l < "$WORK/requests.log")"
+set +e
+err="$(cell 2>&1 >/dev/null)"; rc=$?
+set -e
+[ "$rc" = "3" ] && pass "in a K2 terminal with no passport env exits 3" || bad "no passport exit $rc: $err"
+case "$err" in *"requires session ID"*) pass "and says it needs the passport" ;; *) bad "no passport: $err" ;; esac
+[ "$(wc -l < "$WORK/requests.log")" = "$before" ] && pass "and never asks the daemon as the owner" || bad "a request went out: $(last_req)"
+: > "$WORK/tokens.log"
+out="$(cell K2_HOOK_TOKEN=passport-abc)"
+case "$out" in *"export DISPLAY=:101"*) pass "with a passport env works" ;; *) bad "passport env: $out" ;; esac
+case "$(cat "$WORK/tokens.log")" in *passport-abc*) pass "env sent the passport" ;; *) bad "env token: $(cat "$WORK/tokens.log")" ;; esac
+case "$(cat "$WORK/tokens.log")" in *owner-secret*) bad "env sent the owner token" ;; *) pass "env never sent the owner token" ;; esac
 set +e
 k2 status --release >/dev/null 2>&1; rc=$?
 set -e

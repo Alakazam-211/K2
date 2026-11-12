@@ -574,5 +574,9 @@ textarea.field { height: auto; padding: 8px 10px; resize: none; line-height: 1.4
 .t-image.broken { background: color-mix(in srgb, #e5484d 14%, transparent); border-radius: 4px; outline: 1px dashed #e5484d; }
 
 /* A board file in a K2 tab: read-only mode hides what would change it, and an unknown type is a labelled placeholder. */
+/* K2 draws the file's name over the top-left corner (its own DOM, so it can rename the file) and says so with these two;
+   without them (an older K2) the board shows its own name, as before. */
+.topleft { left: calc(12px + var(--zen-board-name-w, 0px)); }
+.boardname .logo, .boardname .name { display: var(--zen-board-name-host, flex); }
 .read-only .toolbar, .read-only .ctx { display: none !important; }
 .foreign { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; padding: 8px; font-size: 12px; text-align: center; color: var(--zen-text-muted, #666); border: 1px dashed var(--zen-border, #999); box-sizing: border-box; pointer-events: none; }

@@ -4,12 +4,13 @@
 //
 // Clients are thin: nothing here reads or writes the format, and opening a board sends no write.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HtmlFrame } from '@/components/HtmlFrame/HtmlFrame'
 import { useRoom, useRoomTabs } from '@/components/Room/RoomContext'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { isWebClient } from '@/lib/is-web'
 import { useToastStore } from '@/stores/toast'
+import { fileUndoFor } from '@/stores/file-undo'
 import { onBoardFileChanged, onFsChanged } from '@/stores/session-events'
 import { fetchZenWidgetBundle, zenWidgetError } from '@/lib/zen/zen-widget-routes'
 import { zenLib } from '@/lib/zen/zen-lib-loader'
@@ -35,6 +36,7 @@ import { BOARD_FILE_FEATURES, BOARD_FILE_WIDGET, boardFileTheme, boardFileConsen
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { BoardWebStub } from './BoardWebStub'
 import { BoardFileCard } from './BoardFileCard'
+import { BoardFileName } from './BoardFileName'
 
 export interface BoardFilePaneProps {
   filePath: string
@@ -160,6 +162,17 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
     }
   }, [session])
 
+  // The name's rename: the file tree's route, after what's queued is saved (a save after the rename would find the
+  // file gone). The tab follows the file to its new path; the pane remounts there.
+  const rename = async (fileName: string): Promise<void> => {
+    await session.flush().catch(() => undefined)
+    const v = session.view()
+    if (v.queued + v.held.filter((h) => h.heldId === null).length > 0) throw new Error('Some edits aren’t saved yet. Save them, then rename.')
+    const r = await daemonCliPost<{ path: string }>(scope, 'fs/rename', { old_path: filePath, new_name: fileName })
+    fileUndoFor(scope.hostKey).push({ type: 'rename', oldPath: filePath, newPath: r.path })
+    if (tabId) room.tabs.getState().retargetUntitledFile(tabId, filePath, r.path)
+  }
+
   const close = async (): Promise<void> => {
     if (!tabId) return
     if (await askBeforeBoardFileLoss('close', [session])) closeTab(tabId)
@@ -220,7 +233,7 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
   return (
     <div ref={boxRef} className="relative flex h-full min-h-0 flex-col" data-board-file-pane={filePath}>
       <BoardFileBanners view={view} session={session} filePath={filePath} onClose={() => void close()} />
-      <BoardFileFrame key={filePath} session={session} filePath={filePath} tabId={tabId ?? filePath} api={api} />
+      <BoardFileFrame key={filePath} session={session} filePath={filePath} tabId={tabId ?? filePath} api={api} rename={rename} />
       <HeldChip held={view.held} session={session} />
     </div>
   )
@@ -356,7 +369,12 @@ const noInnerBridge = (): ZenWidgetBridge => {
 
 type Loaded = { html: string; nonce: string; prelude: string; hash: string }
 
-function BoardFileFrame({ session, filePath, tabId, api }: { session: BoardFileSession; filePath: string; tabId: string; api: BoardFileApi }): React.JSX.Element {
+/** The frame hides its own name and starts its bar after K2's (BoardFileName) by these two. */
+function nameVars(width: number): Record<string, string> {
+  return width > 0 ? { '--zen-board-name-host': 'none', '--zen-board-name-w': `${width + 8}px` } : {}
+}
+
+function BoardFileFrame({ session, filePath, tabId, api, rename }: { session: BoardFileSession; filePath: string; tabId: string; api: BoardFileApi; rename(fileName: string): Promise<void> }): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [reloads, setReloads] = useState(0)
@@ -367,13 +385,25 @@ function BoardFileFrame({ session, filePath, tabId, api }: { session: BoardFileS
   const hostRef = useRef<{ dispose(): void } | null>(null)
   const gestureKey = `board-file:${tabId}`
   const label = 'Board'
+  // The name's width reaches the frame as theme variables: a width change is a theme change to it.
+  const nameWidth = useRef(0)
+  const themeListeners = useRef(new Set<() => void>())
+  const onNameWidth = useCallback((px: number) => {
+    if (px === nameWidth.current) return
+    nameWidth.current = px
+    for (const cb of themeListeners.current) cb()
+  }, [])
+  const frameTheme = (): ReturnType<typeof boardFileTheme> => {
+    const t = boardFileTheme(boxRef.current)
+    return { ...t, vars: { ...t.vars, ...nameVars(nameWidth.current) } }
+  }
 
   useEffect(() => {
     let live = true
     void Promise.all([fetchZenWidgetBundle(BOARD_FILE_WIDGET), zenLib.texts(['k2-png@1'])])
       .then(([bundle, libs]) => {
         if (!live) return
-        const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: boardFileTheme(boxRef.current), libs })
+        const prelude = zenFramePrelude({ nonce: bundle.nonce, theme: frameTheme(), libs })
         setLoaded({ html: bundle.html, nonce: bundle.nonce, prelude, hash: bundle.hash })
       })
       .catch((err: unknown) => {
@@ -506,14 +536,19 @@ function BoardFileFrame({ session, filePath, tabId, api }: { session: BoardFileS
           paused: () => false,
           pauseForRunaway: () => undefined,
           theme: () => {
-            const t = boardFileTheme(boxRef.current)
+            const t = frameTheme()
             return { theme: { scheme: t.scheme, vars: t.vars }, chrome: { corners: null, stoplights: null }, motion: { reduced: t.reduced } }
           },
           onThemeChange: (cb) => {
-            if (typeof MutationObserver === 'undefined') return () => undefined
+            themeListeners.current.add(cb)
+            const off = (): void => void themeListeners.current.delete(cb)
+            if (typeof MutationObserver === 'undefined') return off
             const mo = new MutationObserver(cb)
             mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style', 'data-theme'] })
-            return () => mo.disconnect()
+            return () => {
+              off()
+              mo.disconnect()
+            }
           },
           setTimer: (fn, ms) => window.setTimeout(fn, ms),
           clearTimer: (t) => window.clearTimeout(t as number),
@@ -543,6 +578,7 @@ function BoardFileFrame({ session, filePath, tabId, api }: { session: BoardFileS
           style={{ border: 0, background: 'transparent', minHeight: 0 }}
         />
       ) : null}
+      {loaded ? <BoardFileName filePath={filePath} rename={rename} onWidth={onNameWidth} /> : null}
       {downloadAsk ? <ZenDownloadSheet ask={downloadAsk.ask} onDone={(a) => { downloadAsk.resolve(a); setDownloadAsk(null) }} /> : null}
       {linkAsk ? <ZenLinkSheet ask={linkAsk.ask} onDone={(a) => { linkAsk.resolve(a); setLinkAsk(null) }} /> : null}
     </div>

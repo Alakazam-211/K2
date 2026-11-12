@@ -22,6 +22,12 @@ describe('Board tab: no space reserved for chrome it does not have', () => {
     expect(read('board-file-1', 'ui.js')).not.toMatch(/Math\.max\(60, Math\.min\(H - ph/)
   })
 
+  it('hides its own name and starts its bar after K2’s name only when the tab says so', () => {
+    const css = read('board-file-1', 'board.css')
+    expect(css).toContain('.topleft { left: calc(12px + var(--zen-board-name-w, 0px)); }')
+    expect(css).toContain('.boardname .logo, .boardname .name { display: var(--zen-board-name-host, flex); }')
+  })
+
   it('leaves the Garden board (board-1) as it was', () => {
     const css = read('board-1', 'board.css')
     for (const sel of ['.topleft', '.topright', '.hud']) expect(topOf(css, sel)).toBe('60px')

@@ -297,3 +297,51 @@ describe('the banners and the chip', () => {
     expect(session().pendingCount()).toBe(1)
   })
 })
+
+describe('renaming from the name (Rosson 2026-11-11)', () => {
+  async function open(): Promise<void> {
+    noteServerVersion(LOCAL_HOME_HOST, null, ['board-file-v1'])
+    pane()
+    await waitFor(() => expect(screen.getByTestId('board-file-name')).toBeTruthy())
+  }
+  const renameTo = async (v: string): Promise<void> => {
+    fireEvent.click(screen.getByTestId('board-file-name'))
+    fireEvent.change(screen.getByTestId('board-file-name-input'), { target: { value: v } })
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('board-file-name-input'), { key: 'Enter' })
+    })
+  }
+
+  it('renames through the file tree’s route, and the tab follows the file', async () => {
+    await open()
+    const retarget = vi.spyOn(primaryRoom().tabs.getState(), 'retargetUntitledFile').mockImplementation(() => undefined)
+    daemonCliPost.mockImplementation((_s: unknown, route: string, body: unknown) =>
+      route === 'fs/rename' ? Promise.resolve({ path: '/w/Road map.k5board' }) : d.post(route, body),
+    )
+    await renameTo('Road map')
+    await waitFor(() => expect(retarget).toHaveBeenCalledWith('tab', PATH, '/w/Road map.k5board'))
+    expect(daemonCliPost).toHaveBeenCalledWith(expect.anything(), 'fs/rename', { old_path: PATH, new_name: 'Road map.k5board' })
+  })
+
+  it('a taken name: the daemon’s refusal in words, and the tab stays', async () => {
+    await open()
+    const retarget = vi.spyOn(primaryRoom().tabs.getState(), 'retargetUntitledFile').mockImplementation(() => undefined)
+    daemonCliPost.mockImplementation((_s: unknown, route: string, body: unknown) =>
+      route === 'fs/rename' ? Promise.reject(new Error('Already exists: /w/Taken.k5board')) : d.post(route, body),
+    )
+    await renameTo('Taken')
+    await waitFor(() => expect(screen.getByTestId('board-file-name-problem').textContent).toBe('A board with that name is already here.'))
+    expect(retarget).not.toHaveBeenCalled()
+  })
+
+  it('an edit the file doesn’t have yet: no rename is sent', async () => {
+    await open()
+    await act(async () => {
+      d.setSaveRefusal({ code: 'blob_missing' })
+      session().submit({ gesture: 't', kind: 'edit', byAll: false, ops: [{ op: 'set', id: 's-a', f: { x: 9 } }] })
+    })
+    await renameTo('Later')
+    await waitFor(() => expect(screen.getByTestId('board-file-name-problem')).toBeTruthy())
+    expect(daemonCliPost.mock.calls.some((c) => c[1] === 'fs/rename')).toBe(false)
+  })
+})

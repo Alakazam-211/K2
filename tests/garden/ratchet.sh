@@ -55,6 +55,18 @@ lines 4000 "$T/crates/a/src/small.rs"
 run 1 "crates/a/src/small.rs has 4000 lines and is not listed"
 lines 100 "$T/crates/a/src/small.rs"
 
+# The CLI is counted by its parts: a part may not reach the limit, and the
+# joined cli/k2 is not counted at all.
+mkdir -p "$T/cli/src"
+lines 9000 "$T/cli/k2"
+lines 3999 "$T/cli/src/mail.sh"
+git -C "$T" add -A
+run 0 "ratchet: ok."
+lines 4000 "$T/cli/src/mail.sh"
+run 1 "cli/src/mail.sh has 4000 lines and is not listed"
+rm -rf "$T/cli"
+git -C "$T" add -A
+
 # A listed file that is gone fails until its row is removed; --tighten removes it.
 printf '4500 crates/a/src/big.rs\n4100 crates/a/src/gone.rs\n' > "$T/c.txt"
 run 1 "crates/a/src/gone.rs is listed but does not exist"

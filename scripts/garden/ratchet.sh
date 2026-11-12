@@ -45,7 +45,8 @@ cd "$ROOT"
 
 # The files rule 2 looks at: source the lanes edit by hand.
 counted_files() {
-    git ls-files -- cli/k2 'crates/*.rs' 'src/*.ts' 'src/*.tsx' 'src-tauri/*.rs' \
+    # The CLI is counted by its parts (cli/src); cli/k2 is their join.
+    git ls-files -- 'cli/src/*.sh' 'crates/*.rs' 'src/*.ts' 'src/*.tsx' 'src-tauri/*.rs' \
         | grep -v -E '(^|/)(tests|generated|dist|migrations)/|(^|/)tests\.rs$|_tests?\.rs$|\.test\.tsx?$|\.generated\.'
 }
 

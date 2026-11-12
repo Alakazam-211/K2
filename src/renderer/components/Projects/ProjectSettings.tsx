@@ -1219,7 +1219,7 @@ function AgentsSection({
     doneTimer.current = setTimeout(() => setDone(null), 4000)
   }
   // 0302: where each agent opens, for everyone (owner or admin).
-  const views = useMemberViews(detail)
+  const views = useMemberViews(detail, primaryScope())
   const projectView = projectDefaultView(detail)
   const viewLockReason = memberViewLockReason(caps.canEditLooks, daemonKnowsMemberViews(detail.members))
   const setView = async (m: ProjectGroupMemberInfo, display: string, next: ProjectDefaultView | null): Promise<void> => {

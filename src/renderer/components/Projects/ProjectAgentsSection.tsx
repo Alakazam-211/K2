@@ -674,7 +674,7 @@ export function ProjectNavSection({
 
   const members = useMemo(() => sortMembersPinnedFirst(show.members, pinnedIds).sorted, [show.members, pinnedIds])
   const files = useProjectFiles(show.id)
-  const views = useMemberViews(show)
+  const views = useMemberViews(show, primaryScope())
   const viewLockReason = memberViewLockReason(canSetAgentViews, daemonKnowsMemberViews(show.members))
   const filesByAgent = useMemo(() => {
     const sorted = sortResourcesPinnedThenAlpha(files.docs ?? [], pinnedKeys).sorted

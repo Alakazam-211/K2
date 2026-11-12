@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { httpCodeOf } from '@/lib/daemon-http-error'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 import {
   daemonErrorInfo,
   memberDefaultView,
@@ -69,9 +69,10 @@ export function memberViewError(err: unknown, name: string): MemberViewError {
 
 /** Every member's view, with a change shown at once (optimistic) until the
  *  next `show` read carries it. `set` resolves with the daemon's answer or
- *  rolls back and rethrows. */
+ *  rolls back and rethrows. `scope`: the server the project is on. */
 export function useMemberViews(
   project: Pick<ProjectGroup, 'id' | 'defaultView'> & { members: ProjectGroupMemberInfo[] },
+  scope: ServerScope,
 ): {
   viewOf: (m: ProjectGroupMemberInfo) => MemberView
   busy: string | null
@@ -96,7 +97,7 @@ export function useMemberViews(
       setBusy(id)
       setOver((o) => ({ ...o, [id]: { view: next ?? projectView, own: next } }))
       try {
-        const r = await setProjectGroupMemberDefaultView(primaryScope(), project.id, id, next)
+        const r = await setProjectGroupMemberDefaultView(scope, project.id, id, next)
         if (r && typeof r.defaultView === 'string') {
           setOver((o) => ({ ...o, [id]: { view: r.defaultView, own: r.ownDefaultView ?? null } }))
         }
@@ -112,7 +113,7 @@ export function useMemberViews(
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project.id, project.defaultView],
+    [project.id, project.defaultView, scope],
   )
 
   return { viewOf, busy, set }

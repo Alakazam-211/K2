@@ -61,6 +61,13 @@ fn helper_bundle_id_matches_build_script() {
 /// the build step is that call, and the array (defined at the script's top
 /// level, not inside a function or conditional) must list
 /// `-p k2-ptyd --bin k2-ptyd`.
+///
+/// Since 0.46.13 that call lives in its own function, `_k2_mac_sidecar_cargo`
+/// (nothing but the call), and `k2_build_mac_binaries` runs it either after
+/// `tauri build` (`K2_MAC_BUILD_PARALLEL=0`) or beside it (the default): an
+/// `if`/`else` at its top level whose every branch calls it. A call at the
+/// top level, or in every branch of an `if` that has an `else`, reaches the
+/// build on every path; a branch without it, or no `else`, fails.
 #[cfg(unix)]
 #[test]
 fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
@@ -70,6 +77,7 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
     const PTYD_ARGS: &str = "-p k2-ptyd --bin k2-ptyd";
     const SHARED: &str = "scripts/lib/build-binaries.sh";
     const SHARED_FN: &str = "k2_build_mac_binaries";
+    const SIDECAR_FN: &str = "_k2_mac_sidecar_cargo";
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let read = |rel: &str| std::fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
     let helper = read("scripts/macos-daemon-helper-app.sh");
@@ -79,39 +87,97 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
         "scripts/macos-daemon-helper-app.sh ptyd name drifted from PTYD_BINARY_NAME"
     );
 
-    // The shared step: the body of `k2_build_mac_binaries() {` up to its
+    // A shell function's body in the shared file: `<name>() {` up to its
     // closing `}` at column 0.
     let shared = read(SHARED);
-    let start = shared
-        .lines()
-        .position(|l| l.trim_end() == format!("{SHARED_FN}() {{"))
-        .unwrap_or_else(|| panic!("{SHARED} does not define {SHARED_FN}()"));
-    let body: Vec<&str> = shared.lines().skip(start + 1).take_while(|l| *l != "}").collect();
-    assert!(body.iter().any(|l| l.trim() == "local out=\"target/release\""), "{SHARED_FN} no longer builds into target/release");
-    // Block depth before each line: an `if`/`case`/loop the line sits in, or
-    // an early `return` before it, would let a caller skip it.
-    let unconditional = |needle: &dyn Fn(&str) -> bool, what: &str| -> String {
+    let fn_body = |name: &str| -> Vec<&str> {
+        let start = shared
+            .lines()
+            .position(|l| l.trim_end() == format!("{name}() {{"))
+            .unwrap_or_else(|| panic!("{SHARED} does not define {name}()"));
+        shared.lines().skip(start + 1).take_while(|l| *l != "}").collect()
+    };
+    // How a code line moves the block depth: `if`/`case`/a loop opens a
+    // block, `fi`/`esac`/`done` closes one, and a block opened and closed on
+    // the one line (`case "$x" in a) ;; esac`) leaves it as it was.
+    let opens = |t: &str| t.starts_with("if ") || t.starts_with("case ") || t.ends_with("; do") || t == "do";
+    let closes_alone = |t: &str| t == "fi" || t == "esac" || t == "done" || t.starts_with("fi ") || t.starts_with("done ");
+    let closes_inline = |t: &str| t.ends_with("; fi") || t.ends_with(" esac") || t.ends_with("; done");
+    let step = |t: &str, depth: &mut i32| {
+        if opens(t) && !closes_inline(t) {
+            *depth += 1;
+        }
+        if closes_alone(t) {
+            *depth -= 1;
+        }
+    };
+    let early_return = |t: &str| t == "return" || t == "return 0";
+    // A line at a function's top level: an `if`/`case`/loop the line sits
+    // in, or an early `return` before it, would let a caller skip it.
+    let unconditional = |body: &[&str], fname: &str, needle: &dyn Fn(&str) -> bool, what: &str| -> String {
         let mut depth: i32 = 0;
-        for l in &body {
+        for l in body {
             let t = l.trim();
             if t.starts_with('#') {
                 continue;
             }
             if needle(t) {
-                assert_eq!(depth, 0, "{SHARED_FN}: {what} sits inside a conditional block: {t}");
+                assert_eq!(depth, 0, "{fname}: {what} sits inside a conditional block: {t}");
                 return t.to_string();
             }
-            assert!(t != "return" && t != "return 0", "{SHARED_FN}: an early `{t}` comes before {what}");
-            if t.starts_with("if ") || t.starts_with("case ") || t.ends_with("; do") || t == "do" {
-                depth += 1;
-            }
-            if t == "fi" || t == "esac" || t == "done" || t.starts_with("fi ") || t.starts_with("done ") {
-                depth -= 1;
+            assert!(!early_return(t), "{fname}: an early `{t}` comes before {what}");
+            step(t, &mut depth);
+        }
+        panic!("{fname} does not {what}");
+    };
+
+    // The sidecar build: the one cargo call over the array, unconditional
+    // in its own function.
+    unconditional(&fn_body(SIDECAR_FN), SIDECAR_FN, &|t| t.starts_with(SIDECAR_BUILD), "build the sidecars (K2_MAC_SIDECAR_CARGO_ARGS)");
+
+    // The shared step reaches that function on every path: a call at its
+    // top level, or one in every branch of a top-level `if` with an `else`.
+    let body = fn_body(SHARED_FN);
+    assert!(body.iter().any(|l| l.trim() == "local out=\"target/release\""), "{SHARED_FN} no longer builds into target/release");
+    let calls_sidecar = |t: &str| t.split_whitespace().any(|w| w == SIDECAR_FN);
+    let mut depth: i32 = 0;
+    let mut branches: Vec<bool> = Vec::new();
+    let mut has_else = false;
+    let mut reached = false;
+    for l in &body {
+        let t = l.trim();
+        if t.starts_with('#') {
+            continue;
+        }
+        if depth == 0 && calls_sidecar(t) {
+            reached = true;
+            break;
+        }
+        assert!(!early_return(t), "{SHARED_FN}: an early `{t}` comes before the sidecar build ({SIDECAR_FN})");
+        if depth == 0 && t.starts_with("if ") && !closes_inline(t) {
+            branches = vec![false];
+            has_else = false;
+        } else if depth == 1 && !branches.is_empty() && (t == "else" || t.starts_with("elif ")) {
+            has_else |= t == "else";
+            branches.push(false);
+        } else if depth >= 1 && calls_sidecar(t) {
+            if let Some(b) = branches.last_mut() {
+                *b = true;
             }
         }
-        panic!("{SHARED_FN} does not {what}");
-    };
-    unconditional(&|t| t.starts_with(SIDECAR_BUILD), "build the sidecars (K2_MAC_SIDECAR_CARGO_ARGS)");
+        step(t, &mut depth);
+        if depth == 0 && closes_alone(t) && !branches.is_empty() {
+            if has_else && branches.iter().all(|b| *b) {
+                reached = true;
+                break;
+            }
+            branches.clear();
+        }
+    }
+    assert!(
+        reached,
+        "{SHARED_FN} does not build the sidecars ({SIDECAR_FN}) on every path: call it at its top level or in every branch of an if/else"
+    );
     // The array that call expands: assigned once, at column 0 (top level),
     // and one of its lines is exactly k2-ptyd's package + bin.
     let arrays: Vec<usize> = helper
@@ -137,7 +203,7 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
         array.iter().any(|t| *t == PTYD_ARGS),
         "K2_MAC_SIDECAR_CARGO_ARGS no longer builds k2-ptyd ({PTYD_ARGS}): {array:?}"
     );
-    let call = unconditional(&|t| t.starts_with("k2_daemon_helper_assemble "), "assemble K2 Daemon.app");
+    let call = unconditional(&body, SHARED_FN, &|t| t.starts_with("k2_daemon_helper_assemble "), "assemble K2 Daemon.app");
     assert!(call.contains("\"$out/k2-ptyd\""), "{SHARED_FN} assembles without k2-ptyd: {call}");
     // The export worker (vs-live §3.1) rides the same way: built in the one
     // sidecar call and nested beside the daemon, under the name the daemon

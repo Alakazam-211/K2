@@ -1228,7 +1228,7 @@ fn psql_cluster_runs_that_majors_psql_on_its_port() {
 fn version_announces_pgmajor_on_protocol_9() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 15, "pgmajor came in 9; 15 is 0.46.11's one bump (additive)");
+    assert_eq!(v["protocol"], 16, "pgmajor came in 9; 16 is 0.46.12's one bump (additive)");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
     assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL);
@@ -1559,7 +1559,7 @@ fn schema_only_dump_force_kept_off_force_back_and_quiesce_repl() {
 fn version_announces_pgdual_on_protocol_10() {
     let t = box_root();
     let v = json(&t.call(&["helper", "version"]));
-    assert_eq!(v["protocol"], 15, "pgdual came in 10 (additive)");
+    assert_eq!(v["protocol"], 16, "pgdual came in 10 (additive)");
     assert_eq!(v["namespaces"]["pgdual"], true);
     assert_eq!(v["namespaces"]["creds"], true);
     assert_eq!(k2_root_proto::version::PGDUAL_MIN_PROTOCOL, 10);
@@ -1799,7 +1799,7 @@ fn named_verbs_are_the_daemons() {
 fn version_announces_pgnamed_on_protocol_15() {
     let t = box_root();
     let v: serde_json::Value = serde_json::from_slice(&t.call(&["helper", "version"]).stdout).unwrap();
-    assert_eq!(v["protocol"], 15);
+    assert_eq!(v["protocol"], 16, "pgnamed came in 15 (additive)");
     assert_eq!(v["namespaces"]["pgnamed"], true);
     assert_eq!(v["namespaces"]["pgmajor"], true, "protocols are additive");
 }

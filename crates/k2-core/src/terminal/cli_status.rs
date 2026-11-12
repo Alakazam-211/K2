@@ -502,8 +502,12 @@ mod tests {
         // The probe's PATH is only `bin`, so the full path.
         fake(&bin, "grok", "exec /bin/sleep 30");
         let cache = ProbeCache::new(CACHE_TTL);
+        // The CLIs that answer get the real timeout: a fake's first run took
+        // over 400ms on a busy Mac node, and that read as "timed out". Only
+        // the one that hangs gets a short one, which it always overruns.
+        let mut got = status(&["claude", "codex", "gemini"], &bin, &cache, PROBE_TIMEOUT);
         let started = Instant::now();
-        let got = status(&["claude", "codex", "grok", "gemini"], &bin, &cache, Duration::from_millis(400));
+        got.extend(status(&["grok"], &bin, &cache, Duration::from_millis(400)));
         assert!(started.elapsed() < Duration::from_secs(10), "a hung probe must not hold the request");
         let by: HashMap<&str, &CliStatus> = got.iter().map(|s| (s.program.as_str(), s)).collect();
 

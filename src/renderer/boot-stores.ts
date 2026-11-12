@@ -9,6 +9,7 @@
  *
  * Keep the order: it is the order the entry's imports ran these in.
  */
+import { bootFocusGroups } from './stores/focus-groups'
 import { bootProjects } from './stores/projects'
 import { bootSettings } from './stores/settings'
 
@@ -17,5 +18,6 @@ export function bootStores(): void {
   // The custom editor themes, in their own chunk as before (settings.ts
   // used to start this import when it was first imported).
   void import('./stores/custom-themes').then((m) => m.bootCustomThemes()).catch(() => {})
+  bootFocusGroups()
   bootProjects()
 }

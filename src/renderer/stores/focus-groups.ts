@@ -267,15 +267,20 @@ export const useFocusGroupsStore = create<FocusGroupsState>((set, get) => ({
   }
 }))
 
-// Initialize on import
-useFocusGroupsStore.getState().initFromSettings()
-
-// Phase 2.5 fix (finding #547): retry on daemon (re)connect when
-// the initial load hasn't yet succeeded. Steady-state no-op.
-onDaemonConnected(() => {
-  if (hasLoadedFromDaemon) return
+/** The first load, and its retry when the daemon (re)connects.
+ *  `bootStores()` (boot-stores.ts) calls this once at
+ *  app start. It does not run at import: a test that imports this store
+ *  fires no fetch. */
+export function bootFocusGroups(): void {
   useFocusGroupsStore.getState().initFromSettings()
-})
+
+  // Phase 2.5 fix (finding #547): retry on daemon (re)connect when
+  // the initial load hasn't yet succeeded. Steady-state no-op.
+  onDaemonConnected(() => {
+    if (hasLoadedFromDaemon) return
+    useFocusGroupsStore.getState().initFromSettings()
+  })
+}
 
 // #625 — on a real active-host CHANGE, drop the load gate and re-init
 // (focusGroups + focusGroupsEnabled + activeFocusGroupId) from the NEW

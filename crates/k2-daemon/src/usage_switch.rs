@@ -7,7 +7,7 @@
 //! default at once. The single-record path needs none of this: its GET
 //! reads the live token every time.
 
-use crate::subscription_usage::{self as su, HarnessUsage};
+use crate::subscription_usage as su;
 
 /// Point `harness`'s cache row at the token now in the live store: its own
 /// last reading (with its own time), or no numbers (and no plan) if it was
@@ -31,7 +31,7 @@ pub(crate) fn follow_live_owner(harness: &str) -> bool {
 mod tests {
     use super::*;
     use crate::subscription_usage::tests::{future_reset, harness, seed_wallet, with_isolated, write_cache_for_tests};
-    use crate::subscription_usage::{SubscriptionFile, UsageWindow};
+    use crate::subscription_usage::{HarnessUsage, SubscriptionFile, UsageWindow};
     use chrono::Utc;
     use serde_json::{json, Value};
 

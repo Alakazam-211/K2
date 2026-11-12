@@ -214,3 +214,33 @@ export function boardFilesForFrame(scope: ServerScope, pressed: () => boolean): 
     },
   }
 }
+
+/** A board's own workspace in the list: the longest workspace root above `path`, or null. */
+export function workspaceOfBoard(rows: readonly BoardFileRow[], path: string): string | null {
+  let best: string | null = null
+  for (const r of rows) {
+    const root = r.workspace.replace(/\/+$/, '')
+    if ((path.startsWith(`${root}/`) || r.path === path) && (best === null || root.length > best.length)) best = root
+  }
+  return best
+}
+
+/**
+ * The Board tab's switcher (Rosson 2026-11-11): the `.k5board` files in the same workspace as `path`, by name, from
+ * the same daemon list as the Board Garden's "Board files" (so the same rights and the same re-lists).
+ */
+export function workspaceBoardsFor(
+  listing: BoardFileListing,
+  path: string,
+): { subscribe(push: (rows: { path: string; name: string; rel: string }[]) => void, fail: (err: unknown) => void): () => void } {
+  return {
+    subscribe: (push, fail) =>
+      listing.subscribe((list) => {
+        const all = list.boards.map((b) => listing.row(b.id)).filter((r): r is BoardFileRow => r !== null)
+        const ws = workspaceOfBoard(all, path)
+        const here = ws === null ? [] : all.filter((r) => r.workspace.replace(/\/+$/, '') === ws)
+        here.sort((a, b) => a.name.localeCompare(b.name) || a.rel.localeCompare(b.rel))
+        push(here.map((r) => ({ path: r.path, name: r.name, rel: r.rel })))
+      }, fail),
+  }
+}

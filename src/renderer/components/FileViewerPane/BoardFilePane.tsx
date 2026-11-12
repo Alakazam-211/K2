@@ -31,12 +31,13 @@ import type { ZenCustomWidgetPayload, ZenFrameHello } from '@/lib/zen/zen-custom
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { createBoardFilePartJoiner, type BoardFileApi, type BoardFileSession, type BoardFileView, type BoardOp, type HeldGroup } from '@/lib/board-file/board-file-session'
 import { createBoardFileBlobs } from '@/lib/board-file/board-file-blobs'
+import { boardFileListingFor, workspaceBoardsFor } from '@/lib/board-file/board-file-list'
 import { acquireBoardFileSession, askBeforeBoardFileLoss, releaseBoardFileSession } from '@/lib/board-file/board-file-tabs'
 import { BOARD_FILE_FEATURES, BOARD_FILE_WIDGET, boardFileTheme, boardFileConsentKey, redispatchBoardFileKey } from '@/lib/board-file/board-file-frame'
 import { FILE_POLL_INTERVAL } from '@shared/constants'
 import { BoardWebStub } from './BoardWebStub'
 import { BoardFileCard } from './BoardFileCard'
-import { BoardFileName } from './BoardFileName'
+import { BoardFileName, type BoardMenuSource } from './BoardFileName'
 
 export interface BoardFilePaneProps {
   filePath: string
@@ -173,6 +174,14 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
     if (tabId) room.tabs.getState().retargetUntitledFile(tabId, filePath, r.path)
   }
 
+  // The switcher: this workspace's boards, from the Board Garden's list. A pick opens in this tab, as a rename moves it.
+  const boards = useMemo(() => workspaceBoardsFor(boardFileListingFor(scope), filePath), [scope, filePath])
+  const pick = (path: string): void => {
+    if (!tabId) return
+    void session.flush().catch(() => undefined)
+    room.tabs.getState().retargetUntitledFile(tabId, filePath, path)
+  }
+
   const close = async (): Promise<void> => {
     if (!tabId) return
     if (await askBeforeBoardFileLoss('close', [session])) closeTab(tabId)
@@ -233,7 +242,7 @@ function BoardFilePaneLive({ filePath, tabId }: BoardFilePaneProps): React.JSX.E
   return (
     <div ref={boxRef} className="relative flex h-full min-h-0 flex-col" data-board-file-pane={filePath}>
       <BoardFileBanners view={view} session={session} filePath={filePath} onClose={() => void close()} />
-      <BoardFileFrame key={filePath} session={session} filePath={filePath} tabId={tabId ?? filePath} api={api} rename={rename} />
+      <BoardFileFrame key={filePath} session={session} filePath={filePath} tabId={tabId ?? filePath} api={api} rename={rename} boards={boards} pick={pick} />
       <HeldChip held={view.held} session={session} />
     </div>
   )
@@ -374,7 +383,17 @@ function nameVars(width: number): Record<string, string> {
   return width > 0 ? { '--zen-board-name-host': 'none', '--zen-board-name-w': `${width + 8}px` } : {}
 }
 
-function BoardFileFrame({ session, filePath, tabId, api, rename }: { session: BoardFileSession; filePath: string; tabId: string; api: BoardFileApi; rename(fileName: string): Promise<void> }): React.JSX.Element {
+interface BoardFileFrameProps {
+  session: BoardFileSession
+  filePath: string
+  tabId: string
+  api: BoardFileApi
+  rename(fileName: string): Promise<void>
+  boards: BoardMenuSource
+  pick(path: string): void
+}
+
+function BoardFileFrame({ session, filePath, tabId, api, rename, boards, pick }: BoardFileFrameProps): React.JSX.Element {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
   const [reloads, setReloads] = useState(0)
@@ -578,7 +597,7 @@ function BoardFileFrame({ session, filePath, tabId, api, rename }: { session: Bo
           style={{ border: 0, background: 'transparent', minHeight: 0 }}
         />
       ) : null}
-      {loaded ? <BoardFileName filePath={filePath} rename={rename} onWidth={onNameWidth} /> : null}
+      {loaded ? <BoardFileName filePath={filePath} rename={rename} boards={boards} pick={pick} onWidth={onNameWidth} /> : null}
       {downloadAsk ? <ZenDownloadSheet ask={downloadAsk.ask} onDone={(a) => { downloadAsk.resolve(a); setDownloadAsk(null) }} /> : null}
       {linkAsk ? <ZenLinkSheet ask={linkAsk.ask} onDone={(a) => { linkAsk.resolve(a); setLinkAsk(null) }} /> : null}
     </div>

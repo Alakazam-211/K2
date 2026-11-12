@@ -305,7 +305,7 @@ describe('renaming from the name (Rosson 2026-11-11)', () => {
     await waitFor(() => expect(screen.getByTestId('board-file-name')).toBeTruthy())
   }
   const renameTo = async (v: string): Promise<void> => {
-    fireEvent.click(screen.getByTestId('board-file-name'))
+    fireEvent.keyDown(screen.getByTestId('board-file-name'), { key: 'F2' })
     fireEvent.change(screen.getByTestId('board-file-name-input'), { target: { value: v } })
     await act(async () => {
       fireEvent.keyDown(screen.getByTestId('board-file-name-input'), { key: 'Enter' })
@@ -343,5 +343,34 @@ describe('renaming from the name (Rosson 2026-11-11)', () => {
     await renameTo('Later')
     await waitFor(() => expect(screen.getByTestId('board-file-name-problem')).toBeTruthy())
     expect(daemonCliPost.mock.calls.some((c) => c[1] === 'fs/rename')).toBe(false)
+  })
+})
+
+describe('the switcher in the tab (Rosson 2026-11-11)', () => {
+  const ws = (path: string, name: string, workspace = '/w'): Record<string, string> => ({
+    path,
+    rel: path.slice(workspace.length + 1),
+    name,
+    workspace,
+    workspaceName: workspace.slice(1),
+  })
+
+  it('lists this workspace’s boards from the Board Garden’s list, and a pick opens in this tab', async () => {
+    noteServerVersion(LOCAL_HOME_HOST, null, ['board-file-v1'])
+    daemonCliGet.mockImplementation((_s: unknown, route: string, params: Record<string, string | number | undefined>) =>
+      route === 'board/file/list'
+        ? Promise.resolve({
+            boards: [ws(PATH, 'Plan'), ws('/w/sub/Ideas.k5board', 'Ideas'), ws('/elsewhere/Far.k5board', 'Far', '/elsewhere')],
+            truncated: false,
+          })
+        : d.get(route, params),
+    )
+    pane()
+    await waitFor(() => expect(screen.getByTestId('board-file-name')).toBeTruthy())
+    const retarget = vi.spyOn(primaryRoom().tabs.getState(), 'retargetUntitledFile').mockImplementation(() => undefined)
+    fireEvent.click(screen.getByTestId('board-file-name'))
+    await waitFor(() => expect(screen.getAllByRole('menuitemradio').map((el) => el.textContent)).toEqual(['Ideas', '✓Plan']))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Ideas/ }))
+    expect(retarget).toHaveBeenCalledWith('tab', PATH, '/w/sub/Ideas.k5board')
   })
 })

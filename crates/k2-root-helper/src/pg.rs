@@ -262,7 +262,7 @@ pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
             None => return Err(Fail::state("hba-app refused: a cluster has no pg_hba.conf")),
             Some(st) => st,
         };
-        if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
+        if crate::fsx::kind_of(crate::fsx::mode(&st)) != Kind::File {
             return Err(Fail::state("hba-app refused: pg_hba.conf is not a regular file"));
         }
         let bytes = main
@@ -272,7 +272,7 @@ pub fn hba_app(ctx: &Ctx, add: bool, id: &AppId) -> HResult<serde_json::Value> {
         let text = std::str::from_utf8(&bytes).map_err(|_| Fail::state("hba-app refused: pg_hba.conf is not UTF-8"))?;
         let next = hba_edit(text, add, id).map_err(Fail::state)?;
         let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
-        plan.push((ver.to_string_lossy().to_string(), main, next, (st.st_mode as u32) & 0o7777, owner));
+        plan.push((ver.to_string_lossy().to_string(), main, next, crate::fsx::mode(&st) & 0o7777, owner));
     }
     let mut changed = Vec::new();
     for (ver, main, next, mode, owner) in &plan {
@@ -332,7 +332,7 @@ fn hba_apply(ctx: &Ctx, m: PgMajor, edit: impl Fn(&str) -> Result<Option<String>
         .lstat(hba)
         .map_err(|e| Fail::io_err("stat pg_hba.conf", e))?
         .ok_or_else(|| Fail::state("hba-guard refused: the cluster has no pg_hba.conf"))?;
-    if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
+    if crate::fsx::kind_of(crate::fsx::mode(&st)) != Kind::File {
         return Err(Fail::state("hba-guard refused: pg_hba.conf is not a regular file"));
     }
     let bytes = main
@@ -344,7 +344,7 @@ fn hba_apply(ctx: &Ctx, m: PgMajor, edit: impl Fn(&str) -> Result<Option<String>
         return Ok(false);
     };
     let owner = ctx.real_owners.then_some((st.st_uid, st.st_gid));
-    main.write_atomic(hba, next.as_bytes(), (st.st_mode as u32) & 0o7777, owner)
+    main.write_atomic(hba, next.as_bytes(), crate::fsx::mode(&st) & 0o7777, owner)
         .map_err(|e| Fail::io_err("write pg_hba.conf", e))?;
     let unit = m.unit();
     let active = ctx

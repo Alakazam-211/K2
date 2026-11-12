@@ -601,7 +601,7 @@ pub fn start_conf(ctx: &Ctx, m: PgMajor, auto: bool) -> HResult<J> {
         .lstat(name)
         .map_err(|e| Fail::io_err("stat start.conf", e))?
         .ok_or_else(|| Fail::state("start.conf is missing"))?;
-    if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
+    if crate::fsx::kind_of(crate::fsx::mode(&st)) != Kind::File {
         return Err(Fail::state("start.conf is not a regular file"));
     }
     let word = if auto { "auto" } else { "manual" };
@@ -613,7 +613,7 @@ pub fn start_conf(ctx: &Ctx, m: PgMajor, auto: bool) -> HResult<J> {
         return Err(Fail::state("start_conf_disabled: the owner set this cluster disabled; K2 leaves it"));
     }
     if before.as_deref() != Some(word) {
-        d.write_atomic(name, body.as_bytes(), (st.st_mode as u32) & 0o7777, owner)
+        d.write_atomic(name, body.as_bytes(), crate::fsx::mode(&st) & 0o7777, owner)
             .map_err(|e| Fail::io_err("write start.conf", e))?;
         ctx.run_ok(SYSTEMCTL, &["daemon-reload"], None)?;
     }

@@ -339,7 +339,7 @@ fn pg_box() -> (T, W) {
                     }
                     if let Some(rest) = sql.split("WHERE datname = '").nth(1) {
                         let db = rest.split('\'').next().unwrap().to_string();
-                        let has = w.dbs.get(&port).is_some_and(|d| d.iter().any(|x| *x == db));
+                        let has = w.dbs.get(&port).is_some_and(|d| d.contains(&db));
                         if sql.contains("pg_get_userbyid(datdba)") {
                             let o = w.owners.get(&(port, db.clone())).cloned().unwrap_or(format!("{db}_migrator"));
                             return out(0, if has { &o } else { "" });
@@ -688,7 +688,8 @@ fn ensure_cluster_creates_17_on_5433_with_k2_conf_and_the_slice() {
 
 #[test]
 fn ensure_cluster_refusals_change_nothing() {
-    let cases: Vec<(&str, Box<dyn Fn(&T, &W)>, &str)> = vec![
+    type Setup = Box<dyn Fn(&T, &W)>;
+    let cases: Vec<(&str, Setup, &str)> = vec![
         ("band full", Box::new(|t, w| {
             bins(&t.root, 17);
             w.borrow_mut().listening = (5433..=5449).collect();
@@ -1231,7 +1232,7 @@ fn version_announces_pgmajor_on_protocol_9() {
     assert_eq!(v["protocol"], 16, "pgmajor came in 9; 16 is 0.46.12's one bump (additive)");
     assert_eq!(v["namespaces"]["pgmajor"], true);
     assert_eq!(v["namespaces"]["pg"], true, "protocols are additive");
-    assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL);
+    const { assert!(PROTOCOL >= k2_root_proto::version::PGMAJOR_MIN_PROTOCOL) };
 }
 
 // ── pgdual (protocol 10, prd-app-pg-choice-dualrun-v1 §9) ───────────────
@@ -1616,13 +1617,16 @@ fn tree(root: &Path) -> Vec<(String, Vec<u8>)> {
     v
 }
 
-fn k2db_trees(t: &T) -> (Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>) {
+/// Every file under a folder, as (path, bytes).
+type Tree = Vec<(String, Vec<u8>)>;
+
+fn k2db_trees(t: &T) -> (Tree, Tree) {
     (tree(&t.p("/etc/postgresql/17/k2db")), tree(&t.p("/var/lib/postgresql/17/k2db")))
 }
 
 /// No exec, no SQL and no file of the run ever names `k2db`, except the
 /// read-only `pg_lsclusters` listing itself.
-fn k2db_untouched(t: &T, w: &W, before: &(Vec<(String, Vec<u8>)>, Vec<(String, Vec<u8>)>)) {
+fn k2db_untouched(t: &T, w: &W, before: &(Tree, Tree)) {
     assert_eq!(&k2db_trees(t), before, "every file of 17/k2db is byte-identical");
     for c in t.non_query_calls() {
         assert!(!c.contains("k2db") && !c.contains("17-k2db"), "{c}");

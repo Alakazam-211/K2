@@ -811,8 +811,7 @@ fn systemctl_vectors_are_fixed() {
         let last = t
             .calls()
             .into_iter()
-            .filter(|(p, a, _)| p == SYSTEMCTL && !a.iter().any(|x| x == "MainPID"))
-            .last()
+            .rfind(|(p, a, _)| p == SYSTEMCTL && !a.iter().any(|x| x == "MainPID"))
             .unwrap();
         assert_eq!(last.1, want);
         assert!(last.2.is_none(), "no stdin to systemctl");
@@ -1288,7 +1287,8 @@ fn self_update_refusals_change_nothing() {
         let v = crate::core::running_version();
         format!("{}.{}.{}", v.0, v.1.saturating_sub(1), 0)
     };
-    let cases: Vec<(&str, Box<dyn Fn(&T) -> Vec<u8>>)> = vec![
+    type Payload = Box<dyn Fn(&T) -> Vec<u8>>;
+    let cases: Vec<(&str, Payload)> = vec![
         (
             "bad signature",
             Box::new(|_t: &T| {

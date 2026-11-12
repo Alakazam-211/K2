@@ -1847,7 +1847,10 @@ fn turn_cert_body() -> String {
 }
 
 /// What the staged TURN files hold while `sew` runs (they are removed after).
-fn capture_turn_files(t: &T) -> std::rc::Rc<std::cell::RefCell<Vec<(String, String, String, u32)>>> {
+/// (cert, key, media JSON, key file mode) as `sew` saw them.
+type TurnFiles = std::rc::Rc<std::cell::RefCell<Vec<(String, String, String, u32)>>>;
+
+fn capture_turn_files(t: &T) -> TurnFiles {
     let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let (s, c, k, j) = (seen.clone(), t.p(SEW_STAGE_TURN_CERT), t.p(SEW_STAGE_TURN_KEY), t.p(SEW_STAGE_MEDIA_JSON));
     t.exec.0.borrow_mut().effects.push((

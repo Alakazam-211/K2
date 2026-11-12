@@ -151,7 +151,7 @@ fn helper_dir(ctx: &Ctx) -> HResult<Dir> {
     let st = d
         .stat_self()
         .map_err(|e| Fail::io_err("stat helper dir", e))?;
-    if (st.st_mode as u32) & 0o022 != 0 {
+    if crate::fsx::mode(&st) & 0o022 != 0 {
         return Err(Fail::sig(
             "refused: helper directory is group/other-writable",
         ));
@@ -389,7 +389,7 @@ pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json
         Err(e) => return Err(Fail::io_err("open /usr/local/bin", e)),
     };
     let dst = base.stat_self().map_err(|e| Fail::io_err("stat /usr/local/bin", e))?;
-    if (ctx.real_owners && dst.st_uid != 0) || (dst.st_mode as u32) & 0o022 != 0 {
+    if (ctx.real_owners && dst.st_uid != 0) || crate::fsx::mode(&dst) & 0o022 != 0 {
         return Ok(cli_skipped("directory not root-owned", &to));
     }
     if let Some(why) = cli_owner_gate(ctx, who)? {
@@ -399,7 +399,7 @@ pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json
     let Some(st) = base.lstat(name).map_err(|e| Fail::io_err("stat", e))? else {
         return Ok(cli_skipped("absent", &to));
     };
-    match crate::fsx::kind_of(st.st_mode as u32) {
+    match crate::fsx::kind_of(crate::fsx::mode(&st)) {
         Kind::File => {}
         Kind::Symlink => return Ok(cli_skipped("symlink", &to)),
         _ => return Ok(cli_skipped("not a regular file", &to)),
@@ -419,7 +419,7 @@ pub fn cli_refresh(ctx: &Ctx, who: &crate::caller::Caller) -> HResult<serde_json
     if ctx.real_owners && st.st_uid != 0 {
         return Ok(cli_skipped("not root-owned", &to));
     }
-    if (st.st_mode as u32) & 0o022 != 0 {
+    if crate::fsx::mode(&st) & 0o022 != 0 {
         return Ok(cli_skipped("file is group/other-writable", &to));
     }
     if st.st_size < 0 || st.st_size as u64 > CLI_MAX_BYTES {

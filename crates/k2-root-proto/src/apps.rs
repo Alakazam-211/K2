@@ -1866,7 +1866,7 @@ mod tests {
         assert!(sc.contains("5439") && !sc.contains("5440"), "{sc}");
         // A rule an older daemon recorded (no --db yet): the whole band.
         let legacy = AppRule { cgroup: "c".into(), level: 2, gw_port: 38_601, box_ports: vec![8470], db_ports: None };
-        assert!(nft_apps_script(&[legacy.clone()], true).contains("tcp dport { 38601, 38901, 8470, 5432-5449 } accept"));
+        assert!(nft_apps_script(std::slice::from_ref(&legacy), true).contains("tcp dport { 38601, 38901, 8470, 5432-5449 } accept"));
         assert!(nft_apps_script(&[legacy], false).contains("tcp dport { 38601, 38901, 8470 } accept"), "the band table needs no per-App band");
         // The band table still admits the band (old daemons).
         let band = nft_ruleset(997, None, GATEWAY_PORTS, PROXY_PORTS, crate::verbs::NftDb::Band(DB_PORTS), &[rule]);

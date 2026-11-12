@@ -475,9 +475,12 @@ mod tests {
     #[test]
     fn podman_verbs_ride_protocol_8() {
         assert_eq!(PODMAN_INSTALL_MIN_PROTOCOL, 8);
-        assert!(PODMAN_INSTALL_MIN_PROTOCOL <= PROTOCOL);
-        assert!(PODMAN_INSTALL_MIN_PROTOCOL > SEW_MIN_PROTOCOL);
-        assert!(PODMAN_INSTALL_MIN_PROTOCOL > APPS_MIN_PROTOCOL);
+        // Checked when the test compiles (the constants never change at run time).
+        const {
+            assert!(PODMAN_INSTALL_MIN_PROTOCOL <= PROTOCOL);
+            assert!(PODMAN_INSTALL_MIN_PROTOCOL > SEW_MIN_PROTOCOL);
+            assert!(PODMAN_INSTALL_MIN_PROTOCOL > APPS_MIN_PROTOCOL);
+        }
         let cat = crate::verbs::catalog();
         for argv in [&["apps", "podman", "install"][..], &["apps", "podman", "uninstall"]] {
             let v = crate::verbs::Verb::parse(argv).expect("parses");

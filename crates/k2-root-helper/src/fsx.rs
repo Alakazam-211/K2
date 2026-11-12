@@ -118,7 +118,7 @@ impl Dir {
     pub fn kind(&self, name: &OsStr) -> io::Result<Kind> {
         Ok(match self.lstat(name)? {
             None => Kind::Missing,
-            Some(st) => kind_of(st.st_mode as u32),
+            Some(st) => kind_of(mode(&st)),
         })
     }
 
@@ -164,7 +164,7 @@ impl Dir {
         // SAFETY: zeroed stat is a valid out-param; fd is open.
         let mut st: libc::stat = unsafe { std::mem::zeroed() };
         check(unsafe { libc::fstat(f.as_raw_fd(), &mut st) })?;
-        if kind_of(st.st_mode as u32) != Kind::File {
+        if kind_of(mode(&st)) != Kind::File {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "not a regular file"));
         }
         Ok(Some((f, st)))
@@ -361,6 +361,15 @@ impl Dir {
     }
 }
 
+/// A stat's mode bits. `mode_t` is u32 on Linux and u16 on macOS, so the
+/// cast is a no-op on one and needed on the other.
+#[allow(clippy::unnecessary_cast)]
+pub fn mode(st: &libc::stat) -> u32 {
+    st.st_mode as u32
+}
+
+/// The file type in `mode`. `S_IF*` are `mode_t` (see [`mode`]).
+#[allow(clippy::unnecessary_cast)]
 pub fn kind_of(mode: u32) -> Kind {
     match mode & (libc::S_IFMT as u32) {
         m if m == libc::S_IFLNK as u32 => Kind::Symlink,

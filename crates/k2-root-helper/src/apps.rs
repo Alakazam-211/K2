@@ -1169,7 +1169,7 @@ pub fn install_engine(ctx: &Ctx, payload: &[u8]) -> HResult<J> {
         .dir(HELPER_DIR)
         .map_err(|e| Fail::io_err("open /usr/local/libexec", e))?;
     let st = d.stat_self().map_err(|e| Fail::io_err("stat libexec", e))?;
-    if (st.st_mode as u32) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
+    if crate::fsx::mode(&st) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
         return Err(Fail::sig(
             "refused: /usr/local/libexec is not root-owned or is group/other-writable",
         ));

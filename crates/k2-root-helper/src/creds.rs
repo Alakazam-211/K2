@@ -5,8 +5,9 @@
 //! - `creds status`: systemd version, `systemd-creds has-tpm2`, the
 //!   credentials and drop-ins THIS daemon wrote.
 //! - `creds put <cred>`: stdin = the value (≤ 64 KiB, never argv, never in
-//!   the audit line) → `systemd-creds encrypt --name=<cred> --with-key=auto
-//!   - -` → `/etc/k2/credstore.encrypted/<cred>.cred` (K2's own store, root
+//!   the audit line) →
+//!   `systemd-creds encrypt --name=<cred> --with-key=auto - -` →
+//!   `/etc/k2/credstore.encrypted/<cred>.cred` (K2's own store, root
 //!   0700, outside systemd's credential search path), root 0600, temp +
 //!   fsync + rename in a directory opened without following links. The
 //!   plaintext buffers are wiped after use.
@@ -116,7 +117,7 @@ fn hex_sha(b: &[u8]) -> String {
 /// group/other-writable.
 fn root_only(ctx: &Ctx, d: &Dir, what: &'static str) -> HResult<()> {
     let st = d.stat_self().map_err(|e| Fail::io_err("stat", e))?;
-    if (st.st_mode as u32) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
+    if crate::fsx::mode(&st) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
         return Err(Fail::state(what));
     }
     Ok(())
@@ -150,7 +151,7 @@ pub fn load_state(ctx: &Ctx) -> HResult<CredsState> {
     let Some((f, st)) = d.open_regular(OsStr::new(STATE_FILE)).map_err(|e| Fail::io_err("open creds state", e))? else {
         return Ok(CredsState::default());
     };
-    if (st.st_mode as u32) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
+    if crate::fsx::mode(&st) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
         return Err(Fail::state("refused: creds.json is not root's alone"));
     }
     use std::io::Read;
@@ -214,7 +215,7 @@ fn credstore(ctx: &Ctx, create: bool) -> HResult<Option<Dir>> {
     }
     let d = parent.sub(n).map_err(|e| Fail::io_err("open credstore", e))?;
     let st = d.stat_self().map_err(|e| Fail::io_err("stat credstore", e))?;
-    if (st.st_mode as u32) & 0o077 != 0 || (ctx.real_owners && st.st_uid != 0) {
+    if crate::fsx::mode(&st) & 0o077 != 0 || (ctx.real_owners && st.st_uid != 0) {
         return Err(Fail::state("refused: /etc/k2/credstore.encrypted must be root's, mode 0700"));
     }
     Ok(Some(d))
@@ -274,7 +275,7 @@ pub fn allow_list(ctx: &Ctx) -> HResult<Vec<String>> {
     let Some((f, st)) = d.open_regular(OsStr::new(name)).map_err(|_| Fail::state("refused: the systemd-cred allow list is not a regular file"))? else {
         return Ok(vec![]);
     };
-    if (st.st_mode as u32) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
+    if crate::fsx::mode(&st) & 0o022 != 0 || (ctx.real_owners && st.st_uid != 0) {
         return Err(Fail::state("refused: the systemd-cred allow list is not root's alone"));
     }
     use std::io::Read;

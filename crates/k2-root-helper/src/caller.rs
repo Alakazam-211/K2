@@ -37,10 +37,10 @@ pub fn load_daemons(ctx: &Ctx) -> Result<Vec<DaemonEntry>, &'static str> {
         .lstat(name)
         .map_err(|_| "daemon.toml unreadable")?
         .ok_or("daemon.toml missing")?;
-    if crate::fsx::kind_of(st.st_mode as u32) != crate::fsx::Kind::File {
+    if crate::fsx::kind_of(crate::fsx::mode(&st)) != crate::fsx::Kind::File {
         return Err("daemon.toml is not a regular file");
     }
-    if (st.st_mode as u32) & 0o022 != 0 {
+    if crate::fsx::mode(&st) & 0o022 != 0 {
         return Err("daemon.toml is group/other-writable");
     }
     if ctx.real_owners && st.st_uid != 0 {

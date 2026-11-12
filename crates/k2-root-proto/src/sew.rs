@@ -4298,7 +4298,7 @@ mod tests {
             assert_eq!(parse_sysctl_baseline(bad), None, "{}", String::from_utf8_lossy(bad));
         }
         let mut big = br#"{"format":1,"rmem_max":1,"wmem_max":1,"pad":""#.to_vec();
-        big.extend(std::iter::repeat(b'a').take(MAX_SYSCTL_BASELINE));
+        big.extend(std::iter::repeat_n(b'a', MAX_SYSCTL_BASELINE));
         big.extend(br#""}"#);
         assert_eq!(parse_sysctl_baseline(&big), None, "over the size cap");
     }

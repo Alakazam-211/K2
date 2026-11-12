@@ -550,10 +550,10 @@ fn binary_sha(ctx: &Ctx, abs: &str) -> HResult<Option<String>> {
     let Some((d, n)) = open_parent(ctx, abs)? else { return Ok(None) };
     let name = OsStr::new(&n);
     let Some(st) = d.lstat(name).map_err(|e| Fail::io_err("stat sew", e))? else { return Ok(None) };
-    if crate::fsx::kind_of(st.st_mode as u32) != Kind::File {
+    if crate::fsx::kind_of(crate::fsx::mode(&st)) != Kind::File {
         return Err(Fail::state(format!("sew helper: {abs} is not a regular file")));
     }
-    if ctx.real_owners && (st.st_uid != 0 || (st.st_mode as u32) & 0o022 != 0) {
+    if ctx.real_owners && (st.st_uid != 0 || crate::fsx::mode(&st) & 0o022 != 0) {
         return Err(Fail::state(format!("sew helper: {abs} is not root-owned or is writable by others")));
     }
     let bytes = d

@@ -923,7 +923,14 @@ pre_line=$(grep -n 'scripts/sign-daemon.sh" --preflight "$VERSION"' "$R" | head 
 copies_line=$(grep -n '^cargo test -p k2-release-keys$' "$R" | head -1 | cut -d: -f1)
 [ -n "$copies_line" ] && [ -n "$pre_line" ] && [ "$copies_line" -lt "$pre_line" ] && [ "$copies_line" -lt "$(grep -n '^if \[ "$SKIP_BUILD" = 0 \]; then$' "$R" | head -1 | cut -d: -f1)" ] \
     && pass "release.sh Step 0.45 runs the key copies test (cargo test -p k2-release-keys) before anything else signs or builds" || fail "copies test in release.sh" "line=$copies_line pre=$pre_line"
-first_build=$(grep -nE '^(RUSTFLAGS=.*)?cargo |^bun |^bunx ' "$R" | grep -v ':cargo test -p k2-release-keys$' | head -1 | cut -d: -f1)
+# The first thing the release path builds (after the --gates-only branch,
+# which signs nothing and exits): a bare cargo/bun line, or since 0.46.12
+# the pre-flight gates (scripts/lib/release-gates.sh: k2rg_submit_all,
+# k2rg_local_all, k2rg_local), or Step 2. `|| true`: no match must reach
+# the check below as a FAIL, not end this script under pipefail.
+ver_line=$(grep -n '^VERSION="${1:-}"$' "$R" | head -1 | cut -d: -f1)
+first_build=$(grep -nE '^(RUSTFLAGS=.*)?cargo |^bun |^bunx |^ *(if ! )?k2rg_(submit_all|local_all|local )|^k2_build_mac_binaries ' "$R" \
+    | grep -v ':cargo test -p k2-release-keys$' | awk -F: -v v="${ver_line:-0}" '$1 > v { print $1; exit }' || true)
 [ -n "$env_line" ] && [ -n "$guard_line" ] && [ -n "$pre_line" ] && [ -n "$first_build" ] \
     && [ "$guard_line" -gt "$env_line" ] && [ "$pre_line" -gt "$guard_line" ] && [ "$first_build" -gt "$pre_line" ] \
     && pass "release.sh: .env → k2u_env_guard → signing preflight → first build" || fail "release.sh order" "env=$env_line guard=$guard_line pre=$pre_line build=$first_build"

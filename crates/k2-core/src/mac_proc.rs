@@ -56,6 +56,29 @@ pub fn bsd_info(pid: i32) -> Option<BsdInfo> {
     })
 }
 
+/// Every pid on the machine, from `proc_listallpids`. `None` when the
+/// kernel won't say.
+#[cfg(target_os = "macos")]
+pub fn all_pids() -> Option<Vec<i32>> {
+    // SAFETY: a null buffer of size 0 only asks how many pids there are.
+    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if n <= 0 {
+        return None;
+    }
+    // Room for processes that start between the two calls.
+    let mut buf = vec![0 as libc::pid_t; n as usize + 64];
+    let bytes = libc::c_int::try_from(buf.len() * std::mem::size_of::<libc::pid_t>()).ok()?;
+    // SAFETY: `buf` is `bytes` writable bytes; the kernel writes at most
+    // that and returns how many pids it wrote.
+    let got = unsafe { libc::proc_listallpids(buf.as_mut_ptr().cast(), bytes) };
+    if got <= 0 {
+        return None;
+    }
+    buf.truncate(got as usize);
+    buf.retain(|pid| *pid > 0);
+    Some(buf)
+}
+
 /// Why [`argv`] gave no argv.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgvError {
@@ -203,6 +226,16 @@ mod tests {
             b.push(0);
         }
         b
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn all_pids_lists_this_process_and_its_parent() {
+        let pids = all_pids().expect("the kernel lists pids");
+        let me = std::process::id() as i32;
+        assert!(pids.contains(&me), "{me} not in {} pids", pids.len());
+        let parent = bsd_info(me).expect("bsd info").ppid;
+        assert!(pids.contains(&parent), "parent {parent} not in {} pids", pids.len());
     }
 
     #[test]

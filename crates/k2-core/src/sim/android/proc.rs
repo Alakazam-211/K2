@@ -144,7 +144,9 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
-/// The command line of `pid` (Linux `/proc`, else `ps`).
+/// The command line of `pid`: Linux `/proc`; macOS the kernel's argv for
+/// a process of ours, with `ps` as the fallback (`ps` is setuid, so it
+/// fails under a sandbox); else `ps`.
 pub fn cmdline(pid: u32) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
@@ -152,13 +154,31 @@ pub fn cmdline(pid: u32) -> Option<String> {
     }
     #[cfg(not(target_os = "linux"))]
     {
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(argv) = crate::mac_proc::argv(pid as i32) {
+                return Some(argv.join(" "));
+            }
+        }
         let o = crate::bg_proc::command("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().ok()?;
         o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
 }
 
-/// Every pid whose command line contains `needle`.
+/// Every pid whose command line contains `needle`. On macOS these are
+/// processes of our own user (the only ones whose argv the kernel read
+/// is for); `ps` is the fallback when the kernel won't list pids.
 pub fn pids_matching(needle: &str) -> Vec<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(pids) = crate::mac_proc::all_pids() {
+            return pids
+                .into_iter()
+                .filter(|pid| crate::mac_proc::argv(*pid).is_ok_and(|argv| argv.join(" ").contains(needle)))
+                .map(|pid| pid as u32)
+                .collect();
+        }
+    }
     let mut out = Vec::new();
     #[cfg(target_os = "linux")]
     {
@@ -221,6 +241,39 @@ mod tests {
     fn sh_quote_survives_quotes() {
         assert_eq!(sh_quote("a'b"), "'a'\\''b'");
         assert_eq!(sh_quote("x; rm -rf /"), "'x; rm -rf /'");
+    }
+
+    /// A child whose argv carries a marker: `cmdline` shows the marker and
+    /// `pids_matching` finds exactly that child.
+    #[cfg(unix)]
+    #[test]
+    fn cmdline_and_pids_matching_find_a_child_by_its_argv() {
+        let marker = format!(
+            "k2-pids-matching-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        );
+        use std::os::unix::process::CommandExt;
+        // `; :` keeps the shell from exec-ing sleep, so the marker stays in
+        // argv. Its own process group, so the kill below takes the sleep too.
+        let mut child = crate::bg_proc::command("/bin/sh")
+            .args(["-c", "/bin/sleep 300; :", &marker])
+            .process_group(0)
+            .spawn()
+            .expect("spawn sh");
+        let pid = child.id();
+        // Until the exec lands, the child still shows this test's own argv.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !cmdline(pid).is_some_and(|c| c.contains(&marker)) {
+            assert!(std::time::Instant::now() < deadline, "cmdline({pid}) never showed the marker: {:?}", cmdline(pid));
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let found = pids_matching(&marker);
+        // SAFETY: SIGKILL to the process group this test created.
+        assert_eq!(unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) }, 0, "kill the group");
+        child.wait().expect("wait");
+        assert_eq!(found, vec![pid]);
+        assert!(pids_matching(&marker).is_empty(), "the child is gone");
     }
 
     #[cfg(unix)]

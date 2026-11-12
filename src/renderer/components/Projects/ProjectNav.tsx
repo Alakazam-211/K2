@@ -12,7 +12,7 @@
 // both (the main nav's pattern). Group-list drag-to-reorder awaits a
 // sort-order route (V1.1).
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { openProjectSettings } from './ProjectSettingsSheet'
 import { NEW_PROJECT_EVENT } from './project-nav-events'
@@ -427,6 +427,23 @@ export default function ProjectNav({
 
   const { pinned, unpinned } = useMemo(() => partitionPinned(groups ?? []), [groups])
   const selected = groups?.find((g) => g.id === selectedGroupId) ?? null
+
+  // Whether the capped list has rows below its cut (the fade shows then).
+  const listRef = useRef<HTMLDivElement>(null)
+  const [moreBelow, setMoreBelow] = useState(false)
+  const checkMore = (): void => {
+    const el = listRef.current
+    if (!el) return
+    setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 2)
+  }
+  useEffect(() => {
+    checkMore()
+    const el = listRef.current
+    if (!el || typeof ResizeObserver !== 'function') return
+    const ro = new ResizeObserver(checkMore)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [groups, listOpen, show !== null])
   const hasGroups = (groups?.length ?? 0) > 0
 
   // TODO(V1.1): drag-to-reorder within sections — Sidebar's
@@ -492,12 +509,14 @@ export default function ProjectNav({
           project's section below always has room (1024×768 included).
           Folded, only the selected project's row stays. */}
       <div
+        ref={listRef}
         id="projects-nav-list"
         className={cx(
           'overflow-y-auto overflow-x-hidden pb-2',
           show ? 'flex-shrink min-h-[5rem] max-h-[45%]' : 'flex-1',
         )}
         data-projects-list=""
+        onScroll={checkMore}
       >
         {listOpen ? (
           <>
@@ -519,6 +538,15 @@ export default function ProjectNav({
         )}
         {/* Loading, failed or empty: the canvas says so (one state card,
             ProjectStates.tsx); the nav keeps just its header and +. */}
+        {/* More projects below the cut: a fade over the last row says the
+            list scrolls (it never just ends on a half row). */}
+        {moreBelow && (
+          <div
+            aria-hidden="true"
+            data-projects-list-fade=""
+            className="sticky -bottom-2 -mt-8 h-8 pointer-events-none bg-gradient-to-b from-transparent to-[var(--color-bg-surface)]"
+          />
+        )}
       </div>
 
       {show && (

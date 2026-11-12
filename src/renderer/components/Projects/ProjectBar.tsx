@@ -68,11 +68,11 @@ export function nextDashboardName(existing: string[]): string {
   }
 }
 
-/** "6 agents · Point of contact Atlas" (the point of contact only when set). */
+/** "6 agents · Point of contact: Atlas" (the point of contact only when set). */
 export function projectSummary(show: ProjectGroupShow): string {
   const poc = show.members.find((m) => m.workspaceId === show.pocWorkspaceId)
   const count = agentCountText(show.members.length)
-  return poc ? `${count} · Point of contact ${memberDisplayName(poc)}` : count
+  return poc ? `${count} · Point of contact: ${memberDisplayName(poc)}` : count
 }
 
 /** The signed-in login's role (null until known: the daemon decides). */
@@ -103,24 +103,35 @@ function useBarWidth(ref: React.RefObject<HTMLDivElement | null>): number {
   return width
 }
 
-/** Whether a scroller's content is wider than it (tabs hidden off the end). */
-function useOverflowing(ref: React.RefObject<HTMLDivElement | null>, deps: unknown[]): boolean {
-  const [over, setOver] = useState(false)
+/** Whether the tabs fit: the width they'd take (measured from a hidden
+ *  copy of the row) against the room the bar gives them. Unmeasured (0)
+ *  counts as fitting. */
+function useTabsFit(
+  room: React.RefObject<HTMLDivElement | null>,
+  measure: React.RefObject<HTMLDivElement | null>,
+  deps: unknown[],
+): boolean {
+  const [fits, setFits] = useState(true)
   useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const check = (): void => setOver(el.scrollWidth > el.clientWidth + 1)
+    const box = room.current
+    const copy = measure.current
+    if (!box || !copy) return
+    const check = (): void => {
+      const avail = box.clientWidth
+      setFits(avail === 0 || copy.scrollWidth <= avail)
+    }
     check()
     if (typeof ResizeObserver !== 'function') return
     const ro = new ResizeObserver(check)
-    ro.observe(el)
+    ro.observe(box)
     return () => ro.disconnect()
-  }, [ref, ...deps])
-  return over
+  }, [room, measure, ...deps])
+  return fits
 }
 
-/** "All dashboards ▾": every tab in a menu, shown when some don't fit. */
-function AllDashboardsMenu({
+/** When the tabs don't fit: one button naming the open tab, whose menu
+ *  lists every dashboard, then Feedback after a separator. */
+function TabPicker({
   dashboards,
   activeTab,
   onTab,
@@ -130,25 +141,32 @@ function AllDashboardsMenu({
   onTab: (id: string) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  const menu = useBarMenu(open, setOpen, { minWidth: 200, align: 'start', estimatedHeight: 40 + dashboards.length * 30 })
+  const menu = useBarMenu(open, setOpen, { minWidth: 220, align: 'start', estimatedHeight: 60 + dashboards.length * 30 })
+  const current =
+    activeTab === FEEDBACK_TAB ? 'Feedback' : (dashboards.find((d) => d.id === activeTab)?.name ?? 'Dashboards')
   return (
     <>
-      <Button
+      <button
         ref={menu.anchorRef}
-        variant="quiet"
-        className="!border-transparent !px-1.5 flex items-center gap-1"
+        type="button"
+        data-k2-focus=""
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`All dashboards (${dashboards.length})`}
-        title="Some dashboards don’t fit: see them all"
+        aria-label={`Dashboards and Feedback: ${current} is open`}
+        title="Dashboards and Feedback"
         onClick={() => setOpen(!open)}
-        data-all-dashboards=""
+        className={cx(tabClass(true), 'min-w-0 gap-1')}
+        data-tab-picker=""
       >
-        <span>All</span>
+        {activeTab === FEEDBACK_TAB && <TicketsIcon size={13} className="flex-shrink-0" />}
+        <span className="truncate">{current}</span>
         <Chevron open={open} />
-      </Button>
+      </button>
       {open && (
-        <BarMenuPanel menu={menu} label="All dashboards" onClose={() => setOpen(false)} testId="all-dashboards" className="max-h-[min(70vh,30rem)] overflow-y-auto">
+        <BarMenuPanel menu={menu} label="Dashboards and Feedback" onClose={() => setOpen(false)} testId="tab-picker-menu" className="max-h-[min(70vh,30rem)] overflow-y-auto">
+          <div className="px-3 pt-1.5 pb-1 type-hint font-semibold text-[var(--color-text-secondary)]" role="presentation">
+            Dashboards
+          </div>
           {dashboards.map((d) => (
             <BarMenuItem
               key={d.id}
@@ -161,6 +179,17 @@ function AllDashboardsMenu({
               <span className="truncate">{d.name}</span>
             </BarMenuItem>
           ))}
+          <div role="separator" className="my-1 border-t border-[var(--color-border)]" />
+          <BarMenuItem
+            selected={activeTab === FEEDBACK_TAB}
+            onSelect={() => {
+              setOpen(false)
+              onTab(FEEDBACK_TAB)
+            }}
+          >
+            <TicketsIcon size={13} className="flex-shrink-0" />
+            Feedback
+          </BarMenuItem>
         </BarMenuPanel>
       )}
     </>
@@ -387,7 +416,7 @@ function DashboardTabs({
   activeTab: string | null
   onTab: (id: string | null) => void
   canEdit: boolean
-  /** A narrow bar: Feedback keeps only its icon. */
+  /** A narrow bar (the fit check runs again when it changes). */
   compact: boolean
   onChanged: () => void
 }): React.JSX.Element {
@@ -395,19 +424,21 @@ function DashboardTabs({
   const [creating, setCreating] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<ProjectGroupDashboard | null>(null)
   const plusRef = useRef<HTMLButtonElement>(null)
-  const stripRef = useRef<HTMLDivElement>(null)
-  const overflowing = useOverflowing(stripRef, [dashboards.length, editing])
-  // The open tab is always in view, also when picked from the menu.
-  useEffect(() => {
-    const el = activeTab ? stripRef.current?.querySelector<HTMLElement>(`[data-dashboard-tab="${activeTab}"]`) : null
-    el?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
-  }, [activeTab, dashboards.length])
+  const roomRef = useRef<HTMLDivElement>(null)
+  const measureRef = useRef<HTMLDivElement>(null)
+  const names = dashboards.map((d) => d.name).join('\n')
+  // The tabs show as tabs only when every one fits whole, with + and
+  // Feedback; otherwise one picker holds them all (Feedback included), so
+  // nothing is ever cut or hidden.
+  const fits = useTabsFit(roomRef, measureRef, [names, canEdit, compact])
   const toast = (text: string, kind: 'success' | 'error'): void => useToastStore.getState().addToast(text, kind)
   const lastOne = dashboards.length <= 1
 
   const focusTab = (id: string | null): void => {
     requestAnimationFrame(() => {
-      const el = id ? document.querySelector<HTMLElement>(`[data-dashboard-tab="${id}"] [role="tab"]`) : null
+      const el =
+        (id ? document.querySelector<HTMLElement>(`[data-dashboard-tab="${id}"] [role="tab"]`) : null) ??
+        document.querySelector<HTMLElement>('[data-tab-picker]')
       el?.focus({ preventScroll: true })
     })
   }
@@ -470,119 +501,145 @@ function DashboardTabs({
     next.focus()
   }
 
-  return (
-    <div
-      role="tablist"
-      aria-label="Dashboards"
-      data-project-tabs=""
-      // overflow-hidden: however tight the bar, the tabs never run under
-      // the buttons beside them.
-      className="flex-1 min-w-0 self-stretch flex items-stretch overflow-hidden"
-      onKeyDown={onKeyDown}
+  const active = dashboards.find((d) => d.id === activeTab) ?? null
+
+  const tabMenu = (d: ProjectGroupDashboard): React.JSX.Element => (
+    // The menu is portalled; its Esc stops here so the dashboard's
+    // Esc-to-tile doesn't take the focus back.
+    <span
+      className="flex items-center pr-1 flex-shrink-0"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') e.stopPropagation()
+      }}
     >
-      <div
-        ref={stripRef}
-        role="none"
-        className={cx(
-          'flex items-stretch min-w-[5rem] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
-          // A fade at the cut edge says there's more past it.
-          overflowing ? '[mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)]' : '',
-        )}
+      <OverflowMenu
+        label={`More actions for the dashboard ${d.name}`}
+        className="!border-transparent !py-0.5 !px-1"
+        triggerProps={{ 'data-tab-menu': d.id }}
+        items={[
+          { id: 'rename', label: 'Rename', onSelect: () => setEditing(d.id) },
+          {
+            id: 'delete',
+            label: 'Delete…',
+            danger: true,
+            group: true,
+            disabled: lastOne,
+            hint: lastOne ? 'A project keeps at least one dashboard.' : 'Removes this tab. The agents and files stay.',
+            onSelect: () => setConfirmDelete(d),
+          },
+        ]}
+      />
+    </span>
+  )
+
+  const plus = canEdit ? (
+    <div className="flex items-center pl-1 flex-shrink-0">
+      <Button
+        ref={plusRef}
+        variant="quiet"
+        className="!border-transparent !px-1.5 flex items-center"
+        aria-label="New dashboard"
+        title="New dashboard"
+        disabled={creating}
+        onClick={() => void create()}
+        data-new-dashboard=""
       >
-        {dashboards.map((d) => {
-          const active = activeTab === d.id
-          return (
-            <div key={d.id} role="none" className="flex items-stretch flex-shrink-0" data-dashboard-tab={d.id}>
-              {editing === d.id ? (
-                <RenameField dashboard={d} onDone={(name) => void rename(d, name)} />
-              ) : (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  tabIndex={active ? 0 : -1}
-                  data-k2-focus=""
-                  className={tabClass(active)}
-                  onClick={() => onTab(d.id)}
-                  onDoubleClick={() => canEdit && setEditing(d.id)}
-                  title={canEdit ? `${d.name} (double-click to rename)` : d.name}
-                >
-                  {d.name}
-                </button>
-              )}
-              {active && canEdit && editing !== d.id && (
-                // The menu is portalled; its Esc stops here so the
-                // dashboard's Esc-to-tile doesn't take the focus back.
-                <span
-                  className="flex items-center pr-1"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') e.stopPropagation()
-                  }}
-                >
-                  <OverflowMenu
-                    label={`More actions for the dashboard ${d.name}`}
-                    className="!border-transparent !py-0.5 !px-1"
-                    triggerProps={{ 'data-tab-menu': d.id }}
-                    items={[
-                      { id: 'rename', label: 'Rename', onSelect: () => setEditing(d.id) },
-                      {
-                        id: 'delete',
-                        label: 'Delete…',
-                        danger: true,
-                        group: true,
-                        disabled: lastOne,
-                        hint: lastOne ? 'A project keeps at least one dashboard.' : 'Removes this tab. The agents and files stay.',
-                        onSelect: () => setConfirmDelete(d),
-                      },
-                    ]}
-                  />
-                </span>
-              )}
-            </div>
-          )
-        })}
+        <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" className="w-3.5 h-3.5 block">
+          <path d="M8 3.5v9M3.5 8h9" />
+        </svg>
+      </Button>
+    </div>
+  ) : null
+
+  return (
+    <div ref={roomRef} className="relative flex-1 min-w-0 self-stretch flex items-stretch" data-project-tabs-room="">
+      {/* A hidden copy of the full row, measured to decide tabs or picker. */}
+      <div
+        ref={measureRef}
+        aria-hidden="true"
+        className="absolute left-0 top-0 h-0 overflow-hidden invisible pointer-events-none flex whitespace-nowrap"
+        style={{ width: 0 }}
+      >
+        <div className="flex">
+          {dashboards.map((d) => (
+            <span key={d.id} className={tabClass(false)}>
+              {d.name}
+            </span>
+          ))}
+          {/* The open tab's … menu, the +, the divider and Feedback. */}
+          <span className="inline-block w-7 flex-shrink-0" />
+          {canEdit && <span className="inline-block w-8 flex-shrink-0" />}
+          <span className="inline-block w-[17px] flex-shrink-0" />
+          <span className={tabClass(false)}>
+            <span className="inline-block w-[13px] mr-1.5" />
+            Feedback
+          </span>
+        </div>
       </div>
-      {overflowing && (
-        <div className="flex items-center flex-shrink-0">
-          <AllDashboardsMenu dashboards={dashboards} activeTab={activeTab} onTab={onTab} />
-        </div>
-      )}
-      {canEdit && (
-        <div className="flex items-center pl-1 flex-shrink-0">
-          <Button
-            ref={plusRef}
-            variant="quiet"
-            className="!border-transparent !px-1.5 flex items-center"
-            aria-label="New dashboard"
-            title="New dashboard"
-            disabled={creating}
-            onClick={() => void create()}
-            data-new-dashboard=""
-          >
-            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" className="w-3.5 h-3.5 block">
-              <path d="M8 3.5v9M3.5 8h9" />
-            </svg>
-          </Button>
-        </div>
-      )}
-      <span aria-hidden="true" className="self-center h-5 w-px mx-2 flex-shrink-0 bg-[var(--color-border)]" />
-      <div role="none" className="flex items-stretch flex-shrink-0">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === FEEDBACK_TAB}
-          tabIndex={activeTab === FEEDBACK_TAB ? 0 : -1}
-          data-k2-focus=""
-          className={tabClass(activeTab === FEEDBACK_TAB)}
-          onClick={() => onTab(FEEDBACK_TAB)}
-          title="Tickets this project’s agents filed"
-          aria-label={compact ? 'Feedback' : undefined}
-          data-feedback-tab=""
+
+      {fits ? (
+        <div
+          role="tablist"
+          aria-label="Dashboards"
+          data-project-tabs=""
+          className="flex-1 min-w-0 flex items-stretch overflow-hidden"
+          onKeyDown={onKeyDown}
         >
-          <TicketsIcon size={13} className={cx('flex-shrink-0', compact ? '' : 'mr-1.5')} />
-          {!compact && 'Feedback'}
-        </button>
-      </div>
+          {dashboards.map((d) => {
+            const isActive = activeTab === d.id
+            return (
+              <div key={d.id} role="none" className="flex items-stretch flex-shrink-0" data-dashboard-tab={d.id}>
+                {editing === d.id ? (
+                  <RenameField dashboard={d} onDone={(name) => void rename(d, name)} />
+                ) : (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    tabIndex={isActive ? 0 : -1}
+                    data-k2-focus=""
+                    className={tabClass(isActive)}
+                    onClick={() => onTab(d.id)}
+                    onDoubleClick={() => canEdit && setEditing(d.id)}
+                    title={canEdit ? `${d.name} (double-click to rename)` : d.name}
+                  >
+                    {d.name}
+                  </button>
+                )}
+                {isActive && canEdit && editing !== d.id && tabMenu(d)}
+              </div>
+            )
+          })}
+          {plus}
+          <span aria-hidden="true" className="self-center h-5 w-px mx-2 flex-shrink-0 bg-[var(--color-border)]" />
+          <div role="none" className="flex items-stretch flex-shrink-0">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === FEEDBACK_TAB}
+              tabIndex={activeTab === FEEDBACK_TAB ? 0 : -1}
+              data-k2-focus=""
+              className={tabClass(activeTab === FEEDBACK_TAB)}
+              onClick={() => onTab(FEEDBACK_TAB)}
+              title="Tickets this project’s agents filed"
+              data-feedback-tab=""
+            >
+              <TicketsIcon size={13} className="flex-shrink-0 mr-1.5" />
+              Feedback
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div role="group" aria-label="Dashboards" data-project-tabs="" className="flex-1 min-w-0 flex items-stretch">
+          {active && editing === active.id ? (
+            <RenameField dashboard={active} onDone={(name) => void rename(active, name)} />
+          ) : (
+            <TabPicker dashboards={dashboards} activeTab={activeTab} onTab={onTab} />
+          )}
+          {active && canEdit && editing !== active.id && tabMenu(active)}
+          {plus}
+        </div>
+      )}
 
       {confirmDelete && (
         <ConfirmSheet

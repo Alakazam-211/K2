@@ -166,7 +166,7 @@ describe('helpers', () => {
     expect(nextDashboardName(['Main', 'new dashboard', 'New dashboard 2'])).toBe('New dashboard 3')
   })
   it('sums a project up in one quiet line', () => {
-    expect(projectSummary(BASE_SHOW)).toBe('2 agents · Point of contact Atlas')
+    expect(projectSummary(BASE_SHOW)).toBe('2 agents · Point of contact: Atlas')
     expect(projectSummary({ ...BASE_SHOW, members: [BASE_SHOW.members[1]], pocWorkspaceId: null })).toBe('1 agent')
   })
 })
@@ -201,6 +201,20 @@ describe('the nav', () => {
     expect(list.querySelectorAll('[data-group-id]').length).toBe(2)
   })
 
+  it('a list longer than its cap fades at the cut, so it reads as scrollable', async () => {
+    const sh = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    const ch = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 600 })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get: () => 200 })
+    try {
+      await renderPage()
+      await waitFor(() => expect(document.querySelector('[data-projects-list-fade]')).not.toBeNull())
+    } finally {
+      if (sh) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', sh)
+      if (ch) Object.defineProperty(HTMLElement.prototype, 'clientHeight', ch)
+    }
+  })
+
   it('"+" opens the create form with the shared field and buttons', async () => {
     await renderPage()
     fireEvent.click(screen.getByRole('button', { name: 'New project' }))
@@ -221,6 +235,7 @@ describe('the nav', () => {
     const atlas = section.querySelector('[data-agent-row="w1"]') as HTMLElement
     expect(atlas.textContent).toContain('Atlas')
     expect(atlas.textContent).toContain('Point of contact')
+    expect(atlas.querySelector('[data-agent-poc]')!.getAttribute('title')).toContain('Point of contact')
     // The view its tile opens in, and awake (a dot) or asleep (from the session lookup).
     expect(atlas.querySelector('[data-agent-view="thread"]')!.getAttribute('title')).toBe('Opens in Thread')
     await waitFor(() => expect(atlas.querySelector('[data-liveness="awake"]')).not.toBeNull())
@@ -294,7 +309,7 @@ describe('the nav', () => {
       expect(daemon.posts.find((p) => p.route === 'project-group/add-member')!.body).toMatchObject({ group: 'g1', workspace: 'w3' }),
     )
     await waitFor(() =>
-      expect(bar().querySelector('[data-project-summary]')!.textContent).toBe('3 agents · Point of contact Atlas'),
+      expect(bar().querySelector('[data-project-summary]')!.textContent).toBe('3 agents · Point of contact: Atlas'),
     )
     expect(document.querySelector('[data-project-nav-section] [data-agent-row="w3"]')).not.toBeNull()
     expect(document.querySelector('[data-project-section-count]')!.textContent).toBe('3 agents')
@@ -327,7 +342,7 @@ describe('the project bar', () => {
     await renderPage()
     const b = bar()
     expect(within(b).getByRole('heading', { name: 'Launch' })).toBeTruthy()
-    expect(b.querySelector('[data-project-summary]')!.textContent).toBe('2 agents · Point of contact Atlas')
+    expect(b.querySelector('[data-project-summary]')!.textContent).toBe('2 agents · Point of contact: Atlas')
     const tabs = within(b).getAllByRole('tab').map((t) => t.textContent)
     expect(tabs).toEqual(['Main', 'Release', 'Feedback'])
     expect(within(b).getByRole('button', { name: 'New dashboard' })).toBeTruthy()
@@ -407,19 +422,23 @@ describe('the project bar', () => {
 })
 
 describe('tabs that don\'t fit', () => {
-  it('"All ▾" appears and lists every dashboard; picking one opens it', async () => {
+  it('turn into one picker naming the open tab; it lists every dashboard, then Feedback', async () => {
     const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollWidth')
     const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
     Object.defineProperty(HTMLElement.prototype, 'scrollWidth', { configurable: true, get: () => 500 })
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 100 })
     try {
       await renderPage()
-      const all = await waitFor(() => within(bar()).getByRole('button', { name: 'All dashboards (2)' }))
-      fireEvent.click(all)
-      const menu = await screen.findByTestId('all-dashboards')
-      expect(within(menu).getAllByRole('menuitem').map((m) => m.textContent)).toEqual(['Main', 'Release'])
-      fireEvent.click(within(menu).getByRole('menuitem', { name: 'Release' }))
-      await waitFor(() => expect(within(bar()).getByRole('tab', { name: 'Release' }).getAttribute('aria-selected')).toBe('true'))
+      const picker = await waitFor(() => bar().querySelector('[data-tab-picker]') as HTMLElement)
+      // No tab is cut or hidden behind the buttons: the tabs give way whole.
+      expect(within(bar()).queryAllByRole('tab')).toHaveLength(0)
+      expect(picker.textContent).toContain('Main')
+      fireEvent.click(picker)
+      const menu = await screen.findByTestId('tab-picker-menu')
+      expect(within(menu).getAllByRole('menuitem').map((m) => m.textContent)).toEqual(['Main', 'Release', 'Feedback'])
+      fireEvent.click(within(menu).getByRole('menuitem', { name: 'Feedback' }))
+      expect(screen.getByTestId('feedback-stub')).toBeTruthy()
+      expect((bar().querySelector('[data-tab-picker]') as HTMLElement).textContent).toContain('Feedback')
     } finally {
       if (sw) Object.defineProperty(HTMLElement.prototype, 'scrollWidth', sw)
       if (cw) Object.defineProperty(HTMLElement.prototype, 'clientWidth', cw)

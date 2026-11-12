@@ -2,7 +2,7 @@
 // keep the agents and their files in the nav, organised): under the project
 // list, a divider, then the project's picture and name, its agents, and
 // "Add an agent…".
-//   - each agent row: picture, name, the Point of contact tag, the view its
+//   - each agent row: picture, name, a star for the point of contact, the view its
 //     tile shows (the picker's icon) and whether it's awake or asleep. Click
 //     opens or focuses its tile on the open dashboard; drag drops it onto
 //     the canvas (the dashboard-dnd bridge); right-click pins it to the top.
@@ -255,7 +255,9 @@ function AgentRow({
         type="button"
         data-k2-focus=""
         className={cx(
-          'relative flex-1 min-w-0 flex items-center gap-2 pr-3 py-1.5 text-left no-drag outline-none select-none',
+          // overflow-hidden + pr-3: the row's right column (⌘N, view, state)
+          // keeps a clear inset from the nav's edge and never spills past it.
+          'relative flex-1 min-w-0 flex items-center gap-2 pr-3 py-1.5 text-left no-drag outline-none select-none overflow-hidden',
           readOnly ? 'cursor-default' : 'cursor-pointer',
         )}
         title={paneNum !== undefined ? `Go to ${name}’s tile (⌘${paneNum})` : `Open ${name} on this dashboard`}
@@ -301,12 +303,21 @@ function AgentRow({
           iconUrl={workspace?.iconUrl ?? null}
           size={18}
         />
-        {/* The name keeps its room; the tag gives way first. */}
-        <span className="min-w-[4.5rem] flex-shrink type-name text-[var(--color-text-primary)] truncate">{name}</span>
+        <span className="min-w-0 flex-shrink type-name text-[var(--color-text-primary)] truncate">{name}</span>
+        {/* The full "Point of contact" tag doesn't fit beside the name,
+            view and state in a 296px nav (Terminal's type is wider), so the
+            row marks it with a star; the words are its tooltip and name. */}
         {isPoc && (
-          <Tag tone="accent" data-case="as-written" className="min-w-0 flex-shrink-[2] overflow-hidden" title="Point of contact">
-            <span className="block truncate">Point of contact</span>
-          </Tag>
+          <span
+            className="flex-shrink-0 inline-flex text-[var(--color-accent-text)]"
+            title="Point of contact: gets every message in the project chat"
+            data-agent-poc=""
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+              <path d="M8 1.75l1.9 3.85 4.25.62-3.07 3 .72 4.23L8 11.45l-3.8 2 .72-4.23-3.07-3 4.25-.62L8 1.75z" />
+            </svg>
+            <span className="sr-only">Point of contact</span>
+          </span>
         )}
         {isPinned && <span className="sr-only">(pinned)</span>}
         <span className="flex-1" />
@@ -377,7 +388,7 @@ function FileRow({
     <div
       data-file-row={doc.fileName}
       className={cx('group relative flex items-center gap-2 pl-[3.25rem] pr-3 py-1 select-none', SETTING_LIST_ROW_HOVER)}
-      title={html ? `${doc.filePath}\nDouble-click to open on this dashboard` : doc.filePath}
+      title={html ? `${doc.filePath}\nDouble-click to open on this dashboard` : `${doc.filePath}\nNot an HTML file: only HTML files can show on a dashboard for now`}
       onMouseDown={(e) => {
         if (!html || noteViewerInteractionBlocked()) return
         if ((e.target as HTMLElement).closest('button')) return
@@ -416,11 +427,14 @@ function FileRow({
         }
       }}
     >
-      <span className="flex-shrink-0 w-4 flex items-center justify-center" aria-hidden="true">
+      <span className={cx('flex-shrink-0 w-4 flex items-center justify-center', html ? '' : 'opacity-50')} aria-hidden="true">
         <SetiFileIcon name={doc.fileName} className="w-3.5 h-3.5" />
       </span>
       <span className="min-w-0 flex-1 flex items-center gap-2">
-        <span className="type-row text-[var(--color-text-primary)] truncate">{doc.fileName}</span>
+        <span className={cx('type-row truncate', html ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]')}>
+          {doc.fileName}
+        </span>
+        {!html && <span className="sr-only">(not an HTML file, so it can’t show on a dashboard)</span>}
         {doc.missing ? (
           <Tag tone="warn" data-case="as-written" className="flex-shrink-0">
             Missing
@@ -429,47 +443,40 @@ function FileRow({
         {isPinned && <span className="sr-only">(pinned)</span>}
       </span>
       {html ? (
-        // At rest the name has the room: "Show on this dashboard" comes up on
-        // hover or focus; a file already on it keeps a quiet check.
+        // A compact icon button, so the name keeps its room: a check once the
+        // file is a tile here, else "show here" on hover or focus. The words
+        // are its tooltip and accessible name.
         <button
           type="button"
           data-k2-focus=""
           className={cx(
-            'flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 type-hint no-drag outline-none cursor-pointer rounded-[var(--radius-selector)] transition-colors',
+            'relative flex-shrink-0 w-6 h-6 inline-flex items-center justify-center no-drag outline-none cursor-pointer rounded-[var(--radius-selector)] transition-colors hover:bg-[var(--color-wash-1)]',
             onDashboard
-              ? 'relative text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-              : // Over the row's end, so at rest it takes no room from the name.
-                'absolute right-2 top-1/2 -translate-y-1/2 bg-[var(--color-bg-surface)] text-[var(--color-accent-text)] hover:bg-[var(--color-bg-elevated)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+              ? 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+              : 'text-[var(--color-accent-text)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
           )}
           aria-label={onDashboard ? `${doc.fileName} is on this dashboard: go to it` : `Show ${doc.fileName} on this dashboard`}
           title={
             onDashboard
               ? `On ${dashboardName ?? 'this dashboard'}: go to it`
-              : `Show ${doc.fileName} on ${dashboardName ?? 'this dashboard'}`
+              : `Show on ${dashboardName ?? 'this dashboard'}`
           }
           onClick={show}
           data-file-show=""
           data-on-dashboard={onDashboard ? '' : undefined}
         >
           {onDashboard ? (
-            <>
-              <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
-                <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
-              </svg>
-              <span className="hidden group-hover:inline group-focus-within:inline">On this dashboard</span>
-            </>
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="w-3 h-3">
+              <path d="M3.5 8.5 6.5 11.5 12.5 4.5" />
+            </svg>
           ) : (
-            'Show on this dashboard'
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5">
+              <rect x="2" y="3" width="12" height="10" />
+              <path d="M8 6v4M6 8h4" />
+            </svg>
           )}
         </button>
-      ) : (
-        <span
-          className="flex-shrink-0 type-hint text-[var(--color-text-secondary)]"
-          title="Only HTML files can show on a dashboard for now"
-        >
-          Not an HTML file
-        </span>
-      )}
+      ) : null}
     </div>
   )
 }

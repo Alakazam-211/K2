@@ -249,7 +249,7 @@ describe('one project', () => {
 
 describe('an empty dashboard', () => {
   it('says what to do next, in plain words', () => {
-    expect(emptyDashboardHint(3, false)).toBe('Drag an agent from Members onto this space, or click one to open it.')
+    expect(emptyDashboardHint(3, false)).toBe('Drag an agent from the list on the left onto this space, or click one to open it here.')
     expect(emptyDashboardHint(0, false)).toBe('Add an agent, then click it on the left to open it here.')
     expect(emptyDashboardHint(3, true)).not.toMatch(/drag|click/i)
     for (const s of [emptyDashboardHint(3, false), emptyDashboardHint(0, false), emptyDashboardHint(3, true)]) {

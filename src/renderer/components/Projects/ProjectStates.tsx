@@ -232,5 +232,5 @@ export function EmptyDashboardState({
 export function emptyDashboardHint(memberCount: number, readOnly: boolean): string {
   if (readOnly) return 'Agents show here once the project’s owner or an admin adds them.'
   if (memberCount === 0) return 'Add an agent, then click it on the left to open it here.'
-  return 'Drag an agent from Members onto this space, or click one to open it.'
+  return 'Drag an agent from the list on the left onto this space, or click one to open it here.'
 }

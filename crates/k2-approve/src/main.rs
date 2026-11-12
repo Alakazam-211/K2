@@ -2,7 +2,7 @@
 //! Exit codes: 0 approved / ok, 2 usage or a bad key set, 3 refused.
 
 use k2_approve::verify::{verify, verify_once, DirNonceStore, Require};
-use k2_approve::{describe, keys, payload, time, Check, View};
+use k2_approve::{describe, keys, payload, time, Check, Environment, View};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -21,6 +21,9 @@ Usage:
       --kind <kind>       the kind you expect, e.g. k2.release
       --check <c>         weakest check accepted: credential (default) or biometric
       --view <v>          weakest view accepted: page (default), host or device
+      --attest <e>        weakest enrolment proof accepted: none (default),
+                          development or production (App Attest; the key
+                          folder's fifth column). Releases use production.
       --nonce <hex>       the nonce you issued
       --used-nonces <dir> mark the nonce used in <dir> (one empty file per
                           nonce); a second approval with it is refused
@@ -65,6 +68,7 @@ fn cmd_verify(args: &[String]) -> ExitCode {
     let mut stored = None;
     let (mut rp, mut kind, mut nonce, mut used, mut at) = (None, None, None, None, None);
     let (mut check, mut view, mut as_json) = (Check::Credential, View::Page, false);
+    let mut attest: Option<Environment> = None;
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -75,7 +79,7 @@ fn cmd_verify(args: &[String]) -> ExitCode {
                 i += 1;
                 continue;
             }
-            "--approval" | "--keys" | "--payload" | "--rp" | "--kind" | "--check" | "--view" | "--nonce" | "--used-nonces" | "--at" => {
+            "--approval" | "--keys" | "--payload" | "--rp" | "--kind" | "--check" | "--view" | "--attest" | "--nonce" | "--used-nonces" | "--at" => {
                 let Some(v) = val(i) else { return usage(&format!("{a} needs a value")) };
                 match a {
                     "--approval" => approval = Some(PathBuf::from(v)),
@@ -90,6 +94,13 @@ fn cmd_verify(args: &[String]) -> ExitCode {
                     "--view" => match View::parse(&v) {
                         Some(x) => view = x,
                         None => return usage("--view is device, host or page"),
+                    },
+                    "--attest" => match v.as_str() {
+                        "none" => attest = None,
+                        other => match Environment::parse(other) {
+                            Some(e) => attest = Some(e),
+                            None => return usage("--attest is none, development or production"),
+                        },
                     },
                     "--nonce" => nonce = Some(v),
                     "--used-nonces" => used = Some(PathBuf::from(v)),
@@ -127,7 +138,7 @@ fn cmd_verify(args: &[String]) -> ExitCode {
             Err(_) => return usage("the clock is before 1970"),
         },
     };
-    let req = Require { rp: rp.as_deref(), kind: kind.as_deref(), check, view, now, stored_payload: stored_bytes.as_deref(), nonce: nonce.as_deref() };
+    let req = Require { rp: rp.as_deref(), kind: kind.as_deref(), check, view, attest, now, stored_payload: stored_bytes.as_deref(), nonce: nonce.as_deref() };
     let result = match &used {
         Some(d) => verify_once(&record, &trusted, &req, &mut DirNonceStore(d.clone())),
         None => verify(&record, &trusted, &req),
@@ -154,13 +165,14 @@ fn cmd_verify(args: &[String]) -> ExitCode {
     }
     if as_json {
         println!(
-            "{{\"ok\":true,\"key_name\":{},\"person\":{},\"key_id\":\"{}\",\"alg\":\"{}\",\"check\":\"{}\",\"view\":\"{}\",\"kind\":{},\"rp\":{},\"nonce\":\"{}\",\"answer_by\":\"{}\"}}",
+            "{{\"ok\":true,\"key_name\":{},\"person\":{},\"key_id\":\"{}\",\"alg\":\"{}\",\"check\":\"{}\",\"view\":\"{}\",\"attest\":\"{}\",\"kind\":{},\"rp\":{},\"nonce\":\"{}\",\"answer_by\":\"{}\"}}",
             json_str(&v.key_name),
             json_str(&v.person),
             v.key_id,
             v.alg.as_str(),
             v.check.as_str(),
             v.view.as_str(),
+            v.attest.map_or("none", Environment::as_str),
             json_str(&v.payload.kind),
             json_str(&v.payload.rp),
             v.payload.nonce,

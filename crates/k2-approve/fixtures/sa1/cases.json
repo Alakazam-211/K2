@@ -10,6 +10,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -20,7 +21,8 @@
     "person": "alex",
     "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
     "check": "biometric",
-    "view": "device"
+    "view": "device",
+    "attest": "production"
    }
   },
   {
@@ -32,6 +34,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -42,7 +45,8 @@
     "person": "alex",
     "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
     "check": "biometric",
-    "view": "device"
+    "view": "device",
+    "attest": "production"
    }
   },
   {
@@ -54,6 +58,7 @@
     "kind": "k2.release",
     "check": "credential",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -64,7 +69,8 @@
     "person": "alex",
     "key_id": "91ac1312245d73df57fe662bd9502777017b542cf30a9d9569957841c5f58a19",
     "check": "credential",
-    "view": "device"
+    "view": "device",
+    "attest": "development"
    }
   },
   {
@@ -76,6 +82,7 @@
     "kind": "com.example.refund",
     "check": "credential",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -86,7 +93,8 @@
     "person": "alex",
     "key_id": "91ac1312245d73df57fe662bd9502777017b542cf30a9d9569957841c5f58a19",
     "check": "credential",
-    "view": "device"
+    "view": "device",
+    "attest": "development"
    }
   },
   {
@@ -98,6 +106,7 @@
     "kind": "com.example.refund",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -108,7 +117,8 @@
     "person": "alex",
     "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
     "check": "biometric",
-    "view": "device"
+    "view": "device",
+    "attest": "production"
    }
   },
   {
@@ -120,6 +130,7 @@
     "kind": "k2.release",
     "check": "credential",
     "view": "host",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -130,7 +141,8 @@
     "person": "alex",
     "key_id": "b993519f773f2fbbd2a12b15891547824241c46797fb8d648b58625b89cdb6af",
     "check": "credential",
-    "view": "host"
+    "view": "host",
+    "attest": null
    }
   },
   {
@@ -142,6 +154,7 @@
     "kind": "k2.release",
     "check": "credential",
     "view": "host",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -152,7 +165,8 @@
     "person": "alex",
     "key_id": "392a86d0d9a5186675e6037d1d12cf82532b950586436e8d6bbd471f5ac596ba",
     "check": "credential",
-    "view": "host"
+    "view": "host",
+    "attest": null
    }
   },
   {
@@ -164,6 +178,7 @@
     "kind": null,
     "check": "credential",
     "view": "page",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": null
    },
@@ -174,7 +189,56 @@
     "person": "alex",
     "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
     "check": "biometric",
-    "view": "device"
+    "view": "device",
+    "attest": "production"
+   }
+  },
+  {
+   "name": "ok-release-attested-production",
+   "record": "records/ok-release-attested-production.json",
+   "stored_payload": "records/ok-release-attested-production.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "biometric",
+    "view": "device",
+    "attest": "production",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-bio",
+    "person": "alex",
+    "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
+    "check": "biometric",
+    "view": "device",
+    "attest": "production"
+   }
+  },
+  {
+   "name": "ok-development-when-allowed",
+   "record": "records/ok-development-when-allowed.json",
+   "stored_payload": "records/ok-development-when-allowed.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "device",
+    "attest": "development",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": true,
+    "key_name": "alex-phone-cred",
+    "person": "alex",
+    "key_id": "91ac1312245d73df57fe662bd9502777017b542cf30a9d9569957841c5f58a19",
+    "check": "credential",
+    "view": "device",
+    "attest": "development"
    }
   },
   {
@@ -186,6 +250,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -204,6 +269,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -222,6 +288,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -240,6 +307,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -258,6 +326,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -276,6 +345,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -294,6 +364,7 @@
     "kind": "k2.release",
     "check": "credential",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -312,6 +383,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -330,6 +402,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -348,6 +421,7 @@
     "kind": "k2.delete",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -366,6 +440,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -384,6 +459,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -391,6 +467,44 @@
    "expect": {
     "ok": false,
     "code": "weak_check"
+   }
+  },
+  {
+   "name": "refuse-development-for-release",
+   "record": "records/refuse-development-for-release.json",
+   "stored_payload": "records/refuse-development-for-release.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "device",
+    "attest": "production",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "not_attested"
+   }
+  },
+  {
+   "name": "refuse-unattested-key",
+   "record": "records/refuse-unattested-key.json",
+   "stored_payload": "records/refuse-unattested-key.stored.bin",
+   "require": {
+    "rp": "k2sign@build-mac",
+    "kind": "k2.release",
+    "check": "credential",
+    "view": "host",
+    "attest": "development",
+    "now": "2026-11-11T14:05:00Z",
+    "nonce": "00112233445566778899aabbccddeeff"
+   },
+   "used_nonces": [],
+   "expect": {
+    "ok": false,
+    "code": "not_attested"
    }
   },
   {
@@ -402,6 +516,7 @@
     "kind": "k2.release",
     "check": "credential",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -420,6 +535,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:15:01Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -438,6 +554,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:15:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -448,7 +565,8 @@
     "person": "alex",
     "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
     "check": "biometric",
-    "view": "device"
+    "view": "device",
+    "attest": "production"
    }
   },
   {
@@ -460,6 +578,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T13:54:59Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -478,6 +597,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T13:55:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -488,7 +608,8 @@
     "person": "alex",
     "key_id": "414e70f4cee199b526c21e16f612fc746b65dcda3c35419059da92855cd82954",
     "check": "biometric",
-    "view": "device"
+    "view": "device",
+    "attest": "production"
    }
   },
   {
@@ -500,6 +621,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "ffeeddccbbaa99887766554433221100"
    },
@@ -518,6 +640,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -538,6 +661,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -556,6 +680,7 @@
     "kind": "com.example.x",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -574,6 +699,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -592,6 +718,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -610,6 +737,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -628,6 +756,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -646,6 +775,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },
@@ -664,6 +794,7 @@
     "kind": "k2.release",
     "check": "biometric",
     "view": "device",
+    "attest": null,
     "now": "2026-11-11T14:05:00Z",
     "nonce": "00112233445566778899aabbccddeeff"
    },

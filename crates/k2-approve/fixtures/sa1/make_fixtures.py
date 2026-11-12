@@ -28,6 +28,8 @@ PREFIX = b"K2-SIGNED-APPROVAL-1\x00"
 OPENSSL = shutil.which("openssl") or "/usr/bin/openssl"
 
 # name: (person, check, view, kind of key, in approvers.tsv)
+# ATTEST: the attest column a relying party pinned (App Attest environment).
+ATTEST = {"alex-phone-bio": "production", "alex-phone-cred": "development"}
 KEYS = {
     "alex-phone-bio": ("alex", "biometric", "device", "ec", True),
     "alex-phone-cred": ("alex", "credential", "device", "ec", True),
@@ -62,7 +64,7 @@ def write(rel, data):
 
 def make_keys():
     os.makedirs(os.path.join(HERE, "keys", "private"), exist_ok=True)
-    tsv = ["# name\tperson\tcheck\tview  (TEST KEYS: the private halves are in private/)"]
+    tsv = ["# name\tperson\tcheck\tview[\tattest]  (TEST KEYS; private halves stay out of git)"]
     ids = {}
     for name, (person, check, view, kt, listed) in KEYS.items():
         priv = os.path.join(HERE, "keys", "private", name + ".key")
@@ -76,7 +78,7 @@ def make_keys():
         ids[name] = hashlib.sha256(der).hexdigest()
         if listed:
             write("keys/%s.pem" % name, pem)
-            tsv.append("\t".join((name, person, check, view)))
+            tsv.append("\t".join((name, person, check, view) + ((ATTEST[name],) if name in ATTEST else ())))
     write("keys/approvers.tsv", "\n".join(tsv) + "\n")
     return ids
 
@@ -290,7 +292,8 @@ def main():
     cases = []
 
     def req(**kw):
-        r = {"rp": RP, "kind": "k2.release", "check": "biometric", "view": "device", "now": NOW_OK, "nonce": NONCE}
+        r = {"rp": RP, "kind": "k2.release", "check": "biometric", "view": "device", "attest": None, "now": NOW_OK,
+             "nonce": NONCE}
         r.update(kw)
         return r
 
@@ -313,7 +316,8 @@ def main():
 
     def ok(key):
         person, check, view = KEYS[key][:3]
-        return {"ok": True, "key_name": key, "person": person, "key_id": ids[key], "check": check, "view": view}
+        return {"ok": True, "key_name": key, "person": person, "key_id": ids[key], "check": check, "view": view,
+                "attest": ATTEST.get(key)}
 
     rel = valid["release"][0]
     both = valid["release-reapprove-windows"][0]
@@ -330,7 +334,11 @@ def main():
     win = enc(payload_obj(ids, approver_keys=[ids["alex-win-hello"]]))
     case("ok-rs256-host-when-allowed", "alex-win-hello", win, ok("alex-win-hello"), require=req(check="credential", view="host"))
     case("ok-no-optional-checks", "alex-phone-bio", rel, ok("alex-phone-bio"),
-         require={"rp": None, "kind": None, "check": "credential", "view": "page", "now": NOW_OK, "nonce": None})
+         require={"rp": None, "kind": None, "check": "credential", "view": "page", "attest": None, "now": NOW_OK,
+                  "nonce": None})
+    case("ok-release-attested-production", "alex-phone-bio", rel, ok("alex-phone-bio"), require=req(attest="production"))
+    case("ok-development-when-allowed", "alex-phone-cred", both, ok("alex-phone-cred"),
+         require=req(check="credential", attest="development"))
 
     no = lambda code: {"ok": False, "code": code}
     # A one-byte change: the signature no longer verifies.
@@ -351,6 +359,10 @@ def main():
     case("refuse-wrong-kind", "alex-phone-bio", rel, no("wrong_kind"), require=req(kind="k2.delete"))
     case("refuse-credential-for-release", "alex-phone-cred", both, no("weak_check"))
     case("refuse-mac-legacy-for-release", "alex-mac-legacy", mac, no("weak_check"))
+    case("refuse-development-for-release", "alex-phone-cred", both, no("not_attested"),
+         require=req(check="credential", attest="production"))
+    case("refuse-unattested-key", "alex-mac-legacy", mac, no("not_attested"),
+         require=req(check="credential", view="host", attest="development"))
     case("refuse-host-view-for-release", "alex-mac-legacy", mac, no("weak_view"), require=req(check="credential"))
     case("refuse-expired", "alex-phone-bio", rel, no("expired"), require=req(now="2026-11-11T14:15:01Z"))
     case("ok-at-answer-by", "alex-phone-bio", rel, ok("alex-phone-bio"), require=req(now=ANSWER_BY))

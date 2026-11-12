@@ -10,7 +10,7 @@
 //! 4. the key is one the payload accepts (`key_not_listed`) and belongs to
 //!    the person it names (`wrong_approver`); `rp` and kind are the relying
 //!    party's (`wrong_rp`, `wrong_kind`); the pinned check and view meet
-//!    its policy (`weak_check`, `weak_view`);
+//!    its policy (`weak_check`, `weak_view`, `not_attested`);
 //! 5. time by the relying party's clock (`issued_future`, `expired`), the
 //!    nonce (`wrong_nonce`), and single use (`nonce_used`, through the
 //!    relying party's [`NonceStore`]).
@@ -20,7 +20,7 @@
 use crate::keys::TrustedKey;
 use crate::payload::{self, Payload};
 use crate::record::{self, Record};
-use crate::{refuse, Alg, Check, Code, Result, View};
+use crate::{refuse, Alg, Check, Code, Environment, Result, View};
 use std::path::PathBuf;
 
 /// How far ahead of the relying party's clock `issued` may be.
@@ -36,6 +36,10 @@ pub struct Require<'a> {
     pub check: Check,
     /// The weakest view accepted (page < host < device).
     pub view: View,
+    /// The weakest enrolment proof accepted: None takes any key, Some(env)
+    /// needs an App Attest attestation at least that strong (development <
+    /// production). Releases need production.
+    pub attest: Option<Environment>,
     /// The relying party's clock, seconds since 1970 UTC.
     pub now: i64,
     /// The bytes the relying party wrote and kept for this request.
@@ -53,6 +57,7 @@ pub struct Verified {
     pub alg: Alg,
     pub check: Check,
     pub view: View,
+    pub attest: Option<Environment>,
     pub payload: Payload,
 }
 
@@ -113,6 +118,12 @@ pub fn verify_record(rec: &Record, trusted: &[TrustedKey], req: &Require) -> Res
     if k.view < req.view {
         return refuse(Code::WeakView, format!("key {} has view {}; {} is required", k.name, k.view.as_str(), req.view.as_str()));
     }
+    if k.attest < req.attest {
+        return refuse(
+            Code::NotAttested,
+            format!("key {} was attested as {}; {} is required", k.name, k.attest.map_or("none", Environment::as_str), req.attest.map_or("none", Environment::as_str)),
+        );
+    }
     if p.issued_at > req.now + ISSUED_SKEW_SECS {
         return refuse(Code::IssuedFuture, format!("issued {} is ahead of this clock", p.issued));
     }
@@ -124,7 +135,7 @@ pub fn verify_record(rec: &Record, trusted: &[TrustedKey], req: &Require) -> Res
             return refuse(Code::WrongNonce, format!("the payload's nonce is {}, not {n}", p.nonce));
         }
     }
-    Ok(Verified { key_name: k.name.clone(), person: k.person.clone(), key_id: k.key_id.clone(), alg: k.key.alg, check: k.check, view: k.view, payload: p })
+    Ok(Verified { key_name: k.name.clone(), person: k.person.clone(), key_id: k.key_id.clone(), alg: k.key.alg, check: k.check, view: k.view, attest: k.attest, payload: p })
 }
 
 /// The relying party's record of used nonces.

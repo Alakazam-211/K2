@@ -11,6 +11,8 @@
 //! The fixtures under `fixtures/sa1/` are shared with the phone app (Swift)
 //! and k2sign (Python): every reader must reach the same verdict on each.
 
+#[cfg(feature = "verify")]
+pub mod attest;
 pub mod describe;
 pub mod json;
 pub mod keys;
@@ -61,6 +63,7 @@ pub enum Code {
     WrongKind,
     WeakCheck,
     WeakView,
+    NotAttested,
     IssuedFuture,
     Expired,
     WrongNonce,
@@ -96,6 +99,7 @@ impl Code {
             Code::WrongKind => "wrong_kind",
             Code::WeakCheck => "weak_check",
             Code::WeakView => "weak_view",
+            Code::NotAttested => "not_attested",
             Code::IssuedFuture => "issued_future",
             Code::Expired => "expired",
             Code::WrongNonce => "wrong_nonce",
@@ -214,3 +218,30 @@ impl Alg {
         }
     }
 }
+
+/// Which App Attest environment attested a key (prd-signed-approvals-v1 SA-7).
+/// A key with none was pinned on a person's fingerprint check alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Environment {
+    /// Xcode builds: fine for testing relying parties, never for releases.
+    Development,
+    /// App Store and TestFlight builds.
+    Production,
+}
+
+impl Environment {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Environment::Development => "development",
+            Environment::Production => "production",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Environment> {
+        match s {
+            "development" => Some(Environment::Development),
+            "production" => Some(Environment::Production),
+            _ => None,
+        }
+    }
+}
+

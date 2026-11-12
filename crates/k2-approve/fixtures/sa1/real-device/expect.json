@@ -1,0 +1,13 @@
+{
+ "about": "Made on a real iPhone (S0, 2026-11-11, an Xcode build: App Attest development). Nothing here is secret. s0-sigs.json: Secure Enclave ES256 signatures (Face ID key, passcode key) over spike payloads; the spike body predates k2.release v1's shape, so the strict reader refuses the payloads with code shape while the signatures verify. s0-attest.json: an App Attest attestation whose clientData is the spike form SPKI(biometric) || SPKI(passcode) (no K2-APPROVER-ENROL-1 prefix or challenge); verify it with the attestation check alone, not the enrolment check.",
+ "sigs": {"file": "s0-sigs.json", "entries": ["sign_biometric", "sign_passcode"], "signature_verifies": true, "payload_code": "shape"},
+ "attest": {
+  "file": "s0-attest.json",
+  "app_id": "36B8R93HXV.com.alakazamlabs.k2so.companion",
+  "check_at": "2026-11-11T12:00:00Z",
+  "environment": "development",
+  "leaf_not_after": "2026-11-14T03:50:14Z",
+  "refused_at": "2026-11-15T00:00:00Z",
+  "enrolment_check": "refused: the spike clientData has no K2-APPROVER-ENROL-1 prefix"
+ }
+}

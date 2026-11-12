@@ -4,7 +4,7 @@
 use k2_approve::json::{self, Value};
 use k2_approve::keys;
 use k2_approve::verify::{verify, verify_once, MemNonceStore, Require};
-use k2_approve::{describe, payload, time, Check, View};
+use k2_approve::{describe, payload, time, Check, Environment, View};
 use std::path::{Path, PathBuf};
 
 fn dir() -> PathBuf {
@@ -110,6 +110,7 @@ fn record_cases_reach_their_verdicts() {
             kind: opt_s(r, "kind"),
             check: Check::parse(s(r, "check")).expect("check"),
             view: View::parse(s(r, "view")).expect("view"),
+            attest: opt_s(r, "attest").map(|e| Environment::parse(e).expect("attest")),
             now: time::parse_utc(s(r, "now")).expect("now"),
             stored_payload: stored.as_deref(),
             nonce: opt_s(r, "nonce"),
@@ -128,6 +129,7 @@ fn record_cases_reach_their_verdicts() {
             assert_eq!(v.key_id, s(e, "key_id"), "{name}");
             assert_eq!(v.check.as_str(), s(e, "check"), "{name}");
             assert_eq!(v.view.as_str(), s(e, "view"), "{name}");
+            assert_eq!(v.attest.map(Environment::as_str), opt_s(e, "attest"), "{name}");
             // Single use: the same record a second time is refused.
             let again = verify_once(&rec, &trusted, &req, &mut store).expect_err("second use");
             assert_eq!(again.code.as_str(), "nonce_used", "{name}");

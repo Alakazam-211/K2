@@ -7,11 +7,13 @@
 //!   compares them between the device's screen and the relying party's
 //!   printout when the key is pinned.
 //! - A **key set** is a folder: `approvers.tsv` (name, person, check, view
-//!   per line, tab-separated, `#` comments) and `<name>.pem` for each name.
+//!   and optionally attest, per line, tab-separated, `#` comments) and
+//!   `<name>.pem` for each name. attest is `production`, `development` (App
+//!   Attest's environment, checked at enrolment) or `none` (the default).
 //!   The check and view of an approval are read from here, never from the
 //!   record (SA-5).
 
-use crate::{Alg, Check, View};
+use crate::{Alg, Check, Environment, View};
 use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -47,11 +49,16 @@ pub fn words(key_id: &str) -> Option<String> {
 
 /// The DER inside one `PUBLIC KEY` PEM block.
 pub fn pem_to_der(pem: &str) -> Result<Vec<u8>, String> {
-    let begin = "-----BEGIN PUBLIC KEY-----";
-    let end = "-----END PUBLIC KEY-----";
-    let a = pem.find(begin).ok_or("no BEGIN PUBLIC KEY line")?;
+    pem_block_to_der(pem, "PUBLIC KEY")
+}
+
+/// The DER inside one PEM block with this label (`CERTIFICATE`, `PUBLIC KEY`).
+pub fn pem_block_to_der(pem: &str, label: &str) -> Result<Vec<u8>, String> {
+    let begin = format!("-----BEGIN {label}-----");
+    let end = format!("-----END {label}-----");
+    let a = pem.find(&begin).ok_or(format!("no BEGIN {label} line"))?;
     let rest = &pem[a + begin.len()..];
-    let z = rest.find(end).ok_or("no END PUBLIC KEY line")?;
+    let z = rest.find(&end).ok_or(format!("no END {label} line"))?;
     if rest[z + end.len()..].contains("-----BEGIN") {
         return Err("more than one PEM block".into());
     }
@@ -141,6 +148,9 @@ pub struct TrustedKey {
     pub person: String,
     pub check: Check,
     pub view: View,
+    /// How the key was proven at enrolment: App Attest's environment, or
+    /// None (a person compared the fingerprint words).
+    pub attest: Option<Environment>,
     pub key: PublicKey,
     pub key_id: String,
 }
@@ -161,9 +171,13 @@ pub fn load_dir(dir: &Path) -> Result<Vec<TrustedKey>, String> {
             continue;
         }
         let cols: Vec<&str> = line.split('\t').collect();
-        if cols.len() != 4 {
-            return Err(format!("approvers.tsv line {}: want name, person, check, view (tab-separated)", n + 1));
+        if cols.len() != 4 && cols.len() != 5 {
+            return Err(format!("approvers.tsv line {}: want name, person, check, view[, attest] (tab-separated)", n + 1));
         }
+        let attest = match cols.get(4).copied() {
+            None | Some("none") => None,
+            Some(e) => Some(Environment::parse(e).ok_or_else(|| format!("approvers.tsv line {}: attest must be production, development or none", n + 1))?),
+        };
         let (name, person) = (cols[0], cols[1]);
         if !name_ok(name) {
             return Err(format!("approvers.tsv line {}: bad name {name:?}", n + 1));
@@ -180,7 +194,7 @@ pub fn load_dir(dir: &Path) -> Result<Vec<TrustedKey>, String> {
         if out.iter().any(|k| k.name == name || k.key_id == key_id) {
             return Err(format!("approvers.tsv line {}: {name} (or its key) is listed twice", n + 1));
         }
-        out.push(TrustedKey { name: name.into(), person: person.into(), check, view, key, key_id });
+        out.push(TrustedKey { name: name.into(), person: person.into(), check, view, attest, key, key_id });
     }
     Ok(out)
 }

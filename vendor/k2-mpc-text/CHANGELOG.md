@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.20 (2026-11-11): pairs with kit v0.15.0
+
+**Requires `k2-mpc-base` v0.15.0**. This pack's code and tests are unchanged from v0.2.19.
+
+- Pairs with kit v0.15.0. Its additions are additive or provided methods with defaults (turns,
+  the pack verb on a change, focus and range, `Pack::container_of`, the carrier hook
+  `Pack::wants_carrier` and `Pack::encode_from`, host cache keys); this pack overrides none of
+  them, so its merges, its JSON guard and its docs behave as in v0.2.19. The kit's changes for
+  keyed docs (a size limit; an app's save over the kit's write keeps both) are for keyed docs,
+  not this pack's text docs.
+- `Cargo.lock`: k2-mpc-base 0.15.0 (only the kit's crate version moves); the crate version.
+
 ## v0.2.19 (2026-11-11): pairs with kit v0.14.0
 
 **Requires `k2-mpc-base` v0.14.0** (its `Pack::check_merged`).

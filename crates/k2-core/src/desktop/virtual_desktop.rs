@@ -763,6 +763,35 @@ pub struct Record {
     /// `/proc/sys/kernel/random/boot_id` at start: another means a reboot.
     #[serde(default)]
     pub boot_id: String,
+    /// The agent's hold and its cap's bookkeeping, so a daemon restart
+    /// keeps them (L9: a restart dropped the hold under a working agent).
+    #[serde(default)]
+    pub holds: Holds,
+}
+
+/// [`Desktop`]'s hold fields as `state.json` keeps them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Holds {
+    #[serde(default)]
+    pub hold: Option<Hold>,
+    #[serde(default)]
+    pub held_alone_since: Option<i64>,
+    #[serde(default)]
+    pub agent_paused_until: Option<i64>,
+}
+
+impl Holds {
+    pub fn of(d: &Desktop) -> Holds {
+        Holds { hold: d.hold.clone(), held_alone_since: d.held_alone_since, agent_paused_until: d.agent_paused_until }
+    }
+
+    /// Put them back on an adopted desktop (an expired hold is dropped).
+    pub fn restore(&self, d: &mut Desktop, now: i64) {
+        d.hold = self.hold.clone().filter(|h| h.until > now);
+        d.held_alone_since = self.held_alone_since;
+        d.agent_paused_until = self.agent_paused_until.filter(|t| *t > now);
+    }
 }
 
 #[cfg(test)]
@@ -1140,6 +1169,7 @@ mod tests {
             started_at: Some(1),
             asleep_since: Some(2),
             boot_id: "b".into(),
+            holds: Holds { hold: Some(Hold { by: "w".into(), until: 9 }), held_alone_since: Some(3), agent_paused_until: None },
         };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"state\":\"asleep\"") && s.contains("\"mode\":\"systemd\""), "{s}");

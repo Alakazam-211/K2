@@ -570,6 +570,7 @@ impl Manager {
                     started_at: Some(now),
                     asleep_since: None,
                     boot_id: self.host.boot_id(),
+                    holds: Default::default(),
                 };
                 self.write_record(&rec);
                 {
@@ -839,6 +840,7 @@ impl Manager {
             g.pending_size.remove(id);
             let d = g.desktops.entry(id.to_string()).or_insert_with(|| Desktop::new(id));
             d.mark_closed(Some(reason.clone()), now);
+            let holds = vd::Holds::of(d);
             let r = g.records.entry(id.to_string()).or_insert_with(|| Record {
                 id: id.to_string(),
                 mode: RunMode::Systemd,
@@ -851,6 +853,7 @@ impl Manager {
                 started_at: None,
                 asleep_since: None,
                 boot_id: String::new(),
+                holds: Default::default(),
             });
             r.state = State::Closed;
             r.closed = Some(Closed { reason, at: now });
@@ -859,6 +862,7 @@ impl Manager {
             r.pids.clear();
             r.started_at = None;
             r.asleep_since = None;
+            r.holds = holds;
             r.clone()
         };
         if self.dir(id).is_dir() {
@@ -907,6 +911,11 @@ impl Manager {
                 }
                 Action::Proceed(id) => self.proceed(&id),
             }
+        }
+        // The hold cap's bookkeeping moves on the tick: keep it too.
+        let ids: Vec<String> = lock(&self.inner).records.keys().cloned().collect();
+        for id in ids {
+            self.save_holds(&id);
         }
     }
 
@@ -995,6 +1004,7 @@ impl Manager {
                 let d = g.desktops.entry(id.clone()).or_insert_with(|| Desktop::new(&id));
                 d.size = rec.size;
                 d.started_at = rec.started_at;
+                rec.holds.restore(d, now);
                 if asleep {
                     d.state = State::Asleep;
                     d.asleep_since = Some(rec.asleep_since.unwrap_or(now));
@@ -1037,11 +1047,37 @@ impl Manager {
     /// An agent's hold (LD-29): `Err` names who holds it until when.
     pub fn hold(&self, id: &str, by: &str) -> Result<Hold, Hold> {
         let now = self.now();
-        lock(&self.inner).desktops.entry(id.to_string()).or_insert_with(|| Desktop::new(id)).take_hold(by, now)
+        let r = lock(&self.inner).desktops.entry(id.to_string()).or_insert_with(|| Desktop::new(id)).take_hold(by, now);
+        if r.is_ok() {
+            self.save_holds(id);
+        }
+        r
     }
 
     pub fn release(&self, id: &str, by: &str) -> bool {
-        self.with_desktop(id, |d, _| d.release_hold(by)).unwrap_or(false)
+        let released = self.with_desktop(id, |d, _| d.release_hold(by)).unwrap_or(false);
+        if released {
+            self.save_holds(id);
+        }
+        released
+    }
+
+    /// Write the desktop's hold fields into its `state.json` when they
+    /// changed (a desktop with no record yet has nothing to keep).
+    fn save_holds(&self, id: &str) {
+        let rec = {
+            let mut g = lock(&self.inner);
+            let Some(holds) = g.desktops.get(id).map(vd::Holds::of) else { return };
+            let Some(r) = g.records.get_mut(id) else { return };
+            if r.holds == holds {
+                return;
+            }
+            r.holds = holds;
+            r.clone()
+        };
+        if self.dir(id).is_dir() {
+            self.write_record(&rec);
+        }
     }
 
     // ── reads ────────────────────────────────────────────────────────

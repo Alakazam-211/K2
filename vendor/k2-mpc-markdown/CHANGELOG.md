@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.21 (2026-11-12): pairs with kit v0.17.0
+
+**Requires `k2-mpc-base` v0.17.0**. This pack's code and tests are unchanged from v0.7.20.
+
+- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the host's call
+  for a text doc whose type now routes to tier 0), the carrier's pairing (K1b, opt-in by
+  `Pack::wants_pairing`, new error `MPC-E521`), the live grid (wire 3, additive), and an
+  outside save on unwritten changes keeping both on a keyed doc that isn't a table. This pack's text docs use none of the new hooks and keep no carrier, so it behaves as
+  in v0.7.20. Markdown stays live text: nothing it opens is demoted.
+- `Cargo.lock`: k2-mpc-base 0.17.0 (only the kit's crate version moves); the crate version.
+
 ## v0.7.20 (2026-11-12): pairs with kit v0.16.0
 
 **Requires `k2-mpc-base` v0.16.0**. This pack's code and tests are unchanged from v0.7.19.

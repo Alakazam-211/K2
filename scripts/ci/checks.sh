@@ -66,7 +66,11 @@ part_web() {
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot
     step "App server SDK typecheck";               bunx tsc -p sdk/server/tsconfig.json
-    step "App server SDK dist is fresh";           node scripts/sdk-server-dist.mjs --check
+    # Every generated file this part can check: the App server SDK dist,
+    # the CLI explorer catalog, the styles and the CLI goldens. No cargo
+    # here, so contract-gen's outputs are checked in rust-test ("verb
+    # catalog": k2-core's contract:: freshness test).
+    step "generated files are fresh (regen.sh)";   bash scripts/regen.sh --check --no-cargo
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh
     step "k2 on a virtual desktop never acts as the owner"; bash tests/cli/virtual_desktop_owner_guard.sh
     step "k2 desktop on a Linux server (stub daemon)"; bash tests/cli/desktop_virtual_cli.sh

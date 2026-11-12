@@ -147,8 +147,11 @@ jobs:
 
       # 0.46.6: the daemon embeds sdk/server/dist (the @k2/server tarball
       # `k2 app sdk add` vendors); it must be built from today's sources.
-      - name: App server SDK dist is fresh
-        run: node scripts/sdk-server-dist.mjs --check
+      # Also the CLI explorer catalog, the styles and the CLI goldens
+      # (scripts/regen.sh). No cargo in this job: contract-gen's outputs
+      # are checked by k2-core's contract:: freshness test in the rust job.
+      - name: Generated files are fresh (regen.sh)
+        run: bash scripts/regen.sh --check --no-cargo
 
       # prd-zen-user-widgets-v2 UW41, TUWA11: the widget CLI's offline
       # half (no grant verb, usage errors, the generated guide api page).

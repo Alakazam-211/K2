@@ -1,0 +1,4 @@
+target/
+.DS_Store
+# a fetched test corpus (never committed)
+/.corpus/

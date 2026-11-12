@@ -1,0 +1,40 @@
+# Ceilings for scripts/garden/ratchet.sh: "<lines> <path>", biggest first.
+# A ceiling only ever goes down (scripts/garden/ratchet.sh --tighten).
+# Never raise one by hand: put new code in a new file or the area file.
+101981 cli/k2
+16825 crates/k2-daemon/src/routes/dispatcher.rs
+13021 crates/k2-core/src/skin.rs
+9981 crates/k2-daemon/src/overlay_routes.rs
+9661 crates/k2-daemon/src/mail/jmap.rs
+8569 src/renderer/stores/tabs.ts
+5985 src/renderer/kessel-term/TerminalPane.tsx
+5773 crates/k2-core/src/chat_history.rs
+5650 crates/k2-core/src/tunnel/connector.rs
+5546 crates/k2-daemon/src/mail/routes_send.rs
+5374 crates/k2-daemon/src/federation_routes.rs
+5050 src/renderer/components/Settings/sections/ProjectsSection.tsx
+5021 crates/k2-daemon/src/sql/ops.rs
+5005 crates/k2-core/src/connect_users.rs
+4901 crates/k2-daemon/src/project_group_routes.rs
+4867 crates/k2-daemon/src/compute_routes.rs
+4842 crates/k2-daemon/src/skin_routes.rs
+4797 crates/k2-vault/src/vault.rs
+4774 crates/k2-daemon/src/workspace_msg.rs
+4688 crates/k2-daemon/src/fs_routes.rs
+4585 crates/k2-daemon/src/mail/send.rs
+4550 crates/k2-core/src/terminal/daemon_pty.rs
+4503 crates/k2-daemon/src/publish_runtime.rs
+4483 crates/k2-daemon/src/sql/mod.rs
+4404 crates/k2-daemon/src/feedback_routes.rs
+4350 crates/k2-daemon/src/routes/route_policy.rs
+4305 crates/k2-root-proto/src/sew.rs
+4277 crates/k2-daemon/src/mail/calendar.rs
+4220 crates/k2-core/src/workspace/context_layers.rs
+4184 crates/k2-daemon/src/v2_spawn.rs
+4164 crates/k2-daemon/src/mail/supervisor.rs
+4131 crates/k2-daemon/src/subscription_usage.rs
+
+# Held: a lane is still adding to these. Both rules skip them.
+# When the lane lands: scripts/garden/ratchet.sh --release <path>
+held crates/k2-core/src/db/schema.rs migrations in flight
+held crates/k2-core/src/db/mod.rs migrations in flight until migrations come from build.rs

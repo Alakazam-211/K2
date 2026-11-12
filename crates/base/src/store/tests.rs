@@ -254,6 +254,89 @@ fn client_kinds_mark_only_agent_ids_reusable() {
     assert_eq!(s.reusable_clients(b).unwrap(), set(&[13]));
 }
 
+/// `client_kinds` kind 2 (person-writer reuse, v0.14.0, no format bump): a row round-trips
+/// through its 51 bytes; it is never in the agent reuse list (what a kit from v0.10.2 to
+/// v0.13.x reads); a row of another layout version, a damaged one, or one without an owner row
+/// is not a person writer; rows land with their owner rows, keeping an owner row already there;
+/// a rewrite keeps them and a delete erases them.
+#[test]
+fn person_writer_rows() {
+    let t = TmpDir::new("person-writers");
+    let s = DocStore::open(t.db()).unwrap();
+    let (a, b) = (
+        s.create(&meta("a.md")).unwrap(),
+        s.create(&meta("b.md")).unwrap(),
+    );
+    let row = PersonWriterRow {
+        leased: true,
+        device: [7; 16],
+        token: u64::MAX - 1,
+        ended_token: 3,
+        ended_seq: 1 << 40,
+        ended_ms: 99,
+    };
+    let enc = enc_person_row(&row);
+    assert_eq!(enc.len(), 51);
+    assert_eq!(dec_person_row(&enc), Some(row));
+    let mut other_version = enc;
+    other_version[1] = 2;
+    assert_eq!(
+        dec_person_row(&other_version),
+        None,
+        "a later layout: unknown"
+    );
+    let mut bad_state = enc;
+    bad_state[2] = 7;
+    assert_eq!(dec_person_row(&bad_state), None, "a damaged row: unknown");
+    assert_eq!(dec_person_row(&enc[..50]), None);
+    assert_eq!(
+        dec_person_row(&[KIND_AGENT]),
+        None,
+        "an agent's row isn't one"
+    );
+    // the rows land with their owner rows (a session's change commit, `commit_changes_with`,
+    // writes them as this does, in its own transaction)
+    let free = PersonWriterRow {
+        device: [1; 16],
+        ..PersonWriterRow::default()
+    };
+    s.put_person_writers(a, &[(21, "ada".into(), row), (22, "ada".into(), free)])
+        .unwrap();
+    assert_eq!(
+        s.person_writers(a).unwrap(),
+        vec![(21, "ada".into(), row), (22, "ada".into(), free)]
+    );
+    assert_eq!(s.client_owner(a, 22).unwrap().as_deref(), Some("ada"));
+    assert!(
+        s.reusable_clients(a).unwrap().is_empty(),
+        "never in the agent reuse list an older kit reads"
+    );
+    // a close's write keeps an owner row already there (a purge may have renamed it)
+    s.set_client(a, 23, "erased-1").unwrap();
+    s.put_person_writers(a, &[(23, "ada".into(), free)])
+        .unwrap();
+    assert_eq!(s.client_owner(a, 23).unwrap().as_deref(), Some("erased-1"));
+    // a row without an owner row is not listed
+    {
+        let w = s.begin_write().unwrap();
+        w.open_table(CLIENT_KINDS)
+            .unwrap()
+            .insert((a, 24), enc.as_slice())
+            .unwrap();
+        w.commit().unwrap();
+    }
+    let listed: Vec<u64> = s.person_writers(a).unwrap().iter().map(|r| r.0).collect();
+    assert_eq!(listed, vec![21, 22, 23]);
+    s.put_person_writers(b, &[(31, "bea".into(), free)])
+        .unwrap();
+    // a rewrite keeps them; a delete erases the doc's, not another doc's
+    s.rewrite_file().unwrap();
+    assert_eq!(s.person_writers(a).unwrap().len(), 3);
+    s.delete_doc(a, 1).unwrap();
+    assert!(s.person_writers(a).unwrap().is_empty());
+    assert_eq!(s.person_writers(b).unwrap().len(), 1);
+}
+
 /// One row of doc `id` in table `t`, whatever its key shape.
 fn plant_row(w: &redb::WriteTransaction, t: DocRows, id: DocId) {
     let v: &[u8] = b"row";

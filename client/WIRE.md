@@ -38,7 +38,10 @@ interface Welcome {
   root: string;      // the text root this connection edits ("source" for Markdown)
   version: number;   // the version `text` is at (a resume: the doc's version now)
   text?: string;     // on a first connect, or when resuming was impossible; absent on a resume
-  client: number;    // Joined.client of THIS connection: new on every connection
+  client: number;    // Joined.client of THIS connection: new on every connection, or kept
+  lease?: string;    // Joined.lease (kit v0.14.0, a host that reuses writers): 64 bits, decimal
+  kept?: boolean;    // Joined.kept: the reconnect took the client's own writer back
+  prevEnded?: number; // Joined.prev_ended: a reconnect that didn't keep it: when its lease ended
   self: string;      // this participant as the roster names them (pid; an App viewer's handle)
   rights: "edit" | "read" | "none";
 }
@@ -115,6 +118,7 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
 | `undo` / `redo` | `op` | the participant's undo / redo, one step | `change` frames, then `undone`; or `refused` |
 | `visible` | `visible` | `set_visible(conn, visible)` | none |
 | `view` | `root?`, `first`, `last` | `set_view(conn, LineRange {root, first, last})` (1-based, inclusive; `root` defaults to the connection's) | none |
+| `bye` | | `release(conn)` (kit v0.14.0, a host that reuses writers), then close the socket | none |
 
 - `op` is the client's request number; replies carry it back.
 - **One edit in flight (rule 0).** The client sends an `edit` only when its previous one was
@@ -378,6 +382,29 @@ this spec, no socket.
     reconnect (`Rejection.asOf`), recognises the late change by its client ID if it lands
     (`onLanded`), and a host's Re-apply places it only when `presence` shows it absent
     (`HOST.md`).
+- **Writer leases (kit v0.14.0, `Config::reuse_person_writers`).** A host that reuses a person's
+  writer per device joins with a device key (`JoinOptions::device`) only for a client that says
+  it can (a connect parameter of the host's choosing, say `writer=lease`); every other client
+  gets a fresh writer per connection, as before. The device key is not a security boundary: it
+  only chooses among the authenticated person's own free writers, so a host may take it from the
+  client (a browser's random id) and scopes it to the person by the pid it stamps.
+  - The welcome carries `lease` (`Joined.lease`). The client sends it back with `prev` on its
+    next reconnect (`connect({resume, prev, lease})`, an example route
+    `…&prev=<client>&lease=<lease>`), and the host passes it as `JoinOptions::reclaim`.
+  - When that lease is still the writer's, the kit gives the client its writer back (`kept`):
+    a connection still holding it is closed first, under the session lock (`Joined.replaced`;
+    the host marks that socket dead and closes it, as for `prev`). Nothing of the previous
+    connection lands after the welcome, so the `since` reply settles the edit in flight for good.
+  - Otherwise the kit closes nothing (`replaced: null`) and joins as without it; `prevEnded`
+    says the version the previous lease ended at, when known: changes under the old writer after
+    it are another connection's (the client caps its lost-change watches there).
+  - **With a device key, `prev` alone closes nothing**, in the kit and in the host: the writer
+    may be a sibling tab's by now. A host that retires a previous connection itself matches the
+    lease too (client and token), never the client ID alone.
+  - **`bye`**: the client sends it when the page goes and it holds nothing unsent; the host
+    calls `Session::release(conn)` and closes the socket, and the writer is free for the
+    person's next connection on that device. Any other end (a dropped socket, a timeout, a
+    close) parks the writer for the client's own reclaim.
 - **Frames sent while disconnected are dropped, never replayed** on the next socket: the wire
   has no idempotency key, so a replayed `edit` could apply twice. `Transport.send` drops
   while no socket is open; it never buffers.

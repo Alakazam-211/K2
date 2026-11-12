@@ -1,5 +1,127 @@
 # Changelog
 
+## v0.14.0 (2026-11-11)
+
+A host release on v0.13.1. The crate version is `0.14.0`; the client's is `0.14.0`. Pairs with
+the markdown, text, board, csv and psd pack tags of this release. The store format is the same
+(`STORE_FORMAT` 6, `STORE_FORMAT_READ` 7, `STORE_FORMAT_BASE` 5) and no store needs a
+migration. No error id is added. The wire gains only what person-writer reuse uses (the
+`welcome` frame's `lease`, `kept` and `prevEnded`, and the client's `bye` frame), and a host
+that leaves reuse off sends none of it.
+
+**This tag's tree doesn't include the vendored native engine,** as in v0.13.1 (the release
+commit is cut by `tools/public-cut.sh`; main keeps all of it).
+
+For a host, in short (details below):
+
+- **A behaviour change in tier 0: an app's save over an agent's write keeps both.** When the
+  kit has written a file (an agent's whole-file write, a restore, a merge) and no lease is
+  held, an app that still has the older file open and saves it keeps the agent's version
+  too. The app's save stays in the file and is the current version, and
+  the agent's version is kept as a version and as a **conflict copy** beside the file (or in
+  the host's conflict folder). The host sees `DiskCheck::Conflict` and
+  `AuditEvent::BlobConflict { current, kept, copy, lease_holder: None }` where it saw
+  `DiskCheck::Ingested` and `AuditEvent::ExternalEdit`. **`AuditEvent::BlobConflict` is
+  emitted once per copy**, with `copy` set (`None` only if the copy couldn't be written): show
+  it to the person once, from that event. A save of exactly what the kit wrote is still
+  nothing, and a save over another outside save is still a plain new version.
+- **`Host::conflict_copy_name(file_name, at_ms, who) -> Option<String>`** (new provided
+  method, default `None`): the host names conflict copies in its own words, e.g.
+  `notes (Ada's version).md`. The host's name comes first, then the pack's, then the kit's
+  default; a name that is empty, `.`, `..` or holds a path separator is passed over, and an
+  existing file is never overwritten.
+- **`Pack::check_merged(root, text) -> Result<(), Declined>`** (new provided method; the
+  default passes every text): a pack can refuse a whole-line merge whose result isn't valid
+  for its format. The text pack of this release uses it for JSON (`.json`, `.ipynb`,
+  `.geojson`, `.webmanifest`). A refused outside save is taken whole (the replaced text stays
+  in the "before external edit" version, with the usual removal notes); a refused
+  `write --base` is a conflict, nothing applied.
+- **Person-writer reuse, off by default** (`Config::reuse_person_writers`,
+  `Config::person_writer_park_ms`): one writer per person per device, so a long-lived doc's
+  writer count follows people and devices, not connections. A host turns it on with its own
+  pieces (a device key in `JoinOptions`, `Session::release` on the wire's `bye`); off, nothing
+  changes. Client 0.14.0 carries the client side and behaves as 0.13.2 with a host that
+  doesn't reuse writers.
+- **Going back to v0.13.1:** no store format constant changes. A store written by this build
+  opens in v0.13.1 as it is; person-writer rows (kind 2 in `client_kinds`) are copied there and
+  never reused. `tools/n1` checks both ways.
+- **Tooling:** `tools/private-allow.txt` says what `check-private.sh` skips (only the
+  allowlist itself).
+
+In detail:
+
+### Tier 0: an outside save over a kit write
+
+- **An app's save over an agent's write keeps both.** Before this release, when the kit had
+  written a file and no lease was held, an app that still had the older file open could save
+  over it, and its save became the new version: the agent's change was left only in history.
+  Now that save keeps both, as a save under a lease always has: **for a person**, the app's
+  save stays in the file and is the current version, and the agent's version is kept as a
+  version **and** as a conflict copy. The kit decides from the stored version (its reason and
+  `via`: a write, a restore, a merge or an import from bytes count as the kit's; an outside
+  save or an import from disk as the file's), so a restart between the write and the save
+  changes nothing. A save over the file as first opened is still a plain new version. A pack
+  that can merge (tier 0.5) is not asked over a kit write with no lease, since the base would
+  be the kit's own version. Conservative until the outside-editor bridge: an app that
+  reopened the file after the kit's write and then saved also gets a copy.
+- **`Host::conflict_copy_name`:** `who` is the replaced version's author name (or the lease
+  holder's). Precedence: the host's name, then the pack's (`BlobPack::conflict_copy_name`),
+  then the kit's default; ` 2`, ` 3` are added rather than overwrite a file.
+- **Tests:** `tests/tier0.rs`: the stale-save rows (kept both, not merged, across a restart,
+  with the event once and its copy), an outside save over an outside save still a plain
+  version, a save identical to the kit's write still nothing, the host's copy names, and the
+  planted fault "stale-after-kit-write ignored" (`differential::Tier0Mutant`) caught by name.
+  `a_save_recreating_a_write_of_ours_after_an_outside_save_is_kept`: the person's first save
+  over the kit's write is now a conflict (was `Ingested`); its point, the second save not an
+  echo, is unchanged.
+- **Going back (N-1):** no store format or stored-data change; the decision reads fields
+  every version already stores.
+
+### `Pack::check_merged`
+
+- Some formats' lines depend on each other (JSON's commas and brackets), and a whole-line merge
+  of two valid texts could leave an invalid one on disk. The kit now asks the pack about a text
+  doc's merged text, and acts only when the merge fails while both merged texts pass:
+  - **an outside save** whose merge onto the live text is refused is **taken whole**. The
+    live text it replaces stays in the "before external edit" version, and the existing
+    removal notes tell each author what went and which version holds it;
+  - **`write --base`**'s clean merge, refused, is a conflict (`WriteOutcome::Conflicts`, exit
+    1, nothing applied): one region over every line either side changed
+    (`text::merge::refused_merge`, new).
+- `tests/check_merged.rs` (new) has both paths with a test pack that refuses, the agent's
+  text recovered from the version the note names, and the planted fault
+  (`differential::CheckMergedMutant::Skipped`: the call skipped) caught by name.
+  `docs/SESSIONS.md` now says an outside save's merge can be refused by the pack.
+- **Going back (N-1):** no store format or stored-data change.
+
+### Person-writer reuse (off by default)
+
+- **`Config::reuse_person_writers`.** One writer per person per device
+  (`docs/design/person-writer-reuse-r0.md`, `docs/SESSIONS.md`). A join with a device key
+  (`JoinOptions::device`, `device_stateless`) takes a free writer of that person on that
+  device; `Session::release` (the wire's new `bye`) frees it; any other end parks it for the
+  client's own reclaim (`JoinOptions::reclaim`, `Joined::lease`, `kept`, `prev_ended`), which
+  hands a still-held writer over under the session lock. With a device key a bare `prev`
+  closes nothing. `Config::person_writer_park_ms` (0: never) lets a parked writer go after
+  that long. Without a device key, or off: as before.
+- **Store:** `client_kinds` gains kind 2 (`PersonWriterRow`, `DocStore::person_writers`), with
+  no format bump; the rows ride in a change's commit and the session's close, and only for
+  writers that can write (a read-only join leaves no row). An older kit never reuses or hands
+  out such an ID and copies the rows on a rewrite (`tools/n1` checks both ways).
+- **Client 0.14.0:** `welcome.lease`, `kept`, `prevEnded`; `ConnectOptions.lease`;
+  `LiveText.bye()` and the `bye` frame; a kept reconnect settles the edit in flight for good,
+  and a lost change's watch is capped where its writer's lease ended (`client/CHANGELOG.md`).
+- **Tests:** `tests/person_writer_leases.rs` (leases and rows), `tests/person_writers.rs` (the
+  rows R1–R13 on Yrs, the native engine's column, three planted faults),
+  `tests/person_writers_cost.rs` (bytes per writer, join and leave latency),
+  `client/test/writer-lease.test.ts`.
+
+### Tooling
+
+- `tools/private-allow.txt`'s header says what `tools/check-private.sh` skips: only the
+  allowlist itself (it may quote a match). The script checks itself like any other file,
+  since its patterns live outside the tree.
+
 ## v0.13.1 (2026-11-10)
 
 A host release on v0.13.0. The crate version is `0.13.1`; the client's stays `0.13.2` (no file

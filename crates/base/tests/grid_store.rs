@@ -23,9 +23,9 @@ use k2_mpc_base::elem::{Anchor, Applied, Key, ListOp, MapOp, Value};
 use k2_mpc_base::schema::Schema;
 use k2_mpc_base::session::{
     AuditEvent, AuditViolation, ChangeKind, Config, ConnId, Declined, EditOptions, GridWrite,
-    GridWriteOptions, Host, LogItem, LogQuery, Need, Pack, PackContent, PackError, Participant,
-    ParticipantKind, Rights, Session, SessionError, SessionManager, Stay, TextFilePack, UndoMode,
-    UndoOutcome, UndoRequest, View,
+    GridWriteOptions, Host, JoinOptions, LogItem, LogQuery, Need, Pack, PackContent, PackError,
+    Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
+    TextFilePack, UndoMode, UndoOutcome, UndoRequest, View, WriterLease,
 };
 use k2_mpc_base::store::{
     DocKey, DocStore, StoreError, VersionReason, STORE_FORMAT, STORE_FORMAT_BASE, STORE_FORMAT_READ,
@@ -1177,7 +1177,10 @@ fn n1_producer() {
             .unwrap()
             .insert("bot".into(), Rights::full());
         let store = Arc::new(DocStore::open(&path).unwrap());
-        let mgr = SessionManager::new(store.clone(), host.clone(), config());
+        let persons = std::env::var("K2MB_N1_PERSONS").is_ok();
+        let mut cfg = config();
+        cfg.reuse_person_writers = persons;
+        let mgr = SessionManager::new(store.clone(), host.clone(), cfg);
         let s = mgr
             .open(Arc::new(MD), &key("a.md"), Some(b"one\n"))
             .unwrap();
@@ -1225,6 +1228,45 @@ fn n1_producer() {
             .unwrap();
             k.join(participant("bot", ParticipantKind::Agent), Stay::Held)
                 .unwrap();
+        }
+        // tools/n1 `layout-both` (v0.14.0): person-device writers (`client_kinds` kind 2) in
+        // a.md and keep.md, one free (released) and one parked (left without a release), for
+        // the other build to open, write and rewrite, and this build to take back after it
+        // (`n1_persons_after`); written down in persons-<store>
+        if persons {
+            let mut lines = String::new();
+            for doc in ["a.md", "keep.md"] {
+                let d = mgr.open(Arc::new(MD), &key(doc), Some(b"keep\n")).unwrap();
+                let tab = || {
+                    d.join_with(
+                        participant("p", ParticipantKind::Person),
+                        Stay::Held,
+                        &JoinOptions::new().device("laptop"),
+                    )
+                    .unwrap()
+                };
+                let (free, parked) = (tab(), tab());
+                // a.md's text stays as the consumer expects it: its writers land no change,
+                // and their rows are written at the close; keep.md's write
+                let words = match doc {
+                    "keep.md" => vec![(&free, "free"), (&parked, "parked")],
+                    _ => Vec::new(),
+                };
+                for (j, word) in words {
+                    let now = d.read(j.conn).unwrap().text_by_root.remove(0).1;
+                    d.replace_text(j.conn, TextFilePack::ROOT, &format!("{now}{word}\n"))
+                        .unwrap();
+                }
+                d.release(free.conn).unwrap();
+                d.leave(parked.conn).unwrap();
+                let l = parked.lease.unwrap();
+                lines.push_str(&format!(
+                    "{doc} free {} 0\n{doc} parked {} {}\n",
+                    free.client, l.client, l.token
+                ));
+            }
+            std::fs::write(out.join(format!("persons-{name}")), lines).unwrap();
+            println!("{name}: person-device writers in a.md and keep.md (persons-{name})");
         }
         if grid {
             let g = mgr
@@ -1306,6 +1348,88 @@ fn n1_kinds_after_delete() {
             "{name}: a deleted doc's rows survive an open"
         );
         assert_eq!(live_after, live, "{name}: a live doc's rows changed");
+    }
+}
+
+/// tools/n1 `node-both` (v0.14.0), after the other build's consumer opened, wrote, rewrote and
+/// deleted a.md in the stores of `K2MB_N1_OUT`: keep.md's person-device writers (the producer's
+/// `persons-<store>`) are still this person's on that device: the parked one goes back to its
+/// lease, the free one to the device's next join. Nothing to check when the producer predates
+/// person writers (no `persons-<store>`).
+#[test]
+#[ignore = "tools/n1: reads the stores another build's consumer left"]
+fn n1_persons_after() {
+    let out = std::path::PathBuf::from(std::env::var("K2MB_N1_OUT").expect("K2MB_N1_OUT"));
+    for name in ["text.redb", "grid.redb"] {
+        let Ok(list) = std::fs::read_to_string(out.join(format!("persons-{name}"))) else {
+            println!("{name}: no person-device writers (the producer predates them)");
+            continue;
+        };
+        let (mut free, mut parked) = (None, None);
+        for l in list.lines() {
+            let f: Vec<&str> = l.split(' ').collect();
+            if f[0] != "keep.md" {
+                continue;
+            }
+            let (c, t): (u64, u64) = (f[2].parse().unwrap(), f[3].parse().unwrap());
+            match f[1] {
+                "free" => free = Some(c),
+                _ => {
+                    parked = Some(WriterLease {
+                        client: c,
+                        token: t,
+                    })
+                }
+            }
+        }
+        let (free, parked) = (free.unwrap(), parked.unwrap());
+        let store = Arc::new(DocStore::open(out.join(name)).unwrap());
+        let id = store.find(&key("keep.md")).unwrap().expect("keep.md");
+        let rows = store.person_writers(id).unwrap();
+        assert!(
+            rows.iter()
+                .any(|(c, o, r)| *c == free && o == "p" && !r.leased),
+            "{name}: the free writer's row survives: {rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|(c, o, r)| *c == parked.client && o == "p" && r.leased),
+            "{name}: the parked writer's row survives: {rows:?}"
+        );
+        let host = Arc::new(TestHost {
+            now: AtomicU64::new(4_000_000),
+            rights: Mutex::new(HashMap::new()),
+            events: Mutex::new(Vec::new()),
+        });
+        host.rights
+            .lock()
+            .unwrap()
+            .insert("p".into(), Rights::full());
+        let mut cfg = config();
+        cfg.reuse_person_writers = true;
+        let mgr = SessionManager::new(store.clone(), host, cfg);
+        let s = mgr.open(Arc::new(MD), &key("keep.md"), None).unwrap();
+        let p = || participant("p", ParticipantKind::Person);
+        let back = s
+            .join_with(
+                p(),
+                Stay::Held,
+                &JoinOptions::new().device("laptop").reclaim(parked),
+            )
+            .unwrap();
+        assert!(
+            back.kept && back.client == parked.client,
+            "{name}: the parked lease reclaims"
+        );
+        let next = s
+            .join_with(p(), Stay::Held, &JoinOptions::new().device("laptop"))
+            .unwrap();
+        assert_eq!(
+            next.client, free,
+            "{name}: the free writer goes to the next tab"
+        );
+        mgr.release().unwrap();
+        println!("{name}: person-device writers taken back after the other build");
     }
 }
 

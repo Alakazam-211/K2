@@ -78,11 +78,11 @@ pub use live::{
     GridWriteOptions, GridWriteReport, HiddenCellWrite, PlaceBlame, StructureBlame,
 };
 pub use live::{
-    Blame, BlameLine, ChangeEvent, CursorAtVersion, CursorDrop, DiffOutput, EditAtBase,
+    Blame, BlameLine, ChangeEvent, CursorAtVersion, CursorDrop, DeviceKey, DiffOutput, EditAtBase,
     EditOptions, EditResult, FileBytes, FileCodec, FileCopy, JoinOptions, Joined, LogItem,
     LogQuery, NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange,
     Session, SettingsChanged, Status, SyncDrift, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
-    WriteReport,
+    WriteReport, WriterLease, DEVICE_KEY_MAX,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{

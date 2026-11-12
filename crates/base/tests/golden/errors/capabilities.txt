@@ -1,4 +1,4 @@
-k2-mpc-base 0.13.1
+k2-mpc-base 0.14.0
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):
@@ -370,6 +370,8 @@ Limits in effect:
   position_check_every = 1000
   writeback_check_every = 100
   reuse_agent_clients = 1
+  reuse_person_writers = 0
+  person_writer_park_ms = 0
   blame_check_every = 100
   blame_check_large_at = 20000
   blame_check_every_large = 1000

@@ -18,6 +18,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Apps: K2 drops a visitor's own forwarding headers on every path, and sets `X-K2-Client-IP` only where it knows the visitor.** An App gets the visitor's real address (`X-K2-Client-IP`) only where K2 knows it: through the server's own :443 today, and through K2 Connect once its relay passes visitor addresses (`k2 tunnel status` shows "Visitor IPs"). `k2 study auth-pages` now says so.
 - **Password resets through an App count each visitor first.** When an App's server passes on the visitor's `X-K2-Client-IP`, one visitor's junk resets stop at that visitor's own limit and no longer use up the App's resets for everyone else. Resets never shared a limit with sign-ins.
 - **Inbox item names are checked.** An inbox item id or folder is now always a single name inside the workspace's own inbox.
+- **Certificates: issuing one for a domain's apex no longer removes another server's pending check record in the same zone.** Before a check, K2 now removes only old records at that certificate's own `_acme-challenge` name.
 - **If you're updating from 0.46.10 or earlier,** you still get the new default look (Glass, Auto) once, the same as 0.46.11.
 
 ## 0.46.11 — Kessel, a new look, and a Get started list

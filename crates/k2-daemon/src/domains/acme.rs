@@ -823,11 +823,24 @@ fn purge_existing_acme_txt(binding: &DomainBinding, hostname: &str) {
     }
 }
 
+/// `true` iff a zone record's `name` is exactly this order's challenge
+/// owner name `rel` (`_acme-challenge` at the apex, `_acme-challenge.<sub>`
+/// below it), written relative or as `<rel>.<apex>`; case, surrounding
+/// space and a trailing dot are ignored.
+///
+/// Exact on purpose. Several servers on one account can share a zone, each
+/// with write, so a prefix or suffix match would delete another server's
+/// in-flight challenge: at the apex, `_acme-challenge.` prefixes every
+/// subdomain's challenge name. The records listing carries no per-server
+/// owner, so a stale value at this exact name is still removed, whoever
+/// planted it.
 fn is_acme_challenge_name(name: &str, rel: &str, apex: &str) -> bool {
-    let _ = apex;
-    let name = name.trim_end_matches('.').to_ascii_lowercase();
-    let rel_l = rel.to_ascii_lowercase();
-    name == rel_l || name.starts_with(&format!("{rel_l}.")) || name.ends_with(&rel_l)
+    let norm = |s: &str| s.trim().trim_end_matches('.').to_ascii_lowercase();
+    let (name, rel, apex) = (norm(name), norm(rel), norm(apex));
+    if rel.is_empty() {
+        return false;
+    }
+    name == rel || (!apex.is_empty() && name == format!("{rel}.{apex}"))
 }
 
 fn acme_txt_record_ids(body: &str, rel: &str, apex: &str) -> Vec<String> {

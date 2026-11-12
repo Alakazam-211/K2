@@ -262,3 +262,48 @@ fn a_slide_renders_the_same_first_or_after_other_slides() {
         assert_eq!(fresh.image, after.image, "slide {slide}: first in a process and after others give the same bytes");
     }
 }
+
+/// A deck whose text asks for "DeckCraft Legacy", with (or without) that font embedded
+/// (deckcraft's own one-glyph test font, CC0).
+fn embedded_font_deck(embed: bool) -> Vec<u8> {
+    let mut p = deckcraft_model::defaults::new_presentation(None);
+    if embed {
+        let font = include_bytes!("../../../vendor/deckcraft/crates/fonts/tests/fixtures/legacy-regular.ttf").to_vec();
+        let id = p.add_media("font1.fntdata", "application/x-fontdata", font).expect("media");
+        p.embedded_fonts.push(deckcraft_model::EmbeddedFont { typeface: "DeckCraft Legacy".into(), regular: Some(id), ..Default::default() });
+    }
+    let mut s = (*p.slides[0]).clone();
+    let props = RunProps { font: Some("DeckCraft Legacy".into()), size: Some(40.0), ..Default::default() };
+    s.shapes.push(Shape {
+        id: ShapeId(4200),
+        name: "Embedded words".into(),
+        xfrm: Some(Xfrm::new(60.0, 200.0, 600.0, 80.0)),
+        kind: ShapeKind::Shape,
+        text_box: true,
+        text: Some(TextBody { paragraphs: vec![Paragraph { runs: vec![Run::with("AAAA", props)], ..Default::default() }], ..Default::default() }),
+        ..Default::default()
+    });
+    p.slides[0] = Arc::new(s);
+    deckcraft_pptx::export(&p).expect("export")
+}
+
+/// Embedded fonts are never loaded (contract Q9): the slide draws with the bundled substitute,
+/// exactly as when nothing is embedded, and the response names the embedded family and the
+/// substitution.
+#[test]
+fn embedded_fonts_are_reported_never_loaded() {
+    let with = embedded_font_deck(true);
+    let without = embedded_font_deck(false);
+    assert!(deckcraft_pptx::import(&with).expect("import").embedded_fonts.iter().any(|f| f.typeface == "DeckCraft Legacy"), "the file embeds it");
+    let a = host::render(bin(), &Request::new(&with, SlideRef::Index(0), 640), &limits()).expect("with");
+    let b = host::render(bin(), &Request::new(&without, SlideRef::Index(0), 640), &limits()).expect("without");
+    assert_eq!(a.image, b.image, "the embedded font changes nothing drawn");
+    let f = &a.meta.fonts;
+    let e = f.embedded.iter().find(|e| e.family == "DeckCraft Legacy").expect("reported");
+    assert!(e.embedded);
+    assert_ne!(e.used, "DeckCraft Legacy");
+    assert!(k2_deckrender::fonts::manifest_families().contains(&e.used.as_str()), "drawn with a bundled family: {}", e.used);
+    assert!(f.substituted.iter().any(|s| s.requested == "DeckCraft Legacy" && s.used == e.used), "listed as substituted: {f:?}");
+    assert!(!f.used.iter().any(|u| u == "DeckCraft Legacy"), "never drawn: {f:?}");
+    assert!(b.meta.fonts.embedded.is_empty());
+}

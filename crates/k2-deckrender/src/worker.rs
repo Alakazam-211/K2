@@ -4,7 +4,7 @@
 //! [`FailureCode`].
 //!
 //! [`open`] is the parse path (fuzzed): sniffing, deckcraft-pptx's import, the
-//! file's embedded fonts, the slide list. [`render`] adds the slide lookup, the
+//! file's embedded font families (listed, never loaded), the slide list. [`render`] adds the slide lookup, the
 //! size checks, the draw (bundled fonts only, see [`crate::fonts`]; date fields
 //! from the request or the file, never the clock), the flattening onto white,
 //! the encoding (WebP lossless or PNG), the shape boxes and the fonts.
@@ -19,7 +19,7 @@ use deckcraft_model::text::RunKind;
 use deckcraft_model::{Presentation, Shape, ShapeKind, Xfrm};
 use kurbo::{Affine, Rect};
 
-use crate::proto::{FailureCode, FontSubstitution, Fonts, ImageFormat, Meta, ShapeBox, SlideRef, Timings, MAX_NAME_CHARS, MAX_SHAPES};
+use crate::proto::{EmbeddedFamily, FailureCode, FontSubstitution, Fonts, ImageFormat, Meta, ShapeBox, SlideRef, Timings, MAX_NAME_CHARS, MAX_SHAPES};
 
 /// EMU per point.
 const EMU_PER_PT: f64 = 12_700.0;
@@ -30,7 +30,7 @@ pub const RENDERER_MAX_SIDE: u32 = deckcraft_render::MAX_SIDE;
 /// Largest package part this module reads itself (the slide list's parts).
 const MAX_LIST_PART: u64 = 16 << 20;
 
-/// Most embedded font files added from one package.
+/// Most embedded font families reported from one package.
 const MAX_EMBEDDED_FONTS: usize = 64;
 
 /// A typed failure.
@@ -81,14 +81,14 @@ pub struct Opened {
     /// The sldId of each slide in `pres.slides`, when the package's slide list
     /// matches the reader's (`None`: it doesn't, or it couldn't be read).
     pub sld_ids: Option<Vec<u32>>,
-    /// Faces added from the file's embedded fonts.
-    pub embedded_faces: usize,
+    /// The families the file embeds (reported, never loaded).
+    pub embedded_families: Vec<String>,
 }
 
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
-/// The parse path: sniff the bytes, import the package, add its embedded fonts, match its slide
-/// list. A panic inside the reader is a [`FailureCode::RendererError`], never a crash.
+/// The parse path: sniff the bytes, import the package, list its embedded fonts (never loaded),
+/// match its slide list. A panic inside the reader is a [`FailureCode::RendererError`], never a crash.
 pub fn open(bytes: &[u8]) -> Result<Opened, Failure> {
     crate::fonts::init();
     if bytes.starts_with(&CFB_MAGIC) {
@@ -109,35 +109,29 @@ pub fn open(bytes: &[u8]) -> Result<Opened, Failure> {
         deckcraft_pptx::PptxError::Unsupported(m) => Failure::new(FailureCode::UnsupportedPart, format!("unsupported: {m}")),
         deckcraft_pptx::PptxError::Write(m) => Failure::new(FailureCode::RendererError, m),
     })?;
-    let embedded_faces = catch_unwind(AssertUnwindSafe(|| add_embedded_fonts(&pres))).unwrap_or(0);
+    let embedded_families = embedded_families(&pres);
     let sld_ids = catch_unwind(AssertUnwindSafe(|| slide_ids(bytes, &lost)))
         .ok()
         .flatten()
         .filter(|ids| ids.len() == pres.slides.len());
-    Ok(Opened { pres, lost, sld_ids, embedded_faces })
+    Ok(Opened { pres, lost, sld_ids, embedded_families })
 }
 
-/// The file's own embedded fonts (`p:embeddedFontLst`), as the reader's host does: they come
-/// with the file, so every host draws the same with them. A face the bundled fonts already have
-/// (same family and style) is not replaced. Returns the faces added.
-fn add_embedded_fonts(p: &Presentation) -> usize {
-    let db = deckcraft_fonts::FontDb::global();
-    let mut seen = BTreeSet::new();
-    let mut added = 0;
-    for font in &p.embedded_fonts {
-        for id in font.faces().into_iter().flatten() {
-            if seen.len() >= MAX_EMBEDDED_FONTS || !seen.insert(id) {
-                continue;
-            }
-            let Some(item) = p.media(id) else { continue };
-            let Some(sfnt) = deckcraft_fonts::embedded_sfnt(&item.data) else { continue };
-            added += db.add_font(sfnt.to_vec());
-        }
-    }
-    if added > 0 {
-        crate::fonts::preload(db);
-    }
-    added
+/// The families the file embeds (`p:embeddedFontLst`). Their font programs are never loaded:
+/// they are untrusted input and not licensed to us, and the renderer draws only the bundled fonts
+/// until the Kessel Steward rules on embedded ones (contract Q9). They are reported, with what is
+/// drawn instead.
+fn embedded_families(p: &Presentation) -> Vec<String> {
+    let mut v: Vec<String> = p
+        .embedded_fonts
+        .iter()
+        .take(MAX_EMBEDDED_FONTS)
+        .map(|f| f.typeface.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 fn ms(since: Instant) -> f64 {
@@ -218,7 +212,7 @@ pub fn render(bytes: &[u8], slide: SlideRef, width: u32, opts: &Opts) -> Result<
     drop(rgb);
     let encode_ms = ms(t_encode);
     let (shapes, shapes_omitted) = catch_unwind(AssertUnwindSafe(|| shape_boxes(pres, index))).unwrap_or_default();
-    let fonts = catch_unwind(AssertUnwindSafe(|| fonts(pres, index, &ropts))).unwrap_or_default();
+    let fonts = catch_unwind(AssertUnwindSafe(|| fonts(pres, index, &ropts, &opened.embedded_families))).unwrap_or_default();
     let meta = Meta {
         width,
         height,
@@ -457,8 +451,9 @@ fn walk(
 }
 
 /// The families the slide was drawn in, and the Latin families its own runs
-/// ask for that the bundled (and embedded) fonts lack, with what is drawn instead.
-pub fn fonts(pres: &Presentation, index: usize, ropts: &deckcraft_render::RenderOpts) -> Fonts {
+/// ask for that the bundled fonts lack, with what is drawn instead, and the families the file
+/// embeds (never loaded; each one the bundle lacks is also listed as substituted).
+pub fn fonts(pres: &Presentation, index: usize, ropts: &deckcraft_render::RenderOpts, embedded: &[String]) -> Fonts {
     let mut used = BTreeSet::new();
     for t in deckcraft_render::place_slide_with(pres, index, ropts).texts {
         for r in &t.layout.runs {
@@ -483,17 +478,23 @@ pub fn fonts(pres: &Presentation, index: usize, ropts: &deckcraft_render::Render
         }
     }
     let db = deckcraft_fonts::FontDb::global();
+    let drawn_for = |fam: &str| db.document_face(fam, "Regular").family.clone();
+    requested.extend(embedded.iter().cloned());
     let mut substituted = Vec::new();
     for fam in requested {
         if db.has_family(&fam) {
             continue;
         }
-        let drawn = db.document_face(&fam, "Regular").family.clone();
+        let drawn = drawn_for(&fam);
         if !drawn.eq_ignore_ascii_case(&fam) {
             substituted.push(FontSubstitution { requested: fam, used: drawn });
         }
     }
-    Fonts { used: used.into_iter().collect(), substituted }
+    let embedded = embedded
+        .iter()
+        .map(|fam| EmbeddedFamily { family: fam.clone(), embedded: true, used: if db.has_family(fam) { fam.clone() } else { drawn_for(fam) } })
+        .collect();
+    Fonts { used: used.into_iter().collect(), substituted, embedded }
 }
 
 // ── The package's slide list ─────────────────────────────────────────────

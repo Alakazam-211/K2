@@ -246,10 +246,26 @@ pub struct FontSubstitution {
 pub struct Fonts {
     /// Families the slide's text was drawn in (the layout's and master's text included).
     pub used: Vec<String>,
-    /// Latin families the slide's own text runs ask for (theme fonts
-    /// resolved) that aren't installed or compiled in, with the family drawn
-    /// instead. East Asian, complex-script and table-cell fonts aren't listed yet.
+    /// Families drawn with another: the Latin families the slide's own text
+    /// runs ask for (theme fonts resolved) and the families the file embeds,
+    /// when the bundled fonts lack them. East Asian, complex-script and
+    /// table-cell fonts aren't listed yet.
     pub substituted: Vec<FontSubstitution>,
+    /// The families the file embeds. Their font programs are never loaded
+    /// (contract Q9: bundled fonts only until the Steward rules on embedded
+    /// ones); `used` is what is drawn for each.
+    #[serde(default)]
+    pub embedded: Vec<EmbeddedFamily>,
+}
+
+/// A family the file embeds, reported and not loaded.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddedFamily {
+    pub family: String,
+    /// Always `true`: the file embeds it.
+    pub embedded: bool,
+    /// The family drawn for it (a bundled one).
+    pub used: String,
 }
 
 /// What the worker reports with an image.
@@ -287,7 +303,7 @@ pub struct Meta {
 pub struct Timings {
     /// Setting up the fonts (the manifest's families, every face loaded): once per process.
     pub fonts_ms: f64,
-    /// Reading the package (and adding its embedded fonts).
+    /// Reading the package.
     pub parse_ms: f64,
     pub render_ms: f64,
     /// Flattening onto white and encoding.

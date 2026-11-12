@@ -64,6 +64,15 @@ class H(BaseHTTPRequestHandler):
         path = self._log("")
         if path == "/cli/desktop/list":
             return self._reply(200, LIST)
+        polls = os.path.join(work, "setup_polls")
+        if os.path.exists(polls):
+            n = int(open(polls).read())
+            if n > 0:
+                open(polls, "w").write(str(n - 1))
+                return self._reply(200, dict(STATUS, state="setting_up", message="Installing the desktop packages\u2026"))
+            if os.path.exists(os.path.join(work, "setup_fail")):
+                return self._reply(200, dict(STATUS, state="not_set_up", message="The desktop packages didn\u0027t install: E: Unable to locate package xvfb. Set up again."))
+            return self._reply(200, dict(STATUS, state="closed", message="This server has no screen. K2 can start a desktop on it."))
         return self._reply(200, STATUS)
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -73,6 +82,9 @@ class H(BaseHTTPRequestHandler):
             return self._reply(200, STATUS)
         if path == "/cli/desktop/stop":
             return self._reply(200, {"ok": True, "desktop": "virtual:ws1", "closed": True, "state": "closed", "message": "The desktop was closed by rosson."})
+        if path == "/cli/desktop/setup" and os.path.exists(os.path.join(work, "setup_async")):
+            open(os.path.join(work, "setup_polls"), "w").write("2")
+            return self._reply(200, {"ok": True, "state": "setting_up", "message": "Installing the desktop packages\u2026"})
         if path == "/cli/desktop/setup":
             return self._reply(409, {"ok": False, "error": {"code": "setup_manual", "hint": "Run this, then try again: sudo apt-get update && sudo apt-get install --no-install-recommends xvfb icewm fonts-dejavu-core"}, "manual": "sudo apt-get update"})
         return self._reply(404, {"ok": False, "error": {"code": "not_found", "hint": path}})
@@ -129,6 +141,32 @@ err="$(k2 setup 2>&1 >/dev/null)"; rc=$?
 set -e
 [ "$rc" != "0" ] && pass "setup_manual exits non-zero" || bad "setup exit 0"
 case "$err" in *"setup_manual"*"sudo apt-get update"*) pass "setup prints the command" ;; *) bad "setup: $err" ;; esac
+
+# Setup answers setting_up at once (contract note 11-11); the CLI waits on
+# status until closed (installed) or not_set_up (why), printing progress.
+touch "$WORK/setup_async"
+set +e
+out="$(k2 setup 2>"$WORK/err")"; rc=$?
+set -e
+[ "$rc" = "0" ] && pass "setup waits and exits 0 when installed" || bad "setup exit $rc: $(cat "$WORK/err")"
+case "$out" in *"Installed. k2 desktop start starts it."*) pass "setup says installed" ;; *) bad "setup: $out" ;; esac
+case "$(cat "$WORK/err")" in *"Installing the desktop packages"*) pass "setup prints progress" ;; *) bad "setup progress: $(cat "$WORK/err")" ;; esac
+case "$(grep -c 'GET /cli/desktop/status?desktop=virtual' "$WORK/requests.log")" in 0) bad "setup never polled status" ;; *) pass "setup polls status for virtual" ;; esac
+
+touch "$WORK/setup_fail"
+set +e
+err="$(k2 setup 2>&1 >/dev/null)"; rc=$?
+set -e
+[ "$rc" = "1" ] && pass "a failed install exits 1" || bad "failed setup exit $rc"
+case "$err" in *"setup_failed"*"Unable to locate package xvfb"*) pass "a failed install says why" ;; *) bad "failed setup: $err" ;; esac
+rm -f "$WORK/setup_fail"
+
+out="$(k2 setup --no-wait)"
+case "$out" in *"k2 desktop status says setting_up"*) pass "--no-wait returns at once" ;; *) bad "--no-wait: $out" ;; esac
+set +e
+k2 status --no-wait >/dev/null 2>&1; rc=$?
+set -e
+[ "$rc" = "2" ] && pass "--no-wait only goes with setup" || bad "status --no-wait exit $rc"
 
 [ "$fail" = "0" ] || exit 1
 echo "desktop_virtual_cli: ok"

@@ -6,7 +6,7 @@
 //! resolved the desktop.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use k2_core::connect_users::Role;
 use k2_core::desktop::audit::{self, AuditLine, Event};
@@ -64,16 +64,22 @@ fn may_open(p: &Principal, id: &str) -> bool {
 }
 
 /// A desktop's state on the wire, and its sentence.
-fn state_of(id: &str) -> (String, String) {
+pub(crate) fn state_of(id: &str) -> (String, String) {
     if vd::is_virtual(id) {
         if vd::workspace_of(id).is_some() && agent_name(id).is_none() {
             return ("gone".into(), GONE.into());
         }
         if setting_up() {
-            return ("setting_up".into(), "Installing the desktop packages…".into());
+            return ("setting_up".into(), SETTING_UP_MESSAGE.into());
         }
         let st = manager().status(id);
-        (st.wire_state().to_string(), st.message())
+        let state = st.wire_state();
+        if state == "not_set_up" {
+            if let Some(why) = setup_failed() {
+                return (state.to_string(), failed_message(&why, st.manual.as_deref()));
+            }
+        }
+        (state.to_string(), st.message())
     } else {
         let s = deskd::current().state();
         (s.as_wire().to_string(), s.message())
@@ -143,6 +149,7 @@ pub fn fill_status(v: &mut Value, id: &str, screen: &str) {
     }
     let mut virt = st.virtual_json(label);
     virt["screen"] = json!(screen);
+    virt["setup"] = setup_json();
     if let Some(h) = virt.get_mut("hold").filter(|h| h.is_object()) {
         let name = h["by"].as_str().map(hold_name).unwrap_or_default();
         h["name"] = json!(name);
@@ -193,6 +200,9 @@ fn may_run(p: &Principal, id: &str, what: &str) -> Result<(), CliResponse> {
 pub fn start(p: &Principal, body: &Value, req: &Req<'_>, id: &str) -> CliResponse {
     if let Err(r) = may_run(p, id, "Starting") {
         return r;
+    }
+    if setting_up() {
+        return refuse(409, "setting_up", "The desktop packages are being installed: start it when that ends (k2 desktop status).");
     }
     let size = match size_of(body) {
         Ok(s) => s,
@@ -269,6 +279,11 @@ impl SetupDoor for RealDoor {
 
 static DOOR: RwLock<Option<Arc<dyn SetupDoor>>> = RwLock::new(None);
 static SETTING_UP: AtomicBool = AtomicBool::new(false);
+/// The last install's failure (cleared when another starts).
+static SETUP_FAILED: Mutex<Option<String>> = Mutex::new(None);
+
+/// What `setting_up` says.
+pub const SETTING_UP_MESSAGE: &str = "Installing the desktop packages…";
 
 fn door() -> Arc<dyn SetupDoor> {
     DOOR.read().unwrap_or_else(|p| p.into_inner()).clone().unwrap_or_else(|| Arc::new(RealDoor))
@@ -288,18 +303,57 @@ impl Drop for DoorGuard {
     }
 }
 
-fn setting_up() -> bool {
+/// The packages are being installed now.
+pub(crate) fn setting_up() -> bool {
     SETTING_UP.load(Ordering::SeqCst)
 }
 
+fn setup_failed() -> Option<String> {
+    SETUP_FAILED.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
+
+/// The `not_set_up` sentence after a failed install.
+fn failed_message(why: &str, manual: Option<&str>) -> String {
+    match manual {
+        Some(m) => format!("The desktop packages didn't install: {why}. Set up again, or run this by hand: {m}"),
+        None => format!("The desktop packages didn't install: {why}. Set up again."),
+    }
+}
+
+/// `virtual.setup` in status: whether an install runs, and the last one's
+/// failure (`null` when it didn't fail or another runs).
+pub fn setup_json() -> Value {
+    json!({"running": setting_up(), "failed": setup_failed()})
+}
+
+/// `desktop_state` for every virtual desktop K2 knows (the packages are
+/// the server's, so every one's state moves with them).
+fn emit_every_virtual() {
+    let mut ids = vec![vd::VIRTUAL.to_string()];
+    for (id, _) in manager().known() {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    for id in ids {
+        super::routes::emit_state_for(&id);
+    }
+}
+
 /// `POST /cli/desktop/setup {}` (Owner): install the packages through the
-/// root helper, or print the command when it can't.
+/// root helper, or print the command when it can't. Answers
+/// `{"ok": true, "state": "setting_up"}` at once and installs in the
+/// background; `desktop_state` events follow it until the state is
+/// `closed` (installed) or `not_set_up` with why (contract note 11-11).
 pub fn setup(p: &Principal, req: &Req<'_>) -> CliResponse {
     if !linux_here() {
         return linux_only();
     }
     if !matches!(p, Principal::OwnerToken | Principal::Shell | Principal::Login { role: Role::Owner, .. }) {
         return refuse(403, "owner_only", "Installing the desktop packages is the Owner's: an Owner login, or the owner at this server");
+    }
+    if setting_up() {
+        return refuse(409, "setting_up", "The desktop packages are already being installed.");
     }
     let m = manager();
     if m.missing().is_empty() {
@@ -326,22 +380,33 @@ pub fn setup(p: &Principal, req: &Req<'_>) -> CliResponse {
         SETTING_UP.store(false, Ordering::SeqCst);
         return r;
     }
-    super::routes::emit_state_for(vd::VIRTUAL);
-    let r = d.install();
-    SETTING_UP.store(false, Ordering::SeqCst);
-    let outcome = if r.is_ok() { "ok" } else { "failed" };
-    if let Err(e) = audit::write(&line(Event::DesktopSetup, vd::VIRTUAL, p, req).outcome(outcome)) {
-        k2_core::log_debug!("[desktop] audit write failed (setup): {e}");
-    }
-    super::routes::emit_state_for(vd::VIRTUAL);
-    match r {
-        Ok(text) => {
-            let result = serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text));
-            let missing = m.missing();
-            ok(json!({"ok": missing.is_empty(), "state": "closed", "installed": result, "missing": missing}))
+    *SETUP_FAILED.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    emit_every_virtual();
+    let done_line = line(Event::DesktopSetup, vd::VIRTUAL, p, req);
+    let spawned = std::thread::Builder::new().name("k2-vdesktop-setup".into()).spawn(move || {
+        let r = d.install();
+        let failed = match &r {
+            Ok(_) if !manager().missing().is_empty() => Some(format!("still missing {}", manager().missing().join(", "))),
+            Ok(_) => None,
+            Err(e) => Some(e.trim().to_string()),
+        };
+        if let Err(e) = audit::write(&done_line.outcome(if failed.is_none() { "ok" } else { "failed" })) {
+            k2_core::log_debug!("[desktop] audit write failed (setup): {e}");
         }
-        Err(e) => refuse_with(500, "setup_failed", format!("The packages didn't install: {e}"), json!({"manual": manual})),
+        match &r {
+            Ok(text) => k2_core::log_debug!("[desktop] setup: {}", text.trim()),
+            Err(e) => k2_core::log_debug!("[desktop] setup failed: {e}"),
+        }
+        *SETUP_FAILED.lock().unwrap_or_else(|p| p.into_inner()) = failed;
+        SETTING_UP.store(false, Ordering::SeqCst);
+        emit_every_virtual();
+    });
+    if let Err(e) = spawned {
+        SETTING_UP.store(false, Ordering::SeqCst);
+        emit_every_virtual();
+        return refuse_with(500, "setup_failed", format!("K2 couldn't start the install: {e}"), json!({"manual": manual}));
     }
+    ok(json!({"ok": true, "state": "setting_up", "message": SETTING_UP_MESSAGE}))
 }
 
 // ── the glue: K2 Screen, the stream, events, the access log ──────────

@@ -92,7 +92,10 @@ ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
                                 distro (Owner): about 300 MB on a server
                                 with no graphics libraries yet, about 70 MB
                                 on one that has. Through the root helper,
-                                or it prints the command to run by hand
+                                or it prints the command to run by hand.
+                                The install runs on the server; setup waits
+                                for it and prints progress (--timeout 10m,
+                                or --no-wait to return at once)
   k2 desktop list               the desktops you may open, with their state
   k2 desktop start [--desktop <id>] [--size 1600x900]
                                 start it (Owners and Admins). Size: 1280x720

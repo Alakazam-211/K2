@@ -785,9 +785,28 @@ fn past_the_limit_start_says_which_could_close() {
     assert_eq!(r["closable"], json!(["virtual", "virtual:w1"]));
 }
 
+/// A fake root helper. `gate`: the install waits until it opens (so a
+/// test sees `setting_up`); `ok: false` is a helper too old to ask.
 struct FakeDoor {
     ok: bool,
     installs: Mutex<u32>,
+    gate: (Mutex<bool>, std::sync::Condvar),
+    /// The install's answer: the programs appear, or it fails.
+    result: Mutex<Result<(), String>>,
+    host: Option<Arc<crate::desktop::virtual_desktop::tests::Fake>>,
+}
+
+impl FakeDoor {
+    fn new(ok: bool, host: Option<Arc<crate::desktop::virtual_desktop::tests::Fake>>) -> Arc<FakeDoor> {
+        Arc::new(FakeDoor { ok, installs: Mutex::new(0), gate: (Mutex::new(true), std::sync::Condvar::new()), result: Mutex::new(Ok(())), host })
+    }
+    fn hold(&self) {
+        *self.gate.0.lock().unwrap() = false;
+    }
+    fn open(&self) {
+        *self.gate.0.lock().unwrap() = true;
+        self.gate.1.notify_all();
+    }
 }
 
 impl super::super::virtual_routes::SetupDoor for FakeDoor {
@@ -796,37 +815,146 @@ impl super::super::virtual_routes::SetupDoor for FakeDoor {
     }
     fn install(&self) -> Result<String, String> {
         *self.installs.lock().unwrap() += 1;
+        let mut open = self.gate.0.lock().unwrap();
+        while !*open {
+            open = self.gate.1.wait(open).unwrap();
+        }
+        drop(open);
+        self.result.lock().unwrap().clone()?;
+        if let Some(h) = &self.host {
+            h.programs.lock().unwrap().push("Xvfb");
+        }
         Ok(r#"{"installed":["xvfb","icewm","fonts-dejavu-core"]}"#.into())
     }
 }
 
+/// Status until its state isn't `setting_up` (10 s at most).
+fn setup_settles(who: &Who) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (_, st) = get_q(who, "/cli/desktop/status", &[("desktop", "virtual")]);
+        if st["state"] != "setting_up" {
+            return st;
+        }
+        assert!(std::time::Instant::now() < deadline, "setup never finished: {st}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// The `desktop_state` events seen so far: (desktop, state, message).
+fn desktop_states(rx: &mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if ev.kind_name() == "desktop_state" {
+            let j = serde_json::to_value(&ev).unwrap();
+            let p = j.get("payload").cloned().unwrap_or_else(|| j.clone());
+            let f = |k: &str| p[k].as_str().unwrap_or_else(|| panic!("desktop_state without {k}: {j}")).to_string();
+            out.push((f("desktop"), f("state"), f("message")));
+        }
+    }
+    out
+}
+
+/// `virtual`'s `desktop_state` events until one says `end` (the install's
+/// thread emits after status already reads the outcome): 5 s at most.
+fn virtual_states_until(rx: &mut tokio::sync::broadcast::Receiver<crate::session_events::SessionEvent>, end: &str) -> Vec<(String, String, String)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut out = Vec::new();
+    loop {
+        out.extend(desktop_states(rx).into_iter().filter(|e| e.0 == "virtual"));
+        if out.last().is_some_and(|e| e.1 == end) {
+            return out;
+        }
+        assert!(std::time::Instant::now() < deadline, "no {end} event: {out:?}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 #[test]
-fn setup_uses_the_root_helper_or_prints_the_command() {
+fn setup_with_an_old_helper_prints_the_command_and_asks_nothing() {
     let v = venv();
     v.rig.host.programs.lock().unwrap().retain(|p| *p != "Xvfb");
     let owner = login("rosson", Role::Owner);
     let (_, st) = get_q(&owner, "/cli/desktop/status", &[]);
     assert_eq!(st["state"], "not_set_up", "{st}");
     assert!(st["virtual"]["manual"].as_str().unwrap().contains("apt-get install --no-install-recommends xvfb icewm"), "{st}");
-
-    let old = Arc::new(FakeDoor { ok: false, installs: Mutex::new(0) });
-    let g = super::super::virtual_routes::door_for_test(old.clone());
+    let old = FakeDoor::new(false, None);
+    let _g = super::super::virtual_routes::door_for_test(old.clone());
     let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
     assert_eq!((s, code(&r)), (409, "setup_manual"), "{r}");
     assert!(r["manual"].as_str().unwrap().starts_with("sudo apt-get update"), "{r}");
     assert_eq!(*old.installs.lock().unwrap(), 0, "an old helper is never asked");
-    drop(g);
+}
 
-    let helper = Arc::new(FakeDoor { ok: true, installs: Mutex::new(0) });
+/// Contract note 11-11: setup answers `setting_up` at once and installs in
+/// the background; `desktop_state` follows it to `closed`; a second setup
+/// meanwhile is `409 setting_up`.
+#[test]
+fn setup_answers_at_once_and_installs_in_the_background() {
+    let v = venv();
+    v.rig.host.programs.lock().unwrap().retain(|p| *p != "Xvfb");
+    let owner = login("rosson", Role::Owner);
+    let helper = FakeDoor::new(true, Some(v.rig.host.clone()));
+    helper.hold();
     let _g = super::super::virtual_routes::door_for_test(helper.clone());
+    let mut rx = crate::session_events::subscribe();
+
     let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
-    assert_eq!(s, 200, "{r}");
+    assert_eq!((s, r["state"].as_str()), (200, Some("setting_up")), "answered before the install ends: {r}");
+    assert_eq!(r["ok"], true);
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual")]);
+    assert_eq!((st["state"].as_str(), st["message"].as_str()), (Some("setting_up"), Some("Installing the desktop packages…")), "{st}");
+    assert_eq!(st["virtual"]["setup"]["running"], true, "{st}");
+    let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
+    assert_eq!((s, code(&r)), (409, "setting_up"), "one install at a time: {r}");
+    let (s, r) = call(&owner, "/cli/desktop/start", json!({}));
+    assert_eq!((s, code(&r)), (409, "setting_up"), "no start while the packages install: {r}");
+
+    helper.open();
+    let st = setup_settles(&owner);
+    assert_eq!(st["state"], "closed", "{st}");
+    assert_eq!(st["virtual"]["setup"]["running"], false, "{st}");
+    assert_eq!(st["virtual"]["setup"]["failed"], Value::Null, "{st}");
     assert_eq!(*helper.installs.lock().unwrap(), 1);
-    assert!(audit_events().iter().filter(|e| *e == "desktop_setup").count() == 2, "started and the outcome");
-    v.rig.host.programs.lock().unwrap().push("Xvfb");
+    // The events: setting_up first, closed last, each with its sentence.
+    let events = virtual_states_until(&mut rx, "closed");
+    assert_eq!(events.first().map(|e| e.1.as_str()), Some("setting_up"), "{events:?}");
+    assert_eq!(events.last().map(|e| e.1.as_str()), Some("closed"), "{events:?}");
+    assert!(events.iter().all(|e| !e.2.is_empty()), "every event carries a message: {events:?}");
+    assert_eq!(audit_events().iter().filter(|e| *e == "desktop_setup").count(), 2, "started and the outcome");
     let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
     assert_eq!((s, r["message"].as_str()), (200, Some("The desktop packages are already installed.")), "{r}");
     assert_eq!(*helper.installs.lock().unwrap(), 1, "nothing to install");
+}
+
+#[test]
+fn a_failed_setup_ends_not_set_up_with_why() {
+    let v = venv();
+    v.rig.host.programs.lock().unwrap().retain(|p| *p != "Xvfb");
+    let owner = login("rosson", Role::Owner);
+    let helper = FakeDoor::new(true, None);
+    *helper.result.lock().unwrap() = Err("apt-get: E: Unable to locate package xvfb".into());
+    let _g = super::super::virtual_routes::door_for_test(helper.clone());
+    let mut rx = crate::session_events::subscribe();
+    let (s, r) = call(&owner, "/cli/desktop/setup", json!({}));
+    assert_eq!((s, r["state"].as_str()), (200, Some("setting_up")), "{r}");
+    let st = setup_settles(&owner);
+    assert_eq!(st["state"], "not_set_up", "{st}");
+    let msg = st["message"].as_str().unwrap();
+    assert!(msg.contains("didn't install") && msg.contains("Unable to locate package xvfb"), "{msg}");
+    assert!(st["virtual"]["setup"]["failed"].as_str().unwrap().contains("Unable to locate"), "{st}");
+    let last = virtual_states_until(&mut rx, "not_set_up").pop().expect("an event");
+    assert_eq!(last.1, "not_set_up");
+    assert!(last.2.contains("didn't install"), "the event carries why: {last:?}");
+    // Trying again clears the old failure while it runs.
+    *helper.result.lock().unwrap() = Ok(());
+    helper.hold();
+    let (s, _) = call(&owner, "/cli/desktop/setup", json!({}));
+    assert_eq!(s, 200);
+    let (_, st) = get_q(&owner, "/cli/desktop/status", &[("desktop", "virtual")]);
+    assert_eq!(st["virtual"]["setup"]["failed"], Value::Null, "{st}");
+    helper.open();
+    setup_settles(&owner);
 }
 
 #[test]

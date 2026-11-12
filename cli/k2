@@ -26394,7 +26394,12 @@ this in v1: they can't see or drive the screen with K2, and can't ask to
   k2 desktop displays [--json]      the screens you can pick in the tab
 
 On a Linux server with no screen (a virtual desktop K2 starts; never on a Mac):
-  k2 desktop setup [--json]         install the packages it needs (Owner)
+  k2 desktop setup [--timeout 10m] [--no-wait] [--json]
+                                    install the packages it needs (Owner). The
+                                    install runs on the server; this waits for
+                                    it (10 minutes at most) and prints progress.
+                                    --no-wait returns at once (k2 desktop status
+                                    shows setting_up until it ends)
   k2 desktop list [--json]          the desktops you may open, with their state
   k2 desktop start [--size WxH] [--json]
                                     start it, or wake it (Owners and Admins);
@@ -26585,6 +26590,74 @@ elif verb == "displays":
 '
 }
 
+# _desktop_setup_wait <as_json> <no_wait> <timeout> <raw "body\ncode">: the
+# install runs on the server in the background (contract note 11-11):
+# setup answers setting_up at once; this polls status until the state is
+# closed (installed) or not_set_up (with why), printing progress on stderr.
+_desktop_setup_wait() {
+    local as_json="$1" no_wait="$2" wait_for="$3" raw="$4" code body secs=600 waited=0 state st
+    code="${raw##*$'\n'}"
+    body="${raw%$'\n'*}"
+    if [ -z "$raw" ] || [ "$code" = "$raw" ] || [ "$code" != "200" ]; then
+        _desktop_render "$as_json" setup "$raw"
+        return 0
+    fi
+    state="$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state") or "")' 2>/dev/null || true)"
+    if [ "$state" != "setting_up" ] || [ "$no_wait" = 1 ]; then
+        if [ "$state" = "setting_up" ] && [ "$as_json" != 1 ]; then
+            echo "Installing the desktop packages on the server. k2 desktop status says setting_up until it ends."
+            return 0
+        fi
+        _desktop_render "$as_json" setup "$raw"
+        return 0
+    fi
+    if [ -n "$wait_for" ]; then
+        case "$wait_for" in
+            *[!0-9smh]*|"") echo "usage: --timeout 10m|90s|600" >&2; exit 2 ;;
+            *h) secs=$(( ${wait_for%h} * 3600 )) ;;
+            *m) secs=$(( ${wait_for%m} * 60 )) ;;
+            *s) secs="${wait_for%s}" ;;
+            *) secs="$wait_for" ;;
+        esac
+        case "$secs" in ""|*[!0-9]*) echo "usage: --timeout 10m|90s|600" >&2; exit 2 ;; esac
+    fi
+    [ "$as_json" = 1 ] || echo "Installing the desktop packages on the server (this can take a few minutes)…" >&2
+    while :; do
+        sleep 2
+        waited=$((waited + 2))
+        st="$(_sidecar_send GET /cli/desktop/status "desktop=virtual")"
+        code="${st##*$'\n'}"
+        body="${st%$'\n'*}"
+        if [ -z "$st" ] || [ "$code" = "$st" ] || [ "$code" = "000" ]; then
+            echo "k2 desktop: daemon unreachable while waiting for the install (k2 desktop status shows how it ends)" >&2
+            exit 1
+        fi
+        [ "$code" = "200" ] || _desktop_render "$as_json" status "$st"
+        state="$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state") or "")')"
+        [ "$state" = "setting_up" ] || break
+        if [ "$waited" -ge "$secs" ]; then
+            echo "k2 desktop: still installing after ${waited} s. It goes on on the server: k2 desktop status says setting_up until it ends." >&2
+            exit 1
+        fi
+        if [ "$as_json" != 1 ] && [ $((waited % 10)) -eq 0 ]; then
+            echo "  still installing… (${waited} s)" >&2
+        fi
+    done
+    if [ "$as_json" = 1 ]; then
+        printf '%s\n' "$body"
+        [ "$state" = "not_set_up" ] && exit 1
+        return 0
+    fi
+    K2_DT_BODY="$body" python3 -c '
+import json, os, sys
+d = json.loads(os.environ["K2_DT_BODY"])
+if d.get("state") == "not_set_up":
+    print("k2 desktop: error: setup_failed: %s" % (d.get("message") or "the packages did not install"), file=sys.stderr)
+    sys.exit(1)
+print("Installed. k2 desktop start starts it.")
+' || exit 1
+}
+
 # _desktop_body <json object> <desktop id or empty>: the body with "desktop".
 _desktop_body() {
     if [ -z "${2:-}" ]; then
@@ -26601,7 +26674,7 @@ cmd_desktop() {
         help|--help|-h) _desktop_usage; return 0 ;;
         --json) sub=status; set -- --json "$@" ;;
     esac
-    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size=""
+    local as_json=0 since="" limit="" display="" no_hide=0 raw body mode=view qs desk="" size="" wait_for="" no_wait=0
     local args=() hides=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -26610,6 +26683,9 @@ cmd_desktop() {
             --desktop=*) desk="${1#--desktop=}"; shift ;;
             --size) size="${2:-}"; shift 2 || { echo "usage: --size WxH (1280x720 to 1920x1080)" >&2; exit 2; } ;;
             --size=*) size="${1#--size=}"; shift ;;
+            --timeout) wait_for="${2:-}"; shift 2 || { echo "usage: --timeout 10m|90s|600 (how long k2 desktop setup waits)" >&2; exit 2; } ;;
+            --timeout=*) wait_for="${1#--timeout=}"; shift ;;
+            --no-wait) no_wait=1; shift ;;
             --since) since="${2:-}"; shift 2 || { echo "usage: --since 1d|2h|30m|<RFC 3339 time>" >&2; exit 2; } ;;
             --since=*) since="${1#--since=}"; shift ;;
             --limit) limit="${2:-}"; shift 2 || { echo "usage: --limit N" >&2; exit 2; } ;;
@@ -26640,6 +26716,9 @@ cmd_desktop() {
     if [ -n "$size" ] && [ "$sub" != "start" ]; then
         echo "usage: --size goes with k2 desktop start" >&2; exit 2
     fi
+    if { [ -n "$wait_for" ] || [ "$no_wait" = 1 ]; } && [ "$sub" != "setup" ]; then
+        echo "usage: --timeout and --no-wait go with k2 desktop setup" >&2; exit 2
+    fi
     case "$sub" in
         status)
             raw="$(_sidecar_send GET /cli/desktop/status "$dq")" ;;
@@ -26656,7 +26735,9 @@ cmd_desktop() {
             sub=stop
             raw="$(_sidecar_send POST /cli/desktop/stop "$(_desktop_body "{}" "$desk")")" ;;
         setup)
-            raw="$(_sidecar_send POST /cli/desktop/setup "{}")" ;;
+            raw="$(_sidecar_send POST /cli/desktop/setup "{}")"
+            _desktop_setup_wait "$as_json" "$no_wait" "$wait_for" "$raw"
+            return 0 ;;
         enable|on)
             sub=enable
             raw="$(_sidecar_send POST /cli/desktop/enable "$(_desktop_body "{}" "$desk")")" ;;
@@ -47417,7 +47498,7 @@ cmd_schema() {
     {"name": "changes open", "usage": "k2 changes open [--workspace <path>] [--json]", "description": "Ask a K2 window that shows this workspace to open (or focus) its Changes tab (daemon event open_changes). Agents: their own workspace. 200 means asked; a window opens it only while it shows that workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, workspacePath}."}]},
     {"name": "changes init", "usage": "k2 changes init [--workspace <path>] [--json]", "description": "Make the workspace root a git repository (git init, no commit), like the Changes tab's Initialize repository. Only a workspace root; refused inside an existing repository (already_a_repo) or for a folder that is not a workspace root (bad_path / not_found). Agents: their own workspace.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "{success, repoRoot, rev}."}]},
     {"name": "sim", "usage": "k2 sim status | list-devices [--platform android|ios] | boot [--platform android|ios] [--device \"Pixel 9\"] [--no-tab] | stop | erase [--yes]", "description": "This workspace's mobile device (prd-mobile-dev-v1): one Android emulator (iOS Simulator on a Mac) owned by the daemon, shown live in the Mobile tab. status lists the lanes this server can run and the device; boot opens the Mobile tab for your human unless --no-tab; stop keeps the device's data, erase deletes it (--yes off a terminal). Agents need the workspace's \"Allow mobile devices\" switch (exit 3 + Ask with: otherwise). See k2 study sim.", "args": [], "flags": [{"name": "--platform", "arg": "android|ios", "description": "boot: the lane (default: the first this server can run)."}, {"name": "--device", "arg": "profile", "description": "boot: a profile from k2 sim list-devices."}, {"name": "--no-tab", "arg": null, "description": "boot: do not open the Mobile tab."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
-    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays | list | start [--size WxH] | stop | setup  (any verb: --desktop <id>)", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. On a Linux server with no screen K2 starts a virtual desktop instead (Xvfb + IceWM): setup installs its packages (Owner), start/stop (Owners and Admins), list shows what you may open; --desktop virtual:<workspace id> is an agent's own (Separate, not private). It sleeps 10 min after the last viewer leaves. See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays | list | start | stop | setup"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--desktop", "arg": "id", "description": "which desktop: virtual (This server on Linux), virtual:<workspace id> (an agent's), console; default This server."}, {"name": "--size", "arg": "WxH", "description": "start: the size, 1280x720 to 1920x1080 (default 1280x720); fixed until it is closed."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
+    {"name": "desktop", "usage": "k2 desktop [status] | enable | disable | policy --hide-app <bundle id>... | --no-hide-apps | grant <login> [--view] | revoke <login> | grants | viewers | kick <viewer-id|login> | audit [--since 1d] [--limit 50] | open [--display <id>] | displays | list | start [--size WxH] | stop | setup  (any verb: --desktop <id>)", "description": "Remote desktop (Beta): this computer's real screen in a Desktop tab on another device. PEOPLE ONLY: agents can't see or drive the screen with K2 and can't ask to; every verb answers an agent desktop_people_only (exit 3, It can't be requested). Owner and Admin logins watch and drive; a Member only with a grant, view only; the owner token and K2 terminals manage but never watch. On until an Owner turns it off. On a Linux server with no screen K2 starts a virtual desktop instead (Xvfb + IceWM): setup installs its packages (Owner), start/stop (Owners and Admins), list shows what you may open; --desktop virtual:<workspace id> is an agent's own (Separate, not private). It sleeps 10 min after the last viewer leaves. See k2 study desktop.", "args": [{"name": "verb", "required": false, "description": "status (default) | enable | disable | policy | grant | revoke | grants | viewers | kick | audit | open | displays | list | start | stop | setup"}], "flags": [{"name": "--hide-app", "arg": "bundle id", "description": "policy: an app viewers never see on macOS (repeatable; replaces the list)."}, {"name": "--no-hide-apps", "arg": null, "description": "policy: hide no apps."}, {"name": "--view", "arg": null, "description": "grant: view only (the only kind; Members never drive)."}, {"name": "--since", "arg": "1d|2h|30m|time", "description": "audit: lines from then on."}, {"name": "--limit", "arg": "N", "description": "audit: at most N lines (default 50)."}, {"name": "--display", "arg": "id", "description": "open: the display to show (k2 desktop displays)."}, {"name": "--desktop", "arg": "id", "description": "which desktop: virtual (This server on Linux), virtual:<workspace id> (an agent's), console; default This server."}, {"name": "--size", "arg": "WxH", "description": "start: the size, 1280x720 to 1920x1080 (default 1280x720); fixed until it is closed."}, {"name": "--timeout", "arg": "10m|90s", "description": "setup: how long to wait for the install (default 10m); it goes on on the server after."}, {"name": "--no-wait", "arg": null, "description": "setup: return at once; status says setting_up until it ends."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is."}]},
     {"name": "sim tree", "usage": "k2 sim tree [--all] [--find <text>] [--boxes] [--json]", "description": "What is on the device's screen, one format for every lane: interactive elements by default with short ids (e5) tied to a snapshot (t7). Ids of elements still on screen carry over; a gone or older id fails loudly (stale_element / stale_snapshot, exit 3). Read this before acting.", "args": [], "flags": [{"name": "--all", "arg": null, "description": "Every element, not only interactive ones."}, {"name": "--find", "arg": "text", "description": "Only elements whose label, value or id contain it."}, {"name": "--boxes", "arg": null, "description": "Each element's frame in dp."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim tap", "usage": "k2 sim tap e5 | tap --at x,y · type [--into e3] \"text\" | type [--into e3] --secret <vault-name> · swipe up|down|left|right [--from e7] · key enter|backspace|tab|arrow-up|… · button home|back|lock|dev-menu|… · rotate left|right · open-url <url> · location <lat,lon> · appearance dark|light", "description": "Act on the device (POST /cli/sim/act). Each prints one line with the result and what changed: ok tap e5 · 140ms · +e9 text \"Saved\". --secret types a vault secret you never see. While a person is using the device (3 s after their tap, or Take over) an action exits 2 held: run k2 sim wait, then k2 sim tree.", "args": [{"name": "element", "required": false, "description": "An id from k2 sim tree (e5, or t7:e5)."}], "flags": [{"name": "--at", "arg": "x,y", "description": "tap: a point in dp (screens with no tree)."}, {"name": "--into", "arg": "element", "description": "type: focus this field first."}, {"name": "--secret", "arg": "vault-name", "description": "type: a vault secret instead of text."}, {"name": "--from", "arg": "element", "description": "swipe: start on this element."}, {"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
     {"name": "sim install", "usage": "k2 sim install <app.apk|App.app> · launch <package|bundleId> · terminate <id>", "description": "Install an app you built in your own terminal, then launch or stop it.", "args": [{"name": "path", "required": true, "description": "The built .apk (Android) or .app (iOS Simulator)."}], "flags": [{"name": "--workspace", "arg": "path|name", "description": "Outside K2: which workspace's device (default: this one). Agents: only their own."}, {"name": "--json", "arg": null, "description": "The daemon's JSON as is (errors on stderr as {error:{code,hint,status}})."}]},
@@ -52912,7 +52993,10 @@ ON A LINUX SERVER (no screen: a virtual desktop, 0.46.12)
                                 distro (Owner): about 300 MB on a server
                                 with no graphics libraries yet, about 70 MB
                                 on one that has. Through the root helper,
-                                or it prints the command to run by hand
+                                or it prints the command to run by hand.
+                                The install runs on the server; setup waits
+                                for it and prints progress (--timeout 10m,
+                                or --no-wait to return at once)
   k2 desktop list               the desktops you may open, with their state
   k2 desktop start [--desktop <id>] [--size 1600x900]
                                 start it (Owners and Admins). Size: 1280x720

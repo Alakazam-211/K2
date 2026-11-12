@@ -314,8 +314,7 @@ fn resolve_desktop(req: &Req<'_>, body: &Value) -> Result<String, CliResponse> {
 pub fn emit_state_for(desktop: &str) {
     let enabled = store::is_enabled(vd::switch_id(desktop)).unwrap_or(false);
     let (state, message) = if vd::is_virtual(desktop) {
-        let st = super::virtual_desktop::manager().status(desktop);
-        (st.wire_state().to_string(), st.message())
+        super::virtual_routes::state_of(desktop)
     } else {
         let s = deskd::current().state();
         (s.as_wire().to_string(), s.message())

@@ -1,0 +1,123 @@
+# The parts of cli/k2: `<part name><TAB><header text>`, one line per
+# top-level section, in the file's order. `+` folds a section that is only
+# a header into the part that follows. Read by scripts/garden/split-cli.py.
+prelude	(file start)
+cli-tools-policy	CLI Tools identity policy (mirrors crates/k2-core cli_tool_policy)
+cell-socket	#58 Phase-1 close: scoped per-cell UDS arms
+respond	F2 (sandbox cell + HOST session) — k2 respond
+session-complete	Host-session / sandbox completion — k2 done (API lifecycle)
+remote-target	Remote target addressing (K2-as-a-server, 0.40.x)
+remote-msg	Cross-server agent msg over FEDERATION
+commands-core	Commands
+heartbeat	Multi-heartbeat (agent_heartbeats) CRUD
+remind	One-time reminders (a heartbeat that fires once, 0.46.11)
+daemon	Daemon lifecycle
+daemon-install	P2: headless standalone-daemon installer
++	BETA: `k2 talk` — fused read+send inter-agent collaboration verb
+talk-and-workspace	GH#8 #69 (Wave 2) — batch HITL "scout" + batch-answer
+app-runtime	App runtime (prd-k2-app-runtime-v1 stage 1)
+app-doctor	k2 app doctor --store (0.46.9, the Tauri App SDK)
++	App egress (runtime S15) and held widenings
+app-db	k2 app db (0.46.11, prd-app-database-integrations-v1 S2)
+app-box	App box services (0.46.0)
+app-grace	0.46.0 App grace (Rosson's cross-over plan, 2026-10-14)
+app-sdk	k2 app sdk (0.46.6): @k2/server (and Sew's App kit) into an App
+app-updates	k2 app updates (0.46.7): an App's update feed (Tauri's updater)
+app-init	k2 app init (0.46.7, prd-tauri-core-0467-v1 TC-13)
+app-links	k2 app links (0.46.7, prd-tauri-core-0467-v1 TC-20…TC-22)
+app-auth	k2 app auth (0.46.9, prd-app-hosted-sign-in-v1)
+app-door	The 0.46.1 door (lane 2: S19, AR10)
+app-people	app-mobile-access-v1 (0.46.3): People grid, discovery, stay signed in
+app-recording	Recording in Apps (Sew 0.9.0, K2 0.46.11)
+app-guests	RS-A15 guests:rooms (0.46.1)
+app-wallet	App users' personal wallets (0.46.3)
+remote-session	Remote Session (owner/admin + grant-token drive)
+msg-whoami-done	Agent Skill Surface
+thread	`k2 thread` — user-agent overlay (not PTY; that's k2 msg)
+browser	Design mode: k2 browser note (prd-browser-design-mode-v1 D-A13)
+whats-new	0.38.7: `k2 whats-new`
+awareness	Awareness Bus CLI verbs (0.34.0 Phase 3)
+sessions	k2 sessions (prd-workspace-sessions-cli-v1)
+sidecar	k2 sidecar v1 (prd-k2-sidecar-cli-v1)
+root-helper	k2 root-helper — K2's one root door on Linux
+front	k2 front — the box's :443 as an SNI pass-through router (front443)
+push	k2 push — phones and end-to-end encrypted pushes
+firewall	k2 firewall — the box's public ports and the owner's options (0.46.6)
+desktop	k2 desktop — this computer's screen, for people (0.46.11)
+git-tools	k2 git-tools — is git usable on this machine (0.46.4)
+compute	k2 compute — run commands on your compute nodes
+llm	k2 llm tokens — LLM subscriptions and API tokens
+sources	k2 sources (Garden v3 data sources; contract-sources-v1 §7)
+vault	k2 vault (prd-k2-vault-v1 §14)
+ci	k2 ci (0.46.10, prd-ci-on-compute-for-clients-v1 C6a)
+job	k2 job (prd-vault-gaps-v1 item 5)
+migrate	k2 migrate (box moves carry the vault; prd-box-move-carry-v1)
+usage	k2 usage (prd-usage-v2 §5)
+connect	K2 Connect — Pro multi-subdomain (PRD k2-connect-e2e-encryption.md §7)
++	Headless Connect users (local daemon accounts)
+clone	k2 clone (prd-clone-carries-threads-and-vault-v1 §4.3, §4.4, CL20)
+users-phones	phone-web-off: pair a Companion phone (k2 users pair-phone|phones|unpair-phone)
+connect-account	Headless Connect account pairing — k2 connect login|status|logout
+wiki	Workspace Knowledge Base (brain map) — k2 wiki
+schema	GH#8 #4: `k2 --schema [json]` — machine-readable command surface
+explain	App refusal ids, `k2 explain`, `k2 capabilities`, `k2 app status`
+setup	k2 setup (prd-setup-checklist-v1 C2)
+send-feedback	k2 send-feedback (prd-k2-product-feedback-v1, 0.46.11)
+study	`k2 study` — bounded teaching pages (daemon-optional)
+update	Self-Update
+onboarding	Onboarding (workspace-add three-option flow)
+deprecation	Phase 2.1: Deprecation helpers
+inbox	Phase 2.1: Inbox verbs (A22)
+glossary	Phase 2.1: Glossary (A10)
+activity	Phase 2.1: Renames (feed→activity, roster→who)
+help-helpers	Phase 2.1: help text helpers
+agent	0.40.24: `k2 agent` — the agent management plane (S2)
+agent-context	Context management stack — `k2 agent context …` (prd-context-hamburger-v1)
+help	Phase 2.1: 3-tier help (verbatim mock text)
+msg-inbox	Phase 2.1 / file-delivery: msg --inbox-silent / --inbox-wake
+msg-inbox-staging	P1: stage local files onto the daemon before /cli/inbox/deliver
+checkin-retired	k2 checkin: retired 0.46.11
+commit-merge	Phase 2.1: commit --merge flag handler
+update-flags	Phase 2.1: update --cli / --app flag handler
+federation	Federation (cross-server agent comms)
+feedback	Feedback (F1) — ask a human for input, durably
+project	Projects V1 (P3) — `k2 project` command group
+mail	K2 Mail — `k2 mail` command group (prd-email-server-v1 §11)
+mail-wrappers	cmd_mail_* wrappers (arg parsing + validation; PRD §11)
+mail-watch	k2 mail watch: agents hear that mail arrived (0.46.11)
+mail-manage	0081 inbox MANAGEMENT + DELETE (agent verbs; gated by the
+mail-inboxes	S11 unified inbox surface: inboxes / link / access
++	k2 hostmail (server-admin family)
++	k2 hostchat — the Sew chat (and voice) server on this box
+hostchat-voice	`k2 voice` — voice rooms on this server (prd-k2-voice-rooms-v1 §9.3)
+chat	k2 chat — Sew chat inside Spaces (S30 K21)
+hostmail-app-cert-backup	k2 hostchat additions (S30 K19/K21): people, approvals, agents, on-behalf, log
+hostmail-ooo-footer	k2 mail help text
+hostmail-lists-spam-queue	k2 mail help text
+hostmail-dkim-dmarc	k2 mail help text
+hostmail-bans-allowlist	Calendars S4: groups + calendar sharing (mail-manage surface)
+calendar	k2 calendar / k2 cal (prd-hostmail-calendars-v1 S3)
++	k2 mail help text
+mail-reader-and-help	k2 mail reader (prd-ocmail-admin-in-k2-v1 OA7)
+dns	K2 DNS K1 — `k2 dns` command group
+domains-certs	Custom domains / certs (prd-custom-domains-and-certs-v1)
+preset	W6 (0.40.30): `k2 preset` — agent-preset management
+db-store	k2 db / k2 store (workspace data sidecar)
+garden-data	Garden data — k2 store --widget / k2 zen data (contract-garden-data-v1 §8)
+board	k2 board (Rosson 2026-11-01): the Board Garden's boards, by Board's rules
+zen	Zen Mode — k2 zen (prd-zen-mode-v1 Z17; prd-zen-gardens-v1 G35)
+zen-guide	k2 zen guide (prd-zen-freeform-chrome FC33, FC34, FC59–FC66)
+zen-guide-data	Garden data in the guide (contract-garden-data-v1 §11.4, B3)
+garden-access	Garden access (prd-garden-access-v1 G19). One list per Garden of the
+garden-agents	Agents run Gardens end to end (0.46.0, migration 0181)
+zen-widget-dev	The widget dev loop (0.46.1 S3)
+zen-retired	Retired by Garden access (0.46.3; k2 study garden-changes)
+agent-hire	Agent hire: teams, instances, hire root, sender check (0.45.6)
+agent-template	k2 agent template — hireable agent types (0.46.12)
+changes	k2 changes — the Changes tab from the CLI (prd-changes-tab-v1, C4)
+changes-open	k2 changes open | init (C5)
+changes-notes	k2 changes notes (C5 review notes)
+sim	k2 sim — the workspace's mobile device (prd-mobile-dev-v1 §4, S2)
+doc	`k2 doc` — live Markdown docs (Markdown multiplayer v1, K3)
+permission	`k2 permission` — permission cards (Beta)
+router	Router

@@ -93,3 +93,52 @@ fn the_worker_inherits_nothing_and_runs_in_a_private_folder_that_goes_away() {
     assert!(cwd.contains("k2-deckrender-"), "a fresh folder: {detail}");
     assert!(!Path::new(cwd).exists(), "removed afterwards: {cwd}");
 }
+
+#[test]
+fn the_limits_are_on_before_the_first_input_byte_is_read() {
+    // 1. A worker the host started: what was in force just before it read its
+    //    first byte of stdin (taken there, answered by the `limits` mode).
+    let limits = short();
+    let f = hostile("limits", &limits);
+    assert_eq!(f.code, FailureCode::RendererError);
+    let seen: std::collections::HashMap<&str, &str> =
+        f.detail.trim_start_matches("limits: ").split("; sandbox:").next().unwrap_or("").split(';').filter_map(|kv| kv.split_once('=')).collect();
+    let cpu = limits.wall.as_secs() + 5;
+    let want = |k: &str, v: String| assert_eq!(seen.get(k).copied(), Some(v.as_str()), "{k} in {}", f.detail);
+    want("alloc_cap", limits.memory_bytes.to_string());
+    if cfg!(unix) {
+        want("core", "0/0".into());
+        want("fsize", "0/0".into());
+        want("nofile", format!("{0}/{0}", k2_deckrender::sandbox::NOFILE));
+        want("cpu", format!("{cpu}/{}", cpu + 1));
+    }
+    if cfg!(target_os = "linux") {
+        let as_cap = limits.memory_bytes + host::ADDRESS_SPACE_HEADROOM;
+        want("as", format!("{as_cap}/{as_cap}"));
+        want("no_new_privs", "1".into());
+        want("seccomp", "2".into());
+        want("pdeathsig", libc::SIGKILL.to_string());
+        // Our filter's own answer to socket(2): EACCES (13).
+        want("socket", "errno13".into());
+    }
+
+    // 2. A step that fails stops the worker before it reads anything: a parent
+    //    that isn't ours, with stdin left open and never written (a worker that
+    //    read it would wait here until the deadline).
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        use std::process::{Command, Stdio};
+        let not_parent = k2_deckrender::sandbox::SelfLimits { parent: 1, cpu_secs: 10, memory_bytes: 256 << 20, address_space: 0 };
+        let mut child =
+            Command::new(bin()).args(not_parent.to_args()).env_clear().stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().expect("spawn");
+        let _stdin_kept_open = child.stdin.take();
+        let started = Instant::now();
+        let mut out = String::new();
+        child.stdout.take().expect("stdout").read_to_string(&mut out).expect("read");
+        let st = child.wait().expect("wait");
+        assert!(started.elapsed() < Duration::from_secs(10), "it waited for input");
+        assert_eq!(st.code(), Some(k2_deckrender::proto::EXIT_FAILED), "{out}");
+        assert!(out.contains("\"renderer_error\"") && out.contains("parent"), "{out}");
+    }
+}

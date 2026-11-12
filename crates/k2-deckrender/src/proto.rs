@@ -150,7 +150,9 @@ pub struct Header {
     /// The image's width in pixels.
     pub width: u32,
     pub slide: SlideRef,
-    /// The worker's memory cap (its allocator's; 0: none).
+    /// The worker's memory cap (its allocator's; 0: none). The worker sets
+    /// its cap from argv ([`crate::sandbox::SelfLimits`]) before it reads
+    /// this; a header that disagrees is a `renderer_error`.
     pub memory_bytes: u64,
     /// Longest image side (the height is checked against it too).
     #[serde(default = "default_max_side")]

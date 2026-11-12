@@ -2,23 +2,40 @@
 //! started by the host (`k2_deckrender::host`) with an empty environment. See
 //! `k2_deckrender::proto` for the wire.
 //!
+//! The host starts it with `posix_spawn` and the limits on argv
+//! (`--sandbox parent=… cpu=… memory=… as=…`, [`k2_deckrender::sandbox`]). The
+//! worker puts them on itself as the very first thing in `main`, before it
+//! reads a byte of its input, in this order:
+//!
+//! 1. the argv parsed (nothing else is: no env, no stdin);
+//! 2. [`SelfLimits::apply`]: `PR_SET_PDEATHSIG` and the parent checked
+//!    against the host's pid, the signal mask, inherited fds closed, the
+//!    rlimits, `PR_SET_NO_NEW_PRIVS` and the seccomp no-network filter
+//!    (Linux);
+//! 3. the allocator's cap;
+//! 4. macOS: the `no-network` sandbox profile (best effort);
+//! 5. the parent watch (exits when the parent changes; macOS has no
+//!    parent-death signal);
+//! 6. the bundled fonts; then the request is read.
+//!
+//! A step of 1–3 that fails answers a typed `renderer_error` line and exits,
+//! with the input unread.
+//!
 //! The memory cap lives here, in a counting global allocator: an allocation
-//! that would pass the cap writes a prebuilt `too_large` line and aborts. The
-//! host adds the OS limits (`RLIMIT_AS` on Linux, a footprint watchdog on
-//! macOS). On macOS the worker also puts itself in the `no-network` sandbox
-//! profile before it reads its input (Linux: the host's seccomp filter).
+//! that would pass the cap writes a prebuilt `too_large` line and aborts.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::{BufRead, Read, Write};
 use std::sync::atomic::{AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 use k2_deckrender::proto::{self, FailureCode, Header, ResponseHeader};
+use k2_deckrender::sandbox::SelfLimits;
 use k2_deckrender::worker;
 
 struct Counting;
 
 static USED: AtomicU64 = AtomicU64::new(0);
-/// 0: no cap yet (before the header).
+/// 0: no cap (before [`set_memory_cap`], or a host that set none).
 static CAP: AtomicU64 = AtomicU64::new(0);
 static LINE_PTR: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
 static LINE_LEN: AtomicUsize = AtomicUsize::new(0);
@@ -98,20 +115,21 @@ fn set_memory_cap(cap: u64) {
 }
 
 /// macOS has no parent-death signal: a thread exits the worker when its
-/// parent is gone. Linux uses `PR_SET_PDEATHSIG` (the host).
-fn watch_parent() {
+/// parent is no longer the host (whose pid [`SelfLimits::apply`] already
+/// checked). Linux also has `PR_SET_PDEATHSIG`.
+fn watch_parent(parent: u32) {
     #[cfg(unix)]
     {
-        // SAFETY: getppid has no preconditions.
-        let parent = unsafe { libc::getppid() };
         let _ = std::thread::Builder::new().name("parent".into()).spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
-            // SAFETY: as above.
-            if unsafe { libc::getppid() } != parent {
+            // SAFETY: getppid has no preconditions.
+            if u32::try_from(unsafe { libc::getppid() }).ok() != Some(parent) {
                 std::process::exit(proto::EXIT_FAILED);
             }
         });
     }
+    #[cfg(not(unix))]
+    let _ = parent;
 }
 
 /// macOS: the `no-network` sandbox profile, before any input is read. Best
@@ -146,7 +164,7 @@ fn no_network() -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 fn no_network() -> Result<(), String> {
-    // Linux: the host's seccomp filter. Elsewhere: none (documented gap).
+    // Linux: the seccomp filter (SelfLimits::apply). Elsewhere: none (documented gap).
     Ok(())
 }
 
@@ -176,26 +194,48 @@ fn main() {
         println!("k2-deckrender {} (proto {}{extra})", proto::VERSION, proto::PROTO);
         return;
     }
-    if !args.is_empty() {
-        eprintln!("k2-deckrender: the host runs this worker (stdin/stdout); the only flag is --version");
-        std::process::exit(proto::EXIT_USAGE);
+    // The limits first: nothing is read before they are on (the input stays
+    // unread when a step fails).
+    let limits = match SelfLimits::parse(&args) {
+        Ok(l) => l,
+        Err(m) => {
+            eprintln!("k2-deckrender: the host runs this worker (stdin/stdout); the other flag is --version: {m}");
+            let _ = fail(&mut std::io::stdout(), FailureCode::RendererError, format!("usage: {m}"));
+            std::process::exit(proto::EXIT_USAGE);
+        }
+    };
+    if let Err(e) = limits.apply() {
+        std::process::exit(fail(&mut std::io::stdout(), FailureCode::RendererError, e.to_string()));
     }
-    watch_parent();
+    if limits.memory_bytes > 0 {
+        set_memory_cap(limits.memory_bytes);
+    }
     let sandbox = no_network();
     if let Err(e) = &sandbox {
         eprintln!("k2-deckrender: no network sandbox: {e}");
     }
+    watch_parent(limits.parent);
     // The bundled fonts, every face loaded, before anything is read or drawn.
     let _ = k2_deckrender::fonts::init();
-    let rc = run(match (&sandbox, cfg!(target_os = "macos")) {
-        (Ok(()), true) => "on",
-        (Err(_), true) => "off",
-        _ => "n/a (the host's seccomp filter on Linux)",
-    });
+    let rc = run(
+        limits.memory_bytes,
+        match (&sandbox, cfg!(target_os = "macos")) {
+            (Ok(()), true) => "on",
+            (Err(_), true) => "off",
+            _ => "n/a (the seccomp filter on Linux)",
+        },
+    );
     std::process::exit(rc);
 }
 
-fn run(sandbox: &str) -> i32 {
+/// TEST ONLY: the limits in force just before the first byte of input is
+/// read (the `limits` hostile mode answers it).
+#[cfg(feature = "test-hostile")]
+static AT_FIRST_READ: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn run(memory_cap: u64, sandbox: &str) -> i32 {
+    #[cfg(feature = "test-hostile")]
+    let _ = AT_FIRST_READ.set(format!("{};alloc_cap={}", k2_deckrender::sandbox::observe(), CAP.load(Ordering::Acquire)));
     let stdin = std::io::stdin();
     let mut input = std::io::BufReader::with_capacity(256 << 10, stdin.lock());
     let stdout = std::io::stdout();
@@ -214,11 +254,12 @@ fn run(sandbox: &str) -> i32 {
         Err(m) => return fail(&mut out, FailureCode::InvalidInput, m),
     };
     drop(line);
-    if header.memory_bytes > 0 {
-        set_memory_cap(header.memory_bytes);
+    // The cap is argv's, set before anything was read; the header's copy must agree.
+    if header.memory_bytes != memory_cap {
+        return fail(&mut out, FailureCode::RendererError, format!("the header's memory cap {} isn't the worker's {memory_cap}", header.memory_bytes));
     }
-    if header.memory_bytes > 0 && header.input_len >= header.memory_bytes {
-        return fail(&mut out, FailureCode::TooLarge, format!("the file is {} bytes; the memory cap is {}", header.input_len, header.memory_bytes));
+    if memory_cap > 0 && header.input_len >= memory_cap {
+        return fail(&mut out, FailureCode::TooLarge, format!("the file is {} bytes; the memory cap is {memory_cap}", header.input_len));
     }
     let Ok(len) = usize::try_from(header.input_len) else {
         return fail(&mut out, FailureCode::TooLarge, "the file is too large for this machine");
@@ -285,8 +326,6 @@ fn hostile(out: &mut impl Write, what: &str, sandbox: &str) -> i32 {
         }
         // Around the allocator (malloc and touch): only the OS limits and the
         // host's watchdog can stop it.
-        // Around the allocator (malloc and touch): only the OS limits and the
-        // host's watchdog can stop it.
         "alloc_raw" => alloc_raw(out),
         "abort" => std::process::abort(),
         "net" => {
@@ -297,6 +336,8 @@ fn hostile(out: &mut impl Write, what: &str, sandbox: &str) -> i32 {
             };
             fail(out, FailureCode::RendererError, format!("net: {net}; sandbox: {sandbox}"))
         }
+        // The limits in force just before the first input byte was read.
+        "limits" => fail(out, FailureCode::RendererError, format!("limits: {}; sandbox: {sandbox}", AT_FIRST_READ.get().map(String::as_str).unwrap_or("none"))),
         "env" => {
             let names: Vec<String> = std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect();
             let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default();

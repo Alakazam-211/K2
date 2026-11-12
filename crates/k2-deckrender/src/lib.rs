@@ -8,6 +8,7 @@
 //! - [`worker`]: the process side (read, draw, describe), also used
 //!   in-process by the tests and the fuzz targets;
 //! - [`host`]: the side the daemon links (spawn, limits per OS, watchdog);
+//! - [`sandbox`]: the limits the worker puts on itself before it reads its input;
 //! - [`fonts`]: the only fonts it draws with (`fonts/manifest.tsv`), never the system's.
 //!
 //! This crate never links k2-core: no tokens, no DB, no OS integration in
@@ -19,4 +20,5 @@ pub mod fonts;
 mod font_path;
 pub mod host;
 pub mod proto;
+pub mod sandbox;
 pub mod worker;

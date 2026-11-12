@@ -2,10 +2,16 @@
 //! response, and say how it ended as a [`Failure`] with its [`FailureCode`].
 //! Nothing in the daemon calls this yet (the preview cache is K2's next step).
 //!
-//! **Spawn:** an empty environment (no `K2_*`, no token, no `HOME`: nothing
+//! **Spawn:** `posix_spawn` (std's, with no pre-exec hook: about 1 ms
+//! whatever the host's size, where fork + a hook cost 36–54 ms from a ~1 GB
+//! daemon), an empty environment (no `K2_*`, no token, no `HOME`: nothing
 //! inherited; macOS itself adds `__CF_USER_TEXT_ENCODING`), a fresh private temp folder as its cwd (removed afterwards,
-//! whatever happened), stdin/stdout/stderr piped, and only those three fds
-//! survive exec.
+//! whatever happened), stdin/stdout/stderr piped. The limits go on argv
+//! ([`SelfLimits`]): the worker puts them on itself, and closes every fd past
+//! stdio, as the very first thing in `main`, before it reads a byte of its
+//! input ([`crate::sandbox`] has the order); a step that fails is a
+//! `renderer_error` with the input unread. The wall deadline and the memory
+//! watchdog stay here.
 //!
 //! **Limits per OS:**
 //!
@@ -15,7 +21,7 @@
 //! | time | the wall deadline (SIGKILL) + `RLIMIT_CPU` = wall × max(1, threads) + 5 s (SIGXCPU) | same | the wall deadline (kill) |
 //! | files | `RLIMIT_FSIZE` 0 (it writes no file), `RLIMIT_NOFILE` 64, `RLIMIT_CORE` 0 | same | — |
 //! | network | a seccomp filter: `socket(2)` and `io_uring_setup(2)` fail with `EACCES` (and any syscall of another ABI, x32 included, with `EPERM`) | the worker puts itself in the `no-network` sandbox profile (`sandbox_init`) before it reads its input; best effort: a failure is logged to stderr and it goes on (it fails when the host itself already runs in a sandbox, as K2 Compute's macOS jobs do) | none (documented gap) |
-//! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL | the worker exits when its parent changes | — |
+//! | processes | `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` = SIGKILL (then the parent checked against the host's pid on argv) | the parent checked against the host's pid, then the worker exits when its parent changes | — |
 //! | output | the response line at most [`MAX_RESPONSE_HEADER`], the image at most [`Limits::max_output_bytes`]; past either: kill | same | same |
 //!
 //! How it ended: the worker's own failure line wins (the allocator writes
@@ -32,6 +38,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::proto::{FailureCode, Header, ImageFormat, Meta, ResponseHeader, SlideRef, EXIT_OK, MAX_RESPONSE_HEADER, PROTO};
+use crate::sandbox::SelfLimits;
 
 /// Headroom over the memory cap for `RLIMIT_AS` (address space is more than
 /// what is in use: thread stacks, the binary, allocator arenas).
@@ -167,7 +174,10 @@ pub fn render_with(bin: &Path, req: &Request<'_>, limits: &Limits, hostile: Opti
 }
 
 fn run(bin: &Path, cwd: &Path, header: &Header, input: &[u8], limits: &Limits) -> Result<Rendered, Failure> {
-    let mut cmd = Command::new(bin);
+    // An absolute path: std's posix_spawn path wants one (with a cwd set, and
+    // with the environment cleared, a bare name or a relative path falls back to fork).
+    let bin = if bin.is_absolute() { bin.to_path_buf() } else { std::env::current_dir().map(|d| d.join(bin)).unwrap_or_else(|_| bin.to_path_buf()) };
+    let mut cmd = Command::new(&bin);
     cmd.env_clear().current_dir(cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     configure(&mut cmd, limits);
     let mut child = cmd
@@ -397,183 +407,20 @@ pub fn resident(_pid: u32) -> Option<u64> {
     None
 }
 
-#[cfg(unix)]
+/// The worker's argv: the limits it puts on itself before it reads its input
+/// ([`SelfLimits`]). No pre-exec hook, so std starts it with `posix_spawn`
+/// (glibc 2.29+ and macOS, with an absolute path and a cwd), never by forking
+/// the host.
 fn configure(cmd: &mut Command, limits: &Limits) {
-    use std::os::unix::process::CommandExt;
     let cpu_secs = limits.wall.as_secs().saturating_mul(u64::from(limits.threads.max(1))).saturating_add(5);
     let memory = limits.memory_bytes;
-    #[cfg(target_os = "linux")]
-    let filter = seccomp::no_network_filter();
-    // SAFETY: the closure runs in the child between fork and exec and calls
-    // only async-signal-safe functions (setrlimit, prctl, syscall, fcntl);
-    // the filter was built before the fork.
-    unsafe {
-        cmd.pre_exec(move || {
-            child_limits(cpu_secs, memory);
-            #[cfg(target_os = "linux")]
-            seccomp::install(&filter)?;
-            Ok(())
-        });
-    }
-}
-
-#[cfg(windows)]
-fn configure(cmd: &mut Command, _limits: &Limits) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    cmd.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(any(unix, windows)))]
-fn configure(_cmd: &mut Command, _limits: &Limits) {}
-
-/// In the child, before exec. A failed rlimit is ignored: the watchdog and the
-/// allocator still bound it.
-#[cfg(unix)]
-unsafe fn child_limits(cpu_secs: u64, memory: u64) {
-    macro_rules! limit {
-        ($res:expr, $soft:expr, $hard:expr) => {{
-            let rl = libc::rlimit { rlim_cur: $soft as libc::rlim_t, rlim_max: $hard as libc::rlim_t };
-            libc::setrlimit($res, &rl);
-        }};
-    }
-    // SIGXCPU at the soft limit, SIGKILL one second later.
-    limit!(libc::RLIMIT_CPU, cpu_secs, cpu_secs + 1);
-    // It writes no files (pipes aren't affected).
-    limit!(libc::RLIMIT_FSIZE, 0, 0);
-    limit!(libc::RLIMIT_CORE, 0, 0);
-    // System font files are opened one at a time.
-    limit!(libc::RLIMIT_NOFILE, 64, 64);
-    #[cfg(target_os = "linux")]
+    let address_space = if memory > 0 { memory.saturating_add(ADDRESS_SPACE_HEADROOM) } else { 0 };
+    cmd.args(SelfLimits { parent: std::process::id(), cpu_secs, memory_bytes: memory, address_space }.to_args());
+    #[cfg(windows)]
     {
-        if memory > 0 {
-            let as_cap = memory.saturating_add(ADDRESS_SPACE_HEADROOM);
-            limit!(libc::RLIMIT_AS, as_cap, as_cap);
-        }
-        libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0);
-        // Everything past stdio closes at exec (CLOSE_RANGE_CLOEXEC, 5.11+;
-        // an older kernel leaves the host's own CLOEXEC flags).
-        const CLOSE_RANGE_CLOEXEC: libc::c_uint = 1 << 2;
-        libc::syscall(libc::SYS_close_range, 3 as libc::c_uint, libc::c_uint::MAX, CLOSE_RANGE_CLOEXEC);
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = memory;
-        for fd in 3..4096 {
-            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
-        }
-    }
-}
-
-/// Linux: no network for the worker. A classic-BPF seccomp filter makes
-/// `socket(2)` and `io_uring_setup(2)` fail with `EACCES` (no socket can be
-/// made, so nothing can connect, bind or send), and any syscall of another ABI
-/// (`int 0x80`, x32) fail with `EPERM`. Installed after `PR_SET_NO_NEW_PRIVS`,
-/// so no privilege is needed.
-#[cfg(target_os = "linux")]
-mod seccomp {
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct SockFilter {
-        code: u16,
-        jt: u8,
-        jf: u8,
-        k: u32,
-    }
-
-    #[repr(C)]
-    struct SockFprog {
-        len: u16,
-        filter: *const SockFilter,
-    }
-
-    const LD_W_ABS: u16 = 0x20; // BPF_LD | BPF_W | BPF_ABS
-    const JEQ_K: u16 = 0x15; // BPF_JMP | BPF_JEQ | BPF_K
-    #[cfg(target_arch = "x86_64")]
-    const JGE_K: u16 = 0x35; // BPF_JMP | BPF_JGE | BPF_K
-    const RET_K: u16 = 0x06; // BPF_RET | BPF_K
-    const RET_ALLOW: u32 = 0x7fff_0000;
-    const RET_ERRNO: u32 = 0x0005_0000;
-    const OFF_NR: u32 = 0;
-    const OFF_ARCH: u32 = 4;
-    const SYS_IO_URING_SETUP: u32 = 425;
-    const PR_SET_SECCOMP: libc::c_int = 22;
-    const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
-    #[cfg(target_arch = "x86_64")]
-    const ARCH: u32 = 0xC000_003E; // AUDIT_ARCH_X86_64
-    #[cfg(target_arch = "aarch64")]
-    const ARCH: u32 = 0xC000_00B7; // AUDIT_ARCH_AARCH64
-
-    const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
-        SockFilter { code, jt, jf, k }
-    }
-
-    /// The program (built before the fork: no allocation in the child).
-    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    pub fn no_network_filter() -> Vec<SockFilter> {
-        let deny_abi = RET_ERRNO | libc::EPERM as u32;
-        let deny = RET_ERRNO | libc::EACCES as u32;
-        let socket = libc::SYS_socket as u32;
-        let mut p = vec![op(LD_W_ABS, 0, 0, OFF_ARCH)];
-        // Another ABI: to the last instruction (EPERM), patched below.
-        p.push(op(JEQ_K, 0, 0, ARCH));
-        p.push(op(LD_W_ABS, 0, 0, OFF_NR));
-        #[cfg(target_arch = "x86_64")]
-        p.push(op(JGE_K, 0, 0, 0x4000_0000)); // x32: to EPERM, patched below
-        p.push(op(JEQ_K, 0, 0, socket)); // to EACCES, patched below
-        p.push(op(JEQ_K, 0, 0, SYS_IO_URING_SETUP)); // to EACCES, patched below
-        p.push(op(RET_K, 0, 0, RET_ALLOW));
-        let eacces = p.len();
-        p.push(op(RET_K, 0, 0, deny));
-        let eperm = p.len();
-        p.push(op(RET_K, 0, 0, deny_abi));
-        // Jumps are relative to the next instruction.
-        let rel = |from: usize, to: usize| (to - from - 1) as u8;
-        p[1].jf = rel(1, eperm);
-        // The syscall checks follow the second load: [x32 check,] socket, io_uring_setup.
-        let socket_at = eacces - 3;
-        #[cfg(target_arch = "x86_64")]
-        {
-            p[3].jt = rel(3, eperm);
-        }
-        p[socket_at].jt = rel(socket_at, eacces);
-        p[socket_at + 1].jt = rel(socket_at + 1, eacces);
-        p
-    }
-
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    pub fn no_network_filter() -> Vec<SockFilter> {
-        Vec::new()
-    }
-
-    /// In the child, before exec: install the filter (after NO_NEW_PRIVS).
-    /// An empty filter (another architecture) installs nothing.
-    pub unsafe fn install(filter: &[SockFilter]) -> std::io::Result<()> {
-        if filter.is_empty() {
-            return Ok(());
-        }
-        let prog = SockFprog { len: filter.len() as u16, filter: filter.as_ptr() };
-        if libc::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog as *const SockFprog as libc::c_ulong, 0, 0) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn every_jump_lands_inside_the_program() {
-            let p = super::no_network_filter();
-            assert!(!p.is_empty());
-            for (i, ins) in p.iter().enumerate() {
-                if ins.code == super::JEQ_K || ins.code == 0x35 {
-                    assert!(i + 1 + (ins.jt as usize) < p.len(), "jt of {i}");
-                    assert!(i + 1 + (ins.jf as usize) < p.len(), "jf of {i}");
-                }
-            }
-            assert_eq!(p.last().map(|i| i.code), Some(super::RET_K));
-        }
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
     }
 }
 

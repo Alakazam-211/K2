@@ -1851,7 +1851,10 @@ mod tests {
                     continue;
                 }
                 let rel = p.strip_prefix(&root).expect("rel").to_string_lossy().to_string();
-                if rel == "session_token.rs" {
+                // session_token_tests.rs holds only session_token.rs's
+                // moved test module. Named exactly: no other test file is
+                // skipped.
+                if rel == "session_token.rs" || rel == "session_token_tests.rs" {
                     continue;
                 }
                 let src = std::fs::read_to_string(&p).expect("read");

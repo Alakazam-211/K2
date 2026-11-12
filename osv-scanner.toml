@@ -80,12 +80,6 @@ id = "GHSA-c83g-rgw3-j3cx"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Build time only (autoprefixer reads our own browserslist query); never ships. Fix with the build-tool refresh."
 
-# crossbeam-epoch 0.9.18
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0204"
-ignoreUntil = 2026-12-05T00:00:00Z
-reason = "Bad pointer deref only in the fmt::Pointer impl for Atomic/Shared; K2 never formats those. Via rayon/ignore. Fix: crossbeam-epoch 0.9.20 (lockfile bump)."
-
 # crypto-bigint 0.5.5
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0387"

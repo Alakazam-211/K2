@@ -1,8 +1,12 @@
 //! Compiles in the fonts `fonts/manifest.tsv` lists for this crate (`compiled_in` =
 //! `k2-deckrender`) and writes the manifest as a table (`fonts.rs` reads it). Reads only local
-//! files; tests/fonts.rs checks every file against its sha256 pin.
+//! files, and only from under `fonts/` (src/font_path.rs); tests/fonts.rs checks every file
+//! against its sha256 pin.
 use std::fmt::Write as _;
 use std::path::PathBuf;
+
+#[path = "src/font_path.rs"]
+mod font_path;
 
 fn main() {
     let dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -19,7 +23,7 @@ fn main() {
         let bytes = match *compiled_in {
             "deckcraft" => "None".to_string(),
             "k2-deckrender" => {
-                let path = dir.join(file).canonicalize().unwrap_or_else(|e| panic!("{file}: {e}"));
+                let path = font_path::compiled_in_font_path(&dir, file).unwrap_or_else(|e| panic!("fonts/manifest.tsv: {e}"));
                 println!("cargo::rerun-if-changed={}", path.display());
                 format!("Some(include_bytes!({:?}))", path.display().to_string())
             }

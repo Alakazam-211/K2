@@ -14,6 +14,9 @@
 //! the process that parses hostile bytes. Nothing in the daemon calls it yet.
 
 pub mod fonts;
+// build.rs's rule for the font paths it compiles in; here only for its unit tests.
+#[cfg(test)]
+mod font_path;
 pub mod host;
 pub mod proto;
 pub mod worker;

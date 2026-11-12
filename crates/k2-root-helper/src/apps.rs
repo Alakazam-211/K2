@@ -1266,7 +1266,7 @@ pub(crate) enum Pm {
     Pacman,
 }
 
-fn package_manager(ctx: &Ctx) -> Option<Pm> {
+pub(crate) fn package_manager(ctx: &Ctx) -> Option<Pm> {
     if exists(ctx, APT_GET) {
         Some(Pm::Apt)
     } else if exists(ctx, DNF) {
@@ -1278,7 +1278,7 @@ fn package_manager(ctx: &Ctx) -> Option<Pm> {
     }
 }
 
-fn pm_name(pm: Pm) -> &'static str {
+pub(crate) fn pm_name(pm: Pm) -> &'static str {
     match pm {
         Pm::Apt => "apt",
         Pm::Dnf => "dnf",

@@ -1840,6 +1840,7 @@ mod tests {
         let mut stack = vec![root.clone()];
         let mut checked = 0;
         let mut missing = vec![];
+        let mut named_elsewhere = vec![];
         while let Some(d) = stack.pop() {
             for e in std::fs::read_dir(&d).expect("read dir") {
                 let p = e.expect("entry").path();
@@ -1851,13 +1852,20 @@ mod tests {
                     continue;
                 }
                 let rel = p.strip_prefix(&root).expect("rel").to_string_lossy().to_string();
+                let src = std::fs::read_to_string(&p).expect("read");
+                // The skipped test file is compiled only as session_token.rs's
+                // test module: no other file may name it (this one does, to
+                // say so). Anything else could build it outside cfg(test).
+                let slashed = rel.replace('\\', "/");
+                if slashed != "session_token.rs" && slashed != "vault/spawn.rs" && src.contains("session_token_tests") {
+                    named_elsewhere.push(rel.clone());
+                }
                 // session_token_tests.rs holds only session_token.rs's
                 // moved test module. Named exactly: no other test file is
                 // skipped.
                 if rel == "session_token.rs" || rel == "session_token_tests.rs" {
                     continue;
                 }
-                let src = std::fs::read_to_string(&p).expect("read");
                 // Whole file: only session_token.rs's own tests mint in tests.
                 let prod = src.as_str();
                 let mints = prod.matches("prepare_agent_spawn_env(").count();
@@ -1873,6 +1881,16 @@ mod tests {
         }
         assert!(checked >= 3, "expected spawn.rs, v2_spawn.rs and the legacy terminal path; saw {checked}");
         assert!(missing.is_empty(), "spawn paths without vault delivery: {missing:?}");
+        // The skip above is safe only while session_token_tests.rs is test
+        // code: reached through one `#[cfg(test)] #[path] mod` line in
+        // session_token.rs and from nowhere else.
+        assert!(named_elsewhere.is_empty(), "only session_token.rs may name session_token_tests.rs; also named in {named_elsewhere:?}");
+        let owner = std::fs::read_to_string(root.join("session_token.rs")).expect("read session_token.rs");
+        assert_eq!(owner.matches("session_token_tests").count(), 1, "session_token.rs names session_token_tests.rs exactly once");
+        assert!(
+            owner.contains("\n#[cfg(test)]\n#[path = \"session_token_tests.rs\"]\nmod tests;\n"),
+            "session_token.rs must include session_token_tests.rs only as `#[cfg(test)] #[path = \"session_token_tests.rs\"] mod tests;`"
+        );
     }
 
     #[test]

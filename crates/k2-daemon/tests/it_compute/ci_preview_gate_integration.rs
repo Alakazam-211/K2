@@ -273,7 +273,7 @@ async fn every_ci_route_is_dark_until_the_owner_turns_the_ci_preview_on() {
 
     for (p, m) in &routes {
         let (query, body) = match (*p, *m) {
-            ("/cli/ci/status", _) | ("/cli/ci/tests", _) | ("/cli/ci/stats", _) | ("/cli/ci/monitors", _) => ("workspace=gate", None),
+            ("/cli/ci/status", _) | ("/cli/ci/tests", _) | ("/cli/ci/stats", _) | ("/cli/ci/monitors", _) | ("/cli/ci/cache/trust", "GET") => ("workspace=gate", None),
             (_, "POST") => ("", Some(json!({}))),
             _ => ("", None),
         };

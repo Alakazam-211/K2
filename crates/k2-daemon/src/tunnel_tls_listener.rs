@@ -2560,6 +2560,114 @@ mod tests {
         k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap::default());
     }
 
+    /// 0.46.12: every way a visitor reaches a runtime App, with no switch set
+    /// (the manifest's `host.clientIp` absent, so on; no `k2 publish
+    /// client-ip`). The App sees exactly the visitor K2 knows, as one
+    /// `X-K2-Client-IP` with a single-value `X-Forwarded-For` and
+    /// `X-Real-IP`, on every keep-alive request, and never a copy the visitor
+    /// sent. With no known visitor (no PROXY header, a loopback source, a
+    /// relay's own address) the App gets none of them, never a client's:
+    ///
+    /// 1. its k2.dev label through the K2 Connect E2E listener (frpc's PROXY v2);
+    /// 2. a custom name through the relay (Path B, the same listener);
+    /// 3. a custom name through the box's own :443 (front443's PROXY v2 into
+    ///    the App TLS door);
+    /// 4. another nested label pointed at the App's front port (K2's raw
+    ///    splice, then the front port's hop lookup);
+    /// 5. the App's front port from a caller on the box itself: never a
+    ///    visitor, so only `X-K2-Client-IP` is dropped.
+    #[tokio::test]
+    async fn every_path_to_a_runtime_app_carries_exactly_the_visitor() {
+        use k2_core::tunnel::subdomains::{self, SubdomainMap};
+        let _home = crate::test_support::TempHome::new();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        crate::apps::guard::reload();
+        crate::relay_addrs::set_for_test(&["192.0.2.77".parse().unwrap()]);
+        let daemon_port = install_test_ingress_state();
+
+        // The App: live behind its label, with its front port open.
+        let app = crate::client_ip::tests::echo_app().await;
+        crate::apps::router::switch("shop", app);
+        let front = crate::apps::router::ensure_front(&tokio::runtime::Handle::current(), "shop", 0, true).expect("the App's front port");
+        let closed = k2_core::test_env::ClosedPort::dual();
+        let mut targets = std::collections::HashMap::new();
+        targets.insert("shop".to_string(), format!("localhost:{}", closed.port()));
+        targets.insert("alias".to_string(), format!("127.0.0.1:{front}"));
+        mark_public(&["shop", "alias"]);
+        subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
+        let (tunnel_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("example").expect("cert");
+        let shared = Arc::new(ArcSwap::from_pointee(e2e_server_config(&tunnel_pem, &key_pem).expect("config")));
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind the E2E listener");
+        let e2e = l.local_addr().unwrap().port();
+        tokio::spawn(async move { accept_loop(Arc::new(l), shared, daemon_port).await });
+
+        // A live custom name with its own certificate: the E2E listener
+        // (Path B) and the App TLS door both serve it.
+        let host = "shop.customer-c.example";
+        let key = rcgen::KeyPair::generate().unwrap();
+        let cert = rcgen::CertificateParams::new(vec![host.to_string()]).unwrap().self_signed(&key).unwrap();
+        let ck = crate::apps::custom_names::certified_key(&cert.pem(), &key.serialize_pem()).unwrap();
+        crate::apps::custom_names::install_for_test(host, "shop", k2_core::domains::STATE_LIVE, Some(ck));
+        let door_l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind the door");
+        let door = door_l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((tcp, _)) = door_l.accept().await else { return };
+                tokio::spawn(async move {
+                    let _ = crate::apps::tls_door::serve_conn(tcp, crate::apps::tls_door::server_config()).await;
+                });
+            }
+        });
+
+        let custom_pem = cert.pem();
+        let paths: [(&str, &str, u16, &str); 4] = [
+            ("label", tunnel_pem.as_str(), e2e, "shop.example.k2.dev"),
+            ("custom-via-relay", custom_pem.as_str(), e2e, host),
+            ("custom-via-front443", custom_pem.as_str(), door, host),
+            ("label-to-front-port", tunnel_pem.as_str(), e2e, "alias.example.k2.dev"),
+        ];
+        let visitors: [(Option<Vec<u8>>, Option<&str>); 5] = [
+            (relay_saw("203.0.113.7:51515"), Some("203.0.113.7")),
+            (relay_saw("[2001:db8::7]:4000"), Some("2001:db8::7")),
+            (relay_saw("127.0.0.1:40000"), None),
+            (relay_saw("192.0.2.77:40000"), None),
+            (None, None),
+        ];
+        for (what, pem, port, sni) in paths {
+            for (preamble, want) in &visitors {
+                let mut tls = frpc_session(pem, port, sni, preamble.clone())
+                    .await
+                    .unwrap_or_else(|e| panic!("{what} ({want:?}): TLS: {e}"));
+                let mut buf = Vec::new();
+                for i in 0..2 {
+                    let req = format!("GET /{what}/{i} HTTP/1.1\r\nHost: {sni}\r\n{SPOOFED}\r\n");
+                    tls.write_all(req.as_bytes()).await.unwrap();
+                    let (head, seen) = next_response(&mut tls, &mut buf).await;
+                    assert!(head.starts_with("HTTP/1.1 200 OK"), "{what} ({want:?}): the App answers: {head}");
+                    assert!(seen.starts_with(&format!("GET /{what}/{i} ")), "{what} ({want:?}): {seen}");
+                    assert_app_saw(&seen, *want);
+                }
+            }
+        }
+
+        // 5. A caller on the box itself is never a visitor: K2's header is
+        // dropped and none is set. (A local reverse proxy's own
+        // X-Forwarded-For is its business, so that one stays.)
+        let mut s = TcpStream::connect(("127.0.0.1", front)).await.expect("the front port");
+        s.write_all(b"GET /local HTTP/1.1\r\nHost: shop\r\nX-K2-Client-IP: 6.6.6.6\r\nX-Forwarded-For: 198.51.100.1\r\n\r\n").await.unwrap();
+        let (head, seen) = next_response(&mut s, &mut Vec::new()).await;
+        assert!(head.starts_with("HTTP/1.1 200 OK"), "{head}");
+        assert!(header_values(&seen, "x-k2-client-ip").is_empty(), "local caller: {seen}");
+        assert_eq!(header_values(&seen, "x-forwarded-for"), vec!["198.51.100.1".to_string()], "{seen}");
+
+        crate::apps::custom_names::remove_for_test(host);
+        crate::apps::router::close_front("shop");
+        crate::apps::router::clear("shop");
+        crate::relay_addrs::set_for_test(&[]);
+        subdomains::store(SubdomainMap::default());
+    }
+
     /// PRD test 3: a hello offering `acme-tls/1` gets only the challenge
     /// certificate registered for its name, then the connection closes; with
     /// none registered (any name, k2.dev's too), no certificate. A real

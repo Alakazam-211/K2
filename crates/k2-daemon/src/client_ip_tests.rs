@@ -663,6 +663,39 @@ async fn local_front_port_strips_only_k2s_header_unless_it_is_k2s_hop() {
     assert_k2_only(&seen, Some("198.51.100.200"));
 }
 
+/// K2's own splice to an App's front port with no known visitor (the relay
+/// passed none) still carries internet traffic: every client copy of the
+/// forwarding headers is dropped, exactly as on the tunnel, and none is set.
+/// Before 0.46.12 only `X-K2-Client-IP` was dropped there, so a visitor's own
+/// `X-Forwarded-For` reached the App. K2's login throttle still sees no client
+/// for that hop, and neither does the visitor key K2's doors use.
+#[tokio::test]
+async fn a_k2_hop_with_no_known_visitor_drops_every_client_copy() {
+    let app = echo_app().await;
+    let front = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let front_port = front.local_addr().unwrap().port();
+    let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (s, peer) = front.accept().await.unwrap();
+        let _ = peer_tx.send(peer);
+        let mut up = TcpStream::connect(("127.0.0.1", app)).await.unwrap();
+        let mut down = s;
+        let _ = forward(&mut down, &mut up, Mode::Local { peer: Some(peer) }).await;
+    });
+    let hop = TcpStream::connect(("127.0.0.1", front_port)).await.unwrap();
+    let _guard = register_hop(&hop, None);
+    let peer = peer_rx.await.unwrap();
+    assert_eq!(hop_client_ip(peer), None, "no visitor for the login throttle");
+    assert_eq!(visitor_of(Mode::Local { peer: Some(peer) }), None, "no visitor for K2's doors");
+    let mut hop = Client { s: hop, buf: Vec::new() };
+    for i in 0..2 {
+        hop.send(format!("GET /n{i} HTTP/1.1\r\nHost: a\r\n{SPOOFS}\r\n").as_bytes()).await.unwrap();
+        let (_, seen) = hop.response().await;
+        assert!(seen.starts_with(&format!("GET /n{i} ")), "{seen}");
+        assert_k2_only(&seen, None);
+    }
+}
+
 #[test]
 fn owned_names_cover_underscore_spellings() {
     for n in ["X_Forwarded_For", "x-real_ip", "X-K2_CLIENT_IP", "FORWARDED"] {

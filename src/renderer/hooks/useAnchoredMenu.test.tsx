@@ -20,6 +20,15 @@ import HomePicker from '@/components/Home/HomePicker'
 import { useHomesStore } from '@/stores/homes'
 import { useState } from 'react'
 import { ANCHORED_MENU_MARGIN, ZEN_ANCHORED_MENU_LAYER, anchoredMenuBox, useAnchoredMenu } from './useAnchoredMenu'
+import {
+  applyAppZoomForTest,
+  onScreen,
+  relayout,
+  resetAppZoomForTest,
+  setCssSize,
+  setScreenRect,
+  setWindowSize,
+} from '@/test-utils/app-zoom'
 
 const OPTIONS = [
   { id: 'g-work', name: 'Work', color: '#f00' },
@@ -259,6 +268,59 @@ describe('FocusGroupDropdown in a clipping card', () => {
     // Above the window-control cluster (3) and the Add agent picker (30).
     expect(ZEN_ANCHORED_MENU_LAYER).toBeGreaterThan(30)
   })
+})
+
+// Under the app zoom (CSS `zoom` on <html>) rects and the window size are
+// window px, the menu's fixed top/left are CSS px. Every menu on this hook
+// (top-bar usage, Keep awake, voice; sidebars; Zen) places in CSS px.
+describe('anchored menus under the app zoom', () => {
+  const WIN = { width: 1000, height: 800 }
+  const MENU = { width: 190, height: 200 }
+
+  function openZoomed(z: number, trigger: { left: number; top: number }): { menu: HTMLElement; anchor: DOMRect } {
+    setWindowSize(WIN.width, WIN.height)
+    applyAppZoomForTest(z)
+    const { trigger: button } = renderClipped()
+    const wrap = button.parentElement as HTMLElement
+    setScreenRect(wrap, { left: trigger.left, top: trigger.top, width: 190 * z, height: 28 * z })
+    act(() => {
+      fireEvent.click(button)
+    })
+    const menu = menuEl()
+    setCssSize(menu, MENU, z)
+    relayout()
+    return { menu, anchor: wrap.getBoundingClientRect() }
+  }
+
+  afterEach(() => {
+    resetAppZoomForTest()
+    setWindowSize(1024, 768)
+  })
+
+  for (const z of [1.25, 1.5]) {
+    it(`at ${z * 100}%: opens under the trigger, left edges lined up, at its width`, () => {
+      const { menu, anchor } = openZoomed(z, { left: 30 * z, top: 100 * z })
+      const box = onScreen(menu, MENU, z)
+      expect(box.left).toBeCloseTo(anchor.left, 5)
+      expect(box.top).toBeCloseTo(anchor.bottom + 2 * z, 5)
+      expect(menu.style.width).toBe('190px')
+    })
+
+    it(`at ${z * 100}%: a trigger near the right edge keeps the menu inside the window`, () => {
+      const { menu } = openZoomed(z, { left: WIN.width - 100, top: 100 * z })
+      const box = onScreen(menu, MENU, z)
+      expect(box.right).toBeCloseTo(WIN.width - ANCHORED_MENU_MARGIN * z, 5)
+      expect(box.left).toBeGreaterThanOrEqual(0)
+    })
+
+    it(`at ${z * 100}%: near the bottom it flips up and ends just above the trigger`, () => {
+      const { menu, anchor } = openZoomed(z, { left: 30 * z, top: WIN.height - 40 * z })
+      expect(menu.getAttribute('data-placement')).toBe('up')
+      const box = onScreen(menu, MENU, z)
+      expect(box.bottom).toBeCloseTo(anchor.top - 2 * z, 5)
+      expect(box.top).toBeGreaterThanOrEqual(0)
+    })
+  }
 })
 
 describe('Home picker (Home sidebar)', () => {

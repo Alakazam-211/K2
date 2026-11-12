@@ -12,9 +12,11 @@
 // It opens below the trigger and flips upward when there isn't room below
 // but there is more above (`prefer: 'up'` reverses that: Zen's bottom band
 // opens toward the page). It lines up with the trigger's left edge, or its
-// right edge with `align: 'end'`. It follows the trigger on scroll and resize, and
-// closes on a mousedown outside both the trigger and the menu (a pick in a
-// dropdown the menu opened, itself portalled, is not outside), or on Escape.
+// right edge with `align: 'end'`. It is placed in CSS px, so it stays under
+// its trigger and inside the window at any app zoom (`lib/app-zoom`). It
+// follows the trigger on scroll and resize, and closes on a mousedown
+// outside both the trigger and the menu (a pick in a dropdown the menu
+// opened, itself portalled, is not outside), or on Escape.
 // `tabOrder: true` keeps the menu where it was in the Tab order before it
 // moved to <body>: Tab from the trigger goes into the menu, Shift+Tab from
 // its first stop goes back to the trigger, and Tab past its last stop goes on
@@ -35,6 +37,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { createPortal } from 'react-dom'
 import { menuLayerForTrigger } from '@/components/Settings/controls/SettingControls'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { clientRectToCss, cssViewport } from '@/lib/app-zoom'
 
 /** Above every Zen layer (cluster 3, content 1, Add agent picker 30). */
 export const ZEN_ANCHORED_MENU_LAYER = 40
@@ -60,7 +63,9 @@ export interface AnchoredMenuBox {
 }
 
 /** Where the menu goes for a trigger at `anchor` in a `viewport`-sized
- *  window, for a menu `menuHeight` tall and `menuWidth` wide (pure). */
+ *  window, for a menu `menuHeight` tall and `menuWidth` wide (pure). All in
+ *  CSS px: under the app zoom, convert measured rects and the window size
+ *  first (`clientRectToCss`, `cssViewport`). */
 export function anchoredMenuBox(
   anchor: { top: number; bottom: number; left: number; width: number },
   viewport: { width: number; height: number },
@@ -149,10 +154,13 @@ export function useAnchoredMenu<A extends HTMLElement = HTMLElement>({
   const place = useCallback(() => {
     const anchor = anchorRef.current
     if (!anchor) return
-    const rect = anchor.getBoundingClientRect()
-    const menuRect = menuEl.current?.getBoundingClientRect()
+    // Measured rects and innerWidth/innerHeight are window px; the menu's
+    // fixed top/left are CSS px, which the app zoom scales. Place in CSS px.
+    const rect = clientRectToCss(anchor.getBoundingClientRect())
+    const measured = menuEl.current?.getBoundingClientRect()
+    const menuRect = measured ? clientRectToCss(measured) : undefined
     const height = menuRect && menuRect.height > 0 ? menuRect.height : estimatedHeight
-    const next = anchoredMenuBox(rect, { width: window.innerWidth, height: window.innerHeight }, height, {
+    const next = anchoredMenuBox(rect, cssViewport(), height, {
       gap,
       width,
       minWidth,

@@ -406,7 +406,7 @@ export default function VoicePopover({
       role="dialog"
       aria-label="Voice rooms"
       data-testid="voice-popover"
-      {...floatMaterial('popover')} className="w-[320px] max-h-[70vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
+      {...floatMaterial('popover')} className="w-[320px] max-h-[calc(var(--k2-vh)*0.7)] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] px-3 py-2 shadow-lg"
       style={{ ...style, ...noDrag }}
     >
       <header className="mb-1 text-[12px] text-[var(--color-text-primary)]">Voice rooms</header>

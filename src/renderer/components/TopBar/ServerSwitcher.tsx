@@ -544,7 +544,7 @@ export default function ServerSwitcher({
             <div
               ref={scrollRef}
               data-testid="server-switcher-scroll"
-              className="max-h-[min(320px,60vh)] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
+              className="max-h-[min(320px,calc(var(--k2-vh)*0.6))] overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
             >
               {hostsSorted.map((h) => {
                 const isActive = activeHost !== 'local' && activeHost.id === h.id

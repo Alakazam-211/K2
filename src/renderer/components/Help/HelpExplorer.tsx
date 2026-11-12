@@ -510,8 +510,9 @@ export default function HelpExplorer({
           left: '50%',
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
-          width: 'min(880px, calc(100vw - 32px))',
-          height: 'min(640px, calc(100vh - 64px))',
+          // In the window at any app zoom (globals.css --k2-vw / --k2-vh).
+          width: 'min(880px, calc(var(--k2-vw) - 32px))',
+          height: 'min(640px, calc(var(--k2-vh) - 64px))',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -559,7 +560,7 @@ export default function HelpExplorer({
                 data-testid="help-search-results"
                 className="absolute left-1/2 -translate-x-1/2 mt-1"
                 style={{
-                  width: 'min(480px, calc(100vw - 48px))',
+                  width: 'min(480px, calc(var(--k2-vw) - 48px))',
                   maxHeight: 340,
                   overflowY: 'auto',
                   zIndex: 2,

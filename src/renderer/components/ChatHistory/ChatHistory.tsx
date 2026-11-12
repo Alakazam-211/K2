@@ -33,6 +33,7 @@ import {
 import { IconAutonomous } from '@/components/icons/IconAutonomous'
 import { useStore } from 'zustand'
 import { clientToCssPx } from '@/stores/context-menu'
+import { cssViewport } from '@/lib/app-zoom'
 import { sessionIdsTargetedByHeartbeats } from '@/lib/heartbeat-delivery'
 import type { ServerScope } from '@/kessel/server-scope'
 
@@ -827,16 +828,18 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     document.body.appendChild(menuDiv)
     // Flip / clamp into the viewport after layout (bottom-of-list right-click
     // previously opened downward and ran off the page).
+    // All in CSS px: the window too, at any app zoom.
     const pad = 8
     const rect = menuDiv.getBoundingClientRect()
     const width = clientToCssPx(rect.width)
     const height = clientToCssPx(rect.height)
+    const view = cssViewport()
     let left = clientToCssPx(e.clientX)
     let top = clientToCssPx(e.clientY)
-    if (left + width > window.innerWidth - pad) {
-      left = Math.max(pad, window.innerWidth - width - pad)
+    if (left + width > view.width - pad) {
+      left = Math.max(pad, view.width - width - pad)
     }
-    if (top + height > window.innerHeight - pad) {
+    if (top + height > view.height - pad) {
       // Prefer opening upward from the cursor.
       top = clientToCssPx(e.clientY) - height
     }

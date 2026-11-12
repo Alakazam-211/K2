@@ -58,6 +58,15 @@ vi.mock('@/stores/timer', () => {
 
 import KeepAwakeButton from './KeepAwakeButton'
 import { FrostCapsule, expectOnPopoverLayer } from '@/test-utils/popover-layer'
+import {
+  applyAppZoomForTest,
+  onScreen,
+  relayout,
+  resetAppZoomForTest,
+  setCssSize,
+  setScreenRect,
+  setWindowSize,
+} from '@/test-utils/app-zoom'
 import TimerButton from './TimerButton'
 
 function status(over: Partial<KeepAwakeStatus>): KeepAwakeStatus {
@@ -543,6 +552,67 @@ describe('a Member on the window’s server (0.43.2 Q3: route floor Admin)', () 
     fireEvent.click(button)
     expect((await screen.findByTestId('keep-awake-mode-off') as HTMLInputElement).disabled).toBe(false)
     expect(screen.queryByTestId('keep-awake-read-only')).toBeNull()
+  })
+})
+
+// With the app zoomed in (Cmd+=), the menu opened right of and below the
+// mug and ran off the window: it was placed from the mug's on-screen rect
+// (window px) and clamped to innerWidth (window px), then drawn in CSS px,
+// which the zoom scales up again.
+describe('KeepAwakeButton under the app zoom', () => {
+  const WIN = { width: 1400, height: 900 }
+  /** The menu's CSS size (its `w-[280px]` and a typical height). */
+  const MENU = { width: 280, height: 320 }
+
+  async function openAt(z: number, mug: { right: number }): Promise<{ menu: HTMLElement; anchor: DOMRect }> {
+    setWindowSize(WIN.width, WIN.height)
+    applyAppZoomForTest(z)
+    h.daemonCliGet.mockResolvedValue({ keepAwake: STATES[2].s })
+    render(
+      <FrostCapsule>
+        <KeepAwakeButton />
+      </FrostCapsule>,
+    )
+    const button = await screen.findByTestId('keep-awake')
+    const wrap = button.parentElement
+    if (!wrap) throw new Error('no anchor around the mug')
+    // The mug in the top bar: 24 CSS px square, 6 CSS px from the top.
+    setScreenRect(wrap, { left: mug.right - 24 * z, top: 6 * z, width: 24 * z, height: 24 * z })
+    fireEvent.click(button)
+    const menu = await screen.findByTestId('keep-awake-menu')
+    setCssSize(menu, MENU, z)
+    relayout()
+    return { menu, anchor: wrap.getBoundingClientRect() }
+  }
+
+  for (const z of [1, 1.25, 1.5]) {
+    it(`at ${z * 100}%: opens just under the mug, right edges lined up, inside the window`, async () => {
+      try {
+        const { menu, anchor } = await openAt(z, { right: WIN.width - 60 })
+        const box = onScreen(menu, MENU, z)
+        // 4 CSS px gap under the mug.
+        expect(box.top).toBeCloseTo(anchor.bottom + 4 * z, 5)
+        expect(box.right).toBeCloseTo(anchor.right, 5)
+        expect(box.left).toBeGreaterThanOrEqual(0)
+        expect(box.right).toBeLessThanOrEqual(WIN.width)
+        expect(box.bottom).toBeLessThanOrEqual(WIN.height)
+      } finally {
+        resetAppZoomForTest()
+      }
+    })
+  }
+
+  it('at 150%, a mug near the left edge: the menu is pushed right to stay inside the window (8 CSS px margin)', async () => {
+    const z = 1.5
+    try {
+      const { menu, anchor } = await openAt(z, { right: 100 })
+      const box = onScreen(menu, MENU, z)
+      expect(box.left).toBeCloseTo(8 * z, 5)
+      expect(box.top).toBeCloseTo(anchor.bottom + 4 * z, 5)
+      expect(box.right).toBeLessThanOrEqual(WIN.width)
+    } finally {
+      resetAppZoomForTest()
+    }
   })
 })
 

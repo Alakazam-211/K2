@@ -662,8 +662,9 @@ export function AdminProfileModal({ onClose }: { onClose: () => void }): React.J
           transform: 'translate(-50%, -50%)',
           zIndex: 99999,
           // Wide enough for the sign-ins grid; shrinks with small windows.
-          width: 'min(680px, calc(100vw - 32px))',
-          maxHeight: '78vh',
+          // In the window at any app zoom (globals.css --k2-vw / --k2-vh).
+          width: 'min(680px, calc(var(--k2-vw) - 32px))',
+          maxHeight: 'calc(var(--k2-vh) * 0.78)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

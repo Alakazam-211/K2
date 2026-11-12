@@ -104,6 +104,7 @@ import { SendFeedbackHost } from './components/SendFeedback/SendFeedbackButton'
 import { openSendFeedback } from '@/stores/send-feedback'
 import { installBothShifts } from '@/lib/both-shifts'
 import { bootAppStores } from './boot-app-stores'
+import { applyAppZoomToDocument } from '@/lib/app-zoom'
 
 // The first loads of the stores that come in with the app
 // (boot-app-stores.ts). They ran while the imports above were evaluated.
@@ -236,13 +237,7 @@ function applyK2SOZoom(): void {
   // Hosted web: `z3thon | K2`. Desktop Mission Control: `K2 | <server>`.
   // Zoom suffix shared: `… — 125%`.
   const z = window.__k2soZoom ?? 1
-  document.documentElement.style.setProperty('--k2-app-zoom', String(z))
-  document.documentElement.classList.toggle('k2-app-zoomed', z !== 1)
-  if (z === 1) {
-    document.documentElement.style.zoom = ''
-  } else {
-    document.documentElement.style.zoom = String(z)
-  }
+  applyAppZoomToDocument(z)
   // macOS: re-center the stoplights on the zoomed top bar and size the
   // spacer to their unscaled width. Runs at startup too (mount effect).
   onAppZoomChange()

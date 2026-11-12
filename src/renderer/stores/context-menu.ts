@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
+import { clientToCssPx } from '@/lib/app-zoom'
 
 export interface ContextMenuItemDef {
   id: string
@@ -43,13 +44,10 @@ export function isSelectableItem(item: ContextMenuItemDef): boolean {
 
 /**
  * CSS `zoom` on <html> (applyK2SOZoom): clientX/Y and getBoundingClientRect
- * are post-zoom; position:fixed left/top are pre-zoom. Divide by zoom.
- * WKWebView may want the inverse — keep `/` to match column-resize tests.
+ * are window px; position:fixed left/top are CSS px. Divide by zoom
+ * (`lib/app-zoom`, where the window size in CSS px lives too).
  */
-export function clientToCssPx(clientPx: number): number {
-  const z = typeof window !== 'undefined' ? window.__k2soZoom ?? 1 : 1
-  return z > 0 ? clientPx / z : clientPx
-}
+export { clientToCssPx }
 
 interface ContextMenuState {
   isOpen: boolean

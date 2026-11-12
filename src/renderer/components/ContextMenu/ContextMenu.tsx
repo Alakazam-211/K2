@@ -3,6 +3,7 @@ import { floatMaterial } from '@/components/ui/float-material'
 import { BetaTag, Tag } from '@/components/ui/Tag'
 import { KeyCombo } from '@/components/KeySymbol'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { cssViewport } from '@/lib/app-zoom'
 import {
   clientToCssPx,
   isSelectableItem,
@@ -206,12 +207,13 @@ function Submenu({
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
+    // Both window px (rect and innerWidth/innerHeight), at any app zoom.
     const rect = el.getBoundingClientRect()
-    if (clientToCssPx(rect.right) > window.innerWidth) {
+    if (rect.right > window.innerWidth) {
       el.style.left = 'auto'
       el.style.right = '100%'
     }
-    if (clientToCssPx(rect.bottom) > window.innerHeight) {
+    if (rect.bottom > window.innerHeight) {
       el.style.top = 'auto'
       el.style.bottom = '-4px'
     }
@@ -273,12 +275,12 @@ export default function ContextMenu(): React.JSX.Element | null {
     .filter((i) => i !== -1)
 
   // Position adjustment to keep menu within viewport.
-  // Stored x/y and innerWidth are CSS px; gBCR is post-zoom.
+  // Stored x/y are CSS px; gBCR and innerWidth are window px, so the
+  // menu's size and the window are converted to CSS px (app zoom).
   const adjustedPosition = useCallback(() => {
     if (!menuRef.current) return { left: x, top: y }
     const rect = menuRef.current.getBoundingClientRect()
-    const vw = window.innerWidth
-    const vh = window.innerHeight
+    const { width: vw, height: vh } = cssViewport()
     const width = clientToCssPx(rect.width)
     const height = clientToCssPx(rect.height)
 

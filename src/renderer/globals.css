@@ -77,6 +77,13 @@ html {
      stores/style.ts rewrites it on every zoom change: the native buttons
      do not scale, so the CSS width is their remaining width / zoom. */
   --k2-stoplight-spacer: 57px;
+  /* The window's width and height in CSS px at any app zoom. Under
+     html { zoom } a CSS px draws `zoom` window px wide, and 100vw / 100vh
+     are the window in CSS px, so a box sized from them draws `zoom` times
+     larger than the window. Size floating boxes that must fit the window
+     from these instead (lib/app-zoom.ts). Same as 100vw / 100vh at 100%. */
+  --k2-vw: calc(100vw / var(--k2-app-zoom, 1));
+  --k2-vh: calc(100vh / var(--k2-app-zoom, 1));
 }
 /* Page top bars (DesktopChromeLeft on macOS). */
 .k2-stoplight-spacer {

@@ -255,8 +255,9 @@ export default function SendFeedbackDialog(): React.JSX.Element {
         closeButton="inline"
         style={{
           width: 560,
-          maxWidth: 'calc(100vw - 48px)',
-          maxHeight: 'calc(100vh - 96px)',
+          // In the window at any app zoom (globals.css --k2-vw / --k2-vh).
+          maxWidth: 'calc(var(--k2-vw) - 48px)',
+          maxHeight: 'calc(var(--k2-vh) - 96px)',
           display: 'flex',
           flexDirection: 'column',
         }}

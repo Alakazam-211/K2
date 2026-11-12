@@ -191,6 +191,16 @@ describe('Toast stack placement', () => {
       'feedback',
       'wiki',
     ]
+    const expectOn = (host: HTMLElement, page: string): void => {
+      // Projects: bottom centre, clear of the project bar's Layout and Chat.
+      if (page !== 'projects') return expectTopRightOf(host)
+      const el = stack()
+      expect(el.parentElement).toBe(host)
+      expect(el.style.position).toBe('absolute')
+      expect(el.style.bottom).toBe('16px')
+      expect(el.style.top).toBe('')
+      expect(el.style.left).toBe('50%')
+    }
     for (const page of pages) {
       cleanup()
       useToastStore.setState({ toasts: [] })
@@ -204,7 +214,7 @@ describe('Toast stack placement', () => {
       )
       show(page)
 
-      expectTopRightOf(screen.getByTestId('page-host'))
+      expectOn(screen.getByTestId('page-host'), page)
       expect(screen.getByTestId('grid').contains(stack())).toBe(false)
     }
   })
@@ -240,5 +250,23 @@ describe('Toast stack placement', () => {
     expect(el.style.bottom).toBe('16px')
     expect(el.style.top).toBe('')
     expect(screen.getByTestId('page-host').contains(el)).toBe(false)
+  })
+
+  it('a toast is a cut box in Terminal (a drop-shadow wrapper), its kind a dot, with a named Dismiss', () => {
+    render(
+      <>
+        <div data-terminal-container="" data-testid="grid" />
+        <Toast />
+      </>,
+    )
+    act(() => {
+      useToastStore.getState().addToast('Couldn’t save.', 'error')
+    })
+    const item = document.querySelector<HTMLElement>('[data-toast-item="error"]')
+    expect(item?.getAttribute('data-k2-chamfer-float')).toBe('menu')
+    const box = item?.firstElementChild as HTMLElement
+    expect(box.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(box.className).not.toContain('overflow-hidden')
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
   })
 })

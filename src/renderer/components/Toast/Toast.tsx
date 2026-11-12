@@ -16,31 +16,6 @@ const ACCENT_COLORS: Record<ToastData['type'], string> = {
   warning: 'var(--color-status-warn)'
 }
 
-const CORNER_SIZE = 8
-const CORNER_WEIGHT = 2
-
-/** Four L-shaped corner brackets */
-function CornerBrackets({ color }: { color: string }): React.JSX.Element {
-  const s = CORNER_SIZE
-  const w = CORNER_WEIGHT
-  return (
-    <>
-      {/* Top-left */}
-      <span className="absolute top-0 left-0" style={{ width: s, height: w, background: color }} />
-      <span className="absolute top-0 left-0" style={{ width: w, height: s, background: color }} />
-      {/* Top-right */}
-      <span className="absolute top-0 right-0" style={{ width: s, height: w, background: color }} />
-      <span className="absolute top-0 right-0" style={{ width: w, height: s, background: color }} />
-      {/* Bottom-left */}
-      <span className="absolute bottom-0 left-0" style={{ width: s, height: w, background: color }} />
-      <span className="absolute bottom-0 left-0" style={{ width: w, height: s, background: color }} />
-      {/* Bottom-right */}
-      <span className="absolute bottom-0 right-0" style={{ width: s, height: w, background: color }} />
-      <span className="absolute bottom-0 right-0" style={{ width: w, height: s, background: color }} />
-    </>
-  )
-}
-
 function ToastItem({ toast }: { toast: ToastData }): React.JSX.Element {
   const removeToast = useToastStore((s) => s.removeToast)
   const progressRef = useRef<HTMLDivElement>(null)
@@ -56,14 +31,27 @@ function ToastItem({ toast }: { toast: ToastData }): React.JSX.Element {
     })
   }, [toast.duration])
 
+  // A cut box in Terminal like K2's other floating surfaces (its wrapper
+  // carries the drop shadow: a box-shadow can't follow a cut); the kind
+  // shows as a dot before the words and in the time bar along the bottom.
   return (
-    <div {...floatMaterial('toast')} className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] text-xs shadow-lg min-w-[240px] max-w-[360px] overflow-hidden">
-      <CornerBrackets color={color} />
+    <div data-k2-chamfer-float="menu" data-toast-item={toast.type}>
+      <div
+        {...floatMaterial('toast')}
+        data-k2-chamfer="surface"
+        className="relative bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)] type-control border border-[var(--color-border)] [box-shadow:var(--shadow-3)] min-w-[240px] max-w-[360px]"
+      >
+      {/* The clip lives inside, so the cut's edge (drawn just outside the
+          padding box) isn't clipped with it. */}
+      <div className="rounded-[inherit] overflow-hidden">
       <div className="px-3 py-2.5 flex flex-col gap-1.5">
         <div className="flex items-start gap-2">
+          <span aria-hidden="true" className="mt-[0.4em] w-2 h-2 flex-shrink-0 rounded-[var(--radius-status)]" style={{ backgroundColor: color }} />
           <span className="flex-1 leading-relaxed">{toast.message}</span>
           <button
-            className="flex-shrink-0 w-4 h-4 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+            type="button"
+            aria-label="Dismiss"
+            className="k2-focus flex-shrink-0 w-4 h-4 flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
             onClick={() => removeToast(toast.id)}
           >
             <svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -91,6 +79,8 @@ function ToastItem({ toast }: { toast: ToastData }): React.JSX.Element {
           className="h-[2px]"
           style={{ backgroundColor: color, opacity: 0.4 }}
         />
+      </div>
+      </div>
       </div>
     </div>
   )
@@ -212,8 +202,10 @@ const PANE_STACK_STYLE: React.CSSProperties = {
   zIndex: 30,
 }
 
-/** In a modal sheet: bottom centre, as over Settings, clear of the
- *  sheet's own title-row actions. */
+/** In a modal sheet, and on the Projects page: bottom centre, as over
+ *  Settings, clear of the title-row actions at the top (the sheet's ×,
+ *  the project bar's Layout and Chat). */
+const BOTTOM_HOSTS = new Set(['sheet', 'projects'])
 const SHEET_STACK_STYLE: React.CSSProperties = {
   position: 'absolute',
   bottom: 16,
@@ -276,7 +268,7 @@ export default function Toast(): React.JSX.Element | null {
       style={
         live === 'settings'
           ? { left: '50%', transform: 'translateX(-50%)' }
-          : live.getAttribute('data-toast-host') === 'sheet'
+          : BOTTOM_HOSTS.has(live.getAttribute('data-toast-host') ?? '')
             ? SHEET_STACK_STYLE
             : PANE_STACK_STYLE
       }

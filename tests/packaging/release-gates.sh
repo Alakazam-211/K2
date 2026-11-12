@@ -47,6 +47,7 @@ cat > "$tmp/bin/k2" <<'STUB'
 echo "k2 $*" >> "$STUB_CALLS"
 gate_of() { # the gate a run line is for, from its command
     case "$*" in
+        *ratchet.sh*) echo ratchet ;;
         *vitest*) echo vitest ;;
         *typecheck:web*) echo typecheck-web ;;
         *vite:build:web*) echo vite-build-web ;;
@@ -95,6 +96,7 @@ case "$1 $2" in
             cargo-*) echo "    Finished \`dev\` profile [optimized + debuginfo] target(s) in 2m 01s" ;;
             typecheck-web) echo "typecheck:web: no errors" ;;
             vite-build-web) echo "✓ built in 1.92s" ;;
+            ratchet) echo "ratchet: ok." ;;
         esac
         exit 0 ;;
 esac
@@ -117,7 +119,7 @@ echo "all gates pass (--gates-only):"
 rc="$(gates_only ok)"
 out="$(cat "$tmp/out-ok")"
 [ "$rc" = 0 ] && pass "exit 0" || fail "ok rc=$rc" "$out"
-for g in cargo-linux cargo-macos vitest typecheck-web vite-build-web; do
+for g in cargo-linux cargo-macos vitest typecheck-web vite-build-web ratchet; do
     line="$(runs ok "$g")"
     [ -n "$line" ] && pass "$g: one job sent" || { fail "$g: no job" "$(cat "$tmp/calls-ok")"; continue; }
     for want in "--sha $SHA" "--detach" "--json" "--tier ci" "set -euo pipefail"; do
@@ -134,7 +136,7 @@ done
 [[ "$(runs ok cargo-macos)" == *"--needs rust@1.98.7,cmake@3"* && "$(runs ok cargo-macos)" == *"RUSTFLAGS='-D warnings' cargo check --workspace --all-targets"* \
     && "$(runs ok cargo-macos)" == *"k2_mac_build_env"* && "$(runs ok cargo-macos)" == *"--mem 8G --env CARGO_BUILD_JOBS=1 "* ]] && pass "cargo-macos: the pinned Rust, the mac build env, -D warnings, one crate at a time in 8 GB" || fail "cargo-macos" "$(runs ok cargo-macos)"
 printf '%s\n' "$out" | grep -q "Tests  12255 passed | 2 skipped (12257)" && pass "vitest's line shows its test result" || fail "vitest result" "$out"
-printf '%s\n' "$out" | grep -qE "Gates: 5 passed in [0-9]+m[0-9]{2}s wall-clock" && pass "a wall-clock summary" || fail "summary" "$out"
+printf '%s\n' "$out" | grep -qE "Gates: 6 passed in [0-9]+m[0-9]{2}s wall-clock" && pass "a wall-clock summary" || fail "summary" "$out"
 grep -qE "^k2 (compute run|compute nodes|compute get|compute logs|compute wait|compute --help)" "$tmp/calls-ok" && ! grep -qE "^k2 (msg|thread|release)" "$tmp/calls-ok" \
     && pass "only compute calls" || fail "other k2 calls" "$(cat "$tmp/calls-ok")"
 ! grep -qiE "release lock|Signing approval|Bumping version" "$tmp/out-ok" && pass "no lock, no signing approval, no bump" || fail "did more than the gates" "$out"
@@ -189,11 +191,11 @@ rc="$(lib_run relinfra 'k2rg_begin "$(git rev-parse HEAD)" release; k2rg_submit_
 out="$(cat "$tmp/out-relinfra")"
 printf '%s\n' "$out" | grep -q "RC=0 INFRA=\[typecheck-web\]" && pass "release: a node problem leaves the gate to run here (K2RG_INFRA)" || fail "relinfra" "$out"
 rc="$(lib_run reldirty 'printf x > untracked.txt; k2rg_begin "$(git rev-parse HEAD)" release; k2rg_submit_all; rm -f untracked.txt')"
-[ "$(grep -c '^RUN .* --dirty' "$tmp/calls-reldirty")" = 4 ] && pass "release: a dirty checkout ships --dirty on every job" || fail "reldirty" "$(cat "$tmp/calls-reldirty")"
+[ "$(grep -c '^RUN .* --dirty' "$tmp/calls-reldirty")" = 5 ] && pass "release: a dirty checkout ships --dirty on every job" || fail "reldirty" "$(cat "$tmp/calls-reldirty")"
 rc="$(lib_run relmac 'k2rg_begin "$(git rev-parse HEAD)" release; k2rg_submit_all' K2_RELEASE_MAC_CHECK=compute)"
 [ -n "$(runs relmac cargo-macos)" ] && pass "K2_RELEASE_MAC_CHECK=compute sends the mac check too" || fail "relmac" "$(cat "$tmp/calls-relmac")"
 rc="$(lib_run cancel 'k2rg_begin "$(git rev-parse HEAD)" release; k2rg_submit_all; k2rg_cancel_open')"
-[ "$(grep -c '^k2 compute cancel .* --force' "$tmp/calls-cancel")" = 4 ] && pass "k2rg_cancel_open cancels every open gate job" || fail "cancel" "$(cat "$tmp/calls-cancel")"
+[ "$(grep -c '^k2 compute cancel .* --force' "$tmp/calls-cancel")" = 5 ] && pass "k2rg_cancel_open cancels every open gate job" || fail "cancel" "$(cat "$tmp/calls-cancel")"
 
 echo "release.sh Step 0.5 as written (k2rg_local stubbed: it records the gates run here):"
 awk '/^echo "Step 0\.5: Pre-flight gates/{on=1} /^# ── Step 0\.55/{exit} on{print}' "$ROOT/scripts/release.sh" > "$tmp/step05.sh"
@@ -213,14 +215,14 @@ step_run() { # <name> [env…]; echoes rc
 locals() { grep '^LOCAL ' "$tmp/calls-$1" | cut -d' ' -f2 | tr '\n' ' ' | sed 's/ $//' || true; }
 rc="$(step_run s-ok)"
 [ "$rc" = 0 ] && [ "$(locals s-ok)" = "cargo-macos" ] && grep -q "LINUX_OK=1" "$tmp/out-s-ok" && grep -q "Pre-flight gates passed." "$tmp/out-s-ok" \
-    && pass "compute: 4 jobs, the mac check here, Step 0.6 told the Linux gate ran" || fail "s-ok rc=$rc locals=$(locals s-ok)" "$(cat "$tmp/out-s-ok")"
+    && pass "compute: 5 jobs, the mac check here, Step 0.6 told the Linux gate ran" || fail "s-ok rc=$rc locals=$(locals s-ok)" "$(cat "$tmp/out-s-ok")"
 rc="$(step_run s-down STUB_DOWN=1)"
-[ "$rc" = 0 ] && [ "$(locals s-down)" = "cargo-macos typecheck-web vitest vite-build-web" ] && ! grep -q '^RUN' "$tmp/calls-s-down" \
+[ "$rc" = 0 ] && [ "$(locals s-down)" = "ratchet cargo-macos typecheck-web vitest vite-build-web" ] && ! grep -q '^RUN' "$tmp/calls-s-down" \
     && grep -q "K2 Compute is unreachable" "$tmp/out-s-down" && grep -q "LINUX_OK=0" "$tmp/out-s-down" \
     && pass "unreachable: says so, the old local gates, Step 0.6 runs its own job" || fail "s-down rc=$rc locals=$(locals s-down)" "$(cat "$tmp/out-s-down")"
 rc="$(step_run s-refuse STUB_REFUSE=vitest)"
-[ "$rc" = 0 ] && [ "$(locals s-refuse)" = "cargo-macos typecheck-web vitest vite-build-web" ] && grep -q "refused a gate job" "$tmp/out-s-refuse" \
-    && [ "$(grep -c '^k2 compute cancel' "$tmp/calls-s-refuse")" = 3 ] && grep -q "LINUX_OK=0" "$tmp/out-s-refuse" \
+[ "$rc" = 0 ] && [ "$(locals s-refuse)" = "ratchet cargo-macos typecheck-web vitest vite-build-web" ] && grep -q "refused a gate job" "$tmp/out-s-refuse" \
+    && [ "$(grep -c '^k2 compute cancel' "$tmp/calls-s-refuse")" = 4 ] && grep -q "LINUX_OK=0" "$tmp/out-s-refuse" \
     && pass "a refused job: the sent ones cancelled, the old local gates" || fail "s-refuse rc=$rc locals=$(locals s-refuse)" "$(cat "$tmp/out-s-refuse" "$tmp/calls-s-refuse")"
 rc="$(step_run s-infra STUB_INFRA=cargo-linux)"
 [ "$rc" = 0 ] && [ "$(locals s-infra)" = "cargo-macos cargo-linux" ] && grep -q "LINUX_OK=1" "$tmp/out-s-infra" \
@@ -229,7 +231,7 @@ rc="$(step_run s-fail STUB_FAIL=typecheck-web)"
 [ "$rc" = 1 ] && grep -q "FATAL: a pre-flight gate failed" "$tmp/out-s-fail" && [ "$(locals s-fail)" = "cargo-macos" ] \
     && pass "a failed gate stops the release, no local rerun" || fail "s-fail rc=$rc" "$(cat "$tmp/out-s-fail")"
 rc="$(step_run s-local K2_RELEASE_GATES=local)"
-[ "$rc" = 0 ] && [ "$(locals s-local)" = "cargo-macos typecheck-web vitest vite-build-web" ] && ! grep -q '^k2 ' "$tmp/calls-s-local" \
+[ "$rc" = 0 ] && [ "$(locals s-local)" = "ratchet cargo-macos typecheck-web vitest vite-build-web" ] && ! grep -q '^k2 ' "$tmp/calls-s-local" \
     && pass "K2_RELEASE_GATES=local: the old path, no k2 call" || fail "s-local rc=$rc" "$(cat "$tmp/out-s-local")"
 
 echo "release.sh wiring:"

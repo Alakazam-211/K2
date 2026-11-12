@@ -183,6 +183,9 @@ for t in bun bunx; do
     printf '#!/usr/bin/env bash\necho "%s $*" >> "$STUB_LOG"\n' "$t" > "$stubs/$t"
 done
 chmod +x "$stubs"/*
+# The size ratchet is a script of the repo, run from its root.
+mkdir -p "$proj/scripts/garden"
+printf 'echo "ratchet" >> "$STUB_LOG"\n' > "$proj/scripts/garden/ratchet.sh"
 printf '%s\n' "$block" > "$tmp/step05.sh"
 set +e
 out="$(cd "$proj" && env -u SDKROOT -u CMAKE_POLICY_VERSION_MINIMUM PATH="$stubs:$PATH" STUB_LOG="$tmp/step05.log" \
@@ -191,6 +194,7 @@ rc=$?
 set -e
 log="$(cat "$tmp/step05.log" 2>/dev/null || true)"
 check "the block ran (rc $rc: $out)" '[ "$rc" = 0 ]'
+check "the size ratchet ran first" '[ "$(printf "%s\n" "$log" | head -n 1)" = "ratchet" ]'
 check "cargo check ran" 'printf "%s\n" "$log" | grep -qx "cargo check --workspace --all-targets"'
 check "cargo saw SDKROOT from xcrun" 'printf "%s\n" "$log" | grep -qx "SDKROOT=/fake/Xcode.app/MacOSX26.5.sdk"'
 check "cargo saw the cmake policy floor" 'printf "%s\n" "$log" | grep -qx "CMAKE_POLICY_VERSION_MINIMUM=3.5"'

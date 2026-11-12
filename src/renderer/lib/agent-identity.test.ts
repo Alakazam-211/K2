@@ -71,3 +71,13 @@ describe('agentIdentityMatchesPath / agentIdentityDisplayName', () => {
     expect(agentIdentityDisplayName(ev({ displayName: '', name: '' }))).toBe(null)
   })
 })
+
+describe('applyAgentIdentity: the list row\'s agentDisplayName', () => {
+  it('follows a display-name change on rows that carry it, and never adds it to rows that don\'t', () => {
+    const withName: Array<(typeof rows)[number] & { agentDisplayName?: string }> = [{ ...rows[0], agentDisplayName: 'Sales' }, rows[1]]
+    const next = applyAgentIdentity(withName, ev({ name: 'Sales', displayName: 'Revenue Desk' }))
+    expect(next[0].agentDisplayName).toBe('Revenue Desk')
+    const plain = applyAgentIdentity(rows, ev({ name: 'Sales', displayName: 'Revenue Desk' }))
+    expect(plain).toBe(rows)
+  })
+})

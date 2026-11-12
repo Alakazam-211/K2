@@ -69,6 +69,15 @@ export function defaultViewLockReason(
   return null
 }
 
+/** 0302: why an agent's "Opens in" can't be changed here, or null when it
+ *  can. The same rule as the project's view (it changes it for everyone):
+ *  owner or admin (`ProjectSettingsCaps.canEditLooks`); a daemon before 0302 has no route for it. */
+export function memberViewLockReason(canEditLooks: boolean, daemonKnowsMemberViews: boolean): string | null {
+  if (!daemonKnowsMemberViews) return 'Needs a newer K2 on this server.'
+  if (!canEditLooks) return 'Only the owner or an admin can change where an agent opens.'
+  return null
+}
+
 /** Case-insensitive name filter for the left master list (the
  *  ProjectsSection `matchesSearch` idiom — groups have no path, so the
  *  name is the whole haystack). A blank query keeps everything. */

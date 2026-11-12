@@ -64,6 +64,52 @@ export interface ProjectGroupMemberInfo {
   path: string | null
   agentName: string | null
   createdAt: number
+  /** Whether the agent has a live session, as `show` was read (the answer
+   *  `sessions/lookup-by-agent` gives, for every member at once). A
+   *  snapshot: no event moves it; the page reads `show` again on a member
+   *  change and on its session starting or ending. Absent from older
+   *  daemons: unknown. */
+  sessionAlive?: boolean
+  sessionId?: string | null
+  /** 0302: the view this agent's tile opens in, for everyone: its own,
+   *  else the project's. Absent from older daemons: read it through
+   *  `memberDefaultView`. */
+  defaultView?: ProjectDefaultView
+  /** 0302: the agent's own view, or null when it follows the project's. */
+  ownDefaultView?: ProjectDefaultView | null
+}
+
+/** The view a member's tile opens in when nobody switched it: its own,
+ *  else the project's (`projectDefaultView`). A word this client doesn't
+ *  know falls back the same way. */
+export function memberDefaultView(
+  member: Pick<ProjectGroupMemberInfo, 'defaultView'>,
+  project: Pick<ProjectGroup, 'defaultView'>,
+): ProjectDefaultView {
+  const v = member.defaultView
+  return v !== undefined && PROJECT_DEFAULT_VIEWS.includes(v) ? v : projectDefaultView(project)
+}
+
+/** The member's own view, or null when it follows the project's (or the
+ *  daemon predates 0302). */
+export function memberOwnDefaultView(member: Pick<ProjectGroupMemberInfo, 'ownDefaultView'>): ProjectDefaultView | null {
+  const v = member.ownDefaultView
+  return v !== undefined && v !== null && PROJECT_DEFAULT_VIEWS.includes(v) ? v : null
+}
+
+/** Whether a session event's folder is one of the project's agents (the
+ *  page reads `show` again then, so the nav's awake/asleep is current). */
+export function pathIsMember(members: Pick<ProjectGroupMemberInfo, 'path'>[], path: string | null | undefined): boolean {
+  if (!path) return false
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const want = norm(path)
+  return members.some((m) => m.path !== null && norm(m.path) === want)
+}
+
+/** Whether this daemon has per-agent views (0302): its `show` members carry
+ *  `ownDefaultView` (null included). */
+export function daemonKnowsMemberViews(members: Pick<ProjectGroupMemberInfo, 'ownDefaultView'>[]): boolean {
+  return members.some((m) => m.ownDefaultView !== undefined)
 }
 
 export interface ProjectGroupDashboard {
@@ -246,6 +292,30 @@ export async function setProjectGroupDefaultView(
   view: ProjectDefaultView,
 ): Promise<ProjectGroup> {
   return daemonCliPost<ProjectGroup>(scope, 'project-group/set-default-view', { group, view })
+}
+
+/** The `set-member-default-view` answer: the member's `show` fields. */
+export interface MemberDefaultViewResult {
+  ok: boolean
+  groupId: string
+  workspaceId: string
+  defaultView: ProjectDefaultView
+  ownDefaultView: ProjectDefaultView | null
+}
+
+/** POST /cli/project-group/set-member-default-view (0302) — `{group,
+ *  workspace, view}`: the view one agent's tile opens in, for everyone;
+ *  `view: null` makes it follow the project's again (the key is always
+ *  sent). Same rule as `set-default-view`: owner or admin (an agent needs
+ *  'Manage K2 projects'); a Member gets 403 `forbidden`, a workspace
+ *  outside the project 403 `not_a_member`. Emits members-changed. */
+export async function setProjectGroupMemberDefaultView(
+  scope: ServerScope,
+  group: string,
+  workspace: string,
+  view: ProjectDefaultView | null,
+): Promise<MemberDefaultViewResult> {
+  return daemonCliPost<MemberDefaultViewResult>(scope, 'project-group/set-member-default-view', { group, workspace, view })
 }
 
 /** POST /cli/project-group/dashboard/rename — P8's §6.5 Main-row

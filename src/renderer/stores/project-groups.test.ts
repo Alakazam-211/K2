@@ -589,4 +589,23 @@ describe('project-groups store event wiring', () => {
     useProjectGroupsStore.getState().dropStaleTileViews('g1', 'terminal')
     expect(useProjectGroupsStore.getState().tileViews).toEqual({})
   })
+
+  it("dropStaleTileViews keeps a switch on an agent with its own view (0302), made against that view", () => {
+    useProjectGroupsStore.setState({
+      tileViews: {
+        'local|g1|w1': { view: 'chatter', against: 'terminal' },
+        'local|g1|w2': { view: 'chatter', against: 'thread' },
+      },
+    })
+    useProjectGroupsStore.getState().dropStaleTileViews('g1', 'terminal', { w1: 'terminal', w2: 'thread' })
+    expect(useProjectGroupsStore.getState().tileViews).toEqual({
+      'local|g1|w1': { view: 'chatter', against: 'terminal' },
+      'local|g1|w2': { view: 'chatter', against: 'thread' },
+    })
+    // w1 follows the project again: its switch against its old view goes.
+    useProjectGroupsStore.getState().dropStaleTileViews('g1', 'thread', { w2: 'thread' })
+    expect(useProjectGroupsStore.getState().tileViews).toEqual({
+      'local|g1|w2': { view: 'chatter', against: 'thread' },
+    })
+  })
 })

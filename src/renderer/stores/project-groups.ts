@@ -40,9 +40,11 @@ import { onAppHello, onProjectGroupsChanged } from '@/stores/session-events'
 import {
   fetchProjectGroups,
   fetchProjectGroupShow,
+  memberOwnDefaultView,
   projectDefaultView,
   type ProjectDefaultView,
   type ProjectGroup,
+  type ProjectGroupMemberInfo,
   type ProjectGroupShow,
 } from '@/components/Projects/projects-api'
 import { initUnreadEvents, unreadKey, useUnreadStore } from '@/stores/unread'
@@ -171,8 +173,14 @@ interface ProjectGroupsState {
   /** A project's default is now `projectDefault` (this client saved it, or
    *  a list refetch shows it moved): drop every switch on that project made
    *  against another default, so tiles reset even while no dashboard is
-   *  mounted to notice (and a default moved away and back still resets). */
-  dropStaleTileViews: (groupId: string, projectDefault: ProjectDefaultView) => void
+   *  mounted to notice (and a default moved away and back still resets).
+   *  An agent with its own view (0302) keeps a switch made against that:
+   *  `ownViews` by workspace id, else the cached `show`'s. */
+  dropStaleTileViews: (
+    groupId: string,
+    projectDefault: ProjectDefaultView,
+    ownViews?: Record<string, ProjectDefaultView>,
+  ) => void
   fetchGroups: () => Promise<void>
   /** Optimistic edit (0.46.1): patch one row of `groups` in place (rename
    *  / pin / PoC from Settings) — the daemon's answer or a rollback patch
@@ -264,11 +272,13 @@ export const useProjectGroupsStore = create<ProjectGroupsState>((set, get) => ({
       return { tileViews: next }
     })
   },
-  dropStaleTileViews: (groupId, projectDefault) => {
+  dropStaleTileViews: (groupId, projectDefault, ownViews) => {
     const prefix = `${activeHostKey(useConnectHostStore.getState().activeHost)}|${groupId}|`
+    const own = ownViews ?? memberOwnViews(getCachedShow(groupId)?.members ?? [])
     set((s) => {
       const stale = Object.keys(s.tileViews).filter(
-        (k) => k.startsWith(prefix) && s.tileViews[k].against !== projectDefault,
+        (k) =>
+          k.startsWith(prefix) && s.tileViews[k].against !== (own[k.slice(prefix.length)] ?? projectDefault),
       )
       if (stale.length === 0) return {}
       const next = { ...s.tileViews }
@@ -443,6 +453,16 @@ const showCache = new Map<string, ProjectGroupShow>()
 
 function showKey(groupId: string): string {
   return `${activeHostKey(useConnectHostStore.getState().activeHost)}:${groupId}`
+}
+
+/** The agents that have their own view (0302), by workspace id. */
+export function memberOwnViews(members: ProjectGroupMemberInfo[]): Record<string, ProjectDefaultView> {
+  const out: Record<string, ProjectDefaultView> = {}
+  for (const m of members) {
+    const v = memberOwnDefaultView(m)
+    if (v !== null) out[m.workspaceId] = v
+  }
+  return out
 }
 
 export function getCachedShow(groupId: string): ProjectGroupShow | undefined {

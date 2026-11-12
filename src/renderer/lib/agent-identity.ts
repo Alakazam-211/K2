@@ -46,6 +46,8 @@ interface IdentityRow {
   name: string
   color: string
   handle?: string
+  /** projects/list's agent display name (newer daemons only). */
+  agentDisplayName?: string
 }
 
 /** Patch the matching row with the daemon's CURRENT name / handle / color.
@@ -59,6 +61,10 @@ export function applyAgentIdentity<T extends IdentityRow>(rows: T[], e: AgentIde
     if (e.name && e.name !== r.name) patch.name = e.name
     if (e.color && e.color !== r.color) patch.color = e.color
     if (e.handle && e.handle !== r.handle) patch.handle = e.handle
+    // Only on rows that carry it (a daemon that sends it): the event's
+    // display name, else its sidebar name, as projects/list resolves it.
+    const display = agentIdentityDisplayName(e)
+    if (r.agentDisplayName !== undefined && display && display !== r.agentDisplayName) patch.agentDisplayName = display
     if (Object.keys(patch).length === 0) return r
     changed = true
     return { ...r, ...patch }

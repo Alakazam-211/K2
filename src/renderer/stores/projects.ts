@@ -269,6 +269,10 @@ interface Project {
   mobileTabEnabled?: number | null
   // 0103 — workspace address token. Empty until backfilled / minted.
   handle?: string
+  // The agent's display name (AGENT.md `display_name`, else the folder's
+  // name), on every projects/list row from 0.46.13 daemons, so a picker
+  // needs no call per folder. Absent from older daemons: use `name`.
+  agentDisplayName?: string
   // Create-only passport for `k2 db create` (`off` | `read` | `write`).
   // Missing / empty → treat as `'off'`. No global master. Written via
   // POST workspace/set `db_agent_access`.

@@ -17,13 +17,18 @@ import {
   fetchProjectGroupIcon,
   fetchProjectGroups,
   fetchProjectGroupShow,
+  daemonKnowsMemberViews,
+  memberDefaultView,
+  memberOwnDefaultView,
   normalizeHexColor,
   partitionPinned,
+  pathIsMember,
   projectDefaultView,
   reorderProjectGroupDashboards,
   setProjectGroupColor,
   setProjectGroupDefaultView,
   setProjectGroupIcon,
+  setProjectGroupMemberDefaultView,
 } from './projects-api'
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { primaryScope } from '@/kessel/server-scope'
@@ -142,6 +147,22 @@ describe('icon + color route wrappers (§6.7.7 contract shapes)', () => {
     })
     expect(g.defaultView).toBe('chatter')
   })
+
+  it('set-member-default-view posts {group, workspace, view}, always with the view key (null clears)', async () => {
+    post.mockResolvedValueOnce({ ok: true, groupId: 'g1', workspaceId: 'w1', defaultView: 'terminal', ownDefaultView: 'terminal' })
+    const r = await setProjectGroupMemberDefaultView(primaryScope(), 'g1', 'w1', 'terminal')
+    expect(post).toHaveBeenLastCalledWith(primaryScope(), 'project-group/set-member-default-view', {
+      group: 'g1',
+      workspace: 'w1',
+      view: 'terminal',
+    })
+    expect(r.ownDefaultView).toBe('terminal')
+    post.mockResolvedValueOnce({ ok: true, groupId: 'g1', workspaceId: 'w1', defaultView: 'thread', ownDefaultView: null })
+    await setProjectGroupMemberDefaultView(primaryScope(), 'g1', 'w1', null)
+    const body = post.mock.calls.at(-1)![2] as Record<string, unknown>
+    expect('view' in body).toBe(true)
+    expect(body.view).toBeNull()
+  })
 })
 
 describe('projectDefaultView', () => {
@@ -233,5 +254,38 @@ describe('show / list with object list fields', () => {
     await expect(fetchProjectGroups(primaryScope())).resolves.toEqual([])
     get.mockResolvedValueOnce({})
     await expect(fetchProjectGroups(primaryScope())).resolves.toEqual([])
+  })
+})
+
+describe("a member's view (0302)", () => {
+  it("is its own, else the project's; an unknown word or an older daemon falls back", () => {
+    expect(memberDefaultView({ defaultView: 'terminal' }, { defaultView: 'thread' })).toBe('terminal')
+    expect(memberDefaultView({}, { defaultView: 'chatter' })).toBe('chatter')
+    expect(memberDefaultView({}, {})).toBe('thread')
+    expect(memberDefaultView({ defaultView: 'heartbeats' as never }, { defaultView: 'chatter' })).toBe('chatter')
+  })
+
+  it('its own view is null when it follows the project', () => {
+    expect(memberOwnDefaultView({ ownDefaultView: 'chatter' })).toBe('chatter')
+    expect(memberOwnDefaultView({ ownDefaultView: null })).toBeNull()
+    expect(memberOwnDefaultView({})).toBeNull()
+    expect(memberOwnDefaultView({ ownDefaultView: 'split' as never })).toBeNull()
+  })
+
+  it('a daemon knows per-agent views when its members carry ownDefaultView (null included)', () => {
+    expect(daemonKnowsMemberViews([{ ownDefaultView: null }])).toBe(true)
+    expect(daemonKnowsMemberViews([{}])).toBe(false)
+    expect(daemonKnowsMemberViews([])).toBe(false)
+  })
+})
+
+describe('pathIsMember', () => {
+  it("matches a session's folder to a member's, ignoring a trailing slash", () => {
+    const members = [{ path: '/w/atlas' }, { path: null }]
+    expect(pathIsMember(members, '/w/atlas')).toBe(true)
+    expect(pathIsMember(members, '/w/atlas/')).toBe(true)
+    expect(pathIsMember(members, '/w/atlas-2')).toBe(false)
+    expect(pathIsMember(members, '')).toBe(false)
+    expect(pathIsMember(members, null)).toBe(false)
   })
 })

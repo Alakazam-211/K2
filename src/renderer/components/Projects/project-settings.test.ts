@@ -9,6 +9,7 @@ import {
   dashboardShowsDoc,
   filterGroupsByQuery,
   hasHtmlDocPane,
+  memberViewLockReason,
   projectSettingsCaps,
   readOnlyBannerText,
   removeMemberBlockedReason,
@@ -136,5 +137,16 @@ describe('hasHtmlDocPane', () => {
     expect(hasHtmlDocPane(root, 'w2', '/a.html')).toBe(false)
     expect(hasHtmlDocPane(root, 'w1', '/b.html')).toBe(false)
     expect(hasHtmlDocPane(null, 'w1', '/a.html')).toBe(false)
+  })
+})
+
+describe('memberViewLockReason (0302: Opens in, per agent)', () => {
+  it('owner or admin may change it; a Member is told who can; an older daemon needs a newer K2', () => {
+    expect(memberViewLockReason(projectSettingsCaps('owner').canEditLooks, true)).toBeNull()
+    expect(memberViewLockReason(projectSettingsCaps('admin').canEditLooks, true)).toBeNull()
+    expect(memberViewLockReason(projectSettingsCaps('member').canEditLooks, true)).toBe(
+      'Only the owner or an admin can change where an agent opens.',
+    )
+    expect(memberViewLockReason(true, false)).toBe('Needs a newer K2 on this server.')
   })
 })

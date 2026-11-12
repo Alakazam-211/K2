@@ -143,24 +143,6 @@ id = "RUSTSEC-2024-0429"
 ignoreUntil = 2027-01-15T00:00:00Z
 reason = "Unsound VariantStrIter impls in glib 0.18, Linux GTK stack of the Tauri app only; K2 code never iterates glib Variants. Fix comes with Tauri's move off gtk-rs 0.18."
 
-# hickory-proto 0.24.4
-[[IgnoredVulns]]
-id = "GHSA-q2qq-hmj6-3wpp"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "O(n^2) name compression when encoding; k2-daemon only encodes its own small ACME/mail DNS precheck queries (domains/acme.rs, mail/dns_verify.rs). Fix: hickory 0.26 (dependency-majors PRD)."
-
-# hickory-proto 0.24.4
-[[IgnoredVulns]]
-id = "RUSTSEC-2026-0119"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "O(n^2) name compression when encoding; k2-daemon only encodes its own small ACME/mail DNS precheck queries (domains/acme.rs, mail/dns_verify.rs). Fix: hickory 0.26 (dependency-majors PRD)."
-
-# hickory-resolver 0.24.4
-[[IgnoredVulns]]
-id = "GHSA-5j98-2g5x-46v6"
-ignoreUntil = 2027-01-15T00:00:00Z
-reason = "lookup()/lookup_ip() return DNSSEC-unvalidated answers only when validation is on; K2 builds resolvers with ResolverOpts::default() (no validate), so it never relies on DNSSEC. Fix: hickory 0.26."
-
 # instant 0.1.13
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0384"

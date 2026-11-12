@@ -133,13 +133,14 @@ fn hostname_is_cname(hostname: &str) -> bool {
 }
 
 fn lookup_cname(hostname: &str) -> bool {
-    use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+    use crate::mail::dns_verify::BlockingResolver;
+    use hickory_resolver::config::{ResolverConfig, ResolverOpts, CLOUDFLARE, GOOGLE};
     use hickory_resolver::proto::rr::RecordType;
-    let mut config = ResolverConfig::google();
-    for ns in ResolverConfig::cloudflare().name_servers() {
-        config.add_name_server(ns.clone());
+    let mut config = ResolverConfig::udp_and_tcp(&GOOGLE);
+    for ns in CLOUDFLARE.udp_and_tcp() {
+        config.add_name_server(ns);
     }
-    let Ok(resolver) = hickory_resolver::Resolver::new(config, ResolverOpts::default()) else {
+    let Ok(resolver) = BlockingResolver::new(config, ResolverOpts::default()) else {
         return false;
     };
     let q = if hostname.ends_with('.') {
@@ -147,8 +148,8 @@ fn lookup_cname(hostname: &str) -> bool {
     } else {
         format!("{hostname}.")
     };
-    match resolver.lookup(q, RecordType::CNAME) {
-        Ok(lookup) => lookup.iter().next().is_some(),
+    match resolver.lookup(&q, RecordType::CNAME) {
+        Ok(lookup) => !lookup.answers().is_empty(),
         Err(_) => false,
     }
 }
@@ -773,9 +774,9 @@ fn txt_has_cloudflare(fqdn: &str, want: &str) -> bool {
 }
 
 fn txt_has_at_ns(ns_host: &str, fqdn: &str, want: &str) -> bool {
-    use crate::mail::dns_verify::{DnsResolver, SystemResolver};
-    use hickory_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
-    use std::net::SocketAddr;
+    use crate::mail::dns_verify::{txt_answers, BlockingResolver, DnsResolver, SystemResolver};
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+    use hickory_resolver::proto::rr::RecordType;
     let Ok(boot) = SystemResolver::google_nocache() else {
         return false;
     };
@@ -785,25 +786,23 @@ fn txt_has_at_ns(ns_host: &str, fqdn: &str, want: &str) -> bool {
     if ips.is_empty() {
         return false;
     }
-    let mut config = ResolverConfig::new();
-    for ip in ips {
-        config.add_name_server(NameServerConfig::new(
-            SocketAddr::from((ip, 53)),
-            Protocol::Udp,
-        ));
-    }
+    // UDP only, port 53 (as with hickory 0.24's NameServerConfig::new(.., Protocol::Udp)).
+    let config = ResolverConfig::from_name_servers(
+        ips.into_iter().map(|ip| NameServerConfig::udp(ip.into())).collect(),
+    );
     let mut opts = ResolverOpts::default();
     opts.cache_size = 0;
-    let Ok(resolver) = hickory_resolver::Resolver::new(config, opts) else {
+    let Ok(resolver) = BlockingResolver::new(config, opts) else {
         return false;
     };
-    match resolver.txt_lookup(if fqdn.ends_with('.') {
+    let q = if fqdn.ends_with('.') {
         fqdn.to_string()
     } else {
         format!("{fqdn}.")
-    }) {
-        Ok(lookup) => lookup.iter().any(|rdata| {
-            let s = rdata.txt_data().iter().map(|b| String::from_utf8_lossy(b).into_owned()).collect::<Vec<_>>().concat();
+    };
+    match resolver.lookup(&q, RecordType::TXT) {
+        Ok(lookup) => txt_answers(&lookup).iter().any(|chunks| {
+            let s = chunks.concat();
             s == want || s.trim_matches('"') == want
         }),
         Err(_) => false,

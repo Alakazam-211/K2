@@ -276,11 +276,13 @@ tar = "0.4.45"
 
 # K2 Mail S2 — DNS verification for domain onboarding (prd-email-server-v1
 # §6.3). hickory-resolver (the maintained trust-dns successor; nothing else
-# in the tree links a DNS client) provides the blocking system-conf resolver
-# behind `mail::dns_verify::SystemResolver`; handlers + the poller call it
-# from spawn_blocking. Tests NEVER use it — every test goes through the
-# `DnsResolver` trait with canned answers (no real DNS in tests, ever).
-hickory-resolver = "0.24"
+# in the tree links a DNS client) provides the system-conf resolver behind
+# `mail::dns_verify::SystemResolver`; handlers + the poller call it from
+# spawn_blocking. 0.26 is async only: `dns_verify::BlockingResolver` runs it
+# on its own current-thread runtime, as 0.24's blocking resolver did (0.26.2
+# fixes RUSTSEC-2026-0487/0489/0490/0491). Tests never resolve real names:
+# every check goes through the `DnsResolver` trait with canned answers.
+hickory-resolver = "0.26"
 
 # K2 Mail S9 — external assistant inboxes (prd-email-server-v1 §17.5): a
 # sync IMAP client for the user's OWN accounts (Gmail app-passwords,

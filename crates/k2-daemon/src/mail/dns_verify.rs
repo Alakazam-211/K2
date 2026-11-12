@@ -34,6 +34,9 @@
 //! [`SystemResolver`] (hickory, system config); every test uses canned
 //! answers — no real DNS lookups in tests, ever.
 
+use hickory_resolver::lookup::Lookup;
+use hickory_resolver::net::NetError;
+use hickory_resolver::proto::rr::{RData, RecordType};
 use tokio::task::JoinHandle;
 
 use super::domains::{
@@ -92,6 +95,147 @@ pub struct SrvAnswer {
     pub target: String,
 }
 
+/// A blocking hickory resolver. hickory 0.26 has only the async
+/// `Resolver`; 0.24's blocking one was this same shape (its own
+/// current-thread tokio runtime behind a mutex, every lookup a
+/// `block_on`), so callers keep the rule they had: call it from
+/// `spawn_blocking` or a plain thread, never from an async task.
+pub(crate) struct BlockingResolver {
+    rt: std::sync::Mutex<tokio::runtime::Runtime>,
+    inner: hickory_resolver::TokioResolver,
+}
+
+impl BlockingResolver {
+    fn runtime() -> Result<tokio::runtime::Runtime, String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("DNS resolver runtime: {e}"))
+    }
+
+    /// A resolver over `config` with `opts`.
+    pub(crate) fn new(
+        config: hickory_resolver::config::ResolverConfig,
+        opts: hickory_resolver::config::ResolverOpts,
+    ) -> Result<Self, String> {
+        let rt = Self::runtime()?;
+        let inner = hickory_resolver::TokioResolver::builder_with_config(
+            config,
+            hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+        )
+        .with_options(opts)
+        .build()
+        .map_err(|e| e.to_string())?;
+        Ok(Self { rt: std::sync::Mutex::new(rt), inner })
+    }
+
+    /// The system configuration (`/etc/resolv.conf`, or the OS's own).
+    pub(crate) fn system() -> Result<Self, String> {
+        let rt = Self::runtime()?;
+        let inner = hickory_resolver::TokioResolver::builder_tokio()
+            .and_then(|b| b.build())
+            .map_err(|e| e.to_string())?;
+        Ok(Self { rt: std::sync::Mutex::new(rt), inner })
+    }
+
+    fn block_on<F: std::future::Future<Output = Result<Lookup, NetError>>>(
+        &self,
+        f: F,
+    ) -> Result<Lookup, NetError> {
+        let rt = self
+            .rt
+            .lock()
+            .map_err(|_| NetError::Msg("DNS resolver runtime lock poisoned".to_string()))?;
+        rt.block_on(f)
+    }
+
+    /// Records of `record_type` for `name` (the answer section).
+    pub(crate) fn lookup(&self, name: &str, record_type: RecordType) -> Result<Lookup, NetError> {
+        self.block_on(self.inner.lookup(name, record_type))
+    }
+
+    /// PTR records for `ip`.
+    pub(crate) fn reverse_lookup(&self, ip: std::net::IpAddr) -> Result<Lookup, NetError> {
+        self.block_on(self.inner.reverse_lookup(ip))
+    }
+}
+
+/// The answer section's rdata, in order (CNAME chain records included,
+/// as hickory returns them; each reader below keeps only its type).
+fn rdata(l: &Lookup) -> impl Iterator<Item = &RData> {
+    l.answers().iter().map(|r| &r.data)
+}
+
+pub(crate) fn mx_answers(l: &Lookup) -> Vec<MxHost> {
+    rdata(l)
+        .filter_map(|d| match d {
+            RData::MX(mx) => Some(MxHost {
+                preference: mx.preference,
+                exchange: mx.exchange.to_utf8(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn txt_answers(l: &Lookup) -> Vec<Vec<String>> {
+    rdata(l)
+        .filter_map(|d| match d {
+            RData::TXT(txt) => Some(
+                txt.txt_data
+                    .iter()
+                    .map(|chunk| String::from_utf8_lossy(chunk).to_string())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn a_answers(l: &Lookup) -> Vec<std::net::Ipv4Addr> {
+    rdata(l)
+        .filter_map(|d| match d {
+            RData::A(a) => Some(a.0),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn aaaa_answers(l: &Lookup) -> Vec<std::net::Ipv6Addr> {
+    rdata(l)
+        .filter_map(|d| match d {
+            RData::AAAA(a) => Some(a.0),
+            _ => None,
+        })
+        .collect()
+}
+
+/// PTR, NS and CNAME targets, as names with their trailing dot.
+pub(crate) fn name_answers(l: &Lookup, record_type: RecordType) -> Vec<String> {
+    rdata(l)
+        .filter_map(|d| match (d, record_type) {
+            (RData::PTR(p), RecordType::PTR) => Some(p.0.to_utf8()),
+            (RData::NS(n), RecordType::NS) => Some(n.0.to_utf8()),
+            (RData::CNAME(c), RecordType::CNAME) => Some(c.0.to_utf8()),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn srv_answers(l: &Lookup) -> Vec<SrvAnswer> {
+    rdata(l)
+        .filter_map(|d| match d {
+            RData::SRV(s) => Some(SrvAnswer {
+                priority: s.priority,
+                weight: s.weight,
+                port: s.port,
+                target: s.target.to_utf8().trim_end_matches('.').to_string(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Production resolver: hickory (system configuration — the same
 /// resolvers the box itself uses, so "valid here" means "propagated to
 /// where this server sits"). Blocking; callers run in spawn_blocking.
@@ -100,34 +244,34 @@ pub struct SrvAnswer {
 /// PTR/FCrDNS so a local stub cache cannot fail doctor after the
 /// internet already agrees (field report 2026-09-18).
 pub struct SystemResolver {
-    inner: hickory_resolver::Resolver,
+    inner: BlockingResolver,
 }
 
 impl SystemResolver {
     pub fn new() -> Result<Self, String> {
-        hickory_resolver::Resolver::from_system_conf()
+        BlockingResolver::system()
             .map(|inner| Self { inner })
             .map_err(|e| format!("system DNS resolver unavailable: {e}"))
     }
 
     /// Google + Cloudflare. PTR/FCrDNS and `k2 hostmail ptr show`.
     pub fn public() -> Result<Self, String> {
-        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-        let mut config = ResolverConfig::google();
-        for ns in ResolverConfig::cloudflare().name_servers() {
-            config.add_name_server(ns.clone());
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts, CLOUDFLARE, GOOGLE};
+        let mut config = ResolverConfig::udp_and_tcp(&GOOGLE);
+        for ns in CLOUDFLARE.udp_and_tcp() {
+            config.add_name_server(ns);
         }
-        hickory_resolver::Resolver::new(config, ResolverOpts::default())
+        BlockingResolver::new(config, ResolverOpts::default())
             .map(|inner| Self { inner })
             .map_err(|e| format!("public DNS resolver unavailable: {e}"))
     }
 
     /// Google only, no cache — ACME wait must re-query each poll.
     pub fn google_nocache() -> Result<Self, String> {
-        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts, GOOGLE};
         let mut opts = ResolverOpts::default();
         opts.cache_size = 0;
-        hickory_resolver::Resolver::new(ResolverConfig::google(), opts)
+        BlockingResolver::new(ResolverConfig::udp_and_tcp(&GOOGLE), opts)
             .map(|inner| Self { inner })
             .map_err(|e| format!("google DNS resolver unavailable: {e}"))
     }
@@ -137,17 +281,17 @@ impl SystemResolver {
     /// resolvers catch up on their TTL. The NS names come from the
     /// system resolver; every IPv4 of every NS is a server here.
     pub fn authoritative_for(zone: &str) -> Result<Self, String> {
-        use hickory_resolver::config::{NameServerConfigGroup, ResolverConfig, ResolverOpts};
+        use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
         let system = Self::new()?;
         let ns = system
             .inner
-            .ns_lookup(fqdn(zone))
+            .lookup(&fqdn(zone), RecordType::NS)
             .map_err(|e| format!("NS lookup for {zone}: {e}"))?;
         let mut ips: Vec<std::net::IpAddr> = Vec::new();
-        for name in ns.iter() {
-            if let Ok(a) = system.inner.ipv4_lookup(name.0.to_utf8()) {
-                for ip in a.iter() {
-                    let ip = std::net::IpAddr::V4(ip.0);
+        for name in name_answers(&ns, RecordType::NS) {
+            if let Ok(a) = system.inner.lookup(&name, RecordType::A) {
+                for ip in a_answers(&a) {
+                    let ip = std::net::IpAddr::V4(ip);
                     if !ips.contains(&ip) {
                         ips.push(ip);
                     }
@@ -157,21 +301,22 @@ impl SystemResolver {
         if ips.is_empty() {
             return Err(format!("no address for any nameserver of {zone}"));
         }
-        let group = NameServerConfigGroup::from_ips_clear(&ips, 53, true);
+        // UDP + TCP on port 53, NXDOMAIN trusted (0.24's from_ips_clear(.., 53, true)).
+        let servers = ips.iter().map(|ip| NameServerConfig::udp_and_tcp(*ip)).collect();
         let mut opts = ResolverOpts::default();
         opts.cache_size = 0;
         opts.recursion_desired = false;
-        hickory_resolver::Resolver::new(ResolverConfig::from_parts(None, vec![], group), opts)
+        BlockingResolver::new(ResolverConfig::from_name_servers(servers), opts)
             .map(|inner| Self { inner })
             .map_err(|e| format!("authoritative resolver for {zone}: {e}"))
     }
 
     /// Cloudflare only, no cache — ACME wait must re-query each poll.
     pub fn cloudflare_nocache() -> Result<Self, String> {
-        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts, CLOUDFLARE};
         let mut opts = ResolverOpts::default();
         opts.cache_size = 0;
-        hickory_resolver::Resolver::new(ResolverConfig::cloudflare(), opts)
+        BlockingResolver::new(ResolverConfig::udp_and_tcp(&CLOUDFLARE), opts)
             .map(|inner| Self { inner })
             .map_err(|e| format!("cloudflare DNS resolver unavailable: {e}"))
     }
@@ -187,48 +332,33 @@ fn fqdn(name: &str) -> String {
     }
 }
 
-fn map_resolve_err(e: hickory_resolver::error::ResolveError) -> DnsError {
-    match e.kind() {
-        hickory_resolver::error::ResolveErrorKind::NoRecordsFound { .. } => DnsError::NotFound,
-        _ => DnsError::Other(e.to_string()),
+fn map_resolve_err(e: NetError) -> DnsError {
+    if e.is_no_records_found() {
+        DnsError::NotFound
+    } else {
+        DnsError::Other(e.to_string())
     }
 }
 
 impl DnsResolver for SystemResolver {
     fn mx(&self, name: &str) -> Result<Vec<MxHost>, DnsError> {
         self.inner
-            .mx_lookup(fqdn(name))
-            .map(|l| {
-                l.iter()
-                    .map(|mx| MxHost {
-                        preference: mx.preference(),
-                        exchange: mx.exchange().to_utf8(),
-                    })
-                    .collect()
-            })
+            .lookup(&fqdn(name), RecordType::MX)
+            .map(|l| mx_answers(&l))
             .map_err(map_resolve_err)
     }
 
     fn txt(&self, name: &str) -> Result<Vec<Vec<String>>, DnsError> {
         self.inner
-            .txt_lookup(fqdn(name))
-            .map(|l| {
-                l.iter()
-                    .map(|txt| {
-                        txt.txt_data()
-                            .iter()
-                            .map(|chunk| String::from_utf8_lossy(chunk).to_string())
-                            .collect()
-                    })
-                    .collect()
-            })
+            .lookup(&fqdn(name), RecordType::TXT)
+            .map(|l| txt_answers(&l))
             .map_err(map_resolve_err)
     }
 
     fn a(&self, name: &str) -> Result<Vec<std::net::Ipv4Addr>, DnsError> {
         self.inner
-            .ipv4_lookup(fqdn(name))
-            .map(|l| l.iter().map(|a| a.0).collect())
+            .lookup(&fqdn(name), RecordType::A)
+            .map(|l| a_answers(&l))
             .map_err(map_resolve_err)
     }
 
@@ -236,8 +366,9 @@ impl DnsResolver for SystemResolver {
         self.inner
             .reverse_lookup(ip)
             .map(|l| {
-                l.iter()
-                    .map(|ptr| ptr.0.to_utf8().trim_end_matches('.').to_string())
+                name_answers(&l, RecordType::PTR)
+                    .into_iter()
+                    .map(|n| n.trim_end_matches('.').to_string())
                     .collect()
             })
             .map_err(map_resolve_err)
@@ -245,24 +376,15 @@ impl DnsResolver for SystemResolver {
 
     fn aaaa(&self, name: &str) -> Result<Vec<std::net::Ipv6Addr>, DnsError> {
         self.inner
-            .ipv6_lookup(fqdn(name))
-            .map(|l| l.iter().map(|a| a.0).collect())
+            .lookup(&fqdn(name), RecordType::AAAA)
+            .map(|l| aaaa_answers(&l))
             .map_err(map_resolve_err)
     }
 
     fn srv(&self, name: &str) -> Result<Vec<SrvAnswer>, DnsError> {
         self.inner
-            .srv_lookup(fqdn(name))
-            .map(|l| {
-                l.iter()
-                    .map(|s| SrvAnswer {
-                        priority: s.priority(),
-                        weight: s.weight(),
-                        port: s.port(),
-                        target: s.target().to_utf8().trim_end_matches('.').to_string(),
-                    })
-                    .collect()
-            })
+            .lookup(&fqdn(name), RecordType::SRV)
+            .map(|l| srv_answers(&l))
             .map_err(map_resolve_err)
     }
 }
@@ -1444,6 +1566,149 @@ mod tests {
             let conn = db.lock();
             let _ = conn.execute("DELETE FROM mail_domains WHERE domain = ?1", rusqlite::params![domain]);
             let _ = conn.execute("DELETE FROM mail_server WHERE id = 1", []);
+        }
+    }
+
+    // ── hickory 0.26 answer readers + the blocking wrapper ─────────────
+
+    mod hickory_answers {
+        use super::super::*;
+        use hickory_resolver::lookup::Lookup;
+        use hickory_resolver::net::{DnsError as HDnsError, NetError, NoRecords};
+        use hickory_resolver::proto::op::{Query, ResponseCode};
+        use hickory_resolver::proto::rr::rdata::{A, AAAA, CNAME, MX, NS, PTR, SRV, TXT};
+        use hickory_resolver::proto::rr::{Name, RData, Record, RecordType};
+
+        fn name(s: &str) -> Name {
+            Name::from_ascii(s).expect("name")
+        }
+
+        fn lookup(q: &str, t: RecordType, data: Vec<RData>) -> Lookup {
+            let records: Vec<Record> =
+                data.into_iter().map(|d| Record::from_rdata(name(q), 300, d)).collect();
+            Lookup::new_with_max_ttl(Query::query(name(q), t), records)
+        }
+
+        #[test]
+        fn mx_keeps_preference_and_exchange() {
+            let l = lookup(
+                "example.com.",
+                RecordType::MX,
+                vec![
+                    RData::MX(MX::new(10, name("mx1.example.com."))),
+                    RData::MX(MX::new(20, name("mx2.example.com."))),
+                ],
+            );
+            assert_eq!(
+                mx_answers(&l),
+                vec![
+                    MxHost { preference: 10, exchange: "mx1.example.com.".into() },
+                    MxHost { preference: 20, exchange: "mx2.example.com.".into() },
+                ]
+            );
+        }
+
+        #[test]
+        fn txt_keeps_chunk_structure_per_record() {
+            let l = lookup(
+                "k2._domainkey.example.com.",
+                RecordType::TXT,
+                vec![
+                    RData::TXT(TXT::new(vec!["v=DKIM1; p=AAA".into(), "BBB".into()])),
+                    RData::TXT(TXT::new(vec!["second".into()])),
+                ],
+            );
+            assert_eq!(
+                txt_answers(&l),
+                vec![vec!["v=DKIM1; p=AAA".to_string(), "BBB".to_string()], vec!["second".to_string()]]
+            );
+        }
+
+        #[test]
+        fn readers_keep_only_their_type_from_a_cname_chain() {
+            let l = lookup(
+                "www.example.com.",
+                RecordType::A,
+                vec![
+                    RData::CNAME(CNAME(name("edge.example.net."))),
+                    RData::A(A("203.0.113.7".parse().unwrap())),
+                    RData::AAAA(AAAA("2001:db8::7".parse().unwrap())),
+                ],
+            );
+            assert_eq!(a_answers(&l), vec!["203.0.113.7".parse::<std::net::Ipv4Addr>().unwrap()]);
+            assert_eq!(aaaa_answers(&l), vec!["2001:db8::7".parse::<std::net::Ipv6Addr>().unwrap()]);
+            assert_eq!(name_answers(&l, RecordType::CNAME), vec!["edge.example.net.".to_string()]);
+            assert!(name_answers(&l, RecordType::PTR).is_empty());
+            assert!(mx_answers(&l).is_empty());
+        }
+
+        #[test]
+        fn ptr_ns_and_srv_answers() {
+            let ptr = lookup(
+                "7.113.0.203.in-addr.arpa.",
+                RecordType::PTR,
+                vec![RData::PTR(PTR(name("mail.example.com.")))],
+            );
+            assert_eq!(name_answers(&ptr, RecordType::PTR), vec!["mail.example.com.".to_string()]);
+            let ns = lookup("example.com.", RecordType::NS, vec![RData::NS(NS(name("ns1.example.com.")))]);
+            assert_eq!(name_answers(&ns, RecordType::NS), vec!["ns1.example.com.".to_string()]);
+            let srv = lookup(
+                "_caldavs._tcp.example.com.",
+                RecordType::SRV,
+                vec![RData::SRV(SRV::new(0, 1, 443, name("mail.example.com.")))],
+            );
+            assert_eq!(
+                srv_answers(&srv),
+                vec![SrvAnswer { priority: 0, weight: 1, port: 443, target: "mail.example.com".into() }]
+            );
+        }
+
+        #[test]
+        fn no_records_is_not_found_and_a_timeout_is_other() {
+            let q = Query::query(name("missing.example.com."), RecordType::TXT);
+            let nx = NetError::from(HDnsError::NoRecordsFound(NoRecords::new(q.clone(), ResponseCode::NXDomain)));
+            assert_eq!(map_resolve_err(nx), DnsError::NotFound);
+            let empty = NetError::from(HDnsError::NoRecordsFound(NoRecords::new(q, ResponseCode::NoError)));
+            assert_eq!(map_resolve_err(empty), DnsError::NotFound);
+            match map_resolve_err(NetError::Timeout) {
+                DnsError::Other(msg) => assert!(msg.contains("timed out"), "{msg}"),
+                other => panic!("a timeout must be Other, got {other:?}"),
+            }
+        }
+
+        /// A nameserver on loopback that never answers: the lookup must
+        /// come back as an error (no real DNS, no panic).
+        fn silent_resolver() -> (std::net::UdpSocket, BlockingResolver) {
+            use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig, ResolverOpts};
+            let sock = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind");
+            let mut conn = ConnectionConfig::udp();
+            conn.port = sock.local_addr().expect("addr").port();
+            let ns = NameServerConfig::new("127.0.0.1".parse().unwrap(), true, vec![conn]);
+            let mut opts = ResolverOpts::default();
+            opts.timeout = std::time::Duration::from_millis(200);
+            opts.attempts = 1;
+            opts.cache_size = 0;
+            let r = BlockingResolver::new(ResolverConfig::from_name_servers(vec![ns]), opts).expect("resolver");
+            (sock, r)
+        }
+
+        #[test]
+        fn blocking_resolver_works_from_a_plain_thread() {
+            let (_sock, r) = silent_resolver();
+            let err = r.lookup("example.com.", RecordType::A).expect_err("silent server must not answer");
+            assert!(!err.is_no_records_found(), "{err}");
+        }
+
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+        async fn blocking_resolver_works_from_spawn_blocking() {
+            let res = tokio::task::spawn_blocking(|| {
+                let (_sock, r) = silent_resolver();
+                r.lookup("example.com.", RecordType::TXT).map(|_| ())
+            })
+            .await
+            .expect("spawn_blocking must not panic");
+            let err = res.expect_err("silent server must not answer");
+            assert!(!err.is_no_records_found(), "{err}");
         }
     }
 }

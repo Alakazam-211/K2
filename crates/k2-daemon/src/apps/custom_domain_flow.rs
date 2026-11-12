@@ -107,14 +107,15 @@ impl Lookup for LiveLookup {
         Ok(out)
     }
     fn cname(&self, host: &str) -> Option<String> {
-        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        use crate::mail::dns_verify::BlockingResolver;
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts, GOOGLE};
         use hickory_resolver::proto::rr::RecordType;
         let mut opts = ResolverOpts::default();
         opts.cache_size = 0;
-        let resolver = hickory_resolver::Resolver::new(ResolverConfig::google(), opts).ok()?;
+        let resolver = BlockingResolver::new(ResolverConfig::udp_and_tcp(&GOOGLE), opts).ok()?;
         let q = format!("{}.", host.trim_end_matches('.'));
-        let l = resolver.lookup(q, RecordType::CNAME).ok()?;
-        let target = l.iter().next()?.to_string();
+        let l = resolver.lookup(&q, RecordType::CNAME).ok()?;
+        let target = l.answers().first()?.data.to_string();
         Some(target.trim_end_matches('.').to_ascii_lowercase())
     }
 }

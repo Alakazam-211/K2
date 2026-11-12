@@ -114,8 +114,8 @@ export const useCustomThemesStore = create<CustomThemesStore>((set, get) => ({
   },
 }))
 
-/** The first load of the custom editor themes (~/.k2so/themes/), and its
- *  retry when the daemon (re)connects. `bootStores()` (boot-stores.ts)
+/** The first load of the custom editor themes, and its retry when the
+ *  daemon (re)connects. `bootStores()` (boot-stores.ts)
  *  calls this once at app start; nothing here runs at import. */
 export function bootCustomThemes(): void {
   useCustomThemesStore.getState().loadCustomThemes()

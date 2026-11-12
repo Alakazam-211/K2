@@ -1493,6 +1493,71 @@ mod lineage_tests {
         assert!(!dst.exists());
     }
 
+    /// A measurement on a node, not a check of behaviour (ignored by
+    /// default): fork, commit and discard times for a real cargo target.
+    ///
+    ///   K2_GENS_MEASURE=<a target dir> cargo test -p k2-node --lib \
+    ///     gens::lineage_tests::measure -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn measure_fork_commit_discard_of_a_real_target() {
+        let src = PathBuf::from(std::env::var("K2_GENS_MEASURE").expect("K2_GENS_MEASURE=<a cargo target dir>"));
+        assert!(src.is_dir(), "{} is not a folder", src.display());
+        let (root, g, _) = setup("gens-measure");
+        let gens = gens_root(&root);
+        let secs = |t: std::time::Instant| t.elapsed().as_secs_f64();
+        let seed = gens.join("seed");
+        let t = std::time::Instant::now();
+        if g.fs.clone == CloneMethod::Subvolume {
+            new_set_dir(CloneMethod::Subvolume, &seed).unwrap();
+            let mut a = src.as_os_str().to_owned();
+            a.push("/.");
+            run_tool(&find_tool("cp").unwrap(), &["-a".as_ref(), "--reflink=auto".as_ref(), a.as_os_str(), seed.as_os_str()]).unwrap();
+        } else {
+            clone_tree(CloneMethod::Copy, &src, &seed).unwrap();
+        }
+        let seeded = secs(t);
+        let bytes = crate::node::disk_usage(&seed);
+        let files = walk_count(&seed);
+        let mut line = format!("MEASURE fs={} method={:?} files={files} bytes={bytes} ({:.1} GB) seed_copy={seeded:.2}s", g.fs.fs, g.fs.clone, bytes as f64 / (1u64 << 30) as f64);
+        for (i, m) in [g.fs.clone, CloneMethod::Copy].into_iter().enumerate() {
+            if i == 1 && m == g.fs.clone {
+                break;
+            }
+            let f = gens.join(format!("fork{i}"));
+            let t = std::time::Instant::now();
+            clone_tree(m, &seed, &f).unwrap();
+            let fork = secs(t);
+            assert_eq!(walk_count(&f), files, "{m:?}: the fork has every entry");
+            let gdir = gens.join(format!("g{i}"));
+            let t = std::time::Instant::now();
+            std::fs::rename(&f, &gdir).unwrap();
+            let commit = secs(t);
+            let t = std::time::Instant::now();
+            let usage = crate::node::disk_usage(&gdir);
+            let measure = secs(t);
+            let t = std::time::Instant::now();
+            remove_tree(&gdir).unwrap();
+            let discard = secs(t);
+            line.push_str(&format!(" | {m:?}: fork={fork:.2}s commit(rename)={commit:.4}s measure(du {usage})={measure:.2}s discard={discard:.2}s"));
+        }
+        eprintln!("{line}");
+    }
+
+    fn walk_count(p: &Path) -> u64 {
+        let mut n = 0;
+        let mut stack = vec![p.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            n += 1;
+            if std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()) {
+                if let Ok(rd) = std::fs::read_dir(&d) {
+                    stack.extend(rd.flatten().map(|e| e.path()));
+                }
+            }
+        }
+        n
+    }
+
     fn policy(now: i64) -> EvictPolicy {
         EvictPolicy { now, budget_bytes: u64::MAX, lineage_max_bytes: u64::MAX, pressure: false }
     }

@@ -120,7 +120,11 @@ impl Node {
             let _ = crate::gens::remove_tree(&dst);
             let f = g.fork(&ForkAsk { set: &set, commit, cache_ref: cache_ref.as_deref(), dst: &dst, now })?;
             if unit_mode && !secret {
+                // The clone is the node's; the job (the slot's group) writes
+                // its target, CARGO_HOME and sccache dir: group rw on every
+                // entry the node owns (O(files), BK-3).
                 crate::wall::group_dir(&f.dir)?;
+                crate::wall::share_with_jobs(&f.dir)?;
             }
             let body = serde_json::to_vec(&ForkRecord { slot, job, gen, fork: f.clone() }).map_err(|e| e.to_string())?;
             if let Some(p) = rec.parent() {
@@ -179,6 +183,15 @@ impl Node {
         let job = a.fence.job_id.clone();
         let gen = a.fence.generation;
         let fork = self.take_fork(t, &job, gen)?;
+        // Linux wall: what the job wrote is its uid's; the tree comes back
+        // to the node before it is saved or deleted (a generation is never
+        // a reclaim target: gens/ is outside jobs/ and cache/).
+        if matches!(self.wall, crate::wall::Wall::JobUser { .. }) && fork.dir.starts_with(crate::gens::forks_root(&t.paths.root())) {
+            let op = crate::admin::jobs::JobOp::Reclaim { path: fork.dir.clone(), slot: t.slot };
+            if let Err(e) = self.job_op(op, vec![], std::time::Duration::from_secs(600)).await {
+                crate::nlog!("cache generations: reclaim {}: {e}", fork.dir.display());
+            }
+        }
         let rec = Self::fork_record(t, &t.job_key(&job, gen));
         let g = self.gens.clone()?;
         let src = a.plan.src.clone();

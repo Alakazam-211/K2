@@ -6,7 +6,9 @@
 //! package manager from [`DESKTOP_PACKAGES`], simulates the install first
 //! and refuses one that would remove anything. The names were checked
 //! with a simulated install on Ubuntu 24.04 (apt) and Arch (pacman) in L0
-//! (11-11); Fedora's (dnf) are unchecked.
+//! (11-11), and the Kessel Steward approved them (R32). Fedora (dnf) has
+//! no list until its names are checked: a Fedora server gets the manual
+//! text and the helper installs nothing there.
 //!
 //! Licences (Kessel Steward ruling R32): Xvfb (MIT/X11), IceWM (LGPL-2)
 //! and the DejaVu fonts come from the distro's own repositories and run
@@ -24,19 +26,17 @@ pub const DESKTOP_PACKAGES: &[(&str, &[&str])] = &[
     ("apt", &["xvfb", "icewm", "fonts-dejavu-core"]),
     // Arch and Omarchy.
     ("pacman", &["xorg-server-xvfb", "icewm", "ttf-dejavu"]),
-    // Fedora, best effort: not checked in L0 (no Fedora node).
-    ("dnf", &["xorg-x11-server-Xvfb", "icewm", "dejavu-sans-fonts"]),
 ];
 
-/// The fixed list for a package manager (`apt`, `pacman`, `dnf`), or
-/// `None` for one K2 has no list for.
+/// The fixed list for a package manager (`apt`, `pacman`), or `None` for
+/// one K2 has no list for (`dnf` too, until Fedora's names are checked).
 pub fn packages_for(pm: &str) -> Option<&'static [&'static str]> {
     DESKTOP_PACKAGES.iter().find(|(p, _)| *p == pm).map(|(_, l)| *l)
 }
 
 /// Free space the install needs on `/` and `/var` first. L0: about
-/// 70 MB on a box that already has Mesa, up to about 250 MB on a bare
-/// one, plus apt's lists; the rest keeps a full box out of ENOSPC.
+/// 70 MB on a box that already has Mesa, about 300 MB on a bare Ubuntu
+/// server, plus apt's lists; the rest keeps a full box out of ENOSPC.
 pub const DESKTOP_MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// How long apt waits for the dpkg lock (unattended-upgrades on a fresh
@@ -90,7 +90,6 @@ pub fn manual_command(pm: Option<&str>) -> String {
     match pm {
         "apt" => format!("sudo apt-get update && sudo apt-get install --no-install-recommends {names}"),
         "pacman" => format!("sudo pacman -S --needed {names}"),
-        "dnf" => format!("sudo dnf install --setopt=install_weak_deps=False {names}"),
         _ => unreachable!("every DESKTOP_PACKAGES entry has a command"),
     }
 }
@@ -103,7 +102,7 @@ mod tests {
     fn each_package_manager_has_one_closed_list() {
         assert_eq!(packages_for("apt"), Some(&["xvfb", "icewm", "fonts-dejavu-core"][..]));
         assert_eq!(packages_for("pacman"), Some(&["xorg-server-xvfb", "icewm", "ttf-dejavu"][..]));
-        assert_eq!(packages_for("dnf"), Some(&["xorg-x11-server-Xvfb", "icewm", "dejavu-sans-fonts"][..]));
+        assert_eq!(packages_for("dnf"), None, "Fedora's names are unchecked: no list, no install");
         assert_eq!(packages_for("zypper"), None);
         assert_eq!(packages_for(""), None);
         // No list asks for a terminal, a browser or anything outside R32.
@@ -121,11 +120,7 @@ mod tests {
             "sudo apt-get update && sudo apt-get install --no-install-recommends xvfb icewm fonts-dejavu-core"
         );
         assert_eq!(manual_command(Some("pacman")), "sudo pacman -S --needed xorg-server-xvfb icewm ttf-dejavu");
-        assert_eq!(
-            manual_command(Some("dnf")),
-            "sudo dnf install --setopt=install_weak_deps=False xorg-x11-server-Xvfb icewm dejavu-sans-fonts"
-        );
-        for unknown in [None, Some("zypper"), Some("apk")] {
+        for unknown in [None, Some("dnf"), Some("zypper"), Some("apk")] {
             let m = manual_command(unknown);
             assert!(m.contains("Install Xvfb, IceWM and a DejaVu font"), "{m}");
             assert!(!m.contains("sudo"), "no guessed command: {m}");

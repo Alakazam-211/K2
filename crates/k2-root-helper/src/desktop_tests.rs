@@ -146,7 +146,7 @@ fn desktop_packages_install_with_no_known_package_manager_installs_nothing_and_s
 }
 
 #[test]
-fn desktop_packages_install_on_pacman_and_dnf_uses_their_fixed_lists() {
+fn desktop_packages_install_on_pacman_uses_its_fixed_list() {
     let t = box_root();
     bin(&t, PACMAN);
     rule(&t, PACMAN, "--print", 0, "imlib2\nicewm\nttf-dejavu\n");
@@ -164,17 +164,20 @@ fn desktop_packages_install_on_pacman_and_dnf_uses_their_fixed_lists() {
     assert_eq!(v["packageManager"], "pacman");
     assert_eq!(v["added"], serde_json::json!(["imlib2", "icewm", "ttf-dejavu"]));
 
+}
+
+#[test]
+fn desktop_packages_install_on_dnf_installs_nothing_until_fedoras_names_are_checked() {
     let t = box_root();
     bin(&t, DNF);
     installs_the_desktop(&t, DNF);
     let o = t.call(ARGV);
-    ok(&o);
-    // dnf never removes without --allowerasing, which K2 never passes.
-    assert_eq!(
-        calls_of(&t, DNF),
-        vec!["install -y -q --setopt=install_weak_deps=False xorg-x11-server-Xvfb icewm dejavu-sans-fonts"]
-    );
-    assert!(calls_of(&t, DNF).iter().all(|c| !c.contains("allowerasing")));
+    assert_eq!(o.code, exit::STATE, "{}", o.stderr);
+    assert!(o.stderr.starts_with("no_package_list:"), "{}", o.stderr);
+    assert!(o.stderr.contains("nothing was installed"), "{}", o.stderr);
+    assert!(o.stderr.contains("Install Xvfb, IceWM and a DejaVu font"), "{}", o.stderr);
+    assert!(calls_of(&t, DNF).is_empty(), "{:?}", calls_of(&t, DNF));
+    assert!(t.non_query_calls().is_empty(), "{:?}", t.non_query_calls());
 }
 
 #[test]

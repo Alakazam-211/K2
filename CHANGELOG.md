@@ -1,8 +1,21 @@
 # Changelog
 
+## v0.7.17 (2026-11-11): pairs with kit v0.14.0
+
+**Requires `k2-mpc-base` v0.14.0**. This pack's code and tests are unchanged from v0.7.16.
+
+- Pairs with kit v0.14.0. Its additions are provided methods with defaults
+  (`Pack::check_merged`, `Host::conflict_copy_name`) and person-writer reuse, off by default;
+  this pack overrides none of them, so its merges and docs behave as in v0.7.16. The kit's
+  tier-0 change (an app's save over an agent's write keeps both) is for blob files, not this
+  pack's text docs.
+- `scripts/private-allow.txt`'s header says what `scripts/check-private.sh` skips (only the
+  allowlist itself). v0.7.16's pairing line names the kit tag alone.
+- `Cargo.lock`: k2-mpc-base 0.14.0 (only the kit's crate version moves); the crate version.
+
 ## v0.7.16 (2026-11-10): pairs with kit v0.13.1
 
-**Requires `k2-mpc-base` v0.13.1** (the tag at its public cut 6ef688e4). This pack's code and
+**Requires `k2-mpc-base` v0.13.1**. This pack's code and
 tests are unchanged from v0.7.15.
 
 - Pairs with kit v0.13.1 (no kit API change since v0.13.0).
@@ -10,7 +23,7 @@ tests are unchanged from v0.7.15.
   are no longer in the tree. It reads them from `MPC_PRIVATE_PATTERNS`, else the file
   `MPC_PRIVATE_PATTERNS_FILE` names, else `~/.config/k2-mpc/private-patterns.txt`, and with
   none it exits 2. `scripts/private-allow.txt` works as before.
-- `Cargo.lock`: k2-mpc-base 0.13.1 (only the kit's crate version moves; no `mpce` entry); the
+- `Cargo.lock`: k2-mpc-base 0.13.1 (only the kit's crate version moves); the
   crate version.
 
 ## v0.7.15 (2026-11-10): pairs with kit v0.13.0

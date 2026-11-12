@@ -186,6 +186,10 @@ pub(super) const ROWS: &[Route] = &[
     // watch, freeze and init need Admin people or a passport for its own
     // workspace (the handler refuses a Member login `owner_only`).
     // release and evidence (0.46.11, C5/C6b): agent verbs like run.
+    // prd-compute-blacksmith-class-v1 B2: the trusted branches (widening
+    // is a person's, checked in the handler).
+    get("/cli/ci/cache/trust", Member),
+    post("/cli/ci/cache/trust/set", Member),
     post("/cli/ci/evidence", Member),
     post("/cli/ci/freeze", Member),
     post("/cli/ci/init", Member),

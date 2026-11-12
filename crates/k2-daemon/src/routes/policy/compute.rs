@@ -31,6 +31,8 @@ pub(super) const ROWS: &[Route] = &[
     // owner/Admin (or an agent under "Allow managing compute nodes").
     get("/cli/compute/cache", Admin),
     post("/cli/compute/cache/clear", Admin),
+    // B2: the workspace's cache generations (its own project only).
+    get("/cli/compute/cache/lineages", Member),
     get("/cli/compute/enroll", Public),
     get("/cli/compute/events", Admin),
     // Git access for jobs (0.46.9, GH#78): anyone who may see the

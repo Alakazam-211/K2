@@ -2984,6 +2984,19 @@ cmd_schema() {
       ]
     },
     {
+      "name": "approve",
+      "usage": "k2 approve request --payload <file> [--to <login>] [--wait] [--out <file>] [--json] | k2 approve status [<id>] [--out <file>] [--json] | k2 approve cancel <id>",
+      "description": "Signed approvals: ask a person to approve the exact bytes a relying party wrote (K2-SIGNED-APPROVAL-1, a zero byte, strict JSON, at most 16 KB). They read it and approve on their own phone (Face ID or passcode); the phone signs the bytes and you get an approval record for the relying party, which checks the signature with keys it trusts. K2 only carries the bytes; you can never answer. Needs the approve.request permission (an Owner or Admin: k2 approve agents <workspace> on). Without --to you ask the person you work for; anyone else must allow you first. At most 3 waiting, 20 asks an hour; answer_by at most 60 minutes away. Exit 0 asked/approved, 1 declined/expired/cancelled, 2 bad request, 3 refused. POST /cli/approve/request.",
+      "args": [],
+      "flags": [
+        {"name": "--payload", "arg": "file", "description": "request: the payload file, sent byte for byte."},
+        {"name": "--to", "arg": "login", "description": "request: the person to ask (default: the person you work for)."},
+        {"name": "--wait", "arg": null, "description": "request: wait until approved, declined or expired."},
+        {"name": "--out", "arg": "file", "description": "request --wait / status <id>: write the approval record there once approved."},
+        {"name": "--json", "arg": null, "description": "The request as JSON: {id, state, person, kind, rp, nonce, answerBy, device, record, card}."}
+      ]
+    },
+    {
       "name": "send-feedback",
       "usage": "k2 send-feedback \"<text>\" [--category bug|idea|praise|other] [--diagnostics | --diagnostics-preview] [--yes] [--json]",
       "description": "Tell Alakazam Labs, K2's makers, about K2 itself (a bug, an idea, praise); not for asking your human (k2 tickets ask). Sent: the category, the text with vault values taken out, person or agent, the client and the K2/OS versions; never your name, workspace, files, chats or tokens. The server keeps it in an outbox and sends it when it can (queued with the reason while K2's feedback service isn't reachable yet). Agents: while the owner keeps agents on, 1 in any 60 s and 3 in any 24 h per workspace, 10 in any 24 h for the server; no contact email. Text from stdin with -. Subcommands: list [--state S], show <id>, retry <id>, cancel <id>, settings. POST /cli/product-feedback/send. Exit 3 when refused, nothing saved (disabled, agents_off, agent_limit, diagnostics_need_owner, needs_connect, airgap). Not k2 feedback (that asks your human). k2 study send-feedback.",

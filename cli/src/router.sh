@@ -278,15 +278,6 @@ case "${1:-help}" in
     reviews)
         shift; cmd_reviews "$@"
         ;;
-    approve)
-        # Signed approvals (prd-signed-approvals-v1). verify/show/key-id are
-        # local (k2-approve); request/status/cancel are the daemon's.
-        case "${2:-}" in
-            verify|show|key-id) shift; cmd_approve_local "$@" ;;
-            ""|-h|--help|help) shift; cmd_approve_local --help ;;
-            *) echo "k2 approve: unknown subcommand ${2:-} (verify, show, key-id)" >&2; exit 2 ;;
-        esac
-        ;;
     review)
         case "${2:-}" in
             approve)  shift 2; cmd_review_approve "$@" ;;
@@ -933,6 +924,10 @@ case "${1:-help}" in
         # 0.46.11 (prd-k2-product-feedback-v1): feedback about K2 itself to
         # Alakazam Labs. Not `k2 feedback` (asking your own human).
         shift; cmd_send_feedback "$@"
+        ;;
+    approve)
+        # Signed approvals (prd-signed-approvals-v1 S1): BEGIN_CLI_APPROVE.
+        shift; cmd_approve "$@"
         ;;
     permission)
         # Permission cards (Beta): unknown, exactly as today, unless the

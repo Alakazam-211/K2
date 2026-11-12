@@ -369,6 +369,209 @@ cmd_permission() {
 }
 # END_CLI_PERMISSION
 
+# BEGIN_CLI_APPROVE
+# `k2 approve` — signed approvals (prd-signed-approvals-v1 S1). An agent
+# asks a person to approve exact bytes that a relying party wrote; the
+# person approves on their phone (Face ID) and the phone signs the bytes.
+# The daemon only carries them (/cli/approve/*); the relying party checks
+# the signature itself. An `id` tool: inside a K2 terminal the daemon sees
+# the session passport, never the owner token.
+_approve_usage() {
+    cat <<'EOF'
+k2 approve — ask a person to approve something on their phone
+
+A program that is about to act (the relying party: a release signer, a
+payment service) writes down exactly what it will do as a payload file:
+"K2-SIGNED-APPROVAL-1", a zero byte, then JSON. You send that file to a
+person. They read it on their own phone, approve with Face ID (or their
+passcode), and the phone signs the exact bytes. You get back an approval
+record, and you give it to the relying party, which checks the signature
+with keys it already trusts. K2 only carries the bytes: it can't approve
+anything, and neither can you.
+
+  k2 approve request --payload <file> [--to <login>] [--wait] [--out <file>] [--json]
+      Ask. Without --to: the person you work for (this server's owner).
+      Anyone else must first allow you to ask them, in K2.
+      --wait   wait for the answer (until the payload's answer_by)
+      --out    with --wait: write the approval record there when approved
+      Prints the request id (ap_…). Exit 0 asked (or, with --wait,
+      approved); 1 declined, expired or cancelled; 2 a bad payload or
+      request; 3 refused (no permission, not allowed to ask them, limits).
+  k2 approve status [<id>] [--out <file>] [--json]
+      One request (with --out: write its approval record once approved),
+      or your recent requests.
+  k2 approve cancel <id>
+      Withdraw a request that is still waiting.
+
+Rules:
+  - You need the approve.request permission. An Owner or Admin turns it on:
+    k2 approve agents <workspace> on   (or ask: k2 permission request approve.request)
+  - At most 3 of your requests wait at once, 20 asks an hour. A payload's
+    nonce is sent once; make a new payload to ask again.
+  - answer_by must be in the future and at most 60 minutes away.
+  - Never put a secret in a payload: the person's phone shows every field.
+  - Only the person answers, on their own phone. You can't answer for them.
+
+People (Owner or Admin): k2 approve agents [<workspace> on|off] lists or
+sets which agents may ask.
+
+Relying parties check a record on their own machine, never through K2:
+k2 approve verify / show / key-id (no daemon; k2 approve verify --help).
+EOF
+}
+
+# Print one request (agent view) in plain words.
+_approve_print() {
+    printf '%s' "$1" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+rows = v.get("requests")
+def t(s):
+    return time.strftime("%H:%M:%S UTC", time.gmtime(s)) if s else "-"
+def line(r):
+    out = "%s  %-9s  %s  to %s, answer by %s" % (r["id"], r["state"], r.get("kind", ""), r.get("person", ""), t(r.get("answerBy")))
+    if r.get("state") in ("approved", "declined") and r.get("device"):
+        out += "  (on %s)" % r["device"]
+    return out
+if rows is None:
+    print(line(v))
+elif not rows:
+    print("No approval requests from this agent.")
+else:
+    for r in rows:
+        print(line(r))
+'
+}
+
+# Write the approval record of an approved request to a file.
+_approve_write_record() {
+    local body="$1" out="$2"
+    printf '%s' "$body" | K2_AP_OUT="$out" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+rec = v.get("recordText")
+if v.get("state") != "approved" or not isinstance(rec, str) or not rec:
+    print("Error: %s is %s; there is no approval record to write" % (v.get("id"), v.get("state")), file=sys.stderr)
+    sys.exit(1)
+# Exactly as the phone wrote it: the relying party reads it strictly.
+with open(os.environ["K2_AP_OUT"], "w") as f:
+    f.write(rec)
+print("Wrote the approval record to %s. Give it to the relying party: it checks the signature." % os.environ["K2_AP_OUT"])
+'
+}
+
+# Wait for a final state; exit 0 approved, 1 otherwise.
+_approve_wait() {
+    local id="$1" out="$2" json="$3" state
+    while :; do
+        _compute_call GET /cli/approve/wait "id=$(urlencode "$id")&timeout=45"
+        state="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))')"
+        [ "$state" = waiting ] || break
+    done
+    if [ "$json" = 1 ]; then printf '%s\n' "$_CP_BODY"; else _approve_print "$_CP_BODY"; fi
+    [ "$state" = approved ] || exit 1
+    if [ -n "$out" ]; then _approve_write_record "$_CP_BODY" "$out" >&2 || exit 1; fi
+}
+
+_approve_request() {
+    local payload="" to="" wait=0 out="" json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --payload) payload="${2:-}"; shift 2 ;;
+            --to) to="${2:-}"; shift 2 ;;
+            --wait) wait=1; shift ;;
+            --out) out="${2:-}"; shift 2 ;;
+            --json) json=1; shift ;;
+            -h|--help) _approve_usage; return 0 ;;
+            *) echo "Error: unexpected argument '$1' (k2 approve --help)" >&2; exit 2 ;;
+        esac
+    done
+    [ -n "$payload" ] || { echo "Usage: k2 approve request --payload <file> [--to <login>] [--wait] [--out <file>]" >&2; exit 2; }
+    [ -f "$payload" ] || { echo "Error: no payload file at $payload" >&2; exit 2; }
+    [ -z "$out" ] || [ "$wait" = 1 ] || { echo "Error: --out needs --wait (or use k2 approve status <id> --out <file> later)" >&2; exit 2; }
+    local body
+    body="$(K2_AP_FILE="$payload" K2_AP_TO="$to" python3 -c '
+import base64, json, os
+with open(os.environ["K2_AP_FILE"], "rb") as f:
+    b = f.read()
+out = {"payload_b64": base64.b64encode(b).decode("ascii")}
+if os.environ["K2_AP_TO"]:
+    out["to"] = os.environ["K2_AP_TO"]
+print(json.dumps(out))
+')"
+    _compute_call POST /cli/approve/request "$body"
+    local id
+    id="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+    if [ "$wait" = 1 ]; then
+        [ "$json" = 1 ] || echo "Asked: $id. Waiting for the answer on their phone…" >&2
+        _approve_wait "$id" "$out" "$json"
+        return 0
+    fi
+    if [ "$json" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    _approve_print "$_CP_BODY"
+    echo "They approve on their phone. Check with: k2 approve status $id (or ask again with --wait)."
+}
+
+_approve_cmd() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        ""|help|-h|--help) _approve_usage ;;
+        request) _approve_request "$@" ;;
+        verify|show|key-id)
+            # The relying party's side runs k2-approve locally (no daemon).
+            if declare -F cmd_approve_local >/dev/null; then cmd_approve_local "$sub" "$@"; exit $?; fi
+            echo "Error: k2 approve $sub needs the k2-approve program, which this K2 doesn't have yet" >&2
+            exit 2
+            ;;
+        status)
+            local id="" out="" json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --out) out="${2:-}"; shift 2 ;;
+                    --json) json=1; shift ;;
+                    -*) echo "Usage: k2 approve status [<id>] [--out <file>] [--json]" >&2; exit 2 ;;
+                    *) id="$1"; shift ;;
+                esac
+            done
+            [ -z "$out" ] || [ -n "$id" ] || { echo "Error: --out needs a request id" >&2; exit 2; }
+            _compute_call GET /cli/approve/status "${id:+id=$(urlencode "$id")}"
+            if [ "$json" = 1 ]; then printf '%s\n' "$_CP_BODY"; else _approve_print "$_CP_BODY"; fi
+            [ -z "$out" ] || _approve_write_record "$_CP_BODY" "$out" || exit 1
+            ;;
+        cancel)
+            [ -n "${1:-}" ] || { echo "Usage: k2 approve cancel <id>" >&2; exit 2; }
+            _compute_call POST /cli/approve/cancel "$(_compute_json "K2_CJ_id=$1")"
+            echo "Cancelled: $1. The card on the Thread says so."
+            ;;
+        agents)
+            if [ -n "${1:-}" ]; then
+                case "${2:-}" in on|off) ;; *) echo "Usage: k2 approve agents [<workspace> on|off]" >&2; exit 2 ;; esac
+                _compute_call POST /cli/approve/agents "$(_compute_json "K2_CJ_workspace=$1" "K2_CJ_on_b=$([ "$2" = on ] && echo 1 || echo 0)")"
+                echo "approve.request is $2 for $1."
+            else
+                _compute_call GET /cli/approve/agents ""
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("agents") or []
+print("\n".join("%s  (turned on by %s)" % (r["workspace"], r["grantedBy"]) for r in rows) if rows else "No agent may ask for signed approvals yet.")
+'
+            fi
+            ;;
+        *)
+            echo "Error: unknown k2 approve command: $sub" >&2
+            _approve_usage >&2
+            exit 2
+            ;;
+    esac
+}
+
+cmd_approve() {
+    _K2_REFUSAL_AREA=""
+    _approve_cmd "$@"
+}
+# END_CLI_APPROVE
+
 # BEGIN_CLI_ORGANIZATION
 # `k2 organization` — the Org Chart (prd-org-chart-v1, 0.46.11): orgs of
 # agents, their heads, the lines between them and the daily server

@@ -408,6 +408,9 @@ export interface OverlayDoc {
   changes?: ThreadChangesDoc | null
   /** 0.46.11: a mail notice, drawn by NoticeCard as plain text. */
   notice?: unknown
+  /** Kind `approval` only (signed approvals S1): ids and state, never the
+   *  payload. Drawn read-only by ApprovalCard (coerceApproval). */
+  approval?: unknown
   /** post-idempotency-v1 (0.46.8): the id the sender gave its post. This
    *  window's pending bubble for the post is matched by it. Absent on posts
    *  sent without one and on older servers. */
@@ -1432,6 +1435,8 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       ...(typeof d.summary === 'string' && d.summary.trim() ? { summary: d.summary } : {}),
       ...(d.summarySource === 'sender' || d.summarySource === 'derived' ? { summarySource: d.summarySource } : {}),
       ...(d.notice ? { notice: d.notice } : {}),
+      // Signed approvals S1: ids and state (ApprovalCard coerces it).
+      ...(d.approval ? { approval: d.approval } : {}),
       ...docExtras(d),
     },
   }

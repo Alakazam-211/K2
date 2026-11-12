@@ -540,6 +540,12 @@ unset _k2_cli_wants_help
 if [ "${1:-}" = "capabilities" ]; then
     for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
 fi
+# `k2 approve` with no args or --help only prints help; verify, show and
+# key-id run k2-approve locally (no daemon).
+if [ "${1:-}" = "approve" ]; then
+    case "${2:-}" in ""|help|-h|--help|verify|show|key-id) _skip_conn_gate=1 ;; esac
+    for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done
+fi
 # `k2 send-feedback` with no args, help or --help only prints help.
 if [ "${1:-}" = "send-feedback" ]; then
     case "${2:-}" in ""|help|-h|--help) _skip_conn_gate=1 ;; esac

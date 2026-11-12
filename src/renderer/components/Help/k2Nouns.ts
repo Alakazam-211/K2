@@ -83,6 +83,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         example: 'k2 feedback ask "Ship it?" --options yes,no',
       },
       { noun: 'review', blurb: "Approve, reject or comment on an agent's proposed work.", example: 'k2 review approve sales' },
+      {
+        noun: 'approve',
+        blurb: 'Ask a person to approve exact bytes on their phone (Face ID); they sign there, K2 only carries it.',
+        example: 'k2 approve request --payload p.bin --wait --out approval.json',
+      },
     ],
   },
   {

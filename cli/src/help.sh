@@ -62,6 +62,8 @@ ASK A HUMAN
   feedback list                         This workspace's asks + their status
   feedback show <id>                    One ask: status, answer, discussion thread
                                         (ask/list/show/comment/resolve — see `k2 feedback --help`)
+  approve request --payload <file>      Ask a person to approve exact bytes on their phone
+                                        (Face ID); status / cancel — `k2 approve --help`
 
 K2 ITSELF
   send-feedback "<text>"                Tell Alakazam Labs (K2's makers) about K2: a bug, an

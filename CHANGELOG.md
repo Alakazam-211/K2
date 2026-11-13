@@ -1,14 +1,29 @@
 # Changelog
 
+## v0.7.22 (2026-11-12): pairs with kit v0.18.0
+
+**Requires `k2-mpc-base` v0.18.0**. This pack's behaviour is unchanged from v0.7.21.
+
+- Pairs with kit v0.18.0. Its changes for a pack: build the view index's structs with
+  `..X::default()` (and the schema's parts with `..X::NONE`); a keyed doc's `MPC-E822` is
+  `SessionError::KeyedAtLimit`; an optional per-pack keyed limit (`Pack::keyed_entries_default`);
+  verb state, derived values per unit and placements in 3D, all additive with defaults. This pack's
+  text docs use none of them, so it behaves as in v0.7.21.
+- Public text in plain words: internal labels in docs, comments and test names are now plain
+  descriptions, and `scripts/check-labels.sh` (run by `scripts/check.sh`) fails on one. The
+  CHANGELOG's lines are wrapped to at most 100 characters, words unchanged.
+- `Cargo.lock`: k2-mpc-base 0.18.0 (only the kit's crate version moves); the crate version.
+
 ## v0.7.21 (2026-11-12): pairs with kit v0.17.0
 
 **Requires `k2-mpc-base` v0.17.0**. This pack's code and tests are unchanged from v0.7.20.
 
-- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the host's call
-  for a text doc whose type now routes to tier 0), the carrier's pairing (K1b, opt-in by
-  `Pack::wants_pairing`, new error `MPC-E521`), the live grid (wire 3, additive), and an
-  outside save on unwritten changes keeping both on a keyed doc that isn't a table. This pack's text docs use none of the new hooks and keep no carrier, so it behaves as
-  in v0.7.20. Markdown stays live text: nothing it opens is demoted.
+- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the host's call for a text
+  doc whose type now routes to tier 0), the carrier's pairing (opt-in by `Pack::wants_pairing`, new
+  error `MPC-E521`), the live grid (wire 3, additive), and an outside save on unwritten changes
+  keeping both on a keyed doc that isn't a table. This pack's text docs use none of the new hooks
+  and keep no carrier, so it behaves as in v0.7.20. Markdown stays live text: nothing it opens is
+  demoted.
 - `Cargo.lock`: k2-mpc-base 0.17.0 (only the kit's crate version moves); the crate version.
 
 ## v0.7.20 (2026-11-12): pairs with kit v0.16.0
@@ -123,8 +138,8 @@ ae2ac947). This pack's code and tests are unchanged from v0.7.12.
   applies with the one warning while the same verb without `--nth` gets none.
 - `Cargo.lock`: k2-mpc-base 0.11.0 (only the kit's crate version moves; no `mpce` entry); the
   crate version.
-- `scripts/check-windows-names.sh` and its self-test, in `scripts/check.sh`: every path must be one Windows can
-  check out.
+- `scripts/check-windows-names.sh` and its self-test, in `scripts/check.sh`: every path must be one
+  Windows can check out.
 
 ## v0.7.11 (2026-11-02): pairs with kit v0.10.2
 
@@ -157,7 +172,7 @@ pack's code and tests are unchanged from v0.7.8.
 
 ## v0.7.8 (2026-10-30): pairs with kit v0.10.0
 
-**Requires `k2-mpc-base` v0.10.0** (C1: structured kinds and the grid, for CSV, on top of
+**Requires `k2-mpc-base` v0.10.0** (structured kinds and the grid, for CSV, on top of
 kit v0.9.7.1, whose whole-line `write --base` this pack took in v0.7.7: that entry stands).
 This pack gets no grid and no new verb; what changed for it:
 - **The grid's arrival doesn't affect it.** The kit's grid tier (structured roots, the grid
@@ -210,21 +225,21 @@ corruption, kit v0.1.0 through v0.9.7). What changes:
   exit code and everything else the demo prints are unchanged (the whole transcript was
   diffed on a build node: that line only, edited by hand, not re-blessed).
 - `Cargo.lock`: k2-mpc-base 0.9.7; the crate version. No other pack code change: the kit's
-  other v0.9.7 changes (K5 handles in `run_tool` output for App viewers, D1's undo, outside
-  saves merged line by line) leave this pack's tests and goldens as they were (checked on a
-  build node). No store format change.
+  other v0.9.7 changes (handles in `run_tool` output for App viewers, an undo that keeps
+  others' words, outside saves merged line by line) leave this pack's tests and goldens as
+  they were (checked on a build node). No store format change.
 
 The kit's changes since v0.9.5 (its CHANGELOG has the details):
 - **v0.9.6:** an outside save that deleted a line and typed it back could leave the line
   twice; the outside-save merge now diffs each side on whole lines.
 - **v0.9.7, the Live-tab release:** the live typing APIs (the hunk channel, `edit_at_base`,
   `events_since`, undo over the channel, handles instead of pids in `run_tool` output for App
-  viewers, roster push, participant overflow); **D1**: an undo never changes a word someone
+  viewers, roster push, participant overflow); an undo never changes a word someone
   else wrote, and says so instead; speed work (incremental write-back and blame, the
-  engine's position index); outside saves merged line by line; exports P0 (`Session::file_at`,
+  engine's position index); outside saves merged line by line; exports (`Session::file_at`,
   the export contract, the P24 verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
-  guidance per surface, relative paths in refusals and hard-linked files declined (K6, K7,
-  K9); the vendored engine at k2-yrs k2.6.3.
+  guidance per surface, relative paths in refusals and hard-linked files declined; the vendored
+  engine at k2-yrs k2.6.3.
 
 ## v0.7.5 (2026-10-29)
 
@@ -244,7 +259,7 @@ version only. Nothing to do for this pack; no store format change. The kit's cha
 - **Hardening:** client updates carrying subdocuments are refused (the kit never uses them),
   with `DocError::Unaccepted`. A stored doc holding one is quarantined
   (`DocError::Quarantined`). The vendored engine is updated to k2-yrs k2.2.2.
-- K-AUD-1 gains `SyncDrift::Pending`.
+- The disk-sync audit gains `SyncDrift::Pending`.
 
 ## v0.7.4 (2026-10-29)
 
@@ -253,7 +268,7 @@ version only. The kit fixes an outside edit that could be corrupted after a chan
 no byte (since v0.1.0): an edit and its undo, a delete and a retype, or a rewrite and back,
 then a plain-editor edit of the same text, could land beside the restored copy (`LINE
 three3`) while the doc reported clean. The kit now keeps its disk replica on the doc's own
-elements, and adds `Session::audit_disk_sync()` (K-AUD-1's sync check). Nothing to do for
+elements, and adds `Session::audit_disk_sync()` (the sync check). Nothing to do for
 this pack; no store format change.
 
 ## v0.7.3 (2026-10-28)
@@ -283,27 +298,41 @@ through the kit's `TextFilePack`, and the P30 row may leave the `approvals` alia
 demo's transcript now shows both demo findings fixed (`restored by` on scenes 6 and 8; no
 `edited lines 25–26` notes), and the demo fails if a partly restored line lacks it.
 
-**A multiplayer demo** (`docs/DEMO.md`): three agents and one person on one Markdown doc through the kit's sessions, headless and deterministic. It covers presence notes; a claim, a bounce and a retry with `--if-version`; a person never refused; a `write --base` merge and a conflict; exact `replace`; undo with provenance; blame with `restored by`; and a revert. The example is `crates/markdown/examples/multiplayer_demo.rs`. `tests/demo_transcript.rs` compares its transcript with `tests/golden/multiplayer_demo.txt`. `docs/DEMO.md` maps each scene to a host's doc CLI, so it can be replayed as a dogfood script. No pack or API change; no new dependency.
+**A multiplayer demo** (`docs/DEMO.md`): three agents and one person on one Markdown doc through the
+kit's sessions, headless and deterministic. It covers presence notes; a claim, a bounce and a retry
+with `--if-version`; a person never refused; a `write --base` merge and a conflict; exact `replace`;
+undo with provenance; blame with `restored by`; and a revert. The example is
+`crates/markdown/examples/multiplayer_demo.rs`. `tests/demo_transcript.rs` compares its transcript
+with `tests/golden/multiplayer_demo.txt`. `docs/DEMO.md` maps each scene to a host's doc CLI, so it
+can be replayed as a dogfood script. No pack or API change; no new dependency.
 
 ## v0.7.0 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.9.0** (undo, redo and revert never remove another participant's text, and text they put back keeps its provenance: blame names who first wrote it and who put it back; a behaviour change in undo and blame, hence the minor bump). The base's **store format is 5** (an in-place upgrade from 4; an older build refuses it). `Cargo.lock` only; no pack change.
+**Requires `k2-mpc-base` v0.9.0** (undo, redo and revert never remove another participant's text,
+and text they put back keeps its provenance: blame names who first wrote it and who put it back; a
+behaviour change in undo and blame, hence the minor bump). The base's **store format is 5** (an
+in-place upgrade from 4; an older build refuses it). `Cargo.lock` only; no pack change.
 
 ## v0.6.2 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.8.2** (the revert fix: a revert's conflicts no longer change across a host restart). `Cargo.lock` only; no pack change.
+**Requires `k2-mpc-base` v0.8.2** (the revert fix: a revert's conflicts no longer change across a
+host restart). `Cargo.lock` only; no pack change.
 
 ## v0.6.1 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.8.1** (the undo fix: undo, redo and revert remove only their own text). `Cargo.lock` only; no pack change.
+**Requires `k2-mpc-base` v0.8.1** (the undo fix: undo, redo and revert remove only their own text).
+`Cargo.lock` only; no pack change.
 
 ## v0.6.0 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.8.0** (`--if-version V` on every edit verb; the kit strips it before the pack parses argv, so `replace-section` takes it too). The usage line and `docs/PARITY.md` name `[--if-version V]`; `Cargo.lock` moves to base 0.8.0. No other change.
+**Requires `k2-mpc-base` v0.8.0** (`--if-version V` on every edit verb; the kit strips it before the
+pack parses argv, so `replace-section` takes it too). The usage line and `docs/PARITY.md` name
+`[--if-version V]`; `Cargo.lock` moves to base 0.8.0. No other change.
 
 ## v0.5.0 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.7.0** (agent presence). P8 lists `cursor`, `claim`, `claim --renew`, `claim --release`; P6 adds `activity`; `docs/PARITY.md` updated. No other change.
+**Requires `k2-mpc-base` v0.7.0** (agent presence). P8 lists `cursor`, `claim`, `claim --renew`,
+`claim --release`; P6 adds `activity`; `docs/PARITY.md` updated. No other change.
 
 ## v0.4.0 (2026-10-28)
 
@@ -313,7 +342,8 @@ demo's transcript now shows both demo findings fixed (`restored by` on scenes 6 
 
 ## v0.3.1 (2026-10-27)
 
-**Requires `k2-mpc-base` v0.5.0** (store format 4; P29/P30 gain blob rows, text packs unaffected). Only `Cargo.lock` and the crate version change; no code change.
+**Requires `k2-mpc-base` v0.5.0** (store format 4; P29/P30 gain blob rows, text packs unaffected).
+Only `Cargo.lock` and the crate version change; no code change.
 
 ## v0.3.0 (2026-10-27)
 

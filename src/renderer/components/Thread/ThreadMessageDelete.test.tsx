@@ -3,8 +3,8 @@
 // enters something sensitive into the threads, we need to give them a way
 // to delete the sensitive message."
 //
-//   1. A deleted post draws as "You deleted this message" for its sender and
-//      "Message deleted" for everyone else: muted, no words, no files, no menu.
+//   1. A deleted post draws as one quiet "Message deleted" line for everyone:
+//      muted text, no bubble, no words, no files, no menu, no status line.
 //   2. Your own post's menu has Delete message where the Thread's server has
 //      the feature; someone else's post, or a server without it, has none.
 //   3. Delete asks first (the agreed words), then posts
@@ -73,13 +73,14 @@ afterEach(() => {
 })
 
 describe('a deleted post', () => {
-  it('reads "You deleted this message" to its sender and "Message deleted" to others, with no words', () => {
+  it('reads "Message deleted" to its sender and to others, with no words and no bubble', () => {
     const mine = draw(tombstone('d1'), true)
     const note = mine.container.querySelector('[data-thread-deleted]')
-    expect(note?.textContent).toBe('You deleted this message')
-    expect(mine.container.textContent).not.toContain('hunter2')
+    expect(note?.textContent).toBe('Message deleted')
+    expect(mine.container.textContent).toBe('Message deleted')
     expect(mine.container.querySelector('[data-zen-bubble]')).toBeNull()
     expect(mine.container.querySelector('[data-zen-message-more]')).toBeNull()
+    expect(mine.container.querySelector('[data-zen-message-meta]')).toBeNull()
     cleanup()
 
     const theirs = draw(tombstone('d2'), false)
@@ -97,7 +98,8 @@ describe('a deleted post', () => {
       </ThreadAttachmentSourceProvider>,
     )
     expect(view.container.textContent).not.toContain('hunter2')
-    expect(view.container.querySelector('[data-thread-deleted]')?.textContent).toBe('You deleted this message')
+    expect(view.container.querySelector('[data-thread-deleted]')?.textContent).toBe('Message deleted')
+    expect(view.container.querySelector('[data-zen-bubble]')).toBeNull()
   })
 })
 

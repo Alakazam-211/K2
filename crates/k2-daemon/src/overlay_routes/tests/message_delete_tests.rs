@@ -274,3 +274,59 @@ fn the_note_names_people_and_a_time_never_the_text() {
     assert!(!message_delete::is_uploaded_copy("src/main.rs"));
     assert!(!message_delete::is_uploaded_copy(".k2/downloads/../../src/main.rs"));
 }
+
+/// A person coming back to the Thread after a delete reads it again in one
+/// of several ways: the newest page, a catch-up from the start, a delta
+/// after what they had (`after_seq`), an older page (`before_seq`), and the
+/// list preview. Every one serves the tombstone (flagged, no body, nothing
+/// to draw as a message) in its place, and the message before it as it was.
+#[test]
+fn a_returning_reader_gets_the_tombstone_from_every_read() {
+    let _home = crate::test_support::TempHome::new();
+    let (handle, _project_id, _root) = ws("ovldelret");
+    let kept = post_as("owner", &handle, "keep this one", None);
+    let gone = post_as("owner", &handle, "my card number is 4111", None);
+    let kept_id = kept["id"].as_str().expect("id").to_string();
+    let gone_id = gone["id"].as_str().expect("id").to_string();
+    let gone_seq = gone["seq"].as_i64().expect("seq");
+    let r = delete_as("owner", &HashMap::new(), serde_json::json!({ "addr": handle, "id": gone_id }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+
+    let read = |pairs: &[(&str, &str)]| -> serde_json::Value {
+        let mut all = vec![("addr", handle.as_str())];
+        all.extend_from_slice(pairs);
+        let r = dispatch("/cli/thread", &params_of(&all)).expect("GET /cli/thread");
+        assert_eq!(r.status, "200 OK", "{pairs:?}: {}", r.body);
+        assert!(!r.body.contains("4111"), "{pairs:?}: a read never carries the deleted words: {}", r.body);
+        json_body(&r)
+    };
+    let tombstone_in = |rows: &serde_json::Value, how: &str| {
+        let rows = rows.as_array().unwrap_or_else(|| panic!("{how}: no rows"));
+        let t = rows
+            .iter()
+            .find(|i| i["id"] == gone_id.as_str())
+            .unwrap_or_else(|| panic!("{how}: the deleted message keeps its place: {rows:?}"));
+        assert_eq!(t["seq"], gone_seq, "{how}: {t}");
+        assert_eq!(t["doc"]["deleted"], true, "{how}: flagged deleted: {t}");
+        assert!(t["doc"].get("body").is_none(), "{how}: no body: {t}");
+        assert!(t["doc"]["deletedAt"].is_i64(), "{how}: {t}");
+        if let Some(k) = rows.iter().find(|i| i["id"] == kept_id.as_str()) {
+            assert_eq!(k["doc"]["body"], "keep this one", "{how}: {k}");
+            assert!(k["doc"].get("deleted").is_none(), "{how}: the other message is not flagged: {k}");
+        }
+    };
+
+    tombstone_in(&read(&[])["items"], "the newest page");
+    tombstone_in(&read(&[("since_seq", "0"), ("limit", "0")])["items"], "a catch-up from the start");
+    let older = (gone_seq + 1).to_string();
+    tombstone_in(&read(&[("before_seq", older.as_str())])["items"], "an older page");
+    tombstone_in(&read(&[("after_seq", "0")])["items"], "a delta from nothing");
+    // A reader that had both messages: the tombstone comes as a change.
+    let had = gone_seq.to_string();
+    tombstone_in(&read(&[("after_seq", had.as_str())])["changed"], "a delta after what the reader had");
+
+    let latest = dispatch("/cli/thread/latest", &params_of(&[("addrs", handle.as_str())])).expect("latest");
+    assert_eq!(latest.status, "200 OK", "{}", latest.body);
+    let lv = json_body(&latest);
+    assert_eq!(lv["items"][0]["preview"], "Message deleted", "the list preview: {lv}");
+}

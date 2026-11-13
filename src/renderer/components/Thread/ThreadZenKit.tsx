@@ -428,16 +428,16 @@ const BUBBLE_BODY_STYLE: CSSProperties = { color: 'inherit', fontSize: 'inherit'
  *  (`dimClosedCards`): muted with its card, so the closed card never reads
  *  as still waiting. Never in a Garden. */
 const BUBBLE_BODY_CLOSED_STYLE: CSSProperties = { ...BUBBLE_BODY_STYLE, opacity: 0.6 }
-/** A deleted post (thread-message-delete-v1): muted words in an outline,
- *  no fill, so it never reads as a message. */
-const DELETED_BUBBLE_STYLE: CSSProperties = {
-  padding: '6px 12px',
-  borderRadius: 'var(--zen-bubble-radius)',
-  border: '1px dashed var(--zen-text-muted, var(--color-text-muted))',
+/** A deleted post (thread-message-delete-v1): one quiet line of muted text
+ *  in its place, the Thread's note size (ThreadContextNote), with no bubble
+ *  shape, so it never reads as a message. */
+const DELETED_LINE_STYLE: CSSProperties = {
+  padding: '0 6px',
+  fontSize: '0.78em',
   color: 'var(--zen-text-muted, var(--color-text-muted))',
-  fontStyle: 'italic',
-  fontSize: '0.9em',
 }
+/** What a deleted post says, to everyone. */
+export const THREAD_DELETED_LINE = 'Message deleted'
 
 export interface ThreadBubbleProps {
   item: OverlayThreadItem
@@ -725,11 +725,28 @@ export const ThreadBubble = memo(function ThreadBubble({
   const shownReceipt = statusBelow && !pending && receipt ? receipt : null
   // (A post that is only files has no words to act on: no menu, no bubble.)
   const more = menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => openMenu(x, y, null)} /> : null
-  const bubbleNode = deleted ? (
-    <div data-thread-deleted="" role="note" style={DELETED_BUBBLE_STYLE}>
-      {mine ? 'You deleted this message' : 'Message deleted'}
-    </div>
-  ) : bubble ? (
+  // A deleted post: the one line, on its sender's side. No bubble, name,
+  // status line, receipt, files or menu (the runs and the receipt skip it).
+  if (deleted) {
+    return (
+      <div
+        data-zen-message={item.id}
+        data-testid="thread-item"
+        data-kind={kind}
+        data-seq={item.seq}
+        data-mine={mine ? '' : undefined}
+        data-thread-deleted-row=""
+        {...column.attrs}
+        className={column.className ? `flex flex-col ${column.className}` : 'flex flex-col'}
+        style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth, minWidth: 0, ...column.style }}
+      >
+        <span data-thread-deleted="" role="note" style={DELETED_LINE_STYLE}>
+          {THREAD_DELETED_LINE}
+        </span>
+      </div>
+    )
+  }
+  const bubbleNode = bubble ? (
     <div
       ref={bubbleRef}
       className="selectable-copy"

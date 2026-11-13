@@ -420,6 +420,54 @@ describe('Thread sync: merge by id (every source, no duplicates)', () => {
   })
 })
 
+// A deleted message read back (thread-message-delete-v1): the daemon's read
+// serves the tombstone (`deleted`, `deletedAt`, `deletedBy`, no body). The
+// read is rebuilt field by field, so the flag must survive it: without it a
+// returning viewer drew an empty bubble of theirs with a receipt under it.
+describe('a deleted message read back', () => {
+  const tomb = {
+    id: 'd1',
+    kind: 'text',
+    from: 'owner',
+    via: 'compose',
+    created_at: 1_762_700_000,
+    author: { kind: 'owner', login: 'owner' },
+    mine: true,
+    deleted: true,
+    deletedAt: 1_762_700_100,
+    deletedBy: { kind: 'owner', login: 'owner' },
+  }
+
+  it('keeps the tombstone from a Thread read (deleted, when, by whom; no body)', () => {
+    const snap = threadItemsFromSnapshot({ conversation_id: 'conv-1', items: [{ collection: 'thread', seq: 4, id: 'd1', doc: tomb }] })
+    expect(snap.items).toHaveLength(1)
+    const doc = snap.items[0].doc
+    expect(doc.deleted).toBe(true)
+    expect(doc.deletedAt).toBe(1_762_700_100)
+    expect(doc.deletedBy).toEqual({ kind: 'owner', login: 'owner' })
+    expect(doc.body).toBeNull()
+  })
+
+  it('a later read replaces the copy drawn before the delete (a cached page, an open window)', () => {
+    const before: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 4,
+      id: 'd1',
+      doc: { id: 'd1', kind: 'text', from: 'owner', via: 'compose', body: 'my password is hunter2', author: { kind: 'owner', login: 'owner' } },
+    }
+    const read = threadItemsFromSnapshot({ items: [{ collection: 'thread', seq: 4, id: 'd1', doc: tomb }] }).items
+    const merged = mergeThreadItems([before], read)
+    expect(merged).toHaveLength(1)
+    expect(merged[0].doc.deleted).toBe(true)
+    expect(merged[0].doc.body).toBeNull()
+  })
+
+  it('a row that is not deleted never gains the flag', () => {
+    const snap = threadItemsFromSnapshot({ items: [{ collection: 'thread', seq: 1, id: 'doc-1', doc: { ...textDoc, deleted: false } }] })
+    expect(snap.items[0].doc.deleted).toBeUndefined()
+  })
+})
+
 // Own send time (Rosson 2026-10-16: "You -" until the echo): the
 // `thread/post` answer has no `created_at`, so the row carries the send time
 // and the server's stamp replaces it whichever copy lands first.

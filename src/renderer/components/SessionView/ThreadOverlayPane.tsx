@@ -91,13 +91,15 @@ function paneRow(
   viewer: ThreadViewer | null,
   currentAddr?: string,
   pastAddresses?: readonly string[],
-): { id: string; sender: ReturnType<typeof threadSender>; mine: boolean; at: number | undefined } {
+): { id: string; sender: ReturnType<typeof threadSender>; mine: boolean; at: number | undefined; deleted: boolean } {
   return {
     id: it.id,
     sender: threadSender(it.doc, currentAddr, pastAddresses),
     // A pending bubble is always this window's own send (as ThreadItemRow).
     mine: it.pending ? true : threadAuthorLabel(it.doc, viewer, currentAddr, pastAddresses).mine,
     at: it.doc.created_at,
+    // thread-message-delete-v1: its "Message deleted" line stands alone.
+    deleted: it.doc.deleted === true,
   }
 }
 
@@ -121,7 +123,7 @@ export function threadPaneRuns(
   },
 ): { senders: ReturnType<typeof threadSenderSlots>; tails: Set<string>; starts: Set<string> } {
   const row = (it: OverlayThreadItem) => paneRow(it, o.viewer, o.currentAddr, o.pastAddresses)
-  const run = (r: ReturnType<typeof row>) => ({ mine: r.mine, from: r.sender.key, at: r.at })
+  const run = (r: ReturnType<typeof row>) => ({ mine: r.mine, from: r.sender.key, at: r.at, deleted: r.deleted })
   const rows = visible.slice(o.lo, o.hi).map(row)
   const before = o.lo > 0 && o.lo <= visible.length ? row(visible[o.lo - 1]) : null
   const after = o.hi < visible.length ? row(visible[o.hi]) : null
@@ -155,6 +157,8 @@ export function threadPaneReceipt(
     confirmed: !it.pending,
     agent: !it.pending && !isPersonPost(it.doc),
     at: it.doc.created_at,
+    // thread-message-delete-v1: a deleted message never carries it.
+    deleted: it.doc.deleted === true,
   }))
   const i = threadReceiptRow(rows)
   const state = i >= 0 ? threadReceiptFor(rows, i, o.turn) : null

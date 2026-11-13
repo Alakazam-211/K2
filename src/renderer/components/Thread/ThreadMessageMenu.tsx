@@ -68,7 +68,7 @@ export const DELETE_MESSAGE_CONFIRM = {
   destructive: true,
 } as const
 
-/** Confirm, then delete. The bubble turns into "You deleted this message"
+/** Confirm, then delete. The bubble turns into the "Message deleted" line
  *  when the daemon's frame (or the answer) comes back. */
 export async function deleteThreadMessage(del: ThreadMessageDelete): Promise<boolean> {
   if (!(await useConfirmDialogStore.getState().confirm(DELETE_MESSAGE_CONFIRM))) return false

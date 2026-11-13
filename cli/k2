@@ -23485,6 +23485,10 @@ def body_lines(s):
 for it in items:
     doc=it.get("doc") or {}
     body=doc.get("body") or ""
+    if doc.get("deleted") is True:
+        # thread-message-delete-v1: its sender deleted it; the server keeps
+        # no words, so say that rather than print an empty message.
+        body="(message deleted)"
     frm=doc.get("from") or ""
     author=doc.get("author") if isinstance(doc.get("author"), dict) else {}
     if author.get("kind") == "guest":

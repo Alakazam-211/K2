@@ -32,6 +32,9 @@ export interface ThreadReceiptInput {
   agent: boolean
   /** Server time (Unix s or ms); null when unknown. */
   at: number | null | undefined
+  /** Deleted by its sender (thread-message-delete-v1): never carries the
+   *  receipt; the one of yours before it does. */
+  deleted?: boolean
 }
 
 /** The words for a receipt. */
@@ -43,10 +46,10 @@ function secondsOf(at: number | null | undefined): number | null {
 }
 
 /** The row that carries the receipt: the newest confirmed one of yours
- *  (-1: none). */
+ *  that isn't deleted (-1: none). */
 export function threadReceiptRow(rows: readonly ThreadReceiptInput[]): number {
   for (let i = rows.length - 1; i >= 0; i--) {
-    if (rows[i].mine && rows[i].confirmed) return i
+    if (rows[i].mine && rows[i].confirmed && !rows[i].deleted) return i
   }
   return -1
 }
@@ -72,7 +75,7 @@ export function threadReceiptFor(
   turn?: Pick<ThreadTurn, 'startedAt' | 'phase' | 'end'> | null,
 ): ThreadReceipt | null {
   const r = rows[index]
-  if (!r || !r.mine || !r.confirmed) return null
+  if (!r || !r.mine || !r.confirmed || r.deleted) return null
   for (let i = index + 1; i < rows.length; i++) if (!rows[i].mine && rows[i].agent) return 'read'
   return readByTurn(r.at, turn) ? 'read' : 'delivered'
 }

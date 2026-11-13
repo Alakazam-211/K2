@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { ThreadOverlayPane, threadPanePictures, threadPaneReceipt, threadPaneRuns } from '@/components/SessionView/ThreadOverlayPane'
-import { coerceThreadTurn, type OverlayThreadItem, type ThreadTurn } from '@/components/SessionView/overlayThread'
+import { coerceThreadTurn, threadItemsFromSnapshot, type OverlayThreadItem, type ThreadTurn } from '@/components/SessionView/overlayThread'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { primaryScope } from '@/kessel/server-scope'
 import { OWNER_VIEWER, resetThreadViewersForTests, setThreadViewerForTests } from '@/lib/thread-viewer'
@@ -354,5 +354,88 @@ describe('the chats that wear the Thread (project chat, a ticket)', () => {
     const zen = render(<ThreadChatZenContext.Provider value={true}>{bubble('c2')}</ThreadChatZenContext.Provider>)
     expect(zen.container.querySelector('[data-thread-meta]')).toBeNull()
     expect(zen.container.querySelector('[data-zen-message-meta]')?.textContent).toBe('ada · now')
+  })
+})
+
+// A deleted message after coming back to the Thread (thread-message-delete-v1):
+// the Thread is read again from the server (or painted from this computer's
+// copy first). The tombstone draws as one quiet "Message deleted" line in
+// its place: no bubble, no status line, no receipt; the receipt moves to the
+// newest message of yours that still stands.
+describe('a deleted message after returning to the Thread', () => {
+  /** The daemon's tombstone for `me(id)`, as `GET /cli/thread` serves it. */
+  function servedTombstone(id: string, seq: number, at: number): unknown {
+    return {
+      collection: 'thread',
+      seq,
+      id,
+      doc: {
+        id,
+        kind: 'text',
+        from: 'Rosson',
+        via: 'compose',
+        author: { kind: 'owner', login: 'owner' },
+        created_at: at,
+        deleted: true,
+        deletedAt: at + 30,
+        deletedBy: { kind: 'owner', login: 'owner' },
+      },
+    }
+  }
+
+  function returning(rows: unknown[]): OverlayThreadItem[] {
+    return threadItemsFromSnapshot({ conversation_id: 'c', items: rows }).items
+  }
+
+  const seqd = (it: OverlayThreadItem, seq: number): OverlayThreadItem => ({ ...it, seq })
+
+  it('draws one muted "Message deleted" line, never an empty bubble with Read under it', () => {
+    pane(returning([seqd(agent('a1', T0), 1), seqd(me('m1', T0 + 10), 2), servedTombstone('m2', 3, T0 + 20), seqd(agent('a2', T0 + 40), 4)]))
+    const gone = row('m2')
+    expect(gone.querySelector('[data-zen-bubble]')).toBeNull()
+    const line = gone.querySelector<HTMLElement>('[data-thread-deleted]')!
+    expect(line).not.toBeNull()
+    expect(line.textContent).toBe('Message deleted')
+    expect(gone.textContent).toBe('Message deleted')
+    // A quiet line, not a bubble: no outline, no fill.
+    expect(line.style.border).toBe('')
+    expect(line.style.background).toBe('')
+    expect(gone.querySelector('[data-thread-meta]')).toBeNull()
+    expect(gone.querySelector('[data-thread-receipt]')).toBeNull()
+    expect(gone.querySelector('[data-zen-message-more]')).toBeNull()
+    // The receipt is on the newest message of yours that stands.
+    expect(statusLine('m1')?.getAttribute('data-receipt')).toBe('read')
+  })
+
+  it('the receipt never sits on a deleted message, even the newest of yours', () => {
+    const items = returning([seqd(me('m1', T0), 1), servedTombstone('m2', 2, T0 + 10)])
+    expect(threadPaneReceipt(items, { viewer: OWNER_VIEWER })).toEqual({ id: 'm1', state: 'delivered' })
+    expect(threadPaneReceipt(returning([servedTombstone('m2', 1, T0)]), { viewer: OWNER_VIEWER })).toBeNull()
+  })
+
+  it('a deleted message ends the run before it, so that message keeps its status line', () => {
+    pane(returning([seqd(me('m1', T0), 1), servedTombstone('m2', 2, T0 + 10), seqd(me('m3', T0 + 20), 3)]))
+    expect(statusLine('m1')).not.toBeNull()
+    expect(row('m2').querySelector('[data-thread-meta]')).toBeNull()
+    expect(statusLine('m3')?.getAttribute('data-receipt')).toBe('delivered')
+  })
+
+  it('draws the same from this computer’s saved copy (the items as stored, no read)', () => {
+    const stored = JSON.parse(JSON.stringify(returning([seqd(me('m1', T0), 1), servedTombstone('m2', 2, T0 + 10)]))) as OverlayThreadItem[]
+    pane(stored)
+    expect(row('m2').textContent).toBe('Message deleted')
+    expect(row('m2').querySelector('[data-zen-bubble]')).toBeNull()
+    expect(row('m2').querySelector('[data-thread-receipt]')).toBeNull()
+  })
+
+  it('reads "Message deleted" with no menu or meta line, wherever it is drawn', () => {
+    const tomb = returning([servedTombstone('m9', 9, T0)])[0]
+    const { container } = render(
+      <ThreadAttachmentSourceProvider value={{ scope: primaryScope(), addr: 'sales' }}>
+        <ThreadBubble item={tomb} mine author="You" timeLabel="now" viewer={null} />
+      </ThreadAttachmentSourceProvider>,
+    )
+    expect(container.textContent).toBe('Message deleted')
+    expect(container.querySelector('[data-zen-message-meta]')).toBeNull()
   })
 })

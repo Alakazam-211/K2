@@ -67,9 +67,20 @@ export const OVERLAY_SEARCH_PAGE_SIZE = 500
  *  field, so a field left out here vanishes on load (0.46.1 RC: file chips
  *  never drew from a loaded Thread, and a files-only post was an empty
  *  bubble). */
-type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId'>
+type DocExtras = Pick<
+  OverlayDoc,
+  'widget' | 'author' | 'mine' | 'design' | 'attachments' | 'context' | 'stash' | 'clientMsgId' | 'deleted' | 'deletedAt' | 'deletedBy'
+>
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
+  // thread-message-delete-v1: the tombstone. Left out, a deleted post read
+  // back drew as an empty bubble of the sender's with the receipt under it.
+  if (src.deleted === true) {
+    out.deleted = true
+    if (typeof src.deletedAt === 'number' && Number.isFinite(src.deletedAt)) out.deletedAt = src.deletedAt
+    const by = parseThreadAuthor(src.deletedBy)
+    if (by) out.deletedBy = by
+  }
   // thread-mine-v1: the server's answer for whoever read this doc.
   if (typeof src.mine === 'boolean') out.mine = src.mine
   // post-idempotency-v1: the sender's own id (a pending bubble matches it).
@@ -417,8 +428,8 @@ export interface OverlayDoc {
   clientMsgId?: string | null
   /** thread-message-delete-v1 (0.46.11): the person who sent it deleted
    *  it (or the server owner did). A tombstone: no body, files or options;
-   *  it keeps its place. Drawn as "You deleted this message" / "Message
-   *  deleted". */
+   *  it keeps its place. Drawn as one quiet "Message deleted" line, with no
+   *  bubble, status line or receipt. */
   deleted?: boolean | null
   deletedAt?: number | null
   deletedBy?: ThreadAuthor | null

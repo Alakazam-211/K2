@@ -148,4 +148,23 @@ describe('thread view cache', () => {
     expect((await readThreadView('rosson.k2.dev', 'k2'))?.items).toHaveLength(2)
     expect(await readThreadView('rosson.k2.dev', 'none')).toBeNull()
   })
+
+  it('keeps a deleted message deleted across a reload, and drops copies saved before the flag was kept', async () => {
+    const tomb: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 4,
+      id: 'd4',
+      doc: { id: 'd4', kind: 'text', from: 'owner', via: 'compose', body: null, author: { kind: 'owner', login: 'owner' }, deleted: true, deletedAt: 9, deletedBy: { kind: 'owner', login: 'owner' } },
+    }
+    saveThreadView('rosson.k2.dev', 'k2', 'conv-1', [...items(3), tomb])
+    await flushThreadViewWritesForTests()
+    await resetThreadViewCacheForTests({ keepDisk: true })
+    const back = await readThreadView('rosson.k2.dev', 'k2')
+    const doc = back?.items.find((it) => it.id === 'd4')?.doc
+    expect(doc?.deleted).toBe(true)
+    expect(doc?.body).toBeNull()
+    // Version 1 copies could hold a deleted message without its flag (an
+    // empty bubble until the read landed): they are not painted.
+    expect(THREAD_VIEW_CACHE_VERSION).toBeGreaterThanOrEqual(2)
+  })
 })

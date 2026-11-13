@@ -28,7 +28,9 @@ import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
 import { homeHostKey } from '@/lib/host-key'
 import { isThreadSurfaceItem, type OverlayThreadItem } from './overlayThread'
 
-export const THREAD_VIEW_CACHE_VERSION = 1
+/** 2: version 1 copies could hold a deleted message without its `deleted`
+ *  flag (the read dropped it), painted as an empty bubble. */
+export const THREAD_VIEW_CACHE_VERSION = 2
 /** Messages kept per Thread. */
 export const THREAD_VIEW_CACHE_ITEMS = 25
 /** Threads kept. */

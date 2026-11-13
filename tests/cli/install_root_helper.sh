@@ -142,7 +142,7 @@ nothing_installed() {
 
 expect_fail_with() {
 	[ "$rc" -ne 0 ] || fail "$1: expected failure, got exit 0: $out"
-	printf '%s' "$out" | grep -q -- "$2" || fail "$1: missing '$2' in: $out"
+	<<<"$out" grep -q -- "$2" || fail "$1: missing '$2' in: $out"
 }
 
 legacy() {
@@ -188,25 +188,25 @@ for f in k2-pg-helper k2-mail-helper; do
 done
 [ "$(cat "$BK/k2-mail-helper" | head -c 4 | od -An -c | tr -d ' \n')" = '177ELF' ] || [ -n "$(cat "$BK/k2-mail-helper")" ] || fail "backup content"
 [ "$(mode_of "$BK")" = "700" ] || fail "backup dir mode $(mode_of "$BK")"
-printf '%s' "$out" | grep -q "backups     : /var/backups/k2-root-helper/" || fail "summary names the backups: $out"
-printf '%s' "$out" | grep -q "mail-sidecar: none" || fail "sidecar none: $out"
+<<<"$out" grep -q "backups     : /var/backups/k2-root-helper/" || fail "summary names the backups: $out"
+<<<"$out" grep -q "mail-sidecar: none" || fail "sidecar none: $out"
 ok "every removed file backed up first (0700 dir), summary names it"
-printf '%s' "$out" | grep -q "minisign + sha256 verified" || fail "provenance: $out"
+<<<"$out" grep -q "minisign + sha256 verified" || fail "provenance: $out"
 [ ! -e "$D1/usr/local/bin/stalwart" ] || fail "must never touch stalwart"
 ok "summary + no stalwart"
 
 echo "== re-run: unchanged =="
 run "$D1" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "re-run: $out"
-printf '%s' "$out" | grep -q "k2-root-helper  unchanged" || fail "helper not unchanged: $out"
-printf '%s' "$out" | grep -q "daemon.toml  unchanged" || fail "toml not unchanged: $out"
-printf '%s' "$out" | grep -q "k2-root-helper  unchanged  (0440" || fail "sudoers not unchanged: $out"
+<<<"$out" grep -q "k2-root-helper  unchanged" || fail "helper not unchanged: $out"
+<<<"$out" grep -q "daemon.toml  unchanged" || fail "toml not unchanged: $out"
+<<<"$out" grep -q "k2-root-helper  unchanged  (0440" || fail "sudoers not unchanged: $out"
 ok "idempotent"
 
 echo "== upgrade, then downgrade refused unless --allow-downgrade =="
 run "$D1" --version 0.45.6
 [ "$rc" -eq 0 ] || fail "upgrade: $out"
-printf '%s' "$out" | grep -q "installed v0.45.6 (was v0.45.5)" || fail "upgrade summary: $out"
+<<<"$out" grep -q "installed v0.45.6 (was v0.45.5)" || fail "upgrade summary: $out"
 run "$D1" --version 0.45.5
 expect_fail_with "downgrade" "is older"
 cmp -s "$WORK/rel/v0.45.6/k2-root-helper-linux-x86_64" "$D1/usr/local/libexec/k2-root-helper" || fail "downgrade changed the helper"
@@ -281,7 +281,7 @@ D3="$WORK/box3"
 fake_elf "$WORK/k2-root-helper" 0.45.5 4 x86_64
 run "$D3" --file "$WORK/k2-root-helper" --user k2std --unit k2-daemon-std --scope user
 [ "$rc" -eq 0 ] || fail "--file: $out"
-printf '%s' "$out" | grep -q "NOT signature-checked" || fail "--file provenance: $out"
+<<<"$out" grep -q "NOT signature-checked" || fail "--file provenance: $out"
 grep -q '^user = "k2std"$' "$D3/etc/k2-root-helper/daemon.toml" || fail "toml user"
 grep -q '^unit = "k2-daemon-std.service"$' "$D3/etc/k2-root-helper/daemon.toml" || fail "unit suffix"
 grep -q '^scope = "user"$' "$D3/etc/k2-root-helper/daemon.toml" || fail "toml scope"
@@ -330,7 +330,7 @@ run "$D8" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "sidecar install: $out"
 [ ! -e "$D8/etc/sudoers.d/k2-mail-sidecar" ] || fail "a K2-shaped k2-mail-sidecar must be retired"
 cmp -s "$WORK/sidecar.orig" "$(ls -d "$D8"/var/backups/k2-root-helper/*/ | head -n1)/k2-mail-sidecar" || fail "sidecar backup bytes"
-printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "sidecar summary: $out"
+<<<"$out" grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "sidecar summary: $out"
 ok "a K2-written k2-mail-sidecar is backed up and retired"
 
 # The exact line the 2026-09 mail-sidecar provisioning wrote on akzm and another fleet box.
@@ -339,14 +339,14 @@ printf 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/chown, /usr/sbin/us
 run "$D8" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "fleet sidecar install: $out"
 [ ! -e "$D8/etc/sudoers.d/k2-mail-sidecar" ] || fail "the 2026-09 fleet k2-mail-sidecar line must be retired"
-printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "fleet sidecar summary: $out"
+<<<"$out" grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "fleet sidecar summary: $out"
 ok "the 2026-09 fleet k2-mail-sidecar line (akzm and another fleet box) is retired"
 for body in 'k2 ALL=(ALL) NOPASSWD: ALL' 'k2 ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart, /bin/bash' 'admin ALL=(root) NOPASSWD: /usr/bin/systemctl restart stalwart' '%sudo ALL=(ALL) ALL'; do
 	printf '%s\n' "$body" >"$D8/etc/sudoers.d/k2-mail-sidecar"
 	run "$D8" --version 0.45.5
 	[ "$rc" -eq 0 ] || fail "foreign sidecar must not fail the install: $out"
 	[ "$(cat "$D8/etc/sudoers.d/k2-mail-sidecar")" = "$body" ] || fail "foreign sidecar changed: $body"
-	printf '%s' "$out" | grep -q "LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar is not one K2 wrote" || fail "foreign sidecar report ($body): $out"
+	<<<"$out" grep -q "LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar is not one K2 wrote" || fail "foreign sidecar report ($body): $out"
 done
 ok "any other k2-mail-sidecar content is reported and left alone"
 
@@ -378,8 +378,8 @@ for n in $SHIM_NAMES; do
 	[ ! -e "$D12/usr/local/bin/$n" ] || fail "line + shims: /usr/local/bin/$n must be retired"
 	cmp -s "$WORK/shims.orig/$n" "$BK12/$n" || fail "line + shims: backup bytes of $n"
 done
-printf '%s' "$out" | grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "line + shims summary (line): $out"
-printf '%s' "$out" | grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd" || fail "line + shims summary (shims): $out"
+<<<"$out" grep -q "mail-sidecar: retired: /etc/sudoers.d/k2-mail-sidecar" || fail "line + shims summary (line): $out"
+<<<"$out" grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd" || fail "line + shims summary (shims): $out"
 ok "line + the four known shims: all retired and backed up"
 
 # Whitespace and comment lines don't matter; the exec line does.
@@ -399,8 +399,8 @@ check_left_in_place() {
 	[ "$rc" -eq 0 ] || fail "$1: must not fail the install: $out"
 	[ "$(cat "$2/etc/sudoers.d/k2-mail-sidecar")" = "$FLEET_LINE" ] || fail "$1: the line must stay"
 	for n in $SHIM_NAMES; do [ -e "$2/usr/local/bin/$n" ] || [ -L "$2/usr/local/bin/$n" ] || fail "$1: /usr/local/bin/$n must stay"; done
-	printf '%s' "$out" | grep -q "mail-sidecar: LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar — PATH shims" || fail "$1: line report: $out"
-	printf '%s' "$out" | grep -q "path-shims  : LEFT IN PLACE:.*not what K2 wrote: $3" || fail "$1: shim report: $out"
+	<<<"$out" grep -q "mail-sidecar: LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar — PATH shims" || fail "$1: line report: $out"
+	<<<"$out" grep -q "path-shims  : LEFT IN PLACE:.*not what K2 wrote: $3" || fail "$1: shim report: $out"
 }
 i=0
 for mod in \
@@ -435,8 +435,8 @@ plant_shims "$D15"
 run "$D15" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "shims without the line: $out"
 for n in $SHIM_NAMES; do cmp -s "$WORK/shims.orig/$n" "$D15/usr/local/bin/$n" || fail "shims without the line: $n must stay as is"; done
-printf '%s' "$out" | grep -q "mail-sidecar: none" || fail "shims without the line (line): $out"
-printf '%s' "$out" | grep -q "path-shims  : LEFT IN PLACE: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd (present without /etc/sudoers.d/k2-mail-sidecar)" || fail "shims without the line (report): $out"
+<<<"$out" grep -q "mail-sidecar: none" || fail "shims without the line (line): $out"
+<<<"$out" grep -q "path-shims  : LEFT IN PLACE: /usr/local/bin/k2-if-k2-sudo /usr/local/bin/systemctl /usr/local/bin/chown /usr/local/bin/useradd (present without /etc/sudoers.d/k2-mail-sidecar)" || fail "shims without the line (report): $out"
 ok "shims without the line: left alone and reported"
 
 D16="$WORK/box16"
@@ -447,12 +447,12 @@ K2_TEST_DOOR_OK=0 run "$D16" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "door not ok + shims: $out"
 for n in $SHIM_NAMES; do [ -e "$D16/usr/local/bin/$n" ] || fail "door not ok: $n must stay"; done
 [ -e "$D16/etc/sudoers.d/k2-mail-sidecar" ] || fail "door not ok: line must stay"
-printf '%s' "$out" | grep -q "path-shims  : kept (the root helper did not answer" || fail "door not ok report: $out"
+<<<"$out" grep -q "path-shims  : kept (the root helper did not answer" || fail "door not ok report: $out"
 run "$D16" --version 0.45.5
-printf '%s' "$out" | grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo" || fail "door ok on rerun: $out"
+<<<"$out" grep -q "path-shims  : retired: /usr/local/bin/k2-if-k2-sudo" || fail "door ok on rerun: $out"
 [ ! -e "$D16/etc/sudoers.d/k2-mail-sidecar" ] || fail "door ok on rerun: line retired"
 run "$D16" --version 0.45.5
-printf '%s' "$out" | grep -q "path-shims  : none" || fail "idempotent rerun: $out"
+<<<"$out" grep -q "path-shims  : none" || fail "idempotent rerun: $out"
 ok "shims stay while the root helper doesn't answer; a rerun retires them; a third run sees none"
 
 echo "== --user other than k2: the k2-only shims never match =="
@@ -464,11 +464,11 @@ run "$D17" --version 0.45.5 --user bob
 [ "$rc" -eq 0 ] || fail "--user bob + shims: $out"
 [ -e "$D17/etc/sudoers.d/k2-mail-sidecar" ] || fail "--user bob: the line must stay while unknown shims are present"
 for n in $SHIM_NAMES; do [ -e "$D17/usr/local/bin/$n" ] || fail "--user bob: $n must stay"; done
-printf '%s' "$out" | grep -q "mail-sidecar: LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar — PATH shims" || fail "--user bob report: $out"
+<<<"$out" grep -q "mail-sidecar: LEFT IN PLACE: /etc/sudoers.d/k2-mail-sidecar — PATH shims" || fail "--user bob report: $out"
 rm "$D17"/usr/local/bin/*
 run "$D17" --version 0.45.5 --user bob
 [ ! -e "$D17/etc/sudoers.d/k2-mail-sidecar" ] || fail "--user bob without shims: the line retires as before"
-printf '%s' "$out" | grep -q "path-shims  : retired: (none)" || fail "--user bob without shims report: $out"
+<<<"$out" grep -q "path-shims  : retired: (none)" || fail "--user bob without shims report: $out"
 ok "--user bob: k2-form shims count as unknown and hold the line; without shims the line retires"
 
 echo "== daemon older than 0.45.4: refuse, change nothing (ironwood 0.41.3) =="
@@ -482,7 +482,7 @@ nothing_installed "$D9" "old daemon"
 [ -e "$D9/usr/local/libexec/k2-mail-helper" ] && [ -e "$D9/usr/local/libexec/k2-pg-helper" ] || fail "old daemon: legacy must stay"
 K2_TEST_RUNNING_DAEMON_VERSION=0.45.4 run "$D9" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "0.45.4 running daemon: $out"
-printf '%s' "$out" | grep -q "daemon      : v0.45.4 (running)" || fail "daemon line: $out"
+<<<"$out" grep -q "daemon      : v0.45.4 (running)" || fail "daemon line: $out"
 ok "a daemon below 0.45.4 (asked for or running) is refused before any change"
 
 echo "== /boot-status: the TOP-LEVEL version, not ops.version (keys sort; ops comes first) =="
@@ -498,21 +498,21 @@ nothing_installed "$D9B" "old daemon via boot-status"
 printf '%s' '{"ops":{"supported":true,"version":"1"},"phase":"ready","version":"0.46.2"}' >"$BOOT"
 K2_TEST_BOOT_STATUS_FILE="$BOOT" run "$D9B" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "0.46.2 via boot-status: $out"
-printf '%s' "$out" | grep -q "daemon      : v0.46.2 (running)" || fail "boot-status daemon line: $out"
-printf '%s' "$out" | grep -q "could not read the running daemon's version" && fail "boot-status: must not warn: $out"
+<<<"$out" grep -q "daemon      : v0.46.2 (running)" || fail "boot-status daemon line: $out"
+<<<"$out" grep -q "could not read the running daemon's version" && fail "boot-status: must not warn: $out"
 D9C="$WORK/box9c"
 printf '%s' '{"ops":{"supported":true,"version":"1"},"phase":"ready"}' >"$BOOT"
 K2_TEST_BOOT_STATUS_FILE="$BOOT" run "$D9C" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "no top-level version: $out"
-printf '%s' "$out" | grep -q "could not read the running daemon's version" || fail "no top-level version must warn: $out"
+<<<"$out" grep -q "could not read the running daemon's version" || fail "no top-level version must warn: $out"
 ok "boot-status: top-level version read past a nested ops.version; none at top level warns"
 
 echo "== a box with no prior helpers at all (ironwood shape) =="
 D10="$WORK/box10"
 run "$D10" --version 0.45.5
 [ "$rc" -eq 0 ] || fail "bare box: $out"
-printf '%s' "$out" | grep -q "legacy pg   : retired: (none)" || fail "bare pg line: $out"
-printf '%s' "$out" | grep -q "legacy mail : retired: (none)" || fail "bare mail line: $out"
+<<<"$out" grep -q "legacy pg   : retired: (none)" || fail "bare pg line: $out"
+<<<"$out" grep -q "legacy mail : retired: (none)" || fail "bare mail line: $out"
 [ ! -e "$D10/var/backups/k2-root-helper" ] || fail "no backup dir when nothing was removed"
 ok "no prior helpers: installs, retires nothing, makes no backup dir"
 
@@ -595,9 +595,9 @@ for _case in "debian:apt-get install -y minisign" "ubuntu:apt-get install -y min
 	# A release that would 404 proves the refusal comes BEFORE any download.
 	PATH="$NOMS" K2_TEST_OS_RELEASE="$WORK/os-${_case%%:*}" run "$DNM" --version 0.45.9
 	expect_fail_with "no minisign (${_case%%:*})" "minisign is not installed"
-	printf '%s' "$out" | grep -qF -- "${_case#*:}" || fail "no minisign (${_case%%:*}): hint '${_case#*:}' missing: $out"
-	printf '%s' "$out" | grep -q "Nothing was downloaded or changed" || fail "no minisign: $out"
-	if printf '%s' "$out" | grep -q "download failed\|downloading"; then fail "no minisign: a download was attempted: $out"; fi
+	<<<"$out" grep -qF -- "${_case#*:}" || fail "no minisign (${_case%%:*}): hint '${_case#*:}' missing: $out"
+	<<<"$out" grep -q "Nothing was downloaded or changed" || fail "no minisign: $out"
+	if <<<"$out" grep -q "download failed\|downloading"; then fail "no minisign: a download was attempted: $out"; fi
 done
 nothing_installed "$DNM" "no minisign"
 # Ubuntu/Debian ship /etc/os-release -> ../usr/lib/os-release (a relative
@@ -608,13 +608,13 @@ ln -s ../usr/lib/os-release "$WORK/osl/etc/os-release"
 [ -L "$WORK/osl/etc/os-release" ] || fail "test setup: os-release must be a symlink"
 PATH="$NOMS" K2_TEST_OS_RELEASE="$WORK/osl/etc/os-release" run "$DNM" --version 0.45.9
 expect_fail_with "no minisign (symlinked os-release)" "minisign is not installed"
-printf '%s' "$out" | grep -qF -- "apt-get install -y minisign" || fail "symlinked os-release: apt hint missing: $out"
-if printf '%s' "$out" | grep -q "jedisct1/minisign/releases"; then fail "symlinked os-release: generic hint shown: $out"; fi
+<<<"$out" grep -qF -- "apt-get install -y minisign" || fail "symlinked os-release: apt hint missing: $out"
+if <<<"$out" grep -q "jedisct1/minisign/releases"; then fail "symlinked os-release: generic hint shown: $out"; fi
 # A dangling link still falls back to the generic hint (never an error).
 ln -s ../usr/lib/no-such-file "$WORK/osl/etc/os-release-dangling"
 PATH="$NOMS" K2_TEST_OS_RELEASE="$WORK/osl/etc/os-release-dangling" run "$DNM" --version 0.45.9
 expect_fail_with "no minisign (dangling os-release)" "minisign is not installed"
-printf '%s' "$out" | grep -q "jedisct1/minisign/releases" || fail "dangling os-release: generic hint missing: $out"
+<<<"$out" grep -q "jedisct1/minisign/releases" || fail "dangling os-release: generic hint missing: $out"
 nothing_installed "$DNM" "no minisign (symlinked os-release)"
 # --file with no .sig never needs minisign (operator-supplied build).
 fake_elf "$WORK/local-helper" 0.45.5 4 x86_64

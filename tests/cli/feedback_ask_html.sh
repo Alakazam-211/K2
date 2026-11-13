@@ -295,14 +295,14 @@ set +e
 tpl="$(env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" tickets template 2>"$WORK/err")"
 tpl_rc=$?
 set -e
-if [ "$tpl_rc" -eq 0 ] && printf '%s' "$tpl" | grep -q 'class="k2-need"' && printf '%s' "$tpl" | grep -q 'class="k2-options"'; then
+if [ "$tpl_rc" -eq 0 ] && <<<"$tpl" grep -q 'class="k2-need"' && <<<"$tpl" grep -q 'class="k2-options"'; then
     ok "template prints k2-need + k2-options with no daemon"
 else
     bad "template: rc=$tpl_rc err=$(cat "$WORK/err")"
 fi
-if printf '%s' "$tpl" | grep -q '<!--'; then bad "template has an HTML comment (would warn brief_sanitized)"; else ok "template has no HTML comments"; fi
+if <<<"$tpl" grep -q '<!--'; then bad "template has an HTML comment (would warn brief_sanitized)"; else ok "template has no HTML comments"; fi
 for h in "Problem" "What I tried" "What I need from you" "Options" "Context"; do
-    if printf '%s' "$tpl" | grep -q "<h2>$h</h2>"; then ok "template section: $h"; else bad "template missing section: $h"; fi
+    if <<<"$tpl" grep -q "<h2>$h</h2>"; then ok "template section: $h"; else bad "template missing section: $h"; fi
 done
 set +e
 env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" feedback template >/dev/null 2>&1
@@ -423,9 +423,9 @@ set +e
 study_tb="$(env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" study ticket-brief 2>/dev/null)"
 study_fl="$(env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" study feedback-loop 2>/dev/null)"
 set -e
-if printf '%s' "$study_tb" | grep -q 'A ticket must be assigned to a user on this server (`--assign <user>`)' \
-    && printf '%s' "$study_tb" | grep -q 'assignee_unknown' \
-    && printf '%s' "$study_fl" | grep -q -- '--assign <user>'; then
+if <<<"$study_tb" grep -q 'A ticket must be assigned to a user on this server (`--assign <user>`)' \
+    && <<<"$study_tb" grep -q 'assignee_unknown' \
+    && <<<"$study_fl" grep -q -- '--assign <user>'; then
     ok "study ticket-brief + feedback-loop teach assigning"
 else
     bad "study pages missing assignee text"

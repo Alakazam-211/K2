@@ -14,8 +14,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 bash -n "$K2" || fail "bash -n cli/k2"
 
 help="$("$K2" hostmail import --help)"
-printf '%s' "$help" | grep -q -- '--skip-inbox' || fail "import --help must mention --skip-inbox: $help"
-printf '%s' "$help" | grep -Eq '7200|2 hour' || fail "import --help must mention the 2h / 7200s wait: $help"
+<<<"$help" grep -q -- '--skip-inbox' || fail "import --help must mention --skip-inbox: $help"
+<<<"$help" grep -Eq '7200|2 hour' || fail "import --help must mention the 2h / 7200s wait: $help"
 
 # Import POST waits 7200s; global cli_post_json stays 30s.
 if ! grep -A30 'verb == "import"' "$K2" | grep -q 'timeout=7200'; then

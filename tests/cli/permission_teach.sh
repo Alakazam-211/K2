@@ -210,14 +210,14 @@ esac
 [ "$(printf '%s\n' "$OUT" | grep -c 'permission request')" = 1 ] && ok || bad "k2 help: the line must appear once"
 
 run agent study
-printf '%s\n' "$OUT" | grep -q '^  permissions         Permission cards (Beta)' && ok || bad "k2 study: no permissions entry while on"
+<<<"$OUT" grep -q '^  permissions         Permission cards (Beta)' && ok || bad "k2 study: no permissions entry while on"
 run agent study --json
-printf '%s' "$OUT" | grep -q '"id":"permissions"' && ok || bad "k2 study --json: no permissions topic while on"
+<<<"$OUT" grep -q '"id":"permissions"' && ok || bad "k2 study --json: no permissions topic while on"
 run agent study permissions
 [ "$RC" = 0 ] && ok || bad "k2 study permissions: exit $RC ($ERR)"
 printf '%s\n' "$OUT" | head -1 | grep -qx '# Permission cards (Beta)' && ok || bad "k2 study permissions: wrong page: $(printf '%s' "$OUT" | head -2)"
 run agent study --help
-printf '%s\n' "$OUT" | grep -qx '  permissions' && ok || bad "k2 study --help: no permissions topic while on"
+<<<"$OUT" grep -qx '  permissions' && ok || bad "k2 study --help: no permissions topic while on"
 
 # A refused verb ends with the Ask-with line, printed once.
 run agent connections add billing
@@ -239,9 +239,9 @@ grep -q '^POST /cli/thread/post ' "$LOG" && ok || bad "thread post: never reache
 # now notes (0.46.4 #9/#11).
 run agent app install heldapp
 [ "$RC" = 2 ] && ok || bad "app install held: exit $RC, want 2 ($ERR)"
-printf '%s\n' "$OUT" | grep -q '^held for the owner: w_abc123def456' && ok || bad "app install held: '$OUT'"
-printf '%s\n' "$OUT" | grep -q 'this is your earlier request w_abc123def456 (asked 2 h ago)' && ok || bad "app install held: no reuse line: '$OUT'"
-printf '%s\n' "$OUT" | grep -q '^  owner: no permission card went up; the request waits in Settings → App Approvals' && ok || bad "app install held: no owner line: '$OUT'"
+<<<"$OUT" grep -q '^held for the owner: w_abc123def456' && ok || bad "app install held: '$OUT'"
+<<<"$OUT" grep -q 'this is your earlier request w_abc123def456 (asked 2 h ago)' && ok || bad "app install held: no reuse line: '$OUT'"
+<<<"$OUT" grep -q '^  owner: no permission card went up; the request waits in Settings → App Approvals' && ok || bad "app install held: no owner line: '$OUT'"
 [ "$(last_err_line)" = 'Ask with: k2 permission request apps.approve request=w_abc123def456 --why "<what you need it for>"' ] && ok \
     || bad "app install held: last stderr line is '$(last_err_line)'"
 
@@ -259,7 +259,7 @@ run agent workspace create "$SANDBOX/new-ws"
 
 # … and a refusal with no `permission` object keeps today's exit 1 and no line.
 run agent workspace open "$SANDBOX/ws"
-printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "workspace open: a closing line without a permission object" || ok
+<<<"$ERR" grep -q 'Ask with:\|It can.t be requested' && bad "workspace open: a closing line without a permission object" || ok
 [ "$RC" = 1 ] && ok || bad "workspace open: exit $RC, want 1"
 
 # 0.46.9: the agent's own `k2 compute access on` asks for compute.use ...
@@ -279,9 +279,9 @@ run agent compute manage on
 # and ends with the Ask-with line that brings it to their chat.
 run agent compute node policy k2n1-m4 set max_cpus=10 --reason "bigger builds"
 [ "$RC" = 2 ] && ok || bad "node policy held: exit $RC, want 2 ($ERR)"
-printf '%s\n' "$ERR" | grep -q '^held for the owner: car_9f8e7d$' && ok || bad "node policy held: '$ERR'"
-printf '%s\n' "$ERR" | grep -q "^  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card.$" && ok || bad "node policy held: no chat line: '$ERR'"
-printf '%s\n' "$ERR" | grep -q "don't run your command again" && ok || bad "node policy held: no don't-rerun line: '$ERR'"
+<<<"$ERR" grep -q '^held for the owner: car_9f8e7d$' && ok || bad "node policy held: '$ERR'"
+<<<"$ERR" grep -q "^  to ask the owner in chat now, run the Ask with: line below: it puts this same request on a card.$" && ok || bad "node policy held: no chat line: '$ERR'"
+<<<"$ERR" grep -q "don't run your command again" && ok || bad "node policy held: no don't-rerun line: '$ERR'"
 [ "$(last_err_line)" = 'Ask with: k2 permission request compute.admin-approve request=car_9f8e7d --why "<what you need it for>"' ] && ok \
     || bad "node policy held: last stderr line is '$(last_err_line)'"
 
@@ -304,7 +304,7 @@ grep -q '^POST /cli/mail/access/grant ' "$LOG" && ok || bad "mail access grant: 
 # `k2 permission request` reaches the daemon and prints the ask.
 run agent permission request compute.use --why "Run the test suite on k2n2-m1"
 [ "$RC" = 0 ] && ok || bad "permission request: exit $RC ($ERR)"
-printf '%s\n' "$OUT" | grep -q '^Asked: pr_7f3a2c (pending; expires in .*). Shown to: rosson (owner), maya (admin).$' && ok \
+<<<"$OUT" grep -q '^Asked: pr_7f3a2c (pending; expires in .*). Shown to: rosson (owner), maya (admin).$' && ok \
     || bad "permission request: '$OUT'"
 grep -q '^POST /cli/permission/request {"action": "compute.use", "params": {}, "why": "Run the test suite on k2n2-m1"}$' "$LOG" && ok \
     || bad "permission request: wrong request: $(cat "$LOG")"
@@ -326,23 +326,23 @@ echo on > "$MODE"
 echo "== off (the daemon says no) =="
 echo off > "$MODE"
 run agent help
-printf '%s' "$OUT" | grep -q 'permission request' && bad "k2 help: permission line while off" || ok
+<<<"$OUT" grep -q 'permission request' && bad "k2 help: permission line while off" || ok
 run agent permission request compute.use --why x
 [ "$RC" = 1 ] && ok || bad "permission (off): exit $RC, want 1"
 printf '%s' "$ERR" | head -1 | grep -qx 'Unknown command: permission' && ok || bad "permission (off): '$(printf '%s' "$ERR" | head -1)'"
 run agent study permissions
 [ "$RC" = 2 ] && ok || bad "study permissions (off): exit $RC, want 2"
 run agent connections add billing
-printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "connections add (off): a closing line" || ok
+<<<"$ERR" grep -q 'Ask with:\|It can.t be requested' && bad "connections add (off): a closing line" || ok
 run agent compute node policy k2n1-m4 set max_cpus=10
 [ "$RC" = 2 ] && ok || bad "node policy held (off): exit $RC, want 2"
-printf '%s' "$ERR" | grep -q "Ask with:\|It can.t be requested\|owner's chat" && bad "node policy held (off): a card line: $ERR" || ok
+<<<"$ERR" grep -q "Ask with:\|It can.t be requested\|owner's chat" && bad "node policy held (off): a card line: $ERR" || ok
 run agent compute access on
-printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "compute access on (off): a closing line" || ok
+<<<"$ERR" grep -q 'Ask with:\|It can.t be requested' && bad "compute access on (off): a closing line" || ok
 [ "$RC" = 3 ] && ok || bad "compute access on (off): exit $RC, want 3 (forbidden)"
-printf '%s' "$ERR" | grep -q '"error": "forbidden"' && ok || bad "compute access on (off): '$ERR'"
+<<<"$ERR" grep -q '"error": "forbidden"' && ok || bad "compute access on (off): '$ERR'"
 run agent mail access grant ops@brand.test "$SANDBOX/ws" --level send
-printf '%s' "$ERR" | grep -q 'Ask with:\|It can.t be requested' && bad "mail access grant (off): a closing line" || ok
+<<<"$ERR" grep -q 'Ask with:\|It can.t be requested' && bad "mail access grant (off): a closing line" || ok
 [ "$RC" = 3 ] && ok || bad "mail access grant (off): exit $RC, want 3 (owner_only)"
 
 echo "permission_teach: $pass passed, $fail failed"

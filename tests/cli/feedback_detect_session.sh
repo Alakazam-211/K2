@@ -18,7 +18,7 @@ FN="$(awk '
 ' "$K2_CLI")"
 
 [ -n "$FN" ] || { echo "FAIL: could not extract _feedback_detect_session from $K2_CLI" >&2; exit 1; }
-printf '%s\n' "$FN" | grep -q 'FB_SESSION_KIND="sandbox"' && {
+<<<"$FN" grep -q 'FB_SESSION_KIND="sandbox"' && {
     echo "FAIL: legacy sandbox stamp still present in _feedback_detect_session" >&2
     exit 1
 }

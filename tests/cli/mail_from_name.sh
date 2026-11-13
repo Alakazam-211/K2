@@ -135,7 +135,7 @@ out="$("${K2[@]}" "$K2_CLI" mail send cust@dest.example --subject s --body b --f
 rc=$?
 set -e
 assert_exit "--from-name without value" 2 "$rc"
-printf '%s' "$out" | grep -q -- "--from-name requires a display name" && ok "missing-value hint" || bad "missing-value hint missing in: $out"
+<<<"$out" grep -q -- "--from-name requires a display name" && ok "missing-value hint" || bad "missing-value hint missing in: $out"
 [ ! -f "$SEND_POST" ] && ok "nothing POSTed (missing value)" || bad "a POST went out without a --from-name value"
 
 echo "== --from-name '' / blank is refused =="
@@ -146,13 +146,13 @@ for blank in "" "   "; do
     rc=$?
     set -e
     assert_exit "--from-name '$blank'" 2 "$rc"
-    printf '%s' "$out" | grep -q "non-empty display name" && ok "blank hint ('$blank')" || bad "blank hint missing in: $out"
+    <<<"$out" grep -q "non-empty display name" && ok "blank hint ('$blank')" || bad "blank hint missing in: $out"
     [ ! -f "$SEND_POST" ] && ok "nothing POSTed ('$blank')" || bad "a POST went out for a blank --from-name"
 done
 
 echo "== help and schema document the flag =="
 help="$("${K2[@]}" "$K2_CLI" mail send --help 2>&1)"
-printf '%s' "$help" | grep -q -- "--from-name <name>" && ok "help lists --from-name" || bad "help lacks --from-name: $help"
+<<<"$help" grep -q -- "--from-name <name>" && ok "help lists --from-name" || bad "help lacks --from-name: $help"
 schema="$("${K2[@]}" "$K2_CLI" --schema json 2>/dev/null)"
 assert_json "schema lists --from-name" "$schema" \
     "any(f['name'] == '--from-name' for c in (d['commands'] if isinstance(d, dict) else d) if c['name'] == 'mail send' for f in c['flags'])"
@@ -199,7 +199,7 @@ out="$("${K2[@]}" "$K2_CLI" mail reply msg_fake01 --body b --from-name 2>&1)"
 rc=$?
 set -e
 assert_exit "reply --from-name without value" 2 "$rc"
-printf '%s' "$out" | grep -q -- "--from-name requires a display name" && ok "reply missing-value hint" || bad "reply missing-value hint missing in: $out"
+<<<"$out" grep -q -- "--from-name requires a display name" && ok "reply missing-value hint" || bad "reply missing-value hint missing in: $out"
 [ ! -f "$REPLY_POST" ] && ok "reply: nothing POSTed (missing value)" || bad "a reply POST went out without a --from-name value"
 
 echo "== mail reply --from-name '' / blank is refused =="
@@ -210,13 +210,13 @@ for blank in "" "   "; do
     rc=$?
     set -e
     assert_exit "reply --from-name '$blank'" 2 "$rc"
-    printf '%s' "$out" | grep -q "non-empty display name" && ok "reply blank hint ('$blank')" || bad "reply blank hint missing in: $out"
+    <<<"$out" grep -q "non-empty display name" && ok "reply blank hint ('$blank')" || bad "reply blank hint missing in: $out"
     [ ! -f "$REPLY_POST" ] && ok "reply: nothing POSTed ('$blank')" || bad "a reply POST went out for a blank --from-name"
 done
 
 echo "== reply help and schema document the flag =="
 help="$("${K2[@]}" "$K2_CLI" mail reply --help 2>&1)"
-printf '%s' "$help" | grep -q -- "--from-name <name>" && ok "reply help lists --from-name" || bad "reply help lacks --from-name: $help"
+<<<"$help" grep -q -- "--from-name <name>" && ok "reply help lists --from-name" || bad "reply help lacks --from-name: $help"
 assert_json "schema lists reply --from-name" "$schema" \
     "any(f['name'] == '--from-name' for c in (d['commands'] if isinstance(d, dict) else d) if c['name'] == 'mail reply' for f in c['flags'])"
 

@@ -125,11 +125,11 @@ PY2
 set +e
 out="$(k2s publish status hearth 2>&1)"
 set -e
-printf '%s\n' "$out" | grep -Fxq "hearth: starting (waiting for port 3047, 4m12s left)" || fail "status line: $out"
+<<<"$out" grep -Fxq "hearth: starting (waiting for port 3047, 4m12s left)" || fail "status line: $out"
 ok "status <name>: exit 2, statusText and grace fields"
 
 out="$(k2s publish --help 2>&1)" || true
-printf '%s' "$out" | grep -Fq -- "--probe-timeout <dur>" || fail "publish help lacks the flag: $out"
+<<<"$out" grep -Fq -- "--probe-timeout <dur>" || fail "publish help lacks the flag: $out"
 ok "publish help documents --probe-timeout"
 
 echo "PASS: publish probe timeout ($pass checks)"

@@ -25,11 +25,11 @@ k2n() { env HOME="$WORK" "$K2_CLI" "$@"; }
 
 out="$(k2n vault run --help)" || fail "vault run --help exited non-zero: $out"
 printf '%s\n' "$out" | head -1 | grep -Fq "k2 vault run " || fail "run --help first line: $out"
-printf '%s' "$out" | grep -Fq "Example: k2 vault run --secret" || fail "run --help has no example: $out"
-printf '%s' "$out" | grep -Fq -- "--no-mask" || fail "run --help lacks --no-mask: $out"
-printf '%s' "$out" | grep -Fq "not masked" || fail "run --help doesn't say --no-mask stops masking: $out"
-printf '%s' "$out" | grep -Fq "hygiene, not a wall" || fail "run --help doesn't say what masking isn't: $out"
-if printf '%s' "$out" | grep -Fq "k2 vault — secrets for agents"; then fail "run --help printed the top help"; fi
+<<<"$out" grep -Fq "Example: k2 vault run --secret" || fail "run --help has no example: $out"
+<<<"$out" grep -Fq -- "--no-mask" || fail "run --help lacks --no-mask: $out"
+<<<"$out" grep -Fq "not masked" || fail "run --help doesn't say --no-mask stops masking: $out"
+<<<"$out" grep -Fq "hygiene, not a wall" || fail "run --help doesn't say what masking isn't: $out"
+if <<<"$out" grep -Fq "k2 vault — secrets for agents"; then fail "run --help printed the top help"; fi
 ok "k2 vault run --help: its own page, no daemon needed, with an example"
 
 # The CLI wants a port and token before any verb but --help; port 1 is dead,
@@ -42,7 +42,7 @@ for args in "--secret A" "--secret A --" "-- ls" "node app.js"; do
     err="$(k2d vault run $args 2>&1)"; rc=$?
     set -e
     [ "$rc" = 2 ] || fail "vault run $args: exit $rc ($err)"
-    printf '%s' "$err" | grep -Fq "usage: k2 vault run" || fail "vault run $args: $err"
+    <<<"$err" grep -Fq "usage: k2 vault run" || fail "vault run $args: $err"
 done
 set +e
 err="$(k2d vault run 2>&1)"; rc=$?
@@ -53,12 +53,12 @@ ok "no --, no command or no secret is exit 2 (no daemon needed)"
 set +e
 err="$(k2d vault run --bogus --secret A -- ls 2>&1)"; rc=$?
 set -e
-[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "unknown flag '--bogus'" || fail "unknown flag: exit $rc ($err)"
+[ "$rc" = 2 ] && <<<"$err" grep -Fq "unknown flag '--bogus'" || fail "unknown flag: exit $rc ($err)"
 set +e
 err="$(k2d vault run --value hunter2 -- ls 2>&1)"; rc=$?
 set -e
-[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "value_on_argv" || fail "--value: exit $rc ($err)"
-if printf '%s' "$err" | grep -Fq "hunter2"; then fail "--value echoed the value: $err"; fi
+[ "$rc" = 2 ] && <<<"$err" grep -Fq "value_on_argv" || fail "--value: exit $rc ($err)"
+if <<<"$err" grep -Fq "hunter2"; then fail "--value echoed the value: $err"; fi
 ok "an unknown flag, and --value, are exit 2; the value is not echoed"
 
 # ── a stub daemon and a fake helper ─────────────────────────────────────
@@ -132,7 +132,7 @@ ok "the exit code is the helper's (exec, nothing after it)"
 set +e
 err="$(env HOME="$WORK" FAKE_HELPER_LOG="$WORK/helper.log" K2_PORT="$PORT" "$K2_CLI" vault exec --help 2>&1)"; rc=$?
 set -e
-[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "did you mean run? (k2 vault run --help)" || fail "vault exec: exit $rc ($err)"
+[ "$rc" = 2 ] && <<<"$err" grep -Fq "did you mean run? (k2 vault run --help)" || fail "vault exec: exit $rc ($err)"
 ok "k2 vault exec points at run"
 
 echo "vault_run: $pass passed"

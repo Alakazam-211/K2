@@ -26,7 +26,7 @@ for want in '--dry-run' '--acknowledge-failed' 'snapshot' '/var/lib/stalwart.k2-
             'rolled_back' 'rollback_failed' 'NEVER automatic' 'Owner/admin' \
             'never re-runs a Maildir import' 'Never uses hostmail disable/enable' \
             'mail helper' '1 GiB' '/cli/mail/server/upgrade'; do
-  printf '%s' "$help" | grep -qiF -- "$want" || fail "upgrade --help must mention '$want'"
+  <<<"$help" grep -qiF -- "$want" || fail "upgrade --help must mention '$want'"
 done
 "$K2" hostmail --help | grep -q 'upgrade \[--dry-run\]' || fail "hostmail --help must list upgrade"
 "$K2" hostmail enable --help | grep -q 'k2 hostmail upgrade' \
@@ -45,7 +45,7 @@ expect_usage() {
   rc=$?
   set -e
   [ "$rc" -eq 2 ] || fail "'k2 $*' must exit 2, got $rc: $out"
-  if printf '%s' "$out" | grep -q daemon_unreachable; then
+  if <<<"$out" grep -q daemon_unreachable; then
     fail "'k2 $*' must not send anything: $out"
   fi
 }
@@ -179,15 +179,15 @@ run_rc() {
 
 run_rc dry_ready hostmail upgrade --dry-run
 [ "$RC" -eq 0 ] || fail "ready dry-run must exit 0, got $RC: $OUT $ERR"
-printf '%s' "$OUT" | grep -q 'Stalwart 0.16.10 -> 0.16.20  (ready)' || fail "dry-run header: $OUT"
-printf '%s' "$OUT" | grep -q '~61s typical; up to 312s' || fail "dry-run must print the outage: $OUT"
-printf '%s' "$OUT" | grep -q '3.0 GiB data' || fail "dry-run must print the data size: $OUT"
-printf '%s' "$OUT" | grep -q 'restore the snapshot' || fail "dry-run must print the rollback plan: $OUT"
+<<<"$OUT" grep -q 'Stalwart 0.16.10 -> 0.16.20  (ready)' || fail "dry-run header: $OUT"
+<<<"$OUT" grep -q '~61s typical; up to 312s' || fail "dry-run must print the outage: $OUT"
+<<<"$OUT" grep -q '3.0 GiB data' || fail "dry-run must print the data size: $OUT"
+<<<"$OUT" grep -q 'restore the snapshot' || fail "dry-run must print the rollback plan: $OUT"
 
 run_rc dry_blocked hostmail upgrade --dry-run
 [ "$RC" -eq 1 ] || fail "blocked dry-run must exit 1, got $RC: $OUT"
-printf '%s' "$OUT" | grep -q 'BLOCKED' || fail "blocked dry-run: $OUT"
-printf '%s' "$OUT" | grep -q 'mail_helper_outdated' || fail "blocked dry-run must print the blocker: $OUT"
+<<<"$OUT" grep -q 'BLOCKED' || fail "blocked dry-run: $OUT"
+<<<"$OUT" grep -q 'mail_helper_outdated' || fail "blocked dry-run must print the blocker: $OUT"
 
 run_rc dry_ready hostmail upgrade --dry-run --json
 [ "$RC" -eq 0 ] || fail "dry-run --json rc $RC"
@@ -196,18 +196,18 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert
 
 run_rc run_ok hostmail upgrade
 [ "$RC" -eq 0 ] || fail "succeeded upgrade must exit 0, got $RC: $OUT $ERR"
-printf '%s' "$OUT" | grep -q 'upgraded : Stalwart 0.16.20' || fail "success output: $OUT"
-printf '%s' "$OUT" | grep -q 'snapshot' || fail "success output must show steps: $OUT"
+<<<"$OUT" grep -q 'upgraded : Stalwart 0.16.20' || fail "success output: $OUT"
+<<<"$OUT" grep -q 'snapshot' || fail "success output must show steps: $OUT"
 
 run_rc run_rb hostmail upgrade
 [ "$RC" -eq 1 ] || fail "rolled_back must exit 1, got $RC: $OUT"
-printf '%s' "$OUT" | grep -q 'result   : rolled_back' || fail "rolled_back output: $OUT"
-printf '%s' "$OUT" | grep -q 'health check failed' || fail "rolled_back must print the error: $OUT"
+<<<"$OUT" grep -q 'result   : rolled_back' || fail "rolled_back output: $OUT"
+<<<"$OUT" grep -q 'health check failed' || fail "rolled_back must print the error: $OUT"
 
 run_rc run_rbf hostmail upgrade
 [ "$RC" -eq 1 ] || fail "rollback_failed must exit 1, got $RC"
-printf '%s' "$ERR" | grep -q 'ROLLBACK FAILED' || fail "rollback_failed must be loud on stderr: $ERR"
-printf '%s' "$ERR" | grep -q 'sudo /usr/bin/systemctl stop stalwart' || fail "manual steps on stderr: $ERR"
+<<<"$ERR" grep -q 'ROLLBACK FAILED' || fail "rollback_failed must be loud on stderr: $ERR"
+<<<"$ERR" grep -q 'sudo /usr/bin/systemctl stop stalwart' || fail "manual steps on stderr: $ERR"
 
 run_rc run_ok hostmail upgrade --json
 [ "$RC" -eq 0 ] || fail "--json run rc $RC"
@@ -216,12 +216,12 @@ printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert
 
 run_rc noop hostmail upgrade
 [ "$RC" -eq 0 ] || fail "noop must exit 0, got $RC"
-printf '%s' "$OUT" | grep -q 'already the pinned version' || fail "noop output: $OUT"
+<<<"$OUT" grep -q 'already the pinned version' || fail "noop output: $OUT"
 
 run_rc refused hostmail upgrade
 [ "$RC" -eq 1 ] || fail "refusal must exit 1, got $RC"
-printf '%s' "$ERR" | grep -q 'mail_helper_missing' || fail "refusal must print the code: $ERR"
-printf '%s' "$ERR" | grep -q 'run as root' || fail "refusal must print the root fix: $ERR"
+<<<"$ERR" grep -q 'mail_helper_missing' || fail "refusal must print the code: $ERR"
+<<<"$ERR" grep -q 'run as root' || fail "refusal must print the root fix: $ERR"
 
 # The daemon restarts mid-upgrade (new owner token): the watcher must stop
 # with daemon_lost and point at status + manualSteps, not poll for 6 h.
@@ -238,14 +238,14 @@ set -e
 ERR="$(cat "$WORK/stderr")"
 [ "$RC" -ne 142 ] || fail "lost daemon: the watcher must give up, not hang (killed after 20 s)"
 [ "$RC" -eq 1 ] || fail "lost daemon must exit 1, got $RC: $OUT $ERR"
-printf '%s' "$ERR" | grep -q 'daemon_lost' || fail "lost daemon must print daemon_lost: $ERR"
-printf '%s' "$ERR" | grep -q 'manualSteps' || fail "lost daemon must point at manualSteps: $ERR"
-printf '%s' "$ERR" | grep -q 'acknowledge-failed' || fail "lost daemon must name --acknowledge-failed: $ERR"
-printf '%s' "$ERR" | grep -q 'finishes or rolls back' || fail "lost daemon must say the restarted daemon recovers: $ERR"
+<<<"$ERR" grep -q 'daemon_lost' || fail "lost daemon must print daemon_lost: $ERR"
+<<<"$ERR" grep -q 'manualSteps' || fail "lost daemon must point at manualSteps: $ERR"
+<<<"$ERR" grep -q 'acknowledge-failed' || fail "lost daemon must name --acknowledge-failed: $ERR"
+<<<"$ERR" grep -q 'finishes or rolls back' || fail "lost daemon must say the restarted daemon recovers: $ERR"
 
 run_rc ack hostmail upgrade --acknowledge-failed
 [ "$RC" -eq 0 ] || fail "ack rc $RC"
-printf '%s' "$OUT" | grep -q 'acknowledged' || fail "ack output: $OUT"
+<<<"$OUT" grep -q 'acknowledged' || fail "ack output: $OUT"
 
 cat >"$WORK/check.py" <<'PY'
 import json, sys

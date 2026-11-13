@@ -176,8 +176,8 @@ fi
 # 5. help teaches the loop.
 help="$(k2 tickets --help 2>&1)"
 resolve_help="$(k2 tickets resolve --help 2>&1)"
-if printf '%s' "$help" | grep -q 'needs_discussion' \
-        && printf '%s' "$resolve_help" | grep -q -- '--answered <outcome>'; then
+if <<<"$help" grep -q 'needs_discussion' \
+        && <<<"$resolve_help" grep -q -- '--answered <outcome>'; then
     pass "case 5 — help teaches needs_discussion + --answered"
 else
     fail "case 5 — help text missing the settle loop"

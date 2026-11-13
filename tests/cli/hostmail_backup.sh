@@ -24,17 +24,17 @@ grep -q '"/cli/mail/backup/plan"' "$K2" || fail "backup plan must GET /cli/mail/
 group="$("$K2" hostmail backup --help)"
 for want in 'unconfigured' 'RUNS NO BACKUPS' 'local' 'offsite-only' 'both' 'none' \
             'it-email agent' 'owner-only' 'NOT disk failure'; do
-  printf '%s' "$group" | grep -qF -- "$want" || fail "backup --help must mention '$want'"
+  <<<"$group" grep -qF -- "$want" || fail "backup --help must mention '$want'"
 done
 plan_help="$("$K2" hostmail backup plan --help)"
 for want in '--bandwidth-mbps' 'planHash' 'max(5 GiB, 10% of the filesystem)' \
             'measured over N days' 'unmeasured' 'Changes nothing'; do
-  printf '%s' "$plan_help" | grep -qF -- "$want" || fail "plan --help must mention '$want'"
+  <<<"$plan_help" grep -qF -- "$want" || fail "plan --help must mention '$want'"
 done
 set_help="$("$K2" hostmail backup set --help)"
 for want in '--confirm-plan' '--reason' 'plan_changed' 'later release' '03:30-04:30' \
             '--offsite-keep-monthly' 'old → new'; do
-  printf '%s' "$set_help" | grep -qF -- "$want" || fail "set --help must mention '$want'"
+  <<<"$set_help" grep -qF -- "$want" || fail "set --help must mention '$want'"
 done
 "$K2" hostmail backup status --help | grep -qF 'GET /cli/mail/backup' || fail "status --help"
 "$K2" hostmail --help | grep -qF 'backup status|plan|set' || fail "hostmail --help must list backup"
@@ -155,24 +155,24 @@ k2() {
 }
 
 st="$(k2 hostmail backup status)"
-printf '%s' "$st" | grep -q '^mode     : unconfigured' || fail "status output: $st"
-printf '%s' "$st" | grep -qF 'k2 hostmail backup plan' || fail "status must carry the unconfigured note: $st"
-printf '%s' "$st" | grep -q '^churn    : deleted 2.0 GiB/day (worst 3.0 GiB), new 1.0 GiB/day — not yet measured' \
+<<<"$st" grep -q '^mode     : unconfigured' || fail "status output: $st"
+<<<"$st" grep -qF 'k2 hostmail backup plan' || fail "status must carry the unconfigured note: $st"
+<<<"$st" grep -q '^churn    : deleted 2.0 GiB/day (worst 3.0 GiB), new 1.0 GiB/day — not yet measured' \
   || fail "status churn line: $st"
 
 plan="$(k2 hostmail backup plan --bandwidth-mbps 100 --keep-daily 3)"
-printf '%s' "$plan" | grep -q '^planHash : a1b2c3d4e5f6' || fail "plan must print planHash: $plan"
-printf '%s' "$plan" | grep -q '^local        verdict OK' || fail "plan local verdict: $plan"
-printf '%s' "$plan" | grep -qF 'offsite-only verdict OK  (not available yet: offsite destination not set' \
+<<<"$plan" grep -q '^planHash : a1b2c3d4e5f6' || fail "plan must print planHash: $plan"
+<<<"$plan" grep -q '^local        verdict OK' || fail "plan local verdict: $plan"
+<<<"$plan" grep -qF 'offsite-only verdict OK  (not available yet: offsite destination not set' \
   || fail "plan must say offsite is not available yet: $plan"
-printf '%s' "$plan" | grep -qF 'first upload 24.0 GiB–40.0 GiB (~115 min at 100.0 Mbit/s)' || fail "plan offsite line: $plan"
-printf '%s' "$plan" | grep -qF 'unmeasured — conservative bound' || fail "plan churn quality: $plan"
-printf '%s' "$plan" | grep -qF -- '--confirm-plan a1b2c3d4e5f6' || fail "plan must print the next command: $plan"
+<<<"$plan" grep -qF 'first upload 24.0 GiB–40.0 GiB (~115 min at 100.0 Mbit/s)' || fail "plan offsite line: $plan"
+<<<"$plan" grep -qF 'unmeasured — conservative bound' || fail "plan churn quality: $plan"
+<<<"$plan" grep -qF -- '--confirm-plan a1b2c3d4e5f6' || fail "plan must print the next command: $plan"
 k2 hostmail backup plan --json | python3 -c 'import json,sys; assert json.load(sys.stdin)["planHash"]'
 
 out="$(k2 hostmail backup set --mode local --keep-daily 3 --window 02:00-03:00 --max-local-gb 80 --confirm-plan a1b2c3d4e5f6)"
-printf '%s' "$out" | grep -qF 'backup mode: unconfigured → local' || fail "set output: $out"
-printf '%s' "$out" | grep -qF 'later release' || fail "set must say nothing runs yet: $out"
+<<<"$out" grep -qF 'backup mode: unconfigured → local' || fail "set output: $out"
+<<<"$out" grep -qF 'later release' || fail "set must say nothing runs yet: $out"
 k2 hostmail backup set --mode none --reason "provider snapshots daily" --confirm-plan a1b2c3d4e5f6 --json >/dev/null
 
 cat >"$WORK/check.py" <<'PY'

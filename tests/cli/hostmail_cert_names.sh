@@ -26,9 +26,9 @@ help="$("$K2" hostmail cert names --help)"
 for want in 'autoconfig' 'autodiscover' 'mta-sts' 'ua-auto-config' 'never the apex' \
             'never' 'ReloadTlsCertificates' 'left to expire' 'K2-hosted' 'Owner/admin' \
             'names [list]' 'names issue' 'names renew' '--name <host>'; do
-  printf '%s' "$help" | grep -qF -- "$want" || fail "cert names --help must mention '$want'"
+  <<<"$help" grep -qF -- "$want" || fail "cert names --help must mention '$want'"
 done
-printf '%s' "$help" | grep -q 'disable/enable' || fail "cert names --help must say never hostmail disable/enable"
+<<<"$help" grep -q 'disable/enable' || fail "cert names --help must say never hostmail disable/enable"
 "$K2" hostmail cert --help | grep -q 'cert names' || fail "cert --help must list cert names"
 "$K2" hostmail --help | grep -q 'cert names \[issue|renew\]' || fail "hostmail --help must list cert names"
 
@@ -130,24 +130,24 @@ k2() {
 }
 
 human="$(k2 hostmail cert names)"
-printf '%s' "$human" | grep -q '^autoconfig.example.com .*here yes .*cert missing' \
+<<<"$human" grep -q '^autoconfig.example.com .*here yes .*cert missing' \
   || fail "list human output: $human"
-printf '%s' "$human" | grep -q '192.0.2.99 is not this box' || fail "list must print why a name is skipped: $human"
+<<<"$human" grep -q '192.0.2.99 is not this box' || fail "list must print why a name is skipped: $human"
 
 set +e
 run_out="$(k2 hostmail cert names issue)"
 rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "issue with a failed name must exit 1, got $rc: $run_out"
-printf '%s' "$run_out" | grep -q '^autoconfig.example.com .*issued' || fail "issue output: $run_out"
-printf '%s' "$run_out" | grep -q 'acme order failed' || fail "issue output must carry the failure: $run_out"
-printf '%s' "$run_out" | grep -q '^reload   : action' || fail "issue output must show the reload method: $run_out"
+<<<"$run_out" grep -q '^autoconfig.example.com .*issued' || fail "issue output: $run_out"
+<<<"$run_out" grep -q 'acme order failed' || fail "issue output must carry the failure: $run_out"
+<<<"$run_out" grep -q '^reload   : action' || fail "issue output must show the reload method: $run_out"
 set +e
 k2 hostmail cert names renew --name autoconfig.example.com --json >/dev/null
 set -e
 
 status_out="$(k2 hostmail status || true)"
-printf '%s' "$status_out" | grep -q '^names    : 2 of 3 extra names point here; no own cert: autodiscover.example.com' \
+<<<"$status_out" grep -q '^names    : 2 of 3 extra names point here; no own cert: autodiscover.example.com' \
   || fail "status must summarize extraNames: $status_out"
 
 cat >"$WORK/check.py" <<'PY'

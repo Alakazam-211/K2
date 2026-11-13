@@ -47,7 +47,7 @@ assert_json() {
 
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -qF -- "$needle"; then ok "$label"; else bad "$label — '$needle' missing in: $hay"; fi
+    if <<<"$hay" grep -qF -- "$needle"; then ok "$label"; else bad "$label — '$needle' missing in: $hay"; fi
 }
 
 WORKDIR="$(mktemp -d -t k2-mail-sending-XXXXXX)"
@@ -266,7 +266,7 @@ out="$("${K2[@]}" "$K2_CLI" mail inboxes 2>&1)"
 set -e
 printf '%s\n' "$out" | grep -E '^baden@gmail\.com +linked +send +yes ' >/dev/null \
     && ok "gate on → SEND yes" || bad "gate on row: $out"
-if printf '%s' "$out" | grep -q "BLOCKED"; then bad "no BLOCKED when the gate is on: $out"; else ok "no BLOCKED note when on"; fi
+if <<<"$out" grep -q "BLOCKED"; then bad "no BLOCKED when the gate is on: $out"; else ok "no BLOCKED note when on"; fi
 
 echo "== owner catalog + link list mark the blocked grant =="
 echo off > "$WORKDIR/STATE"

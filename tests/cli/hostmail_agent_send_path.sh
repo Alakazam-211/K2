@@ -171,8 +171,8 @@ out="$("${K2[@]}" "$K2_CLI" hostmail create bot 2>&1)"
 rc=$?
 set -e
 assert_exit "mail create (agent)" 0 "$rc"
-printf '%s' "$out" | grep -q "password : withheld" && ok "prints withheld" || bad "withheld line missing in: $out"
-printf '%s' "$out" | grep -q "k2 mail send" && ok "withheld hint names k2 mail send" || bad "hint missing in: $out"
+<<<"$out" grep -q "password : withheld" && ok "prints withheld" || bad "withheld line missing in: $out"
+<<<"$out" grep -q "k2 mail send" && ok "withheld hint names k2 mail send" || bad "hint missing in: $out"
 
 echo "== owner mint: password shown once =="
 echo owner > "$WORKDIR/MODE"
@@ -181,8 +181,8 @@ out="$("${K2[@]}" "$K2_CLI" hostmail create bot 2>&1)"
 rc=$?
 set -e
 assert_exit "mail create (owner)" 0 "$rc"
-printf '%s' "$out" | grep -q "password : OWNER-ONCE-PASSWORD" && ok "owner sees the once password" || bad "owner password missing in: $out"
-if printf '%s' "$out" | grep -q "withheld"; then bad "owner mint must not say withheld: $out"; else ok "owner mint not withheld"; fi
+<<<"$out" grep -q "password : OWNER-ONCE-PASSWORD" && ok "owner sees the once password" || bad "owner password missing in: $out"
+if <<<"$out" grep -q "withheld"; then bad "owner mint must not say withheld: $out"; else ok "owner mint not withheld"; fi
 
 echo "== hostmail password keep =="
 KEEP_POST="$WORKDIR/post_cli_mail_credentials_keep.json"
@@ -193,7 +193,7 @@ set -e
 assert_exit "password keep" 0 "$rc"
 post="$(cat "$KEEP_POST" 2>/dev/null || echo '{}')"
 assert_json "password keep POST body (no appPasswordId)" "$post" "d == {'address': 'staff@shop.example'}"
-printf '%s' "$out" | grep -q "kept the mailbox password of staff@shop.example" && ok "password keep output" || bad "keep output: $out"
+<<<"$out" grep -q "kept the mailbox password of staff@shop.example" && ok "password keep output" || bad "keep output: $out"
 
 echo "== hostmail app-password keep =="
 rm -f "$KEEP_POST"
@@ -215,8 +215,8 @@ set -e
 assert_exit "password keep --all-existing" 0 "$rc"
 post="$(cat "$KEEP_POST" 2>/dev/null || echo '{}')"
 assert_json "password bulk POST body" "$post" "d == {'allExisting': True, 'kind': 'mailbox'}"
-printf '%s' "$out" | grep -q "kept 4 mailbox password(s) that existed before this update" && ok "bulk mailbox output" || bad "bulk output: $out"
-printf '%s' "$out" | grep -q "still flagged: 1 created after the update" && ok "bulk names what stays flagged" || bad "bulk leftover line: $out"
+<<<"$out" grep -q "kept 4 mailbox password(s) that existed before this update" && ok "bulk mailbox output" || bad "bulk output: $out"
+<<<"$out" grep -q "still flagged: 1 created after the update" && ok "bulk names what stays flagged" || bad "bulk leftover line: $out"
 rm -f "$KEEP_POST"
 set +e
 out="$("${K2[@]}" "$K2_CLI" hostmail app-password keep --all-existing --json 2>&1)"
@@ -264,7 +264,7 @@ set -e
 assert_exit "create --person" 0 "$rc"
 post="$(cat "$CREATE_POST" 2>/dev/null || echo '{}')"
 assert_json "create --person POST body" "$post" "d.get('person') is True and d.get('localPart') == 'staff'"
-printf '%s' "$out" | grep -q "password : OWNER-ONCE-PASSWORD" && ok "person mint shows the password" || bad "person mint output: $out"
+<<<"$out" grep -q "password : OWNER-ONCE-PASSWORD" && ok "person mint shows the password" || bad "person mint output: $out"
 set +e
 "${K2[@]}" "$K2_CLI" hostmail create bot >/dev/null 2>&1
 set -e
@@ -277,7 +277,7 @@ rc=$?
 set -e
 assert_exit "person on" 0 "$rc"
 assert_json "person on POST body" "$(cat "$PERSON_POST")" "d == {'address': 'staff@shop.example', 'person': True}"
-printf '%s' "$out" | grep -q "is now a person's mailbox" && ok "person on output" || bad "person on output: $out"
+<<<"$out" grep -q "is now a person's mailbox" && ok "person on output" || bad "person on output: $out"
 set +e
 "${K2[@]}" "$K2_CLI" hostmail person staff@shop.example off --json >/dev/null 2>&1
 rc=$?
@@ -297,8 +297,8 @@ rc=$?
 set -e
 assert_exit "person --all --workspace on" 0 "$rc"
 assert_json "person --all POST body" "$(cat "$PERSON_POST")" "d == {'all': True, 'workspace': 'it-email', 'person': True}"
-printf '%s' "$out" | grep -q "marked 2 mailbox(es) in it-email as people's mailboxes" && ok "person --all output" || bad "person --all output: $out"
-printf '%s' "$out" | grep -q "left as the agent's own (its send identities): desk@shop.example" && ok "person --all names the excluded send identity" || bad "excluded line: $out"
+<<<"$out" grep -q "marked 2 mailbox(es) in it-email as people's mailboxes" && ok "person --all output" || bad "person --all output: $out"
+<<<"$out" grep -q "left as the agent's own (its send identities): desk@shop.example" && ok "person --all names the excluded send identity" || bad "excluded line: $out"
 rm -f "$PERSON_POST"
 set +e
 "${K2[@]}" "$K2_CLI" hostmail person --all on >/dev/null 2>&1
@@ -312,8 +312,8 @@ set -e
 assert_exit "person --all with an address" 2 "$rc"
 [ ! -f "$PERSON_POST" ] && ok "no POST on --all usage errors" || bad "a person POST went out on a --all usage error"
 h="$("${K2[@]}" "$K2_CLI" hostmail person --help)"
-printf '%s' "$h" | grep -q "k2 hostmail person --all --workspace <ws> on|off" && ok "person --all help" || bad "person --all help: $h"
-printf '%s' "$h" | grep -q "k2 hostmail person <addr> on|off" && ok "person help" || bad "person help: $h"
+<<<"$h" grep -q "k2 hostmail person --all --workspace <ws> on|off" && ok "person --all help" || bad "person --all help: $h"
+<<<"$h" grep -q "k2 hostmail person <addr> on|off" && ok "person help" || bad "person help: $h"
 
 echo "== keep usage errors (no POST) =="
 rm -f "$KEEP_POST"
@@ -331,13 +331,13 @@ assert_exit "password keep without addr" 2 "$rc"
 
 echo "== help =="
 h="$("${K2[@]}" "$K2_CLI" hostmail app-password keep --help)"
-printf '%s' "$h" | grep -q "k2 hostmail app-password keep <addr> <id>" && ok "app-password keep leaf help" || bad "leaf help: $h"
+<<<"$h" grep -q "k2 hostmail app-password keep <addr> <id>" && ok "app-password keep leaf help" || bad "leaf help: $h"
 h="$("${K2[@]}" "$K2_CLI" hostmail password keep --help)"
-printf '%s' "$h" | grep -q "k2 hostmail password keep <addr>" && ok "password keep leaf help" || bad "leaf help: $h"
+<<<"$h" grep -q "k2 hostmail password keep <addr>" && ok "password keep leaf help" || bad "leaf help: $h"
 h="$("${K2[@]}" "$K2_CLI" hostmail app-password add --help)"
-printf '%s' "$h" | grep -q "loosen mail rules on its own sends" && ok "add help names the refusal" || bad "add help: $h"
+<<<"$h" grep -q "loosen mail rules on its own sends" && ok "add help names the refusal" || bad "add help: $h"
 h="$("${K2[@]}" "$K2_CLI" hostmail app-password --help)"
-printf '%s' "$h" | grep -q "app-password keep" && ok "group help lists keep" || bad "group help: $h"
+<<<"$h" grep -q "app-password keep" && ok "group help lists keep" || bad "group help: $h"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

@@ -25,17 +25,17 @@ ghelp="$("$K2" hostmail group --help)"
 for want in 'group create' 'group add' 'group remove' 'group list' 'group delete' \
             'Shared Folders' 'k2 hostmail list' 'mail fan-out' '--mail' \
             "can't widen its own access" 'TEAM CALENDAR' '--with team --write' '--editor'; do
-  printf '%s' "$ghelp" | grep -qF -- "$want" || fail "group --help must mention '$want'"
+  <<<"$ghelp" grep -qF -- "$want" || fail "group --help must mention '$want'"
 done
 chelp="$("$K2" hostmail calendar --help)"
 for want in 'calendar create' 'calendar rename' 'calendar share' 'calendar unshare' \
             'calendar shares' 'calendar sharing' 'TEAM CALENDAR' 'k2 hostmail group'; do
-  printf '%s' "$chelp" | grep -qF -- "$want" || fail "calendar --help must mention '$want'"
+  <<<"$chelp" grep -qF -- "$want" || fail "calendar --help must mention '$want'"
 done
 shelp="$("$K2" hostmail calendar share --help)"
 for want in 'mayReadFreeBusy' 'mayReadItems' 'mayWriteAll' 'mayRSVP' 'mayDelete' 'mayShare' \
             'k2 hostmail upgrade' 'maxShares' '--max-shares' 'k2 calendar'; do
-  printf '%s' "$shelp" | grep -qF -- "$want" || fail "calendar share --help must mention '$want'"
+  <<<"$shelp" grep -qF -- "$want" || fail "calendar share --help must mention '$want'"
 done
 "$K2" hostmail --help | grep -q 'group create|add|remove|list|show|delete' \
   || fail "hostmail --help must list group"
@@ -163,31 +163,31 @@ k2() {
 }
 
 out="$(k2 hostmail group create team)"
-printf '%s' "$out" | grep -q 'created group team@example.com (inbound mail off' || fail "group create output: $out"
+<<<"$out" grep -q 'created group team@example.com (inbound mail off' || fail "group create output: $out"
 k2 hostmail group create team --domain example.com --mail --json >/dev/null
 out="$(k2 hostmail group add team a@example.com b@example.com)"
-printf '%s' "$out" | grep -q 'members=a@example.com,b@example.com' || fail "group add output: $out"
+<<<"$out" grep -q 'members=a@example.com,b@example.com' || fail "group add output: $out"
 k2 hostmail group remove team b@example.com >/dev/null
 out="$(k2 hostmail group list)"
-printf '%s' "$out" | grep -q 'group team@example.com · 1 member(s) · inbound mail off' || fail "group list: $out"
+<<<"$out" grep -q 'group team@example.com · 1 member(s) · inbound mail off' || fail "group list: $out"
 k2 hostmail group show team --json >/dev/null
 out="$(k2 hostmail group delete team)"
-printf '%s' "$out" | grep -q '1 calendar share(s) and 2 membership(s) removed' || fail "group delete: $out"
+<<<"$out" grep -q '1 calendar share(s) and 2 membership(s) removed' || fail "group delete: $out"
 k2 hostmail calendar create owner@example.com "Team" --color '#3366ff' >/dev/null
 out="$(k2 hostmail calendar rename owner@example.com Team Crew)"
-printf '%s' "$out" | grep -q "renamed calendar 'Team' → 'Crew'" || fail "rename: $out"
+<<<"$out" grep -q "renamed calendar 'Team' → 'Crew'" || fail "rename: $out"
 out="$(k2 hostmail calendar share owner@example.com --calendar Team --with team --write)"
-printf '%s' "$out" | grep -q "shared 'Team' of owner@example.com with team@example.com: write" || fail "share: $out"
+<<<"$out" grep -q "shared 'Team' of owner@example.com with team@example.com: write" || fail "share: $out"
 k2 hostmail calendar share owner@example.com --with a@example.com --editor >/dev/null
 k2 hostmail calendar share owner@example.com --with a@example.com --freebusy >/dev/null
 k2 hostmail calendar share owner@example.com --with a@example.com --read >/dev/null
 out="$(k2 hostmail calendar unshare owner@example.com --calendar Team --with team)"
-printf '%s' "$out" | grep -q "stopped sharing 'Team'" || fail "unshare: $out"
+<<<"$out" grep -q "stopped sharing 'Team'" || fail "unshare: $out"
 out="$(k2 hostmail calendar shares owner@example.com)"
-printf '%s' "$out" | grep -q 'team@example.com (group): write' || fail "shares: $out"
+<<<"$out" grep -q 'team@example.com (group): write' || fail "shares: $out"
 k2 hostmail calendar sharing >/dev/null
 out="$(k2 hostmail calendar sharing --max-shares 25)"
-printf '%s' "$out" | grep -q 'max shares per calendar : 25' || fail "sharing: $out"
+<<<"$out" grep -q 'max shares per calendar : 25' || fail "sharing: $out"
 
 cat >"$WORK/check.py" <<'PY'
 import json, sys

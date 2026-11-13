@@ -346,7 +346,7 @@ echo "== help says where Sew comes from =="
 out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" hostchat --help 2>&1)"
 assert_contains "help: download source" "$out" "github.com/Alakazam-211/sew-releases"
 assert_contains "help: tarball is for offline boxes" "$out" "are for a box without"
-if printf '%s' "$out" | grep -q "SW1\|has not published"; then bad "help: no stale SW1 words"; else ok "help: no stale SW1 words"; fi
+if <<<"$out" grep -q "SW1\|has not published"; then bad "help: no stale SW1 words"; else ok "help: no stale SW1 words"; fi
 
 # 0.46.1: voice flags outside enable used to be dropped silently.
 before="$(nreq)"

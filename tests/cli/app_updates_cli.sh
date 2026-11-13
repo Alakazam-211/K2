@@ -27,7 +27,7 @@ run() { set +e; OUT="$(bash "$K2" "$@" 2>&1)"; RC=$?; set -e; }
 expect() {
     local label="$1" rc="$2" needle="$3"; shift 3
     run "$@"
-    if [ "$RC" = "$rc" ] && printf '%s' "$OUT" | grep -Fq -- "$needle"; then ok "$label"; else bad "$label (exit $RC, want $rc; output: $(printf '%s' "$OUT" | head -3))"; fi
+    if [ "$RC" = "$rc" ] && <<<"$OUT" grep -Fq -- "$needle"; then ok "$label"; else bad "$label (exit $RC, want $rc; output: $(printf '%s' "$OUT" | head -3))"; fi
 }
 
 echo "== help =="

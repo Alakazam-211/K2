@@ -135,10 +135,10 @@ ACCESS_ON='"/cli/zen/garden/access": [400, {"ok": false, "error": "bad_request",
 echo "== an older K2 (no access routes): the topic is still listed =="
 routes '{}'
 if run 0 study; then
-    if printf '%s' "$OUT" | grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access (older K2)"; else bad "study (older K2): $OUT"; fi
+    if <<<"$OUT" grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access (older K2)"; else bad "study (older K2): $OUT"; fi
 fi
 if run 0 study garden-access; then
-    if printf '%s' "$OUT" | grep -q '^k2 study garden-access'; then ok "study garden-access (older K2) prints the page"; else bad "older K2 page: $OUT"; fi
+    if <<<"$OUT" grep -q '^k2 study garden-access'; then ok "study garden-access (older K2) prints the page"; else bad "older K2 page: $OUT"; fi
 fi
 printf 'schema = 1\n' > "$SANDBOX/page.toml"
 if run 2 zen garden new Plans --from "$SANDBOX/page.toml"; then
@@ -148,7 +148,7 @@ fi
 echo "== Garden access: the topic and its page =="
 routes "{$ACCESS_ON}"
 if run 0 study; then
-    if printf '%s' "$OUT" | grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access"; else bad "study: $OUT"; fi
+    if <<<"$OUT" grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access"; else bad "study: $OUT"; fi
     if printf '%s' "$OUT" | grep -A1 '^  garden-data ' | grep -q '^  garden-access '; then ok "right after garden-data"; else bad "order: $OUT"; fi
 fi
 if run 0 study --json; then
@@ -160,7 +160,7 @@ if run 0 study --json; then
 fi
 if run 0 study garden-access; then
     for needle in "Edit a Garden" "k2 zen garden access <g> ask" "garden_access_needed" "garden_delete_person" "needs_editor" "Keep as mine"; do
-        if printf '%s' "$OUT" | grep -qF "$needle"; then ok "page says $needle"; else bad "page lacks $needle"; fi
+        if <<<"$OUT" grep -qF "$needle"; then ok "page says $needle"; else bad "page lacks $needle"; fi
     done
 fi
 if run 0 study garden-access --json; then
@@ -260,11 +260,11 @@ fi
 echo "== an agent's delete asks the person (G19) =="
 routes "{$ACCESS_ON, \"/cli/zen/garden/delete\": [403, {\"ok\": false, \"error\": \"garden_delete_person\", \"garden\": \"g-1a2b3c4d\", \"name\": \"Sales board\", \"card\": {\"card\": {\"id\": \"c1\"}, \"request\": \"r1\"}, \"message\": \"Only the person deletes a Garden. K2 asked them to delete Sales board (a card on their Thread with you).\"}]}"
 if run 3 zen garden delete "Sales board"; then
-    if printf '%s' "$OUT" | grep -q '^Asked the person to delete Sales board$'; then ok "delete says it asked"; else bad "delete: $OUT"; fi
+    if <<<"$OUT" grep -q '^Asked the person to delete Sales board$'; then ok "delete says it asked"; else bad "delete: $OUT"; fi
 fi
 routes "{$ACCESS_ON, \"/cli/zen/garden/delete\": [403, {\"ok\": false, \"error\": \"garden_delete_person\", \"garden\": \"g-1a2b3c4d\", \"name\": \"Sales board\", \"card\": {\"card\": null, \"asked\": true}, \"message\": \"Only the person deletes a Garden. Ask them to delete Sales board (Settings → Gardens), or wait for their answer to your last ask.\"}]}"
 if run 3 zen garden delete "Sales board"; then
-    if printf '%s' "$OUT" | grep -q 'Asked the person'; then bad "no card out, yet it says it asked: $OUT"; else ok "no card: the daemon's words only"; fi
+    if <<<"$OUT" grep -q 'Asked the person'; then bad "no card out, yet it says it asked: $OUT"; else ok "no card: the daemon's words only"; fi
 fi
 
 echo "garden_access_cli: $pass passed, $fail failed"

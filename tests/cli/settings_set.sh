@@ -128,8 +128,8 @@ for key in voiceRoomsPreview voiceTunnelPreview computePreview ciPreview boardFi
     run owner-tok settings set "$key" true
     [ "$RC" = 0 ] || bad "$key true: exit $RC ($ERR)"
     [ "$(cat "$LOG")" = "POST /cli/settings/update {\"$key\":true}" ] || bad "$key true: wrong request: $(cat "$LOG")"
-    printf '%s\n' "$OUT" | grep -qx "$key is now true on this server." || bad "$key true: stdout '$OUT'"
-    printf '%s\n' "$OUT" | grep -q '^Next: ' || bad "$key true: no Next line: '$OUT'"
+    <<<"$OUT" grep -qx "$key is now true on this server." || bad "$key true: stdout '$OUT'"
+    <<<"$OUT" grep -q '^Next: ' || bad "$key true: no Next line: '$OUT'"
     ok
 
     run owner-tok settings set "$key" false
@@ -171,14 +171,14 @@ done
 run passport-agent settings set voiceRoomsPreview true
 [ "$RC" = 3 ] || bad "refused: exit $RC, want 3 ($ERR)"
 [ "$(cat "$LOG")" = 'POST /cli/settings/update {"voiceRoomsPreview":true}' ] || bad "refused: wrong request: $(cat "$LOG")"
-printf '%s\n' "$ERR" | grep -qx "Error: owner_only: only the server's owner may change this setting" || bad "refused: no error line: '$ERR'"
-printf '%s\n' "$ERR" | grep -qx "Server settings are the owner's: ask your human, or run it from a terminal outside a K2 agent session." || bad "refused: no owner line: '$ERR'"
+<<<"$ERR" grep -qx "Error: owner_only: only the server's owner may change this setting" || bad "refused: no error line: '$ERR'"
+<<<"$ERR" grep -qx "Server settings are the owner's: ask your human, or run it from a terminal outside a K2 agent session." || bad "refused: no owner line: '$ERR'"
 [ -z "$OUT" ] && ok || bad "refused: stdout '$OUT'"
 
 # ── a 200 that doesn't carry the new value: exit 1, not a false success ───
 run stale-tok settings set computePreview true
 [ "$RC" = 1 ] || bad "stale: exit $RC, want 1 ($ERR)"
-printf '%s\n' "$ERR" | grep -q "computePreview is false, not true" && ok || bad "stale: stderr '$ERR'"
+<<<"$ERR" grep -q "computePreview is false, not true" && ok || bad "stale: stderr '$ERR'"
 
 # ── no daemon: exit 1 ─────────────────────────────────────────────────────
 set +e
@@ -192,7 +192,7 @@ grep -q "no answer from the K2 daemon" "$SANDBOX/err" && ok || bad "no daemon: s
 run owner-tok settings set --help
 [ "$RC" = 0 ] || bad "set --help: exit $RC"
 for line in "k2 settings set <key> <true|false>" "voiceRoomsPreview" "voiceTunnelPreview" "computePreview" "ciPreview" "boardFilePreview" "videoRoomsPreview" "usageSingleRecord"; do
-    printf '%s\n' "$OUT" | grep -qF "$line" || bad "set --help: missing '$line'"
+    <<<"$OUT" grep -qF "$line" || bad "set --help: missing '$line'"
 done
 [ ! -s "$LOG" ] && ok || bad "set --help sent a request: $(cat "$LOG")"
 
@@ -200,7 +200,7 @@ done
 run owner-tok settings
 [ "$RC" = 0 ] || bad "k2 settings: exit $RC ($ERR)"
 grep -q '^GET /cli/settings ' "$LOG" || bad "k2 settings: wrong request: $(cat "$LOG")"
-printf '%s\n' "$OUT" | grep -qx "  Mode:      custom" && ok || bad "k2 settings: stdout '$OUT'"
+<<<"$OUT" grep -qx "  Mode:      custom" && ok || bad "k2 settings: stdout '$OUT'"
 
 run owner-tok settings --mode manager
 [ "$RC" = 0 ] || bad "--mode: exit $RC ($ERR)"

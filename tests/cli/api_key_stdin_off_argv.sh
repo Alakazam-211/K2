@@ -172,7 +172,7 @@ set -e
 err="$WORK/err6"
 out="$(printf 'sk-llm-stdin-4444' | "$K2" api-key create --label lbl --workspaces '*' --key-stdin 2>"$err")" \
     || fail "api-key create --key-stdin failed: $out $(cat "$err")"
-printf '%s' "$out" | grep -q "k2sk_minted" || fail "minted key not printed: $out"
+<<<"$out" grep -q "k2sk_minted" || fail "minted key not printed: $out"
 body="$(last_post_body /cli/api-keys/create)"
 [ "$(json_field "$body" anthropicKey)" = "sk-llm-stdin-4444" ] || fail "llm key not in body: $body"
 [ "$(json_field "$body" label)" = "lbl" ] || fail "label not in body: $body"
@@ -204,7 +204,7 @@ grep -q "deprecated" "$err" && fail "keyless create must not warn: $(cat "$err")
 #    transport, which is covered by its own test.)
 posts="$(grep -F -- '--data-binary @-' "$ARGV_LOG" || true)"
 [ "$(printf '%s\n' "$posts" | grep -c .)" -ge 7 ] || fail "expected the key POSTs in the argv log: $(cat "$ARGV_LOG")"
-if printf '%s' "$posts" | grep -qF "owner-token-for-test"; then
+if <<<"$posts" grep -qF "owner-token-for-test"; then
     fail "token on curl argv for a key POST: $posts"
 fi
 

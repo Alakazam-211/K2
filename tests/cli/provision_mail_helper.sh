@@ -31,14 +31,14 @@ L_BAKE_EXIT="$(line_of 'bake complete')"
 [ "$L_HELPER" -lt "$L_BAKE_EXIT" ] || fail "root helper step must run before the bake exit (bake images get it too)"
 ok "step 7a runs after the daemon install and before the bake exit"
 BLOCK="$(sed -n '/^# ── 7a\. root helper/,/^# ── 7b\./p' "$PROVISION")"
-printf '%s' "$BLOCK" | grep -q 'install-root-helper.sh' || fail "7a must use install-root-helper.sh"
-printf '%s' "$BLOCK" | grep -q -- '--version "$DAEMON_VERSION"' || fail "7a must pass the daemon version"
-printf '%s' "$BLOCK" | grep -q 'releases/download/v${DAEMON_VERSION}/install-root-helper.sh' \
+<<<"$BLOCK" grep -q 'install-root-helper.sh' || fail "7a must use install-root-helper.sh"
+<<<"$BLOCK" grep -q -- '--version "$DAEMON_VERSION"' || fail "7a must pass the daemon version"
+<<<"$BLOCK" grep -q 'releases/download/v${DAEMON_VERSION}/install-root-helper.sh' \
 	|| fail "7a must fetch the installer from the same-version release"
-printf '%s' "$BLOCK" | grep -q -- '--unit "${K2_UNIT_NAME}.service" --scope system' \
+<<<"$BLOCK" grep -q -- '--unit "${K2_UNIT_NAME}.service" --scope system' \
 	|| fail "7a must name this unit + system scope for daemon.toml (RH15)"
 ok "uses install-root-helper.sh at the daemon's version, with this unit"
-if printf '%s' "$BLOCK" | grep -q 'NOPASSWD'; then fail "7a must not write sudo policy itself"; fi
+if <<<"$BLOCK" grep -q 'NOPASSWD'; then fail "7a must not write sudo policy itself"; fi
 [ "$(grep -c 'NOPASSWD' "$PROVISION")" = "1" ] || fail "only the legacy (pre-0.45.4) pg branch writes a sudoers line"
 grep -q 'visudo -cf "$PG_SUDO_TMP"' "$PROVISION" || fail "the legacy pg sudoers line must be visudo-checked"
 if grep -Eq 'cat > /etc/sudoers' "$PROVISION"; then fail "an unchecked sudoers write is back (RH11)"; fi
@@ -49,7 +49,7 @@ ROOT_DB="$(printf '%s\n' "$DB_BLOCK" | sed -n '/^\telse$/,/^\tfi$/p')"
 if printf '%s\n' "$ROOT_DB" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper|sudoers'; then
 	fail "7b (root helper) must not install k2-pg-helper or write a sudoers file (RH11)"
 fi
-printf '%s' "$DB_BLOCK" | grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
+<<<"$DB_BLOCK" grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
 ok "7b: no pg helper copy, no unchecked sudoers, RAM fence via k2-root-helper"
 # Customer boxes: an existing cluster is adopted — the check runs before apt and
 # the adopt branch never installs, inits, rewrites config or fences.
@@ -203,8 +203,8 @@ grep -q -- '--unit k2-daemon-std.service' "$WORK/installer.log" || fail "custom 
 ok "K2_UNIT_NAME reaches daemon.toml"
 grep -qx 'visudo -c' "$WORK/visudo.log" || fail "visudo -c never ran"
 ok "visudo -c ran after install"
-printf '%s' "$out" | grep -q 'root helper: installed (v0.45.5)' || fail "missing 'root helper: installed (v0.45.5)': $out"
-printf '%s' "$out" | grep -q 'SUMMARY=installed (v0.45.5)' || fail "summary var: $out"
+<<<"$out" grep -q 'root helper: installed (v0.45.5)' || fail "missing 'root helper: installed (v0.45.5)': $out"
+<<<"$out" grep -q 'SUMMARY=installed (v0.45.5)' || fail "summary var: $out"
 ok "prints 'root helper: installed (v0.45.5)'"
 grep -qx k2 "$WORK/runuser.log" || fail "the version cross-check must run as k2"
 if grep -qx direct "$WORK/daemon-runs.log"; then fail "k2-daemon was executed without dropping to k2"; fi
@@ -213,45 +213,45 @@ ok "the installed daemon ran only as k2 (runuser), never as the caller"
 echo "== installer fails: provisioning stops with a clear message =="
 FAKE_INSTALL_RC=7 run_step "$WORK/box2"
 [ "$rc" -ne 0 ] || fail "installer failure must fail the step: $out"
-printf '%s' "$out" | grep -q 'root helper: install-root-helper.sh --version 0.45.5 failed' || fail "message: $out"
-printf '%s' "$out" | grep -q 'provisioning stopped' || fail "message: $out"
-if printf '%s' "$out" | grep -q 'SUMMARY='; then fail "must not continue past a failed install"; fi
+<<<"$out" grep -q 'root helper: install-root-helper.sh --version 0.45.5 failed' || fail "message: $out"
+<<<"$out" grep -q 'provisioning stopped' || fail "message: $out"
+if <<<"$out" grep -q 'SUMMARY='; then fail "must not continue past a failed install"; fi
 ok "installer failure is fatal and says so"
 
 echo "== wrong modes / owner, visudo -c failure: fatal =="
 FAKE_HELPER_MODE=0775 run_step "$WORK/box3"
 [ "$rc" -ne 0 ] || fail "helper 0775 must fail"
-printf '%s' "$out" | grep -q "expected 'root:root 755'" || fail "helper mode message: $out"
+<<<"$out" grep -q "expected 'root:root 755'" || fail "helper mode message: $out"
 SHIM_OWNER=k2:k2 run_step "$WORK/box4"
 [ "$rc" -ne 0 ] || fail "helper owned by k2 must fail"
-printf '%s' "$out" | grep -q "is 'k2:k2 755'" || fail "owner message: $out"
+<<<"$out" grep -q "is 'k2:k2 755'" || fail "owner message: $out"
 FAKE_SUDOERS_MODE=0644 run_step "$WORK/box5"
 [ "$rc" -ne 0 ] || fail "sudoers 0644 must fail"
-printf '%s' "$out" | grep -q "expected 'root:root 440'" || fail "sudoers mode message: $out"
+<<<"$out" grep -q "expected 'root:root 440'" || fail "sudoers mode message: $out"
 FAKE_TOML_MODE=0666 run_step "$WORK/box5b"
 [ "$rc" -ne 0 ] || fail "daemon.toml 0666 must fail"
-printf '%s' "$out" | grep -q "expected 'root:root 644'" || fail "toml mode message: $out"
+<<<"$out" grep -q "expected 'root:root 644'" || fail "toml mode message: $out"
 VISUDO_FAIL=1 run_step "$WORK/box6"
 [ "$rc" -ne 0 ] || fail "visudo -c failure must fail"
-printf '%s' "$out" | grep -q 'visudo -c fails' || fail "visudo message: $out"
+<<<"$out" grep -q 'visudo -c fails' || fail "visudo message: $out"
 ok "helper / owner / sudoers / daemon.toml modes and visudo -c are fatal"
 
 echo "== same version guard + unreadable daemon version =="
 K2_VERSION=0.44.4 run_step "$WORK/box7"
 [ "$rc" -ne 0 ] || fail "K2_VERSION mismatch must fail"
-printf '%s' "$out" | grep -q 'must match the daemon' || fail "mismatch message: $out"
+<<<"$out" grep -q 'must match the daemon' || fail "mismatch message: $out"
 K2_VERSION=v0.45.5 run_step "$WORK/box8"
 [ "$rc" -eq 0 ] || fail "K2_VERSION=v0.45.5 should match 0.45.5: $out"
 FAKE_DAEMON_VERSION="" run_step "$WORK/box9"
 [ "$rc" -ne 0 ] || fail "unreadable daemon version must fail: $out"
-printf '%s' "$out" | grep -q 'could not read the installed daemon version' || fail "message: $out"
+<<<"$out" grep -q 'could not read the installed daemon version' || fail "message: $out"
 ok "version guards"
 
 echo "== K2_VERSION is required and must be plain x.y.z =="
 for bad in "" "latest" "0.45" "0.45.5-rc1" '0.45.5;id' '0.45.5/../x'; do
 	K2_VERSION="$bad" run_step "$WORK/box-badver"
 	[ "$rc" -ne 0 ] || fail "K2_VERSION='$bad' must fail: $out"
-	printf '%s' "$out" | grep -q 'plain x.y.z' || fail "K2_VERSION='$bad' message: $out"
+	<<<"$out" grep -q 'plain x.y.z' || fail "K2_VERSION='$bad' message: $out"
 	[ ! -e "$WORK/installer.log" ] || fail "K2_VERSION='$bad': installer must not run"
 done
 ok "missing or malformed K2_VERSION stops before anything runs"
@@ -262,13 +262,13 @@ FAKE_DAEMON_VERSION=0.45.0 K2_VERSION=0.45.0 run_step "$WORK/box-legacy"
 grep -qx -- 'legacy --version 0.45.0 --user k2' "$WORK/installer.log" || fail "legacy installer argv: $(cat "$WORK/installer.log")"
 [ -f "$WORK/box-legacy/usr/local/libexec/k2-mail-helper" ] || fail "legacy helper not installed"
 [ ! -e "$WORK/box-legacy/usr/local/libexec/k2-root-helper" ] || fail "no root helper for an old daemon"
-printf '%s' "$out" | grep -q 'installed legacy k2-mail-helper (v0.45.0 predates the root helper)' || fail "legacy summary: $out"
+<<<"$out" grep -q 'installed legacy k2-mail-helper (v0.45.0 predates the root helper)' || fail "legacy summary: $out"
 ok "a pre-0.45.5 daemon (raw-main provisioner) still gets its own release's mail helper"
 
 echo "== not Linux: skipped with a note, nothing run =="
 SHIM_OS=Darwin run_step "$WORK/box10"
 [ "$rc" -eq 0 ] || fail "non-Linux skip exit $rc: $out"
-printf '%s' "$out" | grep -q 'root helper: skipped' || fail "skip note: $out"
+<<<"$out" grep -q 'root helper: skipped' || fail "skip note: $out"
 [ ! -e "$WORK/installer.log" ] || fail "installer must not run off Linux"
 ok "non-Linux skips with a note"
 

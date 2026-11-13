@@ -76,7 +76,7 @@ for verb in ps list; do
 	out="$(cat "$WORK/out")"
 	printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env (ends 0.46.0)]" || fail "$verb: shop row lacks the tag: $out"
 	if printf '%s\n' "$out" | grep -E '^fresh ' | grep -Fq "legacy env"; then fail "$verb: a clean row must carry no tag: $out"; fi
-	printf '%s\n' "$out" | grep -Fxq "warning: 1 service still inherits the daemon environment (shop); this ends in K2 0.46.0. Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)." \
+	<<<"$out" grep -Fxq "warning: 1 service still inherits the daemon environment (shop); this ends in K2 0.46.0. Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)." \
 		|| fail "$verb: summary line missing: $out"
 	[ "$(printf '%s\n' "$out" | grep -c '^warning:')" = 1 ] || fail "$verb: expected exactly one warning line: $out"
 	ok "k2 publish $verb: legacy row tagged, clean row not, one summary line"
@@ -114,14 +114,14 @@ if grep -q "inherits\|deprecated" "$WORK/out"; then fail "clean start stdout: $(
 ok "k2 publish start <clean>: no warning"
 
 out="$(k2s publish env shop 2>&1)" || fail "publish env: $out"
-printf '%s' "$out" | grep -Fq "inherits the daemon environment (it keeps it as a --cmd service) — start it clean with: k2 publish env shop clean" \
+<<<"$out" grep -Fq "inherits the daemon environment (it keeps it as a --cmd service) — start it clean with: k2 publish env shop clean" \
 	|| fail "publish env lacks the notice: $out"
-if printf '%s' "$out" | grep -q "0\.46\.4"; then fail "publish env names a release no daemon set: $out"; fi
+if <<<"$out" grep -q "0\.46\.4"; then fail "publish env names a release no daemon set: $out"; fi
 ok "k2 publish env: no end sent, none named; the switch"
 
 out="$(k2s study vault 2>&1)" || fail "study vault: $out"
-printf '%s' "$out" | grep -q "^PUBLISHED SERVICES" || fail "study vault lacks the section: $out"
-printf '%s' "$out" | grep -Fq "k2 publish env <name> clean" || fail "study vault lacks the switch: $out"
+<<<"$out" grep -q "^PUBLISHED SERVICES" || fail "study vault lacks the section: $out"
+<<<"$out" grep -Fq "k2 publish env <name> clean" || fail "study vault lacks the switch: $out"
 ok "k2 study vault explains the switch"
 
 # 0.46.4 field report #4: a daemon that IS the cut-over release never says "ends in
@@ -134,12 +134,12 @@ for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && b
 k2s publish ps >"$WORK/out" 2>"$WORK/err" || fail "ps (now): $(cat "$WORK/out" "$WORK/err")"
 out="$(cat "$WORK/out")"
 printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env (ends now, 0.46.0)]" || fail "now: shop row tag: $out"
-printf '%s\n' "$out" | grep -Fq "this ends with this release (K2 0.46.0)." || fail "now: summary line: $out"
-if printf '%s\n' "$out" | grep -Fq "ends in K2 0.46.0"; then fail "now: still says 'ends in K2 <this release>': $out"; fi
+<<<"$out" grep -Fq "this ends with this release (K2 0.46.0)." || fail "now: summary line: $out"
+if <<<"$out" grep -Fq "ends in K2 0.46.0"; then fail "now: still says 'ends in K2 <this release>': $out"; fi
 k2s publish start shop >"$WORK/out" 2>"$WORK/err" || fail "start shop (now): $(cat "$WORK/out" "$WORK/err")"
 grep -Fq "this ends with this release (K2 0.46.0)." "$WORK/err" || fail "now: start warning: $(cat "$WORK/err")"
 out="$(k2s publish env shop 2>&1)" || fail "publish env (now): $out"
-printf '%s' "$out" | grep -Fq "ends with this release (K2 0.46.0) — switch with: k2 publish env shop clean" || fail "now: publish env: $out"
+<<<"$out" grep -Fq "ends with this release (K2 0.46.0) — switch with: k2 publish env shop clean" || fail "now: publish env: $out"
 ok "on the cut-over release itself the notices say the end is now"
 
 
@@ -153,8 +153,8 @@ for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && b
 k2s publish ps >"$WORK/out" 2>"$WORK/err" || fail "ps (noend): $(cat "$WORK/out" "$WORK/err")"
 out="$(cat "$WORK/out")"
 printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env]" || fail "noend: shop row tag: $out"
-printf '%s\n' "$out" | grep -Fq "warning: 1 service still inherits the daemon environment (shop). Switch each with" || fail "noend: summary line: $out"
-if printf '%s\n' "$out" | grep -q "ends\|0\.46\."; then fail "noend: names an end: $out"; fi
+<<<"$out" grep -Fq "warning: 1 service still inherits the daemon environment (shop). Switch each with" || fail "noend: summary line: $out"
+if <<<"$out" grep -q "ends\|0\.46\."; then fail "noend: names an end: $out"; fi
 k2s publish start shop >"$WORK/out" 2>"$WORK/err" || fail "start shop (noend): $(cat "$WORK/out" "$WORK/err")"
 [ "$(cat "$WORK/err")" = "warning: shop still inherits the daemon environment (it keeps it as a --cmd service). Start it clean with: k2 publish env shop clean (grant secrets with k2 publish secret add)." ] \
 	|| fail "noend: start warning: $(cat "$WORK/err")"

@@ -22,15 +22,15 @@ grep -A20 'verb == "ptr_set"' "$K2" | grep -q '/cli/mail/ptr/set' \
 
 # Help + schema mention ptr.
 help="$("$K2" hostmail ptr --help)"
-printf '%s' "$help" | grep -q 'ptr show' || fail "ptr --help must mention show"
-printf '%s' "$help" | grep -q 'ptr set' || fail "ptr --help must mention set"
+<<<"$help" grep -q 'ptr show' || fail "ptr --help must mention show"
+<<<"$help" grep -q 'ptr set' || fail "ptr --help must mention set"
 
 show_help="$("$K2" hostmail ptr show --help)"
-printf '%s' "$show_help" | grep -q '/cli/mail/ptr' \
+<<<"$show_help" grep -q '/cli/mail/ptr' \
   || fail "ptr show --help must name /cli/mail/ptr"
 
 set_help="$("$K2" hostmail ptr set --help)"
-printf '%s' "$set_help" | grep -q '/cli/mail/ptr/set' \
+<<<"$set_help" grep -q '/cli/mail/ptr/set' \
   || fail "ptr set --help must name /cli/mail/ptr/set"
 
 # Schema JSON.
@@ -49,7 +49,7 @@ out="$("$K2" hostmail ptr set 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "ptr set without hostname must exit 2, got $rc: $out"
-printf '%s' "$out" | grep -qi 'hostname' || fail "ptr set usage must name hostname: $out"
+<<<"$out" grep -qi 'hostname' || fail "ptr set usage must name hostname: $out"
 
 # k2 mail ptr moved to hostmail (exit 2).
 set +e
@@ -57,7 +57,7 @@ out="$("$K2" mail ptr 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "k2 mail ptr must exit 2, got $rc ($out)"
-printf '%s' "$out" | grep -q "hostmail" || fail "k2 mail ptr must point at k2 hostmail ($out)"
+<<<"$out" grep -q "hostmail" || fail "k2 mail ptr must point at k2 hostmail ($out)"
 
 # CLI keeps TCP for mail (quota pattern) — _uds_eligible omits /cli/mail/.
 if grep -A40 '_uds_eligible()' "$K2" | grep -q '/cli/mail'; then

@@ -31,7 +31,7 @@ assert_eq() {
 }
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if <<<"$hay" grep -Fq -- "$needle"; then
         echo "  PASS: $label"; pass=$((pass + 1))
     else
         echo "  FAIL: $label (missing $(printf %q "$needle") in $(printf %q "$hay"))" >&2; fail=$((fail + 1))
@@ -39,7 +39,7 @@ assert_contains() {
 }
 assert_not_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if <<<"$hay" grep -Fq -- "$needle"; then
         echo "  FAIL: $label (found $(printf %q "$needle") in $(printf %q "$hay"))" >&2; fail=$((fail + 1))
     else
         echo "  PASS: $label"; pass=$((pass + 1))

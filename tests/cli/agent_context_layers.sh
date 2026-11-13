@@ -128,7 +128,7 @@ assert_contains "hire help has --color" "$help_hire" "--color"
 assert_contains "hire help has --focus-group" "$help_hire" "--focus-group"
 
 help_ws_create="$(PORT=1 TOKEN=fake "$K2_CLI" workspace create --help 2>&1)" || true
-if ! printf '%s' "$help_ws_create" | grep -q -- "--no-agents-md"; then
+if ! <<<"$help_ws_create" grep -q -- "--no-agents-md"; then
     help_ws_create="$(PORT=1 TOKEN=fake "$K2_CLI" workspace --help 2>&1)" || true
 fi
 assert_contains "workspace help has --no-agents-md" "$help_ws_create" "--no-agents-md"
@@ -243,9 +243,9 @@ else
     # pending seed for a missing path.
     hire_err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
     hire_out="$(cat /tmp/_k2_ctx_out.$$ 2>/dev/null || true)"
-    if [ "$hire_rc" -eq 0 ] && printf '%s' "$hire_out" | grep -q 'seed-context\|context:'; then
+    if [ "$hire_rc" -eq 0 ] && <<<"$hire_out" grep -q 'seed-context\|context:'; then
         # If plan printed, ensure missing path was not would-apply
-        if printf '%s' "$hire_out" | grep -q 'would apply.*nope-missing'; then
+        if <<<"$hire_out" grep -q 'would apply.*nope-missing'; then
             echo "  FAIL: hire dry-run would apply missing context path" >&2
             fail=$((fail + 1))
         else
@@ -345,7 +345,7 @@ else
                 assert_contains "list has OPTIONAL" "$list_out" "OPTIONAL"
             else
                 err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
-                if printf '%s' "$err" | grep -Eq 'not_found'; then
+                if <<<"$err" grep -Eq 'not_found'; then
                     echo "  PASS: list reached daemon (project not_found — ok)"
                     pass=$((pass + 1))
                 else

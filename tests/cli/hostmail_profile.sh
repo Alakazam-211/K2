@@ -29,9 +29,9 @@ for want in '--apple' '--out' '--force' 'k2-profile-<YYYY-MM-DD>' 'app-password 
             'AirDrop' 'Profile Downloaded' 'Install' 'Unverified' 'k2 hostmail bans' \
             'allowlist' 'Owner/admin' '/dav/cal' '/dav/card' '993' '465' 'k2.dev' \
             'linked' 'retired'; do
-  printf '%s' "$help" | grep -qF -- "$want" || fail "profile --help must mention '$want'"
+  <<<"$help" grep -qF -- "$want" || fail "profile --help must mention '$want'"
 done
-printf '%s' "$help" | grep -q 'never read back or reused' || fail "help must say a stored secret is never reused"
+<<<"$help" grep -q 'never read back or reused' || fail "help must say a stored secret is never reused"
 "$K2" hostmail --help | grep -q 'profile <addr> --apple' || fail "hostmail --help must list profile"
 "$K2" study mail | grep -q 'k2 hostmail profile' || fail "study mail must list hostmail profile as owner-only"
 
@@ -136,13 +136,13 @@ human="$(k2 hostmail profile alice@example.com --apple --out "$WORK/alice.mobile
 grep -qF "$SECRET" "$WORK/alice.mobileconfig" || fail "the profile file must carry the app password"
 python3 -c 'import plistlib,sys; d=plistlib.load(open(sys.argv[1],"rb")); assert d["PayloadType"]=="Configuration", d' \
   "$WORK/alice.mobileconfig" || fail "written file must parse as a plist"
-printf '%s' "$human" | grep -qF "$SECRET" && fail "human output must never print the secret: $human"
+<<<"$human" grep -qF "$SECRET" && fail "human output must never print the secret: $human"
 grep -qF "$SECRET" "$WORK/err1" && fail "stderr must never print the secret"
-printf '%s' "$human" | grep -q '^wrote    : ' || fail "human output: $human"
-printf '%s' "$human" | grep -q 'mail, caldav, carddav' || fail "human output must list includes: $human"
-printf '%s' "$human" | grep -q 'k2 hostmail app-password revoke alice@example.com ap-7' || fail "human output must print revoke: $human"
-printf '%s' "$human" | grep -q 'AirDrop' || fail "human output must say how to install: $human"
-printf '%s' "$human" | grep -q 'k2 hostmail bans' || fail "human output must carry the ban note: $human"
+<<<"$human" grep -q '^wrote    : ' || fail "human output: $human"
+<<<"$human" grep -q 'mail, caldav, carddav' || fail "human output must list includes: $human"
+<<<"$human" grep -q 'k2 hostmail app-password revoke alice@example.com ap-7' || fail "human output must print revoke: $human"
+<<<"$human" grep -q 'AirDrop' || fail "human output must say how to install: $human"
+<<<"$human" grep -q 'k2 hostmail bans' || fail "human output must carry the ban note: $human"
 
 # Existing file without --force: refused, exit 2, and NO request (nothing minted).
 before="$(wc -l <"$WORK/requests")"
@@ -163,7 +163,7 @@ k2 hostmail profile alice@example.com --apple --out "$WORK/alice.mobileconfig" -
 
 # --json with --out: no profile body in the JSON, out path instead.
 j="$(k2 hostmail profile alice@example.com --apple --out "$WORK/j.mobileconfig" --json)"
-printf '%s' "$j" | grep -qF "$SECRET" && fail "--json with --out must not echo the profile"
+<<<"$j" grep -qF "$SECRET" && fail "--json with --out must not echo the profile"
 python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert "profile" not in d and d["out"].endswith("j.mobileconfig") and d["appPasswordId"]=="ap-7" and d["includes"]==["mail","caldav","carddav"], d' "$j" \
   || fail "--json --out shape: $j"
 

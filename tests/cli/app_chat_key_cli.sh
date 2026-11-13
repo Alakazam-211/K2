@@ -22,7 +22,7 @@ fail=0
 ok()  { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got=$(printf %q "$2") want=$(printf %q "$3"))"; fi; }
-assert_contains() { if printf '%s' "$2" | grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
+assert_contains() { if <<<"$2" grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
 
 WORK="$(mktemp -d -t k2-chat-key-cli-XXXXXX)"
 STUB_PID=""
@@ -172,7 +172,7 @@ out="$(owner app chat --help 2>&1)"
 assert_eq "app chat help: no request" "$(nreq)" "$before"
 assert_contains "app chat help: its own page" "$out" "What K2 keeps in step for an App's chat"
 assert_contains "app chat help: the member limit hold" "$out" "the Space at the App's member limit"
-if printf '%s' "$out" | grep -Fq 'k2 app token <create|list|revoke|rooms>'; then bad "app chat help: not the family's usage"; else ok "app chat help: not the family's usage"; fi
+if <<<"$out" grep -Fq 'k2 app token <create|list|revoke|rooms>'; then bad "app chat help: not the family's usage"; else ok "app chat help: not the family's usage"; fi
 
 echo
 echo "app chat-key CLI: $pass passed, $fail failed"

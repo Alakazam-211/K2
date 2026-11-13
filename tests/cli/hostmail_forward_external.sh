@@ -192,11 +192,11 @@ for h in "hostmail forward --help" "hostmail forward set --help" "hostmail forwa
          "hostmail forward list --help" "mail forward --help" "hostmail person link --help"; do
     # shellcheck disable=SC2086
     out="$("$K2" $h)"
-    printf '%s' "$out" | grep -q 'USAGE' || fail "k2 $h must print leaf help: $out"
-    if printf '%s' "$out" | grep -qi 'k2-forward\|not Gmail\|cannot be Gmail'; then
+    <<<"$out" grep -q 'USAGE' || fail "k2 $h must print leaf help: $out"
+    if <<<"$out" grep -qi 'k2-forward\|not Gmail\|cannot be Gmail'; then
         fail "k2 $h still says k2-forward / not Gmail: $out"
     fi
-    if printf '%s' "$out" | grep -qi 'confirm link'; then
+    if <<<"$out" grep -qi 'confirm link'; then
         fail "k2 $h still talks about a confirm link: $out"
     fi
 done
@@ -206,18 +206,18 @@ done
 # ── set: keep only when asked ───────────────────────────────────────────
 out="$("$K2" hostmail forward set sales@brand.test --to me@gmail.test)"
 last_body | grep -q '"keep"' && fail "set without --keep/--no-keep must not send keep: $(last_body)"
-printf '%s' "$out" | grep -q "K2 emailed me@gmail.test to say so, with a link to stop it" \
+<<<"$out" grep -q "K2 emailed me@gmail.test to say so, with a link to stop it" \
     || fail "set must print the daemon's line about the stop link: $out"
-printf '%s' "$out" | grep -q ': active' || fail "outside set must print active: $out"
+<<<"$out" grep -q ': active' || fail "outside set must print active: $out"
 last_body | grep -q '"to":"me@gmail.test"' || fail "one --to must stay a string on the wire: $(last_body)"
-printf '%s' "$out" | grep -q 'keeps a copy' || fail "outside default keep must show: $out"
+<<<"$out" grep -q 'keeps a copy' || fail "outside default keep must show: $out"
 
 "$K2" hostmail forward set sales@brand.test --to me@gmail.test --no-keep >/dev/null
 last_body | grep -q '"keep":false' || fail "--no-keep must send keep:false: $(last_body)"
 "$K2" hostmail forward set sales@brand.test --to other@brand.test --keep >/dev/null
 last_body | grep -q '"keep":true' || fail "--keep must send keep:true: $(last_body)"
 out="$("$K2" hostmail forward set sales@brand.test --to other@brand.test)"
-printf '%s' "$out" | grep -q ': active' || fail "same-box set must print active: $out"
+<<<"$out" grep -q ': active' || fail "same-box set must print active: $out"
 
 set +e
 out="$("$K2" hostmail forward set sales@brand.test --to me@gmail.test --keep --no-keep 2>&1)"; rc=$?
@@ -227,15 +227,15 @@ set -e
 # ── several destinations ────────────────────────────────────────────────
 out="$("$K2" hostmail forward set sales@brand.test --to a@gmail.test --to b@gmail.test)"
 last_body | grep -q '"to":\["a@gmail.test","b@gmail.test"\]' || fail "repeated --to must be a list: $(last_body)"
-printf '%s' "$out" | grep -q 'sales@brand.test -> a@gmail.test' || fail "set must print the first: $out"
-printf '%s' "$out" | grep -q 'sales@brand.test -> b@gmail.test' || fail "set must print the second: $out"
+<<<"$out" grep -q 'sales@brand.test -> a@gmail.test' || fail "set must print the first: $out"
+<<<"$out" grep -q 'sales@brand.test -> b@gmail.test' || fail "set must print the second: $out"
 "$K2" hostmail forward add sales@brand.test --to c@gmail.test --no-keep >/dev/null
 last_body | grep -q '^POST /cli/mail/forward/add ' || fail "add must POST /cli/mail/forward/add: $(last_body)"
 last_body | grep -q '"keep":false' || fail "add must carry --no-keep: $(last_body)"
 out="$("$K2" hostmail forward rm sales@brand.test --to c@gmail.test)"
 last_body | grep -q '^POST /cli/mail/forward/rm ' || fail "rm must POST /cli/mail/forward/rm: $(last_body)"
-printf '%s' "$out" | grep -q 'no longer forwards to c@gmail.test' || fail "rm output: $out"
-printf '%s' "$out" | grep -q 'still forwarding to: left@gmail.test' || fail "rm must name what's left: $out"
+<<<"$out" grep -q 'no longer forwards to c@gmail.test' || fail "rm output: $out"
+<<<"$out" grep -q 'still forwarding to: left@gmail.test' || fail "rm must name what's left: $out"
 set +e
 out="$("$K2" hostmail forward rm sales@brand.test 2>&1)"; rc=$?
 set -e
@@ -249,22 +249,22 @@ last_body | grep -q '"to":"a@gmail.test"' || fail "pause --to must send it: $(la
 "$K2" hostmail forward resume sales@brand.test --to a@gmail.test >/dev/null
 last_body | grep -q '"to":"a@gmail.test"' || fail "resume --to must send it: $(last_body)"
 out="$("$K2" hostmail forward resume some@brand.test)"
-printf '%s' "$out" | grep -q 'left alone: gone@gmail.test: the owner resumes this one' || fail "resume must say what it left: $out"
+<<<"$out" grep -q 'left alone: gone@gmail.test: the owner resumes this one' || fail "resume must say what it left: $out"
 set +e
 out="$("$K2" hostmail forward unset sales@brand.test --to a@gmail.test 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "unset takes no --to (rm does) (got $rc): $out"
 out="$("$K2" hostmail forward show two@brand.test)"
-printf '%s' "$out" | grep -q 'to=me@gmail.test' || fail "show must print the first destination: $out"
-printf '%s' "$out" | grep -q 'to=two@gmail.test' || fail "show must print the second destination: $out"
-printf '%s' "$out" | grep -q 'told two@gmail.test: emailed it a stop link' || fail "show must print the notice: $out"
+<<<"$out" grep -q 'to=me@gmail.test' || fail "show must print the first destination: $out"
+<<<"$out" grep -q 'to=two@gmail.test' || fail "show must print the second destination: $out"
+<<<"$out" grep -q 'told two@gmail.test: emailed it a stop link' || fail "show must print the notice: $out"
 
 # ── refusals that say what to do (exit 1) ───────────────────────────────
 set +e
 out="$("$K2" hostmail forward set sales@brand.test --to stopped@gmail.test 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "set to a stopped address must exit 1 (got $rc): $out"
-printf '%s' "$out" | grep -q -- '--restart-stopped' || fail "destination_stopped must name the override: $out"
+<<<"$out" grep -q -- '--restart-stopped' || fail "destination_stopped must name the override: $out"
 "$K2" hostmail forward set sales@brand.test --to stopped@gmail.test --restart-stopped >/dev/null
 last_body | grep -q '"restartStopped":true' || fail "--restart-stopped must reach the daemon: $(last_body)"
 for t in onetoomany@gmail.test onemore@gmail.test; do
@@ -272,18 +272,18 @@ for t in onetoomany@gmail.test onemore@gmail.test; do
     out="$("$K2" hostmail forward add sales@brand.test --to "$t" 2>&1)"; rc=$?
     set -e
     [ "$rc" -eq 1 ] || fail "$t must exit 1 (got $rc): $out"
-    printf '%s' "$out" | grep -q 'at most' || fail "$t must say the limit: $out"
+    <<<"$out" grep -q 'at most' || fail "$t must say the limit: $out"
 done
 
 # ── the daily cap (the owner only) ──────────────────────────────────────
 out="$("$K2" hostmail config --forward-new-per-day 300)"
 last_body | grep -q '^POST /cli/mail/config/forward-new-per-day .*"perDay": *300' || fail "the cap must POST its route: $(last_body)"
-printf '%s' "$out" | grep -q 'may now add 300 new outside forward addresses a day (default 20, most 1000)' || fail "cap output: $out"
+<<<"$out" grep -q 'may now add 300 new outside forward addresses a day (default 20, most 1000)' || fail "cap output: $out"
 set +e
 out="$("$K2" hostmail config --forward-new-per-day 5000 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "over the ceiling must exit 2 (got $rc): $out"
-printf '%s' "$out" | grep -q 'at most 1000' || fail "over the ceiling must say the most: $out"
+<<<"$out" grep -q 'at most 1000' || fail "over the ceiling must say the most: $out"
 set +e
 out="$("$K2" hostmail config --forward-new-per-day lots 2>&1)"; rc=$?
 set -e
@@ -297,24 +297,24 @@ set +e
 out="$(K2_HOOK_TOKEN=agent-passport "$K2" hostmail config --forward-new-per-day 1000 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 3 ] || fail "an agent raising the cap must exit 3 (got $rc): $out"
-printf '%s' "$out" | grep -q "It can't be requested" || fail "an agent's refusal must end in the permission line: $out"
+<<<"$out" grep -q "It can't be requested" || fail "an agent's refusal must end in the permission line: $out"
 
 # ── how much a mailbox may forward (the owner only) ─────────────────────
 out="$("$K2" hostmail config --forward-copies-per-day 2000)"
 last_body | grep -q '^POST /cli/mail/config/forward-copies-per-day .*"perDay": *2000' || fail "per-day must POST its route: $(last_body)"
-printf '%s' "$out" | grep -q 'may now forward 2000 copies in 24 hours (default 500, most 24000)' || fail "per-day output: $out"
+<<<"$out" grep -q 'may now forward 2000 copies in 24 hours (default 500, most 24000)' || fail "per-day output: $out"
 out="$("$K2" hostmail config --forward-copies-per-hour 300)"
 last_body | grep -q '^POST /cli/mail/config/forward-copies-per-hour .*"perHour": *300' || fail "per-hour must POST its route: $(last_body)"
-printf '%s' "$out" | grep -q 'may now forward 300 copies an hour (default 100, most 1000)' || fail "per-hour output: $out"
+<<<"$out" grep -q 'may now forward 300 copies an hour (default 100, most 1000)' || fail "per-hour output: $out"
 out="$("$K2" hostmail config --forward-copies-per-day 20000)"
-printf '%s' "$out" | grep -q '^note: at 300 an hour' || fail "the answer's note must show: $out"
+<<<"$out" grep -q '^note: at 300 an hour' || fail "the answer's note must show: $out"
 for args in "--forward-copies-per-day 24001" "--forward-copies-per-hour 1001" "--forward-copies-per-day 0"; do
     set +e
     # shellcheck disable=SC2086
     out="$("$K2" hostmail config $args 2>&1)"; rc=$?
     set -e
     [ "$rc" -eq 2 ] || fail "$args must exit 2 (got $rc): $out"
-    printf '%s' "$out" | grep -q 'Nothing changed' || fail "$args must say nothing changed: $out"
+    <<<"$out" grep -q 'Nothing changed' || fail "$args must say nothing changed: $out"
 done
 for args in "--forward-copies-per-day lots" "--forward-copies-per-hour lots" "--forward-copies-per-day 600 --forward-copies-per-hour 200" "--forward-copies-per-day 600 --forward-new-per-day 30" "--forward-copies-per-hour 200 --address-cap 3"; do
     set +e
@@ -329,24 +329,24 @@ for args in "--forward-copies-per-day 24000" "--forward-copies-per-hour 1000"; d
     out="$(K2_HOOK_TOKEN=agent-passport "$K2" hostmail config $args 2>&1)"; rc=$?
     set -e
     [ "$rc" -eq 3 ] || fail "an agent running $args must exit 3 (got $rc): $out"
-    printf '%s' "$out" | grep -q "It can't be requested" || fail "an agent's refusal must end in the permission line: $out"
+    <<<"$out" grep -q "It can't be requested" || fail "an agent's refusal must end in the permission line: $out"
 done
 "$K2" hostmail config --help | grep -q -- '--forward-copies-per-hour <n>' || fail "config --help must name the hourly flag"
 "$K2" hostmail forward --help | grep -q -- '--forward-copies-per-day' || fail "forward --help must name the daily flag"
 
 # ── show: pause words, notice, 24 h counts ──────────────────────────────
 out="$("$K2" hostmail forward show sales@brand.test)"
-printf '%s' "$out" | grep -q '^volume: 12 of 2000 copies counted in 24 hours .*300 an hour' || fail "show must give the volume limits: $out"
-printf '%s' "$out" | grep -q 'state=paused  reason=refused' || fail "show must print state + reason: $out"
-printf '%s' "$out" | grep -q 'paused because the destination refused too many forwards' || fail "show must print pauseWords: $out"
-printf '%s' "$out" | grep -q 'last 24h: forwarded 12, delivered 9, refused 3' || fail "show must print the 24 h counts: $out"
-printf '%s' "$out" | grep -q 'paused' || fail "show must list events: $out"
+<<<"$out" grep -q '^volume: 12 of 2000 copies counted in 24 hours .*300 an hour' || fail "show must give the volume limits: $out"
+<<<"$out" grep -q 'state=paused  reason=refused' || fail "show must print state + reason: $out"
+<<<"$out" grep -q 'paused because the destination refused too many forwards' || fail "show must print pauseWords: $out"
+<<<"$out" grep -q 'last 24h: forwarded 12, delivered 9, refused 3' || fail "show must print the 24 h counts: $out"
+<<<"$out" grep -q 'paused' || fail "show must list events: $out"
 out="$("$K2" hostmail forward show old@brand.test)"
-printf '%s' "$out" | grep -q "not on: it was waiting for a confirm" || fail "an old forward must say it's off: $out"
+<<<"$out" grep -q "not on: it was waiting for a confirm" || fail "an old forward must say it's off: $out"
 out="$("$K2" hostmail forward show cant@brand.test)"
-printf '%s' "$out" | grep -q "can't arrive: this server hosts its domain" || fail "show must say the mail can't arrive: $out"
+<<<"$out" grep -q "can't arrive: this server hosts its domain" || fail "show must say the mail can't arrive: $out"
 out="$("$K2" hostmail forward show none@brand.test)"
-printf '%s' "$out" | grep -q 'forward=none' || fail "no forward must print forward=none: $out"
+<<<"$out" grep -q 'forward=none' || fail "no forward must print forward=none: $out"
 "$K2" hostmail forward show sales@brand.test --json | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["forward"]["pauseReason"]=="refused", d' \
     || fail "show --json must carry the route JSON"
 
@@ -355,13 +355,13 @@ set +e
 out="$("$K2" hostmail forward set oldbox@brand.test --to me@gmail.test 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "upgrade_required must exit 1 (got $rc): $out"
-printf '%s' "$out" | grep -q 'upgrade_required' || fail "set must print the code: $out"
-printf '%s' "$out" | grep -q 'k2 hostmail upgrade' || fail "set must print the upgrade hint: $out"
+<<<"$out" grep -q 'upgrade_required' || fail "set must print the code: $out"
+<<<"$out" grep -q 'k2 hostmail upgrade' || fail "set must print the upgrade hint: $out"
 out="$("$K2" hostmail forward show oldbox@brand.test)"
-printf '%s' "$out" | grep -q 'state=paused  reason=upgrade_required' || fail "held show must print the reason: $out"
-printf '%s' "$out" | grep -q 'not forwarding: the mail server needs upgrading: k2 hostmail upgrade' || fail "held show must say it isn't forwarding: $out"
-printf '%s' "$out" | grep -q 'resumes by itself after the upgrade' || fail "held show must say how it lifts: $out"
-printf '%s' "$out" | grep -q 'paused because' && fail "held show must not print the generic pause line: $out"
+<<<"$out" grep -q 'state=paused  reason=upgrade_required' || fail "held show must print the reason: $out"
+<<<"$out" grep -q 'not forwarding: the mail server needs upgrading: k2 hostmail upgrade' || fail "held show must say it isn't forwarding: $out"
+<<<"$out" grep -q 'resumes by itself after the upgrade' || fail "held show must say how it lifts: $out"
+<<<"$out" grep -q 'paused because' && fail "held show must not print the generic pause line: $out"
 "$K2" hostmail forward --help | grep -q 'upgrade_required' || fail "forward --help must name upgrade_required"
 "$K2" hostmail forward set --help | grep -q 'upgrade_required' || fail "forward set --help must name upgrade_required"
 "$K2" hostmail forward resume --help | grep -q 'upgrade_required' || fail "forward resume --help must name upgrade_required"
@@ -380,27 +380,27 @@ set +e
 out="$("$K2" hostmail forward resume auto@brand.test 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 3 ] || fail "an agent resuming an automatic pause must exit 3 (got $rc): $out"
-printf '%s' "$out" | grep -q "the owner, an Admin or the mailbox's person resumes it" || fail "owner_only resume must say who: $out"
-printf '%s' "$out" | grep -q 'ask your human' && fail "owner_only resume must not add the generic tail: $out"
+<<<"$out" grep -q "the owner, an Admin or the mailbox's person resumes it" || fail "owner_only resume must say who: $out"
+<<<"$out" grep -q 'ask your human' && fail "owner_only resume must not add the generic tail: $out"
 
 set +e
 out="$("$K2" hostmail forward resume stopped@brand.test 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 1 ] || fail "destination_stopped must exit 1 (got $rc): $out"
-printf '%s' "$out" | grep -q -- '--restart-stopped' || fail "destination_stopped must name the override: $out"
+<<<"$out" grep -q -- '--restart-stopped' || fail "destination_stopped must name the override: $out"
 
 set +e
 out="$(K2_HOOK_TOKEN=agent-passport "$K2" mail forward show 2>&1)"; rc=$?
 set -e
 [ "$rc" -eq 3 ] || fail "person_only must exit 3 (got $rc): $out"
-printf '%s' "$out" | grep -q 'k2 hostmail forward' || fail "person_only must point agents at k2 hostmail forward: $out"
+<<<"$out" grep -q 'k2 hostmail forward' || fail "person_only must point agents at k2 hostmail forward: $out"
 
 # ── k2 mail forward (person routes) ─────────────────────────────────────
 out="$("$K2" mail forward set --to me@gmail.test)"
 last_body | grep -q '^POST /cli/mail/self/forward ' || fail "mail forward set must POST the person route: $(last_body)"
 last_body | grep -q '"keep"' && fail "mail forward set without --keep must not send keep: $(last_body)"
 last_body | grep -q '"address"' && fail "mail forward set without --address must not send address: $(last_body)"
-printf '%s' "$out" | grep -q "K2 emailed me@gmail.test to say so" || fail "person set must print the notice line: $out"
+<<<"$out" grep -q "K2 emailed me@gmail.test to say so" || fail "person set must print the notice line: $out"
 "$K2" mail forward add --to b@gmail.test >/dev/null
 last_body | grep -q '^POST /cli/mail/self/forward/add ' || fail "mail forward add route: $(last_body)"
 "$K2" mail forward rm --to b@gmail.test >/dev/null

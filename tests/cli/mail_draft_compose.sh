@@ -152,7 +152,7 @@ out="$("${K2[@]}" "$K2_CLI" mail draft m_abc --to a@b.example --subject s --body
 rc=$?
 set -e
 assert_exit "id and --to" 2 "$rc"
-printf '%s' "$out" | grep -q "not both" && { echo "  PASS: xor hint"; pass=$((pass + 1)); } || {
+<<<"$out" grep -q "not both" && { echo "  PASS: xor hint"; pass=$((pass + 1)); } || {
     echo "  FAIL: xor hint missing in: $out" >&2
     fail=$((fail + 1))
 }
@@ -163,7 +163,7 @@ out="$("${K2[@]}" "$K2_CLI" mail draft --to a@b.example --body t 2>&1)"
 rc=$?
 set -e
 assert_exit "compose missing --subject" 2 "$rc"
-printf '%s' "$out" | grep -q "subject" && { echo "  PASS: missing subject hint"; pass=$((pass + 1)); } || {
+<<<"$out" grep -q "subject" && { echo "  PASS: missing subject hint"; pass=$((pass + 1)); } || {
     echo "  FAIL: missing subject hint in: $out" >&2
     fail=$((fail + 1))
 }
@@ -174,7 +174,7 @@ out="$("${K2[@]}" "$K2_CLI" mail draft --to a@b.example --subject s 2>&1)"
 rc=$?
 set -e
 assert_exit "compose missing --body" 2 "$rc"
-printf '%s' "$out" | grep -q "body" && { echo "  PASS: missing body hint"; pass=$((pass + 1)); } || {
+<<<"$out" grep -q "body" && { echo "  PASS: missing body hint"; pass=$((pass + 1)); } || {
     echo "  FAIL: missing body hint in: $out" >&2
     fail=$((fail + 1))
 }

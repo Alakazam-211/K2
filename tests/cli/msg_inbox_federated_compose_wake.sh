@@ -119,10 +119,10 @@ set -e
 [ "$rc" = "0" ] || fail "exit $rc; out=$(cat "$WORK/out") err=$(cat "$WORK/err")"
 ok "exit 0"
 log="$(seen)"
-printf '%s\n' "$log" | grep -Fxq "/cli/inbox/compose true wake chris::cyberdyne.k2.dev" \
+<<<"$log" grep -Fxq "/cli/inbox/compose true wake chris::cyberdyne.k2.dev" \
     || fail "compose must carry wake=true&mode=wake for the peer; saw: $log"
 ok "compose carries wake=true, mode=wake"
-if printf '%s\n' "$log" | grep -q "^/cli/workspace/msg "; then
+if <<<"$log" grep -q "^/cli/workspace/msg "; then
     fail "must not knock /cli/workspace/msg on this box with a federated token; saw: $log"
 fi
 ok "no local /cli/workspace/msg knock"
@@ -139,9 +139,9 @@ echo "== federated --inbox-silent --title =="
 run_k2 msg chris::cyberdyne.k2.dev --inbox-silent --title "Quiet" >"$WORK/out" 2>"$WORK/err" \
     || fail "silent exit non-zero: $(cat "$WORK/err")"
 log="$(seen)"
-printf '%s\n' "$log" | grep -Fxq "/cli/inbox/compose false silent chris::cyberdyne.k2.dev" \
+<<<"$log" grep -Fxq "/cli/inbox/compose false silent chris::cyberdyne.k2.dev" \
     || fail "silent compose must carry wake=false; saw: $log"
-if printf '%s\n' "$log" | grep -q "^/cli/workspace/msg "; then
+if <<<"$log" grep -q "^/cli/workspace/msg "; then
     fail "silent must not knock anything; saw: $log"
 fi
 ok "silent: wake=false, no knock"
@@ -151,9 +151,9 @@ echo "== local --inbox-wake --title (unchanged: compose then local knock) =="
 run_k2 msg localws --inbox-wake --title "Local" >"$WORK/out" 2>"$WORK/err" \
     || fail "local exit non-zero: $(cat "$WORK/err")"
 log="$(seen)"
-printf '%s\n' "$log" | grep -q "^/cli/inbox/compose - - localws$" \
+<<<"$log" grep -q "^/cli/inbox/compose - - localws$" \
     || fail "local compose unchanged; saw: $log"
-printf '%s\n' "$log" | grep -q "^/cli/workspace/msg true - localws$" \
+<<<"$log" grep -q "^/cli/workspace/msg true - localws$" \
     || fail "local target still knocks /cli/workspace/msg; saw: $log"
 ok "local target keeps compose + local knock"
 

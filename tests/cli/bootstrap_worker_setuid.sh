@@ -27,7 +27,7 @@ if printf '%s\n' "$CODE" | grep -E '^[[:space:]]*(chown|chmod)' | grep -q 'WORKE
 	fail "step 6 chowns/chmods the file already in the daemon user's dir"
 fi
 ok "never chown/chmod the in-place worker"
-if printf '%s\n' "$CODE" | grep -q 'WORKER_STAMP'; then
+if <<<"$CODE" grep -q 'WORKER_STAMP'; then
 	fail "step 6 still trusts a stamp in the daemon user's dir"
 fi
 ok "no stamp shortcut"
@@ -139,13 +139,13 @@ new_box box2
 printf 'attacker-binary' >"$BIN/k2-vmm-worker"
 SHIM_PARENT_UID=1000 run_step
 [ "$rc" -ne 0 ] || fail "non-root staging parent must fail: $out"
-printf '%s' "$out" | grep -q 'must be root-owned' || fail "message: $out"
+<<<"$out" grep -q 'must be root-owned' || fail "message: $out"
 SHIM_GROUP_WRITABLE=1 run_step
 [ "$rc" -ne 0 ] || fail "group-writable staging parent must fail: $out"
-printf '%s' "$out" | grep -q 'must be root-owned' || fail "message: $out"
+<<<"$out" grep -q 'must be root-owned' || fail "message: $out"
 SHIM_OTHER_DEV="$BIN" run_step
 [ "$rc" -ne 0 ] || fail "cross-filesystem must fail: $out"
-printf '%s' "$out" | grep -q 'same filesystem' || fail "message: $out"
+<<<"$out" grep -q 'same filesystem' || fail "message: $out"
 [ "$(cat "$BIN/k2-vmm-worker")" = "attacker-binary" ] || fail "refusals must not touch the bin dir"
 ok "non-root, writable or cross-filesystem staging is refused"
 
@@ -155,7 +155,7 @@ rm -rf "$BIN"
 ln -s "$BOX/elsewhere" "$BIN"
 run_step
 [ "$rc" -ne 0 ] || fail "symlinked bin dir must fail: $out"
-printf '%s' "$out" | grep -q 'missing or a symlink' || fail "message: $out"
+<<<"$out" grep -q 'missing or a symlink' || fail "message: $out"
 [ -z "$(ls -A "$BOX/elsewhere")" ] || fail "nothing may land through the symlink"
 ok "a symlinked bin dir is refused"
 

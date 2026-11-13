@@ -14,7 +14,7 @@ pass=0
 fail=0
 assert_contains() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if <<<"$hay" grep -Fq -- "$needle"; then
         echo "  PASS: $label"
         pass=$((pass + 1))
     else
@@ -34,7 +34,7 @@ assert_eq() {
 }
 assert_absent() {
     local label="$1" hay="$2" needle="$3"
-    if printf '%s' "$hay" | grep -Fq -- "$needle"; then
+    if <<<"$hay" grep -Fq -- "$needle"; then
         echo "  FAIL: $label (unexpected $(printf %q "$needle"))" >&2
         fail=$((fail + 1))
     else

@@ -64,13 +64,13 @@ kit_sha="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv
 
 make "$WORK/ok" ok
 out="$(bash "$PIN" "$WORK/ok" 2>"$WORK/err")" && rc=0 || rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | grep -Fq 'version: "0.0.2"' && printf '%s' "$out" | grep -Fq "SewAppKit { version: \"0.0.2\", sha256: \"$kit_sha\" },"; then
+if [ "$rc" = 0 ] && <<<"$out" grep -Fq 'version: "0.0.2"' && <<<"$out" grep -Fq "SewAppKit { version: \"0.0.2\", sha256: \"$kit_sha\" },"; then
 	ok "a release with a kit prints the entry and the kit row"
 else
 	bad "ok release (rc=$rc): $out $(cat "$WORK/err")"
 fi
 sums_sha="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$WORK/ok/SHA256SUMS")"
-if printf '%s' "$out" | grep -Fq "// provenance: sew-releases tag v0.0.2, SHA256SUMS sha256 $sums_sha, sew-0.0.2-release.json sha256 "; then
+if <<<"$out" grep -Fq "// provenance: sew-releases tag v0.0.2, SHA256SUMS sha256 $sums_sha, sew-0.0.2-release.json sha256 "; then
 	ok "the provenance line names the tag and the SHA256SUMS hash"
 else
 	bad "provenance: $out"
@@ -78,7 +78,7 @@ fi
 
 make "$WORK/pre" prerelease
 out="$(bash "$PIN" "$WORK/pre" 2>"$WORK/err")" && rc=0 || rc=$?
-if [ "$rc" = 0 ] && printf '%s' "$out" | grep -Fq "SewAppKit" && printf '%s' "$out" | grep -Fq "tag v0.0.2, published as a pre-release,"; then
+if [ "$rc" = 0 ] && <<<"$out" grep -Fq "SewAppKit" && <<<"$out" grep -Fq "tag v0.0.2, published as a pre-release,"; then
 	ok "a pre-release pins like any release, recorded as one"
 else
 	bad "pre-release (rc=$rc): $out $(cat "$WORK/err")"

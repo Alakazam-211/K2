@@ -38,8 +38,8 @@ k2n() { env HOME="$WORK" "$K2_CLI" "$@"; }
 
 top="$(k2n vault --help)" || fail "vault --help"
 printf '%s\n' "$top" | head -1 | grep -Fq "k2 vault — secrets for agents" || fail "top-level help: $top"
-printf '%s' "$top" | grep -Fq "k2 vault <verb> --help" || fail "top-level help doesn't point at per-verb help"
-printf '%s' "$top" | grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic|body" || fail "top-level help lacks --inject-dst"
+<<<"$top" grep -Fq "k2 vault <verb> --help" || fail "top-level help doesn't point at per-verb help"
+<<<"$top" grep -Fq -- "--inject-dst header:<Name>|query:<param>|basic|body" || fail "top-level help lacks --inject-dst"
 ok "k2 vault --help: no daemon needed, names --inject-dst and per-verb help"
 
 for verb in status list show set rotate hosts delivery grant revoke disable enable destroy get audit requests presets \
@@ -54,8 +54,8 @@ for verb in status list show set rotate hosts delivery grant revoke disable enab
         *) want="k2 vault $verb" ;;
     esac
     printf '%s\n' "$out" | head -1 | grep -Fq "$want" || fail "vault $verb --help starts with: $(printf '%s\n' "$out" | head -1)"
-    if printf '%s' "$out" | grep -Fq "k2 vault — secrets for agents"; then fail "vault $verb --help printed the top-level help"; fi
-    printf '%s' "$out" | grep -Eq "^Example|^  k2 vault|^  new box:|^Examples|^  k2 vault send" || fail "vault $verb --help has no example: $out"
+    if <<<"$out" grep -Fq "k2 vault — secrets for agents"; then fail "vault $verb --help printed the top-level help"; fi
+    <<<"$out" grep -Eq "^Example|^  k2 vault|^  new box:|^Examples|^  k2 vault send" || fail "vault $verb --help has no example: $out"
 done
 ok "every k2 vault verb has its own --help with an example"
 
@@ -67,10 +67,10 @@ for guess in exec env inject frobnicate; do
     set -e
     [ "$rc" = 2 ] || fail "vault $guess --help: exit $rc ($err)"
     printf '%s\n' "$err" | head -1 | grep -Fqx "usage: unknown vault verb '$guess' (k2 vault --help)" || fail "vault $guess --help: $err"
-    if printf '%s' "$err" | grep -Fq "k2 vault — secrets for agents"; then fail "vault $guess --help printed the top help: $err"; fi
+    if <<<"$err" grep -Fq "k2 vault — secrets for agents"; then fail "vault $guess --help printed the top help: $err"; fi
     case "$guess" in
-        exec|env|inject) printf '%s' "$err" | grep -Fq "did you mean run? (k2 vault run --help)" || fail "vault $guess: no did-you-mean: $err" ;;
-        *) if printf '%s' "$err" | grep -Fq "did you mean"; then fail "vault $guess: a did-you-mean for no reason: $err"; fi ;;
+        exec|env|inject) <<<"$err" grep -Fq "did you mean run? (k2 vault run --help)" || fail "vault $guess: no did-you-mean: $err" ;;
+        *) if <<<"$err" grep -Fq "did you mean"; then fail "vault $guess: a did-you-mean for no reason: $err"; fi ;;
     esac
 done
 ok "an unknown vault verb with --help exits 2, no daemon needed; exec/env/inject say did you mean run"
@@ -84,13 +84,13 @@ for args in "publish secret --help" "publish secret add --help" "publish secret 
     for want in "--scope <s>" "--as env|file" "--env-name X" "--file-name F" \
         "k2 publish secret add mpc-progress MPC_PROGRESS_PIN --as env" "with --scope ws:k2-cores added" \
         "k2 permission request vault.share-service as=file|env secret=NAME service=<service>" "k2 app restart <app>"; do
-        printf '%s' "$out" | grep -Fq -- "$want" || fail "$args lacks '$want': $out"
+        <<<"$out" grep -Fq -- "$want" || fail "$args lacks '$want': $out"
     done
 done
 set +e
 out="$(k2n publish secret 2>&1)"; rc=$?
 set -e
-[ "$rc" = 2 ] && printf '%s' "$out" | grep -Fq -- "--env-name X" || fail "bare publish secret: exit $rc ($out)"
+[ "$rc" = 2 ] && <<<"$out" grep -Fq -- "--env-name X" || fail "bare publish secret: exit $rc ($out)"
 ok "k2 publish secret --help lists --scope, --as, --env-name, --file-name with an example"
 
 out="$(k2n vault set NAME --kind ssh_key --help)" || fail "set --help after flags"
@@ -103,7 +103,7 @@ for needle in "--inject-header <Name>" "--inject-format '<fmt>'" "--inject-dst <
     "ssh_key, tls_key                file" "Every kind allows fetch, file and env" "--sign ovh" "--sign hmac-sha256 " \
     "--sign hmac-sha256-ts" "--sign-header <Name>" "--sign-ts-header <Name>" "--sign-template '<t>'" "--sign-value '<v>'" \
     "ovh-eu|ovh-ca|ovh-us" "--delivery fetch|agent|file|env|api" "ssh_key also allows agent" "--kind ssh_key --delivery agent"; do
-    printf '%s' "$set_help" | grep -Fq -- "$needle" || fail "set --help lacks '$needle'"
+    <<<"$set_help" grep -Fq -- "$needle" || fail "set --help lacks '$needle'"
 done
 ok "set --help: inject options, the four dst forms, delivery per kind"
 
@@ -113,7 +113,7 @@ printf '%s' "$(k2n vault grant --help)" | grep -Fq -- "--as fetch|agent|proxy|fi
 al_help="$(k2n vault agent-limit --help)"
 for needle in "--burst N" "--per-minute M" "--allow-forwarded" "default 60" "default 240" "rate_limited" \
     "Advisory, not a security control" "can still sign with it" "come from what the ssh client" "can't be told apart."; do
-    printf '%s' "$al_help" | grep -Fq -- "$needle" || fail "agent-limit --help lacks '$needle'"
+    <<<"$al_help" grep -Fq -- "$needle" || fail "agent-limit --help lacks '$needle'"
 done
 printf '%s' "$(k2n vault public-key --help)" | grep -Fq "Never the" || fail "public-key --help"
 set +e
@@ -127,27 +127,27 @@ set -e
 ok "agent delivery: set/delivery/grant/agent-limit/public-key help, bad flags exit 2"
 
 grant_help="$(k2n vault grant --help)"
-printf '%s' "$grant_help" | grep -Fq -- "--env-name X" || fail "grant --help lacks --env-name"
-printf '%s' "$grant_help" | grep -Fq "k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN" || fail "grant --help lacks the CLI-tool example"
+<<<"$grant_help" grep -Fq -- "--env-name X" || fail "grant --help lacks --env-name"
+<<<"$grant_help" grep -Fq "k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN" || fail "grant --help lacks the CLI-tool example"
 ok "grant --help: --env-name with a CLI-tool example"
 
 fetch_help="$(k2n vault fetch --help)"
-printf '%s' "$fetch_help" | grep -Fq "fetch adds the secret as-is, in one place: a header, a query parameter," || fail "fetch --help lacks the one-place line"
-printf '%s' "$fetch_help" | grep -Fq "Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC with a" || fail "fetch --help lacks the signer line"
-if printf '%s' "$fetch_help" | grep -Fq "It can't sign"; then fail "fetch --help still says it can't sign"; fi
-printf '%s' "$fetch_help" | grep -Fq -- "--json-out prints the daemon's answer" || fail "fetch --help lacks the --json-out shape"
-printf '%s' "$fetch_help" | grep -Fq '"bodyB64"' || fail "fetch --help lacks bodyB64"
+<<<"$fetch_help" grep -Fq "fetch adds the secret as-is, in one place: a header, a query parameter," || fail "fetch --help lacks the one-place line"
+<<<"$fetch_help" grep -Fq "Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC with a" || fail "fetch --help lacks the signer line"
+if <<<"$fetch_help" grep -Fq "It can't sign"; then fail "fetch --help still says it can't sign"; fi
+<<<"$fetch_help" grep -Fq -- "--json-out prints the daemon's answer" || fail "fetch --help lacks the --json-out shape"
+<<<"$fetch_help" grep -Fq '"bodyB64"' || fail "fetch --help lacks bodyB64"
 ok "fetch --help: as-is in one place, signers, --json-out shape"
 
 # prd-vault-gaps-v1 item 4: systemd-cred and placements.
 sc_help="$(k2n vault systemd-cred --help)"
 for needle in "People only, on Linux" "LoadCredentialEncrypted=<cred>:/etc/k2/credstore.encrypted/<cred>.cred" "--replace" "/etc/k2-root-helper/systemd-cred-units" \
     "\$CREDENTIALS_DIRECTORY/<cred>" "--restart" "--remove" "--dry-run" "%d/k2c.env" "ExecStart=" "single quotes"; do
-    printf '%s' "$sc_help" | grep -Fq -- "$needle" || fail "systemd-cred --help lacks '$needle'"
+    <<<"$sc_help" grep -Fq -- "$needle" || fail "systemd-cred --help lacks '$needle'"
 done
 pl_help="$(k2n vault placement --help)"
 for needle in "k2 vault placement add NAME --where <host>:<path>" "k2 vault placement done ID" "k2 vault placements [NAME]"; do
-    printf '%s' "$pl_help" | grep -Fq -- "$needle" || fail "placement --help lacks '$needle'"
+    <<<"$pl_help" grep -Fq -- "$needle" || fail "placement --help lacks '$needle'"
 done
 set +e
 err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" vault systemd-cred X 2>&1)"; rc=$?
@@ -158,10 +158,10 @@ err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=agent-token "$K2_CLI" vault syst
 set -e
 if [ "$(uname -s)" = "Linux" ]; then
     [ "$rc" = 3 ] || fail "systemd-cred from a K2 terminal: exit $rc ($err)"
-    printf '%s' "$err" | grep -Fq "owner_only" || fail "systemd-cred from a K2 terminal: $err"
+    <<<"$err" grep -Fq "owner_only" || fail "systemd-cred from a K2 terminal: $err"
 else
     [ "$rc" = 2 ] || fail "systemd-cred on $(uname -s): exit $rc ($err)"
-    printf '%s' "$err" | grep -Fq "linux_only" || fail "systemd-cred on $(uname -s): $err"
+    <<<"$err" grep -Fq "linux_only" || fail "systemd-cred on $(uname -s): $err"
 fi
 ok "systemd-cred and placement help; people only; Linux only"
 
@@ -176,15 +176,15 @@ for needle in "k2 vault import .env" "k2 vault send NAME --to <agent>" "ssh -i \
     "--kind ssh_key --delivery agent" "k2 vault public-key NAME" "The ssh -A refusal and audit host key are" "advisory: they trust what the ssh client says" \
     "Some secrets are signers" "--sign ovh --preset ovh-eu" "--json-out" \
     "k2 vault systemd-cred API_KEY --unit" "k2 vault placement add" "Keep the source copy in a K2 vault" "%d/<cred>"; do
-    printf '%s' "$study" | grep -Fq -- "$needle" || fail "study vault lacks '$needle'"
+    <<<"$study" grep -Fq -- "$needle" || fail "study vault lacks '$needle'"
 done
 # The can't-do-yet block is the last section.
 last="$(printf '%s\n' "$study" | grep -E '^[A-Z][A-Z ,()'"'"'-]+$|^[A-Z][A-Z '"'"']+ \(' | tail -1)"
 case "$last" in "WHAT THE VAULT CAN'T DO YET"*) ;; *) fail "the can't-do-yet block isn't last (last section: $last)" ;; esac
 lines="$(printf '%s\n' "$study" | wc -l | tr -d ' ')"
 [ "$lines" -le 184 ] || fail "study vault is $lines lines (max 184)"
-if printf '%s' "$study" | grep -Fq "plain systemd units"; then fail "study vault still lists plain systemd units as can't-do"; fi
-if printf '%s' "$study" | grep -Fq "ssh-agent: file delivery"; then fail "study vault still lists ssh-agent as can't-do"; fi
+if <<<"$study" grep -Fq "plain systemd units"; then fail "study vault still lists plain systemd units as can't-do"; fi
+if <<<"$study" grep -Fq "ssh-agent: file delivery"; then fail "study vault still lists ssh-agent as can't-do"; fi
 ok "k2 study vault: new sections present, can't-do-yet last, $lines lines"
 
 # ── against a stub daemon ─────────────────────────────────────────────
@@ -299,10 +299,10 @@ done
 ok "an unknown vault verb with a daemon up: exit 2, nothing sent"
 
 out="$(k2s vault list --system)" || fail "list --system: $out"
-printf '%s' "$out" | grep -Fq "44 K2 system secrets hidden from you: K2's own secrets are used by the daemon only" || fail "list --system: $out"
-if printf '%s' "$out" | grep -Fq "no secrets yet"; then fail "list --system says 'no secrets yet' next to hidden ones: $out"; fi
+<<<"$out" grep -Fq "44 K2 system secrets hidden from you: K2's own secrets are used by the daemon only" || fail "list --system: $out"
+if <<<"$out" grep -Fq "no secrets yet"; then fail "list --system says 'no secrets yet' next to hidden ones: $out"; fi
 out="$(k2s vault list)" || fail "list: $out"
-if printf '%s' "$out" | grep -Fq "hidden"; then fail "plain list mentions hidden system secrets: $out"; fi
+if <<<"$out" grep -Fq "hidden"; then fail "plain list mentions hidden system secrets: $out"; fi
 ok "list --system prints the hidden count and why; plain list doesn't"
 
 out="$(k2s vault doctor)" || fail "doctor: $out"
@@ -311,10 +311,10 @@ ok "doctor prints the names it checks"
 
 rc=0; out="$(k2s vault doctor --transcripts 2>&1)" || rc=$?
 [ "$rc" = "1" ] || fail "doctor --transcripts on a leak exits 1, got $rc: $out"
-printf '%s' "$out" | grep -Fq "STRIPE_KEY appears in 7 files" || fail "doctor --transcripts: $out"
-printf '%s' "$out" | grep -Fq "/f4.jsonl" || fail "doctor --transcripts lists files: $out"
-if printf '%s' "$out" | grep -Fq "/f5.jsonl"; then fail "doctor --transcripts lists at most 5 files: $out"; fi
-printf '%s' "$out" | grep -Fq "and 2 more (--json lists up to 7)" || fail "doctor --transcripts says how many more: $out"
+<<<"$out" grep -Fq "STRIPE_KEY appears in 7 files" || fail "doctor --transcripts: $out"
+<<<"$out" grep -Fq "/f4.jsonl" || fail "doctor --transcripts lists files: $out"
+if <<<"$out" grep -Fq "/f5.jsonl"; then fail "doctor --transcripts lists at most 5 files: $out"; fi
+<<<"$out" grep -Fq "and 2 more (--json lists up to 7)" || fail "doctor --transcripts says how many more: $out"
 printf '%s\n' "$out" | tail -1 | grep -Fq "transcripts: read 7 of 7 file(s)" || fail "doctor --transcripts ends with what it read: $out"
 ok "doctor --transcripts names files, caps the list, and exits 1 on a leak"
 
@@ -324,9 +324,9 @@ ok "doctor --transcripts --json is the daemon's answer"
 
 rc=0; out="$(k2s vault list --transcripts 2>&1)" || rc=$?
 [ "$rc" = "2" ] || fail "--transcripts on another verb exits 2, got $rc: $out"
-printf '%s' "$out" | grep -Fq "goes with k2 vault doctor" || fail "--transcripts on another verb: $out"
+<<<"$out" grep -Fq "goes with k2 vault doctor" || fail "--transcripts on another verb: $out"
 out="$(k2s vault doctor --help)" || fail "doctor --help: $out"
-printf '%s' "$out" | grep -Fq "k2 vault doctor --transcripts [--json]" || fail "doctor --help: $out"
+<<<"$out" grep -Fq "k2 vault doctor --transcripts [--json]" || fail "doctor --help: $out"
 ok "--transcripts belongs to doctor and is in its help"
 
 : >"$WORK/posts.log"
@@ -346,7 +346,7 @@ err="$(printf 'k2test-value' | k2s vault set B --inject-header X --inject-dst qu
 rc=$?
 set -e
 [ "$rc" = 2 ] || fail "--inject-header with --inject-dst: exit $rc ($err)"
-printf '%s' "$err" | grep -Fq "give one of them" || fail "--inject-header with --inject-dst: $err"
+<<<"$err" grep -Fq "give one of them" || fail "--inject-header with --inject-dst: $err"
 ok "set --inject-dst sends query/basic dst; --inject-header still works; both at once is refused"
 
 : >"$WORK/posts.log"
@@ -373,8 +373,8 @@ err="$(printf 'k2test-value' | k2s vault set B --sign ovh --inject-header X 2>&1
 err2="$(printf 'k2test-value' | k2s vault set B --sign-header X 2>&1)"; rc2=$?
 err3="$(k2s vault sign HOOK none --sign-header X 2>&1)"; rc3=$?
 set -e
-[ "$rc1" = 2 ] && printf '%s' "$err" | grep -Fq "no --inject-*" || fail "--sign with --inject-*: exit $rc1 ($err)"
-[ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "need --sign" || fail "--sign-header alone: exit $rc2 ($err2)"
+[ "$rc1" = 2 ] && <<<"$err" grep -Fq "no --inject-*" || fail "--sign with --inject-*: exit $rc1 ($err)"
+[ "$rc2" = 2 ] && <<<"$err2" grep -Fq "need --sign" || fail "--sign-header alone: exit $rc2 ($err2)"
 [ "$rc3" = 2 ] || fail "sign none with options: exit $rc3 ($err3)"
 ok "set --sign sends inject.sign; k2 vault sign posts the signer or none; mixed flags refused"
 
@@ -393,7 +393,7 @@ PY3
 set +e
 err="$(printf 'k2test-value' | k2s vault set B --oauth-token-url https://oauth2.example.test/token 2>&1)"; rc=$?
 set -e
-[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "need --sign" || fail "--oauth-token-url alone: exit $rc ($err)"
+[ "$rc" = 2 ] && <<<"$err" grep -Fq "need --sign" || fail "--oauth-token-url alone: exit $rc ($err)"
 k2n vault set --help | grep -Fq -- "--oauth-token-url" || fail "set --help names --oauth-token-url"
 k2n vault sign --help | grep -Fq "oauth-refresh" || fail "sign --help names oauth-refresh"
 ok "set --sign oauth-refresh sends the token URL and client auth; the flags need --sign; help names them"
@@ -445,8 +445,8 @@ err="$(k2s vault file --secret A --secret B 2>&1)"; rc1=$?
 err2="$(k2s vault file --secret A --ttl soon 2>&1)"; rc2=$?
 err3="$(k2s vault file 2>&1)"; rc3=$?
 set -e
-[ "$rc1" = 2 ] && printf '%s' "$err" | grep -Fq "one secret per file" || fail "two secrets: exit $rc1 ($err)"
-[ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "bad_ttl: a duration is like 90s, 10m, 2h or 7d" || fail "--ttl soon: exit $rc2 ($err2)"
+[ "$rc1" = 2 ] && <<<"$err" grep -Fq "one secret per file" || fail "two secrets: exit $rc1 ($err)"
+[ "$rc2" = 2 ] && <<<"$err2" grep -Fq "bad_ttl: a duration is like 90s, 10m, 2h or 7d" || fail "--ttl soon: exit $rc2 ($err2)"
 [ "$rc3" = 2 ] || fail "no secret: exit $rc3 ($err3)"
 ok "file posts one secret by name (--ttl as typed, --done) and prints only the path"
 
@@ -473,10 +473,10 @@ err="$(k2s vault env-file 2>&1)"; rc=$?
 err2="$(k2s vault env-file DATABASE_URL --ttl soon 2>&1)"; rc2=$?
 err3="$(printf 'k2test-value' | k2s vault set S --scope session --ttl soon 2>&1)"; rc3=$?
 set -e
-[ "$rc" = 2 ] && printf '%s' "$err" | grep -Fq "usage: k2 vault env-file NAME" || fail "env-file with no name: exit $rc ($err)"
-[ "$rc2" = 2 ] && printf '%s' "$err2" | grep -Fq "bad_ttl" || fail "env-file --ttl soon: exit $rc2 ($err2)"
-[ "$rc3" = 2 ] && printf '%s' "$err3" | grep -Fq "bad_ttl" || fail "set --ttl soon: exit $rc3 ($err3)"
-if printf '%s' "$err3" | grep -Fq "Traceback"; then fail "set --ttl soon: a Python traceback: $err3"; fi
+[ "$rc" = 2 ] && <<<"$err" grep -Fq "usage: k2 vault env-file NAME" || fail "env-file with no name: exit $rc ($err)"
+[ "$rc2" = 2 ] && <<<"$err2" grep -Fq "bad_ttl" || fail "env-file --ttl soon: exit $rc2 ($err2)"
+[ "$rc3" = 2 ] && <<<"$err3" grep -Fq "bad_ttl" || fail "set --ttl soon: exit $rc3 ($err3)"
+if <<<"$err3" grep -Fq "Traceback"; then fail "set --ttl soon: a Python traceback: $err3"; fi
 ok "env-file NAME (and --secret), --ttl as typed on env-file and set; bad --ttl is the daemon's bad_ttl (exit 2)"
 
 # V9: grant --ttl is sent (it used to be parsed and dropped), the end is
@@ -489,9 +489,9 @@ set +e
 err="$(k2s vault grant OLD_SERVER --to ws:billing --as fetch --ttl 2h 2>&1)"; rc=$?
 set -e
 [ "$rc" = 1 ] || fail "grant --ttl on a server that drops it: exit $rc ($err)"
-printf '%s' "$err" | grep -Fq "grant_ttl_ignored: this K2 server made the share WITHOUT an end time" || fail "grant --ttl dropped: $err"
-printf '%s' "$err" | grep -Fq "k2 vault revoke --grant g-OLD_SERVER" || fail "grant --ttl dropped, no revoke line: $err"
-if printf '%s' "$err" | grep -Fq "shared OLD_SERVER"; then fail "grant --ttl dropped but said shared: $err"; fi
+<<<"$err" grep -Fq "grant_ttl_ignored: this K2 server made the share WITHOUT an end time" || fail "grant --ttl dropped: $err"
+<<<"$err" grep -Fq "k2 vault revoke --grant g-OLD_SERVER" || fail "grant --ttl dropped, no revoke line: $err"
+if <<<"$err" grep -Fq "shared OLD_SERVER"; then fail "grant --ttl dropped but said shared: $err"; fi
 grep -Fq -- "--ttl 2h           the share ends by itself" <<<"$(k2n vault grant --help)" || fail "grant --help lacks --ttl"
 ok "grant --ttl is sent, the end is printed, and a server that drops it fails loudly"
 
@@ -507,7 +507,7 @@ set -e
 [ "$(printf '%s\n' "$err_on" | grep -c "It can't be requested.")" = 1 ] || fail "cards on: closing line printed more than once: $err_on"
 printf '%s\n' "$err_on" | head -1 | grep -Fq "vault_owner_confirm_required: a person gave this secret" || fail "cards on: hint first: $err_on"
 [ "$(printf '%s\n' "$err_off" | wc -l | tr -d ' ')" = 1 ] || fail "cards off: one line, as before: $err_off"
-printf '%s' "$err_off" | grep -Fq "k2 publish secret add svc REFUSED_OFF --scope ws:w --as env" || fail "cards off: hint: $err_off"
+<<<"$err_off" grep -Fq "k2 publish secret add svc REFUSED_OFF --scope ws:w --as env" || fail "cards off: hint: $err_off"
 grep -F '/cli/vault/grant {' "$WORK/posts.log" | grep -F '"REFUSED_ON"' | grep -Fq '"to": "service:svc"' || fail "publish secret add posts a service grant: $(cat "$WORK/posts.log")"
 ok "a refused vault grant ends with It can't be requested. (cards on) and stays one line (cards off)"
 
@@ -545,10 +545,10 @@ $recall" ] || fail "destroy: $out"
 ok "revoke, disable and destroy print what happened to delivered files"
 
 out="$(k2n vault destroy --help)"
-printf '%s' "$out" | grep -Fq 'Its file' || fail "destroy help names the file: $out"
-printf '%s' "$out" | grep -Fq 'environment variable' || fail "destroy help names env: $out"
+<<<"$out" grep -Fq 'Its file' || fail "destroy help names the file: $out"
+<<<"$out" grep -Fq 'environment variable' || fail "destroy help names env: $out"
 out="$(k2n vault grant --help)"
-printf '%s' "$out" | grep -Fq "not k2 whoami's" || fail "grant help warns about the whoami id: $out"
+<<<"$out" grep -Fq "not k2 whoami's" || fail "grant help warns about the whoami id: $out"
 ok "destroy and grant help say what they can't reach"
 
 # A session secret that shares a workspace secret's name is reached by asking

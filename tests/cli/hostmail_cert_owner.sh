@@ -24,17 +24,17 @@ grep -A4 'verb == "cert_owner"' "$K2" | grep -q '"/cli/mail/cert/owner"' \
 help="$("$K2" hostmail cert owner --help)"
 for want in 'k2 ' 'stalwart-acme' 'unknown' '--stalwart-acme' 'role mail' 'planted' \
             'k2 domain name remove' 'mail host only' 'never flips it' 'Owner/admin'; do
-  printf '%s' "$help" | grep -qF -- "$want" || fail "cert owner --help must mention '$want'"
+  <<<"$help" grep -qF -- "$want" || fail "cert owner --help must mention '$want'"
 done
-printf '%s' "$help" | grep -q 'disable/enable' || fail "cert owner --help must say never hostmail disable/enable"
+<<<"$help" grep -q 'disable/enable' || fail "cert owner --help must say never hostmail disable/enable"
 cert_help="$("$K2" hostmail cert --help)"
-printf '%s' "$cert_help" | grep -q 'cert owner \[--stalwart-acme\]' || fail "cert --help must list cert owner"
-printf '%s' "$cert_help" | grep -qF 'cert.owner' || fail "cert --help must point at cert.owner"
-printf '%s' "$cert_help" | grep -qF 'k2 study mail' || fail "cert --help must point at k2 study mail"
-printf '%s' "$cert_help" | grep -qF 'never turn it back on' || fail "cert --help: never turn Stalwart ACME back on"
+<<<"$cert_help" grep -q 'cert owner \[--stalwart-acme\]' || fail "cert --help must list cert owner"
+<<<"$cert_help" grep -qF 'cert.owner' || fail "cert --help must point at cert.owner"
+<<<"$cert_help" grep -qF 'k2 study mail' || fail "cert --help must point at k2 study mail"
+<<<"$cert_help" grep -qF 'never turn it back on' || fail "cert --help: never turn Stalwart ACME back on"
 "$K2" hostmail --help | grep -q 'cert owner \[--stalwart-acme\]' || fail "hostmail --help must list cert owner"
 names_help="$("$K2" hostmail cert names --help)"
-printf '%s' "$names_help" | grep -qF 'sudo -n systemctl restart stalwart' \
+<<<"$names_help" grep -qF 'sudo -n systemctl restart stalwart' \
   || fail "cert names --help: the restart fallback is helper, else sudo -n systemctl"
 
 # Schema.
@@ -115,17 +115,17 @@ k2() {
 }
 
 show="$(k2 hostmail cert owner)"
-printf '%s' "$show" | grep -q '^owner    : stalwart-acme' || fail "show output: $show"
-printf '%s' "$show" | grep -q '^stalwart : ACME Manual' || fail "show must print Stalwart's setting: $show"
-printf '%s' "$show" | grep -qF 'k2 hostmail cert owner --stalwart-acme' \
+<<<"$show" grep -q '^owner    : stalwart-acme' || fail "show output: $show"
+<<<"$show" grep -q '^stalwart : ACME Manual' || fail "show must print Stalwart's setting: $show"
+<<<"$show" grep -qF 'k2 hostmail cert owner --stalwart-acme' \
   || fail "detached + Manual must name the owner command: $show"
 
 flip="$(k2 hostmail cert owner --stalwart-acme)"
-printf '%s' "$flip" | grep -q 'mail host only' || fail "flip output: $flip"
+<<<"$flip" grep -q 'mail host only' || fail "flip output: $flip"
 k2 hostmail cert owner --json >/dev/null
 
 status_out="$(k2 hostmail status || true)"
-printf '%s' "$status_out" | grep -q '^owner    : k2 — K2 issues, installs and renews it; Stalwart ACME is Manual' \
+<<<"$status_out" grep -q '^owner    : k2 — K2 issues, installs and renews it; Stalwart ACME is Manual' \
   || fail "status must print cert.owner: $status_out"
 
 cat >"$WORK/check.py" <<'PY'

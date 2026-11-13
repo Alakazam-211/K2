@@ -24,9 +24,9 @@ grep -A12 'verb == "dav"' "$K2" | grep -q '"/cli/mail/dav"' \
 help="$("$K2" hostmail calendar --help)"
 for want in 'calendar status' 'calendar enable' 'calendar disable' '--files on|off' \
             'k2 hostmail bans' 'allowlist' 'uninstall' 'Owner/admin'; do
-  printf '%s' "$help" | grep -qF -- "$want" || fail "calendar --help must mention '$want'"
+  <<<"$help" grep -qF -- "$want" || fail "calendar --help must mention '$want'"
 done
-printf '%s' "$help" | grep -q 'never uses' || fail "calendar --help must say it never uses hostmail disable/enable"
+<<<"$help" grep -q 'never uses' || fail "calendar --help must say it never uses hostmail disable/enable"
 "$K2" hostmail calendar status --help | grep -q '/cli/mail/dav' || fail "status --help must name the route"
 "$K2" hostmail calendar enable --help | grep -q 'files' || fail "enable --help must explain --files"
 "$K2" hostmail calendar disable --help | grep -q 'files' || fail "disable --help must explain --files"
@@ -110,10 +110,10 @@ k2() {
 }
 
 human="$(k2 hostmail calendar status)"
-printf '%s' "$human" | grep -q '^calendars : on' || fail "status human output: $human"
-printf '%s' "$human" | grep -q '^files     : off' || fail "status human output: $human"
-printf '%s' "$human" | grep -q 'mail.example.com/.well-known/caldav' || fail "status must print the url: $human"
-printf '%s' "$human" | grep -q 'bans' || fail "status must carry the auth-ban note: $human"
+<<<"$human" grep -q '^calendars : on' || fail "status human output: $human"
+<<<"$human" grep -q '^files     : off' || fail "status human output: $human"
+<<<"$human" grep -q 'mail.example.com/.well-known/caldav' || fail "status must print the url: $human"
+<<<"$human" grep -q 'bans' || fail "status must carry the auth-ban note: $human"
 k2 hostmail calendar enable --files on --json >/dev/null
 k2 hostmail calendar disable >/dev/null
 

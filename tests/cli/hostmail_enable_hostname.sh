@@ -66,13 +66,13 @@ if ! "$K2" hostmail status --help | grep -q 'systemctl is-active stalwart'; then
 fi
 
 domain_help="$("$K2" hostmail domain --help)"
-if ! printf '%s' "$domain_help" | grep -q 'k2 hostmail domain add'; then
+if ! <<<"$domain_help" grep -q 'k2 hostmail domain add'; then
     fail "k2 hostmail domain --help must be domain help, got: $domain_help"
 fi
-if printf '%s' "$domain_help" | grep -q 'k2 mail domain add'; then
+if <<<"$domain_help" grep -q 'k2 mail domain add'; then
     fail "k2 hostmail domain --help must not teach leftover k2 mail domain: $domain_help"
 fi
-if printf '%s' "$domain_help" | grep -q 'k2 hostmail <command>'; then
+if <<<"$domain_help" grep -q 'k2 hostmail <command>'; then
     fail "k2 hostmail domain --help must not be group help: $domain_help"
 fi
 
@@ -83,7 +83,7 @@ set -e
 if [ "$mail_domain_rc" -eq 0 ]; then
     fail "k2 mail domain add must exit 2 moved-to-hostmail, got 0: $mail_domain_out"
 fi
-if ! printf '%s' "$mail_domain_out" | grep -q "moved to 'k2 hostmail domain'"; then
+if ! <<<"$mail_domain_out" grep -q "moved to 'k2 hostmail domain'"; then
     fail "k2 mail domain add must say moved to hostmail: $mail_domain_out"
 fi
 

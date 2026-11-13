@@ -67,7 +67,7 @@ k2 firewall close 6000/udp >/dev/null
 [ "$(k2 firewall ports --json | jget 'd["hash"]')" = "$h1" ] || fail "close didn't restore the hash"
 ok "close restores it"
 if out="$(k2 firewall close 22/tcp 2>&1)"; then fail "close 22/tcp succeeded: $out"; fi
-printf '%s' "$out" | grep -q "ssh_stays_open" || fail "close 22/tcp: $out"
+<<<"$out" grep -q "ssh_stays_open" || fail "close 22/tcp: $out"
 ok "close 22/tcp refused (lockout guard)"
 if out="$(k2 firewall ssh allow 2>&1)"; then fail "empty ssh allow succeeded: $out"; fi
 ok "an empty ssh allow is refused"

@@ -66,14 +66,14 @@ out="$(k2s vault file SAVED --wait 10m 2>"$WORK/err")" || fail "file --wait: $(c
 [ "$out" = "/run/k2-secrets/use-files/abc-SAVED" ] || fail "stdout is only the path: $out"
 grep -Fq "waiting for a person to save the card (c1)" "$WORK/err" || fail "no waiting line on stderr: $(cat "$WORK/err")"
 first="$(head -1 "$WORK/posts.log")"
-printf '%s' "$first" | grep -Fq '"wait": "10m"' || fail "the first call sends --wait as typed: $first"
+<<<"$first" grep -Fq '"wait": "10m"' || fail "the first call sends --wait as typed: $first"
 second="$(sed -n 2p "$WORK/posts.log")"
-printf '%s' "$second" | grep -Fq '"waitCard": "c1"' || fail "the second call follows the card: $second"
+<<<"$second" grep -Fq '"waitCard": "c1"' || fail "the second call follows the card: $second"
 ok "file --wait prints only the path and follows the card it was told about"
 
 : >"$WORK/posts.log"
 out="$(k2s vault env-file SAVED --wait 10m 2>"$WORK/err")" || fail "env-file --wait: $(cat "$WORK/err")"
-printf '%s' "$out" | grep -Fq "abc-SAVED" || fail "env-file --wait: $out"
+<<<"$out" grep -Fq "abc-SAVED" || fail "env-file --wait: $out"
 printf '%s' "$(head -1 "$WORK/posts.log")" | grep -Fq '"wait": "10m"' || fail "env-file sends --wait: $(cat "$WORK/posts.log")"
 ok "env-file --wait works the same way"
 
@@ -81,19 +81,19 @@ set +e
 err="$(k2s vault file NEVER --wait 1s 2>&1 >/dev/null)"; rc=$?
 set -e
 [ "$rc" = 3 ] || fail "past the deadline: exit $rc ($err)"
-printf '%s' "$err" | grep -Fq "no answer yet; the card is still open (card c1)" || fail "past the deadline: $err"
+<<<"$err" grep -Fq "no answer yet; the card is still open (card c1)" || fail "past the deadline: $err"
 ok "past its deadline the CLI exits 3 and names the open card"
 
 set +e
 err="$(k2s vault file NOCARD --wait 10m 2>&1 >/dev/null)"; rc=$?
 set -e
 [ "$rc" = 4 ] || fail "no card: exit $rc ($err)"
-printf '%s' "$err" | grep -Fq "no card asks for NOCARD" || fail "no card: $err"
+<<<"$err" grep -Fq "no card asks for NOCARD" || fail "no card: $err"
 set +e
 err="$(k2s vault file DECLINED --wait 10m 2>&1 >/dev/null)"; rc=$?
 set -e
 [ "$rc" = 3 ] || fail "dismissed: exit $rc ($err)"
-printf '%s' "$err" | grep -Fq "card_declined" || fail "dismissed: $err"
+<<<"$err" grep -Fq "card_declined" || fail "dismissed: $err"
 ok "no card is exit 4; a dismissed card is exit 3"
 
 set +e
@@ -108,9 +108,9 @@ grep -Fq '"once": true' "$WORK/posts.log" || fail "--once isn't on the request: 
 ok "thread secret --once goes on the card request"
 
 help="$(k2s vault file --help)"
-printf '%s' "$help" | grep -Fq -- "--wait 10m" || fail "file --help doesn't say --wait: $help"
+<<<"$help" grep -Fq -- "--wait 10m" || fail "file --help doesn't say --wait: $help"
 help="$(k2s thread secret --help)"
-printf '%s' "$help" | grep -Fq -- "--once" || fail "thread secret --help doesn't say --once"
+<<<"$help" grep -Fq -- "--once" || fail "thread secret --help doesn't say --once"
 ok "help names --wait and --once"
 
 echo "PASS: vault wait ($pass checks)"

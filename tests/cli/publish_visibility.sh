@@ -21,8 +21,8 @@ fail=0
 ok()  { echo "  PASS: $1"; pass=$((pass + 1)); }
 bad() { echo "  FAIL: $1" >&2; fail=$((fail + 1)); }
 assert_eq() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1 (got=$(printf %q "$2") want=$(printf %q "$3"))"; fi; }
-assert_contains() { if printf '%s' "$2" | grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
-assert_lacks() { if printf '%s' "$2" | grep -Fq -- "$3"; then bad "$1 (found $(printf %q "$3") in $(printf %q "$2"))"; else ok "$1"; fi; }
+assert_contains() { if <<<"$2" grep -Fq -- "$3"; then ok "$1"; else bad "$1 (missing $(printf %q "$3") in $(printf %q "$2"))"; fi; }
+assert_lacks() { if <<<"$2" grep -Fq -- "$3"; then bad "$1 (found $(printf %q "$3") in $(printf %q "$2"))"; else ok "$1"; fi; }
 
 WORK="$(mktemp -d -t k2-publish-vis-XXXXXX)"
 STUB_PID=""
@@ -456,7 +456,7 @@ PY
 idle=""
 for _ in $(seq 1 80); do
     idle="$(real publish ps)"
-    printf '%s' "$idle" | grep -Fq "idle-stopped" && break
+    <<<"$idle" grep -Fq "idle-stopped" && break
     sleep 0.2
 done
 assert_contains "ps says idle-stopped" "$idle" "idle-stopped"
@@ -474,7 +474,7 @@ assert_contains "a visitor who passes: K2's starting page" "$r" "Starting the de
 woke=""
 for _ in $(seq 1 100); do
     woke="$(visit / -H "Cookie: $OWNER_COOKIE")"
-    printf '%s' "$woke" | grep -Fq "HTTP/1.1 200" && break
+    <<<"$woke" grep -Fq "HTTP/1.1 200" && break
     sleep 0.1
 done
 assert_contains "and the site comes back" "$woke" "HTTP/1.1 200"

@@ -27,7 +27,7 @@ bare_out="$(env K2_PORT=9 K2_HOOK_TOKEN=fake "$K2_CLI" msg peer --inbox ./x.md 2
 bare_rc=$?
 set -e
 [ "$bare_rc" = "2" ] || fail "bare --inbox exit want 2 got $bare_rc body=$bare_out"
-printf '%s' "$bare_out" | grep -Fq "bare --inbox is no longer accepted" \
+<<<"$bare_out" grep -Fq "bare --inbox is no longer accepted" \
     || fail "bare --inbox teaching missing: $bare_out"
 ok "bare --inbox exit 2 teaching"
 
@@ -73,7 +73,7 @@ _split_remote_target "ahama::acme.k2.dev"
 ok "agent::host still splits as user form"
 
 # Keep original token (do not strip to bare) — grep the comment/lock.
-printf '%s' "$inner" | grep -q 'Keep the original agent::host token' \
+<<<"$inner" grep -q 'Keep the original agent::host token' \
     || fail "inner must keep agent::host for local-daemon federation"
 ok "CLI keeps agent::host token for local daemon hop"
 

@@ -105,7 +105,7 @@ for SH in $SHELLS; do
 
 	run "$SH" "x" -d postgres -c 'SELECT 1'
 	expect_refused "-c"
-	printf '%s' "$out" | grep -q 'psql -c is forbidden' || fail "-c message: $out"
+	<<<"$out" grep -q 'psql -c is forbidden' || fail "-c message: $out"
 	run "$SH" "x" -d postgres --command='SELECT 1'
 	expect_refused "--command="
 	run "$SH" "x" -d postgres -f /etc/shadow

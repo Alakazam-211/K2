@@ -30,22 +30,22 @@ if grep -A30 'verb == "password_rotate"' "$K2" | grep -q '993'; then
 fi
 
 help="$("$K2" hostmail password rotate --help)"
-printf '%s' "$help" | grep -q 'k2 hostmail password rotate' || fail "rotate --help must be leaf help: $help"
-printf '%s' "$help" | grep -q 'Every API key on the mailbox is revoked' || fail "rotate --help must say API keys are revoked: $help"
-printf '%s' "$help" | grep -q '443' || fail "rotate --help must mention 443: $help"
-printf '%s' "$help" | grep -q '465' || fail "rotate --help must mention 465: $help"
-if printf '%s' "$help" | grep -q 'k2 hostmail <command>'; then
+<<<"$help" grep -q 'k2 hostmail password rotate' || fail "rotate --help must be leaf help: $help"
+<<<"$help" grep -q 'Every API key on the mailbox is revoked' || fail "rotate --help must say API keys are revoked: $help"
+<<<"$help" grep -q '443' || fail "rotate --help must mention 443: $help"
+<<<"$help" grep -q '465' || fail "rotate --help must mention 465: $help"
+if <<<"$help" grep -q 'k2 hostmail <command>'; then
     fail "rotate --help must not be group help: $help"
 fi
-if printf '%s' "$help" | grep -q 'rotate-admin'; then
+if <<<"$help" grep -q 'rotate-admin'; then
     fail "password rotate --help must not be rotate-admin: $help"
 fi
 
 pw_help="$("$K2" hostmail password --help)"
-printf '%s' "$pw_help" | grep -q 'password rotate' || fail "password --help must list rotate: $pw_help"
+<<<"$pw_help" grep -q 'password rotate' || fail "password --help must list rotate: $pw_help"
 
 group="$("$K2" hostmail --help)"
-printf '%s' "$group" | grep -q 'password rotate' || fail "hostmail --help must list password rotate: $group"
+<<<"$group" grep -q 'password rotate' || fail "hostmail --help must list password rotate: $group"
 
 out="$(mktemp -t k2-hostmail-pw-XXXXXX)"
 trap 'rm -f "$out"; hermetic_cli_cleanup' EXIT

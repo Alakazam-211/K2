@@ -122,7 +122,7 @@ out="$("${K2[@]}" "$K2_CLI" mail send cust@dest.example --subject s --body b --b
 rc=$?
 set -e
 assert_exit "--bcc without value" 2 "$rc"
-printf '%s' "$out" | grep -q -- "--bcc requires an address" && ok "--bcc missing-value hint" || bad "--bcc hint missing in: $out"
+<<<"$out" grep -q -- "--bcc requires an address" && ok "--bcc missing-value hint" || bad "--bcc hint missing in: $out"
 
 echo "== mail draft --bcc (compose) =="
 set +e
@@ -139,7 +139,7 @@ out="$("${K2[@]}" "$K2_CLI" mail draft m_abc --body t --bcc boss@shop.example 2>
 rc=$?
 set -e
 assert_exit "reply draft --bcc" 2 "$rc"
-printf '%s' "$out" | grep -q "compose drafts" && ok "reply-draft bcc hint" || bad "reply-draft hint missing in: $out"
+<<<"$out" grep -q "compose drafts" && ok "reply-draft bcc hint" || bad "reply-draft hint missing in: $out"
 
 echo "== hostmail config --always-bcc sets the policy =="
 set +e
@@ -168,7 +168,7 @@ out="$("${K2[@]}" "$K2_CLI" hostmail config --always-bcc owner@shop.example 2>&1
 rc=$?
 set -e
 assert_exit "--always-bcc without --workspace" 2 "$rc"
-printf '%s' "$out" | grep -q -- "--workspace" && ok "needs-workspace hint" || bad "needs-workspace hint missing in: $out"
+<<<"$out" grep -q -- "--workspace" && ok "needs-workspace hint" || bad "needs-workspace hint missing in: $out"
 [ ! -f "$CFG_POST" ] && ok "nothing POSTed" || bad "a POST went out without --workspace"
 
 echo ""

@@ -32,9 +32,9 @@ for want in 'k2 calendar list' 'events' 'freebusy' 'wait' 'create' 'update' 'del
             'k2 mail link calendars on' 'scope_not_granted' \
             '/cli/mail/calendar/' 'BEGIN/END CALENDAR NOTES' 'SHARED CALENDARS' \
             '<owner>/<id>' 'share_rights' 'editor share'; do
-  printf '%s' "$help" | grep -qF -- "$want" || fail "calendar --help must mention '$want'"
+  <<<"$help" grep -qF -- "$want" || fail "calendar --help must mention '$want'"
 done
-printf '%s' "$help" | grep -qF -- 'not_built' && fail "calendar --help must not say Google calendars are not built (MCS4)"
+<<<"$help" grep -qF -- 'not_built' && fail "calendar --help must not say Google calendars are not built (MCS4)"
 "$K2" mail link --help | grep -qF -- '--features calendar' || fail "mail link --help must teach calendar-only Google links"
 [ "$("$K2" cal --help)" = "$help" ] || fail "k2 cal --help must equal k2 calendar --help"
 [ "$("$K2" calendar events --help)" = "$help" ] || fail "verb --help prints the page"
@@ -142,20 +142,20 @@ k2() {
     K2_PROJECT_PATH=/tmp/ws-calendar-test "$K2" "$@"
 }
 
-out="$(k2 calendar list)"; printf '%s' "$out" | grep -q 'c1 · Main · default' || fail "list output: $out"
+out="$(k2 calendar list)"; <<<"$out" grep -q 'c1 · Main · default' || fail "list output: $out"
 out="$(k2 cal events ops@example.com --from 2026-10-08 --to 2026-10-15 --calendar Main --limit 5)"
-printf '%s' "$out" | grep -q 'ev_abc · 2026-10-08T16:00:00Z → 2026-10-08T16:30:00Z \[America/Los_Angeles\] · Prep call' \
+<<<"$out" grep -q 'ev_abc · 2026-10-08T16:00:00Z → 2026-10-08T16:30:00Z \[America/Los_Angeles\] · Prep call' \
   || fail "events output: $out"
 out="$(k2 calendar show ev_abc)"
-printf '%s' "$out" | grep -q 'BEGIN CALENDAR NOTES' || fail "show must wrap notes: $out"
+<<<"$out" grep -q 'BEGIN CALENDAR NOTES' || fail "show must wrap notes: $out"
 k2 calendar freebusy --from 2026-10-08T00:00:00Z --to 2026-10-09T00:00:00Z | grep -q '16:00:00Z → .* · busy' \
   || fail "freebusy output"
 out="$(k2 calendar wait --since-state s1 --timeout 30)"
-printf '%s' "$out" | grep -q 'created · ev_new' || fail "wait output: $out"
-printf '%s' "$out" | grep -q 'since-state s9' || fail "wait must print the next state: $out"
+<<<"$out" grep -q 'created · ev_new' || fail "wait output: $out"
+<<<"$out" grep -q 'since-state s9' || fail "wait must print the next state: $out"
 out="$(k2 calendar create --title "Prep call" --start 2026-10-08T09:00:00-07:00 \
         --end 2026-10-08T09:30:00-07:00 --tz America/Los_Angeles --location "Room 2" --notes "n")"
-printf '%s' "$out" | grep -q 'no email was sent' || fail "create output: $out"
+<<<"$out" grep -q 'no email was sent' || fail "create output: $out"
 k2 calendar update ev_abc --location "" --title "New" --json | python3 -c 'import json,sys; assert json.load(sys.stdin)["ok"]'
 k2 calendar delete ev_abc | grep -q 'deleted ev_abc' || fail "delete output"
 
@@ -227,8 +227,8 @@ done
 # S4: a calendar shared to the inbox shows its owner and rights.
 set_reply /cli/mail/calendar/list 200 '{"ok":true,"address":"ops@example.com","calendars":[{"id":"c1","name":"Main","isDefault":true,"owner":"ops@example.com","shared":false,"rights":{"freeBusy":true,"read":true,"write":true,"delete":true}},{"id":"boss@example.com/c9","name":"Team","isDefault":false,"owner":"boss@example.com","shared":true,"rights":{"freeBusy":true,"read":true,"write":true,"delete":false}}]}'
 out="$(k2 calendar list)"
-printf '%s' "$out" | grep -q '^c1 · Main · default · read/write/delete$' || fail "own list row: $out"
-printf '%s' "$out" | grep -q '^boss@example.com/c9 · Team · shared by boss@example.com · read/write$' \
+<<<"$out" grep -q '^c1 · Main · default · read/write/delete$' || fail "own list row: $out"
+<<<"$out" grep -q '^boss@example.com/c9 · Team · shared by boss@example.com · read/write$' \
   || fail "shared list row: $out"
 # MCS3: capability_missing exits 3 and keeps {cap, reason, fix} on stderr.
 set_reply /cli/mail/calendar/events 409 '{"ok":false,"error":{"code":"capability_missing","hint":"linked for mail only","cap":"calendar.read","reason":"scope_not_granted","fix":"k2 mail link upgrade me@example.com --features calendar (owner)"}}'

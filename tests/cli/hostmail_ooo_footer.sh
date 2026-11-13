@@ -42,21 +42,21 @@ if grep -A40 'verb == "ooo_set"' "$K2" | grep -q 'x:SieveScript'; then
 fi
 
 help="$("$K2" hostmail ooo set --help)"
-printf '%s' "$help" | grep -q 'k2 hostmail ooo set' || fail "ooo set --help must be leaf: $help"
-printf '%s' "$help" | grep -q -- '--text' || fail "ooo set --help must mention --text: $help"
-if printf '%s' "$help" | grep -q 'k2 hostmail <command>'; then
+<<<"$help" grep -q 'k2 hostmail ooo set' || fail "ooo set --help must be leaf: $help"
+<<<"$help" grep -q -- '--text' || fail "ooo set --help must mention --text: $help"
+if <<<"$help" grep -q 'k2 hostmail <command>'; then
     fail "ooo set --help must not be group help: $help"
 fi
 
 footer_help="$("$K2" hostmail footer set --help)"
-printf '%s' "$footer_help" | grep -q 'k2 hostmail footer set' || fail "footer set --help must be leaf: $footer_help"
-if printf '%s' "$footer_help" | grep -q 'signature'; then
+<<<"$footer_help" grep -q 'k2 hostmail footer set' || fail "footer set --help must be leaf: $footer_help"
+if <<<"$footer_help" grep -q 'signature'; then
     fail "footer help must not invent k2 hostmail signature: $footer_help"
 fi
 
 group="$("$K2" hostmail --help)"
-printf '%s' "$group" | grep -q 'ooo set|unset|show' || fail "hostmail --help must list ooo: $group"
-printf '%s' "$group" | grep -q 'footer set|unset|show' || fail "hostmail --help must list footer: $group"
+<<<"$group" grep -q 'ooo set|unset|show' || fail "hostmail --help must list ooo: $group"
+<<<"$group" grep -q 'footer set|unset|show' || fail "hostmail --help must list footer: $group"
 
 out="$(mktemp -t k2-hostmail-ooo-XXXXXX)"
 trap 'rm -f "$out"; hermetic_cli_cleanup' EXIT

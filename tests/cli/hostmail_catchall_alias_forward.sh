@@ -18,22 +18,22 @@ grep -q 'M_MAILBOX="${M_MAILBOX:-}"' "$K2" || fail "_mail_py must export M_MAILB
 grep -q 'M_KEEP="${M_KEEP:-false}"' "$K2" || fail "_mail_py must export M_KEEP"
 
 help="$("$K2" hostmail alias --help)"
-printf '%s' "$help" | grep -q 'k2 hostmail alias add' || fail "alias --help must be leaf help: $help"
-if printf '%s' "$help" | grep -q 'k2 hostmail <command>'; then
+<<<"$help" grep -q 'k2 hostmail alias add' || fail "alias --help must be leaf help: $help"
+if <<<"$help" grep -q 'k2 hostmail <command>'; then
     fail "k2 hostmail alias --help must not be group help: $help"
 fi
-printf '%s' "$help" | grep -q 'create' || fail "alias help must teach create mints: $help"
+<<<"$help" grep -q 'create' || fail "alias help must teach create mints: $help"
 
 group="$("$K2" hostmail --help)"
-printf '%s' "$group" | grep -q 'catchall' || fail "hostmail --help must list catchall: $group"
-printf '%s' "$group" | grep -q 'alias' || fail "hostmail --help must list alias: $group"
-printf '%s' "$group" | grep -q 'forward' || fail "hostmail --help must list forward: $group"
+<<<"$group" grep -q 'catchall' || fail "hostmail --help must list catchall: $group"
+<<<"$group" grep -q 'alias' || fail "hostmail --help must list alias: $group"
+<<<"$group" grep -q 'forward' || fail "hostmail --help must list forward: $group"
 
 fwd_help="$("$K2" hostmail forward set --help)"
-printf '%s' "$fwd_help" | grep -q -- '--keep' || fail "forward set --help must mention --keep"
+<<<"$fwd_help" grep -q -- '--keep' || fail "forward set --help must mention --keep"
 
 ca_help="$("$K2" hostmail catchall set --help)"
-printf '%s' "$ca_help" | grep -q -- '--address' || fail "catchall set --help must mention --address"
+<<<"$ca_help" grep -q -- '--address' || fail "catchall set --help must mention --address"
 
 set +e
 mail_alias_out="$("$K2" mail alias add a@b.test sales@b.test 2>&1)"
@@ -42,7 +42,7 @@ set -e
 if [ "$mail_alias_rc" -eq 0 ]; then
     fail "k2 mail alias must exit 2 moved-to-hostmail, got 0: $mail_alias_out"
 fi
-if ! printf '%s' "$mail_alias_out" | grep -q "moved to 'k2 hostmail alias'"; then
+if ! <<<"$mail_alias_out" grep -q "moved to 'k2 hostmail alias'"; then
     fail "k2 mail alias must say moved to hostmail: $mail_alias_out"
 fi
 
@@ -53,15 +53,15 @@ set -e
 if [ "$mail_ca_rc" -eq 0 ]; then
     fail "k2 mail catchall must exit 2, got 0: $mail_ca_out"
 fi
-if ! printf '%s' "$mail_ca_out" | grep -q "moved to 'k2 hostmail catchall'"; then
+if ! <<<"$mail_ca_out" grep -q "moved to 'k2 hostmail catchall'"; then
     fail "k2 mail catchall must say moved to hostmail: $mail_ca_out"
 fi
 
 # 0.46.7: `k2 mail forward` is a verb again: a person's OWN mailbox
 # (person routes). The admin verb stays `k2 hostmail forward`.
 mail_fw_help="$("$K2" mail forward --help)"
-printf '%s' "$mail_fw_help" | grep -q 'k2 mail forward set --to <dest>' || fail "k2 mail forward --help must be the person verb: $mail_fw_help"
-printf '%s' "$mail_fw_help" | grep -q 'k2 hostmail forward' || fail "k2 mail forward --help must point agents at k2 hostmail forward: $mail_fw_help"
+<<<"$mail_fw_help" grep -q 'k2 mail forward set --to <dest>' || fail "k2 mail forward --help must be the person verb: $mail_fw_help"
+<<<"$mail_fw_help" grep -q 'k2 hostmail forward' || fail "k2 mail forward --help must point agents at k2 hostmail forward: $mail_fw_help"
 set +e
 mail_fw_out="$("$K2" mail forward set a@b.test --to b@b.test 2>&1)"
 mail_fw_rc=$?

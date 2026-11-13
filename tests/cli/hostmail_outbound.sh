@@ -25,7 +25,7 @@ grep -A4 'verb == "outbound"' "$K2" | grep -q '"/cli/mail/outbound"' \
 help="$("$K2" hostmail outbound --help)"
 for want in 'v4Only' 'ONCE' 'never changed' 'dane on' '0.16.20' 'set by hand' \
             'k2 hostmail queue retry' 'disable/enable'; do
-  printf '%s' "$help" | grep -qF -- "$want" || fail "outbound --help must mention '$want'"
+  <<<"$help" grep -qF -- "$want" || fail "outbound --help must mention '$want'"
 done
 "$K2" hostmail --help | grep -qF 'outbound [show] | outbound dane on' || fail "hostmail --help must list outbound"
 schema="$("$K2" --schema)" || fail "k2 --schema exited non-zero"
@@ -119,20 +119,20 @@ k2() {
 }
 
 show="$(k2 hostmail outbound)"
-printf '%s' "$show" | grep -q '^mx route : v4Only (set by K2)' || fail "show mx route: $show"
-printf '%s' "$show" | grep -q '^DANE     : default .*disable (set by hand)' || fail "show DANE: $show"
-printf '%s' "$show" | grep -qF 'k2 hostmail outbound dane on' || fail "show must name dane on: $show"
+<<<"$show" grep -q '^mx route : v4Only (set by K2)' || fail "show mx route: $show"
+<<<"$show" grep -q '^DANE     : default .*disable (set by hand)' || fail "show DANE: $show"
+<<<"$show" grep -qF 'k2 hostmail outbound dane on' || fail "show must name dane on: $show"
 
 on="$(k2 hostmail outbound dane on)"
-printf '%s' "$on" | grep -qF 'DANE is optional again' || fail "dane on output: $on"
+<<<"$on" grep -qF 'DANE is optional again' || fail "dane on output: $on"
 k2 hostmail outbound --json >/dev/null
 
 status_out="$(k2 hostmail status || true)"
-printf '%s' "$status_out" | grep -qF 'outbound : v4Only · DANE off (K2, until 0.16.20) · DNSSEC ok' \
+<<<"$status_out" grep -qF 'outbound : v4Only · DANE off (K2, until 0.16.20) · DNSSEC ok' \
   || fail "status must print the outbound line: $status_out"
-printf '%s' "$status_out" | grep -qF 'cert     : missing mail.example.com — ACME failed 2026-10-07T20:00:00Z: connection refused (orders: mail.example.com only)' \
+<<<"$status_out" grep -qF 'cert     : missing mail.example.com — ACME failed 2026-10-07T20:00:00Z: connection refused (orders: mail.example.com only)' \
   || fail "status must print the ACME detail: $status_out"
-printf '%s' "$status_out" | grep -qF 'last err : acme: connection refused' || fail "status lastError: $status_out"
+<<<"$status_out" grep -qF 'last err : acme: connection refused' || fail "status lastError: $status_out"
 
 dom="$(k2 hostmail domain show example.com)"
 a_line="$(printf '%s\n' "$dom" | grep -n 'A mail.example.com' | head -1 | cut -d: -f1)"

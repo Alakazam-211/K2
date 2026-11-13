@@ -68,7 +68,7 @@ if ! "$K2" hostmail uninstall --help | grep -q 'does not POST'; then
 fi
 
 surface="$(awk '/pub fn is_mail_manage_surface/,/^}/' "$PROJECT_ROOT/crates/k2-daemon/src/mail_routes.rs")"
-if printf '%s\n' "$surface" | grep -q '/cli/mail/server/uninstall'; then
+if <<<"$surface" grep -q '/cli/mail/server/uninstall'; then
     fail "uninstall must stay off is_mail_manage_surface"
 fi
 

@@ -56,7 +56,7 @@ run() { set +e; OUT="$(bash "$K2" "$@" 2>&1)"; RC=$?; set -e; }
 expect() {
     local label="$1" rc="$2" needle="$3"; shift 3
     run "$@"
-    if [ "$RC" = "$rc" ] && printf '%s' "$OUT" | grep -Fq -- "$needle"; then ok "$label"; else bad "$label (exit $RC, wanted $rc and '$needle'): $OUT"; fi
+    if [ "$RC" = "$rc" ] && <<<"$OUT" grep -Fq -- "$needle"; then ok "$label"; else bad "$label (exit $RC, wanted $rc and '$needle'): $OUT"; fi
 }
 sent() { # the last request's line
     tail -1 "$LOG"
@@ -81,8 +81,8 @@ nothing_sent "none of those reached the daemon"
 echo "== k2 app init: what it sends =="
 printf '{"ok":true,"template":"tauri","dryRun":true,"files":[{"path":"src-tauri/Info.plist","action":"write","note":"new"},{"path":"a/AndroidManifest.xml","action":"snippet","note":"add","content":"<uses-permission />"}],"next":["k2 app updates token jobs --file <file>"],"notes":["a note"]}' >"$ANSWER"
 expect "--app --voice --dry-run prints the plan" 0 "add by hand" app init --template tauri --app jobs --voice --dry-run "$SANDBOX/repo"
-printf '%s' "$OUT" | grep -Fq "<uses-permission />" && ok "a snippet is shown" || bad "a snippet is shown: $OUT"
-printf '%s' "$OUT" | grep -Fq "k2 app updates token jobs --file" && ok "Next: is shown" || bad "Next: is shown: $OUT"
+<<<"$OUT" grep -Fq "<uses-permission />" && ok "a snippet is shown" || bad "a snippet is shown: $OUT"
+<<<"$OUT" grep -Fq "k2 app updates token jobs --file" && ok "Next: is shown" || bad "Next: is shown: $OUT"
 sent_has "POST /cli/app/init" "POST /cli/app/init"
 sent_has "the App goes" '"app": "jobs"'
 sent_has "voice goes" '"voice": true'
@@ -101,8 +101,8 @@ expect "not a folder" 2 "is not a folder" app doctor --store "$SANDBOX/nope"
 nothing_sent "none of those reached the daemon"
 printf '{"folder":"/r","voice":true,"voiceWhy":"--voice","tauri":"2.10.3","tao":null,"wry":"0.57.0 (crates.io)","findings":[{"id":"tauri_too_old","level":"error","platform":"all","path":"src-tauri/Cargo.lock","problem":"Cargo.lock builds tauri 2.10.3","fix":"tauri = \\"2.12.5\\""},{"id":"wry_unpatched","level":"warn","platform":"all","path":"src-tauri/Cargo.toml","problem":"wry is not K2s","fix":"add the row"}],"passed":[],"notes":["Android skipped"],"ok":false}' >"$ANSWER"
 expect "an error exits 1 and shows the fix" 1 "fix: tauri = \"2.12.5\"" app doctor --store --voice "$SANDBOX/repo"
-printf '%s' "$OUT" | grep -Fq "Not ready: 1 error, 1 warning." && ok "the tally" || bad "the tally: $OUT"
-printf '%s' "$OUT" | grep -Fq "note: Android skipped" && ok "notes are shown" || bad "notes are shown: $OUT"
+<<<"$OUT" grep -Fq "Not ready: 1 error, 1 warning." && ok "the tally" || bad "the tally: $OUT"
+<<<"$OUT" grep -Fq "note: Android skipped" && ok "notes are shown" || bad "notes are shown: $OUT"
 sent_has "POST /cli/app/doctor/store" "POST /cli/app/doctor/store"
 sent_has "voice goes" '"voice": true'
 run app doctor --store --no-voice "$SANDBOX/repo"

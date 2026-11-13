@@ -33,7 +33,7 @@ assert_contains() {
 }
 assert_line_matches() {
     local label="$1" hay="$2" regex="$3"
-    if printf '%s\n' "$hay" | grep -Eq -- "$regex"; then
+    if <<<"$hay" grep -Eq -- "$regex"; then
         echo "  PASS: $label"
         pass=$((pass + 1))
     else

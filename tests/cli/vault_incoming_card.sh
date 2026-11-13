@@ -30,7 +30,7 @@ help="$(env HOME="$WORK" "$K2_CLI" vault send --help)" || fail "vault send --hel
 for want in "K2 puts a permission card on your Thread" "Allow (accept)" "Deny (decline)" \
     "k2 permission request vault.incoming.accept id=<delivery-id> [as=NEW|replace=yes]" \
     "the card K2 puts on the receiving agent's Thread"; do
-    printf '%s' "$help" | grep -Fq -- "$want" || fail "vault send --help lacks '$want': $help"
+    <<<"$help" grep -Fq -- "$want" || fail "vault send --help lacks '$want': $help"
 done
 ok "k2 vault send --help: the card, Allow/Deny, and the line to ask with"
 
@@ -40,16 +40,16 @@ for verb in accept decline; do
     err="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=agent-token "$K2_CLI" vault incoming "$verb" "$ID" 2>&1 >/dev/null)"; rc=$?
     set -e
     [ "$rc" = 3 ] || fail "incoming $verb from a K2 terminal: exit $rc ($err)"
-    printf '%s' "$err" | grep -Fq "a person accepts or declines $ID on the card K2 put on your Thread" || fail "incoming $verb: $err"
-    printf '%s' "$err" | grep -Fq -- "$ASK" || fail "incoming $verb lacks the ask line: $err"
-    if printf '%s' "$err" | grep -Fq "Settings"; then fail "incoming $verb sends the agent to Settings: $err"; fi
+    <<<"$err" grep -Fq "a person accepts or declines $ID on the card K2 put on your Thread" || fail "incoming $verb: $err"
+    <<<"$err" grep -Fq -- "$ASK" || fail "incoming $verb lacks the ask line: $err"
+    if <<<"$err" grep -Fq "Settings"; then fail "incoming $verb sends the agent to Settings: $err"; fi
 done
 ok "k2 vault incoming accept|decline in a K2 terminal: exit 3, the card and the ask line"
 
 # ── k2 study vault ─────────────────────────────────────────────────────
 study="$(env HOME="$WORK" K2_PORT=1 K2_HOOK_TOKEN=offline "$K2_CLI" study vault)" || fail "study vault"
-printf '%s' "$study" | grep -Fq "K2 puts a card on that agent's Thread for a person" || fail "study vault lacks the card: $study"
-printf '%s' "$study" | grep -Fq "k2 permission request vault.incoming.accept" || fail "study vault lacks the ask line"
+<<<"$study" grep -Fq "K2 puts a card on that agent's Thread for a person" || fail "study vault lacks the card: $study"
+<<<"$study" grep -Fq "k2 permission request vault.incoming.accept" || fail "study vault lacks the ask line"
 ok "k2 study vault: the card and the ask line"
 
 # ── the list, against a stub daemon ───────────────────────────────────
@@ -84,7 +84,7 @@ for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && b
 out="$(env HOME="$WORK" K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=stub-token K2_PROJECT_PATH="$WORK" "$K2_CLI" vault incoming)" || fail "incoming: $out"
 printf '%s' "$out" | grep -F "STRIPE_KEY" | grep -Fq "(waiting for a person: the card on the Thread of ops)" || fail "incoming: the card line: $out"
 printf '%s' "$out" | grep -F "OTHER" | grep -Fq "(no card yet: k2 permission request vault.incoming.accept id=hd_nocard" || fail "incoming: the ask line: $out"
-if printf '%s' "$out" | grep -Fq "from their own terminal"; then fail "incoming still says 'from their own terminal': $out"; fi
+if <<<"$out" grep -Fq "from their own terminal"; then fail "incoming still says 'from their own terminal': $out"; fi
 ok "k2 vault incoming: where each card is, or the line to ask with"
 
 echo "vault_incoming_card: $pass passed"

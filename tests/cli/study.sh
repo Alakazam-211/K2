@@ -158,7 +158,7 @@ reasons="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[
 reason_count=0
 while IFS= read -r reason; do
     reason_count=$((reason_count + 1))
-    if printf '%s\n' "$hb_out" | grep -Eq "^  ${reason}[[:space:]]"; then
+    if <<<"$hb_out" grep -Eq "^  ${reason}[[:space:]]"; then
         echo "  PASS: wait reason $reason has a row"
         pass=$((pass + 1))
     else
@@ -232,7 +232,7 @@ tk_out="$("$K2" study app-tickets)"
 assert_contains "tickets socket path" "$tk_out" "WS   /cli/activity/events?workspace=<handle>"
 assert_contains "ticket_changed frame" "$tk_out" '{"kind":"ticket_changed","workspace":"<handle>","id":"<id>",'
 for change in created commented answered status_changed assigned resolved dismissed brief_attached; do
-    if printf '%s\n' "$tk_out" | grep -Eq "^  ${change}[[:space:]]"; then
+    if <<<"$tk_out" grep -Eq "^  ${change}[[:space:]]"; then
         echo "  PASS: change $change has a row"
         pass=$((pass + 1))
     else
@@ -510,7 +510,7 @@ assert_contains "resume keeps its token" "$la_out" "Without its own token, a res
 assert_contains "api tokens billed per token" "$la_out" "billed per token"
 assert_contains "cli noun" "$la_out" "k2 llm tokens add <tool> <label> [--device]"
 assert_absent_word() {
-    if printf '%s\n' "$2" | grep -iqw -- "$3"; then
+    if <<<"$2" grep -iqw -- "$3"; then
         echo "  FAIL: $1 (matched $3)" >&2
         fail=$((fail + 1))
     else
@@ -627,7 +627,7 @@ for id in $TOPICS; do
 done
 assert_absent "no rosson.k2.dev" "$all" "rosson.k2.dev"
 assert_absent "no z3mbp" "$all" "z3mbp"
-if printf '%s' "$all" | grep -Eq 'k2skn_[A-Za-z0-9]{8,}'; then
+if <<<"$all" grep -Eq 'k2skn_[A-Za-z0-9]{8,}'; then
     echo "  FAIL: raw k2skn_ secret material" >&2
     fail=$((fail + 1))
 else

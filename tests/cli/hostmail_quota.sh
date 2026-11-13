@@ -20,6 +20,6 @@ grep -q 'M_QUOTA_GB="${M_QUOTA_GB:-}"' "$K2" || fail "_mail_py must export M_QUO
 grep -q 'M_QUOTA_MESSAGES="${M_QUOTA_MESSAGES:-}"' "$K2" || fail "_mail_py must export M_QUOTA_MESSAGES"
 
 help="$("$K2" hostmail quota set --help)"
-printf '%s' "$help" | grep -q -- '--gb' || fail "quota set --help must mention --gb"
+<<<"$help" grep -q -- '--gb' || fail "quota set --help must mention --gb"
 
 echo "OK: hostmail quota env exported to _mail_py"

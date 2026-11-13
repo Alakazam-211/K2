@@ -24,11 +24,11 @@ assert_eq() {
     else echo "  FAIL: $1 (got=$(printf %q "$2") want=$(printf %q "$3"))" >&2; fail=$((fail + 1)); fi
 }
 assert_contains() {
-    if printf '%s' "$2" | grep -Fq -- "$3"; then echo "  PASS: $1"; pass=$((pass + 1))
+    if <<<"$2" grep -Fq -- "$3"; then echo "  PASS: $1"; pass=$((pass + 1))
     else echo "  FAIL: $1 (missing $(printf %q "$3") in $(printf %q "$2"))" >&2; fail=$((fail + 1)); fi
 }
 assert_not_contains() {
-    if printf '%s' "$2" | grep -Fq -- "$3"; then echo "  FAIL: $1 (found $(printf %q "$3"))" >&2; fail=$((fail + 1))
+    if <<<"$2" grep -Fq -- "$3"; then echo "  FAIL: $1 (found $(printf %q "$3"))" >&2; fail=$((fail + 1))
     else echo "  PASS: $1"; pass=$((pass + 1)); fi
 }
 

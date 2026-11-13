@@ -29,14 +29,14 @@ grep -q '/cli/mail/dmarc' "$K2" || fail "dmarc must use /cli/mail/dmarc"
 "$K2" hostmail password --help >/dev/null || fail "hostmail password still exists"
 
 help="$("$K2" hostmail --help)"
-printf '%s' "$help" | grep -q 'dkim show|rotate|retire' || fail "hostmail help must list dkim"
-printf '%s' "$help" | grep -q 'dmarc show|report-to' || fail "hostmail help must list dmarc"
+<<<"$help" grep -q 'dkim show|rotate|retire' || fail "hostmail help must list dkim"
+<<<"$help" grep -q 'dmarc show|report-to' || fail "hostmail help must list dmarc"
 
 dkim_help="$("$K2" hostmail dkim --help)"
-printf '%s' "$dkim_help" | grep -q 'rotate' || fail "dkim help must mention rotate"
+<<<"$dkim_help" grep -q 'rotate' || fail "dkim help must mention rotate"
 
 dmarc_help="$("$K2" hostmail dmarc report-to --help)"
-printf '%s' "$dmarc_help" | grep -q -- '--address' || fail "dmarc report-to --help must mention --address"
+<<<"$dmarc_help" grep -q -- '--address' || fail "dmarc report-to --help must mention --address"
 
 # k2 mail dkim|dmarc moved to hostmail (exit 2).
 set +e
@@ -44,7 +44,7 @@ out="$("$K2" mail dkim show example.test 2>&1)"
 rc=$?
 set -e
 [ "$rc" -eq 2 ] || fail "k2 mail dkim must exit 2, got $rc ($out)"
-printf '%s' "$out" | grep -q "hostmail" || fail "k2 mail dkim must point at k2 hostmail ($out)"
+<<<"$out" grep -q "hostmail" || fail "k2 mail dkim must point at k2 hostmail ($out)"
 
 set +e
 out="$("$K2" mail dmarc show example.test 2>&1)"

@@ -38,23 +38,23 @@ if ! grep -q 'cmd_mail_link' "$K2"; then
 fi
 
 help="$("$K2" hostmail app-password add --help)"
-printf '%s' "$help" | grep -q 'k2 hostmail app-password add' || fail "add --help must be leaf help: $help"
-if printf '%s' "$help" | grep -q 'k2 hostmail <command>'; then
+<<<"$help" grep -q 'k2 hostmail app-password add' || fail "add --help must be leaf help: $help"
+if <<<"$help" grep -q 'k2 hostmail <command>'; then
     fail "add --help must not be group help: $help"
 fi
 
 list_help="$("$K2" hostmail app-password list --help)"
-printf '%s' "$list_help" | grep -q 'k2 hostmail app-password list' || fail "list --help: $list_help"
+<<<"$list_help" grep -q 'k2 hostmail app-password list' || fail "list --help: $list_help"
 
 rev_help="$("$K2" hostmail app-password revoke --help)"
-printf '%s' "$rev_help" | grep -q 'k2 hostmail app-password revoke' || fail "revoke --help: $rev_help"
+<<<"$rev_help" grep -q 'k2 hostmail app-password revoke' || fail "revoke --help: $rev_help"
 
 group="$("$K2" hostmail --help)"
-printf '%s' "$group" | grep -q 'app-password' || fail "hostmail --help must list app-password: $group"
-printf '%s' "$group" | grep -q 'password rotate' || fail "hostmail --help must still list password rotate: $group"
+<<<"$group" grep -q 'app-password' || fail "hostmail --help must list app-password: $group"
+<<<"$group" grep -q 'password rotate' || fail "hostmail --help must still list password rotate: $group"
 
 pw_help="$("$K2" hostmail password --help)"
-if printf '%s' "$pw_help" | grep -q 'app-password add'; then
+if <<<"$pw_help" grep -q 'app-password add'; then
     fail "password --help must not nest app-password: $pw_help"
 fi
 

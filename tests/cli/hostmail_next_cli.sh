@@ -42,12 +42,12 @@ if "list" in verbs:
 PY
 
 help="$("$K2" hostmail --help)"
-printf '%s' "$help" | grep -q 'list create' || fail "hostmail --help must list mailing lists: $help"
-printf '%s' "$help" | grep -q 'spam ham' || fail "hostmail --help must list spam: $help"
-printf '%s' "$help" | grep -q 'queue list' || fail "hostmail --help must list queue: $help"
-printf '%s' "$help" | grep -q 'acl grant' || fail "hostmail --help must list acl: $help"
-printf '%s' "$help" | grep -q 'autoconfig show' || fail "hostmail --help must list autoconfig: $help"
-printf '%s' "$help" | grep -q 'k2 mail list' || fail "hostmail --help must teach k2 mail list stays inboxes: $help"
+<<<"$help" grep -q 'list create' || fail "hostmail --help must list mailing lists: $help"
+<<<"$help" grep -q 'spam ham' || fail "hostmail --help must list spam: $help"
+<<<"$help" grep -q 'queue list' || fail "hostmail --help must list queue: $help"
+<<<"$help" grep -q 'acl grant' || fail "hostmail --help must list acl: $help"
+<<<"$help" grep -q 'autoconfig show' || fail "hostmail --help must list autoconfig: $help"
+<<<"$help" grep -q 'k2 mail list' || fail "hostmail --help must teach k2 mail list stays inboxes: $help"
 
 # Bare k2 hostmail list = usage (exit 2), not address listing.
 out="$(mktemp -t k2-hostmail-list-XXXXXX)"
@@ -60,8 +60,8 @@ grep -q 'list create' "$out" || fail "bare k2 hostmail list must print list usag
 
 # k2 mail list --help is inboxes, not mailing lists.
 mail_list_help="$("$K2" mail list --help)"
-printf '%s' "$mail_list_help" | grep -qi 'inbox' || fail "k2 mail list --help must stay inboxes: $mail_list_help"
-printf '%s' "$mail_list_help" | grep -q 'x:MailingList' && fail "k2 mail list --help must not be mailing lists: $mail_list_help"
+<<<"$mail_list_help" grep -qi 'inbox' || fail "k2 mail list --help must stay inboxes: $mail_list_help"
+<<<"$mail_list_help" grep -q 'x:MailingList' && fail "k2 mail list --help must not be mailing lists: $mail_list_help"
 
 # Redirects exit 2.
 for verb in spam queue acl autoconfig; do
@@ -75,12 +75,12 @@ done
 
 # k2 hostmail create stays mint (help mentions mint/create address).
 create_help="$("$K2" hostmail create --help)"
-printf '%s' "$create_help" | grep -qi 'create' || fail "k2 hostmail create --help missing: $create_help"
-printf '%s' "$create_help" | grep -q 'MailingList' && fail "k2 hostmail create must stay mint, not mailing list: $create_help"
+<<<"$create_help" grep -qi 'create' || fail "k2 hostmail create --help missing: $create_help"
+<<<"$create_help" grep -q 'MailingList' && fail "k2 hostmail create must stay mint, not mailing list: $create_help"
 
 # ACL is not k2 mail access.
 acl_help="$("$K2" hostmail acl --help)"
-printf '%s' "$acl_help" | grep -q 'mail access' || fail "acl help must mention k2 mail access is separate: $acl_help"
+<<<"$acl_help" grep -q 'mail access' || fail "acl help must mention k2 mail access is separate: $acl_help"
 
 # Python helper exports new env.
 grep -q 'M_MEMBERS="${M_MEMBERS:-}"' "$K2" || fail "_mail_py must export M_MEMBERS"

@@ -21,14 +21,16 @@ lane = "ci-standard"
 
 # L1 + V1: the x86_64 daemon, root helper, k2-node and App engine, built
 # twice on nodes on two hosts. They hold the OAuth values (vault names
-# BUILD_GMAIL_CLIENT_ID and BUILD_GMAIL_CLIENT_SECRET, granted to the lane),
-# so each runs alone on its node.
+# BUILD_GMAIL_CLIENT_ID, BUILD_GMAIL_CLIENT_SECRET and
+# BUILD_MICROSOFT_CLIENT_ID, granted to the lane), so each runs alone on its
+# node. The Microsoft client id makes the Linux daemons match the Mac build,
+# which bakes it in too.
 [release.builds.linux-x86_64]
 argv = ["bash", "scripts/ci/build-linux-bins.sh", "x86_64"]
 needs = ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]
 artifacts = ["dist/*"]
 env = ["BUILD_COMMIT", "BUILD_TREE"]
-secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
+secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_MICROSOFT_CLIENT_ID"]
 label = "L1"
 verify_label = "V1"
 independent = ["host"]
@@ -45,7 +47,7 @@ argv = ["bash", "scripts/ci/build-linux-bins.sh", "aarch64"]
 needs = ["cmake@3", "sys:pkg-config", "sys:zlib1g-dev"]
 artifacts = ["dist/*"]
 env = ["BUILD_COMMIT", "BUILD_TREE"]
-secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET"]
+secrets = ["BUILD_GMAIL_CLIENT_ID", "BUILD_GMAIL_CLIENT_SECRET", "BUILD_MICROSOFT_CLIENT_ID"]
 label = "L2"
 verify_label = "V2"
 independent = ["host"]

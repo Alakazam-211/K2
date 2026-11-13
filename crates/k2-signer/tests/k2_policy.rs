@@ -80,7 +80,11 @@ fn ci_toml_builds_what_the_policy_accepts() {
         assert!(!c.needs.iter().any(|n| n.starts_with("rust@")), "{name}: a rust@ need drops rust-toolchain.toml's targets");
         assert_eq!(c.artifacts, r.artifacts, "{name} artifacts");
         assert_eq!(c.env, r.env, "{name} env");
-        assert_eq!(c.secrets, r.secrets, "{name}: the vault names the jobs get are the policy's required secrets");
+        let mut want: Vec<String> = r.secrets.iter().chain(&r.secrets_optional).cloned().collect();
+        let mut got = c.secrets.clone();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want, "{name}: the jobs get every secret the policy names, the optional Microsoft id too (parity with the Mac build)");
         assert_eq!(c.verify_label.is_some(), !r.dual.is_empty(), "{name}: a dual build in both or neither");
         assert_eq!(c.exclusive, !r.secrets.is_empty(), "{name}: a build that holds secrets runs alone on its node");
         let ci_dims: Vec<_> = c.independence().into_iter().filter(|d| *d != k2_node_proto::ci::Dimension::Node).collect();

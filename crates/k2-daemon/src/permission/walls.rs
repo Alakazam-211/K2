@@ -170,7 +170,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 69] = [
+pub(crate) const V1_ACTIONS: [&str; 70] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -2016,7 +2016,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 69);
+        assert_eq!(V1_ACTIONS.len(), 70);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

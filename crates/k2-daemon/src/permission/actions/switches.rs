@@ -306,7 +306,7 @@ const LEVEL: &[ParamSpec] =
 
 /// The Agent tab's switches, in Settings order. Index = the const generic
 /// of [`check_on`] / [`apply_on`] and their twins.
-pub(crate) static SWITCHES: [Switch; 20] = [
+pub(crate) static SWITCHES: [Switch; 21] = [
     Switch {
         on: on_spec(
             "compute.use",
@@ -957,7 +957,7 @@ macro_rules! register {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19)
+    register!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
 }
 
 // ── not card-able (§5.4, §9) ────────────────────────────────────────

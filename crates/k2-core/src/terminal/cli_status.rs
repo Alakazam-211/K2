@@ -444,6 +444,15 @@ mod tests {
         assert!(err.chars().count() <= MAX_TEXT + 1, "clipped: {}", err.len());
     }
 
+    /// The timeout for a fake CLI that answers. A fake's first run is a
+    /// freshly written script, and on a busy macOS node that first run has
+    /// taken over the 5 s of [`PROBE_TIMEOUT`], which read as "timed out"
+    /// with no version. These tests are about what an answer means, not how
+    /// fast it comes, so the fake gets time it can't overrun. The timeout
+    /// itself is tested with a fake that never answers.
+    #[cfg(unix)]
+    const ANSWERS: Duration = Duration::from_secs(120);
+
     /// A temp `bin/` holding fake CLIs; returns (dir, bin).
     #[cfg(unix)]
     fn bin_dir(tag: &str) -> (PathBuf, PathBuf) {
@@ -502,10 +511,10 @@ mod tests {
         // The probe's PATH is only `bin`, so the full path.
         fake(&bin, "grok", "exec /bin/sleep 30");
         let cache = ProbeCache::new(CACHE_TTL);
-        // The CLIs that answer get the real timeout: a fake's first run took
-        // over 400ms on a busy Mac node, and that read as "timed out". Only
-        // the one that hangs gets a short one, which it always overruns.
-        let mut got = status(&["claude", "codex", "gemini"], &bin, &cache, PROBE_TIMEOUT);
+        // The CLIs that answer get a timeout they can't overrun (see
+        // ANSWERS). Only the one that hangs gets a short one, which it
+        // always overruns.
+        let mut got = status(&["claude", "codex", "gemini"], &bin, &cache, ANSWERS);
         let started = Instant::now();
         got.extend(status(&["grok"], &bin, &cache, Duration::from_millis(400)));
         assert!(started.elapsed() < Duration::from_secs(10), "a hung probe must not hold the request");
@@ -554,7 +563,7 @@ mod tests {
         let _lock = crate::test_env::lock();
         let (dir, bin) = bin_dir("noexec");
         fs::write(bin.join("claude"), "#!/bin/sh\necho 1.0.0\n").unwrap();
-        let got = status(&["claude"], &bin, &ProbeCache::new(CACHE_TTL), PROBE_TIMEOUT);
+        let got = status(&["claude"], &bin, &ProbeCache::new(CACHE_TTL), ANSWERS);
         assert!(!got[0].installed && got[0].path.is_none(), "{:?}", got[0]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -571,11 +580,11 @@ mod tests {
         let path = bin.to_string_lossy().into_owned();
         let elsewhere = move |_: &str| Some(other_claude.clone());
         let cache = ProbeCache::new(CACHE_TTL);
-        let got = cli_status_with(&["claude"], &path, &elsewhere, &cache, PROBE_TIMEOUT, &open_guard());
+        let got = cli_status_with(&["claude"], &path, &elsewhere, &cache, ANSWERS, &open_guard());
         assert!(got[0].installed && !got[0].launches, "{:?}", got[0]);
         assert_eq!(got[0].version.as_deref(), Some("1.0.0"), "the found binary is probed");
         let nowhere = |_: &str| -> Option<PathBuf> { None };
-        let got = cli_status_with(&["claude"], &path, &nowhere, &cache, PROBE_TIMEOUT, &open_guard());
+        let got = cli_status_with(&["claude"], &path, &nowhere, &cache, ANSWERS, &open_guard());
         assert!(got[0].installed && !got[0].launches, "{:?}", got[0]);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -589,7 +598,7 @@ mod tests {
         fake(&bin, "codex", "exit 4");
         let cache = ProbeCache::new(CACHE_TTL);
         for _ in 0..3 {
-            let got = status(&["claude", "codex"], &bin, &cache, PROBE_TIMEOUT);
+            let got = status(&["claude", "codex"], &bin, &cache, ANSWERS);
             assert_eq!(got[0].version.as_deref(), Some("1.0.0"));
             assert_eq!(got[1].error.as_deref(), Some("--version exited 4"));
         }
@@ -598,14 +607,14 @@ mod tests {
 
         // A reinstall (new size) is probed again at once.
         fake(&bin, "claude", "echo 1.1.0 # a newer build");
-        let got = status(&["claude"], &bin, &cache, PROBE_TIMEOUT);
+        let got = status(&["claude"], &bin, &cache, ANSWERS);
         assert_eq!(got[0].version.as_deref(), Some("1.1.0"));
         assert_eq!(runs(&bin, "claude"), 2);
 
         // Past the TTL the same binary is probed again.
         let expired = ProbeCache::new(Duration::ZERO);
-        status(&["claude"], &bin, &expired, PROBE_TIMEOUT);
-        status(&["claude"], &bin, &expired, PROBE_TIMEOUT);
+        status(&["claude"], &bin, &expired, ANSWERS);
+        status(&["claude"], &bin, &expired, ANSWERS);
         assert_eq!(runs(&bin, "claude"), 4);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -676,7 +685,7 @@ mod tests {
         let _lock = crate::test_env::lock();
         let (dir, bin) = bin_dir("noflag");
         let hermes = fake(&bin, "hermes", "echo 9.9.9");
-        let got = status(&["hermes"], &bin, &ProbeCache::new(CACHE_TTL), PROBE_TIMEOUT);
+        let got = status(&["hermes"], &bin, &ProbeCache::new(CACHE_TTL), ANSWERS);
         assert_eq!(
             got[0],
             CliStatus {

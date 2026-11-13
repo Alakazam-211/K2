@@ -209,6 +209,17 @@ class H(BaseHTTPRequestHandler):
             return self.reply({"plan": True, "node": "k2n7", "online": True, "startsNow": True,
                                "warnings": ["--mem auto: 8G — auto (no history yet: the fallback 8G)"],
                                "effective": {"source": None, "mem": {"value": "8G", "bytes": 8 << 30, "from": "auto (no history yet: the fallback 8G)", "asked": "flag"}}})
+        if path == "/cli/ci/release":
+            return self.reply({"workspace": "proj", "plan": True, "version": v["version"], "project": "k2", "sha": SHA, "tree": SHA,
+                               "seat": "seat-1", "owner": "owner.example", "lane": "ci-standard",
+                               "placed": [{"label": "L1", "role": "build", "build": "linux-x86_64", "node": "n7", "why": "starts now"}]})
+        if path == "/cli/ci/setup":
+            if v.get("rev") == "missing":
+                return self.reply({"workspace": "proj", "project": "k2", "sha": SHA, "owner": "owner.example", "lane": "ci-standard",
+                                   "controllerFp": "c" * 64, "missing": ["no seat on owner.example's lane ci-standard: ask for one"]})
+            return self.reply({"workspace": "proj", "project": "k2", "sha": SHA, "owner": "owner.example", "lane": "ci-standard",
+                               "controllerFp": "c" * 64, "missing": [], "roster": {"seq": 3, "entries": [{"name": "n7", "fp": "a" * 64, "status": "active"}]},
+                               "setup": {"kind": "k2-signer-setup", "v": 1, "project": "k2", "policy": "version = 1\n"}})
         if path == "/cli/ci/freeze":
             if v.get("off"):
                 return self.reply({"workspace": "proj", "freeze": None})
@@ -552,6 +563,24 @@ has "search: a match" "$out" "jobaaaaa 2h ago [unit] thread 'main' panicked at s
 has "search: cut short" "$out" "cut short: --limit reached"
 rc "logs --search --json" 0 compute logs --search panicked --json
 has "search --json is the daemon's" "$(cat "$WORK/out")" "\"cut\": \"limit\""
+echo "== release --only-keys, evidence --reported, setup =="
+fpa="$(printf 'a%.0s' $(seq 64))"; fpb="$(printf 'b%.0s' $(seq 64))"
+rc "release --plan --only-keys" 0 ci release 1.2.3 --sha "$(printf '1%.0s' $(seq 40))" --plan --only-keys "$fpa,$fpb"
+b="$(last /cli/ci/release)"
+eq "release sends onlyKeys" "$(field "$b" onlyKeys)" "[\"$fpa\", \"$fpb\"]"
+rc "release without --only-keys" 0 ci release 1.2.3 --plan
+eq "no onlyKeys when not asked (every seat node)" "$(field "$(last /cli/ci/release)" onlyKeys)" "null"
+rc "evidence --reported with --no-files" 2 ci evidence run1 --out "$WORK/ev" --no-files --reported dist/build-info.json
+has "evidence: --reported needs the files" "$(cat "$WORK/err")" "--reported reads the fetched files"
+rc "setup without --plan" 2 ci setup --out "$WORK/setup.json"
+rc "setup --plan" 0 ci setup --plan --out "$WORK/setup.json"
+python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["kind"]=="k2-signer-setup", v' "$WORK/setup.json" && ok "setup --plan writes the setup file" || bad "setup --plan writes the setup file"
+has "setup: the person's next step" "$(cat "$WORK/out")" "sudo k2-signer-admin apply-setup $WORK/setup.json"
+rm -f "$WORK/setup2.json"
+rc "setup --plan with steps missing" 3 ci setup --plan --out "$WORK/setup2.json" missing
+[ ! -e "$WORK/setup2.json" ] && ok "setup: no file while steps are missing" || bad "setup: wrote a file with steps missing"
+has "setup: names what is missing" "$(cat "$WORK/out")" "no seat on owner.example"
+has "help: setup" "$("$K2" ci --help)" "k2 ci setup --plan --out <file>"
 
 echo
 echo "ci_cli: $pass passed, $fail failed"

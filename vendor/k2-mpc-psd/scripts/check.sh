@@ -13,4 +13,5 @@ cargo test -q --locked --workspace --all-targets
 sh scripts/check-licences.sh
 sh scripts/oss-check.sh
 sh scripts/check-private.sh
+sh scripts/check-labels.sh
 echo "repo checks: ok"

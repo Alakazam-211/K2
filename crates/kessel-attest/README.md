@@ -16,7 +16,7 @@ band, and kessel-attest checks everything else from there.
 Used in K2 Compute: its servers hand out the statements with a `trust/`
 folder (`k2 ci provenance --out DIR`, `k2 ci evidence --out DIR`). The
 formats are in `docs/provenance-v1.md` and `docs/ci-formats-v1.md` in the
-source repository. Licensed MIT.
+source repository. Licensed under MIT OR Apache-2.0, at your option.
 
 ## Use
 

@@ -3,7 +3,7 @@ name = "kessel-attest"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 description = "Checks a build statement (in-toto Statement v1 with a SLSA Provenance v1 predicate, in a DSSE envelope) signed by a build machine's key, against the machine owner's signed roster of keys and the files you hold. Offline: no server, no network."
 authors = ["Alakazam Labs"]
 readme = "README.md"
@@ -13,7 +13,7 @@ keywords = ["slsa", "in-toto", "dsse", "provenance", "supply-chain"]
 categories = ["command-line-utilities", "cryptography", "development-tools"]
 # Only the code, the README, the changelog and the licence ship. tests/ reads
 # fixtures from the repository, and scripts/ needs stock tools.
-include = ["/src/", "/README.md", "/LICENSE-MIT", "/CHANGELOG.md"]
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/CHANGELOG.md"]
 # Not published until the crate is reviewed.
 publish = false
 

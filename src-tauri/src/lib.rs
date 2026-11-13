@@ -1265,8 +1265,8 @@ pub fn run() {
             // (builder-only). Must exist before restore / close / watchdog.
             crate::k2_app_window::create_main_k2_window(app.handle())?;
 
-            // Restore last good frame, or center a default 1400×900 if
-            // the saved rect is missing / tiny / off every current display.
+            // Restore the saved frame (pulled into view), or center the
+            // first-launch default when nothing is saved (window.rs).
             window::apply_restored_frame(app.handle());
             if window::load_window_state(app.handle()).is_none() {
                 let handle = app.handle().clone();

@@ -402,10 +402,15 @@ pub fn window_open_ticket(app: AppHandle, ticket_id: String) -> Result<(), Strin
 pub fn open_new_window(app: &AppHandle) -> Result<(), tauri::Error> {
     let label = format!("window-{}", uuid::Uuid::new_v4());
     let webview_url = crate::k2_app_window::k2_app_webview_url(app, None);
+    let (width, height) = crate::window::new_window_logical_size(app);
     let builder = crate::k2_app_window::k2_app_window_builder(app, &label, webview_url)
         .title("K2 | local")
-        .inner_size(1400.0, 900.0)
-        .min_inner_size(800.0, 600.0);
+        .inner_size(width, height)
+        .min_inner_size(
+            crate::window::MIN_WIDTH as f64,
+            crate::window::MIN_HEIGHT as f64,
+        )
+        .center();
     // hidden_title / TitleBarStyle::Overlay are macOS-only builder methods.
     #[cfg(target_os = "macos")]
     let builder = builder

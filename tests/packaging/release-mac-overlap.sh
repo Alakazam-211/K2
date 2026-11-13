@@ -90,7 +90,7 @@ check '[ $(( $(date +%s) - t0 )) -lt 2 ] && [ -n "$K2_STANDALONE_PID" ] && kill 
 check 'k2_standalone_macos_daemon_poll "$stage"' "poll while it runs: 0"
 check 'cmp -s "$stage/embed/k2-ptyd" "$pdir/k2-ptyd" && cmp -s "$stage/embed/k2-export" "$pdir/k2-export"' \
     "it embeds COPIES of the signed k2-ptyd and k2-export"
-want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
+want="build --release -p k2-daemon --bin k2-daemon --bin k2-power-helper -p k2-ptyd --bin k2-ptyd -p k2-export --bin k2-export -p k2-deckrender --bin k2-deckrender -p k2-scenerender --bin k2-scenerender -p k2-node --bin k2-node -p k2-menubar --bin k2-menubar -p k2-deskd --bin k2-deskd"
 k2_standalone_macos_daemon_finish "$app" "$stage" "$work/out-daemon" > "$work/finish.log" 2>&1 \
     && pass "finish waits and succeeds" || fail "finish waits and succeeds" "$(cat "$work/finish.log")"
 check '[ "$(cut -f1 "$work/cargo.calls")" = "$want" ] && [ "$(cut -f2 "$work/cargo.calls")" = "embed=$stage/embed/k2-ptyd" ]' \

@@ -21,6 +21,11 @@ comment block right above it goes along. Exactly one line of the section
 must start with `<function>() {`. The section's own name is then the
 name of its first part.
 
+`<part name><TAB>@entry <command>` cuts inside the `k2 --schema` manifest,
+at the entry with that name. A part named `schema/<noun>` is written as
+cli/src/schema/<noun>.entries: a run of entries with no shell around it,
+which scripts/build-cli.sh checks file by file.
+
 --recut is for a tree that already has cli/src: the parts are joined,
 checked against cli/k2, cut again by the table, and ORDER is rewritten.
 """
@@ -66,8 +71,17 @@ def headers(lines):
 def cut_at(lines, start, end, rule, part):
     """The line index a cut row names, inside the section [start, end)."""
     kind, _, text = rule.partition(" ")
+    if kind == "@entry" and text:
+        # A `k2 --schema` entry: `    {` then its name line, or both on one line.
+        hits = [i - 1 for i in range(start + 1, end)
+                if lines[i] == '      "name": "%s",' % text and lines[i - 1] == "    {"]
+        hits += [i for i in range(start, end) if lines[i].startswith('    {"name": "%s",' % text)]
+        if len(hits) != 1:
+            sys.exit("split-cli: %s: %d schema entries of its section are named %r; a cut needs exactly one"
+                     % (part, len(hits), text))
+        return hits[0]
     if kind != "@fn" or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", text):
-        sys.exit("split-cli: %s: a cut row is `@fn <function>`, not %r" % (part, rule))
+        sys.exit("split-cli: %s: a cut row is `@fn <function>` or `@entry <command>`, not %r" % (part, rule))
     want = text + "() {"
     hits = [i for i in range(start, end) if lines[i].startswith(want)]
     if len(hits) != 1:
@@ -106,7 +120,7 @@ def main():
     with open(NAMES, encoding="utf-8") as f:
         rows = [l.rstrip("\n").split("\t", 1) for l in f if l.strip() and not l.startswith("#")]
     for k, row in enumerate(rows):
-        if len(row) != 2 or not re.fullmatch(r"\+|[a-z0-9][a-z0-9-]*", row[0]):
+        if len(row) != 2 or not re.fullmatch(r"\+|(schema/)?[a-z0-9][a-z0-9-]*", row[0]):
             sys.exit("split-cli: %s row %d is not `<part name><TAB><header text>`" % (NAMES, k + 1))
     # A section row, then the cut rows (`@…`) that cut that section further.
     want, cuts = [], []
@@ -151,7 +165,7 @@ def main():
         body = "\n".join(lines[a:b])
         if b < len(lines):
             body += "\n"
-        parts.append((name + ".sh", body))
+        parts.append((name + (".entries" if name.startswith("schema/") else ".sh"), body))
     if "".join(b for _, b in parts) != text:
         sys.exit("split-cli: the parts do not join back to cli/k2 byte for byte; nothing written")
 
@@ -163,6 +177,11 @@ def main():
     os.makedirs(SRC, exist_ok=True)
     for name in old:
         os.remove(os.path.join(SRC, name))
+    folder = os.path.join(SRC, "schema")
+    if any(name.startswith("schema/") for name, _ in parts):
+        os.makedirs(folder, exist_ok=True)
+    elif os.path.isdir(folder):
+        os.rmdir(folder)
     for name, body in parts:
         with open(os.path.join(SRC, name), "w", encoding="utf-8", newline="") as f:
             f.write(body)

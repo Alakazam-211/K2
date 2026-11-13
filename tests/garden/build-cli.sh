@@ -61,4 +61,47 @@ run 2 "no $S/ORDER"
 run 2 "unknown argument: --chekc" --chekc
 grep -q "mail 2" "$T/cli/k2" || { echo "FAIL: an error changed cli/k2" >&2; exit 1; }
 pass=$((pass + 1))
+
+# The schema folder: runs of `k2 --schema` entries, each file checked on
+# its own, joined like any part. No other folder is allowed.
+rm -rf "$T/cli"; mkdir -p "$S/schema"
+printf 'head\n' > "$S/schema-head.sh"
+printf '    {\n      "name": "last",\n      "usage": "k2 last",\n      "description": "d"\n    }\n  ]\n' > "$S/schema-tail.sh"
+mail='    {"name": "mail", "usage": "k2 mail", "description": "d", "args": [], "flags": []},'
+db='    {\n      "name": "db",\n      "usage": "k2 db",\n      "description": "a \\\\ b"\n    },'
+printf '%s\n' "$mail" > "$S/schema/mail.entries"
+printf "$db\n" > "$S/schema/db.entries"
+printf 'schema-head.sh\nschema/mail.entries\nschema/db.entries\nschema-tail.sh\n' > "$S/ORDER"
+run 0 "wrote cli/k2 from 4 parts"
+run 0 "cli/k2 is current (4 parts)" --check
+grep -q '"name": "db",' "$T/cli/k2" || { echo "FAIL: the entries are not in the join" >&2; exit 1; }
+pass=$((pass + 1))
+breaks() {
+    local text="$1" file="$2" body="$3"
+    cp "$S/schema/$file" "$T/keep"
+    printf "$body" > "$S/schema/$file"
+    run 1 "cli/src/schema/$file: $text" --check
+    run 1 "cli/src/schema/$file: $text"
+    cp "$T/keep" "$S/schema/$file"
+}
+breaks 'the last entry must end with `},` and a new line' db.entries '    {"name": "db", "usage": "u", "description": "d"}\n'
+breaks 'not a run of JSON entries' db.entries '    {"name": "db", "usage": "u" "description": "d"},\n'
+breaks 'not a run of JSON entries' db.entries '    {"name": "db", "usage": "a \\q b", "description": "d"},\n'
+breaks 'entry 1 (mail) is already in cli/src/schema/mail.entries' db.entries '    {"name": "mail", "usage": "u", "description": "d"},\n'
+breaks 'entry 1 (last) is already in cli/src/schema-tail.sh' db.entries '    {"name": "last", "usage": "u", "description": "d"},\n'
+breaks 'entry 2 (db): "usage" must be a string' db.entries '    {"name": "x", "usage": "u", "description": "d"},\n    {"name": "db", "description": "d"},\n'
+breaks 'entry 1 (db): "flags" must be a list' db.entries '    {"name": "db", "usage": "u", "description": "d", "flags": {}},\n'
+breaks 'entry 1 (no name): "name" must be a string' db.entries '    {"usage": "u", "description": "d"},\n'
+breaks 'a line is the heredoc word EOF alone' db.entries '    {"name": "db", "usage": "u", "description": "d"},\nEOF\n'
+run 0 "is current" --check
+# A file in the folder that ORDER does not list, and any other folder.
+printf '%s\n' "$mail" > "$S/schema/stray.entries"
+run 2 "cli/src/schema/stray.entries is not in ORDER"
+rm "$S/schema/stray.entries"
+printf 'schema-head.sh\nother/mail.entries\nschema-tail.sh\n' > "$S/ORDER"
+run 2 "ORDER names a part outside cli/src: other/mail.entries"
+printf 'schema-head.sh\nschema/../schema-tail.sh\nschema/deep/x.entries\n' > "$S/ORDER"
+run 2 "ORDER names a part outside cli/src"
+printf 'schema-head.sh\nschema/mail.sh\nschema-tail.sh\n' > "$S/ORDER"
+run 2 "ORDER names a part outside cli/src: schema/mail.sh"
 echo "build-cli tests: $pass passed"

@@ -2,7 +2,9 @@
 # top-level section, in the file's order. `+` folds a section that is only
 # a header into the part that follows. Read by scripts/garden/split-cli.py.
 # A row `<part name><TAB>@fn <function>` cuts the section above it further:
-# a new part starts at that function (see the script's head).
+# a new part starts at that function (see the script's head). `@entry
+# <command>` cuts the `k2 --schema` manifest at that command's entry; a
+# part named schema/<noun> becomes cli/src/schema/<noun>.entries.
 prelude	(file start)
 cli-tools-policy	CLI Tools identity policy (mirrors crates/k2-core cli_tool_policy)
 cell-socket	#58 Phase-1 close: scoped per-cell UDS arms
@@ -68,7 +70,25 @@ clone	k2 clone (prd-clone-carries-threads-and-vault-v1 §4.3, §4.4, CL20)
 users-phones	phone-web-off: pair a Companion phone (k2 users pair-phone|phones|unpair-phone)
 connect-account	Headless Connect account pairing — k2 connect login|status|logout
 wiki	Workspace Knowledge Base (brain map) — k2 wiki
-schema	GH#8 #4: `k2 --schema [json]` — machine-readable command surface
+schema-head	GH#8 #4: `k2 --schema [json]` — machine-readable command surface
+schema/talk	@entry thread
+schema/sessions	@entry sessions
+schema/sources	@entry sources list
+schema/llm	@entry llm tokens list
+schema/agent	@entry connections
+schema/feedback-project	@entry feedback ask
+schema/db	@entry db create
+schema/mail	@entry hostmail create
+schema/hostmail	@entry hostmail
+schema/domains	@entry dns access
+schema/heartbeat	@entry heartbeat
+schema/publish	@entry tunnel
+schema/users	@entry connect
+schema/app	@entry app
+schema/skin	@entry skin
+schema/remote-session	@entry remote-session
+schema/wiki-zen	@entry wiki
+schema-tail	@entry skills
 explain	App refusal ids, `k2 explain`, `k2 capabilities`, `k2 app status`
 setup	k2 setup (prd-setup-checklist-v1 C2)
 send-feedback	k2 send-feedback (prd-k2-product-feedback-v1, 0.46.11)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for scripts/garden/split-cli.py on a throwaway tree: the first cut,
-# `@fn` cut rows, and --recut of a tree that already has cli/src.
+# `@fn` and `@entry` cut rows, and --recut of a tree that already has cli/src.
 # Run: bash tests/garden/split-cli.sh
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -104,6 +104,42 @@ run 1 "a folded \`+\` section can't be cut" --recut
 names 'prelude\t(file start)\nmail\tmail\nmail\t@fn mail_read\nrouter\trouter\n'
 run 1 "two parts are named mail" --recut
 [ "$(ls "$T/cli/src" | wc -l | tr -d ' ')" = "6" ] || no "a refused recut changed cli/src: $(ls "$T/cli/src")"; ok
+
+# `@entry` cuts the schema manifest at a command's entry, and a part named
+# schema/<noun> is written as cli/src/schema/<noun>.entries.
+cat >> "$T/cli/k2" <<'CLI'
+
+# ── schema ──────────────
+cmd_schema() {
+    cat <<'EOF'
+  "commands": [
+    {
+      "name": "mail",
+      "usage": "k2 mail"
+    },
+    {"name": "mail read", "usage": "k2 mail read"},
+    {"name": "db", "usage": "k2 db"},
+    {
+      "name": "help",
+      "usage": "k2 help"
+    }
+  ]
+EOF
+}
+CLI
+rm -rf "$T/cli/src"
+names 'prelude\t(file start)\nmail\tmail\nrouter\trouter\nschema-head\tschema\nschema/mail\t@entry mail\nschema/db\t@entry db\nschema-tail\t@entry help\n'
+run 0 "7 parts"
+[ "$(head -2 "$T/cli/src/schema/mail.entries")" = "$(printf '    {\n      "name": "mail",')" ] || no "mail.entries starts at: $(head -2 "$T/cli/src/schema/mail.entries")"; ok
+[ "$(cat "$T/cli/src/schema/db.entries")" = '    {"name": "db", "usage": "k2 db"},' ] || no "db.entries: $(cat "$T/cli/src/schema/db.entries")"; ok
+[ "$(head -1 "$T/cli/src/schema-tail.sh")" = "    {" ] && [ ! -e "$T/cli/src/schema-tail.entries" ] || no "the tail is a shell part starting at its entry"; ok
+[ "$(grep -v '^#' "$T/cli/src/ORDER" | tr '\n' ' ')" = "prelude.sh mail.sh router.sh schema-head.sh schema/mail.entries schema/db.entries schema-tail.sh " ] || no "ORDER with entries: $(cat "$T/cli/src/ORDER")"; ok
+names 'prelude\t(file start)\nmail\tmail\nrouter\trouter\nschema-head\tschema\nschema/mail\t@entry mail read\nschema-tail\t@entry nope\n'
+run 1 "0 schema entries of its section are named 'nope'" --recut
+# Cut back to one schema part: the folder goes with its files.
+names 'prelude\t(file start)\nmail\tmail\nrouter\trouter\nschema\tschema\n'
+run 0 "4 parts" --recut
+[ ! -e "$T/cli/src/schema" ] && [ -f "$T/cli/src/schema.sh" ] || no "the schema folder stayed: $(ls "$T/cli/src")"; ok
 rm -rf "$T/cli/src"
 run 1 "--recut needs an existing cli/src" --recut
 run 1 "split-cli.py [--dry-run] [--recut]" --bogus

@@ -277,11 +277,36 @@ export function AgentColorPicker({
     apply(normalized)
   }
 
+  // One custom-color field for the Settings card and the drawer: the shared
+  // <Input> (its height, well, focus ring and Terminal cut), marked invalid
+  // the same way (aria-invalid colours the cut corners too), with the same
+  // line under it. Only the width differs: each place keeps its own (the
+  // drawer's field wraps onto its own line under the swatches).
+  const hexInput = (width: string): React.JSX.Element => (
+    <Input
+      value={customHex}
+      onChange={(e) => { setCustomHex(e.target.value); setHexError(false) }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commitHex()
+        else if (e.key === 'Escape') { e.stopPropagation(); setCustomHex(''); setHexError(false) }
+      }}
+      onBlur={commitHex}
+      placeholder={project.color || '#rrggbb'}
+      spellCheck={false}
+      aria-label="Custom color (hex or rgb)"
+      aria-invalid={hexError || undefined}
+      className={cx(width, 'type-control', hexError && '!border-[var(--color-status-error-soft)]')}
+    />
+  )
+  const hexAlert = hexError
+    ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">Enter a hex color or an rgb() value.</p>
+    : undefined
+
   if (card) {
     return (
       <SettingRow
         label="Color"
-        below={hexError ? <p role="alert" className="type-hint text-[var(--color-status-error-soft)]">Enter a hex color or an rgb() value.</p> : undefined}
+        below={hexAlert}
       >
         <div className="flex items-center gap-1.5">
           {GROUP_AVATAR_COLORS.map((color) => (
@@ -304,19 +329,7 @@ export function AgentColorPicker({
             </button>
           ))}
         </div>
-        <Input
-          value={customHex}
-          onChange={(e) => { setCustomHex(e.target.value); setHexError(false) }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commitHex()
-            else if (e.key === 'Escape') { e.stopPropagation(); setCustomHex(''); setHexError(false) }
-          }}
-          onBlur={commitHex}
-          placeholder={project.color || '#rrggbb'}
-          spellCheck={false}
-          aria-label="Custom color (hex or rgb)"
-          className={cx('w-24 type-control', hexError && '!border-[var(--color-status-error-soft)]')}
-        />
+        {hexInput('w-24')}
       </SettingRow>
     )
   }
@@ -346,53 +359,12 @@ export function AgentColorPicker({
           )}
         </button>
       ))}
-      <input
-        type="text"
-        value={customHex}
-        onChange={(e) => {
-          setCustomHex(e.target.value)
-          setHexError(false)
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            const normalized = normalizeHexColor(customHex)
-            if (normalized === null) {
-              setHexError(customHex.trim().length > 0)
-              return
-            }
-            setHexError(false)
-            setCustomHex('')
-            apply(normalized)
-          } else if (e.key === 'Escape') {
-            e.stopPropagation()
-            setCustomHex('')
-            setHexError(false)
-          }
-        }}
-        onBlur={() => {
-          if (!customHex.trim()) return
-          const normalized = normalizeHexColor(customHex)
-          if (normalized === null) {
-            setHexError(true)
-            return
-          }
-          setHexError(false)
-          setCustomHex('')
-          apply(normalized)
-        }}
-        placeholder={project.color || '#rrggbb'}
-        spellCheck={false}
-        aria-label="Custom color (hex or rgb)"
-        className={`w-[7.5rem] px-1.5 py-0.5 text-[11px] font-mono bg-[var(--color-bg)] border text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none no-drag ${
-          hexError
-            ? 'border-[color-mix(in_srgb,var(--color-status-error-soft)_60%,transparent)]'
-            : 'border-[var(--color-border)] focus:border-[var(--color-accent)]'
-        }`}
-      />
+      {hexInput('w-[7.5rem]')}
     </div>
   )
 
-  if (compact) return swatches
+  // Always the same wrapper, so the field keeps focus when the line appears.
+  if (compact) return <div className="flex flex-col gap-1.5">{swatches}{hexAlert}</div>
 
   return (
     <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)] gap-3">

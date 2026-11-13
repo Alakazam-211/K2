@@ -282,6 +282,40 @@ describe('Agent tab: a local agent (the window’s room)', () => {
     expect(other.querySelector('svg')).toBeNull()
   })
 
+  // The hex field is the Settings card's field (one element for both): the
+  // shared <Input> with its height, focus ring and cut, the same invalid mark
+  // and line; only the width is the drawer's.
+  it('the hex field is the shared field, and a bad value is marked like the Settings card', () => {
+    renderPrimary()
+    const field = screen.getByLabelText('Custom color (hex or rgb)') as HTMLInputElement
+    expect(field.getAttribute('data-k2-chamfer')).toBe('control')
+    expect(field.className).toContain('k2-focus')
+    expect(field.className).toContain('type-control')
+    expect(field.className).toContain('rounded-[var(--radius-field)]')
+    expect(field.className).toContain('w-[7.5rem]')
+    expect(field.className).not.toContain('font-mono')
+    expect(field.className).not.toContain('text-[11px]')
+    expect(field.hasAttribute('aria-invalid')).toBe(false)
+
+    field.focus()
+    fireEvent.change(field, { target: { value: 'not a color' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect(field.getAttribute('aria-invalid')).toBe('true')
+    expect(field.className).toContain('!border-[var(--color-status-error-soft)]')
+    expect(screen.getByRole('alert').textContent).toBe('Enter a hex color or an rgb() value.')
+    // The line appears without remounting the field, so focus stays.
+    expect(screen.getByLabelText('Custom color (hex or rgb)')).toBe(field)
+    expect(document.activeElement).toBe(field)
+    expect(cli.posts.filter((p) => p.route === 'projects/update')).toEqual([])
+
+    fireEvent.change(field, { target: { value: 'rgb(239, 68, 68)' } })
+    expect(field.hasAttribute('aria-invalid')).toBe(false)
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect(useProjectsStore.getState().projects[0].color).toBe('#ef4444')
+    expect(field.value).toBe('')
+  })
+
   it('a letter tile has no edge, so the cut draws no diagonal', () => {
     renderPrimary()
     const tile = screen.getByTestId('agent-picture-tile')

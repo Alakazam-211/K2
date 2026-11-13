@@ -1,0 +1,14 @@
+# k2-node test files that put a macOS sandbox around something themselves:
+# they call sandbox-exec, or start a node whose jobs run under it
+# (Wall::Seatbelt). macOS refuses a sandbox inside a sandbox, and a K2
+# Compute job on a Mac already runs inside one, so there these fail with
+# "sandbox_apply: Operation not permitted".
+#
+# They run on the Mac node that has no job wall; every other k2-node test
+# runs on the walled Mac nodes. scripts/ci/k2-node-mac-tests.sh turns this
+# list into the two nextest filters and checks it against the test files.
+#
+# One file name per line, without .rs, then why it is here.
+job_wall_e2e        the seatbelt:: tests run probes under sandbox-exec
+servers_e2e         starts nodes with Wall::Seatbelt; their jobs run under sandbox-exec
+tenant_wall_macos   the wall between servers, under sandbox-exec

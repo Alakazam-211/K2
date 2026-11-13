@@ -3,15 +3,16 @@ import { describe, expect, it } from 'vitest'
 import { fitTopBar } from './top-bar-fit'
 
 /** A bar `room` CSS px wide whose clusters measure per step: the server
- *  label goes at `compact` (-110), the Usage word at `tight` (-30). */
+ *  label goes at `compact` (-110), the Usage word at `tight` (-30), the
+ *  switcher and the dividers at `minimal` (-50, -10). */
 function bar(room: number): { b: HTMLElement; l: HTMLElement; r: HTMLElement } {
   const b = document.createElement('div')
   const l = document.createElement('div')
   const r = document.createElement('div')
   const step = (): string => b.dataset.topBarFit ?? 'full'
   Object.defineProperty(b, 'clientWidth', { get: () => room })
-  Object.defineProperty(l, 'scrollWidth', { get: () => (step() === 'full' ? 400 : 290) })
-  Object.defineProperty(r, 'offsetWidth', { get: () => (step() === 'tight' ? 150 : 180) })
+  Object.defineProperty(l, 'scrollWidth', { get: () => ({ full: 400, compact: 290, tight: 290, minimal: 240 })[step()] ?? 400 })
+  Object.defineProperty(r, 'offsetWidth', { get: () => ({ full: 180, compact: 180, tight: 150, minimal: 140 })[step()] ?? 180 })
   return { b, l, r }
 }
 
@@ -27,6 +28,11 @@ describe('a top bar too narrow for its items', () => {
     expect(fitTopBar(one.b, one.l, one.r)).toBe('compact')
     const two = bar(450)
     expect(fitTopBar(two.b, two.l, two.r)).toBe('tight')
+  })
+
+  it('as the last resort hides the dividers and the server switcher (an 800 px window at 175 %)', () => {
+    const { b, l, r } = bar(400)
+    expect(fitTopBar(b, l, r)).toBe('minimal')
   })
 
   it('comes back as the bar widens', () => {

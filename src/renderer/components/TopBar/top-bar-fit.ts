@@ -3,7 +3,11 @@
 //
 //   compact  the server switcher shows its icon (and status light) only;
 //   tight    the Usage pill shows its marks only (agent icons, or a small
-//            gauge), not the percentages or the word.
+//            gauge), not the percentages or the word;
+//   minimal  the last resort (an 800 px window at 175 %): the dividers go,
+//            and so does the server switcher until its menu opens (⌘L, as
+//            Home's hidden trigger does), so the page tabs and the right
+//            cluster never overlap.
 //
 // The bar carries the step in `data-top-bar-fit`; globals.css hides the
 // labels (`data-top-bar-label`). Each pass starts from the full bar and
@@ -14,7 +18,7 @@
 
 import { useLayoutEffect, useRef } from 'react'
 
-export const TOP_BAR_FIT_STEPS = ['full', 'compact', 'tight'] as const
+export const TOP_BAR_FIT_STEPS = ['full', 'compact', 'tight', 'minimal'] as const
 export type TopBarFit = (typeof TOP_BAR_FIT_STEPS)[number]
 
 /** Room kept between the two clusters, in CSS px. */

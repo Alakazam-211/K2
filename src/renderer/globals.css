@@ -1817,8 +1817,11 @@ html[data-style="terminal"] .k2-slider::-webkit-slider-thumb {
 [data-top-bar-glyph] { display: none; }
 :is([data-top-bar-fit="compact"], [data-top-bar-fit="tight"]) [data-top-bar-label="server"] { display: none; }
 :is([data-top-bar-fit="compact"], [data-top-bar-fit="tight"]) [data-server-switcher] { width: auto; }
-[data-top-bar-fit="tight"] [data-top-bar-label="usage"] { display: none; }
-[data-top-bar-fit="tight"] [data-top-bar-glyph] { display: inline-flex; }
+:is([data-top-bar-fit="tight"], [data-top-bar-fit="minimal"]) [data-top-bar-label="usage"] { display: none; }
+:is([data-top-bar-fit="tight"], [data-top-bar-fit="minimal"]) [data-top-bar-glyph] { display: inline-flex; }
+/* minimal: an 800 px window at 175 %. The switcher comes back while its
+   menu is open (⌘L), as Home's hidden trigger does. */
+[data-top-bar-fit="minimal"] :is([data-server-switcher]:not([aria-expanded="true"]), [data-top-bar-pipe]) { display: none; }
 
 /* A Settings row's button on a line of its own that is still wider than the
    line (a narrow pane, the app zoomed in): its label wraps rather than

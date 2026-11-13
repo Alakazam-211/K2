@@ -472,6 +472,12 @@ mod tests {
     /// A loopback gRPC server that answers every call with an empty
     /// message; counts the TCP connections it accepted and closes the
     /// first one after one call when `drop_first`.
+    ///
+    /// Each call is answered in a task of its own while the connection's
+    /// loop keeps calling `accept`: h2 reads the socket only inside
+    /// `accept`, so a loop that awaited the request body itself would wait
+    /// forever for a body that arrived after the headers (it did, on a
+    /// busy node).
     async fn tiny_server(drop_first: bool) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -483,28 +489,45 @@ mod tests {
                 let n = c2.fetch_add(1, Ordering::SeqCst);
                 tokio::spawn(async move {
                     let Ok(mut h) = h2::server::handshake(tcp).await else { return };
-                    while let Some(Ok((req, mut respond))) = h.accept().await {
-                        let mut body = req.into_body();
-                        while let Some(Ok(chunk)) = body.data().await {
-                            let _ = body.flow_control().release_capacity(chunk.len());
-                        }
-                        let resp = http::Response::builder().status(200).header("content-type", "application/grpc").body(()).expect("response");
-                        let Ok(mut send) = respond.send_response(resp, false) else { return };
-                        let _ = send.send_data(encode_frame(&Empty {}), false);
-                        let mut t = http::HeaderMap::new();
-                        t.insert("grpc-status", http::HeaderValue::from_static("0"));
-                        let _ = send.send_trailers(t);
-                        if drop_first && n == 0 {
-                            // Flush the reply, then close this connection.
-                            h.graceful_shutdown();
-                            while h.accept().await.is_some() {}
-                            return;
+                    let (answered_tx, mut answered) = tokio::sync::mpsc::unbounded_channel::<()>();
+                    loop {
+                        tokio::select! {
+                            next = h.accept() => {
+                                let Some(Ok((req, respond))) = next else { return };
+                                tokio::spawn(answer_empty(req, respond, answered_tx.clone()));
+                            }
+                            Some(()) = answered.recv(), if drop_first && n == 0 => {
+                                // The reply is queued: flush it, then close this connection.
+                                h.graceful_shutdown();
+                                while h.accept().await.is_some() {}
+                                return;
+                            }
                         }
                     }
                 });
             }
         });
         (port, conns)
+    }
+
+    /// Reads one request to its end, answers it with an empty message and
+    /// status 0, then says so on `answered`.
+    async fn answer_empty(
+        req: http::Request<h2::RecvStream>,
+        mut respond: h2::server::SendResponse<Bytes>,
+        answered: tokio::sync::mpsc::UnboundedSender<()>,
+    ) {
+        let mut body = req.into_body();
+        while let Some(Ok(chunk)) = body.data().await {
+            let _ = body.flow_control().release_capacity(chunk.len());
+        }
+        let resp = http::Response::builder().status(200).header("content-type", "application/grpc").body(()).expect("response");
+        let Ok(mut send) = respond.send_response(resp, false) else { return };
+        let _ = send.send_data(encode_frame(&Empty {}), false);
+        let mut t = http::HeaderMap::new();
+        t.insert("grpc-status", http::HeaderValue::from_static("0"));
+        let _ = send.send_trailers(t);
+        let _ = answered.send(());
     }
 
     /// Fix 3: unary calls reuse one warm connection; one that went away is

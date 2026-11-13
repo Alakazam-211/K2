@@ -268,12 +268,27 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "cmdline({pid}) never showed the marker: {:?}", cmdline(pid));
             std::thread::sleep(Duration::from_millis(20));
         }
-        let found = pids_matching(&marker);
+        // The shell forks before it runs sleep, and until that fork's exec
+        // lands it is a second process with the marker in its argv. Wait
+        // for the list to settle on the shell alone; anything else that
+        // stays is a failure.
+        let mut found = pids_matching(&marker);
+        while found != vec![pid] && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+            found = pids_matching(&marker);
+        }
         // SAFETY: SIGKILL to the process group this test created.
         assert_eq!(unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) }, 0, "kill the group");
         child.wait().expect("wait");
         assert_eq!(found, vec![pid]);
-        assert!(pids_matching(&marker).is_empty(), "the child is gone");
+        // The killed sleep is reaped by init a moment after the shell is.
+        let gone = std::time::Instant::now() + Duration::from_secs(10);
+        let mut left = pids_matching(&marker);
+        while !left.is_empty() && std::time::Instant::now() < gone {
+            std::thread::sleep(Duration::from_millis(20));
+            left = pids_matching(&marker);
+        }
+        assert!(left.is_empty(), "the child is gone, but these still match: {left:?}");
     }
 
     #[cfg(unix)]

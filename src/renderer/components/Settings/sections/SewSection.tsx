@@ -80,6 +80,7 @@ import {
 import { OnceSecret, SewStatusChip, TypeToConfirm, muted, secondary, typedMatches, usePersonConfirm } from './sew-ui'
 import { RecordingPanel } from './SewRecordingPanel'
 import { SewAgentsPanelStub, SewApprovalsPanelStub, SewDeliveriesPanelStub } from './SewStubs'
+import { useSplitPage } from '../controls/split-page'
 
 export const SEW_MANIFEST: SettingEntry[] = [
   { id: 'sew.status', section: 'sew', label: 'Chat / Voice', description: 'The chat and voice server on this box, powered by Sew: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
@@ -1189,6 +1190,8 @@ export function SewSection(): React.JSX.Element {
   const [status, setStatus] = useState<SewStatus | null>(null)
   const [loadError, setLoadError] = useState<{ forbidden: boolean; message: string } | null>(null)
   const [selection, setSelection] = useState<Selection>('server')
+  // Narrow (a small window, the app zoomed in): the list goes on top.
+  const [setPageEl, stacked] = useSplitPage()
   const mounted = useRef(true)
 
   const load = useCallback(async () => {
@@ -1268,8 +1271,18 @@ export function SewSection(): React.JSX.Element {
           {SEW_MAC_BANNER}
         </div>
       ) : null}
-      <div className="flex flex-1 min-h-0">
-        <div className="w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0">
+      <div
+        ref={setPageEl}
+        data-sew-layout={stacked ? 'stacked' : 'split'}
+        className={stacked ? 'flex flex-col flex-1 min-h-0 overflow-y-auto overflow-x-hidden' : 'flex flex-1 min-h-0'}
+      >
+        <div
+          className={
+            stacked
+              ? 'flex-shrink-0 border-b border-[var(--color-border)] flex flex-col'
+              : 'w-60 flex-shrink-0 border-r border-[var(--color-border)] flex flex-col min-h-0'
+          }
+        >
           <button
             type="button"
             onClick={() => setSelection('server')}
@@ -1312,7 +1325,7 @@ export function SewSection(): React.JSX.Element {
             )
           })}
         </div>
-        <div className="flex-1 overflow-y-auto p-6 min-h-0">
+        <div className={stacked ? 'min-w-0 p-6' : 'flex-1 min-w-0 overflow-y-auto p-6 min-h-0'}>
           {!youOf(status).canManage && !sample ? (
             <p className={`type-hint mb-3 ${muted}`}>You can see Chat / Voice Hosting. Only the box owner, an admin or an agent with Manage Chat / Voice Hosting changes it.</p>
           ) : null}

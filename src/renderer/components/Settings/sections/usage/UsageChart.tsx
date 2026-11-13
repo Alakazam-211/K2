@@ -37,8 +37,8 @@ export function ChartLegend({ harnesses }: { harnesses: string[] }): React.JSX.E
 }
 
 /** Room one day label needs on the axis, gap included ("Nov 12" in the
- *  hint type), in CSS px. */
-export const AXIS_LABEL_SLOT_PX = 56
+ *  hint type, about 42), in CSS px. */
+export const AXIS_LABEL_SLOT_PX = 48
 
 /** Day labels: every day for a week or so, else about five on an even
  *  step, always the first and the last. `room` caps how many fit the axis

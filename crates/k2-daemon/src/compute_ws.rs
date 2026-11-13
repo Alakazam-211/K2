@@ -2767,9 +2767,9 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             continue;
         }
         // V71: `--any` waits on this server a while for a node that can
-        // start it now, before it joins a node's queue.
+        // start it now (with a slot free node-wide), before it joins a node's queue.
         let since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
-        if j.ctl.any.is_some() && now - since < t.any_hold_secs && !share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) {
+        if j.ctl.any.is_some() && now - since < t.any_hold_secs && !(share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) && (offer.parallel_max == 0 || offer.running < offer.parallel_max)) {
             wait(
                 frames::Refusal::new("any_hold", format!("waiting up to {}s on this server for a node that can start it now", t.any_hold_secs)),
                 &mut pass,

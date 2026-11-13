@@ -171,7 +171,7 @@ word.
 3. With the receipt: the receipt verifies with the same key, and every field
    above agrees with it (`k2_node_proto::provenance::check_against_receipt`).
 4. Which node keys to trust is the owner's roster, not this file: see
-   `docs/ci-formats-v1.md` and prd-compute-build-attestations-v1 §3 and §7.
+   `docs/ci-formats-v1.md`.
    `builder.id` names the owner whose roster to check. A verifier that pins
    an owner's roster key accepts only `…/owner/<that key's fp>`; the
    `…/owner-server/<fp>` form (a node that held no roster when it signed)
@@ -180,7 +180,7 @@ word.
 
 ### Outside K2: kessel-attest
 
-`crates/kessel-attest` (MIT, pure Rust, no server and no network) runs
+`crates/kessel-attest` (MIT OR Apache-2.0, pure Rust, no server and no network) runs
 every step above that doesn't need the receipt, from a pinned owner key:
 the owner's roster, the node key in it, the signature, the statement's
 form, `builder.id`, the key's status and dates, the node's self-statement,
@@ -253,7 +253,7 @@ Readers:
   release signer checks again with its own pins.
 - `k2 ci provenance <run> --out <dir>` and `k2 ci evidence <run> --out
   <dir>` (bundle v3, `docs/ci-formats-v1.md` §8).
-- The release signer (k2-signer, slice S4) checks each statement in a
+- The release signer checks each statement in a
   bundle v3 against its receipt, the pinned owner's roster and its policy's
   `provenance`, `min_k2node` and `network` keys (`docs/ci-formats-v1.md`
   §8, "Build statements at the signer").

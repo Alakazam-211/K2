@@ -71,7 +71,7 @@ WHAT IT CHECKS, in order (it stops at the first that fails)
   signature       the DSSE signature verifies; the statement is well formed
   owner           the statement names that owner and that key
   key status      the key is not revoked and the roster vouches for it;
-                  for a retired key, the job started before it was retired
+                  for a retired key, the job started on or before its retirement
   time            only for a key that is no longer active (see EXIT 3)
   self-statement  the machine's own signed statement: a job wall, no job
                   could read the key, never ran a job without the wall,

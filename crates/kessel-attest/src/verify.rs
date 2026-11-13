@@ -442,7 +442,7 @@ fn pick_roster(input: &Input, run: &mut Run) -> Result<NodeRoster, Stop> {
     run.pass(
         "roster",
         "roster",
-        format!("{}'s roster seq {} (issued {}, {} keys) verifies with the pinned owner key {}…", newest.owner_id, newest.seq, when(newest.issued_at), newest.entries.len(), short(fp)),
+        format!("{}'s roster seq {} (issued {}, {} {}) verifies with the pinned owner key {}…", newest.owner_id, newest.seq, when(newest.issued_at), newest.entries.len(), if newest.entries.len() == 1 { "key" } else { "keys" }, short(fp)),
     );
     Ok(newest)
 }

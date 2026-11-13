@@ -22,16 +22,14 @@ repository. Licensed under MIT OR Apache-2.0, at your option.
 
 ## Install
 
-```sh
-cargo install kessel-attest
-```
-
-It is not on crates.io yet; until it is, build it from source:
+It is not on crates.io yet, so build it from source:
 
 ```sh
 git clone https://github.com/Alakazam-211/K2
 cargo install --path K2/crates/kessel-attest
 ```
+
+Once it is published, `cargo install kessel-attest` will do the same.
 
 ## Use
 
@@ -72,7 +70,7 @@ It exits 0 and prints:
 
 ```text
 verified: acme-linux-x86_64
-  ok        roster           roster          acme-owner.example.test's roster seq 1 (issued 2026-10-06T00:00:00Z, 1 keys) verifies with the pinned owner key fe812c12f3ab4ce6…
+  ok        roster           roster          acme-owner.example.test's roster seq 1 (issued 2026-10-06T00:00:00Z, 1 key) verifies with the pinned owner key fe812c12f3ab4ce6…
   ok        L1               node key        node test-node-01 (host host-a), key e9017ba77f8a0fca…, epoch 3, active in the roster
   ok        L1               signature       the DSSE signature verifies with the node key; the statement is well formed
   ok        L1               owner           builder.id names the pinned owner acme-owner.example.test
@@ -192,12 +190,14 @@ stock DSSE tools can check the node signature alone; the owner and roster
 chain is this tool's. `scripts/stock-verifiers.sh` runs cosign and the
 in-toto reference library (securesystemslib) on the golden statement
 (`tests/fixtures/provenance-v1.json`) and prints the exact commands that
-pass.
+pass. The script and the fixtures are in a clone of the repository, under
+`crates/kessel-attest/`, not in the published crate.
 
 ## Library
 
-The same check from Rust, on the worked example (paths are relative to the
-crate's folder):
+The same check from Rust, on the worked example (paths are relative to
+`crates/kessel-attest/` in a clone of the repository; the fixtures are not
+in the published crate):
 
 ```rust,no_run
 use std::path::Path;

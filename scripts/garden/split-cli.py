@@ -88,7 +88,9 @@ def cut_at(lines, start, end, rule, part):
         sys.exit("split-cli: %s: %d lines of its section start with %r; a cut needs exactly one"
                  % (part, len(hits), want))
     i = hits[0]
-    while i > start and lines[i - 1].startswith("#"):
+    # Its comment block goes along, but not the `# <<< generated` line that
+    # ends a generated block above it: both marker lines stay in one part.
+    while i > start and lines[i - 1].startswith("#") and not lines[i - 1].startswith("# <<< "):
         i -= 1
     return i
 
@@ -166,6 +168,13 @@ def main():
         if b < len(lines):
             body += "\n"
         parts.append((name + (".entries" if name.startswith("schema/") else ".sh"), body))
+    for name, body in parts:
+        # contract-gen rewrites a generated block inside one part.
+        opens = len(re.findall(r"^# >>> generated", body, re.M))
+        closes = len(re.findall(r"^# <<< generated", body, re.M))
+        if opens != closes:
+            sys.exit("split-cli: %s would hold %d `# >>> generated` and %d `# <<< generated` lines; "
+                     "a cut may not split a generated block" % (name, opens, closes))
     if "".join(b for _, b in parts) != text:
         sys.exit("split-cli: the parts do not join back to cli/k2 byte for byte; nothing written")
 

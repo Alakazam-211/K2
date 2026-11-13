@@ -1519,10 +1519,13 @@ pub fn note_withdraw(conn: &Connection, id: &str, at: i64) {
     let _ = conn.execute("UPDATE compute_jobs SET withdraws = withdraws + 1, withdrawn_at = ?2 WHERE id = ?1", params![id, at]);
 }
 
-/// Every job a node holds in its queue for this server (all nodes).
+/// Every job a node holds in its queue for this server (all nodes),
+/// oldest first. Jobs submitted in the same second keep the order they
+/// were submitted in (`rowid`, not the random job id): the `--any` mover
+/// and a re-send rely on a workspace's older job coming first.
 pub fn node_queued_jobs(conn: &Connection) -> Vec<JobRow> {
     let Ok(mut stmt) = conn.prepare(&format!(
-        "SELECT {JOB_COLS} FROM compute_jobs WHERE node_queued = 1 AND state = 'assigned' ORDER BY created_at, id"
+        "SELECT {JOB_COLS} FROM compute_jobs WHERE node_queued = 1 AND state = 'assigned' ORDER BY created_at, rowid"
     )) else {
         return Vec::new();
     };
@@ -1846,6 +1849,25 @@ mod tests {
         let r = requeue_new_attempt(&c, &j.id, "retry").unwrap();
         assert_eq!((r.state.as_str(), r.attempt, r.generation, r.exit_code, r.ended_at), ("queued", 2, 2, None, None));
         assert_eq!(jobs_in_states(&c, "n1", &["queued"]).len(), 1);
+    }
+
+    /// Two jobs submitted in the same second: listed in submit order.
+    #[test]
+    fn node_queued_jobs_keep_submit_order_within_one_second() {
+        let c = conn();
+        // Same second (the helper's created_at); the later job's id sorts first.
+        let ids = ["nqff000000000000000000000000000a", "nq00000000000000000000000000000b"];
+        for (i, id) in ids.iter().enumerate() {
+            let j = insert_job(
+                &c,
+                &NewJob { plan: &plan(id, "n1", "ws"), client_job_id: &format!("client-order-{i}"), session_id: None, request_sha256: "h", detach: false, retry_interrupted: true, ctl: JobCtl::default() },
+            )
+            .unwrap();
+            assert!(assign_if_queued(&c, &j.id, 5).unwrap());
+            assert!(mark_node_queued(&c, &j.id, 1, None, Some("node_queued"), 6).unwrap());
+        }
+        let order: Vec<String> = node_queued_jobs(&c).into_iter().map(|j| j.id).collect();
+        assert_eq!(order, ids.map(String::from).to_vec(), "submit order, not id order");
     }
 
     /// V46/V56: a node-queued job comes back under a NEW generation with

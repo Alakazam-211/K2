@@ -109,7 +109,7 @@ fn family_of_dir(rel: &str) -> Family {
     }
 }
 
-/// The corpus covers what the brief asks for; fails if a case is lost.
+/// The corpus covers every family and every hard case; fails if a case is lost.
 #[test]
 fn the_corpus_covers_every_family_and_every_hard_case() {
     let (ok, _) = corpus();

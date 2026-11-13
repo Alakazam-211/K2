@@ -1,11 +1,25 @@
 # Changelog
 
+## v0.2.24 (2026-11-12): pairs with kit v0.18.0
+
+**Requires `k2-mpc-base` v0.18.0**. This pack's behaviour is unchanged from v0.2.23.
+
+- Pairs with kit v0.18.0. Its changes for a pack: build the view index's structs with
+  `..X::default()` (and the schema's parts with `..X::NONE`); a keyed doc's `MPC-E822` is
+  `SessionError::KeyedAtLimit`; an optional per-pack keyed limit (`Pack::keyed_entries_default`);
+  verb state, derived values per unit and placements in 3D, all additive with defaults. This pack's
+  text docs use none of them, so it behaves as in v0.2.23.
+- Public text in plain words: internal labels in docs, comments and test names are now plain
+  descriptions, and `scripts/check-labels.sh` (run by `scripts/check.sh`) fails on one. The
+  CHANGELOG's lines are wrapped to at most 100 characters, words unchanged.
+- `Cargo.lock`: k2-mpc-base 0.18.0 (only the kit's crate version moves); the crate version.
+
 ## v0.2.23 (2026-11-12): pairs with kit v0.17.0
 
 **Requires `k2-mpc-base` v0.17.0** for the host rule below. The pack's code is unchanged.
 
 - Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the rule below), the
-  carrier's pairing (K1b, opt-in), the live grid (wire 3, additive), and an outside save on
+  carrier's pairing (opt-in), the live grid (wire 3, additive), and an outside save on
   unwritten changes keeping both on a keyed doc that isn't a table. This pack's text docs keep
   no carrier and declare no grid. `Cargo.lock`: k2-mpc-base 0.17.0 (only the kit's crate
   version moves); the crate version.
@@ -169,13 +183,13 @@ ae2ac947). This pack's code and tests are unchanged from v0.2.14.
 
 **Requires `k2-mpc-base` v0.10.2** (unchanged from v0.2.12).
 
-- The refused-file test case `nul.binary.json` is now `nul-byte.binary.json`: `nul` is a reserved name on
-  Windows, and a tree holding that name can't be checked out there.
-- `.k5board` is on the not-text list: the file is a zip, so `TextPack::for_path` returns `None` for it and a
-  host opens it some other way.
-- `scripts/check-windows-names.sh` and its self-test, in `scripts/check.sh`: every path must be one Windows can
-  check out (no reserved name or refused character, no trailing dot or space, no case collision, and up
-  to 200 bytes).
+- The refused-file test case `nul.binary.json` is now `nul-byte.binary.json`: `nul` is a reserved
+  name on Windows, and a tree holding that name can't be checked out there.
+- `.k5board` is on the not-text list: the file is a zip, so `TextPack::for_path` returns `None` for
+  it and a host opens it some other way.
+- `scripts/check-windows-names.sh` and its self-test, in `scripts/check.sh`: every path must be one
+  Windows can check out (no reserved name or refused character, no trailing dot or space, no case
+  collision, and up to 200 bytes).
 
 ## v0.2.12 (2026-11-02): pairs with kit v0.10.2
 
@@ -209,7 +223,7 @@ pack's code and tests are unchanged from v0.2.9.
 
 ## v0.2.9 (2026-10-30): pairs with kit v0.10.0
 
-**Requires `k2-mpc-base` v0.10.0** (C1: structured kinds and the grid, for CSV, on top of
+**Requires `k2-mpc-base` v0.10.0** (structured kinds and the grid, for CSV, on top of
 kit v0.9.7.1, whose whole-line `write --base` this pack took in v0.2.8: that entry stands).
 This pack gets no grid and no new verb; what changed for it:
 - **The grid's arrival doesn't affect it.** The kit's grid tier (structured roots, the grid
@@ -256,21 +270,22 @@ corruption, kit v0.1.0 through v0.9.7). What changes for CSV-as-text users:
   has, so the parity check would fail against it. `docs/PARITY.md`'s P24 row (the parity test
   checks the table names each verb) and the parity test's counts (28 live rows, no N/A) follow.
 - `Cargo.lock`: k2-mpc-base 0.9.7; the crate version. No other pack code change: the kit's
-  v0.9.7 changes (stable error ids, K5 handles in `run_tool` output, D1's undo, outside saves
-  merged line by line) leave this pack's tests and goldens as they were (`scripts/check.sh`
-  on a build node, every step green, nothing re-blessed). No store format change.
+  v0.9.7 changes (stable error ids, handles in `run_tool` output, an undo that keeps others'
+  words, outside saves merged line by line) leave this pack's tests and goldens as they were
+  (`scripts/check.sh` on a build node, every step green, nothing re-blessed). No store format
+  change.
 
 The kit's changes since v0.9.5 (its CHANGELOG has the details):
 - **v0.9.6:** an outside save that deleted a line and typed it back could leave the line
   twice; the outside-save merge now diffs each side on whole lines.
 - **v0.9.7, the Live-tab release:** the live typing APIs (the hunk channel, `edit_at_base`,
   `events_since`, undo over the channel, handles instead of pids in `run_tool` output for App
-  viewers, roster push, participant overflow); **D1**: an undo never changes a word someone
+  viewers, roster push, participant overflow); an undo never changes a word someone
   else wrote, and says so instead; speed work (incremental write-back and blame, the
-  engine's position index); outside saves merged line by line; exports P0 (`Session::file_at`,
+  engine's position index); outside saves merged line by line; exports (`Session::file_at`,
   the export contract, the P24 verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
-  guidance per surface, relative paths in refusals and hard-linked files declined (K6, K7,
-  K9); the vendored engine at k2-yrs k2.6.3.
+  guidance per surface, relative paths in refusals and hard-linked files declined; the vendored
+  engine at k2-yrs k2.6.3.
 
 ## v0.2.6 (2026-10-29)
 
@@ -290,7 +305,7 @@ version only. Nothing to do for this pack; no store format change. The kit's cha
 - **Hardening:** client updates carrying subdocuments are refused (the kit never uses them),
   with `DocError::Unaccepted`. A stored doc holding one is quarantined
   (`DocError::Quarantined`). The vendored engine is updated to k2-yrs k2.2.2.
-- K-AUD-1 gains `SyncDrift::Pending`.
+- The disk-sync audit gains `SyncDrift::Pending`.
 
 ## v0.2.5 (2026-10-29)
 
@@ -299,7 +314,7 @@ version only. The kit fixes an outside edit that could be corrupted after a chan
 no byte (since v0.1.0): an edit and its undo, a delete and a retype, or a rewrite and back,
 then a plain-editor edit of the same text, could land beside the restored copy (`LINE
 three3`) while the doc reported clean. The kit now keeps its disk replica on the doc's own
-elements, and adds `Session::audit_disk_sync()` (K-AUD-1's sync check). Nothing to do for
+elements, and adds `Session::audit_disk_sync()` (the sync check). Nothing to do for
 this pack; no store format change.
 
 ## v0.2.4 (2026-10-28)
@@ -320,11 +335,15 @@ store format change). No pack code change: `Cargo.lock` and the crate version on
 
 ## v0.2.2 (2026-10-28)
 
-Docs only: `HOST-INTEGRATION.md` and `PARITY.md` no longer tell hosts to strip a leading BOM from `write` bodies; base v0.9.1 does it (`Pack::writes_bom`). Requires `k2-mpc-base` v0.9.1. `scripts/check.sh` checks formatting of this crate only (`cargo fmt -p k2-mpc-text`), so the kit's own style and its vendored model don't fail the pack's check.
+Docs only: `HOST-INTEGRATION.md` and `PARITY.md` no longer tell hosts to strip a leading BOM from
+`write` bodies; base v0.9.1 does it (`Pack::writes_bom`). Requires `k2-mpc-base` v0.9.1.
+`scripts/check.sh` checks formatting of this crate only (`cargo fmt -p k2-mpc-text`), so the kit's
+own style and its vendored model don't fail the pack's check.
 
 ## v0.2.1 (2026-10-28)
 
-**Requires `k2-mpc-base` v0.9.1** (its double-BOM fix covers this pack with no code change). `Cargo.lock` and the crate version only.
+**Requires `k2-mpc-base` v0.9.1** (its double-BOM fix covers this pack with no code change).
+`Cargo.lock` and the crate version only.
 
 ## v0.2.0 (2026-10-28)
 

@@ -477,7 +477,8 @@ function OpenAsOwner({ status, sample, canMutate, reload }: PanelProps): React.J
           </span>
         ) : (
           <span className="flex flex-wrap items-center gap-2">
-            <span className="font-mono">{appUrl ?? 'Not set'}</span>
+            {/* A long URL breaks rather than running off a narrow pane. */}
+            <span className="font-mono min-w-0 max-w-full break-all">{appUrl ?? 'Not set'}</span>
             <Button disabled={!canMutate} onClick={() => { setDraft(appUrl ?? ''); setEditing(true) }}>
               Edit
             </Button>

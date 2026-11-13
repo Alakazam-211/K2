@@ -90,6 +90,15 @@ jobs:
       - name: Test-group check fails on broken layouts
         run: bash tests/packaging/daemon-test-targets.sh
 
+      # k2-node's tests that apply a macOS sandbox themselves can't run in a
+      # Mac compute job (a sandbox inside a sandbox is refused). They are
+      # listed, and run on the Mac node with no job wall; this keeps the
+      # list true to the test files, so none runs nowhere. No cargo.
+      - name: k2-node Mac wall test list (no cargo)
+        run: bash scripts/ci/k2-node-mac-tests.sh check
+      - name: Mac wall test list check fails on broken lists
+        run: bash tests/garden/k2-node-mac-tests.sh
+
       # The Python blocks embedded in cli/k2 and the shell tests/scripts
       # compile under Python 3.12+ (a broken block fails only when its verb
       # runs). No cargo, no daemon.

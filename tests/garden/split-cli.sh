@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Tests for scripts/garden/split-cli.py on a throwaway tree: the first cut,
+# `@fn` cut rows, and --recut of a tree that already has cli/src.
+# Run: bash tests/garden/split-cli.sh
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")/../.." && pwd)"
+P="$HERE/scripts/garden/split-cli.py"
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+pass=0
+run() {
+    local want="$1" text="$2" out code; shift 2
+    set +e; out="$(cd "$T" && python3 "$P" "$@" 2>&1)"; code=$?; set -e
+    if [ "$code" != "$want" ]; then echo "FAIL ($*): exit $code, wanted $want: $out" >&2; exit 1; fi
+    case "$out" in *"$text"*) ;; *) echo "FAIL ($*): output lacks '$text': $out" >&2; exit 1 ;; esac
+    pass=$((pass + 1))
+}
+ok() { pass=$((pass + 1)); }
+no() { echo "FAIL: $1" >&2; exit 1; }
+N="$T/scripts/garden/cli-parts.txt"
+mkdir -p "$T/cli" "$T/scripts/garden"
+cat > "$T/cli/k2" <<'CLI'
+#!/bin/bash
+K2_HOME="${HOME}/.k2"
+# ── mail ──────────────
+mail_usage() {
+    cat <<'EOF'
+# ── not a header, a heredoc line ──
+mail_send() {
+EOF
+}
+
+# Sends one message.
+# Second comment line.
+mail_send() {
+    echo send
+}
+mail_read() {
+    echo read
+}
+# ── router ──────────────
+main "$@"
+CLI
+printf 'cli/k2 :: K2_HOME="${HOME}/.k2"\ncli/src/gone.sh :: old text\nother/file :: *\n' > "$T/scripts/k2-home-allowlist.txt"
+names() { printf '%b' "$1" > "$N"; }
+
+# The first cut: one part per section, the join is cli/k2.
+names 'prelude\t(file start)\nmail\tmail\nrouter\trouter\n'
+run 0 "3 parts" --dry-run
+[ ! -e "$T/cli/src" ] || no "--dry-run wrote cli/src"; ok
+run 0 "3 parts, 20 lines; the join equals cli/k2"
+[ "$(grep -v '^#' "$T/cli/src/ORDER" | tr '\n' ' ')" = "prelude.sh mail.sh router.sh " ] || no "ORDER: $(cat "$T/cli/src/ORDER")"; ok
+cat "$T/cli/src/prelude.sh" "$T/cli/src/mail.sh" "$T/cli/src/router.sh" | cmp -s - "$T/cli/k2" || no "the parts do not join to cli/k2"; ok
+# The allowlist gets a twin row for the part holding the text, and a row
+# for a part that does not exist is dropped.
+grep -qxF 'cli/src/prelude.sh :: K2_HOME="${HOME}/.k2"' "$T/scripts/k2-home-allowlist.txt" || no "no twin row"; ok
+! grep -q 'gone.sh' "$T/scripts/k2-home-allowlist.txt" || no "the stale row stayed"; ok
+grep -qxF 'other/file :: *' "$T/scripts/k2-home-allowlist.txt" || no "an unrelated row was lost"; ok
+# cli/src is there now: without --recut nothing happens.
+run 0 "already exists; nothing to do"
+
+# --recut with a cut row: mail.sh becomes mail-usage.sh and mail-send.sh.
+# The function's comment block goes with it; the heredoc line that looks
+# like the function is one more line starting so, and is refused.
+names 'prelude\t(file start)\nmail-usage\tmail\nmail-send\t@fn mail_send\nrouter\trouter\n'
+run 1 "2 lines of its section start with 'mail_send() {'; a cut needs exactly one" --recut
+[ -f "$T/cli/src/mail.sh" ] || no "a refused recut changed cli/src"; ok
+names 'prelude\t(file start)\nmail-usage\tmail\nmail-read\t@fn mail_read\nrouter\trouter\n'
+run 0 "4 parts" --recut --dry-run
+[ -f "$T/cli/src/mail.sh" ] && [ ! -e "$T/cli/src/mail-read.sh" ] || no "--recut --dry-run wrote"; ok
+run 0 "4 parts, 20 lines; the join equals cli/k2" --recut
+[ ! -e "$T/cli/src/mail.sh" ] || no "the old part stayed"; ok
+[ "$(head -1 "$T/cli/src/mail-read.sh")" = "mail_read() {" ] || no "mail-read.sh starts at: $(head -1 "$T/cli/src/mail-read.sh")"; ok
+[ "$(grep -v '^#' "$T/cli/src/ORDER" | tr '\n' ' ')" = "prelude.sh mail-usage.sh mail-read.sh router.sh " ] || no "ORDER after recut: $(cat "$T/cli/src/ORDER")"; ok
+bash "$HERE/scripts/build-cli.sh" --root "$T" --check >/dev/null || no "build-cli --check after the recut"; ok
+# A comment block right above the function is cut with it.
+sed -i.bak 's/^mail_send() {$/mail_send_one() {/' "$T/cli/src/mail-usage.sh" && rm "$T/cli/src/mail-usage.sh.bak"
+# (that edit hit the heredoc line too: put the heredoc line back by hand)
+python3 - "$T/cli/src/mail-usage.sh" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read().replace("mail_send_one() {\nEOF", "mail_send() {\nEOF")
+open(p, "w").write(s)
+PY
+# A part edited without a build: the recut refuses, cli/src untouched.
+names 'prelude\t(file start)\nmail-usage\tmail\nmail-send\t@fn mail_send_one\nmail-read\t@fn mail_read\nrouter\trouter\n'
+run 1 "cli/k2 is not the join of cli/src; run scripts/build-cli.sh first" --recut
+[ ! -e "$T/cli/src/mail-send.sh" ] || no "a refused recut wrote a part"; ok
+bash "$HERE/scripts/build-cli.sh" --root "$T" >/dev/null
+run 0 "5 parts" --recut
+[ "$(head -2 "$T/cli/src/mail-send.sh")" = "$(printf '# Sends one message.\n# Second comment line.')" ] || no "the comment block was not cut with the function: $(head -2 "$T/cli/src/mail-send.sh")"; ok
+bash "$HERE/scripts/build-cli.sh" --root "$T" --check >/dev/null || no "build-cli --check after the second recut"; ok
+
+# Refusals: cuts out of order, a cut in another section, a bad rule, a
+# cut under a folded section, two parts with one name, a missing cli/src.
+names 'prelude\t(file start)\nmail-usage\tmail\nmail-read\t@fn mail_read\nmail-send\t@fn mail_send_one\nrouter\trouter\n'
+run 1 "the cut for mail-send is not below the one before it" --recut
+names 'prelude\t(file start)\nmail\tmail\nrouter\trouter\nrouter-two\t@fn mail_read\n'
+run 1 "0 lines of its section start with 'mail_read() {'" --recut
+names 'prelude\t(file start)\nmail\tmail\nmail-two\t@line 7\nrouter\trouter\n'
+run 1 "a cut row is \`@fn <function>\`" --recut
+names 'prelude\t(file start)\n+\tmail\nmail-two\t@fn mail_read\nrouter\trouter\n'
+run 1 "a folded \`+\` section can't be cut" --recut
+names 'prelude\t(file start)\nmail\tmail\nmail\t@fn mail_read\nrouter\trouter\n'
+run 1 "two parts are named mail" --recut
+[ "$(ls "$T/cli/src" | wc -l | tr -d ' ')" = "6" ] || no "a refused recut changed cli/src: $(ls "$T/cli/src")"; ok
+rm -rf "$T/cli/src"
+run 1 "--recut needs an existing cli/src" --recut
+run 1 "split-cli.py [--dry-run] [--recut]" --bogus
+echo "split-cli tests: $pass passed"

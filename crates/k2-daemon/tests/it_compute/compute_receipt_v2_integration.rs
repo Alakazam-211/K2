@@ -312,18 +312,18 @@ async fn receipt_v2_mixed_versions_and_the_receipt_route() {
     // A v2 receipt without its statement: stored, not verified.
     let rc = receipt(&new_key, &rw, Some(run_facts(&st.digest())));
     let signed = SignedReceipt::sign(&new_key, &rc).unwrap();
-    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: signed.clone(), statement: None }));
+    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: signed.clone(), statement: None, provenance: None }));
     assert_eq!(row(&job).receipt_ok, Some(false), "a v2 receipt needs its statement");
     // With another statement (not the one it names): not verified.
     let st2 = NodeStatement { issued_at: 1_700_000_200, ..statement(&new_key) }.sign(&new_key).unwrap();
-    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: signed.clone(), statement: Some(st2) }));
+    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: signed.clone(), statement: Some(st2), provenance: None }));
     assert_eq!(row(&job).receipt_ok, Some(false));
     // A v1 receipt for a v2 plan: not verified.
     let v1 = SignedReceipt::sign(&new_key, &receipt(&new_key, &rw, None)).unwrap();
-    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: v1, statement: None }));
+    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: v1, statement: None, provenance: None }));
     assert_eq!(row(&job).receipt_ok, Some(false), "the plan asked for v2");
     // The real one: verified, and the route returns all the bundle needs.
-    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: signed.clone(), statement: Some(st.clone()) }));
+    compute_ws::test_frame("new-1", Frame::Receipt(ReceiptFrame { job_id: job.clone(), generation: rw.generation as u32, receipt: signed.clone(), statement: Some(st.clone()), provenance: None }));
     assert_eq!(row(&job).receipt_ok, Some(true));
     let r = get(d.port, "/cli/compute/jobs/receipt", &format!("job={job}")).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -342,7 +342,7 @@ async fn receipt_v2_mixed_versions_and_the_receipt_route() {
     // The plain v1 job's receipt: verified, and its answer has no v2 keys.
     let prow = row(&plain);
     let pv1 = SignedReceipt::sign(&old_key, &receipt(&old_key, &prow, None)).unwrap();
-    compute_ws::test_frame("old-1", Frame::Receipt(ReceiptFrame { job_id: plain.clone(), generation: prow.generation as u32, receipt: pv1.clone(), statement: None }));
+    compute_ws::test_frame("old-1", Frame::Receipt(ReceiptFrame { job_id: plain.clone(), generation: prow.generation as u32, receipt: pv1.clone(), statement: None, provenance: None }));
     assert_eq!(row(&plain).receipt_ok, Some(true));
     let r = get(d.port, "/cli/compute/jobs/receipt", &format!("job={plain}")).await;
     let v = j(&r);

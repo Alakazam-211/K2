@@ -276,6 +276,11 @@ impl Node {
         if self.offers_cpu_burst(t) && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_CPU_BURST) {
             f.push(k2_node_proto::gens::FEATURE_CPU_BURST.to_string());
         }
+        // Build statements (protocol 10, prd-compute-build-attestations-v1
+        // S2): `Plan.provenance` and `ReceiptFrame.provenance`.
+        if self.offers_provenance(t) && !f.iter().any(|x| x == k2_node_proto::provenance::FEATURE_PROVENANCE_V1) {
+            f.push(k2_node_proto::provenance::FEATURE_PROVENANCE_V1.to_string());
+        }
         // O2 (protocol 10): `Outputs.stats`, the job's 5 s series.
         if t.speaks_gens() && !f.iter().any(|x| x == k2_node_proto::gens::FEATURE_JOB_STATS) {
             f.push(k2_node_proto::gens::FEATURE_JOB_STATS.to_string());

@@ -48,8 +48,15 @@ pub const FEATURE_RECEIPT_V3: &str = "receipt-v3";
 /// Every protocol-10 feature. A node offers one only to a server that said
 /// protocol ≥ [`crate::frames::PROTOCOL_GENS`]; a server sends a field or
 /// frame only to a node offering its feature.
-pub const FEATURES: &[&str] =
-    &[FEATURE_CACHE_GENS, FEATURE_SETUP_SNAPSHOTS, FEATURE_CPU_BURST, FEATURE_BOX, FEATURE_JOB_STATS, FEATURE_RECEIPT_V3];
+pub const FEATURES: &[&str] = &[
+    FEATURE_CACHE_GENS,
+    FEATURE_SETUP_SNAPSHOTS,
+    FEATURE_CPU_BURST,
+    FEATURE_BOX,
+    FEATURE_JOB_STATS,
+    FEATURE_RECEIPT_V3,
+    crate::provenance::FEATURE_PROVENANCE_V1,
+];
 
 /// The features a plan's protocol-10 fields need (sorted, unique). A
 /// server checks them against the node's offer before it assigns, the same
@@ -64,6 +71,9 @@ pub fn plan_features(p: &crate::frames::Plan) -> Vec<&'static str> {
     }
     if p.receipt_v == Some(crate::frames::RECEIPT_V3) {
         out.push(FEATURE_RECEIPT_V3);
+    }
+    if p.provenance.is_some() {
+        out.push(crate::provenance::FEATURE_PROVENANCE_V1);
     }
     if !p.setup.is_empty() {
         out.push(FEATURE_SETUP_SNAPSHOTS);

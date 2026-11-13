@@ -49,6 +49,8 @@
 //! - [`gens`]: cache generations, setup snapshots, idle cores, job stats
 //!   (protocol 10 contracts, prd-compute-blacksmith-class-v1).
 //! - [`boxes`]: warm boxes for agents (protocol 10 frames).
+//! - [`provenance`]: the node-signed build statement (in-toto Statement
+//!   v1, SLSA Provenance v1, DSSE; protocol-10 feature `provenance-v1`).
 
 pub mod admin;
 pub mod boxes;
@@ -72,6 +74,7 @@ pub mod pairing;
 pub mod pkgmap;
 pub mod pkgpolicy;
 pub mod profiles;
+pub mod provenance;
 pub mod queue;
 pub mod refusal;
 pub mod results;

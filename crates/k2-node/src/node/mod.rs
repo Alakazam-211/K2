@@ -58,6 +58,7 @@ pub mod lane_secrets;
 mod offer;
 pub mod owner_swap;
 pub mod pkgreq;
+pub mod provenance;
 pub mod roster;
 mod run;
 mod sync_src;
@@ -495,6 +496,9 @@ pub struct Node {
     /// Receipt v2's start-time facts of running attempts, by (slot, job,
     /// gen): what `finish_job` signs when the plan asked for v2.
     ci_runs: Mutex<HashMap<(Slot, String, u32), k2_node_proto::ci::RunFacts>>,
+    /// Build statements: what a running attempt started under (network,
+    /// isolation), by (slot, job, gen), for a plan with `provenance`.
+    prov_starts: Mutex<HashMap<(Slot, String, u32), provenance::ProvStart>>,
     /// Cache generations (prd-compute-blacksmith-class-v1 §4.1): `None`
     /// unless the owner's switch is on, the wall holds and the probe
     /// passed at start (module `gens_run`).
@@ -672,6 +676,7 @@ impl Node {
             statement: Mutex::new(Default::default()),
             root_taint: Mutex::new(root_taint),
             ci_runs: Mutex::new(HashMap::new()),
+            prov_starts: Mutex::new(HashMap::new()),
             gens,
             gens_forks: Mutex::new(HashMap::new()),
             own_fetches: Mutex::new(Default::default()),
@@ -1508,7 +1513,7 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
             with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };

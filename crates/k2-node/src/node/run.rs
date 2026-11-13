@@ -620,6 +620,8 @@ impl Node {
                 return;
             }
         };
+        // Build statements: the network and isolation it starts under.
+        self.set_prov_start(&t, &job, gen, &a.plan, network);
         // A secret job (secret-env, review B-H1) keeps nothing where another
         // workspace's job (same uid on the owner's slot) could read it: its
         // journal is node-only (0600), it gets no warm slot and no shared
@@ -1072,6 +1074,7 @@ impl Node {
         if let Some(i) = uid_index {
             sys(&mut journal, &format!("runs as a uid of its own ({}, pool index {i}); no other job shares it", crate::admin::jobpool::pool_user_name(t.slot, i)));
             self.set_ci_run_job_uid(&t, &job, gen, i);
+            self.set_prov_start_job_uid(&t, &job, gen);
         } else if uid_share == UidShare::SlotAlone {
             sys(&mut journal, "runs as this server's job user with no other job beside it (no per-job uid on this node)");
         }
@@ -2395,6 +2398,16 @@ impl Node {
         if let Err(e) = &signed {
             crate::nlog!("receipt for {job}: {e}");
         }
+        // Build statement (prd-compute-build-attestations-v1 S2): made from
+        // the receipt just signed, in this same step, outside the job's wall.
+        let (provenance, prov_note) = match self.sign_provenance(t, a, signed.as_ref().ok()) {
+            super::provenance::Outcome::Signed(d) => (Some(d), None),
+            super::provenance::Outcome::NotAsked | super::provenance::Outcome::NoArtifacts => (None, None),
+            super::provenance::Outcome::Failed(e) => {
+                crate::nlog!("build statement for {job} gen {gen}: {e}; its receipt is signed alone");
+                (None, Some(format!("no build statement: {e}; the receipt is signed alone")))
+            }
+        };
         // Cache generations (B1): the fork is saved or dropped now that the
         // job's processes are gone and its receipt names it (§4.1.4).
         let tests_failed = outputs.as_ref().and_then(|o| o.tests.as_ref()).map(|t| t.failed + t.errors).unwrap_or(0);
@@ -2402,14 +2415,22 @@ impl Node {
         if let Some(c) = &cache {
             crate::nlog!("job {job} gen {gen}: cache {}", c.why);
         }
-        let outputs = match (outputs, cache) {
+        let mut outputs = match (outputs, cache) {
             (Some(mut o), Some(c)) => {
                 o.cache = Some(c);
                 Some(o)
             }
             (o, _) => o,
         };
-        let record = || self.record_finish(t, job, gen, state, reason, detail, exit.as_ref(), log_seq, now, src.as_ref(), outputs.as_ref(), signed.as_ref().ok());
+        if let (Some(o), Some(n)) = (outputs.as_mut(), prov_note) {
+            if o.notes.len() >= k2_node_proto::results::MAX_NOTES {
+                o.notes.pop();
+            }
+            o.notes.push(n);
+        }
+        let record = || {
+            self.record_finish(t, job, gen, state, reason, detail, exit.as_ref(), log_seq, now, src.as_ref(), outputs.as_ref(), signed.as_ref().ok(), provenance.as_ref())
+        };
         let mut recorded = record();
         let gone = || {
             if let Some(root) = secret_tree_left.clone() {
@@ -2502,13 +2523,14 @@ impl Node {
         src: Option<&SrcRan>,
         outputs: Option<&Outputs>,
         signed: Option<&SignedReceipt>,
+        provenance: Option<&k2_node_proto::provenance::Dsse>,
     ) -> Result<bool, String> {
         #[cfg(test)]
         if job == tests::FINISH_FAILS_JOB && tests::FINISH_FAILS.load(Ordering::SeqCst) > 0 {
             tests::FINISH_FAILS.fetch_sub(1, Ordering::SeqCst);
             return Err("database or disk is full (test)".into());
         }
-        t.ledger.lock().unwrap().end_attempt(job, gen, state, reason, detail, exit, log_seq, now, src, outputs, signed)
+        t.ledger.lock().unwrap().end_attempt(job, gen, state, reason, detail, exit, log_seq, now, src, outputs, signed, provenance)
     }
 }
 

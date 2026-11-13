@@ -291,7 +291,9 @@ async fn ship_pass(node: &Node, tenant: &Tenant, tracks: &Tracks, tx: &mpsc::Sen
             if let Some(receipt) = row.receipt.clone() {
                 // Protocol 9: a v2 receipt brings the statement it names.
                 let statement = if tenant.speaks_ci() { node.statement_for_receipt(&receipt) } else { None };
-                tx.send(Frame::Receipt(ReceiptFrame { job_id: key.0.clone(), generation: key.1, receipt, statement })).await.map_err(|_| ())?;
+                // Protocol 10: the build statement signed with it, if any.
+                let provenance = if tenant.speaks_gens() { row.provenance.clone() } else { None };
+                tx.send(Frame::Receipt(ReceiptFrame { job_id: key.0.clone(), generation: key.1, receipt, statement, provenance })).await.map_err(|_| ())?;
                 continue; // done with this attempt
             }
             t.sent = Some(state_key);

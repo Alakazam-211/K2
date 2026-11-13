@@ -139,6 +139,12 @@ impl Node {
             t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(super::ci::RECEIPT_V_UNKNOWN), Some(&detail)));
             return None;
         }
+        // Build statements: a version this node doesn't sign, or a session
+        // that was never offered `provenance-v1`.
+        if let Some(detail) = self.provenance_refusal(t, &a.plan) {
+            t.hub.send(self.state_frame(&job, gen, JobState::Failed, Some(super::provenance::PROVENANCE_V_UNKNOWN), Some(&detail)));
+            return None;
+        }
         // Only the owner, on a node nobody shares, takes today's path. Any
         // other server always goes through its share (a paused, expired or
         // revoked share must never fall back to "solo").

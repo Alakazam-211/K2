@@ -21,10 +21,15 @@
 //! `run_json`: how a running attempt can be found again by the next
 //! k2-node process (its unit or holder, spool files and offsets, lease).
 //! A row without it is never adopted.
+//!
+//! v6 (build statements, prd-compute-build-attestations-v1 S2) adds
+//! `provenance_json`: the DSSE envelope the node signed with the receipt,
+//! written in the same transaction, so the shipper sends both or neither.
 
 use std::path::Path;
 
 use k2_node_proto::frames::{Assign, ExitInfo, JobState, LedgerJob, Plan, SignedReceipt, SrcRan};
+use k2_node_proto::provenance::Dsse;
 use k2_node_proto::results::Outputs;
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -88,6 +93,8 @@ pub struct Row {
     pub seq: i64,
     /// Run facts for adoption (v5; `crate::node::adopt::RunFacts` JSON).
     pub run_json: Option<String>,
+    /// The build statement signed with the receipt (v6).
+    pub provenance: Option<Dsse>,
 }
 
 impl Row {
@@ -114,7 +121,7 @@ pub struct Ledger {
 }
 
 const COLS: &str = "job_id, generation, attempt, plan_digest, plan_json, state, reason, detail, created_at, \
-    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at, rowid, run_json";
+    started_at, ended_at, exit_code, signal, log_seq, boot_id, src_json, receipt_json, cleaned, outputs_json, enqueued_at, rowid, run_json, provenance_json";
 
 /// The ended states, as SQL: one list for every guard (finish, set_state,
 /// the open-row queries); a test keeps it equal to
@@ -159,6 +166,10 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         enqueued_at: r.get(19)?,
         seq: r.get(20)?,
         run_json: r.get(21)?,
+        provenance: match r.get::<_, Option<String>>(22)? {
+            Some(s) => Some(serde_json::from_str(&s).map_err(|_| bad("provenance_json"))?),
+            None => None,
+        },
     })
 }
 
@@ -235,7 +246,15 @@ impl Ledger {
         if !has_run {
             conn.execute_batch("ALTER TABLE jobs ADD COLUMN run_json TEXT;").map_err(sqlerr)?;
         }
-        conn.execute_batch("PRAGMA user_version = 5;").map_err(sqlerr)?;
+        // v6: the build statement beside the receipt. Found by column too.
+        let has_prov = conn
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'provenance_json'")
+            .and_then(|mut st| st.exists([]))
+            .map_err(sqlerr)?;
+        if !has_prov {
+            conn.execute_batch("ALTER TABLE jobs ADD COLUMN provenance_json TEXT;").map_err(sqlerr)?;
+        }
+        conn.execute_batch("PRAGMA user_version = 6;").map_err(sqlerr)?;
         let id: Option<String> = conn
             .query_row("SELECT v FROM meta WHERE k = 'ledger_id'", [], |r| r.get(0))
             .optional()
@@ -472,6 +491,7 @@ impl Ledger {
         src: Option<&SrcRan>,
         outputs: Option<&Outputs>,
         receipt: Option<&SignedReceipt>,
+        provenance: Option<&Dsse>,
     ) -> Result<bool, String> {
         let tx = self.conn.unchecked_transaction().map_err(sqlerr)?;
         if !self.finish(job_id, generation, state, reason, detail, exit, log_seq, at)? {
@@ -485,6 +505,12 @@ impl Ledger {
         }
         if let Some(r) = receipt {
             self.set_receipt(job_id, generation, r)?;
+        }
+        if let Some(p) = provenance {
+            let j = serde_json::to_string(p).map_err(|e| format!("encode provenance: {e}"))?;
+            self.conn
+                .execute("UPDATE jobs SET provenance_json = ?3 WHERE job_id = ?1 AND generation = ?2", params![job_id, generation, j])
+                .map_err(sqlerr)?;
         }
         tx.commit().map_err(sqlerr)?;
         Ok(true)
@@ -650,7 +676,7 @@ pub mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None,
+            src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
             with: Vec::new(),
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }
@@ -873,7 +899,7 @@ pub mod tests {
         l.insert(&assign("plain", 1), &clock).unwrap();
         drop(l);
         let c = Connection::open(&path).unwrap();
-        assert_eq!(version(&c), 5);
+        assert_eq!(version(&c), 6);
         assert_eq!(tier_of(&c, "p").as_deref(), Some("priority"));
         assert_eq!(tier_of(&c, "old-gate").as_deref(), Some("ci"), "an old server's gate plan is CI");
         assert_eq!(tier_of(&c, "plain").as_deref(), Some("normal"));
@@ -885,7 +911,7 @@ pub mod tests {
         assert_eq!((row.state, row.plan.tier), (JobState::Queued, Some(k2_node_proto::tiers::Tier::Priority)), "queued tiers survive the restart");
         drop(l);
         let c = Connection::open(&path).unwrap();
-        assert_eq!(version(&c), 5);
+        assert_eq!(version(&c), 6);
         let cols: i64 = c.query_row("SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'tier'", [], |r| r.get(0)).unwrap();
         assert_eq!(cols, 1, "the column is added once");
         // The 0.46.4 reader: its column list (this build's, without `tier`)

@@ -2495,7 +2495,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cache_commit,
         cache_ref,
         setup: Vec::new(),
-        cpus_burst: None,
+        cpus_burst: None, provenance: None, // build statements: S3 asks, `provenance-v1` nodes only
     };
     let job = {
         let db = k2_core::db::shared();
@@ -3869,7 +3869,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None,
+        src_path: None, submitter: None, submitter_max_running: None, packages: Vec::new(), git_access: Vec::new(), receipt_v: None, gpu: None, gpu_mem: None, cache_commit: None, cache_ref: None, setup: Vec::new(), cpus_burst: None, provenance: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());

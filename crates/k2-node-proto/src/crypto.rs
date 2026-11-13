@@ -223,6 +223,43 @@ impl SigningKey {
             .map_err(|_| "sign failed".to_string())?;
         Ok(b64(sig.as_ref()))
     }
+
+    /// Sign a build statement (prd-compute-build-attestations-v1 §4.3,
+    /// BA-29): its canonical JSON ([`crate::provenance::payload`], which
+    /// checks its shape and refuses a zero byte) under the fixed payload
+    /// type [`crate::provenance::PAYLOAD_TYPE`], over the DSSE PAE this
+    /// function builds itself. The only signing besides [`Self::sign_domain`]:
+    /// no caller chooses the payload type or the bytes, so no K2 domain
+    /// message can be signed this way (every one starts `domain ‖ 0x00`,
+    /// and a PAE starts `DSSEv1 ` and holds no zero byte).
+    pub fn sign_statement(&self, st: &crate::provenance::Statement) -> Result<crate::provenance::Dsse, String> {
+        let payload = crate::provenance::payload(st)?;
+        let msg = crate::provenance::pae(crate::provenance::PAYLOAD_TYPE, &payload);
+        let sig = self
+            .pair
+            .sign(&SystemRandom::new(), &msg)
+            .map_err(|_| "sign failed".to_string())?;
+        Ok(crate::provenance::Dsse {
+            payload_type: crate::provenance::PAYLOAD_TYPE.to_string(),
+            payload: b64(&payload),
+            signatures: vec![crate::provenance::DsseSignature { keyid: self.fingerprint(), sig: b64(sig.as_ref()) }],
+        })
+    }
+}
+
+/// Verify a DSSE signature (P-256 DER, base64) over the PAE of
+/// `payload_type` and `payload` against an SPKI DER.
+pub fn verify_dsse(spki_der: &[u8], payload_type: &str, payload: &[u8], sig_b64: &str) -> bool {
+    let Ok(point) = p256_point_from_spki(spki_der) else {
+        return false;
+    };
+    let Ok(sig) = unb64(sig_b64) else {
+        return false;
+    };
+    let msg = crate::provenance::pae(payload_type, payload);
+    UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, point)
+        .verify(&msg, &sig)
+        .is_ok()
 }
 
 /// Verify a [`SigningKey::sign_domain`] signature against an SPKI DER.
@@ -267,6 +304,33 @@ mod tests {
         let other = SigningKey::generate().unwrap();
         assert!(!verify_domain(other.spki_der(), "d1", &[b"a", b"bc"], &sig));
         assert!(!verify_domain(k.spki_der(), "d1", &[b"a", b"bc"], "not base64!"));
+    }
+
+    /// A statement signature and a domain signature never stand in for
+    /// each other, and a payload that verifies but isn't canonical (signed
+    /// here by hand: nothing outside this module can) is still refused.
+    #[test]
+    fn statement_signatures_are_their_own_kind() {
+        let k = SigningKey::generate().unwrap();
+        let (_, sr, st) = crate::provenance::tests::built(&k);
+        let env = k.sign_statement(&st).unwrap();
+        let payload = unb64(&env.payload).unwrap();
+        let sig = &env.signatures[0].sig;
+        for d in crate::provenance::tests::DOMAINS {
+            assert!(!verify_domain(k.spki_der(), d, &[&payload], sig), "{d}");
+            let pae = crate::provenance::pae(crate::provenance::PAYLOAD_TYPE, &payload);
+            let dsig = k.sign_domain(d, &[&pae]).unwrap();
+            assert!(!verify_dsse(k.spki_der(), crate::provenance::PAYLOAD_TYPE, &payload, &dsig), "{d}");
+        }
+        // Signed over its pretty form: the signature holds, the form doesn't.
+        let loose = serde_json::to_vec_pretty(&st).unwrap();
+        let raw = k.pair.sign(&SystemRandom::new(), &crate::provenance::pae(crate::provenance::PAYLOAD_TYPE, &loose)).unwrap();
+        let mut bad = env.clone();
+        bad.payload = b64(&loose);
+        bad.signatures[0].sig = b64(raw.as_ref());
+        assert!(verify_dsse(k.spki_der(), crate::provenance::PAYLOAD_TYPE, &loose, &bad.signatures[0].sig));
+        assert!(bad.open(k.spki_der()).unwrap_err().contains("canonical"));
+        assert!(env.open_for_receipt(k.spki_der(), &sr).is_ok());
     }
 
     #[test]

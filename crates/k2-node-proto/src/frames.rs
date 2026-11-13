@@ -861,6 +861,14 @@ pub struct Plan {
     /// [`crate::gens::FEATURE_CPU_BURST`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cpus_burst: Option<u64>,
+    /// Build statements (prd-compute-build-attestations-v1 §4.4): `1`
+    /// ([`crate::provenance::PROVENANCE_V1`]) asks the node to sign an
+    /// in-toto statement for this job if it keeps an artifact
+    /// (`ReceiptFrame.provenance`). Absent otherwise, so every older plan
+    /// and digest is unchanged; sent only to nodes offering
+    /// [`crate::provenance::FEATURE_PROVENANCE_V1`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<u32>,
 }
 
 impl Plan {
@@ -1469,6 +1477,13 @@ pub struct ReceiptFrame {
     /// sees 0.46.9's frame.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statement: Option<crate::ci::Signed>,
+    /// Protocol 10 (`provenance-v1`): the build statement the node signed
+    /// with this receipt, when the plan asked (`Plan.provenance`) and the
+    /// job kept an artifact. Its `k2-receipt` byproduct names this
+    /// receipt's body ([`crate::provenance::Dsse::open_for_receipt`]).
+    /// Absent otherwise, so an older server sees the same frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::provenance::Dsse>,
 }
 
 /// `artifact_get`: send one kept artifact of an attempt.
@@ -1856,7 +1871,7 @@ mod tests {
             cache_commit: None,
             cache_ref: None,
             setup: Vec::new(),
-            cpus_burst: None,
+            cpus_burst: None, provenance: None,
         }
     }
 
@@ -2423,7 +2438,7 @@ mod tests {
         assert_eq!(open(k.spki_der(), Direction::NodeToController, "s", 0, &t).unwrap(), f);
         // A v1 receipt frame: no `statement` key at all.
         let sr = SignedReceipt { body: "{}".into(), sig: "x".into() };
-        let rf = ReceiptFrame { job_id: "j".into(), generation: 1, receipt: sr.clone(), statement: None };
+        let rf = ReceiptFrame { job_id: "j".into(), generation: 1, receipt: sr.clone(), statement: None, provenance: None };
         assert_eq!(serde_json::to_string(&rf).unwrap(), r#"{"job_id":"j","generation":1,"receipt":{"body":"{}","sig":"x"}}"#);
         // A 0.46.9 frame (no key) still parses.
         let old: ReceiptFrame = serde_json::from_str(r#"{"job_id":"j","generation":1,"receipt":{"body":"{}","sig":"x"}}"#).unwrap();

@@ -24,7 +24,10 @@
 //!   says how to decide;
 //! - **the routes** ([`dispatch`]): `GET /cli/folder-trust/status` and
 //!   `POST /cli/folder-trust/request` for registered workspace folders
-//!   only (an agent: its own), `POST /cli/folder-trust/decide` (with the
+//!   only (an agent: its own, or another workspace's on this server while
+//!   that folder waits for the owner: its own agent can't start then, so
+//!   can't ask; the card goes on the asking agent's Thread and names both),
+//!   `POST /cli/folder-trust/decide` (with the
 //!   fingerprint the owner saw) and `POST /cli/folder-trust/reset` (the
 //!   owner);
 //! - **boot** ([`boot_pass`]): the 0.46.3 upgrade marks (one owner summary)
@@ -62,6 +65,12 @@ pub const CARD_LINES: usize = 5;
 pub const CHANGED: &str = "folder_trust_changed";
 /// Held spawns older than this are dropped, not retried (review B#8).
 pub const HELD_TTL: Duration = Duration::from_secs(24 * 3600);
+/// The 409 when an agent asks about another workspace's folder that
+/// doesn't wait for the owner's decision.
+pub const NOT_WAITING: &str = "folder_trust_not_waiting";
+/// [`Actor::by`] when an agent asks on behalf of another workspace on this
+/// server: the card goes on the asking agent's Thread and names both.
+const BY_OTHER_AGENT: &str = "request-for-other";
 
 // ── Install ──────────────────────────────────────────────────────────
 
@@ -111,6 +120,21 @@ fn pinned_conversation(project_id: &str) -> Option<String> {
 
 fn agent_name_of(project_id: &str) -> String {
     k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_else(|_| "An agent".to_string())
+}
+
+/// A workspace's name as Settings → Workspaces lists it.
+fn workspace_name_of(project_id: &str) -> String {
+    k2_core::projects_ops::projects_list()
+        .ok()
+        .and_then(|ps| ps.into_iter().find(|p| p.id == project_id))
+        .map(|p| p.name)
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| agent_name_of(project_id))
+}
+
+/// Where the owner decides in the app, for a workspace.
+fn decide_in_app(project_id: &str) -> String {
+    format!("Settings → Workspaces → {} → Folder trust", workspace_name_of(project_id))
 }
 
 /// The workspace folder of a registered project id.
@@ -238,11 +262,25 @@ fn finding_rank(what: &str) -> u8 {
 /// how many findings, the most important ones in a code block, and a plain
 /// note when a line was cut or more findings exist.
 pub fn card_prompt(caller: &str, eval: &gate::Evaluation, actor: &Actor, leftover: &[String]) -> String {
+    card_prompt_for(caller, None, eval, actor, leftover)
+}
+
+/// [`card_prompt`]; `for_workspace`: the folder's workspace when an agent
+/// of another workspace asks on its behalf (its own agent can't start, so
+/// can't ask), named in the first line with the asking agent.
+pub fn card_prompt_for(caller: &str, for_workspace: Option<&str>, eval: &gate::Evaluation, actor: &Actor, leftover: &[String]) -> String {
     let tool = tool_display(actor.tool.as_deref());
     let caller = md_text(caller, 80);
     let folder = md_code_inline(&eval.path);
     let n = eval.findings.len();
-    let mut s = if actor.changed_live {
+    let mut s = if let Some(ws) = for_workspace {
+        let ws = md_text(ws, 80);
+        format!(
+            "**{caller} asks you to decide on {folder}, the folder of {ws}.** {ws} can't start an agent there until you do. \
+             This folder has {n} setting{} that run commands or send your logins elsewhere when programs start here:\n",
+            if n == 1 { "" } else { "s" }
+        )
+    } else if actor.changed_live {
         format!(
             "**The settings in {folder} changed while {caller} was running.** K2 stopped its sessions there until you decide. \
              {n} setting{} run commands or send your logins elsewhere when programs start here (Claude picks up new hooks without a restart):\n",
@@ -314,19 +352,31 @@ fn present(ask: &Ask<'_>) -> Asked {
     let eval = ask.eval;
     let folder = project_for_path(&eval.path).or_else(|| project_for_path(&eval.scope)).map(|(id, _)| id);
     let principal = crate::caller_workspace::request_principal().map(|p| p.workspace_uuid).filter(|w| !w.is_empty());
+    // An agent asking for another workspace (whose own agent can't start):
+    // the card goes on the asking agent's Thread first, where the person
+    // is talking to it, and names that workspace.
+    let for_other = ask.actor.by == BY_OTHER_AGENT && ask.actor.project_id.is_some() && ask.actor.project_id != folder;
+    let order = if for_other {
+        [ask.actor.project_id.clone(), folder.clone(), principal]
+    } else {
+        [folder.clone(), ask.actor.project_id.clone(), principal]
+    };
     let mut candidates: Vec<String> = Vec::new();
-    for c in [folder.clone(), ask.actor.project_id.clone(), principal] {
+    for c in order {
         if let Some(c) = c.filter(|c| !c.is_empty()) {
             if !candidates.contains(&c) {
                 candidates.push(c);
             }
         }
     }
+    // Tickets live on the folder's own workspace, whoever asked.
+    let ticket_home = folder.clone().or_else(|| candidates.first().cloned());
     let caller = caller_name(ask.actor, folder.as_deref());
     let leftover = k2_core::cli_folder_trust::current_home()
         .map(|h| k2_core::cli_folder_trust::leftover_grants(&h, &eval.keys, eval.in_git))
         .unwrap_or_default();
-    let prompt = card_prompt(&caller, eval, ask.actor, &leftover);
+    let for_workspace = folder.as_deref().filter(|_| for_other).map(workspace_name_of);
+    let prompt = card_prompt_for(&caller, for_workspace.as_deref(), eval, ask.actor, &leftover);
     let action = k2_core::overlay::CardAction {
         id: CARD_ACTION.to_string(),
         params: json!({
@@ -371,7 +421,7 @@ fn present(ask: &Ask<'_>) -> Asked {
         ) {
             Ok(crate::overlay_routes::Presented::Card { id, .. }) | Ok(crate::overlay_routes::Presented::Waiting { id }) => {
                 log_debug!("[folder-trust] card {id} for {} on {project}", eval.scope);
-                let ticket = candidates.first().and_then(|p| open_ticket(p));
+                let ticket = ticket_home.as_deref().and_then(|p| open_ticket(p));
                 return Asked { card: Some(id), conversation: Some(conversation), project: Some(project.clone()), ticket };
             }
             Ok(crate::overlay_routes::Presented::NoThread) => {}
@@ -380,7 +430,7 @@ fn present(ask: &Ask<'_>) -> Asked {
     }
     // No person and no Thread (A6): an owner ticket with the findings, the
     // three choices and the fingerprint they apply to.
-    let Some(project) = candidates.first() else {
+    let Some(project) = ticket_home.as_ref() else {
         log_debug!("[folder-trust] {}: no workspace to post a card or ticket on", eval.scope);
         return Asked::default();
     };
@@ -856,10 +906,33 @@ fn passport_workspace(params: &HashMap<String, String>) -> Option<String> {
         .or_else(|| bound.then(String::new))
 }
 
+/// Who asks about a registered workspace folder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Asker {
+    /// A person: the owner token, a login.
+    Person,
+    /// The folder's own agent.
+    Own,
+    /// An agent of another workspace on this server (its `projects.id`).
+    /// It may read the folder's status and raise the card only while the
+    /// folder waits for the owner's decision ([`waiting_for_other`]): the
+    /// folder's own agent can't start then, so it can't ask.
+    Other(String),
+}
+
+fn not_your_workspace() -> CliResponse {
+    err(
+        "403 Forbidden",
+        "not_your_workspace",
+        "an agent can only ask about or read its own workspace's folder, or another workspace's on this server while it waits for the owner's decision",
+    )
+}
+
 /// Which registered workspace folder `folder` is, for this caller (reviews
-/// A-H1, B#7): a registered workspace folder only, and for an agent only
-/// its own workspace's folder. `Err` is the refusal.
-fn workspace_folder_for(params: &HashMap<String, String>, folder: &str) -> Result<(String, String), CliResponse> {
+/// A-H1, B#7): a registered workspace folder only. An agent's passport must
+/// belong to a workspace on this server (a peer's agent, a removed
+/// workspace: `not_on_this_server`). `Err` is the refusal.
+fn workspace_folder_for(params: &HashMap<String, String>, folder: &str) -> Result<(String, String, Asker), CliResponse> {
     let Some((id, path)) = registered_exact(folder) else {
         return Err(err(
             "404 Not Found",
@@ -867,12 +940,51 @@ fn workspace_folder_for(params: &HashMap<String, String>, folder: &str) -> Resul
             format!("{folder} isn't a registered workspace folder; folder trust only covers workspaces"),
         ));
     };
-    if let Some(own) = passport_workspace(params) {
-        if own != id {
-            return Err(err("403 Forbidden", "not_your_workspace", "an agent can only ask about or read its own workspace's folder"));
+    let asker = match passport_workspace(params) {
+        None => Asker::Person,
+        Some(own) if own == id => Asker::Own,
+        // A K2 terminal cell with no workspace of its own.
+        Some(own) if own.is_empty() => return Err(not_your_workspace()),
+        Some(own) if project_path_for_id(&own).is_none() => {
+            return Err(err(
+                "403 Forbidden",
+                "not_on_this_server",
+                "only an agent on this server can ask about another workspace's folder; ask an agent on that server",
+            ))
         }
+        Some(own) => Asker::Other(own),
+    };
+    Ok((id, path, asker))
+}
+
+/// For an agent of another workspace: the folder's status, and whether it
+/// waits for the owner's decision (pending, undecided or changed): only
+/// then may that agent read it or raise the card.
+fn waiting_for_other(path: &str) -> Result<(gate::StatusView, bool), CliResponse> {
+    let st = gate::status(path).map_err(|e| err("400 Bad Request", "usage", e))?;
+    let waits = UNDECIDED_STATES.contains(&st.state.as_str());
+    Ok((st, waits))
+}
+
+/// The 409 for another agent's ask about a folder that doesn't wait.
+fn not_waiting(id: &str, st: &gate::StatusView) -> CliResponse {
+    let ws = workspace_name_of(id);
+    let next = if st.state == "denied" {
+        format!("The owner chose \"Don't trust\"; only the owner can change it: {} → Reset.", decide_in_app(id))
+    } else {
+        "There is nothing to ask; if its agent still can't start, the reason isn't folder trust.".to_string()
+    };
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: json!({
+            "error": NOT_WAITING,
+            "message": format!("{}, the folder of {ws}, doesn't wait for the owner's decision (it is {}). {next}", st.path, st.state),
+            "state": st.state,
+            "workspace": ws,
+        })
+        .to_string(),
     }
-    Ok((id, path))
 }
 
 /// `/cli/folder-trust/*`. `session_author`: `owner`, a login name, or
@@ -932,16 +1044,27 @@ fn status_json(id: &str, s: &gate::StatusView) -> J {
 fn status_route(params: &HashMap<String, String>, body: &[u8], session_author: &str) -> CliResponse {
     match param(params, body, "path").or_else(|| param(params, body, "folder")) {
         Some(p) => {
-            let (id, path) = match workspace_folder_for(params, &p) {
+            let (id, path, asker) = match workspace_folder_for(params, &p) {
                 Ok(w) => w,
                 Err(r) => return r,
             };
-            match gate::status(&path) {
+            let status = match asker {
+                // Another workspace's agent reads it only while it waits.
+                Asker::Other(_) => match waiting_for_other(&path) {
+                    Ok((st, true)) => Ok(st),
+                    Ok((_, false)) => return not_your_workspace(),
+                    Err(r) => return r,
+                },
+                Asker::Own | Asker::Person => gate::status(&path),
+            };
+            match status {
                 Ok(v) => {
                     let mut st = status_json(&id, &v);
                     // Who gets the buttons: the check `decide` itself runs,
                     // so a client never has its own idea of the rule.
                     st["can_decide"] = json!(crate::overlay_routes::require_action_card_person(params, session_author, "answers").is_ok());
+                    st["workspace"] = json!(workspace_name_of(&id));
+                    st["decide_in_app"] = json!(decide_in_app(&id));
                     CliResponse::ok_json(st.to_string())
                 }
                 Err(e) => err("400 Bad Request", "usage", e),
@@ -970,7 +1093,7 @@ fn request_route(params: &HashMap<String, String>, body: &[u8], session_author: 
         Ok(f) => f,
         Err(r) => return r,
     };
-    let (id, path) = match workspace_folder_for(params, &folder) {
+    let (id, path, asker) = match workspace_folder_for(params, &folder) {
         Ok(w) => w,
         Err(r) => return r,
     };
@@ -980,16 +1103,31 @@ fn request_route(params: &HashMap<String, String>, body: &[u8], session_author: 
         None if session_author == "owner" => "The owner".to_string(),
         None => session_author.to_string(),
     };
-    let actor = Actor {
-        project_id: Some(id),
-        by: "request".into(),
-        why: param(params, body, "why"),
-        caller: Some(caller),
-        ..Default::default()
+    // Another workspace's agent asks only while the folder waits; the card
+    // then goes on its own Thread (one open card per folder still: an open
+    // one is returned, wherever it is).
+    let (project_id, by) = match &asker {
+        Asker::Other(own) => {
+            match waiting_for_other(&path) {
+                Ok((_, true)) => {}
+                Ok((st, false)) => return not_waiting(&id, &st),
+                Err(r) => return r,
+            }
+            (own.clone(), BY_OTHER_AGENT)
+        }
+        Asker::Own | Asker::Person => (id.clone(), "request"),
     };
+    let actor = Actor { project_id: Some(project_id), by: by.into(), why: param(params, body, "why"), caller: Some(caller), ..Default::default() };
     // Only asks: no grant is written or removed (review A-H1).
     let out = gate::request(&path, &actor);
-    CliResponse::ok_json(out.to_json().to_string())
+    if let Asker::Other(own) = &asker {
+        log_debug!("[folder-trust] request: the agent of {own} asked for {path} ({id}): {}", out.to_json()["state"]);
+    }
+    let mut v = out.to_json();
+    // Where else the owner decides: the app, for this workspace.
+    v["workspace"] = json!(workspace_name_of(&id));
+    v["decide_in_app"] = json!(decide_in_app(&id));
+    CliResponse::ok_json(v.to_string())
 }
 
 fn decision_param(params: &HashMap<String, String>, body: &[u8]) -> Result<Decision, CliResponse> {

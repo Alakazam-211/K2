@@ -1138,7 +1138,10 @@ owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
                                     trusted, always, pending, undecided,
                                     changed or denied, with the findings
   k2 workspace trust request <folder> --why "…"
-                                    Agents: present the card (only asks)
+                                    Agents: present the card (only asks).
+                                    Your own folder, or another workspace's
+                                    on this server while it waits (its own
+                                    agent can't start, so can't ask)
   k2 workspace trust <folder> --yes|--always|--no [--fingerprint <fp>]
                                     Owner: Trust it (this version) / Always
                                     trust this folder / Don't trust, for the
@@ -1152,15 +1155,17 @@ owner: a card on Thread (Trust it / Always trust this folder / Don't trust).
                                     folder in every tool's file (yours and
                                     parent folders' too); status lists them
 
-Deciding is the owner's: an agent or a K2 terminal gets exit 3 (the card is
-the request). More: k2 study folder-trust
+Deciding is the owner's: an agent or a K2 terminal gets exit 3 and the
+request line to run instead. The owner can also decide in the app:
+Settings → Workspaces → <workspace> → Folder trust, or by opening that
+agent. More: k2 study folder-trust
 EOF
 }
 
 _workspace_trust_print() {
-    # $1 = response body, $2 = mode (status|request|decide)
+    # $1 = response body, $2 = mode (status|request|decide), $3 = the folder (decide)
     printf '%s' "$1" | python3 -c '
-import json, sys
+import json, shlex, sys
 mode = sys.argv[1]
 try:
     d = json.load(sys.stdin)
@@ -1175,7 +1180,12 @@ if err:
         err = err.get("code") or "refused"
     print("Error: %s%s" % (err, (": " + msg) if msg else ""), file=sys.stderr)
     if err == "action_card_person_only":
-        print("It can'"'"'t be requested.", file=sys.stderr)
+        folder = sys.argv[2] if len(sys.argv) > 2 else ""
+        if mode == "decide" and folder:
+            # The card is the request: the line to run instead (closing).
+            print("Ask with: k2 workspace trust request %s --why \"<what you need it for>\"" % shlex.quote(folder), file=sys.stderr)
+        else:
+            print("It can'"'"'t be requested.", file=sys.stderr)
         sys.exit(3)
     sys.exit(1)
 def show(v):
@@ -1222,8 +1232,10 @@ elif mode == "request":
             print("  • %s: %s" % (f.get("file"), f.get("detail")))
         for t in d.get("leftover") or []:
             print("  Still trusted outside K2: %s" % t)
+        if d.get("decide_in_app"):
+            print("The owner can also decide in the app: %s, or by opening that agent." % d["decide_in_app"])
     elif st == "denied":
-        print("Not trusted: the owner chose \"Don'"'"'t trust\". Only the owner can change it (Settings → Workspaces → Folder trust → Reset).")
+        print("Not trusted: the owner chose \"Don'"'"'t trust\". Only the owner can change it (%s → Reset)." % (d.get("decide_in_app") or "Settings → Workspaces → Folder trust"))
     else:
         print("Not gated: %s" % (d.get("reason") or st))
 elif mode == "forget":
@@ -1241,7 +1253,23 @@ else:
     print(d.get("message") or "Done.")
     for t in d.get("leftover") or []:
         print("  Still trusted elsewhere: %s" % t)
-' "$2"
+' "$2" "${3:-}"
+}
+
+# An agent or a K2 terminal asked to decide (the caller exits 3): the
+# owner's other ways in the app, then the request it can run instead, as
+# the closing line. The workspace's name comes from status when it can.
+_workspace_trust_not_yours() {
+    local folder="$1" where=""
+    where=$(cli_send cli_request "/cli/folder-trust/status" "path=$(urlencode "$folder")" 2>/dev/null | python3 -c 'import json, sys
+try:
+    print(json.load(sys.stdin).get("decide_in_app") or "")
+except Exception:
+    pass' 2>/dev/null) || where=""
+    [ -n "$where" ] || where="Settings → Workspaces → (that workspace) → Folder trust"
+    echo "Error: only the owner decides folder trust; an agent or a K2 terminal can't." >&2
+    echo "The owner can also decide in the app: $where, or by opening that agent." >&2
+    echo "Ask with: k2 workspace trust request $(printf '%q' "$folder") --why \"<what you need it for>\"" >&2
 }
 
 cmd_workspace_trust() {
@@ -1322,8 +1350,7 @@ cmd_workspace_trust() {
     # A session passport (an agent, a K2 terminal) never decides: the card
     # is the request.
     if [ -n "$SCOPED_TOKEN" ]; then
-        echo "Error: only the owner decides folder trust; an agent or a K2 terminal can't. The card is the request: k2 workspace trust request $(printf '%q' "$folder") --why \"…\"" >&2
-        echo "It can't be requested." >&2
+        _workspace_trust_not_yours "$folder"
         exit 3
     fi
     local resp
@@ -1372,7 +1399,7 @@ print(d.get("scope") or "")')
         else
             resp=$(cli_request_post "$endpoint" "path=$(urlencode "$folder")" "decision=$decision" "fingerprint=$(urlencode "$fingerprint")")
         fi
-        _workspace_trust_print "$resp" decide
+        _workspace_trust_print "$resp" decide "$folder"
     fi
 }
 

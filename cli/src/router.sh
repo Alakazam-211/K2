@@ -298,6 +298,8 @@ case "${1:-help}" in
             case "${2:-}" in
                 design-tab|design-mode) _workspace_pinned_tab_help design ;;
                 mobile-tab)             _workspace_pinned_tab_help mobile ;;
+                # `k2 workspace --help` points here for folder trust.
+                trust)                  cmd_help_workspace_trust ;;
                 *)                      cmd_help_workspace ;;
             esac
             exit 0

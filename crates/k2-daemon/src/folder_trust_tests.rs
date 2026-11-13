@@ -260,12 +260,13 @@ fn the_card_answer_runs_the_decision_only_for_what_it_showed() {
 }
 
 /// Review A-H1: request and status take only registered workspace folders,
-/// and an agent only its own; request never writes a grant.
+/// and an agent its own; another workspace's folder only while it waits
+/// for the owner (the tests at the end); request never writes a grant.
 #[test]
 fn request_and_status_are_for_workspace_folders_only() {
     let e = env();
     let mine = folder(&e.home, "mine", None);
-    let theirs = folder(&e.home, "theirs", Some(HOOK));
+    let theirs = folder(&e.home, "theirs", None);
     let loose = folder(&e.home, "not-a-workspace", Some(HOOK));
     let mine_id = register(&mine);
     register(&theirs);
@@ -274,13 +275,17 @@ fn request_and_status_are_for_workspace_folders_only() {
         let r = dispatch(true, route, &params(&[("path", &s(&loose))]), b"", "owner");
         assert_eq!(r.status, "404 Not Found", "{route}: {}", r.body);
         assert_eq!(json_of(&r)["error"], "not_a_workspace");
-        let r = dispatch(true, route, &passport(&mine_id, &[("path", &s(&theirs))]), b"", "agent");
-        assert_eq!(r.status, "403 Forbidden", "{route}: {}", r.body);
-        assert_eq!(json_of(&r)["error"], "not_your_workspace");
         let mut bound_no_ws = params(&[("path", &s(&theirs))]);
         bound_no_ws.insert("cell_session_id".into(), "s1".into());
         assert_eq!(dispatch(true, route, &bound_no_ws, b"", "agent").status, "403 Forbidden", "{route}");
     }
+    // Another workspace's clean folder: nothing to read or ask about.
+    let r = dispatch(false, STATUS_PATH, &passport(&mine_id, &[("path", &s(&theirs))]), b"", "agent");
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert_eq!(json_of(&r)["error"], "not_your_workspace");
+    let r = dispatch(true, REQUEST_PATH, &passport(&mine_id, &[("path", &s(&theirs))]), b"", "agent");
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert_eq!(json_of(&r)["error"], "folder_trust_not_waiting");
     let r = dispatch(true, REQUEST_PATH, &passport(&mine_id, &[("path", &s(&mine)), ("why", "build")]), b"", "agent");
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert_eq!(json_of(&r)["state"], "clean");
@@ -787,4 +792,193 @@ fn a_trust_says_what_happens_to_the_paused_sessions() {
     assert_eq!(v["action"]["result"]["restarting"], 1, "{v}");
     assert!(v["action"]["result"]["message"].as_str().unwrap().ends_with(" Starting the 1 session K2 held here again."), "{v}");
     assert_eq!(held_count(&r.scope), 0, "taken for the retry");
+}
+
+// ── Another agent on this server asks for a workspace that can't start ──
+//
+// A workspace's folder waits for the owner, so that workspace's agent
+// can't start, and it was the only one allowed to raise the card. Another
+// agent on the same server may raise it (and read the folder's status)
+// while the folder waits; the owner still decides.
+
+/// The project name Settings → Workspaces shows.
+fn project_name(id: &str) -> String {
+    k2_core::projects_ops::projects_list().unwrap().into_iter().find(|p| p.id == id).expect("registered").name
+}
+
+/// Another agent's ask lands on its own Thread (where the person is
+/// talking to it), names the asking agent, the workspace and the folder,
+/// and lists the findings like any folder-trust card. Nothing is granted.
+#[test]
+fn another_agent_on_this_server_raises_the_card_for_a_waiting_folder() {
+    let e = env();
+    let stuck = folder(&e.home, "stuck-ws", Some(HOOK));
+    let (stuck_id, _, stuck_conv) = register_with_thread(&stuck);
+    let helper = folder(&e.home, "helper-ws", None);
+    let (helper_id, _, helper_conv) = register_with_thread(&helper);
+    let path = s(&stuck);
+    assert_eq!(gate::status(&path).unwrap().state, "undecided", "the setup: nobody asked yet");
+
+    // It reads the folder's state and findings while the folder waits.
+    let st = dispatch(false, STATUS_PATH, &passport(&helper_id, &[("path", path.as_str())]), b"", "agent");
+    assert_eq!(st.status, "200 OK", "{}", st.body);
+    let v = json_of(&st);
+    assert_eq!(v["state"], "undecided", "{v}");
+    assert_eq!(v["projectId"], stuck_id.as_str(), "{v}");
+    assert_eq!(v["findings"][0]["file"], ".claude/settings.json", "{v}");
+    assert_eq!(v["can_decide"], false, "{v}");
+
+    let r = dispatch(true, REQUEST_PATH, &passport(&helper_id, &[("path", path.as_str()), ("why", "its session can't start")]), b"", "agent");
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v = json_of(&r);
+    assert_eq!(v["state"], "held", "{v}");
+    let card = v["card"].as_str().expect("a card").to_string();
+    let ws_name = project_name(&stuck_id);
+    assert_eq!(v["workspace"], ws_name.as_str(), "{v}");
+    assert_eq!(v["decide_in_app"], format!("Settings → Workspaces → {ws_name} → Folder trust"), "{v}");
+
+    let c = card_doc(&helper_conv, &card);
+    assert_eq!(c.status, "pending");
+    let asker = md_text(&agent_name_of(&helper_id), 80);
+    let ws_words = md_text(&ws_name, 80);
+    assert!(
+        c.prompt.starts_with(&format!("**{asker} asks you to decide on {}, the folder of {ws_words}.**", md_code_inline(&path))),
+        "{}",
+        c.prompt
+    );
+    assert!(c.prompt.contains(&format!("{ws_words} can't start an agent there until you do.")), "{}", c.prompt);
+    assert!(c.prompt.contains(".claude/settings.json: "), "the findings, as on every card: {}", c.prompt);
+    assert!(c.prompt.contains(&format!("{asker} says: its session can't start")), "{}", c.prompt);
+    assert_eq!(c.action.as_ref().map(|a| a.id.as_str()), Some(CARD_ACTION));
+    assert!(k2_core::overlay::get_thread_doc(&stuck_conv, &card).unwrap().is_none(), "on the asking agent's Thread, not the stuck one's");
+
+    let after = gate::status(&path).unwrap();
+    assert_eq!((after.state.as_str(), after.card.as_deref()), ("pending", Some(card.as_str())));
+    assert!(!k2_core::cli_folder_trust::granted_in_any_store(&e.home, &path), "asking granted nothing");
+}
+
+/// One open card per folder: asking again, from the same agent or another
+/// one, returns the card that waits.
+#[test]
+fn a_second_ask_while_the_card_waits_returns_the_same_card() {
+    let e = env();
+    let stuck = folder(&e.home, "stuck-twice", Some(HOOK));
+    register_with_thread(&stuck);
+    let (one, _, one_conv) = register_with_thread(&folder(&e.home, "helper-one", None));
+    let (two, _, two_conv) = register_with_thread(&folder(&e.home, "helper-two", None));
+    let path = s(&stuck);
+    let ask = |ws: &str| {
+        let r = dispatch(true, REQUEST_PATH, &passport(ws, &[("path", path.as_str()), ("why", "stuck")]), b"", "agent");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        json_of(&r)["card"].as_str().unwrap_or_else(|| panic!("a card: {}", r.body)).to_string()
+    };
+    let first = ask(&one);
+    assert_eq!(ask(&one), first, "the same agent again");
+    assert_eq!(ask(&two), first, "another agent");
+    assert_eq!(card_doc(&one_conv, &first).status, "pending");
+    assert!(k2_core::overlay::get_thread_doc(&two_conv, &first).unwrap().is_none(), "no second card");
+    // The folder's own agent asking gets the same card too.
+    let own = gate::request(&path, &Actor::by("request"));
+    assert_eq!(own.refusal().and_then(|r| r.card.as_deref()), Some(first.as_str()));
+}
+
+/// A folder that doesn't wait for a decision (clean, trusted, always, not
+/// trusted) is refused for another agent, in words that say why; nothing
+/// is posted and the folder's own agent is unchanged.
+#[test]
+fn another_agent_cant_ask_about_a_folder_that_isnt_waiting() {
+    let e = env();
+    let (helper_id, _, _) = register_with_thread(&folder(&e.home, "helper-refused", None));
+    let clean = folder(&e.home, "clean-ws", None);
+    let clean_id = register(&clean);
+    let risky = folder(&e.home, "decided-ws", Some(HOOK));
+    register(&risky);
+    let refused = |p: &Path, state: &str| {
+        let r = dispatch(true, REQUEST_PATH, &passport(&helper_id, &[("path", &s(p)), ("why", "x")]), b"", "agent");
+        assert_eq!(r.status, "409 Conflict", "{state}: {}", r.body);
+        let v = json_of(&r);
+        assert_eq!(v["error"], "folder_trust_not_waiting", "{v}");
+        let m = v["message"].as_str().unwrap();
+        assert!(m.contains(&format!("doesn't wait for the owner's decision (it is {state})")), "{m}");
+        assert_eq!(v["state"], state, "{v}");
+        let st = dispatch(false, STATUS_PATH, &passport(&helper_id, &[("path", &s(p))]), b"", "agent");
+        assert_eq!(st.status, "403 Forbidden", "{state}: {}", st.body);
+        assert_eq!(json_of(&st)["error"], "not_your_workspace");
+        m.to_string()
+    };
+    refused(&clean, "clean");
+    // Its own agent still gets the clean answer.
+    let own = dispatch(true, REQUEST_PATH, &passport(&clean_id, &[("path", &s(&clean))]), b"", "agent");
+    assert_eq!(json_of(&own)["state"], "clean", "{}", own.body);
+
+    let path = s(&risky);
+    let fp = gate::evaluate(&path).unwrap().fingerprint.unwrap();
+    for (d, state) in [("once", "trusted"), ("always", "always"), ("deny", "denied")] {
+        let r = dispatch(true, RESET_PATH, &params(&[("path", path.as_str())]), b"", "owner");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let r = dispatch(true, DECIDE_PATH, &params(&[("path", path.as_str()), ("decision", d), ("fingerprint", fp.as_str())]), b"", "owner");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let m = refused(&risky, state);
+        if state == "denied" {
+            assert!(m.contains("Settings → Workspaces → "), "where the owner changes it: {m}");
+        }
+    }
+    assert!(gate::status(&path).unwrap().card.is_none(), "nothing was posted");
+}
+
+/// The asking agent (and the stuck one) still can't decide: decide and a
+/// tap from a passport are refused and nothing changes; the owner decides
+/// and the card closes with that choice.
+#[test]
+fn the_owner_still_decides_after_another_agent_asks() {
+    let e = env();
+    let stuck = folder(&e.home, "stuck-decide", Some(HOOK));
+    let stuck_id = register(&stuck);
+    let (helper_id, helper_addr, helper_conv) = register_with_thread(&folder(&e.home, "helper-decide", None));
+    let path = s(&stuck);
+    let r = dispatch(true, REQUEST_PATH, &passport(&helper_id, &[("path", path.as_str())]), b"", "agent");
+    let card = json_of(&r)["card"].as_str().unwrap_or_else(|| panic!("a card: {}", r.body)).to_string();
+    let fp = gate::evaluate(&path).unwrap().fingerprint.unwrap();
+    let decide = [("path", path.as_str()), ("decision", "once"), ("fingerprint", fp.as_str())];
+    for ws in [&helper_id, &stuck_id] {
+        for author in ["agent", "owner"] {
+            let r = dispatch(true, DECIDE_PATH, &passport(ws, &decide), b"", author);
+            assert_eq!(r.status, "403 Forbidden", "{author}: {}", r.body);
+            assert_eq!(json_of(&r)["error"]["code"], "action_card_person_only", "{}", r.body);
+        }
+    }
+    let mut tap_params = passport(&helper_id, &[]);
+    tap_params.insert("cell_session_id".into(), "sess-helper".into());
+    let body = json!({ "addr": helper_addr, "id": card, "answer": TRUST_IT }).to_string();
+    let tapped = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &tap_params, body.as_bytes(), "agent");
+    assert_eq!(tapped.status, "403 Forbidden", "{}", tapped.body);
+    assert_eq!(gate::status(&path).unwrap().state, "pending", "nothing was decided");
+    assert_eq!(card_doc(&helper_conv, &card).status, "pending");
+
+    let ok = dispatch(true, DECIDE_PATH, &params(&decide), b"", "owner");
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    assert_eq!(gate::status(&path).unwrap().state, "trusted");
+    let c = card_doc(&helper_conv, &card);
+    assert_eq!((c.status.as_str(), c.answer.as_deref()), ("answered", Some(TRUST_IT)));
+}
+
+/// Only an agent of this server: a passport whose workspace isn't one of
+/// this server's workspaces (a federated peer's agent, a removed workspace)
+/// is refused, and nothing is posted.
+#[test]
+fn an_agent_from_another_server_is_refused() {
+    let e = env();
+    let stuck = folder(&e.home, "stuck-remote", Some(HOOK));
+    register_with_thread(&stuck);
+    let path = s(&stuck);
+    let elsewhere = uuid::Uuid::new_v4().to_string();
+    for (route, post) in [(REQUEST_PATH, true), (STATUS_PATH, false)] {
+        let r = dispatch(post, route, &passport(&elsewhere, &[("path", path.as_str()), ("why", "x")]), b"", "agent");
+        assert_eq!(r.status, "403 Forbidden", "{route}: {}", r.body);
+        let v = json_of(&r);
+        assert_eq!(v["error"], "not_on_this_server", "{v}");
+        assert!(v["message"].as_str().unwrap().contains("only an agent on this server"), "{v}");
+    }
+    let st = gate::status(&path).unwrap();
+    assert_eq!((st.state.as_str(), st.card.as_deref()), ("undecided", None), "nothing was posted");
 }

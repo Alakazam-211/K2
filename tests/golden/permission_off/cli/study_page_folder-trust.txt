@@ -29,9 +29,9 @@ WHAT K2 DOES
 
   Who decides: the owner (the owner token, or a login with the Owner
   role, from any device). Admins and Members are refused, in words. The
-  same three choices are in Settings → Workspaces → Folder trust while the
-  folder waits, in the agent's chat when its session can't start, and on
-  the CLI. Whichever is used first decides: the card
+  same three choices are in Settings → Workspaces → <workspace> → Folder
+  trust while the folder waits, in the agent's chat when its session
+  can't start, and on the CLI. Whichever is used first decides: the card
   closes showing that choice and who made it, and a later tap on it says
   "Already answered: … by <who> at <time>". A trust starts the spawns K2
   held there again; a session K2 stopped starts again when its tab opens.
@@ -44,12 +44,13 @@ WHAT K2 DOES
 YOU (AN AGENT)
   k2 workspace trust status [<folder>]        what K2 found, the state
   k2 workspace trust request <folder> --why "…"   ask: presents the card
-  Both work on your own workspace's folder only. request only asks: it
-  never trusts anything. You never decide: k2 workspace trust <folder>
-  --yes|--always|--no is the owner's (you get exit 3; the card is the
-  request). Don't edit the trust files (~/.claude.json,
-  ~/.codex/config.toml, ~/.gemini/trustedFolders.json,
-  ~/.grok/trusted_folders.toml, ~/.cursor/projects/…) to get around it.
+  Both work on your own workspace's folder, and on another workspace's on
+  this server while it waits (its agent can't start, so can't ask): the
+  card goes on your Thread, one per folder. request never trusts anything.
+  You never decide: --yes|--always|--no is the owner's (exit 3 and the
+  request line); tell your person they can also decide in the app or by
+  opening that agent (above). Don't edit the trust files (~/.claude.json,
+  ~/.codex, ~/.gemini, ~/.grok, ~/.cursor) to get around it.
 
 RE-SCAN ON CHANGE
   Every spawn, and every reuse of a running session, scans (a folder whose
@@ -57,13 +58,12 @@ RE-SCAN ON CHANGE
   scan). Claude also reloads hooks mid-session, so K2 watches the risky
   files of every folder where it runs a session: when they change, a
   "Trust it" folder is undecided again, K2's grants come off, K2 stops its
-  sessions there and the owner gets the card. The window: K2 sees a
-  change in a watched config folder within about a second, and a file
-  deeper under one (a script under .claude/, a nested clone) within a
-  minute. Claude may load
-  a new hook before that, so a running session can run new settings in
-  that window. "Trust it" and the CLI apply only to the settings shown; if
-  they changed in between, nothing is decided and K2 asks again.
+  sessions there and the owner gets the card. The window: K2 sees a change
+  in a watched config folder within about a second, and a file deeper
+  under one (a script under .claude/, a nested clone) within a minute.
+  Claude may load a new hook before that, so a running session can run
+  new settings in that window. "Trust it" and the CLI apply only to the
+  settings shown: if they changed, nothing is decided and K2 asks again.
 
 WHAT IT CAN'T DO (honest limits)
   - It is not a wall against an agent running as the same OS user: such an

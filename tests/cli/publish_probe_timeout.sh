@@ -107,7 +107,7 @@ grep -Fq "public URL is published once port 3047 answers" "$WORK/out" || fail "t
 ok "tunnelled run inside its grace says the URL waits for the port"
 
 out="$(k2s publish ps 2>&1)" || fail "ps: $out"
-printf '%s\n' "$out" | grep -E '^hearth ' | grep -Fq "starting (waiting for port 3047, 4m12s left)" || fail "ps row: $out"
+<<<"$(<<<"$out" grep -E '^hearth ')" grep -Fq "starting (waiting for port 3047, 4m12s left)" || fail "ps row: $out"
 ok "ps shows the starting wording"
 
 set +e

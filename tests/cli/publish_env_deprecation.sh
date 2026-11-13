@@ -74,8 +74,8 @@ WARN="warning: shop still inherits the daemon environment; this ends in K2 0.46.
 for verb in ps list; do
 	k2s publish "$verb" >"$WORK/out" 2>"$WORK/err" || fail "publish $verb: $(cat "$WORK/out" "$WORK/err")"
 	out="$(cat "$WORK/out")"
-	printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env (ends 0.46.0)]" || fail "$verb: shop row lacks the tag: $out"
-	if printf '%s\n' "$out" | grep -E '^fresh ' | grep -Fq "legacy env"; then fail "$verb: a clean row must carry no tag: $out"; fi
+	<<<"$(<<<"$out" grep -E '^shop ')" grep -Fq "[legacy env (ends 0.46.0)]" || fail "$verb: shop row lacks the tag: $out"
+	if <<<"$(<<<"$out" grep -E '^fresh ')" grep -Fq "legacy env"; then fail "$verb: a clean row must carry no tag: $out"; fi
 	<<<"$out" grep -Fxq "warning: 1 service still inherits the daemon environment (shop); this ends in K2 0.46.0. Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)." \
 		|| fail "$verb: summary line missing: $out"
 	[ "$(printf '%s\n' "$out" | grep -c '^warning:')" = 1 ] || fail "$verb: expected exactly one warning line: $out"
@@ -133,7 +133,7 @@ STUB_PID=$!
 for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.05; done
 k2s publish ps >"$WORK/out" 2>"$WORK/err" || fail "ps (now): $(cat "$WORK/out" "$WORK/err")"
 out="$(cat "$WORK/out")"
-printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env (ends now, 0.46.0)]" || fail "now: shop row tag: $out"
+<<<"$(<<<"$out" grep -E '^shop ')" grep -Fq "[legacy env (ends now, 0.46.0)]" || fail "now: shop row tag: $out"
 <<<"$out" grep -Fq "this ends with this release (K2 0.46.0)." || fail "now: summary line: $out"
 if <<<"$out" grep -Fq "ends in K2 0.46.0"; then fail "now: still says 'ends in K2 <this release>': $out"; fi
 k2s publish start shop >"$WORK/out" 2>"$WORK/err" || fail "start shop (now): $(cat "$WORK/out" "$WORK/err")"
@@ -152,7 +152,7 @@ STUB_PID=$!
 for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.05; done
 k2s publish ps >"$WORK/out" 2>"$WORK/err" || fail "ps (noend): $(cat "$WORK/out" "$WORK/err")"
 out="$(cat "$WORK/out")"
-printf '%s\n' "$out" | grep -E '^shop ' | grep -Fq "[legacy env]" || fail "noend: shop row tag: $out"
+<<<"$(<<<"$out" grep -E '^shop ')" grep -Fq "[legacy env]" || fail "noend: shop row tag: $out"
 <<<"$out" grep -Fq "warning: 1 service still inherits the daemon environment (shop). Switch each with" || fail "noend: summary line: $out"
 if <<<"$out" grep -q "ends\|0\.46\."; then fail "noend: names an end: $out"; fi
 k2s publish start shop >"$WORK/out" 2>"$WORK/err" || fail "start shop (noend): $(cat "$WORK/out" "$WORK/err")"

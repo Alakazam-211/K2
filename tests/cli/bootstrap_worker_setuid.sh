@@ -23,7 +23,7 @@ bash -n "$BOOT" || fail "bash -n"
 BLOCK="$(sed -n '/^# ── 6\. k2-vmm-worker/,/^# ── 7\./p' "$BOOT")"
 [ -n "$BLOCK" ] || fail "step 6 block not found"
 CODE="$(printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#')"
-if printf '%s\n' "$CODE" | grep -E '^[[:space:]]*(chown|chmod)' | grep -q 'WORKER_DST'; then
+if <<<"$(<<<"$CODE" grep -E '^[[:space:]]*(chown|chmod)')" grep -q 'WORKER_DST'; then
 	fail "step 6 chowns/chmods the file already in the daemon user's dir"
 fi
 ok "never chown/chmod the in-place worker"

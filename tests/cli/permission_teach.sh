@@ -215,7 +215,7 @@ run agent study --json
 <<<"$OUT" grep -q '"id":"permissions"' && ok || bad "k2 study --json: no permissions topic while on"
 run agent study permissions
 [ "$RC" = 0 ] && ok || bad "k2 study permissions: exit $RC ($ERR)"
-printf '%s\n' "$OUT" | head -1 | grep -qx '# Permission cards (Beta)' && ok || bad "k2 study permissions: wrong page: $(printf '%s' "$OUT" | head -2)"
+<<<"$OUT" head -1 | grep -qx '# Permission cards (Beta)' && ok || bad "k2 study permissions: wrong page: $(printf '%s' "$OUT" | head -2)"
 run agent study --help
 <<<"$OUT" grep -qx '  permissions' && ok || bad "k2 study --help: no permissions topic while on"
 
@@ -320,7 +320,7 @@ echo off > "$MODE"
 run person permission beta on
 grep -q '^POST /cli/settings/update {"permissionCards":true}$' "$LOG" && ok || bad "permission beta on: wrong request: $(cat "$LOG")"
 run person permission pending
-printf '%s' "$ERR" | head -1 | grep -qx 'Unknown command: permission' && ok || bad "permission pending (person, off): '$ERR'"
+<<<"$ERR" head -1 | grep -qx 'Unknown command: permission' && ok || bad "permission pending (person, off): '$ERR'"
 echo on > "$MODE"
 
 echo "== off (the daemon says no) =="
@@ -329,7 +329,7 @@ run agent help
 <<<"$OUT" grep -q 'permission request' && bad "k2 help: permission line while off" || ok
 run agent permission request compute.use --why x
 [ "$RC" = 1 ] && ok || bad "permission (off): exit $RC, want 1"
-printf '%s' "$ERR" | head -1 | grep -qx 'Unknown command: permission' && ok || bad "permission (off): '$(printf '%s' "$ERR" | head -1)'"
+<<<"$ERR" head -1 | grep -qx 'Unknown command: permission' && ok || bad "permission (off): '$(printf '%s' "$ERR" | head -1)'"
 run agent study permissions
 [ "$RC" = 2 ] && ok || bad "study permissions (off): exit $RC, want 2"
 run agent connections add billing

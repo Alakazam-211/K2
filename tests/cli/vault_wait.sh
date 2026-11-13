@@ -74,7 +74,7 @@ ok "file --wait prints only the path and follows the card it was told about"
 : >"$WORK/posts.log"
 out="$(k2s vault env-file SAVED --wait 10m 2>"$WORK/err")" || fail "env-file --wait: $(cat "$WORK/err")"
 <<<"$out" grep -Fq "abc-SAVED" || fail "env-file --wait: $out"
-printf '%s' "$(head -1 "$WORK/posts.log")" | grep -Fq '"wait": "10m"' || fail "env-file sends --wait: $(cat "$WORK/posts.log")"
+<<<"$(head -1 "$WORK/posts.log")" grep -Fq '"wait": "10m"' || fail "env-file sends --wait: $(cat "$WORK/posts.log")"
 ok "env-file --wait works the same way"
 
 set +e

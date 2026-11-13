@@ -24,7 +24,7 @@ trap '[ -n "$STUB_PID" ] && { kill "$STUB_PID" 2>/dev/null; wait "$STUB_PID" 2>/
 k2n() { env HOME="$WORK" "$K2_CLI" "$@"; }
 
 out="$(k2n vault run --help)" || fail "vault run --help exited non-zero: $out"
-printf '%s\n' "$out" | head -1 | grep -Fq "k2 vault run " || fail "run --help first line: $out"
+<<<"$out" head -1 | grep -Fq "k2 vault run " || fail "run --help first line: $out"
 <<<"$out" grep -Fq "Example: k2 vault run --secret" || fail "run --help has no example: $out"
 <<<"$out" grep -Fq -- "--no-mask" || fail "run --help lacks --no-mask: $out"
 <<<"$out" grep -Fq "not masked" || fail "run --help doesn't say --no-mask stops masking: $out"

@@ -46,7 +46,7 @@ ok "no sudo policy in 7a; the legacy pg line is visudo-checked"
 DB_BLOCK="$(sed -n '/^# ── 7b\./,/bake complete/p' "$PROVISION")"
 ROOT_DB="$(printf '%s\n' "$DB_BLOCK" | sed -n '/^\telse$/,/^\tfi$/p')"
 [ -n "$ROOT_DB" ] || fail "7b root-helper branch not found"
-if printf '%s\n' "$ROOT_DB" | grep -Ev '^[[:space:]]*#' | grep -Eq 'k2-pg-helper|sudoers'; then
+if <<<"$(<<<"$ROOT_DB" grep -Ev '^[[:space:]]*#')" grep -Eq 'k2-pg-helper|sudoers'; then
 	fail "7b (root helper) must not install k2-pg-helper or write a sudoers file (RH11)"
 fi
 <<<"$DB_BLOCK" grep -q 'k2-root-helper pg install-ram-fence' || fail "7b fences RAM through the root helper"
@@ -60,16 +60,19 @@ L_APT="$(line_of 'apt-get install -y -qq postgresql')"
 # helper branch, then the distro branch).
 ADOPT="$(sed -n '/^if \[ "\$WITH_DB" = 1 \] && \[ -n "\$PG_EXISTING" \]; then$/,/^elif /p' "$PROVISION")"
 [ -n "$ADOPT" ] || fail "7b adopt branch not found"
-if printf '%s\n' "$ADOPT" | grep -Ev '^[[:space:]]*(#|log )' | grep -Eq 'apt-get|initdb|pg_createcluster|listen_addresses|sed -i|install-ram-fence|systemctl'; then
+if <<<"$(<<<"$ADOPT" grep -Ev '^[[:space:]]*(#|log )')" grep -Eq 'apt-get|initdb|pg_createcluster|listen_addresses|sed -i|install-ram-fence|systemctl'; then
 	fail "the adopt branch must not install, init, reconfigure or fence an existing cluster"
 fi
 grep -q 'ROOT_HELPER_FROM="0.45.4"' "$PROVISION" || fail "the root helper ships from 0.45.4"
 ok "7b adopts an existing Postgres cluster read-only (no re-init, no config change)"
-if printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#' | grep -Eq 'hostmail|k2 dns|/cli/mail|/cli/dns'; then fail "7a must not enable mail or touch DNS"; fi
+if <<<"$(<<<"$BLOCK" grep -Ev '^[[:space:]]*#')" grep -Eq 'hostmail|k2 dns|/cli/mail|/cli/dns'; then fail "7a must not enable mail or touch DNS"; fi
 ok "does not enable mail or touch DNS"
 # Root never executes the daemon user's binary: every line that runs the
 # installed k2-daemon must drop to the daemon user first.
-if printf '%s\n' "$BLOCK" | grep -Ev '^[[:space:]]*#' | grep -F '/.local/bin/k2-daemon"' | grep -vq 'runuser -u "$K2_RUN_USER" --'; then
+# The lines that start the daemon, collected first: the last grep stops at
+# its first match, and under pipefail that failed the stage before it.
+daemon_starts="$(<<<"$BLOCK" grep -Ev '^[[:space:]]*#' | grep -F '/.local/bin/k2-daemon"' || true)"
+if [ -n "$daemon_starts" ] && <<<"$daemon_starts" grep -vq 'runuser -u "$K2_RUN_USER" --'; then
 	fail "7a runs the daemon user's k2-daemon without dropping to that user"
 fi
 if grep -Ev '^[[:space:]]*#' "$PROVISION" | grep -F '/.local/bin/k2-daemon"' | grep -F -- '--version' | grep -vq 'runuser -u'; then

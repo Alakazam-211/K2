@@ -82,8 +82,8 @@ python3 "$WORK/stub.py" "$PORT" "$ID" &
 STUB_PID=$!
 for _ in $(seq 1 100); do curl -s "http://127.0.0.1:$PORT/" >/dev/null 2>&1 && break; sleep 0.05; done
 out="$(env HOME="$WORK" K2_HOST=127.0.0.1 K2_PORT="$PORT" K2_HOOK_TOKEN=stub-token K2_PROJECT_PATH="$WORK" "$K2_CLI" vault incoming)" || fail "incoming: $out"
-printf '%s' "$out" | grep -F "STRIPE_KEY" | grep -Fq "(waiting for a person: the card on the Thread of ops)" || fail "incoming: the card line: $out"
-printf '%s' "$out" | grep -F "OTHER" | grep -Fq "(no card yet: k2 permission request vault.incoming.accept id=hd_nocard" || fail "incoming: the ask line: $out"
+<<<"$(<<<"$out" grep -F "STRIPE_KEY")" grep -Fq "(waiting for a person: the card on the Thread of ops)" || fail "incoming: the card line: $out"
+<<<"$(<<<"$out" grep -F "OTHER")" grep -Fq "(no card yet: k2 permission request vault.incoming.accept id=hd_nocard" || fail "incoming: the ask line: $out"
 if <<<"$out" grep -Fq "from their own terminal"; then fail "incoming still says 'from their own terminal': $out"; fi
 ok "k2 vault incoming: where each card is, or the line to ask with"
 

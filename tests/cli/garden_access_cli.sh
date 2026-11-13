@@ -149,7 +149,7 @@ echo "== Garden access: the topic and its page =="
 routes "{$ACCESS_ON}"
 if run 0 study; then
     if <<<"$OUT" grep -q '^  garden-access       Who may edit a Garden'; then ok "study lists garden-access"; else bad "study: $OUT"; fi
-    if printf '%s' "$OUT" | grep -A1 '^  garden-data ' | grep -q '^  garden-access '; then ok "right after garden-data"; else bad "order: $OUT"; fi
+    if <<<"$(<<<"$OUT" grep -A1 '^  garden-data ')" grep -q '^  garden-access '; then ok "right after garden-data"; else bad "order: $OUT"; fi
 fi
 if run 0 study --json; then
     if printf '%s' "$OUT" | python3 -c 'import json,sys; t=[x["id"] for x in json.load(sys.stdin)["topics"]]; sys.exit(0 if t[t.index("garden-data") + 1]=="garden-access" else 1)'; then

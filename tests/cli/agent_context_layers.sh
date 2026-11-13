@@ -326,7 +326,7 @@ else
                 # not_found project is acceptable if workspace not registered;
                 # other failures are real.
                 err="$(cat /tmp/_k2_ctx_err.$$ 2>/dev/null || true)"
-                if printf '%s' "$err$catalog_out" | grep -Eq 'not_found|No project|unregistered'; then
+                if <<<"$err$catalog_out" grep -Eq 'not_found|No project|unregistered'; then
                     echo "  PASS: catalog reached daemon (project not registered — ok for smoke)"
                     pass=$((pass + 1))
                 else

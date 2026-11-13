@@ -72,7 +72,7 @@ ok "close 22/tcp refused (lockout guard)"
 if out="$(k2 firewall ssh allow 2>&1)"; then fail "empty ssh allow succeeded: $out"; fi
 ok "an empty ssh allow is refused"
 rules="$(k2 firewall rules --format ufw)"
-printf '%s' "$rules" | grep -m1 "sudo ufw allow" | grep -q "22/tcp" || fail "ufw rules don't start with SSH: $rules"
+<<<"$(<<<"$rules" grep -m1 "sudo ufw allow")" grep -q "22/tcp" || fail "ufw rules don't start with SSH: $rules"
 k2 firewall rules --format nft | grep -q "policy drop" || fail "nft rules aren't default-deny"
 ok "rules: SSH first, default deny"
 

@@ -60,7 +60,8 @@ afterEach(() => {
 describe('DeckPreviewPane', () => {
   it('shows each slide’s thumb, the first slide at full width, and a slide it can’t draw', async () => {
     render(<DeckPreviewPane scope={scope} filePath="/w/talk.pptx" />)
-    expect(await screen.findByAltText('Slide 1: Quarterly review', { selector: 'li img' })).toBeTruthy()
+    // The thumb strip's copy (an <img> in the list), not only the full-width one.
+    expect((await screen.findAllByAltText('Slide 1: Quarterly review')).some((img) => img.closest('li') !== null)).toBe(true)
     expect(screen.getByText("can't draw")).toBeTruthy()
     await waitFor(() => expect(screen.getByTestId('deck-preview-stage')).toBeTruthy())
     expect(h.gets[0]).toEqual({ path: '/w/talk.pptx', want: 'thumb' })

@@ -49,6 +49,7 @@ import { TerminalComposeBar, THREAD_ADDR_WAIT_MS } from '@/components/Terminal/T
 import { fakeScope } from '@/test-utils/fake-scope'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
+import type { ConnectHost } from '@/stores/connect-host'
 
 const HOST = 'your-server.k2.dev'
 const WS = '/home/k2/ai/builder'
@@ -74,7 +75,9 @@ function Harness() {
 function renderRemote(): void {
   const room = testRoom({
     tabs: {},
-    scope: fakeScope(HOST, { remote: true }),
+    // A remote server is one saved on this computer: the Thread outbox sends
+    // only to a server with a saved login (threadOutbox.ts scopeLogin).
+    scope: { ...fakeScope(HOST, { remote: true }), connectHost: () => ({ hostname: HOST, username: 'owner' }) as unknown as ConnectHost },
     isPrimary: false,
     localCommands: false,
     projects: [{ id: 'p-builder', name: 'builder', path: WS } as unknown as ProjectWithWorkspaces],

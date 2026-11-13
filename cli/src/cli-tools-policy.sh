@@ -856,6 +856,105 @@ _cli_split_status() {
 }
 _cli_migrating() { [ "${_K2_HTTP:-}" = 503 ] && [[ "$1" == *'"state":"migrating"'* ]]; }
 
+# BEGIN_CLI_NO_ANSWER
+# A request the daemon never answered ends the command with one plain
+# line that names the route and how long it waited, never a JSON parse
+# error from the reader downstream (`… | python3 -c 'json.loads…'` used to
+# print "Expecting value: line 1 column 1 (char 0)" after a stall).
+# "Never answered": curl timed out (28), the connection closed with no
+# reply (52), or a 5xx came back with an empty body.
+#
+# The request helpers run inside $(…) or on the left of a pipe, where
+# `exit` ends only that subshell and the reader still runs.
+# _k2_end_command ends the whole command from there:
+#   - in a $(…) with no reader beside it: the main shell's USR1 trap
+#     (exit 1 once the substitution returns; EXIT traps run);
+#   - with a reader beside it (`… | python3 -c 'json.loads…'`): the shells
+#     between here and the main one get SIGPIPE, then the reader SIGTERM,
+#     so nobody is left to print the reader's error or bash's "Terminated"
+#     job report. The exit status is then 141 (SIGPIPE), still non-zero.
+# Any other process of this command (a spinner) ends with the reader.
+# No temp files (here-strings, mktemp): the disk may be full.
+trap 'exit 1' USR1
+_k2_end_command() {
+    local st="${1:-1}" probe="" table="" plan="" anc="" kids=""
+    # The main shell itself: a plain exit.
+    [ -n "${BASHPID:-}" ] && [ "$BASHPID" = "$$" ] && exit "$st"
+    kill -USR1 "$$" 2>/dev/null || true
+    # Which pid is this shell? bash 3.2 has no BASHPID, so a probe child
+    # names it: the probe's parent in the table is this shell.
+    sleep 30 &
+    probe=$!
+    table="$(ps -A -o pid= -o ppid= 2>/dev/null)" || table=""
+    kill "$probe" 2>/dev/null || true
+    if [ -n "$table" ]; then
+        # Line 1: the shells between here and the main one (main included).
+        # Line 2: the command's other processes (not mine, not below me).
+        # Nothing when there are none of the second kind.
+        plan="$(printf '%s\n' "$table" | awk -v main="$$" -v probe="$probe" '
+            { par[$1] = $2 }
+            END {
+                if (!(probe in par)) exit
+                me = par[probe]
+                if (me == main || !(me in par)) exit
+                p = par[me]
+                while (p != "" && p != main && (p in par)) { anc[p] = 1; p = par[p] }
+                if (p != main) exit
+                anc[main] = 1
+                live[main] = 1; grew = 1
+                while (grew) {
+                    grew = 0
+                    for (c in par) if (!(c in live) && (par[c] in live)) { live[c] = 1; grew = 1 }
+                }
+                mine[me] = 1; grew = 1
+                while (grew) {
+                    grew = 0
+                    for (c in par) if (!(c in mine) && (par[c] in mine)) { mine[c] = 1; grew = 1 }
+                }
+                k = ""
+                for (c in live) if (!(c in anc) && !(c in mine)) k = k " " c
+                if (k == "") exit
+                a = ""
+                for (c in anc) a = a " " c
+                print a
+                print k
+            }')" || plan=""
+    fi
+    if [ -n "$plan" ]; then
+        anc="${plan%%$'\n'*}"
+        kids="${plan#*$'\n'}"
+        # shellcheck disable=SC2086
+        kill -PIPE $anc 2>/dev/null || true
+        # shellcheck disable=SC2086
+        kill -TERM $kids 2>/dev/null || true
+    fi
+    exit "$st"
+}
+
+# _cli_no_answer RC OUT ENDPOINT T0 — returns 1 (carry on) unless the
+# request went unanswered; then prints the line and ends the command.
+# Quiet inside cli_send's cell-socket try (_K2_NOANSWER_SOFT=1): the TCP
+# try that follows reports. T0 is $SECONDS when the request began.
+_cli_no_answer() {
+    local rc="$1" out="$2" endpoint="$3" t0="${4:-$SECONDS}"
+    case "$rc" in
+        28|52) ;;
+        0)
+            if [ -n "$out" ] || [[ "${_K2_HTTP:-}" != 5* ]]; then return 1; fi
+            ;;
+        *) return 1 ;;
+    esac
+    [ "${_K2_NOANSWER_SOFT:-0}" = 1 ] && return 1
+    local waited=$((SECONDS - t0))
+    if [ "$rc" = 28 ]; then
+        echo "Error: K2's server didn't answer ${endpoint} within ${waited} s; run k2 daemon status" >&2
+    else
+        echo "Error: K2's server gave an empty answer to ${endpoint} after ${waited} s; run k2 daemon status" >&2
+    fi
+    _k2_end_command 1
+}
+# END_CLI_NO_ANSWER
+
 cli_request() {
     local endpoint="$1"
     shift
@@ -863,7 +962,7 @@ cli_request() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local _K2_CFG="" out rc=0 try=1
+    local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add data "$params"
     # Captured (with a sentinel, so trailing newlines survive) only so the
     # permission-cards closing line can be noted; the bytes are unchanged.
@@ -878,6 +977,7 @@ cli_request() {
         fi
         break
     done
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
     if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
         cli_request "$endpoint" "$@"
         return $?
@@ -903,7 +1003,7 @@ cli_request_post() {
     for param in "$@"; do
         params="${params}&${param}"
     done
-    local out rc=0 _K2_CFG="" try=1
+    local out rc=0 _K2_CFG="" try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add url "${BASE_URL}${endpoint}?${params}"
     while :; do
         rc=0
@@ -916,6 +1016,7 @@ cli_request_post() {
         fi
         break
     done
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
     if [ "$rc" -eq 0 ] && [[ "$out" == *'method not allowed for this route'* ]]; then
         cli_request "$endpoint" "$@"
         return $?
@@ -934,7 +1035,7 @@ cli_request_post_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG="" out rc=0 try=1
+    local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     while :; do
         rc=0
@@ -948,6 +1049,7 @@ cli_request_post_uds() {
         fi
         break
     done
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
     if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
         cli_request_post_uds "$endpoint" "$@"
         return $?
@@ -968,7 +1070,7 @@ cli_post_json() {
         body="$(cat)"
     fi
     # Bodies carry passwords (k2 users add, k2 app user password): config too.
-    local _K2_CFG="" out rc=0
+    local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}"
     _k2_cfg_add data-raw "$body"
     # 0.46.6 (client papercut 12): note the refusal's (or hold's) `permission`
@@ -977,6 +1079,9 @@ cli_post_json() {
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
+    # No status is read here: a 5xx from an earlier request must not count.
+    _K2_HTTP=""
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
     if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
         cli_post_json "$endpoint" "$body"
         return $?
@@ -1081,11 +1186,17 @@ cli_post_form() {
     for param in "$@"; do
         body="${body}${body:+&}${param}"
     done
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add url "${BASE_URL}${endpoint}?token=${TOKEN}&project=$(urlencode "$PROJECT")"
     _k2_cfg_add data-raw "$body"
-    _k2_curl "$_K2_CFG" -s -X POST \
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST \
         --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    # No status is read here: a 5xx from an earlier request must not count.
+    _K2_HTTP=""
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    printf '%s' "$out"
+    return "$rc"
 }
 

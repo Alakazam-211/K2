@@ -12,7 +12,7 @@ cli_request_uds() {
     local endpoint="$1"; shift
     local params=""
     for param in "$@"; do params="${params}${params:+&}${param}"; done
-    local _K2_CFG="" out rc=0 try=1
+    local _K2_CFG="" out rc=0 try=1 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     if [ -n "$params" ]; then
         _k2_cfg_add data "$params"
@@ -28,6 +28,7 @@ cli_request_uds() {
         fi
         break
     done
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
     if [ "$rc" -eq 0 ] && _cli_retry_with_healed_passport "$out"; then
         cli_request_uds "$endpoint" "$@"
         return $?
@@ -41,19 +42,25 @@ cli_post_form_uds() {
     local endpoint="$1"; shift
     local body=""
     for param in "$@"; do body="${body}${body:+&}${param}"; done
-    local _K2_CFG=""
+    local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     _k2_cfg_add data-raw "$body"
-    _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
+    out="$(r=0; _k2_curl "$_K2_CFG" -s -X POST --unix-socket "$(_hook_sock)" "http://localhost${endpoint}" \
         --connect-timeout 5 --max-time 30 \
-        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
+    out="${out%x}"
+    # No status is read here: a 5xx from an earlier request must not count.
+    _K2_HTTP=""
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
+    printf '%s' "$out"
+    return "$rc"
 }
 
 cli_post_json_uds() {
     local endpoint="$1"
     local body="${2:-}"
     if [ -z "$body" ]; then body="$(cat)"; fi
-    local _K2_CFG="" out rc=0
+    local _K2_CFG="" out rc=0 t0="${_K2_REQ_T0:-$SECONDS}"
     _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
     _k2_cfg_add data-raw "$body"
     # 0.46.6: the permission note, as cli_post_json.
@@ -61,6 +68,9 @@ cli_post_json_uds() {
         --connect-timeout 5 --max-time 30 \
         -H "Content-Type: application/json" 2>/dev/null || r=$?; printf x; exit "$r")" || rc=$?
     out="${out%x}"
+    # No status is read here: a 5xx from an earlier request must not count.
+    _K2_HTTP=""
+    _cli_no_answer "$rc" "$out" "$endpoint" "$t0" || true
     _permission_note "$out"
     printf '%s' "$out"
     return "$rc"
@@ -112,6 +122,8 @@ _uds_eligible() {
 cli_send() {
     local fn="$1" endpoint="$2"; shift 2
     local sock; sock="$(_hook_sock)"
+    # The no-answer line counts from here, cell-socket try included.
+    local _K2_REQ_T0="${_K2_REQ_T0:-$SECONDS}"
     # After _apply_remote_host, every hop must use BASE_URL+Connect token.
     # UDS would hit THIS box's cell socket (Bug A: foreign staged path).
     if _cli_skip_uds; then
@@ -125,7 +137,7 @@ cli_send() {
         # `k2 inbox read` → "no usable answer: ''" from a session whose
         # socket nobody served).
         local out rc=0
-        out="$("${fn}_uds" "$endpoint" "$@")" || rc=$?
+        out="$(_K2_NOANSWER_SOFT=1 "${fn}_uds" "$endpoint" "$@")" || rc=$?
         if [ "$rc" -eq 0 ] && [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]]; then
             printf '%s' "$out"
             return 0

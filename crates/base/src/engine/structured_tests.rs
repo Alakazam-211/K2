@@ -510,7 +510,7 @@ fn map_set_delete_get() {
     assert_eq!(
         d.map_get("cells", "r1\x1fc2").unwrap(),
         Some(Value::str("")),
-        "an empty value is present (a cell clear is a set to \"\", E5)"
+        "an empty value is present (a cell clear is a set to \"\")"
     );
     assert_eq!(
         d.winner("cells", "r1\x1fc1", Facet::Value).unwrap(),
@@ -838,7 +838,7 @@ fn a_block_move_is_one_run_and_keeps_its_order() {
     assert!(one_run(&slots_of(&d, &got[0].write)));
 }
 
-/// E9: two writers each move a block into one gap, concurrently: the blocks stay
+/// Two writers each move a block into one gap, concurrently: the blocks stay
 /// contiguous (forward chains don't interleave).
 #[test]
 fn concurrent_block_moves_into_one_gap_stay_contiguous() {
@@ -873,7 +873,7 @@ fn concurrent_moves_never_duplicate() {
     assert_eq!(base.elem("rows", &k("a")).unwrap(), ElemState::Live(i));
 }
 
-/// E-MLIST-2: a delete concurrent with a move wins; the element comes back (restore) at the
+/// A delete concurrent with a move wins; the element comes back (restore) at the
 /// moved place.
 #[test]
 fn delete_wins_over_a_concurrent_move() {
@@ -888,7 +888,7 @@ fn delete_wins_over_a_concurrent_move() {
     assert_eq!(order(&base), "b c a");
 }
 
-/// E1: a delete concurrent with a restore wins.
+/// A delete concurrent with a restore wins.
 #[test]
 fn delete_wins_over_a_concurrent_restore() {
     for (rx, ry) in [(21, 22), (22, 21)] {
@@ -905,7 +905,7 @@ fn delete_wins_over_a_concurrent_restore() {
     }
 }
 
-/// E-MLIST-2: an insert next to an element moved concurrently lands at the old spot.
+/// An insert next to an element moved concurrently lands at the old spot.
 #[test]
 fn insert_beside_a_moved_element_stays_at_the_old_spot() {
     let mut base = doc_with("a b c d");
@@ -1015,7 +1015,7 @@ fn a_merged_sort_is_a_minimal_set_of_moves() {
 // `KNOWN_DEVIATIONS` (`crate::conformance`), each asserted to still happen by the generic
 // suite (`crates/conformance`, `tests/structured.rs`).
 
-/// `map.steady_bounded` (E-MAP-3: memory O(1) in overwrites of one key) deviates in memory,
+/// `map.steady_bounded` (memory O(1) in overwrites of one key) deviates in memory,
 /// live and after a reload (pinned in the conformance suite, `k2-mpc-conformance`, which
 /// counts allocations). The stored state is another matter: the v2 encoding compresses a
 /// regular run of overwrite stubs (two writers alternating, 1000 more overwrites) to a few
@@ -1107,7 +1107,7 @@ fn planted_move_as_reinsert_duplicates() {
     );
 }
 
-/// Mutant `undel-lww` (E1): restore as a set of a liveness flag. A restore concurrent with a
+/// Mutant `undel-lww`: restore as a set of a liveness flag. A restore concurrent with a
 /// delete then wins by client ID; the kit's restore (a flag removal) never does
 /// (`delete_wins_over_a_concurrent_restore`).
 #[test]
@@ -1170,7 +1170,7 @@ fn planted_order_without_the_position_register_duplicates() {
     assert_eq!(order(&base).matches('a').count(), 1);
 }
 
-// ---- drop (`rows drop-deleted`) and places (C1c) ----
+// ---- drop (`rows drop-deleted`) and places ----
 
 fn drp(key: &str) -> ListOp {
     ListOp::Drop { key: k(key) }

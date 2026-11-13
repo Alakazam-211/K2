@@ -1,0 +1,21 @@
+MPCE-E997 causal_check_over_limit (limits)
+exit:     2
+message:  the engine refused the update: its causal check is over a limit
+next:     Nothing was applied. Split the update at run boundaries into parts each within the limits (one run always is), and send them in causal order.
+rule:     the MPCE seam (stable codes)
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E997",
+  "name": "causal_check_over_limit",
+  "area": "limits",
+  "exit": 2,
+  "message": "the engine refused the update: its causal check is over a limit",
+  "next": "Nothing was applied. Split the update at run boundaries into parts each within the limits (one run always is), and send them in causal order.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

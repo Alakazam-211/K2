@@ -3,7 +3,7 @@ exit:     4
 message:  no live claim {claim}
 next:     That claim already ended (it expired, or your edit ended it), or you hold none. Take a new one with claim --lines a,b if you still need it.
 step:     claim; why: That claim already ended, or you hold none; take a new one if you still need it.
-rule:     A13 (claims)
+rule:     claims
 verbs:    claim --renew; claim --release
 status:   live
 --- json
@@ -19,7 +19,7 @@ status:   live
     "args": [],
     "why": "That claim already ended, or you hold none; take a new one if you still need it."
   },
-  "rule": "A13 (claims)",
+  "rule": "claims",
   "verbs": ["claim --renew", "claim --release"],
   "returned_by": ["claim --renew", "claim --release"],
   "status": "live",

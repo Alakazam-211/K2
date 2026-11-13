@@ -1,4 +1,4 @@
-# The grid's (C1) long runs, beside tools/tests/full.sh's parts (which run every grid test at
+# The grid's long runs, beside tools/tests/full.sh's parts (which run every grid test at
 # CI size): a --repo job (tools/README.md, "Test jobs"), PART picks one:
 #   k2 compute run <node> --repo <repo> --needs rust@stable --cpus 4 --mem 8G \
 #     --env PART=grid-a -- sh tools/job.sh tools/tests/grid.sh

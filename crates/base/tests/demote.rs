@@ -10,7 +10,8 @@
 //! - an unwritten change: written to the file, and current;
 //! - an outside save since the last sync: kept both ways (the save current, the live state a
 //!   version and a conflict copy), never merged by lines;
-//! - a change the file never got (closed so, as after a crash): kept, and written;
+//! - a change the file never got (closed so, as when a process stops before its write-back):
+//!   kept, and written;
 //! - after a restart: the tier-0 doc as it was left, the file in step;
 //! - history: each version's bytes are what the text doc's `file_at` gave, names kept, and the
 //!   change log (approvals included) readable as the live log;
@@ -22,7 +23,7 @@
 //! - erasure and purge reach everything.
 //!
 //! The plants (`k2_mpc_base::differential::DemoteMutant`): `DropsUnwritten` (the tier-0 doc
-//! starts from the file) turns the unwritten-change and crash rows red, `MergesByLine` (the
+//! starts from the file) turns both unwritten-change rows red, `MergesByLine` (the
 //! outside save taken in by lines first) the keep-both row, each by name.
 //!
 //! The N-1 checks (ignored; `tools/n1/n1.sh layout-demote` / `node-demote`) are at the end.
@@ -536,11 +537,11 @@ fn outside_save_keeps_both() {
     row_outside_save_keeps_both().unwrap();
 }
 
-/// A doc closed with a change the file never got (b's door, made without the file; a crash
-/// before write-back leaves the same): the change is current and written.
-fn row_crash_change_is_kept() -> Result<(), String> {
-    const ROW: &str = "row_crash_change_is_kept";
-    let f = fx("crash");
+/// A doc closed with a change the file never got (b's door, made without the file; a process that
+/// stops before its write-back leaves the same): the change is current and written.
+fn row_closed_unwritten_change_is_kept() -> Result<(), String> {
+    const ROW: &str = "row_closed_unwritten_change_is_kept";
+    let f = fx("closed-unwritten");
     let (s, _, _) = live_doc(&f);
     drop(s);
     assert!(f.mgr.close(&key(NAME), "shutdown").unwrap());
@@ -548,7 +549,7 @@ fn row_crash_change_is_kept() -> Result<(), String> {
     let bc = join(&t, agent("agent-b"));
     write(&t, bc, &with_door());
     drop(t);
-    assert!(f.mgr.close(&key(NAME), "crash").unwrap());
+    assert!(f.mgr.close(&key(NAME), "stopped").unwrap());
     assert_eq!(
         f.bytes(NAME),
         with_3().as_bytes(),
@@ -571,8 +572,8 @@ fn row_crash_change_is_kept() -> Result<(), String> {
 }
 
 #[test]
-fn crash_change_is_kept() {
-    row_crash_change_is_kept().unwrap();
+fn closed_unwritten_change_is_kept() {
+    row_closed_unwritten_change_is_kept().unwrap();
 }
 
 /// After a restart the tier-0 doc is as the demotion left it: the same versions, current and
@@ -923,7 +924,7 @@ fn red_by_name(mutant: DemoteMutant, rows: &[(&str, RowFn)]) {
     }
 }
 
-/// "demote drops unwritten": the unwritten-change and crash rows go red, by name.
+/// "demote drops unwritten": both unwritten-change rows go red, by name.
 #[test]
 fn the_planted_drops_unwritten_is_caught_by_name() {
     red_by_name(
@@ -933,7 +934,10 @@ fn the_planted_drops_unwritten_is_caught_by_name() {
                 "row_demotes_with_an_unwritten_change",
                 row_demotes_with_an_unwritten_change,
             ),
-            ("row_crash_change_is_kept", row_crash_change_is_kept),
+            (
+                "row_closed_unwritten_change_is_kept",
+                row_closed_unwritten_change_is_kept,
+            ),
         ],
     );
 }
@@ -1011,12 +1015,19 @@ fn n1_demote_producer() {
 }
 
 /// Forward, after the previous release ran on `<out>/fwd` (it read both docs at tier 0, wrote
-/// a version to `model.ifc`, deleted `gone.ifc` and had its purge refused): this build reads
-/// `model.ifc`'s live log and the other release's version, finds `gone.ifc`'s live-log rows
-/// swept by its open, and purges.
+/// a version to `model.ifc` and deleted `gone.ifc`; a release before v0.17.0 had its purge and
+/// erasure refused, v0.17.0 and later, which know the table, purged and erased): this build
+/// finds `gone.ifc`'s live-log rows gone after its open, reads `model.ifc`'s live log (agent-a
+/// renamed `erased-1` in it by a release that knows it, still named by one that doesn't:
+/// `K2MB_N1_PREV`, that release's crate version) and the other release's version, and purges.
 #[test]
 #[ignore = "N-1: tools/n1/n1.sh node-demote"]
 fn n1_demote_after() {
+    let prev_knows = std::env::var("K2MB_N1_PREV").is_ok_and(|v| {
+        let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+        assert_eq!(n.len(), 3, "K2MB_N1_PREV={v:?}: not MAJOR.MINOR.PATCH");
+        (n[0], n[1], n[2]) >= (0, 17, 0)
+    });
     let out = n1_dir().join("fwd");
     // the deleted doc's id (the previous release can't read its live-log rows: an unknown
     // table, which its refused rewrite named)
@@ -1046,6 +1057,31 @@ fn n1_demote_after() {
         !b.live_log(c).unwrap().is_empty(),
         "the live log is still there"
     );
+    // the live log's authors: a release that knows the table erased agent-a in them
+    // (pseudonym `erased-1`); an older one was refused, so agent-a is still named
+    let model = f.store.find(&key("model.ifc")).unwrap().unwrap();
+    let authors: Vec<String> = f
+        .store
+        .demoted_changes(model)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.info.author)
+        .collect();
+    let (erased, kept) = (
+        authors.iter().any(|a| a == "erased-1"),
+        authors.iter().any(|a| a == "agent-a"),
+    );
+    if prev_knows {
+        assert!(
+            erased && !kept,
+            "the previous release's erasure renamed agent-a in the live log: {authors:?}"
+        );
+    } else {
+        assert!(
+            kept && !erased,
+            "the previous release's erasure was refused: agent-a still named: {authors:?}"
+        );
+    }
     assert_eq!(
         current(&b, c),
         b"written by the previous release\n",

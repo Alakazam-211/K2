@@ -93,11 +93,11 @@ use enc::{R, W};
 ///   ([`StoreError::Newer`]).
 ///
 ///   v0.3.0 adds one table, `change_clocks` (blame's index from engine clocks to changes),
-///   **without a format bump** (K-FMT-10, N−1 reads): a v0.2.0 build reads and writes such a
+///   **without a format bump** (N−1 reads): a v0.2.0 build reads and writes such a
 ///   store as before (its changes get no clock rows; blame shows their text by client
 ///   owner, without a change id), and only its `rewrite_file` refuses the table it doesn't
 ///   know (an error, never a silent drop).
-/// - 4: approvals of on-behalf blob versions (K-T0-9), in a new table `blob_approvals` keyed
+/// - 4: approvals of on-behalf blob versions, in a new table `blob_approvals` keyed
 ///   `(doc, version)`: the same record as a text change's approval, kept apart from
 ///   `approvals` (keyed `(doc, seq)`) so a blob version and a text change can never be taken
 ///   for each other. A format-3 store opens as is and is stamped 4 **in place**, in the
@@ -118,9 +118,9 @@ use enc::{R, W};
 ///   of writing changes without their provenance rows (a later build would then read text
 ///   restored by them as fresh), reading version-2 records as damaged, or refusing the
 ///   table in `rewrite_file` mid-purge.
-/// - 6: structured docs (C1c; `structured.rs`): typed versions (version record 3), revert
+/// - 6: structured docs (`structured.rs`): typed versions (version record 3), revert
 ///   records version 3 (ops by key), change summaries version 2 (element counts), and a new
-///   table, `elem_writes`. **Lazy and one-way** (K-FMT-10, approved exception): a store is
+///   table, `elem_writes`. **Lazy and one-way** (approved exception): a store is
 ///   stamped 6 only in the transaction that writes its first structured doc. A store that
 ///   never holds one stays at 5 ([`STORE_FORMAT_BASE`]) byte for byte, so the previous
 ///   release reads and writes it as before. A format-5 build refuses a format-6 store with
@@ -178,7 +178,7 @@ pub const STORE_FORMAT: u64 = 6;
 
 /// The highest store format this build **reads** (v0.10.1): one past what it writes
 /// ([`STORE_FORMAT`]), so the release before the native switch opens the switch's stores
-/// (K-FMT-10's N−1 read) without writing their format.
+/// (the N−1 read) without writing their format.
 pub const STORE_FORMAT_READ: u64 = 7;
 
 /// The format of a store without structured docs: a new store starts here, an older one is
@@ -490,7 +490,7 @@ pub(super) enum DocRows {
     /// `(doc, client, clock)` → record.
     Clock(TableDefinition<'static, (u64, u64, u64), &'static [u8]>),
     /// `(doc, root, key, facet)` → write (`elem_writes`, format 6: a structured doc's last
-    /// write per element facet; C1).
+    /// write per element facet).
     Elem(TableDefinition<'static, (u64, &'static str, &'static str, u8), &'static [u8]>),
     /// `(doc, name)` → record (`row_marks`, format 6: by row key).
     Named(TableDefinition<'static, (u64, &'static str), &'static [u8]>),
@@ -1259,7 +1259,8 @@ pub(crate) const LOG_ENTRY_ENGINE: &str = "log entry engine";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EntryEngine {
     Yrs,
-    /// No stamp maps here in this build (C3 stamps native docs); the check is ready for it.
+    /// No stamp maps here in this build (native docs get their own later); the check is
+    /// ready for it.
     #[cfg_attr(not(test), allow(dead_code))]
     Native,
 }
@@ -1368,7 +1369,7 @@ fn dec_meta(b: &[u8]) -> Result<DocMeta, StoreError> {
 }
 
 /// Log record version 3 (a Yrs entry): version 2 with the update either present (`0`, its
-/// bytes) or purged (`1`, its byte length only: K-PURGE-2's `redacted {byte length}`). Every
+/// bytes) or purged (`1`, its byte length only: the `redacted {byte length}`). Every
 /// Yrs entry is written as version 3, byte for byte as before native entries existed, so a
 /// store with no native doc is unchanged.
 ///
@@ -1674,7 +1675,7 @@ fn put_versions(
         new.push((last, v.seq));
     }
     drop(t);
-    // each takes the live carrier (K1), if the doc has one
+    // each takes the live carrier, if the doc has one
     live_carrier::carry_new_versions(w, id, &new)
 }
 

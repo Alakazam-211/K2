@@ -1,4 +1,4 @@
-//! Participant overflow (K11): past `Config::participants_max` distinct participants, a new
+//! Participants past the cap: past `Config::participants_max` distinct participants, a new
 //! pid joins as a watcher: read-only whatever its rights, no presence detail, shown in the
 //! roster only as `watching: N`. A freed slot promotes nobody by itself; the host lets the
 //! earliest watcher in. An edit by a watcher is refused `MPC-E305` (exit 3). Public API only.

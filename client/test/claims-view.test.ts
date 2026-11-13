@@ -1,5 +1,5 @@
 // `PresenceChannel.claims()`: the live claims on elements folded from the roster, each with its
-// actor and times (rendering-data contract Item 4, gap 27; wire 3). A wire-3 host's events carry
+// actor and times (wire 3). A wire-3 host's events carry
 // the actor; a wire-2 host's don't, and the claimant's roster row gives it. The kit's own stream
 // (`roster_events_claims_elems.json`) folds to the claims its final snapshot names.
 
@@ -40,7 +40,7 @@ function channel() {
   return { c, seen, ev };
 }
 
-describe("watching (gap 30)", () => {
+describe("watching", () => {
   it("follows the snapshot and `watching {count}`, says when it changes, and watchers get no row (GOLD case H)", () => {
     const { c, ev } = channel();
     const told: number[] = [];

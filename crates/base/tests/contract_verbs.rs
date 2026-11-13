@@ -1,7 +1,7 @@
-//! The pack verb on a change (rendering-data contract r1.6, Item 2, gap 9): the kit records the
+//! The pack verb on a change: the kit records the
 //! id of the pack verb that made a change (`shape move`), on the change record, its events and
 //! history, and none for a raw write, a kit tool, an outside save, an undo, a redo, a revert or
-//! a restore; `via` stays the client. And an agent's presence from its verbs (Item 3, gap 11):
+//! a restore; `via` stays the client. And an agent's presence from its verbs (Item 3):
 //! a verb that changes elements sets the agent's focus to the container of the last element it
 //! touched and its selection to what it touched; a person's presence is never moved. Public API
 //! only.
@@ -387,7 +387,7 @@ fn logged(log: &[(u64, Option<String>)], seq: u64) -> Option<&str> {
         .as_deref()
 }
 
-// ---------- gap 9: the verb on the change ----------
+// ---------- the verb on the change ----------
 
 /// The check behind the deck rows: an agent's `shape move` records its verb on every event of
 /// its change and in the log, and a reload reads it back; `via` stays the client. A raw write, an undo, a redo, a revert and a restore record none. `Err` names the
@@ -584,7 +584,7 @@ fn erasure_clears_the_verbs_of_the_erased_participants_changes() {
     );
 }
 
-// ---------- gap 11: an agent's presence from its verbs ----------
+// ---------- an agent's presence from its verbs ----------
 
 /// A participant's focus (`root:key`) and selection (`root:key` each).
 type Seen = (Option<String>, Option<Vec<String>>);

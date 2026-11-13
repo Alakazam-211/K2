@@ -13,7 +13,7 @@
 #                tools/check-private.sh (with its self-test), tools/check-windows-names.sh (with its self-test), the
 #                engine-features check (cargo tree, no build; not in a public cut) on what the
 #                part ships, and tools/oss-check.sh with its
-#                self-test (K-OSS-3: both licence files, "MIT OR Apache-2.0" on our crates and
+#                self-test (both licence files, "MIT OR Apache-2.0" on our crates and
 #                package.json files), and the self-test of the pack template's carrier-row
 #                check (scripts/pack-checks/carrier-row.sh)
 #   base-c       the kit: soak (CI variant), edit_paths, edit_cost, history, presence, sessions, roster, app_view, overflow
@@ -89,6 +89,9 @@ case ${PART:?PART: base-a1, base-a2, base-b, base-c, base-d, errors, spec-undo, 
   # 0.46.7, else tools/job.sh's job-local toolchain); a --repo job only (the whole workspace)
   lint) timed fmt lint cargo fmt -p k2-mpc-base -p k2-mpc-spec-undo -- --check
           timed clippy lint cargo clippy -p k2-mpc-base -p k2-mpc-spec-undo --all-targets -- -D warnings
-          timed clippy_mutants lint cargo clippy -p k2-mpc-spec-undo --all-targets --features mutants -- -D warnings ;;
+          timed clippy_mutants lint cargo clippy -p k2-mpc-spec-undo --all-targets --features mutants -- -D warnings
+          # the kit's lib alone, as a host builds it: no test cfg and no feature a workspace member
+          # turns on, so a value read only by a test-build counter shows as dead code here
+          timed clippy_lib lint cargo clippy -p k2-mpc-base --lib -- -D warnings ;;
   *) echo "unknown PART $PART" >&2; exit 2 ;;
 esac

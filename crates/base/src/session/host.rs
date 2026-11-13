@@ -18,7 +18,7 @@ pub struct Rights {
     pub read: bool,
     /// Change the doc (and place a caret). Meaningless without `read`.
     pub edit: bool,
-    /// Read its history: versions, log, diff, show, blame (C7a), and the approval state of
+    /// Read its history: versions, log, diff, show, blame, and the approval state of
     /// other people's on-behalf changes. **Never implied** by read or edit: grant it
     /// explicitly. Meaningless without `read`.
     pub history: bool,
@@ -205,7 +205,7 @@ pub enum Action {
     Purge,
     /// `blame` (text and tier 0).
     Blame,
-    /// `rows drop-deleted` (owner only, K-CSV-7).
+    /// `rows drop-deleted` (owner only).
     DropDeleted,
     /// Comment threads: start, reply, resolve, reopen, delete, re-anchor, list.
     Annotate,
@@ -232,9 +232,9 @@ pub enum PurgedScope {
     Text { bytes: usize },
     /// Participant erasure, to `pseudonym`.
     Participant { pseudonym: String },
-    /// A table's cell (its row and column keys: identities, not content; C1f).
+    /// A table's cell (its row and column keys: identities, not content).
     Cell { row: String, col: String },
-    /// A table's row (its key; C1f).
+    /// A table's row (its key).
     Row { row: String },
     /// Tier 0: blob versions (`None`: every one but the current).
     BlobVersions {
@@ -645,7 +645,7 @@ pub enum AuditEvent {
         version: crate::store::Seq,
         next_waiter: Option<(ConnId, String)>,
     },
-    /// The owner `by` purged `scope` from the doc (K-PURGE-1): what changed, as counts. No
+    /// The owner `by` purged `scope` from the doc: what changed, as counts. No
     /// content and no content hash, ever.
     Purged {
         key: DocKey,
@@ -654,7 +654,7 @@ pub enum AuditEvent {
         counts: crate::store::PurgeCounts,
     },
     /// The owner removed a grid's deleted rows and columns from the live sheet (`rows
-    /// drop-deleted`, K-CSV-7) as change `seq`: they can't be restored from the sheet, and
+    /// drop-deleted`) as change `seq`: they can't be restored from the sheet, and
     /// versions and change records still hold them (not erasure). Counts only, no content.
     DroppedDeleted {
         key: DocKey,

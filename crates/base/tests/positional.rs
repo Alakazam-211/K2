@@ -1,4 +1,4 @@
-//! Positional addresses are bound to a version (K-ADDR-3, R-1, R-2), through
+//! Positional addresses are bound to a version (R-1, R-2), through
 //! `Session::run_tool` / `run_tool_with`. Public API only.
 //!
 //! - **Grids (R-1):** under `--base B`, a grid edit's `#N` and `LN` count in version B, not in
@@ -245,7 +245,7 @@ fn every_positional_form_counts_in_the_base() {
     assert_eq!(live_rows(&f), ["r4", "r1", "r5", "r2", "r3"]);
 }
 
-// ---------- grids: the key counters aren't content (K-BR-12) ----------
+// ---------- grids: the key counters aren't content ----------
 
 fn live_cols(f: &Fx) -> Vec<String> {
     let o = ok(f, f.person, ROWS, "col list", "");

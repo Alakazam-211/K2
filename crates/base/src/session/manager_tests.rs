@@ -1,4 +1,4 @@
-//! The manager's listing, rights re-check and delete (C7b). Crate-internal: the delete
+//! The manager's listing, rights re-check and delete. Crate-internal: the delete
 //! tests enumerate the store's actual tables (`DocStore::tables_holding`), so a per-doc table
 //! added later without being erased fails them.
 
@@ -513,7 +513,7 @@ fn delete_space_erases_its_docs_only() {
     assert!(f.mgr.delete_space("ws").unwrap().is_empty());
 }
 
-/// A pack with structured roots opens (C1c): its import is stored with a typed version, and
+/// A pack with structured roots opens: its import is stored with a typed version, and
 /// the store is upgraded to format 6 in that transaction (a text-only store stays at 5).
 #[test]
 fn a_structured_pack_opens_and_upgrades_the_store_lazily() {

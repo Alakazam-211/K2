@@ -204,7 +204,7 @@ describe("the grid helpers", () => {
     expect(colLabel(WORKBOOK_GRID, 27)).toBe("AA");
   });
 
-  it("cornerAt gives the corner in normal form, and nothing out of bounds", () => {
+  it("cornerAt gives the corner in normal form, and nothing outside the sheet", () => {
     replay(V, (rev, w) => {
       if (rev !== V.rev) return;
       const n = numbersOf(w, "@sheet:1");

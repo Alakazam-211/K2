@@ -61,14 +61,14 @@ pub struct TickReport {
     /// Tier 0, and a live keyed doc that isn't a table: outside saves that conflicted (doc,
     /// the new current version, the conflict copy written, if any).
     pub conflicts: Vec<(DocKey, Seq, Option<PathBuf>)>,
-    /// Versions cut after quiet following edits (K-HIST-4).
+    /// Versions cut after quiet following edits.
     pub versions_cut: Vec<(DocKey, VersionId)>,
-    /// Versions removed by retention (K-HIST-7), over every doc.
+    /// Versions removed by retention, over every doc.
     pub versions_thinned: usize,
-    /// Revert records that left the revert window (K-HIST-23), over every doc.
+    /// Revert records that left the revert window, over every doc.
     pub reverts_dropped: u64,
     /// Tier 0, and a live keyed doc that isn't a table: conflict copies deleted after
-    /// [`super::Config::conflict_copy_keep_ms`] (K-A11Y-5): only copies the kit recorded,
+    /// [`super::Config::conflict_copy_keep_ms`]: only copies the kit recorded,
     /// still holding exactly their version's bytes, whose version isn't named.
     pub conflict_copies_removed: Vec<(DocKey, PathBuf)>,
 }
@@ -220,7 +220,7 @@ impl SessionManager {
         path: &Path,
         root: &Path,
     ) -> Result<Arc<Session>> {
-        // K7: an error's paths, as the host may show them (inside the root, relative)
+        // An error's paths, as the host may show them (inside the root, relative)
         self.open_file_in(pack, key, path, root)
             .map_err(|e| e.redacted(root))
     }
@@ -476,7 +476,7 @@ impl SessionManager {
         path: &Path,
         root: &Path,
     ) -> Result<Arc<BlobSession>> {
-        // K7: an error's paths, as the host may show them (inside the root, relative)
+        // An error's paths, as the host may show them (inside the root, relative)
         self.open_blob_file_in(pack, key, path, root)
             .map_err(|e| e.redacted(root))
     }
@@ -630,13 +630,14 @@ impl SessionManager {
     ///
     /// - every text version becomes a tier-0 version holding exactly what its `file_at` gave,
     ///   and the live doc's final state becomes the current version (a change the file never
-    ///   got, unwritten or left by a crash, included), written to the file by the tier-0
-    ///   session (`Demotion::written`; retried on `tick` when the file can't be written);
+    ///   got, unwritten or left by a process that stopped before its write-back, included),
+    ///   written to the file by the tier-0 session (`Demotion::written`; retried on `tick` when
+    ///   the file can't be written);
     /// - when the file was saved from outside since the last sync, tier 0's keep-both rule:
     ///   its bytes are current, the live state a version and a conflict copy;
     /// - the change log is kept as the live log ([`BlobSession::live_log`]); the text doc's
-    ///   other rows go, in the same store transaction (a crash before it leaves the text doc
-    ///   as it was);
+    ///   other rows go, in the same store transaction (if the process stops before it, the text
+    ///   doc is left as it was);
     /// - the text session closes ([`AuditEvent::Demoted`] names its connections, reason
     ///   [`super::DEMOTED`]), and the blob session opens on the file. Later opens are tier 0.
     ///
@@ -653,7 +654,7 @@ impl SessionManager {
         path: &Path,
         root: &Path,
     ) -> Result<(Arc<BlobSession>, Demotion)> {
-        // K7: an error's paths, as the host may show them (inside the root, relative)
+        // An error's paths, as the host may show them (inside the root, relative)
         self.demote_text_file_in(pack, to, key, path, root)
             .map_err(|e| e.redacted(root))
     }
@@ -864,7 +865,7 @@ impl SessionManager {
         keys
     }
 
-    /// The host's periodic rights re-check (PRD §11.2) over every loaded doc, text and tier
+    /// The host's periodic rights re-check over every loaded doc, text and tier
     /// 0: each session's `recheck_rights` ([`Session::recheck_rights`],
     /// [`BlobSession::recheck_rights`]), so participants who lost read leave. Returns each
     /// pid whose rights changed, with its doc, sorted by doc. A session that fails is
@@ -1271,7 +1272,7 @@ impl SessionManager {
     }
 }
 
-/// K9 (K-DISK-14): a file with more than one name (a hard link) isn't opened live: edits
+/// A file with more than one name (a hard link) isn't opened live: edits
 /// through one name would change the others unseen. [`Declined`] `hard_linked`
 /// (`MPC-E412`).
 fn hard_linked(p: &Probe) -> Result<()> {

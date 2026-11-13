@@ -200,7 +200,10 @@ fn writeback_cost() {
             }
             inc += t.elapsed().as_secs_f64();
             assert_eq!(r.text("source").unwrap(), fresh.text("source").unwrap());
-            assert_eq!(r.state_vector(), fresh.state_vector());
+            assert_eq!(
+                r.try_state_vector().unwrap(),
+                fresh.try_state_vector().unwrap()
+            );
             assert!(
                 r.same_content(&fresh),
                 "a replica kept in step holds what one reloaded from the doc holds"

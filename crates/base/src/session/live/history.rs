@@ -1,4 +1,4 @@
-//! History on a live text doc (C7a): versions (automatic cuts, named, retention), the
+//! History on a live text doc: versions (automatic cuts, named, retention), the
 //! history reads (`log`, `diff --version`, `show --version`), `restore`, and `revert` with
 //! its window. A child of `live`, so it works on the session's own state.
 //!
@@ -13,7 +13,7 @@ use crate::store::{
     window_plan, Carry, Retention, RevertWindow, StoreError, VersionId, VersionInfo,
 };
 
-/// `log` filters (K-HIST-9, -18). `Default` lists everything, newest first.
+/// `log` filters. `Default` lists everything, newest first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LogQuery {
@@ -83,7 +83,7 @@ pub enum LogItem {
         approval: Option<ApprovalState>,
     },
     Version(VersionInfo),
-    /// An outside save that changed only the file's codec settings (C1k): the version that
+    /// An outside save that changed only the file's codec settings: the version that
     /// holds them (reason `External`, by [`EXTERNAL_PID`]), and how they changed from the
     /// version before it ([`super::super::Pack::describe_codec_change`], computed here).
     Settings {
@@ -114,7 +114,7 @@ pub struct DiffOutput {
 }
 
 impl DiffOutput {
-    /// 0 when the same, 1 when different (K-HIST-10).
+    /// 0 when the same, 1 when different.
     pub fn exit(&self) -> u8 {
         if self.differs {
             crate::tools::exit::NO
@@ -175,7 +175,7 @@ impl Session {
     /// or read base. Needs history, like `show`; an unknown `vid` is
     /// [`SessionError::NoSuchChange`].
     ///
-    /// For a pack that keeps a carrier (K1) it is the version's content spliced into the
+    /// For a pack that keeps a carrier it is the version's content spliced into the
     /// carrier as of that version, the file then byte for byte; a version with no carrier (cut
     /// by an older kit or before this build, or one a purge erased) is refused,
     /// [`SessionError::VersionNoCarrier`] (`MPC-E208`), never `encode`'s file without its
@@ -199,8 +199,8 @@ impl Session {
             };
         }
         let (bytes, codec) = match &v.codec {
-            // a structured doc's version holds the codec settings it was cut with (format 6,
-            // C1): the file then, exactly
+            // a structured doc's version holds the codec settings it was cut with
+            // (format 6): the file then, exactly
             Some(c) => (self.pack.encode(&v.content, c)?, FileCodec::Exact),
             None => {
                 let bytes = self.pack.encode(&v.content, &st.codec)?;
@@ -333,7 +333,7 @@ impl Session {
         Ok(DiffOutput { text, differs })
     }
 
-    /// `log`: changes and versions, newest first, filtered by `q` (K-HIST-9, -18). Each
+    /// `log`: changes and versions, newest first, filtered by `q`. Each
     /// change has its author, via, time, ± lines, kind and approval state. Needs history.
     pub fn log(&self, conn: ConnId, q: &LogQuery) -> Result<Vec<LogItem>> {
         // an App viewer filters by its handles (`--by p2`): the pid behind each
@@ -394,7 +394,7 @@ impl Session {
     }
 
     /// `show --version V`'s note: when version `vid` is an outside save that changed only the
-    /// file's codec settings (C1k), how they changed ([`LogItem::Settings`]); `None` for any
+    /// file's codec settings, how they changed ([`LogItem::Settings`]); `None` for any
     /// other version. Needs history.
     pub fn settings_change(&self, conn: ConnId, vid: VersionId) -> Result<Option<String>> {
         let now = self.now();
@@ -461,7 +461,7 @@ impl Session {
     }
 
     /// `version --name N`: name version `vid`, or (`None`) cut a named version of the live
-    /// doc. Named versions are never removed by retention (K-HIST-6). Needs edit.
+    /// doc. Named versions are never removed by retention. Needs edit.
     pub fn name_version(
         &self,
         conn: ConnId,
@@ -499,7 +499,7 @@ impl Session {
 
     /// `restore --version V`: make the doc equal version `vid` again as a **new change by
     /// the caller** (history is never rewritten), after cutting a version of the doc as it
-    /// is (K-HIST-8). The restore is the caller's batch: their `undo` reverses it. Needs
+    /// is. The restore is the caller's batch: their `undo` reverses it. Needs
     /// edit and history.
     pub fn restore(&self, conn: ConnId, vid: VersionId) -> Result<EditResult> {
         self.restore_with(conn, vid, &HistoryOptions::new())
@@ -524,7 +524,7 @@ impl Session {
             .version(self.doc_id, vid)
             .map_err(no_version(vid))?;
         if self.structured {
-            // by identity: revive, delete, move, set (C1c). Its change takes the call's turn;
+            // by identity: revive, delete, move, set. Its change takes the call's turn;
             // none is left for a later change when it stops before committing
             st.next_turn = turn;
             let out = self.restore_structured(&mut st, i, target, vid, now);
@@ -574,7 +574,7 @@ impl Session {
         )
     }
 
-    /// `revert <change>` (undo spec U22, K-HIST-19): reverse one named change from its
+    /// `revert <change>` (undo spec U22): reverse one named change from its
     /// persisted revert record, whoever made it and however long ago, **inside the revert
     /// window** (older: [`SessionError::RevertTooOld`], exit 8). Its regions are carried to
     /// the live text and merged as `undo`'s are: all or nothing, or with `partial` every
@@ -631,7 +631,7 @@ impl Session {
             });
         }
         if !rec.elems.is_empty() || self.structured {
-            // by key, from the record's ops (v3): no carrying (C1c). Its change takes the call's
+            // by key, from the record's ops (v3): no carrying. Its change takes the call's
             // turn; none is left for a later change when it stops before committing
             st.next_turn = turn;
             let out = self.revert_structured(st, i, change, rec, partial, now);
@@ -732,8 +732,7 @@ impl Session {
 
     /// The history duties of [`super::super::SessionManager::tick`]: an idle version
     /// ([`Config::idle_version_ms`] after the last change), and every
-    /// [`Config::history_tick_ms`] version retention (K-HIST-7) and the revert window
-    /// (K-HIST-23).
+    /// [`Config::history_tick_ms`] version retention and the revert window.
     pub(crate) fn history_tick(&self) -> Result<HistoryTick> {
         let now = self.host.now_ms();
         prof!("history.tick");

@@ -1,4 +1,4 @@
-//! The kit's one address grammar (K-ADDR-1…3): how a verb names a thing inside a doc, for
+//! The kit's one address grammar: how a verb names a thing inside a doc, for
 //! every pack. A verb parses its address operands with [`parse`], says which forms its
 //! context has ([`Forms`]), and refuses an ambiguous one with [`ambiguous`] (exit 2,
 //! `MPC-E170`, `details.candidates`), never picking "the first" or "the topmost".
@@ -19,7 +19,7 @@
 //! reads `@<other>` as a bare word, so a header named `@timestamp` still works; `name:` forces
 //! a name everywhere.
 //!
-//! **Positional forms are bound to a version** (K-ADDR-3): `#N` and `LN` mean "in the version
+//! **Positional forms are bound to a version**: `#N` and `LN` mean "in the version
 //! the caller read", so an agent's positional edit names that version (`--if-version` or
 //! `--base`). A person acts on what they see; their positional addresses resolve live.
 //!
@@ -52,7 +52,7 @@ pub enum Form {
     Native,
     /// A key the kit minted ([`Addr::Key`]).
     Key,
-    /// A position ([`Addr::Nth`], [`Addr::Line`]): bound to a version (K-ADDR-3).
+    /// A position ([`Addr::Nth`], [`Addr::Line`]): bound to a version.
     Positional,
     /// A name or a bare word ([`Addr::Name`], [`Addr::Word`]): counts only when unique.
     Name,
@@ -214,7 +214,7 @@ pub enum Unique<T> {
     Many(Vec<T>),
 }
 
-/// The one match in `items`, if there is exactly one (K-ADDR-2: two or more is
+/// The one match in `items`, if there is exactly one (two or more is
 /// [`Unique::Many`], for [`ambiguous`]; nothing ever picks the first or the topmost).
 pub fn unique<T>(items: impl IntoIterator<Item = T>) -> Unique<T> {
     let mut v: Vec<T> = items.into_iter().collect();
@@ -254,7 +254,7 @@ impl Candidate {
     }
 }
 
-/// The refusal for an address that names more than one thing (K-ADDR-2): `MPC-E170
+/// The refusal for an address that names more than one thing: `MPC-E170
 /// ambiguous_address`, exit 2 (usage: the caller names one of the candidates; never a
 /// hold), with `details.given` (the address as given), `details.what` (`row`, `column`,
 /// `section`...) and `details.candidates` (each one's most durable address, and where it
@@ -372,7 +372,7 @@ mod tests {
         assert!(numbers_are_never_positions(mutant).is_err());
     }
 
-    /// The check behind K-ADDR-2: two or more matches are refused, whatever their order.
+    /// The ambiguity check: two or more matches are refused, whatever their order.
     fn never_picks(u: fn(Vec<u32>) -> Unique<u32>) -> Result<(), String> {
         for items in [vec![1, 2], vec![2, 1], vec![7, 7], vec![1, 2, 3]] {
             if !matches!(u(items.clone()), Unique::Many(ref m) if *m == items) {

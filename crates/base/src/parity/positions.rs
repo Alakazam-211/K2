@@ -1,4 +1,4 @@
-//! How positions are encoded on each surface (K-ADDR-4), as data: the one table
+//! How positions are encoded on each surface, as data: the one table
 //! `capabilities` states ([`crate::errors::capabilities`], its `positions` key) and
 //! `docs/POSITIONS.md` explains.
 //!

@@ -1,0 +1,21 @@
+MPCE-E987 part_cap_below_entry (limits)
+exit:     2
+message:  the engine refused its limits: a part size is below the largest checkpoint entry
+next:     Nothing was made or loaded. Raise checkpoint_part_bytes (and record_bytes) to at least the largest checkpoint entry the limits admit, or lower string_bytes_per_op.
+rule:     the MPCE seam (stable codes)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPCE-E987",
+  "name": "part_cap_below_entry",
+  "area": "limits",
+  "exit": 2,
+  "message": "the engine refused its limits: a part size is below the largest checkpoint entry",
+  "next": "Nothing was made or loaded. Raise checkpoint_part_bytes (and record_bytes) to at least the largest checkpoint entry the limits admit, or lower string_bytes_per_op.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -6,7 +6,7 @@ hold.** Until then, live editors use the hunk channel (`Session::edit_at_base`,
 `Session::events_since`, the JS client in `client/`): no client bytes are decoded as CRDT
 data on that path.
 
-## The build-time guard (K10, kit v0.9.8)
+## The build-time guard (kit v0.9.8)
 
 With the feature on, `k2-mpc-base` does not compile unless the build also sets
 `--cfg k2_mpc_untrusted_wire_ack`. The cfg is the host's statement that it has checked

@@ -11,7 +11,9 @@ import type {
   KeyedSnapshotFrame,
   KeyedValue,
   OpsChangeFrame,
+  PlacementJson,
   ServerFrame,
+  SpaceJson,
   Transport,
   ViewSnapshotJson,
   ViewUnit,
@@ -19,6 +21,7 @@ import type {
   Welcome,
 } from "./wire";
 import { KeyedView, ViewMisfit } from "./view";
+import { worldMatrix, type Mat4 } from "./placement";
 
 /** The name a host lists in `welcome.features` when it serves the keyed watch. */
 export const KEYED_WATCH_FEATURE = "keyed_watch";
@@ -332,6 +335,46 @@ export class KeyedWatch {
     return this.cd.get(derivedKey(name, unit, field)) ?? null;
   }
 
+  /**
+   * A unit's derived value (one of the view schema's `unit_derived`, such as a transform or a
+   * label as people read it) for the unit with address `unit`, `null` when it has none or the
+   * view doesn't show the unit. A snapshot's units pages carry each unit's own; each change's
+   * `derived.units` updates them (`null` there removes one). Always `null` from an older kit.
+   */
+  unitDerived(name: string, unit: string): string | null {
+    if (!this.kv?.snapshot.schema.unit_derived?.includes(name)) return null;
+    return this.kv.unit(unit)?.derived?.[name] ?? null;
+  }
+
+  /** The doc's space (a 3D slot), kept from the snapshot and each change's `view_space`;
+   * `null` when the pack has none or from an older kit. */
+  get space(): SpaceJson | null {
+    return this.kv?.snapshot.space ?? null;
+  }
+
+  /** The placement of the unit or container with address `address` (a 3D slot), kept from the
+   * snapshot's pages and each change's `placement_after`; `null` when it has none or the view
+   * doesn't show it. */
+  placement(address: string): PlacementJson | null {
+    return this.kv?.placementOf(address) ?? null;
+  }
+
+  /** The world matrix of the unit or container with address `address` in the doc's space
+   * (`placement.ts`, `worldMatrix`), at the slot's precision; `null` when it has no placement or
+   * its chain is broken. */
+  worldMatrix(address: string): Mat4 | null {
+    const kv = this.kv;
+    if (!kv) return null;
+    const precision = kv.snapshot.schema.space?.precision === "f32" ? "f32" : "f64";
+    return worldMatrix((a) => kv.placementOf(a), address, precision);
+  }
+
+  /** The view index's unit with address `address` (a nested one too), kept as `units` is;
+   * `null` when the view doesn't show it. */
+  unit(address: string): ViewUnit | null {
+    return this.kv?.unit(address) ?? null;
+  }
+
   /** The view is the doc's: every change since the snapshot carried its view deltas. `false`
    * after a change from a kit that sends none (an older kit), until the next snapshot. */
   get viewCurrent(): boolean {
@@ -483,6 +526,7 @@ export class KeyedWatch {
       if (e instanceof ViewMisfit) fail(`view: ${e.message}`);
       throw e;
     }
+    this.kv?.applyDerived(f);
     this.keepCellDerived(f);
     this._seq = f.seq;
     this._rev = f.rev;

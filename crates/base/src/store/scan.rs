@@ -1,4 +1,4 @@
-//! Byte scans for purged content (K-PURGE-3, N6): does any copy of a secret remain?
+//! Byte scans for purged content (N6): does any copy of a secret remain?
 //!
 //! A needle matches where it appears **whole**, and also where **any 8-byte window** of it
 //! appears ([`MIN_MATCH`]): a secret typed in two batches, or split across two records or

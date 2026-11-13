@@ -10,7 +10,7 @@
 //!
 //! The test pack, `deck-cost`: a MovableList `shapes` and a Map `fields` keyed
 //! `<shape>:<field>`; the file is one line per shape (its key, then `\t<field>=<value>` per
-//! field). It keeps a carrier (K1): `encode_from` keeps a shape's line when its fields are what
+//! field). It keeps a carrier: `encode_from` keeps a shape's line when its fields are what
 //! the carrier says. Its verbs: `shape get <shape>` (a read of one shape's fields), `shape set
 //! <shape> <field> <value>` (one field), `shape add <shape> <after>` (one element). It counts
 //! its renders (`encode` and `encode_from` calls).
@@ -331,7 +331,7 @@ fn shape_drop(args: &[String]) -> Result<StructEdit, ToolError> {
 }
 
 /// `shape at <#N> <field> <value>`: one field of the shape at position N (1-based) in the
-/// version the call names (`--base`, K-ADDR-3, R-1), exit 4 past the end.
+/// version the call names (`--base`, R-1), exit 4 past the end.
 fn shape_at(args: &[String]) -> Result<StructEdit, ToolError> {
     let [at, field, value] = args else {
         return Err(usage("shape at <#N> <field> <value>"));

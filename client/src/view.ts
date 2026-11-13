@@ -10,6 +10,7 @@ import type {
   GridSlot,
   KeyedSchema,
   OpsChangeFrame,
+  PlacementJson,
   UnitDelta,
   ViewContainer,
   ViewSchemaJson,
@@ -24,6 +25,12 @@ import type { KeyedState } from "./keyed";
 export const VIEW_TEXT_MAX = 1024;
 
 const SEP = "\u001f";
+
+/** A unit's or container's placement as a delta's `placement_after` gives it (`null`: none). */
+function setPlacement(x: { placement?: PlacementJson | null }, p: PlacementJson | null | undefined): void {
+  if (p) x.placement = p;
+  else delete x.placement;
+}
 
 /** A view delta that doesn't fit the view: the watch asks for a snapshot. */
 export class ViewMisfit extends Error {}
@@ -141,6 +148,47 @@ export class KeyedView {
     return this.lists.get(container) ?? [];
   }
 
+  /** The unit with address `address` the view shows (a nested one too), `null` when it shows
+   * none. */
+  unit(address: string): ViewUnit | null {
+    const u = this.shown.get(address);
+    return u && this.lists.get(u.container)?.includes(u) ? u : null;
+  }
+
+  /** For a chain's walk: the placement of the unit or container with address `address` the view
+   * shows (`null`: shown, not placed), `undefined` when it shows none. */
+  placementOf(address: string): PlacementJson | null | undefined {
+    const u = this.unit(address);
+    if (u) return u.placement ?? null;
+    const c = this.snapshot.containers.find((x) => x.key === address);
+    return c ? (c.placement ?? null) : undefined;
+  }
+
+  /** A change's `derived.units` values of the schema's `unit_derived` names onto the units, as
+   * the kit sends them (the values the change set or removed): a text sets one, `null` removes
+   * it. Names the schema doesn't declare, and units the view doesn't know, are left alone. */
+  applyDerived(f: OpsChangeFrame): void {
+    const names = this.vs.unit_derived;
+    const units = f.derived?.units;
+    if (!names || names.length === 0 || !units) return;
+    for (const [addr, d] of Object.entries(units)) {
+      const u = this.shown.get(addr) ?? this.gone.get(addr);
+      if (!u || !d || typeof d !== "object") continue;
+      const vals = d as Record<string, unknown>;
+      for (const name of names) {
+        if (!(name in vals)) continue;
+        const v = vals[name];
+        if (typeof v === "string") u.derived = { ...(u.derived ?? {}), [name]: v };
+        else if (v === null && u.derived && name in u.derived) {
+          const rest = { ...u.derived };
+          delete rest[name];
+          if (Object.keys(rest).length === 0) delete u.derived;
+          else u.derived = rest;
+        }
+      }
+    }
+  }
+
   /** The view schema's live grid (`schema.grid`, kept as the snapshot gave it, with its
    * `field_class_prefix`), `null` when the pack has none. */
   get grid(): GridSlot | null {
@@ -163,6 +211,7 @@ export class KeyedView {
     for (const c of this.snapshot.containers) c.unit_count = this.lists.get(c.key)?.length ?? 0;
     const page = this.vs.page;
     if (page && f.ops.some((o) => o.root === page.root)) this.repage(st);
+    if (f.view_space) this.snapshot.space = f.view_space;
     this.snapshot.rev = f.rev;
   }
 
@@ -221,7 +270,9 @@ export class KeyedView {
       case "restore": {
         const i = at(d.position_after);
         if (i > cs.length || cs.some((c) => c.key === d.key)) misfit(`${d.op} ${d.key} at ${i + 1}`);
-        cs.splice(i, 0, this.buildContainer(st, d.key));
+        const c = this.buildContainer(st, d.key);
+        if ("placement_after" in d) setPlacement(c, d.placement_after);
+        cs.splice(i, 0, c);
         this.lists.set(d.key, []);
         dirty.add(d.key);
         return;
@@ -248,6 +299,7 @@ export class KeyedView {
           if ((f !== null && d.fields.includes(f)) || (isListValue(src) && d.op === "props")) this.containerField(st, c, n);
         }
         if (d.op === "hide_show" && d.hidden_after !== null && !this.vs.derived.containers.includes("hidden")) c.hidden = d.hidden_after;
+        if ("placement_after" in d) setPlacement(c, d.placement_after);
       }
     }
   }
@@ -348,7 +400,9 @@ export class KeyedView {
     dirty.add(container);
     if (d.ops.includes("add") || d.ops.includes("restore")) {
       if (was) misfit(`${d.ops[0]} of ${d.key}, already in the view`);
-      this.shown.set(d.key, this.buildUnit(st, d.key, container));
+      const u = this.buildUnit(st, d.key, container);
+      if ("placement_after" in d) setPlacement(u, d.placement_after);
+      this.shown.set(d.key, u);
       return;
     }
     const u = was ?? misfit(`${d.ops.join(",")} of ${d.key}, not in the view`);
@@ -362,6 +416,7 @@ export class KeyedView {
     const g = this.vs.geometry;
     if (g && d.fields.includes(g.field)) this.setGeom(u, d.geom_after);
     if (d.ops.includes("hide_show") && d.hidden_after !== null && !this.vs.derived.units.includes("hidden")) u.hidden = d.hidden_after;
+    if ("placement_after" in d) setPlacement(u, d.placement_after);
   }
 
   /** Container `c`'s units again, in the units' list order: its shown units, each followed by

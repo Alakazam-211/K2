@@ -3,7 +3,7 @@ exit:     2
 message:  {claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)
 next:     Others are waiting for your claim, so it can't be extended. Finish your edit before it ends (details.remaining_ms), or release it with claim --release.
 step:     claim --release; args: --id {claim}; why: Others are waiting for your claim, so it can't be extended; finish your edit before it ends, or release it.
-rule:     A13 (claims)
+rule:     claims
 verbs:    claim --renew
 status:   live
 --- json
@@ -19,7 +19,7 @@ status:   live
     "args": ["--id", "{claim}"],
     "why": "Others are waiting for your claim, so it can't be extended; finish your edit before it ends, or release it."
   },
-  "rule": "A13 (claims)",
+  "rule": "claims",
   "verbs": ["claim --renew"],
   "returned_by": ["claim --renew"],
   "status": "live",

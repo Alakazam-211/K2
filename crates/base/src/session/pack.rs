@@ -57,7 +57,7 @@ pub struct Reconciled {
 #[error("pack: {0}")]
 pub struct PackError(pub String);
 
-/// The keys of the units a carrier holds (K1b, `docs/SESSIONS.md`, "The carrier's pairing"):
+/// The keys of the units a carrier holds (`docs/SESSIONS.md`, "The carrier's pairing"):
 /// root by root, in the order the pack's decode of the carrier yields them. **Keys only, never
 /// a value**: the values a pack splices against come from the carrier itself. Made by
 /// [`Pack::pairing`] at every sync point and kept by the kit with every carrier, live and per
@@ -176,6 +176,47 @@ pub fn elem_of_map_key<'a>(
     Some((*list, Key::new(elem).ok()?))
 }
 
+/// A pack's verb state ([`Pack::verb_state_build`]): any type that is `Send + Sync`, `Debug`
+/// and `PartialEq` is one (a blanket impl), so a pack returns `Box::new(its_index)` and reads
+/// it back with [`crate::tools::VerbCtx::verb_state`] or [`VerbState::downcast_mut`]. Equality
+/// is what test builds compare a kept state with a fresh build by. Hold no interior
+/// mutability (no `Cell`, `RefCell` or locks): the kit hands it out as a shared borrow under
+/// the session's lock and changes it only through [`Pack::verb_state_change`].
+pub trait VerbState: std::any::Any + Send + Sync + fmt::Debug {
+    /// As `Any`, to read it back as its type.
+    fn as_any(&self) -> &dyn std::any::Any;
+    /// As `Any`, mutable.
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+    /// Whether `other` is the same state: the same type and equal.
+    fn same_as(&self, other: &dyn VerbState) -> bool;
+}
+
+impl<T> VerbState for T
+where
+    T: std::any::Any + Send + Sync + fmt::Debug + PartialEq,
+{
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    fn same_as(&self, other: &dyn VerbState) -> bool {
+        other.as_any().downcast_ref::<T>() == Some(self)
+    }
+}
+
+impl dyn VerbState {
+    /// The state as its type `T`, if it is one.
+    pub fn downcast_ref<T: VerbState>(&self) -> Option<&T> {
+        self.as_any().downcast_ref::<T>()
+    }
+    /// The state as its type `T`, mutable, if it is one.
+    pub fn downcast_mut<T: VerbState>(&mut self) -> Option<&mut T> {
+        self.as_any_mut().downcast_mut::<T>()
+    }
+}
+
 /// A file type, as a session uses it. Implemented by each pack (Markdown, CSV...).
 pub trait Pack: Send + Sync {
     /// The doc model. Its `name` is stamped on each stored doc, and a stored doc only opens
@@ -189,18 +230,18 @@ pub trait Pack: Send + Sync {
     /// [`Pack::decode`]). An untouched file must round-trip byte for byte.
     fn encode(&self, content: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError>;
 
-    /// Whether the kit keeps this pack's **carrier** (K1): for a format the pack models only in
+    /// Whether the kit keeps this pack's **carrier**: for a format the pack models only in
     /// part (a deck: slides and shapes modelled, the rest of the file opaque), the bytes the kit
     /// last read from the file or wrote to it, so that the doc is written back by splicing its
     /// content into them ([`Pack::encode_from`]) and every byte the pack doesn't model stays
-    /// out of the engine. `docs/SESSIONS.md`, "The carrier (K1)". Default: `false`, and the kit
+    /// out of the engine. `docs/SESSIONS.md`, "The carrier". Default: `false`, and the kit
     /// keeps nothing and calls [`Pack::encode`], as before.
     fn wants_carrier(&self) -> bool {
         false
     }
 
     /// Doc content back to file bytes **by splicing it into `carrier`**, the bytes the kit last
-    /// read from the file or wrote to it, exactly (K1). Called instead of [`Pack::encode`] for a
+    /// read from the file or wrote to it, exactly. Called instead of [`Pack::encode`] for a
     /// live doc whenever [`Pack::wants_carrier`] is `true` and the kit holds a carrier for it;
     /// with no carrier held (a doc never synced with its file, or one whose carrier couldn't be
     /// kept) the kit calls [`Pack::encode`]. The carrier never leaves the kit but to this hook.
@@ -226,7 +267,7 @@ pub trait Pack: Send + Sync {
         self.encode(content, codec)
     }
 
-    /// Whether the kit keeps a **pairing** with the carrier (K1b; `docs/SESSIONS.md`, "The
+    /// Whether the kit keeps a **pairing** with the carrier (`docs/SESSIONS.md`, "The
     /// carrier's pairing"): for a pack that keeps a carrier ([`Pack::wants_carrier`]) and
     /// **mints** its keys (rows with no ids, timeline items, scene objects), so that
     /// [`Pack::decode`] of the carrier can't give the live keys once a live insert or an app's
@@ -251,7 +292,7 @@ pub trait Pack: Send + Sync {
     }
 
     /// Doc content back to file bytes by splicing it into `carrier`, whose units carry the keys
-    /// `pairing` gives (K1b). Called instead of [`Pack::encode_from`] when
+    /// `pairing` gives. Called instead of [`Pack::encode_from`] when
     /// [`Pack::wants_pairing`] is `true`, with the carrier's own pairing: the live carrier's for
     /// the live doc, a version's own for a version's file.
     ///
@@ -376,7 +417,7 @@ pub trait Pack: Send + Sync {
         &[]
     }
 
-    /// The native ID kinds this pack's codec and own verbs read (K-ID-13), as data: each
+    /// The native ID kinds this pack's codec and own verbs read, as data: each
     /// kind's class, scope and the verbs that accept it. The pack's `docs/IDS.md` is
     /// generated from it ([`crate::ids::markdown`]) and checked against its registry
     /// ([`crate::ids::check`]). List only the pack's own kinds (Markdown's headings, docx's
@@ -417,12 +458,12 @@ pub trait Pack: Send + Sync {
     }
 
     /// The container element `key` of the list root `root` sits in, as `(list root, key)`
-    /// (rendering-data contract Item 3: `focus` is the container in view). The kit asks it when
+    /// (`focus` is the container in view). The kit asks it when
     /// a text range is set ([`super::Session::set_range`]: the range's element's container), when
     /// an agent takes a claim on elements ([`super::Session::claim_elems`]: the first container
     /// in document order) and when an agent's verb touches elements.
     ///
-    /// **A pack with a view schema doesn't need it** ([`Pack::view_schema`], contract gap 1):
+    /// **A pack with a view schema doesn't need it** ([`Pack::view_schema`]):
     /// for its units the kit reads the unit's container field
     /// ([`crate::view_index::ViewSchema::unit_container_field`]), and a container is its own;
     /// this is asked for the other roots only. It reads no doc: a container is named by the
@@ -432,7 +473,7 @@ pub trait Pack: Send + Sync {
         Some((root.to_owned(), key.clone()))
     }
 
-    /// The pack's view schema (rendering-data contract §1.2, gap 1): which list roots hold the
+    /// The pack's view schema: which list roots hold the
     /// containers and the units, and where each view field is. The kit builds the view index
     /// from it ([`crate::view_index::ViewIndex::live`], [`super::Session::view_index`]), and finds
     /// a unit's container through it. Default `None`: the pack has no view index (a text pack
@@ -447,7 +488,7 @@ pub trait Pack: Send + Sync {
     /// in their containers' order (stable: a nested unit the hook adds goes right after its
     /// parent in its container's run) and counts them. Bounded, no I/O. Default: nothing.
     ///
-    /// **The carrier** (K1): on the live tier, for a pack that keeps one
+    /// **The carrier**: on the live tier, for a pack that keeps one
     /// ([`Pack::wants_carrier`]), `source` also holds the doc's carrier when the kit holds it
     /// ([`crate::view_index::ViewSource::Live`], [`crate::view_index::ViewCarrier`]), for what
     /// only the file's bytes hold. The rule: **the live store wins**, and the carrier supplies
@@ -462,6 +503,58 @@ pub trait Pack: Send + Sync {
         index: &mut crate::view_index::ViewIndex,
     ) {
         let _ = (source, index);
+    }
+
+    /// [`Pack::view_derive`] for a change, so the kit keeps a live doc's view index through
+    /// changes instead of building it again ([`super::Session::view_index`]). `index` is the
+    /// index before the changes as the pack derived it, with what `touched` names built again
+    /// by the kit: those units and containers have their kit fields and none of the pack's
+    /// (no derived fields, no derived values, no nested units under a touched unit); every
+    /// other unit and container, and the doc's fonts and layouts, are as the pack left them.
+    /// The hook derives again what the changes touched (and anything it knows depends on them:
+    /// `touched.roots` names the other roots they wrote) and returns `true`. The result must
+    /// be the index [`Pack::view_derive`] gives on a whole build; test builds check it after
+    /// every change and fail loudly on a difference.
+    ///
+    /// Default `false`: the pack doesn't derive by change, and the kit builds the index whole
+    /// on every change (as it did before this hook; it asks once a session, then stops).
+    fn view_derive_change(
+        &self,
+        source: crate::view_index::ViewSource<'_>,
+        index: &mut crate::view_index::ViewIndex,
+        touched: &crate::view_index::ViewTouched,
+    ) -> bool {
+        let _ = (source, index, touched);
+        false
+    }
+
+    /// Element `key` of list root `root` (a unit, or a container when the 3D slot has container
+    /// fields), placed: read from **its own fields** in `source` (the keyed state, and the
+    /// carrier when the pack keeps one), in the file's own form
+    /// ([`crate::placement::Placement`]). Pure and bounded. The kit asks it once per element on
+    /// a whole build, then only for an element whose placement fields
+    /// ([`crate::placement::SpaceSlot::unit_fields`]) a change wrote, which is how it names
+    /// `place` deltas from a change's ops: a placement that reads another element's fields
+    /// would go stale (test builds check every kept index against a whole build). `None`: not
+    /// placed by the slot. Default: none.
+    fn view_placement(
+        &self,
+        source: crate::view_index::ViewSource<'_>,
+        root: &str,
+        key: &Key,
+    ) -> Option<crate::placement::Placement> {
+        let _ = (source, root, key);
+        None
+    }
+
+    /// The doc's space, for a 3D slot whose space is the pack's
+    /// ([`crate::placement::SpaceSrc::Pack`]), read from the roots it names. Default: none.
+    fn view_space(
+        &self,
+        source: crate::view_index::ViewSource<'_>,
+    ) -> Option<crate::placement::Space> {
+        let _ = source;
+        None
     }
 
     /// Per-unit derived values a keyed watch's snapshot carries on the pages of the units'
@@ -480,7 +573,7 @@ pub trait Pack: Send + Sync {
         Vec::new()
     }
 
-    /// The address of element `key` of the MovableList root `root` (contract gap 2): how the
+    /// The address of element `key` of the MovableList root `root`: how the
     /// view index, the presence and claim setters by address and the frames name it on the
     /// wire (a deck's `s256-7` is `@sld:256/sp:7`). One to one: [`Pack::key_of`] gives `key`
     /// back, and no element of another root has the same address. Default: the key itself.
@@ -508,6 +601,55 @@ pub trait Pack: Send + Sync {
         &[]
     }
 
+    /// This file type's recommended live size limit, for a keyed doc of it that isn't a table:
+    /// its elements and fields, as [`super::Config::keyed_max_entries`] counts them, measured on
+    /// the type's own shapes (a timeline's items carry many more fields than a board's notes).
+    /// The host owns the limit: this applies only when the host set none for this type
+    /// ([`super::Config::keyed_max_entries_by_pack`]), and only when it is below the host-wide
+    /// one: a pack may lower the limit, never raise it ([`super::Config::keyed_limit`]). A type
+    /// that needs more gets it from the host's limit for the type. A refusal names the limit
+    /// that applied and where it came from. Default `None`: the host's limits apply.
+    fn keyed_entries_default(&self) -> Option<usize> {
+        None
+    }
+
+    /// The pack's **verb state** for a live keyed doc that isn't a table (`docs/SESSIONS.md`,
+    /// "Verb state"): what its structured verbs read beside the doc and would otherwise compute
+    /// on every call (a timeline's per-track index of items by start), built from the live
+    /// view. The kit builds it the first time a structured verb runs on the doc, keeps it
+    /// beside the doc's live view and hands it to every verb as a read-only borrow
+    /// ([`crate::tools::VerbCtx::verb_state`]); it keeps it in step through every change
+    /// ([`Pack::verb_state_change`]). It is the pack's own: never stored, never on the wire,
+    /// dropped with the live view (a reload, a purge or erasure, a demotion or an unload) and
+    /// built again on the next verb. Bounded, no I/O, a pure function of `view`.
+    ///
+    /// Default `None`: the pack keeps none, and nothing changes for it.
+    fn verb_state_build(&self, view: &View) -> Option<Box<dyn VerbState>> {
+        let _ = view;
+        None
+    }
+
+    /// Keep the verb state ([`Pack::verb_state_build`]) in step with one change to the doc,
+    /// whatever made it: a kit or pack verb, a host's edit, an outside save, an undo or redo,
+    /// a restore or revert. Called on every change, in the change's commit, before any verb
+    /// runs again. `applied` is the change's applied ops, root by root (a list op with its
+    /// positions before and after, a map op with its value before and after); `view` is the
+    /// doc after it (a text root's change is read from it). Returns `true` when `state` is the
+    /// state [`Pack::verb_state_build`] would give from `view`; `false` drops it, and the kit
+    /// builds it again when a verb next runs. Test builds compare the kept state with a fresh
+    /// build after every change and at every hand-out, and fail loudly on a difference.
+    ///
+    /// Default `false`: the state is built again after each change.
+    fn verb_state_change(
+        &self,
+        state: &mut (dyn VerbState + 'static),
+        applied: &[crate::elem::Applied],
+        view: &View,
+    ) -> bool {
+        let _ = (state, applied, view);
+        false
+    }
+
     /// What a keyed watch's change frame carries from the pack beyond the change's ops
     /// (`client/WIRE.md`, "The keyed watch"): its `derived` values (a slide's title, an inherited
     /// box: what a view needs without running pack code) and the `render_hashes` of the
@@ -531,7 +673,7 @@ pub trait Pack: Send + Sync {
         super::WatchExtras::default()
     }
 
-    /// A file has no keys (A8): its new bytes (an outside save, a text edit verb's result,
+    /// A file has no keys: its new bytes (an outside save, a text edit verb's result,
     /// an agent's `write --base` body), as edits against `synced`, the doc as the file last
     /// held it. A structured doc's session applies them **by key** to the live doc (CSV
     /// seam design §7.7), so changes the file never got are kept. For a table, `synced`'s
@@ -545,7 +687,7 @@ pub trait Pack: Send + Sync {
         default_reconcile(self, synced, bytes)
     }
 
-    /// Which element each rendered line of `content` belongs to (A8: `L42` addressing, blame
+    /// Which element each rendered line of `content` belongs to (`L42` addressing, blame
     /// lines, views), or `None` when lines are the text itself (a text pack). Default: for a
     /// [`crate::table`] schema, [`Table::line_map`]; a codec that writes lines of its own in
     /// front (a `sep=;` preamble) overrides it to account for them.

@@ -277,7 +277,7 @@ fn lease_contention_expiry_renew_and_owner_break() {
 
     let l = s.acquire_lease(a, None).unwrap();
     assert_eq!(l.pid, "alice");
-    assert_eq!(l.expires_ms, f.now() + 5 * 60_000, "default 5 min (K-T0-2)");
+    assert_eq!(l.expires_ms, f.now() + 5 * 60_000, "default 5 min");
     // shown in presence: the holder is an editor even without recent edits
     f.advance(45_000);
     let r = s.roster(g).unwrap();
@@ -1202,7 +1202,7 @@ fn a_missing_version_exits_4_not_6() {
     }
 }
 
-// ---------- conflict copies (K-A11Y-5) ----------
+// ---------- conflict copies ----------
 
 const DAY: u64 = 24 * 60 * 60_000;
 
@@ -1248,7 +1248,7 @@ fn names_in(dir: &Path) -> Vec<String> {
     v
 }
 
-/// K-A11Y-5 (IT `tier0::conflict_copy_naming_cleanup`): the copy is named
+/// Conflict-copy naming (IT `tier0::conflict_copy_naming_cleanup`): the copy is named
 /// `<name> (conflict <who> <time>).<ext>`, goes to the host's folder (created), is listed in
 /// `status`, and is deleted on `tick` after 30 days (reported), not before.
 #[test]
@@ -1270,7 +1270,7 @@ fn conflict_copy_naming_cleanup() {
     );
     let (copy, kept, version) = conflict(&f, &s, a, PDF2, PDF3);
 
-    // named per K-A11Y-5 (UTC, the host clock), in the host's folder mirroring `sub/`
+    // named by the conflict-copy rule (UTC, the host clock), in the host's folder mirroring `sub/`
     assert_eq!(
         copy,
         conflicts.join("sub/report (conflict Alice 2026-10-27 143001).pdf")
@@ -1511,7 +1511,7 @@ fn old_records_beside_the_file_still_resolve() {
     );
 }
 
-/// K-T0-9: the purge byte scan covers copies in the host's folder.
+/// The purge byte scan covers copies in the host's folder.
 #[test]
 fn purge_scan_covers_the_conflict_folder() {
     let f = fx("a11y5-purge");
@@ -1692,7 +1692,7 @@ fn blob_log_lists_every_version_oldest_first() {
     );
 }
 
-// ---------- on-behalf writes and their approvals (K-ID-10, K-ID-11, K-T0-9) ----------
+// ---------- on-behalf writes and their approvals ----------
 
 /// The host restarts: every handle goes, and the store file and blob folder are opened again.
 fn restart(f: Fx) -> Fx {
@@ -1766,7 +1766,7 @@ fn approval_events(f: &Fx) -> Vec<AuditEvent> {
         .collect()
 }
 
-/// K-T0-9 (IT `tier0::on_behalf_blob_write_pending_approval`, K-ID-10 for tier 0): an
+/// Approvals (IT `tier0::on_behalf_blob_write_pending_approval`, for tier 0): an
 /// assistant's write (and restore) on a person's behalf applies at once, not held, and
 /// records a `Pending` approval `{by, at}` empty, the agent as author; a person's own write
 /// records none, and so does a write of equal bytes (no version). The log, blame and `who`
@@ -1846,7 +1846,7 @@ fn on_behalf_blob_write_pending_approval() {
     assert!(approval_events(&f).is_empty());
 }
 
-/// K-ID-11 for tier 0 (approver identity): only the named person settles it. The agent, a
+/// The approver for tier 0 (approver identity): only the named person settles it. The agent, a
 /// different person and an owner are each refused with `Need::Approver` and an audit event,
 /// and the record stays pending; the person approves; again the same way is a no-op, the
 /// other way `BadApproval`; `Pending` is no target; a version made on nobody's behalf (or
@@ -1980,7 +1980,7 @@ fn on_behalf_blob_approval_only_by_person() {
     assert_eq!(d.approval.by.as_deref(), Some("alice"));
 }
 
-/// K-HIST-19 for tier 0 (mirrors `decline_then_revert_after_restart`): a declined version
+/// A declined version for tier 0 (mirrors `decline_then_revert_after_restart`): a declined version
 /// stays; after a restart the person declines it and is told the version to restore and
 /// the later versions a restore would also replace; nothing is restored on its own; the
 /// person's explicit restore brings the content back as a new version.

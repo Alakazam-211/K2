@@ -616,7 +616,7 @@ pub(crate) struct Inserted {
 /// The live map of a doc's text roots, and the index of its live restored elements.
 #[derive(Debug, Clone)]
 pub(crate) struct Prov {
-    /// The doc's engine units (C2: from [`crate::doc::Doc::units`], never assumed).
+    /// The doc's engine units (from [`crate::doc::Doc::units`], never assumed).
     units: Units,
     texts: Vec<(&'static str, TextMap)>,
     by_root: ByRoot,

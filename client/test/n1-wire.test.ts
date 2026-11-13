@@ -185,6 +185,53 @@ describe.skipIf(!has)("wire N−1 both ways (tools/n1/n1.sh node-wire)", () => {
     expect(w.sent).toEqual([]);
   });
 
+  it("the previous client's keyed watch reads this kit's frames with units' derived values (after v0.17.0): the same state and units as this client's", async () => {
+    const name = "keyed_frames_unit_derived.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const g = load<{ frames: ServerFrame[]; final_json: string; final_rev: number }>(OURS, name);
+    if (!existsSync(join(PREV, "src", "keyed.ts"))) return; // a previous release with no keyed watch: the row above covers it
+    const prevKeyed = (await import(/* @vite-ignore */ join(PREV, "src", "keyed.ts"))) as { KeyedWatch: typeof KeyedWatch };
+    const welcome: Welcome = { root: "objs", version: 1, client: 7, self: "ada", rights: "read", features: ["keyed_watch"] };
+    const read = (W: typeof KeyedWatch) => {
+      const w = wire();
+      const k = new W(w.t, welcome);
+      for (const f of g.frames) w.deliver(f);
+      const units = (k.view?.containers ?? []).map((c) => [c.key, k.units(c.key).map((u) => u.key)]);
+      return { ready: k.ready, state: k.stateJson(), rev: k.rev, units, watches: w.sent.filter((f) => f.type === "watch").length };
+    };
+    const old = read(prevKeyed.KeyedWatch);
+    const ours = read(KeyedWatch);
+    expect(old.ready).toBe(true);
+    expect(old.state).toBe(g.final_json);
+    expect(old.rev).toBe(g.final_rev);
+    expect(old.watches).toBe(1);
+    expect(old.units).toEqual(ours.units);
+    expect(ours.state).toBe(g.final_json);
+  });
+
+  it("the previous client's keyed watch reads this kit's frames with placements in 3D: the same state and units as this client's", async () => {
+    const name = "keyed_frames_placement.json";
+    if (!existsSync(join(OURS, name))) throw new Error(`test/golden/${name} is missing: the kit writes it; this row needs it`);
+    const g = load<{ frames: ServerFrame[]; final_json: string; final_rev: number }>(OURS, name);
+    if (!existsSync(join(PREV, "src", "keyed.ts"))) return;
+    const prevKeyed = (await import(/* @vite-ignore */ join(PREV, "src", "keyed.ts"))) as { KeyedWatch: typeof KeyedWatch };
+    const welcome: Welcome = { root: "objs", version: 1, client: 7, self: "ada", rights: "read", features: ["keyed_watch"] };
+    const read = (W: typeof KeyedWatch) => {
+      const w = wire();
+      const k = new W(w.t, welcome);
+      for (const f of g.frames) w.deliver(f);
+      const units = (k.view?.containers ?? []).map((c) => [c.key, k.units(c.key).map((u) => u.key)]);
+      return { ready: k.ready, state: k.stateJson(), rev: k.rev, units, watches: w.sent.filter((f) => f.type === "watch").length };
+    };
+    const old = read(prevKeyed.KeyedWatch);
+    const ours = read(KeyedWatch);
+    expect(old.ready).toBe(true);
+    expect(old.state).toBe(g.final_json);
+    expect(old.rev).toBe(g.final_rev);
+    expect(old.watches).toBe(1);
+    expect(old.units).toEqual(ours.units);
+  });
+
   it("this client's keyed watch on the previous release's host (no `keyed_watch`) sends nothing", () => {
     const w = wire();
     const k = new KeyedWatch(w.t, { root: "shapes", version: 1, client: 7, self: "ada", rights: "read", features: ["presence", "claims", "focus", "range"], wire: prevWire });

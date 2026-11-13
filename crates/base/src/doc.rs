@@ -131,6 +131,11 @@ pub enum DocError {
     },
     #[error("primitive {0:?} is not implemented yet")]
     Unsupported(Kind),
+    /// The native engine was chosen for a file type with a list or map root (feature
+    /// `native`): such a file type isn't switched to the native engine until lists get the
+    /// engine's placement rules. Nothing was made or loaded. Error id `MPC-E162`.
+    #[error("root {root:?} is {kind:?}: this file type isn't switched to the native engine yet")]
+    RootKindNotNative { root: String, kind: Kind },
     #[error(transparent)]
     Hunk(#[from] HunkError),
     /// A schema's root name: empty, holding `/` (the engine's layout uses it), or twice.
@@ -146,6 +151,21 @@ pub enum DocError {
     /// The doc holds something the kit never writes (a bug or a damaged store).
     #[error("the doc's state is malformed: {0}")]
     Malformed(String),
+    /// This replica refused a frame the host relayed as a merge that isn't a fold
+    /// (`MPCE-E995` from the host, not from a peer): its engine is behind the host's. Nothing
+    /// was applied. Error id `MPC-E163`.
+    #[error("this replica's engine refused the host's merge: it is behind the host's engine")]
+    ReplicaLagging,
+    /// This doc's version vector doesn't fit one frame (`MPCE-E983`, about 10,000 writers at
+    /// the default limits): it goes in parts ([`Doc::state_vector_parts`]), never smaller or
+    /// empty. Nothing was sent. Error id `MPC-E164`.
+    #[error("the version vector ({entries} writers) doesn't fit one frame: send it in parts")]
+    VectorNeedsParts { entries: u64 },
+    /// The peer's history is compacted past what this doc holds (`MPCE-E262`): this doc is
+    /// behind the peer's cut and needs a state transfer, not a diff. Nothing was applied; not
+    /// to be retried, and the peer isn't at fault. Error id `MPC-E165`.
+    #[error("the peer's history is compacted past this doc's state: it needs a state transfer")]
+    NeedsStateTransfer,
 }
 
 /// A root's content as plain data, independent of the engine (versions, export, restore).
@@ -469,7 +489,7 @@ impl Doc {
         self.inner.map_get(root, key)
     }
 
-    /// The write that holds a register now (engine answer E4): for a MovableList element its
+    /// The write that holds a register now (the engine's answer on registers): for a MovableList element its
     /// `Value`, `Position` or `Existence` facet, for a Map key its `Value`. O(1). `None` when
     /// no write holds it: an absent map key or an unknown element, a value never set since an
     /// insert that gave none, and the existence of a live element (on this engine an undelete
@@ -489,9 +509,28 @@ impl Doc {
         }
     }
 
-    /// Encoded state vector (what this doc has), for sync step 1.
+    /// Encoded state vector (what this doc has), for sync step 1. **Deprecated:** it can't
+    /// fail, and a native doc's vector past one frame (feature `native`, which no host turns
+    /// on yet) is never sent smaller or empty, so there it fails hard naming `MPC-E164`. Use
+    /// [`Doc::try_state_vector`] (typed) or [`Doc::state_vector_parts`]. Before any host turns
+    /// the native engine on, this is removed or made fallible in a breaking release.
+    #[deprecated(note = "use try_state_vector (typed) or state_vector_parts")]
     pub fn state_vector(&self) -> Vec<u8> {
         self.inner.state_vector()
+    }
+
+    /// The state vector (what this doc has), for sync step 1, typed: on the native engine a
+    /// vector past one frame is [`DocError::VectorNeedsParts`] (`MPC-E164`, the engine's
+    /// `MPCE-E983` beside it); send [`Doc::state_vector_parts`] then. Yrs's never fails.
+    pub fn try_state_vector(&self) -> Result<Vec<u8>, DocError> {
+        self.inner.try_state_vector()
+    }
+
+    /// The state vector as the frames a peer answers with diff parts: on the native engine,
+    /// kind-4 vector parts (any number of writers; each carries this doc's limits hint), on
+    /// Yrs the one vector. Never a smaller or empty vector.
+    pub fn state_vector_parts(&self) -> Result<Vec<Vec<u8>>, DocError> {
+        self.inner.state_vector_parts()
     }
 
     /// Full state, in the compact store format. Fails with [`DocError::Pending`] on a
@@ -577,7 +616,7 @@ impl Doc {
         Ok(self.edit_applied(client, edits)?.update)
     }
 
-    /// [`Doc::edit_as`], with the applied stream (A5): per edit, in order, its text hunks,
+    /// [`Doc::edit_as`], with the applied stream: per edit, in order, its text hunks,
     /// or each structured op as applied (live indices and values before and after, the
     /// op's [`WriteId`], its effect). Structured ops are checked one by one in order, each
     /// against the state the previous ones left; a refused op ([`DocError::Op`]) refuses
@@ -590,7 +629,7 @@ impl Doc {
 
     /// [`Doc::edit_applied`], with each text hunk's first inserted clock as the engine
     /// applied it ([`crate::engine::Made`]): what the session's provenance and clock spans
-    /// name the change's elements by (C2: never predicted after the fact).
+    /// name the change's elements by (never predicted after the fact).
     pub(crate) fn edit_made(
         &mut self,
         client: ClientId,
@@ -727,7 +766,7 @@ impl Doc {
         self.inner.units()
     }
 
-    /// Whether a session may store this doc (C2): until C3 gives native docs their own
+    /// Whether a session may store this doc: until native docs get their own
     /// stamp and record format, only a doc on Yrs (a native doc would be stamped as Yrs's).
     /// Every doc a session makes or loads is on Yrs today; this holds that line.
     pub(crate) fn check_storable(&self) -> Result<(), DocError> {
@@ -756,7 +795,7 @@ impl Doc {
     }
 
     /// Whether this doc holds updates it couldn't integrate (missing dependencies) or is
-    /// poisoned: K-AUD-1's no-pending check (v0.9.5). O(1).
+    /// poisoned: the no-pending check (v0.9.5). O(1).
     pub(crate) fn unresolved(&self) -> bool {
         self.inner.unresolved()
     }
@@ -779,8 +818,7 @@ impl Doc {
     /// process, kit-made bytes only (the concurrency tests' merge). Unit tests only.
     #[cfg(test)]
     pub(crate) fn merge_from(&mut self, from: &Doc) -> Result<(), DocError> {
-        let update = from.inner.encode_diff(&self.inner.state_vector())?;
-        self.inner.apply_trusted(&update)
+        self.inner.catch_up_from(&from.inner)
     }
 
     #[cfg(test)]
@@ -793,8 +831,7 @@ impl Doc {
     /// trusted bytes. Test-only ([`crate::conformance::replica`]).
     #[cfg(feature = "conformance")]
     pub(crate) fn sync_from_local(&mut self, from: &Doc) -> Result<(), DocError> {
-        let update = from.inner.encode_diff(&self.inner.state_vector())?;
-        self.inner.apply_trusted(&update)
+        self.inner.catch_up_from(&from.inner)
     }
 
     /// The state vector as sorted `(client, clock)` pairs (the native engine: its version

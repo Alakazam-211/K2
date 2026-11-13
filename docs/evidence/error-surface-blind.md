@@ -1,6 +1,6 @@
 # Evidence: the blind-agent test of the error surface
 
-Condition 4 of the error-surface slice: a fresh agent with no context gets only the CLI's
+Condition 4 of the error-surface work: a fresh agent with no context gets only the CLI's
 `--help`, `explain` and `capabilities`, plus a task that fails, and must recover.
 
 ## Setup
@@ -21,7 +21,7 @@ Condition 4 of the error-surface slice: a fresh agent with no context gets only 
 - **The record:** each agent reported its transcript. The daemon logged every request with
   its exit code and error id (`.mpc/requests.log`), and the transcripts below were checked
   against those logs. Final file contents were checked by hand.
-- **Five scenarios** (the brief asks for at least four):
+- **Five scenarios** (the check asks for at least four):
 
   | # | Scenario | The other participants | Task |
   |---|---|---|---|
@@ -31,10 +31,11 @@ Condition 4 of the error-surface slice: a fresh agent with no context gets only 
   | 4 | declined CSV | `data.csv` mixes `\r\n` and `\n` | "add the row carol,42" |
   | 5 | claimed lines | a bot holds a 90 s claim on lines 3–6, "rewriting the Sync section"; the host respects claims for agents | "fix the typo on line 4" |
 
-  The brief's example of a grid cap needs the CSV grid work (C1), which isn't on this base.
+  A grid cap scenario needs the CSV grid work, which isn't on this base.
   Its id, `MPC-E802`, is reserved. Scenario 3 is the kit's cap that ships today.
-  **Pending C1:** a grid-cap scenario (`MPC-E802 at_limit`, with `NeedsBase` `E801` and
-  `FacetConflict` `E803` if they fit), run the same way once C1 wires those ids.
+  **Pending the grid work:** a grid-cap scenario (`MPC-E802 at_limit`, with `NeedsBase`
+  `E801` and `FacetConflict` `E803` if they fit), run the same way once the grid work wires
+  those ids.
 
 ## Round 1
 

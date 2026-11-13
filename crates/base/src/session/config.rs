@@ -1,4 +1,6 @@
-//! Session and pool settings. Defaults follow the Markdown PRD (§6, §9.4, §12).
+//! Session and pool settings, with their defaults.
+
+use std::collections::BTreeMap;
 
 /// Settings for a [`super::SessionManager`] and its sessions. Start from
 /// [`Config::default`] and change fields.
@@ -59,13 +61,13 @@ pub struct Config {
     /// Bytes of retained region text per participant per doc, undo and redo stacks
     /// together; that participant's oldest batches go first. Default 4 MiB (spec U6).
     pub undo_max_bytes: usize,
-    /// Person undo grouping (spec U3 (a), K4): an edit with an
+    /// Person undo grouping (spec U3 (a)): an edit with an
     /// [`super::EditOptions::group`] token joins its connection's open group only if the
     /// group's last edit is less than this old on the host clock. 0: groups never merge.
     /// Default 1 s.
     pub undo_group_idle_ms: u64,
 
-    // --- versions and history (K-HIST-4, -7, -22, -23) ---
+    // --- versions and history ---
     /// Cut a version after this much quiet following edits. Default 2 min.
     pub idle_version_ms: u64,
     /// Cut a version before an agent edit changing more than this many lines... Default 20.
@@ -117,7 +119,7 @@ pub struct Config {
     /// subscriber that falls this far behind gets a fresh snapshot instead of the deltas it
     /// missed. Default 256.
     pub roster_queue: usize,
-    /// Participants (distinct pids) a doc admits with presence (K11). A join past it is a
+    /// Participants (distinct pids) a doc admits with presence. A join past it is a
     /// **watcher**: read-only whatever its rights, no caret, view or claims, shown in the
     /// roster only as a `watching` count. A slot that frees is not filled by itself: the host
     /// promotes the earliest watcher ([`super::Session::promote_watcher`]). Default 32.
@@ -211,16 +213,16 @@ pub struct Config {
     /// draws one fresh ID, reused from then on. Default true.
     pub reuse_agent_clients: bool,
 
-    /// Reuse a person's writer per device (v0.14.0, `docs/design/person-writer-reuse-r0.md`):
-    /// a join with a device key ([`super::JoinOptions::device`]) by a person or an App guest
-    /// takes a free writer of that person on that device, or takes its own writer back on a
-    /// reconnect ([`super::JoinOptions::reclaim`]), instead of minting one per connection. A
-    /// writer is free only after its connection was released ([`super::Session::release`]: the
-    /// client holds nothing unsent and is done with it) or, for a connection without client
-    /// state ([`super::JoinOptions::device_stateless`]), after any end; every other end parks
-    /// it for its own lease. Every op is made by the session itself, so a reused writer's line
-    /// continues from the doc's own state. Without a device key, or off: a fresh writer per
-    /// connection, as before. Default false.
+    /// Reuse a person's writer per device (v0.14.0; `docs/SESSIONS.md`, "Person-writer reuse
+    /// (v0.14.0)"): a join with a device key ([`super::JoinOptions::device`]) by a person or an App
+    /// guest takes a free writer of that person on that device, or takes its own writer back on a
+    /// reconnect ([`super::JoinOptions::reclaim`]), instead of minting one per connection. A writer
+    /// is free only after its connection was released ([`super::Session::release`]: the client
+    /// holds nothing unsent and is done with it) or, for a connection without client state
+    /// ([`super::JoinOptions::device_stateless`]), after any end; every other end parks it for its
+    /// own lease. Every op is made by the session itself, so a reused writer's line continues from
+    /// the doc's own state. Without a device key, or off: a fresh writer per connection, as before.
+    /// Default false.
     pub reuse_person_writers: bool,
 
     /// How long a parked person writer (one whose connection ended without a release) stays
@@ -277,13 +279,13 @@ pub struct Config {
     /// own limit applies below it. Default 64 MiB.
     pub disk_read_max_bytes: u64,
     /// Echo suppression: a hash of one of the kit's own writes is kept this long (in memory
-    /// only, keyed per doc; K-DISK-4, K-PURGE-13). A file holding an older write of ours
+    /// only, keyed per doc). A file holding an older write of ours
     /// is then an outside edit. Default 60 s.
     pub own_write_ttl_ms: u64,
 
     // --- tier 0 (blob docs) ---
     /// A lease lasts this long unless the caller asks otherwise; renew to keep it.
-    /// Default 5 min (K-T0-2).
+    /// Default 5 min.
     pub lease_default_ms: u64,
     /// The longest lease anyone can ask for. Default 1 h.
     pub lease_max_ms: u64,
@@ -316,12 +318,12 @@ pub struct Config {
     /// toggle or move a thread (resolve, reopen, re-anchor, a proposal) are refused
     /// (`MPC-E907`); replies, deletes and purges always fit. Default 4,096.
     pub annot_thread_log_max: u32,
-    /// Conflict copies older than this are deleted on `tick` (K-A11Y-5), unless their
+    /// Conflict copies older than this are deleted on `tick`, unless their
     /// version is named or a person edited the copy (its bytes no longer match the version
     /// it holds). Default 30 days.
     pub conflict_copy_keep_ms: u64,
 
-    // --- grids (tables on the interim engine, K-CSV-7): knobs, measured in C1a ---
+    // --- grids (tables on the interim engine): knobs, as measured ---
     /// A table holds at most this many cells (present, live or hidden). A change that would
     /// grow past it is refused ([`super::SessionError::AtLimit`], exit 2); existing content
     /// is never dropped. Default 25,000.
@@ -348,10 +350,126 @@ pub struct Config {
     /// fields`, `MPC-E822`, exit 2); nothing in the doc is ever dropped. Default 25,000: the
     /// CSV grid's measured cap ([`Config::grid_max_cells`]), borrowed until a deck-shaped
     /// measurement sets it.
+    ///
+    /// The host-wide limit: it applies to a file type the host set no limit for
+    /// ([`Config::keyed_max_entries_by_pack`]) unless the type's pack recommends a lower one
+    /// ([`super::Pack::keyed_entries_default`]); a pack never raises it.
+    /// [`Config::keyed_limit`] says which applies.
     pub keyed_max_entries: usize,
+    /// The host's own [`Config::keyed_max_entries`] for a file type, by its pack's name (its
+    /// schema's `name`, the one stamped on each stored doc): decks, workbooks and timelines
+    /// hold very different numbers of elements and fields. A file type named here takes this
+    /// limit, whatever its pack recommends and whatever the host-wide limit is, above it too:
+    /// it is the only way a type gets more than the host-wide limit. Any other type takes the
+    /// lower of its pack's recommended default and the host-wide limit. Read at every open and
+    /// every change, so a change here applies to a doc's next change. Default: empty.
+    pub keyed_max_entries_by_pack: BTreeMap<String, usize>,
+}
+
+/// Which setting a keyed doc's live size limit came from ([`Config::keyed_limit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LimitSource {
+    /// The host's limit for this file type ([`Config::keyed_max_entries_by_pack`]).
+    HostPerPack,
+    /// The file type's own recommended default ([`super::Pack::keyed_entries_default`]): the
+    /// host set none for the type, and the default is below the host-wide limit.
+    PackDefault,
+    /// The host-wide limit ([`Config::keyed_max_entries`]): the host set none for the type,
+    /// and its pack recommends none or one at or above it (capped here).
+    HostWide,
+}
+
+impl LimitSource {
+    /// Every source, in the order [`Config::keyed_limit`] tries them.
+    pub const ALL: [LimitSource; 3] = [
+        LimitSource::HostPerPack,
+        LimitSource::PackDefault,
+        LimitSource::HostWide,
+    ];
+
+    /// Its name in an error's details (`limit_source`): `host_per_pack`, `pack_default` or
+    /// `host_wide`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LimitSource::HostPerPack => "host_per_pack",
+            LimitSource::PackDefault => "pack_default",
+            LimitSource::HostWide => "host_wide",
+        }
+    }
+
+    /// In words, as a decline's message says it.
+    pub fn words(&self) -> &'static str {
+        match self {
+            LimitSource::HostPerPack => "the host's limit for this file type",
+            LimitSource::PackDefault => "this file type's own default",
+            LimitSource::HostWide => "the host's limit for every file type",
+        }
+    }
+}
+
+/// A keyed doc's live size limit (its elements and fields) and where it came from: what
+/// [`Config::keyed_limit`] resolves for a file type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct KeyedLimit {
+    pub limit: usize,
+    pub source: LimitSource,
+}
+
+impl KeyedLimit {
+    pub fn new(limit: usize, source: LimitSource) -> Self {
+        Self { limit, source }
+    }
+
+    /// How a decline names this limit, inside its parentheses: `25000 elements and fields;
+    /// the host's limit for every file type`. [`KeyedLimit::from_decline`] reads it back.
+    pub(crate) fn phrase(self) -> String {
+        format!(
+            "{} elements and fields; {}",
+            self.limit,
+            self.source.words()
+        )
+    }
+
+    /// The limit a `live_too_large` decline's message names ([`KeyedLimit::phrase`], after
+    /// "the live limit ("), read back for its details; `None` for any other wording.
+    pub(crate) fn from_decline(message: &str) -> Option<KeyedLimit> {
+        let (_, rest) = message.split_once("the live limit (")?;
+        let (n, rest) = rest.split_once(" elements and fields; ")?;
+        let (words, _) = rest.split_once(')')?;
+        let limit = n.parse().ok()?;
+        let source = LimitSource::ALL.into_iter().find(|s| s.words() == words)?;
+        Some(KeyedLimit { limit, source })
+    }
 }
 
 impl Config {
+    /// The live size limit of a keyed doc of `pack`'s type that isn't a table, and where it came
+    /// from. The host owns it:
+    /// 1. the host's limit for this type, [`Config::keyed_max_entries_by_pack`] under the
+    ///    pack's name, wins whatever it is ([`LimitSource::HostPerPack`]);
+    /// 2. else the pack's recommended default ([`super::Pack::keyed_entries_default`]) when
+    ///    it is below the host-wide limit: a pack may lower the limit, never raise it
+    ///    ([`LimitSource::PackDefault`]);
+    /// 3. else the host-wide [`Config::keyed_max_entries`] ([`LimitSource::HostWide`]), a
+    ///    pack's default at or above it included.
+    ///
+    /// A type that needs more than the host-wide limit gets it only from the host's limit for
+    /// that type. The kit applies the result at import, at every change and at every outside
+    /// save; a host can call it to show a type's limit.
+    pub fn keyed_limit(&self, pack: &dyn super::Pack) -> KeyedLimit {
+        if let Some(&limit) = self.keyed_max_entries_by_pack.get(pack.schema().name) {
+            return KeyedLimit::new(limit, LimitSource::HostPerPack);
+        }
+        match pack.keyed_entries_default() {
+            Some(limit) if limit < self.keyed_max_entries => {
+                KeyedLimit::new(limit, LimitSource::PackDefault)
+            }
+            _ => KeyedLimit::new(self.keyed_max_entries, LimitSource::HostWide),
+        }
+    }
+
     /// Every setting in effect, by field name, as numbers (milliseconds, bytes, counts as the
     /// fields say): what `capabilities` prints. Lists every field: a new one doesn't compile
     /// until it is added here.
@@ -441,6 +559,9 @@ impl Config {
             grid_max_rows,
             grid_max_value_len,
             keyed_max_entries,
+            // per file type, not one number: a refusal names the limit that applied
+            // (`limit`, `limit_source`), and a host shows a type's with `keyed_limit`
+            keyed_max_entries_by_pack: _,
         } = self;
         vec![
             ("editor_window_ms", *editor_window_ms),
@@ -632,9 +753,10 @@ impl Default for Config {
             grid_max_cols: 1_024,
             grid_max_rows: 100_000,
             grid_max_value_len: crate::table::DEFAULT_MAX_VALUE_LEN,
-            // the CSV grid's measured cap (`grid_max_cells`, K-CSV-7) until a deck-shaped
+            // the CSV grid's measured cap (`grid_max_cells`) until a deck-shaped
             // measurement (the pptx plan's M1) sets this one
             keyed_max_entries: 25_000,
+            keyed_max_entries_by_pack: BTreeMap::new(),
         }
     }
 }

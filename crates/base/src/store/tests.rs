@@ -771,7 +771,10 @@ fn doc_round_trips_through_log_and_compaction() {
         rebuilt.text("source").unwrap(),
         "# Notes (Sam)\n\nfirst\nsecond 日本\nthird 🎉\n"
     );
-    assert_eq!(rebuilt.state_vector(), doc.state_vector());
+    assert_eq!(
+        rebuilt.try_state_vector().unwrap(),
+        doc.try_state_vector().unwrap()
+    );
     // an engine-neutral version of it
     let vid = s
         .put_version(
@@ -1039,7 +1042,7 @@ fn blob_v(s: &DocStore, n: u8, author: &str, obo: Option<&str>) -> BlobVersion {
     v
 }
 
-/// K-T0-9 in the store: a blob version an agent wrote on someone's behalf gets a `Pending`
+/// Approvals in the store: a blob version an agent wrote on someone's behalf gets a `Pending`
 /// approval in the same commit, keyed `(doc, version)` in `blob_approvals`, never in the text
 /// `approvals` table; a person's own version gets none; a doc's delete erases them.
 #[test]
@@ -1407,7 +1410,7 @@ fn every_table_is_listed_once() {
     listed.dedup();
     assert_eq!(listed.len(), n, "a table is listed twice");
     // `authored` comes with the first widened change; `elem_writes` with the first
-    // structured record (format 6's upgrade, C1); `client_kinds` with the first join that
+    // structured record (format 6's upgrade); `client_kinds` with the first join that
     // mints an agent's or an own replica's client ID; `doc_blob_refs` with the first name
     let lazy = [
         "authored".to_owned(),
@@ -1431,10 +1434,10 @@ fn every_table_is_listed_once() {
         "blob_turns".to_owned(),
         // the pack verb of a live change, with the first change a pack verb made
         "change_verbs".to_owned(),
-        // a live doc's carrier and its versions' (K1), with the first
+        // a live doc's carrier and its versions', with the first
         "live_carriers".to_owned(),
         "version_carriers".to_owned(),
-        // a carrier's pairing (K1b), with the first carrier of a pack that pairs
+        // a carrier's pairing, with the first carrier of a pack that pairs
         "carrier_pairings".to_owned(),
         // a demoted doc's live log, with the first demotion
         "demoted_changes".to_owned(),
@@ -2138,7 +2141,7 @@ fn an_edit_and_its_row_land_together() {
     );
 }
 
-// ---- the log entry's body (C3, design §1.7): EntryBody, versions 3 and 4 ----
+// ---- the log entry's body (design §1.7): EntryBody, versions 3 and 4 ----
 
 fn hex_bytes(hex: &str) -> Vec<u8> {
     (0..hex.len())

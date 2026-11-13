@@ -1,5 +1,5 @@
 //! A keyed doc that isn't a table (a deck, a board) on the live path, with a file behind it:
-//! the guards it needs before any such type goes live (the pptx live plan's slice 1).
+//! the guards it needs before any such type goes live.
 //!
 //! - **The size limit** (`Config::keyed_max_entries`): a file over it is declined
 //!   `live_too_large` (`MPC-E415`) and still opens, at tier 0; a file at it opens live; a
@@ -35,11 +35,12 @@ use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::differential::{self, KeyedMutant};
 use k2_mpc_base::doc::{Edit, Neutral};
 use k2_mpc_base::elem::{Anchor, Key, ListOp, MapOp, Value};
+use k2_mpc_base::errors::{ErrorReport, Refusal, Value as ErrorValue};
 use k2_mpc_base::schema::{Kind, Schema};
 use k2_mpc_base::session::{
-    AnyFile, AuditEvent, Config, ConnId, Declined, DiskCheck, EditOptions, Host, NotReached, Pack,
-    PackContent, PackError, Participant, ParticipantKind, PurgeRequest, PurgeScope, Reconciled,
-    Rights, Session, SessionError, SessionManager, Stay, View,
+    AnyFile, AuditEvent, Config, ConnId, Declined, DiskCheck, EditOptions, Host, LimitSource,
+    NotReached, Pack, PackContent, PackError, Participant, ParticipantKind, PurgeRequest,
+    PurgeScope, Reconciled, Rights, Session, SessionError, SessionManager, Stay, View,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 
@@ -507,18 +508,10 @@ fn row_keyed_growth_past_the_cap_is_refused() -> Result<(), String> {
         Ok(v) => return Err(format!("{ROW}: the doc grew past the cap (version {v})")),
         Err(e) => e,
     };
-    let SessionError::AtLimit {
-        what,
-        limit,
-        would_be,
-    } = &e
-    else {
-        return Err(format!("{ROW}: expected AtLimit, got {e:?}"));
-    };
     need(
-        (*what, *limit, *would_be) == ("elements and fields", 6, 8),
+        keyed_refusal_from(&e) == Some((6, 8, LimitSource::HostWide)),
         ROW,
-        || format!("the refusal: {what} {limit} {would_be}"),
+        || format!("expected KeyedAtLimit at 6 (host-wide) to 8, got {e:?}"),
     )?;
     need(e.report().id() == "MPC-E822", ROW, || {
         format!("the registry id: {}", e.report().id())
@@ -612,6 +605,387 @@ fn the_default_keyed_cap_is_the_grids() {
         .limits()
         .iter()
         .any(|(n, v)| *n == "keyed_max_entries" && *v == 25_000));
+}
+
+// ---------- a limit of any size ----------
+
+/// Insert a shape `key` with no field, at the end, as `c`: one element.
+fn add_bare_shape(s: &Session, c: ConnId, key: &str) -> Result<u64, SessionError> {
+    let mut opts = EditOptions::new();
+    opts.base = Some(s.read(c)?.version);
+    let r = s.edit_ops(
+        c,
+        vec![Edit::List {
+            root: SHAPES.into(),
+            ops: vec![ListOp::Insert {
+                key: k(key),
+                at: Anchor::End,
+                value: Value::Null,
+            }],
+        }],
+        &opts,
+    )?;
+    Ok(r.version)
+}
+
+/// The size refusal's limit and what the change would have made it, if `e` is one.
+fn keyed_refusal(e: &SessionError) -> Option<(usize, usize)> {
+    keyed_refusal_from(e).map(|(l, w, _)| (l, w))
+}
+
+/// The size refusal's limit, what the change would have made it, and where the limit came
+/// from, if `e` is one (`KeyedAtLimit`; never the grid's `AtLimit`).
+fn keyed_refusal_from(e: &SessionError) -> Option<(usize, usize, LimitSource)> {
+    match e {
+        SessionError::KeyedAtLimit {
+            limit,
+            would_be,
+            from,
+            ..
+        } => Some((*limit, *would_be, *from)),
+        _ => None,
+    }
+}
+
+/// A limit is compared exactly whatever its size: one past `i64::MAX`, up to `usize::MAX`,
+/// lets the doc grow (before, a limit that didn't fit an `i64` wrapped negative and refused
+/// every growing change).
+#[test]
+fn keyed_limits_of_any_size_let_the_doc_grow() {
+    let big = usize::try_from(i64::MAX).expect("a 64-bit host");
+    for limit in [big, big + 1, usize::MAX - 1, usize::MAX] {
+        let f = fx_with("anylimit", |c| c.keyed_max_entries = limit);
+        f.write(AT_CAP);
+        let s = f.open();
+        let p = f.person(&s);
+        let grew = add_shape(&s, p, "s4", "D");
+        assert!(
+            grew.is_ok(),
+            "keyed limit {limit}: the doc didn't grow: {grew:?}"
+        );
+        assert_eq!(text(&s, p), OVER_CAP, "keyed limit {limit}");
+    }
+}
+
+/// A limit of 0: an empty file opens live, and any growth is refused; a file with one
+/// element is over it (`live_too_large`).
+#[test]
+fn keyed_limit_zero() {
+    let f = fx_with("limit0", |c| c.keyed_max_entries = 0);
+    f.write("");
+    let s = f.open();
+    let p = f.person(&s);
+    let e = add_bare_shape(&s, p, "s1").expect_err("limit 0: growth is refused");
+    assert_eq!(keyed_refusal(&e), Some((0, 1)), "limit 0: {e:?}");
+    assert_eq!(e.report().id(), "MPC-E822");
+    assert_eq!(text(&s, p), "");
+    let f = fx_with("limit0-file", |c| c.keyed_max_entries = 0);
+    f.write("s1\n");
+    let e = f.try_open().err().expect("limit 0: one element is over it");
+    assert!(
+        matches!(&e, SessionError::Declined(d) if d.code == "live_too_large"),
+        "limit 0: {e:?}"
+    );
+}
+
+/// A limit of 1: one element fits, the second is refused.
+#[test]
+fn keyed_limit_one() {
+    let f = fx_with("limit1", |c| c.keyed_max_entries = 1);
+    f.write("");
+    let s = f.open();
+    let p = f.person(&s);
+    add_bare_shape(&s, p, "s1").expect("limit 1: the first element fits");
+    let e = add_bare_shape(&s, p, "s2").expect_err("limit 1: the second is refused");
+    assert_eq!(keyed_refusal(&e), Some((1, 2)), "limit 1: {e:?}");
+    assert_eq!(text(&s, p), "s1\n");
+    // a file at it opens live
+    let f = fx_with("limit1-file", |c| c.keyed_max_entries = 1);
+    f.write("s1\n");
+    let s = f.open();
+    let p = f.person(&s);
+    assert_eq!(text(&s, p), "s1\n");
+}
+
+/// At the default limit (25,000) the refusal (`MPC-E822`) still fires.
+#[test]
+fn keyed_default_limit_still_refuses_at_it() {
+    let f = fx("default-limit");
+    let limit = Config::default().keyed_max_entries;
+    // limit / 2 shapes with one field each: exactly at the limit
+    let file: String = (0..limit / 2).map(|i| format!("s{i}\ttitle=t\n")).collect();
+    f.write(&file);
+    let s = f.open();
+    let p = f.person(&s);
+    let e = add_shape(&s, p, "extra", "E").expect_err("growth past the default is refused");
+    assert_eq!(keyed_refusal(&e), Some((limit, limit + 2)), "{e:?}");
+    assert_eq!(e.report().id(), "MPC-E822");
+    assert_eq!(
+        keyed_refusal_from(&e).map(|r| r.2),
+        Some(LimitSource::HostWide)
+    );
+    // a change that doesn't grow it passes
+    set_field(&s, p, "s0", "title", "u").expect("a set at the limit passes");
+}
+
+// ---------- the limit per file type ----------
+
+/// `Deck` with a recommended limit of its own ([`Pack::keyed_entries_default`]).
+struct DeckWithDefault(usize);
+
+impl Pack for DeckWithDefault {
+    fn schema(&self) -> Schema {
+        Deck.schema()
+    }
+    fn decode(&self, b: &[u8]) -> Result<PackContent, Declined> {
+        Deck.decode(b)
+    }
+    fn encode(&self, c: &[(String, Neutral)], codec: &[u8]) -> Result<Vec<u8>, PackError> {
+        Deck.encode(c, codec)
+    }
+    fn reconcile(&self, synced: &View, bytes: &[u8], x: &[u8]) -> Result<Reconciled, Declined> {
+        Deck.reconcile(synced, bytes, x)
+    }
+    fn keyed_entries_default(&self) -> Option<usize> {
+        Some(self.0)
+    }
+}
+
+impl Fx {
+    fn try_open_pack(&self, pack: Arc<dyn Pack>) -> Result<Arc<Session>, SessionError> {
+        self.mgr.open_file(pack, &key(), &self.path(), &self.ws)
+    }
+}
+
+/// A report's `limit` and `limit_source` details.
+fn limit_details(rep: &ErrorReport) -> (Option<u64>, Option<String>) {
+    (
+        rep.detail("limit").and_then(ErrorValue::as_u64),
+        rep.detail("limit_source")
+            .and_then(ErrorValue::as_str)
+            .map(str::to_owned),
+    )
+}
+
+/// The rows of one limit's source: under the host's settings `set` and `pack`, the limit is 6
+/// (the cap of [`AT_CAP`]) and comes from `source`. A file over it is declined
+/// `live_too_large` (`MPC-E415`), a change past it is refused (`MPC-E822`), and an outside save
+/// past it declines the file, each naming the limit and its source in its details.
+fn row_limit_from(
+    row: &str,
+    set: impl Fn(&mut Config),
+    pack: impl Fn() -> Arc<dyn Pack>,
+    source: LimitSource,
+) -> Result<(), String> {
+    let want = (Some(6), Some(source.as_str().to_owned()));
+    // the config resolves it
+    let f = fx_with(row, &set);
+    let got = f.mgr.config().keyed_limit(&*pack());
+    need((got.limit, got.source) == (6, source), row, || {
+        format!("Config::keyed_limit: {got:?}")
+    })?;
+    // a file over it is declined, naming it
+    f.write(OVER_CAP);
+    let e = match f.try_open_pack(pack()) {
+        Ok(_) => return Err(format!("{row}: a file over the limit opened live")),
+        Err(e) => e,
+    };
+    let rep = e.report();
+    need(rep.id() == "MPC-E415", row, || format!("the open: {e:?}"))?;
+    need(limit_details(&rep) == want, row, || {
+        format!("the decline's details: {:?}", limit_details(&rep))
+    })?;
+    // at it, a change that grows the doc is refused, naming it
+    let f = fx_with(row, &set);
+    f.write(AT_CAP);
+    let s = f
+        .try_open_pack(pack())
+        .map_err(|e| format!("{row}: a file at the limit didn't open: {e}"))?;
+    let p = f.person(&s);
+    let e = match add_shape(&s, p, "s4", "D") {
+        Ok(v) => return Err(format!("{row}: the doc grew past the limit (version {v})")),
+        Err(e) => e,
+    };
+    need(keyed_refusal_from(&e) == Some((6, 8, source)), row, || {
+        format!("the refusal: {e:?}")
+    })?;
+    let rep = e.report();
+    need(rep.id() == "MPC-E822", row, || {
+        format!("the refusal's id: {}", rep.id())
+    })?;
+    need(limit_details(&rep) == want, row, || {
+        format!("the refusal's details: {:?}", limit_details(&rep))
+    })?;
+    // an outside save past it declines the file, naming it
+    f.advance(1_000);
+    app_save(&f.path(), OVER_CAP);
+    let out = s.file_changed().map_err(|e| format!("{row}: {e}"))?;
+    let DiskCheck::Declined(d) = &out else {
+        return Err(format!("{row}: expected the file declined, got {out:?}"));
+    };
+    let rep = Refusal::report(d);
+    need(rep.id() == "MPC-E415", row, || format!("the save: {d:?}"))?;
+    need(limit_details(&rep) == want, row, || {
+        format!("the save's details: {:?}", limit_details(&rep))
+    })
+}
+
+/// The host's limit for the file type wins over the pack's default and the host-wide one; a
+/// limit set for another type doesn't apply.
+#[test]
+fn keyed_limit_from_the_hosts_per_pack_setting() {
+    row_limit_from(
+        "per-pack",
+        |c| {
+            c.keyed_max_entries = 100;
+            c.keyed_max_entries_by_pack.insert("deck-lite".into(), 6);
+            c.keyed_max_entries_by_pack.insert("another-type".into(), 1);
+        },
+        || Arc::new(DeckWithDefault(50)),
+        LimitSource::HostPerPack,
+    )
+    .unwrap();
+}
+
+/// With no limit of the host's for the type, the pack's own default applies, in place of the
+/// host-wide one.
+#[test]
+fn keyed_limit_from_the_packs_default() {
+    row_limit_from(
+        "pack-default",
+        |c| {
+            c.keyed_max_entries = 100;
+            c.keyed_max_entries_by_pack.insert("another-type".into(), 1);
+        },
+        || Arc::new(DeckWithDefault(6)),
+        LimitSource::PackDefault,
+    )
+    .unwrap();
+}
+
+/// With neither, the host-wide limit applies.
+#[test]
+fn keyed_limit_from_the_host_wide_setting() {
+    row_limit_from(
+        "host-wide",
+        |c| {
+            c.keyed_max_entries = 6;
+            c.keyed_max_entries_by_pack.insert("another-type".into(), 1);
+        },
+        || Arc::new(Deck),
+        LimitSource::HostWide,
+    )
+    .unwrap();
+}
+
+/// The host owns the limit: a pack's default above the host-wide limit is capped at it (the
+/// source is the host-wide limit). A type that needs more gets it only from the host's limit
+/// for that type.
+#[test]
+fn a_packs_default_is_capped_at_the_host_wide_limit() {
+    let f = fx_with("capped", |c| c.keyed_max_entries = 6);
+    f.write(OVER_CAP);
+    let e = f
+        .try_open_pack(Arc::new(DeckWithDefault(10)))
+        .err()
+        .expect("capped at six: a file of eight is over it");
+    let rep = e.report();
+    assert_eq!(rep.id(), "MPC-E415", "{e:?}");
+    assert_eq!(
+        limit_details(&rep),
+        (Some(6), Some("host_wide".to_owned())),
+        "{e:?}"
+    );
+    let f = fx_with("capped-grow", |c| c.keyed_max_entries = 6);
+    f.write(AT_CAP);
+    let s = f
+        .try_open_pack(Arc::new(DeckWithDefault(10)))
+        .expect("six is at the cap");
+    let p = f.person(&s);
+    let e = add_bare_shape(&s, p, "s4").expect_err("seven is past the host-wide six");
+    assert_eq!(
+        keyed_refusal_from(&e),
+        Some((6, 7, LimitSource::HostWide)),
+        "{e:?}"
+    );
+    // the host's limit for the type raises it
+    let f = fx_with("capped-raised", |c| {
+        c.keyed_max_entries = 6;
+        c.keyed_max_entries_by_pack.insert("deck-lite".into(), 10);
+    });
+    f.write(OVER_CAP);
+    let s = f
+        .try_open_pack(Arc::new(DeckWithDefault(7)))
+        .expect("the host's ten for the type wins");
+    let p = f.person(&s);
+    add_bare_shape(&s, p, "s5").expect("nine fits");
+    add_bare_shape(&s, p, "s6").expect("ten fits");
+    let e = add_bare_shape(&s, p, "s7").expect_err("eleven doesn't");
+    assert_eq!(
+        keyed_refusal_from(&e),
+        Some((10, 11, LimitSource::HostPerPack)),
+        "{e:?}"
+    );
+}
+
+/// A pack's default below the host-wide limit lowers it for that type (source `pack_default`).
+#[test]
+fn a_packs_default_below_the_host_wide_limit_lowers_it() {
+    let f = fx_with("lowered", |c| c.keyed_max_entries = 100);
+    f.write(AT_CAP);
+    let s = f
+        .try_open_pack(Arc::new(DeckWithDefault(7)))
+        .expect("six is under the pack's seven");
+    let p = f.person(&s);
+    add_bare_shape(&s, p, "s4").expect("seven fits");
+    let e = add_bare_shape(&s, p, "s5").expect_err("eight is past the pack's seven");
+    assert_eq!(
+        keyed_refusal_from(&e),
+        Some((7, 8, LimitSource::PackDefault)),
+        "{e:?}"
+    );
+    let rep = e.report();
+    assert_eq!(
+        limit_details(&rep),
+        (Some(7), Some("pack_default".to_owned()))
+    );
+}
+
+/// `Config::keyed_limit`'s order: the host's for the type, whatever it is; else the pack's
+/// default when it is below the host-wide limit; else the host-wide limit.
+#[test]
+fn config_keyed_limit_takes_the_first_set() {
+    let mut c = Config::default();
+    let got = |c: &Config, p: &dyn Pack| {
+        let l = c.keyed_limit(p);
+        (l.limit, l.source)
+    };
+    assert_eq!(got(&c, &Deck), (25_000, LimitSource::HostWide));
+    assert_eq!(got(&c, &DeckWithDefault(7)), (7, LimitSource::PackDefault));
+    // a pack's default never raises it: capped (equal is the host's own)
+    let host_wide = (25_000, LimitSource::HostWide);
+    assert_eq!(got(&c, &DeckWithDefault(25_000)), host_wide);
+    assert_eq!(got(&c, &DeckWithDefault(25_001)), host_wide);
+    assert_eq!(got(&c, &DeckWithDefault(usize::MAX)), host_wide);
+    assert_eq!(
+        got(&c, &DeckWithDefault(24_999)),
+        (24_999, LimitSource::PackDefault)
+    );
+    c.keyed_max_entries_by_pack.insert("another-type".into(), 3);
+    assert_eq!(got(&c, &Deck), (25_000, LimitSource::HostWide));
+    assert_eq!(got(&c, &DeckWithDefault(7)), (7, LimitSource::PackDefault));
+    c.keyed_max_entries_by_pack.insert("deck-lite".into(), 0);
+    assert_eq!(got(&c, &Deck), (0, LimitSource::HostPerPack));
+    assert_eq!(got(&c, &DeckWithDefault(7)), (0, LimitSource::HostPerPack));
+    c.keyed_max_entries_by_pack
+        .insert("deck-lite".into(), usize::MAX);
+    assert_eq!(
+        got(&c, &DeckWithDefault(7)),
+        (usize::MAX, LimitSource::HostPerPack)
+    );
+    // the names a report's details give
+    let names: Vec<&str> = LimitSource::ALL.iter().map(|s| s.as_str()).collect();
+    assert_eq!(names, ["host_per_pack", "pack_default", "host_wide"]);
 }
 
 // ---------- the outside-save rule (the review's B2) ----------
@@ -780,7 +1154,7 @@ fn keyed_stale_save_after_a_kit_write_across_a_restart() {
     row_keyed_stale_save_after_a_kit_write_across_a_restart().unwrap();
 }
 
-/// A save that lands on unwritten changes keeps both too (K1b: one rule, never a merge by key):
+/// A save that lands on unwritten changes keeps both too (one rule, never a merge by key):
 /// the agent's change isn't written yet when the app saves (s2's title). The save becomes the
 /// live doc exactly; the kit's version (with the agent's change) is a version and a conflict
 /// copy; one conflict event; the doc then holds the file, so nothing is written. Red before the
@@ -831,8 +1205,8 @@ fn keyed_save_on_unwritten_changes_keeps_both() {
     row_keyed_save_on_unwritten_changes_keeps_both().unwrap();
 }
 
-/// The same with a restart between the agent's change and the app's save (a crash before the
-/// write-back: the change is in the store, never in the file).
+/// The same with a restart between the agent's change and the app's save (the process
+/// stopped before the write-back: the change is in the store, never in the file).
 fn row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart() -> Result<(), String> {
     const ROW: &str = "row_keyed_save_on_unwritten_changes_keeps_both_after_a_restart";
     let mut f = fx("dirty-restart");
@@ -974,7 +1348,7 @@ fn keyed_conflict_copy_takes_the_hosts_name() {
 }
 
 /// The kit's conflict copies are removed on `tick` after `Config::conflict_copy_keep_ms`, as
-/// tier 0's are (K-A11Y-5), also after a restart (the copies are recorded in the store): not
+/// tier 0's are, also after a restart (the copies are recorded in the store): not
 /// before the keep, and never a copy a person edited. Red before the cleanup: the copy stayed.
 fn row_keyed_conflict_copy_is_removed_on_tick() -> Result<(), String> {
     const ROW: &str = "row_keyed_conflict_copy_is_removed_on_tick";

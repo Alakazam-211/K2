@@ -6,7 +6,7 @@
 //! sessions on Yrs. After **every** step the runner compares every root's text, the
 //! outcome, the reported conflict regions as an exact set, and every pid's stack depths.
 //! The regions: an undo, redo or revert's (U11) by root, live range, live lines and kind;
-//! a refused `write --base`'s (K-BR-2, grouped by O6) by root, range in the base, and lines
+//! a refused `write --base`'s (grouped by O6) by root, range in the base, and lines
 //! in the base, in the writer's text and in the live text (the kit's `Conflict` without its
 //! texts; the oracle's are its own, from its merge's conflicting pairs,
 //! `merge::write_base_regions`).
@@ -27,8 +27,7 @@
 //! window moved past it while it was pending), with a restart after that, a later change on
 //! its root, and another restart before the revert.
 //!
-//! Sequential runs only: the concurrency class and the positions property test are later
-//! (`docs/CONFORMANCE.md`).
+//! Sequential runs only: the concurrency class and the positions property test are later.
 
 pub mod kit;
 
@@ -51,8 +50,7 @@ use spec_undo::model::{
 use kit::{Kit, KitChar, KitId, KitOut, Knobs};
 
 /// The case classes this runner covers (spec §8 Volume, sequential), plus the
-/// rules every class leans on. Native-only and concurrency classes are later
-/// (`docs/CONFORMANCE.md`).
+/// rules every class leans on. Native-only and concurrency classes are later.
 pub const CLASSES: &[&str] = &[
     "append_at_end",
     "insert_inside_another_range",

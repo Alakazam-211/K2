@@ -1,4 +1,4 @@
-// The kit's JS client for the hunk channel (K1): host-agnostic, plain TypeScript, no DOM. The
+// The kit's JS client for the hunk channel: host-agnostic, plain TypeScript, no DOM. The
 // host draws its own editor from it (HOST.md); WIRE.md has the frames a host carries.
 
 export { LiveText, diffText, frameBytes, setDefaultLiveTimers } from "./live";
@@ -9,6 +9,8 @@ export { transform, Bias } from "./position";
 export { KEYED_WATCH_FEATURE, KeyedWatch, REPORT_EVERY, keyedStateJson, mapKey } from "./keyed";
 export type { KeyedRootState, KeyedState, KeyedWatchOptions, ResyncReason } from "./keyed";
 export { KeyedView, VIEW_TEXT_MAX } from "./view";
+export { mul, placementMatrix, stepMatrix, worldMatrix } from "./placement";
+export type { Mat4, PlacementLookup, Precision } from "./placement";
 export {
   CELLS_FEATURE,
   CELLS_RANGES_MAX,
@@ -80,6 +82,11 @@ export type {
   ViewSnapshotJson,
   ViewSrc,
   ViewUnit,
+  PlacementJson,
+  RotationJson,
+  SpaceJson,
+  SpaceSlotJson,
+  StepJson,
   Band,
   CellClaim,
   CellRange,

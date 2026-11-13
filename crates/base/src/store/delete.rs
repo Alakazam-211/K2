@@ -6,7 +6,7 @@
 //! `revert_carry`, `revert_stats`, `authored`, `change_clocks`, `provenance`) and the
 //! tier-0 tables (`blob_versions`, `blob_sync`, `blob_approvals`), `doc_blob_refs` and
 //! `live_carriers`. A blob doc's versions each held a reference on their blob in `blobs`, a doc
-//! holds one on each blob its values name and one on its carrier (K1): those references are
+//! holds one on each blob its values name and one on its carrier: those references are
 //! released (the blob's grace starts then), so
 //! [`crate::blob::BlobStore::gc`] removes a blob nothing else references once the grace runs
 //! out.

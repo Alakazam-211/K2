@@ -1,5 +1,5 @@
 {
-  "about": "The view deltas of the rendering-data contract goldens (r1.6): turn-frames.json revs 41-46, and cases C, E and F of cases-untested.json, each unit delta with its container added. Hand-made from the contract, not kit output; crates/base/tests/view_deltas.rs replays the same steps on a deck with the contract view schema and compares.",
+  "about": "The view deltas of a scripted agent turn (revs 41-46) and of cases C (a hidden slide), E (a delete and its undo) and F (a hidden unit), each unit delta with its container added. Hand-made, not kit output; crates/base/tests/view_deltas.rs replays the same steps on a deck with the same view schema and compares.",
   "turn": [
     {
       "step": "shape text",

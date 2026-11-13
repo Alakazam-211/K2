@@ -1,0 +1,974 @@
+{
+  "about": "k2-mpc-base placement vectors for the JS client: each placement's matrix (column-major, null when unknown or degenerate) and each chain's world matrix (null when broken), as the kit's Rust helper computes them. Written by crates/base/tests/view_place.rs (MPC_BLESS=1).",
+  "cases": [
+    {
+      "name": "trs euler XYZ",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [1, 2, 0.5]
+            }
+          }
+        ]
+      },
+      "matrix": [-0.36339563671695296, 0.2714646433468038, 0.8912073600614354, 0, -0.7214905132605816, -1.845962415639883, 0.26809363908893735, 0, 0.4294783088334688, -0.13639339923896088, 0.21666846306185156, 0, 1, 2, 3, 1]
+    },
+    {
+      "name": "trs euler XZY",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "XZY",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [1, 2, 0.5]
+            }
+          }
+        ]
+      },
+      "matrix": [-0.36339563671695296, 0.5984721441039564, -0.7139850866416563, 0, -1.045419725040265, -1.5307234579240037, -0.7509882115305914, 0, -0.38558981147044863, 0.1183770634159213, 0.29547820249082135, 0, 1, 2, 3, 1]
+    },
+    {
+      "name": "trs euler YXZ",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "YXZ",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [1, 2, 0.5]
+            }
+          }
+        ]
+      },
+      "matrix": [-0.20577615785901332, 0.4824616637042605, 0.8514029104439915, 0, -1.143484553975495, -1.5307234579240037, 0.5910404133226791, 0, 0.39710418707237527, -0.21298601297738545, 0.21666846306185156, 0, 1, 2, 3, 1]
+    },
+    {
+      "name": "trs euler YZX",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "YZX",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [1, 2, 0.5]
+            }
+          }
+        ]
+      },
+      "matrix": [-0.36339563671695296, -0.004029703926791861, 0.9316261979470858, 0, -1.1969442882079129, -1.5307234579240037, -0.4735082536636852, 0, 0.35699254332082814, -0.32179387242711655, 0.13785872363288174, 0, 1, 2, 3, 1]
+    },
+    {
+      "name": "trs euler ZXY",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "ZXY",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [1, 2, 0.5]
+            }
+          }
+        ]
+      },
+      "matrix": [-0.5210151155748926, 0.5717422769877475, -0.633761799138562, 0, -0.12093524597869426, -1.5307234579240037, -1.2815070665592339, 0, -0.42570145522199576, -0.14776010333066977, 0.21666846306185156, 0, 1, 2, 3, 1]
+    },
+    {
+      "name": "trs euler ZYX",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [1, 2, 3],
+              "rot": {
+                "euler": "ZYX",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [1, 2, 0.5]
+            }
+          }
+        ]
+      },
+      "matrix": [-0.36339563671695296, 0.7827392973452042, -0.5052353942536254, 0, -0.5429292866936076, -1.2154845002081243, -1.492590104283214, 0, -0.4456036800307177, -0.06702340977223434, 0.21666846306185156, 0, 1, 2, 3, 1]
+    },
+    {
+      "name": "trs quat",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "quat": [0.9238795, 0, 0, 0.3826834]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": [0.7071068058785941, 0.7071067564945002, 0, 0, -0.7071067564945002, 0.7071068058785941, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    },
+    {
+      "name": "trs quat unnormalised",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "quat": [2, 0, 2, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": [0.0000000000000002220446049250313, 0, -0.9999999999999998, 0, 0, 1, 0, 0, 0.9999999999999998, 0, 0.0000000000000002220446049250313, 0, 0, 0, 0, 1]
+    },
+    {
+      "name": "trs quat zero",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "quat": [0, 0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "trs axis angle",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "axis": [0, 0, 2],
+                "angle": 1.2
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": [0.3623577544766736, 0.9320390859672263, 0, 0, -0.9320390859672263, 0.3623577544766736, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    },
+    {
+      "name": "trs zero axis",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "axis": [0, 0, 0],
+                "angle": 1.2
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "trs zero axis zero angle",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "axis": [0, 0, 0],
+                "angle": 0
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "axes defaults",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": null,
+              "x": null
+            }
+          }
+        ]
+      },
+      "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1]
+    },
+    {
+      "name": "axes z only",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [0, 1, 1],
+              "x": null
+            }
+          }
+        ]
+      },
+      "matrix": [1, 0, 0, 0, 0, 0.7071067811865475, -0.7071067811865475, 0, 0, 0.7071067811865475, 0.7071067811865475, 0, 10, 20, 30, 1]
+    },
+    {
+      "name": "axes x only",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": null,
+              "x": [0, 1, 0]
+            }
+          }
+        ]
+      },
+      "matrix": [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1]
+    },
+    {
+      "name": "axes both, x not at right angles",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [0, 0, 3],
+              "x": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": [0.7071067811865475, 0.7071067811865475, 0, 0, -0.7071067811865475, 0.7071067811865475, 0, 0, 0, 0, 1, 0, 10, 20, 30, 1]
+    },
+    {
+      "name": "axes z along x, x defaulted",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [1, 0, 0],
+              "x": null
+            }
+          }
+        ]
+      },
+      "matrix": [0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 10, 20, 30, 1]
+    },
+    {
+      "name": "axes z along -x, x defaulted",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [-1, 0, 0],
+              "x": null
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "axes x along z",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [0, 0, 1],
+              "x": [0, 0, 2]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "axes zero z",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [0, 0, 0],
+              "x": null
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "axes zero x",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": null,
+              "x": [0, 0, 0]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "matrix",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "matrix": [1, 0.5, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]
+          }
+        ]
+      },
+      "matrix": [1, 0.5, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]
+    },
+    {
+      "name": "matrix last row not 0,0,0,1",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "matrix": [1, 0.5, 0, 0.000000001, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "two steps",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "matrix": [1, 0.5, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]
+          },
+          {
+            "trs": {
+              "loc": [1, 0, 0],
+              "rot": {
+                "euler": "ZXY",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [2, 2, 2]
+            }
+          }
+        ]
+      },
+      "matrix": [-1.042030231149785, 0.6224694384006024, -1.267523598277124, 0, -0.12093524597869426, -1.5911910809133507, -1.2815070665592339, 0, -1.702805820887983, -1.4424433237666707, 0.8666738522474062, 0, 6, 0.5, 0, 1]
+    },
+    {
+      "name": "five steps (no limit in a helper)",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "matrix": [1, 0.5, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]
+          },
+          {
+            "trs": {
+              "loc": [1, 0, 0],
+              "rot": {
+                "euler": "ZXY",
+                "angles": [0.3, -1.1, 2.5]
+              },
+              "scale": [2, 2, 2]
+            }
+          },
+          {
+            "axes": {
+              "origin": [10, 20, 30],
+              "z": [0, 1, 0],
+              "x": null
+            }
+          },
+          {
+            "matrix": [1, 0.5, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1]
+          },
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "axis": [1, 1, 0],
+                "angle": 0.7
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": [0.0870901940199259, 2.0801386580156156, -1.0190119628495728, 0, 1.4250883061622637, 0.7059957660349928, -1.5485224137986604, 0, -0.9550132933705879, -1.2619947357295729, -1.360148302505392, 0, -63.13333301346015, -65.2600797552581, -18.642779737919348, 1]
+    },
+    {
+      "name": "f32 numbers",
+      "precision": "f32",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0.1, 0.2, 0.3],
+              "rot": {
+                "euler": "XYZ",
+                "angles": [0.7, 0, 1.3]
+              },
+              "scale": [1.1, 1.1, 1.1]
+            }
+          }
+        ]
+      },
+      "matrix": [0.2942487684053541, 1.0599140129010562, 0, 0, -0.8106669601005165, 0.2250538738926523, 0.7086394612914141, 0, 0.6828153443980354, -0.18956025837178497, 0.8413264326958367, 0, 0.10000000149011612, 0.20000000298023224, 0.30000001192092896, 1]
+    },
+    {
+      "name": "unknown step kind",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+          },
+          {
+            "lookat": {
+              "at": [0, 0, 0]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "unknown euler order",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": [
+          {
+            "trs": {
+              "loc": [0, 0, 0],
+              "rot": {
+                "euler": "XYW",
+                "angles": [0, 0, 0]
+              },
+              "scale": [1, 1, 1]
+            }
+          }
+        ]
+      },
+      "matrix": null
+    },
+    {
+      "name": "no steps",
+      "precision": "f64",
+      "placement": {
+        "relative_to": null,
+        "steps": []
+      },
+      "matrix": null
+    }
+  ],
+  "chains": [
+    {
+      "name": "a chain of 1",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:0",
+      "world": [0.9210609940028851, 0.3894183423086505, 0, 0, -0.3894183423086505, 0.9210609940028851, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1]
+    },
+    {
+      "name": "a chain of 2",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:1",
+      "world": [0.6967067093471655, 0.7173560908995228, 0, 0, -0.7173560908995228, 0.6967067093471655, 0, 0, 0, 0, 1, 0, 2.84212198800577, 0.778836684617301, 0, 1]
+    },
+    {
+      "name": "a chain of 3",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:2": {
+          "relative_to": "@u:1",
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:2",
+      "world": [0.36235775447667357, 0.9320390859672264, 0, 0, -0.9320390859672264, 0.36235775447667357, 0, 0, 0, 0, 1, 0, 4.9322421160472665, 2.9309049573158696, 0, 1]
+    },
+    {
+      "name": "a chain of 4",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:2": {
+          "relative_to": "@u:1",
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:3": {
+          "relative_to": "@u:2",
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:3",
+      "world": [-0.029199522301288805, 0.9995736030415052, 0, 0, -0.9995736030415052, -0.029199522301288805, 0, 0, 0, 0, 1, 0, 6.381673133953961, 6.659061301184775, 0, 1]
+    },
+    {
+      "name": "a chain of 5",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [2, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:2": {
+          "relative_to": "@u:1",
+          "steps": [
+            {
+              "trs": {
+                "loc": [3, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:3": {
+          "relative_to": "@u:2",
+          "steps": [
+            {
+              "trs": {
+                "loc": [4, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:4": {
+          "relative_to": "@u:3",
+          "steps": [
+            {
+              "trs": {
+                "loc": [5, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:4",
+      "world": [-0.4161468365471425, 0.9092974268256817, 0, 0, -0.9092974268256817, -0.4161468365471425, 0, 0, 0, 0, 1, 0, 6.235675522447517, 11.6569293163923, 0, 1]
+    },
+    {
+      "name": "a missing link (an address not shown)",
+      "precision": "f64",
+      "placements": {
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:1",
+      "world": null
+    },
+    {
+      "name": "an unplaced parent",
+      "precision": "f64",
+      "placements": {
+        "@u:0": null,
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:1",
+      "world": null
+    },
+    {
+      "name": "a cycle",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": "@u:1",
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:1",
+      "world": null
+    },
+    {
+      "name": "an unknown kind on the way",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "spline": {}
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:1",
+      "world": null
+    },
+    {
+      "name": "a degenerate parent",
+      "precision": "f64",
+      "placements": {
+        "@u:0": {
+          "relative_to": null,
+          "steps": [
+            {
+              "trs": {
+                "loc": [0, 0, 0],
+                "rot": {
+                  "quat": [0, 0, 0, 0]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        },
+        "@u:1": {
+          "relative_to": "@u:0",
+          "steps": [
+            {
+              "trs": {
+                "loc": [1, 0, 0],
+                "rot": {
+                  "euler": "XYZ",
+                  "angles": [0, 0, 0.4]
+                },
+                "scale": [1, 1, 1]
+              }
+            }
+          ]
+        }
+      },
+      "address": "@u:1",
+      "world": null
+    }
+  ]
+}

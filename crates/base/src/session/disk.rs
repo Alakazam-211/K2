@@ -76,7 +76,7 @@ pub struct FlushOutcome {
     pub disk: Option<DiskState>,
 }
 
-/// A file's identity on its file system (K9, K-DISK-14): its device and inode. Two paths
+/// A file's identity on its file system: its device and inode. Two paths
 /// with one identity are one file (a hard link, or the same file reached two ways): a host
 /// keys sessions by it as well as by the path, so one file never has two live docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -248,7 +248,7 @@ impl FileStat {
 /// What is at a session's path now.
 pub(crate) enum Probe {
     /// A regular file, at `real` (symlinks resolved) inside the root, with its number of
-    /// names (hard links: K9).
+    /// names (hard links).
     File {
         real: PathBuf,
         stat: FileStat,

@@ -91,7 +91,7 @@ pub enum ClaimEnd {
     Left,
     /// A store write failed mid-edit and the session reloaded (positions can't be trusted).
     Reset,
-    /// Every row (or column) it covered was deleted (a grid claim, A10, K-PRES-6), or none of
+    /// Every row (or column) it covered was deleted (a grid claim), or none of
     /// its elements is live (an element claim), so the claimant knows why.
     Deleted,
 }
@@ -110,7 +110,7 @@ impl ClaimEnd {
     }
 }
 
-/// What a claim covers (A10, K-PRES-6): lines of a text root, or on a grid ([`crate::table`]
+/// What a claim covers: lines of a text root, or on a grid ([`crate::table`]
 /// doc) rows, columns or a rectangle of cells **by identity**: the elements between two keys
 /// in the current order, inclusive (whichever comes first). Keys are stable, so a grid span
 /// needs no transform: it follows moves and sorts, rows moved between its ends join it, and
@@ -130,8 +130,8 @@ pub enum ClaimSpan {
     Rows { first: Key, last: Key },
     /// Columns `first..last` (`claim --cols C1..C2`).
     Cols { first: Key, last: Key },
-    /// The cells of rows `rows.0..rows.1` and columns `cols.0..cols.1` (`claim --cells
-    /// R1,C1..R2,C2`).
+    /// The cells of rows `rows.0..rows.1` and columns `cols.0..cols.1`
+    /// (`claim --cells R1,C1..R2,C2`).
     Cells { rows: (Key, Key), cols: (Key, Key) },
     /// Elements of a MovableList root by key, in key order, at most [`CLAIM_KEYS_MAX`]
     /// ([`super::Session::claim_elems`]).
@@ -234,7 +234,7 @@ pub struct ClaimInfo {
     /// what it covers.
     pub lines: LineRange,
     /// What it covers: [`ClaimSpan::Lines`] (the same as `lines`) on a text doc; on a grid,
-    /// its rows, columns or cells by key (A10); on other keyed docs, [`ClaimSpan::Elems`].
+    /// its rows, columns or cells by key; on other keyed docs, [`ClaimSpan::Elems`].
     pub span: ClaimSpan,
     /// Its byte span in the root's text now (`start <= end`; 0 on a grid or for elements).
     pub start: usize,
@@ -1138,7 +1138,7 @@ pub(crate) struct Claim {
     pub waiters: VecDeque<(ConnId, String)>,
     /// Touched by its owner's edit that is being committed (ends it once durable).
     pub edited: bool,
-    /// A grid claim (A10): its rows and/or columns by key (`root` is
+    /// A grid claim: its rows and/or columns by key (`root` is
     /// [`crate::table::CELLS`], `s`/`e` unused).
     pub grid: Option<GridSpan>,
     /// An element claim: its list root's keys (`root` is that list, `s`/`e` unused).

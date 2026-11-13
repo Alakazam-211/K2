@@ -1,4 +1,4 @@
-//! The ID table (K-ID-13) and the ID-churn judge (K-COD-10).
+//! The ID table and the ID-churn judge.
 //!
 //! - `table_matches_docs`: `docs/IDS.md` is what `ids::kit_markdown()` generates from
 //!   `ids::KIT`, and every verb a row names is a registered verb (`MPC_BLESS=1` rewrites
@@ -66,7 +66,7 @@ fn kit_verb(v: &str) -> bool {
 
 // ------------------------------------------------------------- the table
 
-/// K-ID-13: the docs are the data. `docs/IDS.md` is generated from `ids::KIT`, and every
+/// The docs are the data. `docs/IDS.md` is generated from `ids::KIT`, and every
 /// verb a row says accepts the kind is one the kit registers.
 #[test]
 fn table_matches_docs() {
@@ -384,7 +384,7 @@ fn grid_units(_: &str, s: &Saved<'_>) -> Vec<Unit> {
     out
 }
 
-/// K-COD-10 on the grid test pack: zero churn over its corpus. Row and column keys hold
+/// ID churn on the grid test pack: zero churn over its corpus. Row and column keys hold
 /// through a no-op save, a verb's cell set, row insert and row delete written back, and an
 /// edited cell and an inserted row saved outside.
 #[test]

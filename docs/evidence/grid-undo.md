@@ -1,6 +1,6 @@
-# Evidence: C1e grid undo, redo and revert
+# Evidence: grid undo, redo and revert
 
-**Mutant numbering (renumbered at the C1 merge with kit v0.9.7):** the undo spec's D1a
+**Mutant numbering (renumbered at the grid line's merge with kit v0.9.7):** the undo spec's D1a
 amendment took (xii)–(xiv) on main (v1.10), so the structured kinds became v1.11 and their
 mutants moved up by three. The runs cited below were collected under the old ids and keep
 them (historical); runs from the v0.10.0 release candidate on print the new ones
@@ -47,7 +47,7 @@ exit status only.
   every step: the table by key (live order, deleted keys, cells, names, meta), the version, the
   outcome (kind and the conflicting regions as an exact set), every participant's stack depths,
   the holder of every facet the step wrote (`blame_elem`: the resolved change and its author),
-  every holder at the end, and K-AUD-1's sync check after every outside save that came in.
+  every holder at the end, and the sync check after every outside save that came in.
   **0 mismatches.**
 - **Every mutant (xii)–(xxiii) is caught:** each by the all-class run (300 traces per class),
   and each by at least one of the two trace shards.
@@ -101,9 +101,9 @@ probes (delete, insert, move) are pinned as `engine_partial_*` in `grid_store`. 
 the doc is unchanged, and its conflicts equal plain `write --base`'s. No text path brings back a
 column the live side deleted. `reconcile` maps a text's fields only to live columns, and a
 revival (`plan.restore`) happens only when the file wins: an outside save, or a live write from a
-stale `seen`, which takes the outside-save path (§2.9.1).
+stale `seen`, which takes the outside-save path.
 
-**Two kit-level mutants for the rows both sides changed (§2.9.1).** They are `differential`
+**Two kit-level mutants for the rows both sides changed.** They are `differential`
 variants: `k2_mpc_base::differential::MergeMutant` (`OutsideWholeRowLiveCols` and
 `ByCellLiveCols`), planted per thread by `with_merge_mutant`. A build without the `differential`
 feature has no hook. In `grid_store`, `MPC_MERGE_MUTANT=outside-whole-row-live-cols` (xxxii) or
@@ -163,7 +163,8 @@ test `a_byte_neutral_live_unset_in_a_row_both_changed_is_not_noted`, and the pro
   After a width change, an inexact content match falls back to position, so the file never
   touches c3. A column both sides deleted restores what its cells last held:
   `a_column_deleted_by_both_sides_restores_what_its_cells_last_held`.
-- **The C1k case is un-ignored.** `an_outside_rename_after_a_header_switch_and_an_unwritten_edit_is_kept`
+- **The CSV binding's case is un-ignored.**
+  `an_outside_rename_after_a_header_switch_and_an_unwritten_edit_is_kept`
   was fixed by c080489 and 828faf8.
 - **A false `DiskReplicaMismatch`, fixed.** It was raised by every dirty grid outside save.
   - Tests: `a_dirty_outside_save_raises_no_replica_mismatch` and
@@ -194,8 +195,7 @@ test `a_byte_neutral_live_unset_in_a_row_both_changed_is_not_noted`, and the pro
   - **A hidden cell removed by a revert's cell delete:** `a_revert_over_a_hidden_value_written_since_conflicts`
     (`written since`, the value kept hidden).
 
-**K2 Engine's final reconcile evidence.** Source: k2-mpc-engine main 04905c1,
-`docs/evidence/g1-reconcile-pairing-draft.md`.
+**K2 Engine's final reconcile evidence.** Source: k2-mpc-engine main 04905c1.
 - **The model at our final rules,** all COMPLETE with 0 violations (7e4cd8af, K2 Engine's record at `9252e171`):
   - merge: 15,498,046,224 + 5,219,134,080 cases;
   - livegrid: 1,305,748,920;
@@ -242,9 +242,9 @@ and is read from its result lines.
   - **The gap: the hidden-write message.** A raw keyed cell write under a dropped (or never
     existing) row or column was taken as a hidden write: an orphan cell nobody could see, restore
     or sweep, reported with `row restore --row r2`, which refuses a dropped key (probe 0f164b53, tag `ev-0f164b53`).
-    Fixed at 6a7a2ce (K2 Cores' ruling A): `edit_ops` refuses the whole edit as `MPC-E805
+    Fixed at 6a7a2ce (K2 Cores' ruling): `edit_ops` refuses the whole edit as `MPC-E805
     no_element` (exit 4, the grid verbs' unknown-key id), naming the drop while its record is in
-    the revert window; a deleted but known key stays a hidden write (§4.3); a key the same edit
+    the revert window; a deleted but known key stays a hidden write; a key the same edit
     inserts takes the write; a delete under an unknown key stays a no-op. Fail-first on
     assertions at 6fc1cd5 (286e74e2), off 6 passed (1cea91d1), mutant (xxxvii) fails exactly the
     four refusal tests (af09fbdb).
@@ -257,9 +257,9 @@ and is read from its result lines.
   - `MPC-E805` for unknown keys; text undo unchanged.
 
 - **K2 Engine's grid model evidence at k2-mpc-engine main d03217f**
-  (`docs/evidence/g1-table-enum-draft.md` §9): ≤4 ops 25,632,883 (SORT3: 32,469,595), ≤5 ops
+  (its table enumeration): ≤4 ops 25,632,883 (SORT3: 32,469,595), ≤5 ops
   2,637,547,571, all COMPLETE with 0 violations, cross-checked by a checkpoint audit (82868ba7, indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending);
-  it includes the cell-delete rule (E-MAP-1) and our rulings. Its stated gap: TLC can't reach
+  it includes the cell-delete rule and our rulings. Its stated gap: TLC can't reach
   the batches at the bounds it finishes, so those rest on the enumerator, fixtures and unit
   tests.
 
@@ -330,13 +330,13 @@ and is read from its result lines.
    crates/spec-undo/src/grid.rs          |  18 ++++-
    crates/spec-undo/tests/grid_traces.rs |  25 ++++++-
    docs/SPEC-UNDO.md                     |   5 ++
-   docs/evidence/c1e-grid-undo.md        | 134 +++++++++++++++++++++++++++++++++-
+   docs/evidence/grid-undo.md            | 134 +++++++++++++++++++++++++++++++++-
    5 files changed, 186 insertions(+), 4 deletions(-)
   ```
 - **The Yjs-peer path is not reached today.** A client update under a dropped key over sync would
   bypass this check, but untrusted-wire decoding is off and native merges don't reach grid docs
-  (csv contract, "the claim holds only while the server's checks apply", ~line 452). No test for
-  it now.
+  (the CSV pack's rule: "the claim holds only while the server's checks apply"). No test for it
+  now.
 - **The final set at 6a7a2ce** (all parts, the 300-case trial, every `MergeMutant` variant plus
   off, the hook check, the csv pack at 876c969) is green: jobs f3b7a6ae, b6c234d6, a2d17efb,
   336f9681, 882bf4be, 76e722bf, 6802b305, e16b4a3e, 46738683, 20953acf, 653c86ac, 0dcc2a5b,
@@ -367,7 +367,7 @@ the model: the state by key, holders, stacks, marks, undo, redo and revert after
 ## v0.10.0 at the merge with main (M = 260ef4e)
 
 K2 Cores didn't tag 6ec1c6c: it held v0.9.7.1 but not v0.9.8, v0.9.8.1, the wire contract or the
-editor. v0.10.0 is the C1 line merged with main.
+editor. v0.10.0 is the grid line merged with main.
 
 **From 6a7a2ce to M**, first parent, in order:
 - f33a584: merges main eebf5f8 (v0.9.8, v0.9.7.2, v0.9.8.1, the wire contract, the editor);
@@ -401,7 +401,7 @@ plus anything K2 Cores approves.
 `git diff --stat 260ef4e <tag>`:
 
 ```
- docs/evidence/c1e-grid-undo.md | 88 +++++++++++++++++++++++++++++++++++++++++-
+ docs/evidence/grid-undo.md | 88 +++++++++++++++++++++++++++++++++++++++++-
  1 file changed, 87 insertions(+), 1 deletion(-)
 ```
 
@@ -479,7 +479,7 @@ redos, reverts, outside saves (by key through the pack's reconcile) and restarts
 | `write_with_no_identity` | 10,000 [run 49943ef3/grid_traces_write_with_no_identity:traces] | 114,412 [run 49943ef3/grid_traces_write_with_no_identity:steps] | 0 [run 49943ef3/grid_traces_write_with_no_identity:mismatches] | `49943ef3` |
 | **all 17** | **170,000** [derived] | **1,920,241** [derived] | **0** | |
 
-`write_with_no_identity` (KC7) is the Yrs-only case (spec S2): an outside save whose writes the
+`write_with_no_identity` is the Yrs-only case (spec S2): an outside save whose writes the
 kit records with no identity, through the conformance hook
 `Session::set_outside_without_identity_for_tests` (the kit has no merge path that makes such a
 write yet). The model marks those changes (`Grid::anon`); a holder with no identity is someone
@@ -518,7 +518,7 @@ The first grid-a run at `3910b73` (job `fe1b0fb0`, indicative (bundle); source s
 `revert_after_restart` seed 7420, step 13. A map delete of an empty cell moves no byte and only
 deletes, so v0.9.4's re-sync marker (the state vector) left the disk replica holding the cell;
 the next outside save, aligned on that replica, paired two blank rows the other way round (right
-bytes, wrong keys and blame). The merge of v0.9.4 had replaced C1's `live_is_synced` with
+bytes, wrong keys and blame). The merge of v0.9.4 had replaced the grid line's `live_is_synced` with
 `resync_if_synced`. Fix (a), `20e65f7`: grid ingest aligns on the live doc whenever it renders to
 the synced bytes, never on the replica. Seed 7420 is kept as the IT
 `regression_revert_after_restart_seed_7420`. The marker itself moves to the change counter in
@@ -542,7 +542,7 @@ then `drop-deleted`); then nothing, a tick, a flush, a restart or a flush and a 
 plain editor changes any line (a cell, a new row, a row deleted, a row moved). The doc and the
 file end as the outside edit; the row and column keys are the outside edit reconciled on the
 live table; every cell the edit didn't change keeps its author, the others are the outside
-edit's; K-AUD-1 and the store audit are clean.
+edit's; the sync check and the store audit are clean.
 
 ## Costs (node job `66075ba8`, release)
 
@@ -584,7 +584,7 @@ Plain `cargo test` parts (debug, as CI runs them, except `pt`), every one exit 0
 |---|---|---|
 | lib | unit tests, 254 passed | `2cbebf88` (indicative (bundle)) |
 | doc | doctests | `55f5508a` (indicative (bundle)) |
-| int1 | structured, structured_mem, convergence, disk (sim with K-AUD-1 after every outside save and tick), edit_check(_structured, with the scalar-only wire guard), … | `56ffb7d1` (indicative (bundle)) |
+| int1 | structured, structured_mem, convergence, disk (sim with the sync check after every outside save and tick), edit_check(_structured, with the scalar-only wire guard), … | `56ffb7d1` (indicative (bundle)) |
 | int2 | history, sessions, presence, tools, soak (short) | `8f66c9ab` (indicative (bundle)) |
 | int3 | tier0, promote, edit_paths, edit_cost | `6d892678` (indicative (bundle)) |
 | int4 | parity, erasure | `2106eaac` (indicative (bundle)) |
@@ -601,18 +601,17 @@ text model's transition system, checking its invariants (U*, O*, I*) on every tr
 TLC parity against `spec/quint/undo.qnt`. The grid model has no invariants of its own: it
 executes §6a's rules, and the check is the difference against the kit. Enumerating it alone
 would check nothing until grid invariants are written (and a Quint twin, for TLC parity). That
-is work for a later stage, not a fit for C1e.
+is work for a later stage, not a fit for the grid undo work.
 
 ## v1.10 additions (2026-10-29, `5fb84d6`)
 
-Two S4 additions after the C1e review (spec text in `docs/SPEC-UNDO.md`, agreed by K2 Engine,
-m_mnjjaNtJfm):
+Two S4 additions after the grid undo review (spec text in `docs/SPEC-UNDO.md`, agreed by K2 Engine):
 
-- **Restore → delete, the existence own-test** (G1-8 §3): a conflict unless every undel covering
+- **Restore → delete, the existence own-test**: a conflict unless every undel covering
   one of the element's deletes that isn't own is in the batch's causal past. Class "concurrent
   undels, then undo" and mutant (xxiv) `own-by-holder-only` are **model-and-native only**: a
   session's history is linear, so on Yrs an undel outside the batch's past came later and holds
-  the facet (the holder test already conflicts), and a merged one has no identity (KC7). The
+  the facet (the holder test already conflicts), and a merged one has no identity. The
   native oracle for (xxiv) is K2 Engine's: engine `main` `0c73d6f`, mpce-reg
   `restore_undo_is_own` with a two-concurrent-undels fixture and `own-by-holder-only` planted.
   On the kit, the linear form is the IT `undo_class_undels_covering_different_deletes`
@@ -624,19 +623,18 @@ m_mnjjaNtJfm):
   at its index from before the delete) and mutant (xxv) `anchor-on-nearest-live` (`b0e703d`,
   `5fb84d6`). Native follows the same rule by construction (the kit picks the anchor; native's
   `move(elem, after)` takes a live or hidden anchor) and refuses a move anchored on an element
-  whose drop is in the op's causal past (a typed MPCE refusal): Addendum **G1-9**, approved by K2,
-  in the approved requirements PRD.
+  whose drop is in the op's causal past (a typed MPCE refusal), a rule K2 approved.
 
 **The anchor, exhaustive on the native engine (v0.10.0; external citation).** K2 Engine has
-checked the anchored move-back (S4, G1-9) exhaustively on its enumerator: k2-mpc-engine `main`
-`8645866`, `docs/evidence/g1-table-enum-draft.md` §4. The 3 × (1 + 1) case ("3×2", seed 2) is
+checked the anchored move-back (S4) exhaustively on its enumerator: k2-mpc-engine `main`
+`8645866`. The 3 × (1 + 1) case ("3×2", seed 2) is
 complete at 40,323,105,331 states [unverified: k2-mpc-engine 8645866 records], with every
 invariant (`move_after_anchor`, `move_after_anchor_target` and `move_after_dropped_refused`
 among them) and no violation. It ran as 14 resumable slices, job `8d31fd70` first and `24049f4d`
 last, and job `59a5c699` audited the checkpoint (every seed counted once, totals matching)
 [unverified: k2-mpc-engine 8645866 records]. With the 2×3 case, both splits complete
 (2 × (2 + 1): 3,664,616,698 states; 2 × (1 + 2): 2,822,953,870 states [unverified: k2-mpc-engine
-8645866 records]), the anchored grid move is exhaustive at both bounds G1-9 §2 asks for.
+8645866 records]), the anchored grid move is exhaustive at both bounds the rule asks for.
 `8d31fd70`, `24049f4d` and `59a5c699` are each indicative (K2 Engine, uploaded tree); rerun sha-tied by K2 Engine pending. The run
 records stay in the engine's repo; none are copied into `runs/`.
 
@@ -690,9 +688,9 @@ grid_store, the grid traces at 256 and the mutants) is green at the same commit.
 
 ## Open for later stages
 
-- **The per-facet extras for sort** (C1i). (S4's move-back anchor is done: v1.10 additions.)
-- **Purge of structured docs** (C1f): ELEM_WRITES rows, v3 records and versions by key.
-- **Grid claims in `GridConflict.claimed_by`** (C1g).
+- **The per-facet extras for sort**. (S4's move-back anchor is done: v1.10 additions.)
+- **Purge of structured docs**: ELEM_WRITES rows, v3 records and versions by key.
+- **Grid claims in `GridConflict.claimed_by`**.
 - **v0.9.5:** the re-sync marker (the change counter) and three-way ingest against the live doc;
   then the skips listed under the regression come out.
 

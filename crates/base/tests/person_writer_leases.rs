@@ -1,5 +1,4 @@
-//! Person-writer reuse (`Config::reuse_person_writers`, v0.14.0;
-//! `docs/design/person-writer-reuse-r0.md`): the leases and their rows. A person's join with
+//! Person-writer reuse (`Config::reuse_person_writers`, v0.14.0): the leases and their rows. A person's join with
 //! a device key holds its writer under a lease; a release frees it, any other end parks it;
 //! the rows ride in a change's commit and the session's close, never in a join or a leave; a
 //! writer gets its row only once a connection holding it can write.

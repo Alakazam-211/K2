@@ -254,7 +254,7 @@ pub struct PurgeReport {
     /// Structure-index rows of the space's blobs removed with them (their content leaves the
     /// file with the rewrite, `store_rewritten`).
     pub index_rows_removed: u64,
-    /// Whether the store file was rewritten after destroying the key (K-PURGE-2), so the key's
+    /// Whether the store file was rewritten after destroying the key, so the key's
     /// bytes and any index rows' leave the file. `false` when the space had no key, or when
     /// the rewrite failed (the key and rows are gone from the store, their old bytes stay in
     /// freed pages until a later rewrite).

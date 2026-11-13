@@ -1,5 +1,5 @@
 //! The hunk channel (kit v0.9.7, K2's Live tab): `Session::edit_at_base` (amendment E-LIVE
-//! r2) and `Session::events_since` (K3), public API only.
+//! r2) and `Session::events_since`, public API only.
 //!
 //! - **Each rule as a test**, through a session: the window and its refusals (E112), the
 //!   tie (the change applied first stays left), deletion vs deletion, competing text (E111
@@ -347,7 +347,7 @@ fn hunks_are_validated_at_the_base() {
     assert_eq!(e.id(), "MPC-E151");
 }
 
-/// K3: the events since a version replay onto that version's text to the doc's (the serial
+/// The events since a version replay onto that version's text to the doc's (the serial
 /// replay), every kind of change included.
 #[test]
 fn events_since_replays_every_kind_of_change() {
@@ -478,7 +478,7 @@ fn random_hunks(rng: &mut SmallRng, t: &str, stream: Stream, tokens: &AtomicU64)
     out
 }
 
-/// One client: the JS client's model (K1).
+/// One client: the JS client's model.
 struct Client {
     conn: ConnId,
     rx: Receiver<ChangeEvent>,

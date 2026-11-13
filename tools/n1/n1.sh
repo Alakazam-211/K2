@@ -1,5 +1,5 @@
 #!/bin/sh
-# The N−1 check of store format 6 (K-FMT-10 item 22; C1c): a store this build used for text
+# The N−1 check of store format 6: a store this build used for text
 # docs only must open, read, write, revert and rewrite on the previous release, and a store
 # holding a grid doc must be refused there with one line. It prints `N-1 OK`.
 #
@@ -79,7 +79,7 @@
 #                                                what's still there and reports what isn't.
 #                                                The last line is `N-1 REFS OK`.
 #
-# The carrier (K1, after v0.14.0), both ways:
+# The carrier (after v0.14.0), both ways:
 #
 #   tools/n1/n1.sh layout-carrier <previous tag> <dir>   no cargo: <dir>/old is the previous
 #                                                release's kit, <dir>/carrier the consumer
@@ -97,7 +97,7 @@
 #                                                and opens the older store with the file as the
 #                                                carrier. The last line is `N-1 CARRIER OK`.
 #
-# The carrier's pairing (K1b, after v0.15.1), both ways:
+# The carrier's pairing (after v0.15.1), both ways:
 #
 #   tools/n1/n1.sh layout-pairing <previous tag> <dir>   no cargo: <dir>/old is the previous
 #                                                release's kit, <dir>/pairing the consumer
@@ -148,10 +148,13 @@
 #                                                both ways); the previous release reads every
 #                                                version exactly, is refused a text open
 #                                                (PackMismatch), a purge and an erasure
-#                                                (NewerData), writes a version and deletes a doc;
-#                                                this build's `n1_demote_after` sweeps the
-#                                                deleted doc's live log, reads the other's and
-#                                                purges. Then the previous release writes
+#                                                (NewerData; v0.17.0 and later, which know the
+#                                                table, purge and erase, the erasure renaming
+#                                                the participant in the live log: K2MB_N1_PREV),
+#                                                writes a version and deletes a doc; this
+#                                                build's `n1_demote_after` finds the deleted
+#                                                doc's live log gone, reads the other's (its
+#                                                authors as that release left them) and purges. Then the previous release writes
 #                                                <dir>/demote/rev (a text doc with a change the
 #                                                file never got and an outside save after), and
 #                                                this build's `n1_demote_prev_store` demotes it,
@@ -163,6 +166,14 @@
 # the turn, verb and carrier tables), they assert what that build does with rows it can't read
 # (a rewrite refused, rows and counts its delete leaves); against one that knows them (v0.15.0
 # and later), plain round trips (its rewrite and delete take them as this build's do).
+# Each table's first release: doc_blob_refs and client_kinds v0.11.0; change_turns, blob_turns,
+# change_verbs and the carrier tables v0.15.0; carrier_pairings and demoted_changes v0.17.0.
+# Format 6 is read from v0.10.0. Every consumer asserts one outcome for its version, never
+# "either".
+#
+# The previous release's tree is `git archive <tag>` of this repo, or, with
+# N1_PREV_ARCHIVE=<file> (a gzipped `git archive` of the tag, made where the tag is: a job's
+# checkout has no tags off its history), that file unpacked; `HEAD` is always this checkout's.
 #
 # A previous release older than v0.10.1 has no K2MB_N1_RESTORE: `layout-both` adds the
 # revert of the revert to its copy of the producer (python3), and stops if it can't. Ship the
@@ -171,6 +182,15 @@
 set -eu
 # kit_version DIR: the crate version in DIR/crates/base/Cargo.toml (the kit's own manifest)
 kit_version() { sed -n 's/^version = "\(.*\)"$/\1/p' "$1/crates/base/Cargo.toml" | head -1; }
+# tree_of ROOT REV DEST: the tree of REV in DEST (`git archive`; for a REV other than HEAD,
+# N1_PREV_ARCHIVE's file when it is set)
+tree_of() {
+  if [ "$2" != HEAD ] && [ -n "${N1_PREV_ARCHIVE:-}" ]; then
+    tar -xzf "$N1_PREV_ARCHIVE" -C "$3"
+  else
+    git -C "$1" archive "$2" | tar -x -C "$3"
+  fi
+}
 MODE=${1:?layout <tag> <dir> | node <dir> | layout-both <tag> <dir> | node-both <dir> | node-wire <dir> | layout-refs <tag> <dir> | node-refs <dir> | layout-carrier <tag> <dir> | node-carrier <dir> | layout-pairing <tag> <dir> | node-pairing <dir> | layout-index <tag> <dir> | node-index <dir> | layout-demote <tag> <dir> | node-demote <dir>}
 case $MODE in
   layout)
@@ -179,7 +199,7 @@ case $MODE in
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/n1"
     # the whole tree: cargo resolves every path dependency, optional ones too (vendor/mpce-*
     # since the native engine's seam), so a list of dirs would miss the next one
-    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer/." "$OUT/n1/"
@@ -192,9 +212,11 @@ case $MODE in
     echo "== producer (this build)"
     K2MB_N1_OUT="$OUT/n1" cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored
     ls -l "$OUT/n1/text.redb" "$OUT/n1/grid.redb"
-    echo "== consumer (the previous release)"
+    # v0.10.0 and later read format 6, so the grid store opens there
+    PREV=$(kit_version "$OUT/old")
+    echo "== consumer (the previous release, $PREV)"
     cd "$OUT/n1"
-    cargo run -q
+    K2MB_N1_PREV="$PREV" cargo run -q
     ;;
   layout-both)
     TAG=${2:?previous release tag}; OUT=${3:?dir}
@@ -204,7 +226,7 @@ case $MODE in
       REV=$TAG; [ "$side" = head ] && REV=HEAD
       # the whole tree (as `layout`): every path dependency the kit's manifest names, optional
       # ones too, whatever the release
-      git -C "$ROOT" archive "$REV" | tar -x -C "$OUT/$side/kit"
+      tree_of "$ROOT" "$REV" "$OUT/$side/kit"
       sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/$side/kit/Cargo.toml"
       rm "$OUT/$side/kit/Cargo.toml.bak"
     done
@@ -243,12 +265,13 @@ PY
     for pair in "fwd head prev" "rev prev head"; do
       set -- $pair
       READER=$(kit_version "$OUT/$3/kit")
-      echo "== $1: the $2 build writes, the $3 build ($READER) reads"
+      WRITER=$(kit_version "$OUT/$2/kit")
+      echo "== $1: the $2 build ($WRITER) writes, the $3 build ($READER) reads"
       (cd "$OUT/$2/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_RESTORE=1 K2MB_N1_AGENTS=1 \
         K2MB_N1_PERSONS=1 K2MB_N1_TURNS=1 K2MB_N1_VERBS=1 \
         cargo test -p k2-mpc-base --test grid_store n1_producer -- --ignored --nocapture)
       ls -l "$OUT/$1/text.redb" "$OUT/$1/grid.redb"
-      (cd "$OUT/$1" && cargo run -q)
+      (cd "$OUT/$1" && K2MB_N1_WRITER="$WRITER" K2MB_N1_READER="$READER" cargo run -q)
       # after v0.14.0: a.md's turns (deleted by the other build) swept, turns.md's read back.
       # First: it reads the file as the other build left it, before any open here sweeps it
       (cd "$OUT/head/kit" && K2MB_N1_OUT="$OUT/$1" K2MB_N1_READER="$READER" \
@@ -284,7 +307,7 @@ PY
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/refs"
-    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer-refs/." "$OUT/refs/"
@@ -296,8 +319,10 @@ PY
     OUT=$(cd "$OUT" && pwd)
     echo "== this build writes the references"
     K2MB_N1_OUT="$OUT/refs" cargo test -p k2-mpc-base --test blob_refs n1_refs_producer -- --ignored --nocapture
-    echo "== the previous release"
-    (cd "$OUT/refs" && cargo run -q)
+    # v0.11.0 and later know doc_blob_refs, so their rewrite and delete take it
+    PREV=$(kit_version "$OUT/old")
+    echo "== the previous release ($PREV)"
+    (cd "$OUT/refs" && K2MB_N1_PREV="$PREV" cargo run -q)
     echo "== this build again"
     K2MB_N1_OUT="$OUT/refs" cargo test -p k2-mpc-base --test blob_refs n1_refs_after -- --ignored --nocapture
     echo "N-1 REFS OK"
@@ -306,7 +331,7 @@ PY
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/carrier"
-    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer-carrier/." "$OUT/carrier/"
@@ -329,7 +354,7 @@ PY
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/pairing"
-    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer-pairing/." "$OUT/pairing/"
@@ -341,8 +366,10 @@ PY
     OUT=$(cd "$OUT" && pwd)
     echo "== this build writes the pairings"
     K2MB_N1_OUT="$OUT/pairing" cargo test -p k2-mpc-base --test live_paired n1_pairing_producer -- --ignored --nocapture
-    echo "== the previous release ($(kit_version "$OUT/old"))"
-    (cd "$OUT/pairing" && cargo run -q)
+    # v0.17.0 and later know carrier_pairings, so their rewrite takes the store
+    PREV=$(kit_version "$OUT/old")
+    echo "== the previous release ($PREV)"
+    (cd "$OUT/pairing" && K2MB_N1_PREV="$PREV" cargo run -q)
     echo "== this build again"
     K2MB_N1_OUT="$OUT/pairing" cargo test -p k2-mpc-base --test live_paired n1_pairing_after -- --ignored --nocapture
     echo "N-1 PAIRING OK"
@@ -351,7 +378,7 @@ PY
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/index-consumer"
-    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer-index/." "$OUT/index-consumer/"
@@ -373,7 +400,7 @@ PY
     TAG=${2:?previous release tag}; OUT=${3:?dir}
     ROOT=$(cd "$(dirname "$0")/../.." && pwd)
     rm -rf "$OUT"; mkdir -p "$OUT/old" "$OUT/demote"
-    git -C "$ROOT" archive "$TAG" | tar -x -C "$OUT/old"
+    tree_of "$ROOT" "$TAG" "$OUT/old"
     sed -i.bak 's|^members = .*|members = ["crates/base"]|' "$OUT/old/Cargo.toml"
     rm "$OUT/old/Cargo.toml.bak"
     cp -R "$ROOT/tools/n1/consumer-demote/." "$OUT/demote/"
@@ -385,10 +412,13 @@ PY
     OUT=$(cd "$OUT" && pwd)
     echo "== forward: this build demotes"
     K2MB_N1_OUT="$OUT/demote" cargo test -p k2-mpc-base --test demote n1_demote_producer -- --ignored --nocapture
-    echo "== forward: the previous release ($(kit_version "$OUT/old")) reads"
-    (cd "$OUT/demote" && cargo run -q -- read "$OUT/demote")
+    # the previous release's version: v0.17.0 and later know the demotion's table, so their purge
+    # and erasure go through (the consumer and n1_demote_after read it)
+    PREV=$(kit_version "$OUT/old")
+    echo "== forward: the previous release ($PREV) reads"
+    (cd "$OUT/demote" && K2MB_N1_PREV="$PREV" cargo run -q -- read "$OUT/demote")
     echo "== forward: this build again"
-    K2MB_N1_OUT="$OUT/demote" cargo test -p k2-mpc-base --test demote n1_demote_after -- --ignored --nocapture
+    K2MB_N1_OUT="$OUT/demote" K2MB_N1_PREV="$PREV" cargo test -p k2-mpc-base --test demote n1_demote_after -- --ignored --nocapture
     echo "== reverse: the previous release writes a text doc"
     (cd "$OUT/demote" && cargo run -q -- produce "$OUT/demote")
     echo "== reverse: this build demotes it"

@@ -22,11 +22,11 @@
 //!   checkpoint) split K (also in the RUNREC). Progress every `--progress`
 //!   seconds (default 60). `--time-limit SECS` stops early (exit 3).
 //! - `walk`: `--probes` random walks to the bound's full depth (not exhaustive: for bounds
-//!   too large to enumerate, such as the literal G1 bound). At each state every enabled step
+//!   too large to enumerate, such as the full bound). At each state every enabled step
 //!   is computed (each runs the transition checks), one is picked, and only the picked
 //!   step's violations are recorded: a violation on a step not taken is not reported. A
 //!   step past the length cap is not taken and not checked. The summary counts, per case
-//!   class (E-HIST-13, `bounded::CLASSES`), the steps taken that hit it.
+//!   class (`bounded::CLASSES`), the steps taken that hit it.
 //!   A progress line (walks, steps, violations, classes so far) every `--progress` seconds.
 //!   `--bias redo-after-partial` weighs the next step instead of drawing it uniformly: a
 //!   step that redoes a partial undo's entry (the class `redo_after_partial`) weighs 256, a

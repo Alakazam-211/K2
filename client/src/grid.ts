@@ -181,7 +181,7 @@ function anchor(lines: readonly GridLine[], n: number): [string | null, number] 
 }
 
 /** The corner, in normal form, of the cell at row `row` and column `col` of `numbers`'
- * container; `null` when either is out of bounds (under 1, past the most, not whole). */
+ * container; `null` when either is outside it (under 1, past the most, not whole). */
 export function cornerAt(numbers: GridNumbers, row: number, col: number): Corner | null {
   const ok = (n: number, max: number) => Number.isSafeInteger(n) && n >= 1 && n <= max;
   if (!ok(row, numbers.max.rows) || !ok(col, numbers.max.cols)) return null;

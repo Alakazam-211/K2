@@ -1,7 +1,7 @@
 MPC-E415 declined_live_too_large (disk and outside edits)
 exit:     4
 message:  live editing is off: {reason} (live_too_large)
-next:     The file holds more elements and fields than a live doc of its type may hold (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.
+next:     The file holds more elements and fields than a live doc of its type may hold (details.limit; details.limit_source says whose limit it is: host_per_pack, the host's for this file type; pack_default, the file type's own default; or host_wide, the host's for every file type). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.
 step:     cat; why: The file is over the live size limit, so it stays at tier 0 (or 0.5) and opens the ordinary way; read it there, and change it with its file verbs or ordinary file tools.
 rule:     K-PACK-4, K-DISK-8, K-CSV-7
 verbs:    any verb on a doc
@@ -13,7 +13,7 @@ status:   live
   "area": "disk and outside edits",
   "exit": 4,
   "message": "live editing is off: {reason} (live_too_large)",
-  "next": "The file holds more elements and fields than a live doc of its type may hold (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.",
+  "next": "The file holds more elements and fields than a live doc of its type may hold (details.limit; details.limit_source says whose limit it is: host_per_pack, the host's for this file type; pack_default, the file type's own default; or host_wide, the host's for every file type). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.",
   "next_step": {
     "verb": "cat",
     "args": [],

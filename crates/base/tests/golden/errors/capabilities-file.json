@@ -1,6 +1,6 @@
 {
   "kit": "k2-mpc-base",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "error_ids": {
     "kit": "MPC-E",
     "engine": "MPCE-E",
@@ -945,6 +945,30 @@
       "status": "reserved"
     },
     {
+      "id": "MPC-E162",
+      "name": "root_kind_not_native",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E163",
+      "name": "replica_lagging",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E164",
+      "name": "vector_needs_parts",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPC-E165",
+      "name": "needs_state_transfer",
+      "exit": 2,
+      "status": "live"
+    },
+    {
       "id": "MPC-E170",
       "name": "ambiguous_address",
       "exit": 2,
@@ -1719,9 +1743,69 @@
       "status": "live"
     },
     {
+      "id": "MPCE-E561",
+      "name": "native_store_corrupt",
+      "exit": 6,
+      "status": "live"
+    },
+    {
       "id": "MPCE-E568",
       "name": "cut_purge_pending",
       "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E571",
+      "name": "store_keys_wrong",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E573",
+      "name": "stable_part_of_change",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E580",
+      "name": "s_record_missing",
+      "exit": 1,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E581",
+      "name": "checkpoint_drops_s_record",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E582",
+      "name": "store_nonce_invalid",
+      "exit": 6,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E987",
+      "name": "part_cap_below_entry",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E995",
+      "name": "merge_not_a_fold",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E997",
+      "name": "causal_check_over_limit",
+      "exit": 2,
+      "status": "live"
+    },
+    {
+      "id": "MPCE-E1000",
+      "name": "own_line_parents",
+      "exit": 2,
       "status": "live"
     }
   ]

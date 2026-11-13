@@ -2,7 +2,7 @@
 
 <!-- Generated from crates/base/src/errors/registry.rs by `errors_markdown()`; don't edit by hand. Regenerate: MPC_BLESS=1 cargo test -p k2-mpc-base --test error_ids. -->
 
-Every refusal the kit returns has a stable id, `MPC-Ennn` (the engine's are `MPCE-Ennn`). An id is never reused and never changes its exit code; a retired id stays listed here. Each entry names the rule it enforces: requirement ids (`K-…`, the requirements PRD), undo spec rules (`U…`, `docs/SPEC-UNDO.md`), conformance rules (`hist.…`, `docs/CONFORMANCE.md`), amendments (`A13`: `docs/SESSIONS.md`).
+Every refusal the kit returns has a stable id, `MPC-Ennn` (the engine's are `MPCE-Ennn`). An id is never reused and never changes its exit code; a retired id stays listed here. Each entry names the rule it enforces: a requirement key (`K-…`, a stable key for the requirement), undo spec rules (`U…`, `docs/SPEC-UNDO.md`), conformance rules (`hist.…`, the conformance suite's rule names), or the rule in words.
 
 A host prints a refusal as **plain text**, the error's own wording with the id appended (`doc changed since 12 (now 14) (MPC-E110)`), or with `--json` as one object:
 
@@ -10,10 +10,10 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 {"id": "MPC-E110", "exit": 1, "message": "doc changed since 12 (now 14)",
  "next": "Someone changed the doc after …",
  "next_step": {"verb": "cat", "args": [], "why": "Someone changed the doc …"},
- "rule": "A14 (--if-version), K-T0-5", "details": {"expected": 12, "actual": 14}}
+ "rule": "the version guard (--if-version), K-T0-5", "details": {"expected": 12, "actual": 14}}
 ```
 
-`details` is structured (numbers, values, lists, objects), never prose. `next_step` is `next` as data: `verb` a kit verb, `args` its arguments, one token each (`{key}`: the refusal's `details.key`), and `why` in prose; it has no host syntax, so a host renders it in its own (K-PAR-10). It is left out when there is nothing to run (wait, ask a person, report it, use ordinary file tools). `explain <ID>` prints an entry; `capabilities` lists the ids each verb can return. Exit codes:
+`details` is structured (numbers, values, lists, objects), never prose. `next_step` is `next` as data: `verb` a kit verb, `args` its arguments, one token each (`{key}`: the refusal's `details.key`), and `why` in prose; it has no host syntax, so a host renders it in its own. It is left out when there is nothing to run (wait, ask a person, report it, use ordinary file tools). `explain <ID>` prints an entry; `capabilities` lists the ids each verb can return. Exit codes:
 
 | Exit | Name | Meaning |
 |---|---|---|
@@ -116,22 +116,22 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E107` | `not_joined` | 2 | K-PRES-1 | `*` | live |
 | `MPC-E108` | `no_doc` | 4 | K-EXIT-1 | `*` | live |
 | `MPC-E109` | `pack_mismatch` | 4 | K-FMT-2 | `*` | live |
-| `MPC-E110` | `stale` | 1 | A14 (--if-version), K-T0-5 | `@change`, `write` | live |
+| `MPC-E110` | `stale` | 1 | the version guard (--if-version), K-T0-5 | `@change`, `write` | live |
 | `MPC-E111` | `write_conflict` | 1 | K-BR-2, K-BR-3 (O1–O5) | `write` | live |
 | `MPC-E112` | `base_expired` | 8 | K-BR-4, K-EXIT-1 | `write`, `@pack` | live |
 | `MPC-E113` | `bad_edit` | 2 | K-SCH-2 | `@change` | live |
 | `MPC-E114` | `bad_position` | 2 | K-PRES-6 | `cursor`, `view`, `claim`, `blame`, `select`, `pointer`, `viewport` | live |
 | `MPC-E115` | `bad_participant` | 2 | K-PRES-9 | `(host)` | live |
-| `MPC-E116` | `forbidden_comment` | 3 | K-ANN-6, Q24 | `comment`, `reply`, `resolve`, `resolve --reopen`, `reanchor` | live |
+| `MPC-E116` | `forbidden_comment` | 3 | K-ANN-6 | `comment`, `reply`, `resolve`, `resolve --reopen`, `reanchor` | live |
 | `MPC-E117` | `forbidden_comment_author` | 3 | K-ANN-6 | `comment --delete` | live |
 | `MPC-E120` | `tool_unsupported` | 2 | K-PAR-7 | `@run_tool` | live |
 | `MPC-E121` | `tool_refused` | 2 | K-PAR-7, K-SEC-6 | `@run_tool` | live |
 | `MPC-E122` | `tool_usage` | 2 | K-EXIT-1 | `@run_tool` | live |
 | `MPC-E123` | `patch_failed` | 1 | K-PAR-8 | `patch`, `apply` | live |
 | `MPC-E124` | `patch_rejects` | 1 | K-PAR-8, K-BR-9 | `patch`, `apply` | live |
-| `MPC-E125` | `replace_no_match` | 1 | A12 (exact replace) | `replace` | live |
-| `MPC-E126` | `replace_not_unique` | 1 | A12 (exact replace) | `replace` | live |
-| `MPC-E127` | `pack_verb_no` | 1 | A6 (pack verbs) | `@pack` | live |
+| `MPC-E125` | `replace_no_match` | 1 | exact replace | `replace` | live |
+| `MPC-E126` | `replace_not_unique` | 1 | exact replace | `replace` | live |
+| `MPC-E127` | `pack_verb_no` | 1 | pack verbs | `@pack` | live |
 | `MPC-E130` | `held_backlog` | 2 | K-HIST-23, K-ID-10 | `@change` | live |
 | `MPC-E131` | `no_approval` | 4 | K-ID-11 | `approve`, `decline` | live |
 | `MPC-E132` | `bad_approval` | 2 | K-ID-11 | `approve`, `decline` | live |
@@ -152,6 +152,10 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E154` | `malformed_doc` | 2 | K-SEC-5 | `*` | live |
 | `MPC-E160` | `unknown_error_id` | 4 | the catalog (docs/ERRORS.md) | `explain` | live |
 | `MPC-E161` | `engine_unlisted` | 2 | the MPCE seam (stable codes) | `*` | reserved |
+| `MPC-E162` | `root_kind_not_native` | 2 | the native engine: text roots only | `(host)` | live |
+| `MPC-E163` | `replica_lagging` | 2 | the MPCE seam (stable codes): one host, one engine version | `(sync)` | live |
+| `MPC-E164` | `vector_needs_parts` | 2 | the MPCE seam (stable codes): a vector is never sent smaller or empty | `(sync)` | live |
+| `MPC-E165` | `needs_state_transfer` | 2 | the MPCE seam (stable codes): a replica behind a cut | `(sync)` | live |
 | `MPC-E170` | `ambiguous_address` | 2 | K-ADDR-2, K-EXIT-1 | `@pack` | live |
 | `MPC-E171` | `positional_needs_version` | 2 | K-ADDR-3 | `@change` | live |
 | `MPC-E172` | `address_not_found` | 4 | K-READ-1, K-READ-3 | `@pack`, `@index` | live |
@@ -234,7 +238,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `doc changed since {expected} (now {actual})`
 - **Next:** Someone changed the doc after the version you named, so nothing was applied. Read it again (cat prints the version), redo your change on what you read, and pass the new version with --if-version (a blob write: the new base).
 - **Next step:** `cat`. Someone changed the doc after the version you named; read it again, redo your change on what you read, and guard it with the new version.
-- **Rule:** A14 (--if-version), K-T0-5
+- **Rule:** the version guard (--if-version), K-T0-5
 - **Exit:** 1
 
 ### MPC-E111 `write_conflict`
@@ -280,7 +284,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `refused: needs Comment rights`
 - **Next:** You can read this doc but not comment on it: commenting needs edit, or the comment right the doc's owner grants a read-only share. Don't retry: read the threads, or ask the owner. Nothing changed.
 - **Next step:** `comments`. You can't comment on this doc; read its threads instead, or ask the doc's owner for the comment right.
-- **Rule:** K-ANN-6, Q24
+- **Rule:** K-ANN-6
 - **Exit:** 3
 
 ### MPC-E117 `forbidden_comment_author`
@@ -334,7 +338,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `replace: --old matches nothing in {doc}; nothing applied`
 - **Next:** The exact text in --old isn't in the doc (it matches byte for byte, with \n line breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the text exactly; nothing was applied.
 - **Next step:** `cat` with `-n`. The exact old text isn't in the doc; read the lines again and copy the text byte for byte.
-- **Rule:** A12 (exact replace)
+- **Rule:** exact replace
 - **Exit:** 1
 
 ### MPC-E126 `replace_not_unique`
@@ -342,7 +346,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `replace: --old matches {matches} times in {doc}; nothing applied`
 - **Next:** --old must match exactly once. Add surrounding text to --old until it matches once, or pass --all to replace every match. stdout lists where each match is; nothing was applied.
 - **Next step:** `cat` with `-n`. The old text matches more than once; add surrounding text until it matches once, or replace every match.
-- **Rule:** A12 (exact replace)
+- **Rule:** exact replace
 - **Exit:** 1
 
 ### MPC-E127 `pack_verb_no`
@@ -350,7 +354,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `{verb}: nothing applied`
 - **Next:** The file type's own verb found nothing to change (stdout says why: e.g. no such section). Check its target (cat, grep -n) and run it again; nothing was applied.
 - **Next step:** `cat`. The file type's own verb found nothing to change; check its target and run it again.
-- **Rule:** A6 (pack verbs)
+- **Rule:** pack verbs
 - **Exit:** 1
 
 ### MPC-E130 `held_backlog`
@@ -486,7 +490,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** A pack's schema names a root the kit can't store (empty, holding '/', or twice). The pack has to fix its schema; this file type can't open live until then.
 - **Rule:** K-SCH-1
 - **Exit:** 2
-- **Reached by:** a pack with a bad schema (C1)
+- **Reached by:** a pack with a bad schema
 
 ### MPC-E154 `malformed_doc`
 
@@ -494,7 +498,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** The doc holds something the kit never writes (a bug, or a damaged store). Nothing was applied. Don't retry: report it to the host's operator with this message.
 - **Rule:** K-SEC-5
 - **Exit:** 2
-- **Reached by:** a damaged doc state (C1)
+- **Reached by:** a damaged doc state
 
 ### MPC-E160 `unknown_error_id`
 
@@ -510,7 +514,39 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Next:** A newer engine refused something this kit build can't explain. Nothing was applied. Report the code; the engine's own docs describe it.
 - **Rule:** the MPCE seam (stable codes)
 - **Exit:** 2
-- **Status:** reserved for the native engine (MPCE ranges at G2-core); nothing returns it yet
+- **Status:** reserved for the native engine (its own MPCE ranges); nothing returns it yet
+
+### MPC-E162 `root_kind_not_native`
+
+- **Message:** `root {root} is {kind}: this file type isn't switched to the native engine yet`
+- **Next:** The host chose the native engine for a file type with a list or map root. Nothing was made or loaded. This file type isn't switched to the native engine yet: open it on Yrs.
+- **Rule:** the native engine: text roots only
+- **Exit:** 2
+- **Reached by:** a host choosing the native engine for a file type with a list or map root (feature native)
+
+### MPC-E163 `replica_lagging`
+
+- **Message:** `this replica's engine refused the host's merge: it is behind the host's engine`
+- **Next:** The host relayed a change this replica's engine can't take (MPCE-E995 from the host): this replica runs an older engine than the host. Nothing was applied. Upgrade this replica, then resync it from the host; don't treat the host as hostile.
+- **Rule:** the MPCE seam (stable codes): one host, one engine version
+- **Exit:** 2
+- **Reached by:** a replica behind the host's engine (feature native)
+
+### MPC-E164 `vector_needs_parts`
+
+- **Message:** `the version vector ({entries} writers) doesn't fit one frame: send it in parts`
+- **Next:** Nothing was sent. The doc's version vector is past one frame (MPCE-E983): send it as parts (the kit's state_vector_parts), and the peer answers each with diff parts. Never send a smaller or empty vector.
+- **Rule:** the MPCE seam (stable codes): a vector is never sent smaller or empty
+- **Exit:** 2
+- **Reached by:** a native doc with about 10,000 writers or more (feature native)
+
+### MPC-E165 `needs_state_transfer`
+
+- **Message:** `the peer's history is compacted past this doc's state: it needs a state transfer`
+- **Next:** Nothing was applied. The peer compacted the history this doc lacks (MPCE-E262), so no diff can bring it up to date: it needs the peer's state (a state transfer). Don't retry the catch-up and don't close the peer: it isn't at fault.
+- **Rule:** the MPCE seam (stable codes): a replica behind a cut
+- **Exit:** 2
+- **Reached by:** a native replica behind a peer's cut (feature native)
 
 ### MPC-E170 `ambiguous_address`
 
@@ -581,7 +617,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E205` | `no_such_change` | 4 | K-HIST-19, K-HIST-9 | `revert`, `restore`, `show --version`, `diff --version`, `version --name` | live |
 | `MPC-E206` | `history_lost` | 0 | U6, U18, K-HIST-17 | `undo`, `redo`, `undo --partial`, `undo --drop` | live |
 | `MPC-E207` | `cleared_by_purge` | 0 | U19, K-PURGE-4 | `undo`, `redo`, `undo --partial`, `undo --drop` | live |
-| `MPC-E208` | `version_no_carrier` | 4 | K1 (carrier bytes) | `show --version`, `(host)` | live |
+| `MPC-E208` | `version_no_carrier` | 4 | the carrier's bytes | `show --version`, `(host)` | live |
 
 ### MPC-E201 `undo_conflict`
 
@@ -644,18 +680,18 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `version {version} has no copy of its file's own bytes (version_no_carrier)`
 - **Next:** This file type is written back by splicing into the file's own bytes, and the kit keeps those bytes with each version it cuts. This version has none: it was cut before the doc kept them (by an older kit, or before this build), or a purge erased them. Its file can't be rebuilt exactly, so none is given. Its content is still there: read it with show --version; for the file as it is now, read the file.
 - **Next step:** `log`. This version's file can't be rebuilt exactly; its content is still readable, and a later version or the file now may serve instead.
-- **Rule:** K1 (carrier bytes)
+- **Rule:** the carrier's bytes
 - **Exit:** 4
 
 ## 3xx: presence and claims
 
 | Id | Name | Exit | Rule | Verbs | Status |
 |---|---|---|---|---|---|
-| `MPC-E301` | `claimed` | 5 | A13 (claims), K-PRES-12 | `claim`, `@change` | live |
-| `MPC-E302` | `no_claim` | 4 | A13 (claims) | `claim --renew`, `claim --release` | live |
-| `MPC-E303` | `claim_contended` | 2 | A13 (claims) | `claim --renew` | live |
-| `MPC-E304` | `bad_claim` | 2 | A13 (claims) | `claim`, `claim --renew`, `claim --release` | live |
-| `MPC-E305` | `watching` | 3 | K11 (participants_max) | `@change` | live |
+| `MPC-E301` | `claimed` | 5 | claims, K-PRES-12 | `claim`, `@change` | live |
+| `MPC-E302` | `no_claim` | 4 | claims | `claim --renew`, `claim --release` | live |
+| `MPC-E303` | `claim_contended` | 2 | claims | `claim --renew` | live |
+| `MPC-E304` | `bad_claim` | 2 | claims | `claim`, `claim --renew`, `claim --release` | live |
+| `MPC-E305` | `watching` | 3 | the participant cap (participants_max) | `@change` | live |
 | `MPC-E310` | `selection_too_large` | 2 | K-PRES-6 | `select` | live |
 | `MPC-E320` | `no_annotation` | 4 | K-ANN-1 | `reply`, `resolve`, `resolve --reopen`, `comment --delete`, `reanchor`, `comments --log` | live |
 | `MPC-E321` | `bad_annotation` | 2 | K-ANN-1, K-ANN-6 | `comment`, `reply`, `reanchor`, `comments` | live |
@@ -665,7 +701,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `{lines} claimed by {name} ({by}); {remaining_ms} ms left`
 - **Next:** Someone else is working on those lines right now (a live claim). Nothing was applied. Wait and retry after details.remaining_ms, or work on other lines; activity and who show who is where.
 - **Next step:** `activity`. Someone else holds a live claim on those lines; see who is where, then wait for the time left and retry, or work on other lines.
-- **Rule:** A13 (claims), K-PRES-12
+- **Rule:** claims, K-PRES-12
 - **Exit:** 5
 
 ### MPC-E302 `no_claim`
@@ -673,7 +709,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `no live claim {claim}`
 - **Next:** That claim already ended (it expired, or your edit ended it), or you hold none. Take a new one with claim --lines a,b if you still need it.
 - **Next step:** `claim`. That claim already ended, or you hold none; take a new one if you still need it.
-- **Rule:** A13 (claims)
+- **Rule:** claims
 - **Exit:** 4
 
 ### MPC-E303 `claim_contended`
@@ -681,7 +717,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `{claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)`
 - **Next:** Others are waiting for your claim, so it can't be extended. Finish your edit before it ends (details.remaining_ms), or release it with claim --release.
 - **Next step:** `claim --release` with `--id` `{claim}`. Others are waiting for your claim, so it can't be extended; finish your edit before it ends, or release it.
-- **Rule:** A13 (claims)
+- **Rule:** claims
 - **Exit:** 2
 
 ### MPC-E304 `bad_claim`
@@ -689,7 +725,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `bad claim: {reason}`
 - **Next:** The claim call isn't valid as given (the message says why: not your claim, a zero ttl, several claims and no --id...). Fix the arguments; claim --release with no id releases all of yours.
 - **Next step:** `claim --release`. The claim call isn't valid as given; fix its arguments, or release all of your claims.
-- **Rule:** A13 (claims)
+- **Rule:** claims
 - **Exit:** 2
 
 ### MPC-E305 `watching`
@@ -697,7 +733,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Message:** `watching: the doc has its {max} participants; read-only until the host lets you in`
 - **Next:** This doc already has as many participants as it allows, so you joined as a watcher: you can read it and follow changes, but not edit or show presence. This is refused for now, not for good: don't retry in a loop. When someone leaves, the host can let you in; until then, read.
 - **Next step:** `cat`. The doc has all the participants it allows, so you joined as a watcher; read it until the host lets you in, and don't retry in a loop.
-- **Rule:** K11 (participants_max)
+- **Rule:** the participant cap (participants_max)
 - **Exit:** 3
 
 ### MPC-E310 `selection_too_large`
@@ -736,7 +772,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E407` | `declined_pack` | 4 | K-PACK-4, K-COD-6 | `*` | live |
 | `MPC-E410` | `disk` | 1 | K-DISK-2, K-DISK-10 | `flush`, `mv`, `(host)` | live |
 | `MPC-E411` | `bad_path` | 2 | K-SEC-6, K-DISK-14 | `mv`, `(host)` | live |
-| `MPC-E412` | `declined_hard_linked` | 4 | K-DISK-14 (K9) | `(host)` | live |
+| `MPC-E412` | `declined_hard_linked` | 4 | K-DISK-14 (hard links) | `(host)` | live |
 | `MPC-E413` | `save_mismatch` | 1 | K-T0-5, K-DISK-2 | `(host)` | live |
 | `MPC-E414` | `save_ticket_invalid` | 2 | K-T0-5 | `(host)` | live |
 | `MPC-E415` | `declined_live_too_large` | 4 | K-PACK-4, K-DISK-8, K-CSV-7 | `*` | live |
@@ -813,7 +849,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `live editing is off: {reason} (hard_linked)`
 - **Next:** The file has more than one name (a hard link), so edits made live through one name would change the others unseen. It opens the ordinary way: edit it with ordinary file tools, or give it a single name (copy it, remove the extra link) and open it again.
-- **Rule:** K-DISK-14 (K9)
+- **Rule:** K-DISK-14 (hard links)
 - **Exit:** 4
 
 ### MPC-E413 `save_mismatch`
@@ -833,7 +869,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 ### MPC-E415 `declined_live_too_large`
 
 - **Message:** `live editing is off: {reason} (live_too_large)`
-- **Next:** The file holds more elements and fields than a live doc of its type may hold (capabilities shows keyed_max_entries). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.
+- **Next:** The file holds more elements and fields than a live doc of its type may hold (details.limit; details.limit_source says whose limit it is: host_per_pack, the host's for this file type; pack_default, the file type's own default; or host_wide, the host's for every file type). It isn't live: it stays at tier 0 (or 0.5 where its type merges whole files) and opens the ordinary way, so its file verbs and ordinary file tools work on it, with nothing merged live. Don't retry the live verb.
 - **Next step:** `cat`. The file is over the live size limit, so it stays at tier 0 (or 0.5) and opens the ordinary way; read it there, and change it with its file verbs or ordinary file tools.
 - **Rule:** K-PACK-4, K-DISK-8, K-CSV-7
 - **Exit:** 4
@@ -862,7 +898,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E518` | `quarantined` | 3 | K-SEC-5 | `*` | live |
 | `MPC-E519` | `closed` | 1 | K-OFF-2 | `*` | live |
 | `MPC-E520` | `engine_mismatch` | 6 | K-FMT-2, K-FMT-4 | `*` | live |
-| `MPC-E521` | `pairing_mismatch` | 1 | K1b (carrier pairing) | `*` | live |
+| `MPC-E521` | `pairing_mismatch` | 1 | the carrier's pairing | `*` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -1027,7 +1063,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `the file's pairing doesn't fit it: {reason} (pairing_mismatch)`
 - **Next:** The file type writes the doc back by splicing into the file's own bytes, pairing each unit of the file with a key the kit kept for it. The keys kept don't fit the file, so the file type can't tell which unit is which and wrote nothing rather than guess. The file is as it was and the doc keeps every change. Report it; an app's next save of the file sets the pairing again.
-- **Rule:** K1b (carrier pairing)
+- **Rule:** the carrier's pairing
 - **Exit:** 1
 - **Reached by:** a file type's pairing that doesn't fit its file
 
@@ -1083,7 +1119,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E715` | `agent_write_refused` | 2 | structure index | `write` | live |
 | `MPC-E716` | `export_needs_renderer` | 4 | structure index | `@index`, `(host)` | live |
 | `MPC-E717` | `index_stale` | 1 | structure index | `(host)` | live |
-| `MPC-E720` | `blob_ref_unknown` | 4 | structured live, slice 5 | `@pack`, `(host)` | live |
+| `MPC-E720` | `blob_ref_unknown` | 4 | blob references in keyed docs | `@pack`, `(host)` | live |
 
 ### MPC-E701 `leased`
 
@@ -1224,7 +1260,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 
 - **Message:** `no blob {blob} in this doc's space`
 - **Next:** The value names a blob this doc's space doesn't hold: it was never stored here, it was collected, or it belongs to another space. Nothing was applied. Store the bytes in this doc's space, then send the change again with the id that returned.
-- **Rule:** structured live, slice 5
+- **Rule:** blob references in keyed docs
 - **Exit:** 4
 
 ## 8xx: structured and CSV
@@ -1233,14 +1269,14 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 | Id | Name | Exit | Rule | Verbs | Status |
 |---|---|---|---|---|---|
 | `MPC-E801` | `needs_base` | 2 | K-BR-12 | `cell set`, `@change` | live |
-| `MPC-E802` | `at_limit` | 2 | K-CSV-7 (KC4) | `@change` | live |
-| `MPC-E803` | `facet_conflict` | 1 | K-BR-12 (KC7) | `@change` | live |
-| `MPC-E804` | `op_refused` | 2 | K-SCH-2 (C1) | `@change` | live |
-| `MPC-E805` | `no_element` | 4 | CSV contract §3.3 (C1) | `@pack` | live |
-| `MPC-E806` | `header_names_unrendered` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
-| `MPC-E807` | `header_only_row_blank` | 2 | CSV contract §1.4 (C1) | `@pack` | live |
-| `MPC-E820` | `key_not_own` | 2 | structured live, slice 1 | `@change` | live |
-| `MPC-E821` | `key_space_full` | 2 | structured live, slice 1 | `(host)` | live |
+| `MPC-E802` | `at_limit` | 2 | K-CSV-7 (table limits) | `@change` | live |
+| `MPC-E803` | `facet_conflict` | 1 | K-BR-12 (writes with no identity) | `@change` | live |
+| `MPC-E804` | `op_refused` | 2 | K-SCH-2 | `@change` | live |
+| `MPC-E805` | `no_element` | 4 | CSV contract §3.3 | `@pack` | live |
+| `MPC-E806` | `header_names_unrendered` | 2 | CSV contract §1.4 | `@pack` | live |
+| `MPC-E807` | `header_only_row_blank` | 2 | CSV contract §1.4 | `@pack` | live |
+| `MPC-E820` | `key_not_own` | 2 | writer-tagged keys | `@change` | live |
+| `MPC-E821` | `key_space_full` | 2 | writer-tagged keys | `(host)` | live |
 | `MPC-E822` | `keyed_at_limit` | 2 | K-CSV-7 (keyed docs) | `@change` | live |
 | `MPC-E830` | `conflict` | 1 | board file: object revs | `@file`, `update`, `delete`, `resolve`, `lock`, `check-set`, `check-remove`, `table-cell`, `table-remove-row`, `table-remove-column`, `move`, `group`, `ungroup`, `align`, `distribute`, `tidy`, `copy-style`, `apply`, `inverse` | live |
 | `MPC-E831` | `exists` | 1 | board file: unique ids | `@file`, `put-back`, `apply`, `inverse` | live |
@@ -1286,7 +1322,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted``
 - **Next:** The table can't grow past its limit (details.what: cells, columns or rows); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
 - **Next step:** `rows drop-deleted`. The table is at its size limit; remove rows or columns first, or have an owner free the space deleted rows still hold.
-- **Rule:** K-CSV-7 (KC4)
+- **Rule:** K-CSV-7 (table limits)
 - **Exit:** 2
 
 ### MPC-E803 `facet_conflict`
@@ -1294,7 +1330,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `{count} element(s) changed since your base: {where}`
 - **Next:** Someone changed the same cells or rows after the version you read. Nothing was applied. Read again, redo your change on the new values, and pass the new --base.
 - **Next step:** `cat`. Someone changed the same cells or rows since your base; read again, redo your change on the new values, and pass the new base.
-- **Rule:** K-BR-12 (KC7)
+- **Rule:** K-BR-12 (writes with no identity)
 - **Exit:** 1
 
 ### MPC-E804 `op_refused`
@@ -1302,7 +1338,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `op {op} on root {root}: {problem}`
 - **Next:** One of the edit's row, column or cell operations can't apply (an unknown or reused key, a move next to itself, dropping a live element); nothing of the change was applied. List the rows or columns again (row list, col list) and use the keys shown.
 - **Next step:** `row list`. An operation names an unknown or reused key; list the rows or columns again and use the keys shown.
-- **Rule:** K-SCH-2 (C1)
+- **Rule:** K-SCH-2
 - **Exit:** 2
 
 ### MPC-E805 `no_element`
@@ -1310,7 +1346,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `{verb}: {line}`
 - **Next:** The row, column or cell the verb names is unknown or deleted (stdout says which, and who deleted it when you may read history). A raw keyed cell write naming a row or column the table doesn't know (dropped, or never in it) is refused the same way, whole. Nothing was applied. List the live ones (row list, col list), or restore a deleted one first (row restore, col restore).
 - **Next step:** `row list`. The row, column or cell is unknown or deleted; list the live ones, or restore a deleted one first.
-- **Rule:** CSV contract §3.3 (C1)
+- **Rule:** CSV contract §3.3
 - **Exit:** 4
 
 ### MPC-E806 `header_names_unrendered`
@@ -1318,7 +1354,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `the columns have names that would appear as a header line; clear them or add a row first`
 - **Next:** The table has no row, and its columns still hold names from before the header was switched off: switching it on would write them as a header line, changing the file. Nothing was applied. Clear the names (col rename) or add a row first, then switch.
 - **Next step:** `col rename`. The columns still hold names that would be written as a header line; clear them or add a row first, then switch.
-- **Rule:** CSV contract §1.4 (C1)
+- **Rule:** CSV contract §1.4
 - **Exit:** 2
 
 ### MPC-E807 `header_only_row_blank`
@@ -1326,28 +1362,28 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `header on: the only row is a blank line, and a blank header line with nothing after it isn't written (the file would change); add a non-blank row first`
 - **Next:** The table's only row is blank: as the header it would be a blank header line with nothing after it, which isn't written, so the file would change. Nothing was applied. Add a row with values first (row insert), then switch the header on.
 - **Next step:** `row insert`. A blank only row can't be written as the header; add a row with values first, then switch the header on.
-- **Rule:** CSV contract §1.4 (C1)
+- **Rule:** CSV contract §1.4
 - **Exit:** 2
 
 ### MPC-E820 `key_not_own`
 
 - **Message:** `insert {key} on {root} doesn't carry your writer tag {tag}`
 - **Next:** This list's keys carry their writer: an insert must name <prefix><n>.<tag> with one of the list's prefixes and your own writer tag (details.tag). Nothing was applied. Insert through a verb or Session::mint_key, which mints a key with your own writer tag; never reuse another writer's tag.
-- **Rule:** structured live, slice 1
+- **Rule:** writer-tagged keys
 - **Exit:** 2
 
 ### MPC-E821 `key_space_full`
 
 - **Message:** `no key fits 24 bytes for prefix {prefix} and tag {tag}`
 - **Next:** Every key of this prefix and writer tag that fits a list key's 24 bytes is taken. Nothing was written. The pack's key prefix is too long for a tagged key: use a shorter prefix (the pack's fix).
-- **Rule:** structured live, slice 1
+- **Rule:** writer-tagged keys
 - **Exit:** 2
 
 ### MPC-E822 `keyed_at_limit`
 
 - **Message:** `this doc is at its live size limit ({limit} {what}, deleted elements included); nothing was applied`
-- **Next:** The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; capabilities shows keyed_max_entries). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it no longer needs, then make the change again; a change that doesn't add elements or fields always goes through.
-- **Next step:** `cat`. The doc is at its live size limit; read it, remove elements or fields it no longer needs, then make the change again.
+- **Next:** The doc can't grow past its live size limit (details.limit elements and fields: every list element, deleted ones included until dropped, plus every field; details.limit_source says whose limit it is: host_per_pack, the host's for this file type; pack_default, the file type's own default; or host_wide, the host's for every file type). Nothing was applied and nothing was dropped. Read the doc, remove elements or fields it doesn't need any more, then make the change again; a change that doesn't add elements or fields always goes through.
+- **Next step:** `cat`. The doc is at its live size limit; read it, remove elements or fields it doesn't need any more, then make the change again.
 - **Rule:** K-CSV-7 (keyed docs)
 - **Exit:** 2
 
@@ -1614,9 +1650,9 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 |---|---|---|---|---|---|
 | `MPC-E901` | `rate_limited` | 2 | K-SEC-9, K-PERM-14 | `@change` | live |
 | `MPC-E902` | `tool_limit` | 2 | K-PAR-7, K-SEC-4 | `@run_tool` | live |
-| `MPC-E903` | `claims_doc_cap` | 2 | A13 (claims_max) | `claim` | live |
-| `MPC-E904` | `claims_participant_cap` | 2 | A13 (claims_per_participant) | `claim` | live |
-| `MPC-E905` | `claim_waiters_cap` | 2 | A13 (claim_waiters_max) | `(host)` | live |
+| `MPC-E903` | `claims_doc_cap` | 2 | claims (claims_max) | `claim` | live |
+| `MPC-E904` | `claims_participant_cap` | 2 | claims (claims_per_participant) | `claim` | live |
+| `MPC-E905` | `claim_waiters_cap` | 2 | claims (claim_waiters_max) | `(host)` | live |
 | `MPC-E907` | `annotation_cap` | 2 | K-ANN-1 (annot_* limits) | `comment`, `reply`, `resolve`, `resolve --reopen`, `reanchor` | live |
 
 ### MPC-E901 `rate_limited`
@@ -1639,7 +1675,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `bad claim: this doc has {count} live claims (the most)`
 - **Next:** This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.
 - **Next step:** `activity`. This doc has all the live claims it allows; wait for some to end, or edit without a claim.
-- **Rule:** A13 (claims_max)
+- **Rule:** claims (claims_max)
 - **Exit:** 2
 
 ### MPC-E904 `claims_participant_cap`
@@ -1647,7 +1683,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `bad claim: you hold {count} claims here (the most); release one`
 - **Next:** You hold as many claims on this doc as you may. Release one you no longer need (claim --release --id ID), then claim again.
 - **Next step:** `claim --release`. You hold all the claims you may on this doc; release one you no longer need, then claim again.
-- **Rule:** A13 (claims_per_participant)
+- **Rule:** claims (claims_per_participant)
 - **Exit:** 2
 
 ### MPC-E905 `claim_waiters_cap`
@@ -1655,7 +1691,7 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 - **Message:** `bad claim: {count} already waiting for {claim}`
 - **Next:** That claim already has as many waiters as it allows. Retry after it ends, or work elsewhere.
 - **Next step:** `activity`. That claim already has as many waiters as it allows; see where others are working and work elsewhere, or retry after it ends.
-- **Rule:** A13 (claim_waiters_max)
+- **Rule:** claims (claim_waiters_max)
 - **Exit:** 2
 
 ### MPC-E907 `annotation_cap`
@@ -1667,10 +1703,20 @@ It covers structured file types too, a board's own verbs included (MPC-E830 to E
 
 ## Engine ids (MPCE-Ennn)
 
-Reserved for the engine, which allocates its ranges (decode, admission and security, schema, history, store) at G2-core. Its codes cross the seam as these strings, never as enum ordinals; a code this build doesn't list is reported as `MPC-E161` with `details.code`.
+Reserved for the engine, which allocates its ranges (decode, admission and security, schema, history, store) itself. Its codes cross the seam as these strings, never as enum ordinals; a code this build doesn't list is reported as `MPC-E161` with `details.code`.
 
 - `MPCE-E199` `ref_not_in_past`
 - `MPCE-E980` `change_too_large`
 - `MPCE-E566` `store_secret_missing`
 - `MPCE-E567` `checkpoint_mac`
+- `MPCE-E561` `native_store_corrupt`
 - `MPCE-E568` `cut_purge_pending`
+- `MPCE-E571` `store_keys_wrong`
+- `MPCE-E573` `stable_part_of_change`
+- `MPCE-E580` `s_record_missing`
+- `MPCE-E581` `checkpoint_drops_s_record`
+- `MPCE-E582` `store_nonce_invalid`
+- `MPCE-E987` `part_cap_below_entry`
+- `MPCE-E995` `merge_not_a_fold`
+- `MPCE-E997` `causal_check_over_limit`
+- `MPCE-E1000` `own_line_parents`

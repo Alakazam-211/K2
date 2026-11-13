@@ -763,7 +763,7 @@ mod tests {
         ((ix.work() - w0) as f64 / applies as f64, max, p95)
     }
 
-    /// BM `revert_carry_per_apply` (K-HIST-22), CI size: R = 10^4 records. The cost is held
+    /// BM `revert_carry_per_apply`, CI size: R = 10^4 records. The cost is held
     /// by counted work, not time: per apply it grows like log R (a tenfold R adds little),
     /// never like R. The p95 time is printed; the 20 µs p95 budget at R = 10^5 is checked by
     /// the ignored test below, in release, on a compute node.

@@ -391,11 +391,11 @@ fn a_first_change_counts_as_its_writers_own() {
     );
 }
 
-/// K-QUOTA-3's `joins_1m`, **for read-only joins only**: 10^6 joins and leaves by a read-only
+/// the `joins_1m`, **for read-only joins only**: 10^6 joins and leaves by a read-only
 /// participant leave the client table as it was, so within its 8 MiB. Checked along the way, from
 /// the first join on, as well as at the end.
 ///
-/// **This doesn't meet K-QUOTA-3.** Writers who reconnect aren't covered: each connection that
+/// **This doesn't meet the per-writer storage bound.** Writers who reconnect aren't covered: each connection that
 /// writes adds a row, and the requirement stays open until a later change.
 #[test]
 fn joins_1m() {

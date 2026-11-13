@@ -1,4 +1,4 @@
-//! The host-given turn of each change (rendering-data contract gap 8; [`crate::turn`]).
+//! The host-given turn of each change ([`crate::turn`]).
 //!
 //! Two additive per-doc tables, **without a format bump** (the terms of `client_kinds`,
 //! `doc_blob_refs` and `live_copies`; `docs/SESSIONS.md`, "Turns"):

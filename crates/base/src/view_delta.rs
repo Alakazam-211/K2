@@ -1,4 +1,4 @@
-//! View deltas (rendering-data contract, Item 2): what one change did to a live doc's view, per
+//! View deltas: what one change did to a live doc's view, per
 //! container and per unit, so a watcher keeps its view index from the change frames alone and
 //! never runs pack code.
 //!
@@ -39,9 +39,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::elem::{Applied, Effect, Key, KeyedRoot, KeyedState, ListApplied, ListOpKind, Value};
 use crate::errors::Value as Json;
+use crate::placement::{Placement, Step};
 use crate::session::{elem_of_map_key, Pack};
 use crate::table::CELL_SEP;
-use crate::view_index::{flag, parse_geom, FieldClass, Src, ViewSchema};
+use crate::view_index::{flag, parse_geom, FieldClass, Src, ViewIndex, ViewSchema};
 
 /// What a change did to one unit, in the contract's words (`UnitDelta.ops`). Listed in this
 /// order, each once.
@@ -55,6 +56,8 @@ pub enum UnitOp {
     MoveResize,
     Rotate,
     Flip,
+    /// Its placement in 3D changed (the 3D slot; with `placement_after`).
+    Place,
     Text,
     Style,
     HideShow,
@@ -73,6 +76,7 @@ impl UnitOp {
             UnitOp::MoveResize => "move_resize",
             UnitOp::Rotate => "rotate",
             UnitOp::Flip => "flip",
+            UnitOp::Place => "place",
             UnitOp::Text => "text",
             UnitOp::Style => "style",
             UnitOp::HideShow => "hide_show",
@@ -123,6 +127,9 @@ pub struct ContainerDelta {
     pub hidden_after: Option<bool>,
     /// With `hide_show` and `props`: the fields that changed, by name. Empty otherwise.
     pub fields: Vec<String>,
+    /// For a schema whose 3D slot has container fields: its placement after the change, on
+    /// `add` and `restore` always and otherwise when it changed (`Some(None)`: none now).
+    pub placement_after: Option<Option<Placement>>,
 }
 
 impl ContainerDelta {
@@ -136,6 +143,7 @@ impl ContainerDelta {
             ("hidden_after", Json::from(self.hidden_after)),
             ("fields", Json::list(self.fields.iter())),
         ])
+        .with_placement(&self.placement_after)
     }
 }
 
@@ -161,6 +169,9 @@ pub struct UnitDelta {
     /// Its placeholder's type (`title`, `body`...), from the schema's placeholder field, so a
     /// view words the change without a lookup; `None` when it has none.
     pub placeholder_type: Option<String>,
+    /// For a schema with a 3D slot: its placement after the change, on `add` and `restore`
+    /// always and with the op `place` when it changed (`Some(None)`: `null`, none now).
+    pub placement_after: Option<Option<Placement>>,
 }
 
 impl UnitDelta {
@@ -179,6 +190,27 @@ impl UnitDelta {
                 Json::from(self.placeholder_type.as_ref()),
             ),
         ])
+        .with_placement(&self.placement_after)
+    }
+}
+
+/// `placement_after` on a delta's JSON, when it carries one.
+trait WithPlacement {
+    fn with_placement(self, p: &Option<Option<Placement>>) -> Json;
+}
+
+impl WithPlacement for Json {
+    fn with_placement(self, p: &Option<Option<Placement>>) -> Json {
+        match (self, p) {
+            (Json::Obj(mut m), Some(p)) => {
+                m.push((
+                    "placement_after".into(),
+                    p.as_ref().map_or(Json::Null, Placement::to_value),
+                ));
+                Json::Obj(m)
+            }
+            (v, _) => v,
+        }
     }
 }
 
@@ -191,6 +223,9 @@ pub struct ViewDeltas {
     /// In the order the change first touched them; units that came or went with their container
     /// after them.
     pub units: Vec<UnitDelta>,
+    /// For a 3D slot: the containers of everything placed through an element whose placement
+    /// the change moved (the render hint names them after the deltas' own).
+    pub placed_through: Vec<String>,
 }
 
 impl ViewDeltas {
@@ -212,6 +247,9 @@ impl ViewDeltas {
             if let Some(c) = &u.container {
                 put(c);
             }
+        }
+        for c in &self.placed_through {
+            put(c);
         }
         for h in render_hashes {
             put(h);
@@ -599,6 +637,154 @@ impl<'c> Touches<'c> {
     }
 }
 
+// ----- the 3D slot's deltas -----
+
+macro_rules! place_plant {
+    ($name:ident, $variant:ident) => {
+        fn $name() -> bool {
+            #[cfg(any(test, feature = "differential"))]
+            if crate::differential::place_mutant()
+                == Some(crate::differential::PlaceMutant::$variant)
+            {
+                return true;
+            }
+            false
+        }
+    };
+}
+
+place_plant!(planted_place_dropped_on_rotation, PlaceDroppedOnRotation);
+place_plant!(planted_no_placement_on_add, NoPlacementOnAdd);
+place_plant!(planted_no_chain_hint, NoChainHint);
+
+/// A placement's parent and translations only (the planted fault
+/// [`crate::differential::PlaceMutant::PlaceDroppedOnRotation`] compares these alone).
+fn locs(p: &Option<Placement>) -> Option<(Option<String>, Vec<u64>)> {
+    let p = p.as_ref()?;
+    let mut out = Vec::new();
+    for s in &p.steps {
+        let t: &[f64] = match s {
+            Step::Trs { loc, .. } => loc,
+            Step::Axes { origin, .. } => origin,
+            Step::Matrix(m) => &m[12..15],
+        };
+        out.extend(t.iter().map(|x| x.to_bits()));
+    }
+    Some((p.relative_to.clone(), out))
+}
+
+fn same_place(a: &Option<Placement>, b: &Option<Placement>) -> bool {
+    if planted_place_dropped_on_rotation() {
+        return locs(a) == locs(b);
+    }
+    a == b
+}
+
+/// For a schema with a 3D slot, the placements of one change's deltas `d`, from the view index
+/// before it and after it: every unit (and container, for a slot with container fields) that
+/// comes into view (`add`, `restore`) carries `placement_after`; one that stays and whose
+/// placement differs, number by number, gets `place` (a container: its `placement_after`); the
+/// render hint learns the containers of everything placed through a moved element. Returns the
+/// addresses whose placement the frame carries.
+pub(crate) fn place_deltas(
+    vs: &ViewSchema,
+    d: &mut ViewDeltas,
+    before: Option<&ViewIndex>,
+    after: &ViewIndex,
+) -> Vec<String> {
+    let Some(slot) = vs.space else {
+        return Vec::new();
+    };
+    let (mut named, mut moved) = (Vec::new(), Vec::new());
+    for u in &mut d.units {
+        if u.ops.contains(&UnitOp::Delete) {
+            continue;
+        }
+        let now = after.unit(&u.key).and_then(|x| x.placement.clone());
+        if u.ops
+            .iter()
+            .any(|o| matches!(o, UnitOp::Add | UnitOp::Restore))
+        {
+            if !planted_no_placement_on_add() {
+                u.placement_after = Some(now);
+                named.push(u.key.clone());
+            }
+            continue;
+        }
+        let was = before
+            .and_then(|b| b.unit(&u.key))
+            .and_then(|x| x.placement.clone());
+        if !same_place(&was, &now) {
+            u.ops.push(UnitOp::Place);
+            u.ops.sort();
+            u.ops.dedup();
+            u.placement_after = Some(now);
+            named.push(u.key.clone());
+            moved.push(u.key.clone());
+        }
+    }
+    if !slot.container_fields.is_empty() {
+        for c in &mut d.containers {
+            let now = after.container(&c.key).and_then(|x| x.placement.clone());
+            match c.op {
+                ContainerOp::Delete => {}
+                ContainerOp::Add | ContainerOp::Restore => {
+                    if !planted_no_placement_on_add() {
+                        c.placement_after = Some(now);
+                        named.push(c.key.clone());
+                    }
+                }
+                _ => {
+                    let was = before
+                        .and_then(|b| b.container(&c.key))
+                        .and_then(|x| x.placement.clone());
+                    if !same_place(&was, &now) {
+                        c.placement_after = Some(now);
+                        named.push(c.key.clone());
+                        moved.push(c.key.clone());
+                    }
+                }
+            }
+        }
+    }
+    if !moved.is_empty() && !planted_no_chain_hint() {
+        d.placed_through = placed_through(after, &moved);
+    }
+    named
+}
+
+/// The containers of everything placed, directly or through others, relative to one of
+/// `moved` (a container placed through one counts as itself), in the index's order.
+fn placed_through(ix: &ViewIndex, moved: &[String]) -> Vec<String> {
+    let mut kids: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+    for u in &ix.units {
+        if let Some(r) = u.placement.as_ref().and_then(|p| p.relative_to.as_deref()) {
+            kids.entry(r).or_default().push((&u.key, &u.container));
+        }
+    }
+    for c in &ix.containers {
+        if let Some(r) = c.placement.as_ref().and_then(|p| p.relative_to.as_deref()) {
+            kids.entry(r).or_default().push((&c.key, &c.key));
+        }
+    }
+    let mut seen: HashSet<&str> = moved.iter().map(String::as_str).collect();
+    let mut todo: Vec<&str> = moved.iter().map(String::as_str).collect();
+    let mut hit: HashSet<&str> = HashSet::new();
+    while let Some(a) = todo.pop() {
+        for (k, c) in kids.get(a).into_iter().flatten() {
+            hit.insert(c);
+            if seen.insert(k) {
+                todo.push(k);
+            }
+        }
+    }
+    ix.containers
+        .iter()
+        .filter(|c| hit.contains(c.key.as_str()))
+        .map(|c| c.key.clone())
+        .collect()
+}
+
 /// The planted fault [`crate::differential::WatchMutant::DeltaGeomStale`].
 fn planted_delta_geom_stale() -> bool {
     #[cfg(any(test, feature = "differential"))]
@@ -731,6 +917,7 @@ fn one<P: Pack + ?Sized>(
                 position_after: pos(op.index_after),
                 hidden_after: None,
                 fields: Vec::new(),
+                placement_after: None,
             });
         }
     }
@@ -771,6 +958,7 @@ fn one<P: Pack + ?Sized>(
             position_after: None,
             hidden_after: hides.then(|| flag(after.read(CONTAINERS, k, chidden).as_deref())),
             fields: changed,
+            placement_after: None,
         });
     }
 
@@ -808,6 +996,7 @@ fn one<P: Pack + ?Sized>(
                 fields: Vec::new(),
                 hidden_after: None,
                 placeholder_type: placeholder_type(before, k),
+                placement_after: None,
             },
             (None, Some(c)) => {
                 let inserted = t
@@ -827,6 +1016,7 @@ fn one<P: Pack + ?Sized>(
                     fields: t.fields.iter().filter(|f| changed(f)).cloned().collect(),
                     hidden_after: None,
                     placeholder_type: placeholder_type(after, k),
+                    placement_after: None,
                 }
             }
             (Some(cb), Some(ca)) => {
@@ -842,7 +1032,13 @@ fn one<P: Pack + ?Sized>(
                 for f in t.fields.iter().filter(|f| changed(f)) {
                     match class_of(vs, uf.hidden, f) {
                         FieldClass::Geometry => {
-                            let g = vs.geometry.expect("a geometry field");
+                            // a geometry field that isn't the 2D slot's (a scene's transform,
+                            // with no slot at all): it moved, with no box before or after
+                            let Some(g) = vs.geometry.filter(|g| g.field == f.as_str()) else {
+                                ops.push(UnitOp::MoveResize);
+                                fields.push(f.clone());
+                                continue;
+                            };
                             let (b, a) = (
                                 before.field(UNITS, k, f).unwrap_or_default(),
                                 after.field(UNITS, k, f).unwrap_or_default(),
@@ -896,6 +1092,7 @@ fn one<P: Pack + ?Sized>(
                     fields,
                     hidden_after: hides.then(|| flag(after.read(UNITS, k, uf.hidden).as_deref())),
                     placeholder_type: placeholder_type(after, k),
+                    placement_after: None,
                 }
             }
         };

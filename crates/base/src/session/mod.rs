@@ -78,7 +78,7 @@ pub use awareness::{
     OVERWRITE_PENDING_MAX, OVERWRITE_TEXT_MAX, OVERWRITE_VALUE_MAX,
 };
 pub use config::{
-    Config, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
+    Config, KeyedLimit, LimitSource, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
     DEFAULT_BLAME_CHECK_LARGE_AT,
 };
 pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
@@ -106,7 +106,7 @@ pub use live::{
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{
     default_reconcile, elem_of_map_key, list_pairing, Declined, Pack, PackContent, PackError,
-    Pairing, Reconciled, SpliceError, TextFilePack,
+    Pairing, Reconciled, SpliceError, TextFilePack, VerbState,
 };
 pub use participant::{
     CellCursor, ConnId, CursorAt, Device, ElemFocus, ElemRange, ElemSelection, Participant,

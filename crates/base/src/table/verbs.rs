@@ -1,4 +1,4 @@
-//! The grid verbs (CSV contract §3.1) for any table pack (A9): [`VERBS`], listed by a pack's
+//! The grid verbs (CSV contract §3.1) for any table pack: [`VERBS`], listed by a pack's
 //! [`crate::session::Pack::verbs`]. Engine-free and codec-free: each verb computes on the doc
 //! as a [`crate::session::View`] ([`VerbCtx`]) and returns its edits by key; the pack's codec
 //! is reached only through the context (a pasted block, rendered lines).
@@ -15,7 +15,7 @@
 //! **Exits** (§3.3): an unknown or deleted element, `#N` past the end, a `--where` with no
 //! match, a sort column that doesn't exist: **4** (nothing applies). An ambiguous name or
 //! `--where`: **2**, `MPC-E170 ambiguous_address`, the line listing the keys and
-//! `details.candidates` each one's `@k:` address and `#N` (K-ADDR-2; never the first match).
+//! `details.candidates` each one's `@k:` address and `#N` (never the first match).
 //! More values than columns, a bad value (NUL, over 64 KiB), renaming with the header off, a
 //! bad flag: **2**. `--if-version`, `--base` and the claim
 //! policy are the kit's (taken out of the arguments before these see them).
@@ -214,7 +214,7 @@ fn refusal(exit: u8, message: impl Into<String>) -> Refusal {
     }
 }
 
-/// An ambiguous name or `--where` (K-ADDR-2): exit 2 with the keys listed, and each match's
+/// An ambiguous name or `--where`: exit 2 with the keys listed, and each match's
 /// `@k:` address and `#N` among the live elements in `details.candidates`.
 fn ambiguous(what: &str, given: &str, axis: &Axis, many: &[Key], message: String) -> Refusal {
     let candidates: Vec<addr::Candidate> = many
@@ -380,7 +380,7 @@ fn by_key(t: &Table, root: &'static str, k: &Key, want: Want) -> Result<Key, Ref
     }
 }
 
-/// `col` in `t` (`pos`: where `#N` counts, K-ADDR-3).
+/// `col` in `t` (`pos`: where `#N` counts).
 fn resolve_col(t: &Table, col: &ColAt, want: Want, pos: &Pos<'_, '_>) -> Result<Key, Refusal> {
     match col {
         ColAt::Key(k) => by_key(t, super::COLS, k, want),
@@ -431,7 +431,7 @@ fn by_name(t: &Table, name: &str) -> Result<Key, Refusal> {
     }
 }
 
-/// `row` in `t` (`pos`: where `#N` and `LN` count, K-ADDR-3).
+/// `row` in `t` (`pos`: where `#N` and `LN` count).
 fn resolve_row(t: &Table, row: &RowAt, want: Want, pos: &Pos<'_, '_>) -> Result<Key, Refusal> {
     match row {
         RowAt::Key(k) => by_key(t, ROWS, k, want),
@@ -587,7 +587,7 @@ fn place<A>(
 }
 
 /// A place as an anchor in `live` (the axis's live keys where `#N` counts, the moving
-/// element left out); `check` is what the Nth key must pass in the live table (K-ADDR-3: when
+/// element left out); `check` is what the Nth key must pass in the live table (when
 /// `#N` counted in the `--base` version, that element must still be live).
 fn anchor_of<A>(
     p: &Place<A>,
@@ -687,7 +687,7 @@ fn table_err(e: TableError) -> Refusal {
     }
 }
 
-/// Where a verb's positional addresses count (K-ADDR-3, R-1): an edit's `--base` version
+/// Where a verb's positional addresses count (R-1): an edit's `--base` version
 /// when the kit gives it ([`VerbCtx::positions_view`]), else the live table. Keys and names
 /// always resolve in the live table; an element `#N` or `LN` names at the base must still be
 /// live (or known, for restore) there.
@@ -756,7 +756,7 @@ fn lines_of<'c, 'a>(ctx: &'c VerbCtx<'a>) -> Result<Pos<'c, 'a>, Refusal> {
     })
 }
 
-/// A grid verb's positional address (K-ADDR-3; [`PackVerb::positional`]): the first `#N`
+/// A grid verb's positional address ([`PackVerb::positional`]): the first `#N`
 /// or `LN` among its address flags' values (a cell's `R,C` and `--where`'s column
 /// included), as given.
 fn positional(args: &[String]) -> Option<String> {

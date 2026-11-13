@@ -334,7 +334,7 @@ fn the_plain_applier_and_the_doc_agree() {
     runrec("the_plain_applier_and_the_doc_agree", start);
 }
 
-/// C1k (request 3): `header on|off` never changes the rendering; the refusals are
+/// `header on|off` never changes the rendering; the refusals are
 /// `on` where the only live row is blank, and `on` with no row over names kept unrendered
 /// (`MPC-E806`); each changes nothing.
 #[test]
@@ -528,7 +528,7 @@ fn merge3_properties_run() {
 /// `merge3_properties`' shrunk case of seed 683950541548579763 (v0.10.0), by key: base row r1
 /// has a present cell (c3, set to `""`), so it renders every column and its absent c2 reads as
 /// an empty field; theirs clears c2 (absent to `""`: the same bytes) and ours sets it to `"a"`.
-/// By key a clear is a write (K-CSV-10a), so both set r1/c2: one `cell` conflict, theirs' `""`
+/// By key a clear is a write, so both set r1/c2: one `cell` conflict, theirs' `""`
 /// stands. (The row delete, ours' insert and theirs' move are the shrunk case's; they only shape
 /// which rows the random ops picked.)
 #[test]
@@ -590,7 +590,7 @@ fn unset(t: &mut Table, row: &Key, col: &Key) {
 /// element, the file's side (`ours` …) wins, and the overlap is reported in
 /// [`Merge::conflicts`] as **overridden**, not left out: `cell`, `name`, `quoting`: the file's
 /// value is set". By key a switch between absent and `""` is a write of the cell (a clear is a
-/// set to `""`, K-CSV-10a), even where the row renders the same bytes either way: the
+/// set to `""`), even where the row renders the same bytes either way: the
 /// byte-neutral rule is a text's (a text can't tell an empty field from an absent cell). So:
 /// base r1 renders every column (rect, `x,y` and an inserted, absent c3); theirs switches
 /// r1/c3 (absent to `""`, and the reverse); ours (the file) sets it to `"a"`: the file's `"a"`,
@@ -864,7 +864,7 @@ fn unique_best(x: &Record, ys: &[Record]) -> Option<usize> {
     (m > 0 && s.iter().filter(|&&v| v == m).count() == 1).then(|| s.iter().position(|&v| v == m))?
 }
 
-/// C1d part 2 and C1k: random grids (one to four columns, blank lines among the rows),
+/// Random grids (one to four columns, blank lines among the rows),
 /// and ONE outside save combining moves, cell edits, inserts, deletes, rewrites and
 /// blank-line edits. The result renders as the file; reconcile of a rendering is a no-op;
 /// wherever the choice is unambiguous (a surviving row whose old and new records are each

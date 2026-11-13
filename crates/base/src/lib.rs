@@ -42,12 +42,12 @@
 //! - [`tools`]: the text verbs agents run on a live doc (`cat`, `grep`, `sed`, `patch`...),
 //!   as pure functions and through [`Session::run_tool`]; packs add their own
 //!   ([`session::Pack::verbs`]).
-//! - [`ids`]: the ID table (K-ID-13): every ID and address kind the kit's verbs take or
+//! - [`ids`]: the ID table: every ID and address kind the kit's verbs take or
 //!   print, with its durability class, scope and verbs (`docs/IDS.md`); packs add theirs
 //!   ([`session::Pack::ids`]); the ID-churn judge for packs' tests (feature `test-support`).
 //! - [`timers`]: production timers (v0.10.1): per-path counts, times and p50/p95/p99, off
 //!   by default, in every build (`docs/SESSIONS.md`, "Timers").
-//! - [`view_index`]: the view index of the rendering-data contract (gaps 1–3): a pack's view
+//! - [`view_index`]: the view index a host's view reads: a pack's view
 //!   schema, element addresses, and one index shape from a live doc's keyed state or a
 //!   version's structure index, paged by container for a watch.
 //! - [`view_delta`]: what each change did to that view (the contract's Item 2), per container
@@ -87,6 +87,10 @@ macro_rules! engine_visits {
     ($n:expr) => {
         #[cfg(any(test, feature = "differential"))]
         $crate::differential::count_engine_visits(($n) as u64);
+        // a build without the count still reads the value, so a counter kept only for it isn't
+        // dead code there (`cargo clippy --lib`, full.sh's lint)
+        #[cfg(not(any(test, feature = "differential")))]
+        let _ = $n;
     };
 }
 
@@ -99,7 +103,7 @@ macro_rules! timed {
     };
 }
 
-// K10, the build-time guard: decoding remote clients' bytes stays off until the six gates hold
+// The build-time guard: decoding remote clients' bytes stays off until the six gates hold
 // (docs/HOST-WIRE.md). A host that has checked them acknowledges it in its own build:
 // `RUSTFLAGS="--cfg k2_mpc_untrusted_wire_ack"` (or `[build] rustflags` in its cargo config).
 #[cfg(all(feature = "untrusted-wire", not(k2_mpc_untrusted_wire_ack)))]
@@ -129,6 +133,7 @@ pub mod ids;
 pub mod index;
 pub mod mint;
 pub mod parity;
+pub mod placement;
 pub mod refs;
 pub mod schema;
 pub mod session;

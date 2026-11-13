@@ -107,9 +107,9 @@ for the connect and retry loop and Re-apply.
 | Rule | Tests (`client/test/`) |
 |---|---|
 | Rule 0, composing, rebasing | `live.test.ts` ("keeps one change in flight ... (rule 0)"), `convergence.test.ts`, `realistic.test.ts` |
-| No replay while closed; a lost reply is `MPC-E000`; the reconnect | `wire.test.ts` ("reconnect (G4, G5)"), `live-convergence.test.ts` (three DOM-free hosts with dropped sockets, reconnects and resumes) |
+| No replay while closed; a lost reply is `MPC-E000`; the reconnect | `wire.test.ts` ("reconnect"), `live-convergence.test.ts` (three DOM-free hosts with dropped sockets, reconnects and resumes) |
 | One transport across reconnects; connect replaces | `fake-live.ts` (the fake transport the suites run on, the contract as code), `live-convergence.test.ts` |
-| Undo is the server's | `wire.test.ts` ("the own-edit filter (G3) and undo (G9)") |
+| Undo is the server's | `wire.test.ts` ("the own-edit filter and undo") |
 | Re-apply: the server's rule, presence first, kinds | `reapply.test.ts` (the kit's rebase vectors; kinds; planted faults), `live-convergence.test.ts` (fixed seeds, each failing under its planted fault) |
 | The caret re-send | `caret-resend.test.ts`, `carets-per-conn.test.ts` |
 | Presence and marks | `presence.test.ts` |

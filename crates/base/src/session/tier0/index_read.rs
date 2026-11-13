@@ -1,4 +1,4 @@
-//! The structure index's typed reads (slice A2, `docs/SESSIONS.md`, "Reading the index"):
+//! The structure index's typed reads (`docs/SESSIONS.md`, "Reading the index"):
 //! what a host's views call, each with a connection, the rights asked on every call, and an
 //! App viewer's handles. The verbs ([`BlobSession::run_tool`]) are a parser over these.
 //!
@@ -60,8 +60,8 @@ impl BlobSession {
     }
 
     /// The view index of a version (`None`: the current one), from its structure index through
-    /// the pack's view schema ([`crate::view_index::ViewIndex::blob`], rendering-data contract
-    /// gap 3): `tier` blob, `version` set. Rights and refusals as [`BlobSession::index_list`]
+    /// the pack's view schema ([`crate::view_index::ViewIndex::blob`]):
+    /// `tier` blob, `version` set. Rights and refusals as [`BlobSession::index_list`]
     /// (read, and history for a version that isn't current; pending, not indexed). `Ok(None)`,
     /// with nothing read, when the pack has no view schema or the schema no blob mapping.
     pub fn view_index(
@@ -76,7 +76,7 @@ impl BlobSession {
         Ok(crate::view_index::ViewIndex::blob(&*self.pack, &view))
     }
 
-    /// **The outline** of a version (K-READ-1's `outline`): every node the query keeps, in
+    /// **The outline** of a version (the `outline`): every node the query keeps, in
     /// outline order, each with its `#N`, key, kind, name and place, without text,
     /// attributes or hashes. `under` keeps the nodes below one node, by any address: one that
     /// names nothing is `MPC-E172`, one that names several `MPC-E170`
@@ -92,9 +92,9 @@ impl BlobSession {
         self.for_viewer(conn, out, |_, v| v)
     }
 
-    /// **Nodes by address** (K-READ-1's `node`): one entry per address, in the order given,
+    /// **Nodes by address** (the `node`): one entry per address, in the order given,
     /// each the node in full with its ancestors and its descendants `depth` levels down; `None`
-    /// for an address that names nothing, which `missing` lists with its candidates (K-READ-3).
+    /// for an address that names nothing, which `missing` lists with its candidates.
     /// The kit's one address grammar ([`crate::addr`]): a key (`@k:…`), a native ID, `#N` (in
     /// the version read: `NodesRead::version`), a name. A name or ID two nodes share refuses
     /// the read, `MPC-E170` with every holder as a candidate ([`SessionError::IndexRead`]);

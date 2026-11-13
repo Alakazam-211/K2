@@ -1,11 +1,11 @@
-//! Blame (K-HIST-11, K-HIST-18, P22) through sessions: every kind of author (the import, a
+//! Blame (P22) through sessions: every kind of author (the import, a
 //! person, agents, an assistant acting for someone, an outside edit), the most-recent rule
 //! inside one line, `-L` ranges, undo / redo / revert / restore attributed to whoever ran
 //! them (undo spec U18a), purged changes marked `erased` and erased participants shown by
 //! pseudonym, the history right, tier 0's pointer blame, and a property test against a
 //! model of who typed every character. Public API only.
 //!
-//! On a grid (A12, K-HIST-11, CSV contract §5.5), with the kit's test table pack
+//! On a grid (CSV contract §5.5), with the kit's test table pack
 //! (`tests/grid_pack`): a rendered line goes to its row's latest cell write (moves and sorts
 //! author nothing), the header to the latest name write, a value put back by an undo blames
 //! its original write; `blame --structure` gives who inserted each row and who last moved it.
@@ -227,7 +227,7 @@ fn line(b: &Blame, n: usize) -> &BlameLine {
 
 // ---------- every kind of author ----------
 
-/// IT `blame::agent_person_external` (K-HIST-11, K-ID-8, K-ID-10, K-HIST-18): the import, a
+/// IT `blame::agent_person_external`: the import, a
 /// person, two agents, an assistant acting for the person (pending), and an outside edit,
 /// each on its own line, with change, kind, surface, time, on-behalf and approval.
 #[test]
@@ -705,7 +705,7 @@ fn blame_after_purge() {
 
 // ---------- rights ----------
 
-/// K-PERM-9: blame needs history, not just read or edit; refused and audited.
+/// Blame needs history, not just read or edit; refused and audited.
 #[test]
 fn blame_needs_history() {
     let f = fx("rights");
@@ -882,7 +882,7 @@ proptest! {
     }
 }
 
-// ---------- grids (A12) ----------
+// ---------- grids ----------
 
 mod grid {
     use super::*;

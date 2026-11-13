@@ -18,7 +18,7 @@ impl Session {
     /// Let this session read and purge its tier-0 history (the manager's blob store).
     pub(crate) fn set_blob_store(&self, blobs: Arc<crate::blob::BlobStore>) {
         let _ = self.blobs.set(blobs);
-        // the stored carrier (K1), checked against the sync point
+        // the stored carrier, checked against the sync point
         self.load_carrier();
     }
 

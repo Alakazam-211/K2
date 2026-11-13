@@ -1,5 +1,5 @@
 //! Rewriting the store into a fresh file: what makes a purge leave no bytes behind
-//! (K-PURGE-2, E-ERASE-4: "pages rewritten, not marked free").
+//! ("pages rewritten, not marked free").
 //!
 //! **Why not redb's compaction.** `Database::compact` relocates live pages towards the
 //! start of the file and truncates the tail. It does not zero freed pages: a page freed by
@@ -243,7 +243,7 @@ mod tests {
     /// Every table the store defines (`TableDefinition::new("…")` in `src/store/`) is known
     /// to the rewrite ([`DOC_TABLES`] or [`SHARED_TABLES`], v0.9.7's one list), and every
     /// known table is one the store defines: a table left out would make every purge refuse
-    /// (`MPC-E502 store_newer`) once a doc wrote to it (format 6's `elem_writes`, C1).
+    /// (`MPC-E502 store_newer`) once a doc wrote to it (format 6's `elem_writes`).
     #[test]
     fn every_store_table_is_in_the_rewrite_list() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store");

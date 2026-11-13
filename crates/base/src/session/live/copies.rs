@@ -2,7 +2,7 @@
 //! beside its file (or in the host's folder) when an outside save over the kit's own write kept
 //! both (`grid.rs`, `ingest_structured`). Each copy is recorded in the store (`live_copies`),
 //! and `tick` removes it after [`Config::conflict_copy_keep_ms`] on the terms tier 0 removes
-//! its own (K-A11Y-5): only a copy still holding exactly its kept version's content, never one
+//! its own: only a copy still holding exactly its kept version's content, never one
 //! a person edited, nor one whose version (kept, or the save's) is named or purged.
 
 use std::fs;
@@ -40,7 +40,7 @@ fn copy_compared_with_encode() -> bool {
 impl Session {
     /// Stored version `vid` as the kit writes it (as the copy was written: its own codec
     /// settings, else the doc's; for a pack that keeps a carrier, spliced into the version's
-    /// carrier, K1); `None` when it can't be read or rendered.
+    /// carrier); `None` when it can't be read or rendered.
     fn version_bytes(&self, st: &State, vid: VersionId) -> Option<Vec<u8>> {
         let v = self.store(st).ok()?.version(self.doc_id, vid).ok()?;
         self.version_file(st, vid, &v, copy_compared_with_encode())
@@ -143,7 +143,7 @@ impl Session {
         }
     }
 
-    /// K-A11Y-5's cleanup for a live doc (on `tick`, at most every
+    /// the cleanup for a live doc (on `tick`, at most every
     /// [`Config::history_tick_ms`]): delete a recorded copy older than
     /// [`Config::conflict_copy_keep_ms`] when it is still a regular file holding exactly its
     /// kept version's content (the pack's rendering of that version, as the copy was written).

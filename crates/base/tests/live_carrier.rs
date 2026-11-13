@@ -1,7 +1,7 @@
-//! K1, the carrier bytes (the pptx live plan's slice 2): for a pack that models its format only
-//! in part, the kit keeps the bytes it last read from the file or wrote to it (the "carrier", a
-//! blob in the blob store with a count the store's lifecycle tracks) and hands them to
-//! `Pack::encode_from`, which splices the doc's content into them.
+//! The carrier bytes: for a pack that models its format only in part, the kit keeps the bytes
+//! it last read from the file or wrote to it (the "carrier", a blob in the blob store with a
+//! count the store's lifecycle tracks) and hands them to `Pack::encode_from`, which splices the
+//! doc's content into them.
 //!
 //! - `encode_from` gets exactly the bytes last read or written: after the open, after each kit
 //!   write, after an outside save (from the save on, before anything renders the doc that took
@@ -579,7 +579,7 @@ fn need(ok: bool, row: &str, what: impl FnOnce() -> String) -> Result<(), String
 /// (`encode` would write them sorted), so only a splice writes it back as it was.
 const F0: &str =
     "# deck v1 (opaque)\ns1\ttitle=A\n# speaker note for s1\ns2\tz=9\ttitle=B\n# end\n";
-/// F0 with s1's title A2: only that line changes.
+/// F0 with s1's title `A2`: only that line changes.
 const F1: &str =
     "# deck v1 (opaque)\ns1\ttitle=A2\n# speaker note for s1\ns2\tz=9\ttitle=B\n# end\n";
 /// F1 with s2's title B2: that line is written in key order.

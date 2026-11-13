@@ -5,7 +5,7 @@
 //! the invariants checked as it goes:
 //!
 //! - **no panic** (any panic fails the test);
-//! - **nothing acknowledged is lost** (K-AUD-1 style): every line is a unique token naming
+//! - **nothing acknowledged is lost** (as the lost-edit audit checks): every line is a unique token naming
 //!   its writer. After every call, the lines that appeared and went are explained by that
 //!   call alone: a refused or failed call (or a read, a claim, a leave, a tick, a restart)
 //!   changes nothing; an acknowledged insert is there; a delete or replace removes only its
@@ -16,7 +16,7 @@
 //! - **store reload equals live state**: periodically every handle is released and the
 //!   store reopened; the text and version must match, and everyone rejoins;
 //! - **the file equals the doc** after a flush, and so does the disk replica, element for
-//!   element (K-AUD-1's sync check, v0.9.4); blame (by root) gives every line, with a writer
+//!   element (the sync check, v0.9.4); blame (by root) gives every line, with a writer
 //!   who wrote in this doc;
 //! - **outside saves** (v0.9.5): a plain editor reads the file, edits it and saves it, often
 //!   inside the write delay while the doc has changes the file doesn't: a line added or
@@ -24,7 +24,7 @@
 //!   each), or an older write of the kit's saved back from a stale buffer. Each save must be
 //!   taken in exactly (its lines there or gone, nothing else lost: the same line oracle), or,
 //!   for a write of the kit's made since the last outside save, suppressed as an echo and
-//!   reported; K-AUD-1 runs after every save;
+//!   reported; the sync audit runs after every save;
 //! - **claims and presence**: two participants' claims never overlap (a new one, and carried
 //!   ones: text typed where two meet joins one of them; calls after which two shared an
 //!   edge are counted), every claim belongs to a live connection, and the roster is exactly
@@ -1004,7 +1004,7 @@ impl Soak {
     }
 
     /// The plain editor saves `text` (in place, or by rename as vim does) and the host's
-    /// watcher reports it. K-AUD-1 after every save.
+    /// watcher reports it. The sync audit after every save.
     fn editor_save(&mut self, text: &str) -> DiskCheck {
         if self.rng.gen_bool(0.5) {
             std::fs::write(&self.file, text).unwrap();
@@ -1026,7 +1026,7 @@ impl Soak {
         assert_eq!(
             self.s.audit_disk_sync().unwrap(),
             vec![],
-            "K-AUD-1 after an outside save"
+            "the sync audit after an outside save"
         );
         check
     }
@@ -1417,7 +1417,7 @@ impl Soak {
             self.s.read(self.obs()).unwrap().bytes,
             "the file isn't the doc"
         );
-        // K-AUD-1's sync check (v0.9.4): the replica the next outside edit is made on is the
+        // the sync check (v0.9.4): the replica the next outside edit is made on is the
         // doc, on its elements (the file and the doc agreeing can't show a stale one)
         assert_eq!(
             self.s.audit_disk_sync().unwrap(),

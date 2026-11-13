@@ -1,5 +1,4 @@
-//! Person-writer reuse (`Config::reuse_person_writers`, v0.14.0;
-//! `docs/design/person-writer-reuse-r0.md` §5): one writer per person per device.
+//! Person-writer reuse (`Config::reuse_person_writers`, v0.14.0): one writer per person per device.
 //!
 //! The rows, each on Yrs through sessions; the text rows' writer schedules are also replayed on
 //! the native engine (feature `native`), and every text row's store log is replayed through the
@@ -257,7 +256,7 @@ fn log_writers(store: &DocStore, id: DocId) -> BTreeSet<ClientId> {
 
 /// A Yrs v1 state vector: client → clock.
 fn sv(doc: &Doc) -> BTreeMap<u64, u64> {
-    let b = doc.state_vector();
+    let b = doc.try_state_vector().unwrap();
     let mut i = 0;
     let mut var = || {
         let (mut v, mut shift) = (0u64, 0);

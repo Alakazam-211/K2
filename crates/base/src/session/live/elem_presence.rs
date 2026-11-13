@@ -7,13 +7,13 @@
 //! event per connection per flush, the last value. A watcher (past
 //! [`Config::participants_max`]) is refused every one of them ([`SessionError::Watching`]).
 //!
-//! **Focus and range** (rendering-data contract Item 3, wire 3): the focus is the container in
+//! **Focus and range** (wire 3): the focus is the container in
 //! view (a slide); a range is a caret or selection inside one element's text field. Setting a
 //! range sets the connection's focus to that element's container ([`Pack::container_of`]), so a
 //! range is never shown on a container nobody has in view. A range is never moved: it is dropped
 //! when its field changes, by anyone, or its element stops being live.
 //!
-//! **An agent's verbs move its presence** (contract Item 3, gap 11): when a pack's verb changes
+//! **An agent's verbs move its presence**: when a pack's verb changes
 //! elements, the kit sets the acting agent's focus to the container of the last element it
 //! touched (the last container touched wins) and its selection to the elements it touched. A
 //! person's presence is never moved by the kit: people set their own.
@@ -108,7 +108,7 @@ fn planted_roster_keys_leak() -> bool {
     false
 }
 
-/// Elements `keys` of list root `root` by address ([`Pack::address_of`], contract gap 2).
+/// Elements `keys` of list root `root` by address ([`Pack::address_of`]).
 pub(super) fn addresses<P: Pack + ?Sized>(pack: &P, root: &str, keys: &[Key]) -> Vec<String> {
     keys.iter().map(|k| address(pack, root, k)).collect()
 }
@@ -275,7 +275,7 @@ impl Session {
         Ok(())
     }
 
-    /// [`Session::set_selection`] by address ([`Pack::address_of`], contract gap 2): every
+    /// [`Session::set_selection`] by address ([`Pack::address_of`]): every
     /// address names a live element of one list root ([`Session::resolve_address`]); none clears
     /// it. Returns the selection as stored, by address.
     pub fn set_selection_at(&self, conn: ConnId, addresses: &[String]) -> Result<Vec<String>> {
@@ -316,7 +316,7 @@ impl Session {
         }))
     }
 
-    /// [`Session::set_focus`] by address (contract gap 2): the address names a live element
+    /// [`Session::set_focus`] by address: the address names a live element
     /// ([`Session::resolve_address`]); `None` clears it. Returns the focus as stored, by
     /// address.
     pub fn set_focus_at(&self, conn: ConnId, address: Option<&str>) -> Result<Option<String>> {
@@ -331,7 +331,7 @@ impl Session {
         Ok(out.map(|f| self.pack.address_of(&f.root, &f.key)))
     }
 
-    /// [`Session::set_range`] by address (contract gap 2): `(address, field, anchor, head)`, the
+    /// [`Session::set_range`] by address: `(address, field, anchor, head)`, the
     /// element by address ([`Session::resolve_address`]); `None` clears it. Returns the stored
     /// range's element by address.
     pub fn set_range_at(
@@ -350,7 +350,7 @@ impl Session {
         Ok(out.map(|r| self.pack.address_of(&r.root, &r.key)))
     }
 
-    /// Set the container this connection has in view (rendering-data contract Item 3), or
+    /// Set the container this connection has in view, or
     /// clear it with `None`. Needs read. The root must be a MovableList and the key a live
     /// element of it ([`SessionError::BadPosition`] otherwise; the focus stays as it was). A
     /// watcher is refused ([`SessionError::Watching`]). It leaves when its element stops being
@@ -432,7 +432,7 @@ impl Session {
         Ok(Some(out))
     }
 
-    /// After a pack verb's change by member `i` landed (contract Item 3, gap 11; `named`: what
+    /// After a pack verb's change by member `i` landed (`named`: what
     /// the change named, in order, [`touched_in_order`]; `stream`: what it applied): an
     /// **agent's** presence follows what the verb touched.
     ///
@@ -499,7 +499,7 @@ impl Session {
     }
 
     /// The focus on the container of element `key` of `root`, when that is a live element of a
-    /// list root. With a view schema ([`Pack::view_schema`], contract gap 1) a unit's container
+    /// list root. With a view schema ([`Pack::view_schema`]) a unit's container
     /// is the one its container field names ([`Session::schema_container`]) and a container is
     /// its own; any other root's (or a pack's without a schema) is [`Pack::container_of`]'s.
     pub(super) fn container_focus(&self, st: &State, root: &str, key: &Key) -> Option<ElemFocus> {

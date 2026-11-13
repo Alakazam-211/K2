@@ -1,7 +1,7 @@
 //! The live-edit rebase (E-LIVE, `edit_at_base`; kit v0.9.7): carry a text change made at an
 //! older version through the changes applied since, positionally, with deterministic
 //! tie-breaks. The server ([`crate::session::Session::edit_at_base`]) and the JS client
-//! (`client/`, K1) apply the same rules, so both compute the same text. Pure functions over
+//! (`client/`) apply the same rules, so both compute the same text. Pure functions over
 //! [`Hunk`]s (canonical, UTF-8 byte offsets); shared test vectors pin them for the client.
 //!
 //! **Roles.** A change is carried through another one that was applied first:

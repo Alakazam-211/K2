@@ -1,4 +1,4 @@
-//! Erasure on a live text doc (K-PURGE-1…7, -10, -13; undo spec U19, U20):
+//! Erasure on a live text doc (undo spec U19, U20):
 //! [`Session::purge`]. A child of `live`, so it works on the session's own state.
 //!
 //! **Purge removes history, not live text.** What the doc says now stays; every other copy
@@ -6,11 +6,11 @@
 //! pass [`PurgeRequest::and_remove`] with a text scope: the session deletes every live
 //! copy as an ordinary change by the owner, then purges, under one lock).
 //!
-//! **Structured docs** (grids; C1f, A13, CSV seam design §7.4): content is values (cells,
+//! **Structured docs** (grids, CSV seam design §7.4): content is values (cells,
 //! hidden cells of deleted rows and columns, column names, any map or list value). Purge
 //! reaches them in typed versions, revert records (version 3), the log, the snapshot, the
 //! sync replica and the file, and redacts a value **whole** (a register has no sub-value
-//! identity). Overwritten values are gone from the re-encoded state (GC on, K-PURGE-11).
+//! identity). Overwritten values are gone from the re-encoded state (GC on).
 //! [`PurgeScope::Cell`] and [`PurgeScope::Row`] target a table's elements;
 //! [`PurgeScope::Text`] matches every value, live or hidden, in every version and record;
 //! `and_remove` sets each live or hidden value holding the text to that value without it.
@@ -42,16 +42,16 @@ pub enum PurgeScope {
     /// It must be at least [`MIN_MATCH`] (8) bytes: a shorter one would match innocent text
     /// across the whole history, so it is refused ([`SessionError::BadEdit`], exit 2).
     Text(String),
-    /// Participant erasure (K-PURGE-7): replace `pid` by `pseudonym` in attribution (log,
+    /// Participant erasure: replace `pid` by `pseudonym` in attribution (log,
     /// changes, revert records, approvals, versions' authors, the client table), keeping
     /// counts, and purge the content of every change they authored, as
     /// [`PurgeScope::Changes`]. Present connections of `pid` are removed.
     Participant { pid: String, pseudonym: String },
-    /// A table's cell (`purge --cell R,C`, C1f): every value it ever held, redacted whole in
+    /// A table's cell (`purge --cell R,C`): every value it ever held, redacted whole in
     /// every version and change record, and every other copy of those values (8-byte
     /// windows) as [`PurgeScope::Changes`] finds them. Its live value stays.
     Cell { row: Key, col: Key },
-    /// A table's row (`purge --row R`, C1f): as [`PurgeScope::Cell`] for every cell keyed by
+    /// A table's row (`purge --row R`): as [`PurgeScope::Cell`] for every cell keyed by
     /// it, under any column, at any time.
     Row { row: Key },
 }
@@ -103,7 +103,7 @@ impl PurgeRequest {
     }
 }
 
-/// A place purge does not reach (K-PURGE-10, -12). Every purge returns the standing list
+/// A place purge does not reach. Every purge returns the standing list
 /// ([`NotReached::ALWAYS`]) plus what applies to this one; the host prints it with
 /// [`NotReached::describe`] and tells the owner to **rotate the secret**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -111,8 +111,8 @@ impl PurgeRequest {
 pub enum NotReached {
     /// The doc's file wasn't rewritten (missing, declined, unwritable, not attached to this
     /// session, or the pack couldn't render the doc): it, and the sync replica of it the kit
-    /// keeps (and, for a pack that keeps one, its carrier: the file's bytes as last written,
-    /// K1), still hold its text as last written. Attach and flush the file, then purge again.
+    /// keeps (and, for a pack that keeps one, its carrier: the file's bytes as last written),
+    /// still hold its text as last written. Attach and flush the file, then purge again.
     File,
     /// This many targeted changes had already left the revert window: the text they changed
     /// is unknown, so copies of it elsewhere couldn't be found. Purge by text, or the whole
@@ -146,7 +146,7 @@ pub enum NotReached {
     OsSnapshots,
     /// Synced-folder history (iCloud Drive, Dropbox...).
     SyncedFolders,
-    /// K2 backups made before the purge (K-PURGE-9).
+    /// K2 backups made before the purge.
     BackupsBeforePurge,
     /// Clients and devices that haven't reconnected since.
     OfflineClients,
@@ -157,7 +157,7 @@ pub enum NotReached {
     /// Disk blocks of the old store file, released to the file system, not overwritten.
     FreedDiskBlocks,
     /// Annotations: the notifications the host sent about the comments (their copies are the
-    /// host's, K-ANN-5).
+    /// host's).
     SentNotifications,
 }
 
@@ -217,7 +217,7 @@ pub struct PurgeOutcome {
     pub live_matches: usize,
     /// `and_remove`'s change, when it removed anything.
     pub removed: Option<EditResult>,
-    /// Where the purge didn't reach (K-PURGE-10): [`NotReached::ALWAYS`] and more.
+    /// Where the purge didn't reach: [`NotReached::ALWAYS`] and more.
     pub not_reached: Vec<NotReached>,
     /// The store file's rewrite (`None` if it failed: see [`NotReached::StoreFile`]).
     pub rewrite: Option<RewriteReport>,
@@ -346,7 +346,7 @@ fn op_values(rec: &RevertRecord, pick: impl Fn(&str, &str) -> bool) -> Vec<Strin
 }
 
 impl Session {
-    /// **Purge** (K-PURGE-1…7, -13): remove the content `req` targets from everything the kit
+    /// **Purge**: remove the content `req` targets from everything the kit
     /// holds for this doc, keeping change ids, authors, lengths and times as metadata. Owner
     /// only ([`Rights::owner`]; others get [`SessionError::Forbidden`] with [`Need::Owner`]
     /// and an [`AuditEvent::Refused`]). Live text is not changed (see
@@ -752,7 +752,7 @@ impl Session {
         self.purge_kept_tier0(st, &store, whole, now, &mut counts, &mut not_reached)?;
         // the conflict copies holding content the purge erased (`live/copies.rs`)
         self.purge_live_copies(st, copies, &mut counts, &mut not_reached)?;
-        // the carriers of the versions it erased (K1, `live/carrier.rs`)
+        // the carriers of the versions it erased (`live/carrier.rs`)
         self.purge_version_carriers(
             st,
             &whole_versions,

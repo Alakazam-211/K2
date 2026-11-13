@@ -1,14 +1,14 @@
-# The model check at the G1 bound (docs/MODEL-CHECK.md "The G1 bound"). LONG: launched only
+# The model check at the full bound (docs/MODEL-CHECK.md "The full bound"). LONG: launched only
 # after review, never as a smoke run. PART picks what runs (each fits a 2 h job on 12 cores):
 #   PART=exhaustive (default)  3x1 + 2 undos + 1 revert, then 2x2 + 2 undos + 1 revert, exactly
-#   PART=walks                 WALKS (default 5,000,000) random walks at the literal G1 bound,
+#   PART=walks                 WALKS (default 5,000,000) random walks at the full bound,
 #                              then every mutant on 50,000 walks (each must fail), then
 #                              WALKS_RST (default 1,000,000) walks with 1 restart. Over 2 h
 #                              on 8 threads: run it in its three pieces instead,
 #   PART=walks-main            the WALKS walks only (108 min on 8 threads),
 #   PART=walks-mutants         every mutant on 50,000 walks (each must fail; minutes),
 #   PART=walks-restart         the WALKS_RST walks with 1 restart.
-#   PART=walks-bias            WALKS_BIAS (default 200,000) walks at G1 with
+#   PART=walks-bias            WALKS_BIAS (default 200,000) walks at the full bound with
 #                              `--bias redo-after-partial` (the class redo_after_partial, thin in
 #                              uniform walks), then every mutant on 50,000 biased walks (each
 #                              must fail), then WALKS_BIAS_RST (default 1,000) biased walks
@@ -16,7 +16,7 @@
 #   PART=walks-bias-restart    only the biased walks with 1 restart (WALKS_BIAS_RST, default
 #                              1,000,000 here: about 11 min on 8 threads).
 #   PART=long                  3x2 + 2 undos (no revert), exactly: many hours
-# The literal G1 bound (3 pids x 3 events, 2 undos, 1 revert) is far beyond exhaustive reach
+# The full bound (3 pids x 3 events, 2 undos, 1 revert) is far beyond exhaustive reach
 # (>= 1e13 states even with pid symmetry and per-seed dedup), hence the walks.
 # Exhaustive runs use pid symmetry and per-seed fingerprint sets, and write a checkpoint line
 # per finished seed (also logged as "ckpt seed K states N max_depth D"). Resume: rebuild
@@ -30,7 +30,7 @@ T=${THREADS:-$(nproc)}
 # The audit's mutants (2026-11-04; their least depths are counts.sh PART=m's): U13, own_only
 # through redo, and through revert, each caught on these walks at its own rule. NOT
 # i1-per-request (I1 at an intermediate step only): from abb with MAXLEN 4 its least witness
-# at G1 is six exact steps (p1 deletes a letter, appends R, deletes R; p2 appends; p2 reverts
+# at the full bound is six exact steps (p1 deletes a letter, appends R, deletes R; p2 appends; p2 reverts
 # p1's delete; p1 `undo --steps 2`), which uniform walks don't draw (g1-smoke.sh declares its
 # 20,000 walks SAMPLED: none drew it); it is caught exhaustively at its own bound (counts.sh
 # PART=m: the enumerator and TLC, depth 5, which drops two-region edits and purge only to keep
@@ -70,7 +70,7 @@ case ${PART:-exhaustive} in
       timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint
       timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4
       timed "walks at G1, mutant xi-no-o4a (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant xi-no-o4a
-      # the audit's four (2026-11-04): each at the literal G1 bound, at its own rule
+      # the audit's four (2026-11-04): each at the full bound, at its own rule
       for m in $AUDIT_MUTANTS; do
         timed "walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m
       done

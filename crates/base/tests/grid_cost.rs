@@ -1,5 +1,5 @@
-//! What a grid edit, check and read cost on a table at the interim limit (25,000 cells), as
-//! C1c left them (C1d part 2's measurement). Through the public session API, with the store
+//! What a grid edit, check and read cost on a table at the interim limit (25,000 cells).
+//! Through the public session API, with the store
 //! (redb, each change durable):
 //!
 //! - a person's cell set (`edit_ops`: the size-limit check, the engine edit, the store);

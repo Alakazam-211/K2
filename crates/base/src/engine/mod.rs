@@ -1,10 +1,11 @@
 //! The engine seam. Private to the kit: no pack sees an engine type.
 //!
 //! To add an engine, implement [`EngineDoc`] and add it to [`Engine`], the enum
-//! [`crate::doc::Doc`] holds (C1, v0.10.1).
+//! [`crate::doc::Doc`] holds (v0.10.1).
 //! Packs, sessions and stored formats above this line don't change (stored state carries
 //! an engine/format stamp so it can be re-encoded on upgrade).
 
+mod slot_index;
 mod structured;
 #[cfg(test)]
 mod structured_tests;
@@ -81,10 +82,10 @@ impl Units {
     }
 }
 
-// There is no build-wide unit (C2): every caller takes the doc's ([`EngineDoc::units`],
+// There is no build-wide unit: every caller takes the doc's ([`EngineDoc::units`],
 // `Doc::units`), so a doc on another engine counts in its own.
 
-/// How an engine numbers what one change inserts (C2): the clock of each text hunk's first
+/// How an engine numbers what one change inserts: the clock of each text hunk's first
 /// inserted element, from the client's next clock before the change. The edit path reports
 /// it as it applied it ([`Made::firsts`]); this is the prediction, for the one caller that
 /// needs IDs before anything is applied (undo's planner applies each step to scratch copies
@@ -138,7 +139,7 @@ impl IdOrder {
     }
 }
 
-/// What an edit made (C2): the doc's [`Edited`], and per edit, per text hunk, the clock of
+/// What an edit made: the doc's [`Edited`], and per edit, per text hunk, the clock of
 /// the first element the hunk inserted, as the engine applied it ([`IdOrder`]'s order; a
 /// hunk that inserts nothing: where its insertion would have started); empty for a
 /// structured edit. The client is the edit's. Replaces predicting the clocks after the fact.
@@ -204,6 +205,11 @@ pub(crate) trait EngineDoc: Sized + Send {
     /// error ([`DocError::Malformed`]).
     fn text(&self, root: &str) -> Result<String, DocError>;
     fn state_vector(&self) -> Vec<u8>;
+    /// [`EngineDoc::state_vector`], typed: an engine whose vector can be past one frame
+    /// refuses there ([`DocError::VectorNeedsParts`]) instead. Yrs's never is.
+    fn try_state_vector(&self) -> Result<Vec<u8>, DocError> {
+        Ok(self.state_vector())
+    }
     /// Fails (never panics) on a poisoned doc: see [`crate::doc::DocError::Pending`].
     fn encode_state(&self) -> Result<Vec<u8>, DocError>;
     fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError>;
@@ -260,13 +266,13 @@ pub(crate) trait EngineDoc: Sized + Send {
     /// this doc above it can only be damage: the store's clock reads refuse it
     /// ([`crate::store::StoreError::Corrupt`]) instead of handing it on.
     fn max_clock(&self) -> u64;
-    /// Blame (K-HIST-11): text root `root`'s live text as runs, each with the client and
+    /// Blame: text root `root`'s live text as runs, each with the client and
     /// clock that inserted it. **O(doc) per call** (the engine copies the doc to a throwaway
     /// replica and walks it); never on the edit path. Leaves this doc as it was.
     fn blame_runs(&self, root: &str) -> Result<Vec<BlameRun>, DocError>;
 }
 
-/// The engine a doc runs on (C1, v0.10.1): one variant per engine this build carries, read
+/// The engine a doc runs on (v0.10.1): one variant per engine this build carries, read
 /// from the doc's engine stamp ([`reads_stamp`]: a stamp no variant reads is refused at load,
 /// `MPC-E520`). Yrs is the only variant today. [`crate::doc::Doc`] holds this, not an engine
 /// type, so a second engine is a second variant: every `match` below must then say what it
@@ -302,6 +308,10 @@ impl EngineDoc for Engine {
 
     fn state_vector(&self) -> Vec<u8> {
         on_engine!(self, d => d.state_vector())
+    }
+
+    fn try_state_vector(&self) -> Result<Vec<u8>, DocError> {
+        on_engine!(self, d => d.try_state_vector())
     }
 
     fn encode_state(&self) -> Result<Vec<u8>, DocError> {
@@ -384,6 +394,24 @@ impl EngineDoc for Engine {
 /// What a doc's engine does beyond the seam: the checks and the comparisons the kit runs on
 /// it (Yrs's today). A second engine says what each does there, or that it has none.
 impl Engine {
+    /// Take everything `from` (another of this process's docs) has that this doc lacks: the
+    /// kit's own catch-up. On the native engine a vector past one frame goes in parts and the
+    /// answer comes in diff parts, applied as one request; a peer compacted past this doc's
+    /// state is [`DocError::NeedsStateTransfer`]. Never a smaller or empty vector.
+    #[cfg_attr(not(any(test, feature = "conformance")), allow(dead_code))]
+    pub(crate) fn catch_up_from(&mut self, from: &Engine) -> Result<(), DocError> {
+        let update = from.encode_diff(&self.try_state_vector()?)?;
+        self.apply_trusted(&update)
+    }
+
+    /// The state vector as the frames a peer answers with diff parts: the native engine's
+    /// kind-4 parts, Yrs's one vector.
+    pub(crate) fn state_vector_parts(&self) -> Result<Vec<Vec<u8>>, DocError> {
+        match self {
+            Engine::Yrs(d) => Ok(vec![d.state_vector()]),
+        }
+    }
+
     /// The same inserts as `other` (state vectors). Docs on two engines never compare equal.
     pub(crate) fn same_state_vector(&self, other: &Engine) -> bool {
         match (self, other) {
@@ -399,7 +427,7 @@ impl Engine {
         }
     }
 
-    /// Updates the doc couldn't integrate, or a poisoned doc (K-AUD-1).
+    /// Updates the doc couldn't integrate, or a poisoned doc.
     pub(crate) fn unresolved(&self) -> bool {
         on_engine!(self, d => d.unresolved())
     }
@@ -442,7 +470,7 @@ impl Engine {
 
     /// The Yrs doc, for the Yrs-only hooks of test, `differential` and `conformance` builds
     /// (the canary's and the position index's test hooks, the conformance suite's sync and
-    /// anchors); `None` on another engine (C2), where each hook says what it does instead
+    /// anchors); `None` on another engine, where each hook says what it does instead
     /// ([`crate::doc::Doc`]'s hooks).
     #[allow(dead_code)] // test and feature builds only
     pub(crate) fn yrs(&self) -> Option<&YrsDoc> {
@@ -463,7 +491,7 @@ impl Engine {
 mod tests {
     use super::*;
 
-    /// The engine enum (C1, v0.10.1): a new or loaded doc runs on Yrs, the only variant, with
+    /// The engine enum (v0.10.1): a new or loaded doc runs on Yrs, the only variant, with
     /// Yrs's units (UTF-16 code units) and clock bound (u32), and the seam's calls reach it.
     #[test]
     fn a_doc_runs_on_the_yrs_variant_with_its_units() {
@@ -494,7 +522,7 @@ mod tests {
     /// `edit_made` on `doc` as `client`: [`Made::firsts`] are the engine's own IDs (each
     /// hunk's inserted characters, read back from blame, are `(client, first + k units)`),
     /// and the engine's [`IdOrder`] predicts them from the texts before, with the client's
-    /// next clock after. On every engine the doc can run on (C2).
+    /// next clock after. On every engine the doc can run on.
     pub(crate) fn check_firsts(doc: &mut crate::doc::Doc, client: ClientId, edits: &[Edit]) {
         let roots: Vec<String> = edits.iter().map(|e| e.root().to_owned()).collect();
         let before: Vec<(String, String)> = roots

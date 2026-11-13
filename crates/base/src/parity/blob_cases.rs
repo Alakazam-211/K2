@@ -428,7 +428,7 @@ fn p34_agent(a: &mut BlobAgent<'_>) -> R {
     agent_step(a.verb(&["lease", "--break"], b"")?, lease_value)
 }
 
-// ---------- P29, P30: on-behalf writes (K-ID-10, K-ID-11, K-T0-9) ----------
+// ---------- P29, P30: on-behalf writes ----------
 
 /// `pid`, an assistant acting for `person`, writes `bytes` from the current version.
 fn assistant_writes(

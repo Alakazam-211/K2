@@ -18,7 +18,7 @@
 //!   the id appended, `message (MPC-E301)`; [`ErrorReport::to_json`] is the stable object
 //!   `{"id", "exit", "message", "next", "next_step", "rule", "details"}`, `details`
 //!   structured (never prose), `next_step` the prose `next` as data ([`NextStep`]: a kit
-//!   verb, its arguments, why; no host syntax, K-PAR-10), absent when there is nothing to
+//!   verb, its arguments, why; no host syntax), absent when there is nothing to
 //!   run.
 //! - **`explain` and `capabilities`** ([`run_meta`]): verbs that print an entry, or what this
 //!   build can do (verbs, flags, parity rows, the ids each verb can return, the limits in
@@ -152,7 +152,7 @@ pub enum Reach {
     Indirect(&'static str),
 }
 
-/// **What to run next, as data** (K-PAR-10): the registry's `next` as a kit verb, its
+/// **What to run next, as data**: the registry's `next` as a kit verb, its
 /// arguments and a reason, with no host syntax. A host renders it in its own (its command
 /// name, the doc path, its quoting); the prose [`ErrorEntry::next`] stays beside it. An
 /// entry with nothing to run (wait, ask a person, report it, use ordinary file tools) has
@@ -194,11 +194,11 @@ pub struct ErrorEntry {
     pub message: &'static str,
     /// What to do next, in prose.
     pub next: &'static str,
-    /// What to do next, as data ([`NextStep`], K-PAR-10); `None` when there is nothing to
+    /// What to do next, as data ([`NextStep`]); `None` when there is nothing to
     /// run.
     pub step: Option<NextStep>,
     /// The rule it enforces: requirement ids (`K-…`), undo spec rules (`U…`), conformance
-    /// rules (`hist.…`), amendments (`A13`: `docs/SESSIONS.md`).
+    /// rules (`hist.…`), or the rule in words.
     pub rule: &'static str,
     /// The verbs that can return it (registry names), or a group: `*` (any verb on a doc),
     /// `@change` (every verb that changes the doc), `@history` (every history verb),
@@ -299,7 +299,7 @@ pub struct ErrorReport {
     entry: &'static ErrorEntry,
     message: String,
     details: Vec<(&'static str, Value)>,
-    /// The host's own `next` texts, by surface (K6): [`ErrorReport::with_next`].
+    /// The host's own `next` texts, by surface: [`ErrorReport::with_next`].
     next_for: Vec<(String, String)>,
 }
 
@@ -314,7 +314,7 @@ impl ErrorReport {
         }
     }
 
-    /// **The host's guidance for one surface** (K6, v0.9.8): what [`ErrorReport::next_for`]
+    /// **The host's guidance for one surface** (v0.9.8): what [`ErrorReport::next_for`]
     /// and [`ErrorReport::to_json_for`] give on `surface` (a name the host chooses: `tab`,
     /// `app`...) instead of the registry's `next`, which is written for an agent with only the
     /// CLI. A second call for the same surface replaces the first. Nothing else changes: the
@@ -348,7 +348,7 @@ impl ErrorReport {
         self.value_with_next(self.next_for(surface))
     }
 
-    /// **Paths made safe to show** (K7, v0.9.8): the message and every string in the
+    /// **Paths made safe to show** (v0.9.8): the message and every string in the
     /// details through [`redact`]: a path inside `root` becomes relative to it (`root`
     /// itself, `.`), any other absolute path `<outside>`. The kit already does this where
     /// it knows the root (a file session's disk errors, `open_file`); a host passes its
@@ -396,7 +396,7 @@ impl ErrorReport {
     pub fn next(&self) -> &'static str {
         self.entry.next
     }
-    /// The registry's next step as data (K-PAR-10), `None` when there is nothing to run: on
+    /// The registry's next step as data, `None` when there is nothing to run: on
     /// every surface the same ([`ErrorReport::with_next`] changes only the prose).
     pub fn next_step(&self) -> Option<NextStep> {
         self.entry.step
@@ -418,7 +418,7 @@ impl ErrorReport {
     }
 
     /// The stable JSON object, one line: `{"id", "exit", "message", "next", "next_step",
-    /// "rule", "details"}` (`next_step`: [`NextStep::to_value`], K-PAR-10; left out when the
+    /// "rule", "details"}` (`next_step`: [`NextStep::to_value`]; left out when the
     /// entry has none).
     pub fn to_json(&self) -> String {
         self.to_value().to_json()

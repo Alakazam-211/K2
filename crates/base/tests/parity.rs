@@ -1,4 +1,4 @@
-//! The parity framework on the kit's own verbs, with a plain-text pack (K-PAR-2, -3): every
+//! The parity framework on the kit's own verbs, with a plain-text pack: every
 //! row through the harness, and negative controls proving it fails loudly.
 
 use std::sync::Arc;
@@ -45,14 +45,14 @@ fn row(a: PersonAction) -> ParityRow {
             &[
                 "comment", "reply", "resolve", "suggest", "accept", "reject", "comments",
             ],
-            "M5",
+            "later",
             "the annotation layer",
         ),
         P::Export => ParityRow::live(a, &["export", "export --version"]),
         P::WhyOff => ParityRow::live(a, &["status"]),
         P::UndoPartial => ParityRow::live(a, &["undo --partial"]),
-        P::Mention => ParityRow::deferred(a, &["comment"], "M5", "the annotation layer"),
-        P::Purge => ParityRow::deferred(a, &["purge"], "C7a purge", "redaction is not built"),
+        P::Mention => ParityRow::deferred(a, &["comment"], "later", "the annotation layer"),
+        P::Purge => ParityRow::deferred(a, &["purge"], "the purge verb", "redaction is not built"),
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
         P::Pending => ParityRow::live(a, &["log --pending"]),
         P::Revert => ParityRow::live(a, &["revert"]),
@@ -63,7 +63,7 @@ fn row(a: PersonAction) -> ParityRow {
             &["lease", "lease --renew", "lease --release", "lease --break"],
             "text docs merge; leases are tier 0's",
         ),
-        // grid docs only (A11): a text list has no rows for these
+        // grid docs only: a text list has no rows for these
         P::RowInsert
         | P::RowMove
         | P::RowDelete
@@ -128,7 +128,7 @@ fn agent_parity_text_pack() {
     );
 }
 
-/// K-PAR-2: every kit verb serves an action, and the list and the registry agree.
+/// Every kit verb serves an action, and the list and the registry agree.
 #[test]
 fn registry_covers_actions() {
     let r = Registry::kit();

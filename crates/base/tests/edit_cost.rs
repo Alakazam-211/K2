@@ -226,7 +226,10 @@ fn edit_cost_at_sizes() {
             changes += 2;
         }
         assert_eq!(kit.text(ROOT).unwrap(), b.text);
-        assert_eq!(kit.state_vector().len(), b.doc().state_vector().len());
+        assert_eq!(
+            kit.try_state_vector().unwrap().len(),
+            b.doc().try_state_vector().unwrap().len()
+        );
         // state equality across two docs is content equality: upstream may split equal
         // content into blocks differently (k2-yrs k2.4's note)
         let built = b.doc();

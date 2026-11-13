@@ -1,4 +1,4 @@
-//! Disk sync (C4) as a host uses it, on real temp folders: write-back, outside edits, echo
+//! Disk sync as a host uses it, on real temp folders: write-back, outside edits, echo
 //! suppression, renames, deletes, declines, reconciling after a restart, and a plain editor
 //! working alongside agents. The clock is the host's (injected); the kit never sleeps.
 
@@ -845,7 +845,11 @@ fn an_outside_edit_after_a_change_that_moved_no_byte_is_kept() {
             f.advance(2_000);
             assert!(f.tick().written.is_empty(), "{tag}: nothing to write");
             assert_eq!(disk(&s), DiskState::Clean, "{tag}");
-            assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{tag}: K-AUD-1");
+            assert_eq!(
+                s.audit_disk_sync().unwrap(),
+                vec![],
+                "{tag}: the sync audit"
+            );
             // a person edits the changed line in a plain editor
             let edited = seed.replace("line 3", "LINE three");
             f.advance(1_000);
@@ -873,7 +877,7 @@ fn an_outside_edit_after_a_change_that_moved_no_byte_is_kept() {
     );
 }
 
-/// K-AUD-1's sync check (v0.9.4) with planted violations: a disk replica holding the doc's
+/// the sync check (v0.9.4) with planted violations: a disk replica holding the doc's
 /// text on other elements (the stale base an outside edit was corrupted on), and one holding
 /// another text, are both reported while the doc is clean; the next write-back that finds
 /// nothing to write makes the replica the doc again.
@@ -966,7 +970,7 @@ fn spliced(t: &str, (lo, hi): (usize, usize), ins: &str) -> String {
 /// node).
 ///
 /// Its twin for grid docs (a header turned off and on, a cell set back to its value) lands
-/// with C1, which brings grid docs to the kit.
+/// with the grid docs.
 fn no_byte_cases() -> u32 {
     std::env::var("NO_BYTE_CASES")
         .ok()
@@ -1064,12 +1068,20 @@ fn no_byte_case(
     assert_eq!(text(&s, a), seed, "{why}: the change moved no byte");
     if matches!(between, Between::Flush | Between::FlushRestart) {
         assert!(!s.flush(a).unwrap().written, "{why}: nothing to write");
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1");
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "{why}: the sync audit"
+        );
     }
     if matches!(between, Between::Tick) {
         f.advance(2_000);
         assert!(f.tick().written.is_empty(), "{why}: nothing to write");
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1");
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "{why}: the sync audit"
+        );
     }
     let mut a = a;
     if matches!(between, Between::Restart | Between::FlushRestart) {
@@ -1078,7 +1090,11 @@ fn no_byte_case(
         s = f.open("a.md");
         a = f.join(&s, "agent");
         assert_eq!(disk(&s), DiskState::Clean, "{why}: reopened clean");
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1");
+        assert_eq!(
+            s.audit_disk_sync().unwrap(),
+            vec![],
+            "{why}: the sync audit"
+        );
     }
     assert_eq!(
         f.bytes("a.md"),
@@ -1104,7 +1120,7 @@ fn no_byte_case(
     assert_eq!(
         s.audit_disk_sync().unwrap(),
         vec![],
-        "{why}: K-AUD-1 at the end"
+        "{why}: the sync audit at the end"
     );
 }
 
@@ -1155,7 +1171,7 @@ fn an_outside_edit_after_a_no_byte_change_and_an_unwritten_edit_is_kept() {
     assert_eq!(text(&s, a), want);
     assert!(s.flush(a).unwrap().written);
     assert_eq!(String::from_utf8(f.bytes("a.md")).unwrap(), want);
-    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "K-AUD-1");
+    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "the sync audit");
 }
 
 /// The other order (v0.9.5): a line deleted, another edited (not written back), then the
@@ -1194,7 +1210,7 @@ fn an_outside_edit_after_an_undo_behind_an_unwritten_edit_is_kept() {
         assert_eq!(text(&s, a), want, "restart {restart}");
         assert!(s.flush(a).unwrap().written);
         assert_eq!(String::from_utf8(f.bytes("a.md")).unwrap(), want);
-        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "K-AUD-1");
+        assert_eq!(s.audit_disk_sync().unwrap(), vec![], "the sync audit");
     }
 }
 
@@ -1237,7 +1253,7 @@ fn an_overlapping_outside_save_keeps_both_sides() {
     );
     assert!(s.flush(a).unwrap().written);
     assert_eq!(String::from_utf8(f.bytes("a.md")).unwrap(), want);
-    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "K-AUD-1");
+    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "the sync audit");
 }
 
 /// The disk replica's marker is the doc's change counter (v0.9.5): synced at version
@@ -1529,10 +1545,10 @@ fn no_pending(s: &Session) -> bool {
 ///    keep-both model (every deletion of either side, every insertion of both), and each
 ///    side's insertions are in it in order;
 /// 4. no update is left pending: the ingest succeeds (an apply that leaves one poisons the
-///    doc and fails), K-AUD-1 finds no [`SyncDrift::Pending`], and a reopen from the store
+///    doc and fails), the sync audit finds no [`SyncDrift::Pending`], and a reopen from the store
 ///    gives the same text.
 ///
-/// At the end the file is the doc, the doc is clean, and K-AUD-1 finds nothing.
+/// At the end the file is the doc, the doc is clean, and the sync audit finds nothing.
 /// `NO_BYTE_CASES` sets the count (default 256; 10^4 on nodes, sharded).
 #[allow(clippy::too_many_lines)]
 fn mix_case(seed: &str, steps: &[Mix]) {
@@ -1696,7 +1712,7 @@ fn mix_case(seed: &str, steps: &[Mix]) {
         assert!(no_pending(&s), "{why}: pending");
         assert!(
             s.audit_disk_sync().unwrap().is_empty(),
-            "{why}: K-AUD-1 {:?}",
+            "{why}: the sync audit {:?}",
             s.audit_disk_sync()
         );
     }
@@ -1708,7 +1724,11 @@ fn mix_case(seed: &str, steps: &[Mix]) {
         "the file is the doc"
     );
     assert_eq!(disk(&s), DiskState::Clean);
-    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "K-AUD-1 at the end");
+    assert_eq!(
+        s.audit_disk_sync().unwrap(),
+        vec![],
+        "the sync audit at the end"
+    );
     // 4. the store replays to the same doc
     drop(s);
     f.restart();
@@ -1730,8 +1750,8 @@ proptest! {
     }
 }
 
-/// K-AUD-1 regression, pinned by hand from proptest's minimal failing input of
-/// [`an_outside_save_amid_any_mix_of_changes_is_merged`] (a node gate of the Wave 1a stack):
+/// Sync audit regression, pinned by hand from proptest's minimal failing input of
+/// [`an_outside_save_amid_any_mix_of_changes_is_merged`] (a node gate):
 /// an edit, an outside save with the session open, a restart, a tick, and another outside
 /// save. After the tick the doc is clean, and the disk replica must hold the doc's text.
 #[test]
@@ -1751,7 +1771,7 @@ fn an_outside_save_then_a_restart_keeps_the_replica_the_docs_text() {
 /// The pinned case above, step by step, with the host's events (v0.10.0.3): an edit left
 /// unwritten, an outside save merged beside it (the replica takes the save, not the doc's
 /// text, stored at the merged change's version), a restart, and the timed write-back. Returns
-/// the events from the write-back on, K-AUD-1 after it, and the disk state. `by_version`
+/// the events from the write-back on, the sync audit after it, and the disk state. `by_version`
 /// plants the fault fixed in v0.10.0.3 (a reopen claims the stored replica in step from the
 /// version alone).
 fn write_back_after_restart(by_version: bool) -> (Vec<AuditEvent>, Vec<SyncDrift>, DiskState) {
@@ -1796,7 +1816,7 @@ fn write_back_after_restart(by_version: bool) -> (Vec<AuditEvent>, Vec<SyncDrift
 /// is declared in sync (v0.10.0.3). With the fault planted (the reopen claims the stored
 /// replica in step from its version, as before the fix) the check fires once: the replica
 /// held the outside save's text, not the doc's. With the fix the reopen doesn't claim it, the
-/// write-back reloads the replica, and nothing fires. K-AUD-1 is clean after both.
+/// write-back reloads the replica, and nothing fires. The sync audit is clean after both.
 #[test]
 fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
     let repaired = |ev: &[AuditEvent]| {
@@ -1828,13 +1848,13 @@ fn a_stale_replica_after_a_restart_is_reported_and_repaired() {
         "the sampled check's event is not raised for it: {ev:?}"
     );
     assert_eq!(state, DiskState::Clean);
-    assert_eq!(drift, vec![], "K-AUD-1 after the repair");
+    assert_eq!(drift, vec![], "the sync audit after the repair");
     // the fix: nothing to report, and in sync
     let (ev, drift, state) = write_back_after_restart(false);
     assert_eq!(repaired(&ev), vec![], "no report with the fix: {ev:?}");
     assert!(!mismatch(&ev), "{ev:?}");
     assert_eq!(state, DiskState::Clean);
-    assert_eq!(drift, vec![], "K-AUD-1 with the fix");
+    assert_eq!(drift, vec![], "the sync audit with the fix");
 }
 
 /// The sync audit's cost on a realistic doc (5,000 lines, ~340 KB, 1,000 changes since the
@@ -1889,7 +1909,7 @@ fn audit_cost() {
     );
 }
 
-/// K-DISK-5/9/11: a person edits the file in a plain editor (rewriting it in place or by
+/// A person edits the file in a plain editor (rewriting it in place or by
 /// rename, sometimes telling the kit, sometimes leaving it to the stat backup) while three
 /// agents edit through the session, on the host's clock with write-backs in between. Every
 /// agent's change and every editor change must survive, and the file must end equal to the
@@ -1975,12 +1995,12 @@ fn simulate(seed: u64, ticks: usize) {
             }
             if rng.below(2) == 0 {
                 s.file_changed().unwrap();
-                // K-AUD-1's sync check after an outside save too, not only after flushes
+                // the sync check after an outside save too, not only after flushes
                 // (empty unless the doc is clean)
                 assert_eq!(
                     s.audit_disk_sync().unwrap(),
                     vec![],
-                    "seed {seed} tick {t}: K-AUD-1 after an outside save"
+                    "seed {seed} tick {t}: the sync audit after an outside save"
                 );
             }
         }
@@ -1989,7 +2009,7 @@ fn simulate(seed: u64, ticks: usize) {
         assert_eq!(
             s.audit_disk_sync().unwrap(),
             vec![],
-            "seed {seed} tick {t}: K-AUD-1 after a tick"
+            "seed {seed} tick {t}: the sync audit after a tick"
         );
         if std::env::var("SIM_DEBUG").is_ok() {
             let live = text(&s, agents[0]);
@@ -2006,7 +2026,11 @@ fn simulate(seed: u64, ticks: usize) {
     let live = text(&s, c);
     let file = String::from_utf8(f.bytes("doc.md")).unwrap();
     assert_eq!(file, live, "seed {seed}: file == session");
-    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "seed {seed}: K-AUD-1");
+    assert_eq!(
+        s.audit_disk_sync().unwrap(),
+        vec![],
+        "seed {seed}: the sync audit"
+    );
     for e in &expect {
         assert!(
             live.lines().any(|l| l == e),
@@ -2124,7 +2148,7 @@ fn an_outside_delete_and_retype_over_unwritten_edits_never_duplicates_a_line() {
     assert_eq!(
         s.audit_disk_sync().unwrap(),
         vec![],
-        "K-AUD-1 after the delete"
+        "the sync audit after the delete"
     );
     let after_delete = text(&s, a);
     // ... then types it back where it was and saves: the bytes as before the delete
@@ -2134,7 +2158,7 @@ fn an_outside_delete_and_retype_over_unwritten_edits_never_duplicates_a_line() {
     assert_eq!(
         s.audit_disk_sync().unwrap(),
         vec![],
-        "K-AUD-1 after the retype"
+        "the sync audit after the retype"
     );
     let t = text(&s, a);
     let mut seen = std::collections::HashSet::new();

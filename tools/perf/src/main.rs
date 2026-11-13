@@ -1883,8 +1883,8 @@ fn summarize(a: &Args) {
         );
     }
     // the slots with no Yrs path: named, never zeros
-    for (slot, row) in [("fork(V)", "E-PERF-35"), ("changed_since(V)", "E-PERF-34")] {
-        println!("{row} {slot}: no Yrs path (an empty slot until the native engine)");
+    for slot in ["fork(V)", "changed_since(V)"] {
+        println!("{slot}: no Yrs path (an empty slot until the native engine)");
     }
 }
 

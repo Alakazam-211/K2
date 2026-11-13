@@ -180,7 +180,7 @@ impl Session {
     }
 
     /// A purge's blobs: what no record of the doc names any more and nothing else references goes
-    /// now, as a tier-0 version's does (K-T0-9); one still referenced stays, and is reported.
+    /// now, as a tier-0 version's does; one still referenced stays, and is reported.
     pub(super) fn remove_released_refs(
         &self,
         released: &[(u64, BlobId, u64, u64)],

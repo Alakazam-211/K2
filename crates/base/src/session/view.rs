@@ -1,4 +1,4 @@
-//! A doc's content as a read-only, engine-free value (A6): what a structured edit is computed
+//! A doc's content as a read-only, engine-free value: what a structured edit is computed
 //! from ([`super::Session::edit_ops_with`]), what [`super::Pack::reconcile`] aligns a file
 //! against, and what [`super::Pack::line_map`] maps.
 

@@ -604,7 +604,7 @@ pub fn capabilities(registries: &[&Registry], config: &Config) -> Value {
 /// doc-level rows, parity, limits and positions): they describe the kit's verbs, not its.
 const FILE_ONLY_LEFT_OUT: [&str; 4] = ["errors_any_verb", "parity", "limits", "positions"];
 
-/// `capabilities`' `positions` (K-ADDR-4): each surface's unit, every unit, and the
+/// `capabilities`' `positions`: each surface's unit, every unit, and the
 /// position forms of each verb served, from [`crate::parity::positions`]'s one table.
 fn positions(verbs: &Verbs) -> Value {
     use crate::parity::positions as p;
@@ -842,9 +842,10 @@ pub fn errors_markdown() -> String {
          error_ids. -->\n\n\
          Every refusal the kit returns has a stable id, `MPC-Ennn` (the engine's are \
          `MPCE-Ennn`). An id is never reused and never changes its exit code; a retired id \
-         stays listed here. Each entry names the rule it enforces: requirement ids (`K-…`, \
-         the requirements PRD), undo spec rules (`U…`, `docs/SPEC-UNDO.md`), conformance \
-         rules (`hist.…`, `docs/CONFORMANCE.md`), amendments (`A13`: `docs/SESSIONS.md`).\n\n\
+         stays listed here. Each entry names the rule it enforces: a requirement key (`K-…`, a \
+         stable key for the requirement), undo spec rules (`U…`, `docs/SPEC-UNDO.md`), \
+         conformance rules (`hist.…`, the conformance suite's rule names), or the rule in \
+         words.\n\n\
          A host prints a refusal as **plain text**, the error's own wording with the id \
          appended (`doc changed since 12 (now 14) (MPC-E110)`), or with `--json` as one \
          object:\n\n\
@@ -852,12 +853,12 @@ pub fn errors_markdown() -> String {
          {\"id\": \"MPC-E110\", \"exit\": 1, \"message\": \"doc changed since 12 (now 14)\",\n \
          \"next\": \"Someone changed the doc after …\",\n \
          \"next_step\": {\"verb\": \"cat\", \"args\": [], \"why\": \"Someone changed the doc …\"},\n \
-         \"rule\": \"A14 (--if-version), K-T0-5\", \"details\": {\"expected\": 12, \"actual\": 14}}\n\
+         \"rule\": \"the version guard (--if-version), K-T0-5\", \"details\": {\"expected\": 12, \"actual\": 14}}\n\
          ```\n\n\
          `details` is structured (numbers, values, lists, objects), never prose. `next_step` \
          is `next` as data: `verb` a kit verb, `args` its arguments, one token each (`{key}`: \
          the refusal's `details.key`), and `why` in prose; it has no host syntax, so a host \
-         renders it in its own (K-PAR-10). It is left out when there is nothing to run (wait, \
+         renders it in its own. It is left out when there is nothing to run (wait, \
          ask a person, report it, use ordinary file tools). `explain \
          <ID>` prints an entry; `capabilities` lists the ids each verb can return. Exit \
          codes:\n\n\
@@ -927,7 +928,7 @@ pub fn errors_markdown() -> String {
     }
     o.push_str(&format!(
         "\n## Engine ids ({ENGINE_PREFIX}nnn)\n\nReserved for the engine, which allocates its \
-         ranges (decode, admission and security, schema, history, store) at G2-core. Its \
+         ranges (decode, admission and security, schema, history, store) itself. Its \
          codes cross the seam as these strings, never as enum ordinals; a code this build \
          doesn't list is reported as `MPC-E161` with `details.code`.\n\n{}\n",
         if super::ENGINE.is_empty() {

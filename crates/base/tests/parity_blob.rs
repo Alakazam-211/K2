@@ -1,4 +1,4 @@
-//! Agent parity for tier 0 (any file, K-PAR-1…3 on blob docs): every tier-0 row through the
+//! Agent parity for tier 0 (any file, on blob docs): every tier-0 row through the
 //! kit's blob harness, with negative controls proving it fails loudly. The leases (P32–P34)
 //! are tier 0's own rows.
 
@@ -64,7 +64,7 @@ fn row(a: PersonAction) -> ParityRow {
         | P::UndoPartial
         | P::Mention
         | P::Revert => ParityRow::not_applicable(a, &[], &[], "text docs only"),
-        // grid docs only (A11)
+        // grid docs only
         P::RowInsert
         | P::RowMove
         | P::RowDelete

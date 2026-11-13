@@ -258,7 +258,11 @@ fn live(s: &Session, c: ConnId) -> Table {
 
 /// Both audits find nothing: the sync check, and the grid audit (its (d) is the same check).
 fn audits_clean(s: &Session, why: &str) {
-    assert_eq!(s.audit_disk_sync().unwrap(), vec![], "{why}: K-AUD-1 sync");
+    assert_eq!(
+        s.audit_disk_sync().unwrap(),
+        vec![],
+        "{why}: the sync audit"
+    );
     let rep = s.audit().unwrap();
     assert!(rep.is_clean(), "{why}: grid audit {:?}", rep.violations);
 }
@@ -354,7 +358,7 @@ fn an_outside_rename_after_a_header_switch_is_kept() {
     }
 }
 
-// ---------- the value limit on outside saves (C1k, request 7) ----------
+// ---------- the value limit on outside saves (request 7) ----------
 
 /// With `Config::grid_max_value_len` raised, an outside save carrying a value over 64 KiB is
 /// accepted (the aligner reads the file under the host's limit); at the default it is
@@ -390,7 +394,7 @@ fn an_outside_save_follows_the_value_limit() {
     assert_eq!(f.bytes(), body, "the file isn't written over");
 }
 
-// ---------- a re-save that changes only the codec settings (C1k, binding rule (b)) ----------
+// ---------- a re-save that changes only the codec settings (binding rule (b)) ----------
 
 /// `csv-lite` with a dialect: a BOM, CRLF and `;` as the delimiter are the codec settings
 /// (`bom,crlf,;` as bytes), each read from the file and written back.
@@ -949,7 +953,7 @@ fn a_planted_replica_mismatch_is_still_reported() {
     }
 }
 
-/// The C1k case (once open, ignored): the grid form of `tests/disk.rs`'s
+/// The grid case (once open, ignored): the grid form of `tests/disk.rs`'s
 /// `an_outside_edit_after_a_no_byte_change_and_an_unwritten_edit_is_kept`. `header on` moves
 /// no byte, and an edit not yet written back leaves the doc dirty; the header line's outside
 /// rename must stand. Fixed by the keyed three-way merge of outside saves (c080489) and its

@@ -1,5 +1,5 @@
 //! Tier 0: a crash between a write-back's rename and recording it (crate-internal: it sets
-//! the write-in-flight record directly), the same pattern as the text sessions' C4 tests.
+//! the write-in-flight record directly), the same pattern as the text sessions' tests.
 
 use std::fs;
 use std::io::Read;

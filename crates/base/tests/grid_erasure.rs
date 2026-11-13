@@ -1,5 +1,4 @@
-//! C1f: erasure for structured (grid) docs (A13, K-PURGE-1 amended, CSV seam design §7.4),
-//! public API only, with the tiny `csv-lite` table pack (`grid_store.rs`'s).
+//! Erasure for structured (grid) docs (amendment 13), public API only, with the tiny `csv-lite` table pack (`grid_store.rs`'s).
 //!
 //! - **`purge::byte_scan`, grid form:** secrets planted in a live cell, a hidden cell (of a
 //!   deleted row), an overwritten value, a named version, a column name, and one split
@@ -827,7 +826,7 @@ fn purge_then_restore_never_resurrects() {
     );
 }
 
-// ---------- the store rewrite on a grid doc (C1 merge with main, v0.9.5's table check) ----------
+// ---------- the store rewrite on a grid doc (v0.9.5's table check) ----------
 
 /// The rendered table as `c` reads it.
 fn table_text(s: &Session, c: ConnId) -> String {

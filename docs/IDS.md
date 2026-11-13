@@ -2,7 +2,7 @@
 
 <!-- Generated from crates/base/src/ids/mod.rs by `ids::kit_markdown()`; don't edit by hand. Regenerate: MPC_BLESS=1 cargo test -p k2-mpc-base --test ids. -->
 
-Every ID or address kind the kit's verbs take or print, as data (`ids::KIT`, K-ID-13). An address is **(scope, id)**: an ID means something only inside its scope (`r17` is a row of one table, `v12` a version of one doc).
+Every ID or address kind the kit's verbs take or print, as data (`ids::KIT`). An address is **(scope, id)**: an ID means something only inside its scope (`r17` is a row of one table, `v12` a version of one doc).
 
 ## Classes
 
@@ -43,4 +43,4 @@ Anchors bind to the most durable ID an object has; weaker ones are hints for re-
 
 A pack declares the kinds its own codec and verbs read (`Pack::ids`, default none) in the same form, and generates its own `docs/IDS.md` from them with `ids::markdown`; `ids::check` holds the rows to its verb registry. A pack lists only its own kinds: the kit's apply to every pack of their tier.
 
-**The ID-churn judge** (K-COD-10; `ids::churn::judge`, feature `test-support`): over a pack's corpus, a no-op save (decode, encode, read back) must give the file's bytes back and keep every ID, and each one-unit edit (a verb's edits written back, or an outside save read back) must keep the ID of every object it doesn't touch. It is a test harness: a write that would renumber an ID is not refused at run time yet.
+**The ID-churn judge** (`ids::churn::judge`, feature `test-support`): over a pack's corpus, a no-op save (decode, encode, read back) must give the file's bytes back and keep every ID, and each one-unit edit (a verb's edits written back, or an outside save read back) must keep the ID of every object it doesn't touch. It is a test harness: a write that would renumber an ID is not refused at run time yet.

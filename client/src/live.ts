@@ -415,7 +415,7 @@ export class LiveText {
   get roster(): readonly RosterEntry[] {
     return this._roster;
   }
-  /** Participants past the doc's limit, shown only as this count (K11). */
+  /** Participants past the doc's limit, shown only as this count. */
   get watchers(): number {
     return this.watching;
   }
@@ -423,7 +423,7 @@ export class LiveText {
   /**
    * A local edit: `hunks` on the current `text` (UTF-8 bytes, sorted, non-overlapping). Applied
    * at once (optimistic); sent when nothing else is in flight, else queued and composed with
-   * the queued edits of the same `group` (an undo group token, K4). Throws on invalid hunks.
+   * the queued edits of the same `group` (an undo group token). Throws on invalid hunks.
    */
   applyLocal(hunks: readonly Hunk[], opts: { group?: string } = {}): OpId {
     if (this.dead) throw new Error("LiveText is closed");

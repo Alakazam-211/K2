@@ -1,4 +1,4 @@
-//! The grid verbs (C1i, `table::verbs`; CSV contract §3.1) through `Session::run_tool` on a
+//! The grid verbs (`table::verbs`; CSV contract §3.1) through `Session::run_tool` on a
 //! table doc (the `grid-lite` test pack): every verb row of the contract, its addressing
 //! (§1.7: keys, `#N`, `LN`, names, `key:`/`name:`, `--where`) and its exits (§3.3). Public API
 //! only.
@@ -354,7 +354,7 @@ fn header_off_and_on() {
     assert_eq!(ok(&f, "col list"), "c1\t#1\tid\nc2\t#2\tcity\n");
 }
 
-/// C1k (request 3): `header on` where the only row is blank is refused, exit 2, nothing
+/// `header on` where the only row is blank is refused, exit 2, nothing
 /// applied (the header line it would become isn't written: the file would change); `header
 /// off` where no header line is written only changes the setting (no row added).
 #[test]
@@ -538,7 +538,7 @@ fn text_edit_verbs_on_a_table_keep_their_guards() {
 /// `write --base live` replaces the grid, reconciled by key: rows matched by content keep
 /// their keys; a changed cell is set, a missing row deleted (restorable), a new row added.
 /// (The new row goes in another slot than the missing one: a row rewritten in its own slot
-/// keeps its key by position, C1k.)
+/// keeps its key by position.)
 #[test]
 fn write_base_live_replaces_the_grid_by_key() {
     let f = fx(SEED);
@@ -566,7 +566,7 @@ fn write_base_live_replaces_the_grid_by_key() {
     );
 }
 
-// ---------- a codec's own line (C1k, request 6) ----------
+// ---------- a codec's own line (request 6) ----------
 
 /// `grid-lite` with a `sep=,` line in front, which its line map gives to
 /// `LineOwner::Preamble`.

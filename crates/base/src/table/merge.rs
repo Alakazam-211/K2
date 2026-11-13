@@ -1,4 +1,4 @@
-//! The grid three-way merge of `write --base` (contract §3.4, K-BR-3, K7): only what `ours`
+//! The grid three-way merge of `write --base` (contract §3.4): only what `ours`
 //! changed since `base` applies to `theirs` (the live table), element by element, by key;
 //! overlaps are **reported, never last-writer-wins**.
 //!
@@ -15,7 +15,7 @@
 //! | moved R (C) | moved it elsewhere | conflict `moved_row` (`moved_col`); to the same place: once |
 //! | renamed C | renamed C differently | conflict `name`; renamed C vs deleted C: `deleted_col` |
 //! | a quote exception | another one for the same field | conflict `quoting` |
-//! | inserted rows (columns) at one gap | inserted at the same gap | **both land, theirs first** (K7) |
+//! | inserted rows (columns) at one gap | inserted at the same gap | **both land, theirs first** |
 //! | deleted R | deleted R | once |
 //! | anything | anything on other elements | both apply |
 //!
@@ -31,7 +31,7 @@
 //!
 //! The result is the clean part ([`Merge::edits`], one change on `theirs`) and the conflict
 //! report ([`Merge::conflicts`]). `write --base` applies nothing when there are conflicts
-//! (exit 1) and the clean part with `--partial` (K-BR-9).
+//! (exit 1) and the clean part with `--partial`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -189,7 +189,7 @@ impl fmt::Display for Held {
     }
 }
 
-/// One conflict (K-BR-8): the rule, the region by key, what base, ours and theirs hold
+/// One conflict: the rule, the region by key, what base, ours and theirs hold
 /// there, and the writes of theirs it met when they are elsewhere (the row a cell's row
 /// delete, the cells and move that make a row delete conflict; empty when theirs' write is
 /// the region itself). Positions and rendered lines, and who wrote or claims the region, are

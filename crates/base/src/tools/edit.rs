@@ -203,7 +203,7 @@ impl PosEdit {
         })
     }
 
-    /// Its positional address as the caller gave it (`--lines 3,4`), for K-ADDR-3: every
+    /// Its positional address as the caller gave it (`--lines 3,4`), for the version check: every
     /// form but `append`, `--line $`, `--after $` and `--after 0` (the start and the end are
     /// the same in every version).
     pub(crate) fn positional(&self) -> Option<String> {

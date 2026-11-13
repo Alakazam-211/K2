@@ -3,7 +3,7 @@ exit:     3
 message:  refused: needs Comment rights
 next:     You can read this doc but not comment on it: commenting needs edit, or the comment right the doc's owner grants a read-only share. Don't retry: read the threads, or ask the owner. Nothing changed.
 step:     comments; why: You can't comment on this doc; read its threads instead, or ask the doc's owner for the comment right.
-rule:     K-ANN-6, Q24
+rule:     K-ANN-6
 verbs:    comment; reply; resolve; resolve --reopen; reanchor
 status:   live
 --- json
@@ -19,7 +19,7 @@ status:   live
     "args": [],
     "why": "You can't comment on this doc; read its threads instead, or ask the doc's owner for the comment right."
   },
-  "rule": "K-ANN-6, Q24",
+  "rule": "K-ANN-6",
   "verbs": ["comment", "reply", "resolve", "resolve --reopen", "reanchor"],
   "returned_by": [],
   "status": "live",

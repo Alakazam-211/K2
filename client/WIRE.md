@@ -175,7 +175,7 @@ The connection's own `edit` is answered by `ack` and must not also arrive as a `
 - **One edit in flight (rule 0).** The client sends an `edit` only when its previous one was
   answered. `base` is the latest version it has seen, its own acknowledged edits included.
   `hunks` are on that version's text.
-- `group` is an undo group token (K4): consecutive edits with one token can merge into one undo
+- `group` is an undo group token: consecutive edits with one token can merge into one undo
   step; the session closes groups on idle, word boundaries and others' changes.
 - A `cursor` is sent only when the client has nothing pending, so its version's text is the
   client's text.
@@ -206,7 +206,7 @@ They sit outside the doc's numbering: none of them takes or moves a version.
 | `focus` | `set_focus(conn, focus)`, from `ElemFocus::new(root, key)` |
 | `range` | `set_range(conn, range)`, from `ElemRange::new(root, key, field, anchor, head)` |
 
-- **`focus`** (rendering-data contract Item 3): the container this connection has in view (a
+- **`focus`**: the container this connection has in view (a
   slide), an element of a MovableList root, live (`MPC-E114` otherwise). Needs read. It leaves
   when its element stops being live.
 - **`range`**: a caret or selection inside one element's text field: `field` of element `key`
@@ -220,9 +220,10 @@ They sit outside the doc's numbering: none of them takes or moves a version.
   **Setting cells sets the focus** to their container (the kit sends the `focus` event too; the
   client sets its own focus there, sending no `focus` frame). A connection's focus moving to
   another container drops its cells (`cells: null` in the same flush); the client clears its own
-  when it sets that focus. Refusals: `MPC-E114` (a corner not live, not in normal form or out of
-  bounds, an active cell outside the ranges, another container's corner), `MPC-E310` (more than
-  16 ranges: the client refuses it itself, unsent), `MPC-E305` (a watcher).
+  when it sets that focus. Refusals: `MPC-E114` (a corner not live, not in normal form or outside
+  the container's rows or columns, an active cell outside the ranges, another container's
+  corner), `MPC-E310` (more than 16 ranges: the client refuses it itself, unsent), `MPC-E305` (a
+  watcher).
 - **Elements by address.** On the wire an element is named by its address (`@sld:256`,
   `@sld:256/sp:4`), the pack's `Pack::address_of` of its key (by default the key itself, so a
   pack that maps nothing sees no change). The host converts at the kit's edge: the setters by
@@ -345,7 +346,7 @@ this spec, no socket.
 | `events` | `op`, `events` | the reply to `since`: every change after that version, in order |
 | `snapshot` | `op`, `text`, `version` | the reply to `snapshot`: the root's text at `version` |
 | `undone` | `op`, `steps`, `version`, `notice?` | the reply to `undo` / `redo`, after the `change` frames it made ([Undo and redo](#undo-and-redo)) |
-| `roster_event` | `event` | one roster change as the kit pushes it (`subscribe_roster`, K5): the client folds them |
+| `roster_event` | `event` | one roster change as the kit pushes it (`subscribe_roster`): the client folds them |
 | `roster` | `entries` | the whole roster at once, for a host that folds the deltas itself |
 | `claimed` | `req`, `claim` | the reply to `claim` ([Claim frames](#claim-frames)) |
 | `released` | `req`, `claims` | the reply to `release` ([Claim frames](#claim-frames)) |
@@ -355,10 +356,10 @@ this spec, no socket.
 | `keyed_snapshot`, `keyed_page`, `ops_change`, `watch_refused` | see [The keyed watch](#the-keyed-watch) | the keyed watch's frames, only on a connection whose host lists `keyed_watch` |
 
 - `event` is the kit's `ChangeEvent`: `{version, pid, client, via, kind, root, hunks, at_ms,
-  on_behalf_of}` (`pid` and `on_behalf_of` are opaque handles for App viewers, K5; `kind`
+  on_behalf_of}` (`pid` and `on_behalf_of` are opaque handles for App viewers; `kind`
   since kit v0.10.1).
 - `error` is the kit's `ErrorReport` JSON (`ErrorReport::to_json`): `{id, exit, message,
-  next, next_step, rule, details}`. `next_step` (kit v0.10.1, K-PAR-10) is `next` as data,
+  next, next_step, rule, details}`. `next_step` (kit v0.10.1) is `next` as data,
   `{verb, args, why}`: `verb` a kit verb, `args` argv tokens (`{key}`: the refusal's
   `details.key`), `why` prose; it has no host syntax, so a host renders it in its own. It is
   absent when there is nothing to run, and from an older host. The ids the client acts on:
@@ -674,7 +675,7 @@ a frame over it, and the host refuses one cleanly:
 
 ### Claim events (wire 3)
 
-The rendering-data contract's claim events (Item 4) are the roster's own claim kinds, with
+The claim events K2's rendering data asks for are the roster's own claim kinds, with
 the actor and the times added, so a view draws a claim and words it without a roster lookup,
 even after the claimant left:
 
@@ -689,7 +690,7 @@ even after the claimant left:
   start, its `focus` goes to the claim's first container in document order and its
   `selection` is **replaced** by the claimed keys (in the order it gave them). A person's claim
   leaves their presence alone. Later calls override both.
-- The contract's `scope` and `container` fields follow from the pack's view schema
+- A claim's `scope` and `container` follow from the pack's view schema
   (`Pack::view_schema`: which list root holds the containers, which the units); a claim's keys
   go out as addresses, as every element on the wire: the kit fills them
   (`RosterEvent::ClaimStartedElems::addresses`, a snapshot's `ClaimInfo::addresses`) and the host
@@ -971,7 +972,7 @@ byte for byte.
 ### View deltas
 
 What a change did to the view, so a watcher keeps its view index without running pack code
-(the rendering-data contract's Item 2). The kit works them out from the change's ops and the
+(K2's ask). The kit works them out from the change's ops and the
 pack's view schema (`view_delta::view_deltas`), generically; a pack with no view schema gets none
 of the three fields (the frame is as before, byte for byte).
 
@@ -999,7 +1000,9 @@ of the three fields (the frame is as before, byte for byte).
   the geometry; `fieldClass` in `src/grid.ts`). `fields`: the fields that changed (on an `add` or a `restore`, every field the
   change set). `container`: its container's address (before a `delete`, after anything else).
   `geom_before` / `geom_after`: the geometry field's own string, `null` when the geometry wasn't
-  touched, before an add, after a delete, and for an empty one (a box from a layout).
+  touched, before an add, after a delete, and for an empty one (a box from a layout). A field
+  of class `geometry` that isn't the geometry slot's (a scene's 3D transform, with no 2D slot)
+  is a `move_resize` naming the field, with both `null`.
   `placeholder_type`: the type part of the schema's placeholder field, or `null`.
 - **`containers`**: the render hint: every container a delta names, then those in
   `render_hashes`, each once.
@@ -1044,6 +1047,65 @@ interface Band { container: string; axis: "rows" | "cols"; op: "insert" | "delet
   {<row address>: {<field>: <text>}}}`), and each change's `units.<row>.<name>` updates them, a
   `null` removing one. `KeyedWatch.cellDerived(name, row, field)` reads them; a fresh snapshot
   replaces them all.
+
+### Derived values per unit
+
+Small texts only the pack works out for each unit (a scene object's transform, a label as
+people read it), so a view shows them with no pack code. Additive within wire 3: `WIRE_VERSION`
+stays 3, and a client that doesn't know them reads every frame as before.
+
+- **The names**: the view schema's `unit_derived` (`["transform","label"]`), at most 8, each 1
+  to 64 bytes of ASCII letters, digits, `_`, `-` or `.`; absent when the pack declares none (and
+  from an older kit). A name is never also one of the grid's `cell_derived`.
+- **On the units pages**: each unit carries its own as `derived` (`{"transform":"loc 1,0,2",
+  "label":"Cube"}`), each text at most 1,024 bytes (`VIEW_TEXT_MAX`); a unit with none has no
+  `derived`.
+- **On a change frame**: `derived.units.<unit address>.<name>` is the text the change set, or
+  `null` when the unit has none any more, for exactly the values the change set or removed
+  (none for a unit it deleted); `derived` stays `null` when the change moved no value. They sit
+  beside the pack's own keys (`a1`), which the kit never overwrites. A unit restored or added
+  gets all its values.
+- **The client**: `KeyedWatch.unitDerived(name, unit)` reads them (`null` for none), and
+  `KeyedWatch.unit(address)` the unit, with them in `derived`. A fresh snapshot replaces them
+  all. A unit nested under another (a group's child) the pack adds after the snapshot isn't
+  shown until the next snapshot, as before; its values come with it.
+
+### Placements in 3D
+
+A unit's (and a container's) place in a 3D scene, in the file's own form, for a pack whose view
+schema has a 3D slot (`docs/design/view-3d-slot-r1.1.md` in the kit). Additive within wire 3:
+`WIRE_VERSION` stays 3, and a client that doesn't know it reads every frame as before.
+
+- **The slot**: the view schema's `space` (`{unit_fields, container_fields, precision}`,
+  precision `f32` or `f64`); the snapshot's view `space` (`{length_unit, metres_per_unit, up,
+  handed}`), the doc's space; absent from a pack with no slot and from an older kit.
+- **A placement**: `{relative_to, steps, approx?}`. `relative_to` is the address of a unit or a
+  container it is placed relative to, or `null`: **the doc's space** (a unit's container plays no
+  part unless it is named). Steps, the first outermost: `{"trs": {loc, rot, scale}}` (scale, then
+  rotate, then translate), `{"axes": {origin, z, x}}` (built as IFC builds its axes; a `null`
+  direction is the default), `{"matrix": [16 numbers, column-major]}`. A rotation is
+  `{"euler": "XYZ", "angles": [x, y, z]}` (turned about the word's first axis first, each about
+  the parent's fixed axes: `XYZ` is `Rz · Ry · Rx`), `{"quat": [w, x, y, z]}` (normalised by the
+  reader) or `{"axis": [x, y, z], "angle": a}`. Radians. `approx` is a reason word (`driven`)
+  when the file can't say exactly. An `f32` slot's numbers are the shortest decimals that read
+  back as the stored `f32` (`Math.fround` gives it).
+- **Where it rides**: `placement` on each unit of a units page and each container of the head
+  (absent or `null`: not placed by the slot; one meaning only, never "at the origin");
+  `placement_after` on a unit delta with the op `place` (it moved) and on every `add` and
+  `restore` (`null`: none now); on a container delta when its placement changed or it came;
+  `view_space` on a change that changed the doc's space; the render hint `containers` also names
+  the containers of everything placed through a moved element. A change that only the file's
+  carrier held (an outside save that moved an anonymous frame) makes the host ask the watch for
+  a fresh snapshot.
+- **Readers**: a step, rotation, order or space word a reader doesn't know makes the placement
+  unknown (`null`), never a skipped step; there is no step limit in the client.
+- **The client**: `KeyedWatch.placement(address)`, `KeyedWatch.space` and
+  `KeyedWatch.worldMatrix(address)`; `placementMatrix(p, precision)` and
+  `worldMatrix(lookup, address, precision)` (`src/placement.ts`): column-major `Float64Array`,
+  `null` for an unknown or degenerate placement and for a broken chain (an element with none, one
+  not shown, a cycle), never identity for a missing link. The kit's Rust helper
+  (`Placement::matrix`, `ViewIndex::world_matrix`) gives the same numbers on one shared set of
+  vectors (`test/vectors/placement.json`; JS within 1e-12 of the largest entry, plus 1e-12).
 
 ## The live grid
 
@@ -1139,13 +1201,13 @@ rev and its claim.
 
 ## What the client guarantees
 
-- Its pending change is carried **as sent** through every incoming change (E-LIVE r2.3, the
-  kit's `Carried`): never re-canonicalized between steps, so it is refused exactly when the
+- Its pending change is carried **as sent** through every incoming change (the kit's
+  `Carried`): never re-canonicalized between steps, so it is refused exactly when the
   session refuses it. No frame changed.
-- Its rebase is the kit's (`session::rebase`, amendment E-LIVE): an incoming change goes
+- Its rebase is the kit's (`session::rebase`): an incoming change goes
   through the client's pending change with the incoming one first at a tie; the pending change
-  goes through incoming ones as the server will carry it. **Each hunk is carried as sent**
-  (E-LIVE r2.3): the pending change keeps its hunks' identities between steps (the kit's
+  goes through incoming ones as the server will carry it. **Each hunk is carried as sent**:
+  the pending change keeps its hunks' identities between steps (the kit's
   `rebase::Carried`), never re-made canonical until it is applied, and an incoming change goes
   through the pending change's gap form (`Carried::gaps`). Re-canonicalizing on one side only
   makes the client and the server disagree. The shared vectors

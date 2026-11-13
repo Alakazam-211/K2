@@ -8,7 +8,7 @@ A type pack makes one file type multiplayer on this kit. It is its own repo, che
 | **Schema** | Roots on the kit's primitives (`Schema`, `Kind`) | A `Doc` builds from it |
 | **Codec** | File bytes <-> doc state, with limits and decline rules | **Fidelity:** a corpus round-trips byte-exact through doc + store; a small edit changes only what it edits; a carrier pack: the kit's byte-exact row, `test_support::carrier_judge` over the corpus (below) |
 | **Verb map + parity list** | `docs/PARITY.md`: every person action -> a verb -> kit API, or N/A with a reason; the same list as data in the crate | `tests/agent_parity.rs`: `k2_mpc_base::parity::check` over every row |
-| **ID table** | `Pack::ids()`: every native ID kind its codec and own verbs read, as data (class, scope, the verbs that accept it; K-ID-13), and `docs/IDS.md` generated from it with `k2_mpc_base::ids::markdown` (the kit's own kinds: the kit's `docs/IDS.md`) | `ids::check` against `Registry::for_pack`; `docs/IDS.md` equals the generated text; **ID churn:** `ids::churn::judge` (feature `test-support`) over the corpus, zero churn (K-COD-10) |
+| **ID table** | `Pack::ids()`: every native ID kind its codec and own verbs read, as data (class, scope, the verbs that accept it), and `docs/IDS.md` generated from it with `k2_mpc_base::ids::markdown` (the kit's own kinds: the kit's `docs/IDS.md`) | `ids::check` against `Registry::for_pack`; `docs/IDS.md` equals the generated text; **ID churn:** `ids::churn::judge` (feature `test-support`) over the corpus, zero churn |
 | **Editor binding** | Built on the kit's JS client and binding adapters | — |
 
 ## The parity list and the pack's own verbs
@@ -26,7 +26,7 @@ pub fn parity_row(a: PersonAction) -> ParityRow {
         P::Open => ParityRow::live(a, &["open"]),
         P::Paste => ParityRow::live(a, &["patch", "apply", "append", "my-verb"]),
         P::Blame => ParityRow::live(a, &["blame"]),
-        P::Annotate => ParityRow::deferred(a, &["comment"], "M5", "why it waits"),
+        P::Annotate => ParityRow::deferred(a, &["comment"], "a later release", "why it waits"),
         P::Export => ParityRow::not_applicable(a, &["cat"], &["export"], "why it doesn't apply"),
         // tier 0's rows (the leases): a text pack has no lease
         P::Lease | P::ReleaseLease | P::BreakLease => {
@@ -63,7 +63,7 @@ tier) and only checks rows of other tiers if the list has them.
   `Person`, the agent path through `Agent::verb`). Include a negative control: the registry
   `without` the pack's verb must report it missing.
 
-## A format the pack models only in part: the carrier (K1)
+## A format the pack models only in part: the carrier
 
 A pack whose doc holds only part of the file (a deck: slides and shapes; masters, media and
 charts opaque) opts in to the **carrier** and writes the file back by splicing, never by
@@ -83,7 +83,7 @@ rebuilding it from the doc:
   carrier; a version without one is refused (`MPC-E208`), never built with `encode`.
 - **A carrier pack MUST have the byte-exact row**: an untouched doc writes back byte for byte.
   The kit relies on it: opening an untouched carrier file renders nothing, because the doc as
-  imported is taken to render as the file (`docs/SESSIONS.md`, "The carrier (K1)"). The row is
+  imported is taken to render as the file (`docs/SESSIONS.md`, "The carrier"). The row is
   the kit's: a test under `tests/` calls `k2_mpc_base::session::test_support::carrier_judge`
   (feature `test-support`) over the pack's whole corpus and asserts
   `CarrierVerdict::ByteExact`. Per file it checks the hook (`encode_from(file, decode(file))`
@@ -96,9 +96,9 @@ rebuilding it from the doc:
   golden deck (`tests/live_carrier.rs`), is a model for a pack's own.
 - Also required: a small edit changes only the spliced part (`tests/live_carrier.rs` in the
   kit is a worked example with a toy pack, and runs the judge on it). `docs/SESSIONS.md`, "The
-  carrier (K1)", has the kit's side.
+  carrier", has the kit's side.
 
-### A carrier pack that mints its keys: the pairing (K1b)
+### A carrier pack that mints its keys: the pairing
 
 A deck's keys are the file's own ids, so `decode(carrier)` gives the live keys back. A pack whose
 units have no id in the file (spreadsheet rows, timeline items, scene objects) **mints** its keys:

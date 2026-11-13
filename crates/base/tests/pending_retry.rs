@@ -49,7 +49,7 @@ fn typed(c: &(YDoc, TextRef), at: u32, s: &str) -> Vec<u8> {
 
 /// What a client sends on reconnect: everything it has past the doc's state vector.
 fn resync(c: &(YDoc, TextRef), doc: &Doc) -> Vec<u8> {
-    let sv = yrs::StateVector::decode_v1(&doc.state_vector()).unwrap();
+    let sv = yrs::StateVector::decode_v1(&doc.try_state_vector().unwrap()).unwrap();
     c.0.transact().encode_state_as_update_v1(&sv)
 }
 

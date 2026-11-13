@@ -1,5 +1,5 @@
 //! The two line counts on a grid (docs/POSITIONS.md). The verbs that mirror a real tool, and
-//! `--lines`, `--at`, `insert` and `sed` addresses, count `\n` (K-PAR-7). `LN`, `row list`,
+//! `--lines`, `--at`, `insert` and `sed` addresses, count `\n`. `LN`, `row list`,
 //! blame, conflict reports and claims' reported lines count the line map, where a lone CR also
 //! ends a line. These tests hold the seams between the two on the files where they differ:
 //! a lone CR inside a quoted value, and a lone CR ending the records.
@@ -561,7 +561,7 @@ fn ln_follows_the_doc_as_it_changes() {
     })
 }
 
-/// `LN` under `--base` counts in the base version (K-ADDR-3), so the file that matters is the
+/// `LN` under `--base` counts in the base version, so the file that matters is the
 /// base's.
 #[test]
 fn ln_under_base_asks_the_base_version() {

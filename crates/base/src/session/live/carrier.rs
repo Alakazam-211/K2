@@ -1,4 +1,4 @@
-//! A live doc's **carrier** (K1; `docs/SESSIONS.md`, "The carrier (K1)"): for a pack that models
+//! A live doc's **carrier** (`docs/SESSIONS.md`, "The carrier"): for a pack that models
 //! its format only in part and opts in ([`Pack::wants_carrier`]), the bytes the kit last read
 //! from the doc's file or wrote to it. Rendering the doc splices its content into them
 //! ([`Pack::encode_from`]), so every byte the pack doesn't model stays out of the engine and in
@@ -25,7 +25,7 @@
 //! - **Never leaves the kit** but to the pack's hook. Without a blob store it is kept in memory
 //!   only, and taken from the file again after a reload.
 //!
-//! **The pairing** (K1b; `docs/SESSIONS.md`, "The carrier's pairing"): for a pack that mints its
+//! **The pairing** (`docs/SESSIONS.md`, "The carrier's pairing"): for a pack that mints its
 //! keys ([`Pack::wants_pairing`]), the carrier's keys in the order the pack's decode yields its
 //! units, made by [`Pack::pairing`] at every sync point from the content the file holds there
 //! (the content written, or the disk replica) and kept beside the carrier, in memory
@@ -159,7 +159,7 @@ impl Session {
         Ok(ours == bytes)
     }
 
-    /// The pack's pairing of `content` (K1b), counted in test builds.
+    /// The pack's pairing of `content`, counted in test builds.
     pub(super) fn make_pairing(
         &self,
         content: &[(String, Neutral)],
@@ -199,7 +199,7 @@ impl Session {
         self.make_pairing(&content, &codec)
     }
 
-    /// A change that moved no byte made the replica the doc at sync point `seq` (K1b): the
+    /// A change that moved no byte made the replica the doc at sync point `seq`: the
     /// carrier is unchanged, but its keys may not be (an insert and its delete, a delete and a
     /// retype), so the pairing is made again from the doc and stored, the live row and the
     /// versions at `seq`. Never fails: what can't be made is reported, and a rendering is then
@@ -284,11 +284,11 @@ impl Session {
         let _ = store.sweep_version_carriers(self.doc_id, now);
     }
 
-    /// The stored carrier's pairing (K1b), at a load: the stored live row when it names the
+    /// The stored carrier's pairing, at a load: the stored live row when it names the
     /// carrier's blob (`blob`) and the sync point's seq; otherwise (an older kit's write, a
-    /// store from before K1b) made again from the stored synced state (the content the file
-    /// held at the sync point, the one the carrier hashes to) and stored. What can't be made
-    /// leaves none: a rendering is then refused, never spliced by guess.
+    /// store from before the pairing) made again from the stored synced state (the content
+    /// the file held at the sync point, the one the carrier hashes to) and stored. What can't
+    /// be made leaves none: a rendering is then refused, never spliced by guess.
     fn load_pairing(
         &self,
         st: &mut State,
@@ -328,7 +328,7 @@ impl Session {
     /// ([`AuditEvent::DiskError`]) and kept in memory (the stored one, no longer the sync
     /// point's, is dropped at the next load).
     ///
-    /// For a pack that pairs (K1b), the carrier's pairing is made here too, once per sync point:
+    /// For a pack that pairs, the carrier's pairing is made here too, once per sync point:
     /// from `held` (the content the bytes hold, when the caller has it: a kit write) or else from
     /// the disk replica, which holds the file's content at the sync point; then kept with the
     /// carrier (the same bytes at a new sync point store only the pairing).
@@ -404,6 +404,13 @@ impl Session {
         st.carrier = Some(Arc::from(bytes));
         // the view index's derive reads the new carrier, decoded afresh
         st.view_carrier = None;
+        // a watched doc with a 3D slot: placements the new carrier moves reach the watchers
+        if st.watch.active()
+            && st.view_carrier_before.is_none()
+            && self.pack.view_schema().is_some_and(|v| v.space.is_some())
+        {
+            st.view_carrier_before = Self::view_index_kept_before(st);
+        }
     }
 
     /// Put `bytes` in the doc's space and make them the stored carrier at `seq`. Returns the
@@ -467,7 +474,7 @@ impl Session {
         if !self.pack.wants_pairing() {
             return Ok(Some(self.pack.encode_from(&c, &v.content, &codec)?));
         }
-        // the version's own pairing (K1b), made with its carrier: none, or one naming another
+        // the version's own pairing, made with its carrier: none, or one naming another
         // blob (an older kit's), is no exact file, never one paired by guess
         let pairing = store
             .carrier_pairing(self.doc_id, vid)?

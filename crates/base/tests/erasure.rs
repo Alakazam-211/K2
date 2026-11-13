@@ -1,4 +1,4 @@
-//! Erasure (K-PURGE-1…13, K-T0-9, undo spec U19/U20) as a host uses it, on real temp folders
+//! Erasure (undo spec U19/U20) as a host uses it, on real temp folders
 //! with the host's injected clock: purge leaves no byte of a secret in the store file (by
 //! whole copy or any 8-byte window), its file or a conflict copy; undo stacks are cleared;
 //! a revert over purged text reports `erased`; keyed sync hashes rotate; participant
@@ -222,7 +222,7 @@ fn purge(s: &Session, c: ConnId, scope: PurgeScope) -> k2_mpc_base::session::Pur
 
 // ---------- the gate: no bytes behind ----------
 
-/// K-PURGE-3 `purge::byte_scan`: secrets planted in every place the kit keeps content (the
+/// `purge::byte_scan`: secrets planted in every place the kit keeps content (the
 /// log, versions, revert records, an undo stack, the read-base cache, the sync replica and
 /// the file, an outside edit), one of them typed in two halves (two records); a history
 /// purge; the store file, the doc's file, the session's disk sync memory (v0.9.7: the replica
@@ -407,7 +407,7 @@ fn a_delete_alone_leaves_bytes_and_the_rewrite_removes_them() {
 }
 
 /// A purge, then a reload from the store and a restart: the text and history survive;
-/// change ids and lengths survive (K-PURGE-5): a replica synced before the purge still
+/// change ids and lengths survive: a replica synced before the purge still
 /// merges into the doc after it.
 #[test]
 fn reload_and_convergence_after_purge() {
@@ -701,7 +701,7 @@ fn a_redacted_version_is_no_merge_base_and_restores_without_the_span() {
 
 // ---------- rights and audit ----------
 
-/// K-PURGE-1: owner only, refused with a typed reason and audited; nothing changes. The
+/// Owner only, refused with a typed reason and audited; nothing changes. The
 /// audit of a purge is metadata only: no event (and no `Debug` of the request) holds the
 /// text.
 #[test]
@@ -746,7 +746,7 @@ fn purge_is_owner_only_and_audited_without_content() {
 
 // ---------- keyed hashes ----------
 
-/// K-PURGE-13: the stored synced hash is keyed (never the plain SHA-256 of the file), a
+/// The stored synced hash is keyed (never the plain SHA-256 of the file), a
 /// purge replaces the key (the hash of the same file changes), and an echo of a write made
 /// before the purge is not taken for our own: it is an outside edit. The control: before
 /// the purge, the same old write is an echo.
@@ -787,7 +787,7 @@ fn keyed_sync_hashes_rotate_on_purge() {
     assert_eq!(text(&s, ed), "v2\n");
 }
 
-/// Own-write hashes expire (K-PURGE-13: 60 s): after that, an older write of ours coming
+/// Own-write hashes expire (60 s): after that, an older write of ours coming
 /// back is an outside edit.
 #[test]
 fn own_write_hashes_expire() {
@@ -813,7 +813,7 @@ fn own_write_hashes_expire() {
 
 // ---------- participant erasure ----------
 
-/// K-PURGE-7 / U20: the pid is replaced by a pseudonym everywhere the store attributes
+/// U20: the pid is replaced by a pseudonym everywhere the store attributes
 /// (log, changes, versions, approvals, the client table), counts kept; their content goes;
 /// their connections are removed. Refusals: an empty or reserved pseudonym, self-erasure.
 #[test]
@@ -866,7 +866,7 @@ fn participant_erasure() {
     assert!(f.store.client_owned_by(id, pid).unwrap().is_none());
 }
 
-// ---------- tier 0 (K-T0-9) ----------
+// ---------- tier 0 ----------
 
 fn open_blob(f: &Fx, name: &str) -> Arc<BlobSession> {
     f.mgr
@@ -1006,7 +1006,7 @@ fn tier0_purge_whole_history_reports_shared_blobs() {
     assert_eq!(cur, b"new\n");
 }
 
-/// K-T0-9 with K-PURGE-3's byte scan (the approvals slice's gate): an assistant
+/// Approvals with the byte scan: an assistant
 /// writes two secrets on alice's behalf; the first is settled (declined) and also became a
 /// conflict copy (a desktop save under the assistant's lease), the second is still pending.
 /// Purging the first version, then the whole history, leaves neither secret nor its blob id
@@ -1269,7 +1269,7 @@ fn a_purge_of_a_store_holding_a_newer_kits_table_is_refused_unchanged() {
 }
 
 /// The erasure limit is stated where a host reads about purge (`docs/SESSIONS.md`): the
-/// paragraph under `## Erasure`, the rewrite's list, and the K-PURGE-12 row. A purge holds
+/// paragraph under `## Erasure`, the rewrite's list, and the row for older copies. A purge holds
 /// against the store as it stands, never against an older copy of it.
 /// `MPC_DOCS_PLANT=docs-without-limit` (the docs read with the paragraph and the row taken out)
 /// fails at the paragraph's assert.
@@ -1321,6 +1321,6 @@ fn purge_docs_state_the_erasure_limit() {
             "| An older copy of the store file (a backup, a snapshot, a copy taken before the \
              purge) | **No** | it loads as the doc was then; erase older copies (the host's job) |"
         ),
-        "the K-PURGE-12 row"
+        "the row for older copies"
     );
 }

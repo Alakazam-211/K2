@@ -1,4 +1,4 @@
-//! The ID-churn judge (K-COD-10), for packs' tests (feature `test-support`): over a corpus, a
+//! The ID-churn judge, for packs' tests (feature `test-support`): over a corpus, a
 //! no-op save and each one-unit edit must keep the native ID of every object they don't
 //! touch.
 //!

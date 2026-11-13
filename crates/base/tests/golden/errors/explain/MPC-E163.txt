@@ -1,0 +1,21 @@
+MPC-E163 replica_lagging (sessions and edits)
+exit:     2
+message:  this replica's engine refused the host's merge: it is behind the host's engine
+next:     The host relayed a change this replica's engine can't take (MPCE-E995 from the host): this replica runs an older engine than the host. Nothing was applied. Upgrade this replica, then resync it from the host; don't treat the host as hostile.
+rule:     the MPCE seam (stable codes): one host, one engine version
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E163",
+  "name": "replica_lagging",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "this replica's engine refused the host's merge: it is behind the host's engine",
+  "next": "The host relayed a change this replica's engine can't take (MPCE-E995 from the host): this replica runs an older engine than the host. Nothing was applied. Upgrade this replica, then resync it from the host; don't treat the host as hostile.",
+  "rule": "the MPCE seam (stable codes): one host, one engine version",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

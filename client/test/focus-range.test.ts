@@ -1,4 +1,4 @@
-// Focus and range (wire 3; rendering-data contract Item 3, gap 10) in `PresenceChannel`: the
+// Focus and range (wire 3) in `PresenceChannel`: the
 // frames go only to a host that lists their feature, a range's UTF-16 offsets go out as UTF-8
 // bytes, refusals forget the value, a reconnect sends the focus before the range, and the roster's
 // `focus` and `range` events fold into `peers()`. A wire-2 host (no `welcome.wire`, no features)

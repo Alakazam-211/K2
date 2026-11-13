@@ -1,4 +1,4 @@
-//! The pack verb that made each live change (rendering-data contract gap 9; `docs/SESSIONS.md`,
+//! The pack verb that made each live change (`docs/SESSIONS.md`,
 //! "Verbs").
 //!
 //! One additive per-doc table, **without a format bump**, on the terms of `change_turns`

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pack-template check: a pack that keeps a carrier (K1) runs the kit's byte-exact row.
+# Pack-template check: a pack that keeps a carrier runs the kit's byte-exact row.
 # Run from a pack repo's root: ../k2-mpc-base/scripts/pack-checks/carrier-row.sh
 #
 # A pack whose source (outside tests/, target/ and the fuzz crate) implements

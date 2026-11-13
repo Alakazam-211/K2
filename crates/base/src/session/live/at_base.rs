@@ -1,4 +1,4 @@
-//! The hunk channel's two calls (kit v0.9.7, K2's Live tab): [`Session::events_since`] (K3)
+//! The hunk channel's two calls (kit v0.9.7, K2's Live tab): [`Session::events_since`]
 //! and [`Session::edit_at_base`] (K2, amendment E-LIVE r2). A child of `live`, so it works
 //! on the session's own state.
 //!
@@ -139,7 +139,7 @@ impl Session {
             return Err(expired(base, "a version this doc hasn't reached"));
         }
         // a structured doc's changes are ops by key, not text hunks: the window (read from
-        // the records' text roots) can't replay them, so a client reloads (C1: an empty
+        // the records' text roots) can't replay them, so a client reloads (an empty
         // window there would read as "nothing happened")
         if self.structured && base < st.version {
             return Err(expired(
@@ -224,7 +224,7 @@ impl Session {
         Ok(out)
     }
 
-    /// **The changes after `version`** (K3): every [`ChangeEvent`] the doc broadcast since,
+    /// **The changes after `version`**: every [`ChangeEvent`] the doc broadcast since,
     /// in order, one per text root a change touched (hunks in the coordinates of the root's
     /// text before that change). Needs read. A client that missed events (a reconnect)
     /// replays these onto its text at `version`; `version` = the doc's version gives none.
@@ -249,7 +249,7 @@ impl Session {
             self.window(&st, version)?
         };
         let events = window.into_iter().map(|w| w.event);
-        // an App viewer sees handles, never pids (K5)
+        // an App viewer sees handles, never pids
         Ok(match Self::app_viewer(&st, i) {
             Some(v) => {
                 let mut l = st.handles.lens(&v);
@@ -310,7 +310,7 @@ impl Session {
         Ok(CursorAtVersion::Set(c))
     }
 
-    /// A refusal as member `i` may see it: an App viewer's names others by handle (K5).
+    /// A refusal as member `i` may see it: an App viewer's names others by handle.
     fn viewer_rep(&self, st: &mut State, i: usize, e: SessionError) -> ErrorReport {
         match Self::app_viewer(st, i) {
             Some(v) => st.handles.lens(&v).error(e).report(),
@@ -330,7 +330,7 @@ impl Session {
     /// - others' inserted text is never deleted: a deletion over it is split around it, and
     ///   a replacement's text goes at the left end of its range.
     ///
-    /// The client (`client/`, K1) has **one change in flight** (rule 0), and `base` is the
+    /// The client (`client/`) has **one change in flight** (rule 0), and `base` is the
     /// latest version it has seen, its own acknowledged changes included. Refusals (nothing
     /// applied, P4):
     /// - `MPC-E112 base_expired`: `base` is past the live window (as
@@ -451,7 +451,7 @@ impl Session {
             position::line_of(&before, c.end),
         );
         let theirs = on_root.get(c.step).map(|w| &w.event);
-        // its author as `i` may see it: an App viewer by handle (K5)
+        // its author as `i` may see it: an App viewer by handle
         let author = theirs.map(|e| match Self::app_viewer(st, i) {
             Some(v) => st.handles.lens(&v).pid(&e.pid),
             None => e.pid.clone(),

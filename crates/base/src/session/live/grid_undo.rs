@@ -1,4 +1,4 @@
-//! Undo, redo and revert of structured changes (spec v1.10 §6a, C1e). A child of `live`.
+//! Undo, redo and revert of structured changes (spec v1.10 §6a). A child of `live`.
 //!
 //! **One mechanism.** Every stack entry is a change (its log position); undoing it, redoing
 //! it and reverting it all **reverse that change's record** (revert record v3: its ops by key,
@@ -148,7 +148,7 @@ impl Session {
         let conflict = |why, by| Outcome::Conflict { why, by };
         let put_back = || o.prev.as_ref().map(|p| (o.kind.facet(), resolved(p)));
         let list_key = || Key::new(key).ok();
-        // a purge redacted this op's values (C1f): a value can't be put back once erased,
+        // a purge redacted this op's values: a value can't be put back once erased,
         // and the record no longer says what it was (U19: never resurrect, never guess)
         if o.redacted
             && matches!(

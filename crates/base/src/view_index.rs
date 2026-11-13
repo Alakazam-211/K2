@@ -1,24 +1,24 @@
-//! The view index (rendering-data contract, Item 1; gaps 1, 2 and 3): what a view of a
+//! The view index: what a view of a
 //! structured doc draws from, in one shape whichever source it was read from.
 //!
-//! - **The view schema** ([`ViewSchema`], gap 1). A pack declares once which list root holds the
+//! - **The view schema** ([`ViewSchema`]). A pack declares once which list root holds the
 //!   containers (a deck's slides) and which the units (its shapes), which unit field names its
 //!   container, which fields carry a unit's geometry, text, name and visibility, how the page is
 //!   sized and in what native unit ([`crate::session::Pack::view_schema`]). `None`, the default,
 //!   means the pack has no view index.
-//! - **Addresses** (gap 2). Everything a view reads or sends names an element by its address,
+//! - **Addresses**. Everything a view reads or sends names an element by its address,
 //!   never by the live store's key: the pack maps one to the other
 //!   ([`crate::session::Pack::address_of`] and its inverse [`crate::session::Pack::key_of`];
 //!   identity by default), and the kit converts at its edge (the index here; the presence
 //!   setters and claims by address, [`crate::session::Session::set_focus_at`] and its siblings;
 //!   [`key_candidates`] and [`crate::session::Session::resolve_address`]).
-//! - **One shape, two sources** (gap 3). [`ViewIndex::live`] reads a live doc's keyed state
+//! - **One shape, two sources**. [`ViewIndex::live`] reads a live doc's keyed state
 //!   through the schema; [`ViewIndex::blob`] reads one version's structure index through the
 //!   schema's [`BlobView`]. `tier` says which. Containers come in order, units by container,
 //!   back to front, a nested unit right after its parent. The pack then fills what only it can
 //!   work out ([`crate::session::Pack::view_derive`]: a deck's slide titles, inherited boxes,
 //!   fonts...) and the kit finishes (units grouped by container, `unit_count`).
-//! - **The carrier** (K1, [`ViewCarrier`]). On the live tier the hook also reads the doc's
+//! - **The carrier** ([`ViewCarrier`]). On the live tier the hook also reads the doc's
 //!   carrier, for what only the file's bytes hold (a deck's fonts, render hashes, field kinds, a
 //!   group's children, a layout's boxes). The live store wins: the carrier supplies only what
 //!   the store doesn't model. The pack's decode of it runs once per carrier, and the kit keeps a
@@ -30,11 +30,12 @@
 //!
 //! Nothing here holds a raw digest: a container's `render_hash` is a keyed [`NodeHash`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::elem::{Key, KeyedRoot, KeyedState, Value};
 use crate::errors::Value as Json;
 use crate::index::{cut_text, Digest, IndexNode, IndexView, NodeHash};
+use crate::placement::{Link, Mat4, Placement, Space, SpaceSlot, SpaceSrc};
 use crate::schema::{Kind, Schema};
 use crate::session::{BlobPack, Pack};
 use crate::table::CELL_SEP;
@@ -50,7 +51,13 @@ pub const VIEW_PAGE_MIN: usize = crate::index::READ_BUDGET_MIN;
 /// The default budget of one page of units, in bytes ([`crate::index::READ_BUDGET`]).
 pub const VIEW_PAGE_BUDGET: usize = crate::index::READ_BUDGET;
 
-// ----- the schema (gap 1) -----
+/// The most names a schema's [`ViewSchema::unit_derived`] declares.
+pub const UNIT_DERIVED_MAX: usize = 8;
+
+/// The longest name of a unit's derived value, in bytes.
+pub const DERIVED_NAME_MAX: usize = 64;
+
+// ----- the schema -----
 
 /// Where a view field's value comes from in the live store: a field of the element (its key in
 /// the element's list root's [composite](crate::session::Pack::composite) map, `<key>\x1f<field>`),
@@ -304,6 +311,19 @@ pub struct ViewSchema {
     /// A sparse grid's rows, columns, cells and numbering ([`crate::grid::GridSlot`]). `None`:
     /// not a grid.
     pub grid: Option<crate::grid::GridSlot>,
+    /// The names of the pack's **derived values per unit**: small texts only the pack works out
+    /// (a scene object's transform as people read it, a row's number), which its derive hook
+    /// sets on each unit ([`Unit::set_derived`]) and the kit carries on the units' pages
+    /// (`derived` on a unit), in change frames (`derived.units.<unit>.<name>`, the text, or
+    /// `null` when it has none now) and to a host's per-unit read ([`ViewIndex::unit`]). At
+    /// most [`UNIT_DERIVED_MAX`] names, each 1 to [`DERIVED_NAME_MAX`] bytes of ASCII letters,
+    /// digits, `_`, `-` or `.`, none twice and none a name of the grid's
+    /// [`crate::grid::GridSlot::cell_derived`]. A value is cut to [`VIEW_TEXT_MAX`] bytes; a
+    /// name not declared here is dropped. Empty (the default): none.
+    pub unit_derived: &'static [&'static str],
+    /// The 3D slot: a unit's (and a container's) placement in the doc's space
+    /// ([`crate::placement`], [`crate::session::Pack::view_placement`]). `None`: no 3D.
+    pub space: Option<SpaceSlot>,
 }
 
 impl ViewSchema {
@@ -323,6 +343,8 @@ impl ViewSchema {
         derived: Derived::NONE,
         blob: None,
         grid: None,
+        unit_derived: &[],
+        space: None,
     };
 
     /// Why this schema doesn't fit the doc's `schema` and `composites`
@@ -376,6 +398,35 @@ impl ViewSchema {
                 return Err("the geometry has no field or no parts".into());
             }
         }
+        if self.space.is_some_and(|sp| sp.unit_fields.is_empty()) {
+            return Err("the 3D slot names no unit field".into());
+        }
+        if self.unit_derived.len() > UNIT_DERIVED_MAX {
+            return Err(format!(
+                "the schema declares {} unit derived values, at most {UNIT_DERIVED_MAX}",
+                self.unit_derived.len()
+            ));
+        }
+        for (i, n) in self.unit_derived.iter().enumerate() {
+            let good = !n.is_empty()
+                && n.len() <= DERIVED_NAME_MAX
+                && n.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'));
+            if !good {
+                return Err(format!(
+                    "the unit derived value's name {n:?} isn't 1 to {DERIVED_NAME_MAX} bytes of \
+                     ASCII letters, digits, `_`, `-` or `.`"
+                ));
+            }
+            if self.unit_derived[..i].contains(n) {
+                return Err(format!("the unit derived value {n:?} is declared twice"));
+            }
+            if self.grid.is_some_and(|g| g.cell_derived.contains(n)) {
+                return Err(format!(
+                    "the unit derived value {n:?} is also a cell derived value of the grid"
+                ));
+            }
+        }
         if let Some(g) = &self.grid {
             let map_of = |m: &str, l: &str| {
                 schema.kind_of(m) == Some(Kind::Map) && composites.contains(&(m, l))
@@ -423,9 +474,9 @@ impl ViewSchema {
             .map(|(_, c)| *c)
     }
 
-    /// The schema as the watch snapshot carries it (contract §1.2). `field_class_prefix` and
-    /// `grid` are there only when the pack declares them, so a schema without them encodes as
-    /// before.
+    /// The schema as the watch snapshot carries it (contract §1.2). `field_class_prefix`,
+    /// `grid` and `unit_derived` are there only when the pack declares them, so a schema
+    /// without them encodes as before.
     pub fn to_value(&self) -> Json {
         let src = |s: Src| -> Json {
             match s {
@@ -529,11 +580,20 @@ impl ViewSchema {
         if let Some(g) = &self.grid {
             out.push(("grid".into(), g.to_value()));
         }
+        if let Some(sp) = &self.space {
+            out.push(("space".into(), sp.to_value()));
+        }
+        if !self.unit_derived.is_empty() {
+            out.push((
+                "unit_derived".into(),
+                Json::list(self.unit_derived.iter().copied()),
+            ));
+        }
         Json::Obj(out)
     }
 }
 
-// ----- the index (gap 3) -----
+// ----- the index -----
 
 /// Which source a [`ViewIndex`] was read from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -563,6 +623,9 @@ pub struct Page {
 }
 
 /// One font the doc uses (the pack's): a family name, never font bytes.
+///
+/// **Build it with `..FontUse::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FontUse {
     pub family: String,
@@ -574,6 +637,9 @@ pub struct FontUse {
 }
 
 /// A layout, by its address, with its own name and its master's address.
+///
+/// **Build it with `..Layout::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Layout {
     pub key: String,
@@ -582,6 +648,9 @@ pub struct Layout {
 }
 
 /// One container (a slide).
+///
+/// **Build it with `..Container::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Container {
     /// Its address.
@@ -593,7 +662,7 @@ pub struct Container {
     pub hidden: bool,
     /// Its layout's address (its name is in [`ViewIndex::layouts`]).
     pub layout: Option<String>,
-    /// Keyed by the space's key: never a raw digest. Set by the pack's render hash (gap 5).
+    /// Keyed by the space's key: never a raw digest. Set by the pack's render hash.
     pub render_hash: Option<NodeHash>,
     /// Indexes into [`ViewIndex::fonts`].
     pub fonts: Vec<u32>,
@@ -601,9 +670,14 @@ pub struct Container {
     pub has_fields: Vec<String>,
     /// Its units, nested ones included (the kit counts them).
     pub unit_count: u32,
+    /// Its placement, for a schema whose 3D slot has container fields.
+    pub placement: Option<Placement>,
 }
 
 /// A box in native units, page space: the transform box, never the ink.
+///
+/// **Build it with `..Bbox::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Bbox {
     pub x: i64,
@@ -613,6 +687,9 @@ pub struct Bbox {
 }
 
 /// A unit's flips.
+///
+/// **Build it with `..Flip::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Flip {
     pub h: bool,
@@ -620,6 +697,9 @@ pub struct Flip {
 }
 
 /// A unit's text, cut to [`VIEW_TEXT_MAX`].
+///
+/// **Build it with `..UnitText::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UnitText {
     pub summary: String,
@@ -627,6 +707,9 @@ pub struct UnitText {
 }
 
 /// A placeholder's type and index, as the file writes them.
+///
+/// **Build it with `..Placeholder::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Placeholder {
     pub ty: String,
@@ -663,6 +746,9 @@ impl EditableText {
 }
 
 /// One unit (a shape).
+///
+/// **Build it with `..Unit::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Unit {
     /// Its address.
@@ -696,9 +782,39 @@ pub struct Unit {
     pub placeholder: Option<Placeholder>,
     /// `None` when the source doesn't say.
     pub editable_text: Option<EditableText>,
+    /// The pack's derived values ([`ViewSchema::unit_derived`]): `(name, text)`, in the schema's
+    /// order once the kit has finished the index, each name once, each text cut to
+    /// [`VIEW_TEXT_MAX`]. Set them with [`Unit::set_derived`].
+    pub derived: Vec<(String, String)>,
+    /// Its placement, for a schema with a 3D slot (`None`: not placed by the slot).
+    pub placement: Option<Placement>,
+}
+
+impl Unit {
+    /// Set the derived value `name` to `text` (replacing one already set). The kit keeps it
+    /// only when the schema declares `name` ([`ViewSchema::unit_derived`]), cut to
+    /// [`VIEW_TEXT_MAX`].
+    pub fn set_derived(&mut self, name: &str, text: impl Into<String>) {
+        let text = text.into();
+        match self.derived.iter_mut().find(|(n, _)| n == name) {
+            Some((_, t)) => *t = text,
+            None => self.derived.push((name.to_owned(), text)),
+        }
+    }
+
+    /// The derived value `name`, if the unit has one.
+    pub fn derived_value(&self, name: &str) -> Option<&str> {
+        self.derived
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.as_str())
+    }
 }
 
 /// The view index of one rev of a live doc, or of one version of a blob doc (contract Item 1).
+///
+/// **Build it with `..ViewIndex::default()`**, setting the fields you have: the kit adds
+/// fields to it in minor releases, and a full literal stops compiling when it does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ViewIndex {
     pub tier: Tier,
@@ -712,15 +828,25 @@ pub struct ViewIndex {
     pub layouts: Vec<Layout>,
     /// In their order.
     pub containers: Vec<Container>,
+    /// The doc's space, for a schema with a 3D slot.
+    pub space: Option<Space>,
     /// By container, in the containers' order; back to front within one; a nested unit right
     /// after its parent.
     pub units: Vec<Unit>,
 }
 
+/// One container's units' derived values, by unit address, each `(name, text)`
+/// ([`crate::session::Session::view_derived`]).
+pub type UnitsDerived = Vec<(String, Vec<(String, String)>)>;
+
+/// The units' derived values a change set (`Some(text)`) or removed (`None`), by unit address,
+/// each `(name, value)` ([`ViewChange::unit_derived`]).
+pub type DerivedChanges = Vec<(String, Vec<(String, Option<String>)>)>;
+
 /// What a pack's derive hook reads ([`crate::session::Pack::view_derive`]).
 #[derive(Debug, Clone, Copy)]
 pub enum ViewSource<'a> {
-    /// The live doc's keyed state the index was built from, and its carrier (K1) when the pack
+    /// The live doc's keyed state the index was built from, and its carrier when the pack
     /// keeps one and the kit holds it ([`ViewCarrier`]): the file's bytes, for what only they
     /// hold. **The live store wins:** what the store models comes from the state, and the
     /// carrier supplies only what it doesn't.
@@ -740,6 +866,43 @@ pub struct ViewChange<'a> {
 }
 
 impl ViewChange<'_> {
+    /// The units' derived values the change set or removed ([`ViewSchema::unit_derived`]), by
+    /// unit address in the index's order after it: `(unit, [(name, Some(text) | None)])`. A
+    /// unit after the change with a value it didn't have before, or another one, has
+    /// `Some(text)`; a unit in both with a value before and none after has `None`; a unit only
+    /// before (deleted) has nothing. Every unit's values when the index before isn't held.
+    pub fn unit_derived(&self) -> DerivedChanges {
+        let before: HashMap<&str, &Unit> = self
+            .before
+            .map(|b| b.units.iter().map(|u| (u.key.as_str(), u)).collect())
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for u in &self.after.units {
+            let was = before.get(u.key.as_str());
+            let had = was.is_some_and(|w| !w.derived.is_empty());
+            if u.derived.is_empty() && !had {
+                continue;
+            }
+            let mut d: Vec<(String, Option<String>)> = Vec::new();
+            for (n, t) in &u.derived {
+                if was.and_then(|w| w.derived_value(n)) != Some(t.as_str()) {
+                    d.push((n.clone(), Some(t.clone())));
+                }
+            }
+            if let Some(w) = was {
+                for (n, _) in &w.derived {
+                    if u.derived_value(n).is_none() {
+                        d.push((n.clone(), None));
+                    }
+                }
+            }
+            if !d.is_empty() {
+                out.push((u.key.clone(), d));
+            }
+        }
+        out
+    }
+
     /// The containers whose render hash changed, by address, in order: each with a hash after
     /// the change that differs from its hash before it (or that wasn't there before); every
     /// container with a hash when the index before isn't held.
@@ -761,8 +924,8 @@ impl ViewChange<'_> {
     }
 }
 
-/// A live doc's **carrier** as the derive hook reads it (K1; `docs/SESSIONS.md`, "The carrier
-/// (K1)"): the bytes the kit last read from the doc's file or wrote to it, which hold what the
+/// A live doc's **carrier** as the derive hook reads it (`docs/SESSIONS.md`, "The carrier"
+/// ): the bytes the kit last read from the doc's file or wrote to it, which hold what the
 /// live store doesn't model (a deck's fonts, a group's children, a layout's boxes).
 ///
 /// - **Decoded once per carrier** ([`ViewCarrier::decoded`]): the pack's decode runs on the
@@ -779,7 +942,11 @@ pub struct ViewCarrier {
     bytes: std::sync::Arc<[u8]>,
     /// The key render hashes are keyed under.
     hash_key: [u8; 32],
-    decoded: std::sync::OnceLock<Option<Box<dyn std::any::Any + Send + Sync>>>,
+    /// The pack's decode of the bytes, shared by every handle on the same bytes (a new
+    /// pairing on the same carrier keeps it).
+    decoded: std::sync::Arc<std::sync::OnceLock<Option<Box<dyn std::any::Any + Send + Sync>>>>,
+    /// The carrier's pairing, for a pack that pairs ([`crate::session::Pack::wants_pairing`]).
+    pairing: Option<std::sync::Arc<crate::session::Pairing>>,
 }
 
 impl std::fmt::Debug for ViewCarrier {
@@ -800,8 +967,40 @@ impl ViewCarrier {
             id: crate::hash::hmac(doc_key, &bytes),
             bytes,
             hash_key: crate::index::digest_key(doc_key),
-            decoded: std::sync::OnceLock::new(),
+            decoded: std::sync::Arc::new(std::sync::OnceLock::new()),
+            pairing: None,
         }
+    }
+
+    /// The same carrier with `pairing` (its decode shared, not run again).
+    pub(crate) fn with_pairing(
+        &self,
+        pairing: Option<std::sync::Arc<crate::session::Pairing>>,
+    ) -> ViewCarrier {
+        ViewCarrier {
+            id: self.id,
+            bytes: self.bytes.clone(),
+            hash_key: self.hash_key,
+            decoded: self.decoded.clone(),
+            pairing,
+        }
+    }
+
+    /// Whether this handle carries `pairing` (the same one, or none of both).
+    pub(crate) fn has_pairing(
+        &self,
+        pairing: Option<&std::sync::Arc<crate::session::Pairing>>,
+    ) -> bool {
+        match (&self.pairing, pairing) {
+            (None, None) => true,
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// The pairing this handle carries, as the kit keeps it.
+    pub(crate) fn pairing_arc(&self) -> Option<&std::sync::Arc<crate::session::Pairing>> {
+        self.pairing.as_ref()
     }
 
     /// The carrier's id: the keyed hash of its bytes, the same for the same bytes in one doc.
@@ -812,6 +1011,17 @@ impl ViewCarrier {
     /// The carrier's bytes, exactly as the file held them at the sync point.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// The carrier's pairing ([`crate::session::Pairing`]): the keys of the units it holds,
+    /// root by root, in the order the pack's decode of it yields them, as the kit made it at the
+    /// sync point the carrier was taken (`docs/SESSIONS.md`, "The carrier's pairing"). A view
+    /// hook finds a unit's file-only facts by its key through it, not by its live position, so
+    /// units that come, go or move between carriers don't shift them: a key the pairing doesn't
+    /// name (a unit added since) has none. A read-only borrow; `None` for a pack that doesn't
+    /// pair ([`crate::session::Pack::wants_pairing`]) and while the kit holds no pairing.
+    pub fn pairing(&self) -> Option<&crate::session::Pairing> {
+        self.pairing.as_deref()
     }
 
     /// Whether these are the carrier `bytes` the session holds (the same allocation).
@@ -838,8 +1048,8 @@ impl ViewCarrier {
             .downcast_ref::<T>()
     }
 
-    /// A container's render hash from the raw digest the pack worked out (contract Item 1,
-    /// gap 5), keyed under the doc's key as every hash the index carries.
+    /// A container's render hash from the raw digest the pack worked out, keyed
+    /// under the doc's key as every hash the index carries.
     pub fn render_hash(&self, digest: &Digest) -> NodeHash {
         crate::index::key_digest(&self.hash_key, digest)
     }
@@ -1015,7 +1225,7 @@ impl ViewIndex {
         Self::live_carried(pack, state, rev, None)
     }
 
-    /// [`ViewIndex::live`] with the doc's carrier (K1), which the derive hook reads for what
+    /// [`ViewIndex::live`] with the doc's carrier, which the derive hook reads for what
     /// the live store doesn't model ([`ViewSource::Live`]).
     pub fn live_carried<P: Pack + ?Sized>(
         pack: &P,
@@ -1024,9 +1234,9 @@ impl ViewIndex {
         carrier: Option<&ViewCarrier>,
     ) -> Option<ViewIndex> {
         let schema = pack.view_schema()?;
-        let mut ix = build_live(pack, &schema, state, rev);
+        let mut ix = build_live(pack, &schema, state, rev, carrier);
         pack.view_derive(ViewSource::Live(state, carrier), &mut ix);
-        ix.finish();
+        ix.finish(&schema);
         Some(ix)
     }
 
@@ -1052,13 +1262,14 @@ impl ViewIndex {
         let b = schema.blob?;
         let mut ix = build_blob(&schema, &b, view);
         pack.view_derive(ViewSource::Blob(view), &mut ix);
-        ix.finish();
+        ix.finish(&schema);
         Some(ix)
     }
 
     /// After the pack's hook: units in their containers' order (stable within one; a unit
-    /// whose container isn't in the index is dropped), each container's `unit_count`.
-    fn finish(&mut self) {
+    /// whose container isn't in the index is dropped), each container's `unit_count`, and each
+    /// unit's derived values as the schema declares them (its names, in its order, cut).
+    fn finish(&mut self, schema: &ViewSchema) {
         let at: HashMap<String, usize> = self
             .containers
             .iter()
@@ -1078,6 +1289,93 @@ impl ViewIndex {
         for (c, n) in self.containers.iter_mut().zip(counts) {
             c.unit_count = n;
         }
+        for u in &mut self.units {
+            if u.derived.is_empty() {
+                continue;
+            }
+            let mut kept = Vec::with_capacity(u.derived.len());
+            for name in schema.unit_derived {
+                if let Some((n, t)) = u.derived.iter().find(|(n, _)| n == name) {
+                    kept.push((n.clone(), cut(t)));
+                }
+            }
+            u.derived = kept;
+        }
+        if cfg!(any(test, feature = "differential")) && !planted_cycle_unchecked() {
+            if let Some(cycle) = self.placement_cycle() {
+                panic!(
+                    "{}: the pack's placement chain is a cycle: {} -> {}",
+                    cycle[0],
+                    cycle.join(" -> "),
+                    cycle[0]
+                );
+            }
+        }
+    }
+
+    /// The first cycle among the placements' `relative_to` links, as the addresses around it
+    /// from the first in address order, or `None`. A test build refuses an index with one
+    /// ([`ViewIndex::finish`]); a release build keeps it, and the world matrix of anything
+    /// placed through it is `None`, as for any broken chain.
+    fn placement_cycle(&self) -> Option<Vec<String>> {
+        // a unit before a container of the same address, as `world_matrix` looks them up
+        let rel: HashMap<&str, &str> = self
+            .containers
+            .iter()
+            .map(|c| (c.key.as_str(), c.placement.as_ref()))
+            .chain(
+                self.units
+                    .iter()
+                    .map(|u| (u.key.as_str(), u.placement.as_ref())),
+            )
+            .filter_map(|(a, p)| Some((a, p?.relative_to.as_deref()?)))
+            .collect();
+        let mut starts: Vec<&str> = rel.keys().copied().collect();
+        starts.sort_unstable();
+        let mut done: HashSet<&str> = HashSet::new();
+        for start in starts {
+            let mut path: Vec<&str> = Vec::new();
+            let mut on: HashMap<&str, usize> = HashMap::new();
+            let mut at = start;
+            while !done.contains(at) {
+                if let Some(&i) = on.get(at) {
+                    return Some(path[i..].iter().map(|a| (*a).to_owned()).collect());
+                }
+                on.insert(at, path.len());
+                path.push(at);
+                match rel.get(at) {
+                    Some(next) => at = next,
+                    None => break,
+                }
+            }
+            done.extend(path);
+        }
+        None
+    }
+
+    /// The unit whose address is `address` (a nested one too), or `None`.
+    pub fn unit(&self, address: &str) -> Option<&Unit> {
+        self.units.iter().find(|u| u.key == address)
+    }
+
+    /// The container whose address is `address`, or `None`.
+    pub fn container(&self, address: &str) -> Option<&Container> {
+        self.containers.iter().find(|c| c.key == address)
+    }
+
+    /// Every unit's derived values in the container whose address is `container`, back to
+    /// front, by unit address: `(unit, [(name, text)])`, units with none left out. `None` for a
+    /// container the index doesn't hold. What a host reads for one container without its
+    /// units' pages.
+    #[allow(clippy::type_complexity)]
+    pub fn derived_of(&self, container: &str) -> Option<Vec<(&str, &[(String, String)])>> {
+        Some(
+            self.units_of(container)?
+                .iter()
+                .filter(|u| !u.derived.is_empty())
+                .map(|u| (u.key.as_str(), u.derived.as_slice()))
+                .collect(),
+        )
     }
 
     /// The units of the container whose address is `container`, back to front: a slice of
@@ -1110,6 +1408,7 @@ impl ViewIndex {
             fonts: self.fonts.clone(),
             layouts: self.layouts.clone(),
             containers: self.containers.clone(),
+            space: self.space.clone(),
         }
     }
 
@@ -1207,6 +1506,7 @@ pub struct ViewSnapshot {
     pub fonts: Vec<FontUse>,
     pub layouts: Vec<Layout>,
     pub containers: Vec<Container>,
+    pub space: Option<Space>,
 }
 
 impl ViewSnapshot {
@@ -1249,6 +1549,15 @@ impl ViewSnapshot {
                 ("unit_count", Json::from(c.unit_count)),
             ])
         });
+        let containers = containers
+            .zip(&self.containers)
+            .map(|(v, c)| match (v, &c.placement) {
+                (Json::Obj(mut m), Some(p)) => {
+                    m.push(("placement".into(), p.to_value()));
+                    Json::Obj(m)
+                }
+                (v, _) => v,
+            });
         vec![
             ("tier".into(), Json::from(self.tier.as_str())),
             ("rev".into(), Json::from(self.rev)),
@@ -1258,6 +1567,13 @@ impl ViewSnapshot {
             ("layouts".into(), Json::List(layouts.collect())),
             ("containers".into(), Json::List(containers.collect())),
         ]
+        .into_iter()
+        .chain(
+            self.space
+                .as_ref()
+                .map(|sp| ("space".to_owned(), sp.to_value())),
+        )
+        .collect()
     }
 
     /// The snapshot as JSON, with the doc's view schema (contract Item 1: the snapshot is the
@@ -1299,9 +1615,11 @@ impl UnitsPage {
     }
 }
 
-/// One unit as JSON, in the contract's field names.
+/// One unit as JSON, in the contract's field names. `derived` (`{name: text}`) only when the
+/// unit has derived values ([`ViewSchema::unit_derived`]), so a unit of a pack that declares
+/// none encodes as before.
 pub fn unit_value(u: &Unit) -> Json {
-    Json::obj([
+    let v = Json::obj([
         ("key", Json::from(&u.key)),
         ("container", Json::from(&u.container)),
         ("parent", Json::from(u.parent.as_ref())),
@@ -1353,73 +1671,102 @@ pub fn unit_value(u: &Unit) -> Json {
             "editable_text",
             Json::from(u.editable_text.map(EditableText::as_str)),
         ),
-    ])
+    ]);
+    let Json::Obj(mut v) = v else {
+        unreachable!("an object")
+    };
+    if let Some(p) = &u.placement {
+        v.push(("placement".into(), p.to_value()));
+    }
+    if !u.derived.is_empty() {
+        v.push((
+            "derived".into(),
+            Json::obj(u.derived.iter().map(|(n, t)| (n.as_str(), Json::from(t)))),
+        ));
+    }
+    Json::Obj(v)
 }
 
-fn build_live<P: Pack + ?Sized>(
-    pack: &P,
-    schema: &ViewSchema,
-    state: &KeyedState,
-    rev: u64,
-) -> ViewIndex {
-    let composites = pack.composite();
-    let cprops = fields_root(composites, schema.containers).and_then(|m| map_of(state, m));
-    let uprops = fields_root(composites, schema.units).and_then(|m| map_of(state, m));
-    let page = schema.page.and_then(|p| {
+/// What the live builder reads once per build: the schema and the two composite maps.
+struct LiveCtx<'a> {
+    schema: &'a ViewSchema,
+    cprops: Option<&'a BTreeMap<String, Value>>,
+    uprops: Option<&'a BTreeMap<String, Value>>,
+}
+
+impl<'a> LiveCtx<'a> {
+    fn new<P: Pack + ?Sized>(pack: &P, schema: &'a ViewSchema, state: &'a KeyedState) -> Self {
+        let composites = pack.composite();
+        LiveCtx {
+            schema,
+            cprops: fields_root(composites, schema.containers).and_then(|m| map_of(state, m)),
+            uprops: fields_root(composites, schema.units).and_then(|m| map_of(state, m)),
+        }
+    }
+
+    fn page(&self, state: &KeyedState) -> Option<Page> {
+        let p = self.schema.page?;
         let m = map_of(state, p.root)?;
         let n = |k: &str| m.get(k)?.as_str()?.trim().parse::<i64>().ok();
         Some(Page {
             w: n(p.w)?,
             h: n(p.h)?,
-            unit: schema.native_unit.to_owned(),
+            unit: self.schema.native_unit.to_owned(),
         })
-    });
-    let mut ix = ViewIndex {
-        tier: Tier::Live,
-        rev: Some(rev),
-        version: None,
-        page,
-        ..ViewIndex::default()
-    };
-    let cf = schema.container_fields;
-    let mut by_id: HashMap<String, usize> = HashMap::new();
-    for (i, (k, v)) in live_of(state, schema.containers).iter().enumerate() {
-        let e = Elem {
+    }
+
+    fn celem(&self, k: &'a Key, v: &'a Value) -> Elem<'a> {
+        Elem {
             key: k,
             value: v,
-            props: cprops,
-        };
-        let id = match schema.container_id_field {
-            Some(f) => e.field(f).map(str::to_owned),
-            None => Some(k.as_str().to_owned()),
-        };
-        if let Some(id) = id {
-            by_id.entry(id).or_insert(i);
+            props: self.cprops,
         }
-        ix.containers.push(Container {
-            key: pack.address_of(schema.containers, k),
+    }
+
+    fn uelem(&self, k: &'a Key, v: &'a Value) -> Elem<'a> {
+        Elem {
+            key: k,
+            value: v,
+            props: self.uprops,
+        }
+    }
+
+    /// The value a unit's container field must match: the container's id field, or its key.
+    fn container_id(&self, k: &'a Key, v: &'a Value) -> Option<String> {
+        match self.schema.container_id_field {
+            Some(f) => self.celem(k, v).field(f).map(str::to_owned),
+            None => Some(k.as_str().to_owned()),
+        }
+    }
+
+    /// Container `k` at `i` (from 0), its kit fields only.
+    fn container(&self, i: usize, k: &'a Key, v: &'a Value, address: String) -> Container {
+        let cf = self.schema.container_fields;
+        let e = self.celem(k, v);
+        Container {
+            key: address,
             position: u32::try_from(i + 1).unwrap_or(u32::MAX),
             title: e.read(cf.title).map(cut),
             hidden: flag(e.read(cf.hidden)),
             layout: e.read(cf.layout).and_then(nonempty),
             ..Container::default()
-        });
+        }
     }
-    let uf = schema.unit_fields;
-    let mut per: Vec<Vec<Unit>> = vec![Vec::new(); ix.containers.len()];
-    for (k, v) in live_of(state, schema.units) {
-        let e = Elem {
-            key: k,
-            value: v,
-            props: uprops,
-        };
-        let Some(ci) = e
-            .field(schema.unit_container_field)
-            .and_then(|id| by_id.get(id).copied())
-        else {
-            continue;
-        };
-        let geom = schema
+
+    /// The container field of unit `k`.
+    fn unit_container(&self, k: &'a Key, v: &'a Value) -> Option<&'a str> {
+        self.uelem(k, v).field(self.schema.unit_container_field)
+    }
+
+    /// Unit `k`, in container `container` at `z`, its kit fields only: one unit built
+    /// ([`crate::differential::take_view_unit_builds`]).
+    fn unit(&self, k: &'a Key, v: &'a Value, address: String, container: String, z: u32) -> Unit {
+        #[cfg(any(test, feature = "differential"))]
+        crate::differential::count_view_unit_build();
+        let uf = self.schema.unit_fields;
+        let e = self.uelem(k, v);
+        let geom = self
+            .schema
             .geometry
             .and_then(|g| e.field(g.field).and_then(|s| parse_geom(s, g.parts)));
         let hidden = if planted_schema_field_ignored() {
@@ -1427,10 +1774,9 @@ fn build_live<P: Pack + ?Sized>(
         } else {
             flag(e.read(uf.hidden))
         };
-        let z = u32::try_from(per[ci].len()).unwrap_or(u32::MAX);
-        per[ci].push(Unit {
-            key: pack.address_of(schema.units, k),
-            container: ix.containers[ci].key.clone(),
+        Unit {
+            key: address,
+            container,
             parent: None,
             live: true,
             kind: e.read(uf.kind).unwrap_or_default().to_owned(),
@@ -1445,10 +1791,502 @@ fn build_live<P: Pack + ?Sized>(
             placeholder: e.read(uf.placeholder).map(placeholder),
             editable_text: e.read(uf.editable_text).and_then(EditableText::parse),
             ..Unit::default()
-        });
+        }
+    }
+}
+
+fn build_live<P: Pack + ?Sized>(
+    pack: &P,
+    schema: &ViewSchema,
+    state: &KeyedState,
+    rev: u64,
+    carrier: Option<&ViewCarrier>,
+) -> ViewIndex {
+    let cx = LiveCtx::new(pack, schema, state);
+    let source = ViewSource::Live(state, carrier);
+    let mut ix = ViewIndex {
+        tier: Tier::Live,
+        rev: Some(rev),
+        version: None,
+        page: cx.page(state),
+        space: schema.space.and_then(|sp| space_of(pack, &sp, source)),
+        ..ViewIndex::default()
+    };
+    let mut by_id: HashMap<String, usize> = HashMap::new();
+    for (i, (k, v)) in live_of(state, schema.containers).iter().enumerate() {
+        if let Some(id) = cx.container_id(k, v) {
+            by_id.entry(id).or_insert(i);
+        }
+        let address = pack.address_of(schema.containers, k);
+        let mut c = cx.container(i, k, v, address);
+        c.placement = placed_container(pack, schema, source, k, &c.key);
+        ix.containers.push(c);
+    }
+    let mut per: Vec<Vec<Unit>> = vec![Vec::new(); ix.containers.len()];
+    for (k, v) in live_of(state, schema.units) {
+        let Some(ci) = cx
+            .unit_container(k, v)
+            .and_then(|id| by_id.get(id).copied())
+        else {
+            continue;
+        };
+        let z = u32::try_from(per[ci].len()).unwrap_or(u32::MAX);
+        let address = pack.address_of(schema.units, k);
+        let mut u = cx.unit(k, v, address, ix.containers[ci].key.clone(), z);
+        u.placement = placed_unit(pack, schema, source, k, &u.key);
+        per[ci].push(u);
     }
     ix.units = per.into_iter().flatten().collect();
     ix
+}
+
+// ----- the 3D slot -----
+
+/// The planted fault [`crate::differential::PlaceMutant::AskEveryUnit`].
+fn planted_ask_every_unit() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::place_mutant() == Some(crate::differential::PlaceMutant::AskEveryUnit) {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::PlaceMutant::NoneIsContainerFrame`].
+fn planted_none_is_container_frame() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::place_mutant()
+        == Some(crate::differential::PlaceMutant::NoneIsContainerFrame)
+    {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::PlaceMutant::CycleUnchecked`].
+fn planted_cycle_unchecked() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::place_mutant() == Some(crate::differential::PlaceMutant::CycleUnchecked)
+    {
+        return true;
+    }
+    false
+}
+
+/// The doc's space under `slot`: fixed, or the pack's.
+fn space_of<P: Pack + ?Sized>(pack: &P, slot: &SpaceSlot, source: ViewSource<'_>) -> Option<Space> {
+    match slot.space {
+        SpaceSrc::Fixed { .. } => slot.fixed(),
+        SpaceSrc::Pack { .. } => pack.view_space(source),
+    }
+}
+
+/// Whether the changes since an index wrote a root the doc's space is read from.
+fn space_touched(slot: &SpaceSlot, dirty: &ViewDirty) -> bool {
+    match slot.space {
+        SpaceSrc::Pack { roots } => roots.iter().any(|r| dirty.roots.contains(*r)),
+        SpaceSrc::Fixed { .. } => false,
+    }
+}
+
+/// Whether the composite map key `map_key` of element `e` is one of `fields`.
+fn placing(fields: Option<&'static [&'static str]>, e: &Key, map_key: &str) -> bool {
+    let Some(fields) = fields else { return false };
+    let field = map_key
+        .get(e.as_str().len() + CELL_SEP.len_utf8()..)
+        .unwrap_or("");
+    fields.contains(&field)
+}
+
+/// Element `key` of `root` placed by the pack ([`crate::session::Pack::view_placement`]), at
+/// the slot's precision. A placement the slot can't carry ([`Placement::problem`]) is dropped,
+/// and fails a test build loudly, naming the element.
+fn placed<P: Pack + ?Sized>(
+    pack: &P,
+    slot: &SpaceSlot,
+    source: ViewSource<'_>,
+    root: &str,
+    key: &Key,
+    address: &str,
+) -> Option<Placement> {
+    #[cfg(any(test, feature = "differential"))]
+    crate::differential::count_placement_ask();
+    let mut p = pack.view_placement(source, root, key)?;
+    if let Some(why) = p.problem(slot.precision) {
+        if cfg!(any(test, feature = "differential")) {
+            panic!("{address}: the pack's placement can't be carried: {why}");
+        }
+        return None;
+    }
+    p.precision = slot.precision;
+    Some(p)
+}
+
+fn placed_unit<P: Pack + ?Sized>(
+    pack: &P,
+    schema: &ViewSchema,
+    source: ViewSource<'_>,
+    key: &Key,
+    address: &str,
+) -> Option<Placement> {
+    let slot = schema.space?;
+    placed(pack, &slot, source, schema.units, key, address)
+}
+
+fn placed_container<P: Pack + ?Sized>(
+    pack: &P,
+    schema: &ViewSchema,
+    source: ViewSource<'_>,
+    key: &Key,
+    address: &str,
+) -> Option<Placement> {
+    let slot = schema.space.filter(|s| !s.container_fields.is_empty())?;
+    placed(pack, &slot, source, schema.containers, key, address)
+}
+
+impl ViewIndex {
+    /// The world matrix of the unit or container whose address is `address`, in the doc's
+    /// space ([`crate::placement::world_matrix`]): `None` when it has no placement or its chain
+    /// is broken (an element with none, one not in the index, a degenerate step, a cycle: one
+    /// fails a test build when the index is built).
+    pub fn world_matrix(&self, address: &str) -> Option<Mat4> {
+        fn link<'a>(ix: &'a ViewIndex, a: &str) -> Link<'a> {
+            if let Some(u) = ix.unit(a) {
+                return match &u.placement {
+                    Some(p) => Link::Placed(p),
+                    None => Link::Unplaced,
+                };
+            }
+            match ix.container(a) {
+                Some(c) => match &c.placement {
+                    Some(p) => Link::Placed(p),
+                    None => Link::Unplaced,
+                },
+                None => Link::NotShown,
+            }
+        }
+        let lookup = |a: &str| link(self, a);
+        if planted_none_is_container_frame() {
+            // a placement relative to nothing read as relative to its unit's container
+            if let Some(u) = self.unit(address) {
+                if let (Some(p), Some(c)) = (&u.placement, self.container(&u.container)) {
+                    if p.relative_to.is_none() {
+                        let own = p.matrix()?;
+                        let parent = c.placement.as_ref().and_then(Placement::matrix)?;
+                        return Some(crate::placement::mul(&parent, &own));
+                    }
+                }
+            }
+        }
+        crate::placement::world_matrix(address, lookup)
+    }
+}
+
+// ----- keeping a live index through changes -----
+
+/// What the changes since a live index was built touched, as the kit keeps it while it holds
+/// the index (the session, change by change, from each change's applied stream): enough to
+/// update that index ([`ViewIndex::live_update`]) instead of building it again.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ViewDirty {
+    /// The doc's version the record is current to.
+    pub(crate) upto: u64,
+    /// Units and containers by key: an op on the element or on one of its fields.
+    pub(crate) units: HashSet<Key>,
+    pub(crate) containers: HashSet<Key>,
+    /// A list op other than a value's set: elements came, went or moved.
+    pub(crate) unit_order: bool,
+    pub(crate) container_order: bool,
+    /// The page's root was written.
+    pub(crate) page: bool,
+    /// Every other root written (and a composite map's key naming no element).
+    pub(crate) roots: BTreeSet<String>,
+    /// Units and containers whose placement fields (the 3D slot's) a change wrote, or that
+    /// came, went or moved: their placements are asked for again.
+    pub(crate) placed: HashSet<Key>,
+    pub(crate) placed_c: HashSet<Key>,
+    /// More than [`VIEW_DIRTY_MAX`] elements, or a change not taken in order: build again.
+    pub(crate) wide: bool,
+}
+
+/// The most elements a [`ViewDirty`] names before an update is no cheaper than a build.
+pub(crate) const VIEW_DIRTY_MAX: usize = 4096;
+
+impl ViewDirty {
+    /// Nothing changed since `upto`.
+    pub(crate) fn at(upto: u64) -> ViewDirty {
+        ViewDirty {
+            upto,
+            ..ViewDirty::default()
+        }
+    }
+
+    /// One change that took the doc from `before` to `after`, from its applied stream. A
+    /// change that doesn't follow the last one taken makes it wide.
+    pub(crate) fn take<P: Pack + ?Sized>(
+        &mut self,
+        pack: &P,
+        schema: &ViewSchema,
+        before: u64,
+        after: u64,
+        stream: &[crate::elem::Applied],
+    ) {
+        use crate::elem::{Applied, Effect, ListOpKind};
+        if self.wide || self.upto != before {
+            self.wide = true;
+            self.upto = after;
+            return;
+        }
+        self.upto = after;
+        let composites = pack.composite();
+        let umap = fields_root(composites, schema.units);
+        let cmap = fields_root(composites, schema.containers);
+        let page = schema.page.map(|p| p.root);
+        let sp = schema.space;
+        for x in stream {
+            match x {
+                Applied::List { root, ops }
+                    if root == schema.units || root == schema.containers =>
+                {
+                    let units = root == schema.units;
+                    for o in ops {
+                        if matches!(o.effect, Effect::None { .. }) {
+                            continue;
+                        }
+                        let order = o.kind != ListOpKind::Set;
+                        if units {
+                            self.units.insert(o.key.clone());
+                            self.placed.insert(o.key.clone());
+                            self.unit_order |= order;
+                        } else {
+                            self.containers.insert(o.key.clone());
+                            self.placed_c.insert(o.key.clone());
+                            self.container_order |= order;
+                        }
+                    }
+                }
+                Applied::Map { root, ops }
+                    if Some(root.as_str()) == umap || Some(root.as_str()) == cmap =>
+                {
+                    for o in ops {
+                        if matches!(o.effect, Effect::None { .. }) {
+                            continue;
+                        }
+                        match crate::session::elem_of_map_key(composites, root, &o.key) {
+                            Some((l, e)) if l == schema.units => {
+                                if placing(sp.map(|s| s.unit_fields), &e, &o.key) {
+                                    self.placed.insert(e.clone());
+                                }
+                                self.units.insert(e);
+                            }
+                            Some((_, e)) => {
+                                if placing(sp.map(|s| s.container_fields), &e, &o.key) {
+                                    self.placed_c.insert(e.clone());
+                                }
+                                self.containers.insert(e);
+                            }
+                            None => {
+                                self.roots.insert(root.clone());
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if Some(x.root()) == page {
+                        self.page = true;
+                    }
+                    self.roots.insert(x.root().to_owned());
+                }
+            }
+        }
+        if self.units.len() + self.containers.len() > VIEW_DIRTY_MAX {
+            self.wide = true;
+        }
+    }
+}
+
+/// What the changes since a pack's index was last derived touched, for its incremental derive
+/// ([`crate::session::Pack::view_derive_change`]), by address.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ViewTouched {
+    /// The units the kit built again (an op on the unit or one of its fields, a new unit, or
+    /// its container changed), in the index's order: their kit fields are new and the fields
+    /// the pack derives are empty (no derived values, no nested units under them). Every other
+    /// unit is as the pack left it, nested units included.
+    pub units: Vec<String>,
+    /// The containers the kit built again, the same way: their derived fields are empty.
+    pub containers: Vec<String>,
+    /// Units or containers came, went or moved (their order and `z` are the kit's already).
+    pub order: bool,
+    /// The page's root was written (the kit read the page again).
+    pub page: bool,
+    /// Every other root written: neither the units' nor the containers' list or composite map
+    /// (the page's root among them when it changed). A pack whose derived values read one
+    /// derives again what depends on it.
+    pub roots: Vec<String>,
+}
+
+/// The planted fault [`crate::differential::ViewMutant::UpdateSkipsTouched`].
+fn planted_update_skips_touched() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::view_mutant()
+        == Some(crate::differential::ViewMutant::UpdateSkipsTouched)
+    {
+        return true;
+    }
+    false
+}
+
+/// The planted fault [`crate::differential::ViewMutant::UpdateRebuildsAll`].
+fn planted_update_rebuilds_all() -> bool {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::view_mutant()
+        == Some(crate::differential::ViewMutant::UpdateRebuildsAll)
+    {
+        return true;
+    }
+    false
+}
+
+impl ViewIndex {
+    /// The index of a live doc at `rev` from `prev`, its index at the version `dirty` started
+    /// from, and `dirty`, what the changes since touched: the kit builds again only the
+    /// touched units and containers (and new ones), keeps every other one as `prev` has it
+    /// (the pack's derived fields and nested units included), puts them in the doc's order,
+    /// and asks the pack to derive what the changes touched
+    /// ([`crate::session::Pack::view_derive_change`]). `None` when the pack has no view schema
+    /// or doesn't derive by change: the caller builds the index whole
+    /// ([`ViewIndex::live_carried`]).
+    pub(crate) fn live_update<P: Pack + ?Sized>(
+        pack: &P,
+        prev: &ViewIndex,
+        state: &KeyedState,
+        rev: u64,
+        carrier: Option<&ViewCarrier>,
+        dirty: &ViewDirty,
+    ) -> Option<ViewIndex> {
+        let schema = pack.view_schema()?;
+        let cx = LiveCtx::new(pack, &schema, state);
+        let source = ViewSource::Live(state, carrier);
+        let mut touched = ViewTouched {
+            order: dirty.unit_order || dirty.container_order,
+            page: dirty.page,
+            roots: dirty.roots.iter().cloned().collect(),
+            ..ViewTouched::default()
+        };
+        let mut ix = ViewIndex {
+            tier: Tier::Live,
+            rev: Some(rev),
+            version: None,
+            page: match dirty.page {
+                true => cx.page(state),
+                false => prev.page.clone(),
+            },
+            fonts: prev.fonts.clone(),
+            space: match schema.space {
+                Some(sp) if space_touched(&sp, dirty) => space_of(pack, &sp, source),
+                _ => prev.space.clone(),
+            },
+            layouts: prev.layouts.clone(),
+            containers: Vec::new(),
+            units: Vec::new(),
+        };
+        // the containers: the touched and new ones built again, the rest as they were
+        let was: HashMap<&str, &Container> = prev
+            .containers
+            .iter()
+            .map(|c| (c.key.as_str(), c))
+            .collect();
+        let regroup = dirty.container_order || !dirty.containers.is_empty();
+        let mut by_id: HashMap<String, usize> = HashMap::new();
+        for (i, (k, v)) in live_of(state, schema.containers).iter().enumerate() {
+            if let Some(id) = cx.container_id(k, v) {
+                by_id.entry(id).or_insert(i);
+            }
+            let address = pack.address_of(schema.containers, k);
+            let c = match was.get(address.as_str()) {
+                Some(c) if !dirty.containers.contains(k) => Container {
+                    position: u32::try_from(i + 1).unwrap_or(u32::MAX),
+                    ..(*c).clone()
+                },
+                _ => {
+                    touched.containers.push(address.clone());
+                    let mut n = cx.container(i, k, v, address);
+                    n.placement = match was.get(n.key.as_str()) {
+                        Some(c) if !dirty.placed_c.contains(k) && !planted_ask_every_unit() => {
+                            c.placement.clone()
+                        }
+                        _ => placed_container(pack, &schema, source, k, &n.key),
+                    };
+                    n
+                }
+            };
+            ix.containers.push(c);
+        }
+        let at: HashMap<String, usize> = ix
+            .containers
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (c.key.clone(), i))
+            .collect();
+        // `prev`'s runs: each top-level unit and the nested units right after it
+        let mut runs: HashMap<&str, (usize, usize)> = HashMap::new();
+        let mut i = 0;
+        while i < prev.units.len() {
+            let mut j = i + 1;
+            while j < prev.units.len() && prev.units[j].parent.is_some() {
+                j += 1;
+            }
+            if prev.units[i].parent.is_none() {
+                runs.insert(prev.units[i].key.as_str(), (i, j));
+            }
+            i = j;
+        }
+        // the units, in the doc's order: the touched and new ones built again
+        let mut per: Vec<Vec<Unit>> = vec![Vec::new(); ix.containers.len()];
+        let mut tops: Vec<u32> = vec![0; ix.containers.len()];
+        for (k, v) in live_of(state, schema.units) {
+            let address = pack.address_of(schema.units, k);
+            let run = runs.get(address.as_str()).copied();
+            let fresh = planted_update_rebuilds_all()
+                || run.is_none()
+                || (dirty.units.contains(k) && !planted_update_skips_touched());
+            let ci = match run {
+                Some((s, _)) if !fresh && !regroup => at.get(prev.units[s].container.as_str()),
+                _ => cx.unit_container(k, v).and_then(|id| by_id.get(id)),
+            };
+            let Some(&ci) = ci else { continue };
+            let container = ix.containers[ci].key.clone();
+            let z = tops[ci];
+            tops[ci] += 1;
+            match run {
+                Some((s, e)) if !fresh && prev.units[s].container == container => {
+                    per[ci].push(Unit {
+                        z,
+                        ..prev.units[s].clone()
+                    });
+                    per[ci].extend(prev.units[s + 1..e].iter().cloned());
+                }
+                _ => {
+                    touched.units.push(address.clone());
+                    let mut u = cx.unit(k, v, address, container, z);
+                    u.placement = match run {
+                        Some((s, _)) if !dirty.placed.contains(k) && !planted_ask_every_unit() => {
+                            prev.units[s].placement.clone()
+                        }
+                        _ => placed_unit(pack, &schema, source, k, &u.key),
+                    };
+                    per[ci].push(u);
+                }
+            }
+        }
+        ix.units = per.into_iter().flatten().collect();
+        if !pack.view_derive_change(ViewSource::Live(state, carrier), &mut ix, &touched) {
+            return None;
+        }
+        ix.finish(&schema);
+        Some(ix)
+    }
 }
 
 /// How [`build_blob`] makes one unit: of node `k`, under `parent`, in `container`, at `z`.
@@ -1614,7 +2452,7 @@ fn build_blob(schema: &ViewSchema, b: &BlobView, view: &IndexView) -> ViewIndex 
     ix
 }
 
-// ----- addresses (gap 2) -----
+// ----- addresses -----
 
 /// Why an address names no element ([`key_candidates`]).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

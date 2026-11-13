@@ -1,4 +1,4 @@
-//! Opaque handles for App viewers (K5): a participant whose kind is
+//! Opaque handles for App viewers: a participant whose kind is
 //! [`ParticipantKind::App`](super::ParticipantKind::App) never sees another participant's pid,
 //! nor its own. Every pid in what the kit hands such a viewer (the roster and its push,
 //! change events, blame, the log, claims, the activity ring, heads-up notes, and the
@@ -203,7 +203,7 @@ impl Lens<'_> {
         a
     }
 
-    // ----- grids (C1)
+    // ----- grids
 
     pub fn elem_blame(&mut self, mut b: super::live::ElemBlame) -> super::live::ElemBlame {
         b.author = self.pid(&b.author);

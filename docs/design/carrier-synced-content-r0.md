@@ -1,21 +1,20 @@
-# The carrier's synced keys, r0 (design)
+# The carrier's pairing (design)
 
-Status: **draft**, built on branch `feat/carrier-synced-content` from kit main `44c3c9ff`. Folds in
-the live-plans review's three kit blockers (K-B1 a version's keys, K-B2 the held check, K-B3 an
-outside save on unwritten changes).
+The design behind the carrier's pairing, as built (since v0.17.0). The contract of record is
+`docs/SESSIONS.md`, "The carrier" and "The carrier's pairing"; this note gives the reasons.
 
-**Goal.** The carrier hook (`Pack::encode_from(carrier, content, codec)`, `docs/SESSIONS.md`,
-"The carrier (K1)") gets the file's bytes and the live content. A pack whose keys are the file's
-own ids (a deck's shape ids) pairs the two by decoding the carrier. A pack that **mints** its keys
-(rows with no ids, timeline items, scene objects) can't: once a live insert or an app's save has
-moved the elements, `decode(carrier)` mints other keys than the live doc holds, so the pack can't
-tell which file element a live key is.
+**The problem.** The carrier hook (`Pack::encode_from(carrier, content, codec)`,
+`docs/SESSIONS.md`, "The carrier") gets the file's bytes and the live content. A pack whose keys
+are the file's own ids (a deck's shape ids) pairs the two by decoding the carrier. A pack that
+**mints** its keys (rows with no ids, timeline items, scene objects) can't: once a live insert
+or an app's save has moved the elements, `decode(carrier)` mints other keys than the live doc
+holds, so the pack can't tell which file element a live key is.
 
-The first draft handed the hook the whole keyed content as of the sync point, read from the disk
-replica. That covers the live doc only: a version's carrier row holds the version's seq, not the
-seq its carrier was synced at, and no content is kept per sync point, so `file_at` and the
-conflict-copy comparison have nothing to pair with (K-B1). **This design keeps a pairing instead:
-the carrier's keys, nothing else, stored with every carrier row.**
+**Why not hand the hook the content as of the sync point.** That content could be read from
+the disk replica, but it covers the live doc only: a version's carrier row holds the version's
+seq, not the seq its carrier was synced at, and no content is kept per sync point, so `file_at`
+and the conflict-copy comparison would have nothing to pair with. **The kit keeps a pairing
+instead: the carrier's keys, nothing else, stored with every carrier row.**
 
 ---
 
@@ -44,16 +43,16 @@ pub enum SpliceError {
 }
 ```
 
-- A pack with `wants_pairing() == false` (pptx) sees no change: the kit calls `encode_from` as
-  today, makes no pairing and stores none.
-- A pack with `wants_pairing() == true` gets `encode_from_paired` wherever the kit calls
-  `encode_from` today. It decodes the carrier, **takes every value from the carrier**, and puts
-  the pairing's keys on its units in order. A pairing whose shape doesn't fit (another number of
+- A pack with `wants_pairing() == false` (pptx) sees no change: the kit calls `encode_from`,
+  makes no pairing and stores none.
+- A pack with `wants_pairing() == true` gets `encode_from_paired` wherever the kit would call
+  `encode_from`. It decodes the carrier, **takes every value from the carrier**, and puts the
+  pairing's keys on its units in order. A pairing whose shape doesn't fit (another number of
   units in a root) is `PairingMismatch`. Then it diffs that keyed carrier against `content` by
   key and splices the diff. The rules of `encode_from` stand: untouched is byte for byte, the
   result decodes to the content, a failure leaves the file.
 
-**Why a pairing and not the content (the review's recommendation, taken):**
+**Why a pairing and not the content:**
 1. The values the pack diffs against come from the carrier alone, so they can't drift from it.
    There is no second copy of the file's content to check against the file.
 2. It is small and holds no user content (keys only, in the key grammar), so it can be stored
@@ -68,7 +67,7 @@ pub enum SpliceError {
 | Sync point | The content it is made from |
 |---|---|
 | A kit write | the content just rendered and written |
-| An outside save taken in | the doc once it holds the save (always, under K-B3 below) |
+| An outside save taken in | the replica once it holds the save (the save is the carrier, with this pairing, before anything renders the doc: section 7) |
 | A change that moved no byte (`resync_replica`: same bytes, new keys) | the doc, which the replica becomes |
 | An open whose stored pairing doesn't name the sync point (an older kit's write, no row) | the stored synced state (the disk replica) |
 
@@ -80,7 +79,7 @@ It follows the carrier rows in the same transactions:
 - a new live carrier: the live row, and every version at that seq takes it (as it takes the blob);
 - same bytes at a new sync point (`resync_replica`): the live row and the versions at that seq;
 - a version cut: takes the live row (the carrier it takes is the live one, from the last sync
-  point, so its pairing is that point's: exact for a version cut between two syncs, K-B1);
+  point, so its pairing is that point's: exact for a version cut between two syncs);
 - a version that goes (retention, purge, sweep, doc delete): its row goes;
 - an open: the stored live row is used only if it names the stored carrier blob and the sync
   seq; otherwise it is made again from the stored synced state, and stored.
@@ -95,12 +94,12 @@ blob, is `MPC-E208`, never paired by guess.
 |---|---|---|
 | Import | the file read | the decoded content's keys |
 | Kit write | the bytes written | the keys of the content written |
-| Outside save | the save | the keys of the doc holding the save |
+| Outside save | the save, before anything renders the doc | the keys of the replica holding the save |
 | A change that moved no byte | unchanged | the doc's keys (new); stored again at the new seq |
 | Restart | its blob, if it hashes to the sync point | its row, if it names that blob and seq; else made from the stored synced state |
 | Version cut between syncs | the live one (an earlier sync point) | the live one (the same point) |
 | Purge | written back first, then the purged doc is the carrier | made at that write; keys are never content |
-| Purge with the file missing | stays (reported `NotReached::File`) | stays: it holds no values, so a redacted replica can't make it disagree (the review's hypothesis; a row) |
+| Purge with the file missing | stays (reported `NotReached::File`) | stays: it holds no values, so a redacted replica can't make it disagree (a row checks it) |
 | Participant erasure | as a purge | as a purge |
 
 **Erasure** reaches nothing new: the pairing holds keys only. Rows of erased versions go with
@@ -121,38 +120,41 @@ live doc the rendering fails with **`MPC-E521` `pairing_mismatch`** (exit 1): no
 the file as it was, the doc's changes durable in the store; the next outside save sets carrier
 and pairing again. For a version: `MPC-E208`. It means a pack bug or a damaged store.
 
-## 6. K-B2: whether the doc holds an outside save, with no pack call
+## 6. Whether the doc holds an outside save, with no pack call
 
-`holds_file` spliced the live content into **the new save's bytes**, before the replica had taken
-the save. For a keyed doc that isn't a table it now compares keyed content: the doc after the
-save's edits against the synced state with the save's edits applied (on a throwaway copy of the
-replica), key for key. No pack call (plant `HoldsFileCallsPack`). Tables keep their check.
+For a keyed doc that isn't a table, whether the doc holds an outside save is a comparison of
+keyed content: the doc after the save's edits against the synced state with the save's edits
+applied (on a throwaway copy of the replica), key for key. No pack call: splicing the live
+content into the new save's bytes, before the replica has taken the save, would pair the doc
+with keys the replica doesn't hold yet (plant `HoldsFileCallsPack`; test builds count each
+rendering the check makes, `differential::take_held_renders`). Tables keep their check.
 
-## 7. K-B3: an outside save on unwritten changes keeps both
+## 7. An outside save: the carrier first, and keep both over unwritten changes
 
-Today "keep both" fires for a keyed doc that isn't a table only when the kit wrote the file since
-the last outside save. A save landing on **unwritten** live changes is merged by key, which can
-collide minted keys (the pack mints from the replica), break the pack's own rules in the merged
-state, and override a live value with no copy or note.
+**The carrier first.** The save taken in is the sync point: its bytes become the carrier, with a
+pairing made from the replica (which holds the save), **before anything renders the doc that
+took it**: the settle after the save (is the doc clean?), a write-back, a read. So every
+rendering from the save on splices into the save, never into the bytes of the sync point before,
+whose pairing can name keys the save took out of the doc (a pack that re-keys on a save, as a
+workbook's rows follow the file, would refuse it: `MPC-E521`). Plant: `SettleBeforeCarrier`.
 
-**One rule now:** for a keyed doc that isn't a table, an outside save that changes the content
-keeps both when the kit wrote since the last outside save **or the doc holds changes the file
-doesn't** (its version past the sync point, after the usual re-sync check). The kit's version is
-kept as a version and a conflict copy, one `BlobConflict`, `DiskCheck::Conflict`; the save becomes
-the live doc **exactly**: the doc is moved to the synced state plus the save's edits by identity
-(`restore_edits`: live-only units deleted, the save's inserted, values set), so the save is never
-merged with unwritten changes. The doc then holds the file, so no merge is written. Plant:
-`DirtySaveMergedByKey`. A save whose content equals the synced state (other bytes, same content)
-changes nothing, as before.
+**Keep both over unwritten changes.** For a keyed doc that isn't a table, an outside save that
+changes the content keeps both when the kit wrote since the last outside save **or the doc holds
+changes the file doesn't** (its version past the sync point, after the usual re-sync check). The
+kit's version is kept as a version and a conflict copy, one `BlobConflict`,
+`DiskCheck::Conflict`; the save becomes the live doc **exactly**: the doc is moved to the synced
+state plus the save's edits by identity (`restore_edits`: live-only units deleted, the save's
+inserted, values set). The doc then holds the file, so nothing is written. A save whose content
+equals the synced state (other bytes, same content) changes nothing.
 
-**What changes for existing rows.**
-- Kit `tests/keyed_live.rs`: the two "stale save after a merged write" rows assumed the old merge;
-  they become "a save on unwritten changes keeps both" (in memory and across a restart). The
-  merge write can't happen for these docs any more, so the plant `MergeWriteNotRecorded` is
-  retired; `kit_wrote_file` still reads a stored `kit:merge` author from an older store.
-- pptx: none of its rows saves over unwritten changes (its outside-save rows save after a flush
-  or before any edit), so none should change; its `check.sh` run confirms.
-- Boards (any keyed pack that isn't a table) get the same rule.
+**Why never a merge by key.** Merging a save onto unwritten live changes could give the save's
+new unit a key a live insert already took (the pack mints from the replica), leave a state the
+pack's own rules forbid that it never saw, and override a live value with no copy or note. Plant:
+`DirtySaveMergedByKey`. A stored `kit:merge` author, from an older kit that merged, is still read
+as the kit's write.
+
+Tables are unchanged: they keep their own outside-save rule (`docs/SESSIONS.md`, "Outside saves
+on a grid").
 
 ## 8. N−1
 
@@ -162,12 +164,12 @@ another blob or seq, which this kit makes again at the next open; it refuses a r
 purge, naming the table (`MPC-E502`), as for the carrier tables; its doc delete leaves rows the
 orphan sweep removes. This kit on an older store: no rows; the open makes the live pairing from
 the stored synced state; versions an older kit cut have no pairing, so their `file_at` is
-`MPC-E208` for a pack that wants one (as they have no carrier today).
+`MPC-E208` for a pack that wants one (as a version with no carrier is).
 
 ## 9. Plants and rows
 
 Rows on a toy minted-key pack (`tests/live_paired.rs`: rows with no ids, opaque lines, padding
-the pack doesn't model), each red on a scaffold commit first:
+the pack doesn't model), each caught by name:
 
 | Row | Plant that turns it red |
 |---|---|
@@ -179,5 +181,8 @@ the pack doesn't model), each red on a scaffold commit first:
 | A pairing that doesn't fit: refused typed (`MPC-E521`), the file as it was | `SpliceWithoutMatch` (fallback to the carrier-only hook) |
 | An outside save is taken in with no pack call for the held check | `HoldsFileCallsPack` |
 | A save on unwritten changes keeps both; the save is the live doc exactly | `DirtySaveMergedByKey` |
+| A save the pack re-keys is the carrier, with its pairing, before any rendering (alone, and on unwritten changes) | `SettleBeforeCarrier` (the settle renders with the carrier and pairing from before) |
 
-pptx unchanged and green against the kit by path.
+`tests/live_carrier.rs` checks the carrier side for a pack that doesn't pair (every rendering
+from an outside save on is handed the save), and `tests/keyed_live.rs` the keep-both rule on a
+keyed doc that isn't a table.

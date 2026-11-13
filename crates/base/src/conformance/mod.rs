@@ -59,15 +59,15 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
     ),
     (
         "core.no_equivocation",
-        "Pinned on Yrs. The native engine conforms (E-CORE-4).",
+        "Pinned on Yrs. The native engine conforms.",
     ),
     (
         "core.authorship",
-        "Hardening; pinned on Yrs. The native engine conforms (E-CORE-5).",
+        "Hardening; pinned on Yrs. The native engine conforms.",
     ),
     (
         "core.steady_plain",
-        "Pinned on Yrs: E-TEXT-13's budget is the native engine's target.",
+        "Pinned on Yrs: the budget is the native engine's target.",
     ),
     (
         "prov.record",
@@ -105,12 +105,12 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
         "map.delete_vs_set",
         "a yrs map delete removes only the entry it saw, so a concurrent set always survives \
          it, whatever (lamport, agent) say. (A list element's delete is a set of its delete \
-         flag, and wins, as E-MLIST-2 asks.)",
+         flag, and wins.)",
     ),
     (
         "map.steady_bounded",
         "each overwrite of a map key leaves a content-free item stub (content is \
-         garbage-collected, K-PURGE-11), in the live doc and in a doc loaded from its state \
+         garbage-collected), in the live doc and in a doc loaded from its state \
          (the stored v2 state compresses a regular run of them). Bounded on the interim by \
          the CSV caps.",
     ),
@@ -125,7 +125,7 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
          the facet's winner; on yrs a restore removes the delete flag and a map delete \
          removes the entry, and yrs keeps no identity for a removal, so those two ops carry \
          no write (`None`), as `winner(Existence)` of a live element is `None`. The native \
-         engine reports every merged op's event ID (E4).",
+         engine reports every merged op's event ID.",
     ),
 ];
 

@@ -1,4 +1,4 @@
-//! N−1 check (C1c, K-FMT-10 item 22), built against the previous release (k2-mpc-base
+//! N−1 check of store format 6, built against the previous release (k2-mpc-base
 //! v0.9.2): a store the new build used for text docs only opens, reads, writes, reverts and
 //! rewrites here; a store holding a grid doc (format 6) is refused with one line.
 use std::sync::Arc;
@@ -8,6 +8,17 @@ use k2_mpc_base::session::{
     TextFilePack,
 };
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
+
+/// Whether this build reads store format 6: its crate version, `K2MB_N1_PREV` (which `n1.sh`
+/// reads from its manifest), is v0.10.0 or later. Unset: a build before it.
+fn reads_format_6() -> bool {
+    let Ok(v) = std::env::var("K2MB_N1_PREV") else {
+        return false;
+    };
+    let n: Vec<u64> = v.trim().split('.').map(|x| x.parse().unwrap()).collect();
+    assert_eq!(n.len(), 3, "K2MB_N1_PREV={v:?}: not MAJOR.MINOR.PATCH");
+    (n[0], n[1], n[2]) >= (0, 10, 0)
+}
 
 struct H;
 impl Host for H {
@@ -54,14 +65,21 @@ fn main() {
         let r = store.rewrite_file().expect("no table this build doesn't know");
         println!("text.redb: rewrite_file ok ({r:?})");
     }
+    // a release before v0.10.0 refuses a format-6 store with one line; v0.10.0 and later read
+    // format 6 and open it
+    let reads_6 = reads_format_6();
     match DocStore::open("grid.redb") {
-        Err(e @ StoreError::Newer { found: 6 }) => {
+        Err(e @ StoreError::Newer { found: 6 }) if !reads_6 => {
             let line = e.to_string();
             assert!(!line.contains('\n'));
             println!("grid.redb: refused with one line: {line}");
         }
-        Err(e) => panic!("grid.redb: refused, but not as newer: {e}"),
-        Ok(_) => panic!("grid.redb: a format-6 store opened on v0.9.2"),
+        Ok(store) if reads_6 => {
+            store.find(&key).unwrap().expect("the grid store's doc");
+            println!("grid.redb: opened (this release reads format 6)");
+        }
+        Err(e) => panic!("grid.redb (reads format 6: {reads_6}): refused: {e}"),
+        Ok(_) => panic!("grid.redb: a format-6 store opened on a release before v0.10.0"),
     }
     println!("N-1 OK");
 }

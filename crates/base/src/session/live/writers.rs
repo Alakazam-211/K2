@@ -1,5 +1,4 @@
-//! Person-writer reuse ([`Config::reuse_person_writers`], v0.14.0;
-//! `docs/design/person-writer-reuse-r0.md`): one writer per person per device, so a doc's
+//! Person-writer reuse ([`Config::reuse_person_writers`], v0.14.0): one writer per person per device, so a doc's
 //! writer count follows people and devices, not connections.
 //!
 //! A person's (or App guest's) join with a device key ([`JoinOptions::device`]) takes a free

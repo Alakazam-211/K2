@@ -1,0 +1,993 @@
+{
+  "features": ["keyed_watch"],
+  "frames": [
+    {
+      "type": "keyed_snapshot",
+      "seq": 1,
+      "upto": 1,
+      "schema": {
+        "name": "scene3d",
+        "roots": [
+          {
+            "name": "groups",
+            "kind": "list"
+          },
+          {
+            "name": "group_f",
+            "kind": "map"
+          },
+          {
+            "name": "objs",
+            "kind": "list"
+          },
+          {
+            "name": "obj_f",
+            "kind": "map"
+          },
+          {
+            "name": "scene",
+            "kind": "map"
+          }
+        ],
+        "composite": [
+          {
+            "map": "group_f",
+            "list": "groups"
+          },
+          {
+            "map": "obj_f",
+            "list": "objs"
+          }
+        ]
+      },
+      "view": {
+        "schema": {
+          "containers": "groups",
+          "units": "objs",
+          "unit_container_field": "group",
+          "container_id_field": null,
+          "native_unit": "scene-unit",
+          "page": null,
+          "container_fields": {
+            "title": "name",
+            "hidden": null,
+            "layout": null
+          },
+          "unit_fields": {
+            "kind": {
+              "list_value": true
+            },
+            "name": "name",
+            "alt": null,
+            "text": null,
+            "hidden": null,
+            "editable_text": null,
+            "placeholder": null
+          },
+          "geometry": null,
+          "field_class": {
+            "xform": "geometry",
+            "matrix": "geometry",
+            "axes": "geometry",
+            "name": "text"
+          },
+          "derived": {
+            "containers": [],
+            "units": []
+          },
+          "space": {
+            "unit_fields": ["xform", "rot", "quat", "axes", "matrix", "parent", "driven"],
+            "container_fields": ["place"],
+            "precision": "f64"
+          }
+        },
+        "tier": "live",
+        "rev": 1,
+        "version": null,
+        "page": null,
+        "fonts": [],
+        "layouts": [],
+        "containers": [
+          {
+            "key": "@g:1",
+            "position": 1,
+            "title": "Ground",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 9,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [0, 0, 0],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@g:2",
+            "position": 2,
+            "title": "Upper",
+            "hidden": false,
+            "layout": null,
+            "render_hash": null,
+            "fonts": [],
+            "has_fields": [],
+            "unit_count": 2,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [100, 0, 0],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "space": {
+          "length_unit": "mm",
+          "metres_per_unit": 0.001,
+          "up": "z",
+          "handed": "right"
+        }
+      },
+      "pages": 7
+    },
+    {
+      "type": "keyed_page",
+      "seq": 2,
+      "upto": 1,
+      "page": 1,
+      "pages": 7,
+      "root": "groups",
+      "live": [
+        ["@g:1", "group"],
+        ["@g:2", "group"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 3,
+      "upto": 1,
+      "page": 2,
+      "pages": 7,
+      "root": "group_f",
+      "entries": [
+        ["@g:1", "name", "Ground"],
+        ["@g:1", "place", "0,0,0"],
+        ["@g:2", "name", "Upper"],
+        ["@g:2", "place", "100,0,0"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 4,
+      "upto": 1,
+      "page": 3,
+      "pages": 7,
+      "root": "objs",
+      "live": [
+        ["@o:1", "mesh"],
+        ["@o:2", "empty"],
+        ["@o:3", "mesh"],
+        ["@o:4", "mesh"],
+        ["@o:10", "wall"],
+        ["@o:11", "opening"],
+        ["@o:12", "door"],
+        ["@o:20", "mesh"],
+        ["@o:21", "mesh"],
+        ["@o:22", "mesh"],
+        ["@o:30", "mesh"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 5,
+      "upto": 1,
+      "page": 4,
+      "pages": 7,
+      "root": "obj_f",
+      "entries": [
+        ["@o:1", "group", "g1"],
+        ["@o:1", "name", "Cube"],
+        ["@o:1", "xform", "1,2,3,0,0,0,1,1,1"],
+        ["@o:10", "axes", "4000,0,0/-/0,1,0"],
+        ["@o:10", "group", "g1"],
+        ["@o:10", "name", "Wall"],
+        ["@o:10", "parent", "@g:1"],
+        ["@o:11", "axes", "500,0,0/-/-"],
+        ["@o:11", "group", "g1"],
+        ["@o:11", "name", "Opening"],
+        ["@o:11", "parent", "@o:10"],
+        ["@o:12", "group", "g1"],
+        ["@o:12", "matrix", "1,0,0,0,0,1,0,0,0,0,1,0,0,0,10,1"],
+        ["@o:12", "name", "Door"],
+        ["@o:12", "parent", "@o:11"],
+        ["@o:2", "group", "g1"],
+        ["@o:2", "name", "Rig"],
+        ["@o:2", "rot", "ZYX"],
+        ["@o:2", "xform", "0,0,1,0.1,0.2,0.3,1,1,1"],
+        ["@o:20", "group", "g1"],
+        ["@o:20", "name", "Broken"],
+        ["@o:20", "parent", "@o:21"],
+        ["@o:20", "xform", "1,1,1,0,0,0,1,1,1"],
+        ["@o:21", "group", "g1"],
+        ["@o:21", "name", "Unplaced"],
+        ["@o:22", "group", "g1"],
+        ["@o:22", "name", "Orphan"],
+        ["@o:22", "parent", "@o:99"],
+        ["@o:22", "xform", "1,1,1,0,0,0,1,1,1"],
+        ["@o:3", "group", "g2"],
+        ["@o:3", "name", "Arm"],
+        ["@o:3", "parent", "@o:2"],
+        ["@o:3", "xform", "5,0,0,0,0,0,2,2,2"],
+        ["@o:30", "group", "g2"],
+        ["@o:30", "name", "Free"],
+        ["@o:30", "xform", "1,2,3,0,0,0,1,1,1"],
+        ["@o:4", "group", "g1"],
+        ["@o:4", "name", "Quat"],
+        ["@o:4", "quat", "0.9238795,0,0,0.3826834"],
+        ["@o:4", "rot", "quat"],
+        ["@o:4", "xform", "0,1,0,0,0,0,1,1,1"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 6,
+      "upto": 1,
+      "page": 5,
+      "pages": 7,
+      "root": "scene",
+      "entries": [
+        ["mpu", null, "0.001"],
+        ["unit", null, "mm"],
+        ["up", null, "z"]
+      ]
+    },
+    {
+      "type": "keyed_page",
+      "seq": 7,
+      "upto": 1,
+      "page": 6,
+      "pages": 7,
+      "root": "objs",
+      "units": {
+        "container": "@g:1",
+        "from": 0,
+        "units": [
+          {
+            "key": "@o:1",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Cube",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [1, 2, 3],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:2",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "empty",
+            "name": "Rig",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 1,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 7, 0, 0, 1]
+                },
+                {
+                  "trs": {
+                    "loc": [0, 0, 1],
+                    "rot": {
+                      "euler": "ZYX",
+                      "angles": [0.1, 0.2, 0.3]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:4",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Quat",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 2,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [0, 1, 0],
+                    "rot": {
+                      "quat": [0.9238795, 0, 0, 0.3826834]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:10",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "wall",
+            "name": "Wall",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 3,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": "@g:1",
+              "steps": [
+                {
+                  "axes": {
+                    "origin": [4000, 0, 0],
+                    "z": null,
+                    "x": [0, 1, 0]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:11",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "opening",
+            "name": "Opening",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 4,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": "@o:10",
+              "steps": [
+                {
+                  "axes": {
+                    "origin": [500, 0, 0],
+                    "z": null,
+                    "x": null
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:12",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "door",
+            "name": "Door",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 5,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": "@o:11",
+              "steps": [
+                {
+                  "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 10, 1]
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:20",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Broken",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 6,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": "@o:21",
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [1, 1, 1],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:21",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Unplaced",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 7,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null
+          },
+          {
+            "key": "@o:22",
+            "container": "@g:1",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Orphan",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 8,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": "@o:99",
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [1, 1, 1],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "next": null,
+        "total": 9
+      }
+    },
+    {
+      "type": "keyed_page",
+      "seq": 8,
+      "upto": 1,
+      "page": 7,
+      "pages": 7,
+      "root": "objs",
+      "units": {
+        "container": "@g:2",
+        "from": 0,
+        "units": [
+          {
+            "key": "@o:3",
+            "container": "@g:2",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Arm",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 0,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": "@o:2",
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [5, 0, 0],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [2, 2, 2]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "key": "@o:30",
+            "container": "@g:2",
+            "parent": null,
+            "live": true,
+            "kind": "mesh",
+            "name": "Free",
+            "name_is_generic": null,
+            "alt": null,
+            "z": 1,
+            "bbox": null,
+            "bbox_inherited": false,
+            "rot": 0,
+            "flip": {
+              "h": false,
+              "v": false
+            },
+            "approx_box": false,
+            "text": null,
+            "fields": [],
+            "hidden": false,
+            "placeholder": null,
+            "editable_text": null,
+            "placement": {
+              "relative_to": null,
+              "steps": [
+                {
+                  "trs": {
+                    "loc": [1, 2, 3],
+                    "rot": {
+                      "euler": "XYZ",
+                      "angles": [0, 0, 0]
+                    },
+                    "scale": [1, 1, 1]
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "next": null,
+        "total": 2
+      }
+    },
+    {
+      "type": "ops_change",
+      "seq": 9,
+      "rev": 2,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "obj_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@o:2",
+          "field": "xform",
+          "before": "0,0,1,0.1,0.2,0.3,1,1,1",
+          "after": "0,0,1,0.1,0.2,0.9,1,1,1"
+        }
+      ],
+      "units": [
+        {
+          "key": "@o:2",
+          "container": "@g:1",
+          "ops": ["move_resize", "place"],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": ["xform"],
+          "hidden_after": null,
+          "placeholder_type": null,
+          "placement_after": {
+            "relative_to": null,
+            "steps": [
+              {
+                "matrix": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 7, 0, 0, 1]
+              },
+              {
+                "trs": {
+                  "loc": [0, 0, 1],
+                  "rot": {
+                    "euler": "ZYX",
+                    "angles": [0.1, 0.2, 0.9]
+                  },
+                  "scale": [1, 1, 1]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "containers_changed": [],
+      "containers": ["@g:1", "@g:2"],
+      "derived": null,
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 10,
+      "rev": 3,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "objs",
+          "kind": "list",
+          "op": "insert",
+          "key": "@o:40",
+          "index_before": null,
+          "index_after": 11,
+          "after": "mesh",
+          "effect": "visible"
+        },
+        {
+          "root": "obj_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@o:40",
+          "field": "group",
+          "after": "g2"
+        },
+        {
+          "root": "obj_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@o:40",
+          "field": "name",
+          "after": "New"
+        },
+        {
+          "root": "obj_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@o:40",
+          "field": "xform",
+          "after": "3,3,3,0,0,0,1,1,1"
+        },
+        {
+          "root": "obj_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@o:40",
+          "field": "parent",
+          "after": "@o:3"
+        }
+      ],
+      "units": [
+        {
+          "key": "@o:40",
+          "container": "@g:2",
+          "ops": ["add"],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": ["group", "name", "xform", "parent"],
+          "hidden_after": null,
+          "placeholder_type": null,
+          "placement_after": {
+            "relative_to": "@o:3",
+            "steps": [
+              {
+                "trs": {
+                  "loc": [3, 3, 3],
+                  "rot": {
+                    "euler": "XYZ",
+                    "angles": [0, 0, 0]
+                  },
+                  "scale": [1, 1, 1]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "containers_changed": [],
+      "containers": ["@g:2"],
+      "derived": null,
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 11,
+      "rev": 4,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "obj_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@o:10",
+          "field": "axes",
+          "before": "4000,0,0/-/0,1,0",
+          "after": "4000,0,0/0,0,1/1,1,0"
+        }
+      ],
+      "units": [
+        {
+          "key": "@o:10",
+          "container": "@g:1",
+          "ops": ["move_resize", "place"],
+          "geom_before": null,
+          "geom_after": null,
+          "fields": ["axes"],
+          "hidden_after": null,
+          "placeholder_type": null,
+          "placement_after": {
+            "relative_to": "@g:1",
+            "steps": [
+              {
+                "axes": {
+                  "origin": [4000, 0, 0],
+                  "z": [0, 0, 1],
+                  "x": [1, 1, 0]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "containers_changed": [],
+      "containers": ["@g:1"],
+      "derived": null,
+      "render_hashes": null
+    },
+    {
+      "type": "ops_change",
+      "seq": 12,
+      "rev": 5,
+      "at_ms": 100000,
+      "change_kind": "edit",
+      "actor": {
+        "id": "ada",
+        "name": "Ada",
+        "kind": "person",
+        "colour": "#2f9e8f"
+      },
+      "client": 1,
+      "via": "tab",
+      "on_behalf_of": null,
+      "turn": null,
+      "verb": null,
+      "claim": null,
+      "ops": [
+        {
+          "root": "group_f",
+          "kind": "map",
+          "op": "set",
+          "key": "@g:2",
+          "field": "place",
+          "before": "100,0,0",
+          "after": "200,0,0"
+        }
+      ],
+      "units": [],
+      "containers_changed": [
+        {
+          "key": "@g:2",
+          "op": "props",
+          "position_before": null,
+          "position_after": null,
+          "hidden_after": null,
+          "fields": ["place"],
+          "placement_after": {
+            "relative_to": null,
+            "steps": [
+              {
+                "trs": {
+                  "loc": [200, 0, 0],
+                  "rot": {
+                    "euler": "XYZ",
+                    "angles": [0, 0, 0]
+                  },
+                  "scale": [1, 1, 1]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "containers": ["@g:2"],
+      "derived": null,
+      "render_hashes": null
+    }
+  ],
+  "final_json": "{\"roots\":[{\"name\":\"groups\",\"kind\":\"list\",\"live\":[[\"@g:1\",\"group\"],[\"@g:2\",\"group\"]],\"hidden\":[]},{\"name\":\"group_f\",\"kind\":\"map\",\"entries\":[[\"@g:1\\u001fname\",\"Ground\"],[\"@g:1\\u001fplace\",\"0,0,0\"],[\"@g:2\\u001fname\",\"Upper\"],[\"@g:2\\u001fplace\",\"200,0,0\"]]},{\"name\":\"objs\",\"kind\":\"list\",\"live\":[[\"@o:1\",\"mesh\"],[\"@o:2\",\"empty\"],[\"@o:3\",\"mesh\"],[\"@o:4\",\"mesh\"],[\"@o:10\",\"wall\"],[\"@o:11\",\"opening\"],[\"@o:12\",\"door\"],[\"@o:20\",\"mesh\"],[\"@o:21\",\"mesh\"],[\"@o:22\",\"mesh\"],[\"@o:30\",\"mesh\"],[\"@o:40\",\"mesh\"]],\"hidden\":[]},{\"name\":\"obj_f\",\"kind\":\"map\",\"entries\":[[\"@o:1\\u001fgroup\",\"g1\"],[\"@o:1\\u001fname\",\"Cube\"],[\"@o:1\\u001fxform\",\"1,2,3,0,0,0,1,1,1\"],[\"@o:10\\u001faxes\",\"4000,0,0/0,0,1/1,1,0\"],[\"@o:10\\u001fgroup\",\"g1\"],[\"@o:10\\u001fname\",\"Wall\"],[\"@o:10\\u001fparent\",\"@g:1\"],[\"@o:11\\u001faxes\",\"500,0,0/-/-\"],[\"@o:11\\u001fgroup\",\"g1\"],[\"@o:11\\u001fname\",\"Opening\"],[\"@o:11\\u001fparent\",\"@o:10\"],[\"@o:12\\u001fgroup\",\"g1\"],[\"@o:12\\u001fmatrix\",\"1,0,0,0,0,1,0,0,0,0,1,0,0,0,10,1\"],[\"@o:12\\u001fname\",\"Door\"],[\"@o:12\\u001fparent\",\"@o:11\"],[\"@o:2\\u001fgroup\",\"g1\"],[\"@o:2\\u001fname\",\"Rig\"],[\"@o:2\\u001frot\",\"ZYX\"],[\"@o:2\\u001fxform\",\"0,0,1,0.1,0.2,0.9,1,1,1\"],[\"@o:20\\u001fgroup\",\"g1\"],[\"@o:20\\u001fname\",\"Broken\"],[\"@o:20\\u001fparent\",\"@o:21\"],[\"@o:20\\u001fxform\",\"1,1,1,0,0,0,1,1,1\"],[\"@o:21\\u001fgroup\",\"g1\"],[\"@o:21\\u001fname\",\"Unplaced\"],[\"@o:22\\u001fgroup\",\"g1\"],[\"@o:22\\u001fname\",\"Orphan\"],[\"@o:22\\u001fparent\",\"@o:99\"],[\"@o:22\\u001fxform\",\"1,1,1,0,0,0,1,1,1\"],[\"@o:3\\u001fgroup\",\"g2\"],[\"@o:3\\u001fname\",\"Arm\"],[\"@o:3\\u001fparent\",\"@o:2\"],[\"@o:3\\u001fxform\",\"5,0,0,0,0,0,2,2,2\"],[\"@o:30\\u001fgroup\",\"g2\"],[\"@o:30\\u001fname\",\"Free\"],[\"@o:30\\u001fxform\",\"1,2,3,0,0,0,1,1,1\"],[\"@o:4\\u001fgroup\",\"g1\"],[\"@o:4\\u001fname\",\"Quat\"],[\"@o:4\\u001fquat\",\"0.9238795,0,0,0.3826834\"],[\"@o:4\\u001frot\",\"quat\"],[\"@o:4\\u001fxform\",\"0,1,0,0,0,0,1,1,1\"],[\"@o:40\\u001fgroup\",\"g2\"],[\"@o:40\\u001fname\",\"New\"],[\"@o:40\\u001fparent\",\"@o:3\"],[\"@o:40\\u001fxform\",\"3,3,3,0,0,0,1,1,1\"]]},{\"name\":\"scene\",\"kind\":\"map\",\"entries\":[[\"mpu\",\"0.001\"],[\"unit\",\"mm\"],[\"up\",\"z\"]]}]}",
+  "final_rev": 5,
+  "final_world": {
+    "@o:1": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1],
+    "@o:2": [0.6092191543550329, 0.7917424493109481, -0.04467567488062835, 0, -0.7677125236495632, 0.6029681285213633, 0.2169030129321945, 0, 0.19866933079506122, -0.09784339500725571, 0.975170327201816, 0, 7, 0, 1, 1],
+    "@o:4": [0.7071068058785941, 0.7071067564945002, 0, 0, -0.7071067564945002, 0.7071068058785941, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1],
+    "@o:10": [0.7071067811865475, 0.7071067811865475, 0, 0, -0.7071067811865475, 0.7071067811865475, 0, 0, 0, 0, 1, 0, 4000, 0, 0, 1],
+    "@o:11": [0.7071067811865475, 0.7071067811865475, 0, 0, -0.7071067811865475, 0.7071067811865475, 0, 0, 0, 0, 1, 0, 4353.553390593273, 353.5533905932737, 0, 1],
+    "@o:12": [0.7071067811865475, 0.7071067811865475, 0, 0, -0.7071067811865475, 0.7071067811865475, 0, 0, 0, 0, 1, 0, 4353.553390593273, 353.5533905932737, 10, 1],
+    "@o:20": null,
+    "@o:21": null,
+    "@o:22": null,
+    "@o:3": [1.2184383087100659, 1.5834848986218961, -0.0893513497612567, 0, -1.5354250472991264, 1.2059362570427266, 0.433806025864389, 0, 0.39733866159012243, -0.19568679001451142, 1.950340654403632, 0, 10.046095771775164, 3.9587122465547404, 0.7766216255968583, 1],
+    "@o:30": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 2, 3, 1],
+    "@o:40": [1.2184383087100659, 1.5834848986218961, -0.0893513497612567, 0, -1.5354250472991264, 1.2059362570427266, 0.433806025864389, 0, 0.39733866159012243, -0.19568679001451142, 1.950340654403632, 0, 10.28715154077835, 11.739915343505075, 7.66100761711715, 1],
+    "@g:1": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    "@g:2": [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 200, 0, 0, 1]
+  }
+}

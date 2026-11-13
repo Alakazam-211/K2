@@ -149,8 +149,8 @@ export interface PresencePeer {
 }
 
 /**
- * A live claim on elements, or on a block of cells, as `PresenceChannel.claims()` folds the roster
- * (rendering-data contract Item 4): from a snapshot's `elem_claims` and `cell_claims`,
+ * A live claim on elements, or on a block of cells, as `PresenceChannel.claims()` folds the roster:
+ * from a snapshot's `elem_claims` and `cell_claims`,
  * `claim_started_elems`, `claim_started_cells` and `claim_ended`. A claim on cells has `cells`,
  * with `root` `""` and no `keys`.
  */
@@ -659,7 +659,7 @@ export class PresenceChannel {
   }
 
   /**
-   * How many are watching past the host's participant cap (rendering-data contract gap 30): the
+   * How many are watching past the host's participant cap: the
    * roster's `watching`, from its snapshot and its `watching {count}` events. Watchers have no
    * row in `peers()` and send no presence; a view shows them as this count ("+1 watching").
    */

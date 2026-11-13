@@ -248,7 +248,7 @@ pub struct Grid {
     /// Depth limit per stack (U6), as the kit's config.
     pub depth: usize,
     /// Changes whose writes carry no identity (a write merged in from elsewhere whose writer
-    /// the engine doesn't report: KC7, Yrs only, S2). Their writes hold facets like any
+    /// the engine doesn't report: Yrs only, S2). Their writes hold facets like any
     /// other's and count as someone else's.
     pub anon: std::collections::HashSet<Seq>,
     /// S13: the latest change that left each row on its key by a non-exact pairing, or changed

@@ -4,21 +4,21 @@
 //! identity the caller chooses and that lives in the element's value), never by an engine
 //! offset or ID; a write is named by an opaque [`WriteId`].
 //!
-//! - [`Key`], [`Value`]: identities and values (A2);
-//! - [`ListOp`], [`MapOp`], [`Anchor`]: edits (A3; carried by [`crate::Edit::List`] and
+//! - [`Key`], [`Value`]: identities and values;
+//! - [`ListOp`], [`MapOp`], [`Anchor`]: edits (carried by [`crate::Edit::List`] and
 //!   [`crate::Edit::Map`]);
-//! - [`ElemState`], [`Facet`]: readers (A4, [`crate::Doc::elem`], [`crate::Doc::winner`]);
-//! - [`Applied`], [`ListApplied`], [`MapApplied`], [`Effect`]: the applied-change stream (A5,
-//!   [`crate::Doc::edit_applied`]);
-//! - [`chain`], [`reorder`]: **the move rule** (E8/E9): a move of several elements (a block
+//! - [`ElemState`], [`Facet`]: readers ([`crate::Doc::elem`], [`crate::Doc::winner`]);
+//! - [`Applied`], [`ListApplied`], [`MapApplied`], [`Effect`]: the applied-change stream
+//!   ([`crate::Doc::edit_applied`]);
+//! - [`chain`], [`reorder`]: **the move rule**: a move of several elements (a block
 //!   move, a sort) is generated as a forward chain, each move anchored right after the
 //!   previous one's new place. Generate multi-element moves only through these.
 //!
 //! Semantics (the kit's, on every engine; `docs/PRIMITIVES.md`):
 //! - **MovableList:** insert, move, delete, restore, set. A key is never reused, live or
-//!   deleted (E2): an insert of a key the list has ever held is refused; bring it back with
+//!   deleted: an insert of a key the list has ever held is refused; bring it back with
 //!   [`ListOp::Restore`]. Delete hides the element and keeps its value and place; restore
-//!   shows it again where it was (E1: undelete; a delete concurrent with a restore wins).
+//!   shows it again where it was (an undelete; a delete concurrent with a restore wins).
 //!   A move or set of a deleted element is legal and stays hidden (E10: checks are per op,
 //!   never "the element is live").
 //! - **Map:** set and delete by string key, last writer wins per key.
@@ -181,7 +181,7 @@ pub enum ListOp {
     /// Replace an element's value.
     Set { key: Key, value: Value },
     /// Remove a **deleted** element for good: its slot and registers leave the list, so it
-    /// can't be restored and stops taking space (`rows drop-deleted`, K-CSV-7). Not erasure:
+    /// can't be restored and stops taking space (`rows drop-deleted`). Not erasure:
     /// versions and change records keep it. Refused for a live element. Its key is retired
     /// by whoever mints keys (a table's counters), never by the list, which forgets it.
     Drop { key: Key },
@@ -235,7 +235,7 @@ impl MapOp {
     }
 }
 
-/// The move rule (E8/E9): move `keys`, in this order, to `to`, as a **forward chain**: the
+/// The move rule: move `keys`, in this order, to `to`, as a **forward chain**: the
 /// first to `to`, each next one right after the previous one's new place. The new places
 /// form one run, so a block move or a sort costs O(1) engine index entries instead of O(n),
 /// and two concurrent block moves into one gap don't interleave. `keys` must be distinct and
@@ -259,8 +259,7 @@ pub fn chain(keys: &[Key], to: Anchor) -> Vec<ListOp> {
 /// start). `None` when the two are not permutations of each other.
 ///
 /// Not the minimal move set: a sort that moves one row from the top to the bottom moves every
-/// row between. One run per sort is what keeps a sort's cost on the engine's index O(1)
-/// (E8).
+/// row between. One run per sort is what keeps a sort's cost on the engine's index O(1).
 pub fn reorder(current: &[Key], target: &[Key]) -> Option<Vec<ListOp>> {
     if current.len() != target.len() {
         return None;
@@ -398,7 +397,7 @@ fn unbase36(s: &str) -> Option<u64> {
     Some(n)
 }
 
-/// What one change did, root by root, in apply order (A5). Subscribers, undo, revert and
+/// What one change did, root by root, in apply order. Subscribers, undo, revert and
 /// blame work over it, as they do over hunks for text.
 ///
 /// `W` is the write identity: a [`WriteId`] in a change made here ([`crate::Doc::edit_applied`]);
@@ -463,7 +462,7 @@ pub enum MapOpKind {
     Delete,
 }
 
-/// What an op did to what readers see (E4). `W` as in [`Applied`].
+/// What an op did to what readers see. `W` as in [`Applied`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Effect<W = WriteId> {
     /// It shows: the element appeared, moved, vanished or changed value in the live order

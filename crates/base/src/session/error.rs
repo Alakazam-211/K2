@@ -45,7 +45,7 @@ pub enum SessionError {
     /// or belongs to another session. Join again.
     #[error("{conn} has not joined this doc")]
     NotJoined { conn: ConnId },
-    /// The connection joined past [`super::Config::participants_max`] (K11): it watches,
+    /// The connection joined past [`super::Config::participants_max`]: it watches,
     /// read-only, until a slot frees and the host promotes it
     /// ([`super::Session::promote_watcher`]). Nothing was applied. Exit 3.
     #[error("watching: the doc has its {max} participants; read-only until the host lets you in")]
@@ -55,8 +55,8 @@ pub enum SessionError {
     /// text: `doc changed since 12 (now 14)`. Exit 1.
     #[error("doc changed since {expected} (now {actual})")]
     Stale { expected: Seq, actual: Seq },
-    /// A structured edit's positional addresses count in its `--base` version (K-ADDR-3,
-    /// R-1), and that version is no longer held (not live, not a recent read, not stored).
+    /// A structured edit's positional addresses count in its `--base` version,
+    /// and that version isn't held any more (not live, not a recent read, not stored).
     /// Nothing applied. Exit 8 (`MPC-E112 base_expired`): never retry the same request.
     #[error("base version {base} is unknown or no longer cached; nothing applied")]
     BaseExpired { base: Seq },
@@ -108,19 +108,19 @@ pub enum SessionError {
     /// changes; the person approves or declines some first). Exit 2.
     #[error("held: {reason}")]
     Held { reason: &'static str },
-    /// `revert`: the change is older than the revert window (K-HIST-23). Exit 8; never
+    /// `revert`: the change is older than the revert window. Exit 8; never
     /// retry. The way back is `restore --version`.
     #[error("change {seq} is too old to revert (revert_too_old); use restore --version")]
     RevertTooOld { seq: Seq },
     /// No change at that log position (`revert`), or no such version. Exit 4.
     #[error("no change or version {0} in this doc")]
     NoSuchChange(u64),
-    /// `file_at` of a version of a pack that keeps a carrier (K1), when the version has none
+    /// `file_at` of a version of a pack that keeps a carrier, when the version has none
     /// (cut by an older kit or before this build, or a purge erased it): its file can't be
     /// rebuilt exactly, so none is given. Exit 4 (`MPC-E208`).
     #[error("version {version} has no copy of its file's own bytes (version_no_carrier)")]
     VersionNoCarrier { version: u64 },
-    /// The live carrier's pairing doesn't fit it (K1b, [`super::SpliceError::PairingMismatch`]):
+    /// The live carrier's pairing doesn't fit it ([`super::SpliceError::PairingMismatch`]):
     /// the file type can't tell which unit of the file a key is, so nothing was spliced or
     /// written; the file is as it was and the doc keeps its changes. A pack bug or a damaged
     /// store. Exit 1 (`MPC-E521`).
@@ -286,20 +286,33 @@ pub enum SessionError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Pack(#[from] PackError),
-    /// A grid change would take the table past a size limit (K-CSV-7, KC4): nothing applied,
+    /// A grid change would take the table past a size limit: nothing applied,
     /// and nothing already in the table is dropped. Exit 2. `what` is `cells`, `columns` or
     /// `rows` (blank rows included);
     /// or `value bytes` for a cell value or column name longer than
-    /// `Config::grid_max_value_len` (C1k; `would_be` is its length);
-    /// or `elements and fields` for a keyed doc that isn't a table, past
-    /// `Config::keyed_max_entries` (its list elements, deleted ones included, plus its map
-    /// entries).
+    /// `Config::grid_max_value_len` (`would_be` is its length). A keyed doc that isn't a table
+    /// has its own, [`SessionError::KeyedAtLimit`] (before, this with `what` `elements and
+    /// fields`, which still maps to `MPC-E822`).
     #[error("{}", at_limit(what, *limit, *would_be))]
     AtLimit {
         what: &'static str,
         limit: usize,
         /// What the change would have made it.
         would_be: usize,
+    },
+    /// A change would take a keyed doc that isn't a table (a deck, a board) past its live size
+    /// limit: its elements and fields (its list elements, deleted ones included until dropped,
+    /// plus its map entries). Nothing applied, and nothing already in the doc is dropped.
+    /// `MPC-E822`, exit 2. `limit` is the one that applied to the doc's type and `from` where
+    /// it came from ([`super::Config::keyed_limit`]); both are in the report's details
+    /// (`limit`, `limit_source`).
+    #[error("{}", at_limit("elements and fields", *limit, *would_be))]
+    #[non_exhaustive]
+    KeyedAtLimit {
+        limit: usize,
+        /// What the change would have made it.
+        would_be: usize,
+        from: super::LimitSource,
     },
     /// An insert into a root whose pack declares tagged keys ([`super::Pack::tagged_keys`])
     /// names a key that isn't `<prefix><n>.<tag>` with a declared prefix and the inserting
@@ -330,11 +343,11 @@ pub enum SessionError {
     /// (or every number is taken). Nothing written. Exit 2.
     #[error("no key fits 24 bytes for prefix {prefix} and tag {tag}")]
     KeySpaceFull { prefix: String, tag: String },
-    /// An agent's grid edit names no base (K-BR-12): exit 2, "read first and pass --base".
+    /// An agent's grid edit names no base: exit 2, "read first and pass --base".
     #[error("an agent's grid edit needs a base: read first and pass --base")]
     NeedsBase,
-    /// `--base V`: a facet the edit touches was written after V by someone else (K-BR-12;
-    /// on this engine a write with no identity counts as someone else's, KC7). Nothing
+    /// `--base V`: a facet the edit touches was written after V by someone else (on
+    /// this engine a write with no identity counts as someone else's). Nothing
     /// applied. Exit 1.
     #[error("{} changed since your base: {}", if .0.len() == 1 { "1 element" } else { "elements" }, .0.iter().map(|c| c.to_string()).collect::<Vec<_>>().join("; "))]
     FacetConflict(Vec<super::live::FacetConflict>),
@@ -402,7 +415,7 @@ fn at_limit(what: &str, limit: usize, would_be: usize) -> String {
 }
 
 impl SessionError {
-    /// This error with every absolute path in its text made safe to show (K7, v0.9.8):
+    /// This error with every absolute path in its text made safe to show (v0.9.8):
     /// [`crate::errors::redact`] over `root` (inside it, relative; elsewhere, `<outside>`).
     /// The variant, and with it the id and exit code, doesn't change.
     pub fn redacted(self, root: &std::path::Path) -> SessionError {

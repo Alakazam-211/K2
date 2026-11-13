@@ -132,7 +132,7 @@ impl Bound {
         }
     }
 
-    /// The G1 bound: 3 pids × 3 events, 2 undos, 1 revert (spec §8 Model check), from
+    /// The full bound: 3 pids × 3 events, 2 undos, 1 revert (spec §8 Model check), from
     /// `abb` (three letters, so a two-region edit exists from the start), `maxlen` 4.
     pub fn g1() -> Self {
         Bound {
@@ -232,7 +232,7 @@ pub struct State {
     pub reduced: bool,
     /// Rules violated so far (empty on the oracle of record).
     pub viol: BTreeSet<&'static str>,
-    /// The case classes the transition into this state hit (E-HIST-13; not state).
+    /// The case classes the transition into this state hit (not state).
     pub hit: Vec<&'static str>,
 }
 
@@ -647,7 +647,7 @@ impl State {
                 }
             }
         }
-        // the case classes (E-HIST-13) this transition hit
+        // the case classes this transition hit
         let applied = matches!(out, Outcome::Applied { .. });
         for (on, class) in [
             (hits.eof_append_undo, "eof_append"),
@@ -1171,7 +1171,7 @@ pub const STOP: &[&str] = &[
     "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5", "O5doc", "U17doc",
 ];
 
-/// The case classes the walks count (E-HIST-13, as far as the bounded world reaches; the
+/// The case classes the walks count (as far as the bounded world reaches; the
 /// trace test covers leave and rejoin, multi-byte text, `write --base` and the window).
 pub const CLASSES: &[&str] = &[
     "eof_append",

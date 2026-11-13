@@ -1,4 +1,4 @@
-//! The v0.9.3 edit path for **structured** edits (C1e rebase): a grid change is made on the doc
+//! The v0.9.3 edit path for **structured** edits (rebased): a grid change is made on the doc
 //! itself as the client (`transact_mut_as`) and its structured part is emitted by whichever
 //! path makes it, so the canary and the differential shadow see the same bytes as for text.
 //!

@@ -22,6 +22,7 @@ use yrs::{
 #[cfg(feature = "conformance")]
 use yrs::{Assoc, IndexedSequence, StickyIndex};
 
+use super::slot_index::SlotIndex;
 use super::structured::{self, ListRefs, Order};
 use super::{BlameRun, EngineCheck, EngineDoc, IdOrder, Made, Units, SESSION_CLIENT};
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo, MAX_CLIENT_ID};
@@ -41,6 +42,10 @@ pub(crate) struct YrsDoc {
     /// Each MovableList root's live order, computed on first read after a change to that
     /// root (O(slots)) and kept until the next one; any merged update drops them all.
     orders: Mutex<HashMap<&'static str, Arc<Order>>>,
+    /// Each MovableList root's slot index (`slot_index.rs`): built from a full read the first
+    /// time a single insert or delete is planned on the root, then kept by every change this
+    /// doc makes, so such a change plans in O(log n); any merged update or reset drops them all.
+    slot_indexes: HashMap<&'static str, SlotIndex>,
     /// An apply left the doc in a state that can't be trusted: updates left pending (the
     /// engine can't encode those reliably), or a failed or panicked apply that may have
     /// half-integrated. Nothing is encoded or edited from a
@@ -221,7 +226,7 @@ fn history_units(doc: &Doc) -> u64 {
         .sum()
 }
 
-/// Every Yrs doc the kit makes. **GC stays on** (`skip_gc: false`, K-PURGE-11, E-ERASE-10):
+/// Every Yrs doc the kit makes. **GC stays on** (`skip_gc: false`):
 /// deleted text leaves the doc's state when the deleting transaction commits (its items
 /// keep their IDs and lengths, not their content), so a re-encoded state never carries
 /// deleted content. Purge depends on it; `gc_is_on` fails if it is turned off.
@@ -865,6 +870,8 @@ impl YrsDoc {
             .get_mut()
             .unwrap_or_else(|p| p.into_inner())
             .clear();
+        // the slot indexes describe the doc before the merge: built again on next need
+        self.slot_indexes.clear();
     }
 
     /// The full state, v2, under `catch_unwind` even when the doc looks usable.
@@ -913,6 +920,7 @@ impl YrsDoc {
             lists,
             maps,
             orders: Mutex::new(HashMap::new()),
+            slot_indexes: HashMap::new(),
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
             checks,
@@ -1223,7 +1231,7 @@ impl YrsDoc {
 
     /// Whether this doc holds updates it couldn't integrate (missing dependencies: yrs's
     /// pending structs or delete set) or is poisoned. Never true on a correct stream: an
-    /// apply that leaves anything pending poisons the doc and fails. K-AUD-1 (v0.9.5).
+    /// apply that leaves anything pending poisons the doc and fails (v0.9.5).
     pub(crate) fn unresolved(&self) -> bool {
         self.poisoned || self.has_pending()
     }
@@ -1364,6 +1372,7 @@ impl YrsDoc {
                 &txn,
                 &self.lists,
                 &self.maps,
+                &mut self.slot_indexes,
                 client,
                 change,
                 edits,
@@ -1406,7 +1415,18 @@ impl YrsDoc {
             prof!("engine.make_change");
             self.make_change(client, &plans)
         };
-        self.pending = None;
+        // the slot indexes follow the change it made; a change that failed leaves its roots'
+        // indexes unknown: dropped, built again on next need
+        if let Some(p) = self.pending.take() {
+            match &made {
+                Ok(_) => p.made(&mut self.slot_indexes),
+                Err(_) => {
+                    for r in p.list_roots() {
+                        self.slot_indexes.remove(r);
+                    }
+                }
+            }
+        }
         // the live order of a list root this change didn't touch stays valid: keep it
         {
             let orders = self.orders.get_mut().unwrap_or_else(|p| p.into_inner());
@@ -1458,6 +1478,7 @@ impl EngineDoc for YrsDoc {
             lists,
             maps,
             orders: Mutex::new(HashMap::new()),
+            slot_indexes: HashMap::new(),
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
             checks,
@@ -1723,7 +1744,7 @@ mod tests {
         secret.windows(8).any(|w| hay.windows(8).any(|h| h == w))
     }
 
-    /// E-ERASE-10 / K-PURGE-11: with GC on, a deleted secret is absent from the encoded
+    /// With GC on, a deleted secret is absent from the encoded
     /// state (and from a doc loaded from it). The control runs the same steps on a Yrs doc
     /// with `skip_gc: true` and must find the secret, so the check can fail.
     #[test]
@@ -2127,7 +2148,7 @@ mod tests {
 
     /// What a reconnecting client sends: everything it has that the session lacks.
     fn resync(c: &Client, session: &Doc) -> Vec<u8> {
-        let sv = StateVector::decode_v1(&session.state_vector()).unwrap();
+        let sv = StateVector::decode_v1(&session.try_state_vector().unwrap()).unwrap();
         c.doc.transact().encode_state_as_update_v1(&sv)
     }
 
@@ -2142,7 +2163,7 @@ mod tests {
         let mut e = Doc::new(S).unwrap();
         e.replace_text_as(7, "source", "base\n").unwrap();
         let c = client_doc(100, &e);
-        let sv = StateVector::decode_v1(&e.state_vector()).unwrap();
+        let sv = StateVector::decode_v1(&e.try_state_vector().unwrap()).unwrap();
         c.doc
             .get_or_insert_map("m")
             .insert(&mut c.doc.transact_mut(), "sub", yrs::Doc::new());
@@ -2154,9 +2175,9 @@ mod tests {
         assert_eq!(Doc::load(S, &state).err(), Some(DocError::Quarantined));
         assert!(Doc::load(S, &e.encode_state().unwrap()).is_ok());
         let mut f = Doc::load(S, &e.encode_state().unwrap()).unwrap();
-        let before = f.state_vector();
+        let before = f.try_state_vector().unwrap();
         assert_eq!(f.apply_trusted(&u), Err(DocError::Quarantined));
-        assert_eq!(f.state_vector(), before, "nothing applied");
+        assert_eq!(f.try_state_vector().unwrap(), before, "nothing applied");
         assert!(f.encode_state().is_ok(), "not poisoned");
     }
 
@@ -2259,7 +2280,7 @@ mod tests {
     fn shape_checks() {
         let mut e = Doc::new(S).unwrap();
         e.replace_text_as(9, "source", "x").unwrap();
-        assert!(state_vector_well_formed(&e.state_vector()));
+        assert!(state_vector_well_formed(&e.try_state_vector().unwrap()));
         assert!(state_vector_well_formed(
             &StateVector::default().encode_v1()
         ));
@@ -2372,7 +2393,7 @@ mod tests {
         .unwrap();
         d.replace_text_as(500, "source", "aaXa\nbbbb\n🎉y\nzz")
             .unwrap();
-        let (sv, state) = (d.state_vector(), d.encode_state().unwrap());
+        let (sv, state) = (d.try_state_vector().unwrap(), d.encode_state().unwrap());
         let runs = d.blame_runs("source").unwrap();
         assert_eq!(
             runs,
@@ -2384,7 +2405,7 @@ mod tests {
                 run(2, 500, 10),
             ]
         );
-        assert_eq!(d.state_vector(), sv);
+        assert_eq!(d.try_state_vector().unwrap(), sv);
         assert_eq!(d.encode_state().unwrap(), state);
         assert_eq!(d.blame_runs("source").unwrap(), runs, "repeatable");
         // one client typing on: one run across its changes
@@ -2478,7 +2499,7 @@ mod tests {
         e.replace_text_as(4, "source", "a\nB\nc\n").unwrap();
         let l = Doc::load(S, &e.encode_state().unwrap()).unwrap();
         assert_eq!(l.text("source").unwrap(), "a\nB\nc\n");
-        assert_eq!(l.state_vector(), e.state_vector());
+        assert_eq!(l.try_state_vector().unwrap(), e.try_state_vector().unwrap());
     }
 }
 
@@ -2541,7 +2562,7 @@ mod root_handles {
             !shared.iter().any(|l| l.contains("get_or_insert_")),
             "the structured module takes handles only through root_map and root_array"
         );
-        // the map and list roots' types are named (C1); a nested type of any kind is not
+        // the map and list roots' types are named; a nested type of any kind is not
         for nested in [
             "XmlFragmentRef",
             "XmlElementRef",

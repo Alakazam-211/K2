@@ -9,9 +9,9 @@
 //! records older than the window's cut, and per-doc **stats** (record count and bytes,
 //! pending on-behalf count and bytes). All are written in the transaction of the change
 //! itself, so they never disagree with the log, and none of them depends on the log: a
-//! compaction can drop log entries and revert still works (K-HIST-20, -22).
+//! compaction can drop log entries and revert still works.
 //!
-//! **Purge reach (K-PURGE-3).** Content lives only in `REVERTS` rows (`RecordHunk::insert`
+//! **Purge reach.** Content lives only in `REVERTS` rows (`RecordHunk::insert`
 //! / `deleted`) and, since v0.9.7, `AUTHORED` rows (their inserts). A purge redacts those
 //! (sets `redacted`, blanks the text; a revert then reports the region as `erased`; an
 //! authored insert inside a blanked hunk is blanked too); `CHANGES` (which keeps every change's id, author, time
@@ -240,7 +240,7 @@ pub struct ChangeInfo {
     /// a shell's, an outside save, a change made before turns, and after an erasure of its
     /// author (or of the person it was made for).
     pub turn: Option<crate::turn::Turn>,
-    /// The id of the pack verb that made it (rendering-data contract gap 9): the verb's name as
+    /// The id of the pack verb that made it: the verb's name as
     /// the pack declares it ([`crate::tools::PackVerb::name`], e.g. `shape move`), set by the kit
     /// when a pack's verb runs through `run_tool`. `None` for a raw write (`edit_ops`,
     /// `replace_text`, `write --base`), a kit tool, an outside save, an undo, a redo, a revert, a
@@ -327,7 +327,7 @@ pub(crate) struct WindowRow {
     pub client: Option<crate::doc::ClientId>,
 }
 
-/// The persisted revert record of one change (undo spec U22, K-HIST-22).
+/// The persisted revert record of one change (undo spec U22).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevertRecord {
     pub author: String,
@@ -446,11 +446,11 @@ pub(crate) struct RevertStats {
     pub pending_bytes: u64,
 }
 
-/// A span of a version a purge removed (K-PURGE-2, -4): `len` bytes of root `root` from
+/// A span of a version a purge removed: `len` bytes of root `root` from
 /// byte `start`, in the coordinates of the version's text before any purge. The version
 /// keeps its entry; its text is stored, shown, diffed and restored without the span.
 ///
-/// For a structured root (C1f) a value is redacted whole: `root` is `{root}/{key}` (root
+/// For a structured root a value is redacted whole: `root` is `{root}/{key}` (root
 /// names never hold `/`), `start` 0 and `len` the value's byte length; the version keeps
 /// the key, with an empty value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -479,7 +479,7 @@ pub struct VersionInfo {
     pub redacted: Vec<Redaction>,
 }
 
-/// Version retention (K-HIST-7).
+/// Version retention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Retention {
     pub keep_all_ms: u64,
@@ -488,7 +488,7 @@ pub(crate) struct Retention {
     pub max_bytes: u64,
 }
 
-/// The revert window (K-HIST-23).
+/// The revert window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RevertWindow {
     pub keep_ms: u64,
@@ -1052,7 +1052,7 @@ pub(super) fn settle_pending(
     Ok(())
 }
 
-/// Which unnamed versions retention removes (K-HIST-7): every version younger than
+/// Which unnamed versions retention removes: every version younger than
 /// `keep_all_ms`; then the newest per hour up to `hourly_until_ms`; then the newest per day;
 /// then, while over `max_count` or `max_bytes`, the oldest unnamed. Named versions are
 /// never removed.
@@ -1100,7 +1100,7 @@ pub(crate) fn thin_plan(heads: &[VersionInfo], now: u64, r: &Retention) -> Vec<V
     out
 }
 
-/// Which revert records leave the window (K-HIST-23): records outside it (older than
+/// Which revert records leave the window: records outside it (older than
 /// `keep_ms` **and** not among the last `keep_changes` changes) that aren't pending, oldest
 /// first; then, while over `max_bytes`, the oldest non-pending ones. `index` is
 /// `(seq, at_ms, bytes)` oldest first; `head` the doc's last log position.
@@ -1383,7 +1383,7 @@ impl DocStore {
         Ok(out)
     }
 
-    /// The live window (K3, `events_since`, `edit_at_base`), changes `from + 1..=to`, in one
+    /// The live window (`events_since`, `edit_at_base`), changes `from + 1..=to`, in one
     /// read: each one's summary, its revert record (`None`: out of the revert window), its
     /// authored hunks when D1 widened it (v0.9.7) and its log entry's client (`None`:
     /// compacted into the snapshot).
@@ -1598,7 +1598,7 @@ impl DocStore {
         Ok(out)
     }
 
-    /// Apply version retention (K-HIST-7) to a doc in one transaction; returns the ids
+    /// Apply version retention to a doc in one transaction; returns the ids
     /// removed. Named versions are never removed.
     pub(crate) fn thin_versions(
         &self,
@@ -1627,7 +1627,7 @@ impl DocStore {
                 }
             }
         }
-        // their carriers (K1) give their counts back
+        // their carriers give their counts back
         super::live_carrier::drop_versions_in(&w, id, &gone, Some(now))?;
         w.commit()?;
         Ok(plan)

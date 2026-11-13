@@ -201,5 +201,5 @@ kessel-audio = { path = "crates/kessel-audio" }
 vp8-decoder = { path = "crates/vp8-decoder" }
 vp8-encoder = { path = "crates/vp8-encoder" }
 # sew-call-client's video names kessel-video ^0.1.3 from crates.io; here it is
-# K2's in-tree crate (0.1.5), so one kessel-video is built, as with kessel-audio.
+# K2's in-tree crate, so one kessel-video is built, as with kessel-audio.
 kessel-video = { path = "crates/kessel-video" }

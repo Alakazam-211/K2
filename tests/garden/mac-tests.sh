@@ -147,6 +147,33 @@ fresh
 printf 'error: could not compile `k2-daemon` (test "it_auth")\n' > "$T/calls/2.out"; echo 101 > "$T/calls/2.rc"
 run 1 "no test summary (cargo exit 101)" env K2_JOB_CPUS=7 bash "$M" daemon
 
+# Other ways a test ends badly are named and counted too: a timeout, a
+# signal, a failed try. nextest counts a timeout apart from "failed".
+fresh
+printf '     TIMEOUT [  60.004s] (5/100) k2-daemon::it_mail watch::waits_forever\n     SIGKILL [   2.100s] (6/100) k2-daemon::it_mail big::eats_memory\n TRY 2 FAIL [   0.200s] (7/100) k2-daemon::it_mail retry::still_red\n        PASS [   0.010s] (8/100) k2-daemon::it_mail fine::one\n        LEAK [   0.010s] (9/100) k2-daemon::it_mail fine::leaky_but_green\n     Summary [ 70.0s] 100 tests run: 97 passed (1 leaky), 2 failed, 1 timed out, 2 skipped\n' > "$T/calls/3.out"; echo 100 > "$T/calls/3.rc"
+run 1 "mac-tests: daemon: 400 run, 397 passed, 3 failed, 8 skipped" env K2_JOB_CPUS=7 bash "$M" daemon
+for name in "TIMEOUT k2-daemon::it_mail watch::waits_forever" "SIGKILL k2-daemon::it_mail big::eats_memory" "TRY 2 FAIL k2-daemon::it_mail retry::still_red"; do
+    fresh
+    cp "$T/keep.3.out" "$T/calls/3.out" 2>/dev/null || printf '     TIMEOUT [  60.004s] (5/100) k2-daemon::it_mail watch::waits_forever\n     SIGKILL [   2.100s] (6/100) k2-daemon::it_mail big::eats_memory\n TRY 2 FAIL [   0.200s] (7/100) k2-daemon::it_mail retry::still_red\n        PASS [   0.010s] (8/100) k2-daemon::it_mail fine::one\n        LEAK [   0.010s] (9/100) k2-daemon::it_mail fine::leaky_but_green\n     Summary [ 70.0s] 100 tests run: 97 passed (1 leaky), 2 failed, 1 timed out, 2 skipped\n' > "$T/calls/3.out"
+    echo 100 > "$T/calls/3.rc"
+    run 1 "$name" env K2_JOB_CPUS=7 bash "$M" daemon
+done
+# A pass or a leak that passed is never listed as a failure.
+fresh
+printf '     TIMEOUT [  60.004s] (5/100) k2-daemon::it_mail watch::waits_forever\n        PASS [   0.010s] (8/100) k2-daemon::it_mail fine::one\n        LEAK [   0.010s] (9/100) k2-daemon::it_mail fine::leaky_but_green\n     Summary [ 70.0s] 100 tests run: 99 passed (1 leaky), 1 timed out, 2 skipped\n' > "$T/calls/3.out"; echo 100 > "$T/calls/3.rc"
+set +e; out="$(env PATH="$T/bin:$PATH" K2_JOB_CPUS=7 bash "$M" daemon 2>&1)"; code=$?; set -e
+[ "$code" = 1 ] || no "a timeout alone: exit $code"
+case "$out" in *"fine::one"*|*"leaky_but_green"*) no "a passing test was listed as failed: $out" ;; esac; ok
+case "$out" in *"mac-tests: daemon: 400 run, 399 passed, 1 failed, 8 skipped"*) ok ;; *) no "a timeout is not counted as failed: $out" ;; esac
+# A call that failed and named no test still says what it has: the
+# summary and the end of its log.
+fresh
+printf 'some build chatter\nthe last thing the binary printed before it died\n     Summary [ 3.0s] 100 tests run: 98 passed, 2 failed, 0 skipped\nerror: test run failed\n' > "$T/calls/3.out"; echo 100 > "$T/calls/3.rc"
+run 1 "(nextest named no test) Summary [ 3.0s] 100 tests run: 98 passed, 2 failed, 0 skipped. The end of this call's log:" env K2_JOB_CPUS=7 bash "$M" daemon
+fresh
+printf 'some build chatter\nthe last thing the binary printed before it died\n     Summary [ 3.0s] 100 tests run: 98 passed, 2 failed, 0 skipped\nerror: test run failed\n' > "$T/calls/3.out"; echo 100 > "$T/calls/3.rc"
+run 1 "the last thing the binary printed before it died" env K2_JOB_CPUS=7 bash "$M" daemon
+
 # Both stages: the second runs although the first failed, each has its
 # line, and the exit is 1.
 fresh

@@ -56,13 +56,20 @@ JOBS_SET="${CARGO_BUILD_JOBS:-}"
 
 # One number out of a nextest summary line: `count "<line>" passed`.
 count() { echo "$1" | sed -nE "s/.*[^0-9]([0-9]+) $2.*/\1/p"; }
-failed_lines() { grep -E '^ +(FAIL|SIGABRT|SIGSEGV|TIMEOUT|LEAK-FAIL)' "$1" | sed -E 's/^ +//; s/\[ *[0-9.]+s\] \([ 0-9/]+\) //' | sort -u || true; }
+# Every nextest result line that is not a pass: FAIL, TIMEOUT, a signal
+# (SIGABRT, SIGKILL, …), ABORT, LEAK-FAIL, a failed try. Named by what it
+# is not, so a status this script has never seen is still printed.
+failed_lines() {
+    grep -E '^ +[A-Z][A-Z0-9-]*( [0-9]+ [A-Z-]+)? +\[ *[0-9.]+s\]' "$1" \
+        | grep -vE '^ +(PASS|SLOW|LEAK|SKIP|START|FLAKY|TRY [0-9]+ PASS) +\[' \
+        | sed -E 's/^ +//; s/\[ *[0-9.]+s\] \([ 0-9/]+\) //' | sort -u || true
+}
 
 # Runs one nextest call into $2 and adds its counts to the stage's
 # totals. Returns 1 when that call is not clean.
 t_run=0; t_passed=0; t_failed=0; t_skipped=0
 one_run() {
-    local what="$1" log="$2" rc=0 summary run passed failed skipped; shift 2
+    local what="$1" log="$2" rc=0 summary run passed failed skipped timed execf named; shift 2
     cargo nextest run --locked --no-fail-fast "$@" >> "$log" 2>&1 || rc=$?
     # nextest's own word for a binary with no tests (exit 4) is not a failure.
     if [ "$rc" = 4 ] && grep -q 'no tests to run' "$log"; then return 0; fi
@@ -74,11 +81,22 @@ one_run() {
     fi
     run="$(count "$summary" 'tests? run')"; passed="$(count "$summary" passed)"
     failed="$(count "$summary" failed)"; skipped="$(count "$summary" skipped)"
+    # nextest counts a test that timed out, or that could not be started,
+    # apart from "failed": here they are failures like any other.
+    timed="$(count "$summary" 'timed out')"; execf="$(count "$summary" 'exec failed')"
+    failed=$((${failed:-0} + ${timed:-0} + ${execf:-0}))
     t_run=$((t_run + ${run:-0})); t_passed=$((t_passed + ${passed:-0}))
-    t_failed=$((t_failed + ${failed:-0})); t_skipped=$((t_skipped + ${skipped:-0}))
-    if [ "$rc" != 0 ] || [ "${failed:-0}" != 0 ]; then
+    t_failed=$((t_failed + failed)); t_skipped=$((t_skipped + ${skipped:-0}))
+    if [ "$rc" != 0 ] || [ "$failed" != 0 ]; then
         echo "mac-tests: FAILED: $what (cargo exit $rc). Failed tests:" >&2
-        failed_lines "$log" >&2
+        named="$(failed_lines "$log")"
+        if [ -n "$named" ]; then
+            echo "$named" >&2
+        else
+            # Never a failure with nothing to go on.
+            echo "(nextest named no test) $(echo "$summary" | sed -E 's/^ +//'). The end of this call's log:" >&2
+            tail -30 "$log" >&2
+        fi
         return 1
     fi
     [ -n "$run" ] && [ "$run" = "$passed" ] || { echo "mac-tests: FAILED: $what: the counts don't add up: $summary" >&2; return 1; }

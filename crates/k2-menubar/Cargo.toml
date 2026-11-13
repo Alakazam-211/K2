@@ -1,6 +1,6 @@
 [package]
 name = "k2-menubar"
-version = "0.46.11"
+version = "0.46.12"
 edition = "2021"
 license = "MIT"
 publish = false

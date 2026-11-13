@@ -93,7 +93,6 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/jobs/get",
     "/cli/compute/jobs/logs",
     crate::compute_move::MOVE,
-    "/cli/compute/jobs/receipt",
     "/cli/compute/jobs/retry",
     "/cli/compute/jobs/tier",
     "/cli/compute/local/disable",
@@ -212,11 +211,11 @@ pub const POST_ROUTES: &[&str] = &[
 ];
 
 pub fn is_route(p: &str) -> bool {
-    ROUTES.contains(&p) || crate::compute_trust::is_route(p)
+    ROUTES.contains(&p) || crate::compute_trust::is_route(p) || crate::compute_provenance::is_route(p) || crate::ci_routes::is_route(p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
-    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p)
+    POST_ROUTES.contains(&p) || crate::compute_trust::POST_ROUTES.contains(&p) || crate::compute_provenance::POST_ROUTES.contains(&p) || crate::ci_routes::POST_ROUTES.contains(&p)
 }
 
 pub fn is_socket(p: &str) -> bool {
@@ -727,7 +726,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/jobs/logs" => job_logs(&who, params),
         // O1 (prd-compute-blacksmith-class-v1 §4.5.3): one string across logs.
         crate::compute_logsearch::PATH => crate::compute_logsearch::handle(&who, params),
-        "/cli/compute/jobs/receipt" => job_receipt(&who, params),
+        p if crate::compute_provenance::is_route(p) => crate::compute_provenance::handle(p, &who, body, params),
         "/cli/compute/jobs/artifact" => job_artifact(&who, params),
         "/cli/compute/jobs/cancel" => views::job_cancel(&who, body),
         "/cli/compute/jobs/retry" => job_retry(&who, body),
@@ -2495,7 +2494,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         cache_commit,
         cache_ref,
         setup: Vec::new(),
-        cpus_burst: None, provenance: None, // build statements: S3 asks, `provenance-v1` nodes only
+        cpus_burst: None, provenance: crate::compute_provenance::ask(&node_features(&node)), // build statements: `provenance-v1` nodes only
     };
     let job = {
         let db = k2_core::db::shared();
@@ -4159,63 +4158,6 @@ fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value>
         }
         compute_ws::wait_change(seen, deadline - now);
     }
-}
-
-fn job_receipt(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
-    let j = job_for(who, params.get("job").map(String::as_str))?;
-    let Some(raw) = j.receipt_json.as_deref() else {
-        return Err(no("no_receipt", 404, "no receipt yet (the node sends it when the job ends)"));
-    };
-    let signed: k2_core::compute::proto::frames::SignedReceipt =
-        serde_json::from_str(raw).map_err(|e| no("internal", 500, format!("stored receipt: {e}")))?;
-    let body: serde_json::Value = serde_json::from_str(&signed.body).unwrap_or_default();
-    // The node's public key as this server pinned it at enrollment. Display
-    // only: whoever checks the receipt elsewhere (the release signer, S3b)
-    // pins node keys itself and never trusts this field.
-    let node_key = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::node_by_id(&conn, &j.node_id).map(|n| n.public_key_pem)
-    };
-    let mut out = serde_json::json!({
-        "job": compute::message::short(&j.id),
-        "verified": j.receipt_ok == Some(true),
-        "receipt": body,
-        // The exact bytes the node signed (canonical JSON), so a checker
-        // never has to re-serialize `receipt` to verify `signature`.
-        "body": signed.body,
-        "signature": signed.sig,
-        "node_public_key_pem": node_key,
-        // The plan the node ran (its canonical JSON hashes to the receipt's
-        // `plan_digest`), so a checker sees every input the receipt only
-        // digests: --with, cwd, --cache, needs, env. Env VALUES are in it
-        // (as in every plan); vault secrets never are (names only).
-        "plan": j.plan().and_then(|p| serde_json::to_value(p).ok()),
-        "proves": "which node said it ran which inputs and got which outputs — not that the node is honest",
-    });
-    // SE8/SE29: the env names the node says the job got from the vault.
-    if let Some(s) = body.get("secret_env").filter(|s| s.as_array().is_some_and(|a| !a.is_empty())) {
-        out["secrets"] = s.clone();
-    }
-    // Protocol 9, receipt v2: the receipt's version, and the node's signed
-    // self-statement it names (`run.statement_digest`), exactly as the node
-    // signed it, for the evidence bundle (`docs/ci-formats-v1.md` §2, §8).
-    // A v1 receipt's answer is unchanged (S3b reads it).
-    if body.get("v").and_then(|v| v.as_u64()) == Some(u64::from(k2_core::compute::proto::frames::RECEIPT_V2)) {
-        out["v"] = serde_json::json!(k2_core::compute::proto::frames::RECEIPT_V2);
-        let stored: serde_json::Value = serde_json::from_str(raw).unwrap_or_default();
-        out["statement"] = stored.get("statement").cloned().unwrap_or(serde_json::Value::Null);
-    }
-    // C1: the node's owner revoked this key in its roster: the receipt is
-    // void (compromised: every receipt, past and future). Absent otherwise,
-    // so a v1 answer is unchanged.
-    if let Some(fp) = body.get("node_fp").and_then(|v| v.as_str()) {
-        let started = body.get("started_at").and_then(|v| v.as_i64());
-        if let Some(why) = crate::compute_trust::receipt_void(fp, started) {
-            out["voided"] = why.into();
-        }
-    }
-    Ok(out)
 }
 
 /// `POST /cli/compute/jobs/tier` (`k2 compute retier <job> --tier T`,

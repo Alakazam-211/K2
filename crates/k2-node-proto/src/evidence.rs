@@ -1,5 +1,8 @@
-//! The evidence bundle v2 the signer checks (C4, C6b; PRD §4.5, §4.7,
-//! vs-live V13, V14, V28). Formats only: `docs/ci-formats-v1.md` §7.
+//! The evidence bundle the signer checks (C4, C6b; PRD §4.5, §4.7,
+//! vs-live V13, V14, V28): v2, and v3 = v2 plus the build statements
+//! (prd-compute-build-attestations-v1 §5, BA-8, slice S3) and a reserved
+//! `roster_approvals` list (§18.6). Formats only: `docs/ci-formats-v1.md`
+//! §8.
 //!
 //! `k2 ci evidence <run>` writes it; `k2 signer sign --evidence` reads it.
 //! **Nothing in it is trusted because it is in the bundle**: every receipt,
@@ -9,8 +12,8 @@
 //!
 //! v1 (`compute_release.py evidence-bundle`, k2sign's `compute-evidence`)
 //! is unchanged and stays k2sign's: `{"v":1,"commit_object","receipts":{
-//! "L1","V1"}}`. A v2 bundle is refused by k2sign (`v != 1`) and a v1
-//! bundle by [`EvidenceBundle::parse`].
+//! "L1","V1"}}`. A v2 or v3 bundle is refused by k2sign (`v != 1`) and a
+//! v1 bundle by [`EvidenceBundle::parse`].
 
 use std::collections::BTreeMap;
 
@@ -19,20 +22,27 @@ use serde_json::Value;
 
 use crate::ci::{self, Signed};
 
-/// Version of [`EvidenceBundle`].
-pub const EVIDENCE_V: u32 = 2;
+/// Evidence bundle v2: receipts, self-statements, rosters, seats.
+pub const EVIDENCE_V2: u32 = 2;
+/// Evidence bundle v3: v2 plus `provenance` (one build statement per
+/// receipt label that has one) and the optional `roster_approvals`.
+pub const EVIDENCE_V3: u32 = 3;
+/// The version `k2 ci evidence` writes. Readers take v2 and v3.
+pub const EVIDENCE_V: u32 = EVIDENCE_V3;
 /// The bundle's `kind`.
 pub const EVIDENCE_KIND: &str = "k2-ci-evidence";
 /// Largest bundle file.
 pub const MAX_EVIDENCE_BYTES: usize = 8 << 20;
 /// Most receipts in one bundle.
 pub const MAX_RECEIPTS: usize = 32;
+/// Most entries in a v3 bundle's `roster_approvals`.
+pub const MAX_ROSTER_APPROVALS: usize = 64;
 
 /// One release (or CI) run's evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceBundle {
-    /// [`EVIDENCE_V`].
+    /// [`EVIDENCE_V2`] or [`EVIDENCE_V3`].
     pub v: u32,
     /// [`EVIDENCE_KIND`].
     pub kind: String,
@@ -62,6 +72,18 @@ pub struct EvidenceBundle {
     /// cross-check of PRD §4.1.6 (a receipt key must be in a trusted roster
     /// **and**, when listed here, equal to this pin).
     pub pairing_pins: BTreeMap<String, String>,
+    /// v3 (always present there, `{}` when no node signed one): receipt
+    /// label → the build statement (DSSE envelope) the node signed with
+    /// that receipt. Absent in v2. The signer checks each against its
+    /// receipt (slice S4); none is trusted for being here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<BTreeMap<String, crate::provenance::Dsse>>,
+    /// v3, optional and reserved (prd-compute-build-attestations-v1 §18.6,
+    /// slice A2): the node owner's signed approvals of the rosters in
+    /// `rosters`. Their format is A2's. A reader that doesn't know it
+    /// carries them unread, which drops no check it has. Absent in v2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roster_approvals: Option<Vec<Value>>,
 }
 
 /// What was built.
@@ -134,9 +156,9 @@ impl EvidenceBundle {
         }
         let peek: Value = serde_json::from_slice(bytes).map_err(|e| format!("evidence: {e}"))?;
         match peek.get("v").and_then(Value::as_u64) {
-            Some(v) if v == EVIDENCE_V as u64 => {}
-            Some(1) => return Err("evidence: a v1 bundle (k2sign's S3b path); k2-signer reads v2".into()),
-            other => return Err(format!("evidence: version {other:?}, want {EVIDENCE_V}")),
+            Some(v) if v == EVIDENCE_V2 as u64 || v == EVIDENCE_V3 as u64 => {}
+            Some(1) => return Err("evidence: a v1 bundle (k2sign's S3b path); k2-signer reads v2 and v3".into()),
+            other => return Err(format!("evidence: version {other:?}, want {EVIDENCE_V2} or {EVIDENCE_V3}")),
         }
         let b: EvidenceBundle = serde_json::from_value(peek).map_err(|e| format!("evidence: {e}"))?;
         b.check()?;
@@ -144,8 +166,14 @@ impl EvidenceBundle {
     }
 
     pub fn check(&self) -> Result<(), String> {
-        if self.v != EVIDENCE_V || self.kind != EVIDENCE_KIND {
-            return Err(format!("evidence: want v{EVIDENCE_V} kind {EVIDENCE_KIND}"));
+        if !(self.v == EVIDENCE_V2 || self.v == EVIDENCE_V3) || self.kind != EVIDENCE_KIND {
+            return Err(format!("evidence: want v{EVIDENCE_V2} or v{EVIDENCE_V3}, kind {EVIDENCE_KIND}"));
+        }
+        if self.v == EVIDENCE_V2 && (self.provenance.is_some() || self.roster_approvals.is_some()) {
+            return Err("evidence: provenance and roster_approvals are v3 keys; a v2 bundle has neither".into());
+        }
+        if self.v == EVIDENCE_V3 && self.provenance.is_none() {
+            return Err("evidence: a v3 bundle has provenance ({} when no node signed a statement)".into());
         }
         ci::check_name("evidence.project", &self.project)?;
         if let Some(v) = &self.version {
@@ -191,6 +219,22 @@ impl EvidenceBundle {
             ci::check_fp("evidence.pairing_pins", fp)?;
             ci::check_spki(&format!("evidence.pairing_pins.{fp}"), spki, fp)?;
         }
+        for (label, env) in self.provenance.iter().flatten() {
+            if !self.receipts.contains_key(label) {
+                return Err(format!("evidence.provenance.{label}: no receipt has that label"));
+            }
+            if !env.keyid().is_some_and(ci::is_fp) {
+                return Err(format!("evidence.provenance.{label}: not an envelope with one signature and a 64-hex keyid"));
+            }
+            if env.payload.len() > crate::provenance::MAX_PAYLOAD_BYTES.div_ceil(3) * 4 {
+                return Err(format!("evidence.provenance.{label}: the statement is over {} bytes", crate::provenance::MAX_PAYLOAD_BYTES));
+            }
+        }
+        if let Some(a) = &self.roster_approvals {
+            if a.len() > MAX_ROSTER_APPROVALS || a.iter().any(|x| !x.is_object()) {
+                return Err(format!("evidence.roster_approvals: at most {MAX_ROSTER_APPROVALS} JSON objects"));
+            }
+        }
         Ok(())
     }
 }
@@ -223,6 +267,85 @@ mod tests {
         // `git hash-object -t commit` of this exact object.
         let raw = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor t <t@example.com> 1700000000 +0000\ncommitter t <t@example.com> 1700000000 +0000\n\nempty\n";
         assert_eq!(git_commit_sha1(raw), "8cb826031568e8917a2cf8590ca5665726e0fc63");
+    }
+
+    fn bundle(v: u32) -> EvidenceBundle {
+        let receipt = EvidenceReceipt { build: "linux-x86_64".into(), role: Role::Build, body: "{}".into(), sig: "x".into(), plan: serde_json::json!({}) };
+        EvidenceBundle {
+            v,
+            kind: EVIDENCE_KIND.into(),
+            project: "acme".into(),
+            version: Some("1.2.0".into()),
+            run_id: "run-1".into(),
+            controller_fp: "c".repeat(64),
+            created_at: 1,
+            source: EvidenceSource { commit: "1".repeat(40), tree: "2".repeat(40), commit_object: None },
+            receipts: BTreeMap::from([("L1".to_string(), receipt)]),
+            statements: Vec::new(),
+            rotations: Vec::new(),
+            attestations: Vec::new(),
+            rosters: Vec::new(),
+            seats: Vec::new(),
+            pairing_pins: BTreeMap::new(),
+            provenance: (v == EVIDENCE_V3).then(BTreeMap::new),
+            roster_approvals: None,
+        }
+    }
+
+    fn envelope(keyid: &str) -> crate::provenance::Dsse {
+        crate::provenance::Dsse {
+            payload_type: crate::provenance::PAYLOAD_TYPE.into(),
+            payload: "e30=".into(),
+            signatures: vec![crate::provenance::DsseSignature { keyid: keyid.into(), sig: "x".into() }],
+        }
+    }
+
+    /// v3 = v2 + `provenance` (always there, by receipt label) + the
+    /// optional, reserved `roster_approvals`; v2 has neither; both parse.
+    #[test]
+    fn v3_carries_statements_by_label_and_v2_has_none() {
+        let v2 = bundle(EVIDENCE_V2);
+        v2.check().unwrap();
+        let text = serde_json::to_string(&v2).unwrap();
+        assert!(!text.contains("provenance") && !text.contains("roster_approvals"), "v2's bytes as before: {text}");
+        assert_eq!(EvidenceBundle::parse(text.as_bytes()).unwrap(), v2);
+
+        let mut v3 = bundle(EVIDENCE_V3);
+        v3.provenance.as_mut().unwrap().insert("L1".into(), envelope(&"a".repeat(64)));
+        v3.check().unwrap();
+        let text = serde_json::to_string(&v3).unwrap();
+        assert!(text.contains(r#""provenance":{"L1":{"payloadType""#), "{text}");
+        assert!(!text.contains("roster_approvals"), "absent until A2 writes it: {text}");
+        assert_eq!(EvidenceBundle::parse(text.as_bytes()).unwrap(), v3);
+        let empty = bundle(EVIDENCE_V3);
+        assert!(serde_json::to_string(&empty).unwrap().contains(r#""provenance":{}"#), "always present in v3");
+
+        // Reserved for A2: a list of objects, carried as they are.
+        let mut a = v3.clone();
+        a.roster_approvals = Some(vec![serde_json::json!({"kind": "k2.compute.roster"})]);
+        assert_eq!(EvidenceBundle::parse(serde_json::to_string(&a).unwrap().as_bytes()).unwrap(), a);
+        a.roster_approvals = Some(vec![serde_json::json!("not an object")]);
+        assert!(a.check().unwrap_err().contains("roster_approvals"));
+
+        // The refusals, by name.
+        let mut e = v2.clone();
+        e.provenance = Some(BTreeMap::new());
+        assert!(e.check().unwrap_err().contains("v3 keys"));
+        let mut e = v2.clone();
+        e.roster_approvals = Some(Vec::new());
+        assert!(e.check().unwrap_err().contains("v3 keys"));
+        let mut e = v3.clone();
+        e.provenance = None;
+        assert!(e.check().unwrap_err().contains("a v3 bundle has provenance"));
+        let mut e = v3.clone();
+        e.provenance.as_mut().unwrap().insert("V1".into(), envelope(&"a".repeat(64)));
+        assert!(e.check().unwrap_err().contains("evidence.provenance.V1: no receipt"));
+        let mut e = v3.clone();
+        e.provenance.as_mut().unwrap().insert("L1".into(), envelope("not-a-fingerprint"));
+        assert!(e.check().unwrap_err().contains("keyid"));
+        let mut e = bundle(EVIDENCE_V3);
+        e.v = 4;
+        assert!(EvidenceBundle::parse(serde_json::to_string(&e).unwrap().as_bytes()).unwrap_err().contains("want 2 or 3"));
     }
 
     #[test]

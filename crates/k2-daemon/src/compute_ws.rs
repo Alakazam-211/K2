@@ -1966,15 +1966,24 @@ fn on_receipt(node_id: &str, r: ReceiptFrame) {
             && (rc.v == frames::RECEIPT_V1
                 || (pinned_fp.as_deref() == Some(rc.node_fp.as_str()) && r.statement.as_ref().is_some_and(|st| rc.check_statement(st).is_ok())))
     });
-    // The statement rides in the stored receipt (`statement`): readers of
-    // the plain signed receipt ignore the key.
-    let body = match (serde_json::to_value(&r.receipt), &r.statement) {
-        (Ok(mut v), Some(st)) => {
-            v["statement"] = serde_json::to_value(st).unwrap_or_default();
+    // The build statement (prd-compute-build-attestations-v1 S3): checked
+    // beside the receipt; kept, or the job marked "no statement" with why.
+    let kept = crate::compute_provenance::received(&job, spki.as_deref(), &r, ok);
+    if let crate::compute_provenance::Kept::Refused(why) = &kept {
+        store::record_event(&conn, "node", "provenance_refused", Some(node_id), Some(&job.workspace_id), Some(&job.id), serde_json::json!({"why": why}));
+    }
+    // The self-statement and the build statement ride in the stored receipt
+    // (`statement`, `provenance`): readers of the plain signed receipt
+    // ignore the keys.
+    let body = match serde_json::to_value(&r.receipt) {
+        Ok(mut v) => {
+            if let Some(st) = &r.statement {
+                v["statement"] = serde_json::to_value(st).unwrap_or_default();
+            }
+            crate::compute_provenance::keep(&mut v, &kept);
             v.to_string()
         }
-        (Ok(v), None) => v.to_string(),
-        (Err(_), _) => String::new(),
+        Err(_) => String::new(),
     };
     store::set_job_receipt(&conn, &job.id, &body, ok);
     // The receipt lists the kept files too: if the terminal state with

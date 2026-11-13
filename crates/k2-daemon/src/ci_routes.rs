@@ -42,6 +42,8 @@ pub const INIT: &str = "/cli/ci/init";
 /// and `k2 ci monitors` (GET).
 pub const MONITOR: &str = "/cli/ci/monitor";
 pub const MONITORS: &str = "/cli/ci/monitors";
+/// prd-compute-build-attestations-v1 S3: `k2 ci provenance` (a reader).
+pub const PROVENANCE: &str = "/cli/ci/provenance";
 pub const RELEASE: &str = "/cli/ci/release";
 pub const RUN: &str = "/cli/ci/run";
 /// prd-compute-blacksmith-class-v1 O1: `k2 ci stats`.
@@ -51,8 +53,8 @@ pub const STATUS: &str = "/cli/ci/status";
 pub const TESTS: &str = "/cli/ci/tests";
 pub const WATCH: &str = "/cli/ci/watch";
 
-pub const ROUTES: &[&str] = &[CACHE_TRUST, CACHE_TRUST_SET, EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, RELEASE, RUN, STATS, STATUS, TESTS, WATCH];
-pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, RELEASE, RUN, WATCH];
+pub const ROUTES: &[&str] = &[CACHE_TRUST, CACHE_TRUST_SET, EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, PROVENANCE, RELEASE, RUN, STATS, STATUS, TESTS, WATCH];
+pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, PROVENANCE, RELEASE, RUN, WATCH];
 
 /// Longest freeze (`k2 ci freeze --until`).
 pub const MAX_FREEZE_SECS: i64 = 30 * 86_400;
@@ -76,6 +78,7 @@ pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, S
         // 0.46.11 (C5/C6b, `ci_release`): a release set and its evidence.
         RELEASE => crate::ci_release::release(who, body),
         EVIDENCE => crate::ci_release::evidence(who, body),
+        PROVENANCE => crate::ci_release::provenance(who, body),
         WATCH => watch(who, body, mgr),
         INIT => init(who, body),
         FREEZE => freeze(who, body, mgr),

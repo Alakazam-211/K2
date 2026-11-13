@@ -62,6 +62,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses
   ci-release          Signed releases: k2 ci release on your seat, evidence, the signer
   ci-stats            k2 ci stats, monitors, the one [ci] message per run, mem_auto checks
+  provenance          Build statements a node signs (in-toto/SLSA): get one, verify it, why none
   vault               Secrets: fetch not paste; references; who sets what
   jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
   heartbeats          Wake yourself on a schedule or once (routines, reminders, cron)

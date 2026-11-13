@@ -382,7 +382,12 @@ Agents:
                  matches; e.g. move --all-mine --node k2n12 --auto.
                  A started job is never moved (job_started, exit 3)
   k2 compute retry <job>
-  k2 compute receipt <job>
+  k2 compute receipt <job>                     what the node signed it ran and made
+  k2 compute provenance <job> [--out FILE]     the node's signed build statement
+                 (in-toto/SLSA, one .intoto.jsonl line); CI preview
+  k2 compute verify <job | FILE.intoto.jsonl> [--file PATH] [--owner-key FP]
+                 check a statement against this server's records; says
+                 what it checked (k2 study provenance)
 Owner / admin (refused for agents and inside K2 terminals, except where
 "Allow managing compute nodes" is on for that agent: see k2 compute manage):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
@@ -5056,12 +5061,7 @@ v = json.load(sys.stdin)
 if "job" in v: print("retrying as attempt %s: k2 compute attach %s" % (v["job"]["attempt"], v["job"]["short"]))
 else: print(v.get("state", "ok"))'
             ;;
-        receipt)
-            [ -n "${1:-}" ] || { echo "usage: k2 compute receipt <job>" >&2; exit 2; }
-            _compute_call GET /cli/compute/jobs/receipt "job=$(urlencode "$1")"
-            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
-            _compute_render receipt
-            ;;
+        receipt|provenance|verify) cmd_compute_provenance "$sub" "$@" ;;
         node) cmd_compute_node "$@" ;;
         grant) cmd_compute_grant "$@" ;;
         revoke)

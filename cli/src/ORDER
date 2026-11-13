@@ -44,6 +44,7 @@ firewall.sh
 desktop.sh
 git-tools.sh
 compute.sh
+compute-provenance.sh
 llm.sh
 sources.sh
 vault.sh

@@ -110,7 +110,8 @@ impl ResourceDescriptor {
         self.annotations.insert(k.to_string(), v.into());
         self
     }
-    fn sha256(&self) -> Option<&str> {
+    /// The entry's `sha256` digest (64 hex), if it has one.
+    pub fn sha256(&self) -> Option<&str> {
         self.digest.get("sha256").map(String::as_str)
     }
 }
@@ -845,6 +846,39 @@ pub fn check_against_receipt(st: &Statement, signed: &SignedReceipt) -> Result<(
     Ok(())
 }
 
+// ── whose fleet ──────────────────────────────────────────────────────
+
+impl Statement {
+    /// The owner `builder.id` names: the node's claim, which only the
+    /// owner's roster proves. `None` for an id outside both forms
+    /// ([`Statement::check`] refuses those).
+    pub fn builder_owner(&self) -> Option<Owner> {
+        let id = &self.predicate.run_details.builder.id;
+        if let Some(fp) = id.strip_prefix(BUILDER_ID_OWNER).filter(|f| crate::ci::is_fp(f)) {
+            return Some(Owner::RosterKey(fp.to_string()));
+        }
+        id.strip_prefix(BUILDER_ID_OWNER_SERVER).filter(|f| crate::ci::is_fp(f)).map(|fp| Owner::Server(fp.to_string()))
+    }
+
+    /// The rule for a verifier that pins an owner's roster key
+    /// (`k2 compute verify --owner-key`, k2-signer, kessel-attest): the
+    /// statement must name exactly that key (`…/owner/<fp>`). The
+    /// `…/owner-server/<fp>` form is refused: a node that held no roster
+    /// when it signed names no roster key, so nothing ties it to the
+    /// pinned owner. Whether the node key is active in that owner's roster
+    /// is the verifier's next check.
+    pub fn check_builder_owner(&self, roster_key_fp: &str) -> Result<(), String> {
+        match self.builder_owner() {
+            Some(Owner::RosterKey(fp)) if fp == roster_key_fp => Ok(()),
+            Some(Owner::RosterKey(fp)) => Err(format!("provenance: builder.id names roster key {fp}, not the pinned owner key {roster_key_fp}")),
+            Some(Owner::Server(fp)) => Err(format!(
+                "provenance: builder.id is the owner-server form ({fp}): the node held no roster from its owner when it signed, so it can't be checked against a pinned roster key"
+            )),
+            None => Err("provenance: builder.id is not an owner's".into()),
+        }
+    }
+}
+
 // ── helpers ──────────────────────────────────────────────────────────
 
 /// `source.uri` from the plan's remote (BA-14): `git+<remote>` with any
@@ -1300,6 +1334,28 @@ pub(crate) mod tests {
         assert_eq!(source_uri(Some("  "), "pk"), "k2-project:pk");
         assert_eq!(purl_escape("1.99.1-x86_64"), "1.99.1-x86_64");
         assert_eq!(purl_escape("cargo,clippy rustc+x"), "cargo%2Cclippy%20rustc%2Bx");
+    }
+
+    /// A verifier pinning a roster key takes only `…/owner/<that fp>`; the
+    /// owner-server form (a node that held no roster) and another owner's
+    /// key are refused by name.
+    #[test]
+    fn a_pinned_roster_key_refuses_the_owner_server_form() {
+        let key = SigningKey::generate().unwrap();
+        let (p, sr, st) = built(&key);
+        assert_eq!(st.builder_owner(), Some(Owner::RosterKey("e".repeat(64))));
+        st.check_builder_owner(&"e".repeat(64)).unwrap();
+        let e = st.check_builder_owner(&"f".repeat(64)).unwrap_err();
+        assert!(e.contains("not the pinned owner key"), "{e}");
+        let server = NodeFacts { owner: Owner::Server("d".repeat(64)), ..facts() };
+        let st2 = Statement::for_receipt(&sr, &p, &server).unwrap().unwrap();
+        assert_eq!(st2.builder_owner(), Some(Owner::Server("d".repeat(64))));
+        let e = st2.check_builder_owner(&"d".repeat(64)).unwrap_err();
+        assert!(e.contains("owner-server form"), "even the same 64 hex: {e}");
+        let mut odd = st;
+        odd.predicate.run_details.builder.id = "https://example.test/builder".into();
+        assert_eq!(odd.builder_owner(), None);
+        assert!(odd.check_builder_owner(&"e".repeat(64)).is_err());
     }
 
     #[test]

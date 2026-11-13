@@ -404,6 +404,8 @@ impl World {
             rosters,
             seats,
             pairing_pins: pins,
+            provenance: None,
+            roster_approvals: None,
         }
     }
 

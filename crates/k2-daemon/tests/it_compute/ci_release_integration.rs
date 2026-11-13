@@ -2,9 +2,10 @@
 //! clients-v1 C5 + C6b), end to end on the controller: the real dispatcher
 //! in-process (temp `$HOME`, loopback), a real git repo with `[release]` in
 //! its `.k2/ci.toml`, a client seat on another owner's lane with that
-//! owner's signed node roster (an Ed25519 test key), three fake protocol-9
+//! owner's signed node roster (an Ed25519 test key), three fake protocol-10
 //! node sessions (`compute_ws::test_attach`) that get the jobs, sign v2
-//! receipts with their own keys and send their self-statements.
+//! receipts and build statements (`provenance-v1`) with their own keys and
+//! send their self-statements.
 //!
 //! Covers: placement refusals from the owner's roster (`seat_degraded`
 //! with each node's reason; `no_independent_nodes` naming the host),
@@ -12,10 +13,11 @@
 //! submitted), the set submitted as one unit (each job pinned by `--only`
 //! to its node, receipt v2, `BUILD_COMMIT` / `BUILD_TREE`, `--tier ci`),
 //! evidence refused before the set passed, the reaper's verdict, then the
-//! evidence bundle v2 (it checks; receipts by label and role, the
+//! evidence bundle v3 (it checks; receipts by label and role, the
 //! statements, the roster and seat, the owner attestations the roster names
-//! (a note while one is missing), the pairing pins, the commit object)
-//! and the dual-build comparison.
+//! (a note while one is missing), the pairing pins, the commit object, each
+//! job's build statement by label) with the `trust/` files, and the
+//! dual-build comparison.
 
 use std::io::{Read, Write};
 use std::net::TcpStream as StdTcpStream;
@@ -32,7 +34,9 @@ use k2_core::compute::proto::frames::{
     Availability, Caps, Control, Frame, Free, JobState, Offer, Plan, Receipt, ReceiptFrame, ReceiptLog, SignedReceipt, SrcRan, RECEIPT_V2,
 };
 use k2_core::compute::proto::node_roster::{NodeRoster, OwnerAttestation, RosterEntry, SeatStatement};
+use k2_core::compute::proto::provenance::{self as prov, NodeFacts, Owner, Statement};
 use k2_core::compute::proto::results::ArtifactInfo;
+use k2_core::compute::proto::share::Network;
 use k2_core::compute::proto::statement::{KeyExposure, NodeStatement};
 use k2_core::compute::{store, trust};
 use k2_daemon::compute_ws;
@@ -209,11 +213,11 @@ fn offer() -> Offer {
         refusal: None,
         labels: [("os".to_string(), "linux".to_string())].into(),
         tools: [("git".to_string(), "2.43.0".to_string())].into(),
-        protocol: 9,
+        protocol: 10,
         boot_id: "b".into(),
         ledger_id: "l".into(),
-        node_version: "0.46.11".into(),
-        features: vec!["artifacts".into(), "stall".into(), ci::FEATURE_NODE_STATEMENT.into(), ci::FEATURE_RECEIPT_V2.into()],
+        node_version: "0.46.13".into(),
+        features: vec!["artifacts".into(), "stall".into(), ci::FEATURE_NODE_STATEMENT.into(), ci::FEATURE_RECEIPT_V2.into(), prov::FEATURE_PROVENANCE_V1.into()],
         host: None,
         pkg: None,
     }
@@ -371,7 +375,8 @@ fn row(job: &str) -> store::JobRow {
 }
 
 /// The node ran the job: its row ends done/exit 0, and it sends its v2
-/// receipt (with `files`) and the statement the receipt names.
+/// receipt (with `files`), the statement the receipt names, and the build
+/// statement the plan asked for.
 fn node_ran(n: &Node, job: &str, commit: &str, tree: &str, files: &[(&str, &str)]) {
     {
         let db = k2_core::db::shared();
@@ -382,6 +387,8 @@ fn node_ran(n: &Node, job: &str, commit: &str, tree: &str, files: &[(&str, &str)
         store::set_job_state(&conn, job, JobState::Done, None, None, now).unwrap();
     }
     let r = row(job);
+    let plan = r.plan().expect("its plan");
+    assert_eq!(plan.provenance, Some(prov::PROVENANCE_V1), "a provenance-v1 node is asked for a statement");
     let st = statement(&n.key).sign(&n.key).unwrap();
     let rc = Receipt {
         v: RECEIPT_V2,
@@ -392,8 +399,8 @@ fn node_ran(n: &Node, job: &str, commit: &str, tree: &str, files: &[(&str, &str)
         node_fp: n.key.fingerprint(),
         controller_fp: "c".repeat(64),
         workspace_id: r.workspace_id.clone(),
-        argv_sha256: "a".repeat(64),
-        env_names: vec!["BUILD_COMMIT".into(), "BUILD_TREE".into()],
+        argv_sha256: k2_core::compute::proto::frames::argv_sha256(&plan.argv),
+        env_names: plan.env.keys().cloned().collect(),
         src: Some(SrcRan { commit: commit.into(), tree: tree.into(), dirty_sha256: None, slot: None, warmth: Some("private".into()) }),
         tools: Default::default(),
         boot_id: "b".into(),
@@ -403,7 +410,7 @@ fn node_ran(n: &Node, job: &str, commit: &str, tree: &str, files: &[(&str, &str)
         exit: None,
         log: ReceiptLog { sha256: "s".into(), bytes: 0, truncated: false },
         artifacts: files.iter().map(|(name, sha)| ArtifactInfo { name: name.to_string(), sha256: sha.to_string(), bytes: 10 }).collect(),
-        secret_env: vec![],
+        secret_env: plan.secret_env.clone(),
         tools_used: Default::default(),
         run: Some(RunFacts {
             isolation: Isolation::TenantUid,
@@ -421,14 +428,35 @@ fn node_ran(n: &Node, job: &str, commit: &str, tree: &str, files: &[(&str, &str)
         cache: None,
     };
     let signed = SignedReceipt::sign(&n.key, &rc).unwrap();
-    compute_ws::test_frame(n.id, Frame::Receipt(ReceiptFrame { job_id: job.into(), generation: r.generation as u32, receipt: signed, statement: Some(st), provenance: None }));
-    assert_eq!(row(job).receipt_ok, Some(true), "the receipt verifies with the pinned key");
+    let facts = NodeFacts {
+        owner: Owner::RosterKey(owner_key().public().fingerprint()),
+        network: Network::On,
+        isolation: Isolation::TenantUid,
+        wall: Wall::JobUser,
+        tenant_slot: 1,
+        lane: Some(LANE.into()),
+        k2node_version: "0.46.13".into(),
+        k2node_commit: None,
+        protocol: 10,
+        key_epoch: 0,
+        statement_digest: Some(st.digest()),
+        node_name: Some(n.name.into()),
+    };
+    let built = Statement::for_receipt(&signed, &plan, &facts).unwrap().expect("files: a statement");
+    let env = n.key.sign_statement(&built).unwrap();
+    compute_ws::test_frame(n.id, Frame::Receipt(ReceiptFrame { job_id: job.into(), generation: r.generation as u32, receipt: signed, statement: Some(st), provenance: Some(env) }));
+    let r = row(job);
+    assert_eq!(r.receipt_ok, Some(true), "the receipt verifies with the pinned key");
+    let kept: Value = serde_json::from_str(r.receipt_json.as_deref().unwrap()).unwrap();
+    assert!(kept.get("provenance").is_some(), "the build statement is kept: {kept}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
     let env = setup();
     let d = test_harness::start(OWNER).await;
+    // The evidence checks no plain env name is a vault secret's (BA-39).
+    k2_daemon::vault::boot(&k2_core::paths::k2_home());
     let (ws, path, nodes) = seed(&env);
     let sha = git(&path, &["rev-parse", "HEAD"]);
     let tree = git(&path, &["rev-parse", "HEAD^{tree}"]);
@@ -544,8 +572,36 @@ async fn a_release_set_is_placed_on_the_seat_built_and_bundled_as_evidence() {
     let v = j(&r);
     assert_eq!(v["notes"], json!([]), "every attestation the roster names is held: {}", r.body);
     assert_eq!(v["file"], "evidence-acme-desktop-1.2.0.json");
-    let bundle: EvidenceBundle = serde_json::from_value(v["bundle"].clone()).expect("a bundle v2");
+    let bundle: EvidenceBundle = serde_json::from_value(v["bundle"].clone()).expect("a bundle v3");
     bundle.check().expect("it checks");
+    assert_eq!(bundle.v, 3);
+    // Bundle v3: each job's build statement by label, each one the node's
+    // and agreeing with its receipt; roster_approvals reserved, absent.
+    let statements = bundle.provenance.clone().expect("v3 has provenance");
+    assert_eq!(statements.keys().cloned().collect::<Vec<_>>(), vec!["L1".to_string(), "L3".to_string(), "V1".to_string()]);
+    for (label, envelope) in &statements {
+        let n = nodes.iter().find(|n| Some(n.key.fingerprint().as_str()) == envelope.keyid()).unwrap_or_else(|| panic!("{label}: a node's key"));
+        let st = envelope.open_for_receipt(n.key.spki_der(), &bundle.receipts[label].signed()).unwrap_or_else(|e| panic!("{label}: {e}"));
+        st.check_builder_owner(&owner_key().public().fingerprint()).expect("names the owner's roster key");
+    }
+    assert!(bundle.roster_approvals.is_none());
+    assert!(serde_json::to_string(&v["bundle"]).unwrap().contains(r#""v":3"#));
+    // trust/: the node keys, the self-statements, the owner's roster.
+    let t = &v["trust"];
+    assert_eq!(t["nodeKeys"].as_object().unwrap().len(), 3, "{t}");
+    for n in &nodes {
+        assert_eq!(t["nodeKeys"][n.key.fingerprint()]["pem"].as_str().unwrap(), n.key.spki_pem());
+    }
+    assert_eq!(t["owners"], json!([{"id": NODE_OWNER, "rosterKeyFp": owner_key().public().fingerprint(), "rosterSeq": 3}]));
+    assert_eq!(t["statements"].as_array().unwrap().len(), 3);
+    // k2 ci provenance: the same statements, by check name, for any run.
+    let r = post(d.port, "/cli/ci/provenance", json!({"workspace": ws, "run": &run_id[..8]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = j(&r);
+    assert_eq!(p["missing"], json!({}), "{p}");
+    for (label, envelope) in &statements {
+        assert_eq!(p["statements"][label]["line"].as_str().unwrap(), envelope.line().unwrap(), "{label}");
+    }
     assert_eq!((bundle.project.as_str(), bundle.version.as_deref(), bundle.run_id.as_str()), ("acme-desktop", Some("1.2.0"), run_id.as_str()));
     assert_eq!((bundle.source.commit.as_str(), bundle.source.tree.as_str()), (sha.as_str(), tree.as_str()));
     assert!(bundle.source.commit_object.is_some(), "the commit object rides along");

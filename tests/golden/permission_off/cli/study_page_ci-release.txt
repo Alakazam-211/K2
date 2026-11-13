@@ -80,7 +80,8 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
     there is none). The version and notes: /_k2/updates/stable/latest.json
   What K2 checks here is a convenience: each receipt verified with the
   node key this server pinned, L1's and V1's files compared. The signer
-  checks everything again with its own pins and decides.
+  checks everything again with its own pins and decides. PROVENANCE: each
+  job's signed build statement rides in the bundle (k2 study provenance).
   Refusals: ci_no_release (no [release] at the commit), ci_no_seat (no
   seat on that owner's lane), seat_degraded (too few seat nodes can take
   it now: each one's reason is named), no_independent_nodes (no two seat

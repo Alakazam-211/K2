@@ -97,7 +97,16 @@ owner's lane; k2 study ci-release):
                                 in <dir>/<label>/<their paths>. <dir> goes
                                 inside the repo (k2 app updates push reads
                                 files there). Signing is a person's, at
-                                the signing machine (k2-signer)
+                                the signing machine (k2-signer). Also
+                                <dir>/provenance/<label>.intoto.jsonl (each
+                                node's signed build statement) and
+                                <dir>/trust/ (node keys, the owner's
+                                roster) to check them without K2
+  k2 ci provenance <run> --out <dir> [--json]
+                                the build statements of any run (a check
+                                run too), by check name, and <dir>/trust/;
+                                a job without one is listed with why.
+                                k2 study provenance
   Seat, lane, node roster, L1/V1/L3, the signer, the steps and who does
   each: k2 study ci-release.
 
@@ -571,6 +580,11 @@ with open(path, "w") as f:
     json.dump(v["bundle"], f, indent=1, sort_keys=True)
     f.write("\n")
 print(path)' "$out_dir")" || exit 1
+            # Bundle v3: each build statement as <dir>/provenance/<label>.intoto.jsonl,
+            # and <dir>/trust/ to check them without K2.
+            local n_st n_trust
+            n_st="$(printf '%s' "$_CI_BODY" | _compute_write_statements "$out_dir")" || exit 1
+            n_trust="$(printf '%s' "$_CI_BODY" | _compute_write_trust "$out_dir")" || exit 1
             local fetched=0 jl jid
             if [ "$no_files" = 0 ]; then
                 while IFS=$'\t' read -r jl jid; do
@@ -585,10 +599,11 @@ for label, j in sorted(json.load(sys.stdin)["jobs"].items()):
             if [ "$as_json" = 1 ]; then
                 printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); v["path"]=sys.argv[1]; v.pop("bundle", None); print(json.dumps(v))' "$file"
             else
-                printf '%s' "$_CI_BODY" | K2_CI_EV_PATH="$file" K2_CI_EV_DIR="$out_dir" K2_CI_EV_FETCHED="$fetched" python3 -c '
+                printf '%s' "$_CI_BODY" | K2_CI_EV_PATH="$file" K2_CI_EV_DIR="$out_dir" K2_CI_EV_FETCHED="$fetched" K2_CI_EV_ST="$n_st" K2_CI_EV_TRUST="$n_trust" python3 -c '
 import json, os, sys
 v = json.load(sys.stdin)
 print("evidence for %s %s (run %s): %s" % (v.get("project"), v.get("version"), v["short"], os.environ["K2_CI_EV_PATH"]))
+print("  build statements: %s in %s/provenance/; %s file(s) to check them in %s/trust/" % (os.environ["K2_CI_EV_ST"], os.environ["K2_CI_EV_DIR"], os.environ["K2_CI_EV_TRUST"], os.environ["K2_CI_EV_DIR"]))
 for label, j in sorted(v["jobs"].items()):
     print("  %-4s %-6s build %-16s job %s on %s, %d file(s)%s" % (label, j["role"], j["build"], j["short"], j["node"], len(j["artifacts"]),
           (" -> %s/%s/" % (os.environ["K2_CI_EV_DIR"], label)) if os.environ["K2_CI_EV_FETCHED"] != "0" else ""))
@@ -604,6 +619,28 @@ print("  1. sudo -n -u _k2sign /usr/local/libexec/k2-signer/k2-signer rehearse %
 print("  2. the same with: evidence %s %s < %s, then challenge, approve and sign each file" % (v.get("project"), v.get("version"), ev))
 print("  3. here: k2 app updates push <app> --channel beta --version %s --artifact <platform>=<file> --sig <platform>=<file>.sig --evidence %s" % (v.get("version"), v["short"]))'
             fi
+            ;;
+        provenance)
+            # Build attestations S3: every job's build statement of a run, and trust/.
+            local prun="${pos[0]:-}"
+            { [ -n "$prun" ] && [ -n "$out_dir" ]; } || { echo "usage: k2 ci provenance <run> --out <dir> [--json]" >&2; exit 2; }
+            body="$(python3 -c 'import json,sys; o={"run": sys.argv[2]}; o.update({"workspace": sys.argv[1]} if sys.argv[1] else {}); print(json.dumps(o))' "$ws" "$prun")"
+            _ci_call POST provenance "$body"
+            mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }
+            local p_st p_trust
+            p_st="$(printf '%s' "$_CI_BODY" | _compute_write_statements "$out_dir")" || exit 1
+            p_trust="$(printf '%s' "$_CI_BODY" | _compute_write_trust "$out_dir")" || exit 1
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
+            printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d, n_st, n_trust = sys.argv[1:4]
+print("build statements of run %s: %s in %s/provenance/; %s file(s) to check them in %s/trust/" % (v["short"], n_st, d, n_trust, d))
+for name, s in sorted((v.get("statements") or {}).items()):
+    print("  %-16s job %s, %d file(s) -> provenance/%s.intoto.jsonl" % (name, s["short"], s["files"], name))
+for name, why in sorted((v.get("missing") or {}).items()):
+    print("  %-16s no statement: %s" % (name, why))
+print("check one: k2 compute verify %s/provenance/<check>.intoto.jsonl --file <its file>" % d)' "$out_dir" "$p_st" "$p_trust"
             ;;
         stats)
             # Blacksmith class O1 (§4.5.2): per check, from this workspace's runs.

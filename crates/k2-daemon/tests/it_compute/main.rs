@@ -31,6 +31,7 @@ mod compute_manage_integration;
 #[cfg(target_os = "linux")]
 mod compute_pkg_node_e2e;
 mod compute_place_integration;
+mod compute_provenance_integration;
 mod compute_receipt_v2_integration;
 mod compute_rightsize_integration;
 #[cfg(unix)]

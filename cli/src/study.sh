@@ -2,7 +2,7 @@
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates"
 
 _study_usage() {
     cat <<'EOF'
@@ -27,7 +27,7 @@ Topics:
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
-  agent-templates
+  agent-templates  provenance
 EOF
 }
 
@@ -90,6 +90,7 @@ _study_title() {
         ci) echo "CI on K2 Compute" ;;
         ci-release) echo "Signed release builds on K2 Compute" ;;
         ci-stats) echo "CI stats, monitors and the [ci] run message" ;;
+        provenance) echo "Build statements: what a node signs about a build, and how to check one" ;;
         vault) echo "Secrets (the vault)" ;;
         jobs) echo "Scheduled jobs the daemon runs" ;;
         heartbeats) echo "Heartbeats and one-time reminders (routines, cron)" ;;
@@ -223,6 +224,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses
   ci-release          Signed releases: k2 ci release on your seat, evidence, the signer
   ci-stats            k2 ci stats, monitors, the one [ci] message per run, mem_auto checks
+  provenance          Build statements a node signs (in-toto/SLSA): get one, verify it, why none
   vault               Secrets: fetch not paste; references; who sets what
   jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
   heartbeats          Wake yourself on a schedule or once (routines, reminders, cron)
@@ -311,11 +313,7 @@ _study_page() {
         sidecars) _study_page_sidecars ;;
         sessions) _study_page_sessions ;;
         llm-tokens) _study_page_llm_tokens ;;
-        llm-accounts)
-            echo "k2 study llm-accounts is now k2 study llm-tokens — this page still works."
-            echo
-            _study_page_llm_tokens
-            ;;
+        llm-accounts) printf '%s\n\n' "k2 study llm-accounts is now k2 study llm-tokens — this page still works."; _study_page_llm_tokens ;;
         publish-framing) _study_page_publish_framing ;;
         publish-visibility) _study_page_publish_visibility ;;
         publish-dev) _study_page_publish_dev ;;
@@ -324,6 +322,7 @@ _study_page() {
         ci) _study_page_ci ;;
         ci-release) _study_page_ci_release ;;
         ci-stats) _study_page_ci_stats ;;
+        provenance) _study_page_provenance ;;
         data-sources) _study_page_data_sources ;;
         garden-data) _study_page_garden_data ;;
         changes) _study_page_changes ;;
@@ -608,7 +607,8 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
     there is none). The version and notes: /_k2/updates/stable/latest.json
   What K2 checks here is a convenience: each receipt verified with the
   node key this server pinned, L1's and V1's files compared. The signer
-  checks everything again with its own pins and decides.
+  checks everything again with its own pins and decides. PROVENANCE: each
+  job's signed build statement rides in the bundle (k2 study provenance).
   Refusals: ci_no_release (no [release] at the commit), ci_no_seat (no
   seat on that owner's lane), seat_degraded (too few seat nodes can take
   it now: each one's reason is named), no_independent_nodes (no two seat

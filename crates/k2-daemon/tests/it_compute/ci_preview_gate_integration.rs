@@ -189,7 +189,7 @@ fn ci_routes() -> Vec<(&'static str, &'static str)> {
         assert!(k2_daemon::compute_routes::is_ci_route(p), "{p} is a CI route");
         out.push((*p, if k2_daemon::compute_routes::is_post_route(p) { "POST" } else { "GET" }));
     }
-    assert_eq!(out.len(), 36, "13 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1, stats, monitors and monitor since O1, cache/trust and cache/trust/set since B2) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
+    assert_eq!(out.len(), 37, "14 `k2 ci` routes (release and evidence since 0.46.11, tests since the compute Blacksmith class T1, stats, monitors and monitor since O1, cache/trust and cache/trust/set since B2, provenance since build attestations S3) + 23 roster/lane/seat/trust/owner/signer routes (seats end/suspend/resume since the 11-07 review): {out:?}");
     out
 }
 
@@ -255,6 +255,11 @@ async fn every_ci_route_is_dark_until_the_owner_turns_the_ci_preview_on() {
     assert_dark(&r, "--mem auto");
     let r = call(d.port, "GET", "/cli/compute/logs/search", &agent, "search=panicked", None).await;
     assert_dark(&r, "logs --search");
+    // Build statements (attestations S3): served and checked only with it on.
+    let r = call(d.port, "GET", "/cli/compute/jobs/provenance", &agent, "job=nope", None).await;
+    assert_dark(&r, "k2 compute provenance");
+    let r = call(d.port, "POST", "/cli/compute/verify", &agent, "", Some(json!({"job": "nope"}))).await;
+    assert_dark(&r, "k2 compute verify");
     // A lane grant in the vault.
     let r = call(d.port, "POST", "/cli/vault/grant", OWNER, "", Some(lane_grant(&secret_id))).await;
     assert_dark(&r, "lane grant");

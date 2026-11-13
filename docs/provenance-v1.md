@@ -172,3 +172,48 @@ word.
    above agrees with it (`k2_node_proto::provenance::check_against_receipt`).
 4. Which node keys to trust is the owner's roster, not this file: see
    `docs/ci-formats-v1.md` and prd-compute-build-attestations-v1 §3 and §7.
+   `builder.id` names the owner whose roster to check. A verifier that pins
+   an owner's roster key accepts only `…/owner/<that key's fp>`; the
+   `…/owner-server/<fp>` form (a node that held no roster when it signed)
+   names no roster key and is refused
+   (`Statement::check_builder_owner`).
+
+## On the server
+
+A K2 server asks for a statement (`Plan.provenance = 1`) only of a node
+offering `provenance-v1`, and only with its CI preview on; any other node's
+plan has no `provenance` key, so its bytes and digest are as before. When
+the receipt arrives the server checks the statement beside it: the plan
+asked, it verifies with the node key the server pinned at enrolment, and it
+agrees with the receipt (`Dsse::open_for_receipt`). It also refuses one
+whose plain `env` names a secret in its vault, because plain env values are
+written into the statement. The job's stored receipt keeps the envelope
+under `provenance`, or the reason under `provenance_refused` ("no
+statement"); the receipt itself stands either way.
+
+Readers:
+
+- `k2 compute provenance <job> [--out FILE]`: the `.intoto.jsonl` line.
+- `k2 compute verify <job | FILE.intoto.jsonl> [--file PATH] [--owner-key FP]`:
+  checks a statement against the server's own records (the node key it
+  pinned, the job's receipt, the vault, the file's digest, the owner's
+  roster it holds) and prints each check. A convenience for agents: a
+  release signer checks again with its own pins.
+- `k2 ci provenance <run> --out <dir>` and `k2 ci evidence <run> --out
+  <dir>` (bundle v3, `docs/ci-formats-v1.md` §8).
+
+## Files a client gets
+
+`k2 ci provenance` and `k2 ci evidence` write:
+
+| Path | What |
+|---|---|
+| `provenance/<label>.intoto.jsonl` | One statement per job, by its label (`L1`, `V1`) or check name |
+| `trust/nodes/<fp>.pem` | Each node's public key (PEM); `<fp>` is the envelope's `keyid`. A stock DSSE tool checks the signature with it |
+| `trust/statements/<sha256>.json` | The node self-statements the receipts name (`{body, sig}`; `sha256` of `body`) |
+| `trust/owners.json` | `[{id, rosterKeyFp, rosterSeq}]`: each owner a statement names whose roster the server holds |
+| `trust/rosters/<rosterKeyFp>.json` | That owner's newest roster held by the server (`{body, sig}`), as of the build |
+
+A roster in `trust/` is the one the server held when the files were
+written: a key revoked later is still listed there. A verifier that cares
+fetches the owner's current roster.

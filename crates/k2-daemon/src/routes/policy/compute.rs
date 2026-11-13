@@ -51,6 +51,8 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/compute/jobs/get", Member),
     get("/cli/compute/jobs/logs", Member),
     post("/cli/compute/jobs/move", Member),
+    // Build statements (prd-compute-build-attestations-v1 S3): readers.
+    get("/cli/compute/jobs/provenance", Member),
     get("/cli/compute/jobs/receipt", Member),
     post("/cli/compute/jobs/retry", Member),
     post("/cli/compute/jobs/tier", Member),
@@ -146,4 +148,5 @@ pub(super) const ROWS: &[Route] = &[
     get("/cli/compute/trust/requests", Admin),
     post("/cli/compute/trust/withdraw", Admin),
     get("/cli/compute/usage", Admin),
+    post("/cli/compute/verify", Member),
 ];

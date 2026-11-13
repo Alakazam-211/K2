@@ -27900,7 +27900,12 @@ Agents:
                  matches; e.g. move --all-mine --node k2n12 --auto.
                  A started job is never moved (job_started, exit 3)
   k2 compute retry <job>
-  k2 compute receipt <job>
+  k2 compute receipt <job>                     what the node signed it ran and made
+  k2 compute provenance <job> [--out FILE]     the node's signed build statement
+                 (in-toto/SLSA, one .intoto.jsonl line); CI preview
+  k2 compute verify <job | FILE.intoto.jsonl> [--file PATH] [--owner-key FP]
+                 check a statement against this server's records; says
+                 what it checked (k2 study provenance)
 Owner / admin (refused for agents and inside K2 terminals, except where
 "Allow managing compute nodes" is on for that agent: see k2 compute manage):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
@@ -32574,12 +32579,7 @@ v = json.load(sys.stdin)
 if "job" in v: print("retrying as attempt %s: k2 compute attach %s" % (v["job"]["attempt"], v["job"]["short"]))
 else: print(v.get("state", "ok"))'
             ;;
-        receipt)
-            [ -n "${1:-}" ] || { echo "usage: k2 compute receipt <job>" >&2; exit 2; }
-            _compute_call GET /cli/compute/jobs/receipt "job=$(urlencode "$1")"
-            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
-            _compute_render receipt
-            ;;
+        receipt|provenance|verify) cmd_compute_provenance "$sub" "$@" ;;
         node) cmd_compute_node "$@" ;;
         grant) cmd_compute_grant "$@" ;;
         revoke)
@@ -32806,6 +32806,235 @@ print(v.get("cursor"))')"
     esac
 }
 
+# ── k2 compute receipt | provenance | verify ─────────────────────────
+# Receipts and build statements (prd-compute-build-attestations-v1 S3).
+# The node signs a receipt for every job and, when the job kept files and
+# the node offers it, an in-toto build statement (SLSA provenance v1, in a
+# DSSE envelope). The daemon checked and kept both; these verbs read them
+# (`/cli/compute/jobs/receipt`, `/cli/compute/jobs/provenance`) and check
+# one against this server's records (`/cli/compute/verify`).
+
+cmd_compute_provenance() {
+    local verb="$1"; shift
+    local as_json=0 out="" file="" owner_key="" target=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --out) out="${2:-}"; [ -n "$out" ] || { echo "usage: k2 compute provenance <job> --out FILE" >&2; exit 2; }; shift 2 ;;
+            --file) file="${2:-}"; [ -n "$file" ] || { echo "usage: k2 compute verify <job | FILE.intoto.jsonl> --file PATH" >&2; exit 2; }; shift 2 ;;
+            --owner-key) owner_key="${2:-}"; [ -n "$owner_key" ] || { echo "usage: k2 compute verify <job | FILE.intoto.jsonl> --owner-key FP" >&2; exit 2; }; shift 2 ;;
+            -*) echo "k2 compute $verb: unknown flag $1 (k2 compute --help)" >&2; exit 2 ;;
+            *) [ -z "$target" ] || { echo "k2 compute $verb: one job at a time" >&2; exit 2; }; target="$1"; shift ;;
+        esac
+    done
+    case "$verb" in
+        receipt)
+            [ -n "$target" ] || { echo "usage: k2 compute receipt <job>" >&2; exit 2; }
+            _compute_call GET /cli/compute/jobs/receipt "job=$(urlencode "$target")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            _compute_render receipt
+            ;;
+        provenance)
+            { [ -n "$target" ] && [ -z "$file$owner_key" ]; } || { echo "usage: k2 compute provenance <job> [--out FILE] [--json]" >&2; exit 2; }
+            _compute_call GET /cli/compute/jobs/provenance "job=$(urlencode "$target")"
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+            if [ -z "$out" ]; then
+                # The .intoto.jsonl line exactly as the node's envelope (one line).
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["line"])'
+                exit 0
+            fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+path = sys.argv[1]
+with open(path, "w") as f:
+    f.write(v["line"])
+subs = v.get("subjects") or []
+print("wrote %s: job %s'"'"'s build statement, signed by node %s, naming %d file(s):" % (path, v["short"], v.get("node") or "?", len(subs)))
+for s in subs:
+    print("  %s  sha256 %s" % (s["name"], s["sha256"]))
+print("check it: k2 compute verify %s [--file <one of those files>]" % path)' "$out" || exit 1
+            ;;
+        verify)
+            [ -n "$target" ] && [ -z "$out" ] || { echo "usage: k2 compute verify <job | FILE.intoto.jsonl> [--file PATH] [--owner-key FP] [--json]" >&2; exit 2; }
+            if [ -n "$file" ] && [ ! -f "$file" ]; then echo "k2 compute verify: --file $file: no such file" >&2; exit 2; fi
+            local body
+            body="$(python3 -c '
+import hashlib, json, os, sys
+target, file, owner = sys.argv[1:4]
+o = {}
+if os.path.isfile(target):
+    lines = [l for l in open(target, encoding="utf-8").read().splitlines() if l.strip()]
+    if len(lines) != 1:
+        sys.exit("k2 compute verify: %s holds %d lines; a .intoto.jsonl file from k2 compute provenance holds one statement" % (target, len(lines)))
+    try:
+        o["envelope"] = json.loads(lines[0])
+    except ValueError as e:
+        sys.exit("k2 compute verify: %s is not a statement line (JSON): %s" % (target, e))
+else:
+    o["job"] = target
+if file:
+    h = hashlib.sha256()
+    with open(file, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    o["sha256"] = h.hexdigest()
+    o["file"] = os.path.basename(file)
+if owner:
+    o["ownerKey"] = owner
+print(json.dumps(o))' "$target" "$file" "$owner_key")" || exit 2
+            _compute_call POST /cli/compute/verify "$body"
+            if [ "$as_json" = "1" ]; then
+                printf '%s\n' "$_CP_BODY"
+            else
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+what = "job %s'"'"'s build statement (node %s)" % (v["short"], v.get("node") or "?")
+print(("verified: " + what) if v["verified"] else ("NOT verified: %s: %s" % (what, v.get("failed"))))
+for c in v["checks"]:
+    print("  %-8s %-10s %s" % ("checked" if c["ok"] else "FAILED", c["check"], c["detail"]))
+print("not checked: " + v["notChecked"])'
+            fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["verified"] else 1)'
+            ;;
+    esac
+}
+
+# Write the `trust/` files a statement's reader needs into <dir>/trust/
+# (JSON with a `trust` object on stdin; prd §5): each node's public key as
+# nodes/<fingerprint>.pem (a stock DSSE tool checks with it), the node
+# self-statements as statements/<sha256>.json, the owners as owners.json
+# and each one's newest roster as rosters/<roster key fp>.json. Prints how
+# many files it wrote.
+_compute_write_trust() {
+    python3 -c '
+import hashlib, json, os, sys
+t = json.load(sys.stdin).get("trust") or {}
+root = os.path.join(sys.argv[1], "trust")
+n = 0
+def put(rel, text):
+    global n
+    p = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        f.write(text)
+    n += 1
+for fp, k in sorted((t.get("nodeKeys") or {}).items()):
+    put(os.path.join("nodes", fp + ".pem"), k["pem"])
+for s in t.get("statements") or []:
+    put(os.path.join("statements", hashlib.sha256(s["body"].encode()).hexdigest() + ".json"), json.dumps(s, sort_keys=True) + "\n")
+owners = t.get("owners") or []
+put("owners.json", json.dumps(owners, indent=1, sort_keys=True) + "\n")
+for o, r in zip(owners, t.get("rosters") or []):
+    put(os.path.join("rosters", o["rosterKeyFp"] + ".json"), json.dumps(r, sort_keys=True) + "\n")
+print(n)' "$1"
+}
+
+_study_page_provenance() {
+    cat <<'PAGE'
+k2 study provenance — Build statements: what a node signs about a build, and
+how to check one (CI preview: every verb here answers ci_preview_off until
+the owner runs k2 settings set ciPreview true)
+
+WHAT IT IS
+  When a compute job keeps files (k2 compute run --artifact GLOB), its node
+  (k2-node 0.46.13 or newer) signs a BUILD STATEMENT beside the job's
+  receipt: the commit, the command, the --env names and values, the secret
+  names (never values), the machine, how the job was walled off, and the
+  sha256 of every file it kept. The node signs with its own key after the
+  job's processes are gone, so the job can't write or change it. The format
+  is standard: an in-toto Statement v1 with a SLSA Provenance v1 predicate,
+  in a DSSE envelope, one JSON line per job (<name>.intoto.jsonl). Spec:
+  docs/provenance-v1.md in K2's repo.
+  It proves "this node says it built these bytes from this commit with this
+  command". It does not prove the node is honest, the build reproducible or
+  the source safe. The node OWNER (the K2 server the node belongs to) signs
+  a ROSTER: its list of node keys and machines, signed with its ROSTER KEY.
+  The owner's roster and a second build on another machine narrow what one
+  bad node can do (k2 study ci-release).
+
+WORDS
+  job = one compute job; a CI run has checks, each check is one job.
+  node key = the key a node signs with; this server recorded it when the
+  node joined (enrolled), and k2 compute verify checks against that record.
+
+GET IT
+  k2 compute provenance <job>             print the .intoto.jsonl line
+  k2 compute provenance <job> --out F     write it to the file F
+  k2 ci provenance <run> --out <dir>      every check of a CI run (any run):
+                                          <dir>/provenance/<check>.intoto.jsonl
+  k2 ci evidence <run> --out <dir>        a release run: the evidence bundle,
+                                          with the same files beside it
+  Both k2 ci verbs also write <dir>/trust/: nodes/<fingerprint>.pem (each
+  node's public key), statements/ (the nodes' signed self-statements), and
+  owners.json with rosters/ (each owner's roster as this server held it).
+
+CHECK IT
+  k2 compute verify <job | file.intoto.jsonl> [--file PATH] [--owner-key FP]
+  --file PATH: a file on THIS machine; K2 hashes it here and checks that
+  its sha256 is one the statement names. --owner-key FP: the owner's roster
+  key fingerprint, 64 hex (k2 compute owners shows it; it is not a node
+  key). It checks, in this order, prints a line for each, and stops at the
+  first that fails:
+    node key    the key that signed is this server's record for the node
+    receipt     the job's receipt verifies with that key
+    statement   the signature, the format, and that it agrees with the
+                receipt (files and their sha256, commit, command, times)
+    plain env   no --env name is also a secret's name in the vault
+    file        with --file: as above
+    owner       the owner the statement names: when this server holds that
+                owner's roster, it must list the node key as active. With
+                --owner-key, the statement must name that owner, this
+                server must hold its roster, and a node that held no roster
+                when it signed can't pass
+  Exit 0 = verified; 1 = not (the failed check is named); 2 = bad usage;
+  3 = no statement, or refused (code: hint on stderr).
+  It checks THIS server's records and is meant for agents. A release signer
+  (k2-signer) checks everything again with keys it pinned itself. Outside
+  K2 today, a stock DSSE tool checks the signature alone with
+  trust/nodes/<keyid>.pem (the keyid is in the envelope); the owner and
+  roster checks need a K2 verifier.
+
+NO STATEMENT? (no_statement, exit 3; its hint says which)
+  - the plan didn't ask: the node's k2-node is older than 0.46.13, or the
+    CI preview was off when the job was sent. Ask the owner to update the
+    node or turn the preview on, then run the job again;
+  - the job kept no files: run it again with --artifact GLOB;
+  - the node sent none (e.g. a job its k2-node took over after an update):
+    run the job again;
+  - this server refused the one the node sent (it didn't match the
+    receipt, or its signature or key was wrong; k2 compute events lists
+    provenance_refused): tell the node's owner; don't trust that job.
+
+SECRETS AND --env
+  A statement holds the job's plain --env values. Send a secret with
+  --secret NAME, never with --env. K2 won't keep or hand out a statement
+  whose --env name is also a secret's name in the vault
+  (provenance_secret_in_env, exit 3). The value already went to the node
+  and into its statement: have the secret rotated, then run the job again
+  with --secret.
+PAGE
+}
+
+# Write each statement as <dir>/provenance/<label>.intoto.jsonl (JSON on
+# stdin: `statements` {label: {line}} or `bundle.provenance` {label:
+# envelope}). Prints how many.
+_compute_write_statements() {
+    python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+lines = {k: s["line"] for k, s in (v.get("statements") or {}).items()}
+for k, env in ((v.get("bundle") or {}).get("provenance") or {}).items():
+    lines[k] = json.dumps(env, separators=(",", ":")) + "\n"
+root = os.path.join(sys.argv[1], "provenance")
+if lines:
+    os.makedirs(root, exist_ok=True)
+for k, line in sorted(lines.items()):
+    with open(os.path.join(root, k + ".intoto.jsonl"), "w") as f:
+        f.write(line)
+print(len(lines))' "$1"
+}
 # ── k2 llm tokens — LLM subscriptions and API tokens ─────────────────
 # (`k2 llm accounts` is a working alias.) One token per tool is the
 # SERVER DEFAULT, kept where the tool always keeps it; the other
@@ -37034,7 +37263,16 @@ owner's lane; k2 study ci-release):
                                 in <dir>/<label>/<their paths>. <dir> goes
                                 inside the repo (k2 app updates push reads
                                 files there). Signing is a person's, at
-                                the signing machine (k2-signer)
+                                the signing machine (k2-signer). Also
+                                <dir>/provenance/<label>.intoto.jsonl (each
+                                node's signed build statement) and
+                                <dir>/trust/ (node keys, the owner's
+                                roster) to check them without K2
+  k2 ci provenance <run> --out <dir> [--json]
+                                the build statements of any run (a check
+                                run too), by check name, and <dir>/trust/;
+                                a job without one is listed with why.
+                                k2 study provenance
   Seat, lane, node roster, L1/V1/L3, the signer, the steps and who does
   each: k2 study ci-release.
 
@@ -37508,6 +37746,11 @@ with open(path, "w") as f:
     json.dump(v["bundle"], f, indent=1, sort_keys=True)
     f.write("\n")
 print(path)' "$out_dir")" || exit 1
+            # Bundle v3: each build statement as <dir>/provenance/<label>.intoto.jsonl,
+            # and <dir>/trust/ to check them without K2.
+            local n_st n_trust
+            n_st="$(printf '%s' "$_CI_BODY" | _compute_write_statements "$out_dir")" || exit 1
+            n_trust="$(printf '%s' "$_CI_BODY" | _compute_write_trust "$out_dir")" || exit 1
             local fetched=0 jl jid
             if [ "$no_files" = 0 ]; then
                 while IFS=$'\t' read -r jl jid; do
@@ -37522,10 +37765,11 @@ for label, j in sorted(json.load(sys.stdin)["jobs"].items()):
             if [ "$as_json" = 1 ]; then
                 printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); v["path"]=sys.argv[1]; v.pop("bundle", None); print(json.dumps(v))' "$file"
             else
-                printf '%s' "$_CI_BODY" | K2_CI_EV_PATH="$file" K2_CI_EV_DIR="$out_dir" K2_CI_EV_FETCHED="$fetched" python3 -c '
+                printf '%s' "$_CI_BODY" | K2_CI_EV_PATH="$file" K2_CI_EV_DIR="$out_dir" K2_CI_EV_FETCHED="$fetched" K2_CI_EV_ST="$n_st" K2_CI_EV_TRUST="$n_trust" python3 -c '
 import json, os, sys
 v = json.load(sys.stdin)
 print("evidence for %s %s (run %s): %s" % (v.get("project"), v.get("version"), v["short"], os.environ["K2_CI_EV_PATH"]))
+print("  build statements: %s in %s/provenance/; %s file(s) to check them in %s/trust/" % (os.environ["K2_CI_EV_ST"], os.environ["K2_CI_EV_DIR"], os.environ["K2_CI_EV_TRUST"], os.environ["K2_CI_EV_DIR"]))
 for label, j in sorted(v["jobs"].items()):
     print("  %-4s %-6s build %-16s job %s on %s, %d file(s)%s" % (label, j["role"], j["build"], j["short"], j["node"], len(j["artifacts"]),
           (" -> %s/%s/" % (os.environ["K2_CI_EV_DIR"], label)) if os.environ["K2_CI_EV_FETCHED"] != "0" else ""))
@@ -37541,6 +37785,28 @@ print("  1. sudo -n -u _k2sign /usr/local/libexec/k2-signer/k2-signer rehearse %
 print("  2. the same with: evidence %s %s < %s, then challenge, approve and sign each file" % (v.get("project"), v.get("version"), ev))
 print("  3. here: k2 app updates push <app> --channel beta --version %s --artifact <platform>=<file> --sig <platform>=<file>.sig --evidence %s" % (v.get("version"), v["short"]))'
             fi
+            ;;
+        provenance)
+            # Build attestations S3: every job's build statement of a run, and trust/.
+            local prun="${pos[0]:-}"
+            { [ -n "$prun" ] && [ -n "$out_dir" ]; } || { echo "usage: k2 ci provenance <run> --out <dir> [--json]" >&2; exit 2; }
+            body="$(python3 -c 'import json,sys; o={"run": sys.argv[2]}; o.update({"workspace": sys.argv[1]} if sys.argv[1] else {}); print(json.dumps(o))' "$ws" "$prun")"
+            _ci_call POST provenance "$body"
+            mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }
+            local p_st p_trust
+            p_st="$(printf '%s' "$_CI_BODY" | _compute_write_statements "$out_dir")" || exit 1
+            p_trust="$(printf '%s' "$_CI_BODY" | _compute_write_trust "$out_dir")" || exit 1
+            if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; return 0; fi
+            printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d, n_st, n_trust = sys.argv[1:4]
+print("build statements of run %s: %s in %s/provenance/; %s file(s) to check them in %s/trust/" % (v["short"], n_st, d, n_trust, d))
+for name, s in sorted((v.get("statements") or {}).items()):
+    print("  %-16s job %s, %d file(s) -> provenance/%s.intoto.jsonl" % (name, s["short"], s["files"], name))
+for name, why in sorted((v.get("missing") or {}).items()):
+    print("  %-16s no statement: %s" % (name, why))
+print("check one: k2 compute verify %s/provenance/<check>.intoto.jsonl --file <its file>" % d)' "$out_dir" "$p_st" "$p_trust"
             ;;
         stats)
             # Blacksmith class O1 (§4.5.2): per check, from this workspace's runs.
@@ -53572,7 +53838,7 @@ if nx:
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing auth-pages app-profile app-account-deletion app-transfers app-chat app-recording chat-voice chat-voice-rooms voice-rooms tauri tauri-voice skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared ci ci-release ci-stats provenance vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes docs sim design db-upgrade app-databases jobs heartbeats mail-watch mail-reader folder-trust email-notifications box-move board chat-refresh desktop send-feedback organization agent-templates"
 
 _study_usage() {
     cat <<'EOF'
@@ -53597,7 +53863,7 @@ Topics:
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  app-databases  jobs  heartbeats
   folder-trust  email-notifications  box-move  board  chat-refresh  desktop  send-feedback  organization
-  agent-templates
+  agent-templates  provenance
 EOF
 }
 
@@ -53660,6 +53926,7 @@ _study_title() {
         ci) echo "CI on K2 Compute" ;;
         ci-release) echo "Signed release builds on K2 Compute" ;;
         ci-stats) echo "CI stats, monitors and the [ci] run message" ;;
+        provenance) echo "Build statements: what a node signs about a build, and how to check one" ;;
         vault) echo "Secrets (the vault)" ;;
         jobs) echo "Scheduled jobs the daemon runs" ;;
         heartbeats) echo "Heartbeats and one-time reminders (routines, cron)" ;;
@@ -53793,6 +54060,7 @@ K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a bri
   ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses
   ci-release          Signed releases: k2 ci release on your seat, evidence, the signer
   ci-stats            k2 ci stats, monitors, the one [ci] message per run, mem_auto checks
+  provenance          Build statements a node signs (in-toto/SLSA): get one, verify it, why none
   vault               Secrets: fetch not paste; references; who sets what
   jobs                Scripts on a schedule: k2 job, job:<name> secrets, logs, kill
   heartbeats          Wake yourself on a schedule or once (routines, reminders, cron)
@@ -53881,11 +54149,7 @@ _study_page() {
         sidecars) _study_page_sidecars ;;
         sessions) _study_page_sessions ;;
         llm-tokens) _study_page_llm_tokens ;;
-        llm-accounts)
-            echo "k2 study llm-accounts is now k2 study llm-tokens — this page still works."
-            echo
-            _study_page_llm_tokens
-            ;;
+        llm-accounts) printf '%s\n\n' "k2 study llm-accounts is now k2 study llm-tokens — this page still works."; _study_page_llm_tokens ;;
         publish-framing) _study_page_publish_framing ;;
         publish-visibility) _study_page_publish_visibility ;;
         publish-dev) _study_page_publish_dev ;;
@@ -53894,6 +54158,7 @@ _study_page() {
         ci) _study_page_ci ;;
         ci-release) _study_page_ci_release ;;
         ci-stats) _study_page_ci_stats ;;
+        provenance) _study_page_provenance ;;
         data-sources) _study_page_data_sources ;;
         garden-data) _study_page_garden_data ;;
         changes) _study_page_changes ;;
@@ -54178,7 +54443,8 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
     there is none). The version and notes: /_k2/updates/stable/latest.json
   What K2 checks here is a convenience: each receipt verified with the
   node key this server pinned, L1's and V1's files compared. The signer
-  checks everything again with its own pins and decides.
+  checks everything again with its own pins and decides. PROVENANCE: each
+  job's signed build statement rides in the bundle (k2 study provenance).
   Refusals: ci_no_release (no [release] at the commit), ci_no_seat (no
   seat on that owner's lane), seat_degraded (too few seat nodes can take
   it now: each one's reason is named), no_independent_nodes (no two seat

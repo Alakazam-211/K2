@@ -196,6 +196,7 @@ pub(super) const ROWS: &[Route] = &[
     // prd-compute-blacksmith-class-v1 O1: monitors (add/mute/rm, and list).
     post("/cli/ci/monitor", Member),
     get("/cli/ci/monitors", Member),
+    post("/cli/ci/provenance", Member),
     post("/cli/ci/release", Member),
     post("/cli/ci/run", Member),
     // Signer pairing (0.46.10 C3a, vs-live V17; `compute_trust`): a person

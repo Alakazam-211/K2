@@ -1852,6 +1852,7 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
     p.limits.max_secs = ctl.timeout_secs.unwrap_or(max_secs).clamp(1, max_secs.max(1)) as u64;
     p.limits.disk_bytes = (disk_gb.max(1) as u64) << 30;
     p.stall_secs = stall_for(ctl, features, p.limits.max_secs);
+    p.provenance = crate::compute_provenance::ask(features);
     if features.iter().any(|f| f == pshare::FEATURE_QUEUE) {
         p.ws_max_running = Some(grant.map(|g| g.max_parallel.max(1) as u32).unwrap_or(1));
     } else {
@@ -1967,6 +1968,10 @@ pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], caps: Option<Grant
     // a node offering `cpu-burst`; any other node keeps N (its plan and
     // digest as before). From the row, so a move to a newer node gets it.
     p.cpus_burst = j.ctl.cpus_burst.filter(|_| has(k2_core::compute::proto::gens::FEATURE_CPU_BURST));
+    // Build statements (prd-compute-build-attestations-v1 §4.4): asked of
+    // a node offering `provenance-v1`, gone for any other (its digest as
+    // before, `gens::missing_feature` clear).
+    p.provenance = crate::compute_provenance::ask(features);
     (p != *plan).then_some(p)
 }
 

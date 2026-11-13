@@ -298,7 +298,7 @@ Each signer policy decides whether it accepts `owner_attested` (§8).
 | `roster_seq_seen` | u64 \| null | the highest owner roster `seq` the node holds |
 | `lane` | name \| null | |
 
-## 8. Evidence bundle v2 (`evidence::EvidenceBundle`) and signer policy
+## 8. Evidence bundle v2 and v3 (`evidence::EvidenceBundle`) and signer policy
 
 ### Evidence bundle
 
@@ -308,7 +308,7 @@ signer trusts only its own pins. It is closed JSON, at most 8 MiB.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `v`, `kind` | 2, `"k2-ci-evidence"` | a v1 bundle is refused by name |
+| `v`, `kind` | 2 or 3, `"k2-ci-evidence"` | `k2 ci evidence` writes 3; readers take 2 and 3; a v1 bundle is refused by name |
 | `project` | name | the signer project |
 | `version` | string \| null | `null` for a CI run that signs nothing |
 | `run_id` | name | |
@@ -318,6 +318,11 @@ signer trusts only its own pins. It is closed JSON, at most 8 MiB.
 | `receipts` | label → receipt | 1–32 entries |
 | `statements`, `rotations`, `attestations`, `rosters`, `seats` | lists of `{body, sig}` | |
 | `pairing_pins` | fp → base64 SPKI | what the client server pinned at pairing: the PRD §4.1.6 cross-check |
+| `provenance` | v3 only, always there: label → DSSE envelope | each job's build statement (`docs/provenance-v1.md`); `{}` when no node signed one. Every label is a `receipts` label; each envelope has one signature and a 64-hex `keyid`. Nothing in it is trusted for being here: the signer checks each against its receipt (prd-compute-build-attestations-v1 S4) |
+| `roster_approvals` | v3 only, optional: a list of objects | reserved for the node owner's signed approvals of the rosters (prd §18, slice A2); absent until then. A reader that doesn't know them carries them unread |
+
+A v2 bundle has neither `provenance` nor `roster_approvals`; a v3 bundle
+without `provenance` is refused.
 
 Each receipt entry has these fields:
 

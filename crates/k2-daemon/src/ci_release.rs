@@ -18,13 +18,18 @@
 //!
 //! **`POST /cli/ci/evidence`** `{workspace?, run}`: once every job of a
 //! release run ended done/exit 0 with a receipt v2 this server verified, the
-//! evidence bundle v2 (`docs/ci-formats-v1.md` §8): receipts and plans by
+//! evidence bundle v3 (`docs/ci-formats-v1.md` §8): receipts and plans by
 //! label, the self-statements they name, the owner's newest roster and this
-//! client's seat statement, the pairing pins, the commit object. Nothing in
-//! it is trusted because it is in the bundle: the signer re-checks
-//! everything with its own pins. The answer also lists each job's files
-//! (to fetch with `k2 compute fetch`) and the dual-build comparison this
-//! server saw, a convenience only.
+//! client's seat statement, the pairing pins, the commit object, and each
+//! job's build statement by label (`provenance`, prd-compute-build-
+//! attestations-v1 S3). Nothing in it is trusted because it is in the
+//! bundle: the signer re-checks everything with its own pins. The answer
+//! also lists each job's files (to fetch with `k2 compute fetch`), the
+//! dual-build comparison this server saw (a convenience only), and the
+//! `trust/` files for a verifier outside K2.
+//!
+//! **`POST /cli/ci/provenance`** `{workspace?, run}`: every job's build
+//! statement of any run, by check name, and the same `trust/` files.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -36,6 +41,7 @@ use k2_core::compute::proto::ci_config::{CiConfig, ReleaseBuild, ReleaseConfig, 
 use k2_core::compute::proto::crypto;
 use k2_core::compute::proto::evidence::{EvidenceBundle, EvidenceReceipt, EvidenceSource, Role, EVIDENCE_KIND, EVIDENCE_V};
 use k2_core::compute::proto::frames::{Receipt, SignedReceipt, RECEIPT_V2};
+use k2_core::compute::proto::provenance::{Dsse, Statement};
 use k2_core::compute::{lane_secrets, store, trust};
 use serde_json::{json, Value};
 
@@ -423,6 +429,11 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
     let mut pins: BTreeMap<String, String> = BTreeMap::new();
     let mut files: BTreeMap<String, Value> = BTreeMap::new();
     let mut shas: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    // Bundle v3: each job's build statement, or why it has none (a note).
+    let mut provenance: BTreeMap<String, Dsse> = BTreeMap::new();
+    let mut rows: Vec<store::JobRow> = Vec::new();
+    let mut opened: Vec<Statement> = Vec::new();
+    let mut unsigned: Vec<String> = Vec::new();
     for c in &checks {
         let jf = jobs.get(&c.name).ok_or_else(|| no("internal", 500, format!("job {} has no release facts", c.name)))?;
         let unusable = |why: String| no(rcodes::RECEIPT, 409, format!("{}: {why}", c.name));
@@ -450,6 +461,17 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
         let arts: Vec<Value> = rc.artifacts.iter().map(|a| json!({"name": a.name, "sha256": a.sha256, "bytes": a.bytes})).collect();
         shas.insert(c.name.clone(), rc.artifacts.iter().map(|a| (a.name.clone(), a.sha256.clone())).collect());
         files.insert(c.name.clone(), json!({"job": j.id, "short": &j.id[..j.id.len().min(8)], "build": jf.build, "role": jf.role, "node": node.name, "artifacts": arts}));
+        // BA-39: a statement whose plain env names a vault secret is left
+        // out (said in a note); a closed vault refuses the whole bundle.
+        match crate::compute_provenance::writable(&j) {
+            Ok((env, st)) => {
+                provenance.insert(c.name.clone(), env);
+                opened.push(st);
+            }
+            Err(e) if e.code == "vault_locked" => return Err(e),
+            Err(e) => unsigned.push(format!("{}: {}", c.name, e.hint)),
+        }
+        rows.push(j);
     }
     // The dual builds as this server saw them (the signer decides).
     let mut dual: BTreeMap<String, Value> = BTreeMap::new();
@@ -484,8 +506,11 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
         rosters: vec![roster.signed.clone()],
         seats: vec![seat_stmt],
         pairing_pins: pins,
+        provenance: Some(provenance),
+        roster_approvals: None,
     };
     bundle.check().map_err(|e| no(rcodes::RECEIPT, 409, format!("the evidence bundle doesn't check: {e}")))?;
+    let trust_dir = crate::compute_provenance::trust_files(&rows.iter().collect::<Vec<_>>(), &opened.iter().collect::<Vec<_>>());
     audit(who, "ci.evidence", None, Some(&ws.id), None, json!({"run": run.id, "version": facts.version, "jobs": files.keys().collect::<Vec<_>>()}));
     let held: std::collections::HashSet<String> = attestations.iter().map(Signed::digest).collect();
     let missing: Vec<String> = roster
@@ -503,6 +528,9 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
             if missing.len() == 1 { "it" } else { "them" }
         ));
     }
+    for u in &unsigned {
+        notes.push(format!("{u}. A signer that requires build statements refuses this bundle"));
+    }
     Ok(json!({
         "workspace": ws.handle,
         "run": run.id,
@@ -514,7 +542,51 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
         "jobs": files,
         "dual": dual,
         "notes": notes,
+        "trust": trust_dir,
     }))
+}
+
+// ── POST /cli/ci/provenance ──────────────────────────────────────────
+
+/// `POST /cli/ci/provenance` `{workspace?, run}` (`k2 ci provenance <run>
+/// --out <dir>`): the build statement of every job of a run (a CI check
+/// run or a release), by check name, and the `trust/` files to check them
+/// without K2. A job with none is listed with why; nothing is refused for
+/// that. Read only.
+pub(crate) fn provenance(who: &Who, body: &[u8]) -> R<Value> {
+    let v = json_body(body)?;
+    let ws = reader(who, s(&v, "workspace"))?;
+    let token = s(&v, "run").ok_or_else(|| no("bad_request", 400, "which run: k2 ci provenance <run> --out <dir>"))?;
+    let (run, rows) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let run = ci::find_run(&conn, &ws.id, token).ok_or_else(|| no(ci::codes::NO_RUN, 404, format!("no CI run '{token}' in workspace {} (k2 ci status lists them)", ws.handle)))?;
+        let rows: Vec<(String, Option<store::JobRow>)> = ci::checks_of(&conn, &run.id).into_iter().map(|c| (c.name.clone(), c.job_id.as_deref().and_then(|id| store::job_by_id(&conn, id)))).collect();
+        (run, rows)
+    };
+    let mut statements = serde_json::Map::new();
+    let mut missing = serde_json::Map::new();
+    let (mut jobs, mut opened) = (Vec::new(), Vec::new());
+    for (name, j) in &rows {
+        let Some(j) = j else {
+            missing.insert(name.clone(), "never submitted".into());
+            continue;
+        };
+        match crate::compute_provenance::writable(j) {
+            Ok((env, st)) => {
+                let line = env.line().map_err(|e| no("internal", 500, e))?;
+                statements.insert(name.clone(), json!({"job": j.id, "short": k2_core::compute::message::short(&j.id), "line": line, "files": st.subject.len()}));
+                opened.push(st);
+            }
+            Err(e) if e.code == "vault_locked" => return Err(e),
+            Err(e) => {
+                missing.insert(name.clone(), e.hint.into());
+            }
+        }
+        jobs.push(j);
+    }
+    let trust_dir = crate::compute_provenance::trust_files(&jobs, &opened.iter().collect::<Vec<_>>());
+    Ok(json!({"workspace": ws.handle, "run": run.id, "short": run.short(), "statements": statements, "missing": missing, "trust": trust_dir}))
 }
 
 // ── `k2 app updates push --evidence <run>` (C8) ──────────────────────

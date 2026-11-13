@@ -97,7 +97,7 @@ pub fn reason(c: &Cand, w: &Want) -> Option<(&'static str, String)> {
     if c.starts_now(w) {
         return None;
     }
-    Some(first_reason(c, w).unwrap_or((NOT_NOW, "can't start it now".into())))
+    Some(first_reason(c, w).unwrap_or_else(|| (NOT_NOW, "can't start it now".into())))
 }
 
 fn first_reason(c: &Cand, w: &Want) -> Option<(&'static str, String)> {
@@ -105,7 +105,8 @@ fn first_reason(c: &Cand, w: &Want) -> Option<(&'static str, String)> {
     let full = || (NODE_FULL, format!("full: it runs {running} of {} jobs (other servers' jobs count too)", c.offer.parallel_max));
     if let Some(v) = c.shared_view() {
         if !c.usable() {
-            return Some((UNAVAILABLE, format!("unavailable (this server's share there is {:?}, the node is {:?})", v.state, c.offer.control).to_lowercase()));
+            let node = format!("{:?}", c.offer.control).to_lowercase();
+            return Some((UNAVAILABLE, format!("unavailable (this server's share there is {}, the node is {node})", v.state.as_str())));
         }
         if w.exclusive && running > 0 {
             return Some((NOT_IDLE, format!("--exclusive: {running} job(s) run there")));
@@ -182,7 +183,7 @@ pub fn not_now(j: &JobRow, now: i64) -> (Vec<NotNow>, Option<String>) {
         .cands
         .iter()
         .map(|c| {
-            let (code, words) = reason(c, &w).unwrap_or((STARTS_NOW, "can start it now; K2 moves it on a coming pass".into()));
+            let (code, words) = reason(c, &w).unwrap_or_else(|| (STARTS_NOW, "can start it now; K2 moves it on a coming pass".into()));
             NotNow { node: c.node.name.clone(), code, words }
         })
         .collect();

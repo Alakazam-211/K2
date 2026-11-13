@@ -1,8 +1,7 @@
-//! The render hash's rows (the rendering-data contract r1.4, Item 1, gap 5), on the golden
-//! sample deck: which slides' hashes change at each frame of the golden turn (revs 41 to 46,
-//! `expected-dirty-and-hashes.json`) and in its variants V1, V2, V3, V5 and V6. "Events say
-//! where to look; the hash says whether to re-render": a slide's hash changes exactly when
-//! something in its render closure does.
+//! The render hash's rows, on the golden sample deck: which slides' hashes change at each frame
+//! of the golden turn (revs 41 to 46, `expected-dirty-and-hashes.json`) and in the golden's
+//! variants V1, V2, V3, V5 and V6. "Events say where to look; the hash says whether to
+//! re-render": a slide's hash changes exactly when something in its render closure does.
 
 use std::collections::{BTreeMap, BTreeSet};
 

@@ -1,4 +1,4 @@
-//! The rendering contract's hand-made golden `index-rev40.json` (the whole view index of the
+//! The hand-made golden `index-rev40.json` (the whole view index of the
 //! sample deck before the scripted turn, live tier, rev 40), transcribed value for value into the
 //! kit's JSON value (generated from the golden file, its header left out), for
 //! `tests/kit_view.rs`.

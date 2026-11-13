@@ -10,14 +10,14 @@
 //!
 //! **Keys are the file's own ids** (`s<sldId>`, `s<sldId>-<cNvPr>`), for imported elements and
 //! for ones a verb adds alike: a verb fixes the new element's file id inside its own change,
-//! under the session lock, from the deck's id marks (B1), so the key is its address and a
+//! under the session lock, from the deck's id marks, so the key is its address and a
 //! desktop save that keeps the ids keeps the keys. A file id is unique only when it is minted
 //! at one serialisation point, which the kit's Yrs host is.
 //!
 //! **The carrier.** Opaque parts (masters, layouts, themes, pictures, tables, charts,
 //! animations) never enter the engine: the file is written by splicing the live changes into
 //! the bytes the kit last read from the file or wrote to it, the **carrier**, which the kit
-//! keeps in its store and hands to [`Pack::encode_from`] (the kit's carrier hook K1;
+//! keeps in its store and hands to [`Pack::encode_from`] (the kit's carrier hook;
 //! [`PptxLive`] opts in with [`Pack::wants_carrier`]). So a deck encodes after a restart from
 //! the stored carrier, with no read of the file, and a version's file (`file_at`) is that
 //! version spliced into its own carrier. The pack holds no file bytes between calls:

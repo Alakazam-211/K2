@@ -1,5 +1,5 @@
-//! The deck's view schema for the kit's view index (the rendering contract's gap 1), its
-//! addresses (gap 2) and what the pack derives on top of the kit's index.
+//! The deck's view schema for the kit's view index, its addresses and what the pack derives on
+//! top of the kit's index.
 //!
 //! - [`VIEW`]: slides are the containers and shapes the units; a shape's `slide` field holds
 //!   its slide's `sid`; the page is the deck map's `cx` × `cy` in EMU; `geom` is the one geometry
@@ -29,7 +29,7 @@ use k2_mpc_base::view_index::{
 use super::model::{f, parse_key, shape_key, slide_key, DECK, SHAPES, SLIDES};
 use crate::view::name_is_generic;
 
-/// The `edit` field's values as the contract's words.
+/// The `edit` field's values as words.
 pub const EDIT_WORDS: &[(&str, &str)] = &[("1", "plain"), ("fmt", "formatted"), ("0", "never")];
 
 /// The geometry field's parts, in order.

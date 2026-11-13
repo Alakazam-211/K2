@@ -1,7 +1,7 @@
-//! The rows of the pack's view index against the rendering contract's goldens (r1.4,
-//! `render-contract/goldens/`): `index-rev40.json` and the cases D, D2 and D3 of
-//! `cases-untested.json`, transcribed field by field (the goldens are hand-made; where the pack
-//! disagrees with one, the disagreement is listed in [`DISAGREE`] with why, and printed).
+//! The rows of the pack's view index against the hand-made goldens: `index-rev40.json` and the
+//! cases D, D2 and D3 of `cases-untested.json`, transcribed field by field (the goldens are
+//! hand-made; where the pack disagrees with one, the disagreement is listed in [`DISAGREE`] with
+//! why, and printed).
 //!
 //! Each row returns `Err("<row>: ...")` listing every field that differs, so the planted faults
 //! (`tests/mutants.rs`) can say which row caught them.
@@ -483,7 +483,7 @@ pub const CASE_D3: &[Want] = &[
 
 /// Case D3 with `sp:22` counter-turned (315°): its angle at the scaled level is 0°, so step 6
 /// alone would give an exact box; step 8 (approx inherited) flags it. Worked from the
-/// contract's rule, not from a golden: the centre and extent are case D3's, `rot` is
+/// geometry rule (`geom`), not from a golden: the centre and extent are case D3's, `rot` is
 /// 45° + 315° = 0°.
 pub const CASE_D3_COUNTER: &[Want] = &[
     w(

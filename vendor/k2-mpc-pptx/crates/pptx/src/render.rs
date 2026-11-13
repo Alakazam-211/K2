@@ -1,4 +1,4 @@
-//! The render hash (the rendering-data contract r1.4, Item 1, gap 5): SHA-256 over one
+//! The render hash (what a host's renderer reads): SHA-256 over one
 //! slide's **render closure**, from the bytes the renderer draws. The kit keys the digest with
 //! the space's key before anything stores it.
 //!

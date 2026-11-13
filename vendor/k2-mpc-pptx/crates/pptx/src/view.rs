@@ -1,16 +1,16 @@
-//! The pack's part of the rendering-data contract (r1.4, Item 1): a deck's view index, read
+//! The pack's part of what a host's renderer reads: a deck's view index, read
 //! from the bytes the renderer draws ([`index`]). The kit adds `tier`, `rev` and `version`,
 //! keys each render hash with the space's key, and pages units by container; this is what
 //! only the pack can work out:
 //!
-//! - **geometry** (gap 4): each unit's transform box on the page, group children composed by
+//! - **geometry**: each unit's transform box on the page, group children composed by
 //!   [`crate::geom::compose`] (the true affine image, flips, `approx_box`), placeholders with
 //!   no transform given their layout's box, else their master's (`bbox_inherited`), `hidden`;
-//! - **the render hash** (gap 5): [`crate::render::render_digest`] per slide;
-//! - **fonts** (gap 6): every font the deck's text uses, theme fonts resolved to their families,
+//! - **the render hash**: [`crate::render::render_digest`] per slide;
+//! - **fonts**: every font the deck's text uses, theme fonts resolved to their families,
 //!   and per slide which; **field kinds** (`slidenum`, `datetime`) per unit and slide, a slide
 //!   number's text shown as the slide's position; **`name_is_generic`**;
-//! - **layouts** (gap 28): each layout's own name and master; each unit's placeholder type.
+//! - **layouts**: each layout's own name and master; each unit's placeholder type.
 //!
 //! **Two phases**, so the live view shares them: [`read_open`] reads the file into a
 //! [`DeckRead`] (each shape as the file holds it: its own transform, the box it would inherit,
@@ -46,8 +46,7 @@ pub struct FontUse {
     pub script: &'static str,
     /// `theme-major`, `theme-minor` or `explicit`.
     pub from: &'static str,
-    /// The deck embeds it (`p:embeddedFontLst`). No embedded font is used until the Steward
-    /// rules (contract Q9).
+    /// The deck embeds it (`p:embeddedFontLst`). An embedded font is reported and not used.
     pub embedded: bool,
 }
 
@@ -205,7 +204,7 @@ pub fn name_is_generic(name: &str) -> bool {
     num_ok && words_ok
 }
 
-/// The kind of a text field (`a:fld/@type`), as the contract names it.
+/// The kind of a text field (`a:fld/@type`), as the view index names it.
 pub fn field_kind(ty: &str) -> Option<&'static str> {
     if ty == "slidenum" {
         Some("slidenum")
@@ -216,7 +215,7 @@ pub fn field_kind(ty: &str) -> Option<&'static str> {
     }
 }
 
-/// The field kinds in `kinds`, once each, in the contract's order.
+/// The field kinds in `kinds`, once each, in the view index's order: `slidenum`, `datetime`.
 pub fn field_order(kinds: &BTreeSet<&'static str>) -> Vec<&'static str> {
     ["slidenum", "datetime"]
         .into_iter()
@@ -232,7 +231,7 @@ fn text_root<'a, 'i>(n: Node<'a, 'i>) -> Option<Node<'a, 'i>> {
     child(n, P, "txBody")
 }
 
-/// The field kinds in a shape's own text, in contract order.
+/// The field kinds in a shape's own text, in the view index's order.
 fn fields_of(n: Node<'_, '_>) -> Vec<&'static str> {
     let mut seen = BTreeSet::new();
     if let Some(t) = text_root(n) {

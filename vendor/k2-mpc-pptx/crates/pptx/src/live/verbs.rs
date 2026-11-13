@@ -1,4 +1,4 @@
-//! The agent's verbs on a live deck, as the kit's structured verbs (A9): each computes ops by
+//! The agent's verbs on a live deck, as the kit's structured verbs: each computes ops by
 //! key on the live store under the session lock, and the kit applies them as one change with
 //! its guards (an agent's edit needs `--base` or `--if-version`; a facet written since the
 //! base is refused, by name).
@@ -19,7 +19,7 @@
 //! | `shape delete @sld:ID/sp:N` | one delete in `shapes` |
 //! | `notes set @sld:ID --text T` | set `notes` |
 //!
-//! **New ids are fixed inside the change** (B1): a shape's `cNvPr` one past the higher of the
+//! **New ids are fixed inside the change**: a shape's `cNvPr` one past the higher of the
 //! slide's id mark (its whole tree at import, a group's children included) and every id the
 //! store holds for that slide, live or deleted; a slide's `sldId` one past the higher of the
 //! deck's mark and every slide id the store holds. The kit serialises changes under its lock,
@@ -250,7 +250,7 @@ impl<'v> Doc<'v> {
         ""
     }
 
-    /// A new shape id for slide `sid` (B1).
+    /// A new shape id for slide `sid`.
     fn next_fid(&self, sid: u32) -> Option<u32> {
         let mark: u32 = self
             .deck(&fid_mark_key(sid))

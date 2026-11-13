@@ -205,7 +205,7 @@ fn leg_stale() -> Result<(), String> {
     }
 }
 
-/// The kit wrote K1, K2 is pending, and an app saves a buffer from before K1: through the
+/// The kit wrote W1, W2 is pending, and an app saves a buffer from before W1: through the
 /// kit's call (which can't say whether the kit wrote since), kept as a conflict.
 fn leg_kit_wrote() -> Result<(), String> {
     let v0 = d(&testgen::sample());
@@ -219,8 +219,8 @@ fn leg_kit_wrote() -> Result<(), String> {
             },
         )
     };
-    let v1 = set(&v0, 256, 2, "K1");
-    let v2 = set(&v1, 258, 4, "K2");
+    let v1 = set(&v0, 256, 2, "W1");
+    let v2 = set(&v1, 258, 4, "W2");
     let save = set(&v0, 257, 2, "person");
     match PptxPack::default().merge3_bytes(&v1, &v2, &save) {
         BlobMerge::Conflict => Ok(()),
@@ -261,7 +261,7 @@ const ROWS: &[(&str, Leg)] = &[
     ("pack_no_stale_guard", leg_stale),
     ("pack_no_kit_write_guard", leg_kit_wrote),
     ("pack_holds_clashes", leg_clash_kept_both),
-    // the live pack: the rendering contract's geometry and hash plants, and the
+    // the live pack: the geometry and render-hash plants, and the
     // live store's, each caught by the row named
     ("GroupRotNotComposed", view_rows::row_index_rev40),
     ("FlipRotAdded", view_rows::row_case_d2),
@@ -280,7 +280,7 @@ const ROWS: &[(&str, Leg)] = &[
     ),
     (
         "EncodeReserialises",
-        splice_rows::row_f5_untouched_byte_for_byte,
+        splice_rows::row_untouched_byte_for_byte,
     ),
     ("EncodeReserialises", splice_rows::row_each_change_spliced),
     ("EncodeReserialises", splice_rows::row_carrier_judge),
@@ -289,7 +289,7 @@ const ROWS: &[(&str, Leg)] = &[
         splice_rows::row_one_pass_per_encode_from,
     ),
     ("FidReused", live_rows::row_differential_oracle),
-    ("FidReused", live_rows::row_b1_new_shape_after_a_group),
+    ("FidReused", live_rows::row_new_shape_after_a_group),
     ("ReadUnbounded", live_rows::row_reads_bounded_and_paged),
     ("ZOrderGlobal", live_rows::row_each_verb),
 ];

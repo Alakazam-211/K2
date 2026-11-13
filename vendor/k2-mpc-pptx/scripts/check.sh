@@ -43,4 +43,5 @@ if [ -n "${MPC_PRIVATE_PATTERNS:-}" ] || [ -n "${MPC_PRIVATE_PATTERNS_FILE:-}" ]
 else
   echo "check-private: SKIPPED: no patterns here (they live off the tree); run scripts/check-private.sh where they are"
 fi
+sh scripts/check-labels.sh
 echo "repo checks: ok"

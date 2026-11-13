@@ -32,6 +32,9 @@
 //! number at the slide's position) and whether `shape text` can set it. A shape with no id, or
 //! with one another shape on the slide also has, gets none (it shows fewer details, never
 //! another shape's), and so does a deck the view can't read.
+// The kit's view structs are built with `..X::default()` (k2-mpc-base CHANGELOG): the kit
+// adds fields to them, and the update is what keeps a new one from breaking the build.
+#![allow(clippy::needless_update)]
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -271,11 +274,13 @@ fn unit_view(u: &view::Unit, edit: Option<TextEdit>, limits: &IndexLimits) -> No
             y: b.y,
             w: b.w,
             h: b.h,
+            ..kv::Bbox::default()
         },
         rot: u.rot,
         flip: kv::Flip {
             h: u.flip_h,
             v: u.flip_v,
+            ..kv::Flip::default()
         },
         inherited: u.bbox_inherited,
         approx: u.approx_box,
@@ -362,6 +367,7 @@ fn add_view_items(p: &Pptx<'_>, d: &mut IndexDraft, limits: &IndexLimits, pl: &L
             script: f.script.to_owned(),
             from: f.from.to_owned(),
             embedded: f.embedded,
+            ..kv::FontUse::default()
         })
         .collect();
 }

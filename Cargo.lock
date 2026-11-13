@@ -4945,7 +4945,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-pptx"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "k2-mpc-base",
  "k2-mpc-opc",

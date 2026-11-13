@@ -1,5 +1,5 @@
 // What the live workbook view reads that the kit's TS client (k2-mpc-base
-// v0.17.0, `@k2/mpc-client`) doesn't type. Everything else (frames, roster
+// v0.18.0, `@k2/mpc-client`) doesn't type. Everything else (frames, roster
 // events, corners, ranges, cells, the grid slot, derived values) is imported
 // from the kit, never redefined here. Each type below says why it is still
 // ours; when the kit (or K2's host) types it, it goes.
@@ -28,9 +28,25 @@ export interface XlsxViewContainer extends ViewContainer {
   derived?: ContainerDerived | null
 }
 
-/** The index's unit with its `derived` (`a1`). Ours: the kit's `ViewUnit` doesn't carry it. */
-export interface XlsxViewUnit extends ViewUnit {
+/**
+ * The index's unit with r1's `derived` (`a1`: a row's formula text by cell
+ * field). Ours: since client 0.18.0 the kit's `ViewUnit.derived` is a unit's
+ * own values (`{name: text}`, the view schema's `unit_derived`), a different
+ * shape from r1's by-field map, so this unit replaces it.
+ */
+export interface XlsxViewUnit extends Omit<ViewUnit, 'derived'> {
   derived?: UnitDerived | null
+}
+
+/**
+ * Units as a units page carries them. On the wire a unit's `derived` is a
+ * JSON object either way, and the kit's client keeps a unit as it came (it
+ * reads only the names the view schema's `unit_derived` lists, which the
+ * xlsx schema lists none of), so r1's units ride in the kit's page type
+ * unchanged.
+ */
+export function asPageUnits(units: XlsxViewUnit[]): ViewUnit[] {
+  return units as unknown as ViewUnit[]
 }
 
 /** The snapshot's view with the xlsx schema and containers. */

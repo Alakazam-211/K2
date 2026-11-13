@@ -78,6 +78,7 @@ use k2_mpc_base::session::{
 };
 use k2_core::log_debug;
 use k2_mpc_base::blob::BlobError;
+use k2_mpc_base::session::LimitSource;
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
 use k2_mpc_base::text::merge::Conflict;
 use k2_mpc_base::text::Hunk;
@@ -1016,6 +1017,16 @@ fn session_error_body(e: &SessionError) -> CliResponse {
             "that update holds content K2 doesn't accept: nothing was applied",
         ),
         SessionError::Doc(DocError::Quarantined) => refusal("423 Locked", "doc_quarantined", QUARANTINED_HINT),
+        // Kit v0.18.0 (MPC-E162 to MPC-E165): the native engine's refusals.
+        // K2 runs the kit on Yrs (the native engine is off), so none is
+        // reachable today; should one arrive, it answers with the kit's id,
+        // name, exit and next step, never a bare `bad_request`.
+        SessionError::Doc(
+            DocError::RootKindNotNative { .. }
+            | DocError::ReplicaLagging
+            | DocError::VectorNeedsParts { .. }
+            | DocError::NeedsStateTransfer,
+        ) => kit_report(e, None),
         // `DocError` is `#[non_exhaustive]` (kit v0.9.5): any other engine
         // error, today's and a later kit's, is the caller's bad input.
         SessionError::Doc(d) => bad(d.to_string()),
@@ -1034,10 +1045,12 @@ fn session_error_body(e: &SessionError) -> CliResponse {
              (k2 doc cat can't help: make it with your own tools), then comment on this one naming it: \
              k2 doc comment --doc --body \"what I changed and why\" --proposal <new file> <file>",
         )),
-        // Kit v0.15.0 (MPC-E822): a live keyed doc that isn't a table (a
-        // deck, a board) is at its size limit, and the change would grow it.
-        // Nothing was applied. Plain words for whoever made the change.
-        SessionError::AtLimit { what: "elements and fields", limit, .. } => kit_report(e, Some(&keyed_at_limit_hint(*limit))),
+        // MPC-E822: a live keyed doc that isn't a table (a deck, a board) is
+        // at its size limit, and the change would grow it. Nothing was
+        // applied. Plain words for whoever made the change, naming the limit
+        // and whose it is (kit v0.18.0: `KeyedAtLimit`, with the limit's
+        // source; the details carry `limit` and `limit_source`).
+        SessionError::KeyedAtLimit { limit, from, .. } => kit_report(e, Some(&keyed_at_limit_hint(*limit, *from))),
         // Every other kit refusal (the structure index, comments, claims by
         // node, annotation limits, and any a later kit adds): the kit's
         // report, its name as the code, with what to do next.
@@ -1045,12 +1058,21 @@ fn session_error_body(e: &SessionError) -> CliResponse {
     }
 }
 
-/// What `MPC-E822` (`keyed_at_limit`) tells the person or agent.
-pub(super) fn keyed_at_limit_hint(limit: usize) -> String {
+/// What `MPC-E822` (`keyed_at_limit`) tells the person or agent: the limit,
+/// and which one applied (this server's for the file type, the file type's
+/// own, or this server's for every file type).
+pub(super) fn keyed_at_limit_hint(limit: usize, from: LimitSource) -> String {
+    let whose = match from {
+        LimitSource::HostPerPack => "the limit this server sets for this file type",
+        LimitSource::PackDefault => "this file type's own limit",
+        // `LimitSource` is `#[non_exhaustive]`: a later source reads as the
+        // server-wide one until K2 names it.
+        _ => "this server's limit for every file type",
+    };
     format!(
-        "this file is too big to change live: it is at its limit of {limit} parts (its items and their fields, \
-         counting deleted items until they are cleared away). Nothing was changed. Read it (k2 doc cat), remove \
-         parts it no longer needs, then make the change again"
+        "this file is too big to change live: it is at its limit of {limit} parts ({whose}; its items and their \
+         fields, counting deleted items until they are cleared away). Nothing was changed. Read it (k2 doc cat), \
+         remove parts it no longer needs, then make the change again"
     )
 }
 

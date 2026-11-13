@@ -12,7 +12,7 @@
 // kit's form (samples/golden-schema.ts).
 
 import type { KeyedPageFrame, KeyedSchema, RosterEntry } from '@k2/mpc-client'
-import type { XlsxViewSnapshot } from './not-in-kit'
+import { asPageUnits, type XlsxViewSnapshot } from './not-in-kit'
 import type { LiveTier, LiveWorkbookFrame } from './reducer'
 import type { LiveWorkbookSource, LiveWorkbookSourceEvent } from './source'
 import { GOLDEN, stripAnnotations } from './samples/goldens'
@@ -97,7 +97,7 @@ export function sampleSnapshotFrames(firstSeq = 1): LiveWorkbookFrame[] {
   for (const c of containers) {
     page++
     const units = idx.units.filter((u) => u.container === c)
-    out.push({ type: 'keyed_page', seq: firstSeq + page, upto, page, pages, root: GOLDEN.schema.units, units: { container: c, from: 0, units, next: null, total: units.length } })
+    out.push({ type: 'keyed_page', seq: firstSeq + page, upto, page, pages, root: GOLDEN.schema.units, units: { container: c, from: 0, units: asPageUnits(units), next: null, total: units.length } })
   }
   return out
 }

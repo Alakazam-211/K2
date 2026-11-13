@@ -211,8 +211,15 @@ fn open_blobs(store: &Arc<DocStore>) -> Option<Arc<BlobStore>> {
 }
 
 fn config() -> Config {
+    kit_config(memory_budget_bytes())
+}
+
+/// The kit's settings K2 runs with. K2 sets no live size limit per file
+/// type (`keyed_max_entries_by_pack`): every keyed type (a deck) takes the
+/// host-wide `keyed_max_entries` unless its pack recommends a lower one.
+fn kit_config(memory_budget_bytes: u64) -> Config {
     let mut c = Config::default();
-    c.memory_budget_bytes = memory_budget_bytes();
+    c.memory_budget_bytes = memory_budget_bytes;
     c
 }
 
@@ -753,6 +760,22 @@ pub fn pool_json() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Kit v0.18.0: a keyed doc's live size limit is resolved per file type
+    /// (the host's limit for the type, else the lower of the pack's own
+    /// default and the host-wide limit). K2 sets none per type, and the deck
+    /// pack recommends none, so a deck keeps K2's host-wide limit of 25,000
+    /// elements and fields. A pack that starts recommending a lower one
+    /// fails here first.
+    #[test]
+    fn a_deck_takes_k2s_host_wide_live_size_limit() {
+        use k2_mpc_base::session::{KeyedLimit, LimitSource};
+        let c = kit_config(256 << 20);
+        assert!(c.keyed_max_entries_by_pack.is_empty(), "K2 sets no limit per file type: {:?}", c.keyed_max_entries_by_pack);
+        assert_eq!(c.keyed_max_entries, 25_000, "K2's host-wide live size limit");
+        let deck = k2_mpc_pptx::PptxLive::default();
+        assert_eq!(c.keyed_limit(&deck), KeyedLimit::new(25_000, LimitSource::HostWide));
+    }
 
     #[test]
     fn a_too_new_store_says_there_is_no_way_back() {

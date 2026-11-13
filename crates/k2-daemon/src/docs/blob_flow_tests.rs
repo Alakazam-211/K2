@@ -18,6 +18,7 @@ use k2_mpc_base::session::{
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::tools::ToolOptions;
+use k2_mpc_base::DocError;
 
 use super::host::{DocRights, K2Host};
 use super::routes::{self, VerbError};
@@ -297,7 +298,18 @@ fn every_new_kit_refusal_maps_to_its_id_name_and_exit() {
         ),
         (SessionError::IndexPending { version: 4, retry_after_ms: 500 }, "MPC-E713", "index_pending", 1, "409"),
         (SessionError::AgentWriteRefused, "MPC-E715", "agent_write_refused", 2, "400"),
-        (SessionError::AtLimit { what: "elements and fields", limit: 25_000, would_be: 25_001 }, "MPC-E822", "keyed_at_limit", 2, "400"),
+        // Kit v0.18.0: the native engine's four refusals (none reachable
+        // with it off) keep the kit's id, name and exit.
+        (
+            SessionError::Doc(DocError::RootKindNotNative { root: "shapes".into(), kind: k2_mpc_base::Kind::MovableList }),
+            "MPC-E162",
+            "root_kind_not_native",
+            2,
+            "400",
+        ),
+        (SessionError::Doc(DocError::ReplicaLagging), "MPC-E163", "replica_lagging", 2, "400"),
+        (SessionError::Doc(DocError::VectorNeedsParts { entries: 10_001 }), "MPC-E164", "vector_needs_parts", 2, "400"),
+        (SessionError::Doc(DocError::NeedsStateTransfer), "MPC-E165", "needs_state_transfer", 2, "400"),
     ];
     for (e, id, code, exit, status) in cases {
         let r = routes::session_error(&e);
@@ -324,18 +336,11 @@ fn every_new_kit_refusal_maps_to_its_id_name_and_exit() {
     assert_eq!(k2_mpc_base::index::IndexJobError::Stale { version: 1, reason: "purged" }.report().id(), "MPC-E717");
 }
 
-/// Kit v0.15.0 (MPC-E822): a change that would grow a live keyed doc (a
-/// deck, a board) past its size limit reaches the person or agent in plain
-/// words: the limit, that nothing changed, and what to do. A table's own
-/// limit keeps the kit's text.
+/// A table's own size limit keeps the kit's text. (A keyed doc's,
+/// `MPC-E822`, answers in K2's words: `conflicts`' keyed tests refuse a real
+/// change past the limit.)
 #[test]
-fn a_keyed_doc_at_its_limit_answers_in_plain_words() {
-    let e = SessionError::AtLimit { what: "elements and fields", limit: 25_000, would_be: 25_001 };
-    let err = error_of(&routes::session_error(&e));
-    let hint = err["hint"].as_str().expect("hint");
-    assert_eq!(hint, routes::keyed_at_limit_hint(25_000), "{err}");
-    assert!(hint.contains("25000 parts") && hint.contains("Nothing was changed"), "{hint}");
-    assert!(!hint.contains("MPC-") && !hint.contains("keyed_max_entries"), "no kit jargon: {hint}");
+fn a_tables_size_limit_keeps_the_kits_words() {
     let rows = SessionError::AtLimit { what: "rows", limit: 10, would_be: 11 };
     let err = error_of(&routes::session_error(&rows));
     assert_eq!(err["id"], json!("MPC-E802"), "{err}");

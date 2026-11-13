@@ -418,8 +418,8 @@ mod tests {
     use k2_mpc_base::elem::{Anchor, Key, ListOp, MapOp, Value};
     use k2_mpc_base::schema::{Kind, Schema};
     use k2_mpc_base::session::{
-        AnyFile, AuditEvent, Config, Declined, DiskCheck, EditOptions, Host, Pack, PackContent, PackError, Participant,
-        ParticipantKind, Reconciled, Rights, SessionError, SessionManager, Stay, View,
+        AnyFile, AuditEvent, Config, Declined, DiskCheck, EditOptions, Host, LimitSource, Pack, PackContent, PackError,
+        Participant, ParticipantKind, Reconciled, Rights, SessionError, SessionManager, Stay, View,
     };
 
     #[test]
@@ -802,6 +802,14 @@ mod tests {
     }
 
     fn keyed_fx(tag: &str, keyed_max_entries: Option<usize>) -> KeyedFx {
+        keyed_fx_with(tag, |config| {
+            if let Some(n) = keyed_max_entries {
+                config.keyed_max_entries = n;
+            }
+        })
+    }
+
+    fn keyed_fx_with(tag: &str, set: impl FnOnce(&mut Config)) -> KeyedFx {
         static N: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "k2-conflicts-keyed-{tag}-{}-{}",
@@ -820,9 +828,7 @@ mod tests {
         let mut config = Config::default();
         config.edit_rate_per_s = 1_000_000;
         config.edit_burst = 1_000_000;
-        if let Some(n) = keyed_max_entries {
-            config.keyed_max_entries = n;
-        }
+        set(&mut config);
         let mgr = SessionManager::new(store.clone(), host.clone(), config).with_blob_store(blobs);
         KeyedFx { dir, ws, host, store, mgr }
     }
@@ -913,5 +919,68 @@ mod tests {
         assert_eq!(body["error"]["exit"], 4, "{body}");
         let blob = f.mgr.open_blob_file(Arc::new(AnyFile), &deck_key(), &path, &f.ws).expect("it opens at tier 0");
         blob.status().expect("the tier-0 doc answers");
+    }
+
+    /// Grow a live two-shape deck by one field under `f`'s limit of 2: the
+    /// kit refuses it (`KeyedAtLimit`, nothing applied) and K2 answers.
+    fn refuse_a_change_past_the_limit(f: &KeyedFx) -> (SessionError, serde_json::Value, &'static str) {
+        let path = f.ws.join("talk.deck");
+        std::fs::write(&path, "s1\ns2\n").expect("the file");
+        let s = f.mgr.open_file(Arc::new(Deck), &deck_key(), &path, &f.ws).expect("two parts open live at a limit of 2");
+        let agent = Participant::new("agent:proj-1", "Ada", "#654321", ParticipantKind::Agent, "cli");
+        let bot = s.join(agent, Stay::Held).expect("join").conn;
+        let mut opts = EditOptions::new();
+        let before = s.read(bot).expect("read").version;
+        opts.base = Some(before);
+        let ops = vec![MapOp::Set { key: "s1:title".into(), value: Value::str("Agent") }];
+        let e = match s.edit_ops(bot, vec![Edit::Map { root: FIELDS.into(), ops }], &opts) {
+            Ok(_) => panic!("a third part past a limit of 2 is refused, but it was applied"),
+            Err(e) => e,
+        };
+        assert!(matches!(e, SessionError::KeyedAtLimit { limit: 2, would_be: 3, .. }), "kit v0.18.0's keyed refusal: {e:?}");
+        assert_eq!(s.read(bot).expect("read").version, before, "nothing applied");
+        let r = super::super::routes::session_error(&e);
+        let body: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        (e, body["error"].clone(), r.status)
+    }
+
+    /// MPC-E822: a change that would grow a live keyed doc (a deck, a board)
+    /// past its size limit reaches the person or agent in plain words: the
+    /// limit, whose limit it is (here the server's for every file type),
+    /// that nothing changed, and what to do; the details name the limit and
+    /// its source as the kit gives them.
+    #[test]
+    fn a_keyed_doc_at_the_servers_limit_answers_in_plain_words() {
+        let f = keyed_fx("at-limit", Some(2));
+        let (e, err, status) = refuse_a_change_past_the_limit(&f);
+        assert!(matches!(e, SessionError::KeyedAtLimit { from: LimitSource::HostWide, .. }), "{e:?}");
+        assert!(status.starts_with("400"), "{status}");
+        assert_eq!(err["id"], "MPC-E822", "{err}");
+        assert_eq!(err["code"], "keyed_at_limit", "{err}");
+        assert_eq!(err["exit"], 2, "{err}");
+        assert_eq!(err["details"]["limit"], 2, "{err}");
+        assert_eq!(err["details"]["limit_source"], "host_wide", "{err}");
+        let hint = err["hint"].as_str().expect("hint");
+        assert_eq!(hint, super::super::routes::keyed_at_limit_hint(2, LimitSource::HostWide), "{err}");
+        assert!(hint.contains("2 parts (this server's limit for every file type;"), "{hint}");
+        assert!(hint.contains("Nothing was changed"), "{hint}");
+        assert!(!hint.contains("MPC-") && !hint.contains("keyed_max_entries"), "no kit jargon: {hint}");
+    }
+
+    /// MPC-E822 under a limit the server sets for the file type
+    /// (`keyed_max_entries_by_pack`, which wins over the host-wide one): the
+    /// answer says it is this file type's limit.
+    #[test]
+    fn a_keyed_doc_at_its_file_types_limit_says_so() {
+        let f = keyed_fx_with("at-type-limit", |c| {
+            c.keyed_max_entries_by_pack.insert(DECK.name.to_string(), 2);
+        });
+        let (e, err, _) = refuse_a_change_past_the_limit(&f);
+        assert!(matches!(e, SessionError::KeyedAtLimit { from: LimitSource::HostPerPack, .. }), "{e:?}");
+        assert_eq!(err["id"], "MPC-E822", "{err}");
+        assert_eq!(err["details"]["limit_source"], "host_per_pack", "{err}");
+        let hint = err["hint"].as_str().expect("hint");
+        assert_eq!(hint, super::super::routes::keyed_at_limit_hint(2, LimitSource::HostPerPack), "{err}");
+        assert!(hint.contains("2 parts (the limit this server sets for this file type;"), "{hint}");
     }
 }

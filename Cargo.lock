@@ -5187,7 +5187,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
- "p256 0.13.2",
+ "p256 0.14.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",

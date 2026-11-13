@@ -11,8 +11,9 @@ documentation = "https://docs.rs/kessel-attest"
 repository = "https://github.com/Alakazam-211/K2"
 keywords = ["slsa", "in-toto", "dsse", "provenance", "supply-chain"]
 categories = ["command-line-utilities", "cryptography", "development-tools"]
-# Only the code, the README, the changelog and the licence ship. tests/ reads
-# fixtures from the repository, and scripts/ needs stock tools.
+# Only the code, the README, the changelog and the licence ship: tests/ and
+# its fixtures (the worked example) stay in the repository, and scripts/
+# needs stock tools.
 include = ["/src/", "/README.md", "/LICENSE-MIT", "/LICENSE-APACHE", "/CHANGELOG.md"]
 # Not published until the crate is reviewed.
 publish = false
@@ -25,22 +26,24 @@ name = "kessel-attest"
 path = "src/main.rs"
 
 # Pure Rust, no build scripts that compile C. Every crate here is MIT,
-# Apache-2.0 or BSD-3-Clause (deny.toml).
+# Apache-2.0, BSD-3-Clause or Unicode-3.0 (unicode-ident, through serde's
+# derive); deny.toml holds the list.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 sha2 = "0.10"
 # Node keys: ECDSA P-256, signatures in ASN.1 DER (`pkcs8` brings the DER and
-# SubjectPublicKeyInfo parsers).
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
+# SubjectPublicKeyInfo parsers). No `std`: it would only add an OS random
+# number source, and verifying needs none.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
 # Owner roster keys: Ed25519.
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Tests sign their own rosters and statements; the node key of the golden
 # vectors comes as a PKCS#8 PEM.
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "pem", "alloc"] }
 
 [lints.rust]
 missing_docs = "warn"

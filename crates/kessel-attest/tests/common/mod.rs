@@ -12,6 +12,7 @@ use ed25519_dalek::Signer as _;
 use kessel_attest::canonical;
 use kessel_attest::dsse::{pae, PAYLOAD_TYPE};
 use kessel_attest::util::{b64, parse_rfc3339, sha256_hex, signed_bytes};
+use p256::ecdsa::signature::Signer as _;
 use p256::pkcs8::{DecodePrivateKey, EncodePublicKey};
 use serde_json::{json, Value};
 

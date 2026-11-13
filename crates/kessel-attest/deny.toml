@@ -1,6 +1,6 @@
 # cargo-deny policy for kessel-attest:
 #   cargo deny --manifest-path crates/kessel-attest/Cargo.toml \
-#     --config "$PWD/crates/kessel-attest/deny.toml" check licenses bans sources
+#     --config "$PWD/crates/kessel-attest/deny.toml" check advisories licenses bans sources
 # The published crate's tree only (dev-dependencies are test-only).
 
 [graph]
@@ -12,6 +12,11 @@ targets = [
     "x86_64-pc-windows-msvc",
 ]
 exclude-dev = true
+
+[advisories]
+# The RustSec database, fetched at check time. Any advisory against a crate
+# in the tree fails the check; none is ignored.
+ignore = []
 
 [licenses]
 allow = [

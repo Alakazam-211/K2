@@ -89,7 +89,7 @@ fn job(id: &str, ws: &str, state: &str, started: Option<i64>) -> JobRow {
 }
 
 fn facts(row: NodeRow, online: bool, offer: Option<Offer>) -> NodeFacts {
-    NodeFacts { row, online, offer, active: vec![], queued: vec![], load: None, idle_cpu_millis: None, queue: None }
+    NodeFacts { row, online, offer, active: vec![], queued: vec![], load: None, idle_cpu_millis: None, queue: None, pinned_only: false }
 }
 
 /// Workspace ids `wsid-<x>` read as handles `agent-<x>` (the daemon's
@@ -275,6 +275,17 @@ fn states_say_why_a_node_isnt_taking_jobs() {
 
 /// Only nodes this server may use: never a pending enrolment or a share
 /// that ended.
+/// A pinned-only node says so; it is still `active` (it takes the jobs
+/// that name it), and every other node says false.
+#[test]
+fn a_pinned_only_node_says_so() {
+    let mut f = facts(row("k2n2"), true, Some(offer(0, 4)));
+    assert_eq!(shape(&f)["pinnedOnly"], false);
+    f.pinned_only = true;
+    let v = shape(&f);
+    assert_eq!((v["pinnedOnly"].clone(), v["state"].clone()), (serde_json::json!(true), serde_json::json!("active")), "{v}");
+}
+
 #[test]
 fn only_usable_nodes_are_listed() {
     assert!(usable(&row("a")));

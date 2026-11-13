@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 55,
+  "catalogVersion": 56,
   "caps": [
     {
       "name": "agents:read",
@@ -28755,6 +28755,10 @@
                   "type": "boolean",
                   "description": "More than one server uses it."
                 },
+                "pinnedOnly": {
+                  "type": "boolean",
+                  "description": "true: K2 never chooses this node for a job by itself; it runs only jobs that name it (k2 compute node pinned-only)."
+                },
                 "servers": {
                   "type": [
                     "integer",
@@ -28880,6 +28884,7 @@
                 "lastSeenAt",
                 "shared",
                 "servers",
+                "pinnedOnly",
                 "who",
                 "jobs",
                 "queueError"

@@ -256,7 +256,8 @@ fn exposure_counts_are_pinned() {
     // recordings.transcript and recordings.events (app).
     // Catalog v55 (0.46.11): + auth.doorStatus (app), whether the sign-in
     // door is on for the link's own App.
-    assert_eq!(c.catalog_version, 55);
+    // Catalog v56 (0.46.13): compute.nodes says pinnedOnly on every node.
+    assert_eq!(c.catalog_version, 56);
     assert_eq!(
         c.verbs.len(),
         270,

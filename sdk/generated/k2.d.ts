@@ -1706,6 +1706,8 @@ export interface ComputeNode {
   readonly online: boolean
   /** linux, macos or windows. */
   readonly os: string | null
+  /** true: K2 never chooses this node for a job by itself; it runs only jobs that name it (k2 compute node pinned-only). */
+  readonly pinnedOnly: boolean
   /** Null, unless the node's own queue couldn't be read just now: then why, with queueFrom server and this server's counts. */
   readonly queueError: string | null
   /** node: the node's own queue, every server sharing it; server: only this server's jobs (a node nobody shares, or one that didn't answer). */

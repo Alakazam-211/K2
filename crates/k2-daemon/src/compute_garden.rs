@@ -69,6 +69,9 @@ pub struct NodeFacts {
     pub idle_cpu_millis: Option<u64>,
     /// The node's own queue (a shared node, online): the answer or why not.
     pub queue: Option<Result<QueueView, String>>,
+    /// The node takes only jobs that name it
+    /// (`k2_core::compute::pinned_only`).
+    pub pinned_only: bool,
 }
 
 /// The answer to `compute.nodes`.
@@ -95,13 +98,14 @@ fn gather(rows: Vec<store::NodeRow>) -> Vec<NodeFacts> {
         .map(|row| {
             let (online, _, live) = compute_ws::live_view(&row.id);
             let offer = live.or_else(|| row.last_offer.clone());
-            let (active, queued, health) = {
+            let (active, queued, health, pinned_only) = {
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 (
                     store::jobs_in_states(&conn, &row.id, store::ACTIVE_STATES),
                     store::jobs_in_states(&conn, &row.id, &["queued"]),
                     compute::admin::health(&conn, &row.id),
+                    compute::pinned_only::is_on(&conn, &row.id),
                 )
             };
             // A shared node's queued jobs stay `assigned` here: queued, not running.
@@ -114,7 +118,7 @@ fn gather(rows: Vec<store::NodeRow>) -> Vec<NodeFacts> {
                 health.as_ref().filter(|(at, _)| compute::now() - at <= 900).and_then(|(_, h)| h.load_milli).map(|l| l.map(|x| x as f64 / 1000.0))
             };
             let idle_cpu_millis = crate::compute_views::idle_cpu_millis(&row.id, offer.as_ref());
-            NodeFacts { row, online, offer, active, queued: waiting, load, idle_cpu_millis, queue: None }
+            NodeFacts { row, online, offer, active, queued: waiting, load, idle_cpu_millis, queue: None, pinned_only }
         })
         .collect();
     // The node's own queue, for every shared node online, in parallel.
@@ -288,6 +292,7 @@ pub fn node(f: &NodeFacts, handle: &dyn Fn(&str) -> String, now: i64) -> J {
         "lastSeenAt": n.last_seen,
         "shared": n.shared,
         "servers": n.share.as_ref().filter(|_| n.shared).map(|s| s.servers),
+        "pinnedOnly": f.pinned_only,
         "who": who,
         "jobs": listed,
         "queueError": queue_error,

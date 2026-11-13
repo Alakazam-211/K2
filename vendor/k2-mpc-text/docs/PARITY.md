@@ -29,7 +29,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P5 | Find | `grep` | R | `run_tool` | live |
 | P6 | See who's here | `who`; `activity [-n N]` | R | `roster`; `activity` | live |
 | P7 | Follow someone | `follow <name>` | R | `roster` (carets as line:col) | live |
-| P8 | Place the caret / select; say what I'm working on | `cursor --at L:C` / `--select …`; `claim --lines a,b` / `claim --renew` / `claim --release` (K-PRES-12) | E (R: a viewing range; `claim --release`: R) | `set_cursor`; readers `set_view`; `claim` / `renew_claim` / `release_claim` | live |
+| P8 | Place the caret / select; say what I'm working on | `cursor --at L:C` / `--select …`; `claim --lines a,b` / `claim --renew` / `claim --release` | E (R: a viewing range; `claim --release`: R) | `set_cursor`; readers `set_view`; `claim` / `renew_claim` / `release_claim` | live |
 | P9 | Type at a position | `insert --at L:C` / `--line N` / `--after N` | E | `run_tool` (`edit_with`) | live |
 | P10 | Select and type over | `replace --lines a,b` / `--range …` | E | `run_tool` (`edit_with`) | live |
 | P11 | Delete a range | `delete --lines a,b`; `sed -i 'a,bd'` | E | `run_tool` (`edit_with`) | live |
@@ -44,16 +44,16 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P20 | Restore / name a version | `restore --version V`, `version --name N` | E (+H to restore) | `restore`, `name_version` | live |
 | P21 | Rename / move | `mv <new>` (a raw rename is also picked up) | E | `SessionManager::rekey` + `file_moved` | live |
 | P22 | Blame: who last wrote each line, by which change, when (the blame gutter) | `blame [-L a,b]` (a `git blame`-like listing) | H | `blame(conn, root, lines)` | live |
-| P23 | Comment, reply, resolve; suggest; accept / reject per hunk | `comment`, `reply`, `resolve`, `suggest`, `accept`, `reject`, `comments` | C / R (suggest) / E (accept, reject) | later (M5, the kit's annotation layer) | later |
+| P23 | Comment, reply, resolve; suggest; accept / reject per hunk | `comment`, `reply`, `resolve`, `suggest`, `accept`, `reject`, `comments` | C / R (suggest) / E (accept, reject) | later (the kit's annotation layer) | later |
 | P24 | Export | `export [--to as-is]`, `export --version V [--to as-is]` (kit v0.9.7: the file through the kit's export registry; format exporters are the host's) | R (`--version`: H) | `file_now`, `file_at`, then `ExportRegistry::export` | live |
 | P25 | See why live editing is off | `status`; verbs exit 4 with the reason | R | `status` (`declined`, `disk`) | live |
 | P26 | Ctrl+Z when others have since edited part of my change: undo the regions nobody touched, report the rest; a step whose every region was touched stays on top | `undo --partial` | E | `undo_with(UndoMode::Partial)` | live |
-| P27 | Mention someone | `comment --mention @name` | C | later (M5) | later |
-| P28 | Purge a pasted secret or personal data (owner) | `purge --range / --version / --text` | O | later (the purge slice) | later |
+| P27 | Mention someone | `comment --mention @name` | C | later (the kit's annotation layer) | later |
+| P28 | Purge a pasted secret or personal data (owner) | `purge --range / --version / --text` | O | later (the kit's purge verb) | later |
 | P29 | Approve or decline an assistant's edit made on my behalf | `approve <change>` / `decline <change>` | the named person | `set_approval` | live |
 | P30 | See which edits are waiting for my approval | `log --pending --on-behalf-of me` | H | `log(LogQuery::pending().on_behalf_of(..))` (a tab: `approvals`) | live |
 | P31 | Reverse one specific change, even days later, inside the revert window (older: `restore --version`) | `revert <change> [--partial]` (too old: exit 8) | E (author, the `on_behalf_of` person, or owner) | `revert` | live |
-| P35–P44 | The grid tier's own actions: insert, move or delete rows; insert, move, delete or rename columns; sort; bring back a deleted row or column; remove deleted rows to free space | `row …`, `col …`, `sort`, `rows drop-deleted` (a grid pack's and the kit's grid verbs) | — | — | N/A: a text doc has no rows or columns (kit C1g: `PersonAction` gained these rows; mapped N/A in the same bump) |
+| P35–P44 | The grid tier's own actions: insert, move or delete rows; insert, move, delete or rename columns; sort; bring back a deleted row or column; remove deleted rows to free space | `row …`, `col …`, `sort`, `rows drop-deleted` (a grid pack's and the kit's grid verbs) | — | — | N/A: a text doc has no rows or columns (kit v0.10.0: `PersonAction` gained these rows; mapped N/A in the same bump) |
 
 ## Line endings and the BOM in verbs
 

@@ -1,4 +1,4 @@
-//! Agent parity for the text pack (K-PAR-1…3): every row of `docs/PARITY.md` through the
+//! Agent parity for the text pack: every row of `docs/PARITY.md` through the
 //! kit's harness. Each person action runs the person's way (a tab, the session API) and the
 //! agent's way (registered verbs only), and the effects must match. The pack adds no verbs,
 //! so every case is the kit's; this proves the kit's text tier is whole on this pack's
@@ -22,7 +22,7 @@ fn packs() -> Vec<(&'static str, TextPack)> {
     ]
 }
 
-/// K-PAR-3: every row, the person's way and the agent's way, on the pack for each kind of
+/// Every row, the person's way and the agent's way, on the pack for each kind of
 /// type (they differ only in how a file is read in, so all must pass).
 #[test]
 fn agent_parity() {
@@ -73,7 +73,7 @@ fn agent_parity() {
     }
 }
 
-/// K-PAR-2: the registry is the kit's alone (no pack verbs) and covers every live row.
+/// The registry is the kit's alone (no pack verbs) and covers every live row.
 #[test]
 fn registry_covers_actions_with_kit_verbs_only() {
     let r = Registry::for_pack(&PACK).unwrap();
@@ -141,7 +141,7 @@ fn a_stale_deferral_fails() {
     );
 }
 
-/// K-PAR-1: `docs/PARITY.md` has a row for every action, in order, naming every verb the
+/// `docs/PARITY.md` has a row for every action, in order, naming every verb the
 /// data lists (and the data has a row for every action, by its exhaustive match).
 #[test]
 fn every_pack_has_a_table() {

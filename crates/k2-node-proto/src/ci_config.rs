@@ -315,6 +315,15 @@ pub struct ReleaseBuild {
     /// `warm = "signed-chain"` accepts a warm build.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm: Option<bool>,
+    /// Run each job of this build alone on its node (`--exclusive`): a
+    /// build that holds vault secrets and whose signer accepts `exclusive`
+    /// isolation. Optional in version 1 and 2; absent = shared as any job.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exclusive: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A dual build's independence when `independent` is unset (PRD §4.6:
@@ -582,6 +591,17 @@ mod tests {
         for k in ["mem_auto", "cpus_burst", "setup", "quarantine", "tests_failed_exit", "pr_comment", "warm"] {
             assert!(!text.contains(k), "{k}: {text}");
         }
+    }
+
+    #[test]
+    fn exclusive_is_optional_and_round_trips() {
+        let base = "version = 1\n[release]\nproject = \"k2\"\nowner = \"o.example\"\nlane = \"ci-standard\"\n[release.builds.a]\nargv = [\"x\"]\nneeds = []\nartifacts = [\"dist/*\"]\nlabel = \"L1\"\n";
+        let plain = CiConfig::parse(base).unwrap();
+        assert!(!plain.release.as_ref().unwrap().builds["a"].exclusive);
+        assert!(!plain.to_toml().unwrap().contains("exclusive"));
+        let ex = CiConfig::parse(&format!("{base}exclusive = true\n")).unwrap();
+        assert!(ex.release.as_ref().unwrap().builds["a"].exclusive);
+        assert_eq!(CiConfig::parse(&ex.to_toml().unwrap()).unwrap(), ex);
     }
 
     #[test]

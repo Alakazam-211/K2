@@ -338,7 +338,7 @@ pub fn check(inp: &Input) -> R<Summary> {
     }
 
     // The rust pin: the forge's at the tag, else the build receipts' rustc.
-    let needs_pin = |r: &BuildRule| r.needs.iter().any(|n| n.contains("{rust_pin}"));
+    let needs_pin = |r: &BuildRule| pins_rust(r);
     let mut rust_pin: Option<String> = source.and_then(|s| s.rust_pin.clone());
     if rust_pin.is_none() && p.build.values().any(needs_pin) {
         for (label, er) in &b.receipts {
@@ -404,6 +404,8 @@ pub fn check(inp: &Input) -> R<Summary> {
         }
     }
     let oldest = inp.now - i64::from(p.receipt_max_hours) * 3600;
+    let mut needs_person: Vec<String> = Vec::new();
+    let mut needs_person_owners: BTreeSet<String> = BTreeSet::new();
     for (label, er) in &b.receipts {
         let rule = p.build.get(&er.build).ok_or_else(|| Fail::Refused(format!("{label}: build {} is not in the policy", er.build)))?;
         let peek: Receipt = serde_json::from_str(&er.body).map_err(|e| Fail::Refused(format!("{label}: the receipt body: {e}")))?;
@@ -491,18 +493,16 @@ pub fn check(inp: &Input) -> R<Summary> {
         if !person_ok && !auto_ok {
             match p.roster_changes {
                 Changes::Ask => {
+                    // BA-32: every such key is named in one refusal, so the
+                    // person sees all of them at once.
                     let why = if person.is_some() {
                         "its roster attributes (host, provider, site, admin reach, taint basis…) changed, or its status or validity widened, since a person accepted it"
                     } else {
                         "it is new to this signer"
                     };
-                    return refused(format!(
-                        "{ROSTER_CHANGE_NEEDS_PERSON}: {label}: node {name}'s key {}… (owner {}, roster seq {}): {why}: \
-                         a person checks and accepts it (sudo k2-signer-admin roster-accept {owner_fp} < the evidence bundle)",
-                        fp16(&fp),
-                        owned.newest.owner_id,
-                        owned.newest.seq
-                    ));
+                    needs_person.push(format!("{label}: node {name}'s key {}… (owner {}, roster seq {}): {why}", fp16(&fp), owned.newest.owner_id, owned.newest.seq));
+                    needs_person_owners.insert(owner_fp.clone());
+                    continue;
                 }
                 Changes::Auto => {
                     let how = match rotated_from.get(&fp) {
@@ -720,6 +720,7 @@ pub fn check(inp: &Input) -> R<Summary> {
             }
         }
         let env = check_plan(label, er, &rc, rule, rust_pin.as_deref())?;
+        check_reported(label, rule, b, &rc)?;
         let rid = crate::ctx::sha256_hex(er.body.as_bytes());
         jobs.insert(
             label.clone(),
@@ -742,6 +743,16 @@ pub fn check(inp: &Input) -> R<Summary> {
             },
         );
         parsed.insert(label.clone(), (rc, entry.clone(), owner_fp.clone()));
+    }
+
+    if !needs_person.is_empty() {
+        let how: Vec<String> = needs_person_owners.iter().map(|o| format!("sudo k2-signer-admin roster-accept {o} < the evidence bundle")).collect();
+        return refused(format!(
+            "{ROSTER_CHANGE_NEEDS_PERSON}: {}: a person checks and accepts {} ({})",
+            needs_person.join("; "),
+            if needs_person.len() == 1 { "it" } else { "them" },
+            how.join("; ")
+        ));
     }
 
     // 7. Dual builds and independence.
@@ -833,6 +844,47 @@ pub fn check(inp: &Input) -> R<Summary> {
         notes,
         new_marks,
     })
+}
+
+/// Whether a build's receipts must have run the commit's pinned rustc: a
+/// `rust@{rust_pin}` need, or `rust_pin = true` (a build that takes its
+/// toolchain from the commit's rust-toolchain.toml).
+pub fn pins_rust(r: &BuildRule) -> bool {
+    r.rust_pin || r.needs.iter().any(|n| n.contains("{rust_pin}"))
+}
+
+/// `[build.<name>.reported]` (BA-10): the bundle carries the file, its bytes
+/// are the artifact of that name in the job's signed receipt, and it holds
+/// each value the policy names. The file is job-written: only those values
+/// are read from it.
+fn check_reported(label: &str, rule: &BuildRule, b: &EvidenceBundle, rc: &Receipt) -> R<()> {
+    let Some(rep) = &rule.reported else { return Ok(()) };
+    let f = &rep.file;
+    let arts = artifacts_of(label, rc)?;
+    let Some((sha, bytes)) = arts.get(f) else {
+        return refused(format!("{label}: the signed receipt lists no {f} (the job-reported file this build is checked by)"));
+    };
+    let Some(raw) = b.reported_file(label, f).map_err(Fail::Refused)? else {
+        return refused(format!("{label}: the evidence carries no {f} (the job-reported file this build is checked by; k2 ci evidence --reported {f})"));
+    };
+    if crate::ctx::sha256_hex(&raw) != *sha || raw.len() as u64 != *bytes {
+        return refused(format!("{label}: the evidence's {f} is not the one in its signed receipt"));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&raw).map_err(|_| Fail::Refused(format!("{label}: {f} is not JSON")))?;
+    for (ptr, want) in &rep.equals {
+        match v.pointer(ptr).and_then(serde_json::Value::as_str) {
+            Some(got) if got == want => {}
+            Some(got) => {
+                return refused(format!(
+                    "{label}: {f} says {ptr} = {:?}, the policy wants {:?}",
+                    got.chars().take(80).collect::<String>(),
+                    want.chars().take(80).collect::<String>()
+                ))
+            }
+            None => return refused(format!("{label}: {f} has no string at {ptr} (the policy wants {:?})", want.chars().take(80).collect::<String>())),
+        }
+    }
+    Ok(())
 }
 
 fn forge_channel_ok(v: &str) -> bool {

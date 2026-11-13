@@ -499,3 +499,90 @@ fn adopt_k2sign_and_admin_refusals() {
     // An admin verb is not a signer verb.
     assert!(matches!(run(&r.signer, "trust-owner", &[], b"", None), Err(Fail::Usage(_))));
 }
+
+/// BA-32: `preflight` says what a release must know before it places any
+/// job: the policy is installed, its owners pinned, its controllers paired,
+/// and which node keys a person accepted (revoked ones never listed).
+#[test]
+fn preflight_lists_the_accepted_node_keys() {
+    let r = root();
+    let w = World::new();
+    refused(run(&r.signer, "preflight", &["acme-desktop"], b"", None), "no policy for project acme-desktop");
+    approve_policy(&r, "acme-desktop", &w.policy_text(TEST_PUB));
+    let e = run(&r.signer, "preflight", &["acme-desktop"], b"", None).unwrap_err();
+    assert!(e.message().contains("is not paired") && e.message().contains("is not pinned"), "both problems at once: {e}");
+    assert_eq!(e.exit_code(), 3);
+    pair(&r, &w.controller);
+    ok(run(&r.admin, "trust-owner", &[&w.owner_fp, &w.owner.public().encode(), "owner"], b"", None));
+    let v: Value = serde_json::from_str(&ok(run(&r.signer, "preflight", &["acme-desktop"], b"", None))).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["roster_changes"], "ask");
+    assert_eq!(v["accepted_keys"], serde_json::json!([]));
+    assert!(v["notes"][0].as_str().unwrap().contains("no node key is accepted"), "{v}");
+    assert!(v["rosters_seen"][0]["seq"].is_null());
+    assert_eq!(v["builds"]["linux-x86_64"]["rust_pin"], true);
+    // A person accepts the roster: its three keys are listed, by name.
+    let b = w.build(w.spec());
+    ok(run(&r.admin, "roster-accept", &[&w.owner_fp, &b.rosters[0].digest()], &bundle_json(&b), None));
+    let v: Value = serde_json::from_str(&ok(run(&r.signer, "preflight", &["acme-desktop"], b"", None))).unwrap();
+    let mut want = vec![w.fp("node-a"), w.fp("node-b"), w.fp("node-c")];
+    want.sort();
+    assert_eq!(v["accepted_keys"], serde_json::json!(want));
+    assert!(v["accepted"].as_array().unwrap().iter().any(|a| a["name"] == "node-b" && a["how"] == "person"), "{v}");
+    // A roster that revokes node-c: once a person saw it, node-c is never listed again.
+    let mut s = w.spec();
+    s.roster.seq = 2;
+    s.roster.prev_digest = Some(b.rosters[0].digest());
+    let fpc = w.fp("node-c");
+    let c = s.roster.entries.iter_mut().find(|e| e.node_fp == fpc).unwrap();
+    c.status = k2_node_proto::ci::KeyStatus::Revoked;
+    c.revoked_reason = Some(k2_node_proto::ci::RevokeReason::Compromised);
+    let b2 = w.build(s);
+    ok(run(&r.admin, "roster-accept", &[&w.owner_fp, &b2.rosters[0].digest()], &bundle_json(&b2), None));
+    let v: Value = serde_json::from_str(&ok(run(&r.signer, "preflight", &["acme-desktop"], b"", None))).unwrap();
+    assert!(!v["accepted_keys"].as_array().unwrap().iter().any(|k| k == &Value::String(fpc.clone())), "{v}");
+    assert_eq!(v["accepted_keys"].as_array().unwrap().len(), 2);
+    assert!(matches!(run(&r.signer, "preflight", &[], b"", None), Err(Fail::Usage(_))));
+}
+
+/// BA-11: a key the policy marks `held = false` is never used to sign, but
+/// its assets get a verdict: every evidence check on the bytes, under the
+/// version's open session, without the asset on the session's list (that
+/// list is what this signer may sign).
+#[test]
+fn a_key_the_signer_does_not_hold_gets_a_verdict_only() {
+    let r = root();
+    let w = World::new();
+    let pubk = install_key(&r, "k2-signer/projects/acme-desktop/keys", "updater");
+    let text = w.policy_text(&pubk).replace(
+        "[keys.updater]",
+        &format!(
+            "[assets.acme-helper]\nkey = \"helper\"\nbuild = \"linux-x86_64\"\nartifact = \"dist/acme\"\ncheck = \"artifact\"\n\n\
+             [keys.helper]\nkind = \"minisign\"\npublic = \"{TEST_PUB}\"\nheld = false\n\n[keys.updater]"
+        ),
+    );
+    approve_policy(&r, "acme-desktop", &text);
+    pair(&r, &w.controller);
+    ok(run(&r.admin, "trust-owner", &[&w.owner_fp, &w.owner.public().encode(), "owner"], b"", None));
+    let b = w.build(w.spec());
+    let bj = bundle_json(&b);
+    ok(run(&r.admin, "roster-accept", &[&w.owner_fp, &b.rosters[0].digest()], &bj, None));
+    let f = forge_for(&w, VERSION);
+    // No session yet: no verdict either.
+    refused(run(&r.signer, "verdict", &["acme-desktop", "acme-helper", VERSION], &w.artifact, Some(&f)), "no approved signing session");
+    let approver = Approver::new(&r);
+    approver.open(&r, "acme-desktop", VERSION, &w.commit, &["acme"]);
+    refused(run(&r.signer, "verdict", &["acme-desktop", "acme-helper", VERSION], &w.artifact, Some(&f)), "no registered evidence");
+    ok(run(&r.signer, "evidence", &["acme-desktop", VERSION], &bj, Some(&f)));
+    let v: Value = serde_json::from_str(&ok(run(&r.signer, "verdict", &["acme-desktop", "acme-helper", VERSION], &w.artifact, Some(&f)))).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["sha256"], sha256_hex(&w.artifact));
+    let mut other = w.artifact.clone();
+    other.push(1);
+    refused(run(&r.signer, "verdict", &["acme-desktop", "acme-helper", VERSION], &other, Some(&f)), "are not L1's signed artifact");
+    refused(run(&r.signer, "sign", &["acme-desktop", "helper", "acme-helper", VERSION, "raw"], &w.artifact, Some(&f)), "held = false");
+    // A held key's asset still needs the session's list.
+    refused(run(&r.signer, "verdict", &["acme-desktop", "acme-other", VERSION], &w.artifact, Some(&f)), "not in project acme-desktop's policy");
+    let a = audit_lines(&r.dir.join(format!("var/k2sign/k2-signer/audit/acme-desktop/{VERSION}")));
+    assert!(a.contains("\tVERDICT-OK\t") && a.contains("\tREFUSED-VERDICT\t"), "{a}");
+}

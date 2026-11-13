@@ -315,6 +315,19 @@ fn start_words(f: &Fit) -> String {
     }
 }
 
+/// `--only-keys` (BA-32): a seat node whose key the release signer hasn't
+/// accepted takes no build. It is skipped here, never refused at signing
+/// time, and the person accepts it with the next roster change. Placement
+/// then runs on the rest exactly as before, so too few accepted nodes is the
+/// usual `seat_degraded` / `no_independent_nodes` refusal, before any job.
+pub fn only_keys(nodes: &mut [SeatNode], keys: &[String]) {
+    for n in nodes.iter_mut().filter(|n| n.out.is_none()) {
+        if !n.entry.as_ref().is_some_and(|e| keys.contains(&e.node_fp)) {
+            n.out = Some("the release signer hasn't accepted its key yet (not in --only-keys)".into());
+        }
+    }
+}
+
 /// Why a seat node takes no release build, from its roster entry (`None`:
 /// it may). The roster must list the key `active` under a name the seat
 /// names, with a taint basis.
@@ -613,6 +626,32 @@ mod tests {
         assert!(independent_of(Dimension::AdminReach, &a, &b).unwrap_err().contains("fleet-key holds root on both"));
         b.admin_reach = vec!["other".into()];
         assert!(independent_of(Dimension::AdminReach, &a, &b).is_ok());
+    }
+
+    #[test]
+    fn only_keys_skips_nodes_the_signer_has_not_accepted() {
+        let fp = |n: &SeatNode| n.entry.as_ref().unwrap().node_fp.clone();
+        let all = [node("k2n7", "h7"), node("k2n8", "h8"), node("k2n9", "h9")];
+        // One accepted node: a dual build can't be placed, before any job.
+        let mut one = all.clone();
+        only_keys(&mut one, &[fp(&all[0])]);
+        let e = place(&one, &[dual()], now).unwrap_err();
+        assert_eq!(e.code, codes::SEAT_DEGRADED);
+        assert!(e.message.contains("k2n8: the release signer hasn't accepted its key yet"), "{}", e.message);
+        // Two accepted, on two hosts: the set goes on exactly those.
+        let mut two = all.clone();
+        only_keys(&mut two, &[fp(&all[0]), fp(&all[2])]);
+        let p = place(&two, &[dual(), single()], now).unwrap();
+        assert!(p.iter().all(|x| x.node == "k2n7" || x.node == "k2n9"), "{p:?}");
+        // None accepted: nothing can take it.
+        let mut none = all.clone();
+        only_keys(&mut none, &[]);
+        assert_eq!(place(&none, &[single()], now).unwrap_err().code, codes::SEAT_DEGRADED);
+        // A node already out keeps its own reason.
+        let mut gone = all.clone();
+        gone[1].out = Some("removed from this server".into());
+        only_keys(&mut gone, &[fp(&all[0])]);
+        assert_eq!(gone[1].out.as_deref(), Some("removed from this server"));
     }
 
     #[test]

@@ -79,6 +79,8 @@ pub struct Spec {
     pub tamper: Option<String>,
     /// Sign the roster and seats with this owner (default `owner`).
     pub roster_signer_is_owner2: bool,
+    /// Job-written files the bundle carries (label → name → bytes).
+    pub reported: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
 }
 
 impl World {
@@ -315,6 +317,7 @@ impl World {
             commit_object: true,
             tamper: None,
             roster_signer_is_owner2: false,
+            reported: BTreeMap::new(),
         }
     }
 
@@ -406,6 +409,7 @@ impl World {
             pairing_pins: pins,
             provenance: None,
             roster_approvals: None,
+            reported: s.reported.iter().map(|(l, f)| (l.clone(), f.iter().map(|(n, b)| (n.clone(), b64(b))).collect())).collect(),
         }
     }
 

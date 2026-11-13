@@ -14,6 +14,7 @@
 //!   verdict <project> <asset> <version>         (file bytes on stdin) → JSON: every sign check, no signature (V5)
 //!   status <project> <version>                                              → JSON
 //!   pins                                                                     → JSON (what this signer trusts)
+//!   preflight <project>                                                      → JSON: ready for this project's evidence? and the node keys it accepted (BA-32)
 //!   identity                                                                 → JSON (the signer's pairing key)
 //! Admin verbs (sudo /usr/local/libexec/k2-signer/k2-signer-admin <verb> …):
 //!   policy-approve <project> [<sha256>]         (policy TOML on stdin: no sha = show the diff and its sha256)
@@ -80,6 +81,7 @@ pub fn signer_verbs() -> BTreeMap<&'static str, Verb> {
     m.insert("verdict", verb_verdict);
     m.insert("status", verb_status);
     m.insert("pins", verb_pins);
+    m.insert("preflight", verb_preflight);
     m.insert("identity", verb_identity);
     m
 }
@@ -256,7 +258,7 @@ fn check_release(env: &Env, pol: &SignerPolicy, bundle: &EvidenceBundle, sess: &
                     &gh
                 }
             };
-            let needs_pin = pol.build.values().any(|b| b.needs.iter().any(|n| n.contains("{rust_pin}")));
+            let needs_pin = pol.build.values().any(check::pins_rust);
             let rf = release_files(ctx, &pol.project)?;
             Some(forge::resolve_github(f, pol, version, &sess.base_commit, rf.as_deref(), needs_pin)?)
         }
@@ -556,13 +558,21 @@ fn verb_verdict(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let Some(rule) = pol.assets.get(asset.as_str()) else {
         return refused(format!("asset {asset} is not in project {project}'s policy"));
     };
+    // A key the signer never holds (BA-11: K2's root-helper key, used by
+    // the release user's own script): this verdict is the gate before that
+    // script signs. The version's approval session must be open (it binds
+    // the version and base commit), but the asset is not on its list,
+    // which names what this signer may sign.
+    let held = pol.keys.get(&rule.key).map(|k| k.held).unwrap_or(true);
     let _l = Locked::take(ctx)?;
     let dir = registry::audit_dir(ctx, project, version);
     let sess = session::load_valid(ctx, project, version)?;
-    if !sess.assets.contains(asset) {
-        return refused(format!("{asset} is not in {project} {version}'s approved asset list"));
+    if held {
+        if !sess.assets.contains(asset) {
+            return refused(format!("{asset} is not in {project} {version}'s approved asset list"));
+        }
+        k2_asset_rules(ctx, project, asset, version, &sess)?;
     }
-    k2_asset_rules(ctx, project, asset, version, &sess)?;
     let data = (env.stdin)(MAX_SIGN_BYTES)?;
     let sha = ctx::sha256_hex(&data);
     if let Some(f) = registry::signed_assets(ctx, project, version)?.get(asset.as_str()) {
@@ -608,6 +618,9 @@ fn verb_sign(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let Some(key_rule) = pol.keys.get(slot.as_str()) else {
         return refused(format!("project {project}'s policy has no [keys.{slot}]"));
     };
+    if !key_rule.held {
+        return refused(format!("project {project}'s [keys.{slot}] is held = false: this signer never holds or signs with it (verdict only)"));
+    }
     let _l = Locked::take(ctx)?;
     let dir = registry::audit_dir(ctx, project, version);
     let mut sess = session::load_valid(ctx, project, version)?;
@@ -708,6 +721,102 @@ fn verb_pins(env: &Env, args: &[String]) -> R<Vec<u8>> {
         "owners": t.owners.iter().map(|(fp, o)| json!({"fp": fp, "label": o.label, "accepted_keys": o.accepted.len(),
             "roster_seq": marks.get(fp).map(|m| m.seq), "roster_issued": marks.get(fp).map(|m| ctx::iso(m.issued_at))})).collect::<Vec<_>>(),
         "projects": projects,
+    }))
+}
+
+/// `preflight <project>` (BA-32): can this signer check `project`'s evidence
+/// now, and which node keys has it accepted? Read-only. Refused (exit 3,
+/// every problem named) when the policy isn't installed, an owner it names
+/// isn't pinned or a controller it names isn't paired. Otherwise JSON with
+/// `accepted_keys`: the keys a person accepted (and, under
+/// `roster_changes = auto`, the ones this project accepted that way), never
+/// revoked. A release places only on those (`k2 ci release --only-keys`), so
+/// a key nobody accepted yet is skipped rather than refused at signing time.
+/// An acceptance holds for the roster attributes the person saw; if the
+/// owner changed them since, the rehearsal says so before the tag.
+fn verb_preflight(env: &Env, args: &[String]) -> R<Vec<u8>> {
+    need(args, 1, "preflight <project>")?;
+    let ctx = env.ctx;
+    let project = &args[0];
+    policy::check_project_name(project)?;
+    ctx::check_pins(ctx)?;
+    let pol = policy::load(ctx, project)?;
+    let t = Trust::load(ctx)?;
+    let marks = trust::load_marks(ctx)?;
+    let now = ctx.now();
+    let mut problems: Vec<String> = Vec::new();
+    for c in &pol.controllers {
+        if !t.controllers.contains_key(c) {
+            problems.push(format!(
+                "controller {}… in the policy is not paired with this signer (k2-signer-admin pair-begin at the signing machine, then k2 ci signer add on that server)",
+                &c[..16]
+            ));
+        }
+    }
+    let mut accepted: Vec<Value> = Vec::new();
+    let mut keys: Vec<String> = Vec::new();
+    let mut rosters: Vec<Value> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for o in &pol.owners {
+        let Some(pin) = t.owners.get(o) else {
+            problems.push(format!("owner {}… in the policy is not pinned (k2-signer-admin trust-owner <fp read on the owner's screen> <key>)", &o[..16]));
+            continue;
+        };
+        let mark = marks.get(o);
+        let mut found: Vec<(String, AcceptedKey, &str)> = pin.accepted.iter().map(|(fp, a)| (fp.clone(), a.clone(), "person")).collect();
+        if pol.roster_changes == k2_node_proto::signer_policy::Changes::Auto {
+            if let Some(auto) = mark.and_then(|m| m.auto_accepted.get(project.as_str())) {
+                found.extend(auto.iter().map(|(fp, a)| (fp.clone(), a.clone(), "auto")));
+            }
+        }
+        for (fp, a, how) in found {
+            let revoked = pin.revoked.contains(&fp) || mark.is_some_and(|m| m.revoked.contains(&fp));
+            if revoked || keys.contains(&fp) {
+                continue;
+            }
+            keys.push(fp.clone());
+            accepted.push(json!({"owner": o, "fp": fp, "name": a.name, "seq": a.seq, "how": how}));
+        }
+        match mark {
+            Some(m) => {
+                let fresh = now - m.issued_at <= i64::from(pol.roster_max_age_hours) * 3600;
+                if !fresh {
+                    notes.push(format!(
+                        "{}'s newest roster this signer registered (seq {}) was issued {}, over {} hours ago: the next evidence must carry a newer one",
+                        pin.label,
+                        m.seq,
+                        ctx::hhmm(m.issued_at),
+                        pol.roster_max_age_hours
+                    ));
+                }
+                rosters.push(json!({"owner": o, "seq": m.seq, "issued": ctx::iso(m.issued_at), "fresh": fresh}));
+            }
+            None => rosters.push(json!({"owner": o, "seq": null, "issued": null, "fresh": null})),
+        }
+    }
+    if !problems.is_empty() {
+        return refused(format!("preflight for {project}: {}", problems.join("; ")));
+    }
+    if keys.is_empty() {
+        notes.push(format!("no node key is accepted for {project} yet: a person runs k2-signer-admin roster-accept <owner fp> at the signing machine"));
+    }
+    keys.sort();
+    let builds: serde_json::Map<String, Value> = pol
+        .build
+        .iter()
+        .map(|(n, b)| {
+            (
+                n.clone(),
+                json!({"rust_pin": check::pins_rust(b), "dual": b.dual, "independent": b.independent, "isolation": b.isolation,
+                    "reported": b.reported.as_ref().map(|r| json!({"file": r.file, "equals": r.equals}))}),
+            )
+        })
+        .collect();
+    json_out(&json!({
+        "ok": true, "project": project, "roster_changes": pol.roster_changes,
+        "owners": pol.owners, "controllers": pol.controllers,
+        "accepted_keys": keys, "accepted": accepted, "rosters_seen": rosters,
+        "builds": builds, "notes": notes,
     }))
 }
 

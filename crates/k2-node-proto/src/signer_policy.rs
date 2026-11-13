@@ -193,6 +193,42 @@ pub struct BuildRule {
     /// (default [`WARM_MAX_CHAIN_DEFAULT`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warm_max_chain: Option<u32>,
+    /// The job's rustc (`tools_used.rustc`) must be the commit's pinned
+    /// channel even when `needs` names no `rust@{rust_pin}` (a build that
+    /// takes its toolchain from the commit's `rust-toolchain.toml`).
+    /// Optional; absent = only a `{rust_pin}` need pins it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rust_pin: bool,
+    /// A file the job wrote whose facts must hold (BA-10: the hashes of a
+    /// cross toolchain the build fetched itself). Job-reported: the signer
+    /// trusts it only because its bytes are an artifact in the node-signed
+    /// receipt, and checks only the values named here. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported: Option<ReportedRule>,
+}
+
+/// `[build.<name>.reported]`: one JSON file among the build's artifacts and
+/// the exact string values it must hold.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportedRule {
+    /// The artifact's name in the receipt (`dist/build-info.json`).
+    pub file: String,
+    /// JSON pointer (RFC 6901, `/cross/zig_tarball_sha256`) → the exact
+    /// string it must be.
+    pub equals: BTreeMap<String, String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A build's cache rule at the signer (§4.2.3).
@@ -261,6 +297,12 @@ pub struct KeyRule {
     pub kind: KeyKind,
     /// The public key (minisign: the base64 line starting `RW`).
     pub public: String,
+    /// `false`: the signer never holds or uses this key. Its assets get a
+    /// `verdict` only (every evidence check, no signature), for a script
+    /// that signs with a key the signer doesn't hold (K2's root-helper key,
+    /// BA-11). Optional; absent = the signer holds it.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub held: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,6 +467,22 @@ impl BuildRule {
             }
             _ => {}
         }
+        if let Some(r) = &self.reported {
+            ci::check_text(&format!("build.{name}.reported.file"), &r.file, 512)?;
+            if r.file.is_empty() || r.file.starts_with('/') || r.file.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
+                return Err(format!("build.{name}.reported.file: a relative artifact path ({:?})", r.file));
+            }
+            if r.equals.is_empty() {
+                return Err(format!("build.{name}.reported.equals: at least one value"));
+            }
+            for (ptr, v) in &r.equals {
+                ci::check_text(&format!("build.{name}.reported.equals"), ptr, 256)?;
+                if !ptr.starts_with('/') {
+                    return Err(format!("build.{name}.reported.equals: {ptr:?} is not a JSON pointer (/a/b)"));
+                }
+                ci::check_text(&format!("build.{name}.reported.equals.{ptr}"), v, 512)?;
+            }
+        }
         Ok(())
     }
 }
@@ -567,5 +625,47 @@ public = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
         assert!(SignerPolicy::parse(&warm.replace("warm_max_chain = 4", "warm_max_chain = 0")).unwrap_err().contains("1-50"));
         let lone = MIN.replace("isolation = [\"job_uid\", \"exclusive\"]", "isolation = [\"job_uid\", \"exclusive\"]\nwarm_max_chain = 4");
         assert!(SignerPolicy::parse(&lone).unwrap_err().contains("only with warm"));
+    }
+
+    /// The optional keys (absent = the old rule, so older files parse the same
+    /// and serialise without them).
+    const OPTIONAL: &str = "isolation = [\"job_uid\", \"exclusive\"]\nrust_pin = true\n\n\
+        [build.linux-x86_64.reported]\nfile = \"dist/build-info.json\"\n\
+        equals = { \"/cross/zig_tarball_sha256\" = \"aa\", \"/cross/cargo_zigbuild_crate_sha256\" = \"bb\" }\n";
+
+    #[test]
+    fn optional_keys_parse_and_absent_ones_keep_the_old_shape() {
+        let plain = SignerPolicy::parse(MIN).unwrap();
+        let b = &plain.build["linux-x86_64"];
+        assert!(!b.rust_pin && b.reported.is_none());
+        assert!(plain.keys["updater"].held);
+        let text = plain.to_toml().unwrap();
+        assert!(!text.contains("rust_pin") && !text.contains("reported") && !text.contains("held"), "{text}");
+
+        let with = MIN.replace("isolation = [\"job_uid\", \"exclusive\"]\n", OPTIONAL)
+            .replace("[keys.updater]", "[keys.root-helper]\nkind = \"minisign\"\npublic = \"RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3\"\nheld = false\n\n[keys.updater]");
+        let p = SignerPolicy::parse(&with).unwrap();
+        let b = &p.build["linux-x86_64"];
+        assert!(b.rust_pin);
+        let r = b.reported.as_ref().unwrap();
+        assert_eq!(r.file, "dist/build-info.json");
+        assert_eq!(r.equals["/cross/zig_tarball_sha256"], "aa");
+        assert!(!p.keys["root-helper"].held && p.keys["updater"].held);
+        assert_eq!(SignerPolicy::parse(&p.to_toml().unwrap()).unwrap(), p);
+    }
+
+    #[test]
+    fn bad_reported_rules_are_refused() {
+        let with = MIN.replace("isolation = [\"job_uid\", \"exclusive\"]\n", OPTIONAL);
+        let bad = |from: &str, to: &str| SignerPolicy::parse(&with.replace(from, to)).unwrap_err();
+        assert!(bad("file = \"dist/build-info.json\"", "file = \"../build-info.json\"").contains("reported.file"));
+        assert!(bad("file = \"dist/build-info.json\"", "file = \"/etc/passwd\"").contains("reported.file"));
+        assert!(bad("\"/cross/zig_tarball_sha256\"", "\"cross/zig\"").contains("JSON pointer"));
+        let none = with.replace(
+            "equals = { \"/cross/zig_tarball_sha256\" = \"aa\", \"/cross/cargo_zigbuild_crate_sha256\" = \"bb\" }",
+            "equals = {}",
+        );
+        assert!(SignerPolicy::parse(&none).unwrap_err().contains("at least one"));
+        assert!(SignerPolicy::parse(&with.replace("file = \"dist/build-info.json\"\n", "file = \"dist/build-info.json\"\nsurprise = 1\n")).is_err());
     }
 }

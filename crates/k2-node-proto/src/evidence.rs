@@ -37,6 +37,8 @@ pub const MAX_EVIDENCE_BYTES: usize = 8 << 20;
 pub const MAX_RECEIPTS: usize = 32;
 /// Most entries in a v3 bundle's `roster_approvals`.
 pub const MAX_ROSTER_APPROVALS: usize = 64;
+/// Largest reported file (decoded).
+pub const MAX_REPORTED_BYTES: usize = 1 << 20;
 
 /// One release (or CI) run's evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +86,13 @@ pub struct EvidenceBundle {
     /// carries them unread, which drops no check it has. Absent in v2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roster_approvals: Option<Vec<Value>>,
+    /// Files a job wrote that a signer policy reads (`[build.<name>.reported]`,
+    /// BA-10): label → artifact name → the file's bytes, base64. Trusted only
+    /// as far as the bytes hash to that artifact in the label's node-signed
+    /// receipt. Optional: absent in a bundle that carries none, so a bundle
+    /// without it has the shape it always had.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reported: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// What was built.
@@ -235,7 +244,33 @@ impl EvidenceBundle {
                 return Err(format!("evidence.roster_approvals: at most {MAX_ROSTER_APPROVALS} JSON objects"));
             }
         }
+        for (label, files) in &self.reported {
+            if !self.receipts.contains_key(label) {
+                return Err(format!("evidence.reported: {label:?} is not a receipt of this bundle"));
+            }
+            if files.is_empty() {
+                return Err(format!("evidence.reported.{label}: no file"));
+            }
+            for (name, b) in files {
+                ci::check_text(&format!("evidence.reported.{label}"), name, 512)?;
+                if name.is_empty() || name.starts_with('/') || name.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
+                    return Err(format!("evidence.reported.{label}: {name:?} is not an artifact path"));
+                }
+                let raw = crate::crypto::unb64(b).map_err(|e| format!("evidence.reported.{label}.{name}: {e}"))?;
+                if raw.len() > MAX_REPORTED_BYTES {
+                    return Err(format!("evidence.reported.{label}.{name}: over {MAX_REPORTED_BYTES} bytes"));
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// The bytes of `name` that `label`'s job reported, if the bundle has them.
+    pub fn reported_file(&self, label: &str, name: &str) -> Result<Option<Vec<u8>>, String> {
+        match self.reported.get(label).and_then(|f| f.get(name)) {
+            Some(b) => crate::crypto::unb64(b).map(Some).map_err(|e| format!("evidence.reported.{label}.{name}: {e}")),
+            None => Ok(None),
+        }
     }
 }
 
@@ -289,6 +324,7 @@ mod tests {
             pairing_pins: BTreeMap::new(),
             provenance: (v == EVIDENCE_V3).then(BTreeMap::new),
             roster_approvals: None,
+            reported: BTreeMap::new(),
         }
     }
 
@@ -346,6 +382,44 @@ mod tests {
         let mut e = bundle(EVIDENCE_V3);
         e.v = 4;
         assert!(EvidenceBundle::parse(serde_json::to_string(&e).unwrap().as_bytes()).unwrap_err().contains("want 2 or 3"));
+    }
+
+    /// A v3 bundle with one aarch64 build receipt (L2), for reported files.
+    fn reported_bundle() -> EvidenceBundle {
+        let mut b = bundle(EVIDENCE_V3);
+        b.receipts = BTreeMap::from([(
+            "L2".to_string(),
+            EvidenceReceipt { build: "linux-aarch64".into(), role: Role::Build, body: "{}".into(), sig: String::new(), plan: serde_json::json!({}) },
+        )]);
+        b
+    }
+
+    #[test]
+    fn reported_files_are_optional_and_checked() {
+        let plain = reported_bundle();
+        plain.check().unwrap();
+        let text = serde_json::to_string(&plain).unwrap();
+        assert!(!text.contains("reported"), "a bundle without reported files keeps its old shape: {text}");
+        assert_eq!(EvidenceBundle::parse(text.as_bytes()).unwrap(), plain);
+
+        let mut b = reported_bundle();
+        let info = br#"{"cross":{"zig_tarball_sha256":"aa"}}"#;
+        b.reported.insert("L2".into(), BTreeMap::from([("dist/build-info.json".to_string(), crate::crypto::b64(info))]));
+        b.check().unwrap();
+        assert_eq!(b.reported_file("L2", "dist/build-info.json").unwrap().as_deref(), Some(&info[..]));
+        assert_eq!(b.reported_file("V2", "dist/build-info.json").unwrap(), None);
+        let back = EvidenceBundle::parse(serde_json::to_string(&b).unwrap().as_bytes()).unwrap();
+        assert_eq!(back, b);
+
+        let mut other = b.clone();
+        other.reported.insert("V9".into(), other.reported["L2"].clone());
+        assert!(other.check().unwrap_err().contains("not a receipt"));
+        let mut path = reported_bundle();
+        path.reported.insert("L2".into(), BTreeMap::from([("../x".to_string(), crate::crypto::b64(b"x"))]));
+        assert!(path.check().unwrap_err().contains("not an artifact path"));
+        let mut junk = reported_bundle();
+        junk.reported.insert("L2".into(), BTreeMap::from([("dist/x".to_string(), "not base64!".to_string())]));
+        assert!(junk.check().is_err());
     }
 
     #[test]

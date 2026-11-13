@@ -143,6 +143,10 @@ fn build_body(name: &str, label: &str, b: &ReleaseBuild, sha: &str, tree: &str, 
     if let Some(gb) = b.mem_gb {
         v["memBytes"] = json!(u64::from(gb) << 30);
     }
+    if b.exclusive {
+        v["exclusive"] = json!(true);
+        v["why"] = json!(format!("release build {name}: alone on the node while it holds its vault secrets"));
+    }
     v
 }
 
@@ -180,6 +184,21 @@ struct Planned {
     specs: Vec<JobSpec>,
     /// node id → this server's node name (what `--only` names).
     local_names: HashMap<String, String>,
+}
+
+/// `onlyKeys` (`--only-keys a,b`): node key fingerprints. Absent = every
+/// seat node; present and empty = none (no key accepted yet).
+fn only_keys_of(v: &Value) -> R<Option<Vec<String>>> {
+    let raw: Vec<String> = match v.get("onlyKeys") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_default()).collect(),
+        Some(Value::String(x)) => x.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect(),
+        Some(_) => return Err(no("bad_request", 400, "--only-keys takes node key fingerprints, comma separated")),
+    };
+    if let Some(bad) = raw.iter().find(|k| !k2_core::compute::proto::ci::is_fp(k)) {
+        return Err(no("bad_request", 400, format!("--only-keys: '{bad}' is not a node key fingerprint (64 lowercase hex)")));
+    }
+    Ok(Some(raw))
 }
 
 fn plan_set(ws: &Ws, v: &Value, run_id: &str) -> R<Planned> {
@@ -248,6 +267,13 @@ fn plan_set(ws: &Ws, v: &Value, run_id: &str) -> R<Planned> {
         let nodes = seat_nodes(&conn, &seat, &names);
         (seat, nodes)
     };
+    // `--only-keys` (BA-32): only the node keys the release signer accepted.
+    let mut nodes = nodes;
+    if let Some(keys) = only_keys_of(v)? {
+        for (sn, _) in nodes.iter_mut() {
+            rel::only_keys(std::slice::from_mut(sn), &keys);
+        }
+    }
     let mut local_names: HashMap<String, String> = HashMap::new();
     for (sn, row) in &nodes {
         if let Some(r) = row {
@@ -508,6 +534,7 @@ pub(crate) fn evidence(who: &Who, body: &[u8]) -> R<Value> {
         pairing_pins: pins,
         provenance: Some(provenance),
         roster_approvals: None,
+        reported: BTreeMap::new(),
     };
     bundle.check().map_err(|e| no(rcodes::RECEIPT, 409, format!("the evidence bundle doesn't check: {e}")))?;
     let trust_dir = crate::compute_provenance::trust_files(&rows.iter().collect::<Vec<_>>(), &opened.iter().collect::<Vec<_>>());
@@ -678,6 +705,33 @@ mod tests {
         let (code, why) = ev.match_files(&[("linux-x86_64".into(), "1".repeat(64)), ("darwin-aarch64".into(), "2".repeat(64))]).unwrap_err();
         assert_eq!(code, EVIDENCE_MISMATCH);
         assert!(why.contains("darwin-aarch64") && why.contains("rrrrrrrr"), "{why}");
+    }
+
+    #[test]
+    fn only_keys_reads_fingerprints_and_an_empty_list_means_none() {
+        let fp = "a".repeat(64);
+        assert_eq!(only_keys_of(&json!({})).unwrap(), None);
+        assert_eq!(only_keys_of(&json!({"onlyKeys": null})).unwrap(), None);
+        assert_eq!(only_keys_of(&json!({"onlyKeys": []})).unwrap(), Some(vec![]));
+        assert_eq!(only_keys_of(&json!({"onlyKeys": [fp]})).unwrap(), Some(vec![fp.clone()]));
+        assert_eq!(only_keys_of(&json!({"onlyKeys": format!("{fp}, {}", "b".repeat(64))})).unwrap().unwrap().len(), 2);
+        assert!(only_keys_of(&json!({"onlyKeys": ["k2n7-vin"]})).is_err());
+        assert!(only_keys_of(&json!({"onlyKeys": [1]})).is_err());
+        assert!(only_keys_of(&json!({"onlyKeys": true})).is_err());
+    }
+
+    #[test]
+    fn an_exclusive_build_asks_for_the_node_alone() {
+        let cfg = CiConfig::parse(
+            "version = 1\n[release]\nproject = \"acme\"\nowner = \"o.example\"\nlane = \"ci-standard\"\n[release.builds.linux-x86_64]\nargv = [\"bash\", \"b.sh\"]\nneeds = []\nartifacts = [\"dist/*\"]\nsecrets = [\"API\"]\nlabel = \"L1\"\nexclusive = true\n[release.builds.linux-app]\nargv = [\"bash\", \"a.sh\"]\nneeds = []\nartifacts = [\"dist/*\"]\nlabel = \"L3\"\n",
+        )
+        .unwrap();
+        let r = cfg.release.as_ref().unwrap();
+        let v = build_body("linux-x86_64", "L1", &r.builds["linux-x86_64"], &"c".repeat(40), &"d".repeat(40), "ci");
+        assert_eq!(v["exclusive"], true);
+        assert!(v["why"].as_str().unwrap().contains("linux-x86_64"), "{v}");
+        let a = build_body("linux-app", "L3", &r.builds["linux-app"], &"c".repeat(40), &"d".repeat(40), "ci");
+        assert!(a.get("exclusive").is_none() && a.get("why").is_none(), "{a}");
     }
 
     #[test]

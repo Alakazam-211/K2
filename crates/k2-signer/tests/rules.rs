@@ -750,3 +750,120 @@ fn signer_rules_on_policies() {
     let text = w.policy_text("not-a-key");
     assert!(k2_signer::policy::parse(&text, "acme-desktop").unwrap_err().message().contains("keys.updater.public"));
 }
+
+/// BA-32: with `ask`, a validly signed roster that lists two keys the
+/// signer's person never accepted (on two hosts, so the dual build would
+/// pass) is refused, naming both keys. The same evidence under `auto` is
+/// accepted, and the signing summary says so for each key.
+#[test]
+fn ask_names_every_key_a_person_has_not_accepted() {
+    let w = World::new();
+    let mut r = Run::new(&w);
+    r.accept = vec![];
+    let b = w.build(w.spec());
+    let e = r.go(&b).unwrap_err();
+    assert!(e.starts_with("roster_change_needs_person: "), "{e}");
+    for (label, node) in [("L1", "node-a"), ("V1", "node-b")] {
+        assert!(e.contains(&format!("{label}: node {node}'s key {}", &w.fp(node)[..16])), "{node} not named: {e}");
+    }
+    assert!(e.contains("roster-accept"), "{e}");
+    r.policy.roster_changes = Changes::Auto;
+    let s = r.go(&b).unwrap();
+    for node in ["node-a", "node-b"] {
+        assert!(
+            s.notes.iter().any(|n| n.contains("roster_changes = auto") && n.contains(&format!("node {node}'s key"))),
+            "no auto note for {node}: {:?}",
+            s.notes
+        );
+    }
+}
+
+/// `rust_pin = true`: a build that names no `rust@` need (it takes its
+/// toolchain from the commit's rust-toolchain.toml) must still have run the
+/// pinned rustc.
+#[test]
+fn rust_pin_without_a_rust_need() {
+    let w = World::new();
+    let mut r = Run::new(&w);
+    r.policy.build.get_mut("linux-x86_64").unwrap().needs = vec!["cmake@3".into()];
+    let spec = || {
+        let mut s = w.spec();
+        for rc in s.receipts.values_mut() {
+            rc.plan["needs"] = json!(["cmake@3"]);
+        }
+        s
+    };
+    let old = || {
+        let mut s = spec();
+        for rc in s.receipts.values_mut() {
+            rc.receipt.tools_used.insert("rustc".into(), "1.98.0".into());
+        }
+        s
+    };
+    // Without the key, nothing pins rustc for this build.
+    passes(&w, &r, old());
+    r.policy.build.get_mut("linux-x86_64").unwrap().rust_pin = true;
+    passes(&w, &r, spec());
+    refuses(&w, &r, old(), "the job's rustc was 1.98.0, the commit pins 1.99.1");
+    // A rehearsal takes the pin from the build receipts: the verify job must agree.
+    r.rehearse = true;
+    passes(&w, &r, spec());
+    let mut s = spec();
+    v1(&mut s).receipt.tools_used.insert("rustc".into(), "1.98.0".into());
+    refuses(&w, &r, s, "V1: the job's rustc was 1.98.0");
+}
+
+/// BA-10: `[build.<name>.reported]`: a job-written JSON file, carried in the
+/// bundle, must be the artifact in the job's signed receipt byte for byte
+/// and hold exactly the policy's values (the aarch64 cross toolchain
+/// hashes, ported from k2sign's check_cross_build_info).
+#[test]
+fn reported_file_rules() {
+    use k2_node_proto::results::ArtifactInfo;
+    use k2_node_proto::signer_policy::ReportedRule;
+    let w = World::new();
+    let mut r = Run::new(&w);
+    let want = "0".repeat(63) + "1";
+    r.policy.build.get_mut("linux-x86_64").unwrap().reported = Some(ReportedRule {
+        file: "dist/build-info.json".into(),
+        equals: BTreeMap::from([("/cross/zig_tarball_sha256".to_string(), want.clone())]),
+    });
+    let info = |zig: &str| format!("{{\"arch\":\"aarch64\",\"cross\":{{\"zig_tarball_sha256\":\"{zig}\"}}}}").into_bytes();
+    // Every job lists `listed` in its receipt; the bundle carries `carried`.
+    let spec = |listed: &[u8], carried: Option<&[u8]>| {
+        let mut s = w.spec();
+        let labels: Vec<String> = s.receipts.keys().cloned().collect();
+        for label in labels {
+            s.receipts.get_mut(&label).unwrap().receipt.artifacts.push(ArtifactInfo {
+                name: "dist/build-info.json".into(),
+                sha256: sha256_hex(listed),
+                bytes: listed.len() as u64,
+            });
+            if let Some(c) = carried {
+                s.reported.insert(label, BTreeMap::from([("dist/build-info.json".to_string(), c.to_vec())]));
+            }
+        }
+        s
+    };
+    let good = info(&want);
+    passes(&w, &r, spec(&good, Some(&good)));
+    refuses(&w, &r, spec(&good, None), "L1: the evidence carries no dist/build-info.json");
+    let mut s = spec(&good, Some(&good));
+    s.reported.remove("V1");
+    refuses(&w, &r, s, "V1: the evidence carries no dist/build-info.json");
+    let other = info(&"2".repeat(64));
+    refuses(&w, &r, spec(&good, Some(&other)), "L1: the evidence's dist/build-info.json is not the one in its signed receipt");
+    refuses(&w, &r, spec(&other, Some(&other)), "L1: dist/build-info.json says /cross/zig_tarball_sha256 = \"222222222222");
+    let missing = b"{\"arch\":\"aarch64\"}".to_vec();
+    refuses(&w, &r, spec(&missing, Some(&missing)), "L1: dist/build-info.json has no string at /cross/zig_tarball_sha256");
+    refuses(&w, &r, spec(b"not json", Some(b"not json")), "L1: dist/build-info.json is not JSON");
+    // The signed receipt doesn't list the file at all.
+    let mut s = w.spec();
+    for label in ["L1", "V1"] {
+        s.reported.insert(label.into(), BTreeMap::from([("dist/build-info.json".to_string(), good.clone())]));
+    }
+    refuses(&w, &r, s, "L1: the signed receipt lists no dist/build-info.json");
+    // A build without the rule ignores a carried file.
+    r.policy.build.get_mut("linux-x86_64").unwrap().reported = None;
+    passes(&w, &r, spec(&good, Some(&other)));
+}

@@ -5,54 +5,147 @@
 #       --stall-timeout off --needs rust@<pin>,cmake@3,cargo-nextest \
 #       -- bash scripts/ci/mac-tests.sh
 #
-# What runs, in one nextest run: all of k2-core and k2-ptyd, and k2-node
-# without the test files that apply a macOS sandbox themselves (a compute
-# job already runs inside one; see scripts/ci/k2-node-mac-tests.sh, whose
-# `filter walled` is used here and whose `check` runs first).
+# Two stages, each with its own `mac-tests:` summary line:
 #
-# It prints the counts, names every failed test, and exits non-zero when
-# any test failed, when a step before the tests failed, or when the run
-# printed no summary. The whole log stays in ./mac-tests.log.
+#   core     all of k2-core and k2-ptyd, and k2-node without the test
+#            files that apply a macOS sandbox themselves (a compute job
+#            already runs inside one; see scripts/ci/k2-node-mac-tests.sh,
+#            whose `filter walled` is used and whose `check` runs first).
+#            One nextest run.
+#   daemon   k2-daemon, one test binary per cargo call and one crate built
+#            at a time: its test binaries are too big to link side by side
+#            on an 8 GB node. Slow. The helper programs its tests start
+#            (k2-ptyd and the renderers) are built first. A test target
+#            behind a feature that is off by default is named, not run.
+#
+#   mac-tests.sh           both stages; the second runs even if the first failed
+#   mac-tests.sh core      one stage
+#   mac-tests.sh daemon
+#
+# Each stage prints its counts and names every failed test. The script
+# exits non-zero when any test failed, when a step before the tests
+# failed, when a run printed no summary, or when counts don't add up. The
+# whole logs stay in ./mac-tests-core.log and ./mac-tests-daemon.log.
 #
 # It refuses to run outside a compute job: cargo never runs on a person's
 # Mac (the full k2-core tests ask for Touch ID and the keychain there).
 #
-# The Mac nodes have 8 GB: debug info is off and cargo builds two crates
-# at a time unless CARGO_BUILD_JOBS says otherwise.
+# The Mac nodes have 8 GB: debug info is off, and cargo builds two crates
+# at a time in `core` and one in `daemon`, unless CARGO_BUILD_JOBS says
+# otherwise.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-[ $# -eq 0 ] || { echo "mac-tests: takes no arguments" >&2; exit 2; }
+case "$#:${1-}" in
+    0:) stages="core daemon" ;;
+    1:core|1:daemon) stages="$1" ;;
+    *) echo "usage: mac-tests.sh [core|daemon]" >&2; exit 2 ;;
+esac
 [ "$(uname -s)" = Darwin ] || { echo "mac-tests: this is the macOS run; this machine is $(uname -s)" >&2; exit 2; }
 [ -n "${K2_JOB_CPUS:-}" ] || { echo "mac-tests: not in a K2 Compute job (no K2_JOB_CPUS). Start it with k2 compute run on a Mac node; cargo never runs on a person's Mac." >&2; exit 2; }
 
 export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
-LOG="$ROOT/mac-tests.log"
+# Packages whose binaries k2-daemon's tests look for beside the test
+# binary (each test names its own with "cargo build -p …" when missing).
+DAEMON_HELPERS="k2-ptyd k2-deckrender k2-scenerender"
+JOBS_SET="${CARGO_BUILD_JOBS:-}"
 
-echo "mac-tests: checking the k2-node Mac wall list"
-bash scripts/ci/k2-node-mac-tests.sh check
-listed="$(bash scripts/ci/k2-node-mac-tests.sh filter unwalled)"
-# Everything in the three crates, but not k2-node's listed test files.
-filter="not (package(k2-node) & ($listed))"
+# One number out of a nextest summary line: `count "<line>" passed`.
+count() { echo "$1" | sed -nE "s/.*[^0-9]([0-9]+) $2.*/\1/p"; }
+failed_lines() { grep -E '^ +(FAIL|SIGABRT|SIGSEGV|TIMEOUT|LEAK-FAIL)' "$1" | sed -E 's/^ +//; s/\[ *[0-9.]+s\] \([ 0-9/]+\) //' | sort -u || true; }
 
-echo "mac-tests: cargo nextest run -p k2-core -p k2-ptyd -p k2-node -E '$filter'"
-rc=0
-cargo nextest run --locked --no-fail-fast -p k2-core -p k2-ptyd -p k2-node -E "$filter" > "$LOG" 2>&1 || rc=$?
+# Runs one nextest call into $2 and adds its counts to the stage's
+# totals. Returns 1 when that call is not clean.
+t_run=0; t_passed=0; t_failed=0; t_skipped=0
+one_run() {
+    local what="$1" log="$2" rc=0 summary run passed failed skipped; shift 2
+    cargo nextest run --locked --no-fail-fast "$@" >> "$log" 2>&1 || rc=$?
+    # nextest's own word for a binary with no tests (exit 4) is not a failure.
+    if [ "$rc" = 4 ] && grep -q 'no tests to run' "$log"; then return 0; fi
+    summary="$(grep -E '^ +Summary \[' "$log" | tail -1 || true)"
+    if [ -z "$summary" ]; then
+        echo "mac-tests: FAILED: $what: no test summary (cargo exit $rc). The end of the log:" >&2
+        tail -40 "$log" >&2
+        return 1
+    fi
+    run="$(count "$summary" 'tests? run')"; passed="$(count "$summary" passed)"
+    failed="$(count "$summary" failed)"; skipped="$(count "$summary" skipped)"
+    t_run=$((t_run + ${run:-0})); t_passed=$((t_passed + ${passed:-0}))
+    t_failed=$((t_failed + ${failed:-0})); t_skipped=$((t_skipped + ${skipped:-0}))
+    if [ "$rc" != 0 ] || [ "${failed:-0}" != 0 ]; then
+        echo "mac-tests: FAILED: $what (cargo exit $rc). Failed tests:" >&2
+        failed_lines "$log" >&2
+        return 1
+    fi
+    [ -n "$run" ] && [ "$run" = "$passed" ] || { echo "mac-tests: FAILED: $what: the counts don't add up: $summary" >&2; return 1; }
+}
 
-summary="$(grep -E '^ +Summary \[' "$LOG" | tail -1 || true)"
-if [ -z "$summary" ]; then
-    echo "mac-tests: FAILED: no test summary (cargo exit $rc). The end of the log:" >&2
-    tail -40 "$LOG" >&2
-    exit 1
-fi
-count() { echo "$summary" | sed -nE "s/.*[^0-9]([0-9]+) $1.*/\1/p"; }
-run="$(count 'tests? run')"; passed="$(count passed)"; failed="$(count failed)"; skipped="$(count skipped)"
-echo "mac-tests: ${run:-?} run, ${passed:-0} passed, ${failed:-0} failed, ${skipped:-0} skipped"
-if [ "$rc" != 0 ] || [ "${failed:-0}" != 0 ]; then
-    echo "mac-tests: FAILED (cargo exit $rc). Failed tests:" >&2
-    grep -E '^ +(FAIL|SIGABRT|SIGSEGV|TIMEOUT|LEAK-FAIL)' "$LOG" | sed -E 's/^ +//; s/\[ *[0-9.]+s\] \([ 0-9/]+\) //' | sort -u >&2 || true
-    exit 1
-fi
-[ -n "$run" ] && [ "$run" = "$passed" ] || { echo "mac-tests: FAILED: the counts don't add up: $summary" >&2; exit 1; }
+stage_core() {
+    local log="$ROOT/mac-tests-core.log" listed filter
+    : > "$log"
+    export CARGO_BUILD_JOBS="${JOBS_SET:-2}"
+    echo "mac-tests: checking the k2-node Mac wall list"
+    bash scripts/ci/k2-node-mac-tests.sh check || return 1
+    listed="$(bash scripts/ci/k2-node-mac-tests.sh filter unwalled)" || return 1
+    # Everything in the three crates, but not k2-node's listed test files.
+    filter="not (package(k2-node) & ($listed))"
+    echo "mac-tests: core: cargo nextest run -p k2-core -p k2-ptyd -p k2-node -E '$filter'"
+    one_run "core" "$log" -p k2-core -p k2-ptyd -p k2-node -E "$filter"
+}
+
+stage_daemon() {
+    local log bad=0 targets kind name
+    export CARGO_BUILD_JOBS="${JOBS_SET:-1}"
+    : > "$ROOT/mac-tests-daemon.log"
+    # Every test target of k2-daemon: its library, its binaries, and each
+    # integration test, as cargo itself lists them.
+    targets="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
+import json, sys
+for p in json.load(sys.stdin)["packages"]:
+    if p["name"] != "k2-daemon":
+        continue
+    for t in sorted(p["targets"], key=lambda t: t["name"]):
+        if not t.get("test", True):
+            continue
+        for kind in ("lib", "bin", "test"):
+            if kind in t["kind"]:
+                # A target behind a feature that is off by default is not
+                # in a plain build; cargo refuses to test it. It is named.
+                need = ",".join(t.get("required-features") or [])
+                print("off" if need else kind, t["name"], need)
+')" || { echo "mac-tests: FAILED: daemon: could not list k2-daemon's test targets" >&2; return 1; }
+    [ -n "$targets" ] || { echo "mac-tests: FAILED: daemon: k2-daemon has no test targets" >&2; return 1; }
+    echo "mac-tests: daemon: $(echo "$targets" | grep -vc '^off ') test binaries of k2-daemon, one cargo call each"
+    # The helpers k2-daemon's tests start as programs of their own.
+    log="$ROOT/mac-tests-daemon.log"
+    echo "mac-tests: daemon: building the helper binaries the tests start ($DAEMON_HELPERS)"
+    for helper in $DAEMON_HELPERS; do
+        cargo build --locked -p "$helper" >> "$log" 2>&1 || { echo "mac-tests: FAILED: daemon: cargo build -p $helper. The end of the log:" >&2; tail -40 "$log" >&2; return 1; }
+    done
+    while read -r kind name need; do
+        log="$ROOT/mac-tests-daemon.part.log"
+        : > "$log"
+        case "$kind" in
+            lib) one_run "daemon: the library" "$log" -p k2-daemon --lib || bad=1 ;;
+            bin) one_run "daemon: binary $name" "$log" -p k2-daemon --bin "$name" || bad=1 ;;
+            test) one_run "daemon: $name" "$log" -p k2-daemon --test "$name" || bad=1 ;;
+            off) echo "mac-tests: daemon: not run, its feature is off in this build: $name (needs $need)" ;;
+        esac
+        cat "$log" >> "$ROOT/mac-tests-daemon.log"
+    done <<EOF
+$targets
+EOF
+    rm -f "$ROOT/mac-tests-daemon.part.log"
+    return "$bad"
+}
+
+red=0
+for stage in $stages; do
+    t_run=0; t_passed=0; t_failed=0; t_skipped=0
+    ok=1
+    "stage_$stage" || ok=0
+    echo "mac-tests: $stage: $t_run run, $t_passed passed, $t_failed failed, $t_skipped skipped"
+    if [ "$ok" = 1 ]; then echo "mac-tests: $stage: ok"; else echo "mac-tests: $stage: FAILED" >&2; red=1; fi
+done
+[ "$red" = 0 ] || exit 1
 echo "mac-tests: ok"

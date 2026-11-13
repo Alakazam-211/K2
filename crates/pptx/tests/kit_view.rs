@@ -1,18 +1,18 @@
-//! The kit's view index of a deck (the rendering contract's gaps 1, 2 and 3: the pack's view
-//! schema, addresses, and the kit's `ViewIndex` built from it) against the contract's hand-made
-//! golden `index-rev40.json`, field by field, and the blob tier's index against the live one.
+//! The kit's view index of a deck (the pack's view schema, addresses, and the kit's `ViewIndex`
+//! built from it) against the hand-made golden `index-rev40.json`, field by field, and the blob
+//! tier's index against the live one.
 //!
 //! On the live tier the pack reads what only the file's bytes hold (fonts, render hashes, field
-//! kinds, inherited boxes, a group's children: the contract's gaps 4, 5 and 6) from the carrier
-//! the kit hands its derive hook (`live::view_derive`), so the live index is the golden with no
-//! gap listed ([`LIVE_KNOWN`] is empty; render hashes are compared as the golden's labels: one
-//! hash per label, and a different one per label). The blob tier reads the version's structure
-//! index, whose view items (the kit's row format 2) the index reader works out with the same
-//! code (`index::draft`, through `view::read_open`), so it gives the live tier's index with no
-//! gap listed either ([`BLOB_KNOWN`] is empty; render hashes as labels on both tiers, since each
-//! tier keys them under its own key, and the raw digests are checked to be the pack's view's).
-//! Any other difference fails a row, and so does a listed one that no longer shows (the lists
-//! are kept exact). Where the golden itself is the odd one out, [`GOLDEN_DISAGREE`] says so.
+//! kinds, inherited boxes, a group's children) from the carrier the kit hands its derive hook
+//! (`live::view_derive`), so the live index is the golden with no gap listed ([`LIVE_KNOWN`] is
+//! empty; render hashes are compared as the golden's labels: one hash per label, and a different
+//! one per label). The blob tier reads the version's structure index, whose view items (the kit's
+//! row format 2) the index reader works out with the same code (`index::draft`, through
+//! `view::read_open`), so it gives the live tier's index with no gap listed either ([`BLOB_KNOWN`]
+//! is empty; render hashes as labels on both tiers, since each tier keys them under its own key,
+//! and the raw digests are checked to be the pack's view's). Any other difference fails a row, and
+//! so does a listed one that no longer shows (the lists are kept exact). Where the golden itself is
+//! the odd one out, [`GOLDEN_DISAGREE`] says so.
 //!
 //! The carrier's rows: N reads of an unchanged deck decode the carrier zero times, a group the
 //! store moved moves its children (as the pack's view of the written file places them), and a
@@ -107,8 +107,8 @@ fn as_labels(got: &mut Json, want: &Json) {
 /// `golden_disagreements_are_listed`.
 pub const GOLDEN_DISAGREE: &[(&str, &str)] = &[(
     "units[*].approx_box",
-    "the golden's units leave out `approx_box` (Item 1 lists it on every unit, and the cases \
-     give it); the kit's index carries it, false on this deck",
+    "the golden's units leave out `approx_box` (the view index has it on every unit, and \
+     the cases give it); the kit's index carries it, false on this deck",
 )];
 
 /// Every place two JSON values differ, by path, each once: the golden's (`want`) fields only

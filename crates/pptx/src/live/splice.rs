@@ -19,7 +19,7 @@
 //! **Counts** ([`take_counts`], test-only: the `testgen` feature): the package opens, carrier
 //! decodes and read-back guards of this thread's calls, so a row can hold the one pass.
 //!
-//! **The carrier** is handed in by the kit's carrier hook (K1): the bytes the kit last read
+//! **The carrier** is handed in by the kit's carrier hook: the bytes the kit last read
 //! from the file or wrote to it, kept in its store. [`encode_from`] decodes it itself, so the
 //! content it diffs against is always the carrier's own.
 

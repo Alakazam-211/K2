@@ -1,7 +1,6 @@
-//! The pack's view index (the rendering-data contract r1.4, Item 1) against the contract's
-//! hand-made goldens: geometry (gap 4), fonts, field kinds and generic names (gap 6), layouts
-//! and placeholder types (gap 28). The rows live in `common/view_rows.rs`, so the planted
-//! faults in `tests/mutants.rs` run the same ones.
+//! The pack's view index (what a host's renderer reads) against the hand-made goldens:
+//! geometry, fonts, field kinds and generic names, layouts and placeholder types. The rows live
+//! in `common/view_rows.rs`, so the planted faults in `tests/mutants.rs` run the same ones.
 
 mod common;
 

@@ -1,18 +1,17 @@
-//! M1, a measurement of a live deck's costs: heap, verb p99 and `slide show` time on a live deck of
-//! 2,500 shapes (50 slides of 50 text boxes), through the kit's session; then the kit's
-//! memory estimate and the write-back's time (the one rendering per sync point, through the
-//! carrier hook K1); then one-element list changes, `shape add`, `shape order` and `shape
-//! delete`, p50 and p99 of the verb alone (the deck ends with the shapes it started with); and
-//! the view index with the carrier's items (the first read, unchanged reads, reads after a
-//! move). A
-//! measurement, not a row: run it on a node in a release build,
-//! `cargo test --release -p k2-mpc-pptx --test m1 -- --ignored --nocapture`; `M1_SLIDES=N`
-//! measures a deck of N slides of 50 text boxes instead. It feeds the keyed limit (25,000
-//! elements and fields is the kit's provisional default).
+//! A measurement of a live deck's costs: heap, verb p99 and `slide show` time on a live deck of
+//! 2,500 shapes (50 slides of 50 text boxes), through the kit's session; then the kit's memory
+//! estimate and the write-back's time (the one rendering per sync point, through the carrier hook);
+//! then one-element list changes, `shape add`, `shape order` and `shape delete`, p50 and p99 of the
+//! verb alone (the deck ends with the shapes it started with); and the view index with the
+//! carrier's items (the first read, unchanged reads, reads after a move). A measurement, not a row:
+//! run it on a node in a release build,
+//! `cargo test --release -p k2-mpc-pptx --test measure -- --ignored --nocapture`;
+//! `MEASURE_SLIDES=N` measures a deck of N slides of 50 text boxes instead. It feeds the keyed
+//! limit (25,000 elements and fields is the kit's provisional default).
 //!
 //! Heap is counted by this test binary's own allocator (bytes live, and the peak).
 //!
-//! **Phases** (`M1 phase:` lines, last): where a call's time goes, by phase timers around the
+//! **Phases** (`measure phase:` lines, last): where a call's time goes, by phase timers around the
 //! pack's own parts run outside the kit (no kit code changed): a verb's closure on a view of
 //! the same content (the rest of the call is the kit's), a full copy of that content into a
 //! view (what a view of every root costs), and the write-back's parts (the carrier's decode,
@@ -70,9 +69,9 @@ static ALLOC: Counting = Counting;
 
 const PER_SLIDE: u32 = 50;
 
-/// Slides in the deck: 50, or `M1_SLIDES`.
+/// Slides in the deck: 50, or `MEASURE_SLIDES`.
 fn slides() -> u32 {
-    std::env::var("M1_SLIDES")
+    std::env::var("MEASURE_SLIDES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
@@ -118,7 +117,7 @@ fn mib(b: usize) -> f64 {
 
 #[test]
 #[ignore = "a measurement: run on a node, release build"]
-fn m1_heap_verb_p99_and_slide_show() {
+fn measure_heap_verb_p99_and_slide_show() {
     let n_slides = slides();
     let bytes = deck();
     let d = model::read(&bytes, &common::limits()).expect("the deck reads");
@@ -126,11 +125,11 @@ fn m1_heap_verb_p99_and_slide_show() {
     let entries = d.entries();
     drop(d);
     println!(
-        "M1: deck {} slides, {shapes} shapes, {entries} elements and fields, file {} bytes",
+        "measure: deck {} slides, {shapes} shapes, {entries} elements and fields, file {} bytes",
         n_slides,
         bytes.len()
     );
-    let f = fx("m1", |c| c.keyed_max_entries = 1_000_000);
+    let f = fx("measure", |c| c.keyed_max_entries = 1_000_000);
     f.write(&bytes);
     let base = LIVE.load(Ordering::Relaxed);
     PEAK.store(base, Ordering::Relaxed);
@@ -140,7 +139,7 @@ fn m1_heap_verb_p99_and_slide_show() {
     let open_ms = t.elapsed().as_secs_f64() * 1000.0;
     let after_open = LIVE.load(Ordering::Relaxed);
     println!(
-        "M1: open live {open_ms:.1} ms, heap after open {:.1} MiB over the baseline (peak {:.1} MiB)",
+        "measure: open live {open_ms:.1} ms, heap after open {:.1} MiB over the baseline (peak {:.1} MiB)",
         mib(after_open.saturating_sub(base)),
         mib(PEAK.load(Ordering::Relaxed).saturating_sub(base))
     );
@@ -170,13 +169,13 @@ fn m1_heap_verb_p99_and_slide_show() {
         assert_eq!(o.exit, 0, "{}", String::from_utf8_lossy(&o.stdout));
     }
     println!(
-        "M1: shape move (the verb alone), 500 calls: p50 {:.3} ms, p99 {:.3} ms, max {:.3} ms",
+        "measure: shape move (the verb alone), 500 calls: p50 {:.3} ms, p99 {:.3} ms, max {:.3} ms",
         pct(&mut verb, 0.5),
         pct(&mut verb, 0.99),
         pct(&mut verb, 1.0)
     );
     println!(
-        "M1: the agent's read before each (slide list --limit 1, a keyed read: since the kit's K1 it renders nothing), 500 calls: p50 {:.3} ms, p99 {:.3} ms",
+        "measure: the agent's read before each (slide list --limit 1, a keyed read: since the kit keeps the carrier it renders nothing), 500 calls: p50 {:.3} ms, p99 {:.3} ms",
         pct(&mut read, 0.5),
         pct(&mut read, 0.99)
     );
@@ -189,7 +188,7 @@ fn m1_heap_verb_p99_and_slide_show() {
         assert_eq!(o.exit, 0);
     }
     println!(
-        "M1: slide show (50 shapes), 100 calls: p50 {:.3} ms, p99 {:.3} ms",
+        "measure: slide show (50 shapes), 100 calls: p50 {:.3} ms, p99 {:.3} ms",
         pct(&mut show, 0.5),
         pct(&mut show, 0.99)
     );
@@ -228,7 +227,7 @@ fn m1_heap_verb_p99_and_slide_show() {
         rebuilt.push(t.elapsed().as_secs_f64() * 1000.0);
     }
     println!(
-        "M1: view index (with the carrier's items): the first read (the carrier decoded) {first_ms:.1} ms; 100 unchanged reads (kept) p50 {:.3} ms, p99 {:.3} ms; 50 reads each after a move (built from the kept decode) p50 {:.1} ms, p99 {:.1} ms",
+        "measure: view index (with the carrier's items): the first read (the carrier decoded) {first_ms:.1} ms; 100 unchanged reads (kept) p50 {:.3} ms, p99 {:.3} ms; 50 reads each after a move (built from the kept decode) p50 {:.1} ms, p99 {:.1} ms",
         pct(&mut kept, 0.5),
         pct(&mut kept, 0.99),
         pct(&mut rebuilt, 0.5),
@@ -236,14 +235,14 @@ fn m1_heap_verb_p99_and_slide_show() {
     );
     let now = LIVE.load(Ordering::Relaxed);
     println!(
-        "M1: heap after 500 moves and 100 shows {:.1} MiB over the baseline (peak {:.1} MiB)",
+        "measure: heap after 500 moves and 100 shows {:.1} MiB over the baseline (peak {:.1} MiB)",
         mib(now.saturating_sub(base)),
         mib(PEAK.load(Ordering::Relaxed).saturating_sub(base))
     );
     // the kit's own memory estimate (what its pool budgets loaded docs by)
     let est = s.status().expect("status").estimated_bytes as usize;
     println!(
-        "M1: the kit's memory estimate for the doc {:.1} MiB ({entries} elements and fields)",
+        "measure: the kit's memory estimate for the doc {:.1} MiB ({entries} elements and fields)",
         mib(est)
     );
     // the write-back: one rendering per sync point, the moves since spliced into the carrier
@@ -251,7 +250,7 @@ fn m1_heap_verb_p99_and_slide_show() {
     let fl = s.flush(a).expect("the write-back");
     let first_ms = t.elapsed().as_secs_f64() * 1000.0;
     assert!(fl.written, "the 500 moves are written");
-    println!("M1: write-back (flush) of the 500 moves: {first_ms:.1} ms");
+    println!("measure: write-back (flush) of the 500 moves: {first_ms:.1} ms");
     for per in [1u32, 10, 50] {
         let mut wb = Vec::new();
         for r in 0..5u32 {
@@ -280,7 +279,7 @@ fn m1_heap_verb_p99_and_slide_show() {
             wb.push(t.elapsed().as_secs_f64() * 1000.0);
         }
         println!(
-            "M1: write-back (flush) after {per} moves, 5 rounds: p50 {:.1} ms, max {:.1} ms",
+            "measure: write-back (flush) after {per} moves, 5 rounds: p50 {:.1} ms, max {:.1} ms",
             pct(&mut wb, 0.5),
             pct(&mut wb, 1.0)
         );
@@ -292,7 +291,7 @@ fn m1_heap_verb_p99_and_slide_show() {
     );
     let now = LIVE.load(Ordering::Relaxed);
     println!(
-        "M1: heap after the write-backs and the list changes {:.1} MiB over the baseline (peak {:.1} MiB)",
+        "measure: heap after the write-backs and the list changes {:.1} MiB over the baseline (peak {:.1} MiB)",
         mib(now.saturating_sub(base)),
         mib(PEAK.load(Ordering::Relaxed).saturating_sub(base))
     );
@@ -325,7 +324,7 @@ fn list_changes(s: &Session, a: ConnId, n_slides: u32) {
     // one bracket per line: the verb, timed alone, and what each call does
     let line = |what: &str, how: &str, v: &mut Vec<f64>| {
         println!(
-            "M1: {what} (the verb alone; {how}), {} calls: p50 {:.3} ms, p99 {:.3} ms, max {:.3} ms",
+            "measure: {what} (the verb alone; {how}), {} calls: p50 {:.3} ms, p99 {:.3} ms, max {:.3} ms",
             v.len(),
             pct(v, 0.5),
             pct(v, 0.99),
@@ -431,7 +430,7 @@ fn phases(content: &[(String, Neutral)], carrier: &[u8]) {
         std::hint::black_box(go(&ctx).is_ok());
     });
     println!(
-        "M1 phase: the pack's closure of slide list --limit 1 on a view of the content (ok: {ok:?}), 200 calls: p50 {p50:.3} ms, p99 {p99:.3} ms"
+        "measure phase: the pack's closure of slide list --limit 1 on a view of the content (ok: {ok:?}), 200 calls: p50 {p50:.3} ms, p99 {p99:.3} ms"
     );
     let mv_args = |i: usize| args(&["@sld:256/sp:2", "--x", &(7_000 + i).to_string()]);
     let ok = mv.parse_structured(&mv_args(0)).map(|go| go(&ctx).is_ok());
@@ -440,26 +439,26 @@ fn phases(content: &[(String, Neutral)], carrier: &[u8]) {
         std::hint::black_box(go(&ctx).is_ok());
     });
     println!(
-        "M1 phase: the pack's closure of shape move (its ops, not applied) on a view of the content (ok: {ok:?}), 200 calls: p50 {p50:.3} ms, p99 {p99:.3} ms"
+        "measure phase: the pack's closure of shape move (its ops, not applied) on a view of the content (ok: {ok:?}), 200 calls: p50 {p50:.3} ms, p99 {p99:.3} ms"
     );
     let (p50, p99) = timed(50, |_| {
         std::hint::black_box(View::of_content(content));
     });
     println!(
-        "M1 phase: a full copy of the content into a view (every root), 50 calls: p50 {p50:.3} ms, p99 {p99:.3} ms"
+        "measure phase: a full copy of the content into a view (every root), 50 calls: p50 {p50:.3} ms, p99 {p99:.3} ms"
     );
     let (p50, p99) = timed(10, |_| {
         std::hint::black_box(model::read(carrier, &limits).expect("the carrier reads"));
     });
     println!(
-        "M1 phase: the carrier's decode (model::read, once per write-back), 10 calls: p50 {p50:.1} ms, p99 {p99:.1} ms"
+        "measure phase: the carrier's decode (model::read, once per write-back), 10 calls: p50 {p50:.1} ms, p99 {p99:.1} ms"
     );
     let (p50, _) = timed(5, |_| {
         let out = splice::encode_from(carrier, content, CODEC, &limits).expect("untouched");
         assert_eq!(out.len(), carrier.len());
     });
     println!(
-        "M1 phase: the splice, untouched (decode, compare, the carrier back), 5 calls: p50 {p50:.1} ms"
+        "measure phase: the splice, untouched (decode, compare, the carrier back), 5 calls: p50 {p50:.1} ms"
     );
     let live = LiveDeck::from_content(content).expect("the content reads");
     for k in [1usize, 10, 50] {
@@ -481,7 +480,7 @@ fn phases(content: &[(String, Neutral)], carrier: &[u8]) {
             splice::encode_from(carrier, &to, CODEC, &limits).expect("the splice");
         });
         println!(
-            "M1 phase: the splice of {k} changed shapes (decode, one step each, the read-back guard), 3 calls: p50 {p50:.1} ms"
+            "measure phase: the splice of {k} changed shapes (decode, one step each, the read-back guard), 3 calls: p50 {p50:.1} ms"
         );
     }
 }

@@ -1,6 +1,6 @@
-//! What a live deck's view index reads from the carrier (the rendering contract's gaps 4, 5 and
-//! 6 on the live tier): the items only the file's bytes hold, derived on the kit's index through
-//! the kit's carrier hand-off (`ViewSource::Live(state, Some(carrier))`).
+//! What a live deck's view index reads from the carrier (the geometry, render hash, fonts and
+//! field kinds on the live tier): the items only the file's bytes hold, derived on the kit's
+//! index through the kit's carrier hand-off (`ViewSource::Live(state, Some(carrier))`).
 //!
 //! - **Read once per carrier:** the carrier is decoded into the pack's own read of the deck
 //!   ([`crate::view::DeckRead`]: every shape as the file holds it, each slide's render digest)
@@ -17,8 +17,8 @@
 //! from the carrier come:
 //!
 //! - **a group's children** (`live: false`), placed from the group's **live** box with the
-//!   carrier's child space (`chOff`, `chExt`) and the children's own transforms (contract Item 1,
-//!   steps 1 to 8, the true centre): a group the store moved or resized moves or scales them;
+//!   carrier's child space (`chOff`, `chExt`) and the children's own transforms (the true
+//!   centre): a group the store moved or resized moves or scales them;
 //! - **the box a placeholder inherits** from its layout (else its master), when the store holds
 //!   none (`bbox_inherited`); a placeholder the store gave a box has that box;
 //! - **field kinds** (`fields`, `has_fields`), and a slide number's text at the slide's live
@@ -27,12 +27,15 @@
 //!   store changed keeps its style's and its first run's format (what `shape text` writes); a
 //!   shape the carrier doesn't hold (a text box added live, a new slide's placeholder) takes its
 //!   layout's defaults;
-//! - **the render hash** (as the rendering contract specifies: over the written bytes): a slide the store didn't change as
+//! - **the render hash** (over the written bytes): a slide the store didn't change as
 //!   drawn (its shapes, hidden and layout; its position too when it shows a slide number) has
 //!   the carrier's render digest, which is the written bytes' (the splice leaves its closure
 //!   untouched); any other is hashed over the carrier's id and the slide as the store holds it,
 //!   so it changes with every change that changes the drawing and becomes the written bytes'
 //!   digest once the kit's write makes them the carrier.
+// The kit's view structs are built with `..X::default()` (k2-mpc-base CHANGELOG): the kit
+// adds fields to them, and the update is what keeps a new one from breaking the build.
+#![allow(clippy::needless_update)]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -136,6 +139,7 @@ fn kit_font(f: &FontUse) -> kv::FontUse {
         script: f.script.to_owned(),
         from: f.from.to_owned(),
         embedded: f.embedded,
+        ..kv::FontUse::default()
     }
 }
 
@@ -156,28 +160,33 @@ fn kit_unit(u: &view::Unit) -> kv::Unit {
             y: b.y,
             w: b.w,
             h: b.h,
+            ..kv::Bbox::default()
         }),
         bbox_inherited: u.bbox_inherited,
         rot: u.rot,
         flip: kv::Flip {
             h: u.flip_h,
             v: u.flip_v,
+            ..kv::Flip::default()
         },
         approx_box: u.approx_box,
         text: u.text.as_ref().map(|t| kv::UnitText {
             summary: t.summary.clone(),
             truncated: t.truncated,
+            ..kv::UnitText::default()
         }),
         fields: u.fields.iter().map(|s| (*s).to_owned()).collect(),
         hidden: u.hidden,
         placeholder: u.placeholder.as_ref().map(|p| kv::Placeholder {
             ty: p.ty.clone(),
             idx: p.idx.clone(),
+            ..kv::Placeholder::default()
         }),
         editable_text: Some(match u.editable_text {
             true => EditableText::Plain,
             false => EditableText::Never,
         }),
+        ..kv::Unit::default()
     }
 }
 
@@ -189,9 +198,14 @@ fn inherit(u: &mut kv::Unit, x: Xf) {
         y: p.y,
         w: p.w,
         h: p.h,
+        ..kv::Bbox::default()
     });
     u.rot = p.rot;
-    u.flip = kv::Flip { h: p.fh, v: p.fv };
+    u.flip = kv::Flip {
+        h: p.fh,
+        v: p.fv,
+        ..kv::Flip::default()
+    };
     u.approx_box = p.approx;
     u.bbox_inherited = true;
 }
@@ -353,6 +367,7 @@ pub fn derive(state: &KeyedState, carrier: &ViewCarrier, index: &mut ViewIndex, 
                             u.text = Some(kv::UnitText {
                                 summary: t.summary,
                                 truncated: t.truncated,
+                                ..kv::UnitText::default()
                             });
                         }
                     }

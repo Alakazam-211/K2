@@ -27,7 +27,7 @@
 //! it, so `slide delete` is refused).
 //!
 //! **Deck fields:** `cx`, `cy`, `sections`, `notes_master`, the id marks and each layout's
-//! facts. The marks (**B1**): `mark/sld` is the highest `sldId` the file showed, and
+//! facts. The marks: `mark/sld` is the highest `sldId` the file showed, and
 //! `mark/fid/<sldId>` the highest `cNvPr` id anywhere in that slide's part (**the whole shape
 //! tree**, a group's children and the tree's own id included). A live verb mints a new id one
 //! past the higher of the mark and every id the store holds for that slide, live or deleted,

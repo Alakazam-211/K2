@@ -1,7 +1,7 @@
-//! The carrier through the kit (K1): the bytes a live deck is spliced into are the ones the kit
+//! The carrier through the kit: the bytes a live deck is spliced into are the ones the kit
 //! last read from the file or wrote to it, kept in the kit's store, so they survive a restart.
 //!
-//! - F5 through the kit: an untouched live deck writes back byte for byte, by the kit's
+//! - through the kit: an untouched live deck writes back byte for byte, by the kit's
 //!   write-back, before and after a restart;
 //! - after a restart, a verb writes back by splicing into the kit's stored carrier, with no
 //!   read of the file (the doc opened from the store alone renders it);
@@ -93,20 +93,20 @@ fn reopen(row: &str, f: &Fx, when: &str) -> Result<std::sync::Arc<Session>, Stri
         .map_err(|e| format!("{row}: {when}, the deck didn't open live again: {e}"))
 }
 
-// ---------- F5 through the kit ----------
+// ---------- untouched, through the kit ----------
 
-/// F5 through the kit: every fixture (stored and deflated) opened live renders as its file
+/// Untouched, through the kit: every fixture (stored and deflated) opened live renders as its file
 /// byte for byte and the write-back leaves the file; on the sample deck, a change put back is
 /// written back as the file byte for byte, before and after a restart.
-fn row_f5_through_the_kits_write_back() -> Result<(), String> {
-    const ROW: &str = "row_f5_through_the_kits_write_back";
+fn row_untouched_through_the_kits_write_back() -> Result<(), String> {
+    const ROW: &str = "row_untouched_through_the_kits_write_back";
     for (name, spec) in common::specs() {
         let parts = testgen::parts(&spec);
         for (layout, bytes) in [
             ("stored", testgen::stored_zip(&parts)),
             ("deflated", deflated(&parts)),
         ] {
-            let f = fx("k1-f5", |_| {});
+            let f = fx("untouched", |_| {});
             f.write(&bytes);
             let s = f
                 .try_open()
@@ -126,7 +126,7 @@ fn row_f5_through_the_kits_write_back() -> Result<(), String> {
         }
     }
     let bytes = testgen::deck(&testgen::sample());
-    let mut f = fx("k1-f5-back", |_| {});
+    let mut f = fx("put-back", |_| {});
     f.write(&bytes);
     let put_back = |f: &Fx, s: &Session, when: &str| -> Result<(), String> {
         let a = f.agent(s);
@@ -170,8 +170,8 @@ fn row_f5_through_the_kits_write_back() -> Result<(), String> {
 }
 
 #[test]
-fn f5_through_the_kits_write_back() {
-    row_f5_through_the_kits_write_back().unwrap();
+fn untouched_through_the_kits_write_back() {
+    row_untouched_through_the_kits_write_back().unwrap();
 }
 
 // ---------- a restart, then a verb ----------
@@ -182,7 +182,7 @@ fn f5_through_the_kits_write_back() {
 fn row_restart_then_a_verb_writes_back() -> Result<(), String> {
     const ROW: &str = "row_restart_then_a_verb_writes_back";
     let bytes = testgen::deck(&testgen::sample());
-    let mut f = fx("k1-restart", |_| {});
+    let mut f = fx("restart", |_| {});
     f.write(&bytes);
     let s = f.open();
     let a = f.agent(&s);
@@ -275,7 +275,7 @@ fn restart_then_a_verb_writes_back() {
 fn row_file_at_an_earlier_version_byte_for_byte() -> Result<(), String> {
     const ROW: &str = "row_file_at_an_earlier_version_byte_for_byte";
     let bytes = testgen::deck(&testgen::sample());
-    let mut f = fx("k1-file-at", |_| {});
+    let mut f = fx("file-at", |_| {});
     f.write(&bytes);
     let s = f.open();
     let a = f.agent(&s);
@@ -355,7 +355,7 @@ fn file_at_an_earlier_version_byte_for_byte() {
 fn row_outside_save_then_a_verb_splices_into_the_save() -> Result<(), String> {
     const ROW: &str = "row_outside_save_then_a_verb_splices_into_the_save";
     let spec = testgen::sample();
-    let mut f = fx("k1-save", |_| {});
+    let mut f = fx("save", |_| {});
     f.write(&testgen::deck(&spec));
     let s = f.open();
     let mut saved = spec.clone();

@@ -1,4 +1,4 @@
-//! A shape's transform box on the page (the rendering-data contract r1.4, Item 1).
+//! A shape's transform box on the page (what a host's renderer reads).
 //!
 //! **The rule:** a group child's page outline is the true affine image of its child-space
 //! outline under every enclosing group's transform. Per enclosing group, from the innermost

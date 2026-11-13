@@ -1,5 +1,5 @@
 //! The splice (`live::splice::encode_from`) at the pack level, on bytes handed to it as the
-//! kit's carrier hook K1 hands them. The rows live in `common/splice_rows.rs`, so the
+//! kit's carrier hook hands them. The rows live in `common/splice_rows.rs`, so the
 //! planted faults in `tests/mutants.rs` run the same ones.
 
 mod common;
@@ -7,8 +7,8 @@ mod common;
 use common::splice_rows;
 
 #[test]
-fn f5_untouched_byte_for_byte() {
-    splice_rows::row_f5_untouched_byte_for_byte().unwrap();
+fn untouched_byte_for_byte() {
+    splice_rows::row_untouched_byte_for_byte().unwrap();
 }
 
 #[test]

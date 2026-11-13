@@ -526,26 +526,26 @@ fn identities_and_the_stale_buffer_guard() {
 }
 
 /// An app's save over a version the kit may have written keeps both. The kit wrote V1 (an
-/// agent's change K1) to the file; an agent's K2 is pending (the head is V2; the file and the
+/// agent's change W1) to the file; an agent's W2 is pending (the head is V2; the file and the
 /// kit's base are V1); an app that read the file before V1 saves its buffer. A merge from V1
-/// reads that save as the person undoing K1 and drops it with no conflict. The pack can't tell
+/// reads that save as the person undoing W1 and drops it with no conflict. The pack can't tell
 /// this save from one made on V1, so it keeps both.
 #[test]
 fn a_stale_save_after_a_kit_write_keeps_both() {
     let v0 = base();
     let mut v1 = v0.clone();
-    set_text(&mut v1, 256, 2, "K1 by the agent");
+    set_text(&mut v1, 256, 2, "W1 by the agent");
     let mut v2 = v1.clone();
-    set_text(&mut v2, 258, 4, "K2 by the agent");
+    set_text(&mut v2, 258, 4, "W2 by the agent");
     let mut save = v0.clone();
     move_to(&mut save, 258, 5, 6_000_000);
     let (b1, b2, s) = (d(&v1), d(&v2), d(&save));
-    // the hazard: the bare merge from what the file last held loses K1, silently
+    // the hazard: the bare merge from what the file last held loses W1, silently
     let m = merged(&b1, &b2, &s);
     assert!(m.conflicts.is_empty());
-    assert_ne!(text(&m.bytes, 256, 2).as_deref(), Some("K1 by the agent"));
-    assert_eq!(text(&m.bytes, 258, 4).as_deref(), Some("K2 by the agent"));
-    // through the kit's call: keep both (the head, with K1 and K2, becomes a version and a
+    assert_ne!(text(&m.bytes, 256, 2).as_deref(), Some("W1 by the agent"));
+    assert_eq!(text(&m.bytes, 258, 4).as_deref(), Some("W2 by the agent"));
+    // through the kit's call: keep both (the head, with W1 and W2, becomes a version and a
     // conflict copy)
     let pack = PptxPack::default();
     assert_eq!(pack.merge3_bytes(&b1, &b2, &s), BlobMerge::Conflict);
@@ -556,12 +556,12 @@ fn a_stale_save_after_a_kit_write_keeps_both() {
     let f = d(&fresh);
     assert_eq!(pack.merge3_bytes(&b1, &b2, &f), BlobMerge::Conflict);
     // a caller that knows the kit wrote nothing since the last outside save gets the merge:
-    // K1, K2 and the person's move all land
+    // W1, W2 and the person's move all land
     let BlobMerge::Merged(m) = pack.merge3_since(&b1, &b2, &f, Since::NoKitWrite) else {
         panic!("merged")
     };
-    assert_eq!(text(&m, 256, 2).as_deref(), Some("K1 by the agent"));
-    assert_eq!(text(&m, 258, 4).as_deref(), Some("K2 by the agent"));
+    assert_eq!(text(&m, 256, 2).as_deref(), Some("W1 by the agent"));
+    assert_eq!(text(&m, 258, 4).as_deref(), Some("W2 by the agent"));
     assert_eq!(shape(&m, 258, 5).unwrap().xfrm.unwrap().x, 6_000_000);
     // nothing changed on one side: no history can lose anything, so the kit's call passes
     assert_eq!(

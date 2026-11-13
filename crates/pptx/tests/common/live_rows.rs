@@ -1,6 +1,6 @@
-//! The live verbs' rows, on the kit's session: F2 (one change event per `shape move`, within
-//! 50 ms p99), each verb's ops and typed refusals, the agent's base, B1 (a new shape after a
-//! group never takes a child's id), the differential oracle (live verbs written back equal the
+//! The live verbs' rows, on the kit's session: one change event per `shape move`, within
+//! 50 ms p99, each verb's ops and typed refusals, the agent's base, a new shape after a
+//! group never taking a child's id, the differential oracle (live verbs written back equal the
 //! file verbs on the same file), a watcher seeing every change, and bounded, paged reads.
 //! Each row returns `Err("<row>: ...")`, so the planted faults can say which row caught them.
 
@@ -8,7 +8,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use k2_mpc_base::elem::{Applied, MapOpKind, Value};
-use k2_mpc_base::session::{ChangeEvent, ConnId, Session, SessionError};
+use k2_mpc_base::session::{ChangeEvent, ConnId, LimitSource, Session, SessionError};
 use k2_mpc_base::tools::{ToolOutput, ToolRunError};
 use k2_mpc_pptx::live::model::{self, LiveDeck, LiveSlide};
 use k2_mpc_pptx::live::{prop, shape_key, SHAPES, SHAPE_PROPS};
@@ -70,11 +70,11 @@ fn open(tag: &str, bytes: &[u8]) -> (Fx, std::sync::Arc<Session>) {
     (f, s)
 }
 
-/// F2: an agent's `shape move` makes one change event, on `shape_props`, setting the shape's
+/// An agent's `shape move` makes one change event, on `shape_props`, setting the shape's
 /// `geom` (one field: x and y move together), and a watcher has it within 50 ms (p99 of 100).
-pub fn row_f2_shape_move_one_event() -> Result<(), String> {
-    const ROW: &str = "row_f2_shape_move_one_event";
-    let (f, s) = open("f2", &testgen::deck(&testgen::sample()));
+pub fn row_shape_move_one_event() -> Result<(), String> {
+    const ROW: &str = "row_shape_move_one_event";
+    let (f, s) = open("move", &testgen::deck(&testgen::sample()));
     let watcher = f.person(&s);
     let agent = f.agent(&s);
     let rx = s.subscribe(watcher).map_err(|e| row_err(ROW, e))?;
@@ -142,7 +142,7 @@ pub fn row_f2_shape_move_one_event() -> Result<(), String> {
     lat.sort_by(f64::total_cmp);
     let p99 = lat[98];
     println!(
-        "F2: shape move to the watcher's event, 100 moves: p50 {:.3} ms, p99 {:.3} ms",
+        "shape move to the watcher's event, 100 moves: p50 {:.3} ms, p99 {:.3} ms",
         lat[49], p99
     );
     if p99 > 50.0 {
@@ -389,10 +389,10 @@ pub fn row_slide_add_ids_as_the_file_verb() -> Result<(), String> {
     Ok(())
 }
 
-/// B1: a shape added live on a slide whose group holds the highest ids takes one past them.
-pub fn row_b1_new_shape_after_a_group() -> Result<(), String> {
-    const ROW: &str = "row_b1_new_shape_after_a_group";
-    let (f, s) = open("b1", &testgen::deck(&testgen::sample()));
+/// A shape added live on a slide whose group holds the highest ids takes one past them.
+pub fn row_new_shape_after_a_group() -> Result<(), String> {
+    const ROW: &str = "row_new_shape_after_a_group";
+    let (f, s) = open("new-id", &testgen::deck(&testgen::sample()));
     let a = f.agent(&s);
     let o = expect(
         ROW,
@@ -527,8 +527,8 @@ pub fn row_watch_sees_each_change() -> Result<(), String> {
             return Err(row_err(ROW, format!("{call:?}: the watcher saw nothing")));
         }
         for e in &ev {
-            // the kit's `via` is the participant's client, not the verb (a contract gap: Item 2
-            // reads the verb from it): the row holds the agent and the change kind
+            // the kit's `via` is the participant's client, not the verb, so the row holds the
+            // agent and the change kind
             if e.pid != "atlas" {
                 return Err(row_err(ROW, format!("{call:?}: by {:?}", e.pid)));
             }
@@ -705,7 +705,7 @@ fn guarded(d: &LiveDeck) -> Vec<LiveSlide> {
 /// The differential oracle: for seeded random sequences of live verbs, the file
 /// the live deck writes back reads as the file verbs applied to the same file in the same
 /// order. Shape deletes come last in each sequence: the file verb reuses a deleted top shape's
-/// id, the live store never does (B1's mark), so an add after a delete may differ by design.
+/// id, the live store never does (the id mark), so an add after a delete may differ by design.
 pub fn row_differential_oracle() -> Result<(), String> {
     const ROW: &str = "row_differential_oracle";
     for seed in 1..=12u64 {
@@ -866,8 +866,8 @@ pub fn row_reads_bounded_and_paged() -> Result<(), String> {
     Ok(())
 }
 
-/// A live deck at its keyed cap refuses growth (the kit's `MPC-E822`), and text over the
-/// field limit is refused before anything applies.
+/// A live deck at its keyed cap refuses growth (the kit's `MPC-E822`, its keyed limit, from the
+/// host-wide limit), and text over the field limit is refused before anything applies.
 pub fn row_limits_refuse_growth_and_long_text() -> Result<(), String> {
     const ROW: &str = "row_limits_refuse_growth_and_long_text";
     let bytes = testgen::deck(&testgen::sample());
@@ -885,10 +885,23 @@ pub fn row_limits_refuse_growth_and_long_text() -> Result<(), String> {
             "shape", "add", "@sld:256", "--kind", "textbox", "--at", "0,0,1,1", "--text", "x",
         ],
     ) {
-        Err(ToolRunError::Session(e @ SessionError::AtLimit { .. })) => {
+        Err(ToolRunError::Session(e)) => {
+            // the error id first, through the kit's mapping: a renamed variant can't break it
             let id = e.report().id().to_owned();
             if id != "MPC-E822" {
                 return Err(row_err(ROW, format!("growth refused as {id}")));
+            }
+            if !matches!(
+                e,
+                SessionError::KeyedAtLimit {
+                    from: LimitSource::HostWide,
+                    ..
+                }
+            ) {
+                return Err(row_err(
+                    ROW,
+                    format!("growth refused as {e:?}, not at the host-wide keyed limit"),
+                ));
             }
         }
         other => {

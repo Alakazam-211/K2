@@ -1,6 +1,5 @@
-//! The render hash (the rendering-data contract r1.4, gap 5) on the golden sample deck: the
-//! golden turn and its variants. The rows live in `common/hash_rows.rs`, so the planted
-//! faults in `tests/mutants.rs` run the same ones.
+//! The render hash on the golden sample deck: the golden turn and its variants. The rows live
+//! in `common/hash_rows.rs`, so the planted faults in `tests/mutants.rs` run the same ones.
 
 mod common;
 

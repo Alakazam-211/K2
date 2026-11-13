@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.1.5 (2026-11-12): pairs with kit v0.18.0 and k2-mpc-ooxml v0.1.1
+
+**Requires `k2-mpc-base` v0.18.0** (its cut `efc6377e`) and **`k2-mpc-ooxml` v0.1.1**
+(`k2-mpc-opc` 0.1.1, unchanged), each checked out beside this repo. As for v0.1.4, the tag is a
+cut commit that leaves out the fuzz crate (`fuzz/`).
+
+- Pairs with kit v0.18.0. Its changes for a pack: build the view index's structs with
+  `..X::default()` (and the schema's parts with `..X::NONE`); a keyed doc's `MPC-E822` is
+  `SessionError::KeyedAtLimit`; an optional per-pack keyed limit (`Pack::keyed_entries_default`);
+  verb state, derived values per unit and placements in 3D, all additive with defaults.
+- The kit's view structs this pack builds (a unit, its font uses, boxes, flips, texts and
+  placeholders) take `..X::default()`, so a field the kit adds (a unit's derived values) doesn't
+  break the build; the two files allow `clippy::needless_update` for it. The limits row checks
+  the refusal's id (`MPC-E822`) through the kit's error mapping, then that it is the keyed limit
+  (`SessionError::KeyedAtLimit`) from the host-wide limit. No behaviour change.
+- `Cargo.toml`'s comment and the README name the kit's tag and its cut. `Cargo.lock` and
+  `fuzz/Cargo.lock`: k2-mpc-base 0.18.0 and the crate version 0.1.5 (only those versions move).
+- Wording only, no behaviour change: internal plan, requirement and ask labels in the docs,
+  comments, test messages, `scripts/oss-check.sh` and this changelog are now plain words.
+- Tests named by those labels are renamed for what they check (the same rows and asserts): the
+  measurement `tests/m1.rs` is now `tests/measure.rs` (`--test measure`; `MEASURE_SLIDES=N` for
+  another size; its lines start `measure:`), and the live rows' `f1_`, `f2_`, `f5_` and `b1_`
+  prefixes are dropped (`f5_through_the_kits_write_back` is now
+  `untouched_through_the_kits_write_back`).
+
 ## v0.1.4 (2026-11-12): pairs with kit v0.17.0 and k2-mpc-ooxml v0.1.1
 
 **Requires `k2-mpc-base` v0.17.0** (its cut `0a78505a`) and **`k2-mpc-ooxml` v0.1.1**
@@ -7,13 +32,13 @@
 unchanged from v0.1.3. As for v0.1.3, the tag is a cut commit that leaves out the fuzz crate
 (`fuzz/`).
 
-- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the host's call
-  for a text doc whose type now routes to tier 0), the carrier's pairing (K1b, opt-in by
-  `Pack::wants_pairing`, new error `MPC-E521`), the live grid (wire 3, additive), and an
-  outside save on unwritten changes keeping both on a keyed doc that isn't a table. This pack doesn't pair (its shape ids are the file's own), so its decks render as in
-  v0.1.3. One kit rule reaches a deck: an outside save while the deck holds changes the file
-  doesn't now keeps both (the save becomes the live deck; the kit's state a version and a
-  conflict copy), where v0.1.3's kit merged it by key.
+- Pairs with kit v0.17.0. Its changes: text → tier 0 (`demote_text_file`, the host's call for a text
+  doc whose type now routes to tier 0), the carrier's pairing (opt-in by `Pack::wants_pairing`, new
+  error `MPC-E521`), the live grid (wire 3, additive), and an outside save on unwritten changes
+  keeping both on a keyed doc that isn't a table. This pack doesn't pair (its shape ids are the
+  file's own), so its decks render as in v0.1.3. One kit rule reaches a deck: an outside save while
+  the deck holds changes the file doesn't now keeps both (the save becomes the live deck; the kit's
+  state a version and a conflict copy), where v0.1.3's kit merged it by key.
 - The deck's view schema (`live::view_schema::VIEW`) ends with `..ViewSchema::NONE`, so it
   builds with kit v0.17.0's two new `ViewSchema` fields (`field_class_prefix`, `grid`) at
   their defaults, and with fields the kit adds later. No behaviour change.
@@ -68,21 +93,20 @@ that leaves out the fuzz crate (`fuzz/`).
 **Requires the kit's view index** (kit v0.16.0: `Pack::view_schema`, `Pack::address_of`,
 `k2_mpc_base::view_index`).
 
-- **The deck's view schema** (the rendering contract's gap 1): `live::view_schema::VIEW`, which
-  `PptxLive` and `PptxPack` both give the kit. Slides are the containers and shapes the units;
-  a shape's `slide` field holds its slide's `sid`; the page is the deck map's `cx` × `cy` in
-  EMU; `geom` is the one geometry field; `edit` gives `editable_text` (`1` plain, `fmt`
-  formatted, `0` never). On the blob tier the structure index's `slide` nodes are the
-  containers and every node under one but `notes` a unit. The kit builds a deck's `ViewIndex`
-  from it on both tiers.
-- **Addresses** (gap 2): `@sld:<sldId>` for a slide and `@sld:<sldId>/sp:<cNvPr>` for a shape
+- **The deck's view schema**: `live::view_schema::VIEW`, which `PptxLive` and `PptxPack` both
+  give the kit. Slides are the containers and shapes the units; a shape's `slide` field holds
+  its slide's `sid`; the page is the deck map's `cx` × `cy` in EMU; `geom` is the one geometry
+  field; `edit` gives `editable_text` (`1` plain, `fmt` formatted, `0` never). On the blob tier
+  the structure index's `slide` nodes are the containers and every node under one but `notes` a
+  unit. The kit builds a deck's `ViewIndex` from it on both tiers.
+- **Addresses**: `@sld:<sldId>` for a slide and `@sld:<sldId>/sp:<cNvPr>` for a shape
   (`view_schema::address_of` and `key_of`, the structure index's own keys), so the live store's
   keys never reach the wire. `PptxLive::container_of` names a shape's slide by its key, the kit's
   hint before it checks the shape's `slide` field: a range on a shape, an agent's claim and its
   verbs now focus the shape's slide (before, the kit's default focused the shape itself).
 - **What the pack derives on the kit's index** (`view_schema::derive`): each slide's title, the
   layouts (from the deck map), `name_is_generic`, a placeholder with no type as `obj`.
-- `tests/kit_view.rs`: the kit's index of the golden deck against the contract's
+- `tests/kit_view.rs`: the kit's index of the golden deck against the hand-made golden
   `index-rev40.json`, field by field (transcribed in `tests/common/kit_view_golden.rs`), and the
   blob tier's against the live tier's; any difference not listed fails.
 - **The live view reads the carrier** (`live::view_derive`; needs the kit's carrier hand-off,
@@ -93,7 +117,7 @@ that leaves out the fuzz crate (`fuzz/`).
   (`ViewCarrier::decoded`, the pack's `view::read_open` and the live model of it):
   - a group's children (`live: false`), placed by `view::place`, the code that places every
     shape of the pack's own view of a file, from the group's **live** box: a group the store
-    moved or resized moves or scales them (contract Item 1, steps 1 to 8, the true centre);
+    moved or resized moves or scales them (the true centre);
   - the box a placeholder inherits from its layout, else its master, while the store holds none
     (`bbox_inherited`), a new slide's from its layout;
   - field kinds (`fields`, `has_fields`), and a slide number's text at the slide's live
@@ -101,10 +125,10 @@ that leaves out the fuzz crate (`fuzz/`).
   - fonts, per slide and per deck: a shape's from the carrier while its text is the carrier's,
     its style's and first run's format's once the store changed its text, the layout's
     defaults for a shape the file doesn't hold yet;
-  - render hashes: the carrier's render digest for a slide the store didn't change as drawn
-    (the written bytes' digest, as the rendering contract specifies), else a digest over the carrier's id and the slide
-    as the store holds it, which changes with every change to the drawing.
-  The rule: the live store wins, and the carrier supplies only what the store doesn't model.
+  - render hashes: the carrier's render digest for a slide the store didn't change as drawn (the
+    digest over the written bytes), else a digest over the carrier's id and the slide as the
+    store holds it, which changes with every change to the drawing. The rule:
+    the live store wins, and the carrier supplies only what the store doesn't model.
 - **`view` in two phases:** `view::read_open` reads a file into a `DeckRead` (each shape as the
   file holds it, each slide's render digest) and `DeckRead::index` places it (`view::place`);
   `view::index` is the two, unchanged in what it gives.
@@ -119,8 +143,8 @@ that leaves out the fuzz crate (`fuzz/`).
   listed there: its structure index carried no fonts, render hashes, field kinds, inherited
   boxes, composed children's boxes, flips, `edit`, and a table's text one cell per line (closed
   by index format 2, above).
-- M1 prints the view index's reads: the first (the carrier decoded), 100 unchanged (kept) and
-  50 each after a move (built from the kept decode).
+- The measurement (`tests/m1.rs`) prints the view index's reads: the first (the carrier
+  decoded), 100 unchanged (kept) and 50 each after a move (built from the kept decode).
 
 ## v0.1.2 (2026-11-12): pairs with kit v0.15.1 and k2-mpc-ooxml v0.1.1
 
@@ -136,8 +160,8 @@ cut commit that leaves out the fuzz crate (`fuzz/`).
   opc crate's code is the same as v0.1.0's) and the crate version 0.1.2.
 - `scripts/check.sh` runs the kit's `scripts/pack-checks/engine-free.sh` (the pack template's
   rule: no CRDT engine dependency or import) after the carrier-row check.
-- M1's one-element list lines print one bracket each: `M1: shape add (the verb alone; a text
-  box in front of a slide's others), ...`.
+- The measurement's one-element list lines print one bracket each: `shape add (the verb alone;
+  a text box in front of a slide's others), ...`.
 - **The carrier row, the kit's** (the pack contract for a pack that keeps a carrier):
   `tests/live_carrier.rs`, `carrier_judge_byte_exact_over_the_corpus`, runs
   `session::test_support::carrier_judge` over the byte-exact corpus (every fixture, stored and
@@ -147,7 +171,7 @@ cut commit that leaves out the fuzz crate (`fuzz/`).
   it too (`tests/mutants.rs`). The dev-dependency on the kit turns on its `test-support`
   feature (test builds only). `scripts/check.sh` runs the kit's
   `scripts/pack-checks/carrier-row.sh` after fmt, which refuses a carrier pack without the row.
-- **M1 times the one-element list changes** (`tests/m1.rs`, a measurement): on the 2,500-shape
+- **The measurement times the one-element list changes** (`tests/m1.rs`): on the 2,500-shape
   deck, after the write-backs, 200 calls each of `shape add` (a text box in front of a slide's
   others), `shape order` (a shape to the front, then the same shape to the back; every call
   moves one) and `shape delete` (each added box, so the deck ends with the shapes it started
@@ -176,7 +200,7 @@ v0.1.0. As for v0.1.0, the tag is a cut commit that leaves out the fuzz crate (`
 
 ## v0.1.0 (2026-11-11): the first tag, pairs with kit v0.15.0
 
-**Requires `k2-mpc-base` v0.15.0** (the first kit tag with the carrier hook K1, the keyed
+**Requires `k2-mpc-base` v0.15.0** (the first kit tag with the carrier hook, the keyed
 limits and the keyed outside-save rule) and the shared package layer `k2-mpc-ooxml`
 (`k2-mpc-opc`, at `790a044f`), each checked out beside this repo. The crate version is `0.1.0`;
 `Cargo.lock` and `fuzz/Cargo.lock` record k2-mpc-base 0.15.0. The tag is a cut commit that
@@ -191,20 +215,20 @@ The two parts below are the history of the work before this tag.
 
 - **The kit at v0.15.0** (`07a2fa63`, both locks; written against its main `91df58ea`): the
   keyed limits (`MPC-E415` on import, `MPC-E822` on growth), the keyed outside-save rule, and
-  the carrier hook K1 (`Pack::wants_carrier`, `Pack::encode_from`; version carriers; keyed
+  the carrier hook (`Pack::wants_carrier`, `Pack::encode_from`; version carriers; keyed
   structured reads that render nothing).
-- **`PptxLive`** (`live`): the kit's `Pack` for a live deck. Two MovableLists (`slides`,
-  `shapes`) for existence and order, two composite maps (`slide_props`, `shape_props`) of one
-  field each, a `deck` map of facts and id marks. Keys are the file's own ids (`s<sldId>`,
-  `s<sldId>-<cNvPr>`), for imported elements and for ones a verb adds. Geometry is one field
-  (`geom`). Declines `live_ids` and `live_text_too_large`; the kit's cap gives
-  `live_too_large`. Outside saves reconciled by key. **B1:** a slide's id mark is the highest
-  `cNvPr` in its whole tree, a group's children included, and a live verb mints past it.
+- **`PptxLive`** (`live`): the kit's `Pack` for a live deck. Two MovableLists (`slides`, `shapes`)
+  for existence and order, two composite maps (`slide_props`, `shape_props`) of one field each, a
+  `deck` map of facts and id marks. Keys are the file's own ids (`s<sldId>`, `s<sldId>-<cNvPr>`),
+  for imported elements and for ones a verb adds. Geometry is one field (`geom`). Declines
+  `live_ids` and `live_text_too_large`; the kit's cap gives `live_too_large`. Outside saves
+  reconciled by key. **Id marks:** a slide's id mark is the highest `cNvPr` in its whole tree, a
+  group's children included, and a live verb mints past it.
 - **The splice** (`live::splice::encode_from`): the live content written back into the file
   by splicing the difference into the carrier with the file verbs' code; an unchanged deck is
   the carrier byte for byte; a guard refuses a write that doesn't read back as the live
   content.
-- **The carrier through the kit (K1)**: `PptxLive::wants_carrier` is true and
+- **The carrier through the kit**: `PptxLive::wants_carrier` is true and
   `encode_from` splices into the carrier the kit hands it (the bytes it last read from the
   file or wrote to it, kept in its store), decoding it each time; the pack's in-memory carrier
   is gone. A deck writes back after a restart with no read of the file, and `file_at` of an
@@ -227,15 +251,15 @@ The two parts below are the history of the work before this tag.
   `shape show` (bounded and paged), `slide add`, `slide move`, `slide delete`, `slide hide`,
   `shape add`, `shape text` (a formatted shape needs `--drop-formatting`), `shape move`,
   `shape order`, `shape delete`, `notes set`; typed refusals with a next step.
-- **The rendering-data contract r1.4's pack items** (`view`, `geom`, `render`): transform
+- **The view items a host's renderer reads** (`view`, `geom`, `render`): transform
   boxes in page space (group children by the true affine image, flips, `approx_box`,
   inherited placeholder boxes), the render hash over each slide's render closure, fonts,
   field kinds, `name_is_generic`, layout names and placeholder types; checked against the
-  contract's goldens (`testgen::golden`).
+  hand-made goldens on the golden deck (`testgen::golden`).
 - Planted faults: `GroupRotNotComposed`, `FlipRotAdded`, `ApproxNotInherited`,
   `HashMissesSlideNumber`, `HashMissesTableStyle`, `HashMissesLayout`,
   `HashMissesNothingButOverreaches`, `EncodeReserialises`, `FidReused`, `ReadUnbounded`,
-  `ZOrderGlobal`. A fuzz target, `live`. M1, a measurement (`tests/m1.rs`, ignored).
+  `ZOrderGlobal`. A fuzz target, `live`. A measurement (`tests/m1.rs`, ignored).
 
 ### pptx tier 0.5, merged by shape
 

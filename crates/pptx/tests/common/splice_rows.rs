@@ -1,10 +1,9 @@
-//! The splice's rows, at the pack level on bytes handed to `encode_from` as the kit's carrier
-//! hook (K1) hands them (`tests/live_carrier.rs` has the rows through the kit): F5 (an
-//! untouched deck writes back byte for byte), every kind of
-//! live change written by splicing (the written deck reads back as the live content, and every
-//! part the change doesn't touch is its raw record), and the guard refusing what the file
-//! can't hold. Each row returns `Err("<row>: ...")`, so the planted faults can say which row
-//! caught them. The kit's own byte-exact row for a carrier pack
+//! The splice's rows, at the pack level on bytes handed to `encode_from` as the kit's carrier hook
+//! hands them (`tests/live_carrier.rs` has the rows through the kit): an untouched deck writing
+//! back byte for byte, every kind of live change written by splicing (the written deck reads back
+//! as the live content, and every part the change doesn't touch is its raw record), and the guard
+//! refusing what the file can't hold. Each row returns `Err("<row>: ...")`, so the planted faults
+//! can say which row caught them. The kit's own byte-exact row for a carrier pack
 //! (`test_support::carrier_judge`) runs over the same corpus (`row_carrier_judge`).
 
 use std::collections::BTreeMap;
@@ -67,9 +66,9 @@ pub fn corpus() -> Vec<(String, Vec<u8>)> {
     decks
 }
 
-/// F5: an untouched deck writes back byte for byte, every file of the corpus.
-pub fn row_f5_untouched_byte_for_byte() -> Result<(), String> {
-    const ROW: &str = "row_f5_untouched_byte_for_byte";
+/// An untouched deck writes back byte for byte, every file of the corpus.
+pub fn row_untouched_byte_for_byte() -> Result<(), String> {
+    const ROW: &str = "row_untouched_byte_for_byte";
     for (name, b) in corpus() {
         let c = deck(&b)
             .map_err(|e| format!("{ROW}: {name}: {e}"))?
@@ -254,7 +253,7 @@ pub const CHANGES: &[Change] = &[
         &["ppt/slides/slide1.xml"],
     ),
     (
-        "shape add after a group (B1)",
+        "shape add after a group",
         |d| {
             slide(d, 258)
                 .shapes

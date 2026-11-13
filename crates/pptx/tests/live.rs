@@ -1,6 +1,6 @@
-//! The live pack, on the kit's session: a deck opens as a live keyed doc (F1), reads back byte
-//! for byte while untouched (F5), declines what it can't hold, and takes an outside save by
-//! key with its id marks never lowered (B1).
+//! The live pack, on the kit's session: a deck opens as a live keyed doc, reads back byte for
+//! byte while untouched, declines what it can't hold, and takes an outside save by key with its
+//! id marks never lowered.
 //!
 //! Each row is a function returning `Err("<row>: ...")` when it fails, so a planted fault's
 //! test can say which row caught it.
@@ -48,12 +48,12 @@ fn shape_field(c: &[(String, Neutral)], sid: u32, fid: u32, f: &str) -> Option<S
     map_get(c, SHAPE_PROPS, &prop(&shape_key(sid, fid), f))
 }
 
-/// F1: the sample deck opens live; its keyed state is the pack's reading of the file, every
+/// The sample deck opens live; its keyed state is the pack's reading of the file, every
 /// slide and top-level shape with its fields (a group one shape, its children not elements).
-fn row_f1_a_generated_deck_opens_live() -> Result<(), String> {
-    const ROW: &str = "row_f1_a_generated_deck_opens_live";
+fn row_a_generated_deck_opens_live() -> Result<(), String> {
+    const ROW: &str = "row_a_generated_deck_opens_live";
     let bytes = testgen::deck(&testgen::sample());
-    let f = fx("f1", |_| {});
+    let f = fx("opens", |_| {});
     f.write(&bytes);
     let s = f
         .try_open()
@@ -144,20 +144,20 @@ fn row_f1_a_generated_deck_opens_live() -> Result<(), String> {
 }
 
 #[test]
-fn f1_a_generated_deck_opens_live() {
-    row_f1_a_generated_deck_opens_live().unwrap();
+fn a_generated_deck_opens_live() {
+    row_a_generated_deck_opens_live().unwrap();
 }
 
-/// F5 (read side): an untouched live deck reads back byte for byte, stored and deflated.
-fn row_f5_an_untouched_live_deck_reads_back_byte_for_byte() -> Result<(), String> {
-    const ROW: &str = "row_f5_an_untouched_live_deck_reads_back_byte_for_byte";
+/// The read side: an untouched live deck reads back byte for byte, stored and deflated.
+fn row_an_untouched_live_deck_reads_back_byte_for_byte() -> Result<(), String> {
+    const ROW: &str = "row_an_untouched_live_deck_reads_back_byte_for_byte";
     for (name, spec) in common::specs() {
         let parts = testgen::parts(&spec);
         for (layout, bytes) in [
             ("stored", testgen::stored_zip(&parts)),
             ("deflated", deflated(&parts)),
         ] {
-            let f = fx("f5", |_| {});
+            let f = fx("reads-back", |_| {});
             f.write(&bytes);
             let s = f
                 .try_open()
@@ -175,13 +175,13 @@ fn row_f5_an_untouched_live_deck_reads_back_byte_for_byte() -> Result<(), String
 }
 
 #[test]
-fn f5_an_untouched_live_deck_reads_back_byte_for_byte() {
-    row_f5_an_untouched_live_deck_reads_back_byte_for_byte().unwrap();
+fn an_untouched_live_deck_reads_back_byte_for_byte() {
+    row_an_untouched_live_deck_reads_back_byte_for_byte().unwrap();
 }
 
-/// B1: a slide's id mark is the highest id in its whole tree, a group's children included.
-fn row_b1_the_mark_covers_group_children() -> Result<(), String> {
-    const ROW: &str = "row_b1_the_mark_covers_group_children";
+/// A slide's id mark is the highest id in its whole tree, a group's children included.
+fn row_the_mark_covers_group_children() -> Result<(), String> {
+    const ROW: &str = "row_the_mark_covers_group_children";
     let d =
         model::read(&testgen::deck(&testgen::sample()), &limits()).map_err(|e| e.to_string())?;
     let top = d.slides[2].shapes.iter().map(|s| s.fid).max().unwrap_or(0);
@@ -195,8 +195,8 @@ fn row_b1_the_mark_covers_group_children() -> Result<(), String> {
 }
 
 #[test]
-fn b1_the_mark_covers_group_children() {
-    row_b1_the_mark_covers_group_children().unwrap();
+fn the_mark_covers_group_children() {
+    row_the_mark_covers_group_children().unwrap();
 }
 
 #[test]

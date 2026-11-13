@@ -40,7 +40,7 @@ stays at tier 0.5.
   store holds for it, so a new shape never takes a group child's id.
 - **Writing the file:** the live changes are spliced into the **carrier**, the bytes the kit
   last read from the file or wrote to it (`live::splice::encode_from`, through the kit's
-  carrier hook K1: `wants_carrier` is true), every other part a raw record copy; an untouched
+  carrier hook: `wants_carrier` is true), every other part a raw record copy; an untouched
   deck writes back byte for byte, and a write that wouldn't read back as the live content is
   refused. One pass per write: the carrier's package is opened and decoded once, every change
   is applied on that open, the package is written once and read back once. The kit keeps the
@@ -136,7 +136,7 @@ today, a save both sides changed is a whole-file conflict** (Stated limits, the 
 
 Every check runs with cargo and a stable Rust toolchain (1.88 or later), with the kit and the
 package layer checked out beside this repo, where `Cargo.toml`'s path dependencies point:
-`../k2-mpc-base` at the kit's v0.17.0 (`0a78505a`, its public cut) and `../k2-mpc-ooxml` at
+`../k2-mpc-base` at the kit's v0.18.0 (`efc6377e`, its public cut) and `../k2-mpc-ooxml` at
 its v0.1.1 (`2362f7c1`, its cut).
 
 ```sh
@@ -171,30 +171,29 @@ passed. The private-names check's patterns live off the tree: where none are set
   other part's raw record in every fixture), ids, refusals and exits.
 - **Mutants** (`--features mutants`, `tests/mutants.rs`): planted bugs in the merge and the pack,
   each caught by its leg.
-- **Live** (`tests/live.rs`, `live_verbs.rs`, `live_reads.rs`, `splice.rs`,
-  `live_carrier.rs`): a deck opens live and reads back byte for byte; each verb's ops and
-  refusals; the agent's base; the differential oracle (live verbs written back equal the file
-  verbs on the same file); every kind of change spliced with every other part its raw record;
-  bounded reads. Through the kit's carrier (K1): F5 by the kit's write-back, a restart then a
-  verb with no read of the file, `file_at` of an earlier version byte for byte, an outside
-  save then a verb spliced into the save, and the pack contract's byte-exact row: the kit's
-  judge (`test_support::carrier_judge`) over every fixture, stored and deflated, and the golden
-  deck. `scripts/check.sh` runs the kit's `carrier-row.sh`, which fails a pack that keeps a
-  carrier and has no such row.
-- **The rendering contract** (`tests/view.rs`, `render.rs`): the view index and the render
-  hash against the contract's goldens, on a generated copy of its sample deck. The kit's view
+- **Live** (`tests/live.rs`, `live_verbs.rs`, `live_reads.rs`, `splice.rs`, `live_carrier.rs`): a
+  deck opens live and reads back byte for byte; each verb's ops and refusals; the agent's base; the
+  differential oracle (live verbs written back equal the file verbs on the same file); every kind of
+  change spliced with every other part its raw record; bounded reads. Through the kit's carrier: an
+  untouched deck byte for byte by the kit's write-back, a restart then a verb with no read of the
+  file, `file_at` of an earlier version byte for byte, an outside save then a verb spliced into the
+  save, and the pack contract's byte-exact row: the kit's judge (`test_support::carrier_judge`) over
+  every fixture, stored and deflated, and the golden deck. `scripts/check.sh` runs the kit's
+  `carrier-row.sh`, which fails a pack that keeps a carrier and has no such row.
+- **What a renderer reads** (`tests/view.rs`, `render.rs`): the view index and the render
+  hash against the hand-made goldens, on a generated copy of the golden sample deck. The kit's view
   index (`tests/kit_view.rs`): the live tier against `index-rev40.json` with no gap (the
   carrier's items: fonts, render hashes, field kinds, inherited boxes, a group's children), the
   blob tier against the live one with no gap either (the structure index's view items, the
   kit's row format 2), N reads of an unchanged deck decoding
   the carrier zero times, a group move moving its children, and a keyed watch's change frame
   carrying the touched slide's new render hash.
-- **M1** (`tests/m1.rs`, ignored): heap, verb p99, the agent's read and `slide show` time at
-  2,500 shapes, the view index's reads (the first, unchanged, after a move), the write-back's
-  time, and the one-element list changes (`shape add`, `shape order` and `shape delete`, p50
-  and p99 of the verb alone), release build:
-  `cargo test --release -p k2-mpc-pptx --test m1 -- --ignored --nocapture` (`M1_SLIDES=N` for
-  another size; 50 by default).
+- **The measurement** (`tests/measure.rs`, ignored): heap, verb p99, the agent's read and
+  `slide show` time at 2,500 shapes, the view index's reads (the first, unchanged, after a
+  move), the write-back's time, and the one-element list changes (`shape add`, `shape order`
+  and `shape delete`, p50 and p99 of the verb alone), release build:
+  `cargo test --release -p k2-mpc-pptx --test measure -- --ignored --nocapture`
+  (`MEASURE_SLIDES=N` for another size; 50 by default).
 - **External checkers** (`docs/checkers.md`): every file this pack writes (`tests/emit.rs`:
   fixtures, verb outputs, every merged matrix result) passes the Open XML SDK validator and
   opens in Apache POI with the slide and picture counts this pack reads, through the checkers

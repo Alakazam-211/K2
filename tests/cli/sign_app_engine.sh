@@ -167,4 +167,30 @@ run_sign $V >"$WORK/out" 2>&1 && fail "signed with an asset missing"
 grep -q "missing within 0 min: k2-app-engine-linux-aarch64.sha256" "$WORK/out" || fail "missing-asset refusal: $(cat "$WORK/out")"
 ok "a missing asset stops the run"
 
+echo "--verdict (release.sh K2_CI_PATH=client): the release signer must vouch for each listed arch's bytes"
+publish k2-app-engine-linux-aarch64 "$WORK/la"
+cat >"$WORK/k2-signer" <<SH
+#!/usr/bin/env bash
+echo "\$*" >> "$WORK/verdict.log"
+[ "\$1 \$2" = "verdict k2" ] || { echo "stand-in: unexpected \$*" >&2; exit 2; }
+s="\$( (command -v sha256sum >/dev/null && sha256sum || shasum -a 256) | awk '{print \$1}')"
+grep -qx "\$s" "$WORK/verdict-ok" 2>/dev/null && { echo '{"ok":true}'; exit 0; }
+echo "k2-signer: refused: \$3: these bytes are not L1 signed artifact" >&2
+exit 3
+SH
+chmod +x "$WORK/k2-signer"
+{ sha "$REL/k2-app-engine-linux-x86_64"; sha "$REL/k2-app-engine-linux-aarch64"; } | awk '{print $1}' >"$WORK/verdict-ok"
+rm -f "$UP"/* "$WORK/verdict.log"
+K2_SIGNER_CMD="$WORK/k2-signer" run_sign $V --verdict x86_64,aarch64 >"$WORK/out" 2>&1 || fail "verdict run failed: $(cat "$WORK/out")"
+[ "$(grep -c . "$WORK/verdict.log")" = 2 ] || fail "asked the signer: $(cat "$WORK/verdict.log")"
+[ "$(ls "$UP" | wc -l | tr -d ' ')" = 2 ] || fail "not both signed: $(ls "$UP")"
+ok "--verdict x86_64,aarch64: both put to the signer, both signed"
+# The signer refuses the aarch64 engine: nothing is signed, not even x86_64.
+sha "$REL/k2-app-engine-linux-x86_64" | awk '{print $1}' >"$WORK/verdict-ok"
+rm -f "$UP"/*
+K2_SIGNER_CMD="$WORK/k2-signer" run_sign $V --verdict x86_64,aarch64 >"$WORK/out" 2>&1 && fail "signed an engine the signer refused"
+grep -q "k2-app-engine-linux-aarch64: the release signer refused these bytes" "$WORK/out" || fail "verdict refusal: $(cat "$WORK/out")"
+[ -z "$(ls "$UP")" ] || fail "uploaded something after a refused verdict: $(ls "$UP")"
+ok "a refused verdict on one engine signs neither"
+
 echo "sign_app_engine: $pass passed"

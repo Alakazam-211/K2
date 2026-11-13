@@ -677,7 +677,7 @@ printf '{"version":"%s","platforms":{"darwin-aarch64":{"signature":"x","url":"u"
 export STUB_CURL_FILE="$tmp/latest.json"
 wroot="$tmp/wroot"; mkdir -p "$wroot/scripts/lib"
 cp "$ROOT/scripts/windows-patch-latest-json.sh" "$wroot/scripts/"
-cp "$LIB" "$wroot/scripts/lib/"
+cp "$LIB" "$ROOT/scripts/lib/k2-signer.sh" "$wroot/scripts/lib/"
 if bash "$wroot/scripts/windows-patch-latest-json.sh" "$V" "$tmp/K2_${V}_x64-setup.exe" >"$tmp/w.out" 2>&1; then
     python3 -I - "$STUB_REL/v$V/latest.json" > "$tmp/w.sig" <<'PY'
 import base64, json, sys
@@ -955,7 +955,7 @@ for want in \
     '[ -s "$SIG_FILE" ] || { echo "FATAL: $SIG_FILE missing or empty' \
     'k2u_verify_u1 "target/release/bundle/macos/K2.app.tar.gz" "$d/app.sig" K2.app.tar.gz \' \
     'k2u_verify_u1 "$DIST_DIR/$MAC_ASSET" "$d/mac.sig" "$MAC_ASSET" \' \
-    'for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do'; do
+    'for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SA_PHONE_CMD K2_SIGNER_CMD K2_SIGNER_TEST_ROOT; do'; do
     grep -qF -- "$want" "$R" && pass "release.sh (dual-sign): $want" || fail "release.sh dual-sign" "missing: $want"
 done
 grep -qF 'k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw' "$ROOT/scripts/sign-daemon.sh" \
@@ -981,7 +981,7 @@ if env -u K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR=/tmp/y bash -c "$seam_snip" >"$
 else
     pass "release.sh refuses K2_SIGN_SOURCE_DIR (a test seam)"
 fi
-for _seam in K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do
+for _seam in K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SA_PHONE_CMD K2_SIGNER_CMD K2_SIGNER_TEST_ROOT; do
     if env -u K2_UPDATER_SRC_ROOT -u K2_SIGN_SOURCE_DIR "$_seam=/tmp/z" bash -c "$seam_snip" >"$tmp/seam.out" 2>&1; then
         fail "seam guard $_seam" "passed with $_seam set"
     else

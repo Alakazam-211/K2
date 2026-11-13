@@ -9,6 +9,9 @@
 #   bash scripts/sign-daemon.sh <version>                 # release.sh Step 10.5
 #   bash scripts/sign-daemon.sh <version> --from-dir <dir> --compute-verdict <state-dir>
 #                                                         # K2 Compute files
+#   bash scripts/sign-daemon.sh <version> --from-dir <dir> --ci-evidence <bundle.json>
+#                                                         # the client path (K2_CI_PATH=client):
+#                                                         # k2-signer registers the evidence and signs
 #   bash scripts/sign-daemon.sh <version> --dry --from-dir <dir> --compute-verdict <state-dir> \
 #        --manifest <daemon-latest.json> --out <dir>      # no GitHub at all
 #
@@ -39,7 +42,12 @@
 #      early warning: step 1c hands the signing user L1's and V1's
 #      node-signed receipts and the built commit object
 #      (compute_release.py evidence-bundle), and the signer checks them
-#      itself against its pinned node keys (prd-signing-user-v1 S3b);
+#      itself against its pinned node keys (prd-signing-user-v1 S3b).
+#      The client path (--ci-evidence, prd-compute-build-attestations-v1
+#      S1): k2-signer registers the `k2 ci release` evidence bundle (it
+#      checks every receipt against the owner's roster and the node keys a
+#      person accepted, the tag, the approved base and the dual build), its
+#      verdict must name these exact bytes, and it signs them (U1 and U2);
 #   2. check the sha256, then scripts/lib/check-daemon-asset.py (ELF of the
 #      right arch, exactly one K2_DAEMON_BUILD marker for this version, no
 #      test-keys, k2-ptyd embedded), then the OAuth bake check
@@ -146,11 +154,12 @@ VERSION="${1:-}"
 VERSION="${VERSION#v}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: sign-daemon.sh <x.y.z> [--from-dir DIR] [--dry --manifest FILE --out DIR] | --preflight [<x.y.z>]"
 shift
-FROM_DIR="" MANIFEST="" OUT="" DRY=0 VERDICTS=""
+FROM_DIR="" MANIFEST="" OUT="" DRY=0 VERDICTS="" CI_EVIDENCE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --from-dir) FROM_DIR="${2:?--from-dir DIR}"; shift 2 ;;
         --compute-verdict) VERDICTS="${2:?--compute-verdict DIR}"; shift 2 ;;
+        --ci-evidence) CI_EVIDENCE="${2:?--ci-evidence BUNDLE}"; shift 2 ;;
         --manifest) MANIFEST="${2:?--manifest FILE}"; shift 2 ;;
         --out) OUT="${2:?--out DIR}"; shift 2 ;;
         --dry) DRY=1; shift ;;
@@ -168,7 +177,13 @@ fi
 # user. Under k2sign the signer gets the node-signed receipts themselves
 # (step 1c below) and checks them against its own pinned node keys (S3b);
 # the verdict check here stays as an early warning.
-if [ -n "$FROM_DIR" ]; then
+if [ -n "$CI_EVIDENCE" ]; then
+    [ -z "$VERDICTS" ] || die "--ci-evidence and --compute-verdict are two paths: give one"
+    [ -n "$FROM_DIR" ] || die "--ci-evidence needs --from-dir (the files the evidence lists)"
+    [ -s "$CI_EVIDENCE" ] || die "--ci-evidence $CI_EVIDENCE: no bundle there"
+    [ "$DRY" = 0 ] || die "--ci-evidence can't be --dry: k2-signer registers the evidence for the real tag"
+    [ "$(k2u_backend)" = k2sign ] || die "--ci-evidence needs K2_SIGNER=k2sign (k2-signer works under k2sign's approval session)"
+elif [ -n "$FROM_DIR" ]; then
     [ -n "$VERDICTS" ] && [ -d "$VERDICTS" ] || die "--from-dir needs --compute-verdict <state dir> (compute_release.py's receipt checks): no provenance, no signature"
 fi
 k2u_env_guard || exit 1
@@ -316,7 +331,15 @@ fi
 # compute too: release.sh staged it and the audit dir has L2's receipt
 # (else it takes the GitHub path, and an L2 that fell back must not stop
 # the x86 evidence).
-if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/k2-daemon-linux-x86_64" ] && [ "$(k2u_backend)" = k2sign ]; then
+if [ -n "$CI_EVIDENCE" ]; then
+    # The client path: k2-signer checks and registers the bundle (once per
+    # version, never replaced; the GitHub tag must be on the approved base).
+    k2s_run evidence k2 "$VERSION" < "$CI_EVIDENCE" > "$WORK/ci-evidence.registered.json" 2> "$WORK/ci-evidence.err" \
+        || die "k2-signer refused the evidence for $VERSION: $(sed $'s/\x1b\\[[0-9;]*m//g' "$WORK/ci-evidence.err" | tr '\n' ' ') — not signing"
+    sed $'s/\x1b\\[[0-9;]*m//g' "$WORK/ci-evidence.err" | sed 's/^/[sign-daemon] /'
+    cp "$WORK/ci-evidence.registered.json" "${CI_EVIDENCE%.json}.registered.json" \
+        || log "WARNING: could not copy k2-signer's answer next to $CI_EVIDENCE (audit copy only)"
+elif [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/k2-daemon-linux-x86_64" ] && [ "$(k2u_backend)" = k2sign ]; then
     bundle_arches="x86_64"
     [ -f "$FROM_DIR/k2-daemon-linux-aarch64" ] && [ -f "$VERDICTS/L2/receipt.json" ] && bundle_arches="x86_64,aarch64"
     python3 -I "$ROOT/scripts/ci/compute_release.py" evidence-bundle --state "$VERDICTS" --git "$SRC_DIR" --arches "$bundle_arches" \
@@ -333,7 +356,12 @@ for ARCH in "${ARCHES[@]}"; do
     want="$(awk '{print $1; exit}' "$ASSETS/$A.sha256")"
     got="$(sha256_of "$ASSETS/$A")"
     [ -n "$want" ] && [ "$want" = "$got" ] || die "$A: sha256 differs from its .sha256 ($got vs $want)"
-    if [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$A" ]; then
+    via=k2sign
+    if [ -n "$CI_EVIDENCE" ] && [ -f "$FROM_DIR/$A" ]; then
+        k2s_verdict "$A" "$VERSION" "$ASSETS/$A" || die "$A: k2-signer's verdict refused these bytes (above) — not signing"
+        log "$A: k2-signer's verdict: these are the bytes its registered evidence lists"
+        via=k2-signer
+    elif [ -n "$FROM_DIR" ] && [ -f "$FROM_DIR/$A" ]; then
         check_compute_provenance "$ASSETS/$A" "$A"
     else
         check_github_provenance "$ASSETS/$A" "$A"
@@ -342,8 +370,8 @@ for ARCH in "${ARCHES[@]}"; do
     ( # shellcheck source=require-mail-oauth-build-env.sh
       source "$ROOT/scripts/require-mail-oauth-build-env.sh"
       assert_daemon_oauth_not_placeholder "$ASSETS/$A" ) || die "$A: OAuth bake check failed — not signing a placeholder build"
-    k2u_sign u1 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig" raw || die "$A: U1 signing failed"
-    k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw || die "$A: U2 signing failed"
+    K2U_SIGN_VIA="$via" k2u_sign u1 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig" raw || die "$A: U1 signing failed"
+    K2U_SIGN_VIA="$via" k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw || die "$A: U2 signing failed"
 done
 
 # 4. Manifest: the released one (Step 9 published it with macos-aarch64),

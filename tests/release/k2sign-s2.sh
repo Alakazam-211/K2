@@ -330,7 +330,7 @@ closes = [m.start() for m in re.finditer(r'^fi # SKIP_BUILD\b', s, re.M)]
 assert len(opens) == len(closes) == 2, (opens, closes)
 depth_ok = all(not (o < approve < c) for o, c in zip(opens, closes))
 assert depth_ok and opens[0] < closes[0] < approve < opens[1] < closes[1], (opens, closes, approve)
-assert re.search(r'for _k2_seam in [^;]*K2SIGN_TEST_ROOT[^;]*K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY; do', s)
+assert re.search(r'for _k2_seam in [^;]*K2SIGN_TEST_ROOT[^;]*K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY[^;]*; do', s)
 assert 'Step 0.46' not in s, "a stale Step 0.46 label"
 PY
 

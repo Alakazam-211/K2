@@ -143,6 +143,28 @@
 #   Settings and node names: scripts/lib/compute-release.sh. Needs this
 #   Mac's K2 as a server on the nodes with a grant (k2 compute nodes).
 #   Audit: ~/k2-release-audit/<v>/compute/.
+#   K2_CI_PATH (compute and shadow modes; prd-compute-build-attestations-v1
+#   S1): which path builds and signs them.
+#     scripts (default) the path above: compute-release.sh names the nodes,
+#                       k2sign signs on hand-pinned node keys. Kept until
+#                       the client path has made two green releases.
+#     client            the path K2's clients use: the pre-flight asks
+#                       k2-signer (project k2) which node keys a person
+#                       accepted, then `k2 ci release --plan --only-keys`;
+#                       1.6c submits `k2 ci release` (two runs: x86_64 +
+#                       packages, aarch64) on this server's seat; 7.9c
+#                       takes each run's evidence and `k2-signer rehearse
+#                       k2` must pass before the tag; 8.5 stages the
+#                       rehearsed files; 10.5 registers the evidence with
+#                       k2-signer, which signs the daemons, and
+#                       sign-root-helper/-k2-node/-app-engine sign only
+#                       after k2-signer's verdict on the same bytes. A node
+#                       nobody accepted is skipped, never refused. Every
+#                       problem before the tag falls back to GitHub as
+#                       above. Needs the setup applied at the signing Mac
+#                       (k2 ci setup --plan; k2-signer-admin apply-setup)
+#                       and K2_SIGNER=k2sign (its approval session).
+#                       Settings: scripts/lib/ci-client-release.sh.
 #
 # Pre-flight gates (Step 0.5 + the Linux gate of 0.6), switch K2_RELEASE_GATES:
 #   compute (default)  every gate is its own K2 Compute job at HEAD (plus
@@ -290,6 +312,9 @@ source "$PROJECT_DIR/scripts/lib/build-binaries.sh"
 # Compute" below).
 # shellcheck source=scripts/lib/compute-release.sh
 source "$PROJECT_DIR/scripts/lib/compute-release.sh"
+# The client path (K2_CI_PATH=client): k2 ci release + k2-signer.
+# shellcheck source=scripts/lib/ci-client-release.sh
+source "$PROJECT_DIR/scripts/lib/ci-client-release.sh"
 # The Rust pin (rust-toolchain.toml; Step 0.4 and the compute jobs' needs).
 # shellcheck source=scripts/lib/rust-pin.sh
 source "$PROJECT_DIR/scripts/lib/rust-pin.sh"
@@ -320,7 +345,7 @@ k2u_env_guard
 # checkout's public keys and takes the Linux release commit from THIS
 # checkout's tag; a leftover override (a test shell, .env) would move either
 # somewhere else without a word.
-for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SA_PHONE_CMD; do
+for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD K2SA_HELPER K2SA_OPEN K2SA_NOTIFY K2SA_PHONE_CMD K2_SIGNER_CMD K2_SIGNER_TEST_ROOT; do
     if [ -n "${!_k2_seam:-}" ]; then
         echo "ERROR: $_k2_seam is set (${!_k2_seam}). It is a test seam: a release checks signatures and the release tag against this checkout only. Unset it and run again." >&2
         exit 1
@@ -408,6 +433,14 @@ case "$K2_COMPUTE_ARM" in
         exit 1
         ;;
 esac
+# Which path builds and signs them (see the header): scripts or client.
+K2_CI_PATH="${K2_CI_PATH:-scripts}"
+export K2_CI_PATH
+case "$K2_CI_PATH" in
+    scripts|client) ;;
+    *) echo "ERROR: K2_CI_PATH must be scripts or client (got ${K2_CI_PATH})" >&2; exit 1 ;;
+esac
+k2_ci_client() { [ "$K2_CI_PATH" = client ]; }
 case "${K2_COMPUTE_FALLBACK:-1}" in
     0|1) ;;
     *) echo "ERROR: K2_COMPUTE_FALLBACK must be 1 or 0 (got ${K2_COMPUTE_FALLBACK})" >&2; exit 1 ;;
@@ -553,6 +586,23 @@ k2_compute_ready() {
     fi
 }
 
+k2_shadow_warn() {
+    echo "  ⚠ shadow (K2 Compute): $*" >&2
+    K2_SHADOW_NOTE="${K2_SHADOW_NOTE:+$K2_SHADOW_NOTE; }$*"
+}
+
+# A K2 Compute problem with the x86_64 builds: GitHub builds all of Linux
+# instead (compute mode; k2_compute_fallback), a warning in shadow mode.
+k2_compute_problem() {
+    if [ "$K2_LINUX_BUILDS" = "compute" ]; then
+        k2_compute_fallback all "$*"
+        return 0
+    fi
+    k2_shadow_warn "$*"
+}
+
+k2_compute_on() { [ "$K2_LINUX_BUILDS" = "shadow" ] || [ "$K2_LINUX_BUILDS" = "compute" ]; }
+
 # The end of the release (K2_COMPUTE_FALLBACK=0 only): always before the
 # tag, so nothing committed, tagged or published.
 k2_compute_fatal() {
@@ -612,10 +662,41 @@ k2_compute_fallback() {
         K2_COMPUTE_ARM=github
     else
         k2cr_cancel_open || true
+        k2ccr_cancel_open || true
         K2_LINUX_BUILDS=github
         K2_COMPUTE_ARM=github
         k2_compute_unstage
     fi
+}
+
+# The client path's pre-flight (K2_CI_PATH=client): the signing user and
+# k2-signer must be ready for project k2, and `k2 ci release --plan` must
+# place each set on node keys the signer accepted. Compute mode falls back
+# like the scripts path; shadow mode only warns.
+k2_ci_client_preflight() {
+    local err="${TMPDIR:-/tmp}/k2-ci-client-ready.$$" rc=0 arm=0
+    if [ "$K2_SIGNER" != k2sign ]; then
+        k2_compute_problem "K2_CI_PATH=client needs K2_SIGNER=k2sign (k2-signer works under k2sign's approval session for project k2)"
+        return 0
+    fi
+    [ "$K2_COMPUTE_ARM" = compute ] && arm=1
+    K2CR_STATE="${K2_RELEASE_AUDIT_DIR:-$HOME/k2-release-audit}/${VERSION}/compute"
+    mkdir -p "$K2CR_STATE"
+    k2ccr_preflight "$VERSION" "$arm" 2>"$err" || rc=$?
+    cat "$err" >&2
+    case "$rc" in
+        0) ;;
+        2)
+            if [ "$K2_LINUX_BUILDS" = compute ]; then
+                k2_compute_fallback arm "the client path can't build aarch64: $(grep -m1 ERROR "$err" | sed 's/^ERROR: //')"
+            else
+                k2_shadow_warn "client path: no aarch64: $(grep -m1 ERROR "$err" | sed 's/^ERROR: //')"
+                K2_COMPUTE_ARM=github
+            fi
+            ;;
+        *) k2_compute_problem "the client path isn't ready: $(grep -m1 ERROR "$err" | sed 's/^ERROR: //')" ;;
+    esac
+    rm -f "$err"
 }
 
 # Pre-flight (before any build): can this run build Linux on compute, and
@@ -623,7 +704,9 @@ k2_compute_fallback() {
 # can't; K2_COMPUTE_FALLBACK=0 stops instead.
 k2_linux_builds_preflight() {
     local err="${TMPDIR:-/tmp}/k2-compute-ready.$$"
-    if [ "$K2_LINUX_BUILDS" = "compute" ]; then
+    if k2_compute_on && k2_ci_client; then
+        k2_ci_client_preflight
+    elif [ "$K2_LINUX_BUILDS" = "compute" ]; then
         if ! k2_compute_ready x86_64 2>"$err"; then
             cat "$err" >&2
             k2_compute_fallback all "not ready for compute builds: $(grep -m1 -E 'ERROR|✗|- ' "$err" | sed 's/^ *//')"
@@ -635,7 +718,7 @@ k2_linux_builds_preflight() {
         fi
         rm -f "$err"
     fi
-    if [ "$K2_LINUX_BUILDS" = "compute" ] && [ -z "$(k2cr_verify_node)" ]; then
+    if [ "$K2_LINUX_BUILDS" = "compute" ] && ! k2_ci_client && [ -z "$(k2cr_verify_node)" ]; then
         echo "  ⚠⚠ K2_COMPUTE_VERIFY_NODE=none: NO dual build. The daemon, the root helper, k2-node and the App engine" >&2
         echo "  ⚠⚠ ship from ONE node's word (plan §6). Use it only when a release node is down." >&2
     fi
@@ -654,13 +737,15 @@ k2_linux_builds_preflight() {
     fi
     case "$K2_LINUX_BUILDS" in
         compute)
-            if [ "$K2_COMPUTE_ARM" = compute ]; then
+            if k2_ci_client; then
+                echo "  Linux x86_64$([ "$K2_COMPUTE_ARM" = compute ] && echo " and aarch64"): K2 Compute, client path (k2 ci release on the seat, nodes the signer accepted; k2-signer checks and signs the daemons). Arch: GitHub (k2-arch), not waited for."
+            elif [ "$K2_COMPUTE_ARM" = compute ]; then
                 echo "  Linux x86_64 and aarch64: K2 Compute ($(k2cr_x86_node)+$(k2cr_verify_node), $(k2cr_arm_node)+$(k2cr_arm_verify_node); L3 ${K2_COMPUTE_APP_NODE:-${K2_COMPUTE_NODE:-k2n8-vin}}). Arch: GitHub (k2-arch), not waited for."
             else
                 echo "  Linux x86_64: K2 Compute; aarch64 and Arch: GitHub (K2_COMPUTE_ARM=github)."
             fi
             ;;
-        shadow) echo "  Linux: GitHub (shadow builds on K2 Compute, compared at Step 10.7)." ;;
+        shadow) echo "  Linux: GitHub (shadow builds on K2 Compute$(k2_ci_client && echo ", client path: rehearsed by k2-signer"), compared at Step 10.7)." ;;
         github) echo "  Linux: GitHub (K2_LINUX_BUILDS=github)." ;;
     esac
 }
@@ -695,23 +780,6 @@ k2_linux_builds_github_part() {
     esac
 }
 
-k2_shadow_warn() {
-    echo "  ⚠ shadow (K2 Compute): $*" >&2
-    K2_SHADOW_NOTE="${K2_SHADOW_NOTE:+$K2_SHADOW_NOTE; }$*"
-}
-
-# A K2 Compute problem with the x86_64 builds: GitHub builds all of Linux
-# instead (compute mode; k2_compute_fallback), a warning in shadow mode.
-k2_compute_problem() {
-    if [ "$K2_LINUX_BUILDS" = "compute" ]; then
-        k2_compute_fallback all "$*"
-        return 0
-    fi
-    k2_shadow_warn "$*"
-}
-
-k2_compute_on() { [ "$K2_LINUX_BUILDS" = "shadow" ] || [ "$K2_LINUX_BUILDS" = "compute" ]; }
-
 # Step 1.6c. The release commit's tree must be final now, so the lock
 # file gets the bumped workspace versions here (Step 2 would write the
 # same lines). Shadow: never fatal. Compute: a problem sends Linux to
@@ -741,6 +809,22 @@ k2_shadow_start() {
         return 0
     fi
     echo "  Release commit ${commit:0:12} (tree ${K2CR_TREE:0:12}); audit ${K2_SHADOW_STATE}"
+    if k2_ci_client; then
+        if [ -z "$K2CCR_KEYS" ]; then
+            # A K2_RELEASE_RESUME run: the pre-flight's answer is gone.
+            local arm=0
+            [ "$K2_COMPUTE_ARM" = compute ] && arm=1
+            k2ccr_preflight "$VERSION" "$arm" >/dev/null || { k2_compute_problem "the client path isn't ready (k2-signer preflight)"; return 0; }
+        fi
+        if ! k2ccr_submit "$VERSION" "$commit"; then
+            k2_compute_problem "k2 ci release did not submit the x86_64 set"
+            k2_compute_on || return 0
+        fi
+        if [ "$K2_LINUX_BUILDS" = compute ] && [ "$K2_COMPUTE_ARM" = compute ] && [ "${K2CR_ARM_SUBMIT_OK:-}" != 1 ]; then
+            k2_compute_fallback arm "k2 ci release did not submit the aarch64 set"
+        fi
+        return 0
+    fi
     if ! k2cr_submit_release_set; then
         k2_compute_problem "not every compute job was submitted"
         k2_compute_on || return 0
@@ -748,6 +832,40 @@ k2_shadow_start() {
     if [ "$K2_LINUX_BUILDS" = compute ] && [ "$K2_COMPUTE_ARM" = compute ] && [ "${K2CR_ARM_SUBMIT_OK:-}" != 1 ]; then
         k2_compute_fallback arm "the aarch64 jobs (L2, V2) were not submitted"
     fi
+}
+
+# Step 7.9c on the client path: wait for the k2 ci release runs, take
+# their evidence and have k2-signer rehearse it, all before the tag.
+k2_ci_client_collect() {
+    if [ -z "$K2_SHADOW_STATE" ] || [ -z "$(k2ccr_runs 2>/dev/null)" ]; then
+        if [ "$K2_LINUX_BUILDS" = "compute" ]; then
+            echo "  No k2 ci release runs from this run (a K2_RELEASE_RESUME run): submitting them now."
+            k2_shadow_start
+            k2_compute_on || return 0
+        else
+            k2_shadow_warn "no k2 ci release runs to collect"
+            return 0
+        fi
+    fi
+    local t0
+    t0=$(date +%s)
+    if ! k2ccr_wait "${K2_COMPUTE_WAIT_MIN:-60}"; then
+        k2_compute_problem "k2 ci release runs not done in ${K2_COMPUTE_WAIT_MIN:-60} min"
+        return 0
+    fi
+    k2ccr_collect || true
+    if [ "${K2CR_X86_OK:-}" != 1 ]; then
+        k2_compute_problem "the x86_64 set did not pass k2-signer's rehearsal (see ${K2_SHADOW_STATE}/summary.txt)"
+        return 0
+    fi
+    if [ "$K2_COMPUTE_ARM" = compute ] && [ "${K2CR_ARM_OK:-}" != 1 ]; then
+        if [ "$K2_LINUX_BUILDS" = compute ]; then
+            k2_compute_fallback arm "the aarch64 set did not pass k2-signer's rehearsal (see ${K2_SHADOW_STATE}/summary.txt)"
+        else
+            k2_shadow_warn "the aarch64 set did not pass k2-signer's rehearsal"
+        fi
+    fi
+    echo "  waited $(( ($(date +%s) - t0) / 60 )) min after the Mac build."
 }
 
 # Step 7.9c: wait, fetch, verify. Shadow: never fatal. Compute: an x86_64
@@ -758,6 +876,10 @@ k2_shadow_collect() {
     k2_compute_on || return 0
     echo ""
     echo "Step 7.9c: K2 Compute Linux builds: wait, fetch, verify (${K2_LINUX_BUILDS})..."
+    if k2_ci_client; then
+        k2_ci_client_collect
+        return 0
+    fi
     if [ -z "$K2_SHADOW_STATE" ] || [ ! -s "$K2_SHADOW_STATE/jobs.tsv" ]; then
         if [ "$K2_LINUX_BUILDS" = "compute" ]; then
             echo "  No compute jobs from this run (a K2_RELEASE_RESUME run): submitting them now."
@@ -826,7 +948,12 @@ k2_shadow_tree_check() {
 k2_compute_stage() {
     k2_compute_unstage
     [ "$K2_LINUX_BUILDS" = "compute" ] || return 0
-    if ! k2cr_stage "$DIST_DIR"; then
+    if k2_ci_client; then
+        if ! k2ccr_stage "$DIST_DIR"; then
+            k2_compute_problem "staging the rehearsed files failed"
+            return 0
+        fi
+    elif ! k2cr_stage "$DIST_DIR"; then
         k2_compute_problem "staging the compute-built files failed"
         return 0
     fi
@@ -846,6 +973,17 @@ k2_shadow_report() {
         return 0
     fi
     [ "$K2_LINUX_BUILDS" = "shadow" ] || return 0
+    if k2_ci_client; then
+        echo ""
+        echo "Step 10.7: Shadow report (client path): k2-signer's rehearsal of the k2 ci release evidence"
+        if [ "${K2CR_COLLECTED:-0}" = 1 ]; then
+            echo "  rehearsal passed: x86_64 ${K2CR_X86_OK:-0}, aarch64 ${K2CR_ARM_OK:--}; bundle $(k2ccr_bundle)"
+        else
+            echo "  no rehearsal passed (see ${K2_SHADOW_STATE:-the audit dir}/summary.txt)"
+        fi
+        [ -n "$K2_SHADOW_NOTE" ] && echo "  shadow notes: $K2_SHADOW_NOTE"
+        return 0
+    fi
     echo ""
     echo "Step 10.7: Shadow report, K2 Compute vs GitHub Linux assets..."
     if [ "$K2_SHADOW_LATE" = "1" ] && [ -n "$K2_SHADOW_STATE" ]; then
@@ -871,6 +1009,7 @@ k2_arch_gate_on_exit() {
     k2_standalone_macos_daemon_kill || true
     if k2_compute_on; then
         k2cr_cancel_open || true
+        k2ccr_cancel_open || true
     fi
     k2rg_cancel_open || true
     k2_release_lock_release
@@ -1935,7 +2074,19 @@ k2_verify_published_u2 || U2_VERIFY_FAILED=1
 DAEMON_SIGN_FAILED=""
 DAEMON_SIGN_ARGS=("${VERSION}")
 if [ "$K2_LINUX_BUILDS" = "compute" ]; then
-    DAEMON_SIGN_ARGS+=(--from-dir "$DIST_DIR" --compute-verdict "$K2_SHADOW_STATE")
+    if k2_ci_client; then
+        # k2-signer registers the rehearsed evidence and signs the daemons.
+        DAEMON_SIGN_ARGS+=(--from-dir "$DIST_DIR" --ci-evidence "$(k2ccr_bundle)")
+    else
+        DAEMON_SIGN_ARGS+=(--from-dir "$DIST_DIR" --compute-verdict "$K2_SHADOW_STATE")
+    fi
+fi
+# The client path: the root-helper key signs a compute-built file only after
+# k2-signer's verdict on the same bytes (BA-11); aarch64 only when it came
+# from compute.
+ROOT_KEY_SIGN_ARGS=()
+if [ "$K2_LINUX_BUILDS" = compute ] && k2_ci_client; then
+    if [ "$K2_COMPUTE_ARM" = compute ]; then ROOT_KEY_SIGN_ARGS=(--verdict x86_64,aarch64); else ROOT_KEY_SIGN_ARGS=(--verdict x86_64); fi
 fi
 if [ "${K2_SKIP_DAEMON_SIGN:-0}" = "1" ]; then
     echo ""
@@ -1964,7 +2115,7 @@ ROOT_HELPER_SIGN_FAILED=""
 if [ "${K2_SKIP_ROOT_HELPER_SIGN:-0}" != "1" ]; then
     echo ""
     echo "Step 10.5: Signing k2-root-helper assets (waits for daemon-binaries.yml)..."
-    if ! bash "$PROJECT_DIR/scripts/sign-root-helper.sh" "${VERSION}"; then
+    if ! bash "$PROJECT_DIR/scripts/sign-root-helper.sh" "${VERSION}" ${ROOT_KEY_SIGN_ARGS[@]+"${ROOT_KEY_SIGN_ARGS[@]}"}; then
         ROOT_HELPER_SIGN_FAILED=1
         echo "  ✗ root helper NOT signed — re-run: bash scripts/sign-root-helper.sh ${VERSION}" >&2
     fi
@@ -1975,7 +2126,7 @@ K2_NODE_SIGN_FAILED=""
 if [ "${K2_SKIP_K2_NODE_SIGN:-0}" != "1" ]; then
     echo ""
     echo "Step 10.5: Signing k2-node assets with the root-helper key..."
-    if ! bash "$PROJECT_DIR/scripts/sign-k2-node.sh" "${VERSION}"; then
+    if ! bash "$PROJECT_DIR/scripts/sign-k2-node.sh" "${VERSION}" ${ROOT_KEY_SIGN_ARGS[@]+"${ROOT_KEY_SIGN_ARGS[@]}"}; then
         K2_NODE_SIGN_FAILED=1
         echo "  ✗ k2-node NOT signed — re-run: bash scripts/sign-k2-node.sh ${VERSION}" >&2
     fi
@@ -1986,7 +2137,7 @@ APP_ENGINE_SIGN_FAILED=""
 if [ "${K2_SKIP_APP_ENGINE_SIGN:-0}" != "1" ]; then
     echo ""
     echo "Step 10.5: Signing k2-app-engine assets with the root-helper key..."
-    if ! bash "$PROJECT_DIR/scripts/sign-app-engine.sh" "${VERSION}"; then
+    if ! bash "$PROJECT_DIR/scripts/sign-app-engine.sh" "${VERSION}" ${ROOT_KEY_SIGN_ARGS[@]+"${ROOT_KEY_SIGN_ARGS[@]}"}; then
         APP_ENGINE_SIGN_FAILED=1
         echo "  ✗ k2-app-engine NOT signed — re-run: bash scripts/sign-app-engine.sh ${VERSION}" >&2
     fi

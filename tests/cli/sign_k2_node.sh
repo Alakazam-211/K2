@@ -206,4 +206,34 @@ run_sign $V >"$WORK/out" 2>&1 && fail "signed with an asset missing"
 grep -q "missing within 0 min: k2-node-macos-aarch64.sha256" "$WORK/out" || fail "missing-asset refusal: $(cat "$WORK/out")"
 ok "a missing asset stops the run"
 
+echo "--verdict (release.sh K2_CI_PATH=client): the release signer must vouch for each listed Linux arch's bytes"
+publish k2-node-macos-aarch64 "$WORK/ma"
+# A stand-in for k2-signer: `verdict k2 <asset> <version>` with the file on
+# stdin; it accepts only the sha256s in $WORK/verdict-ok.
+cat >"$WORK/k2-signer" <<SH
+#!/usr/bin/env bash
+echo "\$*" >> "$WORK/verdict.log"
+[ "\$1 \$2" = "verdict k2" ] || { echo "stand-in: unexpected \$*" >&2; exit 2; }
+s="\$( (command -v sha256sum >/dev/null && sha256sum || shasum -a 256) | awk '{print \$1}')"
+grep -qx "\$s" "$WORK/verdict-ok" 2>/dev/null && { echo '{"ok":true}'; exit 0; }
+printf '\033[1;31mk2-signer: refused: %s: these bytes are not L1 signed artifact\033[0m\n' "\$3" >&2
+exit 3
+SH
+chmod +x "$WORK/k2-signer"
+sha "$REL/k2-node-linux-x86_64" | awk '{print $1}' >"$WORK/verdict-ok"
+rm -f "$UP"/* "$WORK/verdict.log"
+K2_SIGNER_CMD="$WORK/k2-signer" run_sign $V --verdict x86_64 >"$WORK/out" 2>&1 || fail "verdict run failed: $(cat "$WORK/out")"
+[ "$(cat "$WORK/verdict.log")" = "verdict k2 k2-node-linux-x86_64 $V" ] || fail "asked the signer about: $(cat "$WORK/verdict.log")"
+[ "$(ls "$UP" | wc -l | tr -d ' ')" = 3 ] || fail "not all three signed: $(ls "$UP")"
+ok "--verdict x86_64: only the x86_64 Linux asset is put to the signer; all three signed"
+rm -f "$UP"/* "$WORK/verdict.log"
+K2_SIGNER_CMD="$WORK/k2-signer" run_sign $V --verdict x86_64,aarch64 >"$WORK/out" 2>&1 && fail "signed an aarch64 asset the signer refused"
+grep -q "k2-node-linux-aarch64: the release signer refused these bytes" "$WORK/out" || fail "verdict refusal: $(cat "$WORK/out")"
+grep -q "these bytes are not L1 signed artifact" "$WORK/out" || fail "the signer's own reason is shown: $(cat "$WORK/out")"
+[ ! -f "$UP/k2-node-linux-aarch64.sig" ] || fail "aarch64 .sig uploaded despite the refusal"
+ok "--verdict x86_64,aarch64: a refused aarch64 asset is never signed"
+run_sign $V --verdict arm64 >"$WORK/out" 2>&1 && fail "accepted --verdict arm64"
+grep -q "x86_64 and/or aarch64" "$WORK/out" || fail "bad --verdict: $(cat "$WORK/out")"
+ok "--verdict takes only x86_64 / aarch64"
+
 echo "sign_k2_node: $pass passed"

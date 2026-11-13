@@ -46,6 +46,9 @@ POLL_SECS="${K2_SIGN_POLL_SECS:-30}"
 # One "waiting for …" line, then dots, a status line every few minutes.
 # shellcheck source=lib/wait-progress.sh
 source "$ROOT/scripts/lib/wait-progress.sh"
+# The release signer's verdict (--verdict).
+# shellcheck source=lib/k2-signer.sh
+source "$ROOT/scripts/lib/k2-signer.sh"
 KEYS_RS="${K2_RELEASE_KEYS_RS:-$ROOT/crates/k2-root-proto/src/keys.rs}"
 # The macOS Developer ID team (release.sh SIGNING_IDENTITY; k2-node
 # admin/update.rs APPLE_TEAM_ID).
@@ -137,6 +140,22 @@ fi
 VERSION="${1:-}"
 VERSION="${VERSION#v}"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "usage: sign-k2-node.sh <x.y.z> | --preflight | --check <file> <os> <arch> <version>"
+
+# --verdict x86_64[,aarch64] (release.sh K2_CI_PATH=client, the files K2
+# Compute built): before the root-helper key signs a Linux asset, the
+# release signer (k2-signer, as _k2sign) must say these exact bytes are the
+# artifact in the node-signed receipts it checked for this version
+# (prd-compute-build-attestations-v1 BA-11). Its refusal stops the run
+# before anything is signed for that asset. Without the flag (GitHub
+# builds, the k2sign path) nothing changes.
+VERDICT_ARCHES=""
+if [ $# -gt 1 ]; then
+	{ [ "$2" = "--verdict" ] && [ $# -eq 3 ] && [ -n "$3" ]; } || die "usage: sign-k2-node.sh <x.y.z> [--verdict x86_64[,aarch64]]"
+	for _a in ${3//,/ }; do
+		case "$_a" in x86_64 | aarch64) ;; *) die "--verdict takes x86_64 and/or aarch64, comma separated (got $_a)" ;; esac
+	done
+	VERDICT_ARCHES=",$3,"
+fi
 preflight
 
 TMP="$(mktemp -d -t k2-sign-k2-node.XXXXXX)"
@@ -175,6 +194,10 @@ for A in "${ASSETS[@]}"; do
 	[ "$OS" = macos ] && check_codesign "$TMP/$A" "$A"
 	COMMENT="file:$A version:$VERSION protocol:$PROTO"
 	log "signing $A ($COMMENT)"
+	if [ "$OS" = linux ] && [[ "$VERDICT_ARCHES" == *",$ARCH,"* ]]; then
+		k2s_verdict "$A" "$VERSION" "$TMP/$A" || die "$A: the release signer refused these bytes (above): not the compute build it checked — not signing"
+		log "$A: the release signer's verdict: the bytes its checked evidence lists"
+	fi
 	security find-generic-password -s "$SERVICE" -w \
 		| minisign -S -s "$KEY" -m "$TMP/$A" -x "$TMP/$A.sig" -t "$COMMENT" >/dev/null
 	out="$(minisign -V -m "$TMP/$A" -p "$PUB" -x "$TMP/$A.sig" -Q)" || die "$A: the new signature does not verify"

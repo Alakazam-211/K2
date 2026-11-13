@@ -27,6 +27,10 @@
 #             side still verifies every signature against the source tree's
 #             keys (an alarm: the tree belongs to this user) and keeps a COPY
 #             of the audit line; the real log is /var/k2sign/audit.
+#             K2U_SIGN_VIA=k2-signer (sign-daemon.sh --ci-evidence, the
+#             client path): the same, through k2-signer's `sign k2 …`, which
+#             signs a daemon only on the k2 ci release evidence it registered
+#             (prd-compute-build-attestations-v1 S1).
 #   keychain  the stopgap below (key file + login keychain password, read as
 #             this user), kept only for rollback until two releases have
 #             signed green through k2sign (retirement ledger).
@@ -102,6 +106,9 @@
 #                           fixture tree)
 
 K2U_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# k2-signer (the client path's signer, beside k2sign as the same role user).
+# shellcheck source=scripts/lib/k2-signer.sh
+source "$K2U_LIB_DIR/k2-signer.sh"
 K2U_SRC_ROOT="${K2_UPDATER_SRC_ROOT:-$(cd "$K2U_LIB_DIR/../.." && pwd)}"
 
 k2u_log() { printf '[sign-updater] %s\n' "$*" >&2; }
@@ -312,7 +319,13 @@ k2u_sign() {
     work="$(mktemp -d "${TMPDIR:-/tmp}/k2u-sign.XXXXXX")" || return 1
     if [ "$backend" = k2sign ]; then
         # The bytes go to the signer on stdin; it checks them and signs them.
-        if ! k2u_k2sign sign "$slot" "$asset" "$version" raw < "$file" > "$work/sig" 2> "$work/err"; then
+        local -a signer=(k2u_k2sign sign)
+        case "${K2U_SIGN_VIA:-k2sign}" in
+            k2sign) ;;
+            k2-signer) signer=(k2s_run sign k2) ;;
+            *) k2u_fail "K2U_SIGN_VIA must be k2sign or k2-signer (got '${K2U_SIGN_VIA}')"; rm -rf "$work"; return 1 ;;
+        esac
+        if ! "${signer[@]}" "$slot" "$asset" "$version" raw < "$file" > "$work/sig" 2> "$work/err"; then
             k2u_fail "$asset: the signer refused or failed: $(tr '\n' ' ' < "$work/err" | sed $'s/\x1b\\[[0-9;]*m//g' | head -c 400)"
             rm -rf "$work"; return 1
         fi

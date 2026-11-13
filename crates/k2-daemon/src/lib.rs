@@ -262,6 +262,8 @@ pub mod seed_users;
 // (default ON; opt out with K2_HOOK_SCOPED=0). Owner never enters agent env.
 pub mod cell_identity;
 pub mod cell_server;
+// A /cli/* request over 5 s (or still running at 30 s) logs one line.
+pub mod slow_request;
 pub mod cell_uds;
 // P4-H5 (sandbox hardening): host nft fail-closed egress allowlist for microVM
 // cells (default-DROP `skuid k2cell` + only 443/53). Reached ONLY from the

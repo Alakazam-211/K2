@@ -1374,6 +1374,7 @@ pub(crate) async fn refuse_upgrade(stream: &mut TcpStream, resp: &str) {
     let (head, body) = resp.split_once("\r\n\r\n").unwrap_or((resp, ""));
     let status = head.lines().next().and_then(|l| l.split_once(' ')).map_or("", |(_, s)| s);
     crate::apps::audit::note_response(status, body);
+    crate::slow_request::note_status(status);
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
@@ -1441,6 +1442,7 @@ pub(crate) async fn send_response_with_cookie_and_location(
     // Runtime S19: on an App's gateway link, the per-call audit row gets
     // the result and bytes out (a no-op off a link).
     crate::apps::audit::note_response(status, body);
+    crate::slow_request::note_status(status);
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 
@@ -1474,6 +1476,7 @@ pub(crate) async fn send_response_with_headers(
         frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
     crate::apps::audit::note_response(status, body);
+    crate::slow_request::note_status(status);
     let _ = stream.write_all(resp.as_bytes()).await;
 }
 

@@ -641,9 +641,16 @@ mod unix_impl {
         // never names a session, so a cell can only ever write its OWN log. Clone
         // the bound session id into the worker (the other moved vars own their data).
         let sid_for_dispatch = this_session_id.clone();
+        // A slow verb logs its route and this cell's workspace (slow_request).
+        let slow_trace = crate::slow_request::Trace::new(
+            crate::slow_request::Via::Cell,
+            method,
+            path,
+            &principal.workspace_uuid,
+        );
         // The pure handlers lock the DB / sleep across inject windows, so run
         // them on the blocking pool exactly like the TCP dispatcher does.
-        let (status, ctype, out): (String, &'static str, String) =
+        let (status, ctype, out): (String, &'static str, String) = crate::slow_request::watch_cell(
             tokio::task::spawn_blocking(move || {
                 // Wave 0: install principal for body-based identity resolution
                 // (mail/DNS POST handlers read JSON `project`, not the stamped
@@ -658,15 +665,21 @@ mod unix_impl {
                         &sid_for_dispatch,
                     )
                 })
-            })
-                .await
-                .unwrap_or_else(|e| {
-                    (
-                        "500 Internal Server Error".to_string(),
-                        "application/json",
-                        serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
-                    )
-                });
+            }),
+            slow_trace,
+            |r| match r {
+                Ok((status, _, _)) => crate::slow_request::status_code(status),
+                Err(_) => Some(500),
+            },
+        )
+        .await
+        .unwrap_or_else(|e| {
+            (
+                "500 Internal Server Error".to_string(),
+                "application/json",
+                serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            )
+        });
 
         // Permission cards (PRD rev 3.1 §3.1): an agent verb's refusal (or
         // hold) gains its `permission` object while both switches are on.

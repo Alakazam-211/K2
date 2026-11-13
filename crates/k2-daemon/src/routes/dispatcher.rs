@@ -1310,19 +1310,14 @@ mod app_web_root_location_tests {
 /// Serve one TCP connection, looping over requests on the same socket
 /// (HTTP/1.1 keep-alive).
 ///
-/// **0.39.7 (Issue #2):** pre-0.39.7 this function served exactly ONE
-/// request per connection because [`super::http::send_response`] hard-
-/// coded `Connection: close`. Combined with the renderer's ~12 different
-/// `setInterval` HTTP polls, every fetch was a fresh TCP socket. macOS's
-/// WKWebView Networking process has a soft `RLIMIT_NOFILE = 256`; over
-/// ~50 min the trickle of `CLOSE_WAIT` sockets the WebView didn't
-/// close fast enough filled the fd table, and the UI progressively
-/// locked up.
+/// **0.39.7 (Issue #2):** pre-0.39.7 this function served exactly ONE request per connection
+/// because [`super::http::send_response`] hard-coded `Connection: close`. Combined with the
+/// renderer's ~12 `setInterval` HTTP polls, every fetch was a fresh TCP socket; WKWebView's soft
+/// `RLIMIT_NOFILE = 256` filled with `CLOSE_WAIT` sockets over ~50 min and the UI locked up.
 ///
-/// Now: the dispatcher loops, calling [`handle_one_request`] until the
-/// client sends `Connection: close`, the connection idles out
-/// ([`KEEP_ALIVE_IDLE_TIMEOUT`]), or a WS handoff or fatal error closes
-/// it.
+/// Now: the dispatcher loops over [`handle_one_request`] (each one timed by
+/// [`crate::slow_request`]) until `Connection: close`, an idle timeout
+/// ([`KEEP_ALIVE_IDLE_TIMEOUT`]), a WS handoff or a fatal error.
 ///
 /// `/events` (and the other WS endpoints) are handled the same way as
 /// before — on the FIRST request only. After a WS handoff the loop
@@ -1365,11 +1360,15 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
         other => other,
     };
     // A′: each request's pass fence lives in this connection's scope.
-    super::pass_gate::scope(async move {
+    super::pass_gate::scope(crate::slow_request::scope(async move {
         let mut requests_served: u32 = 0;
         loop {
+            // Idle keep-alive wait: not request time (slow_request).
+            if !crate::slow_request::request_arrived(&stream, KEEP_ALIVE_IDLE_TIMEOUT).await {
+                return;
+            }
             super::pass_gate::set_fenced(false);
-            let outcome = handle_one_request(&mut stream, &state, ingress).await;
+            let outcome = crate::slow_request::watch_tcp(handle_one_request(&mut stream, &state, ingress)).await;
             match outcome {
                 DispatchOutcome::KeepAlive => {
                     requests_served = requests_served.saturating_add(1);
@@ -1378,8 +1377,6 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                         linger_close(&mut stream).await;
                         return;
                     }
-                    // Continue: loop body re-enters `handle_one_request`
-                    // which awaits the next request (with idle timeout).
                 }
                 DispatchOutcome::Done => {
                     #[cfg(windows)]
@@ -1388,7 +1385,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                 }
             }
         }
-    })
+    }))
     .await
 }
 
@@ -1545,6 +1542,7 @@ async fn handle_one_request(
             return DispatchOutcome::Done;
         }
     };
+    crate::slow_request::note_tcp(method, path_and_query, &req); // a slow /cli/* request's line
 
     // H5 (E2E splice hardening): reject `Transfer-Encoding: chunked`.
     // `read_post_body` is Content-Length-driven ONLY — it never decodes

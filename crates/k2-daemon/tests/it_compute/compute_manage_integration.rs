@@ -355,6 +355,10 @@ async fn compute_manage_switch_end_to_end() {
     assert_eq!(r.status, 403, "remove: {}", r.body);
     assert_eq!(r.body, remove.body, "remove stays owner_only");
     assert!(node_by_name("cm-act2").is_some(), "not removed");
+    // Pinned-only is never a managing agent's to set.
+    let r = post(port, "/cli/compute/nodes/pinned-only", &agent, json!({"node": "cm-act2", "on": true})).await;
+    assert_eq!(r.status, 403, "pinned-only: {}", r.body);
+    assert_eq!(r.body, remove.body, "pinned-only stays owner_only");
     let preview_before = j(&get(port, "/cli/settings/get", OWNER, "").await)["computePreview"].clone();
     let r = post(port, "/cli/settings/update", &agent, json!({"computePreview": preview_before.as_bool() != Some(true)})).await;
     assert_eq!(r.status, 403, "preview on/off: {}", r.body);

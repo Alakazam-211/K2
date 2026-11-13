@@ -1690,6 +1690,95 @@ async fn a_pinned_only_node_takes_only_jobs_that_name_it() {
     }
 }
 
+const PINNED_ONLY: &str = "/cli/compute/nodes/pinned-only";
+
+fn pinned_only_events(node: &str) -> Vec<(String, Value)> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let mut stmt = conn.prepare("SELECT actor, detail_json FROM compute_events WHERE kind = 'pinned_only' AND node_id = ?1 ORDER BY id").expect("prepare");
+    let rows = stmt.query_map([node], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).expect("query");
+    rows.map(|r| r.expect("row")).map(|(a, d)| (a, serde_json::from_str(&d).expect("detail is JSON"))).collect()
+}
+
+fn listed_node(v: &Value, name: &str) -> Value {
+    v["nodes"].as_array().expect("nodes").iter().find(|n| n["name"] == name).cloned().unwrap_or_else(|| panic!("{name} not listed: {v}"))
+}
+
+/// The pinned-only route: the owner turns it on and off, each change is
+/// one event with who did it, the node list shows it only while on, a
+/// node not yet confirmed can be set, and an agent can't touch it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_owner_sets_pinned_only_and_an_agent_cannot() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "pnr");
+    active_node("r2n11-vin");
+    grant("r2n11-vin", &me, None, 2);
+    let _eleven = compute_ws::test_attach("r2n11-vin", offer(1, 30, 32, 0));
+    let agent = passport(&me);
+
+    // An agent is refused, and nothing is stored or recorded.
+    let r = post(d.port, PINNED_ONLY, &agent, json!({"node": "r2n11-vin", "on": true})).await;
+    assert_eq!((r.status, code(&r)), (403, "owner_only".to_string()), "{}", r.body);
+    let r = post(d.port, PINNED_ONLY, "not-a-token", json!({"node": "r2n11-vin", "on": true})).await;
+    assert_ne!(r.status, 200, "a bad token: {}", r.body);
+    assert!(pinned_only_events("r2n11-vin").is_empty(), "a refusal records nothing");
+    let nodes = j(&get(d.port, "/cli/compute/nodes", OWNER, "").await);
+    assert!(listed_node(&nodes, "r2n11-vin").get("pinnedOnly").is_none(), "off: the field is absent");
+
+    // Bad requests.
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "r2n11-vin"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "r2n11-vin", "on": "yes"})).await;
+    assert_eq!((r.status, code(&r)), (400, "bad_request".to_string()), "{}", r.body);
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "no-such-node", "on": true})).await;
+    assert_eq!((r.status, code(&r)), (404, "node_not_found".to_string()), "{}", r.body);
+
+    // On: stored, shown, one event; an automatic job no longer fits.
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "r2n11-vin", "on": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["pinnedOnly"].clone(), j(&r)["changed"].clone()), (json!(true), json!(true)), "{}", r.body);
+    let nodes = j(&get(d.port, "/cli/compute/nodes", OWNER, "").await);
+    assert_eq!(listed_node(&nodes, "r2n11-vin")["pinnedOnly"], true, "{nodes}");
+    let r = run(d.port, &agent, &me, json!({"memBytes": GB})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
+    // On again changes nothing and records nothing more.
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "r2n11-vin", "on": true})).await;
+    assert_eq!((r.status, j(&r)["changed"].clone()), (200, json!(false)), "{}", r.body);
+    let events = pinned_only_events("r2n11-vin");
+    assert_eq!(events.len(), 1, "one change, one event: {events:?}");
+    assert_eq!(events[0].1, json!({"on": true}));
+    assert!(!events[0].0.is_empty(), "the event says who");
+
+    // Off: gone from the list, a second event, and the job fits again.
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "r2n11-vin", "on": false})).await;
+    assert_eq!((r.status, j(&r)["pinnedOnly"].clone()), (200, json!(false)), "{}", r.body);
+    let nodes = j(&get(d.port, "/cli/compute/nodes", OWNER, "").await);
+    assert!(listed_node(&nodes, "r2n11-vin").get("pinnedOnly").is_none(), "{nodes}");
+    assert_eq!(pinned_only_events("r2n11-vin").iter().map(|e| e.1.clone()).collect::<Vec<_>>(), vec![json!({"on": true}), json!({"on": false})]);
+    let r = run(d.port, &agent, &me, json!({"memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "r2n11-vin");
+
+    // A node that is added but not yet confirmed can be closed already.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let labels = std::collections::BTreeMap::from([("os".to_string(), "linux".to_string())]);
+        store::insert_pending_node(&conn, "r2n12-vin", "r2n12-vin", &format!("{:0>64}", "r2n12-vin"), "pem", &labels, "owner", "123456", 1).expect("pending node");
+    }
+    let r = post(d.port, PINNED_ONLY, OWNER, json!({"node": "r2n12-vin", "on": true})).await;
+    assert_eq!(r.status, 200, "a pending node: {}", r.body);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::confirm_node(&conn, "r2n12-vin", "owner", 2).expect("confirm");
+        assert!(k2_core::compute::pinned_only::is_on(&conn, "r2n12-vin"), "still on after the node is confirmed");
+        k2_core::compute::pinned_only::set(&conn, "r2n12-vin", false, "owner", 5).expect("off");
+    }
+    compute_ws::test_detach("r2n11-vin");
+}
+
 /// `--avoid`: submit never picks the node, the sweeper never moves a job
 /// there, a named node with --avoid is exit 2, an avoid list that leaves
 /// nothing is exit 3; a release that avoids its own node moves it at once

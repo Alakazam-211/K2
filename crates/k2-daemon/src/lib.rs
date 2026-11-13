@@ -367,6 +367,8 @@ pub mod compute_local;
 pub mod compute_manage;
 // `k2 compute move` and `--avoid` (0.46.8): queued jobs to auto or a node.
 pub mod compute_move;
+// What this server lets a node take: its pause and pinned-only handlers.
+pub mod compute_node_flags;
 // Package requests through nodes (0.46.9, self-serve environments).
 pub mod compute_pkg;
 pub mod compute_place;

@@ -27,15 +27,19 @@ use crate::compute_ws;
 fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     let (online, route, live_offer) = compute_ws::live_view(&n.id);
     let offer = live_offer.or_else(|| n.last_offer.clone());
-    let (queued, active) = {
+    let (queued, active, pinned_only) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         // Node-queued jobs (a shared node's queue) count as queued, not
         // running: their rows stay `assigned` until the node starts them.
         let (node_queued, running): (Vec<_>, Vec<_>) = store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES).into_iter().partition(|r| r.node_queued);
-        (store::jobs_in_states(&conn, &n.id, &["queued"]).len() + node_queued.len(), running.len())
+        (store::jobs_in_states(&conn, &n.id, &["queued"]).len() + node_queued.len(), running.len(), k2_core::compute::pinned_only::is_on(&conn, &n.id))
     };
     let mut v = serde_json::to_value(n).unwrap_or_default();
+    // Only when on: the node takes only jobs that name it.
+    if pinned_only {
+        v["pinnedOnly"] = true.into();
+    }
     v["online"] = online.into();
     v["liveRoute"] = route.into();
     // Whose each count is (CE-7): `running`/`queued` = this server's jobs

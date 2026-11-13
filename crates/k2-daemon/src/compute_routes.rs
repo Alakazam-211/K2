@@ -118,6 +118,7 @@ pub const ROUTES: &[&str] = &[
     crate::compute_pkg::REQUEST,
     crate::compute_pkg::REQUESTS,
     "/cli/compute/nodes/pause",
+    "/cli/compute/nodes/pinned-only",
     "/cli/compute/nodes/policy",
     "/cli/compute/nodes/policy/set",
     "/cli/compute/nodes/remove",
@@ -188,6 +189,7 @@ pub const POST_ROUTES: &[&str] = &[
     crate::compute_pkg::POLICY,
     crate::compute_pkg::REQUEST,
     "/cli/compute/nodes/pause",
+    "/cli/compute/nodes/pinned-only",
     "/cli/compute/nodes/policy/set",
     "/cli/compute/nodes/remove",
     "/cli/compute/nodes/rename",
@@ -441,7 +443,7 @@ fn owner_or_manager(who: &Who, mgr: Option<&Manager>) -> R<()> {
 
 /// Owner/admin, or a local agent under "Allow managing compute nodes".
 /// With no manager this is exactly [`need_admin`].
-fn admin_or_manager(who: &Who, mgr: Option<&Manager>) -> R<()> {
+pub(crate) fn admin_or_manager(who: &Who, mgr: Option<&Manager>) -> R<()> {
     if mgr.is_some() {
         return Ok(());
     }
@@ -693,7 +695,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/nodes/remove" => node_remove(&who, body),
         "/cli/compute/nodes/retire" => node_retire(&who, body, mgr),
         "/cli/compute/nodes/rename" => node_rename(&who, body, mgr),
-        "/cli/compute/nodes/pause" => node_pause(&who, body, mgr),
+        "/cli/compute/nodes/pause" => crate::compute_node_flags::node_pause(&who, body, mgr),
+        "/cli/compute/nodes/pinned-only" => crate::compute_node_flags::node_pinned_only(&who, body),
         "/cli/compute/nodes/routes" => node_routes(&who, body, mgr),
         // Package requests (protocol 7, prd-compute-self-serve-environments).
         p if crate::compute_pkg::is_route(p) => crate::compute_pkg::handle(p, &who, body, params),
@@ -999,37 +1002,6 @@ fn node_rename(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
         crate::compute_manage::audit(m, "node-rename", &n.name, &[("to", name)]);
     }
     Ok(serde_json::json!({"ok": true, "node": name}))
-}
-
-fn node_pause(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Value> {
-    admin_or_manager(who, mgr)?;
-    let v = json_body(body)?;
-    let n = node_or_404(s(&v, "node"))?;
-    let action = s(&v, "action").unwrap_or("pause");
-    let pause = match action {
-        "pause" => Some("paused"),
-        "drain" => Some("draining"),
-        "resume" => None,
-        _ => return Err(no(codes::BAD_REQUEST, 400, "action is pause, drain or resume")),
-    };
-    {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        store::set_controller_pause(&conn, &n.id, pause, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
-        store::record_event(&conn, &who.label(), "controller_pause", Some(&n.id), None, None, serde_json::json!({"action": action}));
-    }
-    if let Some(m) = mgr {
-        crate::compute_manage::audit(m, &format!("node-{action}"), &n.name, &[]);
-    }
-    if pause.is_none() {
-        // Resuming a retiring node keeps it (the machine was switched back on).
-        let _ = compute::access::unmark_retiring_at(&compute::access::retiring_path(), &n.id);
-        // …and puts a node set aside for infra failures back at once.
-        crate::compute_place::clear_set_aside(&n.id);
-    }
-    compute_ws::kick(&n.id);
-    Ok(serde_json::json!({"ok": true, "node": n.name, "controllerPause": pause,
-        "note": "this only stops new assignments from this server; the machine's owner pauses the node itself on that machine"}))
 }
 
 /// A route a node may dial: https/wss anywhere; http/ws only to a

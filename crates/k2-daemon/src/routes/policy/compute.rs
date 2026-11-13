@@ -87,6 +87,7 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/nodes/packages/request", Member),
     get("/cli/compute/nodes/packages/requests", Member),
     post("/cli/compute/nodes/pause", Admin),
+    post("/cli/compute/nodes/pinned-only", Admin),
     get("/cli/compute/nodes/policy", Admin),
     post("/cli/compute/nodes/policy/set", Admin),
     post("/cli/compute/nodes/remove", Owner),

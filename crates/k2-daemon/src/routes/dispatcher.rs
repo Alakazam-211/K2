@@ -1368,7 +1368,7 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                 return;
             }
             super::pass_gate::set_fenced(false);
-            let outcome = crate::slow_request::watch_tcp(handle_one_request(&mut stream, &state, ingress)).await;
+            let outcome = crate::watch_tcp_in_place!(handle_one_request(&mut stream, &state, ingress));
             match outcome {
                 DispatchOutcome::KeepAlive => {
                     requests_served = requests_served.saturating_add(1);

@@ -205,8 +205,28 @@ tokio::task_local! {
 }
 
 /// Run one TCP connection with its request trace (the dispatcher's loop).
-pub async fn scope<F: Future>(f: F) -> F::Output {
-    CURRENT.scope(RefCell::new(Trace::default()), f).await
+///
+/// Not an `async fn`: that would be one more future holding the whole
+/// connection future by value, built on the stack before it is polled.
+pub fn scope<F: Future>(f: F) -> impl Future<Output = F::Output> {
+    CURRENT.scope(RefCell::new(Trace::default()), f)
+}
+
+/// [`watch_tcp`] for a handler future that is too big to hand over by
+/// value. The dispatcher's request handler is one of the largest futures
+/// in the daemon. Passed as an argument it is built on the stack and
+/// copied into each wrapper's future on the way down, and in a debug
+/// build the deepest requests (an App's link) then ran out of stack: the
+/// process aborted with no message. Here the handler stays where it is
+/// made, in the caller's own future, and the watcher gets a pinned
+/// reference to it.
+#[macro_export]
+macro_rules! watch_tcp_in_place {
+    ($handler:expr) => {{
+        let handler = $handler;
+        tokio::pin!(handler);
+        $crate::slow_request::watch_tcp(handler).await
+    }};
 }
 
 /// The dispatcher, once a request's method and target are parsed. `head`

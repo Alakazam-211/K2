@@ -88,5 +88,31 @@ k2 study ci-release — signed release builds on K2 Compute (k2 ci release)
   ci_release_not_done (evidence before every job passed),
   ci_receipt_not_usable (a receipt failed this server's check: don't sign),
   evidence_mismatch (push: a file the run didn't build).
+  With ciPreview off, node rosters, lanes, seats, owners consent, signer
+  pairing, lane secrets and --receipt-v2 answer ci_preview_off too.
+
+RELEASE FREEZE
+  k2 ci freeze --until 3d --why "0.9 release": K2 moves no compute seat
+  while it lasts; k2 ci freeze off ends it.
+
+TRUSTED CACHE (nodes with cache generations; k2 study compute)
+  Every job on such a node starts from a copy of the last good build. Only
+  CI checks of a TRUSTED branch save the shared copy, and only when the
+  commit is verified on that branch: a watched push to it, or a k2 ci run
+  whose commit the remote's branch has (the daemon fetches it into
+  refs/k2-ci/<branch> to check; --ref alone is just a label). A check of
+  any other branch, a local commit, or any plain k2 compute run saves only
+  its own scratch copy. Trusted branches are server state, never read from
+  .k2/ci.toml (a PR could name its own branch there). The shared copy is
+  also pinned to the git remote a person's change saw (its URL after any
+  insteadOf): if the remote is repointed, checks save only scratch until a
+  person sets the branches again. Nothing is recorded until a person sets
+  them (or turns the watch on):
+    k2 ci cache trust                the list and the recorded remote
+    k2 ci cache trust --remove B     yours to do
+    k2 ci cache trust --add B        a person's: the owner or an Admin, from
+                                     a terminal outside K2
+                                     (cache_trust_needs_person; ask with the
+                                     k2 permission request line)
 --- stderr
 --- requests

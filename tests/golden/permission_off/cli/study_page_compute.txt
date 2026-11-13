@@ -1063,7 +1063,9 @@ or k2 compute manage on --workspace <you> outside K2)
   Every act is a line in the owner's Access Audit (Settings → Logs) with
   your workspace and session; add and confirm also drop an inbox note.
   Still the owner's: k2 compute preview on|off, k2 compute node remove,
-  "Allow compute nodes" (agents set), and this switch. Off: owner_only.
+  k2 compute node pinned-only (a pinned-only node runs only jobs that
+  name it), "Allow compute nodes" (agents set), and this switch. Off:
+  owner_only.
   Running jobs still needs "Allow compute nodes" and a grant.
 
 SERVICES

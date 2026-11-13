@@ -395,6 +395,8 @@ Owner / admin (refused for agents and inside K2 terminals, except where
   k2 compute node remove <name>                k2 compute node rename <old> <new>
   k2 compute node retire <name>                drain, then remove once its jobs end
   k2 compute node pause|drain|resume <name>    this server stops/starts assigning
+  k2 compute node pinned-only <name> on|off    on: only jobs that name the node run
+                   there; K2 never chooses it by itself (owner or Admin)
   k2 compute node route add|rm <name> <url>    LAN or tailnet URL the node may dial
 Sharing a node with other K2 servers (the node's owner server; 0.46.3):
   k2 compute node servers <node> [--json]      every server on it: slot, state,
@@ -894,6 +896,8 @@ def node_line(n):
             status = "unavailable: " + ",".join(o.get("unavailable") or [])
     if n.get("controllerPause"):
         status += " (server: %s)" % n["controllerPause"]
+    if n.get("pinnedOnly"):
+        status += " (pinned only)"
     # 0.46.9 (protocol 7): the short platform column (ubuntu24.04-x86_64,
     # arch-x86_64, macos15.5-arm64); an older node: linux-x86_64 as before.
     os_arch = n.get("platform") or "%s-%s" % (n.get("os") or "?", n.get("arch") or "?")
@@ -2944,6 +2948,17 @@ print(json.dumps({"code": v["enroll"], "expiresAt": v["expiresAt"], "name": v["n
             _compute_call POST /cli/compute/nodes/pause "$body" tcp
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: server-side %s. %s" % (v["node"], v.get("controllerPause") or "active", v["note"]))'
             ;;
+        pinned-only)
+            # On: automatic placement never chooses the node; only a job
+            # that names it runs there. The owner or an Admin only: the
+            # daemon refuses an agent, a managing one too.
+            local po_on=""
+            case "${2:-}" in on) po_on=1 ;; off) po_on=0 ;; esac
+            { [ $# -eq 2 ] && [ -n "$po_on" ]; } || { echo "usage: k2 compute node pinned-only <name> on|off" >&2; exit 2; }
+            body="$(_compute_json K2_CJ_node="$1" K2_CJ_on_b="$po_on")"
+            _compute_call POST /cli/compute/nodes/pinned-only "$body" tcp
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("%s: pinned-only %s%s. %s." % (v["node"], "on" if v["pinnedOnly"] else "off", "" if v.get("changed") else " (it already was)", v["note"]))'
+            ;;
         route|routes)
             local op="${1:-}"
             [ $# -ge 3 ] || { echo "usage: k2 compute node route add|rm <name> <url>" >&2; exit 2; }
@@ -3135,7 +3150,7 @@ if "node" in v:
     print("%s: %s" % (v["node"], ("offline alert after %dm" % (a // 60)) if a else "no offline alert"))'
             ;;
         *)
-            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
+            echo "usage: k2 compute node add|confirm|remove|rename|pause|drain|resume|pinned-only|route|health|policy|update|rollout|rollback|wall|alerts|admin|servers|packages …" >&2
             exit 2
             ;;
     esac

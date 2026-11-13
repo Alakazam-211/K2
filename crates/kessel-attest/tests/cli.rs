@@ -31,11 +31,62 @@ fn p(path: &std::path::Path) -> String {
 fn help_and_version() {
     let o = run(&["--help"]);
     assert_eq!(code(&o), 0);
-    for word in ["--owner-key", "--existed-before", "verified, time not proven", "EXIT"] {
+    for word in ["--owner-key", "--existed-before", "--as-of", "verified, time not proven", "EXIT", "https://github.com/Alakazam-211/K2/blob/main/docs/provenance-v1.md"] {
         assert!(out(&o).contains(word), "{word}");
     }
     let o = run(&["--version"]);
     assert_eq!((code(&o), out(&o).trim()), (0, format!("kessel-attest {}", env!("CARGO_PKG_VERSION")).as_str()));
+}
+
+#[test]
+fn help_after_verify_prints_the_help() {
+    for args in [vec!["verify", "--help"], vec!["verify", "-h"], vec!["verify", "dist/app", "--owner-key", "abc", "-h"]] {
+        let o = run(&args);
+        assert_eq!(code(&o), 0, "{args:?}: {}", err(&o));
+        assert!(out(&o).contains("WHAT IT CHECKS"), "{args:?}: {}", out(&o));
+        assert_eq!(err(&o), "", "{args:?}");
+    }
+    // After `--` it is a file name, not a flag.
+    let o = run(&["verify", "--", "--help"]);
+    assert_eq!(code(&o), 2, "{}", out(&o));
+}
+
+#[test]
+fn no_arguments_exits_2_with_the_usage_on_stderr() {
+    let o = run(&[]);
+    assert_eq!(code(&o), 2);
+    assert_eq!(out(&o), "");
+    assert!(err(&o).contains("USAGE") && err(&o).contains("kessel-attest verify FILE..."), "{}", err(&o));
+}
+
+#[test]
+fn with_json_bad_usage_and_unreadable_inputs_come_out_as_json() {
+    let w = World::new("cli-json-errors");
+    w.write(t(AFTER_BUILD));
+    let fp = p(&w.file("dl/acme-linux-x86_64", BIN_A_BYTES));
+    let prov = p(&w.provenance("L1"));
+    let trust = p(&w.trust());
+    let broken = p(&w.file("provenance/broken.intoto.jsonl", b"{not json\n"));
+    let owner = w.owner.fp.clone();
+    let cases: Vec<(Vec<&str>, &str)> = vec![
+        (vec!["--json"], "unknown command"),
+        (vec!["verify", "--json", "--bogus"], "unknown option --bogus"),
+        (vec!["verify", &fp, "--provenance", &prov, "--trust", &trust, "--json"], "--owner-key"),
+        (vec!["verify", &fp, "--provenance", &prov, "--trust", &trust, "--owner-key", &owner, "--as-of", "yesterday", "--json"], "YYYY-MM-DDTHH:MM:SSZ"),
+        (vec!["verify", "/nonexistent/file", "--provenance", &prov, "--trust", &trust, "--owner-key", &owner, "--json"], "not a file"),
+        (vec!["verify", &fp, "--provenance", "/nonexistent/L1.intoto.jsonl", "--trust", &trust, "--owner-key", &owner, "--json"], "/nonexistent/L1.intoto.jsonl"),
+        (vec!["verify", &fp, "--provenance", &broken, "--trust", &trust, "--owner-key", &owner, "--json"], "not a DSSE envelope"),
+    ];
+    for (args, want) in cases {
+        let o = run(&args);
+        assert_eq!(code(&o), 2, "{args:?}: {}{}", out(&o), err(&o));
+        assert_eq!(err(&o), "", "{args:?}: nothing on stderr with --json");
+        let v: Value = serde_json::from_str(&out(&o)).unwrap_or_else(|e| panic!("{args:?}: not JSON ({e}): {}", out(&o)));
+        assert_eq!(v["exitCode"], 2, "{args:?}: {v}");
+        let msg = v["error"].as_str().unwrap_or_else(|| panic!("{args:?}: no error string: {v}"));
+        assert!(msg.contains(want), "{args:?}: {msg}");
+        assert_eq!(v.as_object().map(|o| o.len()), Some(2), "{args:?}: {v}");
+    }
 }
 
 #[test]

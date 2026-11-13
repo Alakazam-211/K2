@@ -11,45 +11,59 @@ use kessel_attest::util::parse_rfc3339;
 use kessel_attest::verify::{self, Input, Outcome, Policy, Report, Verdict};
 use serde_json::json;
 
-const HELP: &str = "\
-kessel-attest: check a build statement offline, from the build machine
-owner's key down to the files you hold. No server, no network.
-
+const USAGE: &str = "\
 USAGE
   kessel-attest verify FILE... --provenance STATEMENT.intoto.jsonl
                        --trust TRUST_DIR --owner-key FP [options]
   kessel-attest verify [FILE...] --dir EVIDENCE_DIR --owner-key FP [options]
+  kessel-attest --help | --version
+";
 
+const HELP_INTRO: &str = "\
+kessel-attest: check a build statement offline, from the build machine
+owner's key down to the files you hold. No server, no network.
+
+";
+
+const HELP_BODY: &str = "\
 WHAT YOU NEED
   FILE            the file(s) you want to trust, e.g. a release binary.
   --provenance F  the build statement: one DSSE envelope per line
-                  (<label>.intoto.jsonl), signed by the machine that built it.
+                  (<job label>.intoto.jsonl, e.g. L1.intoto.jsonl), signed by
+                  the machine that built it.
   --trust DIR     the trust/ folder that came with it: rosters/, nodes/,
                   statements/, owners.json.
   --dir DIR       instead of --provenance and --trust: an evidence folder
                   (provenance/*.intoto.jsonl and trust/; files fetched into
-                  DIR/<label>/ are checked too).
+                  DIR/<job label>/ are checked too).
   --owner-key FP  the owner's roster key fingerprint, 64 hex. Get it from the
                   owner (their website, release notes, a person you trust),
                   NOT from the trust folder: it is what everything else is
                   checked against.
 
 OPTIONS
-  --roster F            the owner's current roster ({body, sig} JSON). The one
-                        in trust/ is as of the build; a key revoked later still
-                        looks active in it. The newest roster given is used.
-  --existed-before T    proof the statement existed by time T
-                        (YYYY-MM-DDTHH:MM:SSZ), e.g. the release's signature
-                        date. Needed when the signing key is no longer active.
-                        --as-of T is the same.
+  --roster F            the owner's current roster ({body, sig} JSON), such as
+                        trust/rosters/<FP>.json from a fresh download of the
+                        evidence. The one in trust/ is as of the build: a key
+                        revoked later still looks active in it. The newest
+                        roster given (highest seq) is used.
+  --existed-before T    a time by which you know the statement existed
+                        (YYYY-MM-DDTHH:MM:SSZ), from a timestamp or log you
+                        trust, e.g. the release's own signature date. The tool
+                        doesn't check it: it takes your word. It only matters
+                        when the signing key is no longer active.
+  --as-of T             the same as --existed-before.
   --repo R              require this source repository (github.com/acme/app,
                         a URL, or the statement's exact uri).
   --commit SHA          require this source commit (40 hex).
   --isolation A,B       require one of these isolation levels: job_uid,
-                        exclusive, tenant_uid, shared_uid.
+                        exclusive, tenant_uid, shared_uid (see ISOLATION).
   --twin F              a second statement for the same build from another
                         machine: it must name the same sha256 for each FILE.
-  --json                print the result as JSON.
+  --json                print the result as one JSON object on stdout. Bad
+                        usage or an unreadable input prints
+                        {\"error\": \"...\", \"exitCode\": 2} there too.
+  -h, --help            this text (also after verify).
 
 WHAT IT CHECKS, in order (it stops at the first that fails)
   roster          the owner's roster verifies with --owner-key
@@ -60,10 +74,17 @@ WHAT IT CHECKS, in order (it stops at the first that fails)
                   for a retired key, the job started before it was retired
   time            only for a key that is no longer active (see EXIT 3)
   self-statement  the machine's own signed statement: a job wall, no job
-                  could read the key, never ran a job without the wall
+                  could read the key, never ran a job without the wall,
+                  not a --dev node
   commit, repo, isolation   when asked for
   file            each FILE's sha256 is one the statement names
   twin            with --twin
+
+ISOLATION (how the job was kept apart from other jobs on the machine)
+  job_uid     a fresh OS user per job
+  exclusive   nothing else ran on the machine
+  tenant_uid  one OS user per tenant: that tenant's other jobs could touch it
+  shared_uid  no separation between jobs (macOS sandbox, --dev nodes)
 
 EXIT
   0  verified
@@ -72,18 +93,31 @@ EXIT
   3  verified, time not proven: everything holds, but the signing key is no
      longer active in the roster and the statement's times are the build
      machine's own clock, so it could have been signed after the key was
-     retired. Pass --existed-before with proof of when the file existed.
+     retired. --existed-before settles it with a time you vouch for, from a
+     timestamp or log you trust; the tool doesn't check that time.
 
 SPEC
   The statement is an in-toto Statement v1 with a SLSA Provenance v1
   predicate in a DSSE envelope; a stock DSSE tool can check the signature
   alone with trust/nodes/<keyid>.pem. The owner and roster checks are this
-  tool's. Formats: docs/provenance-v1.md and docs/ci-formats-v1.md in the
-  source repository.
+  tool's. Formats:
+    https://github.com/Alakazam-211/K2/blob/main/docs/provenance-v1.md
+    https://github.com/Alakazam-211/K2/blob/main/docs/ci-formats-v1.md
 ";
 
-fn usage(msg: &str) -> ExitCode {
-    eprintln!("kessel-attest: {msg}\nRun kessel-attest --help for usage.");
+fn print_help() -> ExitCode {
+    print!("{HELP_INTRO}{USAGE}\n{HELP_BODY}");
+    ExitCode::SUCCESS
+}
+
+/// Bad usage or an unreadable input: exit 2, as JSON on stdout with
+/// `--json`, else as text on stderr.
+fn usage(msg: &str, json: bool) -> ExitCode {
+    if json {
+        println!("{}", json!({"error": msg, "exitCode": 2}));
+    } else {
+        eprintln!("kessel-attest: {msg}\nRun kessel-attest --help for usage.");
+    }
     ExitCode::from(2)
 }
 
@@ -138,21 +172,28 @@ fn parse(argv: &[String]) -> Result<Args, String> {
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // Options end at `--`; after it every word is a FILE.
+    let opts = &argv[..argv.iter().position(|a| a == "--").unwrap_or(argv.len())];
+    let json = opts.iter().any(|a| a == "--json");
     match argv.first().map(String::as_str) {
-        None | Some("-h" | "--help" | "help") => {
-            print!("{HELP}");
-            return ExitCode::SUCCESS;
+        None => {
+            eprint!("kessel-attest: name a command (verify)\n\n{USAGE}\nRun kessel-attest --help for every option.\n");
+            return ExitCode::from(2);
         }
+        Some("-h" | "--help" | "help") => return print_help(),
         Some("-V" | "--version") => {
             println!("kessel-attest {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
         Some("verify") => {}
-        Some(other) => return usage(&format!("unknown command {other:?}; the command is verify")),
+        Some(other) => return usage(&format!("unknown command {other:?}; the command is verify"), json),
+    }
+    if opts[1..].iter().any(|a| a == "-h" || a == "--help") {
+        return print_help();
     }
     let args = match parse(&argv[1..]) {
         Ok(a) => a,
-        Err(e) => return usage(&e),
+        Err(e) => return usage(&e, json),
     };
     match build_input(&args) {
         Ok(input) => {
@@ -164,7 +205,7 @@ fn main() -> ExitCode {
             }
             ExitCode::from(report.verdict.exit_code() as u8)
         }
-        Err(e) => usage(&e),
+        Err(e) => usage(&e, json),
     }
 }
 

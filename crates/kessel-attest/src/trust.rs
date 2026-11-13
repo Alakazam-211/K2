@@ -2,7 +2,7 @@
 //!
 //! | Path | What |
 //! |---|---|
-//! | `nodes/<fp>.pem` | each node's public key (for stock DSSE tools) |
+//! | `nodes/<keyid>.pem` | each node's public key (for stock DSSE tools); `<keyid>` is the key's fingerprint, the envelope's `keyid` |
 //! | `statements/<sha256>.json` | the nodes' signed self-statements, `{body, sig}` |
 //! | `owners.json` | `[{id, rosterKeyFp, rosterSeq}]` |
 //! | `rosters/<rosterKeyFp>.json` | each owner's roster as the server held it, `{body, sig}` |

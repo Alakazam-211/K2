@@ -218,7 +218,7 @@ fn a_retired_key_is_verified_but_time_not_proven() {
 }
 
 #[test]
-fn proof_the_file_existed_before_retirement_settles_the_time() {
+fn a_time_vouched_for_before_retirement_settles_the_time() {
     let mut w = World::new("retired-proven");
     retire(&mut w, "2027-01-15T12:00:00Z");
     w.write(t(AFTER_BUILD));
@@ -227,7 +227,7 @@ fn proof_the_file_existed_before_retirement_settles_the_time() {
     let r = verify(&i);
     assert_eq!(r.verdict, Verdict::Verified, "{:#?}", r.checks);
     assert_eq!(r.checks.iter().find(|c| c.rule == "time").map(|c| c.outcome), Some(Outcome::Pass));
-    // Proof that comes after the retirement proves nothing about the signing.
+    // A time after the retirement says nothing about when it was signed.
     i.policy.existed_before = Some(t("2027-01-15T12:00:01Z"));
     assert_eq!(verify(&i).verdict, Verdict::TimeNotProven);
 }

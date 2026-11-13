@@ -14,8 +14,9 @@
 //!                                   └──▶ node self-statement (wall, key exposure, taint)
 //! ```
 //!
-//! The rules and their order are in [`verify`]. Formats: `docs/provenance-v1.md`
-//! and `docs/ci-formats-v1.md` in the source repository.
+//! The rules and their order are in the [`verify`](mod@verify) module.
+//! Formats: <https://github.com/Alakazam-211/K2/blob/main/docs/provenance-v1.md>
+//! and <https://github.com/Alakazam-211/K2/blob/main/docs/ci-formats-v1.md>.
 //!
 //! **What a pass means.** The owner vouches for a machine, and that machine
 //! says it built these bytes from that commit. It doesn't prove the owner
@@ -26,8 +27,10 @@
 //! **Time.** Every time in a statement is the node's own clock. For a key
 //! that is no longer active in the roster, a statement could have been
 //! signed after the key was retired and back-dated, so the verdict is
-//! [`verify::Verdict::TimeNotProven`] unless you supply proof of when the
-//! statement existed ([`verify::Policy::existed_before`]). A roster is only
+//! [`verify::Verdict::TimeNotProven`] unless you supply a time by which you
+//! know the statement existed, from a timestamp or log you trust
+//! ([`verify::Policy::existed_before`]; the crate takes your word for it).
+//! A roster is only
 //! as current as its date: a key revoked after it was issued still looks
 //! active in it, so the report warns when the roster predates the build.
 //!
@@ -50,3 +53,8 @@ pub mod verify;
 pub use dsse::{Envelope, NodeKey};
 pub use statement::Statement;
 pub use verify::{verify, Input, Policy, Report, Verdict};
+
+// The README's Rust examples run as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;

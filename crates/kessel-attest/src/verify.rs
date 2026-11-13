@@ -17,8 +17,9 @@
 //!      vouches for the key (`taint_basis`);
 //!    - **time** (only for a key not active in the roster): every time in a
 //!      statement is the node's own clock, so a retired key could sign a
-//!      back-dated one. Proven only by `existed_before` on or before
-//!      `valid_to`; otherwise the verdict is [`Verdict::TimeNotProven`];
+//!      back-dated one. Settled only by [`Policy::existed_before`] on or
+//!      before `valid_to`, a time the caller vouches for (not checked here);
+//!      otherwise the verdict is [`Verdict::TimeNotProven`];
 //!    - **self-statement**: the node's own statement (from `trust/`)
 //!      verifies with its key: no `--dev` node, no job could read the key,
 //!      a wall that matches the build's, not tainted;
@@ -90,9 +91,11 @@ impl Verdict {
 pub struct Policy {
     /// The owner's roster key fingerprint, got out of band (64 hex).
     pub owner_fp: String,
-    /// Proof the statement existed by this time (unix seconds): a release's
-    /// own signature date, or a log entry. Settles the time of a statement
-    /// from a key that is no longer active.
+    /// A time (unix seconds) by which the caller knows the statement
+    /// existed, from a timestamp or log the caller trusts, such as a
+    /// release's own signature date. Not checked: the verifier takes the
+    /// caller's word. Settles the time of a statement from a key that is no
+    /// longer active.
     pub existed_before: Option<i64>,
     /// The source repository (`github.com/acme/app`, a URL, or the exact uri).
     pub repo: Option<String>,
@@ -570,7 +573,7 @@ fn wall_str(w: Wall) -> &'static str {
 }
 
 /// Key status and the time rule. `Ok(true)`: the time holds (an active key,
-/// or a retired key with proof of when the statement existed); `Ok(false)`:
+/// or a retired key with a time the caller vouches for); `Ok(false)`:
 /// verified, time not proven.
 fn check_status(label: &str, st: &Statement, e: &RosterEntry, p: &Policy, run: &mut Run) -> Result<bool, Stop> {
     let started = st.started();
@@ -598,7 +601,7 @@ fn check_status(label: &str, st: &Statement, e: &RosterEntry, p: &Policy, run: &
             run.pass(label, "key status", format!("node {}'s key is retired since {}; the statement says the job started {}", e.name, when(to), when(started)));
             match p.existed_before {
                 Some(t) if t <= to => {
-                    run.pass(label, "time", format!("the statement existed by {}, while the key was still valid (until {})", when(t), when(to)));
+                    run.pass(label, "time", format!("you vouch the statement existed by {} (--existed-before), while the key was still valid (until {})", when(t), when(to)));
                     Ok(true)
                 }
                 Some(t) => {
@@ -606,7 +609,7 @@ fn check_status(label: &str, st: &Statement, e: &RosterEntry, p: &Policy, run: &
                         label,
                         "time",
                         format!(
-                            "the statement existed by {}, after the key was retired ({}): it could have been signed, back-dated, after the retirement",
+                            "you vouch the statement existed by {} (--existed-before), after the key was retired ({}): it could have been signed, back-dated, after the retirement",
                             when(t),
                             when(to)
                         ),
@@ -618,7 +621,7 @@ fn check_status(label: &str, st: &Statement, e: &RosterEntry, p: &Policy, run: &
                         label,
                         "time",
                         format!(
-                            "the job's times are the node's own clock, and the key was retired {}. Whoever holds a retired key can back-date a statement. Pass --existed-before TIME with proof of when the file existed (for example the release's signature date)",
+                            "the job's times are the node's own clock, and the key was retired {}. Whoever holds a retired key can back-date a statement. Pass --existed-before TIME: a time by which you know the statement existed, from a timestamp or log you trust (for example the release's signature date); the tool takes your word for it",
                             when(to)
                         ),
                     );

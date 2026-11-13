@@ -65,8 +65,8 @@ members = [
     # D3/D4) and its wire, which the daemon links (no platform code).
     "crates/k2-deskd-proto",
     "crates/k2-deskd",
-    # Checks K2 Compute build statements offline (prd-compute-build-attestations-v1
-    # S5): MIT, pure Rust, linked into nothing else.
+    # The offline verifier for K2 Compute build statements: MIT OR
+    # Apache-2.0, pure Rust, linked into nothing else.
     "crates/kessel-attest",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep

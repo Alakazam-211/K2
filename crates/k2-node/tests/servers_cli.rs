@@ -179,16 +179,49 @@ fn servers_add_takes_the_code_on_stdin_or_env_and_never_in_argv() {
 
     // The environment form: no --code at all.
     let no_flag = ["servers", "add", "--url", "https://b.k2.dev", "--home", h, "--config-dir", c];
-    let child = spawn(&no_flag, Some(CODE));
-    // This child does not wait for anything, so it may be gone already:
-    // one read, as `ps` gave, with no wait for an argv to show.
-    assert!(!argv_of_pid(child.id()).join(" ").contains("ABCDE"), "the env form isn't in argv either");
+    // This child waits for nothing, so it is stopped first: an argv read
+    // from a process that has already exited is empty and would prove
+    // nothing. The check runs only on a child seen stopped, with its argv.
+    // It can also finish before the stop reaches it (1 run in 480 on a
+    // loaded Linux node): that spawn is reaped and another is tried. If
+    // none is ever caught running, the test fails.
+    let mut caught = None;
+    for _ in 0..20 {
+        let child = spawn(&no_flag, Some(CODE));
+        if stop_while_running(child.id()) {
+            caught = Some(child);
+            break;
+        }
+        let (ok, _, err) = finish(child, "");
+        assert!(!ok && err.contains("sudo"), "a child that got away still ran the env form: {err}");
+    }
+    let child = caught.expect("20 env-form children all exited before they could be stopped; argv was never read");
+    let shown = argv_of(child.id());
+    assert!(shown.contains("servers add") && shown.contains("--url"), "the stopped child's argv: {shown:?}");
+    assert!(!shown.contains("ABCDE") && !shown.contains("0123456789abcdef"), "the env form isn't in argv either: {shown:?}");
+    // SAFETY: SIGCONT to the child this test spawned and stopped.
+    assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGCONT) }, 0, "continue the child");
     let (ok, _, err) = finish(child, "");
     assert!(!ok && err.contains("sudo"), "the code from K2_NODE_ENROLL_CODE parsed: {err}");
     assert!(!err.contains(CODE), "{err}");
     // Neither: the error names both safe forms.
     let (ok, _, err) = finish(spawn(&no_flag, None), "");
     assert!(!ok && err.contains("--code - < code-file") && err.contains("K2_NODE_ENROLL_CODE"), "{err}");
+}
+
+/// Stops a child of this test with SIGSTOP and says whether it was caught
+/// running (`true`) or had already exited (`false`). The child is not
+/// reaped here: `waitid` only looks (WNOWAIT), so `Child::wait` still works.
+fn stop_while_running(pid: u32) -> bool {
+    let pid = pid as libc::pid_t;
+    // SAFETY: SIGSTOP to a child of this test; a zombie ignores it.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGSTOP) }, 0, "SIGSTOP: {}", std::io::Error::last_os_error());
+    // SAFETY: siginfo_t is plain old data; all zeroes is a valid value.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is a writable siginfo_t; the pid is our own child.
+    let rc = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WSTOPPED | libc::WEXITED | libc::WNOWAIT) };
+    assert_eq!(rc, 0, "waitid: {}", std::io::Error::last_os_error());
+    info.si_code == libc::CLD_STOPPED
 }
 
 /// A running process's argv as the system shows it to other processes

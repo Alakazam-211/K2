@@ -40,12 +40,28 @@ fn cmd(key: &SigningKey, node_fp: &str, verb: &str, args: Value) -> admin::Signe
 }
 
 async fn ask(c: &mut Conn, s: admin::SignedCommand) -> AdminResult {
+    ask_seen(c, s).await.0
+}
+
+/// [`ask`], with every frame that came before the answer. The node can
+/// send the offer a command causes before it sends the command's result
+/// (its config poll sees the change first), and waiting for the result
+/// reads that offer off the connection.
+async fn ask_seen(c: &mut Conn, s: admin::SignedCommand) -> (AdminResult, Vec<Frame>) {
     let body: Command = serde_json::from_slice(&crypto::unb64(&s.body_b64).unwrap()).unwrap();
     c.send(Frame::Admin(AdminFrame { cmd: s }));
-    let fr = c.until(|f| matches!(f, Frame::AdminResult(r) if r.cmd_id == body.cmd_id || r.cmd_id.is_empty())).await;
-    match fr.into_iter().last() {
-        Some(Frame::AdminResult(r)) => r,
+    let mut fr = c.until(|f| matches!(f, Frame::AdminResult(r) if r.cmd_id == body.cmd_id || r.cmd_id.is_empty())).await;
+    match fr.pop() {
+        Some(Frame::AdminResult(r)) => (r, fr),
         o => panic!("{o:?}"),
+    }
+}
+
+/// The offer a command leads to: one of the frames that came before its
+/// result, or the next one that matches.
+async fn offer_after(c: &mut Conn, before: &[Frame], pred: impl Fn(&Frame) -> bool) {
+    if !before.iter().any(&pred) {
+        c.until(pred).await;
     }
 }
 
@@ -105,12 +121,12 @@ async fn courier_relays_to_the_executor_which_checks_again() {
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
     let fp = n.node.key.fingerprint();
-    let r = ask(&mut c, cmd(&fake.key, &fp, "control.pause", json!({}))).await;
+    let (r, before) = ask_seen(&mut c, cmd(&fake.key, &fp, "control.pause", json!({}))).await;
     assert_eq!(r.state, "done", "{r:?}");
     assert!(r.audit_seq.is_some(), "the executor audited it");
-    // The node picks the owner's pause up from control.toml.
-    let fr = c.until(|f| matches!(f, Frame::Offer(o) if o.control == Control::Paused)).await;
-    assert!(!fr.is_empty());
+    // The node picks the owner's pause up from control.toml (its offer may
+    // come before the command's result).
+    offer_after(&mut c, &before, |f| matches!(f, Frame::Offer(o) if o.control == Control::Paused)).await;
     // Narrowing policy runs; widening is held for the owner (refused here).
     let r = ask(&mut c, cmd(&fake.key, &fp, "policy.set", json!({"max_parallel": 1}))).await;
     assert_eq!(r.state, "done", "{r:?}");
@@ -121,10 +137,9 @@ async fn courier_relays_to_the_executor_which_checks_again() {
     let r = ask(&mut c, cmd(&other, &fp, "control.resume", json!({}))).await;
     assert_eq!(r.code.as_deref(), Some(code::BAD_CONTROLLER_SIGNATURE));
     // Persisted narrowing reaches the offer.
-    let r = ask(&mut c, cmd(&fake.key, &fp, "policy.narrow", json!({"mem_bytes": 1u64 << 30}))).await;
+    let (r, before) = ask_seen(&mut c, cmd(&fake.key, &fp, "policy.narrow", json!({"mem_bytes": 1u64 << 30}))).await;
     assert_eq!(r.state, "done", "{r:?}");
-    let fr = c.until(|f| matches!(f, Frame::Offer(o) if o.caps.mem_bytes == 1 << 30)).await;
-    assert!(!fr.is_empty());
+    offer_after(&mut c, &before, |f| matches!(f, Frame::Offer(o) if o.caps.mem_bytes == 1 << 30)).await;
     let lines = exec.audit().verify().unwrap();
     assert!(lines.len() >= 6, "{}", lines.len());
     let _ = std::fs::remove_file(&sock);

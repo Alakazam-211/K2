@@ -586,7 +586,11 @@ mod tests {
         let mut bytes = MAGIC.to_vec();
         bytes.extend_from_slice(&FORMAT.to_be_bytes());
         bytes.extend_from_slice(&body);
-        assert!(bytes.len() < 2 << 20, "the bomb itself is small ({} bytes)", bytes.len());
+        // How small depends on the deflate backend flate2 was built with:
+        // under 2 MiB with miniz_oxide, 2.6 MiB with zlib-rs (which the
+        // build has once k2-deckrender's zip reader is in it). Either way
+        // it is a tiny part of what it inflates to.
+        assert!(bytes.len() < 8 << 20, "the bomb itself is small ({} bytes)", bytes.len());
         assert!(Snapshot::decode(&bytes).is_none());
     }
 

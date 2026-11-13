@@ -41,7 +41,10 @@ export function OwnerTimezoneRow(): React.JSX.Element {
           What a reminder&apos;s &ldquo;13:00&rdquo; and a mail check window mean. Empty: this server&apos;s own clock.
           {deviceZone && value !== deviceZone && (
             <span className="block mt-1.5">
-              <Button onClick={() => void save(deviceZone)}>Use this device&apos;s zone ({deviceZone})</Button>
+              {/* A long zone name wraps rather than running off the card. */}
+              <Button className="max-w-full !whitespace-normal text-left" onClick={() => void save(deviceZone)}>
+                Use this device&apos;s zone ({deviceZone})
+              </Button>
             </span>
           )}
         </>

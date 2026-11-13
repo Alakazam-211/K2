@@ -72,18 +72,19 @@ export function UsageLimitsStrip({
           return (
             <SettingRow key={item.tool} label={item.display} hint={hint || undefined} testId={`usage-limits-strip-${item.tool}`}>
               {item.percent !== null ? (
-                <span className="flex items-center gap-3">
+                // The meter gives way (to 2rem) on a narrow line; the figure stays.
+                <span className="flex items-center gap-3 min-w-0 max-w-full">
                   <span
                     role="meter"
                     aria-label={`${item.display} limit used`}
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={item.percent}
-                    className="relative block h-1.5 w-40 overflow-hidden rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]"
+                    className="relative block h-1.5 w-40 min-w-8 shrink overflow-hidden rounded-[var(--radius-pill)] bg-[var(--color-wash-2)]"
                   >
                     <span className="absolute inset-y-0 left-0" style={{ width: `${Math.min(100, item.percent)}%`, background: TONE_FILL[tone] }} />
                   </span>
-                  <span className="w-12 text-right type-row tabular-nums text-[var(--color-text-primary)]">{item.percent}%</span>
+                  <span className="w-12 flex-shrink-0 text-right type-row tabular-nums text-[var(--color-text-primary)]">{item.percent}%</span>
                 </span>
               ) : (
                 <span className="type-hint text-[var(--color-text-secondary)]">No reading</span>

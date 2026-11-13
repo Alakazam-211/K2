@@ -174,11 +174,14 @@ pub trait RssSampler: Send + Sync {
     }
 }
 
-/// `ps -axo pgid=,rss=` summed for one group.
+/// One group's RSS: libproc on macOS, else `ps -axo pgid=,rss=` summed.
 pub struct PsSampler;
 
 impl RssSampler for PsSampler {
     fn group_rss(&self, pgid: i32) -> Option<u64> {
+        if let Some(procs) = crate::jobstat::libproc_group(pgid).filter(|v| !v.is_empty()) {
+            return Some(procs.iter().map(|p| p.rss_bytes).sum());
+        }
         let out = std::process::Command::new("/bin/ps").args(["-axo", "pgid=,rss="]).env_clear().output().ok()?;
         let s = String::from_utf8_lossy(&out.stdout);
         let mut kb = 0u64;

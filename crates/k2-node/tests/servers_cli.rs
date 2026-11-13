@@ -145,9 +145,18 @@ fn servers_add_takes_the_code_on_stdin_or_env_and_never_in_argv() {
         let o = child.wait_with_output().expect("wait");
         (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
     };
+    // A child's argv reads as empty for a moment while its exec lands
+    // (seen on Linux): wait for the real one. What it then holds is what
+    // the assertions below judge.
     let argv_of = |pid: u32| -> String {
-        let ps = Command::new("ps").args(["-ww", "-o", "args=", "-p", &pid.to_string()]).output().expect("ps");
-        String::from_utf8_lossy(&ps.stdout).into_owned()
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let shown = argv_of_pid(pid).join(" ");
+            if shown.contains("servers add") || std::time::Instant::now() > deadline {
+                return shown;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     };
 
     // stdin: while it waits for the code, its argv shows no code; then the
@@ -171,11 +180,55 @@ fn servers_add_takes_the_code_on_stdin_or_env_and_never_in_argv() {
     // The environment form: no --code at all.
     let no_flag = ["servers", "add", "--url", "https://b.k2.dev", "--home", h, "--config-dir", c];
     let child = spawn(&no_flag, Some(CODE));
-    assert!(!argv_of(child.id()).contains("ABCDE"), "the env form isn't in argv either");
+    // This child does not wait for anything, so it may be gone already:
+    // one read, as `ps` gave, with no wait for an argv to show.
+    assert!(!argv_of_pid(child.id()).join(" ").contains("ABCDE"), "the env form isn't in argv either");
     let (ok, _, err) = finish(child, "");
     assert!(!ok && err.contains("sudo"), "the code from K2_NODE_ENROLL_CODE parsed: {err}");
     assert!(!err.contains(CODE), "{err}");
     // Neither: the error names both safe forms.
     let (ok, _, err) = finish(spawn(&no_flag, None), "");
     assert!(!ok && err.contains("--code - < code-file") && err.contains("K2_NODE_ENROLL_CODE"), "{err}");
+}
+
+/// A running process's argv as the system shows it to other processes
+/// (what `ps` prints), read without spawning `ps`: a sandbox may refuse
+/// the setuid `ps`.
+#[cfg(target_os = "linux")]
+fn argv_of_pid(pid: u32) -> Vec<String> {
+    // Empty while an exec lands and once the process has exited.
+    let raw = std::fs::read(format!("/proc/{pid}/cmdline")).expect("read /proc/<pid>/cmdline");
+    raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect()
+}
+
+/// macOS: `sysctl(KERN_PROCARGS2)`. The reply is a native-endian i32 argc,
+/// the exec path and its NUL, NUL padding, then argc NUL-terminated
+/// strings (the environment follows and is not read). Empty when the
+/// process is gone.
+#[cfg(target_os = "macos")]
+fn argv_of_pid(pid: u32) -> Vec<String> {
+    let mut buf = vec![0u8; 1 << 20];
+    let mut len = buf.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    // SAFETY: `buf` is `len` writable bytes; the kernel writes at most that
+    // and sets `len` to what it wrote.
+    let rc = unsafe {
+        libc::sysctl(mib.as_mut_ptr(), mib.len() as libc::c_uint, buf.as_mut_ptr().cast(), &mut len, std::ptr::null_mut(), 0)
+    };
+    // A process that has exited has no argv to show, as with `ps`.
+    if rc != 0 {
+        return Vec::new();
+    }
+    buf.truncate(len);
+    let argc = i32::from_ne_bytes(buf[..4].try_into().expect("argc")) as usize;
+    let rest = &buf[4..];
+    let rest = &rest[rest.iter().position(|b| *b == 0).expect("the exec path ends")..];
+    let mut rest = &rest[rest.iter().position(|b| *b != 0).expect("argv follows the padding")..];
+    let mut argv = Vec::with_capacity(argc);
+    for _ in 0..argc {
+        let end = rest.iter().position(|b| *b == 0).expect("an argv string ends");
+        argv.push(String::from_utf8_lossy(&rest[..end]).into_owned());
+        rest = &rest[end + 1..];
+    }
+    argv
 }

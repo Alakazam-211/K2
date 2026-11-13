@@ -68,8 +68,26 @@ fn process_name(pid: i32) -> Option<String> {
     std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string())
 }
 
+/// libproc's name for a pid (macOS): no `ps` spawn, and it works where a
+/// sandbox refuses the setuid `ps`.
+#[cfg(target_os = "macos")]
+fn libproc_name(pid: i32) -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is 256 writable bytes; proc_name writes at most that many.
+    let n = unsafe { libc::proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+}
+
+#[cfg(all(unix, not(target_os = "linux"), not(target_os = "macos")))]
+fn libproc_name(_pid: i32) -> Option<String> {
+    None
+}
+
 #[cfg(not(target_os = "linux"))]
 fn process_name(pid: i32) -> Option<String> {
+    if let Some(n) = libproc_name(pid) {
+        return Some(n);
+    }
     let out = std::process::Command::new("/bin/ps").args(["-o", "comm=", "-p", &pid.to_string()]).output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!s.is_empty()).then(|| s.rsplit('/').next().unwrap_or(&s).to_string())
@@ -233,5 +251,23 @@ mod tests {
         assert!(Path::new(&p).exists());
         let s = scan(&[], Some(&p), l.owned(), crate::util::now());
         assert_eq!(s.holding.as_deref(), Some(p.as_str()));
+    }
+
+    /// macOS: the name comes from libproc, with no `ps` spawn.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_process_name_comes_from_libproc() {
+        let me = std::process::id() as i32;
+        let exe = std::env::current_exe().unwrap();
+        let want = exe.file_name().unwrap().to_string_lossy().into_owned();
+        let got = libproc_name(me).expect("libproc names this process");
+        // libproc keeps at most 32 bytes of the name.
+        assert!(!got.is_empty() && want.starts_with(&got), "libproc said {got:?} for {want:?}");
+        assert_eq!(process_name(me), Some(got));
+        // A reaped child has no name from libproc.
+        let mut child = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).spawn().unwrap();
+        let gone = child.id() as i32;
+        child.wait().unwrap();
+        assert_eq!(libproc_name(gone), None);
     }
 }

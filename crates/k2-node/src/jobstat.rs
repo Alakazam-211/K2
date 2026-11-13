@@ -198,7 +198,7 @@ fn proc_group(pgid: i32) -> Option<Vec<ProcUse>> {
 /// Apple silicon), converted with the timebase.
 #[cfg(target_os = "macos")]
 #[allow(deprecated)] // libc's mach timebase items point at the mach2 crate; the call is the same
-fn libproc_group(pgid: i32) -> Option<Vec<ProcUse>> {
+pub(crate) fn libproc_group(pgid: i32) -> Option<Vec<ProcUse>> {
     let mut tb = libc::mach_timebase_info { numer: 0, denom: 0 };
     if unsafe { libc::mach_timebase_info(&mut tb) } != 0 || tb.denom == 0 {
         return None;
@@ -224,7 +224,7 @@ fn libproc_group(pgid: i32) -> Option<Vec<ProcUse>> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn libproc_group(_pgid: i32) -> Option<Vec<ProcUse>> {
+pub(crate) fn libproc_group(_pgid: i32) -> Option<Vec<ProcUse>> {
     None
 }
 

@@ -22,38 +22,12 @@ fn bad(m: impl Into<String>) -> AdminRefusal {
     AdminRefusal::new(code::BAD_ARGS, m)
 }
 
-/// `ps -A -o pgid=,time=` → CPU seconds per process group.
-pub fn parse_ps_cpu(text: &str) -> HashMap<i32, u64> {
-    let mut out: HashMap<i32, u64> = HashMap::new();
-    for line in text.lines() {
-        let mut it = line.split_whitespace();
-        let (Some(g), Some(t)) = (it.next(), it.next()) else { continue };
-        let (Ok(g), Some(secs)) = (g.parse::<i32>(), parse_cpu_time(t)) else { continue };
-        *out.entry(g).or_default() += secs;
-    }
-    out
-}
-
-/// `[[dd-]hh:]mm:ss[.cc]` → seconds.
-pub fn parse_cpu_time(t: &str) -> Option<u64> {
-    let (days, rest) = match t.split_once('-') {
-        Some((d, r)) => (d.parse::<u64>().ok()?, r),
-        None => (0, t),
-    };
-    let rest = rest.split('.').next()?;
-    let parts: Vec<u64> = rest.split(':').map(|p| p.parse::<u64>().ok()).collect::<Option<_>>()?;
-    let secs = match parts.as_slice() {
-        [m, s] => m * 60 + s,
-        [h, m, s] => h * 3600 + m * 60 + s,
-        _ => return None,
-    };
-    Some(days * 86400 + secs)
-}
-
-fn cpu_by_group() -> HashMap<i32, u64> {
-    let mut c = std::process::Command::new("/bin/ps");
-    c.args(["-A", "-o", "pgid=,time="]).env_clear().env("LANG", "C");
-    crate::util::output_limited(c, std::time::Duration::from_secs(10)).map(|t| parse_ps_cpu(&t)).unwrap_or_default()
+/// CPU seconds a job's process group has used: `/proc` on Linux, libproc
+/// on macOS, `ps` only when those can't say ([`crate::jobstat::ps_group`]).
+/// `None`: the group has no process left, or nothing could read it.
+fn group_cpu_secs(pgid: i32) -> Option<u64> {
+    let procs = crate::jobstat::ps_group(pgid).filter(|v| !v.is_empty())?;
+    Some(procs.iter().map(|p| p.cpu_ms).sum::<u64>() / 1000)
 }
 
 fn mtime(p: &Path) -> Option<i64> {
@@ -94,13 +68,12 @@ pub fn stuck_jobs(node: &Node) -> Vec<StuckJob> {
         node.stuck_track.0.lock().unwrap().clear();
         return vec![];
     }
-    let cpu = cpu_by_group();
     let mut track = node.stuck_track.0.lock().unwrap();
     track.retain(|k, _| rows.iter().any(|(t, r, _)| t.slot == k.0 && r.job_id == k.1 && r.generation == k.2));
     let mut out = Vec::new();
     for (t, r, pid) in rows {
         let key = (t.slot, r.job_id.clone(), r.generation);
-        let c = pid.and_then(|p| cpu.get(&(p as i32)).copied()).unwrap_or(0);
+        let c = pid.and_then(|p| group_cpu_secs(p as i32)).unwrap_or(0);
         let entry = track.entry(key).or_insert((c, now));
         if entry.0 != c {
             *entry = (c, now);
@@ -119,7 +92,6 @@ pub fn stuck_jobs(node: &Node) -> Vec<StuckJob> {
 /// `ps`: the node's running jobs.
 pub fn ps(node: &Node) -> Value {
     let now = node.now();
-    let cpu = cpu_by_group();
     let rows: Vec<Value> = running_rows(node)
         .into_iter()
         .map(|(t, r, pid)| {
@@ -128,7 +100,7 @@ pub fn ps(node: &Node) -> Value {
                 "job_id": r.job_id, "generation": r.generation, "state": r.state.as_str(),
                 "workspace": r.plan.workspace_label, "requested_by": r.plan.requested_by,
                 "argv0": r.plan.argv.first(), "started_at": r.started_at, "pid": pid,
-                "cpu_secs": pid.and_then(|p| cpu.get(&(p as i32)).copied()),
+                "cpu_secs": pid.and_then(|p| group_cpu_secs(p as i32)),
                 "quiet_secs": last_out.map(|t| (now - t).max(0)), "log_seq": r.log_seq,
             })
         })
@@ -380,15 +352,26 @@ mod tests {
         n.stop_all(k2_node_proto::frames::JobState::Cancelled, "test_over");
     }
 
+    /// A group's CPU comes from the system's own tables, with no `ps`
+    /// spawn: a live group answers, a group with no process does not.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
-    fn cpu_times_parse() {
-        assert_eq!(parse_cpu_time("0:01.50"), Some(1));
-        assert_eq!(parse_cpu_time("12:34"), Some(754));
-        assert_eq!(parse_cpu_time("01:02:03"), Some(3723));
-        assert_eq!(parse_cpu_time("2-01:00:00"), Some(2 * 86400 + 3600));
-        assert_eq!(parse_cpu_time("x"), None);
-        let m = parse_ps_cpu("  100  0:01.00\n  100  1:00.00\n  7 0:00.00\nbad line\n");
-        assert_eq!(m.get(&100), Some(&61));
-        assert_eq!(m.get(&7), Some(&0));
+    fn a_groups_cpu_is_read_for_a_live_group_and_absent_for_an_empty_one() {
+        // SAFETY: getpgrp only reads this process's group id.
+        let own = unsafe { libc::getpgrp() };
+        // Burn a little CPU so the answer can't be a default.
+        let t0 = std::time::Instant::now();
+        let mut x = 0u64;
+        while t0.elapsed() < std::time::Duration::from_millis(1200) {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+        }
+        std::hint::black_box(x);
+        let secs = group_cpu_secs(own).expect("this test's own group has processes");
+        assert!(secs >= 1, "the group burned over a second of CPU, got {secs}");
+        // A child that has exited and been reaped: its pid names no group.
+        let mut child = std::process::Command::new("/bin/sh").args(["-c", "exit 0"]).spawn().expect("spawn sh");
+        let gone = child.id() as i32;
+        child.wait().expect("wait");
+        assert_eq!(group_cpu_secs(gone), None, "an empty group has no CPU reading");
     }
 }

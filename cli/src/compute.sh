@@ -921,7 +921,7 @@ def node_line(n):
     run = "run %d/%s%s" % (n.get("running", 0), par if par is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else "")
     queued = "queued %d%s" % (n.get("queued", 0), (" (yours %d)" % mine.get("queued", 0)) if mine else "")
     nr = n.get("nodeRunning")
-    node_runs = (" · node runs %d" % nr) if nr is not None and nr != n.get("running", 0) else ""
+    node_runs = (" · node runs %d%s" % (nr, (" of %s: full" % par) if par and nr >= par else "")) if nr is not None and nr != n.get("running", 0) else ""
     g = n.get("grant")
     grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
     reboot = "  reboot pending" if n.get("rebootPending") else ""
@@ -2845,7 +2845,7 @@ for n in rows:
     parts.append("run %d/%s%s" % (len(st.get("running") or []), st.get("parallelMax") if st.get("parallelMax") is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else ""))
     parts.append("queued %d%s" % (len(st.get("queued") or []), (" (yours %d)" % mine.get("queued", 0)) if mine else ""))
     if n.get("nodeRunning") is not None and n["nodeRunning"] != len(st.get("running") or []):
-        parts.append("node runs %d" % n["nodeRunning"])
+        parts.append("node runs %d%s" % (n["nodeRunning"], (" of %s: full" % st["parallelMax"]) if st.get("parallelMax") and n["nodeRunning"] >= st["parallelMax"] else ""))
     f, c = st.get("free") or {}, st.get("caps") or {}
     if f:
         # CE-8: unreserved (not reserved by K2 jobs) beside idle.

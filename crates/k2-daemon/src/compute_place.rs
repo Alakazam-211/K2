@@ -44,6 +44,10 @@ use k2_core::compute::{self as compute, scheduler};
 
 use crate::compute_ws;
 
+/// Why an auto job waits where it is; a shared node's own slots.
+#[path = "compute_why_not.rs"]
+pub mod why_not;
+
 // ── controller awake time ────────────────────────────────────────────
 
 static AWAKE_SINCE: AtomicI64 = AtomicI64::new(0);
@@ -510,6 +514,9 @@ impl Cand {
             // a GPU job also needs a free GPU in the offer.
             return self.online
                 && share::starts_now(v, w.cpu_millis, w.mem_bytes)
+                // The node's own slots, every server's jobs (the offer is
+                // newer than a quote, and there without one: why_not).
+                && self.node_slot_free()
                 // Jobs sent (or a mover's hold) since the offer take this
                 // server's running slots there too.
                 && (self.pending.jobs == 0 || v.running + self.pending.jobs < v.limits.max_running)
@@ -2667,7 +2674,7 @@ mod tests {
 
     /// A solo node: `free_gb` of `caps_gb` memory free, 8 CPUs, `running`
     /// of `parallel` slots in use (the registry agrees, another workspace's).
-    fn cand(id: &str, free_gb: u64, caps_gb: u64, running: u32, parallel: u32) -> Cand {
+    pub(super) fn cand(id: &str, free_gb: u64, caps_gb: u64, running: u32, parallel: u32) -> Cand {
         let offer = Offer {
             share: None,
             revision: 1,
@@ -2698,7 +2705,7 @@ mod tests {
 
     /// Make `c` a node shared with another server (this server a tenant):
     /// `quote` = (starts now, ETA) for a 2 GB ask, or none.
-    fn shared(mut c: Cand, quote: Option<(bool, Option<u64>)>) -> Cand {
+    pub(super) fn shared(mut c: Cand, quote: Option<(bool, Option<u64>)>) -> Cand {
         c.offer.features.push(pshare::FEATURE_QUEUE.to_string());
         c.offer.share = Some(ShareView {
             role: pshare::Role::Tenant,
@@ -2747,7 +2754,7 @@ mod tests {
         assert_eq!(c.node.id, "held", "the warm head wins a tie");
     }
 
-    fn want(mem_gb: u64) -> Want {
+    pub(super) fn want(mem_gb: u64) -> Want {
         Want {
             ws_id: ME.into(),
             admin: false,

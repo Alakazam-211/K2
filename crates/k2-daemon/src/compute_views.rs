@@ -1270,6 +1270,11 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     if j.state == "queued" {
         with_queue(who, &j, &mut v, &compute_ws::decision_for(&j.node_id));
     }
+    // A waiting auto job: why each other node of its workspace can't start
+    // it now (node full, its grant, room, …), in its move note.
+    if let Some(mv) = v.get_mut("move") {
+        crate::compute_place::why_not::annotate(&j, mv, compute::now());
+    }
     if matches!(j.state.as_str(), "running" | "finishing") {
         v["stall"] = stall_json(&j);
     }

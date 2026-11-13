@@ -1175,7 +1175,8 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
       [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
       [--inject-dst basic|header:Name|query:param] [--inject-format 'user:{}']
       The value goes into the K2 vault; you get a k2v:// reference and use it with
-      `k2 vault fetch --secret NAME …`. YOU choose the sites, scope, delivery and how
+      `k2 vault fetch --secret NAME …` (no --for: a file, `k2 vault file NAME`).
+      YOU choose the sites, scope, delivery and how
       K2 sends it: the card shows your choice in one sentence and the person just
       clicks Save. If they say it's wrong, `k2 thread withdraw` it and ask again. Exact
       hosts only. All flags: k2 thread secret --help. More: k2 study vault
@@ -1266,13 +1267,18 @@ says them in one plain sentence, and the person can change them under Advanced.
 WHERE IT GOES
   --for HOST[,HOST]          the exact sites K2 may send it to: host names only,
                              no https:// or path (api.example.com)
-  --delivery fetch|proxy|file|env|agent  fetch (default): K2 makes the HTTPS call and adds the
+  --delivery fetch|proxy|file|env|agent  the default is fetch with --for, and
+                             file without it (a password that isn't for a
+                             website: a computer's admin password, an ssh
+                             passphrase). fetch and proxy need --for.
+                             fetch: K2 makes the HTTPS call and adds the
                              secret; you never see it. Use it with
                              k2 vault fetch --secret NAME https://HOST/path
                              (GET by default; k2 vault fetch --help)
                              proxy: as fetch, and new sessions also get a
                              placeholder key and a local base URL in their env.
-                             file: $K2_SECRETS_DIR/NAME. env: $NAME (upper case,
+                             file: $K2_SECRETS_DIR/NAME, or a copy with
+                             k2 vault file NAME. env: $NAME (upper case,
                              - and . become _) in new sessions. You can read both.
                              agent (an ssh key, with --kind ssh_key, workspace
                              scope): ssh and git sign with it on $SSH_AUTH_SOCK
@@ -1338,6 +1344,8 @@ EXAMPLES
       --inject-header X-Hook-Token --inject-format 'Token {}'
   k2 thread secret ops --name WEATHER_KEY --for api.weather.example --inject-dst query:appid
   k2 thread secret ops --name GITHUB_CLI --delivery env
+  k2 thread secret ops --name MAC_ADMIN --kind password \
+      --prompt "The admin password for this Mac"     # no site: a file you read
   k2 thread secret ops --name LOGIN_CODE --scope session --delivery file --once
 
 It prints the card id, and on stderr what the card says. Don't wait: you get a

@@ -21,6 +21,7 @@ use crate::workspace_msg::{self, MsgTarget};
 /// `POST /cli/thread/catchup` (inbox-catchup-v1, 0.46.3).
 pub(crate) mod catchup;
 pub(crate) mod message_delete;
+mod secret_delivery;
 
 thread_local! {
     static REQUEST_SKIN: RefCell<Option<SkinPass>> = const { RefCell::new(None) };
@@ -2668,16 +2669,7 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     // How K2 sends it (prd-secret-card-injection-v1 §1): `inject: {dst, fmt}`,
     // the same names and checks as `k2 vault set`. Fetch only (SC-A5).
     let inject = card_inject_param(params)?;
-    let delivery = match (&inject, delivery) {
-        (Some(_), None) => Some("fetch".to_string()),
-        (Some(_), Some(d)) if d != "fetch" && d != "proxy" => {
-            return Err(k2_vault::VaultError::bad_request(
-                "inject_needs_fetch",
-                "--inject-* says how K2 sends the secret in its own calls, so it needs --delivery fetch (the default)",
-            ))
-        }
-        (_, d) => d,
-    };
+    let delivery = secret_delivery::card_delivery(delivery, inject.is_some(), &hosts)?;
     let inject = inject.map(|i| overlay::SecretInject { dst: i.dst.render(), fmt: i.fmt });
     let once = bool_param(params, "once");
     Ok(overlay::SecretProposal { scope, hosts, delivery, kind, inject, once, ..Default::default() })
@@ -2754,7 +2746,7 @@ fn session_card_refused_to_ask(session_id: Option<&str>, delivery: Option<&str>)
         ),
         Some("file") if crate::vault::spawn::kept_dir(sid).is_none() => refused(
             "session_has_no_secrets_dir",
-            "this session has no $K2_SECRETS_DIR (it started before 0.46.5, runs sandboxed, or this machine has no memory-backed folder), so a file can't reach it; use --scope workspace (the file arrives when this session restarts), or --delivery fetch",
+            "this session has no $K2_SECRETS_DIR (it started before 0.46.5, runs sandboxed, or this machine has no memory-backed folder), so a file can't reach it; use --scope workspace (the file arrives when this session restarts), or --delivery fetch --for HOST",
         ),
         _ => None,
     }

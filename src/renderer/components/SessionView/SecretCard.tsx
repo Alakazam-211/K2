@@ -183,6 +183,7 @@ export function SecretPlan({
   scope,
   sites,
   compact = false,
+  advancedOpen = false,
   inject = null,
   envName = null,
 }: {
@@ -191,6 +192,8 @@ export function SecretPlan({
   scope: SecretScope
   sites: readonly string[]
   compact?: boolean
+  /** Advanced is open: the site field is right below. */
+  advancedOpen?: boolean
   /** How K2 sends it (fetch only). */
   inject?: SecretInject | null
   /** The env variable an env delivery uses. */
@@ -231,8 +234,8 @@ export function SecretPlan({
   } else {
     body = (
       <>
-        {agent} didn't say which site this is for, so K2 can't use it yet. {compact ? 'Use More options' : 'Open Advanced'} to
-        add one.
+        {agent} didn't say which site this is for, so K2 can't use it yet.{' '}
+        {compact ? 'Use More options to add one.' : advancedOpen ? 'Add one below.' : 'Open Advanced to add one.'}
       </>
     )
   }
@@ -303,13 +306,19 @@ export function SecretCard({
   const proposedSites = (secret.hosts ?? []).filter((h) => h.trim() !== '')
   const proposedDelivery = normalDelivery(secret.delivery)
   const proposedInject: SecretInject | null = secret.inject ?? null
+  // A card that asks K2 to send it to a site but names none (an older K2's;
+  // an agent's card with no site now asks for a file). Not every secret is
+  // for a website, so it never dead-ends: it starts as a file for the agent,
+  // said in the sentence (the readable-delivery disclosure), and Save sends
+  // that choice. Advanced still takes a site.
+  const noSite = pending && proposedDelivery === 'fetch' && proposedSites.length === 0 && !proposedInject
 
   const fieldRef = useRef<HTMLInputElement>(null)
   const [hasValue, setHasValue] = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const [scope, setScope] = useState<SecretScope>(proposedScope)
   const [sites, setSites] = useState<SiteChip[]>(() => proposedSites.map((value) => ({ value, byAgent: true })))
-  const [delivery, setDelivery] = useState<SecretDelivery>(proposedDelivery)
+  const [delivery, setDelivery] = useState<SecretDelivery>(noSite ? 'file' : proposedDelivery)
   const [inject, setInject] = useState<SecretInject | null>(proposedInject)
   const [siteDraft, setSiteDraft] = useState('')
   const [warning, setWarning] = useState<{ code: string; hint: string } | null>(null)
@@ -529,9 +538,16 @@ export function SecretCard({
         scope={scope}
         sites={siteValues}
         compact={compact}
+        advancedOpen={advanced}
         inject={delivery === 'fetch' ? inject : null}
         envName={secret.envName ?? null}
       />
+      {noSite && delivery === 'file' && sites.length === 0 && (
+        <div className={`text-[10px] ${muted}`} data-testid="thread-secret-no-site">
+          {agent} didn&apos;t name a site, so this is saved as a file for {agent}. To have K2 add it to calls to a site
+          instead, {compact ? 'use More options' : 'open Advanced'}.
+        </div>
+      )}
       {secret.once && <div data-testid="thread-secret-once">Used once, then deleted.</div>}
       {secret.replaces && (
         <div data-testid="thread-secret-replaces">

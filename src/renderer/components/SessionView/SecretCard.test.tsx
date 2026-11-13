@@ -218,13 +218,14 @@ describe('SecretCard: Advanced', () => {
     expect(calls[0]).toEqual({ secret: VALUE, disclosed: true })
   })
 
-  it('no site with "K2 adds it to calls": the sentence says so and Save waits for a site or a readable choice', () => {
-    card({ hosts: [] }, async () => {})
+  it('no site with "K2 adds it to calls" picked by hand: the sentence says so and Save waits for a site', () => {
+    card({ hosts: ['https://api.stripe.com:443'], delivery: 'fetch' }, async () => {})
     paste(VALUE)
     const save = screen.getByTestId('thread-secret-submit') as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    expect(plan()).toBe("sales didn't say which site this is for, so K2 can't use it yet. Open Advanced to add one.")
     openAdvanced()
+    fireEvent.click(screen.getByLabelText('Remove api.stripe.com'))
+    expect(save.disabled).toBe(true)
+    expect(plan()).toBe("sales didn't say which site this is for, so K2 can't use it yet. Add one below.")
     fireEvent.click(screen.getByLabelText(/an environment variable sales can read/))
     expect(save.disabled).toBe(false)
     fireEvent.click(screen.getByLabelText(/K2 adds it to calls/))
@@ -233,6 +234,73 @@ describe('SecretCard: Advanced', () => {
     fireEvent.click(screen.getByTestId('thread-secret-site-add'))
     expect(save.disabled).toBe(false)
     expect(plan()).toBe('K2 will add this to calls to api.example.com, for this workspace; sales never sees it.')
+  })
+})
+
+// A card that asks K2 to send the secret to a site but names none (from an
+// older K2: agents' cards with no site now ask for a file). Not every
+// secret is for a website (a computer's admin password), so the card never
+// dead-ends: Save keeps it as a file for the agent, said in the sentence.
+describe('SecretCard: a card with no site', () => {
+  const NO_SITE: Partial<OverlaySecret> = { name: 'MAC_ADMIN', hosts: [], delivery: 'fetch', secretKind: 'password', scope: 'workspace' }
+
+  it('saves in one click as a file for the agent, and says so first', async () => {
+    const { calls, onSubmit } = recorder()
+    card(NO_SITE, onSubmit)
+    expect(plan()).toBe('sales will get this as a file it can read, for this workspace.')
+    expect(screen.getByTestId('thread-secret-plan').getAttribute('data-delivery')).toBe('file')
+    expect(screen.getByTestId('thread-secret-no-site').textContent).toBe(
+      'sales didn\'t name a site, so this is saved as a file for sales. To have K2 add it to calls to a site instead, open Advanced.',
+    )
+    paste(VALUE)
+    const save = screen.getByTestId('thread-secret-submit') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
+    await waitFor(() => expect(field().value).toBe(''))
+    expect(calls).toEqual([{ secret: VALUE, delivery: 'file', disclosed: true }])
+  })
+
+  it('Advanced still takes a site for people who want K2 to send it', async () => {
+    const { calls, onSubmit } = recorder()
+    card(NO_SITE, onSubmit)
+    paste(VALUE)
+    openAdvanced()
+    expect(screen.getByTestId('thread-secret-readable').textContent).toBe('sales can see this value')
+    fireEvent.click(screen.getByLabelText(/K2 adds it to calls/))
+    const save = screen.getByTestId('thread-secret-submit') as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    expect(screen.queryByTestId('thread-secret-no-site')).toBeNull()
+    fireEvent.change(screen.getByTestId('thread-secret-site-input'), { target: { value: 'api.example.com' } })
+    fireEvent.click(screen.getByTestId('thread-secret-site-add'))
+    expect(save.disabled).toBe(false)
+    expect(plan()).toBe('K2 will add this to calls to api.example.com, for this workspace; sales never sees it.')
+    fireEvent.click(save)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ secret: VALUE, hosts: ['api.example.com'], disclosed: true })
+  })
+
+  it('compact: the same one-click file Save, with More options for a site', async () => {
+    const { calls, onSubmit } = recorder()
+    card(NO_SITE, onSubmit, { compact: true, onMoreOptions: vi.fn() })
+    expect(plan()).toBe('sales will get this as a file it can read, for this workspace.')
+    expect(screen.getByTestId('thread-secret-no-site').textContent).toBe(
+      'sales didn\'t name a site, so this is saved as a file for sales. To have K2 add it to calls to a site instead, use More options.',
+    )
+    paste(VALUE)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(field().value).toBe(''))
+    expect(calls).toEqual([{ secret: VALUE, delivery: 'file', disclosed: true }])
+  })
+
+  it('a card that names a site is unchanged: fetch, no note, nothing extra sent', async () => {
+    const { calls, onSubmit } = recorder()
+    card({ ...NO_SITE, hosts: ['https://api.example.com:443'] }, onSubmit)
+    expect(plan()).toBe('K2 will add this to calls to api.example.com, for this workspace; sales never sees it.')
+    expect(screen.queryByTestId('thread-secret-no-site')).toBeNull()
+    paste(VALUE)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ secret: VALUE, disclosed: true })
   })
 })
 

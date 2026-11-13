@@ -136,6 +136,19 @@ describe('secret card through the real daemon client', () => {
     expect(screen.queryByTestId('thread-secret-error')).toBeNull()
   })
 
+  it('a card with no site (fetch from an older K2) saves as a file for the agent in one click', async () => {
+    stubDaemon('readable')
+    render(<Card secret={{ ...READABLE, name: 'MAC_ADMIN', delivery: 'fetch' }} />)
+    expect(screen.getByTestId('thread-secret-plan').textContent).toBe(
+      'sales will get this as a file it can read, for this workspace.',
+    )
+    fireEvent.change(field(), { target: { value: VALUE } })
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(field().value).toBe(''))
+    expect(posted).toEqual([{ addr: 'sales', id: 'c1', secret: VALUE, delivery: 'file', disclosed: '1' }])
+    expect(screen.queryByTestId('thread-secret-error')).toBeNull()
+  })
+
   it('a server older than 0.46.3 (no `disclosed`) still saves: the card resends with confirm itself', async () => {
     stubDaemon('readable', false)
     render(<Card secret={READABLE} />)

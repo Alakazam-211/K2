@@ -4217,3 +4217,8 @@ mod card_dismiss;
 // 0.46.11: Delete message (thread-message-delete-v1).
 #[path = "message_delete_tests.rs"]
 mod message_delete_route;
+
+// A secret card with no site: a file for the agent, never a card the
+// person can't save.
+#[path = "secret_card_no_site_tests.rs"]
+mod secret_card_no_site;

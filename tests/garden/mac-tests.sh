@@ -27,6 +27,9 @@ chmod +x "$T/bin/cargo" "$T/bin/uname"
 export FAKE_CALLS="$T/calls" FAKE_OUT="$T/out" FAKE_META="$T/meta" FAKE_RC=0
 cat > "$FAKE_META" <<'J'
 {"packages":[
+ {"name":"k2-ptyd","targets":[]},
+ {"name":"k2-deckrender","targets":[]},
+ {"name":"k2-scenerender","targets":[]},
  {"name":"k2-core","targets":[{"name":"k2_core","kind":["lib"],"test":true}]},
  {"name":"k2-daemon","targets":[
    {"name":"k2_daemon","kind":["lib"],"test":true},
@@ -124,6 +127,12 @@ run 0 "mac-tests: daemon: ok" env K2_JOB_CPUS=7 bash "$M" daemon
 fresh
 printf 'error: something else\n' > "$T/calls/1.out"; echo 4 > "$T/calls/1.rc"
 run 1 "no test summary (cargo exit 4)" env K2_JOB_CPUS=7 bash "$M" daemon
+# A tree without one of the helper packages (an older line): that one is
+# named and not built, the others are.
+sed 's/ {"name":"k2-deckrender","targets":\[\]},//' "$FAKE_META" > "$T/meta.older"
+fresh
+run 0 "mac-tests: daemon: this tree has no k2-deckrender package; not built" env K2_JOB_CPUS=7 FAKE_META="$T/meta.older" bash "$M" daemon
+[ "$(builds)" = "$(printf 'build --locked -p k2-ptyd\nbuild --locked -p k2-scenerender')" ] || no "the helper builds on an older tree: $(builds)"; ok
 # A helper that does not build: the stage is red before any test runs.
 fresh
 run 1 "FAILED: daemon: cargo build -p k2-ptyd" env K2_JOB_CPUS=7 FAKE_BUILD_RC=101 bash "$M" daemon

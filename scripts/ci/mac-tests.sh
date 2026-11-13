@@ -94,14 +94,18 @@ stage_core() {
 }
 
 stage_daemon() {
-    local log bad=0 targets kind name
+    local log bad=0 targets has helper kind name need
     export CARGO_BUILD_JOBS="${JOBS_SET:-1}"
     : > "$ROOT/mac-tests-daemon.log"
     # Every test target of k2-daemon: its library, its binaries, and each
     # integration test, as cargo itself lists them.
     targets="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
 import json, sys
-for p in json.load(sys.stdin)["packages"]:
+packages = json.load(sys.stdin)["packages"]
+# The workspace has these packages (a helper named below may be newer
+# than the tree this runs on).
+print("has", " ".join(sorted(p["name"] for p in packages)), "-")
+for p in packages:
     if p["name"] != "k2-daemon":
         continue
     for t in sorted(p["targets"], key=lambda t: t["name"]):
@@ -114,12 +118,18 @@ for p in json.load(sys.stdin)["packages"]:
                 need = ",".join(t.get("required-features") or [])
                 print("off" if need else kind, t["name"], need)
 ')" || { echo "mac-tests: FAILED: daemon: could not list k2-daemon's test targets" >&2; return 1; }
+    has=" $(echo "$targets" | sed -n 's/^has \(.*\) -$/\1/p') "
+    targets="$(echo "$targets" | grep -v '^has ' || true)"
     [ -n "$targets" ] || { echo "mac-tests: FAILED: daemon: k2-daemon has no test targets" >&2; return 1; }
     echo "mac-tests: daemon: $(echo "$targets" | grep -vc '^off ') test binaries of k2-daemon, one cargo call each"
     # The helpers k2-daemon's tests start as programs of their own.
     log="$ROOT/mac-tests-daemon.log"
-    echo "mac-tests: daemon: building the helper binaries the tests start ($DAEMON_HELPERS)"
     for helper in $DAEMON_HELPERS; do
+        case "$has" in
+            *" $helper "*) ;;
+            *) echo "mac-tests: daemon: this tree has no $helper package; not built"; continue ;;
+        esac
+        echo "mac-tests: daemon: building $helper, which the tests start as a program"
         cargo build --locked -p "$helper" >> "$log" 2>&1 || { echo "mac-tests: FAILED: daemon: cargo build -p $helper. The end of the log:" >&2; tail -40 "$log" >&2; return 1; }
     done
     while read -r kind name need; do

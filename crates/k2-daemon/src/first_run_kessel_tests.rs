@@ -507,7 +507,11 @@ fn deleting_kessels_workspace_clears_the_seat_and_the_offer_comes_back_and_kesse
     let r = post(KESSEL_PATH, json!({ "tool": "codex" }), &Actor::owner_token());
     assert_eq!(r.status, "200 OK", "{}", r.body);
     let again = json_of(&r);
-    assert_eq!(again["path"], json!(kessel_path), "the same folder");
+    // The same folder, however each answer spells it: under a temp dir
+    // that sits behind a link (macOS /var), the second answer is the
+    // resolved path and the first is not.
+    let folder = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+    assert_eq!(folder(again["path"].as_str().expect("path")), folder(&kessel_path), "the same folder");
     let id = again["workspaceId"].as_str().expect("id").to_string();
     assert_ne!(id, kessel, "a new workspace");
     assert_eq!(status_for(&Actor::owner_token())["kessel"]["workspaceId"], json!(id), "the seat names it");

@@ -2862,9 +2862,13 @@ mod tests {
                 .lines()
                 .find(|l| l.contains(label) && l.contains("accepting again after"))
                 .and_then(|l| l.split("accepting again after ").nth(1)?.split(' ').next()?.parse::<u64>().ok());
+            // Linux keeps a waiting connection queued, so every paused try
+            // fails again: at least two. macOS drops it on the first
+            // failed accept, and an empty queue fails no further try.
+            let fewest = if cfg!(target_os = "macos") { 1 } else { 2 };
             match tries {
-                Some(n) if (2..=12).contains(&n) => {}
-                other => problems.push(format!("{label}: accept tries in the shortage {other:?}, want 2 to 12")),
+                Some(n) if (fewest..=12).contains(&n) => {}
+                other => problems.push(format!("{label}: accept tries in the shortage {other:?}, want {fewest} to 12")),
             }
         }
         let cpu_ms: u64 = field("cpu_ms=").parse().unwrap();
@@ -2918,16 +2922,48 @@ mod tests {
         }
 
         let cpu_before = cpu_ms();
+        // macOS drops a connection whose accept finds no descriptor, and
+        // the client end of a dropped TLS connection then closes, which
+        // frees a descriptor in this process. Connected last, the ingress
+        // connection was accepted into that descriptor and its listener
+        // never saw the shortage (5 runs of 5). So on macOS it goes first,
+        // while nothing has been freed, and this end of it is kept open.
+        #[cfg(target_os = "macos")]
+        let ingress_tcp = {
+            let tcp = ingress_sock.connect(([127, 0, 0, 1], ingress_port).into()).await.expect("connect");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            tcp
+        };
         let mut handshakes = Vec::new();
         for sock in tls_socks {
             let tcp = sock.connect(([127, 0, 0, 1], tls_port).into()).await.expect("connect");
             let pem = pem.clone();
             handshakes.push(tokio::spawn(async move { frpc_handshake(&pem, tcp, "shop.example.k2.dev", None).await }));
         }
+        #[cfg(not(target_os = "macos"))]
         let mut ingress_tcp = ingress_sock.connect(([127, 0, 0, 1], ingress_port).into()).await.expect("connect");
         tokio::time::sleep(Duration::from_secs(3)).await;
         let cpu = cpu_ms() - cpu_before;
         drop(filler);
+        // On macOS the connections that waited are gone: the kernel takes
+        // one off the queue before it finds there is no descriptor for it,
+        // and drops it (Linux leaves it queued). So there the listeners
+        // must serve connections made now; a caller's retry is what a
+        // client sees.
+        #[cfg(target_os = "macos")]
+        let (handshakes, mut ingress_tcp) = {
+            for dropped in handshakes {
+                let _ = tokio::time::timeout(Duration::from_secs(10), dropped).await;
+            }
+            drop(ingress_tcp);
+            let mut again = Vec::new();
+            for _ in 0..2 {
+                let tcp = tokio::net::TcpStream::connect(("127.0.0.1", tls_port)).await.expect("connect again");
+                let pem = pem.clone();
+                again.push(tokio::spawn(async move { frpc_handshake(&pem, tcp, "shop.example.k2.dev", None).await }));
+            }
+            (again, tokio::net::TcpStream::connect(("127.0.0.1", ingress_port)).await.expect("connect again"))
+        };
 
         let mut tls = "served";
         for handshake in handshakes {

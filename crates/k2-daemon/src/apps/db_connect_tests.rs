@@ -626,6 +626,20 @@ fn a_failed_check_names_the_step_and_shows_the_apps_output() {
 
 // ── 7. a Seed's requires.postgres: the same state ────────────────────
 
+/// K2 runs Postgres on Linux boxes only. Anywhere else, install stops at
+/// its first step and says so, and nothing is connected.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn the_install_path_is_refused_where_k2_runs_no_postgres() {
+    let f = fx("dbc-seed-off");
+    let refused = crate::sql::routes::with_fake_ops(f.fake, || crate::sql::routes::create_for_app_install(&f.ws_a, &ws_path(&f.ws_a), 17, false))
+        .expect_err("no Postgres on this system");
+    assert_eq!((refused.0, refused.1), (409, "requires_unmet"), "{refused:?}");
+    assert!(refused.2.contains("Linux boxes only"), "{refused:?}");
+    assert!(connections_of(&f.app).unwrap().is_empty(), "nothing was connected");
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 fn the_install_path_leaves_the_same_state_as_connect() {
     let f = fx("dbc-seed");

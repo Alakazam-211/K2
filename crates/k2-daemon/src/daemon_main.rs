@@ -103,6 +103,9 @@ pub fn run() {
     // NOTIFY_SOCKET for a hand-off (and drop it from the environment every
     // child inherits) and record the executable path.
     crate::handoff::capture_process_context();
+    // The service manager's daemon.stderr.log / daemon.stdout.log rotate at
+    // 50 MB, 3 kept (stderr_log); a no-op when stderr is not that file.
+    crate::stderr_log::start();
 
     // Real daemon path — boot the multi-thread tokio runtime and
     // run the async main body.

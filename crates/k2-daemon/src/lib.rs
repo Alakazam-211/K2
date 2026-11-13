@@ -264,6 +264,8 @@ pub mod cell_identity;
 pub mod cell_server;
 // A /cli/* request over 5 s (or still running at 30 s) logs one line.
 pub mod slow_request;
+// The daemon's own stdout/stderr log files rotate at 50 MB (3 kept).
+pub mod stderr_log;
 pub mod cell_uds;
 // P4-H5 (sandbox hardening): host nft fail-closed egress allowlist for microVM
 // cells (default-DROP `skuid k2cell` + only 443/53). Reached ONLY from the

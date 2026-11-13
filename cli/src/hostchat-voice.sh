@@ -522,12 +522,13 @@ Server:
                                              for the plain rollback, with voice on. An agent asks the owner on
                                              a card instead:
                                                k2 permission request sew.rollback-data-loss --why "<why>")
-                                            (K2 0.46.11, Sew 0.9.2: that upgrade changes how Sew stores
-                                             chat (0.9.0's 990001, 990002, 990011 and 0.9.2's 991001), so after
-                                             it the plain rollback is refused. Going back needs this
+                                            (K2 0.46.11 on: an upgrade from Sew 0.8.x or 0.9.0 to 0.9.2 or
+                                             0.9.3 changes how Sew stores chat (0.9.0's 990001, 990002, 990011
+                                             and 991001), so after it the plain rollback is refused. Going back needs this
                                              --accept-data-loss rollback, by the owner in person; K2 runs
                                              Sew's rollback with --accept-data-loss-since=<the backup
-                                             taken just before the upgrade>)
+                                             taken just before the upgrade>. Sew 0.9.3 back to 0.9.2 is a
+                                             plain rollback)
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (no flags: downloads the pin, as enable does; --tarball and
                                              --media-tarball (the sew-media release, used when voice is on)
@@ -536,10 +537,11 @@ Server:
                                              The order: Sew itself, then (voice on) its voice engine, then
                                              (only where the recorder is installed) the recorder and
                                              transcriber, when no call is being recorded.
-                                             To Sew 0.9.2 (K2 0.46.11): no new config, recording stays off
-                                             until someone turns it on; the way back is
-                                             k2 hostchat rollback --accept-data-loss, never the plain one.
-                                             A box on Sew 0.8.3 or 0.9.0 upgrades like any release)
+                                             To Sew 0.9.3 (K2 0.46.12): no new config, recording stays off
+                                             until someone turns it on. From 0.9.2 the way back is the plain
+                                             k2 hostchat rollback; from older, k2 hostchat rollback
+                                             --accept-data-loss, never the plain one.
+                                             A box on Sew 0.8.2, 0.8.3, 0.9.0 or 0.9.2 upgrades like any release)
   k2 hostchat upgrade --accept-binary SHA256 [--tarball FILE] [...]
                                             (the owner, from a terminal outside K2, with a confirm: upgrade
                                              FROM a /usr/local/bin/sew K2 doesn't know, only if its sha256 is

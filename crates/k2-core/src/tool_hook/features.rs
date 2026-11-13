@@ -17,7 +17,7 @@
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 //! | [`APP_RECORDING`], [`VOICE_RECORD_CAP`], [`RECORDING_REQUIRED`], [`MGMT_RECORDING_READS`] | Sew 0.9.0 (recording in Apps): read together as [`RecordingFeatures`] (`tool_hook::sew_recording_features()`). Sew 0.8.x reports none, so every recording change is inert there |
 //!
-//! The pin (Sew 0.9.2) reports thirty-seven flags: 0.9.0's thirty-five plus `group_dm_names` and
+//! Sew 0.9.2 reports thirty-seven flags: 0.9.0's thirty-five plus `group_dm_names` and
 //! `dm_order_activity` (group DM names and DMs listed by latest activity; K2 uses neither). 0.9.0's
 //! thirty-five are 0.8.2's and 0.8.3's thirty-one plus the four
 //! recording flags above (each release's own `sew version --json`, held in a test). 0.8.2's thirty-one are
@@ -457,7 +457,7 @@ mod tests {
         }
     }
 
-    /// The pin, Sew 0.9.2, exactly as its own binary reports it (`sew
+    /// Sew 0.9.2 (the pin before 0.9.3), exactly as its own binary reports it (`sew
     /// version --json` of the published x86_64 build, sha256 f13d7c7c…d1c6,
     /// 2026-11-11): 0.9.0's thirty-five plus `group_dm_names` and
     /// `dm_order_activity`, which K2 keeps and doesn't gate on. Every gate

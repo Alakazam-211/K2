@@ -10,6 +10,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Side drawers: drag a tab to reorder it,** or press Alt+Left/Right on a focused tab. Your order is kept on this computer, and right-click → Reset Tab Order puts it back.
 - **Styles is now Themes.** Settings → Themes is the same page with a clearer name. Glass's dark gold palette is now called **Dusk**; your choice is kept.
 
+### Chat / Voice Hosting
+- **Sew 0.9.3: recommended update.**
+
 ### Fixes
 - **Quitting the daemon on a Mac takes the menu-bar icon away too,** instead of leaving it showing "Daemon: Not running": from the menu bar, `k2 daemon stop`, or closing the window with "keep server running" off. Restarts and updates keep the icon. Opening K2 (or `k2 daemon start`) brings both back.
 - **When an app saves over an agent's change, both are kept.** Before, an app that still had an older copy of a file open could save over an agent's write, and the agent's change was left only in history. Now the app's save is the current version, the agent's version is kept beside it in `.k2/conflicts/` as `<file> (<agent>'s version)`, the file's tab shows a notice once, and one line goes to the workspace's Thread.

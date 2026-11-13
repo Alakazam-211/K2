@@ -178,17 +178,22 @@ impl SewAsrModel {
 /// (`asr_pin_sha256` `6d67c041…b472`) again. A sha256 mismatch is a hard
 /// failure (the Steward's R28): no install, no other model, no retry.
 ///
-/// Sew 0.9.2's (the pin): the same file and licence files, byte for byte,
-/// now in the v0.9.2 release's own `SHA256SUMS` and `release.json`
-/// `models[]` (memory_max_mib 704), checked against the downloaded files
-/// (the vendored `testdata/sew/sew-0.9.2.SHA256SUMS`, held by a test).
+/// Sew 0.9.2's: the same file and licence files, byte for byte, now in the
+/// v0.9.2 release's own `SHA256SUMS` and `release.json` `models[]`
+/// (memory_max_mib 704), checked against the downloaded files (the vendored
+/// `testdata/sew/sew-0.9.2.SHA256SUMS`, held by a test).
+///
+/// Sew 0.9.3's (the pin): the same file and licence files again, as its
+/// `SHA256SUMS` lists them (the vendored `testdata/sew/sew-0.9.3.SHA256SUMS`,
+/// held by a test).
 pub const SEW_ASR_MODELS: &[SewAsrModel] = &[
     SewAsrModel { sew_version: "0.9.0", ..BASE_Q8_0 },
     SewAsrModel { sew_version: "0.9.2", ..BASE_Q8_0 },
+    SewAsrModel { sew_version: "0.9.3", ..BASE_Q8_0 },
 ];
 
 /// Sew's base-q8_0 (candle) and its licence files, as published with 0.9.0
-/// and again, unchanged, with 0.9.2.
+/// and again, unchanged, with 0.9.2 and 0.9.3.
 const BASE_Q8_0: SewAsrModel = SewAsrModel {
     sew_version: "",
     name: "base-q8_0",
@@ -458,15 +463,16 @@ mod tests {
         crate::sew::TEST_RELEASES.last().expect("fixture releases")
     }
 
-    /// The real pin's model: Sew 0.9.2's base-q8_0, exactly as its release
-    /// assets publish it (the vendored `SHA256SUMS`, both ways for the model
-    /// and its licence files); 0.9.0's row is the same file, as its own
-    /// `SHA256SUMS-models` published it; an older Sew has no row.
+    /// The real pin's model: Sew 0.9.3's base-q8_0, exactly as its
+    /// `SHA256SUMS` lists it (vendored, both ways for the model and its
+    /// licence files); 0.9.2's row is the same file, as its own `SHA256SUMS`
+    /// published it, and 0.9.0's too, as its `SHA256SUMS-models` published
+    /// it; an older Sew has no row.
     #[test]
-    fn the_real_model_pin_is_sews_0_9_2_base_q8_0_and_equals_its_sums() {
+    fn the_real_model_pin_is_sews_0_9_3_base_q8_0_and_equals_its_sums() {
         let pin = crate::sew::SEW_RELEASES.last().expect("real pins");
-        assert_eq!(pin.version, "0.9.2");
-        let m = model_in(SEW_ASR_MODELS, pin.version).expect("the 0.9.2 model is pinned");
+        assert_eq!(pin.version, "0.9.3");
+        let m = model_in(SEW_ASR_MODELS, pin.version).expect("the 0.9.3 model is pinned");
         assert_eq!((m.name, m.backend, m.file), ("base-q8_0", "candle", "sew-asr-base-q8_0.gguf"), "never auto");
         assert!(SEW_ASR_MODELS.iter().all(|m| m.name != "auto"));
         assert_eq!((m.sha256, m.size, m.memory_max_mib), ("19221e8b84f5ffa4e5589557792302257e445cec8f0c147515049ad86e52937c", 82_578_976, 704));
@@ -480,14 +486,24 @@ mod tests {
             want.sort();
             want
         };
-        // 0.9.2: the release's own SHA256SUMS (it also lists Sew's binaries,
+        // The release's own SHA256SUMS (it also lists Sew's binaries,
         // LICENSE, NOTICE and THIRD_PARTY_NOTICES.md: only the model's lines count).
+        let model_lines = |sums: &str| {
+            let mut published: Vec<String> =
+                sums.lines().filter(|l| l.ends_with(".gguf") || l.contains("  asr-license-") || l.contains("  sew-asr-")).map(str::to_string).collect();
+            published.sort();
+            published
+        };
+        // 0.9.3, the pin.
+        let sums = include_str!("../testdata/sew/sew-0.9.3.SHA256SUMS");
+        assert_eq!(sha(sums), "2811b8e144cf90da7ed763c4d41807a7058c510aa62ce79db36c73ab00837264", "the vendored SHA256SUMS is Sew's");
+        assert_eq!(rows(m), model_lines(sums), "the model and its licence files, both ways");
+        // 0.9.2: the same file.
+        let prev = model_in(SEW_ASR_MODELS, "0.9.2").expect("the 0.9.2 model stays pinned");
         let sums = include_str!("../testdata/sew/sew-0.9.2.SHA256SUMS");
         assert_eq!(sha(sums), "8e9a63bb00acb76d14eb91d5fe927bc2b247bd1d4ef40422a3ea7a2654a3f25d", "the vendored SHA256SUMS is the published one");
-        let mut published: Vec<String> =
-            sums.lines().filter(|l| l.ends_with(".gguf") || l.contains("  asr-license-") || l.contains("  sew-asr-")).map(str::to_string).collect();
-        published.sort();
-        assert_eq!(rows(m), published, "the model and its licence files, both ways");
+        assert_eq!(rows(prev), model_lines(sums), "0.9.2's model and its licence files, both ways");
+        assert_eq!(rows(prev), rows(m), "the same model file in 0.9.2 and 0.9.3");
         // 0.9.0: the same file, from its SHA256SUMS-models.
         let old = model_in(SEW_ASR_MODELS, "0.9.0").expect("the 0.9.0 model stays pinned");
         let sums = include_str!("../testdata/sew/sew-0.9.0.SHA256SUMS-models");

@@ -195,8 +195,10 @@ kessel-attest verify dist/acme-linux-x86_64 \
 
 Exit 0 verified, 1 not, 2 bad usage, 3 **verified, time not proven**: the
 key is retired in the roster it was given, and a statement's times are the
-node's clock, so it could be back-dated. `--existed-before <time>` with proof
-of when the file existed (a release's signature date) settles it. The
+node's clock, so it could be back-dated. `--existed-before <time>` (or `--as-of`)
+settles it with a time you vouch for, from a timestamp or log you trust (a
+release's signature date, say) that the statement existed by; the tool takes
+your word for it and doesn't check it. The
 `trust/` roster is as of the build; it warns when the roster predates the
 build or is over 30 days old, and takes the owner's current one with
 `--roster`.

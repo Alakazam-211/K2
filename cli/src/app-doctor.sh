@@ -2841,8 +2841,8 @@ default channels · 100 members per create or add · names 1–100 characters
 · no delete, no public↔private, no type change. K2 sets no App quotas.
 K2's door: request heads over 64 KiB → 431; 120 writes a minute per
 visitor per App (the Owner: k2 firewall guard). Sew 0.9.3, this K2's
-pin, carries 0.5.1's fixes for the quota gaps (call limits on moves and
-DM calls, upload and message-rate quotas) and the unbound-Space gaps.
+pin, has the quota limits Sew added in 0.5.1 (call limits on moves and
+DM calls, upload and message-rate quotas) and its unbound-Space checks.
 
 K2 is MIT-licensed open source. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF

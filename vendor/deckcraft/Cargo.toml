@@ -1,4 +1,4 @@
-# Changed by Alakazam Labs (see VENDORED.md): only the vendored crates are members; dependencies the cut doesn't use, and the [patch.crates-io] git sources, are removed; zip is 9 (was 3).
+# Changed by Alakazam Labs (see VENDORED.md): only the vendored crates are members; dependencies the cut doesn't use, and the [patch.crates-io] git sources, are removed; zip is 9 (was 3), with the `deflate-flate2` feature.
 [workspace]
 resolver = "3"
 members = [
@@ -52,8 +52,10 @@ vello_cpu = "0.2"
 vello_common = { version = "0.2", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "bmp"] }
 quick-xml = "0.41"
-# 9, not upstream's 3 (RUSTSEC-2026-0367, -0368, -0369 and -0429); the same features.
-zip = { version = "9", default-features = false, features = ["deflate"] }
+# 9, not upstream's 3 (RUSTSEC-2026-0367, -0368, -0369 and -0429). `deflate-flate2`, not
+# `deflate`: in zip 9 `deflate` also means the zopfli compressor and flate2 on zlib-rs, and
+# that backend would then compress for every flate2 user in K2's build (VENDORED.md).
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

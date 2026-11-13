@@ -38,7 +38,9 @@ deckcraft-text = { path = "../../vendor/deckcraft/crates/text" }
 kurbo = "0.13"
 # The package's slide list (`p:sldId` → slide part), read without deckcraft's
 # model; the same zip deckcraft-pptx links.
-zip = { version = "9", default-features = false, features = ["deflate"] }
+# `deflate-flate2` (flate2 on its default, miniz_oxide), not `deflate`: that one also turns
+# on flate2's zlib-rs backend, for every flate2 user in the same build.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 # WebP lossless (image-webp, pure Rust) and PNG encoders; already in deckcraft's tree.
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 serde = { version = "1", features = ["derive"] }

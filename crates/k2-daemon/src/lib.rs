@@ -533,6 +533,8 @@ mod test_support;
 mod codex_no_daemon_tests;
 #[cfg(test)]
 mod sessions_main_tests;
+#[cfg(test)]
+mod sdk_tarball_pin_tests;
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -18,10 +18,17 @@ use serde_json::Value;
 use super::proto::frames::Offer;
 use super::proto::share::{self, JobClass, Quote, Role, ServerStatus, ShareLimits, ShareView};
 
-/// A job withdrawn once can't be withdrawn again for this long (V71).
-pub const WITHDRAW_AGAIN_SECS: i64 = 300;
-/// …and at most this many times in all (V71).
-pub const MAX_WITHDRAWS: i64 = 2;
+/// The `--any` mover's damper (replaces V71's "at most twice in all"): a
+/// job may be withdrawn again this long after a withdraw that moved it
+/// (its new node gets a moment to start it)…
+pub const MOVE_GAP_SECS: i64 = 30;
+/// …and after a bounce (a withdraw whose job had to go back, because the
+/// node it was meant for filled first) this long, doubling per bounce in a
+/// row up to [`BOUNCE_MAX_SECS`]. A move resets the count. There is no
+/// lifetime cap: the mover only withdraws for a node that can start the
+/// job now, so a long wait never makes a job stop looking.
+pub const BOUNCE_BASE_SECS: i64 = 60;
+pub const BOUNCE_MAX_SECS: i64 = 300;
 /// Shards over this many are `batch` (§7 rule 3).
 pub const BATCH_SHARDS_OVER: u32 = 4;
 /// Clock-skew note threshold (§14).
@@ -218,10 +225,25 @@ pub fn room(v: &ShareView, on_node: u32) -> u32 {
     (v.limits.max_running + v.limits.max_queued).saturating_sub(on_node)
 }
 
-/// May the mover withdraw this job (V71): not again within
-/// [`WITHDRAW_AGAIN_SECS`], at most [`MAX_WITHDRAWS`] in all.
-pub fn may_withdraw(withdraws: i64, withdrawn_at: Option<i64>, now: i64) -> bool {
-    withdraws < MAX_WITHDRAWS && withdrawn_at.is_none_or(|t| now - t >= WITHDRAW_AGAIN_SECS)
+/// How long after its last withdraw the mover waits before it may ask
+/// again: `bounces` is the job's withdraws since its last move (the
+/// `withdraws` column; a move resets it). 0 with no withdraw yet.
+pub fn withdraw_gap(bounces: i64, withdrawn_at: Option<i64>) -> i64 {
+    match (withdrawn_at, bounces) {
+        (None, _) => 0,
+        (Some(_), b) if b <= 0 => MOVE_GAP_SECS,
+        (Some(_), b) => BOUNCE_BASE_SECS.saturating_mul(1i64 << (b - 1).min(16)).min(BOUNCE_MAX_SECS),
+    }
+}
+
+/// Seconds until the mover may withdraw this job again (0 = now).
+pub fn withdraw_wait(bounces: i64, withdrawn_at: Option<i64>, now: i64) -> i64 {
+    withdrawn_at.map_or(0, |t| (t + withdraw_gap(bounces, withdrawn_at) - now).max(0))
+}
+
+/// May the mover withdraw this job now ([`withdraw_wait`] is 0).
+pub fn may_withdraw(bounces: i64, withdrawn_at: Option<i64>, now: i64) -> bool {
+    withdraw_wait(bounces, withdrawn_at, now) == 0
 }
 
 /// 7200 → "2h", 5400 → "90m", 45 → "45s".
@@ -499,6 +521,39 @@ pub fn split_add_code(code_fp: &str) -> Result<(String, String), String> {
 
 #[cfg(test)]
 mod tests {
+    // ── the mover's damper ──
+
+    #[test]
+    fn a_job_never_withdrawn_may_be_withdrawn_now() {
+        assert!(may_withdraw(0, None, 1000));
+        assert_eq!(withdraw_wait(0, None, 1000), 0);
+    }
+
+    #[test]
+    fn after_a_move_the_next_withdraw_waits_only_the_short_gap() {
+        // withdraws = 0 (a move reset it), withdrawn 10 s ago.
+        assert_eq!(withdraw_wait(0, Some(990), 1000), MOVE_GAP_SECS - 10);
+        assert!(!may_withdraw(0, Some(990), 1000));
+        assert!(may_withdraw(0, Some(1000 - MOVE_GAP_SECS), 1000));
+    }
+
+    #[test]
+    fn bounces_back_off_60_120_240_then_cap_at_300() {
+        assert_eq!(withdraw_gap(1, Some(0)), 60);
+        assert_eq!(withdraw_gap(2, Some(0)), 120);
+        assert_eq!(withdraw_gap(3, Some(0)), 240);
+        assert_eq!(withdraw_gap(4, Some(0)), 300);
+        assert_eq!(withdraw_gap(40, Some(0)), 300);
+    }
+
+    #[test]
+    fn there_is_no_lifetime_cap_on_withdraws() {
+        // The old rule stopped at 2 withdraws for good; a job that bounced
+        // five times may still try once its back-off passed.
+        assert!(may_withdraw(5, Some(0), 300));
+        assert!(!may_withdraw(5, Some(0), 299));
+    }
+
     use super::*;
     use serde_json::json;
     use crate::compute::proto::share::Trust;
@@ -637,14 +692,6 @@ mod tests {
         assert!(!starts_now(&paused, None, None));
         assert_eq!(room(&v, 3), 8, "1 running + 10 queued − 3 on the node");
         assert_eq!(room(&v, 20), 0);
-    }
-
-    #[test]
-    fn withdraws_are_limited() {
-        assert!(may_withdraw(0, None, 1000));
-        assert!(!may_withdraw(1, Some(900), 1000), "again within 5 min");
-        assert!(may_withdraw(1, Some(700), 1000));
-        assert!(!may_withdraw(2, Some(0), 10_000), "at most twice in all");
     }
 
     #[test]

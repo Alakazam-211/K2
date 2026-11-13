@@ -1030,3 +1030,181 @@ async fn tiers_on_a_shared_node() {
     assert_eq!(tiers, vec![(Some(Tier::Priority), Some(JobClass::Interactive)), (Some(Tier::Ci), Some(JobClass::Gate))], "Priority is interactive for old peers; CI is gate");
     drop(env);
 }
+
+// ── the `--any` mover keeps looking (bounces, holds, order) ──────────
+
+/// A node-queued `--any` job and its node's "you're queued" answer.
+async fn queued_any_on(port: u16, ws: &Ws, node: &str, a: &mut TestConn) -> String {
+    let r = run(port, OWNER, json!({"any": true, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(row(&job).node_id, node);
+    let sent = assigns(&a.frames());
+    assert_eq!(sent.len(), 1, "into {node}'s queue at once");
+    compute_ws::test_frame(node, state(&job, sent[0].1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 2, of: None, eta_secs: Some(900), eta_p90_secs: None, blocked_by: None })));
+    job
+}
+
+/// A solo node with `slots` slots, `running` busy (full when equal).
+fn solo(running: u32, slots: u32) -> Offer {
+    let mut o = v0462(offer(&["artifacts", "stall"], running, None));
+    o.parallel_max = slots;
+    if running >= slots {
+        o = full(o);
+    }
+    o
+}
+
+/// The 34-minute wait: a job whose withdraws bounced (the node it was
+/// meant for filled before the answer came) used to stop looking after two
+/// tries. Now each bounce only backs off (60 s, then 120 s, …) and the job
+/// still moves the moment a node can start it, however many bounces before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_auto_job_keeps_trying_after_bounces_and_moves_when_a_node_frees() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "bouncer");
+    active_node("bn-a", "bn-a", "linux", &ws);
+    active_node("bn-b", "bn-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("bn-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "bn-a", &mut a).await;
+    let mut b = compute_ws::test_attach("bn-b", solo(0, 2));
+    let t0 = k2_core::compute::now();
+    let mut gen = 1u32;
+    // Three bounces in a row: the old rule refused the third withdraw.
+    for (bounce, at) in [(1i64, t0), (2, t0 + 61), (3, t0 + 61 + 121)] {
+        // Not before the back-off has passed.
+        if bounce > 1 {
+            k2_daemon::compute_place::sweep(at - 2);
+            assert!(cancels(&a.frames()).is_empty(), "bounce {bounce}: still backing off");
+        }
+        k2_daemon::compute_place::sweep(at);
+        assert_eq!(cancels(&a.frames()), vec![(job.clone(), gen, CANCEL_WITHDRAW.to_string())], "withdraw {bounce}");
+        // B fills before A's answer comes back.
+        compute_ws::test_frame("bn-b", Frame::Offer(solo(2, 2)));
+        compute_ws::test_frame("bn-a", state(&job, gen, JobState::Cancelled, Some("withdrawn"), None));
+        gen += 1;
+        let rj = row(&job);
+        assert_eq!((rj.node_id.as_str(), rj.generation, rj.withdraws), ("bn-a", i64::from(gen), bounce), "bounced back to A: {rj:?}");
+        let back = assigns(&a.frames());
+        assert_eq!((back.len(), back[0].1), (1, gen), "sent back into A's queue");
+        assert!(assigns(&b.frames()).is_empty());
+        compute_ws::test_frame("bn-a", state(&job, gen, JobState::Queued, Some("node_queued"), None));
+        // B frees again.
+        compute_ws::test_frame("bn-b", Frame::Offer(solo(0, 2)));
+    }
+    assert_eq!(events("withdraw_bounced", &job), 3);
+    // The job explains itself while it waits.
+    let r = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await;
+    let mv = &j(&r)["move"];
+    assert_eq!((mv["auto"].as_bool(), mv["bounces"].as_i64()), (Some(true), Some(3)), "{}", r.body);
+    assert!(mv["nextTryInSecs"].as_i64().is_some(), "{mv}");
+    // A fourth try after 240 s: B stays free this time, so it moves.
+    k2_daemon::compute_place::sweep(t0 + 61 + 121 + 241);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), gen, CANCEL_WITHDRAW.to_string())]);
+    compute_ws::test_frame("bn-a", state(&job, gen, JobState::Cancelled, Some("withdrawn"), None));
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.withdraws), ("bn-b", 0), "moved to B; a move resets the bounces: {rj:?}");
+    assert_eq!(assigns(&b.frames()).len(), 1);
+    let p = rj.ctl.placement.expect("placement");
+    assert!(p.why.starts_with("moved from bn-a: bn-b can start it now"), "{}", p.why);
+    // The event stream says it in words.
+    let r = get(d.port, "/cli/compute/jobs", OWNER, "events=1&last=50").await;
+    let ev = j(&r);
+    let moved: Vec<&Value> = ev["events"].as_array().unwrap().iter().filter(|e| e["event"] == "moved" && e["job"] == job.as_str()).collect();
+    assert_eq!(moved.len(), 1, "{ev}");
+    assert_eq!(moved[0]["detail"], "moved from bn-a to bn-b: bn-b can start it now", "{ev}");
+    compute_ws::test_detach("bn-a");
+    compute_ws::test_detach("bn-b");
+}
+
+/// While a node is asked to give a job back for B, B's place is held: a
+/// new `--any` job doesn't take it (or queue behind it there), and the
+/// moving job lands on B when the answer comes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_target_is_held_while_the_withdraw_travels() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "holder");
+    active_node("hd-a", "hd-a", "linux", &ws);
+    active_node("hd-b", "hd-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("hd-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let first = queued_any_on(d.port, &ws, "hd-a", &mut a).await;
+    let mut b = compute_ws::test_attach("hd-b", solo(0, 1));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(cancels(&a.frames()).len(), 1, "withdraw asked for B");
+    // A new job meanwhile: not onto the held B.
+    let r = run(d.port, OWNER, json!({"any": true, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let second = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert_eq!(row(&second).node_id, "hd-a", "B is held for the moving job");
+    assert!(assigns(&b.frames()).is_empty());
+    compute_ws::test_frame("hd-a", state(&first, 1, JobState::Cancelled, Some("withdrawn"), None));
+    assert_eq!(row(&first).node_id, "hd-b", "the moving job gets B");
+    assert_eq!(assigns(&b.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![first.clone()]);
+    compute_ws::test_detach("hd-a");
+    compute_ws::test_detach("hd-b");
+}
+
+/// Order and pins: while the older job of a workspace backs off after a
+/// bounce, its newer job on the same node doesn't move past it; a job
+/// named on a node never moves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_newer_job_never_moves_past_an_older_one_and_a_pinned_job_stays() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "orderly");
+    active_node("or-a", "or-a", "linux", &ws);
+    active_node("or-b", "or-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("or-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let older = queued_any_on(d.port, &ws, "or-a", &mut a).await;
+    let newer = queued_any_on(d.port, &ws, "or-a", &mut a).await;
+    let r = run(d.port, OWNER, json!({"node": "or-a", "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let pinned = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let sent = assigns(&a.frames());
+    compute_ws::test_frame("or-a", state(&pinned, sent[0].1, JobState::Queued, Some("node_queued"), None));
+    let now = k2_core::compute::now();
+    // The older job bounced 10 s ago.
+    {
+        let db = k2_core::db::shared();
+        store::note_withdraw(&db.lock(), &older, now - 10);
+    }
+    let _b = compute_ws::test_attach("or-b", solo(0, 1));
+    k2_daemon::compute_place::sweep(now);
+    assert!(cancels(&a.frames()).is_empty(), "the newer job waits for the older one's turn; the pinned one never moves");
+    k2_daemon::compute_place::sweep(now + 60);
+    assert_eq!(cancels(&a.frames()), vec![(older.clone(), 1, CANCEL_WITHDRAW.to_string())], "the older job first; B (one slot) is held for it");
+    assert_eq!((row(&newer).node_id.as_str(), row(&pinned).node_id.as_str()), ("or-a", "or-a"));
+    let r = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={pinned}")).await;
+    assert_eq!(j(&r)["move"]["auto"], false, "{}", r.body);
+    compute_ws::test_detach("or-a");
+    compute_ws::test_detach("or-b");
+}
+
+/// The shared-node mover never asks for a withdraw to bring a job to a
+/// pinned-only node, however free it is; turned off, it does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_mover_never_withdraws_a_job_for_a_pinned_only_node() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "pinonly");
+    active_node("po-a", "po-a", "linux", &ws);
+    active_node("po-b", "po-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("po-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "po-a", &mut a).await;
+    let set = |on: bool| {
+        let db = k2_core::db::shared();
+        k2_core::compute::pinned_only::set(&db.lock(), "po-b", on, "owner", k2_core::compute::now()).expect("pinned-only");
+    };
+    set(true);
+    let _b = compute_ws::test_attach("po-b", solo(0, 2));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert!(cancels(&a.frames()).is_empty(), "no withdraw for a pinned-only node");
+    assert_eq!(row(&job).withdraws, 0);
+    set(false);
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "off again: the mover asks");
+    compute_ws::test_detach("po-a");
+    compute_ws::test_detach("po-b");
+}

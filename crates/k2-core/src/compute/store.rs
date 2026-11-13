@@ -900,7 +900,9 @@ pub struct JobRow {
     pub node_blocked_by: Option<String>,
     #[serde(skip)]
     pub node_seen_at: Option<i64>,
-    /// The `--any` mover's withdraws (V71).
+    /// The `--any` mover's withdraws since this job last moved: bounces in
+    /// a row once the node answered (each ask counts; a move resets it).
+    /// Sets the mover's back-off ([`super::share::withdraw_wait`]).
     #[serde(skip)]
     pub withdraws: i64,
     #[serde(skip)]
@@ -1266,7 +1268,7 @@ pub fn set_job_ctl(conn: &Connection, id: &str, ctl: &JobCtl) -> Result<(), Stri
 pub fn move_queued_job(conn: &Connection, id: &str, plan: &Plan, ctl: &JobCtl, reason: &str) -> Result<bool, String> {
     let n = conn
         .execute(
-            "UPDATE compute_jobs SET node_id = ?2, plan_json = ?3, plan_digest = ?4, reason = ?5, detail = NULL \
+            "UPDATE compute_jobs SET node_id = ?2, plan_json = ?3, plan_digest = ?4, reason = ?5, detail = NULL, withdraws = 0 \
              WHERE id = ?1 AND state = 'queued'",
             params![id, plan.node_id, plan_json_with(plan, ctl)?, plan.digest()?, reason],
         )
@@ -1511,7 +1513,8 @@ pub fn requeue_new_generation(conn: &Connection, id: &str, generation: i64, reas
     .map(|n| n == 1)
 }
 
-/// The mover asked the node to give this job back (V71's limit).
+/// The mover asked the node to give this job back (its back-off counts
+/// from `at`; [`move_queued_job`] resets the count).
 pub fn note_withdraw(conn: &Connection, id: &str, at: i64) {
     let _ = conn.execute("UPDATE compute_jobs SET withdraws = withdraws + 1, withdrawn_at = ?2 WHERE id = ?1", params![id, at]);
 }
@@ -2094,9 +2097,16 @@ mod tests {
         // A move rewrites node, plan and digest, only while queued.
         let mut q = p.clone();
         q.node_id = "n2".into();
+        // Two bounces in a row before it moved.
+        note_withdraw(&c, &j.id, 20);
+        note_withdraw(&c, &j.id, 25);
+        assert_eq!(job_by_id(&c, &j.id).unwrap().withdraws, 2);
         assert!(move_queued_job(&c, &j.id, &q, &more, "moved").unwrap());
         let m = job_by_id(&c, &j.id).unwrap();
         assert_eq!((m.node_id.as_str(), m.plan_digest.clone(), m.ctl.clone()), ("n2", q.digest().unwrap(), more.clone()));
+        // A move resets the bounce count (the mover's back-off); the last
+        // withdraw time stays (the short gap after a move counts from it).
+        assert_eq!((m.withdraws, m.withdrawn_at), (0, Some(25)));
         set_job_state(&c, &j.id, JobState::Assigned, None, None, 30).unwrap();
         assert!(!move_queued_job(&c, &j.id, &p, &more, "moved").unwrap(), "never moves an assigned job");
         assert_eq!(active_jobs(&c).len(), 1);

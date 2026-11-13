@@ -7346,7 +7346,9 @@ EVENTS (0.46.7)
     {"cursor":812,"at":…,"event":"finished","job":"…","short":"ab12cd34",
      "node":"k2n7-vin","state":"done","exit":0,"reason":null}
   event: queued, started, finished, requeued (an infrastructure retry),
-  moved (to another node). A finished job: state done with its exit code
+  moved (to another node; "from" names the node it left, and "detail"
+  says why: "moved from k2n7-vin to k2n12-vin: k2n12-vin can start it
+  now"). A finished job: state done with its exit code
   (non-zero = the command failed), or failed / timeout / cancelled /
   interrupted with a reason (mem_cap, stalled, queue_timeout, …).
   --mine: only the jobs this session sent; --tag T: one tag's. Without

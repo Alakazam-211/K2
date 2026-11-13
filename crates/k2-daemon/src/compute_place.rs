@@ -14,7 +14,9 @@
 //! - **The sweeper** (the compute ticker, every 5 s): queued jobs past
 //!   their queue timeout fail loudly (`queue_timeout`); queued `--any`
 //!   jobs leave a node that went offline, is paused, draining or set
-//!   aside, or move to an idle node while theirs is busy (late binding);
+//!   aside, or move to an idle node while theirs is busy (late binding;
+//!   on a shared node through a withdraw, with the target's place held
+//!   while the node answers and a back-off only after a bounce);
 //!   running jobs on a node offline for `node_lost_secs` end as
 //!   `interrupted/node_lost`.
 //! - **Retries**: after each attempt [`after_attempt`] retries
@@ -27,7 +29,7 @@
 //! or "timed out" until nodes had a chance to reconnect (`awake_since`).
 
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
@@ -318,6 +320,8 @@ pub struct Pending {
     pub mem_bytes: u64,
     pub cpu_millis: u64,
     pub jobs: u32,
+    /// Of `jobs`, the `--any` mover's holds ([`note_hold`]).
+    pub holds: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -356,13 +360,43 @@ pub fn note_pending(node_id: &str, job_id: &str, mem: Option<u64>, cpu: Option<u
     });
 }
 
+/// The revision a withdraw hold carries: no offer is newer, so only time
+/// ([`PENDING_SECS`]) or [`drop_hold`] ends it.
+const HOLD_REV: u64 = u64::MAX;
+
+/// The `--any` mover asked a node to give `job_id` back so it can start on
+/// `node_id`: hold that node's memory, CPU and a slot for it while the
+/// answer travels, so a new submit or another move doesn't take the place
+/// first (the job would then bounce back to the end of its old queue).
+/// Unlike a sent job's pending ask, a newer offer doesn't drop it.
+pub fn note_hold(node_id: &str, job_id: &str, mem: Option<u64>, cpu: Option<u64>, now: i64) {
+    note_pending(node_id, job_id, mem, cpu, HOLD_REV, now);
+}
+
+/// The job's withdraw hold ends (it moved, bounced, or the withdraw wasn't
+/// sent): its place on the target is free again.
+pub fn drop_hold(job_id: &str) {
+    with_map(&PENDING, |m| m.values_mut().for_each(|v| v.retain(|p| !(p.rev == HOLD_REV && p.job == job_id))));
+}
+
+/// Keep only the holds of jobs whose withdraw is still in flight (a node
+/// that started the job instead answered its real state, V57).
+fn keep_holds(in_flight: &HashSet<String>) {
+    with_map(&PENDING, |m| m.values_mut().for_each(|v| v.retain(|p| p.rev != HOLD_REV || in_flight.contains(&p.job))));
+}
+
 /// What is pending on `node_id`, given its current offer revision (`None`
 /// = no live offer: only time drops entries).
 pub fn pending_for(node_id: &str, rev: Option<u64>, now: i64) -> Pending {
     with_map(&PENDING, |m| {
         let Some(v) = m.get_mut(node_id) else { return Pending::default() };
         v.retain(|p| now - p.at < PENDING_SECS && rev.is_none_or(|r| r <= p.rev));
-        v.iter().fold(Pending::default(), |a, p| Pending { mem_bytes: a.mem_bytes + p.mem, cpu_millis: a.cpu_millis + p.cpu, jobs: a.jobs + 1 })
+        v.iter().fold(Pending::default(), |a, p| Pending {
+            mem_bytes: a.mem_bytes + p.mem,
+            cpu_millis: a.cpu_millis + p.cpu,
+            jobs: a.jobs + 1,
+            holds: a.holds + u32::from(p.rev == HOLD_REV),
+        })
     })
 }
 
@@ -476,6 +510,9 @@ impl Cand {
             // a GPU job also needs a free GPU in the offer.
             return self.online
                 && share::starts_now(v, w.cpu_millis, w.mem_bytes)
+                // Jobs sent (or a mover's hold) since the offer take this
+                // server's running slots there too.
+                && (self.pending.jobs == 0 || v.running + self.pending.jobs < v.limits.max_running)
                 && w.gpu.is_none_or(|g| self.offer.free.gpus >= g.count)
                 && self.fits_free(w)
                 && !(w.exclusive && self.running_now() > 0)
@@ -1476,7 +1513,7 @@ pub fn choose<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_ke
 /// v1, best first. A stable sort on the score, highest first: among equal
 /// scores the earlier candidate stays first (the old loop's `>`).
 fn rank_v1<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> Vec<(&'a Cand, Tier)> {
-    let mut scored: Vec<(&Cand, (Tier, bool, i64, u8, i64, u64))> = Vec::new();
+    let mut scored: Vec<(&Cand, (Tier, bool, bool, i64, u8, i64, u64))> = Vec::new();
     for c in cands {
         let Some(tier) = c.tier(w) else { continue };
         let warmth = warmth(c, project_key, commit);
@@ -1494,7 +1531,9 @@ fn rank_v1<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: 
             (Tier::Busy, None) => -(i64::MAX / 2),
             _ => 0,
         };
-        scored.push((c, (tier, !prefer_not.contains(&c.node.id), eta, warmth, busy, tie)));
+        // A node held for a moving job is the last place to wait.
+        let not_held = tier != Tier::Busy || c.pending.holds == 0;
+        scored.push((c, (tier, not_held, !prefer_not.contains(&c.node.id), eta, warmth, busy, tie)));
     }
     scored.sort_by(|a, b| b.1.cmp(&a.1));
     scored.into_iter().map(|(c, s)| (c, s.0)).collect()
@@ -1508,10 +1547,12 @@ enum V2Key {
     /// worth one band), `prefer_not`, warmth, recent placements, this
     /// workspace's running jobs, load, free CPU, `sys:` support, name.
     Now(bool, bool, u8, bool, Reverse<u8>, u32, u32, u32, Reverse<u64>, bool, String),
-    /// Busy everywhere: `prefer_not`, a `sys:` need it can't install, a
-    /// known ETA (`(0, secs)`, quoted or estimated, lower first) before an
-    /// unknown one (`(1, 0)`), fewer jobs there, warmth, name.
-    Busy(bool, bool, (u8, u64), u64, Reverse<u8>, String),
+    /// Busy everywhere: a node held for a job the mover is bringing there
+    /// last (a job queued there would start first and bounce it),
+    /// `prefer_not`, a `sys:` need it can't install, a known ETA (`(0,
+    /// secs)`, quoted or estimated, lower first) before an unknown one
+    /// (`(1, 0)`), fewer jobs there, warmth, name.
+    Busy(bool, bool, bool, (u8, u64), u64, Reverse<u8>, String),
     /// Only offline: `prefer_not`, the most recently seen, name.
     Offline(bool, Reverse<i64>, String),
 }
@@ -1530,7 +1571,7 @@ fn v2_key(c: &Cand, tier: Tier, w: &Want, prefer_not: &[String], project_key: Op
         }
         Tier::Busy => {
             let eta = c.wait_eta(w).map(|(e, _)| (0, e)).unwrap_or((1, 0));
-            V2Key::Busy(avoid, unsupported, eta, u64::from(c.running_now()) + c.queued as u64, Reverse(warm), name)
+            V2Key::Busy(c.pending.holds > 0, avoid, unsupported, eta, u64::from(c.running_now()) + c.queued as u64, Reverse(warm), name)
         }
         Tier::Offline => V2Key::Offline(avoid, Reverse(c.node.last_seen.unwrap_or(0)), name),
     }
@@ -2000,13 +2041,62 @@ fn leave_reason(j: &JobRow, node: Option<&NodeRow>, decisions: &mut HashMap<Stri
     }
 }
 
+/// A node the job may move to at all: not one it avoids or keeps off its
+/// `--only` list, and one that can give its `--needs` (the k2-node
+/// features they need, no `sys:` name it can never install there).
+/// [`candidates_report`] already leaves such nodes out; the mover checks
+/// again so its decision stands on its own.
+fn movable(c: &Cand, w: &Want) -> bool {
+    if w.filter.avoid.contains(&c.node.id) || (!w.filter.only.is_empty() && !w.filter.only.contains(&c.node.id)) {
+        return false;
+    }
+    if required_features(w).iter().any(|f| !c.offer.features.iter().any(|x| x == f)) {
+        return false;
+    }
+    let states = c.needs(w);
+    !states.iter().any(|s| s.state == NeedState::UnsupportedOnOs) && package_gaps(&states).1.is_empty()
+}
+
+/// The `--any` mover's choice for a waiting job (`cands`: every other
+/// node): the best [`movable`] node, only when it can start the job now.
+/// A pinned job never moves. `None`: it stays where it waits.
+pub fn move_target<'a>(
+    pinned: bool,
+    policy: compute::PlacementPolicy,
+    cands: &'a [Cand],
+    w: &Want,
+    prefer_not: &[String],
+    project_key: Option<&str>,
+    commit: Option<&str>,
+) -> Option<&'a Cand> {
+    if pinned {
+        return None;
+    }
+    let ok: Vec<Cand> = cands.iter().filter(|c| movable(c, w)).cloned().collect();
+    let (c, tier) = choose_by(policy, &ok, w, prefer_not, project_key, commit)?;
+    if tier != Tier::Now {
+        return None;
+    }
+    cands.iter().find(|x| x.node.id == c.node.id)
+}
+
+/// The line a move leaves on the job ("moved from k2n7-vin: k2n12-vin can
+/// start it now · …"): where it came from, and why the new node.
+pub fn moved_why(from: &str, to: &str, tier: Tier, why: &str) -> String {
+    match tier {
+        Tier::Now => format!("moved from {from}: {to} can start it now{}", why.strip_prefix("starts now").unwrap_or(why)),
+        _ => format!("moved from {from}: {why}"),
+    }
+}
+
 /// Move a queued job to another node now, if one fits. `hard`: any usable
 /// online node; else only one that starts it now. Returns the new node.
 pub fn try_move(j: &JobRow, avoid: &[String], hard: bool, why: &str) -> Option<String> {
     let plan = j.plan()?;
     let now = compute::now();
     let w = Want::of_job(j, &plan);
-    let report = candidates_report(&w, std::slice::from_ref(&j.node_id), now);
+    let mut report = candidates_report(&w, std::slice::from_ref(&j.node_id), now);
+    report.cands.retain(|c| movable(c, &w));
     let pk = plan.src.as_ref().map(|s| s.project_key.clone());
     let commit = plan.src.as_ref().map(|s| s.commit.clone());
     let policy = compute::placement_policy();
@@ -2032,10 +2122,12 @@ pub fn try_move(j: &JobRow, avoid: &[String], hard: bool, why: &str) -> Option<S
     if let Some(before) = j.ctl.placement.as_ref() {
         rec.considered = before.considered;
     }
-    ctl.placement = Some(rec);
     let moved = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        let from = store::node_by_id(&conn, &j.node_id).map(|n| n.name).unwrap_or_else(|| j.node_id.clone());
+        rec.why = moved_why(&from, &c.node.name, tier, &rec.why);
+        ctl.placement = Some(rec);
         let moved = store::move_queued_job(&conn, &j.id, &new_plan, &ctl, &format!("moved_{why}")).unwrap_or(false);
         if moved {
             store::record_event(
@@ -2334,6 +2426,12 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
         let conn = db.lock();
         store::node_queued_jobs(&conn)
     };
+    // Holds of withdraws no longer in flight end here.
+    keep_holds(&held.iter().filter(|j| j.reason.as_deref() == Some(pending::WITHDRAW)).map(|j| j.id.clone()).collect());
+    // Order (oldest first, as `node_queued_jobs` lists them): while an
+    // older job of a workspace waits out its back-off on a node, the
+    // workspace's newer jobs there don't move past it.
+    let mut cooling: HashSet<(String, String)> = HashSet::new();
     for j in held {
         let Some(n) = nodes.get(&j.node_id) else { continue };
         let online = compute_ws::is_online(&n.id);
@@ -2357,7 +2455,20 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
                 continue;
             }
         }
-        if j.ctl.any.is_none() || !online || !share::may_withdraw(j.withdraws, j.withdrawn_at, now) || held_for_cache(&j, since, now) {
+        if j.ctl.any.is_none() || !online {
+            continue;
+        }
+        let turn = (j.workspace_id.clone(), j.node_id.clone());
+        if cooling.contains(&turn) {
+            continue;
+        }
+        // The back-off after a bounce (no lifetime cap; this supersedes
+        // V71's "at most twice in all").
+        if !share::may_withdraw(j.withdraws, j.withdrawn_at, now) {
+            cooling.insert(turn);
+            continue;
+        }
+        if held_for_cache(&j, since, now) {
             continue;
         }
         let Some(plan) = j.plan() else { continue };
@@ -2365,23 +2476,61 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
         let cands = candidates(&w, std::slice::from_ref(&j.node_id), now);
         let pk = plan.src.as_ref().map(|s| s.project_key.clone());
         let commit = plan.src.as_ref().map(|s| s.commit.clone());
-        if !matches!(choose_by(compute::placement_policy(), &cands, &w, &[], pk.as_deref(), commit.as_deref()), Some((_, Tier::Now))) {
-            continue;
-        }
+        let Some(target) = move_target(false, compute::placement_policy(), &cands, &w, &[], pk.as_deref(), commit.as_deref()) else { continue };
+        // Hold the target's place while the node answers.
+        note_hold(&target.node.id, &j.id, w.mem_on(&target.offer), w.cpu_millis, now);
         {
             let db = k2_core::db::shared();
             let conn = db.lock();
             store::set_job_reason(&conn, &j.id, Some(pending::WITHDRAW), None);
             store::note_withdraw(&conn, &j.id, now);
-            store::record_event(&conn, "controller", "withdraw_asked", Some(&n.id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": j.generation, "withdraws": j.withdraws + 1}));
+            store::record_event(
+                &conn,
+                "controller",
+                "withdraw_asked",
+                Some(&n.id),
+                Some(&j.workspace_id),
+                Some(&j.id),
+                serde_json::json!({"generation": j.generation, "withdraws": j.withdraws + 1, "to": target.node.id}),
+            );
         }
         if !compute_ws::send_cancel_if_not_started(&n.id, &j.id, j.generation, frames::CANCEL_WITHDRAW) {
             // Not sent (the node just dropped): no withdraw in flight.
+            drop_hold(&j.id);
             let db = k2_core::db::shared();
             let conn = db.lock();
             store::set_job_reason(&conn, &j.id, Some(pshare::codes::NODE_QUEUED), None);
         }
     }
+}
+
+/// A waiting job's mover state for its own workspace (jobs, get, queue):
+/// pinned or auto, and for an auto job the withdraws that bounced in a row
+/// and when the mover may try again. `None`: not waiting.
+pub fn move_state_json(j: &JobRow, now: i64) -> Option<serde_json::Value> {
+    if !(j.state == "queued" || j.node_queued) {
+        return None;
+    }
+    if j.ctl.any.is_none() {
+        return Some(serde_json::json!({"auto": false, "note": "pinned: it waits for the node it was named on (k2 compute move <job> --auto lets K2 move it)"}));
+    }
+    let wait = share::withdraw_wait(j.withdraws, j.withdrawn_at, now);
+    let moving = j.reason.as_deref() == Some(pending::WITHDRAW);
+    let note = if moving {
+        "moving: its node was asked to give it back for a node that can start it now".to_string()
+    } else if j.withdraws > 0 && wait > 0 {
+        format!("tried to move it {} time(s) in a row; the node it was meant for filled first; next try in {wait}s", j.withdraws)
+    } else {
+        "K2 moves it when another node can start it now".to_string()
+    };
+    Some(serde_json::json!({
+        "auto": true,
+        "bounces": j.withdraws,
+        "lastTryAt": j.withdrawn_at,
+        "nextTryInSecs": wait,
+        "moving": moving,
+        "note": note,
+    }))
 }
 
 /// A node's offer changed this server's share (tenant side notes, §4.1,
@@ -2812,7 +2961,7 @@ mod tests {
         let (mut a, b) = (cand("a", 32, 32, 0, 4), cand("b", 32, 32, 0, 4));
         assert_eq!(pick(V2, &[a.clone(), b.clone()], &w).0, "a", "the name breaks a full tie");
         a.recent = 1;
-        a.pending = Pending { mem_bytes: 2 * GB, cpu_millis: 0, jobs: 1 };
+        a.pending = Pending { mem_bytes: 2 * GB, cpu_millis: 0, jobs: 1, holds: 0 };
         assert_eq!(pick(V2, &[a.clone(), b.clone()], &w).0, "b", "a just took one: the burst spreads");
         // Same band, no pending: this controller's recent placements and
         // this workspace's own running jobs still spread it.
@@ -2860,7 +3009,7 @@ mod tests {
         assert_eq!(pending_for(node, Some(7), now), Pending::default());
         note_pending(node, "job-1", Some(24 * GB), Some(4000), 7, now);
         let p = pending_for(node, Some(7), now);
-        assert_eq!(p, Pending { mem_bytes: 24 * GB, cpu_millis: 4000, jobs: 1 });
+        assert_eq!(p, Pending { mem_bytes: 24 * GB, cpu_millis: 4000, jobs: 1, holds: 0 });
         let mut c = cand(node, 40, 64, 0, 4);
         assert!(c.starts_now(&want(24)), "before: 40 GB free");
         c.pending = p;
@@ -3543,5 +3692,141 @@ mod tests {
         // No cap on the grant: no field.
         let p = fit_plan(&plan, &job, &v2, Some(GrantCaps { ws: 3, submitter: 0 })).expect("fitted");
         assert_eq!(p.submitter_max_running, None);
+    }
+
+    // ── the `--any` mover (a waiting job moves when a node can start it) ──
+
+    fn mover_pick(cands: &[Cand], w: &Want, pinned: bool) -> Option<String> {
+        move_target(pinned, compute::PlacementPolicy::V2, cands, w, &[], None, None).map(|c| c.node.id.clone())
+    }
+
+    /// A job waiting on a full node (the 20 GB one asked here can't start
+    /// on the busy node) moves to the node with a free slot and the memory.
+    #[test]
+    fn a_waiting_auto_job_moves_to_a_node_with_a_free_fitting_slot() {
+        let cands = vec![cand("busy", 4, 32, 2, 2), cand("free", 30, 32, 0, 2)];
+        assert_eq!(mover_pick(&cands, &want(20), false).as_deref(), Some("free"));
+    }
+
+    /// A free slot without the memory is not a place to move to: slots
+    /// alone don't say a 28 GB job fits (the 52 GB nodes with one job on).
+    #[test]
+    fn a_free_slot_without_the_memory_is_not_a_move() {
+        let cands = vec![cand("one-running", 24, 52, 1, 3), cand("small", 23, 23, 0, 1)];
+        assert_eq!(mover_pick(&cands, &want(28), false), None);
+    }
+
+    #[test]
+    fn a_pinned_job_never_moves() {
+        let cands = vec![cand("free", 30, 32, 0, 2)];
+        assert_eq!(mover_pick(&cands, &want(20), true), None);
+    }
+
+    #[test]
+    fn the_mover_never_picks_an_avoided_node() {
+        let cands = vec![cand("busy", 4, 32, 2, 2), cand("free", 30, 32, 0, 2), cand("free-2", 30, 32, 0, 2)];
+        let mut w = want(20);
+        w.filter.avoid = vec!["free".into()];
+        assert_eq!(mover_pick(&cands, &w, false).as_deref(), Some("free-2"));
+        w.filter.avoid.push("free-2".into());
+        assert_eq!(mover_pick(&cands, &w, false), None, "only avoided nodes are free");
+    }
+
+    #[test]
+    fn the_mover_keeps_to_an_only_list() {
+        let cands = vec![cand("free", 30, 32, 0, 2), cand("listed", 30, 32, 1, 2)];
+        let mut w = want(20);
+        w.filter.only = vec!["listed".into()];
+        assert_eq!(mover_pick(&cands, &w, false).as_deref(), Some("listed"));
+    }
+
+    /// A node whose k2-node can't give the job's `--needs` (here: Rust
+    /// components, which need the `rust-components` feature) is never a
+    /// target, however free it is.
+    #[test]
+    fn the_mover_never_picks_a_node_that_cant_give_the_needs() {
+        let mut w = want(20);
+        w.needs = vec!["rust@stable+clippy".into()];
+        let lacking = cand("lacking", 30, 32, 0, 2);
+        assert_eq!(mover_pick(std::slice::from_ref(&lacking), &w, false), None);
+        let mut able = cand("able", 30, 32, 1, 2);
+        able.offer.features.push(needs::FEATURE_NEEDS.to_string());
+        able.offer.features.push(FEATURE_RUST_COMPONENTS.to_string());
+        assert_eq!(mover_pick(&[lacking, able], &w, false).as_deref(), Some("able"));
+    }
+
+    /// The move line names both nodes and why.
+    #[test]
+    fn a_move_says_where_from_and_why() {
+        assert_eq!(moved_why("k2n7", "k2n12", Tier::Now, "starts now · idle · 56/56 GB"), "moved from k2n7: k2n12 can start it now · idle · 56/56 GB");
+        assert_eq!(moved_why("a", "b", Tier::Busy, "no node free now"), "moved from a: no node free now");
+    }
+
+    /// A mover's hold on the target counts as a sent job until the node
+    /// answers: a newer offer from the target doesn't drop it (only the
+    /// answer or 60 s do), so a new submit can't take the place first.
+    #[test]
+    fn a_withdraw_hold_keeps_the_targets_place_until_dropped() {
+        let node = "hold-test-node";
+        let now = 2_000_000;
+        note_hold(node, "hold-job-1", Some(20 * GB), Some(4000), now);
+        let p = pending_for(node, Some(99), now + 5);
+        assert_eq!(p, Pending { mem_bytes: 20 * GB, cpu_millis: 4000, jobs: 1, holds: 1 }, "a newer offer keeps the hold");
+        let mut c = cand(node, 30, 32, 0, 1);
+        c.pending = p;
+        assert!(!c.starts_now(&want(8)), "the one slot is held");
+        assert_eq!(c.tier(&want(8)), Some(Tier::Busy));
+        let other_busy = cand("hold-other-busy", 30, 32, 1, 1);
+        for policy in [compute::PlacementPolicy::V1, compute::PlacementPolicy::V2] {
+            let both = [c.clone(), other_busy.clone()];
+            let (first, _) = choose_by(policy, &both, &want(8), &[], None, None).expect("a pick");
+            assert_eq!(first.node.id, "hold-other-busy", "{policy:?}: a job that can't start now waits elsewhere, not behind the moving one");
+        }
+        let mut roomy = cand("hold-roomy", 30, 32, 0, 2);
+        roomy.pending = p;
+        assert_eq!(roomy.tier(&want(8)), Some(Tier::Now), "a hold takes one place, not the node");
+        // In flight: kept. Not in flight any more: dropped.
+        keep_holds(&HashSet::from(["hold-job-1".to_string()]));
+        assert_eq!(pending_for(node, Some(99), now + 6).jobs, 1);
+        keep_holds(&HashSet::new());
+        assert_eq!(pending_for(node, Some(99), now + 6).jobs, 0);
+        // drop_hold ends it at once and leaves a sent job's ask alone.
+        note_pending(node, "sent-job", Some(GB), None, 7, now);
+        note_hold(node, "hold-job-2", Some(GB), None, now);
+        drop_hold("hold-job-2");
+        assert_eq!(pending_for(node, Some(7), now).jobs, 1);
+        assert_eq!(pending_for(node, None, now + PENDING_SECS).jobs, 0);
+    }
+
+    /// On a shared node a sent job (or a hold) takes one of this server's
+    /// running slots until the next offer, like on a solo node.
+    #[test]
+    fn a_pending_job_takes_a_shared_nodes_running_slot() {
+        let mut c = shared(cand("shared-pend", 30, 32, 0, 2), None);
+        let max = c.shared_view().expect("shared").limits.max_running;
+        c.offer.share.as_mut().expect("share").running = max - 1;
+        assert!(c.starts_now(&want(2)), "one slot left");
+        c.pending = Pending { mem_bytes: GB, cpu_millis: 0, jobs: 1, holds: 0 };
+        assert!(!c.starts_now(&want(2)), "the pending job has it");
+    }
+
+    /// The JSON a waiting job shows its own workspace: pinned or auto, and
+    /// after a bounce the count and the next try.
+    #[test]
+    fn a_waiting_job_says_whether_and_when_it_may_move() {
+        let now = 10_000;
+        let mut j = JobRow { state: "queued".into(), ..Default::default() };
+        let pinned = move_state_json(&j, now).expect("waiting");
+        assert_eq!(pinned["auto"], false);
+        j.ctl.any = Some(AnyFilter::default());
+        let fresh = move_state_json(&j, now).expect("waiting");
+        assert_eq!((fresh["auto"].as_bool(), fresh["bounces"].as_i64(), fresh["nextTryInSecs"].as_i64()), (Some(true), Some(0), Some(0)));
+        j.withdraws = 2;
+        j.withdrawn_at = Some(now - 20);
+        let bounced = move_state_json(&j, now).expect("waiting");
+        assert_eq!((bounced["bounces"].as_i64(), bounced["nextTryInSecs"].as_i64()), (Some(2), Some(100)));
+        assert!(bounced["note"].as_str().expect("note").contains("next try in 100s"), "{bounced}");
+        j.state = "running".into();
+        assert!(move_state_json(&j, now).is_none(), "a started job has no mover state");
     }
 }

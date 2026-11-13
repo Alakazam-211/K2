@@ -1410,10 +1410,29 @@ fn given_back_job(node_id: &str, job: &store::JobRow) {
         );
         store::job_by_id(&conn, &job.id)
     };
+    // The hold on the node it was meant for ends: it moves there (or to
+    // another node that can start it now) or it bounces.
+    crate::compute_place::drop_hold(&job.id);
     if let Some(r) = row.filter(|r| r.ctl.any.is_some()) {
         if crate::compute_place::try_move(&r, &[], false, "withdrawn").is_some() {
             return;
         }
+        // A bounce: back into its node's queue; the mover tries again
+        // after its back-off (share::withdraw_wait), with no lifetime cap.
+        let wait = share::withdraw_wait(r.withdraws, r.withdrawn_at, compute::now());
+        let detail = format!("tried to move it to a node that could start it now; that node filled first; next try in {wait}s");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_job_reason(&conn, &r.id, Some("withdrawn"), Some(&detail));
+        store::record_event(
+            &conn,
+            "controller",
+            "withdraw_bounced",
+            Some(node_id),
+            Some(&r.workspace_id),
+            Some(&r.id),
+            serde_json::json!({"bounces": r.withdraws, "retryInSecs": wait}),
+        );
     }
     kick(node_id);
     notify_change();

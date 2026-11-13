@@ -1083,6 +1083,9 @@ elif verb == "get":
         code = pl.get("code") or ""
         how = ("moved: " + code[len("moved_"):]) if code.startswith("moved_") else "auto"
         print("  placed on %s (%s, %s): %s%s" % (pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else ""))
+    if (j.get("move") or {}).get("note"):
+        # A waiting job: may K2 move it, and how its last tries went.
+        print("  move: %s" % j["move"]["note"])
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
     if j.get("queue") and j["queue"].get("onNode"):
@@ -5245,6 +5248,10 @@ for e in v.get("events") or []:
                 tail += " exit %s" % e["exit"]
             if e.get("reason"):
                 tail += " (%s)" % e["reason"]
+        if e.get("detail"):
+            # A move: "moved from k2n7-vin to k2n12-vin: k2n12-vin can start it now".
+            print("%s  %s  %s" % (time.strftime("%H:%M:%S", time.localtime(e.get("at") or 0)), e.get("short"), e["detail"]))
+            continue
         print("%s  %s  %-9s on %s%s" % (time.strftime("%H:%M:%S", time.localtime(e.get("at") or 0)), e.get("short"), e.get("event"), e.get("node") or "?", tail))
 print(v.get("cursor"))')"
                 cursor="${eout##*$'\n'}"

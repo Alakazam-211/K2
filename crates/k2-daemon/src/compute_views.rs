@@ -455,6 +455,11 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     // 0.46.8: pinned (a node named: it never moves on its own; k2 compute
     // move <id> --auto releases it) or auto (K2 may move it while queued).
     v["pinned"] = (j.ctl.any.is_none() && j.ctl.shards.is_empty()).into();
+    // A waiting job explains whether K2 may move it, and how its last
+    // tries went (bounces, next try).
+    if let Some(m) = crate::compute_place::move_state_json(j, compute::now()) {
+        v["move"] = m;
+    }
     v["submittedBy"] = compute::result::submitted_by(j).into();
     v["via"] = compute::result::via(j).into();
     // CE-9: the commit chosen at submit, so a sourced job never shows a
@@ -838,6 +843,9 @@ pub(crate) fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json
             e["argv"] = argv.into();
             e["mySession"] = viewer.is_some_and(|(_, sid)| r.session_id.as_deref() == Some(sid)).into();
             e["pinned"] = r.ctl.any.is_none().into();
+            if let Some(m) = crate::compute_place::move_state_json(r, compute::now()) {
+                e["move"] = m;
+            }
         } else {
             // Another workspace on this server: state and size only.
             e["otherWorkspace"] = true.into();
@@ -1006,7 +1014,7 @@ fn job_event_json(e: &store::EventRow) -> Option<serde_json::Value> {
     };
     let job = e.job_id.as_deref()?;
     let node = e.node_id.as_deref().map(node_name_of);
-    Some(serde_json::json!({
+    let mut v = serde_json::json!({
         "cursor": e.id,
         "at": e.at,
         "event": event,
@@ -1016,7 +1024,21 @@ fn job_event_json(e: &store::EventRow) -> Option<serde_json::Value> {
         "state": state,
         "exit": d.get("exit").cloned().unwrap_or_default(),
         "reason": reason,
-    }))
+    });
+    // A move says where from and why: "moved from k2n7-vin to k2n12-vin:
+    // k2n12-vin can start it now".
+    if event == "moved" {
+        if let (Some(from), Some(to)) = (s("from").map(node_name_of), node.as_deref()) {
+            let why = match reason {
+                Some("withdrawn") | Some("node_busy") => format!("{to} can start it now"),
+                Some(r) => r.to_string(),
+                None => "moved".to_string(),
+            };
+            v["from"] = from.clone().into();
+            v["detail"] = format!("moved from {from} to {to}: {why}").into();
+        }
+    }
+    Some(v)
 }
 
 /// `GET /cli/compute/jobs?events=1[&after=N|&last=N][&wait=S][&mine=1][&tag=T]`

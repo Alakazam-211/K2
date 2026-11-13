@@ -27,6 +27,10 @@ roster_max_age_hours = 168
 roster_changes = "ask"
 seat_moves = "ask"
 taint_basis = ["owner_attested", "rekeyed", "self_clean"]
+# Build statements (S4): a statement a node signed beside its receipt must
+# pass every check; a receipt from a node too old to sign one still passes,
+# with a note. "required" once every release node runs k2-node 0.46.13.
+provenance = "prefer"
 
 [source]
 kind = "github_tag"

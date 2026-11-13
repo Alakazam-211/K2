@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use k2_node_proto::ci::Isolation;
 use k2_node_proto::ci_config::CiConfig;
-use k2_node_proto::signer_policy::{Changes, SignerPolicy};
+use k2_node_proto::signer_policy::{Changes, ProvenanceRule, SignerPolicy};
 
 fn repo() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -55,6 +55,7 @@ fn source_key(rel: &str, role: &str) -> String {
 fn the_policy_parses_and_asks_a_person_for_new_machines() {
     let p = policy();
     assert_eq!(p.roster_changes, Changes::Ask, "BA-32: K2's signer accepts new node keys only through its person");
+    assert_eq!(p.provenance, ProvenanceRule::Prefer, "S4: statements checked where nodes sign them; required once every release node can");
     assert_eq!(p.source.repo.as_deref(), Some(k2sign("repo").as_str()));
     assert_eq!(p.receipt_max_hours.to_string(), k2sign("compute_receipt_max_hours"));
     for b in ["linux-x86_64", "linux-aarch64"] {

@@ -27,7 +27,7 @@ github_api = https://api.github.com
 daemon_workflow = .github/workflows/daemon-binaries.yml
 # What the release commit (Step 8.9) may change on top of the approved base
 # commit: release.sh's RELEASE_COMMIT_FILES (a test keeps the two equal).
-release_commit_files = package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock src-tauri/Cargo.toml crates/k2-core/Cargo.toml crates/k2-daemon/Cargo.toml crates/k2-menubar/Cargo.toml WHATS_NEW.md
+release_commit_files = package.json src-tauri/tauri.conf.json cli/k2 cli/src/prelude.sh Cargo.lock src-tauri/Cargo.toml crates/k2-core/Cargo.toml crates/k2-daemon/Cargo.toml crates/k2-menubar/Cargo.toml WHATS_NEW.md
 # The Developer ID team every Mac file must be signed by (K2.app, its daemon
 # helper, k2-ptyd inside the standalone macOS daemon).
 apple_team = 36B8R93HXV

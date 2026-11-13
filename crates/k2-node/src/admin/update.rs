@@ -38,8 +38,9 @@ use super::store::AuditEntry;
 /// How long a new build has to say it's healthy.
 pub const HEALTH_GATE_SECS: i64 = 120;
 
-/// How long a shared node's update, rollback or k2-node restart waits for
-/// running jobs before it goes ahead anyway (V55).
+/// How long a drain that gives up (`servers.owner`, `wall.enable`) waits
+/// for running jobs (V55). An update, rollback or k2-node restart waits for
+/// the running jobs' own time limits instead (`drain_limit`, 0.46.13).
 pub const DRAIN_MAX_SECS: i64 = k2_node_proto::admin::DRAIN_MAX_SECS;
 
 /// `node-update.json` in [`mark_dir`]: written by the executor just before every
@@ -370,10 +371,11 @@ pub fn apply(e: &Executor, c: &Checked, sig: &str, bytes: &[u8]) -> Result<Value
             return Err(st.failed(e, "preflight", AdminRefusal::new(code::BAD_BUILD, format!("the staged build doesn't run as {node_user}: {x}"))));
         }
     }
-    let d = decide(e, now_flag, false);
+    let d = decide_update(e, now_flag);
     st.ok(e, "decide", format!("{} running={}", d.0.as_str(), d.1));
     let staged = Staged { to: built.version.to_string(), key: built.key_id.to_string(), cmd_id: cmd_id.clone(), sha, steps: st };
-    // A shared node lets running jobs finish first (V55); `.new` waits.
+    // Running jobs that can't outlive the node finish first, by their own
+    // limits (V55; solo nodes too from 0.46.13); `.new` waits.
     run_decided(e, d, DrainOpts::default(), "node.update", &cmd_id, move |ex| swap_and_restart(ex, staged))
 }
 
@@ -520,6 +522,28 @@ fn running_in_status(p: &Path) -> Result<usize, String> {
     serde_json::from_str::<RunningOnly>(&s).map(|r| r.running.len()).map_err(|x| format!("{}: {x}", p.display()))
 }
 
+/// When the running jobs' own time limits end them, by the node's word
+/// (its status file; 0.46.13). A late time makes a drain wait longer,
+/// never past the ceiling; an early one only cuts the node's own jobs
+/// short. `None`: no status, unreadable, or no end known (the drain waits
+/// to the ceiling).
+pub fn running_until(e: &Executor) -> Option<i64> {
+    #[derive(Deserialize)]
+    struct UntilOnly {
+        #[serde(default)]
+        running_until: Option<i64>,
+    }
+    let s = crate::util::read_regular_max(&e.paths.layout().status(), 4 << 20).ok()?;
+    serde_json::from_str::<UntilOnly>(&s).ok()?.running_until
+}
+
+/// The latest a drain that acts goes ahead with jobs still running, now:
+/// the running jobs' own end plus the grace, never past the ceiling from
+/// `started`.
+fn job_limit(e: &Executor, started: i64) -> i64 {
+    k2_node_proto::admin::drain_limit(started, running_until(e), k2_node_proto::admin::DRAIN_JOB_GRACE_SECS, k2_node_proto::admin::DRAIN_CEILING_SECS)
+}
+
 /// How a node restart goes (§5.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
@@ -566,6 +590,21 @@ pub fn decide(e: &Executor, now: bool, always_drain: bool) -> (Decision, usize) 
         (Decision::Now, running)
     } else {
         (Decision::Drain, running)
+    }
+}
+
+/// `node.update`'s decision (0.46.13): like [`decide`], but a routine
+/// update never cuts a job short on a solo node either. Where running
+/// jobs can't outlive the node, it drains (they end by their own limits);
+/// only `now` stops them.
+pub fn decide_update(e: &Executor, now: bool) -> (Decision, usize) {
+    if e.platform.jobs_outlive_node(&e.paths) {
+        return (Decision::Adopt, running_jobs(e));
+    }
+    match running_jobs(e) {
+        0 => (Decision::Restart, 0),
+        n if now => (Decision::Now, n),
+        n => (Decision::Drain, n),
     }
 }
 
@@ -921,9 +960,11 @@ pub const DRAIN_SETTLE_SECS: u64 = 12;
 /// How a drain behaves at its limit.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DrainOpts {
-    /// Jobs still running when `drain_max` passes: give up (put control
-    /// back, never act) instead of acting anyway. `wall.enable` never
-    /// kills a job (A-H1 / B-M1); updates and owner restarts still go ahead.
+    /// Wait `drain_max`, then, with jobs still running, give up (put
+    /// control back, never act). `wall.enable` and `servers.owner` never
+    /// kill a job this way (A-H1 / B-M1). Without it (updates, rollbacks,
+    /// restarts) the drain waits for the running jobs' own time limits
+    /// (`job_limit`, 0.46.13), then acts.
     pub give_up_at_limit: bool,
     /// Once the count reaches 0, keep control at `draining` for
     /// `drain_settle` and count again before acting (round 4, item 1).
@@ -1036,8 +1077,9 @@ pub fn recover_drain(e: &Executor) {
 /// Run `act` (which restarts the node) now on a solo node, with `now`, or
 /// when nothing runs. On a shared node with running jobs: set the node
 /// draining (no new starts), answer at once, and run `act` in the
-/// background once every running job ended or `drain_max` passed; then
-/// put the machine owner's control back as it was.
+/// background once every running job ended, or at the latest once their
+/// own time limits passed (plus the grace); then put the machine owner's
+/// control back as it was.
 pub fn drain_then<F>(e: &Executor, now: bool, what: &str, cmd_id: &str, act: F) -> Result<Value, AdminRefusal>
 where
     F: FnOnce(&Executor) -> Result<Value, AdminRefusal> + Send + 'static,
@@ -1108,10 +1150,21 @@ where
         e.now(),
     );
     let ex = e.bg_handle();
-    let resp = json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs(), "gives_up_at_limit": opts.give_up_at_limit});
+    // A drain that gives up waits `drain_max`; one that acts waits for the
+    // running jobs' own limits (0.46.13): a routine update never cuts a job
+    // short, only `now` does.
+    let started = e.now();
+    let resp = if opts.give_up_at_limit {
+        json!({"phase": "draining", "what": what, "running": running, "max_secs": e.drain_max.as_secs(), "gives_up_at_limit": true})
+    } else {
+        let until = job_limit(e, started);
+        json!({"phase": "draining", "what": what, "running": running, "max_secs": (until - started).max(0), "until": until,
+               "jobs_end_by": running_until(e), "gives_up_at_limit": false})
+    };
     let stop_cmd = cmd_id.to_string();
     std::thread::spawn(move || {
         let deadline = std::time::Instant::now() + ex.drain_max;
+        let past = |ex: &Executor| if opts.give_up_at_limit { std::time::Instant::now() >= deadline } else { ex.now() >= job_limit(ex, started) };
         if opts.stop_running && running_jobs(&ex) > 0 {
             // Control says `draining` already: the restarted node takes
             // nothing new, and the jobs it stops end `node_update`.
@@ -1120,10 +1173,10 @@ where
             }
         }
         loop {
-            while running_jobs(&ex) > 0 && std::time::Instant::now() < deadline {
+            while running_jobs(&ex) > 0 && !past(&ex) {
                 std::thread::sleep(Duration::from_millis(if cfg!(test) { 20 } else { 2000 }));
             }
-            if !opts.settle || std::time::Instant::now() >= deadline {
+            if !opts.settle || past(&ex) {
                 break;
             }
             // Control has said `draining` all along; give the node one
@@ -2018,21 +2071,44 @@ mod drain_tests {
         wait("control back", || control(&r) == Control::Active);
     }
 
-    /// The drain gives up after `drain_max` and restarts anyway; a machine
-    /// owner's pause set during the drain is never overwritten.
+    /// A restart's drain waits for the running jobs' own limits, not
+    /// `drain_max` (0.46.13): a job stuck past its limit is waited for the
+    /// grace, then the restart goes ahead; a machine owner's pause set
+    /// during the drain is never overwritten. A node that can't say when
+    /// its jobs end gets the ceiling.
     #[test]
-    fn a_drain_ends_at_its_limit_and_keeps_the_owners_pause() {
+    fn a_drain_ends_at_its_jobs_limit_and_keeps_the_owners_pause() {
+        use k2_node_proto::admin::{DRAIN_CEILING_SECS, DRAIN_JOB_GRACE_SECS};
         let mut r = Rig::new("full");
         r.exec.drain_max = Duration::from_millis(300);
         share_node(&r, 2);
-        running(&r, &["stuck"]);
+        let st = crate::status::Status { running: vec!["stuck".into()], running_until: Some(r.exec.now() + 3600), ..Default::default() };
+        crate::status::write(&r.exec.paths.layout().status(), &st).unwrap();
         let res = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node"}))));
         assert_eq!(res.result["phase"], "draining", "{res:?}");
-        crate::config::write_control(&r.exec.paths.layout().control(), Control::Paused, "rosson", r.exec.now()).unwrap();
+        assert_eq!(res.result["until"].as_i64(), Some(r.exec.now() + 3600 + DRAIN_JOB_GRACE_SECS), "{res:?}");
+        crate::config::write_control(&r.exec.paths.layout().control(), Control::Paused, "owner", r.exec.now()).unwrap();
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(calls(&r).is_empty(), "drain_max (300 ms) passed: the job still runs within its limit");
+        r.plat.now.fetch_add(3600 + DRAIN_JOB_GRACE_SECS, Ordering::SeqCst);
         wait("the restart at the limit", || calls(&r) == vec!["restart-unit k2-node".to_string()]);
         std::thread::sleep(Duration::from_millis(100));
         assert_eq!(control(&r), Control::Paused, "the owner's pause stands");
+        // Back to the commands' signing time (they expire in 10 min).
+        r.plat.now.fetch_sub(3600 + DRAIN_JOB_GRACE_SECS, Ordering::SeqCst);
         let bad = r.run(&r.approve(r.cmd("unit.restart", json!({"unit": "k2-node", "now": "yes"}))));
         assert_eq!(bad.code.as_deref(), Some(code::BAD_ARGS));
+        // No end known: the ceiling.
+        let u = Rig::new("full");
+        share_node(&u, 2);
+        running(&u, &["unknown"]);
+        let res = u.run(&u.approve(u.cmd("unit.restart", json!({"unit": "k2-node"}))));
+        assert_eq!(res.result["until"].as_i64(), Some(u.exec.now() + DRAIN_CEILING_SECS), "{res:?}");
+        assert!(res.result["jobs_end_by"].is_null(), "{res:?}");
+        u.plat.now.fetch_add(DRAIN_CEILING_SECS - 1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(calls(&u).is_empty(), "within the ceiling: still waiting");
+        u.plat.now.fetch_add(1, Ordering::SeqCst);
+        wait("the restart at the ceiling", || calls(&u) == vec!["restart-unit k2-node".to_string()]);
     }
 }

@@ -28066,34 +28066,32 @@ Node admin (agents need "Allow this agent to operate compute nodes"):
                    build to one node, which installs it (--canary: this node
                    goes first in every later --all)
   k2 compute node update --all [--batch N] [--now]   a rollout to every node this
-                   server owns (not nodes it only uses). Default: all at once
-                   (--batch 0 is the same); --batch N keeps N updating at a
-                   time. Offline nodes get it when they come back. Running it
-                   again while a rollout to that version is open shows that one.
+                   server owns (not nodes it only uses), a few at a time: per
+                   OS/arch one node or a quarter (the larger), never all; the
+                   rest wait their turn, taking jobs (--now: all at once;
+                   --batch N: at most N in all). Offline nodes get it when they
+                   come back. Again while that version's rollout is open: shows it.
   k2 compute node rollout [show|pause|resume|stop] [--id ID] [--json]
                    the latest rollout and each node's state: pending (not sent
-                   yet), offered (installing), healthy, rolled_back (the new
-                   build failed its 120 s health check and the node went back
-                   to its old one by itself: k2 compute node health <node>
-                   says why), refused / failed (with the node's reason),
-                   timed_out (no answer in 10 min), skipped (with why).
-                   "settled" = any state but pending or offered. The first
-                   rolled_back pauses the rollout: nodes already sent finish,
-                   no more are sent. resume sends to the rest (never again to
-                   a node that rolled back); stop ends it. explicit = started
-                   by a person or agent; auto = this server updated itself.
+                   yet; waiting_turn: its kind's slots are full; waiting_idle:
+                   see below), offered (installing), healthy, rolled_back
+                   (failed its 120 s health check and went back by itself: k2
+                   compute node health <node>), refused / failed (the node's
+                   reason), timed_out (no answer in 10 min, or 10 min past its
+                   drain), skipped (why); settled = neither pending nor
+                   offered. The first rolled_back pauses it (nodes already sent
+                   finish); resume sends to the rest (never to a node that
+                   rolled back); stop ends it. explicit = started by a person
+                   or agent; auto = this server updated itself.
   k2 compute node rollback <node> [--now]      back to the node's own previous build
-                   Running jobs: a node that runs k2-node 0.46.9 or newer
-                   before the update keeps them running (the new k2-node
-                   picks them up; new jobs start on the new build). A node on
-                   an older k2-node still stops them, or, when other servers
-                   share the node, waits for them first (up to 30 min, then it
-                   updates anyway; --now skips the wait). Linux nodes without
-                   the job wall also still wait (turn it on: k2 compute node
-                   wall <node>). Nodes on 0.46.3 or older need a person at the
-                   machine once: their updater can't install a new build.
-                   Install the new k2-node there (sudo k2-node setup); a later
-                   rollout then reaches them.
+                   Running jobs: on a Mac, or Linux with the job wall, k2-node
+                   0.46.9+ keeps them running. Elsewhere the node takes no new
+                   jobs and waits for them first: from 0.46.13 as long as their
+                   own time limits (k2 compute nodes: "draining for update").
+                   Older ones would stop them (after 30 min when shared), so a
+                   rollout sends them the build only once idle (waiting_idle,
+                   up to 12 h). --now stops jobs at once. Nodes on 0.46.3 or
+                   older need one install at the machine (sudo k2-node setup).
   k2 compute node wall <node> [--no-restart] [--reason "…"]
                    Linux: turn the job wall on (jobs run as k2job, walled off
                    from the node's key, /home and /root). At once on 0.46.4+
@@ -28420,7 +28418,7 @@ def node_line(n):
     else:
         status = "online/%s" % (n.get("liveRoute") or "?")
         if o.get("control") and o["control"] != "active":
-            status = o["control"] + (" by " + o["controlBy"] if o.get("controlBy") else "")
+            status = "draining for update" if (o.get("controlBy") or "").startswith("k2-node node.update") else o["control"] + (" by " + o["controlBy"] if o.get("controlBy") else "")
         elif o.get("refusal"):
             status = "waiting: " + o["refusal"].get("code", "")
         elif o.get("available") is False:
@@ -28470,14 +28468,17 @@ def dur(s):
     if s >= 60 and s % 60 == 0: return "%dm" % (s // 60)
     return "%ds" % s
 def update_lines(n):
-    # 0.46.9 (prd-compute-update-continuity-v1 §5.13): only while an update
-    # is under way, or when a node needs a hand install; otherwise nothing.
+    # Only while an update is under way (§5.13), or a node needs a hand install.
     u = n.get("update") if isinstance(n.get("update"), dict) else {}
     r = n.get("rollout") if isinstance(n.get("rollout"), dict) else {}
     have = n.get("nodeVersion") or "?"
-    phase = {"offered": "sent", "staged": "staged", "swapped": "health check"}.get(u.get("state") or "")
+    d = u.get("drain") if u.get("state") == "staged" and isinstance(u.get("drain"), dict) else None
+    end = ("longest ends by " + time.strftime("%b %d %H:%M", time.localtime(d["jobsEndBy"]))) if d and d.get("jobsEndBy") else "end time unknown"
+    phase = (": draining for update (%s jobs running, %s)" % (d.get("running"), end)) if d else {"offered": " (sent)", "staged": " (staged)", "swapped": " (health check)"}.get(u.get("state") or "")
     if phase and u.get("version") and u.get("version") != have:
-        return ["%-14s k2-node v%s -> %s (%s)" % ("", have, u["version"], phase)]
+        return ["%-14s k2-node v%s -> %s%s" % ("", have, u["version"], phase)]
+    if r.get("code") in ("waiting_turn", "waiting_idle") and r.get("node") == "pending" and r.get("state") == "running":
+        return ["%-14s k2-node v%s -> %s (update staged, %s)" % ("", have, r.get("toVersion") or "?", "waiting its turn" if r["code"] == "waiting_turn" else "waiting for its running jobs to end")]
     if r.get("code") == "node_needs_manual_install":
         return ["%-14s k2-node v%s: needs one manual install (the updater fix is in 0.46.4): sudo k2-node setup at the machine" % ("", have)]
     if r.get("node") == "rolled_back":
@@ -30687,8 +30688,7 @@ if "node" in v:
     esac
 }
 
-# A k2-node rollout (prd-compute-update-continuity-v1 §5.10): one line, then
-# each node's place.
+# A k2-node rollout (§5.10): one line, then each node's place.
 _compute_render_rollout() {
     if [ "${1:-0}" = "1" ]; then
         printf '%s\n' "$_CP_BODY"
@@ -30700,12 +30700,12 @@ if not r:
     print("no rollout yet (k2 compute node update --all starts one)%s" % ("" if v.get("follow", True) else "; auto-follow (compute.nodes.follow) is off"))
     sys.exit(0)
 p=r.get("position") or {}
-how="all at once" if not r.get("batchSize") else ("%d at a time" % r["batchSize"])
+how="all at once" if r.get("now") else "a few per OS/arch at a time" + ((", at most %d in all" % r["batchSize"]) if r.get("batchSize") else "")
 print("rollout %s: k2-node %s, %s, %s (%s of %s settled; %s)" % (r["id"][:8], r["toVersion"], r["state"], r["trigger"], p.get("settled"), p.get("total"), how))
 if r.get("note"): print("  " + r["note"])
 for n in r.get("nodes") or []:
     why=(" " + n["code"]) if n.get("code") else ""
-    print("  %-14s %s%s%s" % (n["node"], n["state"], why, (": " + n["detail"]) if n.get("detail") and n["state"] in ("skipped","failed","refused","timed_out") else ""))
+    print("  %-14s %s%s%s" % (n["node"], n["state"], why, (": " + n["detail"]) if n.get("detail") and (n["state"] in ("skipped","failed","refused","timed_out") or (n.get("code") or "").startswith("waiting_")) else ""))
 if v.get("note"): print(v["note"])'
 }
 
@@ -61750,9 +61750,9 @@ operate compute nodes", which your owner turns on — separate from
             --no-job-wall holds it for the owner.
             Nodes on 0.46.3 or older need one manual install of 0.46.4 at
             the machine before an update works (sudo k2-node setup).
-            From k2-node 0.46.9 on, running jobs keep running through an
-            update. k2 compute node update --all updates every node this
-            server owns (k2 compute node rollout shows how it goes).
+            Running jobs keep running through an update (0.46.9 on; Linux
+            needs the job wall) or are waited for. --all updates every node
+            this server owns, a few per OS/arch at a time (rollout shows it).
   Privileged (held for the owner EVERY time): raising limits, restarting
             k2-node as root (and, when nodes learn them: power settings,
             reboot, OS updates, packages, root scripts):
@@ -62091,8 +62091,8 @@ FOR THE NODE'S OWNER
   apply at once. Updates keep every server's running jobs (from k2-node
   0.46.9): the updated node picks them up, so nobody waits. The update's
   health check covers the owner's jobs; other servers' jobs are picked up
-  right after. Older nodes, and Linux nodes without the job wall, still wait
-  for running jobs (≤ 30 min).
+  right after. Linux nodes without the job wall wait for running jobs: from
+  0.46.13 as long as their own time limits (older nodes: ≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
   servers add --for none: a share with no end date.

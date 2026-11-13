@@ -360,6 +360,7 @@ pub mod ci_engine;
 pub mod ci_release;
 pub mod ci_routes;
 pub mod compute_rollout;
+pub mod compute_rollout_stagger;
 // The Compute Garden's node load tile (`compute.nodes`, catalog v49).
 pub mod compute_garden;
 pub mod compute_local;

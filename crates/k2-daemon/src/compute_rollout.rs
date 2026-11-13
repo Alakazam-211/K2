@@ -8,14 +8,19 @@
 //!   place: `pending`, or `skipped` with a code (`node_needs_manual_install`
 //!   for k2-node older than 0.46.4, whose updater can't run a new build;
 //!   `up_to_date`).
-//! - **Send**: all at once by default (Rosson Q3), or `--batch N` in flight
-//!   at a time; canary-ring nodes first, then by name. An offline node stays
-//!   `pending` and goes when it attaches. The command adds no args (C16).
+//! - **Send**: staggered (0.46.13, `compute_rollout_stagger`): per OS and
+//!   architecture at most one node or a quarter of them at once, never the
+//!   whole group; the rest wait their turn (`pending`, `waiting_turn`) and
+//!   keep taking jobs. An explicit `--now` rollout goes all at once.
+//!   `--batch N` also caps the whole rollout. Canary-ring nodes first, then
+//!   idle ones, then by name. An offline node stays `pending` and goes when
+//!   it attaches. The command adds no args (C16).
 //! - **Settle**: each node's own `update_state` (`healthy`, `rolled_back`,
 //!   `refused`, `failed`), or reattaching on the new version. Per-node
-//!   limit 10 min, 35 min while it reports `staged` (a pre-0.46.9 node's
-//!   drain; C12). The first `rolled_back` pauses the rollout and alerts the
-//!   owner (resume / stop by hand).
+//!   limit 10 min; while it reports `staged` (draining for its running
+//!   jobs), until the drain's end it reported plus 10 min, or 35 min from
+//!   a node that doesn't say (C12). The first `rolled_back` pauses the
+//!   rollout and alerts the owner (resume / stop by hand).
 //! - Runs from the 60 s node-admin watch (headless, no client needed), on
 //!   every attach and on every update state: it survives this server's own
 //!   restarts (the rows are the truth).
@@ -27,6 +32,7 @@ use k2_core::compute::rollout::{self as ro, Rollout};
 use k2_core::compute::{self as compute, codes, store};
 use serde_json::{json, Value};
 
+use crate::compute_rollout_stagger as stagger;
 use crate::compute_routes::{json_body, no, s, Who, R};
 
 /// A node's limit once offered (C12).
@@ -281,7 +287,13 @@ fn tick_one(r: &Rollout, now: i64) {
         (ro::nodes(&conn, &r.id), store::list_nodes(&conn, true))
     };
     let row = |id: &str| rows.iter().find(|n| n.id == id).cloned();
+    let group = |n: &store::NodeRow| match crate::compute_admin::node_platform(n) {
+        Ok((os, arch)) => stagger::group(Some(os), Some(arch)),
+        Err(_) => stagger::group(n.os.as_deref(), n.arch.as_deref()),
+    };
     let mut in_flight = 0i64;
+    let mut turns = stagger::Stagger::default();
+    let mut updating: Vec<String> = Vec::new();
     for p in places.iter().filter(|p| p.state == ro::N_OFFERED) {
         let Some(n) = row(&p.node_id) else { continue };
         // Back on the new build (the healthy frame may come on a later attach).
@@ -291,22 +303,35 @@ fn tick_one(r: &Rollout, now: i64) {
             ro::set_node(&conn, &r.id, &n.id, ro::N_HEALTHY, None, Some("attached on the new version"), now);
             continue;
         }
-        let staged = {
+        let update = {
             let db = k2_core::db::shared();
             let conn = db.lock();
-            k2_core::compute::admin::admin_cols(&conn, &n.id).update.as_ref().and_then(|u| u.get("state").and_then(Value::as_str).map(str::to_string)).as_deref() == Some("staged")
+            k2_core::compute::admin::admin_cols(&conn, &n.id).update
         };
-        let limit = if staged { NODE_LIMIT_STAGED_SECS } else { NODE_LIMIT_SECS };
-        if now - p.offered_at.unwrap_or(p.at) >= limit {
+        let staged = update.as_ref().and_then(|u| u.get("state").and_then(Value::as_str)) == Some("staged");
+        let offered_at = p.offered_at.unwrap_or(p.at);
+        // A node draining for its running jobs (0.46.13) says until when.
+        let drain_until = update.as_ref().and_then(|u| u.pointer("/drain/until")).and_then(Value::as_i64);
+        let limit = if staged { stagger::staged_limit(offered_at, drain_until, NODE_LIMIT_STAGED_SECS, NODE_LIMIT_SECS) } else { NODE_LIMIT_SECS };
+        if now - offered_at >= limit {
             let db = k2_core::db::shared();
             let conn = db.lock();
             ro::set_node(&conn, &r.id, &n.id, ro::N_TIMED_OUT, Some("node_update_timeout"), Some(&format!("no healthy report within {} min", limit / 60)), now);
             continue;
         }
         in_flight += 1;
+        turns.updating(&group(&n));
+        updating.push(n.id.clone());
     }
-    // Canary ring first, then by name.
-    let mut pending: Vec<(bool, String, String)> = places
+    // Each OS/arch group's members: this server's own online nodes, and
+    // those updating now (one may be restarting).
+    for n in rows.iter().filter(|n| n.state == "active" && !n.is_tenant()) {
+        if updating.contains(&n.id) || crate::compute_admin::online(&n.id) {
+            turns.member(&group(n));
+        }
+    }
+    // Canary ring first, then idle nodes (fewest running jobs), then by name.
+    let mut pending: Vec<(bool, u32, String, String)> = places
         .iter()
         .filter(|p| p.state == ro::N_PENDING)
         .filter_map(|p| row(&p.node_id))
@@ -316,11 +341,12 @@ fn tick_one(r: &Rollout, now: i64) {
                 let conn = db.lock();
                 k2_core::compute::admin::admin_cols(&conn, &n.id).update_ring == "canary"
             };
-            (!canary, n.name.clone(), n.id.clone())
+            let running = n.last_offer.as_ref().map_or(0, |o| o.running);
+            (!canary, running, n.name.clone(), n.id.clone())
         })
         .collect();
     pending.sort();
-    for (_, _, id) in pending {
+    for (_, _, _, id) in pending {
         if r.batch_size > 0 && in_flight >= r.batch_size {
             break;
         }
@@ -334,6 +360,29 @@ fn tick_one(r: &Rollout, now: i64) {
             ro::set_node(&conn, &r.id, &n.id, ro::N_SKIPPED, Some(code), Some(&detail), now);
             continue;
         }
+        // An older k2-node without the job wall cuts running jobs short when
+        // it updates: it waits until it's idle (up to 12 h). Staggered: a
+        // full group waits; its nodes keep taking jobs. An explicit `--now`
+        // rollout goes all at once.
+        let running = n.last_offer.as_ref().map_or(0, |o| o.running);
+        let cuts = crate::compute_admin::update_jobs(&n) == crate::compute_admin::UpdateJobs::Cut;
+        let wait = if r.now {
+            None
+        } else if stagger::wait_for_idle(cuts, running, now - r.started_at) {
+            Some((stagger::WAITING_IDLE, stagger::idle_detail(n.node_version.as_deref(), running)))
+        } else if !turns.take(&group(&n)) {
+            Some((stagger::WAITING_TURN, turns.waiting_detail(&group(&n))))
+        } else {
+            None
+        };
+        if let Some((code, detail)) = wait {
+            if places.iter().find(|p| p.node_id == n.id).and_then(|p| p.code.as_deref()) != Some(code) {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                ro::set_node(&conn, &r.id, &n.id, ro::N_PENDING, Some(code), Some(&detail), now);
+            }
+            continue;
+        }
         match crate::compute_admin::offer_update(&n, &r.by, r.now, &r.trigger) {
             Ok(_) => {
                 let db = k2_core::db::shared();
@@ -342,8 +391,9 @@ fn tick_one(r: &Rollout, now: i64) {
                 store::record_event(&conn, &r.by, "update_offered", Some(&n.id), None, None, json!({"version": r.to_version, "rollout": r.id}));
                 in_flight += 1;
             }
-            Err(e) if e.code == codes::NODE_OFFLINE => {}
+            Err(e) if e.code == codes::NODE_OFFLINE => turns.release(&group(&n)),
             Err(e) => {
+                turns.release(&group(&n));
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 let state = if e.code == k2_core::compute::admin::codes::NODE_LACKS_ADMIN { ro::N_SKIPPED } else { ro::N_FAILED };

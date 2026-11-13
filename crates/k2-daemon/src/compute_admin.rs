@@ -1515,7 +1515,7 @@ fn update(who: &Who, body: &[u8]) -> R<Value> {
     if b_true(&v, "all") {
         let batch = v.get("batch").and_then(Value::as_i64).unwrap_or(0);
         if batch < 0 {
-            return Err(no(codes::BAD_REQUEST, 400, "--batch is a count of nodes (0 = all at once)"));
+            return Err(no(codes::BAD_REQUEST, 400, "--batch is a count of nodes (0 = no cap beyond the per-kind turns)"));
         }
         let r = crate::compute_rollout::start(&who.label(), "explicit", batch, b_true(&v, "now"))?;
         crate::compute_routes::audit(who, "rollout_started", None, None, None, r.clone());
@@ -1558,9 +1558,10 @@ pub(crate) fn offer_update(node: &store::NodeRow, by: &str, now_flag: bool, trig
     }
     let transfer_id = crypto::random_id().map_err(|e| no("random", 500, e))?;
     let mut args = json!({"version": build.version, "sha256": build.sha256, "trigger": trigger});
-    // V55 `--now`: skip a shared node's drain. Sent only to a shared node
-    // (solo nodes never drain, and an older k2-node doesn't know it).
-    if now_flag && node.shared {
+    // V55 `--now`: skip the drain and stop running jobs. From k2-node
+    // 0.46.13 a solo node drains too, so it goes to every node whose
+    // `node.update` takes it (0.46.4 on: every node a remote update reaches).
+    if now_flag && (node.shared || !newer(crate::compute_rollout::UPDATER_FIX, node.node_version.as_deref())) {
         args[wire::ARG_NOW] = true.into();
     }
     let key = controller_key()?;
@@ -1594,22 +1595,46 @@ pub(crate) fn offer_update(node: &store::NodeRow, by: &str, now_flag: bool, trig
         let conn = db.lock();
         admin::set_update(&conn, &node.id, &state);
     }
-    // §5.5: from k2-node 0.46.9 on, running jobs keep running through the
-    // update (the node adopts them). Older nodes still drain a shared node
-    // or stop a solo node's jobs.
-    let keeps = node.node_version.as_deref().is_some_and(|v| !newer(KEEPS_JOBS_FROM, Some(v)));
-    let note = if keeps {
-        "running jobs keep running (the updated k2-node adopts them) and new jobs start on the new build; it rolls back by itself if the new build doesn't come back healthy in 120 s"
-    } else if node.shared {
-        "this k2-node is older than 0.46.9: the node is shared, so it takes no new jobs and waits for running ones to finish (up to 30 min) before it swaps; it rolls back by itself if the new build doesn't come back healthy in 120 s"
-    } else {
-        "this k2-node is older than 0.46.9: running jobs stop for the update; it rolls back by itself if the new build doesn't come back healthy in 120 s"
+    let jobs = update_jobs(node);
+    let note = match jobs {
+        UpdateJobs::Keep => "running jobs keep running (the updated k2-node adopts them) and new jobs start on the new build; it rolls back by itself if the new build doesn't come back healthy in 120 s",
+        UpdateJobs::WaitForLimits => "running jobs can't outlive this k2-node (no job wall): it takes no new jobs and swaps once they end, waiting as long as their own time limits (never cutting one short; --now stops them); it rolls back by itself if the new build doesn't come back healthy in 120 s",
+        UpdateJobs::Cut if node.shared => "this k2-node is older than 0.46.13 and its jobs can't outlive it: the node is shared, so it takes no new jobs and waits for running ones to finish (up to 30 min) before it swaps; it rolls back by itself if the new build doesn't come back healthy in 120 s",
+        UpdateJobs::Cut => "this k2-node is older than 0.46.13 and its jobs can't outlive it: running jobs stop for the update; it rolls back by itself if the new build doesn't come back healthy in 120 s",
     };
-    Ok(json!({"ok": true, "node": node.name, "update": state, "shared": node.shared, "keepsJobs": keeps, "note": note}))
+    Ok(json!({"ok": true, "node": node.name, "update": state, "shared": node.shared, "keepsJobs": jobs == UpdateJobs::Keep, "note": note}))
 }
 
 /// The first k2-node whose updates keep running jobs (U2–U4).
 pub(crate) const KEEPS_JOBS_FROM: &str = "0.46.9";
+/// The first k2-node whose update drain waits for the running jobs' own
+/// time limits (not 30 min), on solo nodes too.
+pub(crate) const DRAIN_FOR_LIMITS_FROM: &str = "0.46.13";
+
+/// What an update does to a node's running jobs, by the k2-node it runs
+/// now (whose executor does the update).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateJobs {
+    /// They keep running (0.46.9+ on a Mac, or Linux behind the job wall).
+    Keep,
+    /// It waits for them, as long as their own limits (0.46.13+).
+    WaitForLimits,
+    /// An older node without the wall: 30 min when shared, else at once.
+    Cut,
+}
+
+pub(crate) fn update_jobs(node: &store::NodeRow) -> UpdateJobs {
+    let from = |min: &str| node.node_version.as_deref().is_some_and(|v| !newer(min, Some(v)));
+    // Linux jobs outlive the node only behind the job wall.
+    let walled = node_platform(node).is_ok_and(|(os, _)| os == "macos") || features(&node.id).iter().any(|f| f == frames::FEATURE_JOB_WALL);
+    if from(KEEPS_JOBS_FROM) && walled {
+        UpdateJobs::Keep
+    } else if from(DRAIN_FOR_LIMITS_FROM) {
+        UpdateJobs::WaitForLimits
+    } else {
+        UpdateJobs::Cut
+    }
+}
 
 fn b_true(v: &Value, k: &str) -> bool {
     crate::compute_routes::b(v, k) == Some(true)
@@ -1726,6 +1751,10 @@ pub fn on_update_state(node_id: &str, u: frames::UpdateState) {
             p.get("state").and_then(Value::as_str) == Some(phase.as_str())
                 && p.get("cmdId").and_then(Value::as_str) == u.cmd_id.as_deref()
                 && p.get("version").and_then(Value::as_str) == Some(u.version.as_str())
+                // `staged` comes twice: when the build arrives, then with the
+                // drain once the executor answered (its reason and drain).
+                && p.get("reason").and_then(Value::as_str) == u.message.as_deref()
+                && p.get("drain").is_some() == u.drain.is_some()
         });
         if !dup {
             let mut state = json!({
@@ -1735,6 +1764,11 @@ pub fn on_update_state(node_id: &str, u: frames::UpdateState) {
             // The executor's step log (0.46.4 nodes; prd-compute-update-continuity-v1 §5.9).
             if !u.steps.is_empty() {
                 state["steps"] = serde_json::to_value(&u.steps).unwrap_or_default();
+            }
+            // Draining for its running jobs (0.46.13): how many, when the
+            // longest ends, the latest the swap waits.
+            if let Some(d) = &u.drain {
+                state["drain"] = json!({"running": d.running, "jobsEndBy": d.jobs_end_by, "until": d.until});
             }
             admin::set_update(&conn, node_id, &state);
             store::record_event(&conn, "node", &format!("update_{phase}"), Some(node_id), None, None, state);

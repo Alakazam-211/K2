@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use k2_node_proto::admin::{self, code, AdminKeys, AdminRefusal, AdminResult, Level, Runs, SignedCommand, UpdatePhase};
-use k2_node_proto::frames::{Frame, UpdateChunk, UpdateOffer, UpdateState};
+use k2_node_proto::frames::{Frame, UpdateChunk, UpdateDrain, UpdateOffer, UpdateState};
 use tokio::sync::mpsc;
 use serde_json::Value;
 
@@ -161,7 +161,35 @@ fn update_state(node: &Node, o: &UpdateOffer, phase: UpdatePhase, code_s: Option
         message,
         at: node.now(),
         steps: Vec::new(),
+        drain: None,
     })
+}
+
+/// The executor's `draining` answer as the `staged` report's drain and
+/// message. An executor older than 0.46.13 says no `until`: it waits at
+/// most 30 min.
+pub fn drain_report(result: &Value, now: i64) -> (Option<UpdateDrain>, String) {
+    let running = result.get("running").and_then(Value::as_u64).unwrap_or(0);
+    let Some(until) = result.get("until").and_then(Value::as_i64) else {
+        return (None, format!("draining: waiting for {running} running job(s) to finish (up to 30 min)"));
+    };
+    let jobs_end_by = result.get("jobs_end_by").and_then(Value::as_i64);
+    let end = match jobs_end_by {
+        Some(e) => format!("the longest ends within {}", about(e - now)),
+        None => format!("their end time is unknown; it waits up to {}", about(until - now)),
+    };
+    let msg = format!("draining for update: waiting for {running} running job(s) to finish ({end}); the update goes ahead after, never cutting them short");
+    (Some(UpdateDrain { running: running.min(u32::MAX as u64) as u32, jobs_end_by, until }), msg)
+}
+
+/// A rough duration: `45m`, `3h 20m`, `2d 4h`.
+fn about(secs: i64) -> String {
+    let m = (secs.max(0) + 59) / 60;
+    match m {
+        m if m < 60 => format!("{m}m"),
+        m if m < 48 * 60 => format!("{}h {}m", m / 60, m % 60),
+        m => format!("{}d {}h", m / (24 * 60), m % (24 * 60) / 60),
+    }
 }
 
 /// `update_offer`: start receiving a build for this machine.
@@ -218,10 +246,14 @@ pub fn update_chunk(node: &Arc<Node>, tx: &mpsc::Sender<Frame>, c: UpdateChunk) 
         let req = LocalRequest::Update { cmd: inc.offer.cmd.clone(), sig: inc.offer.sig.clone(), size: inc.buf.len() as u64 };
         let r = as_result(ask(&n, req, Some(inc.buf), Duration::from_secs(180)).await, "", "");
         let f = if r.state == "done" && r.result.get("phase").and_then(|p| p.as_str()) == Some("draining") {
-            // A shared node: the build waits staged until the running jobs
-            // end (V55); the restart and the health report come after.
-            let n_running = r.result.get("running").and_then(|x| x.as_u64()).unwrap_or(0);
-            update_state(&n, &inc.offer, UpdatePhase::Staged, None, Some(format!("draining: waiting for {n_running} running job(s) to finish (up to 30 min)")))
+            // Running jobs can't outlive this node: the build waits staged
+            // until they end (V55); the restart and the health report come after.
+            let (drain, msg) = drain_report(&r.result, n.now());
+            let mut f = update_state(&n, &inc.offer, UpdatePhase::Staged, None, Some(msg));
+            if let Frame::UpdateState(u) = &mut f {
+                u.drain = drain;
+            }
+            f
         } else if r.state == "done" {
             // The executor restarts this node next; this may not get out.
             update_state(&n, &inc.offer, UpdatePhase::Swapped, None, None)
@@ -278,6 +310,7 @@ pub fn last_update_frame(v: &serde_json::Value) -> Option<Frame> {
         message: s_of("reason"),
         at: v.get("at").and_then(|x| x.as_i64()).unwrap_or(0),
         steps,
+        drain: None,
     }))
 }
 
@@ -285,6 +318,23 @@ pub fn last_update_frame(v: &serde_json::Value) -> Option<Frame> {
 mod last_update_tests {
     use super::*;
     use serde_json::json;
+
+    /// The `staged` report of a drain says how many jobs run and when the
+    /// longest ends; an older executor's answer (no `until`) keeps the old
+    /// words and sends no drain.
+    #[test]
+    fn a_drain_report_says_when_the_longest_job_ends() {
+        let now = 1_000_000;
+        let (d, msg) = drain_report(&json!({"phase": "draining", "running": 2, "jobs_end_by": now + 4 * 3600, "until": now + 4 * 3600 + 900}), now);
+        assert_eq!(d, Some(UpdateDrain { running: 2, jobs_end_by: Some(now + 4 * 3600), until: now + 4 * 3600 + 900 }));
+        assert!(msg.contains("2 running job(s)") && msg.contains("the longest ends within 4h 0m") && !msg.contains("30 min"), "{msg}");
+        let (d, msg) = drain_report(&json!({"phase": "draining", "running": 1, "until": now + 3 * 86400}), now);
+        assert_eq!(d.map(|d| (d.jobs_end_by, d.until)), Some((None, now + 3 * 86400)));
+        assert!(msg.contains("their end time is unknown; it waits up to 3d 0h"), "{msg}");
+        let (d, msg) = drain_report(&json!({"phase": "draining", "running": 3, "max_secs": 1800}), now);
+        assert_eq!(d, None);
+        assert_eq!(msg, "draining: waiting for 3 running job(s) to finish (up to 30 min)");
+    }
 
     #[test]
     fn an_ended_gate_reports_its_steps_and_a_running_one_nothing() {

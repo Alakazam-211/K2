@@ -1618,6 +1618,24 @@ pub struct UpdateState {
     /// left off the wire when empty so older controllers see the same frame.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<crate::admin::UpdateStep>,
+    /// With `staged`: the node waits for running jobs before it swaps
+    /// (0.46.13). Left off the wire when absent, so older controllers see
+    /// the same frame; an older node never sends it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain: Option<UpdateDrain>,
+}
+
+/// A node waiting for its running jobs before an update's swap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateDrain {
+    /// Running jobs when the drain started (every server's).
+    pub running: u32,
+    /// The latest end time of those jobs (their own time limits), when the
+    /// node knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jobs_end_by: Option<i64>,
+    /// The latest the swap waits ([`crate::admin::drain_limit`]).
+    pub until: i64,
 }
 
 // ── receipts (§11.6) ─────────────────────────────────────────────────
@@ -2618,5 +2636,22 @@ mod tests {
         assert_eq!(back, q);
         // Protocol 10 is in force (R2 offers `cpu-burst`): one bump past 9.
         const { assert!(PROTOCOL == PROTOCOL_GENS && PROTOCOL_GENS == PROTOCOL_CI + 1) };
+    }
+
+    /// The drain on `update_state` (0.46.13) is optional both ways: an older
+    /// node's frame (none) reads as before, a frame without it writes no
+    /// `drain` key, and one with it round-trips.
+    #[test]
+    fn update_state_drain_is_optional_on_the_wire() {
+        let old = r#"{"t":"update_state","transfer_id":"x","phase":"staged","version":"0.46.13","at":5}"#;
+        let Frame::UpdateState(u) = serde_json::from_str::<Frame>(old).unwrap() else { panic!("not an update_state") };
+        assert_eq!(u.drain, None);
+        assert!(!serde_json::to_string(&Frame::UpdateState(u.clone())).unwrap().contains("drain"), "absent stays off the wire");
+        let mut with = u;
+        with.drain = Some(UpdateDrain { running: 2, jobs_end_by: Some(100), until: 1000 });
+        let text = serde_json::to_string(&Frame::UpdateState(with.clone())).unwrap();
+        assert!(text.contains(r#""drain":{"running":2,"jobs_end_by":100,"until":1000}"#), "{text}");
+        let Frame::UpdateState(back) = serde_json::from_str::<Frame>(&text).unwrap() else { panic!("not an update_state") };
+        assert_eq!(back, with);
     }
 }

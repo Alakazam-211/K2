@@ -619,6 +619,91 @@ fn updates_keep_running_jobs_where_they_outlive_the_node() {
     }
 }
 
+/// A routine update where running jobs can't outlive the node (a Linux
+/// node without the job wall), solo or shared: it waits for the running
+/// jobs' own time limits, never a fixed 30 min. A job with a 4 h limit is
+/// still running at 30 min and 3 h 59 min, nothing is swapped or restarted;
+/// once it ends the swap goes ahead. A job stuck past its own limit is
+/// waited for only the grace. `now` stops them at once.
+#[test]
+fn a_routine_update_waits_for_the_running_jobs_own_limits() {
+    use k2_node_proto::admin::{DRAIN_JOB_GRACE_SECS, DRAIN_MAX_SECS};
+    use k2_node_proto::frames::Control;
+    let four_h = NOW + 4 * 3600;
+    let job_running = |r: &Rig, until: Option<i64>| {
+        let running = if until.is_some() { vec!["gate-job-g1".to_string()] } else { vec![] };
+        crate::status::write(&r.exec.paths.layout().status(), &crate::status::Status { running, running_until: until, ..Default::default() }).unwrap();
+    };
+    let control = |r: &Rig| crate::config::read_control(&r.exec.paths.layout().control()).unwrap().control;
+    let at = |r: &Rig, t: i64| r.plat.now.store(t, Ordering::SeqCst);
+    let settle = || std::thread::sleep(std::time::Duration::from_millis(250));
+    for shared in [false, true] {
+        // The job ends by itself after 3 h 59 min: then the swap.
+        let (r, old) = update_rig();
+        if shared {
+            share(&r);
+        }
+        job_running(&r, Some(four_h));
+        let new = fake_build("99.0.0");
+        let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new);
+        assert_eq!(res.state, "done", "shared={shared}: {res:?}");
+        assert_eq!(res.result["phase"], "draining", "shared={shared}: a running job is never stopped by a routine update: {res:?}");
+        assert_eq!((res.result["until"].as_i64(), res.result["jobs_end_by"].as_i64()), (Some(four_h + DRAIN_JOB_GRACE_SECS), Some(four_h)), "{res:?}");
+        assert_eq!(control(&r), Control::Draining, "no new starts meanwhile");
+        for t in [NOW + DRAIN_MAX_SECS + 1, NOW + 2 * 3600, four_h - 60] {
+            at(&r, t);
+            settle();
+            assert!(r.plat.calls.lock().unwrap().is_empty(), "shared={shared}: still running at +{} s: nothing restarted", t - NOW);
+            assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), old, "shared={shared}: nothing swapped at +{} s", t - NOW);
+        }
+        job_running(&r, None);
+        wait_calls(&r, 1);
+        assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string()]);
+        assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), new, "swapped once the job ended");
+        let rec = wait_phase(&r, "swapped");
+        assert_eq!(rec.steps.iter().find(|s| s.step == "decide").and_then(|s| s.detail.clone()).as_deref(), Some("drain running=1"));
+    }
+
+    // A job stuck past its own limit: the swap goes ahead after the grace.
+    let (r, _) = update_rig();
+    job_running(&r, Some(NOW + 600));
+    let new = fake_build("99.0.0");
+    let res = r.exec.handle_update(&update_cmd(&r, &new, "99.0.0", "explicit"), &build_sig(&new, "99.0.0"), &new);
+    assert_eq!(res.result["phase"], "draining", "{res:?}");
+    at(&r, NOW + 600 + DRAIN_JOB_GRACE_SECS - 30);
+    settle();
+    assert!(r.plat.calls.lock().unwrap().is_empty(), "within the grace: still waiting");
+    at(&r, NOW + 600 + DRAIN_JOB_GRACE_SECS);
+    wait_calls(&r, 1);
+    assert_eq!(std::fs::read(&r.exec.paths.binary).unwrap(), new);
+
+    // `now`: the owner's explicit stop, at once.
+    let (r, _) = update_rig();
+    job_running(&r, Some(four_h));
+    let new = fake_build("99.0.0");
+    let cmd = r.sign(&r.cmd("node.update", json!({"version": "99.0.0", "sha256": crypto::sha256_hex(&new), "trigger": "explicit", "now": true})));
+    let res = r.exec.handle_update(&cmd, &build_sig(&new, "99.0.0"), &new);
+    assert_eq!((res.state.as_str(), res.result["phase"].as_str()), ("done", Some("swapped")), "{res:?}");
+    assert_eq!(*r.plat.calls.lock().unwrap(), vec!["restart-node".to_string()], "now: restarted at once");
+    let rec = super::update::load(&r.exec);
+    assert_eq!(rec.steps.iter().find(|s| s.step == "decide").and_then(|s| s.detail.clone()).as_deref(), Some("now running=1"));
+}
+
+/// Two active servers on the node (`servers.toml`).
+fn share(r: &Rig) {
+    use k2_node_proto::share::{Network, ServersFile, ShareLimits, ShareState, Trust};
+    let mut f = ServersFile::new(&"a".repeat(64), "owner.example.test", ShareLimits::owner(2, 8, 16, 100, Network::On), 8, r.exec.now() - 10, "local:t");
+    let mut e = f.servers[0].clone();
+    e.slot = 1;
+    e.label = "s1.example.test".into();
+    e.fp_prefix = format!("{:016x}", 1);
+    e.trust = Trust::Own;
+    e.state = ShareState::Active;
+    e.set_limits(&ShareLimits::new_server(Trust::Own, false));
+    f.servers.push(e);
+    super::servers::write_file(&r.exec.paths.config_dir, &f).unwrap();
+}
+
 #[test]
 fn bad_builds_refuse_and_leave_the_binary() {
     let (r, old) = update_rig();

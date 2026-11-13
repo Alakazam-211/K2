@@ -194,8 +194,8 @@ FOR THE NODE'S OWNER
   apply at once. Updates keep every server's running jobs (from k2-node
   0.46.9): the updated node picks them up, so nobody waits. The update's
   health check covers the owner's jobs; other servers' jobs are picked up
-  right after. Older nodes, and Linux nodes without the job wall, still wait
-  for running jobs (≤ 30 min).
+  right after. Linux nodes without the job wall wait for running jobs: from
+  0.46.13 as long as their own time limits (older nodes: ≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
   servers add --for none: a share with no end date.

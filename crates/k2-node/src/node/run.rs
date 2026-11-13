@@ -1130,6 +1130,8 @@ impl Node {
             adopted: false,
             gpu,
         };
+        // An update's drain waits for this (the status file's running_until).
+        self.job_ends_by(t.slot, &job, self.now().saturating_add(a.plan.limits.max_secs.max(1) as i64));
         self.supervise(t, a, live, stop).await;
     }
 

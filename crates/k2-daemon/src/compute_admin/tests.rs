@@ -584,6 +584,7 @@ fn update_offers_a_signed_build_and_records_rollback() {
             wire::UpdateStep { step: "swap".into(), ok: true, at: compute::now(), detail: None },
             wire::UpdateStep { step: "rollback".into(), ok: true, at: compute::now(), detail: Some("why=health_gate".into()) },
         ],
+        drain: None,
     };
     on_update_state(&f.node, rolled.clone());
     let h = get(NODE_HEALTH, &Who::Owner, &[("node", &f.node_name)]).unwrap();
@@ -1201,9 +1202,24 @@ fn extra_node(tag: &str, version: &str) -> (String, String) {
 }
 
 fn update_state(node: &str, phase: wire::UpdatePhase, version: &str) {
+    update_state_drain(node, phase, version, None);
+}
+
+fn update_state_drain(node: &str, phase: wire::UpdatePhase, version: &str, drain: Option<frames::UpdateDrain>) {
     on_update_state(
         node,
-        frames::UpdateState { transfer_id: None, cmd_id: Some(format!("c-{node}")), phase, version: version.into(), from: None, code: None, message: None, at: compute::now(), steps: vec![] },
+        frames::UpdateState {
+            transfer_id: None,
+            cmd_id: Some(format!("c-{node}")),
+            phase,
+            version: version.into(),
+            from: None,
+            code: None,
+            message: drain.as_ref().map(|d| format!("draining for update: {} job(s)", d.running)),
+            at: compute::now(),
+            steps: vec![],
+            drain,
+        },
     );
 }
 
@@ -1235,23 +1251,32 @@ fn update_all_rolls_out_skips_old_nodes_and_pauses_at_a_rollback() {
     let ro = &r["rollout"];
     assert_eq!((ro["state"].as_str(), ro["toVersion"].as_str(), ro["batchSize"].as_i64()), (Some("running"), Some("0.46.9"), Some(0)));
     let place = |v: &Value, id: &str| v["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == id).cloned().unwrap();
-    assert_eq!(place(ro, &f.node)["state"], "offered");
-    assert_eq!(place(ro, &bad)["state"], "offered", "all at once");
+    // Staggered (0.46.13): three Macs online, so one at a time; the other
+    // waits its turn and keeps taking jobs.
+    assert_eq!(place(ro, &bad)["state"], "offered", "first by name");
+    assert_eq!((place(ro, &f.node)["state"].as_str(), place(ro, &f.node)["code"].as_str()), (Some("pending"), Some(crate::compute_rollout_stagger::WAITING_TURN)));
+    assert!(place(ro, &f.node)["detail"].as_str().unwrap().starts_with("update staged, waiting its turn: 1 of 3 macos/aarch64"), "{}", place(ro, &f.node));
     assert_eq!((place(ro, &old)["state"].as_str(), place(ro, &old)["code"].as_str()), (Some("skipped"), Some(crate::compute_rollout::NEEDS_MANUAL_INSTALL)));
     assert_eq!(place(ro, &away)["state"], "pending", "offline: its turn comes when it attaches");
-    for n in [&f.node, &bad] {
-        assert!(test_seams::take_sent(n).iter().any(|x| matches!(x, Frame::UpdateOffer(o) if o.version == "0.46.9")), "{n} got the build");
-    }
+    assert!(place(ro, &away)["code"].is_null(), "an offline node isn't waiting for a slot");
+    assert!(test_seams::take_sent(&bad).iter().any(|x| matches!(x, Frame::UpdateOffer(o) if o.version == "0.46.9")), "the first node got the build");
+    assert!(test_seams::take_sent(&f.node).is_empty(), "the second waits its turn");
     assert!(test_seams::take_sent(&old).is_empty(), "never sent to a node that can't take it");
     let again = call(NODE_UPDATE, &agent(&f), json!({"all": true})).unwrap();
     assert_eq!(again["rollout"]["id"], ro["id"], "one open rollout per version");
+    // The node list says why the waiting node isn't updating yet.
+    let list = crate::compute_views::nodes_list(&Who::Owner, &HashMap::new(), None).unwrap();
+    let waiting = list["nodes"].as_array().unwrap().iter().find(|n| n["name"] == f.node_name).cloned().unwrap();
+    assert_eq!(waiting["rollout"]["code"], crate::compute_rollout_stagger::WAITING_TURN, "{waiting}");
 
-    update_state(&f.node, wire::UpdatePhase::Healthy, "0.46.9");
-    update_state(&bad, wire::UpdatePhase::RolledBack, "0.46.9");
+    // The first settles: the slot goes to the next.
+    update_state(&bad, wire::UpdatePhase::Healthy, "0.46.9");
+    assert!(test_seams::take_sent(&f.node).iter().any(|x| matches!(x, Frame::UpdateOffer(o) if o.version == "0.46.9")), "its turn came");
+    update_state(&f.node, wire::UpdatePhase::RolledBack, "0.46.9");
     let shown = get(NODE_ROLLOUT, &agent(&f), &[]).unwrap();
     let ro = &shown["rollout"];
-    assert_eq!(place(ro, &f.node)["state"], "healthy");
-    assert_eq!(place(ro, &bad)["state"], "rolled_back");
+    assert_eq!(place(ro, &bad)["state"], "healthy");
+    assert_eq!(place(ro, &f.node)["state"], "rolled_back");
     assert_eq!(ro["state"], "paused", "the first rollback pauses it");
     let m = test_seams::take_messages(&f.ws);
     assert!(m.iter().any(|x| x.contains("rollout") && x.contains("paused")), "{m:?}");
@@ -1307,6 +1332,184 @@ fn a_silent_node_times_out_and_the_rollout_ends() {
     crate::compute_rollout::tick(compute::now() + crate::compute_rollout::NODE_LIMIT_SECS + 1);
     let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
     assert_eq!((shown["rollout"]["nodes"][0]["state"].as_str(), shown["rollout"]["state"].as_str()), (Some("timed_out"), Some("done")));
+    test_seams::set_assets_dir(None);
+    test_seams::set_server_version(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One more Linux x86_64 node in the fixture's DB (online, admin-capable).
+fn linux_node(tag: &str, version: &str) -> String {
+    let id = format!("node-{tag}-{}", crypto::random_id().unwrap());
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let labels = BTreeMap::from([("os".to_string(), "linux".to_string()), ("arch".to_string(), "x86_64".to_string())]);
+        store::insert_pending_node(&conn, &id, &format!("box-{tag}"), &fp_of(&id), "pem", &labels, "owner", "123456", 5).unwrap();
+        store::confirm_node(&conn, &id, "owner", 6).unwrap();
+        store::touch_seen(&conn, &id, "lan", 2, version, compute::now());
+    }
+    test_seams::register(&id, true, &[wire::FEATURE_ADMIN, wire::FEATURE_HEALTH, wire::FEATURE_SELF_UPDATE]);
+    id
+}
+
+fn stage_linux_build(dir: &std::path::Path, version: &str) {
+    use k2_root_proto::node_build::{asset_name, format_marker, trusted_comment};
+    std::fs::create_dir_all(dir).unwrap();
+    let bytes = k2_root_proto::testsign::fake_elf("x86_64", &format_marker(version, 2, "linux", "x86_64"));
+    let sig = k2_root_proto::testsign::sign_with_test_key(&bytes, &trusted_comment("linux", "x86_64", version, 2));
+    let asset = asset_name("linux", "x86_64");
+    std::fs::write(dir.join(&asset), &bytes).unwrap();
+    std::fs::write(dir.join(format!("{asset}.sig")), sig).unwrap();
+}
+
+/// 0.46.13: a rollout never takes every node of a kind at once. Three
+/// Linux nodes and two Macs owned by one server: one of each kind updates,
+/// the others wait their turn (and keep taking jobs). A Linux node draining
+/// for a 4 h job keeps its slot past the old 35 min, until its drain's end
+/// plus the swap's 10 min, and the waiting nodes stay waiting meanwhile;
+/// then the slot goes to the next one.
+#[test]
+fn a_rollout_staggers_each_kind_and_waits_for_a_draining_node() {
+    let f = fx("stagger", true);
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::touch_seen(&conn, &f.node, "lan", 2, "0.46.6", compute::now());
+    }
+    let (mac2, _) = extra_node("mac2", "0.46.6");
+    let lx: Vec<String> = (0..3).map(|i| linux_node(&format!("lx{i}"), "0.46.6")).collect();
+    let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
+    test_seams::set_assets_dir(Some(dir.clone()));
+    test_seams::set_server_version(Some("0.46.9"));
+    stage_build(&dir.join("0.46.9"), "macos", "0.46.9");
+    stage_linux_build(&dir.join("0.46.9"), "0.46.9");
+
+    let r = call(NODE_UPDATE, &Who::Owner, json!({"all": true})).unwrap();
+    let place = |v: &Value, id: &str| v["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == id).cloned().unwrap();
+    let state = |v: &Value, id: &str| place(v, id)["state"].as_str().unwrap().to_string();
+    let ro = &r["rollout"];
+    assert_eq!(lx.iter().map(|n| state(ro, n)).collect::<Vec<_>>(), vec!["offered", "pending", "pending"], "{ro}");
+    assert_eq!([&f.node, &mac2].iter().filter(|n| state(ro, n) == "offered").count(), 1, "one of two Macs: {ro}");
+    for n in &lx[1..] {
+        assert_eq!(place(ro, n)["code"], crate::compute_rollout_stagger::WAITING_TURN);
+        assert!(test_seams::take_sent(n).is_empty(), "{n} waits its turn");
+    }
+    assert!(test_seams::take_sent(&lx[0]).iter().any(|x| matches!(x, Frame::UpdateOffer(o) if o.os == "linux")), "the Linux build went to the first");
+
+    // It drains for a job with a 4 h limit (a k2-node 0.46.13 says until when).
+    let t0 = compute::now();
+    let drain = frames::UpdateDrain { running: 1, jobs_end_by: Some(t0 + 4 * 3600), until: t0 + 4 * 3600 + 900 };
+    update_state_drain(&lx[0], wire::UpdatePhase::Staged, "0.46.9", Some(drain));
+    let list = crate::compute_views::nodes_list(&Who::Owner, &HashMap::new(), None).unwrap();
+    let row = list["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "box-lx0").cloned().unwrap();
+    assert_eq!((row["update"]["state"].as_str(), row["update"]["drain"]["jobsEndBy"].as_i64()), (Some("staged"), Some(t0 + 4 * 3600)), "{row}");
+    crate::compute_rollout::tick(t0 + 40 * 60);
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(lx.iter().map(|n| state(&shown["rollout"], n)).collect::<Vec<_>>(), vec!["offered", "pending", "pending"], "past the old 35 min: still its turn");
+    crate::compute_rollout::tick(t0 + 4 * 3600 + 900 + crate::compute_rollout::NODE_LIMIT_SECS - 60);
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(state(&shown["rollout"], &lx[0]), "offered", "within its drain and the swap's 10 min");
+    crate::compute_rollout::tick(t0 + 4 * 3600 + 900 + crate::compute_rollout::NODE_LIMIT_SECS + 60);
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(lx.iter().map(|n| state(&shown["rollout"], n)).collect::<Vec<_>>(), vec!["timed_out", "offered", "pending"], "the slot went to the next");
+    test_seams::set_assets_dir(None);
+    test_seams::set_server_version(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A node's offer with `running` jobs on it (node-wide).
+fn busy_offer(running: u32) -> frames::Offer {
+    use k2_core::compute::proto::frames::{Availability, Caps, Control, Free};
+    frames::Offer {
+        share: None,
+        revision: 1,
+        control: Control::Active,
+        control_by: None,
+        control_at: None,
+        availability: Availability { ok: true, reasons: vec![] },
+        caps: Caps { cpu_millis: 8000, mem_bytes: 32 << 30, disk_budget_bytes: 100 << 30, hard: true, gpus: 0 },
+        free: Free { cpu_millis: 4000, mem_bytes: 16 << 30, disk_free_bytes: 500 << 30, gpus: 0 },
+        slots: vec![],
+        running,
+        parallel_max: 3,
+        refusal: None,
+        labels: Default::default(),
+        tools: Default::default(),
+        protocol: 9,
+        boot_id: "b".into(),
+        ledger_id: "l".into(),
+        node_version: "0.46.12".into(),
+        features: vec![],
+        host: None,
+        pkg: None,
+    }
+}
+
+/// 0.46.13: an older k2-node without the job wall would stop its running
+/// jobs when it updates (after 30 min when shared, at once when solo), so a
+/// rollout sends it the build only once it's idle, or after 12 h. A node
+/// that waits is not counted as updating.
+#[test]
+fn an_older_unwalled_node_gets_the_build_once_idle() {
+    let _f = fx("idle", true);
+    let a = linux_node("old-a", "0.46.12");
+    let b = linux_node("old-b", "0.46.12");
+    let set_running = |id: &str, n: u32| {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::store_offer(&conn, id, &busy_offer(n), compute::now());
+    };
+    set_running(&a, 2);
+    set_running(&b, 0);
+    let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
+    test_seams::set_assets_dir(Some(dir.clone()));
+    test_seams::set_server_version(Some("0.46.13"));
+    stage_build(&dir.join("0.46.13"), "macos", "0.46.13");
+    stage_linux_build(&dir.join("0.46.13"), "0.46.13");
+    let r = call(NODE_UPDATE, &Who::Owner, json!({"all": true})).unwrap();
+    let place = |v: &Value, id: &str| v["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == id).cloned().unwrap();
+    let ro = &r["rollout"];
+    assert_eq!((place(ro, &a)["state"].as_str(), place(ro, &a)["code"].as_str()), (Some("pending"), Some(crate::compute_rollout_stagger::WAITING_IDLE)), "{ro}");
+    assert!(place(ro, &a)["detail"].as_str().unwrap().contains("its 2 running job(s)"), "{ro}");
+    assert_eq!(place(ro, &b)["state"], "offered", "the idle one takes the slot: {ro}");
+    assert!(test_seams::take_sent(&a).is_empty(), "never sent while it runs jobs");
+    // The busy one stays busy past the other's update: still waiting.
+    update_state(&b, wire::UpdatePhase::Healthy, "0.46.13");
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(place(&shown["rollout"], &a)["code"], crate::compute_rollout_stagger::WAITING_IDLE);
+    // Idle: its turn.
+    set_running(&a, 0);
+    crate::compute_rollout::tick(compute::now());
+    let shown = get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap();
+    assert_eq!(place(&shown["rollout"], &a)["state"], "offered");
+    assert!(test_seams::take_sent(&a).iter().any(|x| matches!(x, Frame::UpdateOffer(_))));
+    test_seams::set_assets_dir(None);
+    test_seams::set_server_version(None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// …and one that never goes idle gets it after 12 h anyway.
+#[test]
+fn an_older_busy_node_gets_the_build_after_twelve_hours() {
+    let _f = fx("idle-cap", true);
+    let a = linux_node("busy", "0.46.12");
+    {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::store_offer(&conn, &a, &busy_offer(1), compute::now());
+    }
+    let dir = std::env::temp_dir().join(format!("k2-admin-assets-{}", crypto::random_id().unwrap()));
+    test_seams::set_assets_dir(Some(dir.clone()));
+    test_seams::set_server_version(Some("0.46.13"));
+    stage_build(&dir.join("0.46.13"), "macos", "0.46.13");
+    stage_linux_build(&dir.join("0.46.13"), "0.46.13");
+    let r = call(NODE_UPDATE, &Who::Owner, json!({"all": true})).unwrap();
+    let state = |v: &Value| v["nodes"].as_array().unwrap().iter().find(|n| n["nodeId"] == a).map(|n| n["state"].as_str().unwrap().to_string()).unwrap();
+    assert_eq!(state(&r["rollout"]), "pending");
+    crate::compute_rollout::tick(compute::now() + crate::compute_rollout_stagger::IDLE_WAIT_SECS - 60);
+    assert_eq!(state(&get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap()["rollout"]), "pending");
+    crate::compute_rollout::tick(compute::now() + crate::compute_rollout_stagger::IDLE_WAIT_SECS + 60);
+    assert_eq!(state(&get(NODE_ROLLOUT, &Who::Owner, &[]).unwrap()["rollout"]), "offered", "after 12 h it goes anyway");
     test_seams::set_assets_dir(None);
     test_seams::set_server_version(None);
     let _ = std::fs::remove_dir_all(&dir);

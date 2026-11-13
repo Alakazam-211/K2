@@ -316,6 +316,7 @@ mod tests {
                 adoptable: false,
                 rust: Vec::new(),
                 gpus: 1,
+                ends_by: None,
             },
         );
         assert_eq!(n.used_gpus(), 1);
@@ -402,6 +403,7 @@ mod tests {
                 adoptable: false,
                 rust: Vec::new(),
                 gpus: 1,
+                ends_by: None,
             },
         );
         assert_eq!(free_before - n.offer(&owner).free.mem_bytes, 3 << 30, "1G --mem + 2G GPU memory held");

@@ -408,8 +408,10 @@ pub struct Executor {
     /// After a healthy update (or a rollback) exit so the service manager
     /// starts the new binary. True in `admin serve`; false in tests.
     pub exit_after_update: bool,
-    /// How long a shared node's update or restart waits for running jobs
-    /// (V55; 30 min; tests shorten it).
+    /// How long a drain that gives up (`servers.owner`, `wall.enable`)
+    /// waits for running jobs (V55; 30 min; tests shorten it). A drain that
+    /// acts (update, rollback, restart) waits for the jobs' own limits
+    /// instead ([`super::update::DrainOpts`]).
     pub drain_max: std::time::Duration,
     /// A drain is under way (one at a time).
     pub draining: Arc<std::sync::atomic::AtomicBool>,

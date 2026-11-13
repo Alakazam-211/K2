@@ -18,6 +18,11 @@ pub struct Status {
     pub since: i64,
     pub last_error: Option<String>,
     pub running: Vec<String>,
+    /// The latest end time of the running jobs (each one's own time limit;
+    /// 0.46.13). Root's update drain waits until then at the most. Absent
+    /// when nothing runs or no running job's end is known yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub running_until: Option<i64>,
     pub control: String,
     pub control_by: Option<String>,
     pub policy_error: Option<String>,

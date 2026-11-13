@@ -7823,9 +7823,9 @@ operate compute nodes", which your owner turns on — separate from
             --no-job-wall holds it for the owner.
             Nodes on 0.46.3 or older need one manual install of 0.46.4 at
             the machine before an update works (sudo k2-node setup).
-            From k2-node 0.46.9 on, running jobs keep running through an
-            update. k2 compute node update --all updates every node this
-            server owns (k2 compute node rollout shows how it goes).
+            Running jobs keep running through an update (0.46.9 on; Linux
+            needs the job wall) or are waited for. --all updates every node
+            this server owns, a few per OS/arch at a time (rollout shows it).
   Privileged (held for the owner EVERY time): raising limits, restarting
             k2-node as root (and, when nodes learn them: power settings,
             reboot, OS updates, packages, root scripts):
@@ -8164,8 +8164,8 @@ FOR THE NODE'S OWNER
   apply at once. Updates keep every server's running jobs (from k2-node
   0.46.9): the updated node picks them up, so nobody waits. The update's
   health check covers the owner's jobs; other servers' jobs are picked up
-  right after. Older nodes, and Linux nodes without the job wall, still wait
-  for running jobs (≤ 30 min).
+  right after. Linux nodes without the job wall wait for running jobs: from
+  0.46.13 as long as their own time limits (older nodes: ≤ 30 min).
   An add from K2 needs the node's remote-admin level `full`; on a node set
   to `policy`, add servers at the machine: sudo k2-node servers add …
   servers add --for none: a share with no end date.

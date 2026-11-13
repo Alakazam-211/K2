@@ -212,6 +212,9 @@ impl Node {
                 adoptable: false,
                 rust: Vec::new(),
                 gpus: a.plan.gpu.map_or(0, |g| g.count),
+                // Its limit counts from the process start (set then); until
+                // then at least this.
+                ends_by: Some(self.now().saturating_add(a.plan.limits.max_secs.max(1) as i64)),
             },
         );
         drop(jobs);
@@ -615,6 +618,7 @@ impl Node {
                     adoptable: false,
                     rust: Vec::new(),
                     gpus: 0,
+                    ends_by: None,
                 },
             );
         }

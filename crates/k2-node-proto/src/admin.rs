@@ -269,17 +269,40 @@ pub const VERB_PACKAGES_ALLOW: &str = "packages.allow";
 /// installs it with brew at the machine).
 pub const PACKAGES_LINUX_ONLY: &str = "packages_linux_only";
 
-/// Verbs that restart `k2-node`. On a node with two or more active
-/// servers they drain first: no new starts, running jobs finish (up to
-/// 30 min), then the swap (prd-compute-shared-queue-v1 §8.2, V55). The
-/// optional argument [`ARG_NOW`] (`true`) skips the wait. Solo nodes never
-/// drain, as today, except for `servers.owner`, which always drains first
-/// (it moves the job folders; `now` stops running jobs instead).
+/// Verbs that restart `k2-node`. Where running jobs can't outlive the node
+/// they drain first: no new starts, running jobs finish, then the swap
+/// (prd-compute-shared-queue-v1 §8.2, V55). `node.update` drains on every
+/// such node (0.46.13); `node.rollback` and `unit.restart` only on a node
+/// with two or more active servers. The wait is bounded by each running
+/// job's own time limit (plus [`DRAIN_JOB_GRACE_SECS`]), never past
+/// [`DRAIN_CEILING_SECS`]: a routine update never cuts a job short. The
+/// optional argument [`ARG_NOW`] (`true`) skips the wait and stops them.
+/// `servers.owner` always drains first (it moves the job folders; `now`
+/// stops running jobs instead) and gives up at [`DRAIN_MAX_SECS`].
 pub const DRAIN_VERBS: &[&str] = &["node.update", "node.rollback", "unit.restart", "servers.owner"];
 /// `"now": true` on a [`DRAIN_VERBS`] command: don't wait for the drain.
 pub const ARG_NOW: &str = "now";
-/// The longest a drain waits before the swap goes ahead anyway.
+/// The longest a drain that gives up (`servers.owner`, `wall.enable`)
+/// waits before it gives up and restarts nothing.
 pub const DRAIN_MAX_SECS: i64 = 30 * 60;
+/// The longest job limit a server can set on a node (7 days, the top of
+/// a share's `max_job_secs` range).
+pub const MAX_JOB_SECS: i64 = 7 * 24 * 3600;
+/// After the running jobs' own end time, how long a drain still waits for
+/// them to stop and send their results.
+pub const DRAIN_JOB_GRACE_SECS: i64 = 15 * 60;
+/// The longest a drain that acts (update, rollback, restart) waits: the
+/// longest job limit plus the grace. It only matters when the node can't
+/// say when its jobs end.
+pub const DRAIN_CEILING_SECS: i64 = MAX_JOB_SECS + DRAIN_JOB_GRACE_SECS;
+
+/// When a drain that acts goes ahead even with jobs still running: the
+/// latest end time of the running jobs plus `grace`, never past `ceiling`
+/// seconds after the drain started. No end time known: the ceiling.
+pub fn drain_limit(started: i64, jobs_end_by: Option<i64>, grace: i64, ceiling: i64) -> i64 {
+    let cap = started.saturating_add(ceiling);
+    jobs_end_by.map_or(cap, |end| end.saturating_add(grace).min(cap))
+}
 
 /// The `now` argument of a drain verb: absent = `false` (drain first).
 pub fn now_arg(args: &Value) -> Result<bool, AdminRefusal> {
@@ -947,6 +970,26 @@ mod tests {
                 assert_eq!(o.body, c.canonical().unwrap(), "only the signed body ever opens");
             }
         }
+    }
+
+    /// A drain waits for its jobs' own limits: a 4 h job is waited for well
+    /// past the old 30 min, a job past its limit only for the grace, and a
+    /// node that can't say when its jobs end gets the ceiling.
+    #[test]
+    fn a_drain_waits_for_the_jobs_own_limits_within_the_ceiling() {
+        let start = 1_000_000;
+        let four_h = start + 4 * 3600;
+        let limit = drain_limit(start, Some(four_h), DRAIN_JOB_GRACE_SECS, DRAIN_CEILING_SECS);
+        assert_eq!(limit, four_h + DRAIN_JOB_GRACE_SECS);
+        assert!(limit > start + DRAIN_MAX_SECS, "a 4 h job is never cut at 30 min");
+        assert_eq!(drain_limit(start, Some(start - 60), DRAIN_JOB_GRACE_SECS, DRAIN_CEILING_SECS), start - 60 + DRAIN_JOB_GRACE_SECS);
+        assert_eq!(drain_limit(start, None, DRAIN_JOB_GRACE_SECS, DRAIN_CEILING_SECS), start + DRAIN_CEILING_SECS);
+        assert_eq!(
+            drain_limit(start, Some(start + 30 * 24 * 3600), DRAIN_JOB_GRACE_SECS, DRAIN_CEILING_SECS),
+            start + DRAIN_CEILING_SECS,
+            "never past the ceiling"
+        );
+        assert_eq!(drain_limit(start, Some(i64::MAX), DRAIN_JOB_GRACE_SECS, DRAIN_CEILING_SECS), start + DRAIN_CEILING_SECS);
     }
 
     #[test]

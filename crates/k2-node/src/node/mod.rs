@@ -388,6 +388,15 @@ struct RunningJob {
     rust: Vec<String>,
     /// GPU jobs (0.46.11): GPUs it holds (`Plan.gpu`).
     gpus: u32,
+    /// When its own time limit ends it (unix seconds; 0.46.13): set at
+    /// assign from `max_secs`, then exactly when the process starts. `None`
+    /// for stand-ins. The status file's `running_until` (an update's drain).
+    ends_by: Option<i64>,
+}
+
+/// The latest end of the running jobs whose end is known.
+fn running_until(jobs: &HashMap<(Slot, String), RunningJob>) -> Option<i64> {
+    jobs.values().filter_map(|j| j.ends_by).max()
 }
 
 /// The lowest port block no running job holds (`None`: all taken).
@@ -834,6 +843,7 @@ impl Node {
                         adoptable: false,
                         rust: Vec::new(),
                         gpus: 0,
+                        ends_by: None,
                     },
                 );
                 self.fairq.set_lingering(slot, &it.key, true);
@@ -1194,6 +1204,15 @@ impl Node {
         v
     }
 
+    /// A running job's process started: its own time limit now ends it at
+    /// `deadline` (the status file says so, for an update's drain).
+    pub(crate) fn job_ends_by(&self, slot: Slot, job: &str, deadline: i64) {
+        if let Some(j) = self.jobs.lock().unwrap().get_mut(&(slot, job.to_string())) {
+            j.ends_by = Some(deadline);
+        }
+        self.write_status();
+    }
+
     fn jobs_changed(&self) {
         self.fairq.kick.notify_one();
         self.notify_offers();
@@ -1251,6 +1270,7 @@ impl Node {
         let pin = self.owner().pin.lock().unwrap().clone();
         let l = self.local.lock().unwrap().clone();
         let running = self.running_ids();
+        let until = running_until(&self.jobs.lock().unwrap());
         let mut s = self.status.lock().unwrap();
         s.name = pin.as_ref().map(|p| p.name.clone());
         s.node_id = pin.as_ref().map(|p| p.node_id.clone());
@@ -1258,6 +1278,7 @@ impl Node {
         s.controller_fp = pin.as_ref().map(|p| p.controller_fp.clone());
         s.sas = pin.as_ref().filter(|p| !p.confirmed && !p.revoked).map(|p| p.sas.clone());
         s.running = running;
+        s.running_until = until;
         s.control = self.effective_control(&l).as_str().to_string();
         s.control_by = l.control.by.clone();
         s.policy_error = l.policy_error.clone();
@@ -1379,6 +1400,51 @@ mod wall_tests {
             let s = crate::status::read(&n.layout().status()).unwrap();
             assert_eq!((s.wall.as_str(), s.network_none), (wall.label(), net));
         }
+    }
+
+    /// The status file says when the running jobs' own time limits end them
+    /// (root's update drain waits that long); a job without a known end
+    /// (a stand-in) adds nothing, and the process start sets the exact end.
+    #[tokio::test]
+    async fn the_status_says_when_the_running_jobs_end() {
+        let d = crate::util::temp_dir("ends-by");
+        let mut o = NodeOptions::new(Layout::new(d.join("home"), d.join("cfg")));
+        o.dev = true;
+        o.health = false;
+        o.keep_awake = false;
+        o.use_cgroups = false;
+        let n = Node::open(o).await.unwrap();
+        let until = || crate::status::read(&n.layout().status()).unwrap().running_until;
+        assert_eq!(until(), None, "nothing runs");
+        let job = |ends_by: Option<i64>| RunningJob {
+            generation: 1,
+            cpu_millis: Some(100),
+            mem_bytes: Some(1 << 20),
+            exclusive: false,
+            stop: watch::channel(None).0,
+            seq: 0,
+            gate: false,
+            workspace: "w".into(),
+            secret: false,
+            uid: Default::default(),
+            port_block: None,
+            adoptable: false,
+            rust: Vec::new(),
+            gpus: 0,
+            ends_by,
+        };
+        let now = n.now();
+        n.jobs.lock().unwrap().insert((OWNER_SLOT, "standin".into()), job(None));
+        n.write_status();
+        assert_eq!(until(), None, "a stand-in has no end");
+        n.jobs.lock().unwrap().insert((OWNER_SLOT, "short".into()), job(Some(now + 600)));
+        n.jobs.lock().unwrap().insert((1, "long".into()), job(Some(now + 4 * 3600)));
+        n.write_status();
+        assert_eq!(until(), Some(now + 4 * 3600), "the longest running job's end, every server's");
+        n.job_ends_by(OWNER_SLOT, "short", now + 5 * 3600);
+        assert_eq!(until(), Some(now + 5 * 3600), "its process start sets its exact end");
+        n.job_ends_by(OWNER_SLOT, "gone", now + 9 * 3600);
+        assert_eq!(until(), Some(now + 5 * 3600), "a job no longer running changes nothing");
     }
 
     /// Review B-M2: a unit the last k2-node left holds its slot as a running

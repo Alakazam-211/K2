@@ -321,6 +321,7 @@ impl Node {
                     adoptable: true,
                     rust: f.rust.clone(),
                     gpus: a.plan.gpu.map_or(0, |g| g.count),
+                    ends_by: Some(f.deadline),
                 },
             );
         }

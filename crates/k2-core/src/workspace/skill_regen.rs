@@ -780,10 +780,11 @@ app-runtime, app-handover, app-push, app-pairing, auth-pages, app-profile,
 app-account-deletion, app-transfers, app-chat, app-recording,
 chat-voice, chat-voice-rooms, voice-rooms, tauri, tauri-voice, skins, feedback-loop, ticket-brief, zen,
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
-publish-visibility, publish-dev, compute, compute-shared, ci, vault,
+publish-visibility, publish-dev, compute, compute-shared, ci, ci-release, ci-stats, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, docs, sim, design, db-upgrade, app-databases, jobs, heartbeats, mail-watch, mail-reader, folder-trust,
-email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization.
+email-notifications, box-move, board, chat-refresh, desktop, send-feedback, organization,
+agent-templates.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.

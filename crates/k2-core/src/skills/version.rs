@@ -334,7 +334,9 @@ pub const SKILL_VERSION_ZEN: u32 = 50;
 /// Bumped to 56 (0.46.12): hiring and sidecars are two switches; the
 /// Sessions block names "Let this agent manage its sidecars" and "Let this
 /// agent hire agents".
-pub const SKILL_VERSION_WORKSPACE: u32 = 56;
+/// Bumped to 57 (0.46.13): the Study topics list names ci-release, ci-stats
+/// and agent-templates, as `k2 study` does.
+pub const SKILL_VERSION_WORKSPACE: u32 = 57;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

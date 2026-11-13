@@ -251,6 +251,10 @@ Readers:
   release signer checks again with its own pins.
 - `k2 ci provenance <run> --out <dir>` and `k2 ci evidence <run> --out
   <dir>` (bundle v3, `docs/ci-formats-v1.md` §8).
+- The release signer (k2-signer, slice S4) checks each statement in a
+  bundle v3 against its receipt, the pinned owner's roster and its policy's
+  `provenance`, `min_k2node` and `network` keys (`docs/ci-formats-v1.md`
+  §8, "Build statements at the signer").
 
 ## Files a client gets
 

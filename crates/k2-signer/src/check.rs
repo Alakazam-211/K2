@@ -34,6 +34,9 @@
 //! 7. **Dual builds.** Every dual build has a verify receipt on an
 //!    independent node (policy dimensions; `node` implied) whose `dual`
 //!    files match byte for byte.
+//! 8. **Build statements** (bundle v3, slice S4): per the policy's
+//!    `provenance`, each receipt's statement is tied to it, to the pinned
+//!    owner and to the key's roster entry ([`crate::provenance`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -117,6 +120,8 @@ pub struct JobSummary {
     pub statement_digest: String,
     /// Every `--env` value the plan set (M1: shown, not only named).
     pub env: BTreeMap<String, String>,
+    /// The receipt's build statement, check by check (slice S4).
+    pub provenance: crate::provenance::StatementReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -167,6 +172,7 @@ pub fn check(inp: &Input) -> R<Summary> {
         return refused(format!("the evidence is for project {}, not {}", b.project, p.project));
     }
     let mut notes = Vec::new();
+    crate::provenance::bundle_gate(p, b, &mut notes)?;
     let (version, base, opened, source) = match &inp.target {
         Target::Rehearse => (None, None, None, None),
         Target::Release { version, base, opened, source } => {
@@ -688,6 +694,24 @@ pub fn check(inp: &Input) -> R<Summary> {
         if ended > inp.now + SKEW_SECS {
             return refused(format!("{label}: the receipt ends in the future ({})", hhmm(ended)));
         }
+        let statement = crate::provenance::check_job(
+            p,
+            b,
+            &crate::provenance::Job {
+                label,
+                build: &er.build,
+                er,
+                rc: &rc,
+                rule,
+                entry,
+                owner_fp,
+                owner_id: &owned.newest.owner_id,
+                roster_seq: owned.newest.seq,
+                opened,
+                now: inp.now,
+            },
+            &mut notes,
+        )?;
         if needs_pin(rule) {
             let pin = rust_pin.as_deref().unwrap_or_default();
             let ran = rc.tools_used.get("rustc").map(String::as_str).unwrap_or_default();
@@ -714,6 +738,7 @@ pub fn check(inp: &Input) -> R<Summary> {
                 ended: iso(ended),
                 statement_digest: run.statement_digest.clone(),
                 env,
+                provenance: statement,
             },
         );
         parsed.insert(label.clone(), (rc, entry.clone(), owner_fp.clone()));

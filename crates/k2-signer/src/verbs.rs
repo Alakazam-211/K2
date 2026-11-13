@@ -310,6 +310,7 @@ fn verb_rehearse(env: &Env, args: &[String]) -> R<Vec<u8>> {
         "rehearsal passed for {project}: {} verify with the pinned owners and controller, and every dual-built file matches (nothing was registered or signed)",
         summary.jobs.iter().map(|(k, j)| format!("{k} on {}", j.node)).collect::<Vec<_>>().join(", ")
     ));
+    say_statements(env, &summary);
     json_out(&json!({"ok": true, "rehearsal": true, "bundle_sha256": sha, "summary": summary}))
 }
 
@@ -372,12 +373,23 @@ fn verb_evidence(env: &Env, args: &[String]) -> R<Vec<u8>> {
     for n in &summary.notes {
         env.say(format!("note: {n}"));
     }
+    say_statements(env, &summary);
     env.say(format!(
         "evidence for {project} {version} {}: tree {}",
         if again { "already registered (the same bundle, checked again)" } else { "registered" },
         &summary.tree[..12]
     ));
     json_out(&json!({"ok": true, "project": project, "version": version, "again": again, "summary": sum_v}))
+}
+
+/// Each job's build-statement checks, one line per job (slice S4); nothing
+/// under `provenance = "off"`.
+fn say_statements(env: &Env, summary: &Summary) {
+    for (k, j) in &summary.jobs {
+        if j.provenance.status != crate::provenance::StatementStatus::NotRead {
+            env.say(format!("{k}: {}", j.provenance.line()));
+        }
+    }
 }
 
 // ── approvals ──────────────────────────────────────────────────────────

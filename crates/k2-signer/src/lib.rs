@@ -28,6 +28,7 @@
 //! - [`trust`]: controllers, owner roster keys, accepted keys, high-water marks.
 //! - [`forge`]: what the forge (GitHub) says about a tag.
 //! - [`check`]: every evidence rule (the heart; pure).
+//! - [`provenance`]: the build-statement rules `check` runs per receipt (S4).
 //! - [`registry`]: evidence never replaced, replays, one sha per asset.
 //! - [`session`]: approval sessions (k2sign's for `k2`, its own for clients).
 //! - [`pairing`]: signer ↔ server pairing with a 6-digit SAS.
@@ -41,6 +42,7 @@ pub mod k2daemon;
 pub mod minisign;
 pub mod pairing;
 pub mod policy;
+pub mod provenance;
 pub mod registry;
 pub mod session;
 pub mod trust;

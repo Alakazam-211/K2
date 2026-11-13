@@ -354,6 +354,8 @@ the repo at sign time.
 | `roster_max_age_hours` | 1–720 (V13; 168 recommended) |
 | `roster_changes`, `seat_moves` | `ask` or `auto` (S1: `ask` for 0.46.10) |
 | `taint_basis` | the accepted bases, at least one, no duplicates (V12) |
+| `provenance` | optional (slice S4): `off` (the default, never written: build statements are not read), `prefer` (a statement that is there must pass every check; a receipt without one passes with a note) or `required` (every receipt has one that passes; a v2 bundle is refused, `provenance_v2_bundle`) |
+| `min_k2node` | optional (S4): the oldest k2-node (`0.46.13`; a pre-release sorts below its release) a job may have run on, checked against every receipt's `run.k2node_version` whatever `provenance` says (`k2node_too_old`) |
 
 **`[source]`:**
 
@@ -372,12 +374,33 @@ the repo at sign time.
 | `dual` | artifact names the verify build must reproduce |
 | `independent` | required exactly when `dual` is set |
 | `secret_sha256` | S9: SHA-256 of values baked into the binary, keyed by secret name |
+| `network` | optional (S4): the networks a job may have run under (`none`, `no-lan`, `on`), as its build statement records them; needs `provenance` `prefer` or `required`, and a receipt without a statement is then refused |
 
 Rules for builds:
 
 - A secret build accepts only `job_uid` or `exclusive`, behind `job_user`.
 - `none` is never accepted.
 - A dual `seatbelt` build needs `independent` to include `owner` (S6).
+
+**Build statements at the signer (S4).** Under `prefer` or `required`, the
+signer checks each receipt's statement after the receipt itself has passed,
+in this order, and reports each check by name in its summary and verdict
+(`jobs.<label>.provenance`: `status` `not_read`, `absent` or `checked`, and
+`checks`: `[{check, ok, detail}]`). A failed check refuses with its code,
+the receipt's label, the check and the checks that passed before it.
+
+| Check | Rule | Refusal code |
+|---|---|---|
+| `signature` | the envelope verifies with the receipt's node key, from the pinned owner's roster | `provenance_mismatch` |
+| `receipt` | `Dsse::open_for_receipt`: it names this receipt and agrees with it | `provenance_mismatch` |
+| `owner` | `builder.id` is `…/owner/<the pinned roster key fp>`; the `owner-server` form is refused | `provenance_owner` |
+| `key active` | the key is valid from before the job started, not revoked, and not retired before it ended (when the statement was signed) | `provenance_key_inactive` |
+| `time` | the job started after the version's first approval and did not end in the future (BA-31: node times are anchored to the approval) | `provenance_key_inactive` |
+| `k2-node` | with `min_k2node`: the version it names is at least that | `k2node_too_old` |
+| `network` | with `[build.<name>].network`: the network it ran under is listed | `provenance_network` |
+
+A receipt without a statement: `provenance_missing` under `required`, or
+under `prefer` when its build names `network`.
 
 **`[assets.<file>]`:**
 

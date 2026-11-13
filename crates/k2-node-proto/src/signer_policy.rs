@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::ci::{self, Dimension, Isolation, TaintBasis, Wall};
+use crate::share::Network;
 
 /// The policy file's `version`.
 pub const SIGNER_POLICY_VERSION: u32 = 1;
@@ -43,6 +44,20 @@ pub struct SignerPolicy {
     pub seat_moves: Changes,
     /// V12: the taint bases this project accepts for a node key.
     pub taint_basis: Vec<TaintBasis>,
+    /// prd-compute-build-attestations-v1 §7.2, slice S4: whether each
+    /// receipt needs the build statement its node signed beside it. `off`
+    /// (the default, never written: today's rule, statements are not
+    /// read), `prefer` (a statement that is there must pass every check; a
+    /// receipt without one passes with a note) or `required` (every receipt
+    /// has one that passes; a v2 bundle is refused). An older signer
+    /// refuses a policy that sets it (unknown key).
+    #[serde(default, skip_serializing_if = "ProvenanceRule::is_off")]
+    pub provenance: ProvenanceRule,
+    /// The oldest k2-node build a release job may have run on
+    /// (`0.46.13`): checked against each receipt's `run.k2node_version`,
+    /// which its statement repeats. Optional; absent = any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_k2node: Option<String>,
     pub source: SourceRule,
     /// Builds by name (`linux-x86_64`).
     pub build: BTreeMap<String, BuildRule>,
@@ -51,6 +66,47 @@ pub struct SignerPolicy {
     /// Signing keys by slot name (`updater`): the public half; the secret
     /// half stays in the role user's key dir.
     pub keys: BTreeMap<String, KeyRule>,
+}
+
+/// `provenance = "off" | "prefer" | "required"` (slice S4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceRule {
+    /// Statements are not read (today's rule).
+    #[default]
+    Off,
+    /// A statement that is there is checked and must pass; a receipt with
+    /// none passes, with a note.
+    Prefer,
+    /// Every receipt has a statement that passes; a v2 bundle is refused.
+    Required,
+}
+
+impl ProvenanceRule {
+    pub fn is_off(&self) -> bool {
+        *self == ProvenanceRule::Off
+    }
+}
+
+/// A k2-node version (`0.46.13`, or `0.46.13-rc1`): `(major, minor, patch,
+/// release)` where `release` is false for a pre-release, which sorts below
+/// the release of the same number. `None` for anything else.
+pub fn k2node_version(s: &str) -> Option<(u64, u64, u64, bool)> {
+    let (num, pre) = match s.split_once('-') {
+        Some((n, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') => (n, true),
+        Some(_) => return None,
+        None => (s, false),
+    };
+    let parts: Vec<&str> = num.split('.').collect();
+    let [a, b, c] = parts.as_slice() else { return None };
+    let n = |x: &str| if !x.is_empty() && x.len() <= 9 && x.bytes().all(|d| d.is_ascii_digit()) { x.parse::<u64>().ok() } else { None };
+    Some((n(a)?, n(b)?, n(c)?, !pre))
+}
+
+/// `have` is at least `min` (both [`k2node_version`]s). `None` when either
+/// doesn't read as one.
+pub fn k2node_at_least(have: &str, min: &str) -> Option<bool> {
+    Some(k2node_version(have)? >= k2node_version(min)?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +170,13 @@ pub struct BuildRule {
     /// What build and verify nodes must differ in (`node` is implied).
     #[serde(default)]
     pub independent: Vec<Dimension>,
+    /// Slice S4: the networks a job of this build may have run under, as
+    /// its build statement records them (`none`, `no-lan`, `on`). Only a
+    /// statement says it, so it needs `provenance = "prefer"` or
+    /// `"required"`, and a receipt without a statement is refused.
+    /// Optional; absent = any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network: Vec<Network>,
     /// S9: SHA-256 hex of values baked into the binary, by secret name
     /// (catches a swapped vault value).
     #[serde(default)]
@@ -259,6 +322,18 @@ impl SignerPolicy {
             ci::check_name("build", name)?;
             b.check(name)?;
         }
+        if let Some(v) = &self.min_k2node {
+            if k2node_version(v).is_none() {
+                return Err(format!("min_k2node: {v:?} is not a k2-node version (0.46.13)"));
+            }
+        }
+        if self.provenance.is_off() {
+            if let Some((name, _)) = self.build.iter().find(|(_, b)| !b.network.is_empty()) {
+                return Err(format!(
+                    "build.{name}.network: only a build statement records the network, so it needs provenance = \"prefer\" or \"required\""
+                ));
+            }
+        }
         for (name, k) in &self.keys {
             ci::check_name("keys", name)?;
             ci::check_text(&format!("keys.{name}.public"), &k.public, 512)?;
@@ -330,6 +405,12 @@ impl BuildRule {
         }
         if self.dual.is_empty() && !self.independent.is_empty() {
             return Err(format!("build.{name}: independent without a dual build"));
+        }
+        let mut nets = self.network.clone();
+        nets.sort();
+        nets.dedup();
+        if nets.len() != self.network.len() {
+            return Err(format!("build.{name}.network: a network listed twice"));
         }
         for (k, v) in &self.secret_sha256 {
             if !self.secrets.contains(k) && !self.secrets_optional.contains(k) {
@@ -418,6 +499,52 @@ public = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
         assert!(SignerPolicy::parse(&k2env).is_err());
         let inner = MIN.replace("check = \"artifact\"", "check = \"inner_binary\"\ninner = \"usr/bin/acme\"");
         assert!(SignerPolicy::parse(&inner).unwrap_err().contains("dual"));
+    }
+
+    /// Slice S4: `provenance`, `min_k2node` and `[build.*].network` are
+    /// optional; absent, the file's bytes are as before.
+    #[test]
+    fn provenance_keys_default_off_and_keep_old_bytes() {
+        let p = SignerPolicy::parse(MIN).unwrap();
+        assert_eq!(p.provenance, ProvenanceRule::Off);
+        assert!(p.min_k2node.is_none() && p.build["linux-x86_64"].network.is_empty());
+        let text = p.to_toml().unwrap();
+        assert!(!text.contains("provenance") && !text.contains("min_k2node") && !text.contains("network"), "{text}");
+
+        let with = MIN
+            .replace("taint_basis = [", "provenance = \"required\"\nmin_k2node = \"0.46.13\"\ntaint_basis = [")
+            .replace("isolation = [\"job_uid\", \"exclusive\"]", "isolation = [\"job_uid\", \"exclusive\"]\nnetwork = [\"none\", \"no-lan\"]");
+        let p = SignerPolicy::parse(&with).unwrap();
+        assert_eq!(p.provenance, ProvenanceRule::Required);
+        assert_eq!(p.min_k2node.as_deref(), Some("0.46.13"));
+        assert_eq!(p.build["linux-x86_64"].network, vec![Network::None, Network::NoLan]);
+        assert_eq!(SignerPolicy::parse(&p.to_toml().unwrap()).unwrap(), p);
+        assert_eq!(SignerPolicy::parse(&with.replace("\"required\"", "\"prefer\"")).unwrap().provenance, ProvenanceRule::Prefer);
+        let off = SignerPolicy::parse(&with.replace("\"required\"", "\"off\"").replace("network = [\"none\", \"no-lan\"]\n", "")).unwrap();
+        assert_eq!(off.provenance, ProvenanceRule::Off);
+
+        let bad = |from: &str, to: &str| SignerPolicy::parse(&with.replace(from, to)).unwrap_err();
+        assert!(bad("\"required\"", "\"optional\"").contains("provenance"), "{}", bad("\"required\"", "\"optional\""));
+        assert!(bad("\"required\"", "\"off\"").contains("needs provenance"), "network is only in a statement");
+        assert!(bad("\"0.46.13\"", "\"0.46\"").contains("min_k2node"));
+        assert!(bad("\"0.46.13\"", "\"latest\"").contains("min_k2node"));
+        assert!(bad("[\"none\", \"no-lan\"]", "[\"none\", \"none\"]").contains("twice"));
+        assert!(bad("[\"none\", \"no-lan\"]", "[\"no_lan\"]").contains("network"));
+    }
+
+    #[test]
+    fn k2node_versions_order_with_pre_releases_below() {
+        assert_eq!(k2node_at_least("0.46.13", "0.46.13"), Some(true));
+        assert_eq!(k2node_at_least("0.46.14", "0.46.13"), Some(true));
+        assert_eq!(k2node_at_least("0.47.0", "0.46.13"), Some(true));
+        assert_eq!(k2node_at_least("0.46.12", "0.46.13"), Some(false));
+        assert_eq!(k2node_at_least("0.46.9", "0.46.13"), Some(false), "numbers, not text");
+        assert_eq!(k2node_at_least("0.46.13-rc1", "0.46.13"), Some(false), "a pre-release is below its release");
+        assert_eq!(k2node_at_least("0.46.13-rc1", "0.46.12"), Some(true));
+        assert_eq!(k2node_at_least("bad", "0.46.13"), None);
+        for bad in ["", "0.46", "0.46.13.1", "v0.46.13", "0.46.x", "0.46.13-", "0.46.13-a b"] {
+            assert_eq!(k2node_version(bad), None, "{bad:?}");
+        }
     }
 
     /// prd-compute-blacksmith-class-v1 §4.2.3: `warm` defaults to private

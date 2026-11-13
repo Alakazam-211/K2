@@ -1,0 +1,25 @@
+# k2-daemon tests that start a login shell (a PTY through /usr/bin/login).
+# A K2 Compute job on a Mac runs inside a sandbox that refuses that
+# program ("Failed to spawn command '/usr/bin/login': Operation not
+# permitted"), so there these tests can only fail.
+#
+# They run on the Mac node that has no job wall; every other k2-daemon
+# test runs on the walled Mac nodes. scripts/ci/k2-daemon-mac-tests.sh
+# turns this list into the two nextest filters and checks it against the
+# test sources. Nothing is skipped inside a test.
+#
+# One test per line: the test binary (`lib` for the crate's own tests),
+# the test's full name as nextest prints it, then why it is here.
+it_apps  publish_skin_gateway::skin_daemon_thread_answer_void_caps_and_rooms  its agent runs in a login shell, which never starts
+it_apps  skin_integration::skin_guest_binary_create_copy_move_and_pin_find_only  plants a live login-shell PTY
+it_contract  users_admins_only_integration::t1_1_no_agent_credential_reaches_any_users_arm  spawns a login shell for the agent credential
+it_sessions  pinned_chat_ensure_integration::empty_command_v2_spawn_evicts_planted_canonical_shell  spawns a login-shell PTY
+it_sessions  pinned_chat_ensure_integration::planted_shell_on_canonical_key_is_not_reused_by_ensure  spawns a login-shell PTY
+it_sessions  pinned_chat_ensure_integration::tab_empty_spawn_stays_a_shell_and_does_not_steal_project_id  an empty spawn is a login shell
+it_sessions  reaper_close_guard_integration::v2_close_without_reason_does_not_refuse_empty_respawn  an empty spawn is a login shell
+it_sessions  remote_session_shell_integration::shell_spawn_write_read_gate_revoke_disable  a remote-session shell is a login shell
+it_sessions  v2_spawn_bare_tab_cap::attached_sessions_stop_counting_against_the_cap  fills the cap with login shells
+it_sessions  v2_spawn_bare_tab_cap::bare_tab_cap_refuses_spawn_number_cap_plus_one  fills the cap with login shells
+lib  v2_spawn::tests::close_without_reason_does_not_refuse_empty_spawn  an empty spawn is a login shell
+ptyd_survival_integration  remote_session_grant_shells_do_not_survive_a_restart  a remote-session shell is a login shell
+remote_session_grants_integration  grant_lifecycle_mint_use_revoke_expire_list  a granted remote-session shell is a login shell

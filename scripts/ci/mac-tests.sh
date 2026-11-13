@@ -17,6 +17,10 @@
 #            on an 8 GB node. Slow. The helper programs its tests start
 #            (k2-ptyd and the renderers) are built first. A test target
 #            behind a feature that is off by default is named, not run.
+#            The tests that start a login shell (the job's sandbox refuses
+#            /usr/bin/login) are left to the node with no wall, by name:
+#            scripts/ci/k2-daemon-mac-tests.sh, whose `filter walled` is
+#            used and whose `check` runs first.
 #
 #   mac-tests.sh           both stages; the second runs even if the first failed
 #   mac-tests.sh core      one stage
@@ -94,9 +98,13 @@ stage_core() {
 }
 
 stage_daemon() {
-    local log bad=0 targets has helper kind name need
+    local log bad=0 targets has helper kind name need filter
     export CARGO_BUILD_JOBS="${JOBS_SET:-1}"
     : > "$ROOT/mac-tests-daemon.log"
+    # The tests that start a login shell wait for the node with no wall.
+    echo "mac-tests: checking the k2-daemon Mac list"
+    bash scripts/ci/k2-daemon-mac-tests.sh check || return 1
+    filter="$(bash scripts/ci/k2-daemon-mac-tests.sh filter walled)" || return 1
     # Every test target of k2-daemon: its library, its binaries, and each
     # integration test, as cargo itself lists them.
     targets="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c '
@@ -136,9 +144,9 @@ for p in packages:
         log="$ROOT/mac-tests-daemon.part.log"
         : > "$log"
         case "$kind" in
-            lib) one_run "daemon: the library" "$log" -p k2-daemon --lib || bad=1 ;;
-            bin) one_run "daemon: binary $name" "$log" -p k2-daemon --bin "$name" || bad=1 ;;
-            test) one_run "daemon: $name" "$log" -p k2-daemon --test "$name" || bad=1 ;;
+            lib) one_run "daemon: the library" "$log" -p k2-daemon --lib -E "$filter" || bad=1 ;;
+            bin) one_run "daemon: binary $name" "$log" -p k2-daemon --bin "$name" -E "$filter" || bad=1 ;;
+            test) one_run "daemon: $name" "$log" -p k2-daemon --test "$name" -E "$filter" || bad=1 ;;
             off) echo "mac-tests: daemon: not run, its feature is off in this build: $name (needs $need)" ;;
         esac
         cat "$log" >> "$ROOT/mac-tests-daemon.log"

@@ -103,10 +103,15 @@ fresh
 run 0 "mac-tests: daemon: not run, its feature is off in this build: k2-vmm-worker (needs sandbox-microvm)" env K2_JOB_CPUS=7 bash "$M" daemon
 fresh
 run 0 "mac-tests: daemon: 4 test binaries of k2-daemon, one cargo call each" env K2_JOB_CPUS=7 bash "$M" daemon
-got="$(for n in 1 2 3 4; do sed -n '5,$p' "$T/calls/$n.args" | tr '\n' ' '; echo; done)"
+got="$(for n in 1 2 3 4; do sed -n '5,$p' "$T/calls/$n.args" | sed '/^-E$/,$d' | tr '\n' ' '; echo; done)"
 want="$(printf -- '--test it_auth \n--test it_mail \n--bin k2-daemon \n--lib \n')"
 [ "$(echo "$got" | sed 's/-p k2-daemon //' | sort)" = "$(echo "$want" | sort)" ] || no "daemon's cargo calls: $got"; ok
 grep -qx 'CARGO_BUILD_JOBS=1' "$T/calls/1.env" || no "daemon builds more than one crate at a time: $(cat "$T/calls/1.env")"; ok
+# Every daemon call leaves out exactly the listed login-shell tests.
+want="$(bash "$HERE/scripts/ci/k2-daemon-mac-tests.sh" filter walled)"
+for n in 1 2 3 4; do
+    [ "$(tail -2 "$T/calls/$n.args" | head -1)" = "-E" ] && [ "$(tail -1 "$T/calls/$n.args")" = "$want" ] || no "daemon call $n has no walled filter: $(tail -2 "$T/calls/$n.args" | cut -c1-80)"
+done; ok
 # One binary red: the stage is red, the others still ran, the red one is named.
 fresh
 printf '        FAIL [   1.0s] (2/100) k2-daemon::it_mail watch::fires_once\n     Summary [ 9.0s] 100 tests run: 99 passed, 1 failed, 2 skipped\n' > "$T/calls/3.out"; echo 100 > "$T/calls/3.rc"

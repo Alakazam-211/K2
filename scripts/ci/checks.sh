@@ -55,6 +55,8 @@ part_web() {
     step "Test-group check on broken layouts";     bash tests/packaging/daemon-test-targets.sh
     step "k2-node Mac wall test list (no cargo)";  bash scripts/ci/k2-node-mac-tests.sh check
     step "Mac wall test list check on broken lists"; bash tests/garden/k2-node-mac-tests.sh
+    step "k2-daemon Mac login-shell test list (no cargo)"; bash scripts/ci/k2-daemon-mac-tests.sh check
+    step "Mac login-shell test list check on broken lists"; bash tests/garden/k2-daemon-mac-tests.sh
     step "macOS test run script (stubbed)";        bash tests/garden/mac-tests.sh
     step "Embedded Python compiles (cli/k2, tests, scripts)"; bash tests/check-embedded-python.sh
     step "Rust pin (rust-toolchain.toml)";         bash tests/packaging/rust-pin.sh

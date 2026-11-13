@@ -98,6 +98,12 @@ jobs:
         run: bash scripts/ci/k2-node-mac-tests.sh check
       - name: Mac wall test list check fails on broken lists
         run: bash tests/garden/k2-node-mac-tests.sh
+      # The same for k2-daemon's tests that start a login shell (refused
+      # in a Mac compute job): listed by name, checked against the sources.
+      - name: k2-daemon Mac login-shell test list (no cargo)
+        run: bash scripts/ci/k2-daemon-mac-tests.sh check
+      - name: Mac login-shell test list check fails on broken lists
+        run: bash tests/garden/k2-daemon-mac-tests.sh
       # The macOS test run (scripts/ci/mac-tests.sh, a compute job on a Mac
       # node): its counting and failing, with stand-ins for cargo. No cargo.
       - name: macOS test run script (stubbed)

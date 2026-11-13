@@ -57,7 +57,7 @@ pub fn row(id: &'static str) -> Result<&'static ErrorEntry, HostBug> {
     lookup(id).ok_or(HostBug::NoRow { id })
 }
 
-/// A format refusal's row, by the call it came from (rulings of 11-04):
+/// A format refusal's row, by the call it came from:
 ///
 /// - the package, its manifest and parts, a newer format, a missing picture, a lock and I/O have
 ///   one row each, whatever the call;

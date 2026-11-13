@@ -15,6 +15,7 @@ cargo test -q --locked --all-targets --manifest-path bridge/Cargo.toml
 ./scripts/check-licences.sh
 sh scripts/test-licences.sh
 sh scripts/check-private.sh
+sh scripts/check-labels.sh
 sh scripts/test-windows-names.sh
 sh scripts/check-windows-names.sh
 sh scripts/test-host-forms.sh

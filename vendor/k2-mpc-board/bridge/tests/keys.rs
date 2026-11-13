@@ -1,4 +1,4 @@
-//! Test 1: for every row the bridge gives, a report built the bridge's way has every `{key}` of the
+//! For every row the bridge gives, a report built the bridge's way has every `{key}` of the
 //! row's message template in `details`, and the finished message has no `{` left.
 
 mod support;
@@ -61,7 +61,7 @@ fn the_message_is_the_template_filled_from_details() {
     }
 }
 
-/// §8's types and names for the keys a template doesn't name.
+/// The stated types and names for the keys a template doesn't name.
 #[test]
 fn the_keys_have_their_stated_types() {
     let by_id: Vec<_> = samples()

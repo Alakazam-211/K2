@@ -48,13 +48,14 @@ pub const RELEASE: &str = "/cli/ci/release";
 pub const RUN: &str = "/cli/ci/run";
 /// prd-compute-blacksmith-class-v1 O1: `k2 ci stats`.
 pub const STATS: &str = "/cli/ci/stats";
+pub const SETUP: &str = "/cli/ci/setup";
 pub const STATUS: &str = "/cli/ci/status";
 /// prd-compute-blacksmith-class-v1 T1: `k2 ci tests` (test history).
 pub const TESTS: &str = "/cli/ci/tests";
 pub const WATCH: &str = "/cli/ci/watch";
 
-pub const ROUTES: &[&str] = &[CACHE_TRUST, CACHE_TRUST_SET, EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, PROVENANCE, RELEASE, RUN, STATS, STATUS, TESTS, WATCH];
-pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, PROVENANCE, RELEASE, RUN, WATCH];
+pub const ROUTES: &[&str] = &[CACHE_TRUST, CACHE_TRUST_SET, EVIDENCE, FREEZE, INIT, MONITOR, MONITORS, PROVENANCE, RELEASE, RUN, SETUP, STATS, STATUS, TESTS, WATCH];
+pub const POST_ROUTES: &[&str] = &[EVIDENCE, FREEZE, INIT, MONITOR, PROVENANCE, RELEASE, RUN, SETUP, WATCH];
 
 /// Longest freeze (`k2 ci freeze --until`).
 pub const MAX_FREEZE_SECS: i64 = 30 * 86_400;
@@ -79,6 +80,8 @@ pub(crate) fn handle(p: &str, who: &Who, body: &[u8], params: &HashMap<String, S
         RELEASE => crate::ci_release::release(who, body),
         EVIDENCE => crate::ci_release::evidence(who, body),
         PROVENANCE => crate::ci_release::provenance(who, body),
+        // BA-46: the signer setup file (read-only; a person applies it at the signer).
+        SETUP => crate::ci_release::setup(who, body),
         WATCH => watch(who, body, mgr),
         INIT => init(who, body),
         FREEZE => freeze(who, body, mgr),

@@ -616,6 +616,79 @@ pub(crate) fn provenance(who: &Who, body: &[u8]) -> R<Value> {
     Ok(json!({"workspace": ws.handle, "run": run.id, "short": run.short(), "statements": statements, "missing": missing, "trust": trust_dir}))
 }
 
+// ── POST /cli/ci/setup (BA-46) ───────────────────────────────────────
+
+/// `k2 ci setup --plan`: the signer setup file for the project of the
+/// commit's `[release]`, prepared from this server's real state: its
+/// controller fingerprint, the node owner's pinned roster key and newest
+/// signed roster, and `.k2/signer.toml` filled in. The person applies it at
+/// the signing machine with one `k2-signer-admin apply-setup`. Read-only;
+/// what is missing on this side is named, and then there is no file.
+pub(crate) fn setup(who: &Who, body: &[u8]) -> R<Value> {
+    let v = json_body(body)?;
+    let ws = reader(who, s(&v, "workspace"))?;
+    let o = ci_engine::ops();
+    let root = o
+        .repo_root(Path::new(&ws.path))
+        .map_err(|e| no(ci::codes::NOT_A_REPO, 409, format!("workspace {}'s folder isn't a git repo ({e})", ws.handle)))?;
+    let rev = s(&v, "rev").unwrap_or("HEAD");
+    if rev.starts_with('-') || rev.len() > 256 {
+        return Err(no("bad_request", 400, "a revision: a commit, a branch or HEAD"));
+    }
+    let sha = o.resolve(&root, rev).map_err(|e| no(ci::codes::NO_COMMIT, 404, format!("'{rev}' isn't a commit here ({e})")))?;
+    let text = o
+        .read_config(&root, &sha)
+        .map_err(|e| no(ci::codes::BAD_CONFIG, 400, format!("{CI_CONFIG_PATH} at {}: {}", &sha[..12], one_line(&e))))?
+        .ok_or_else(|| no(ci::codes::NO_CONFIG, 404, format!("commit {} has no {CI_CONFIG_PATH} with a [release] section", &sha[..12])))?;
+    let cfg = CiConfig::parse(&text).map_err(|e| no(ci::codes::BAD_CONFIG, 400, format!("at {}: {e}", &sha[..12])))?;
+    let rcfg = cfg.release.ok_or_else(|| no(rcodes::NO_RELEASE, 404, format!("{CI_CONFIG_PATH} at {} has no [release]", &sha[..12])))?;
+    let template = git_out(&root, &["show", &format!("{sha}:{}", rel::SIGNER_POLICY_PATH)]).map_err(|_| {
+        no(ci::codes::NO_CONFIG, 404, format!("commit {} has no {}: commit the project's signer policy first", &sha[..12], rel::SIGNER_POLICY_PATH))
+    })?;
+    let template = String::from_utf8(template).map_err(|_| no(ci::codes::BAD_CONFIG, 400, format!("{} is not UTF-8", rel::SIGNER_POLICY_PATH)))?;
+    let controller_fp = crate::compute_admin::trust_controller_key()?.fingerprint();
+    let mut missing: Vec<String> = Vec::new();
+    let (owner, roster, seat) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let owner = trust::owner_trusts(&conn).into_iter().find(|t| t.owner_id == rcfg.owner);
+        let roster = owner.as_ref().and_then(|t| trust::latest_roster(&conn, &t.key_fp));
+        let seat = lane_secrets::seat_named_in(&conn, &rcfg.owner, &rcfg.lane);
+        (owner, roster, seat)
+    };
+    match &owner {
+        None => missing.push(format!(
+            "this server hasn't pinned node owner {}: pin its roster key (k2 compute owners; compare the fingerprint with k2 compute roster key on {})",
+            rcfg.owner, rcfg.owner
+        )),
+        Some(_) if roster.is_none() => missing.push(format!("no node roster from {} is held here yet (the owner publishes one: k2 compute roster publish)", rcfg.owner)),
+        Some(_) => {}
+    }
+    match &seat {
+        None => missing.push(format!("no seat on {}'s lane {}: k2 compute seats request {} --lane {}, then the owner approves", rcfg.owner, rcfg.lane, rcfg.owner, rcfg.lane)),
+        Some(st) if !st.active => missing.push(format!("seat {} on {}'s lane {} is not active yet (the owner approves it)", st.seat_id, rcfg.owner, rcfg.lane)),
+        Some(_) => {}
+    }
+    let mut out = json!({
+        "workspace": ws.handle, "project": rcfg.project, "sha": sha, "owner": rcfg.owner, "lane": rcfg.lane,
+        "controllerFp": controller_fp, "missing": missing,
+    });
+    let (Some(t), Some(r)) = (owner, roster) else {
+        return Ok(out);
+    };
+    let policy = rel::render_signer_policy(&template, &controller_fp, &t.key_fp, &ws.id).map_err(|e| no(ci::codes::BAD_CONFIG, 400, e))?;
+    let entries: Vec<Value> = r.roster.entries.iter().map(|e| json!({"name": e.name, "fp": e.node_fp, "status": e.status})).collect();
+    out["setup"] = json!({
+        "kind": "k2-signer-setup", "v": 1, "project": rcfg.project, "created_at": now(),
+        "controller_fp": controller_fp, "adopt_k2sign": rcfg.project == "k2",
+        "owner": {"id": t.owner_id, "fp": t.key_fp, "key": t.roster_key},
+        "policy": policy, "roster": r.signed,
+    });
+    out["roster"] = json!({"seq": r.roster.seq, "entries": entries});
+    audit(who, "ci.setup", None, Some(&ws.id), None, json!({"project": rcfg.project, "sha": sha, "owner": rcfg.owner, "missing": out["missing"]}));
+    Ok(out)
+}
+
 // ── `k2 app updates push --evidence <run>` (C8) ──────────────────────
 
 /// The release run a push names, with every file its jobs' signed receipts

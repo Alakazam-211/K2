@@ -199,6 +199,8 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/ci/provenance", Member),
     post("/cli/ci/release", Member),
     post("/cli/ci/run", Member),
+    // BA-46: k2 ci setup --plan (read-only: it prepares the signer setup file).
+    post("/cli/ci/setup", Member),
     // Signer pairing (0.46.10 C3a, vs-live V17; `compute_trust`): a person
     // only (owner or Admin with a fresh confirm; the handler refuses every
     // passport). The SAS is answered only to that person.

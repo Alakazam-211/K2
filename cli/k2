@@ -37249,20 +37249,27 @@ Release builds (a [release] section in .k2/ci.toml, a seat on the node
 owner's lane; k2 study ci-release):
   k2 ci release <version> [<rev> | --sha <commit>] [--build a,b]
                 [--tier ci|standard] [--plan] [--wait [--wait-min 180]]
-                [--json]        build every [release.builds.*] of the
+                [--only-keys <fp,fp>] [--json]
+                                build every [release.builds.*] of the
                                 commit (default HEAD) on your seat, as one
                                 set: a dual build's two jobs (L1, V1) on
                                 nodes that differ (independent, default
                                 host), the others beside them. --plan shows
-                                where and submits nothing. Exit 0 = passed
-                                (with --wait); 3 = no seat, seat_degraded,
-                                no_independent_nodes
-  k2 ci evidence <run> --out <dir> [--no-files] [--json]
-                                once the run passed: the evidence bundle
+                                where and submits nothing. --only-keys: use
+                                only seat nodes with these node keys (the
+                                ones your signer accepted: its preflight
+                                lists them); the others are skipped. Exit
+                                0 = passed (with --wait); 3 = no seat,
+                                seat_degraded, no_independent_nodes
+  k2 ci evidence <run> --out <dir> [--no-files] [--reported <file>]
+                [--json]        once the run passed: the evidence bundle
                                 (for the signer) and every job's files,
                                 in <dir>/<label>/<their paths>. <dir> goes
                                 inside the repo (k2 app updates push reads
-                                files there). Signing is a person's, at
+                                files there). --reported dist/x.json: also
+                                put that file of each job into the bundle
+                                (for a signer policy that checks what the
+                                build reported). Signing is a person's, at
                                 the signing machine (k2-signer). Also
                                 <dir>/provenance/<label>.intoto.jsonl (each
                                 node's signed build statement) and
@@ -37273,6 +37280,16 @@ owner's lane; k2 study ci-release):
                                 run too), by check name, and <dir>/trust/;
                                 a job without one is listed with why.
                                 k2 study provenance
+  k2 ci setup --plan --out <file> [<rev>] [--json]
+                                prepare the signer's setup for the
+                                commit's [release] project: this server's
+                                controller key, the node owner's roster
+                                key and newest roster, and .k2/signer.toml
+                                filled in. Changes nothing. A person
+                                applies the file at the signing machine:
+                                sudo k2-signer-admin apply-setup <file>
+                                (it shows every statement first). Exit 3
+                                names what is still missing here
   Seat, lane, node roster, L1/V1/L3, the signer, the steps and who does
   each: k2 study ci-release.
 
@@ -37583,7 +37600,7 @@ cmd_ci() {
     local as_json=0 ws="" pos=() argv=() have_cmd=0
     local check="" needs="" os="" mem="" cpus="" timeout="" branches="" remote="" token="" force=0
     local ref="" tier="" wait=0 wait_min="" limit="" failures=0 poll="" max_inflight="" skip=0 until="" why=""
-    local sha="" builds="" plan=0 out_dir="" no_files=0 tests_filter="" days=""
+    local sha="" builds="" plan=0 out_dir="" no_files=0 tests_filter="" days="" only_keys="" reported=""
     local branch="" mkind="" mcount="" mover="" mcooldown="" mto="" mfor=""
     local tadd="" tset="" tremove="" tset_given=0
     while [ $# -gt 0 ]; do
@@ -37610,7 +37627,7 @@ cmd_ci() {
                     --cooldown) mcooldown="$2" ;; --to) mto="$2" ;; --for) mfor="$2" ;;
                 esac
                 shift 2 ;;
-            --workspace|--check|--checks|--needs|--os|--mem|--cpus|--timeout|--branches|--remote|--statuses-token|--ref|--tier|--wait-min|--limit|--poll|--max-inflight|--until|--why|--sha|--build|--builds|--out)
+            --workspace|--check|--checks|--needs|--os|--mem|--cpus|--timeout|--branches|--remote|--statuses-token|--ref|--tier|--wait-min|--limit|--poll|--max-inflight|--until|--why|--sha|--build|--builds|--out|--only-keys|--reported)
                 [ -n "${2:-}" ] || { echo "usage: $1 needs a value (k2 ci --help)" >&2; exit 2; }
                 case "$1" in
                     --workspace) ws="$2" ;; --check|--checks) check="$2" ;; --needs) needs="$2" ;; --os) os="$2" ;;
@@ -37619,6 +37636,7 @@ cmd_ci() {
                     --tier) tier="$2" ;; --wait-min) wait_min="$2" ;; --limit) limit="$2" ;; --poll) poll="$(_compute_secs "$2")" || exit 2 ;;
                     --max-inflight) max_inflight="$2" ;; --until) until="$2" ;; --why) why="$2" ;;
                     --sha) sha="$2" ;; --build|--builds) builds="$2" ;; --out) out_dir="$2" ;;
+                    --only-keys) only_keys="$2" ;; --reported) reported="$2" ;;
                 esac
                 shift 2 ;;
             # Blacksmith class B2: k2 ci cache trust.
@@ -37698,13 +37716,15 @@ print(json.dumps(o))' "$ws" "${pos[0]:-}" "$ref" "$tier" "$check" "$dir")"
             if _k2_git_usable; then dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"; fi
             body="$(python3 -c '
 import json, sys
-ws, version, rev, tier, builds, d, plan = sys.argv[1:8]
+ws, version, rev, tier, builds, d, plan, keys = sys.argv[1:9]
 o = {k: v for k, v in (("workspace", ws), ("version", version), ("rev", rev), ("tier", tier), ("dir", d)) if v}
 if builds:
     o["builds"] = [b.strip() for b in builds.split(",") if b.strip()]
 if plan == "1":
     o["plan"] = True
-print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan")"
+if keys:
+    o["onlyKeys"] = [k.strip() for k in keys.split(",") if k.strip()]
+print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan" "$only_keys")"
             _ci_call POST release "$body"
             if [ "$plan" = 1 ]; then
                 if [ "$as_json" = 1 ]; then printf '%s\n' "$_CI_BODY"; else _ci_render release-plan; fi
@@ -37733,7 +37753,10 @@ print(json.dumps(o))' "$ws" "$version" "$rev" "$tier" "$builds" "$dir" "$plan")"
             ;;
         evidence)
             local run="${pos[0]:-}"
-            { [ -n "$run" ] && [ -n "$out_dir" ]; } || { echo "usage: k2 ci evidence <run> --out <dir> [--no-files] [--json]" >&2; exit 2; }
+            { [ -n "$run" ] && [ -n "$out_dir" ]; } || { echo "usage: k2 ci evidence <run> --out <dir> [--no-files] [--reported <file>] [--json]" >&2; exit 2; }
+            if [ -n "$reported" ] && [ "$no_files" = 1 ]; then
+                echo "usage: --reported reads the fetched files: drop --no-files" >&2; exit 2
+            fi
             body="$(python3 -c 'import json,sys; o={"run": sys.argv[2]}; o.update({"workspace": sys.argv[1]} if sys.argv[1] else {}); print(json.dumps(o))' "$ws" "$run")"
             _ci_call POST evidence "$body"
             mkdir -p "$out_dir" || { echo "can't make $out_dir" >&2; exit 1; }
@@ -37761,6 +37784,30 @@ print(path)' "$out_dir")" || exit 1
 import json, sys
 for label, j in sorted(json.load(sys.stdin)["jobs"].items()):
     print("%s\t%s" % (label, j["job"]))')
+            fi
+            if [ -n "$reported" ]; then
+                # The named file of each job that wrote one goes into the
+                # bundle (base64): the signer hashes it to the artifact in
+                # that job's signed receipt before it reads anything in it.
+                python3 -I - "$file" "$out_dir" "$reported" <<'PY' || exit 1
+import base64, json, os, sys
+path, out, name = sys.argv[1:4]
+if name.startswith("/") or ".." in name.split("/"):
+    sys.exit("--reported %s: a path inside each job's files (dist/build-info.json)" % name)
+b = json.load(open(path))
+added = []
+for label in sorted(b["receipts"]):
+    f = os.path.join(out, label, name)
+    if os.path.isfile(f):
+        b.setdefault("reported", {}).setdefault(label, {})[name] = base64.b64encode(open(f, "rb").read()).decode()
+        added.append(label)
+if not added:
+    sys.exit("--reported %s: no job of the run wrote that file" % name)
+with open(path, "w") as fh:
+    json.dump(b, fh, indent=1, sort_keys=True)
+    fh.write("\n")
+print("reported %s of %s carried in the bundle" % (name, ", ".join(added)), file=sys.stderr)
+PY
             fi
             if [ "$as_json" = 1 ]; then
                 printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); v["path"]=sys.argv[1]; v.pop("bundle", None); print(json.dumps(v))' "$file"
@@ -37928,6 +37975,42 @@ for r in rows:
         ms = r.get("ewmaMs") or 0
         extra = "%.2fs average%s" % (ms / 1000.0, " · 50%+ slower than 14 days ago" if r.get("rose") else "")
     print("  %s  %s" % (json.dumps(name)[1:-1][:240], extra))'
+            ;;
+        setup)
+            # BA-46: prepare the signer's setup file; nothing changes here.
+            { [ "$plan" = 1 ] && [ -n "$out_dir" ]; } || { echo "usage: k2 ci setup --plan --out <file> [<rev>] [--json]" >&2; exit 2; }
+            body="$(python3 -c 'import json,sys; o={k: v for k, v in (("workspace", sys.argv[1]), ("rev", sys.argv[2])) if v}; print(json.dumps(o))' "$ws" "${pos[0]:-}")"
+            _ci_call POST setup "$body"
+            local missing
+            missing="$(printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["missing"]))')"
+            if [ "$missing" = 0 ]; then
+                printf '%s' "$_CI_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+with open(sys.argv[1], "w") as f:
+    json.dump(v["setup"], f, indent=1, sort_keys=True)
+    f.write("\n")' "$out_dir" || { echo "can't write $out_dir" >&2; exit 1; }
+            fi
+            if [ "$as_json" = 1 ]; then
+                printf '%s' "$_CI_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("setup", None); print(json.dumps(v))'
+            else
+                printf '%s' "$_CI_BODY" | K2_CI_SETUP_OUT="$out_dir" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+print("signer setup for project %s at %s (controller %s, owner %s, lane %s):" % (v["project"], v["sha"][:12], v["controllerFp"][:16] + "...", v["owner"], v["lane"]))
+if v["missing"]:
+    print("still missing on this server (no file written):")
+    for m in v["missing"]:
+        print("  - " + m)
+    sys.exit(0)
+r = v["roster"]
+print("  node roster seq %s: %s" % (r["seq"], ", ".join("%s (%s)" % (e["name"], e["status"]) for e in r["entries"])))
+out = os.environ["K2_CI_SETUP_OUT"]
+print("wrote %s. A person at the signing machine (never an agent):" % out)
+print("  1. sudo k2-signer-admin apply-setup %s        shows every statement; compare the fingerprints" % os.path.abspath(out))
+print("  2. the same with the sha256 it prints, to apply them")'
+            fi
+            [ "$missing" = 0 ] || exit 3
             ;;
         logs|log)
             [ -n "${pos[0]:-}" ] || { echo "usage: k2 ci logs <run|commit|branch> [--check NAME] [--failures]" >&2; exit 2; }
@@ -48439,9 +48522,9 @@ cmd_schema() {
     },
     {
       "name": "ci",
-      "usage": "k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB] [--cpus N] [--timeout 1h] [--branches a,b/*] [--remote R] [--statuses-token NAME] [--force] [-- <cmd…>] | k2 ci run [<rev>] [--check a,b] [--ref B] [--tier ci|standard] [--wait] [--json] | k2 ci status [<run|commit|branch>] [--json] | k2 ci logs <run|commit|branch> [--check NAME] [--failures] | k2 ci tests [--check NAME] [--flaky|--slow|--failing|--quarantined] [--days 30] [--limit N] [--json] | k2 ci stats [--check NAME] [--branch B] [--days 14] [--json] | k2 ci monitors [--json] | k2 ci monitor add <name> --kind fail-streak|slow|queue-wait|new-flaky [--branch B] [--check C] [--count N] [--over 1.5x|10m] [--cooldown 6h] [--to <workspace>|thread[:<addr>]] | k2 ci monitor mute <name> --for 1d|off | k2 ci monitor rm <name> | k2 ci watch [on|off] [--remote R] [--branches a,b/*] [--poll S] [--tier ci|standard] [--max-inflight N] [--skip-current] | k2 ci freeze --until <3d|time> [--why text] | k2 ci freeze off | k2 ci release <version> [<rev>|--sha C] [--build a,b] [--plan] [--wait] [--json] | k2 ci evidence <run> --out <dir> [--no-files] [--json]",
-      "description": "CI on K2 Compute, run by the daemon: .k2/ci.toml (committed; read at each commit) lists [checks.<name>]; each is one compute job on the commit (--tier ci, --supersede ci/<branch>/<check>) carrying the workspace's own grants. watch on: the daemon polls the remote and checks every new tip; run: one commit now (--wait: exit 0 passed, 1 failed). GitHub commit statuses <context>/<check> with the [statuses] token from the workspace vault. release: [release] builds on the workspace's seat as one set (a dual build's L1 and V1 on nodes that differ per the owner's node roster; seat_degraded / no_independent_nodes, exit 3); evidence: once it passed, the evidence bundle v2 and every job's files for the signer (signing is a person's, at the signer). tests: the history of the checks' JUnit (flaky, failing, slowest, quarantined; names are data). stats: per check, run time and queue wait p50/p95, failure and flaky rates, CPU-hours, cache hit rate. monitor: a message (facts only) when a branch fails N runs in a row, a check gets slow, a check job waits too long, or a test turns flaky; each ended run also sends one [ci] message (check jobs send no [compute] note). Agents: their own workspace, with Allow compute nodes on. See k2 study ci.",
-      "args": [{"name": "verb", "required": true, "description": "init | run | status | logs | tests | stats | monitors | monitor | watch | freeze | release | evidence"}],
+      "usage": "k2 ci init [--check NAME] [--needs a,b] [--os linux|macos] [--mem GB] [--cpus N] [--timeout 1h] [--branches a,b/*] [--remote R] [--statuses-token NAME] [--force] [-- <cmd…>] | k2 ci run [<rev>] [--check a,b] [--ref B] [--tier ci|standard] [--wait] [--json] | k2 ci status [<run|commit|branch>] [--json] | k2 ci logs <run|commit|branch> [--check NAME] [--failures] | k2 ci tests [--check NAME] [--flaky|--slow|--failing|--quarantined] [--days 30] [--limit N] [--json] | k2 ci stats [--check NAME] [--branch B] [--days 14] [--json] | k2 ci monitors [--json] | k2 ci monitor add <name> --kind fail-streak|slow|queue-wait|new-flaky [--branch B] [--check C] [--count N] [--over 1.5x|10m] [--cooldown 6h] [--to <workspace>|thread[:<addr>]] | k2 ci monitor mute <name> --for 1d|off | k2 ci monitor rm <name> | k2 ci watch [on|off] [--remote R] [--branches a,b/*] [--poll S] [--tier ci|standard] [--max-inflight N] [--skip-current] | k2 ci freeze --until <3d|time> [--why text] | k2 ci freeze off | k2 ci release <version> [<rev>|--sha C] [--build a,b] [--plan] [--only-keys fp,fp] [--wait] [--json] | k2 ci evidence <run> --out <dir> [--no-files] [--reported FILE] [--json] | k2 ci setup --plan --out FILE [<rev>] [--json]",
+      "description": "CI on K2 Compute, run by the daemon: .k2/ci.toml (committed; read at each commit) lists [checks.<name>]; each is one compute job on the commit (--tier ci, --supersede ci/<branch>/<check>) carrying the workspace's own grants. watch on: the daemon polls the remote and checks every new tip; run: one commit now (--wait: exit 0 passed, 1 failed). GitHub commit statuses <context>/<check> with the [statuses] token from the workspace vault. release: [release] builds on the workspace's seat as one set (a dual build's L1 and V1 on nodes that differ per the owner's node roster; seat_degraded / no_independent_nodes, exit 3); evidence: once it passed, the evidence bundle v2 and every job's files for the signer (signing is a person's, at the signer). setup --plan: the signer setup file (controller, the node owner's roster key and roster, .k2/signer.toml filled in) for a person to apply at the signing machine. tests: the history of the checks' JUnit (flaky, failing, slowest, quarantined; names are data). stats: per check, run time and queue wait p50/p95, failure and flaky rates, CPU-hours, cache hit rate. monitor: a message (facts only) when a branch fails N runs in a row, a check gets slow, a check job waits too long, or a test turns flaky; each ended run also sends one [ci] message (check jobs send no [compute] note). Agents: their own workspace, with Allow compute nodes on. See k2 study ci.",
+      "args": [{"name": "verb", "required": true, "description": "init | run | status | logs | tests | stats | monitors | monitor | watch | freeze | release | evidence | setup"}],
       "flags": [
         {"name": "--check", "arg": "NAME|a,b", "description": "init: the check's name (default test); run: only these checks; logs, tests, stats: one check; monitor add: the check it watches."},
         {"name": "--tier", "arg": "ci|standard", "description": "CI tier (default; the grant needs --ci) or Standard."},

@@ -328,6 +328,24 @@ pub fn only_keys(nodes: &mut [SeatNode], keys: &[String]) {
     }
 }
 
+/// Where a repo keeps its signer policy proposal (`k2 ci setup`). The
+/// signer never reads it from the repo: a person approves it at the signer.
+pub const SIGNER_POLICY_PATH: &str = ".k2/signer.toml";
+
+/// Fill a committed signer policy's three server-specific values: the
+/// client server's controller fingerprint, the node owner's roster key
+/// fingerprint and the building workspace's id. A placeholder left over
+/// (a typo, or one this build doesn't know) is refused.
+pub fn render_signer_policy(template: &str, controller_fp: &str, owner_fp: &str, workspace_id: &str) -> Result<String, String> {
+    let out = template.replace("@CONTROLLER_FP@", controller_fp).replace("@OWNER_FP@", owner_fp).replace("@WORKSPACE_ID@", workspace_id);
+    if let Some(i) = out.find('@') {
+        let rest = &out[i..];
+        let end = rest[1..].find('@').map(|j| j + 2).unwrap_or(rest.len().min(32));
+        return Err(format!("{SIGNER_POLICY_PATH}: an unknown placeholder {} (it knows @CONTROLLER_FP@, @OWNER_FP@, @WORKSPACE_ID@)", &rest[..end]));
+    }
+    Ok(out)
+}
+
 /// Why a seat node takes no release build, from its roster entry (`None`:
 /// it may). The roster must list the key `active` under a name the seat
 /// names, with a taint basis.
@@ -652,6 +670,15 @@ mod tests {
         gone[1].out = Some("removed from this server".into());
         only_keys(&mut gone, &[fp(&all[0])]);
         assert_eq!(gone[1].out.as_deref(), Some("removed from this server"));
+    }
+
+    #[test]
+    fn a_signer_policy_template_is_filled_or_refused() {
+        let t = "controllers = [\"@CONTROLLER_FP@\"]\nowners = [\"@OWNER_FP@\"]\nworkspaces = [\"@WORKSPACE_ID@\"]\n";
+        let out = render_signer_policy(t, "c1", "o1", "ws-1").unwrap();
+        assert_eq!(out, "controllers = [\"c1\"]\nowners = [\"o1\"]\nworkspaces = [\"ws-1\"]\n");
+        let e = render_signer_policy("x = \"@OWNER@\"\n", "c", "o", "w").unwrap_err();
+        assert!(e.contains("@OWNER@"), "{e}");
     }
 
     #[test]

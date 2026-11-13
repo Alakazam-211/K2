@@ -586,3 +586,70 @@ fn a_key_the_signer_does_not_hold_gets_a_verdict_only() {
     let a = audit_lines(&r.dir.join(format!("var/k2sign/k2-signer/audit/acme-desktop/{VERSION}")));
     assert!(a.contains("\tVERDICT-OK\t") && a.contains("\tREFUSED-VERDICT\t"), "{a}");
 }
+
+/// BA-46: the prepared setup file. Without its sha256 apply-setup only shows
+/// every statement (full fingerprints to compare); with it, it pins the
+/// owner, installs the policy and accepts the roster's keys, each through
+/// the admin verb it stands for. A roster another key signed, a policy that
+/// doesn't name the setup's owner, or an unpaired controller is refused.
+#[test]
+fn apply_setup_shows_then_applies_one_prepared_file() {
+    let r = root();
+    let w = World::new();
+    let b = w.build(w.spec());
+    let setup = |roster: &k2_node_proto::ci::Signed, policy: &str, project: &str, adopt: bool| {
+        serde_json::json!({
+            "kind": "k2-signer-setup", "v": 1, "project": project, "created_at": NOW - 60,
+            "controller_fp": w.controller.fingerprint(), "adopt_k2sign": adopt,
+            "owner": {"id": "owner.example", "fp": w.owner_fp, "key": w.owner.public().encode()},
+            "policy": policy, "roster": roster,
+        })
+        .to_string()
+    };
+    let write = |name: &str, text: &str| {
+        let p = r.dir.join(name);
+        std::fs::write(&p, text).unwrap();
+        (p.to_str().unwrap().to_string(), sha256_hex(text.as_bytes()))
+    };
+    let policy = w.policy_text(TEST_PUB);
+    let (path, sha) = write("setup.json", &setup(&b.rosters[0], &policy, "acme-desktop", false));
+
+    // Not paired yet: shown as a missing step, and applying is refused.
+    let show = ok(run(&r.admin, "apply-setup", &[&path], b"", None));
+    assert!(show.contains("NOT paired") && show.contains(&sha), "{show}");
+    assert!(show.contains(&w.owner_fp) && show.contains("COMPARE"), "the full owner fingerprint to compare: {show}");
+    for n in ["node-a", "node-b", "node-c"] {
+        assert!(show.contains(&w.fp(n)), "{n}'s full key: {show}");
+    }
+    assert!(show.contains("+ version = 1"), "the policy as a diff: {show}");
+    assert!(!r.dir.join("usr/local/etc/k2-signer/projects/acme-desktop.toml").exists(), "showing installs nothing");
+    refused(run(&r.admin, "apply-setup", &[&path, &sha], b"", None), "is not paired with this signer");
+    assert!(Trust::load(&r.admin).unwrap().owners.is_empty(), "nothing applied before the controller check");
+
+    pair(&r, &w.controller);
+    refused(run(&r.admin, "apply-setup", &[&path, &"0".repeat(64)], b"", None), "nothing applied");
+    ok(run(&r.admin, "apply-setup", &[&path, &sha], b"", None));
+    let t = Trust::load(&r.admin).unwrap();
+    assert_eq!(t.owners[&w.owner_fp].label, "owner.example");
+    assert_eq!(t.owners[&w.owner_fp].accepted.len(), 3);
+    let v: Value = serde_json::from_str(&ok(run(&r.signer, "preflight", &["acme-desktop"], b"", None))).unwrap();
+    assert_eq!(v["accepted_keys"].as_array().unwrap().len(), 3);
+    // Applying the same file again changes nothing.
+    let again = ok(run(&r.admin, "apply-setup", &[&path], b"", None));
+    assert!(again.contains("already paired") && again.contains("already pinned") && again.contains("unchanged") && again.contains("0 to accept"), "{again}");
+    ok(run(&r.admin, "apply-setup", &[&path, &sha], b"", None));
+
+    // Refusals before anything is shown.
+    let mut other = w.spec();
+    other.roster_signer_is_owner2 = true;
+    let ob = w.build(other);
+    let (p2, _) = write("setup-other.json", &setup(&ob.rosters[0], &policy, "acme-desktop", false));
+    refused(run(&r.admin, "apply-setup", &[&p2], b"", None), "another roster key");
+    let (p3, _) = write("setup-policy.json", &setup(&b.rosters[0], &policy.replace(&w.owner_fp, &w.owner2_fp), "acme-desktop", false));
+    refused(run(&r.admin, "apply-setup", &[&p3], b"", None), "doesn't name its owner's key");
+    let (p4, _) = write("setup-adopt.json", &setup(&b.rosters[0], &policy, "acme-desktop", true));
+    refused(run(&r.admin, "apply-setup", &[&p4], b"", None), "only for project k2");
+    // An admin verb only.
+    assert!(matches!(run(&r.signer, "apply-setup", &[&path], b"", None), Err(Fail::Usage(_))));
+    assert!(std::fs::read_to_string(r.dir.join("usr/local/etc/k2-signer/private/audit/signatures.tsv")).unwrap().contains("\tSETUP-APPLIED\t"));
+}

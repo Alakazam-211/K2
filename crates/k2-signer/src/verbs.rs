@@ -23,6 +23,7 @@
 //!   pair-begin [<label>]   pair-reveal (the server's offer on stdin)   pair-accept <sas>   unpair <fp>
 //!   pairing-pins <project> required|optional
 //!   set-approver </abs/approver.pem>            adopt-k2sign
+//!   apply-setup </abs/setup.json> [<sha256>]   (k2 ci setup --plan's file: no sha = show every statement)
 //!   generate-key <project> <slot>               import-key <project> <slot> </abs/key> (password on stdin)
 //!   set-gh-token <project>                      (token on stdin)
 //!   clear-evidence <project> <version>          repin
@@ -99,6 +100,7 @@ pub fn admin_verbs() -> BTreeMap<&'static str, Verb> {
     m.insert("unpair", admin_unpair);
     m.insert("set-approver", admin_set_approver);
     m.insert("adopt-k2sign", admin_adopt_k2sign);
+    m.insert("apply-setup", admin_apply_setup);
     m.insert("generate-key", admin_generate_key);
     m.insert("import-key", admin_import_key);
     m.insert("set-gh-token", admin_set_gh_token);
@@ -1315,6 +1317,238 @@ fn admin_adopt_k2sign(env: &Env, args: &[String]) -> R<Vec<u8>> {
     let mut out = report.join("\n");
     out.push('\n');
     Ok(out.into_bytes())
+}
+
+// ── apply-setup (BA-46) ────────────────────────────────────────────────
+
+/// The setup file `k2 ci setup --plan` writes: every statement a project's
+/// signer needs, prepared from the client server's real state, so the
+/// person's part is reading them, comparing fingerprints and running one
+/// command. Nothing in it is trusted because it is in the file: the roster
+/// verifies with the owner key the file names (which the person compares
+/// with the owner's own screen), and the policy is shown as a diff.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupFile {
+    pub kind: String,
+    pub v: u32,
+    pub project: String,
+    pub created_at: i64,
+    /// The client server that builds the project (its tunnel key's fp).
+    pub controller_fp: String,
+    /// Project `k2` only: take the controller pin k2sign already holds.
+    #[serde(default)]
+    pub adopt_k2sign: bool,
+    pub owner: SetupOwner,
+    /// The project's policy TOML, as the person approves it.
+    pub policy: String,
+    /// The owner's newest signed node roster the client server holds.
+    pub roster: Signed,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupOwner {
+    /// The owner's server name (`k2 compute owners`).
+    pub id: String,
+    /// The node-roster key's fingerprint.
+    pub fp: String,
+    /// `ed25519:<base64>`.
+    pub key: String,
+}
+
+pub const SETUP_KIND: &str = "k2-signer-setup";
+pub const SETUP_V: u32 = 1;
+
+/// The checks a setup file passes before anything is shown or applied.
+fn parse_setup(raw: &[u8]) -> R<(SetupFile, SignerPolicy, NodeRoster, ApprovalKey)> {
+    let f: SetupFile = serde_json::from_slice(raw).map_err(|e| Fail::Refused(format!("the setup file: {e}")))?;
+    if f.kind != SETUP_KIND || f.v != SETUP_V {
+        return refused(format!("the setup file is {} v{}, not {SETUP_KIND} v{SETUP_V}", f.kind, f.v));
+    }
+    policy::check_project_name(&f.project)?;
+    if f.adopt_k2sign && f.project != "k2" {
+        return refused("adopt_k2sign is only for project k2 (k2sign's controller pin)");
+    }
+    if !k2_node_proto::ci::is_fp(&f.controller_fp) || !k2_node_proto::ci::is_fp(&f.owner.fp) {
+        return refused("the setup file's controller and owner fingerprints are 64 lowercase hex");
+    }
+    let key = ApprovalKey::parse(&f.owner.key).ok_or_else(|| Fail::Refused("the setup file's owner key is not ed25519:<base64>".into()))?;
+    if key.fingerprint() != f.owner.fp {
+        return refused(format!("the setup file's owner key has fingerprint {}, not the {} it names", key.fingerprint(), f.owner.fp));
+    }
+    let pol = policy::parse(&f.policy, &f.project)?;
+    if !pol.controllers.contains(&f.controller_fp) {
+        return refused(format!("the setup's policy doesn't name its controller {}…", &f.controller_fp[..16]));
+    }
+    if !pol.owners.contains(&f.owner.fp) {
+        return refused(format!("the setup's policy doesn't name its owner's key {}…", &f.owner.fp[..16]));
+    }
+    let peek: NodeRoster = f.roster.peek(k2_node_proto::ci::DOMAIN_NODE_ROSTER).map_err(Fail::Refused)?;
+    if peek.key_fp().ok().as_deref() != Some(f.owner.fp.as_str()) {
+        return refused(format!("the setup's roster is not {}'s (another roster key)", f.owner.id));
+    }
+    let roster = NodeRoster::open(&f.roster, &key).map_err(|e| Fail::Refused(format!("the setup's roster: {e}")))?;
+    Ok((f, pol, roster, key))
+}
+
+/// `apply-setup </abs/setup.json> [<sha256>]`: without the sha, every
+/// statement in plain words (full fingerprints, to compare with the owner's
+/// screen and each node's); with the file's sha256, apply them in order:
+/// adopt k2sign's controller pin (project k2), pin the owner, install the
+/// policy, accept the roster's node keys. Each step is the admin verb it
+/// stands for, with that verb's own checks and audit line.
+fn admin_apply_setup(env: &Env, args: &[String]) -> R<Vec<u8>> {
+    if args.is_empty() || args.len() > 2 {
+        return usage("apply-setup </abs/setup.json> [<sha256 of the file, from the first run>]");
+    }
+    let ctx = env.ctx;
+    ctx::check_pins(ctx)?;
+    let raw = read_abs_file(&args[0], 4 << 20)?;
+    let sha = ctx::sha256_hex(&raw);
+    let (f, pol, roster, key) = parse_setup(&raw)?;
+    let t = Trust::load(ctx)?;
+    let paired = t.controllers.contains_key(&f.controller_fp);
+    let pinned = t.owners.get(&f.owner.fp);
+    if let Some(o) = pinned {
+        if o.key != key.encode() {
+            return Err(Fail::Internal("two keys with one fingerprint".into()));
+        }
+    }
+    let old_policy = std::fs::read_to_string(policy::policy_path(ctx, &f.project)?).unwrap_or_default();
+    let policy_changes = old_policy != f.policy;
+    let accepted = pinned.map(|o| o.accepted.clone()).unwrap_or_default();
+    let ever_revoked = |fp: &str| pinned.is_some_and(|o| o.revoked.contains(fp));
+    let digest = f.roster.digest();
+    let mut node_lines = Vec::new();
+    let mut new_keys = 0usize;
+    for e in &roster.entries {
+        let known = accepted.get(&e.node_fp).is_some_and(|a| a.covers(e));
+        let revoked = e.status == k2_node_proto::ci::KeyStatus::Revoked || ever_revoked(&e.node_fp);
+        let tag = if revoked {
+            "revoked (never accepted)"
+        } else if known {
+            "already accepted"
+        } else if accepted.contains_key(&e.node_fp) {
+            "CHANGED, to accept"
+        } else {
+            "NEW, to accept"
+        };
+        if !known && !revoked {
+            new_keys += 1;
+        }
+        node_lines.push(format!(
+            "     {} {}\n       key {}\n       host {}, provider {}, site {}, root held by {}, vouched {:?}",
+            e.name,
+            tag,
+            e.node_fp,
+            e.host,
+            e.provider.as_deref().unwrap_or("-"),
+            e.site.as_deref().unwrap_or("-"),
+            if e.admin_reach.is_empty() { "-".to_string() } else { e.admin_reach.join(", ") },
+            e.taint_basis
+        ));
+    }
+    let Some(confirm) = args.get(1) else {
+        let mut out = vec![format!("Setup for project {} (file sha256 {sha}), {} statements:", f.project, 4)];
+        out.push(format!(
+            "1. Controller (the server that builds {}): {}\n   {}",
+            f.project,
+            f.controller_fp,
+            if paired {
+                "already paired".to_string()
+            } else if f.adopt_k2sign {
+                "to adopt from k2sign's controller pin (refused if k2sign pins another; then pair it: pair-begin)".to_string()
+            } else {
+                "NOT paired: pair it first (sudo k2-signer-admin pair-begin, then k2 ci signer add on that server)".to_string()
+            }
+        ));
+        out.push(format!(
+            "2. Trust build machines owned by {}: node-roster key fingerprint\n   {}\n   {}",
+            f.owner.id,
+            f.owner.fp,
+            if pinned.is_some() { "already pinned" } else { "COMPARE with `k2 compute roster key` on the owner's own screen" }
+        ));
+        if policy_changes {
+            out.push(format!(
+                "3. Signing rules for {} (sha256 {}), the change:\n{}",
+                f.project,
+                ctx::sha256_hex(f.policy.as_bytes()),
+                policy::diff(&old_policy, &f.policy).lines().map(|l| format!("   {l}")).collect::<Vec<_>>().join("\n")
+            ));
+        } else {
+            out.push(format!("3. Signing rules for {}: already installed, unchanged", f.project));
+        }
+        out.push(format!(
+            "4. Node keys from {}'s roster seq {} ({} to accept; roster_changes = {:?}). COMPARE each key with the node's own fingerprint:\n{}",
+            roster.owner_id,
+            roster.seq,
+            new_keys,
+            pol.roster_changes,
+            node_lines.join("\n")
+        ));
+        out.push(format!("To apply exactly these statements:\n  sudo k2-signer-admin apply-setup {} {sha}", args[0]));
+        let mut text = out.join("\n");
+        text.push('\n');
+        return Ok(text.into_bytes());
+    };
+    if *confirm != sha {
+        return refused(format!("that setup file's sha256 is {sha}, not the {confirm} you approved: nothing applied (run without the sha to see it)"));
+    }
+    let mut done = Vec::new();
+    let sub = |stdin: Vec<u8>| -> Box<dyn Fn(usize) -> R<Vec<u8>>> {
+        Box::new(move |lim: usize| {
+            if stdin.len() > lim {
+                return refused("too large");
+            }
+            Ok(stdin.clone())
+        })
+    };
+    let step = |verb: Verb, a: &[String], input: Vec<u8>| -> R<Vec<u8>> {
+        let read = sub(input);
+        let e = Env { ctx, stdin: &*read, forge: None, err: RefCell::new(Vec::new()) };
+        let r = verb(&e, a);
+        for l in e.err.into_inner() {
+            env.say(l);
+        }
+        r
+    };
+    if !paired && f.adopt_k2sign {
+        step(admin_adopt_k2sign, &[], Vec::new())?;
+        done.push("adopted k2sign's controller pin");
+    }
+    if !Trust::load(ctx)?.controllers.contains_key(&f.controller_fp) {
+        return refused(format!(
+            "controller {}… is not paired with this signer{}: pair it (sudo k2-signer-admin pair-begin, then k2 ci signer add on that server), then apply this setup again",
+            &f.controller_fp[..16],
+            if f.adopt_k2sign { " (k2sign pins no such controller)" } else { "" }
+        ));
+    }
+    if pinned.is_none() {
+        let mut a = vec![f.owner.fp.clone(), f.owner.key.clone()];
+        if k2_node_proto::ci::is_name(&f.owner.id) {
+            a.push(f.owner.id.clone());
+        }
+        step(admin_trust_owner, &a, Vec::new())?;
+        done.push("pinned the owner");
+    }
+    if policy_changes {
+        let psha = ctx::sha256_hex(f.policy.as_bytes());
+        step(admin_policy_approve, &[f.project.clone(), psha], f.policy.clone().into_bytes())?;
+        done.push("installed the policy");
+    }
+    if new_keys > 0 || roster.entries.iter().any(|e| e.status == k2_node_proto::ci::KeyStatus::Revoked) {
+        let body = serde_json::to_vec(&f.roster).map_err(|e| Fail::Internal(e.to_string()))?;
+        step(admin_roster_accept, &[f.owner.fp.clone(), digest.clone()], body)?;
+        done.push("accepted the roster's node keys");
+    }
+    admin_audit(ctx, "SETUP-APPLIED", &format!("{}; file {sha}; {}", f.project, if done.is_empty() { "nothing new".to_string() } else { done.join(", ") }))?;
+    env.say(format!(
+        "setup for {} applied: {}",
+        f.project,
+        if done.is_empty() { "nothing was new".to_string() } else { done.join(", ") }
+    ));
+    Ok(Vec::new())
 }
 
 fn new_key_files(ctx: &Ctx, project: &str, slot: &str) -> R<(std::path::PathBuf, std::path::PathBuf)> {

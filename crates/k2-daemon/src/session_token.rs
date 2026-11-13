@@ -873,6 +873,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/ci/release",
         "/cli/ci/run",
         "/cli/ci/stats",
+        // BA-46: prepares the signer setup file; applying it is a person's.
+        "/cli/ci/setup",
         "/cli/ci/status",
         // prd-compute-blacksmith-class-v1 T1: its own workspace's test history.
         "/cli/ci/tests",

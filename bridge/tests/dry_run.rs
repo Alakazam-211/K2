@@ -1,4 +1,4 @@
-//! Test 4: the run and the dry run. A dry run opens, reads the guard, plans, applies and saves
+//! The run and the dry run. A dry run opens, reads the guard, plans, applies and saves
 //! into nowhere: the file's bytes and guard are as they were, the answer says it was a dry run,
 //! its echo's version is the guard read, and `would_write` is what a real save then writes. Every
 //! refusal a real run gives, the dry run gives too, with the same row and exit: on open, on the

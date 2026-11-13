@@ -1,5 +1,5 @@
-//! Test 2: every refusal code and variant maps to exactly one row, as ruled; the two conflicts the
-//! board crate can't give are a host bug, never a row. Test 6: each row's exit, as ruled.
+//! Every refusal code and variant maps to exactly one row, as ruled; the two conflicts the board
+//! crate can't give are a host bug, never a row. And each row's exit, as ruled.
 
 mod support;
 
@@ -18,8 +18,8 @@ use support::*;
 
 const FILE: [Phase; 2] = [Phase::Open, Phase::GuardRead];
 
-/// The ruled row of a format refusal (§7.2, and the rulings of 11-04): the file's rows when it
-/// was read from the file, the caller's when it was in their input or a write.
+/// The ruled row of a format refusal: the file's rows when it was read from the file, the
+/// caller's when it was in their input or a write.
 fn ruled(code: &str, phase: Phase) -> &'static str {
     let file = FILE.contains(&phase);
     let input_json = if phase == Phase::Ops {
@@ -470,7 +470,7 @@ fn every_verb_a_board_row_names_is_a_pack_verb() {
     }
 }
 
-/// Test 6: each row's exit, as ruled (§7.2; E858 and E859, 11-04).
+/// Each row's exit, as ruled.
 #[test]
 fn every_row_exits_as_ruled() {
     let ruled = [

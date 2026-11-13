@@ -1,4 +1,4 @@
-//! Test 5: a call's JSON. A refusal is the kit's report whole, plus `code` (the row's name) and the
+//! A call's JSON. A refusal is the kit's report whole, plus `code` (the row's name) and the
 //! echo under `on` (kind, path, version, mode `file`); one refusal for each exit class the board's
 //! rows give. A host bug has no row, so no id and no exit. An answer is the echo, whether it was a
 //! dry run, and the value. Board values in either print as `read` gives them: 12.5, and -0.0 as 0.
@@ -152,7 +152,7 @@ fn an_answer_is_the_echo_the_dry_run_flag_and_the_value() {
 }
 
 /// Through the JSON path: a refusal's `theirs` and `read`'s answer print the same numbers, 12.5 as
-/// 12.5 and -0.0 as 0, never `-0`. (B2's `values.rs` holds the report against `read` itself.)
+/// 12.5 and -0.0 as 0, never `-0`. (`tests/values.rs` holds the report against `read` itself.)
 #[test]
 fn the_json_prints_board_numbers_as_read_does() {
     let mut b = board();

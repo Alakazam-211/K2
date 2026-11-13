@@ -1,4 +1,4 @@
-//! Test 3: the file registry `capabilities` lists. Every file verb the board crate has, in
+//! The file registry `capabilities` lists. Every file verb the board crate has, in
 //! `verbs::ARGS` order, and no other; each as a file verb, of its kind; its exits 0, those of
 //! every `@file` row that names it, and the usage refusals' (MPC-E120, MPC-E122), which the
 //! bridge's parser gives for any verb; the parity rows it serves, from `parity::ROWS`. Built once.

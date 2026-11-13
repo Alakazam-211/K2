@@ -1287,3 +1287,27 @@ async fn the_mover_skips_a_node_full_of_other_servers_jobs_and_says_why() {
     compute_ws::test_detach("fl-a");
     compute_ws::test_detach("fl-b");
 }
+
+/// V71's hold: an auto job waits on this server a while for a node that
+/// can start it now. A shared node with every slot taken by other servers'
+/// jobs can't, though this server's share there is empty and no quote
+/// says otherwise: the job waits here (`any_hold`, so the mover may still
+/// take it elsewhere) and goes in once a slot frees.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_auto_job_holds_on_this_server_while_the_shared_node_is_full() {
+    let env = setup();
+    k2_core::compute::retry::set_tuning_for_tests(k2_core::compute::retry::Tuning { tick_millis: 3_600_000, any_hold_secs: 600, ..Default::default() });
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "anyhold");
+    active_node("ah-a", "ah-a", "linux", &ws);
+    let mut a = compute_ws::test_attach("ah-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 2, Some(view(Role::Tenant, 0, 0))));
+    let r = run(d.port, OWNER, json!({"any": true, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    assert!(assigns(&a.frames()).is_empty(), "2 of 2 slots run other servers' jobs: not into its queue yet");
+    let rj = row(&job);
+    assert_eq!((rj.node_id.as_str(), rj.state.as_str(), rj.reason.as_deref()), ("ah-a", "queued", Some("any_hold")), "{rj:?}");
+    compute_ws::test_frame("ah-a", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 0)))));
+    assert_eq!(assigns(&a.frames()).iter().map(|x| x.0.clone()).collect::<Vec<_>>(), vec![job.clone()], "a slot is free: sent");
+    compute_ws::test_detach("ah-a");
+}

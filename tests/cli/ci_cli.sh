@@ -66,7 +66,7 @@ n="$(printf '%s\n' "$study" | wc -l | tr -d ' ')"
 if [ "$n" -le 110 ]; then ok "study ci is bounded ($n lines)"; else bad "study ci is $n lines (max 110)"; fi
 has "catalog row" "$("$K2" study)" "  ci                  CI on compute: .k2/ci.toml, k2 ci run/watch, GitHub statuses"
 schema="$("$K2" --schema)"
-python3 -c 'import json,sys; v=json.loads(sys.argv[1]); c=[x for x in v["commands"] if x["name"]=="ci"]; assert len(c)==1 and "k2 study ci" in c[0]["description"], c' "$schema" && ok "schema has ci" || bad "schema has ci"
+python3 -c 'import json,sys; v=json.load(sys.stdin); c=[x for x in v["commands"] if x["name"]=="ci"]; assert len(c)==1 and "k2 study ci" in c[0]["description"], c' <<<"$schema" && ok "schema has ci" || bad "schema has ci"
 
 # ── the stub daemon ──────────────────────────────────────────────────
 REQ_LOG="$WORK/requests.log"

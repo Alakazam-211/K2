@@ -439,9 +439,12 @@ grep -q -- '--html' "$WORK/out" && ok "show --help documents --html" || bad "sho
 set +e
 schema="$(env -i PATH="$PATH" HOME="$EMPTY_HOME" "$K2_CLI" --schema 2>/dev/null)"
 set -e
-if python3 - "$schema" <<'PY'
+# In a file, not an argument: the schema is over 128 KiB, the most Linux
+# takes in one argument, and python3 was never started there.
+printf '%s' "$schema" > "$WORK/schema.json"
+if python3 - "$WORK/schema.json" <<'PY'
 import json, sys
-d = json.loads(sys.argv[1])
+d = json.load(open(sys.argv[1]))
 cmds = {c["name"]: c for c in d["commands"]}
 assert any(f["name"] == "--html" for f in cmds["feedback ask"]["flags"]), "ask --html"
 assert any(f["name"] == "--html" for f in cmds["feedback show"]["flags"]), "show --html"

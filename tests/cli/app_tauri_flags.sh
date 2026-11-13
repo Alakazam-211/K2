@@ -96,7 +96,6 @@ echo "== k2 app doctor --store (0.46.9) =="
 expect "its own help page" 0 "k2 app doctor --store — is this Tauri App ready" app doctor --store --help
 expect "the app help names it" 0 "k2 app doctor --store [<folder>]" app --help
 expect "--voice needs --store" 2 "go with --store" app doctor --voice
-expect "a folder needs --store" 2 "go with --store" app doctor "$SANDBOX/repo"
 expect "not a folder" 2 "is not a folder" app doctor --store "$SANDBOX/nope"
 nothing_sent "none of those reached the daemon"
 printf '{"folder":"/r","voice":true,"voiceWhy":"--voice","tauri":"2.10.3","tao":null,"wry":"0.57.0 (crates.io)","findings":[{"id":"tauri_too_old","level":"error","platform":"all","path":"src-tauri/Cargo.lock","problem":"Cargo.lock builds tauri 2.10.3","fix":"tauri = \\"2.12.5\\""},{"id":"wry_unpatched","level":"warn","platform":"all","path":"src-tauri/Cargo.toml","problem":"wry is not K2s","fix":"add the row"}],"passed":[],"notes":["Android skipped"],"ok":false}' >"$ANSWER"

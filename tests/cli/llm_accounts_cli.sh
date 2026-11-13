@@ -611,9 +611,14 @@ assert_absent "key never in stdout" "$out" "$API_KEY"
 assert_absent "key never in stderr" "$err_text" "$API_KEY"
 [ -s "$WORK/argv.log" ] && ok "argv wrappers saw the children" || bad "argv wrappers saw nothing"
 assert_absent "key never on any child's argv" "$(cat "$WORK/argv.log")" "$API_KEY"
-assert_eq "add-key is a POST" "$(last method)" "POST"
-assert_eq "add-key path" "$(last path)" "/cli/llm/accounts/add-key"
-assert_eq "add-key body carries the key" "$(last_body)" "{\"key\": \"$API_KEY\", \"label\": \"metered\", \"tool\": \"gemini\"}"
+# The request to the add-key route itself: since 0.46.11 the CLI asks
+# /cli/first-run/status afterwards (the Meet K5 hint), so the last request
+# is no longer this one.
+addkey_req="$(tail -n +"$((nreq_before + 1))" "$WORK/reqs.jsonl" | grep -F '"/cli/llm/accounts/add-key"' || true)"
+assert_eq "add-key made one request to its route" "$(printf '%s' "$addkey_req" | grep -c .)" "1"
+assert_eq "add-key is a POST" "$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['method'])" "$addkey_req")" "POST"
+assert_eq "add-key path" "$(python3 -c "import json,sys; print(json.loads(sys.argv[1])['path'])" "$addkey_req")" "/cli/llm/accounts/add-key"
+assert_eq "add-key body carries the key" "$(python3 -c "import json,sys; print(json.dumps(json.loads(json.loads(sys.argv[1])['body']), sort_keys=True))" "$addkey_req")" "{\"key\": \"$API_KEY\", \"label\": \"metered\", \"tool\": \"gemini\"}"
 python3 - "$WORK/reqs.jsonl" "$API_KEY" <<'PY' && ok "key only ever in the add-key JSON body" || bad "key leaked outside the add-key body"
 import json, sys
 for line in open(sys.argv[1]):

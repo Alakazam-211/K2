@@ -93,13 +93,15 @@ assert_eq "catalog: usage is an id tool" "$(_cli_tool_default_mode usage)" "id"
 if _cli_tool_is_locked usage; then ok "catalog: usage is locked"; else bad "catalog: usage is locked"; fi
 
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
+# From stdin, not an argument: the schema is over 128 KiB, the most Linux
+# takes in one argument, and python3 was never started there.
 python3 -c '
 import json, sys
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 names = {c["name"] for c in d["commands"]}
 for n in ("usage tokens", "usage turns", "usage limits"):
     assert n in names, n
-' "$schema" && ok "schema lists usage verbs" || bad "schema usage verbs"
+' <<<"$schema" && ok "schema lists usage verbs" || bad "schema usage verbs"
 
 # ── 2. stub daemon ───────────────────────────────────────────────────
 echo "== stub daemon =="

@@ -17,8 +17,9 @@
 // `setProjectColor`); name `workspace/set-agent-display-name`; handle
 // `workspace/set-handle` (Member floor for Connect logins, like the rest).
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { emit } from '@tauri-apps/api/event'
+import { chamferCutFor } from '@/components/Thread/chamfer'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'
 import { agentDisplayName, agentHandle, setAgentDisplayName, setAgentHandle } from '@/lib/workspace-agent'
@@ -51,7 +52,10 @@ const BUTTON_DANGER =
 
 // ── Picture ──────────────────────────────────────────────────────────────
 
-/** The agent's picture tile: the image, or the first letter on its color. */
+/** The agent's picture tile: the image, or the first letter on its color.
+ *  Shaped like every other agent picture (`ProjectAvatar`): a circle in
+ *  Glass (`data-k2-avatar`), Terminal's cut sized to the tile
+ *  (`data-k2-chamfer="surface"`, `chamferCutFor`). */
 export function AgentPictureTile({
   project,
   size,
@@ -63,12 +67,17 @@ export function AgentPictureTile({
     <div
       className="flex-shrink-0 flex items-center justify-center overflow-hidden"
       data-testid="agent-picture-tile"
+      data-k2-chamfer="surface"
+      data-k2-avatar=""
       style={{
+        // `--k2-ch-bw` tells the cut's diagonal how thick the edge is.
+        '--k2-ch-cut': `${chamferCutFor(size)}px`,
+        '--k2-ch-bw': project.iconUrl ? '2px' : '0px',
         width: size,
         height: size,
         backgroundColor: project.iconUrl ? 'transparent' : project.color,
         border: project.iconUrl ? `2px solid ${project.color}` : 'none',
-      }}
+      } as CSSProperties}
     >
       {project.iconUrl ? (
         <img
@@ -314,18 +323,28 @@ export function AgentColorPicker({
 
   const swatches = (
     <div className={`flex items-center gap-1.5 flex-wrap min-w-0 ${compact ? '' : 'justify-end'}`}>
+      {/* The Settings card's swatch, drawer-sized: a circle in Glass
+          (`--radius-pill`), Terminal's chip cut (`data-k2-chamfer="chip"`).
+          Selected is the same check; the keyboard ring follows the shape
+          (k2-focus in Glass, the cut ring in Terminal). */}
       {GROUP_AVATAR_COLORS.map((color) => (
         <button
           key={color}
           type="button"
           title={color}
           aria-label={`Color ${color}`}
+          aria-pressed={project.color === color}
           onClick={() => apply(color)}
-          className={`w-4 h-4 flex-shrink-0 no-drag cursor-pointer transition-transform ${
-            project.color === color ? 'scale-125 ring-1 ring-[color-mix(in_srgb,var(--color-text-primary)_50%,transparent)]' : 'hover:scale-110'
-          }`}
+          data-k2-chamfer="chip"
+          className="k2-focus w-5 h-5 flex-shrink-0 flex items-center justify-center rounded-[var(--radius-pill)] border-transparent no-drag cursor-pointer transition-transform hover:scale-110"
           style={{ backgroundColor: color }}
-        />
+        >
+          {project.color === color && (
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="var(--color-on-accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M3 8.5l3.2 3.2L13 5" />
+            </svg>
+          )}
+        </button>
       ))}
       <input
         type="text"

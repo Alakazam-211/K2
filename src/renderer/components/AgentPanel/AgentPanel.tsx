@@ -174,7 +174,12 @@ export default function AgentPanel(): React.JSX.Element {
           <AgentColorPicker project={project} compact />
         ) : (
           <div className="flex items-center gap-2">
-            <span className="w-4 h-4 flex-shrink-0" style={{ backgroundColor: project.color }} />
+            <span
+              data-k2-chamfer="chip"
+              data-testid="agent-color-chip"
+              className="w-5 h-5 flex-shrink-0 rounded-[var(--radius-pill)] border-transparent"
+              style={{ backgroundColor: project.color }}
+            />
             <span className="text-[11px] font-mono text-[var(--color-text-secondary)]">{project.color}</span>
           </div>
         )}

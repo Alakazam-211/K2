@@ -253,6 +253,42 @@ describe('Agent tab: a local agent (the window’s room)', () => {
     )
   })
 
+  // Rosson 2026-11-13: the drawer's picture and swatches were plain squares.
+  // They take the house shapes: the picture is an avatar (a circle in Glass,
+  // Terminal's surface cut sized to the tile, as ProjectAvatar), the swatches
+  // are the Settings swatch (a pill in Glass, Terminal's chip cut), with the
+  // selected check and the shared focus ring instead of a square ring.
+  it('the picture and swatches use the house avatar and swatch shapes', () => {
+    renderPrimary(project({ iconUrl: 'data:image/png;base64,AAAA' }))
+    const tile = screen.getByTestId('agent-picture-tile')
+    expect(tile.hasAttribute('data-k2-avatar')).toBe(true)
+    expect(tile.getAttribute('data-k2-chamfer')).toBe('surface')
+    expect(tile.style.getPropertyValue('--k2-ch-cut')).toBe('5px')
+    expect(tile.style.getPropertyValue('--k2-ch-bw')).toBe('2px')
+
+    const swatches = screen.getAllByRole('button', { name: /^Color #/ })
+    expect(swatches).toHaveLength(8)
+    for (const s of swatches) {
+      expect(s.getAttribute('data-k2-chamfer')).toBe('chip')
+      expect(s.className).toContain('rounded-[var(--radius-pill)]')
+      expect(s.className).toContain('k2-focus')
+      expect(s.className).not.toMatch(/\bring-/)
+    }
+    const picked = screen.getByRole('button', { name: 'Color #3b82f6' })
+    expect(picked.getAttribute('aria-pressed')).toBe('true')
+    expect(picked.querySelector('svg')).not.toBeNull()
+    const other = screen.getByRole('button', { name: 'Color #ef4444' })
+    expect(other.getAttribute('aria-pressed')).toBe('false')
+    expect(other.querySelector('svg')).toBeNull()
+  })
+
+  it('a letter tile has no edge, so the cut draws no diagonal', () => {
+    renderPrimary()
+    const tile = screen.getByTestId('agent-picture-tile')
+    expect(tile.hasAttribute('data-k2-avatar')).toBe(true)
+    expect(tile.style.getPropertyValue('--k2-ch-bw')).toBe('0px')
+  })
+
   it('Remove clears the picture through projects/clear-icon', async () => {
     renderPrimary(project({ iconUrl: 'data:image/png;base64,AAAA' }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
@@ -379,6 +415,10 @@ describe('Agent tab: a room on another server', () => {
     expect(screen.queryByLabelText('Agent Name')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Upload' })).toBeNull()
     expect(screen.getByText('#22c55e')).toBeTruthy()
+    const chip = screen.getByTestId('agent-color-chip')
+    expect(chip.getAttribute('data-k2-chamfer')).toBe('chip')
+    expect(chip.className).toContain('rounded-[var(--radius-pill)]')
+    expect(screen.getByTestId('agent-picture-tile').hasAttribute('data-k2-avatar')).toBe(true)
 
     const manage = sw('projects.agents-can-manage-agents')
     expect(manage.disabled).toBe(true)

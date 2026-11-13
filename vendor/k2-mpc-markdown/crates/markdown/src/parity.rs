@@ -17,7 +17,7 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
         P::Find => ParityRow::live(a, &["grep"]),
         P::Who => ParityRow::live(a, &["who", "activity"]),
         P::Follow => ParityRow::live(a, &["follow"]),
-        // saying what I'm working on (K-PRES-12) is `claim` (base v0.7.0)
+        // saying what I'm working on is `claim` (base v0.7.0)
         P::Caret => ParityRow::live(a, &["cursor", "claim", "claim --renew", "claim --release"]),
         P::Type => ParityRow::live(a, &["insert"]),
         P::TypeOver => ParityRow::live(a, &["replace"]),
@@ -40,8 +40,8 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
             &[
                 "comment", "reply", "resolve", "suggest", "accept", "reject", "comments",
             ],
-            "M5",
-            "the kit's annotation layer (K-ANN-1..7)",
+            "the kit's annotation layer",
+            "the kit has no annotation layer yet",
         ),
         // kit v0.9.7: the kit exports (`export`, `export --version`: the file through the
         // export registry; as-is in the kit, format exporters in the host)
@@ -51,13 +51,13 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
         P::Mention => ParityRow::deferred(
             a,
             &["comment"],
-            "M5",
-            "mentions ride on comments (K-ANN-1..7)",
+            "the kit's annotation layer",
+            "mentions ride on comments",
         ),
         P::Purge => ParityRow::deferred(
             a,
             &["purge"],
-            "the purge slice (K-PURGE-1..12)",
+            "the kit's purge verb",
             "redaction of history and revert records is not built",
         ),
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
@@ -70,7 +70,7 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
             &["lease", "lease --renew", "lease --release", "lease --break"],
             "a Markdown doc merges edits; leases are tier 0's",
         ),
-        // the grid tier's rows (P35-P44, base C1g): a Markdown doc has no rows or columns
+        // the grid tier's rows (P35-P44, kit v0.10.0): a Markdown doc has no rows or columns
         P::RowInsert
         | P::RowMove
         | P::RowDelete

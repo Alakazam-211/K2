@@ -1,4 +1,4 @@
-//! Agent parity for Markdown (K-PAR-1…3): every row of `docs/PARITY.md` through the kit's
+//! Agent parity for Markdown: every row of `docs/PARITY.md` through the kit's
 //! harness. Each person action runs the person's way (a tab, the session API) and the
 //! agent's way (registered verbs only), and the effects must match. Fails loudly on a
 //! missing verb, an unmapped row or any difference.
@@ -199,7 +199,7 @@ fn cases() -> Vec<Case> {
     ]
 }
 
-/// K-PAR-3: every row, the person's way and the agent's way.
+/// Every row, the person's way and the agent's way.
 #[test]
 fn agent_parity() {
     let t = Instant::now();
@@ -247,7 +247,7 @@ fn agent_parity() {
     );
 }
 
-/// K-PAR-2: the pack's registry has its own verb, serving P13, and covers every live row.
+/// The pack's registry has its own verb, serving P13, and covers every live row.
 #[test]
 fn registry_covers_actions() {
     let r = Registry::for_pack(&PACK).unwrap();
@@ -261,7 +261,7 @@ fn registry_covers_actions() {
     }
 }
 
-/// K-ADDR-4: every verb of the pack states its position units (`parity::positions::check`),
+/// Every verb of the pack states its position units (`parity::positions::check`),
 /// and `replace-section`'s is `--nth K`, the Kth of the pack's own sections.
 #[test]
 fn replace_section_declares_its_positions() {
@@ -274,7 +274,7 @@ fn replace_section_declares_its_positions() {
     );
 }
 
-/// K-ADDR-3: `replace-section` finds its positional address in a call, as the caller wrote
+/// `replace-section` finds its positional address in a call, as the caller wrote
 /// it, and only `--nth` is one (a `--heading` value spelled `--nth` isn't).
 #[test]
 fn replace_section_finds_its_nth() {
@@ -294,9 +294,9 @@ fn replace_section_finds_its_nth() {
     assert_eq!(find(&["--heading", "--nth"]), None);
 }
 
-/// R-2 through the agent's path: an agent's `replace-section --nth 2` with no `--if-version`
-/// applies (this release's warn mode) with one warning that names the address and
-/// `positional_needs_version`; the same edit without `--nth` gets none.
+/// The positional warning through the agent's path: an agent's `replace-section --nth 2`
+/// with no `--if-version` applies (this release's warn mode) with one warning that names the
+/// address and `positional_needs_version`; the same edit without `--nth` gets none.
 #[test]
 fn an_agents_nth_without_a_version_is_warned() {
     fn nth_warned(a: &mut Agent<'_>) -> R {
@@ -398,7 +398,7 @@ fn the_deferred_blame_row_now_fails() {
     rows[i] = ParityRow::deferred(
         PersonAction::Blame,
         &["blame"],
-        "C7b (the release after MD-v1)",
+        "a later release",
         "blame lands with its UI",
     );
     let f = parity::check_list(&rows, &registry, &cases());
@@ -439,7 +439,7 @@ fn a_wrong_section_is_a_mismatch() {
     );
 }
 
-/// K-PAR-1: `docs/PARITY.md` has a row for every action, in order, naming every verb the
+/// `docs/PARITY.md` has a row for every action, in order, naming every verb the
 /// data lists (and the data has a row for every action, by its exhaustive match).
 #[test]
 fn every_pack_has_a_table() {

@@ -89,6 +89,18 @@ fn child_serves_while_out_of_descriptors() {
 
     // Descriptors free again: the same listener serves the connection that waited.
     drop(filler);
+    // On macOS the one that waited is gone: the kernel takes a connection
+    // off the queue before it finds there is no descriptor for it, and
+    // drops it (Linux leaves it queued). So there the listener must serve
+    // the next connection instead; the caller's retry is what a client sees.
+    #[cfg(target_os = "macos")]
+    let mut c = {
+        use std::io::Write;
+        let gone = c.write_all(b"x").and_then(|()| c.flush());
+        let peer_gone = matches!(&gone, Err(e) if e.raw_os_error() == Some(libc::EPIPE));
+        assert!(peer_gone, "macOS drops a connection that waited through the shortage, got {gone:?}");
+        UnixStream::connect(&sock).expect("the listener stays up")
+    };
     c.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
     server::write_frame(&mut c, b"not a request").unwrap();
     let answer = server::read_frame(&mut c, 1 << 20).unwrap_or_else(|e| panic!("the waiting connection got no answer: {e}"));
@@ -122,5 +134,9 @@ fn an_executor_out_of_descriptors_pauses_logs_once_and_recovers() {
         .and_then(|s| s.split(' ').next())
         .and_then(|n| n.parse().ok())
         .unwrap_or_else(|| panic!("no count in: {}", accept_lines[1]));
-    assert!((2..=MOST_TRIES).contains(&tries), "tries in {SHORTAGE:?}: {tries}");
+    // Linux keeps the waiting connection queued, so every paused try fails
+    // again: at least two in the shortage. macOS drops it on the first
+    // failed accept, and with nothing queued the later tries don't fail.
+    let fewest = if cfg!(target_os = "macos") { 1 } else { 2 };
+    assert!((fewest..=MOST_TRIES).contains(&tries), "tries in {SHORTAGE:?}: {tries}");
 }

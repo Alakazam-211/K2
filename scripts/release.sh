@@ -553,6 +553,36 @@ k2_compute_ready() {
     fi
 }
 
+# The end of the release (K2_COMPUTE_FALLBACK=0 only): always before the
+# tag, so nothing committed, tagged or published.
+k2_compute_fatal() {
+    echo "" >&2
+    echo "  FATAL (K2 Compute, stage 1): $*" >&2
+    [ -n "$K2_SHADOW_STATE" ] && echo "  FATAL: audit: ${K2_SHADOW_STATE}/summary.txt" >&2
+    echo "  FATAL: nothing was pushed, tagged or published (K2_COMPUTE_FALLBACK=0). Fix it and re-run, or let GitHub build Linux:" >&2
+    if [ -f "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" ]; then
+        # The Mac build and notarization are done: reuse them.
+        echo "  FATAL:   K2_LINUX_BUILDS=github K2_RELEASE_RESUME=8 ./scripts/release.sh ${VERSION}   (8 = publish only; keeps this Mac build)" >&2
+    else
+        echo "  FATAL:   K2_LINUX_BUILDS=github ./scripts/release.sh ${VERSION}" >&2
+    fi
+    exit 1
+}
+
+# Files an earlier compute run staged in DIST_DIR go (only those, never
+# outside DIST_DIR), so an old build never rides along with a later release.
+k2_compute_unstage() {
+    # DIST_DIR is set at Step 8.5; before it nothing was staged this run.
+    [ -n "${DIST_DIR:-}" ] || return 0
+    local marker="$DIST_DIR/.compute-staged" f
+    [ -f "$marker" ] || return 0
+    while IFS= read -r f; do
+        case "$f" in ""|*/*) continue ;; esac
+        rm -f "$DIST_DIR/$f" "$DIST_DIR/$f.sig"
+    done < "$marker"
+    rm -f "$marker"
+}
+
 # Say it plainly, once: what goes to GitHub instead and why. <scope>: all
 # (x86_64 and aarch64) or arm (aarch64 only). Only ever before the tag.
 # K2_COMPUTE_FALLBACK=0: stop the release instead (nothing pushed yet).
@@ -668,22 +698,6 @@ k2_linux_builds_github_part() {
 k2_shadow_warn() {
     echo "  ⚠ shadow (K2 Compute): $*" >&2
     K2_SHADOW_NOTE="${K2_SHADOW_NOTE:+$K2_SHADOW_NOTE; }$*"
-}
-
-# The end of the release (K2_COMPUTE_FALLBACK=0 only): always before the
-# tag, so nothing committed, tagged or published.
-k2_compute_fatal() {
-    echo "" >&2
-    echo "  FATAL (K2 Compute, stage 1): $*" >&2
-    [ -n "$K2_SHADOW_STATE" ] && echo "  FATAL: audit: ${K2_SHADOW_STATE}/summary.txt" >&2
-    echo "  FATAL: nothing was pushed, tagged or published (K2_COMPUTE_FALLBACK=0). Fix it and re-run, or let GitHub build Linux:" >&2
-    if [ -f "$PROJECT_DIR/target/release/bundle/dmg/K2_${VERSION}_aarch64.dmg" ]; then
-        # The Mac build and notarization are done: reuse them.
-        echo "  FATAL:   K2_LINUX_BUILDS=github K2_RELEASE_RESUME=8 ./scripts/release.sh ${VERSION}   (8 = publish only; keeps this Mac build)" >&2
-    else
-        echo "  FATAL:   K2_LINUX_BUILDS=github ./scripts/release.sh ${VERSION}" >&2
-    fi
-    exit 1
 }
 
 # A K2 Compute problem with the x86_64 builds: GitHub builds all of Linux
@@ -803,20 +817,6 @@ k2_shadow_tree_check() {
         fi
     fi
     k2_linux_builds_set_var
-}
-
-# Files an earlier compute run staged in DIST_DIR go (only those, never
-# outside DIST_DIR), so an old build never rides along with a later release.
-k2_compute_unstage() {
-    # DIST_DIR is set at Step 8.5; before it nothing was staged this run.
-    [ -n "${DIST_DIR:-}" ] || return 0
-    local marker="$DIST_DIR/.compute-staged" f
-    [ -f "$marker" ] || return 0
-    while IFS= read -r f; do
-        case "$f" in ""|*/*) continue ;; esac
-        rm -f "$DIST_DIR/$f" "$DIST_DIR/$f.sig"
-    done < "$marker"
-    rm -f "$marker"
 }
 
 # Step 8.5 (compute): the verified Linux files go into DIST_DIR, where the

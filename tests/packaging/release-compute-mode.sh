@@ -463,6 +463,27 @@ rc="$(K2_COMPUTE_EXCLUSIVE=0 run_real real-c-noexcl "$FLOW")"
 [ "$rc" = 0 ] && grep -q AFTER "$tmp/out-real-c-noexcl" && grep -q "FALL BACK TO GITHUB" "$tmp/out-real-c-noexcl" && ! grep -q 'k2 compute run' "$tmp/calls-real-c-noexcl" \
     && pass "compute with K2_COMPUTE_EXCLUSIVE=0 (real lib): GitHub instead, nothing submitted" || fail "compute noexcl real" "rc=$rc $(cat "$tmp/out-real-c-noexcl")"
 
+echo "definition order:"
+# release.sh runs top to bottom: the pre-flight (its first top-level call)
+# runs k2_compute_fallback, so every compute-mode function must be defined
+# above that call. A function defined below it is "command not found" only
+# when the fallback runs (k2_compute_unstage did that once).
+python3 - "$REL" > "$tmp/order" <<'PY' && pass "every compute-mode function is defined above the pre-flight call" || fail "definition order" "$(cat "$tmp/order")"
+import re, sys
+s = open(sys.argv[1]).read().split("\n")
+call = next((i for i, l in enumerate(s) if l == "k2_linux_builds_preflight"), None)
+if call is None:
+    sys.exit("release.sh has no top-level k2_linux_builds_preflight call")
+defs = {m.group(1): i for i, l in enumerate(s) for m in [re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\(\) \{", l)] if m}
+late = sorted(n for n, i in defs.items() if i > call and n.startswith(("k2_compute_", "k2_linux_builds_", "k2_shadow_")))
+# What the pre-flight can reach: names called inside the functions defined above the call.
+body = "\n".join(l for l in s[:call] if not l.lstrip().startswith("#"))
+used = sorted(n for n in late if re.search(r"(^|[\s;(&|])%s($|[\s;)&|])" % re.escape(n), body, re.M))
+if used:
+    print("defined below the pre-flight call (line %d) but called by a function it can run: %s" % (call + 1, ", ".join(used)))
+    sys.exit(1)
+PY
+
 echo "syntax:"
 bash -n "$REL" && pass "bash -n release.sh" || fail "bash -n" "release.sh"
 

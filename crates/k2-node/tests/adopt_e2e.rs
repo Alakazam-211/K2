@@ -195,7 +195,15 @@ fn a_job_runs_across_a_node_restart_with_its_whole_output_exit_and_artifacts() {
         let spool: Vec<_> = std::fs::read_dir(layout.state().join("spool")).map(|r| r.flatten().map(|e| e.file_name()).collect()).unwrap_or_default();
         assert!(spool.is_empty(), "the output files go with the job: {spool:?}");
         assert!(!layout.state().join("hold").join("j1-g1").exists(), "the holder folder goes too");
-        let st = k2_node::status::read(&layout.status()).unwrap();
+        // The node rewrites status.json when its set of running jobs
+        // changes, which is just after it sends the receipt: wait for that
+        // write (it came late 1 run in 3 on a busy Mac node).
+        let rewritten = std::time::Instant::now() + Duration::from_secs(10);
+        let mut st = k2_node::status::read(&layout.status()).unwrap();
+        while !st.adopted.is_empty() && std::time::Instant::now() < rewritten {
+            std::thread::sleep(Duration::from_millis(50));
+            st = k2_node::status::read(&layout.status()).unwrap();
+        }
         assert!(st.adopted.is_empty(), "nothing adopted runs any more: {:?}", st.adopted);
         b.exit();
     }

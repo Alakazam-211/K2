@@ -54,7 +54,9 @@ pub use dsse::{Envelope, NodeKey};
 pub use statement::Statement;
 pub use verify::{verify, Input, Policy, Report, Verdict};
 
-// The README's Rust examples run as doctests.
+// The README's Rust examples compile as doctests (no_run: they read
+// tests/fixtures/, which the package doesn't ship; tests/example.rs checks
+// the same example through the CLI).
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 pub struct ReadmeDoctests;

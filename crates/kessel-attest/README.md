@@ -199,7 +199,7 @@ pass.
 The same check from Rust, on the worked example (paths are relative to the
 crate's folder):
 
-```rust
+```rust,no_run
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 

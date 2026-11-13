@@ -977,6 +977,9 @@ pub mod skip {
     pub const UNSUPPORTED_ON_OS: &str = "unsupported_on_os";
     /// Not on the job's `--only` list (0.46.9).
     pub const NOT_ONLY: &str = "not_only";
+    /// The node takes only jobs that name it
+    /// (`k2_core::compute::pinned_only`); auto-placement only.
+    pub const PINNED_ONLY: &str = "pinned_only";
     /// GPU jobs (0.46.11): `--gpu` where the node runs no GPU jobs for
     /// this server (or none of the asked vendor).
     pub const NO_GPU: &str = "no_gpu";
@@ -1062,14 +1065,16 @@ pub fn largest_job_mem(w: &Want, now: i64) -> Option<u64> {
 /// [`candidates_report`] without the package step (prewarm reports every
 /// node's package states itself and files one batched request).
 pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandReport {
-    let (rows, cache_at, waits, permit) = {
+    let (rows, cache_at, waits, permit, pinned_only) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let cache_at = w.cache.as_deref().and_then(|name| cache_node(&conn, &w.ws_id, name));
         // The workspace's node list (0.46.8): for every caller, named node
         // or auto, and every move.
         let permit = k2_core::compute::allow::permit(&conn, &w.ws_id);
-        (store::list_nodes(&conn, false), cache_at, SoloWaits::read(&conn, now), permit)
+        // The nodes that take only jobs that name them: for auto only.
+        let pinned_only = k2_core::compute::pinned_only::all(&conn);
+        (store::list_nodes(&conn, false), cache_at, SoloWaits::read(&conn, now), permit, pinned_only)
     };
     let feats = required_features(w);
     let mut out = CandReport::default();
@@ -1107,6 +1112,12 @@ pub fn candidates_report_raw(w: &Want, exclude: &[String], now: i64) -> CandRepo
         }
         if n.controller_pause.is_some() {
             skipped(&mut out, skip::PAUSED);
+            continue;
+        }
+        // A pinned-only node is never chosen for a job: only a job that
+        // names it goes there, and that caller is not `auto`.
+        if w.auto && pinned_only.holds(&n.id) {
+            skipped(&mut out, skip::PINNED_ONLY);
             continue;
         }
         if set_aside_until(&n.id, now).is_some() {
@@ -1628,6 +1639,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
         skip::PACKAGE_ASK => "that need their owner's approval for a sys: package".to_string(),
         skip::UNSUPPORTED_ON_OS => "Macs (no system packages)".to_string(),
         skip::NOT_ONLY => "off your --only list".to_string(),
+        skip::PINNED_ONLY => "pinned-only (they run only jobs that name them)".to_string(),
         skip::NO_GPU => "with no GPU jobs for you (--gpu)".to_string(),
         skip::GPU_NEEDS_GRANT => "with a GPU, but your grant there doesn't say --gpu".to_string(),
         skip::GPU_MEM_NEEDS_UPDATE => "with GPU jobs, but a k2-node too old for --gpu-mem".to_string(),

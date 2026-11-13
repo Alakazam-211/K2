@@ -27,6 +27,7 @@ pub mod lane_secrets;
 pub mod local;
 pub mod logs;
 pub mod message;
+pub mod pinned_only;
 pub mod pkgreq;
 pub mod result;
 pub mod retry;

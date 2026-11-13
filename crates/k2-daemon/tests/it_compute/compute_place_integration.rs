@@ -1623,6 +1623,73 @@ async fn move_to_pins_and_refuses_by_name_and_all_mine_releases_a_batch() {
     }
 }
 
+fn pinned_only(node: &str, on: bool) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::compute::pinned_only::set(&conn, node, on, "owner", 4).expect("pinned-only");
+}
+
+/// A pinned-only node: automatic placement never picks it at submit (no
+/// node named, or `--any`), the sweeper never moves a job there, and the
+/// refusal says why when it was the only node; a job that names it runs
+/// there; turned off, it is chosen again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pinned_only_node_takes_only_jobs_that_name_it() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "pno");
+    for n in ["p2n11-vin", "p2n12-vin"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let mut eleven = compute_ws::test_attach("p2n11-vin", offer(1, 30, 32, 0));
+    let _twelve = compute_ws::test_attach("p2n12-vin", one_slot_full(1));
+    let agent = passport(&me);
+    hold_one_slot(d.port, "p2n12-vin", &me, 2).await;
+    pinned_only("p2n11-vin", true);
+
+    // No node named: p2n11 is free and p2n12 is full, and the job still
+    // queues on p2n12. The record counts the pinned-only node.
+    let r = run(d.port, &agent, &me, json!({"memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = id_of(&r);
+    assert_eq!(node_of(&r), "p2n12-vin", "never the pinned-only node: {}", r.body);
+    let held = row(&job);
+    assert_eq!(held.ctl.placement.as_ref().map(|p| p.skipped.get("pinned_only").copied()), Some(Some(1)), "the record counts it");
+    // `--any` is automatic too.
+    let r = run(d.port, &agent, &me, json!({"any": true, "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "p2n12-vin", "--any never picks it either: {}", r.body);
+    // The sweeper never moves a waiting job to the free pinned-only node.
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(row(&job).node_id, "p2n12-vin", "never moved to the pinned-only node");
+    assert!(assigns(&mut eleven).is_empty(), "nothing was sent to it");
+
+    // A job that names it runs there.
+    let r = run(d.port, &agent, &me, json!({"node": "p2n11-vin", "memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "p2n11-vin");
+    assert_eq!(assigns(&mut eleven), vec![id_of(&r)], "the named job was sent to it");
+
+    // When every node is pinned-only, an automatic job is refused, with the reason.
+    pinned_only("p2n12-vin", true);
+    let before = job_count();
+    let r = run(d.port, &agent, &me, json!({"memBytes": GB})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
+    assert!(r.body.contains("2 pinned-only (they run only jobs that name them)"), "the refusal says why: {}", r.body);
+    assert_eq!(job_count(), before, "nothing queued");
+
+    // Off again: the free node is chosen.
+    pinned_only("p2n11-vin", false);
+    let r = run(d.port, &agent, &me, json!({"memBytes": GB})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "p2n11-vin", "chosen again once it is off: {}", r.body);
+    pinned_only("p2n12-vin", false);
+    for n in ["p2n11-vin", "p2n12-vin"] {
+        compute_ws::test_detach(n);
+    }
+}
+
 /// `--avoid`: submit never picks the node, the sweeper never moves a job
 /// there, a named node with --avoid is exit 2, an avoid list that leaves
 /// nothing is exit 3; a release that avoids its own node moves it at once

@@ -171,6 +171,12 @@ pub const K2_OWN_UNITS: &[&str] = &[
     // owner token live there), so they are denied like the daemon itself.
     "k2-ptydtest.service",
     "k2-ptydupd.service",
+    // The shared virtual desktop's units (crates/k2-core/src/desktop/
+    // virtual_desktop.rs `units`, started by the daemon's
+    // desktop/virtual_desktop.rs `run_unit` with `systemd-run --user`):
+    // Xvfb and the window-manager session, run as K2's user.
+    "k2-desktop-virtual-x.service",
+    "k2-desktop-virtual-session.service",
 ];
 
 /// K2's generated families, as (prefix, middle) patterns: the stem starts
@@ -196,6 +202,11 @@ pub const K2_UNIT_FAMILIES: &[(&str, Option<&str>)] = &[
     // scripts/node/spikes/s6-gpu-mem-proof.sh): they run test loads as a
     // compute job's user, so no credential is ever bound to one.
     ("k2-s6-proof-", None),
+    // Virtual desktops' units, one pair per desktop: k2-desktop-<id>-x and
+    // k2-desktop-<id>-session (crates/k2-core/src/desktop/virtual_desktop.rs
+    // `units`): Xvfb and the window manager for the shared desktop and each
+    // agent's own one, run as K2's user.
+    ("k2-desktop-", None),
 ];
 
 /// Core system units, by exact name or `prefix*`. The allow list is the
@@ -830,6 +841,25 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn virtual_desktop_units_are_denied() {
+        for u in [
+            "k2-desktop-virtual-x.service",
+            "k2-desktop-virtual-session.service",
+            "k2-desktop-virtual:ws1-x.service",
+            "k2-desktop-virtual:x0123456789abcdef01234567-session.service",
+        ] {
+            assert!(deny_reason(u, &[]).is_some(), "{u} must be denied");
+        }
+        // Names the name rule alone would pass: the family denies them.
+        for u in ["k2-desktop-ws1-x.service", "k2-desktop-abc_def-session.service"] {
+            assert!(unit_name_ok(u), "{u} should pass the name rule");
+            assert_eq!(deny_reason(u, &[]), Some("a unit K2 generates"), "{u}");
+        }
+        assert_eq!(deny_reason("k2-desktop-virtual-x.service", &[]), Some("one of K2's own units"));
+        assert_eq!(deny_reason("k2-desktop-virtual-session.service", &[]), Some("one of K2's own units"));
     }
 
     /// Review blocker (PRD rev 2 item 4, security #8), widened after review

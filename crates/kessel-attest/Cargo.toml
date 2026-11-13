@@ -1,0 +1,47 @@
+[package]
+name = "kessel-attest"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Checks a build statement (in-toto Statement v1 with a SLSA Provenance v1 predicate, in a DSSE envelope) signed by a build machine's key, against the machine owner's signed roster of keys and the files you hold. Offline: no server, no network."
+authors = ["Alakazam Labs"]
+readme = "README.md"
+documentation = "https://docs.rs/kessel-attest"
+repository = "https://github.com/Alakazam-211/K2"
+keywords = ["slsa", "in-toto", "dsse", "provenance", "supply-chain"]
+categories = ["command-line-utilities", "cryptography", "development-tools"]
+# Only the code, the README, the changelog and the licence ship. tests/ reads
+# fixtures from the repository, and scripts/ needs stock tools.
+include = ["/src/", "/README.md", "/LICENSE-MIT", "/CHANGELOG.md"]
+# Not published until the crate is reviewed.
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "kessel-attest"
+path = "src/main.rs"
+
+# Pure Rust, no build scripts that compile C. Every crate here is MIT,
+# Apache-2.0 or BSD-3-Clause (deny.toml).
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+sha2 = "0.10"
+# Node keys: ECDSA P-256, signatures in ASN.1 DER (`pkcs8` brings the DER and
+# SubjectPublicKeyInfo parsers).
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "std"] }
+# Owner roster keys: Ed25519.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# Tests sign their own rosters and statements; the node key of the golden
+# vectors comes as a PKCS#8 PEM.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "pem", "std"] }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

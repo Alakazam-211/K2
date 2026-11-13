@@ -1,0 +1,42 @@
+# cargo-deny policy for kessel-attest:
+#   cargo deny --manifest-path crates/kessel-attest/Cargo.toml \
+#     --config "$PWD/crates/kessel-attest/deny.toml" check licenses bans sources
+# The published crate's tree only (dev-dependencies are test-only).
+
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+exclude-dev = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # Pure Rust only: no C crypto library or bindings.
+    { crate = "openssl-sys" },
+    { crate = "aws-lc-sys" },
+    { crate = "ring" },
+    # A standalone verifier: no async runtime, no network client.
+    { crate = "tokio" },
+    { crate = "reqwest" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -178,6 +178,56 @@ word.
    names no roster key and is refused
    (`Statement::check_builder_owner`).
 
+### Outside K2: kessel-attest
+
+`crates/kessel-attest` (MIT, pure Rust, no server and no network) runs
+every step above that doesn't need the receipt, from a pinned owner key:
+the owner's roster, the node key in it, the signature, the statement's
+form, `builder.id`, the key's status and dates, the node's self-statement,
+the policy asked for (repo, commit, isolation), each file's sha256, and a
+twin on another machine:
+
+```sh
+kessel-attest verify dist/acme-linux-x86_64 \
+  --provenance provenance/L1.intoto.jsonl --trust trust/ \
+  --owner-key <roster key fp> [--twin provenance/V1.intoto.jsonl] [--json]
+```
+
+Exit 0 verified, 1 not, 2 bad usage, 3 **verified, time not proven**: the
+key is retired in the roster it was given, and a statement's times are the
+node's clock, so it could be back-dated. `--existed-before <time>` with proof
+of when the file existed (a release's signature date) settles it. The
+`trust/` roster is as of the build; it warns when the roster predates the
+build or is over 30 days old, and takes the owner's current one with
+`--roster`.
+
+### Stock tools
+
+Two stock verifiers accept the golden statement with the node's PEM and
+refuse it with one payload byte changed
+(`crates/kessel-attest/scripts/stock-verifiers.sh` runs both):
+
+- cosign 2.6.1 and 3.1.4 (3.x warns that `--signature` is deprecated, and
+  still accepts it; the envelope is a raw DSSE JSON line, not a Sigstore
+  bundle, so `--bundle` doesn't apply):
+
+  ```sh
+  cosign verify-blob-attestation --key trust/nodes/<keyid>.pem \
+    --signature provenance/L1.intoto.jsonl --type slsaprovenance1 \
+    --insecure-ignore-tlog=true dist/acme-linux-x86_64
+  ```
+
+  It also checks that the file's sha256 is a subject.
+- securesystemslib 1.6.0 (the in-toto reference library):
+
+  ```python
+  from cryptography.hazmat.primitives import serialization
+  from securesystemslib.dsse import Envelope
+  from securesystemslib.signer import SSlibKey
+  key = SSlibKey.from_crypto(serialization.load_pem_public_key(pem), keyid=keyid)  # ecdsa-sha2-nistp256
+  Envelope.from_dict(json.loads(line)).verify([key], 1)
+  ```
+
 ## On the server
 
 A K2 server asks for a statement (`Plan.provenance = 1`) only of a node

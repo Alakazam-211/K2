@@ -1208,3 +1208,82 @@ async fn the_mover_never_withdraws_a_job_for_a_pinned_only_node() {
     compute_ws::test_detach("po-a");
     compute_ws::test_detach("po-b");
 }
+
+// ── why a job waits while another node looks free ────────────────────
+
+/// A job in node A's queue at its workspace's grant cap there
+/// (`workspace_running_full`) moves to node B, granted, shared and free:
+/// the mover asks A for it back and sends it to B.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_at_its_grant_cap_moves_to_a_free_granted_node() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "capped");
+    active_node("gc-a", "gc-a", "linux", &ws);
+    active_node("gc-b", "gc-b", "linux", &ws);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let one = store::GrantLimits { max_parallel: Some(1), ..Default::default() };
+        store::set_grant(&conn, "gc-a", &ws.id, &one, "owner", 4).expect("grant a");
+        store::set_grant(&conn, "gc-b", &ws.id, &one, "owner", 4).expect("grant b");
+    }
+    let mut a = compute_ws::test_attach("gc-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "gc-a", &mut a).await;
+    let held = QueuePos { pos: 1, of: Some(5), eta_secs: None, eta_p90_secs: None, blocked_by: Some("workspace_running_full".into()) };
+    compute_ws::test_frame("gc-a", state(&job, 1, JobState::Queued, Some("node_queued"), Some(held)));
+    // B: shared with other servers, one of its two slots busy, no quote yet.
+    let mut b = compute_ws::test_attach("gc-b", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 0))));
+    k2_daemon::compute_place::sweep(k2_core::compute::now());
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "A is asked to give it back for B");
+    compute_ws::test_frame("gc-a", state(&job, 1, JobState::Cancelled, Some("withdrawn"), None));
+    let rj = row(&job);
+    assert_eq!(rj.node_id, "gc-b", "{rj:?}");
+    assert_eq!(assigns(&b.frames()).len(), 1, "sent to B");
+    let p = rj.ctl.placement.expect("placement");
+    assert!(p.why.starts_with("moved from gc-a: gc-b can start it now"), "{}", p.why);
+    compute_ws::test_detach("gc-a");
+    compute_ws::test_detach("gc-b");
+}
+
+/// A shared node whose slots all run other servers' jobs can't start the
+/// job, though this server runs nothing there and its CPUs and memory look
+/// free (no quote for this size yet): the mover leaves the job where it
+/// is, and `get` says which node and why. When a slot frees, it moves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_mover_skips_a_node_full_of_other_servers_jobs_and_says_why() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "fullnode");
+    active_node("fl-a", "fl-a", "linux", &ws);
+    active_node("fl-b", "fl-b", "linux", &ws);
+    let mut a = compute_ws::test_attach("fl-a", offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 1, 0))));
+    let job = queued_any_on(d.port, &ws, "fl-a", &mut a).await;
+    let held = QueuePos { pos: 1, of: Some(5), eta_secs: None, eta_p90_secs: None, blocked_by: Some("workspace_running_full".into()) };
+    compute_ws::test_frame("fl-a", state(&job, 1, JobState::Queued, Some("node_queued"), Some(held)));
+    // B runs 2 of its 2 slots, both another server's; this server's share
+    // there runs nothing.
+    let mut b = compute_ws::test_attach("fl-b", offer(&["artifacts", "stall", FEATURE_QUEUE], 2, Some(view(Role::Tenant, 0, 0))));
+    let now = k2_core::compute::now();
+    k2_daemon::compute_place::sweep(now);
+    assert!(cancels(&a.frames()).is_empty(), "no withdraw for a node with no free slot");
+    assert_eq!(row(&job).withdraws, 0);
+    // The job says why B doesn't take it.
+    let r = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let mv = &j(&r)["move"];
+    let not_now = mv["notNow"].as_array().unwrap_or_else(|| panic!("no notNow: {mv}"));
+    assert_eq!(not_now.len(), 1, "{mv}");
+    assert_eq!((not_now[0]["node"].as_str(), not_now[0]["code"].as_str()), (Some("fl-b"), Some("node_full")), "{mv}");
+    let note = mv["note"].as_str().expect("note");
+    assert!(note.contains("fl-b (full: it runs 2 of 2 jobs"), "{note}");
+    // A slot frees on B: the mover asks for it back now.
+    compute_ws::test_frame("fl-b", Frame::Offer(offer(&["artifacts", "stall", FEATURE_QUEUE], 1, Some(view(Role::Tenant, 0, 0)))));
+    k2_daemon::compute_place::sweep(now + 1);
+    assert_eq!(cancels(&a.frames()), vec![(job.clone(), 1, CANCEL_WITHDRAW.to_string())], "B has a slot now");
+    compute_ws::test_frame("fl-a", state(&job, 1, JobState::Cancelled, Some("withdrawn"), None));
+    assert_eq!(row(&job).node_id, "fl-b");
+    assert_eq!(assigns(&b.frames()).len(), 1);
+    compute_ws::test_detach("fl-a");
+    compute_ws::test_detach("fl-b");
+}
